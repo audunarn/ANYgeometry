@@ -1,0 +1,95 @@
+"""Lightweight structural-surface geometry shared by the ANY ecosystem."""
+
+from .curves import Arc, ArcFrame, CurveShape, DegenerateArcError, Spline, Straight
+from .entities import Edge, EntityKind, EntityRef, Face, OrientedEdge, Vertex
+from .errors import GeometryError, GeometryTopologyError
+from .intersections import (
+    FaceIntersection,
+    intersect_faces,
+    intersect_surfaces,
+    line_cylinder,
+    line_line,
+    line_plane,
+    numerical_surface_intersection,
+    plane_cylinder,
+    plane_plane,
+)
+from .model import GeometryModel
+from .operations import (
+    closest_point,
+    fragment_face,
+    project,
+    punch_hole,
+    split_face,
+    split_face_at,
+    split_face_between,
+    strip_face,
+    surface_point,
+    transform,
+    trim_face,
+)
+from .serialization import from_dict, read_geometry, to_dict, write_geometry
+from .surfaces import (
+    CoonsSurface,
+    Cone,
+    Cylinder,
+    Plane,
+    RuledSurface,
+    Surface,
+    SurfaceProtocol,
+    closest_uv,
+    surface_normal,
+)
+
+__all__ = [
+    "Arc",
+    "ArcFrame",
+    "CoonsSurface",
+    "Cone",
+    "CurveShape",
+    "Cylinder",
+    "DegenerateArcError",
+    "Edge",
+    "EntityKind",
+    "EntityRef",
+    "Face",
+    "FaceIntersection",
+    "GeometryError",
+    "GeometryModel",
+    "GeometryTopologyError",
+    "OrientedEdge",
+    "Plane",
+    "RuledSurface",
+    "Spline",
+    "Straight",
+    "Surface",
+    "SurfaceProtocol",
+    "Vertex",
+    "closest_point",
+    "closest_uv",
+    "fragment_face",
+    "from_dict",
+    "intersect_faces",
+    "intersect_surfaces",
+    "line_cylinder",
+    "line_line",
+    "line_plane",
+    "numerical_surface_intersection",
+    "plane_cylinder",
+    "plane_plane",
+    "project",
+    "punch_hole",
+    "read_geometry",
+    "split_face",
+    "split_face_at",
+    "split_face_between",
+    "strip_face",
+    "surface_normal",
+    "surface_point",
+    "to_dict",
+    "transform",
+    "trim_face",
+    "write_geometry",
+]
+
+__version__ = "0.1.0"

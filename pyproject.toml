@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ANYgeometry"
+version = "0.1.0"
+description = "Lightweight deterministic structural-surface geometry kernel"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "GPL-3.0-or-later"
+authors = [{ name = "Audun Arnesen Nyhus", email = "audunarn@gmail.com" }]
+dependencies = ["numpy>=1.26"]
+
+[project.scripts]
+anygeometry = "anygeometry.__main__:main"
+
+[project.optional-dependencies]
+planar = ["shapely>=2.0"]
+dev = ["build>=1.2", "pytest>=8", "twine>=5"]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["anygeometry*"]
+
+[tool.setuptools.package-data]
+anygeometry = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+pythonpath = ["src"]
+addopts = ["-ra", "-p", "no:cacheprovider", "--basetemp=.pytest_tmp"]
