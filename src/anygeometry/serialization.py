@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 import json
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -12,11 +13,17 @@ import numpy as np
 from .curves import Arc, Spline, Straight
 from .entities import Edge, EntityRef, Face, OrientedEdge, Vertex
 from .errors import GeometryError
+from .features import (
+    FeatureHistory,
+    FeatureOutputRef,
+    FeatureRecord,
+    builtin_feature_registry,
+)
 from .model import GeometryModel
 from .surfaces import CoonsSurface, Cone, Cylinder, Plane, RuledSurface
 
 SCHEMA = "anygeometry"
-VERSION = 1
+VERSION = 2
 
 __all__ = ["SCHEMA", "VERSION", "from_dict", "read_geometry", "to_dict", "write_geometry"]
 
@@ -78,7 +85,60 @@ def _surface(surface: object) -> dict[str, object] | None:
     raise GeometryError(f"unsupported surface type {type(surface).__name__}")
 
 
-def to_dict(geometry: GeometryModel) -> dict[str, object]:
+def _feature_input(reference: EntityRef | FeatureOutputRef) -> dict[str, object]:
+    if isinstance(reference, EntityRef):
+        return {"entity": _ref(reference)}
+    return {
+        "feature": reference.feature_id,
+        "output": reference.output_key,
+        "kind": reference.kind,
+    }
+
+
+def _feature_history(
+    history: FeatureHistory, geometry: GeometryModel
+) -> dict[str, object]:
+    return {
+        "version": history.VERSION,
+        "next_id": history.next_id,
+        "baseline": deepcopy(history.baseline),
+        "records": [
+            {
+                "id": record.feature_id,
+                "kind": record.kind,
+                "kind_version": record.kind_version,
+                "name": record.name,
+                "parameters": _json_value(record.parameters),
+                "inputs": {
+                    port: [_feature_input(reference) for reference in references]
+                    for port, references in sorted(record.inputs.items())
+                },
+                "dependencies": list(record.dependencies),
+                "suppressed": record.suppressed,
+                "outputs": {
+                    key: _ref(reference)
+                    for key, reference in sorted(record.outputs.items())
+                },
+                "state": record.state,
+                "diagnostic": record.diagnostic,
+                "materialization_checksum": (
+                    record.materialization_checksum
+                    or (
+                        history.materialization_checksum(record, geometry)
+                        if record.state in ("ok", "active", "frozen")
+                        and record.outputs
+                        else None
+                    )
+                ),
+            }
+            for record in history.records
+        ],
+    }
+
+
+def to_dict(
+    geometry: GeometryModel, *, include_features: bool = True
+) -> dict[str, object]:
     """Return a deterministic, JSON-ready complete geometry document."""
 
     curves = []
@@ -92,7 +152,7 @@ def to_dict(geometry: GeometryModel) -> dict[str, object]:
         else:  # pragma: no cover - closed public union
             raise GeometryError(f"unsupported curve type {type(edge.curve).__name__}")
         curves.append({"id": edge.id, "start": edge.start, "end": edge.end, "curve": curve})
-    return {
+    document: dict[str, object] = {
         "schema": SCHEMA,
         "version": VERSION,
         "id_state": geometry.id_state(),
@@ -130,6 +190,9 @@ def to_dict(geometry: GeometryModel) -> dict[str, object]:
             )
         ],
     }
+    if include_features:
+        document["features"] = _feature_history(geometry.features, geometry)
+    return document
 
 
 def _entity_ref(value: object) -> EntityRef:
@@ -139,6 +202,89 @@ def _entity_ref(value: object) -> EntityRef:
     if kind not in ("vertex", "edge", "face") or isinstance(identifier, bool):
         raise GeometryError("invalid entity reference")
     return EntityRef(kind, _integer(identifier, "entity ID"))  # type: ignore[arg-type]
+
+
+def _feature_input_ref(value: object) -> EntityRef | FeatureOutputRef:
+    if not isinstance(value, Mapping):
+        raise GeometryError("feature input reference must be an object")
+    if "entity" in value:
+        if set(value) != {"entity"}:
+            raise GeometryError("entity feature input has unexpected fields")
+        return _entity_ref(value["entity"])
+    required = {"feature", "output", "kind"}
+    if set(value) != required:
+        raise GeometryError("feature output reference is malformed")
+    kind = value["kind"]
+    if kind not in ("vertex", "edge", "face"):
+        raise GeometryError("invalid feature output entity kind")
+    return FeatureOutputRef(
+        _integer(value["feature"], "feature ID"),
+        str(value["output"]),
+        kind,  # type: ignore[arg-type]
+    )
+
+
+def _decode_feature_history(value: object) -> FeatureHistory:
+    if not isinstance(value, Mapping):
+        raise GeometryError("features must be an object")
+    version = _integer(value.get("version", 1), "feature-history version")
+    if version != FeatureHistory.VERSION:
+        raise GeometryError(f"unsupported feature-history version {version}")
+    baseline = value.get("baseline")
+    if baseline is not None and not isinstance(baseline, Mapping):
+        raise GeometryError("feature-history baseline must be a geometry object")
+    if isinstance(baseline, Mapping) and "features" in baseline:
+        raise GeometryError("feature-history baseline cannot contain another history")
+    records: list[FeatureRecord] = []
+    for item in value.get("records", ()):
+        if not isinstance(item, Mapping):
+            raise GeometryError("feature record must be an object")
+        raw_inputs = item.get("inputs", {})
+        raw_outputs = item.get("outputs", {})
+        if not isinstance(raw_inputs, Mapping) or not isinstance(raw_outputs, Mapping):
+            raise GeometryError("feature inputs and outputs must be objects")
+        records.append(
+            FeatureRecord(
+                feature_id=_integer(item["id"], "feature ID"),
+                kind=str(item["kind"]),
+                kind_version=_integer(
+                    item.get("kind_version", 1), "feature kind version"
+                ),
+                name=str(item.get("name", item["kind"])),
+                parameters=dict(item.get("parameters", {})),
+                inputs={
+                    str(port): tuple(_feature_input_ref(reference) for reference in references)
+                    for port, references in raw_inputs.items()
+                },
+                dependencies=tuple(
+                    _integer(dependency, "feature dependency")
+                    for dependency in item.get("dependencies", ())
+                ),
+                suppressed=bool(item.get("suppressed", False)),
+                outputs={
+                    str(key): _entity_ref(reference)
+                    for key, reference in raw_outputs.items()
+                },
+                state=str(item.get("state", "pending")),
+                diagnostic=(
+                    None
+                    if item.get("diagnostic") is None
+                    else str(item.get("diagnostic"))
+                ),
+                materialization_checksum=(
+                    None
+                    if item.get("materialization_checksum") is None
+                    else str(item.get("materialization_checksum"))
+                ),
+            )
+        )
+    history = FeatureHistory(
+        baseline=None if baseline is None else dict(baseline),
+        records=records,
+        next_id=_integer(value.get("next_id", 1), "next feature ID"),
+    )
+    history.validate()
+    return history
 
 
 def _oriented_loop(value: object) -> tuple[OrientedEdge, ...]:
@@ -176,8 +322,8 @@ def from_dict(document: Mapping[str, Any]) -> GeometryModel:
 
     if document.get("schema", SCHEMA) != SCHEMA:
         raise GeometryError("not an ANYgeometry document")
-    version = _integer(document.get("version", VERSION), "version")
-    if version != VERSION:
+    version = _integer(document.get("version", 1), "version")
+    if version not in (1, VERSION):
         raise GeometryError(f"unsupported ANYgeometry version {version}")
     geometry = GeometryModel()
     try:
@@ -243,6 +389,8 @@ def from_dict(document: Mapping[str, Any]) -> GeometryModel:
             geometry._replacement_history[_entity_ref(item["old"])] = tuple(  # noqa: SLF001
                 _entity_ref(value) for value in item["new"]
             )
+        if version >= 2 and "features" in document:
+            geometry.features = _decode_feature_history(document["features"])
     except (KeyError, TypeError, ValueError) as error:
         raise GeometryError(f"malformed geometry document: {error}") from error
     errors = geometry.validate_topology()
@@ -300,6 +448,54 @@ def from_dict(document: Mapping[str, Any]) -> GeometryModel:
         for reference in members:
             if (reference.kind, reference.id) not in geometry.entity_keys() and reference not in geometry.replacement_history():
                 raise GeometryError(f"group references missing entity {reference}")
+    if version == 1 or "features" not in document:
+        # A materialized legacy document is valid design input, but its
+        # construction intent cannot be inferred safely.  Preserve it as the
+        # immutable base for all features added after migration.
+        geometry.features.capture_baseline(geometry, force=True)
+    else:
+        keys = geometry.entity_keys()
+        history_keys = geometry.replacement_history()
+        registry = builtin_feature_registry()
+        for record in geometry.features.records:
+            for key, reference in record.outputs.items():
+                if (
+                    (reference.kind, reference.id) not in keys
+                    and reference not in history_keys
+                ):
+                    diagnostic = (
+                        f"feature {record.feature_id} output {key!r} references "
+                        f"missing entity {reference}"
+                    )
+                    if registry.has(record.kind):
+                        raise GeometryError(diagnostic)
+                    record.state = "invalid"
+                    record.diagnostic = diagnostic
+        for record in geometry.features.records:
+            if record.suppressed or registry.has(record.kind):
+                continue
+            if record.state == "invalid":
+                continue
+            if record.materialization_checksum is None:
+                # Documents written before checksummed frozen features remain
+                # viewable; the next write persists the derived checksum.
+                record.materialization_checksum = (
+                    geometry.features.materialization_checksum(record, geometry)
+                )
+                record.state = "frozen"
+                record.diagnostic = (
+                    f"executor for feature kind {record.kind!r} is unavailable; "
+                    "using its verified last-good materialization"
+                )
+                continue
+            diagnostic = geometry.features.validate_materialization(record, geometry)
+            record.state = "frozen" if diagnostic is None else "invalid"
+            record.diagnostic = (
+                f"executor for feature kind {record.kind!r} is unavailable; "
+                "using its verified last-good materialization"
+                if diagnostic is None
+                else diagnostic
+            )
     return geometry
 
 

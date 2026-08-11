@@ -2,6 +2,17 @@
 
 All notable user-visible changes to ANYgeometry are documented here.
 
+## Unreleased
+
+- Added a persistent, dependency-aware, suppressible feature history with
+  extensible namespaced executors, stable feature-output references, atomic
+  regeneration, and replacement-lineage preservation.
+- Added schema-v2 history serialization while retaining schema-v1 loading as
+  an immutable legacy base materialization.
+- Added atomic model insertion, deep cloning, topology-closure copying,
+  mirroring, linear and circular patterns, orientation reversal, and typed
+  geometry measurements.
+
 ## 0.1.0 - 2026-08-08
 
 - Established ANYgeometry as the single lightweight geometry authority for the

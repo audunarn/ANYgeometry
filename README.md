@@ -97,6 +97,45 @@ nonconformal bands, and planes needing nested trim classification remain
 non-mutating intersection-query workflows rather than being approximated with
 unrelated edges.
 
+## Editable feature history and owner editing
+
+`GeometryModel.features` stores an ordered, suppressible modelling history.
+Feature inputs use `FeatureOutputRef` so downstream intent does not depend on
+the materialized IDs allocated by a later regeneration.  `EntityRef` remains
+the topology identity passed to mesh and analysis packages.
+
+```python
+from anygeometry import FeatureOutputRef, GeometryModel
+
+geometry = GeometryModel()
+first = geometry.features.append(
+    "geometry.point", parameters={"position": [0.0, 0.0, 0.0]}
+)
+second = geometry.features.append(
+    "geometry.point", parameters={"position": [2.0, 0.0, 0.0]}
+)
+geometry.features.append(
+    "geometry.line",
+    inputs={
+        "start": [FeatureOutputRef(first.feature_id, "point", "vertex")],
+        "end": [FeatureOutputRef(second.feature_id, "point", "vertex")],
+    },
+)
+report = geometry.regenerate_features()
+assert report.success
+```
+
+The registry is extensible by namespaced feature kind, allowing consumers to
+add executors without a reverse dependency. Regeneration is atomic, retains
+replacement lineage, and reserves IDs above the old materialization so a
+stale `EntityRef` can never be silently reused for a different output.
+
+High-level owner operations include `insert_model`, `copy_entities`, linear
+and circular patterns, mirroring, edge/face reversal, deep `clone`, and typed
+`measure` results. Insertion remaps all topology with fresh IDs, preserves
+groups, tags, surfaces, holes, and metadata, and deliberately does not weld
+coincident entities.
+
 ## Serialization and CLI
 
 Geometry serialization is versioned and preserves IDs, ID counters, curves,

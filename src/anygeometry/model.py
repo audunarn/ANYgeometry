@@ -34,6 +34,7 @@ from .curves import (
 )
 from .errors import GeometryError
 from .entities import Edge, EntityRef, Face, OrientedEdge, Vertex
+from .features import FeatureHistory, FeatureRegistry, RegenerationReport
 from .surfaces import CoonsSurface, Plane, Surface, closest_uv
 
 # GeometryError is re-exported for temporary compatibility imports.
@@ -75,6 +76,10 @@ class GeometryModel:
         self._replacement_history: Dict[EntityRef, Tuple[EntityRef, ...]] = {}
         self.groups: Dict[str, Set[EntityRef]] = {}
         self.tags: Dict[EntityRef, Set[str]] = {}
+        # Persistent design intent is separate from the materialized topology,
+        # but travels with its owner so a geometry document cannot silently
+        # lose its editable feature tree.
+        self.features = FeatureHistory()
 
     # ------------------------------------------------------------------
     # replacement log
@@ -150,6 +155,82 @@ class GeometryModel:
         for replacement in replacements:
             self.tags.setdefault(replacement, set()).update(inherited)
 
+    def record_replacements_atomic(
+        self,
+        entries: Iterable[Tuple[EntityRef, Sequence[EntityRef]]],
+    ) -> None:
+        """Append a complete replacement graph atomically.
+
+        Regeneration may need to reconnect a retained historical graph and a
+        set of old-materialization to new-materialization transitions in one
+        operation.  Adding those arcs one at a time can temporarily leave a
+        descendant unresolved even though the final batch is valid, so this
+        method validates and commits the combined graph as a unit.
+        """
+
+        normalized: List[Tuple[EntityRef, Tuple[EntityRef, ...]]] = []
+        supplied: Dict[EntityRef, Tuple[EntityRef, ...]] = {}
+        for old, descendants in entries:
+            made = tuple(descendants)
+            previous = supplied.get(old)
+            if previous is not None and previous != made:
+                raise GeometryError(f"conflicting replacement entries for {old}")
+            supplied[old] = made
+        for old, descendants in supplied.items():
+            current = self._replacement_history.get(old)
+            if current is not None:
+                if current != descendants:
+                    raise GeometryError(
+                        f"replacement history already exists for {old}"
+                    )
+                continue
+            if (old.kind, old.id) in self.entity_keys():
+                raise GeometryError(
+                    f"cannot record replacement for surviving entity {old}"
+                )
+            if (
+                old.kind not in self._next_id
+                or old.id <= 0
+                or old.id >= self._next_id[old.kind]
+            ):
+                raise GeometryError(
+                    f"replacement history references missing entity {old}"
+                )
+            if any(item.kind != old.kind for item in descendants):
+                raise GeometryError("replacement history cannot change entity kind")
+            if old in descendants:
+                raise GeometryError("an entity cannot replace itself")
+            normalized.append((old, descendants))
+
+        previous_history = dict(self._replacement_history)
+        previous_log = list(self._replacements)
+        previous_groups = {
+            name: set(items) for name, items in self.groups.items()
+        }
+        previous_tags = {
+            reference: set(values) for reference, values in self.tags.items()
+        }
+        try:
+            self._replacement_history.update(normalized)
+            errors = self._validate_replacement_history()
+            if errors:
+                raise GeometryError("; ".join(errors))
+            for old, descendants in normalized:
+                self._replacements.append((old, descendants))
+                for members in self.groups.values():
+                    if old in members:
+                        members.discard(old)
+                        members.update(descendants)
+                inherited = self.tags.pop(old, set())
+                for descendant in descendants:
+                    self.tags.setdefault(descendant, set()).update(inherited)
+        except Exception:
+            self._replacement_history = previous_history
+            self._replacements = previous_log
+            self.groups = previous_groups
+            self.tags = previous_tags
+            raise
+
     def replacement_history(self) -> Dict[EntityRef, Tuple[EntityRef, ...]]:
         """Complete supersession map retained across edit transactions."""
 
@@ -222,6 +303,17 @@ class GeometryModel:
     def restore_id_state(self, state: Mapping[str, int]) -> None:
         self._next_id = dict(state)
 
+    def reserve_id_state(self, state: Mapping[str, int]) -> None:
+        """Raise allocator floors without ever moving a counter backwards."""
+
+        for kind in ("vertex", "edge", "face"):
+            if kind not in state:
+                raise GeometryError(f"missing {kind} ID counter")
+            value = int(state[kind])
+            if value < 1:
+                raise GeometryError(f"{kind} ID counter must be positive")
+            self._next_id[kind] = max(self._next_id[kind], value)
+
     def topology_snapshot(self) -> Dict[str, object]:
         """Cheap snapshot of the whole topology, for undo.
 
@@ -259,6 +351,14 @@ class GeometryModel:
             "replacements": list(self._replacements),
         }
 
+    def design_snapshot(self) -> Dict[str, object]:
+        """Snapshot topology and persistent feature definitions for undo."""
+
+        return {
+            "topology": self.topology_snapshot(),
+            "features": self.features.snapshot(),
+        }
+
     def restore_topology(self, snapshot: Mapping[str, object]) -> None:
         """Put the model back exactly as ``topology_snapshot`` found it."""
 
@@ -287,6 +387,45 @@ class GeometryModel:
         self._replacement_history = dict(snapshot.get("replacement_history", {}))  # type: ignore[arg-type]
         self._replacements = list(snapshot.get("replacements", []))  # type: ignore[arg-type]
         self._arc_cache.clear()
+
+    def restore_design(self, snapshot: Mapping[str, object]) -> None:
+        """Restore a snapshot made by :meth:`design_snapshot`."""
+
+        self.restore_topology(snapshot["topology"])  # type: ignore[arg-type]
+        self.features.restore(snapshot["features"])  # type: ignore[arg-type]
+
+    def clone(self, *, include_features: bool = True) -> "GeometryModel":
+        """Return a deep, independently mutable geometry copy."""
+
+        from .serialization import from_dict, to_dict
+
+        return from_dict(to_dict(self, include_features=include_features))
+
+    def insert_model(
+        self,
+        source: "GeometryModel",
+        *,
+        matrix: Sequence[Sequence[float]] | None = None,
+        group_prefix: str | None = None,
+    ):
+        """Insert a flattened topology copy with fresh destination IDs."""
+
+        from .editing import insert_model
+
+        return insert_model(
+            self, source, matrix=matrix, group_prefix=group_prefix
+        )
+
+    def regenerate_features(
+        self, registry: FeatureRegistry | None = None
+    ) -> RegenerationReport:
+        """Replay persistent features with neutral executors by default."""
+
+        if registry is None:
+            from .features import builtin_feature_registry
+
+            registry = builtin_feature_registry()
+        return self.features.regenerate(self, registry)
 
     def entity_keys(self) -> Set[Tuple[str, int]]:
         """Every entity in the model, as ``(kind, id)`` pairs."""
@@ -1597,12 +1736,41 @@ class GeometryModel:
         if candidate.shape != (2,):
             raise GeometryError("local coordinates must contain u and v")
 
+        polygons = self.face_trim_loops_uv(face_id)
+        if not self._point_in_polygon(candidate, polygons[0]):
+            return False
+        return not any(
+            self._point_in_polygon(candidate, hole, include_boundary=False)
+            for hole in polygons[1:]
+        )
+
+    def face_trim_loops_uv(
+        self, face_id: int, *, curve_samples: int = 17
+    ) -> Tuple[np.ndarray, ...]:
+        """Return outer and hole trim loops in the face's local UV plane.
+
+        This is the authoritative public bridge for trim-aware tessellation,
+        hit testing, and planar export. Curves are sampled deterministically;
+        straight segments contribute only their start vertex.
+        """
+
+        face = self._require_face(face_id)
+        count = int(curve_samples)
+        if count < 3:
+            raise GeometryError("trim curve sampling needs at least three points")
+
         def polygon(loop: Sequence[OrientedEdge]) -> np.ndarray:
             points: List[np.ndarray] = []
             for item in loop:
                 edge = self.edges[item.edge]
-                count = 2 if isinstance(edge.curve, Straight) else 17
-                samples = self.sample_edge(item.edge, np.linspace(0.0, 1.0, count))
+                samples = self.sample_edge(
+                    item.edge,
+                    np.linspace(
+                        0.0,
+                        1.0,
+                        2 if isinstance(edge.curve, Straight) else count,
+                    ),
+                )
                 if not item.forward:
                     samples = samples[::-1]
                 points.extend(samples[:-1])
@@ -1611,12 +1779,7 @@ class GeometryModel:
                 dtype=float,
             )
 
-        if not self._point_in_polygon(candidate, polygon(face.loop)):
-            return False
-        return not any(
-            self._point_in_polygon(candidate, polygon(hole), include_boundary=False)
-            for hole in face.holes
-        )
+        return tuple(polygon(loop) for loop in (face.loop,) + tuple(face.holes))
 
     @staticmethod
     def _point_in_polygon(
