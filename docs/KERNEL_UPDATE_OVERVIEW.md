@@ -147,7 +147,7 @@ supported surfaces).  Connectivity and semantic ownership are explicit:
 ```text
 Part
  +- Sheet -> FaceUse -> Face -> Coedge/EdgeUse -> Edge -> Vertex
- `- Member -> MemberEdgeUse --------------------^ 
+ `- Member -> MemberEdgeUse --------------------^
 
 Attachment  (member/face or member/edge incidence with parameters)
 Junction    (typed multi-member and/or member-sheet connection)
@@ -360,4 +360,3 @@ candidate-count scaling.
   data, or results
 - general solid CAD, booleans, NURBS/ellipse implementation
 - edits to any sibling repository
-
