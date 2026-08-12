@@ -38,7 +38,7 @@ def test_public_owner_exports_use_one_geometry_and_reference_type() -> None:
     assert anygeometry.GeometryModel is GeometryModel
     assert anygeometry.EntityRef is EntityRef
     assert geometry.entity_ref("vertex", vertex).__class__ is EntityRef
-    assert anygeometry.__version__ == "0.1.0"
+    assert anygeometry.__version__ == "0.2.0"
     assert set(anygeometry.__all__) >= {
         "GeometryModel",
         "EntityRef",

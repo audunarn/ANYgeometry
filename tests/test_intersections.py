@@ -11,7 +11,11 @@ from anygeometry import (
     FaceIntersection,
     GeometryError,
     GeometryModel,
+    IntersectionKind,
+    MutationPolicy,
+    OrientedEdge,
     Plane,
+    clip_line_to_face,
     intersect_faces,
     intersect_surfaces,
     line_cylinder,
@@ -22,8 +26,29 @@ from anygeometry import (
     plane_plane,
     from_dict,
     to_dict,
+    trim_face,
 )
 from anygeometry.generators import cylinder
+
+
+def _without_document_identity(document: dict) -> dict:
+    """Canonical geometry payload for comparing independently created models."""
+
+    return {
+        key: value
+        for key, value in document.items()
+        if key not in {"model_id", "checksum"}
+    }
+
+
+def _without_allocator_state(document: dict) -> dict:
+    """Committed state payload unaffected by deliberate failed-edit ID gaps."""
+
+    return {
+        key: value
+        for key, value in document.items()
+        if key not in {"id_state", "checksum"}
+    }
 
 
 def _plane(
@@ -42,6 +67,15 @@ def test_line_line_handles_crossing_skew_parallel_and_invalid_lines() -> None:
         (0.0, 1.0, 0.0),
     )
     assert crossing == pytest.approx((0.5, 0.0, 0.0))
+    offset = np.asarray((1.0e12, -2.0e12, 3.0e12))
+    translated = line_line(
+        offset + (0.0, 0.0, 0.0),
+        (1.0e9, 0.0, 0.0),
+        offset + (0.5, -1.0, 0.0),
+        (0.0, 1.0e-6, 0.0),
+    )
+    assert translated is not None
+    assert translated - offset == pytest.approx(crossing)
     assert (
         line_line(
             (0.0, 0.0, 0.0),
@@ -218,7 +252,9 @@ def test_shell_intersection_imprints_one_shared_edge_and_fragments_both_faces() 
     geometry.tag(old_refs[0], "deck")
     geometry.tag(old_refs[1], "bulkhead")
 
-    result = intersect_faces(geometry, horizontal, vertical)
+    result = intersect_faces(
+        geometry, horizontal, vertical, policy=MutationPolicy.IMPRINT
+    )
 
     assert isinstance(result, FaceIntersection)
     assert result.edges == (result.edge,)
@@ -241,14 +277,17 @@ def test_axial_plane_cylinder_intersection_imprints_one_shared_edge() -> None:
     )
     arc = geometry.add_arc(*arc_points)
     cylinder_face = geometry.extrude((arc,), (0.0, 0.0, 3.0))[0]
-    geometry.faces[cylinder_face].surface = Cylinder(
-        np.zeros(3),
-        np.asarray((0.0, 0.0, 1.0)),
-        np.asarray((1.0, 0.0, 0.0)),
-        2.0,
-        3.0,
-        0.0,
-        0.5 * np.pi,
+    geometry.set_face_surface(
+        cylinder_face,
+        Cylinder(
+            np.zeros(3),
+            np.asarray((0.0, 0.0, 1.0)),
+            np.asarray((1.0, 0.0, 0.0)),
+            2.0,
+            3.0,
+            0.0,
+            0.5 * np.pi,
+        ),
     )
     radial = np.asarray((1.0, 1.0, 0.0)) / root_two
     plane_face = geometry.add_plate(
@@ -262,7 +301,9 @@ def test_axial_plane_cylinder_intersection_imprints_one_shared_edge() -> None:
         )
     )
 
-    result = intersect_faces(geometry, plane_face, cylinder_face)
+    result = intersect_faces(
+        geometry, plane_face, cylinder_face, policy=MutationPolicy.IMPRINT
+    )
 
     assert isinstance(result, FaceIntersection)
     assert result.edges == (result.edge,)
@@ -322,7 +363,12 @@ def test_transverse_plane_cylinder_imprints_atomic_shared_ring() -> None:
     old_plane = EntityRef("face", plane_face)
     old_cylinders = tuple(EntityRef("face", item) for item in cylinder_faces)
 
-    result = intersect_faces(geometry, plane_face, cylinder_faces[0])
+    result = intersect_faces(
+        geometry,
+        plane_face,
+        cylinder_faces[0],
+        policy=MutationPolicy.IMPRINT,
+    )
 
     assert isinstance(result, FaceIntersection)
     assert result.edge == result.edges[0]
@@ -374,14 +420,20 @@ def test_transverse_ring_is_deterministic_and_preserves_argument_order() -> None
     first, first_plane, first_cylinders = _transverse_shell()
     second, second_plane, second_cylinders = _transverse_shell()
 
-    forward = intersect_faces(first, first_plane, first_cylinders[1])
-    reverse = intersect_faces(second, second_cylinders[1], second_plane)
+    forward = intersect_faces(
+        first, first_plane, first_cylinders[1], policy=MutationPolicy.IMPRINT
+    )
+    reverse = intersect_faces(
+        second, second_cylinders[1], second_plane, policy=MutationPolicy.IMPRINT
+    )
 
     assert isinstance(forward, FaceIntersection)
     assert isinstance(reverse, FaceIntersection)
     assert len(forward.first_faces) == len(reverse.second_faces) == 2
     assert len(forward.second_faces) == len(reverse.first_faces) == 8
-    assert to_dict(first) == to_dict(second)
+    assert _without_document_identity(to_dict(first)) == _without_document_identity(
+        to_dict(second)
+    )
 
 
 def test_transverse_ring_preflight_failure_does_not_mutate_geometry() -> None:
@@ -391,7 +443,12 @@ def test_transverse_ring_preflight_failure_does_not_mutate_geometry() -> None:
     document = to_dict(geometry)
 
     with pytest.raises(GeometryError, match="strictly inside"):
-        intersect_faces(geometry, plane_face, cylinder_faces[0])
+        intersect_faces(
+            geometry,
+            plane_face,
+            cylinder_faces[0],
+            policy=MutationPolicy.IMPRINT,
+        )
 
     assert to_dict(geometry) == document
     assert geometry.validate_topology() == ()
@@ -415,9 +472,23 @@ def test_transverse_ring_rolls_back_if_fragmentation_fails(
     monkeypatch.setattr(geometry, "add_arc", interrupted_add_arc)
 
     with pytest.raises(RuntimeError, match="injected ring failure"):
-        intersect_faces(geometry, plane_face, cylinder_faces[0])
+        intersect_faces(
+            geometry,
+            plane_face,
+            cylinder_faces[0],
+            policy=MutationPolicy.IMPRINT,
+        )
 
-    assert to_dict(geometry) == document
+    after = to_dict(geometry)
+    assert _without_allocator_state(after) == _without_allocator_state(document)
+    assert all(
+        after["id_state"][kind] >= value
+        for kind, value in document["id_state"].items()
+    )
+    assert any(
+        after["id_state"][kind] > value
+        for kind, value in document["id_state"].items()
+    )
     assert geometry.validate_topology() == ()
 
 
@@ -435,4 +506,47 @@ def test_shell_intersection_rejects_parallel_or_nonoverlapping_faces() -> None:
     )
 
     with pytest.raises(GeometryError, match="parallel or coplanar"):
+        intersect_faces(geometry, first, second, policy=MutationPolicy.IMPRINT)
+
+
+def test_planar_line_clipping_returns_all_material_intervals_minus_holes() -> None:
+    geometry = GeometryModel()
+    outer = geometry.add_points(((0, 0, 0), (4, 0, 0), (4, 4, 0), (0, 4, 0)))
+    face = geometry.add_plate(outer)
+    inner = geometry.add_points(((1, 1, 0), (3, 1, 0), (3, 3, 0), (1, 3, 0)))
+    inner_edges = tuple(
+        geometry.add_line(inner[index], inner[(index + 1) % 4])
+        for index in range(4)
+    )
+    trim_face(
+        geometry,
+        face,
+        ((OrientedEdge(inner_edges[index], True) for index in range(4)),),
+    )
+
+    result = clip_line_to_face(geometry, face, (-1, 2, 0), (5, 0, 0))
+
+    assert result.kind is IntersectionKind.OVERLAP_CURVE
+    assert len(result.components) == 2
+    assert [component.first_parameter_range.start for component in result.components] == pytest.approx((1.0, 4.0))
+    assert [component.first_parameter_range.end for component in result.components] == pytest.approx((2.0, 5.0))
+
+
+def test_face_intersection_requires_explicit_supported_mutation_policy() -> None:
+    geometry = GeometryModel()
+    first = geometry.add_plate(
+        geometry.add_points(((0, 0, 0), (2, 0, 0), (2, 2, 0), (0, 2, 0)))
+    )
+    second = geometry.add_plate(
+        geometry.add_points(((1, -1, -1), (1, 3, -1), (1, 3, 1), (1, -1, 1)))
+    )
+
+    with pytest.raises(GeometryError, match="requires an explicit mutation policy"):
         intersect_faces(geometry, first, second)
+    with pytest.raises(GeometryError, match="rejected by policy"):
+        intersect_faces(geometry, first, second, policy=MutationPolicy.REJECT)
+    result = intersect_faces(
+        geometry, first, second, policy=MutationPolicy.KEEP_SEPARATE_PART
+    )
+    assert isinstance(result, tuple)
+    assert len(geometry.faces) == 2

@@ -24,8 +24,8 @@ def _overlapping() -> tuple[GeometryModel, int, int]:
     )
     first = geometry.add_plate(first_points)
     second = geometry.add_plate(second_points)
-    geometry.faces[first].metadata["section"] = "first"
-    geometry.faces[second].metadata["section"] = "second"
+    geometry.set_face_metadata(first, {"section": "first"})
+    geometry.set_face_metadata(second, {"section": "second"})
     return geometry, first, second
 
 
