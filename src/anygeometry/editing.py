@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Iterable, Mapping, Sequence
 
 import numpy as np
@@ -13,6 +13,20 @@ from .entities import EntityRef, OrientedEdge
 from .errors import GeometryError
 from .model import GeometryModel
 from .operations import transform
+from .structural import (
+    Attachment,
+    AttachmentTargetKind,
+    Coedge,
+    FaceUse,
+    Junction,
+    JunctionMemberUse,
+    Member,
+    MemberEdgeUse,
+    Orientation,
+    ParameterRange,
+    Part,
+    Sheet,
+)
 from .surfaces import CoonsSurface, Cone, Cylinder, Plane, RuledSurface
 
 __all__ = [
@@ -139,9 +153,24 @@ def _insert_selected(
             face.corners,
             surface=deepcopy(face.surface),
         )
-        destination.faces[made].holes = tuple(mapped_loop(loop) for loop in face.holes)
-        destination.faces[made].metadata = deepcopy(face.metadata)
+        destination._put_entity(  # noqa: SLF001
+            "face",
+            replace(
+                destination.faces[made],
+                holes=tuple(mapped_loop(loop) for loop in face.holes),
+                metadata=deepcopy(face.metadata),
+            ),
+        )
         mapping[EntityRef("face", face_id)] = EntityRef("face", made)
+
+    _copy_structural_closure(
+        destination,
+        source,
+        mapping,
+        edge_ids,
+        face_ids,
+        include_empty_parts=references is None,
+    )
 
     made_groups: dict[str, tuple[EntityRef, ...]] = {}
     prefix = "" if group_prefix is None else str(group_prefix).strip("/") + "/"
@@ -172,6 +201,231 @@ def _insert_selected(
     return InsertResult(dict(mapping), made_groups, outputs)
 
 
+def _copy_structural_closure(
+    destination: GeometryModel,
+    source: GeometryModel,
+    entity_mapping: Mapping[EntityRef, EntityRef],
+    edge_ids: set[int],
+    face_ids: set[int],
+    *,
+    include_empty_parts: bool,
+) -> None:
+    """Copy every complete structural ownership closure with fresh IDs.
+
+    A partial selection does not invent ownership for an incomplete sheet or
+    member.  Complete sheets/members, and relationships whose every parent is
+    copied, retain their exact neutral structural records.
+    """
+
+    eligible_sheets = {
+        sheet.id
+        for sheet in source.sheets.values()
+        if all(
+            source.face_uses[use_id].face_id in face_ids
+            for use_id in sheet.face_use_ids
+        )
+    }
+    eligible_members = {
+        member.id
+        for member in source.members.values()
+        if all(
+            source.member_edge_uses[use_id].edge_id in edge_ids
+            for use_id in member.edge_use_ids
+        )
+    }
+    eligible_parts = {
+        part.id
+        for part in source.parts.values()
+        if include_empty_parts
+        or any(item in eligible_sheets for item in part.sheet_ids)
+        or any(item in eligible_members for item in part.member_ids)
+    }
+    eligible_sheets = {
+        item for item in eligible_sheets
+        if source.sheets[item].part_id in eligible_parts
+    }
+    eligible_members = {
+        item for item in eligible_members
+        if source.members[item].part_id in eligible_parts
+    }
+    if not eligible_parts:
+        return
+
+    sheet_use_ids = {
+        use_id
+        for sheet_id in eligible_sheets
+        for use_id in source.sheets[sheet_id].face_use_ids
+    }
+    coedge_ids = {
+        coedge_id
+        for use_id in sheet_use_ids
+        for coedge_id in source.face_uses[use_id].coedge_ids
+    }
+    member_use_ids = {
+        use_id
+        for member_id in eligible_members
+        for use_id in source.members[member_id].edge_use_ids
+    }
+    eligible_attachments = {
+        attachment.id
+        for attachment in source.attachments.values()
+        if attachment.member_id in eligible_members
+        and (
+            attachment.target_id in face_ids
+            if attachment.target_kind.value == "face"
+            else attachment.target_id in edge_ids
+        )
+    }
+    eligible_junctions = {
+        junction.id
+        for junction in source.junctions.values()
+        if all(use.member_id in eligible_members for use in junction.member_uses)
+        and all(item in eligible_sheets for item in junction.sheet_ids)
+        and all(item in eligible_attachments for item in junction.attachment_ids)
+    }
+
+    def fresh(kind: str, identifiers: Iterable[int]) -> dict[int, int]:
+        return {
+            identifier: destination._allocate_structural(kind)  # noqa: SLF001
+            for identifier in sorted(identifiers)
+        }
+
+    part_map = fresh("part", eligible_parts)
+    sheet_map = fresh("sheet", eligible_sheets)
+    face_use_map = fresh("face_use", sheet_use_ids)
+    coedge_map = fresh("coedge", coedge_ids)
+    member_map = fresh("member", eligible_members)
+    member_use_map = fresh("member_edge_use", member_use_ids)
+    attachment_map = fresh("attachment", eligible_attachments)
+    junction_map = fresh("junction", eligible_junctions)
+
+    for old_id in sorted(coedge_ids):
+        old = source.coedges[old_id]
+        destination._put_structural(  # noqa: SLF001
+            "coedge",
+            Coedge(
+                coedge_map[old_id],
+                face_use_map[old.face_use_id],
+                entity_mapping[EntityRef("edge", old.edge_id)].id,
+                old.orientation,
+                old.metadata,
+            ),
+        )
+    for old_id in sorted(sheet_use_ids):
+        old = source.face_uses[old_id]
+        destination._put_structural(  # noqa: SLF001
+            "face_use",
+            FaceUse(
+                face_use_map[old_id],
+                sheet_map[old.sheet_id],
+                entity_mapping[EntityRef("face", old.face_id)].id,
+                tuple(
+                    tuple(coedge_map[item] for item in loop)
+                    for loop in old.loops
+                ),
+                old.orientation,
+                old.metadata,
+            ),
+        )
+    for old_id in sorted(eligible_sheets):
+        old = source.sheets[old_id]
+        destination._put_structural(  # noqa: SLF001
+            "sheet",
+            Sheet(
+                sheet_map[old_id],
+                part_map[old.part_id],
+                tuple(face_use_map[item] for item in old.face_use_ids),
+                old.policy,
+                tuple(
+                    entity_mapping[EntityRef("edge", item)].id
+                    for item in old.declared_non_manifold_edges
+                ),
+                old.name,
+                old.metadata,
+            ),
+        )
+
+    for old_id in sorted(member_use_ids):
+        old = source.member_edge_uses[old_id]
+        destination._put_structural(  # noqa: SLF001
+            "member_edge_use",
+            MemberEdgeUse(
+                member_use_map[old_id],
+                member_map[old.member_id],
+                entity_mapping[EntityRef("edge", old.edge_id)].id,
+                old.parent_range,
+                old.orientation,
+                old.metadata,
+            ),
+        )
+    for old_id in sorted(eligible_members):
+        old = source.members[old_id]
+        destination._put_structural(  # noqa: SLF001
+            "member",
+            Member(
+                member_map[old_id],
+                part_map[old.part_id],
+                tuple(member_use_map[item] for item in old.edge_use_ids),
+                old.name,
+                old.metadata,
+            ),
+        )
+
+    for old_id in sorted(eligible_attachments):
+        old = source.attachments[old_id]
+        target = entity_mapping[
+            EntityRef(old.target_kind.value, old.target_id)  # type: ignore[arg-type]
+        ].id
+        destination._put_structural(  # noqa: SLF001
+            "attachment",
+            Attachment(
+                attachment_map[old_id],
+                member_map[old.member_id],
+                old.kind,
+                old.target_kind,
+                target,
+                old.member_range,
+                old.target_parameters,
+                old.metadata,
+            ),
+        )
+    for old_id in sorted(eligible_junctions):
+        old = source.junctions[old_id]
+        destination._put_structural(  # noqa: SLF001
+            "junction",
+            Junction(
+                junction_map[old_id],
+                old.kind,
+                tuple(
+                    JunctionMemberUse(member_map[item.member_id], item.member_range)
+                    for item in old.member_uses
+                ),
+                tuple(sheet_map[item] for item in old.sheet_ids),
+                tuple(attachment_map[item] for item in old.attachment_ids),
+                old.metadata,
+            ),
+        )
+
+    for old_id in sorted(eligible_parts):
+        old = source.parts[old_id]
+        destination._put_structural(  # noqa: SLF001
+            "part",
+            Part(
+                part_map[old_id],
+                tuple(sheet_map[item] for item in old.sheet_ids if item in sheet_map),
+                tuple(member_map[item] for item in old.member_ids if item in member_map),
+                old.name,
+                old.metadata,
+            ),
+        )
+    destination._rebuild_member_incidence()  # noqa: SLF001
+    problems = destination._validate_structural()  # noqa: SLF001
+    if problems:
+        raise GeometryError(
+            "structural copy produced invalid topology: " + "; ".join(problems)
+        )
+
+
 def insert_model(
     destination: GeometryModel,
     source: GeometryModel,
@@ -189,8 +443,7 @@ def insert_model(
     errors = source.validate_topology()
     if errors:
         raise GeometryError("cannot insert invalid geometry: " + "; ".join(errors))
-    snapshot = destination.topology_snapshot()
-    try:
+    with destination.transaction():
         prepared = source.clone(include_features=False)
         affine = _affine_matrix(matrix)
         if not np.allclose(affine, np.eye(4)):
@@ -202,9 +455,6 @@ def insert_model(
         if errors:
             raise GeometryError("insert produced invalid topology: " + "; ".join(errors))
         return result
-    except Exception:
-        destination.restore_topology(snapshot)
-        raise
 
 
 def copy_entities(
@@ -219,8 +469,7 @@ def copy_entities(
     selected = tuple(references)
     if not selected:
         raise GeometryError("copy needs at least one entity")
-    snapshot = geometry.topology_snapshot()
-    try:
+    with geometry.transaction():
         source = geometry.clone(include_features=False)
         affine = _affine_matrix(matrix)
         if not np.allclose(affine, np.eye(4)):
@@ -232,9 +481,6 @@ def copy_entities(
         if errors:
             raise GeometryError("copy produced invalid topology: " + "; ".join(errors))
         return result
-    except Exception:
-        geometry.restore_topology(snapshot)
-        raise
 
 
 def linear_pattern(
@@ -260,9 +506,8 @@ def linear_pattern(
     if not np.isfinite(spacing) or spacing <= 0.0:
         raise GeometryError("pattern spacing must be finite and positive")
     selected = tuple(references)
-    snapshot = geometry.topology_snapshot()
     made: list[InsertResult] = []
-    try:
+    with geometry.transaction():
         unit = vector / length
         for index in range(1, int(count) + 1):
             matrix = np.eye(4)
@@ -280,9 +525,6 @@ def linear_pattern(
                 )
             )
         return PatternResult(tuple(made))
-    except Exception:
-        geometry.restore_topology(snapshot)
-        raise
 
 
 def _rotation_matrix(
@@ -328,9 +570,8 @@ def circular_pattern(
         raise GeometryError("pattern count must be a positive integer")
     direction /= length
     selected = tuple(references)
-    snapshot = geometry.topology_snapshot()
     made: list[InsertResult] = []
-    try:
+    with geometry.transaction():
         for index in range(1, int(count) + 1):
             made.append(
                 copy_entities(
@@ -345,9 +586,6 @@ def circular_pattern(
                 )
             )
         return PatternResult(tuple(made))
-    except Exception:
-        geometry.restore_topology(snapshot)
-        raise
 
 
 def mirror_entities(
@@ -383,38 +621,76 @@ def mirror_entities(
 
 
 def reverse_edge(geometry: GeometryModel, edge_id: int) -> EntityRef:
-    """Reverse edge parameterization while preserving every face traversal."""
+    """Reverse edge parameterization while preserving dependent semantics."""
 
     edge = geometry._require_edge(int(edge_id))  # noqa: SLF001
-    snapshot = geometry.topology_snapshot()
-    try:
-        edge.start, edge.end = edge.end, edge.start
-        if isinstance(edge.curve, Spline):
-            edge.curve = Spline(tuple(reversed(edge.curve.control_vertices)))
-        for face in geometry.faces.values():
-            face.loop = tuple(
+    with geometry.transaction():
+        curve = edge.curve
+        if isinstance(curve, Spline):
+            curve = Spline(tuple(reversed(curve.control_vertices)))
+        geometry._put_entity(  # noqa: SLF001
+            "edge", replace(edge, start=edge.end, end=edge.start, curve=curve)
+        )
+        for use_id in sorted(geometry._edge_member_uses.get(edge.id, ())):  # noqa: SLF001
+            use = geometry.member_edge_uses[use_id]
+            geometry._put_structural(  # noqa: SLF001
+                "member_edge_use",
+                replace(
+                    use,
+                    orientation=(
+                        Orientation.REVERSED
+                        if use.orientation is Orientation.FORWARD
+                        else Orientation.FORWARD
+                    ),
+                ),
+            )
+        for attachment in tuple(geometry.attachments.values()):
+            if (
+                attachment.target_kind is AttachmentTargetKind.EDGE
+                and attachment.target_id == edge.id
+            ):
+                target = attachment.target_parameters[0]
+                if not target.is_point:
+                    raise GeometryError(
+                        "cannot reverse an edge with an attachment whose target "
+                        "parameter spans a positive interval"
+                    )
+                geometry._put_structural(  # noqa: SLF001
+                    "attachment",
+                    replace(
+                        attachment,
+                        target_parameters=(
+                            ParameterRange.point(1.0 - target.start),
+                        ),
+                    ),
+                )
+        for face_id in geometry.faces_using_edge(edge.id):
+            face = geometry.faces[face_id]
+            geometry._put_entity(  # noqa: SLF001
+                "face",
+                replace(
+                    face,
+                    loop=tuple(
                 OrientedEdge(item.edge, not item.forward)
                 if item.edge == edge.id
                 else item
                 for item in face.loop
+                    ),
+                    holes=tuple(
+                        tuple(
+                            OrientedEdge(item.edge, not item.forward)
+                            if item.edge == edge.id
+                            else item
+                            for item in loop
+                        )
+                        for loop in face.holes
+                    ),
+                ),
             )
-            face.holes = tuple(
-                tuple(
-                    OrientedEdge(item.edge, not item.forward)
-                    if item.edge == edge.id
-                    else item
-                    for item in loop
-                )
-                for loop in face.holes
-            )
-        geometry._arc_cache.pop(edge.id, None)  # noqa: SLF001
         errors = geometry.validate_topology()
         if errors:
             raise GeometryError("edge reversal produced invalid topology: " + "; ".join(errors))
-        return edge.ref
-    except Exception:
-        geometry.restore_topology(snapshot)
-        raise
+        return geometry.edges[edge.id].ref
 
 
 def _reverse_loop(loop: Sequence[OrientedEdge]) -> tuple[OrientedEdge, ...]:
@@ -466,29 +742,78 @@ def _reverse_surface(surface: object) -> object:
     raise GeometryError(f"unsupported surface type {type(surface).__name__}")
 
 
+def _reverse_face_attachment_parameters(
+    surface: object,
+    parameters: tuple[ParameterRange, ...],
+) -> tuple[ParameterRange, ...]:
+    """Carry a face attachment through the surface reparameterization.
+
+    ``ParameterRange`` is intentionally unoriented, so a positive-length path
+    cannot represent a complemented (decreasing) coordinate.  Such curved
+    cases fail closed instead of silently moving the declared attachment.
+    """
+
+    if len(parameters) != 2:
+        raise GeometryError("face attachment requires two target parameter ranges")
+    first, second = parameters
+    if isinstance(surface, Plane) or (
+        isinstance(surface, CoonsSurface) and not surface.has_boundaries
+    ):
+        # Reversed planar/topology-backed four-side faces transpose u and v.
+        return second, first
+    if isinstance(surface, (Cylinder, Cone, RuledSurface, CoonsSurface)):
+        if not first.is_point:
+            raise GeometryError(
+                "cannot reverse a face with an attachment whose complemented "
+                "surface parameter spans a positive interval"
+            )
+        return ParameterRange.point(1.0 - first.start), second
+    raise GeometryError(
+        "cannot reverse a face attachment without a supported surface mapping"
+    )
+
+
 def reverse_face(geometry: GeometryModel, face_id: int) -> EntityRef:
     """Reverse a face orientation, including its authoritative surface normal."""
 
     face = geometry._require_face(int(face_id))  # noqa: SLF001
-    snapshot = geometry.topology_snapshot()
-    try:
+    with geometry.transaction():
         corner_vertices = set(geometry.face_corner_vertices(face.id))
-        face.loop = _reverse_loop(face.loop)
-        face.holes = tuple(_reverse_loop(loop) for loop in face.holes)
+        loop = _reverse_loop(face.loop)
+        corners = face.corners
         if corner_vertices:
-            face.corners = tuple(
+            corners = tuple(
                 index
-                for index, item in enumerate(face.loop)
+                for index, item in enumerate(loop)
                 if geometry.oriented_start_vertex(item) in corner_vertices
             )
-        face.surface = _reverse_surface(face.surface)
+        made = replace(
+            face,
+            loop=loop,
+            holes=tuple(_reverse_loop(item) for item in face.holes),
+            corners=corners,
+            surface=_reverse_surface(face.surface),
+        )
+        geometry._put_entity("face", made)  # noqa: SLF001
+        for attachment in tuple(geometry.attachments.values()):
+            if (
+                attachment.target_kind is AttachmentTargetKind.FACE
+                and attachment.target_id == face.id
+            ):
+                geometry._put_structural(  # noqa: SLF001
+                    "attachment",
+                    replace(
+                        attachment,
+                        target_parameters=_reverse_face_attachment_parameters(
+                            face.surface,
+                            attachment.target_parameters,
+                        ),
+                    ),
+                )
         errors = geometry.validate_topology()
         if errors:
             raise GeometryError("face reversal produced invalid topology: " + "; ".join(errors))
-        return face.ref
-    except Exception:
-        geometry.restore_topology(snapshot)
-        raise
+        return made.ref
 
 
 def _edge_samples(geometry: GeometryModel, edge_id: int, count: int = 65) -> np.ndarray:

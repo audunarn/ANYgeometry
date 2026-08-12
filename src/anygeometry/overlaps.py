@@ -13,7 +13,7 @@ section and other face-scoped attributes through replacement lineage.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Iterable, Mapping, Sequence
 
 import numpy as np
@@ -109,15 +109,19 @@ def _plane_and_polygons(
     if not face_ids:
         raise GeometryError("select at least one plate")
     plane = face_sketch_plane(geometry, int(face_ids[0]))
-    scale = max(
-        (
-            float(np.linalg.norm(geometry.vertex_position(vertex)))
+    participating = np.vstack(
+        [
+            geometry.vertex_position(geometry.oriented_start_vertex(item))
             for face_id in face_ids
-            for item in geometry.faces[int(face_id)].loop
-            for vertex in (geometry.oriented_start_vertex(item),)
-        ),
-        default=1.0,
+            for loop in (
+                geometry.faces[int(face_id)].loop,
+                *geometry.faces[int(face_id)].holes,
+            )
+            for item in loop
+        ]
     )
+    # Classification must be invariant under translating the complete model.
+    scale = max(float(np.linalg.norm(np.ptp(participating, axis=0))), 1.0)
     length_tolerance = float(tolerance) * max(scale, 1.0)
     polygons: dict[int, object] = {}
     for face_id in face_ids:
@@ -205,8 +209,7 @@ def fragment_coplanar_overlaps(
     identifiers = tuple(dict.fromkeys(int(item) for item in face_ids))
     if len(identifiers) < 2:
         raise GeometryError("select at least two plates in ownership order")
-    snapshot = geometry.topology_snapshot()
-    try:
+    with geometry.transaction():
         plane, polygons, length_tolerance = _plane_and_polygons(
             geometry, identifiers, tolerance, strict_straight=True
         )
@@ -320,14 +323,18 @@ def fragment_coplanar_overlaps(
             made = geometry.add_face_from_loop(outer, corners, surface=Plane(
                 plane.origin, plane.x_axis, plane.y_axis
             ))
-            geometry.faces[made].holes = tuple(loop(ring.coords) for ring in polygon.interiors)
-            geometry.faces[made].metadata.update(old_faces[owner_id].metadata)
-            geometry.faces[made].metadata.update(
-                {
+            geometry._put_entity(  # noqa: SLF001
+                "face",
+                replace(
+                    geometry.faces[made],
+                    holes=tuple(loop(ring.coords) for ring in polygon.interiors),
+                    metadata={
+                        **old_faces[owner_id].metadata,
                     "overlap_fragment": True,
                     "source_faces": tuple(sorted(memberships)),
                     "overlap_owner": owner_id,
-                }
+                    },
+                ),
             )
             descendants[owner_id].append(made)
             if len(memberships) > 1:
@@ -418,6 +425,3 @@ def fragment_coplanar_overlaps(
             tuple(overlap_faces),
             float(overlap_area),
         )
-    except Exception:
-        geometry.restore_topology(snapshot)
-        raise

@@ -33,7 +33,7 @@ def _geometry_with_surface(surface: object) -> GeometryModel:
 
     if isinstance(surface, CoonsSurface) and not surface.has_boundaries:
         geometry = plate(2.0, 1.0)
-        next(iter(geometry.faces.values())).surface = surface
+        geometry.set_face_surface(next(iter(geometry.faces)), surface)
         return geometry
 
     assert isinstance(surface, (CoonsSurface, Plane, Cylinder, Cone, RuledSurface))
@@ -68,15 +68,15 @@ def _geometry_with_surface(surface: object) -> GeometryModel:
         for u, v in ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0))
     )
     face = geometry.add_plate(corners)
-    geometry.faces[face].surface = surface
+    geometry.set_face_surface(face, surface)
     return geometry
 
 
 def _complex_geometry() -> GeometryModel:
     geometry = plate(4.0, 3.0, semantic_group="deck")
     face_ref = geometry.group("deck")[0]
-    geometry.faces[face_ref.id].metadata.update(
-        {"label": "main deck", "revision": 2}
+    geometry.update_face_metadata(
+        face_ref.id, label="main deck", revision=2
     )
     geometry.tag(face_ref, "selected", "structural")
     punch_hole(geometry, face_ref.id, (2.0, 1.5, 0.0), 0.25)
@@ -242,3 +242,53 @@ def test_deserialization_rejects_boundary_surface_divergence() -> None:
 
     with pytest.raises(GeometryError, match="inconsistent with its explicit surface"):
         from_dict(document)
+
+
+def test_construction_rejects_a_self_intersecting_face() -> None:
+    geometry = GeometryModel()
+    vertices = geometry.add_points(
+        (
+            (0.0, 0.0, 0.0),
+            (1.0, 1.0, 0.0),
+            (0.0, 1.0, 0.0),
+            (1.0, 0.0, 0.0),
+        )
+    )
+    edges = tuple(
+        geometry.add_line(vertices[index], vertices[(index + 1) % 4])
+        for index in range(4)
+    )
+    with pytest.raises(GeometryError, match="self-intersects"):
+        geometry.add_face_from_loop(
+            tuple(OrientedEdge(edge, True) for edge in edges),
+            surface=Plane(
+                np.zeros(3),
+                np.asarray((1.0, 0.0, 0.0)),
+                np.asarray((0.0, 1.0, 0.0)),
+            ),
+        )
+
+
+def test_construction_rejects_a_face_inconsistent_with_its_surface() -> None:
+    geometry = GeometryModel()
+    vertices = geometry.add_points(
+        (
+            (0.0, 0.0, 0.0),
+            (1.0, 0.0, 0.0),
+            (1.0, 1.0, 0.0),
+            (0.0, 1.0, 0.0),
+        )
+    )
+    edges = tuple(
+        geometry.add_line(vertices[index], vertices[(index + 1) % 4])
+        for index in range(4)
+    )
+    with pytest.raises(GeometryError, match="inconsistent with its explicit surface"):
+        geometry.add_face_from_loop(
+            tuple(OrientedEdge(edge, True) for edge in edges),
+            surface=Plane(
+                np.asarray((0.0, 0.0, 1.0)),
+                np.asarray((1.0, 0.0, 0.0)),
+                np.asarray((0.0, 1.0, 0.0)),
+            ),
+        )

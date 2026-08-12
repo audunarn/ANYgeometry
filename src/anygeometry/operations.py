@@ -6,6 +6,7 @@ those decomposition policies belong to :mod:`anymesher`.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Iterable, List, Sequence, Tuple
 
 import numpy as np
@@ -132,30 +133,22 @@ def _split_face_between_impl(
     second_loop = tuple(second_chain) + (OrientedEdge(dividing_edge, True),)
     first_corners = geometry._detect_corners(first_loop) if len(first_loop) >= 4 else None  # noqa: SLF001
     second_corners = geometry._detect_corners(second_loop) if len(second_loop) >= 4 else None  # noqa: SLF001
-    first = geometry.add_face_from_loop(first_loop, first_corners)
-    second = geometry.add_face_from_loop(second_loop, second_corners)
-    geometry.faces[first].holes = first_holes
-    geometry.faces[second].holes = second_holes
-    for made in (first, second):
-        geometry.faces[made].metadata.update(metadata)
-        # Exact planes remain exact.  Other fragments follow their boundary
-        # as Coons patches, avoiding a false full-domain parameter mapping.
-        made_face = geometry.faces[made]
-        if isinstance(surface, Plane):
-            if len(made_face.corners) == 4:
-                corners = [
-                    geometry.vertex_position(vertex)
-                    for vertex in geometry.face_corner_vertices(made)
-                ]
-                geometry.faces[made].surface = Plane(
-                    corners[0], corners[1] - corners[0], corners[-1] - corners[0]
-                )
-            else:
-                geometry.faces[made].surface = surface
-        else:
-            geometry.faces[made].surface = (
-                CoonsSurface() if len(made_face.corners) == 4 else surface
-            )
+    first = geometry.add_face_from_loop(first_loop, first_corners, surface=surface)
+    second = geometry.add_face_from_loop(second_loop, second_corners, surface=surface)
+    for made, holes in ((first, first_holes), (second, second_holes)):
+        # A split changes trims, not the authoritative support.  Retaining the
+        # verified parent surface is particularly important for cylindrical,
+        # conical, and ruled faces; a Coons patch is only a mapping and must
+        # not silently replace that support.
+        geometry._put_entity(  # noqa: SLF001
+            "face",
+            replace(
+                geometry.faces[made],
+                holes=holes,
+                metadata=dict(metadata),
+                surface=surface,
+            ),
+        )
         geometry.tag(EntityRef("face", made), *tags)
     geometry.record_replacement(
         EntityRef("face", face.id),
@@ -179,8 +172,7 @@ def split_face_between(
 ) -> Tuple[int, Tuple[int, int]]:
     """Atomically fragment a face between boundary vertices."""
 
-    snapshot = geometry.topology_snapshot()
-    try:
+    with geometry.transaction():
         return _split_face_between_impl(
             geometry,
             face_id,
@@ -188,9 +180,6 @@ def split_face_between(
             end_vertex,
             tolerance=tolerance,
         )
-    except Exception:
-        geometry.restore_topology(snapshot)
-        raise
 
 
 split_face = split_face_between
@@ -392,14 +381,10 @@ def split_face_at(
 ) -> Tuple[int, Tuple[int, int]]:
     """Atomically split a four-side face across a local coordinate fraction."""
 
-    snapshot = geometry.topology_snapshot()
-    try:
+    with geometry.transaction():
         return _split_face_at_impl(
             geometry, face_id, axis, fraction, tolerance=tolerance
         )
-    except Exception:
-        geometry.restore_topology(snapshot)
-        raise
 
 
 def _split_side_at(
@@ -463,12 +448,8 @@ def strip_face(
 ) -> Tuple[List[int], List[int]]:
     """Atomically fragment a four-side structural face into strips."""
 
-    snapshot = geometry.topology_snapshot()
-    try:
+    with geometry.transaction():
         return _strip_face_impl(geometry, face_id, axis, count)
-    except Exception:
-        geometry.restore_topology(snapshot)
-        raise
 
 
 def _face_holding(
@@ -513,7 +494,9 @@ def _trim_face_impl(
             if geometry.oriented_end_vertex(current) != geometry.oriented_start_vertex(following):
                 raise GeometryError("inner trim loop is not continuous")
         loops.append(loop)
-    face.holes = tuple(loops)
+    geometry._put_entity(  # noqa: SLF001
+        "face", replace(face, holes=tuple(loops))
+    )
     errors = geometry.validate_topology()
     if errors:
         raise GeometryError("invalid face trim: " + "; ".join(errors))
@@ -527,12 +510,8 @@ def trim_face(
 ) -> int:
     """Atomically attach checked inner trim loops."""
 
-    snapshot = geometry.topology_snapshot()
-    try:
+    with geometry.transaction():
         return _trim_face_impl(geometry, face_id, inner_loops)
-    except Exception:
-        geometry.restore_topology(snapshot)
-        raise
 
 
 def _punch_hole_impl(
@@ -589,7 +568,9 @@ def _punch_hole_impl(
         )
         arcs.append(geometry.add_arc(ring[index], via, ring[(index + 1) % 4]))
     loop = tuple(OrientedEdge(edge, True) for edge in arcs)
-    face.holes = face.holes + (loop,)
+    geometry._put_entity(  # noqa: SLF001
+        "face", replace(face, holes=face.holes + (loop,))
+    )
     errors = geometry.validate_topology()
     if errors:
         raise GeometryError("invalid punched hole: " + "; ".join(errors))
@@ -604,12 +585,8 @@ def punch_hole(
 ) -> Tuple[int, Tuple[int, ...]]:
     """Atomically create a circular trim loop."""
 
-    snapshot = geometry.topology_snapshot()
-    try:
+    with geometry.transaction():
         return _punch_hole_impl(geometry, face_id, centre, radius)
-    except Exception:
-        geometry.restore_topology(snapshot)
-        raise
 
 
 def _fragment_face_impl(
@@ -648,15 +625,11 @@ def fragment_face(
 ) -> Tuple[int, ...]:
     """Atomically apply a sequence of boundary-vertex cuts."""
 
-    snapshot = geometry.topology_snapshot()
-    try:
+    with geometry.transaction():
         return _fragment_face_impl(geometry, face_id, cuts)
-    except Exception:
-        geometry.restore_topology(snapshot)
-        raise
 
 
-def transform(
+def _transform_impl(
     geometry: GeometryModel,
     matrix: Sequence[Sequence[float]],
     references: Iterable[EntityRef] | None = None,
@@ -668,6 +641,11 @@ def transform(
         raise GeometryError("transform must be a finite 4x4 matrix")
     if not np.allclose(transform_matrix[3], (0.0, 0.0, 0.0, 1.0), atol=1e-14):
         raise GeometryError("only affine homogeneous transforms are supported")
+    linear = transform_matrix[:3, :3]
+    singular_values = np.linalg.svd(linear, compute_uv=False)
+    scale = float(singular_values.max())
+    if scale <= 0.0 or float(singular_values.min()) <= 1.0e-12 * scale:
+        raise GeometryError("singular affine transforms are not supported")
     refs = list(references) if references is not None else [
         vertex.ref for vertex in geometry.vertices.values()
     ]
@@ -715,25 +693,105 @@ def transform(
             )
         } <= vertex_ids
     }
+    affected_edges = {
+        edge.id
+        for edge in geometry.edges.values()
+        if {
+            edge.start,
+            edge.end,
+            *(
+                (edge.curve.via_vertex,)
+                if isinstance(edge.curve, Arc)
+                else edge.curve.control_vertices
+                if isinstance(edge.curve, Spline)
+                else ()
+            ),
+        }
+        & vertex_ids
+    }
+    is_uniform = np.allclose(
+        singular_values,
+        singular_values[0],
+        rtol=1.0e-10,
+        atol=1.0e-12 * max(float(singular_values[0]), 1.0),
+    )
+    has_circular_geometry = any(
+        isinstance(geometry.edges[edge_id].curve, Arc)
+        for edge_id in affected_edges
+    ) or any(
+        isinstance(geometry.faces[face_id].surface, (Cylinder, Cone))
+        for face_id in affected_faces
+    )
+    if not is_uniform and has_circular_geometry:
+        raise GeometryError(
+            "anisotropic scale or shear is not supported for arcs, "
+            "cylinders, or cones"
+        )
     transformed_surfaces = {
         face_id: _transform_surface(geometry.faces[face_id].surface, transform_matrix)
         for face_id in complete_faces
     }
+    # Dependency bounds must be captured before any defining vertex moves.
+    # The immutable edge records themselves do not change, and faces are
+    # replaced only after their boundary has moved, so relying on the later
+    # owner writes would leave an already-materialized spatial index at the
+    # old edge/face bounds.
+    journal = geometry._transaction_journal  # noqa: SLF001
+    assert journal is not None
+    for face_id in sorted(affected_faces):
+        geometry._capture_entity("face", face_id)  # noqa: SLF001
+        journal.spatial_updates.add(("face", face_id))
+    for edge_id in sorted(affected_edges):
+        edge_key = ("edge", edge_id)
+        journal.bounds_before.setdefault(  # noqa: SLF001
+            edge_key, geometry._entity_bounds(edge_key)  # noqa: SLF001
+        )
+        journal.spatial_updates.add(edge_key)
     for vertex_id in sorted(vertex_ids):
         point = np.append(geometry.vertex_position(vertex_id), 1.0)
         made = transform_matrix @ point
         if abs(float(made[3])) <= 1.0e-14:
             raise GeometryError("transform maps a point to infinity")
-        geometry.vertices[vertex_id].position = made[:3] / made[3]
+        geometry._put_entity(  # noqa: SLF001
+            "vertex",
+            replace(geometry.vertices[vertex_id], position=made[:3] / made[3]),
+        )
     # Explicit surfaces are invalidated when their defining topology moves;
     # boundary-backed Coons evaluation remains authoritative and exact for
     # affine transforms of the supported structural patches.
     for face_id in affected_faces:
         if face_id in transformed_surfaces:
-            geometry.faces[face_id].surface = transformed_surfaces[face_id]
+            geometry._put_entity(  # noqa: SLF001
+                "face",
+                replace(
+                    geometry.faces[face_id],
+                    surface=transformed_surfaces[face_id],
+                ),
+            )
         else:
-            geometry.faces[face_id].surface = CoonsSurface() if len(geometry.faces[face_id].corners) == 4 else None
+            geometry._put_entity(  # noqa: SLF001
+                "face",
+                replace(
+                    geometry.faces[face_id],
+                    surface=(
+                        CoonsSurface()
+                        if len(geometry.faces[face_id].corners) == 4
+                        else None
+                    ),
+                ),
+            )
     return tuple(EntityRef("vertex", item) for item in sorted(vertex_ids))
+
+
+def transform(
+    geometry: GeometryModel,
+    matrix: Sequence[Sequence[float]],
+    references: Iterable[EntityRef] | None = None,
+) -> Tuple[EntityRef, ...]:
+    """Atomically apply a finite homogeneous transform."""
+
+    with geometry.transaction():
+        return _transform_impl(geometry, matrix, references)
 
 
 def _transform_surface(surface: object, matrix: np.ndarray) -> object:

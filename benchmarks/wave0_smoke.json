@@ -1,0 +1,87 @@
+{
+  "measurements": {
+    "cylinder_member_construction": {
+      "entities": {
+        "edges": 1296,
+        "faces": 640,
+        "vertices": 1312
+      },
+      "peak_python_bytes": 1788528,
+      "seconds": 0.3726471000118181
+    },
+    "duplicate_crossing_construction": {
+      "entities": {
+        "edges": 300,
+        "faces": 0,
+        "vertices": 400
+      },
+      "peak_python_bytes": 165669,
+      "seconds": 0.005921100004343316
+    },
+    "duplicate_crossing_full_audit": {
+      "available": false,
+      "peak_python_bytes": 120,
+      "seconds": 1.8999999156221747e-06
+    },
+    "large_model_local_edit": {
+      "peak_python_bytes": 1008404,
+      "seconds": 0.6630466999922646
+    },
+    "member_lattice_construction": {
+      "entities": {
+        "edges": 500,
+        "faces": 0,
+        "vertices": 1000
+      },
+      "peak_python_bytes": 539728,
+      "seconds": 0.015871299998252653
+    },
+    "mixed_stiffened_panel_construction": {
+      "entities": {
+        "edges": 220,
+        "faces": 100,
+        "vertices": 121
+      },
+      "peak_python_bytes": 275072,
+      "seconds": 0.04915910000272561
+    },
+    "plate_grid_construction": {
+      "entities": {
+        "edges": 840,
+        "faces": 400,
+        "vertices": 441
+      },
+      "peak_python_bytes": 998752,
+      "seconds": 0.058984800009056926
+    },
+    "plate_grid_full_audit": {
+      "available": false,
+      "peak_python_bytes": 144,
+      "seconds": 2.8999929782003164e-06
+    },
+    "plate_grid_serialization": {
+      "document_records": 1681,
+      "peak_python_bytes": 1203132,
+      "seconds": 0.03327839999110438
+    },
+    "replacement_lineage_construction": {
+      "peak_python_bytes": 160864,
+      "seconds": 0.008643099994515069
+    },
+    "replacement_lineage_resolution": {
+      "descendants": 101,
+      "peak_python_bytes": 38624,
+      "seconds": 0.0019016000005649403
+    }
+  },
+  "parameters": {
+    "hostile_sets": 100,
+    "lineage_length": 100,
+    "members": 500,
+    "plate_grid": [
+      20,
+      20
+    ]
+  },
+  "profile": "smoke"
+}

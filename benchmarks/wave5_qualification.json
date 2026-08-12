@@ -1,0 +1,135 @@
+{
+  "measurements": {
+    "cylinder_member_construction": {
+      "entities": {
+        "attachments": 0,
+        "edges": 10368,
+        "faces": 5120,
+        "junctions": 0,
+        "members": 167,
+        "parts": 1,
+        "sheets": 1,
+        "vertices": 10496
+      },
+      "peak_python_bytes": 71135744,
+      "seconds": 35.24061829999846,
+      "untraced_seconds": 6.677990900003351
+    },
+    "duplicate_crossing_construction": {
+      "entities": {
+        "attachments": 0,
+        "edges": 6000,
+        "faces": 0,
+        "junctions": 0,
+        "members": 2000,
+        "parts": 1,
+        "sheets": 0,
+        "vertices": 8000
+      },
+      "peak_python_bytes": 11127462,
+      "seconds": 1.5207688000082271
+    },
+    "duplicate_crossing_full_audit": {
+      "available": true,
+      "candidate_count": 30000,
+      "classified_count": 30000,
+      "clean": false,
+      "index_leaf_tests": 74000,
+      "index_node_visits": 1012978,
+      "index_updates": 0,
+      "issues": 6000,
+      "narrow_phase_count": 30000,
+      "seconds": 7.10183459999098,
+      "unclassified_count": 0
+    },
+    "large_model_local_edit": {
+      "changed": 5,
+      "index_updates": 8,
+      "peak_python_bytes": 128544,
+      "seconds": 0.19976789999054745
+    },
+    "member_lattice_construction": {
+      "entities": {
+        "attachments": 0,
+        "edges": 10000,
+        "faces": 0,
+        "junctions": 0,
+        "members": 10000,
+        "parts": 1,
+        "sheets": 0,
+        "vertices": 20000
+      },
+      "peak_python_bytes": 33023818,
+      "seconds": 3.652152100010426,
+      "untraced_seconds": 0.7120816000096966
+    },
+    "mixed_stiffened_panel_construction": {
+      "entities": {
+        "attachments": 0,
+        "edges": 5100,
+        "faces": 2500,
+        "junctions": 0,
+        "members": 98,
+        "parts": 1,
+        "sheets": 1,
+        "vertices": 2601
+      },
+      "peak_python_bytes": 27179435,
+      "seconds": 2.8929804999934277,
+      "untraced_seconds": 0.6608953999966616
+    },
+    "plate_grid_construction": {
+      "entities": {
+        "attachments": 0,
+        "edges": 20200,
+        "faces": 10000,
+        "junctions": 0,
+        "members": 0,
+        "parts": 0,
+        "sheets": 0,
+        "vertices": 10201
+      },
+      "peak_python_bytes": 30202220,
+      "seconds": 10.791863799997373,
+      "untraced_seconds": 1.964210699996329
+    },
+    "plate_grid_full_audit": {
+      "available": true,
+      "candidate_count": 259000,
+      "classified_count": 259000,
+      "clean": true,
+      "index_leaf_tests": 638401,
+      "index_node_visits": 6879385,
+      "index_updates": 0,
+      "issues": 0,
+      "narrow_phase_count": 259000,
+      "seconds": 72.72503260000667,
+      "unclassified_count": 0
+    },
+    "plate_grid_serialization": {
+      "document_records": 40401,
+      "peak_python_bytes": 33943070,
+      "seconds": 5.72267699999793,
+      "untraced_seconds": 0.9197234000021126
+    },
+    "replacement_lineage_construction": {
+      "peak_python_bytes": 1972025,
+      "seconds": 1.7702833999937866
+    },
+    "replacement_lineage_resolution": {
+      "descendants": 1001,
+      "peak_python_bytes": 169432,
+      "seconds": 0.0029412000003503636
+    }
+  },
+  "parameters": {
+    "hostile_sets": 2000,
+    "lineage_length": 1000,
+    "members": 10000,
+    "plate_grid": [
+      100,
+      100
+    ]
+  },
+  "profile": "qualification"
+}

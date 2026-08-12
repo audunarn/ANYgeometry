@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
+
 import numpy as np
 import pytest
 
@@ -74,7 +76,12 @@ def test_topology_snapshot_restores_identity_groups_tags_and_history(
     geometry.split_edge(edge_ref.id, 0.5)
     geometry.restore_topology(snapshot)
 
-    assert geometry.id_state() == id_state
+    # Snapshot restore recovers topology but never rewinds allocation identity.
+    # The discarded split therefore leaves deliberate vertex/edge ID gaps.
+    restored_state = geometry.id_state()
+    assert restored_state["vertex"] > id_state["vertex"]
+    assert restored_state["edge"] > id_state["edge"]
+    assert restored_state["face"] == id_state["face"]
     assert edge_ref.id in geometry.edges
     assert geometry.group("shell") == (face_ref,)
     assert geometry.tags_for(edge_ref) == ("boundary",)
@@ -88,8 +95,10 @@ def test_topology_snapshot_restores_mutated_vertex_and_edge_state() -> None:
     edge = geometry.add_line(first, second)
     snapshot = geometry.topology_snapshot()
 
-    geometry.vertices[first].position[:] = (4.0, 5.0, 6.0)
-    geometry.edges[edge].start, geometry.edges[edge].end = second, first
+    geometry.move_point(first, 4.0, 5.0, 6.0)
+    from anygeometry import reverse_edge
+
+    reverse_edge(geometry, edge)
     geometry.restore_topology(snapshot)
 
     assert geometry.vertex_position(first) == pytest.approx((0.0, 0.0, 0.0))
@@ -104,19 +113,41 @@ def test_topology_snapshot_can_restore_nested_mutable_state_repeatedly() -> None
             ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (1.0, 1.0, 0.0), (0.0, 1.0, 0.0))
         )
     )
-    face = geometry.faces[face_id]
-    face.metadata["nested"] = {"values": [1, 2]}
+    geometry.set_face_metadata(face_id, {"nested": {"values": [1, 2]}})
     snapshot = geometry.topology_snapshot()
 
     for replacement in ((8, 9), (10, 11)):
-        face.metadata["nested"]["values"][:] = replacement
-        assert face.surface is not None
-        face.surface.origin[:] = (7.0, 7.0, 7.0)  # type: ignore[union-attr]
+        geometry.set_face_metadata(
+            face_id, {"nested": {"values": list(replacement)}}
+        )
         geometry.restore_topology(snapshot)
         face = geometry.faces[face_id]
-        assert face.metadata == {"nested": {"values": [1, 2]}}
+        assert face.metadata.to_dict() == {"nested": {"values": [1, 2]}}
         assert face.surface is not None
         assert face.surface.origin == pytest.approx((0.0, 0.0, 0.0))  # type: ignore[union-attr]
+
+
+def test_public_entity_records_arrays_and_metadata_are_immutable() -> None:
+    geometry = GeometryModel()
+    face_id = geometry.add_plate(
+        geometry.add_points(
+            ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (1.0, 1.0, 0.0), (0.0, 1.0, 0.0))
+        )
+    )
+    face = geometry.faces[face_id]
+    edge = geometry.edges[face.loop[0].edge]
+
+    with pytest.raises(TypeError):
+        geometry.faces[999] = face  # type: ignore[index]
+    with pytest.raises(FrozenInstanceError):
+        edge.start = edge.end  # type: ignore[misc]
+    with pytest.raises(ValueError):
+        geometry.vertices[edge.start].position[:] = (4.0, 5.0, 6.0)
+    with pytest.raises(TypeError):
+        face.metadata["new"] = "value"  # type: ignore[index]
+    assert face.surface is not None
+    with pytest.raises(ValueError):
+        face.surface.origin[:] = (7.0, 7.0, 7.0)  # type: ignore[union-attr]
 
 
 def test_move_point_rebuilds_surface_and_rejects_degenerate_curves_atomically() -> None:
@@ -231,15 +262,16 @@ def test_unordered_loop_is_oriented_and_open_chain_is_rejected() -> None:
         open_geometry.add_face(open_geometry.add_polyline(points))
 
 
-def test_topology_validation_detects_self_intersection_and_zero_length() -> None:
+def test_public_mutations_reject_self_intersection_and_zero_length() -> None:
     geometry = GeometryModel()
     vertices = geometry.add_points(
         ((0.0, 0.0, 0.0), (2.0, 2.0, 0.0), (0.0, 2.0, 0.0), (2.0, 0.0, 0.0))
     )
-    geometry.add_face(geometry.add_polyline(vertices, close=True))
-
-    errors = geometry.validate_topology()
-    assert any("self-intersects" in error for error in errors)
+    edges = geometry.add_polyline(vertices, close=True)
+    with pytest.raises(GeometryError, match="self-intersects"):
+        geometry.add_face(edges)
+    assert geometry.faces == {}
+    assert geometry.validate_topology() == ()
 
     line_geometry = GeometryModel()
     first, second = line_geometry.add_points(

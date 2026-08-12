@@ -355,6 +355,45 @@ def test_split_and_strip_faces_preserve_lineage_groups_and_exact_plane() -> None
     assert geometry.validate_topology() == ()
 
 
+def test_curved_face_split_preserves_authoritative_cylinder_support() -> None:
+    geometry = GeometryModel()
+    surface = Cylinder(
+        np.zeros(3),
+        np.asarray((0.0, 0.0, 1.0)),
+        np.asarray((1.0, 0.0, 0.0)),
+        2.0,
+        3.0,
+        0.0,
+        0.5 * np.pi,
+    )
+    lower = geometry.add_points(
+        tuple(surface.evaluate(u, 0.0) for u in (0.0, 0.5, 1.0))
+    )
+    upper = geometry.add_points(
+        tuple(surface.evaluate(u, 1.0) for u in (0.0, 0.5, 1.0))
+    )
+    bottom = geometry.add_arc(*lower)
+    far_side = geometry.add_line(lower[-1], upper[-1])
+    top = geometry.add_arc(*upper)
+    near_side = geometry.add_line(lower[0], upper[0])
+    face = geometry.add_face_from_loop(
+        (
+            OrientedEdge(bottom, True),
+            OrientedEdge(far_side, True),
+            OrientedEdge(top, False),
+            OrientedEdge(near_side, False),
+        ),
+        (0, 1, 2, 3),
+        surface=surface,
+    )
+
+    divider, children = split_face_at(geometry, face, axis=0, fraction=0.5)
+
+    assert all(geometry.faces[item].surface is surface for item in children)
+    assert len(geometry.faces_using_edge(divider)) == 2
+    assert geometry.validate_topology() == ()
+
+
 def test_fragment_face_applies_multiple_boundary_vertex_cuts() -> None:
     geometry = GeometryModel()
     vertices = tuple(
@@ -470,7 +509,24 @@ def test_face_split_assigns_intact_hole_and_rolls_back_crossing_cut() -> None:
     with pytest.raises(GeometryError, match="intersects or touches hole"):
         split_face_at(crossing, crossing_face, 0, 0.5)
 
-    assert to_dict(crossing) == before
+    after = to_dict(crossing)
+    assert {
+        key: value
+        for key, value in after.items()
+        if key not in {"id_state", "checksum"}
+    } == {
+        key: value
+        for key, value in before.items()
+        if key not in {"id_state", "checksum"}
+    }
+    assert all(
+        after["id_state"][kind] >= value
+        for kind, value in before["id_state"].items()
+    )
+    assert any(
+        after["id_state"][kind] > value
+        for kind, value in before["id_state"].items()
+    )
     assert crossing.validate_topology() == ()
 
 
@@ -498,6 +554,65 @@ def test_invalid_trim_and_overlapping_punch_are_atomic() -> None:
 
     assert to_dict(geometry) == before
     assert geometry.validate_topology() == ()
+
+
+def test_transform_rejects_singular_and_unsafe_circular_affine_maps() -> None:
+    straight = GeometryModel()
+    straight.add_point(0.0, 0.0, 0.0)
+    singular = np.eye(4)
+    singular[2, 2] = 0.0
+    with pytest.raises(GeometryError, match="singular"):
+        transform(straight, singular)
+
+    curved = GeometryModel()
+    start, via, end = curved.add_points(
+        ((1.0, 0.0, 0.0), (np.sqrt(0.5), np.sqrt(0.5), 0.0), (0.0, 1.0, 0.0))
+    )
+    arc = curved.add_arc(start, via, end)
+    anisotropic = np.eye(4)
+    anisotropic[0, 0] = 2.0
+    before = curved.sample_edge(arc, np.linspace(0.0, 1.0, 9))
+
+    with pytest.raises(GeometryError, match="anisotropic scale or shear"):
+        transform(curved, anisotropic, (EntityRef("vertex", start),))
+
+    assert curved.sample_edge(arc, np.linspace(0.0, 1.0, 9)) == pytest.approx(before)
+
+
+def test_transform_updates_materialized_spatial_bounds_for_dependencies() -> None:
+    geometry = GeometryModel()
+    face = geometry.add_plate(
+        geometry.add_points(
+            (
+                (0.0, 0.0, 0.0),
+                (1.0, 0.0, 0.0),
+                (1.0, 1.0, 0.0),
+                (0.0, 1.0, 0.0),
+            )
+        )
+    )
+    edges = {item.edge for item in geometry.faces[face].loop}
+    assert ("face", face) in geometry.spatial_candidates(
+        (-0.1, -0.1, -0.1), (1.1, 1.1, 0.1)
+    )
+
+    matrix = np.eye(4)
+    matrix[:3, 3] = (10.0, 0.0, 0.0)
+    transform(geometry, matrix)
+
+    moved = set(
+        geometry.spatial_candidates((9.9, -0.1, -0.1), (11.1, 1.1, 0.1))
+    )
+    old = set(
+        geometry.spatial_candidates((-0.1, -0.1, -0.1), (1.1, 1.1, 0.1))
+    )
+    assert ("face", face) in moved
+    assert {("edge", edge) for edge in edges} <= moved
+    assert ("face", face) not in old
+    assert not ({("edge", edge) for edge in edges} & old)
+    assert {("face", face), *(("edge", edge) for edge in edges)} <= set(
+        geometry.last_change_set.spatial_updates
+    )
 
 
 def test_operations_reject_invalid_targets_and_parameters(
