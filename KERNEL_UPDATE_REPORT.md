@@ -1,249 +1,400 @@
-# ANYgeometry strict-kernel update report
+# ANYgeometry 0.2.1 kernel gap-closure report
 
-Status: implementation and release qualification complete.
+Status: implementation, repository tests, performance qualification, offline
+package build, Twine validation, and isolated installed-wheel smoke are
+complete. Final commits, branch publication, downstream public-tree rerun,
+and ecosystem closeout remain pending.
 
-This report records the mixed plate-and-beam geometry-kernel update based on
-`kernel_update`. It covers neutral geometry and structural bookkeeping only.
-ANYmesher, ANYfem, ANYstructure, ANYsolver, and sibling repositories were not
-modified.
+This report covers the strict mixed plate/member kernel and the additive
+mesher-facing gap closure. All source changes are confined to ANYgeometry.
+ANYmesh/ANYmesher, ANYfem, ANYstructure, ANYsolver, and other sibling
+repositories were not edited in this task.
 
-## Branch and baseline
+## Authority, branch, and baseline
 
-- Authoritative task branch: local `kernel_update`
-- Resolved base SHA: `19f16746ceee76838b7df9d08a95028699e3a738`
-- Remote resolution: `origin/kernel_update` did not exist after fetching all
-  remotes; the local branch was used exactly as required. `main` was never
-  substituted.
-- Working branch: `codex/strict-kernel-update`
-- Original checkout: not modified
-- Baseline platform: Windows 11, Python 3.13.9, NumPy 2.4.3, Shapely available
-- Baseline release: ANYgeometry 0.1.0, geometry schema 2, feature-history
-  schema 1
+- Original governing plan:
+  `C:\Users\AudunArnesenNyhus\Downloads\ANYgeometry_kernel_update_codex_plan.md`
+- Coordination ledger: `docs/KERNEL_UPDATE_OVERVIEW.md`
+- Repository: `C:\Github\ANYgeometry`
+- Authoritative base: local `kernel_update` at
+  `19f16746ceee76838b7df9d08a95028699e3a738`
+- `origin/kernel_update` did not exist; `main` was never substituted.
+- Working branch: `native_hybrid_mesher`
+- Registration head before final gap-closure edits:
+  `f2d7793d7d32a6dcd772c7ed8701aca11b459288`
+- Package target: ANYgeometry 0.2.1
+- Geometry writer schema: 4
+- Supported geometry readers: schemas 1, 2, 3, and 4
 
-The base collected 132 tests: 131 passed and one failed because the tracked
-branch omitted the `py.typed` marker declared by its package metadata. The
-baseline CLI, source distribution, wheel build, and `twine check` otherwise
-passed.
+The coordinated branch is an approved improvement over the earlier
+`codex/strict-kernel-update` name because it retains the required base while
+providing the agreed ANYmesher read contract. It does not authorize writes to
+the downstream repositories.
 
 ## Delivered kernel
 
-### Identity, ownership, and public state
+### Persistent identity, ownership, and transactions
 
-- `EntityHandle(model_id, kind, id)` is the model-bound public identity.
-  Wrong-model, active, replaced, deleted, and unknown resolution outcomes are
-  explicit. The model-unbound `EntityRef(kind, id)` remains for local
-  compatibility.
-- Geometry and structural IDs use independent monotonic high-water marks.
-  Rollback, undo-compatible snapshot restoration, and feature regeneration do
-  not reuse retired IDs.
-- Vertex, edge, face, surface, structural, group, tag, and coordinate records
-  are read-only at the public boundary. Mutations pass through the model owner.
-- Model UUID, revision, tolerance, units, local origin, and external coordinate
-  transform are serialized document state. Setting changes are revisioned and
-  published through a `ChangeSet`.
+- Public `EntityHandle(model_id, kind, id)` values bind persistent identity to
+  the model UUID; wrong-model, active, replaced, deleted, and unknown outcomes
+  are explicit. `EntityRef` remains a local compatibility value.
+- Geometry and structural allocators use monotonic high-water marks. Failed
+  transactions, snapshot restore, feature regeneration, and alternate edits
+  do not reuse retired IDs.
+- Public geometry, structural, group, tag, coordinate, and feature-history
+  views are owner-controlled. Mutations publish one deterministic `ChangeSet`
+  per successful outer transaction.
+- Delta journals capture changed records and dependency bounds, roll back
+  topology/semantics/ownership/caches/spatial state atomically, and leave
+  allocator gaps on failure.
+- Reverse incidence covers topology, Sheet/FaceUse/Coedge ownership,
+  Member/MemberEdgeUse axes, Attachments/Junctions, curve controls, and
+  orientation references. Local structural validation expands only the
+  affected semantic closure; complete Sheet validation remains intentional
+  when manifold/orientation invariants require it.
 
-### Transactions and performance architecture
+### Mixed plate/member topology
 
-- Ordinary edits use nested delta-journalled transactions instead of
-  full-model snapshots. First writes capture only the affected records.
-- Outer commit validates the changed dependency closure, updates reverse
-  incidence and the spatial index, increments revision once, and publishes one
-  deterministic `ChangeSet`.
-- Failure rolls back geometry, semantics, structural records, caches, and
-  spatial state while retaining allocator high-water marks.
-- Change hooks are read-only observers. Snapshot restoration and feature
-  regeneration publish atomically, so observers cannot see mixed topology and
-  feature-history state.
-- Reverse vertex/edge/face incidence and edge/member and face/sheet incidence
-  are maintained explicitly. A lazy height-balanced AABB tree supports
-  deterministic changed-region and full-audit candidate generation.
+- `Part`, `Sheet`, `FaceUse`, and persistent `Coedge` records own oriented
+  shell topology. `Member` and ordered `MemberEdgeUse` chains represent
+  physical beams independently of geometry edges and finite elements.
+- Member identity survives geometry subdivision. Explicit Member split records
+  structural lineage. Reverse/copy/insert operations retain or remap ownership,
+  qualified relationships, parameterization, construction ownership, and
+  model-bound identity atomically.
+- `Attachment` and `Junction` persist explicit connection intent, parameter
+  witnesses, evidence strength, residual/tolerance, context, provenance, and
+  lineage. Unknown or dangling relationships fail closed.
+- Qualified face/face `CONNECT` persists a shell/sheet T-junction as shared
+  B-rep edge topology in both Sheets' FaceUse/Coedge records. No downstream
+  coordinate-proximity connection inference is required or permitted.
+- Straight sketch extrusion walls are canonical Plane supports; aligned arc
+  extrusion walls are exact Cylinders. Genuine non-planar Coons cases remain
+  typed unsupported.
 
-### Persistent mixed plate-and-beam topology
+### Query, plan, apply, and tolerance
 
-- `Part`, `Sheet`, `FaceUse`, and persistent `Coedge` records represent plate
-  ownership and oriented shell incidence.
-- `Member` and ordered `MemberEdgeUse` chains represent physical beams. They
-  are distinct from geometry edges and from finite-element beam elements.
-- Member identity survives axis subdivision. Coedge identity survives
-  orientation-only edge and face reversals.
-- `Attachment` represents declared member-to-face or member-to-edge
-  relationships. `Junction` represents endpoint, crossing, overlap, and
-  multi-way member intent with parameter-specific uses.
-- Split, copy, insert, mirror, pattern, reversal, and removal paths preserve or
-  reject structural dependencies atomically. Dependency-aware public removal
-  methods prevent dangling relationships.
-- `GeometryModel.add_members(...)` batches large beam lattices into one part
-  update and one structural validation.
+- `query_intersection` returns immutable typed, model-bound components with
+  dimension, parent/subparent identity, parameters, witnesses, residual,
+  tolerance, quality, and diagnostics.
+- `plan_imprint` produces a deterministic revision-bound plan. `apply_imprint`
+  revalidates staleness and the explicit policy before one atomic edit.
+- Typed outcomes include disjoint, touch/tangent/cross, containment, overlap,
+  coincidence, unsupported, capability-missing, and unclassified results.
+- Supported workflows include planar multi-component/hole-aware face
+  clipping/imprint, coplanar fragmentation, qualified Plane/Cylinder cases,
+  straight and same-circle edge/member cases, and member/sheet relations.
+  Unsupported combinations fail before mutation.
+- `TolerancePolicy` separates computational, coincidence, healing, fitting,
+  surface, angular, parameter, area, and AABB tolerances. Effective tolerance
+  depends on participating local extents, not world origin or unrelated model
+  size. Uniform model/unit scaling uses `TolerancePolicy.scaled`.
 
-### Geometry qualification and mutation policy
+### Audit, spatial index, and mesher-facing read contract
 
-- `TolerancePolicy` separates computational length, merge/heal, angular,
-  parameter, area, and surface-residual tolerances. Relative scaling uses only
-  participating local feature extents, never global coordinate magnitude or an
-  unrelated model extent.
-- Typed qualified predicates distinguish disjoint, touch, tangent, cross,
-  overlap, coincidence, and unclassified results, with parameters, witnesses,
-  residuals, and quality.
-- Qualified analytical coverage includes line/line, line/plane, plane/plane,
-  line/cylinder, and bounded segment/segment cases.
-- Planar `clip_line_to_face` returns every material interval and subtracts
-  holes instead of collapsing a concave or holed face to one span.
-- Topology-changing face intersections require an explicit `MutationPolicy`.
-  Query-only calls remain non-mutating; unsupported weld/reuse combinations
-  reject instead of approximating a result.
-- Support surfaces are retained across qualified edits. Circular geometry
-  rejects anisotropic or singular transforms that cannot be represented
-  exactly by the current curve/surface types.
+- A deterministic maintained AABB tree supports incremental mutation,
+  changed-region lookup, nearest queries, overlap candidate selection, and
+  strict-audit broad phase. Conservative face bounds cover Plane, Cylinder,
+  Cone, Ruled, and Coons interiors.
+- `strict_audit()` classifies every admitted full-model candidate and fails
+  closed on unsupported/ill-conditioned geometry, incomplete accounting,
+  unverified relationships, invalid ownership, or index inconsistency.
+- `audit_changed_region(model, change_set, policy=None)` reports explicit
+  `CHANGED_REGION` scope and can never claim full certification.
+- `extract_model_closure` returns a working model, bidirectional model-bound
+  handle maps, source UUID/revision, and canonical source handles. It preserves
+  selected dependency/structural closure without silently dropping provenance.
+- Batch edge/face evaluation, derivatives, normals, and closest projection are
+  exposed as model methods and module functions for Plane, Cylinder, Cone,
+  RuledSurface, and CoonsSurface. Built-in primitive projection is batched and
+  deterministic; unsupported custom cases retain qualified fallback behavior.
+- Public coplanar-overlap query accepts selected face IDs, changed AABBs, or
+  precomputed candidate pairs and uses the maintained index by default.
 
-### Strict fail-closed audit
+## Serialization, certification, and compatibility
 
-- `strict_audit()` builds an independent broad phase and classifies every
-  vertex/vertex, vertex/edge, edge/edge, edge/face, and face/face candidate
-  admitted by conservative bounds.
-- Checks cover duplicate and reversed geometry, T-junctions, crossings,
-  collinear/circular overlap, face overlap and containment, crossing faces,
-  sheet manifoldness and orientation, replacement lineage, structural
-  ownership, member/member relationships, member/face attachments, junction
-  geometry, and maintained-index consistency.
-- Unsupported or ill-conditioned narrow phases become blocker-level
-  `UNCLASSIFIED_CANDIDATE` issues. They cannot produce a false clean result.
-- Declared overlap junctions are proved at all piecewise-straight member-use
-  breakpoints. Multiple circular-arc crossing components are qualified
-  separately. Unrelated distant geometry cannot relax a local classification.
-- Certified serialization requires a complete, verified, certifiable audit.
+ANYgeometry 0.2.1 reads geometry schemas 1–4 and writes canonical checksummed
+schema 4. Schemas 1–3 migrate deterministically and one-way. Schema 4 stores
+model identity/revision, coordinates/CRS, full tolerance policy, allocator
+high-water marks, support and optional parameterization, construction/control
+ownership, geometry and structural topology, qualified relationships,
+semantics, extensions, lineage, and feature history.
 
-### Serialization and feature history
+Legacy relationship evidence that lacks persisted qualification data becomes
+`UNVERIFIED`; zero residual/tolerance placeholders never imply exactness and
+block certification. A 0.2.0 reader intentionally rejects schema 4 even though
+the live Python dependency range remains `ANYgeometry>=0.2,<0.3`.
 
-- Geometry schema 3 is canonical and SHA-256 checksummed. It persists model
-  identity/revision, coordinates, tolerance, all allocator high-water marks,
-  geometry, surfaces and trims, structural ownership and relationships,
-  groups, tags, lineage, extensions, and feature history.
-- The current-schema reader rejects missing or unexpected core fields,
-  duplicate JSON keys and records, malformed enums, invalid counters,
-  non-finite data, checksum mismatch, unresolved references, and invalid
-  topology.
-- Schema 1 and 2 load through conservative one-way migration. Face ownership
-  is inferred without inventing beam identity or cross-face orientation, and
-  migration provenance is recorded.
-- JSON and deterministic gzip JSON round-trip model identity and content.
-- Feature history is owner-observed: append, update, move, suppress, remove,
-  restore, and regeneration are revisioned. Records returned to callers are
-  detached copies, and persistence is validated before checksumming.
-- Feature regeneration stages topology and history together, preserves
-  replacement lineage, and publishes one feature-aware change event.
+`certified=True` is a write-time strict-audit gate, not a persisted certificate.
+Ordinary and certified schema-4 payload shapes are identical. An `AuditReport`
+is evidence only for its exact model UUID, revision, and audit policy; a
+consumer must retain or recompute that report for qualified handoff.
 
-## Compatibility and downstream impact
+## Downstream contract state
 
-- Package version: 0.2.0
-- Geometry document version: 3
-- Feature-history version: 1
-- `EntityRef`, existing geometry construction, query, serialization, and CLI
-  entry points remain available where practical.
-- Consumers should migrate cross-document state to `EntityHandle`, replace
-  direct store mutation with owner methods, and represent physical beams with
-  `Member` records rather than edge groups.
-- Schema migration is one-way on write. A schema-3 document is not expected to
-  load in a schema-2-only consumer.
-- No finite-element generation, mesh numbering, seeding, smoothing, mapped
-  decomposition, materials, sections, thicknesses, loads, supports, solver
-  state, or results were moved into this kernel.
+The ANYmesher task accepted the public Python range and schema-4 boundary. Its
+independent contract evidence reported 31 passing integration tests covering
+canonical API import, real planar query/plan/apply, wrong-model rejection,
+legacy quarantine, persistence/migration, and future-version failure. A later
+solver regression reported 109 passing tests. These results support but do not
+replace ANYgeometry's own release qualification.
 
-## Verification
+The authoritative downstream symbols are:
 
-- Final full suite: **272 passed in 7.84 seconds**
-- Focused audit, predicate, and spatial suite after the final local-tolerance
-  hardening: 52 passed
-- Import-boundary verification: ANYgeometry imports no sibling, mesher, FE,
-  solver, or GUI package
-- CLI qualification: version, example write, schema-3 read, and JSON inspection
-  passed in the repository suite; the isolated wheel reported `0.2.0`.
-- Source and wheel builds: passed with `python -m build`.
-- `twine check`: passed for both artifacts.
-- Clean-environment wheel smoke test: passed for import, `py.typed`, model
-  construction, schema-3 round trip, model UUID preservation, topology
-  validation, and the module CLI.
-- Artifact SHA-256 hashes:
-  - `anygeometry-0.2.0.tar.gz`:
-    `c01e1e1d605fb8466f0e269a92f55777eedc665eb53b3d46f83dcd9377cc3b7a`
-  - `anygeometry-0.2.0-py3-none-any.whl`:
-    `96201dd09361d11c661bd154297cb994097b79c0fed6019449e212ed982ba391`
+```text
+extract_model_closure
+evaluate_edge_many
+edge_tangent_many
+evaluate_face_many
+face_derivatives_many
+face_normal_many
+project_to_face_many
+audit_changed_region
+find_coplanar_overlaps
+query_intersection
+plan_imprint
+apply_imprint
+```
+
+## Supported intersection and mutation matrix
+
+| Operands | Qualified query support | Mutation support |
+|---|---|---|
+| infinite line / line | analytic disjoint, cross, parallel, coincident | query only |
+| line / Plane | analytic disjoint, touch, cross, contained | query only |
+| Plane / Plane | analytic disjoint, curve, coincident | bounded face workflow where trims qualify |
+| line / Cylinder | analytic zero, tangent, or two-point result | qualified bounded Plane/Cylinder face workflow |
+| straight edge / straight edge | disjoint, touch, cross, collinear overlap | weld/connect/reuse according to explicit policy |
+| coincident same-circle Arc / Arc | touch, contained, overlap, coincident | qualified subdivision/reuse where representable |
+| straight edge / planar Face | all material intervals, including concavity and holes | imprint or persistent Attachment where the pair permits it |
+| planar Face / Face | disjoint, point, curve, containment, overlap region, coincidence | curve `IMPRINT`/`CONNECT`; region `IMPRINT` only |
+| bounded Plane / Cylinder faces | qualified analytic components | supported qualified face imprint cases |
+| Member / Member | piecewise straight and coincident same-circle axes | `CONNECT`, `KEEP_DISCONNECTED`, `CONTACT_ONLY`, or strict reuse |
+| Member / Face or Sheet | straight-chain point/interval classification | persistent typed Attachment/Junction; no inferred weld |
+| Sheet / Sheet curve intersection | face/face query with model-bound Sheet context | shared edge plus persistent FaceUse/Coedge topology |
+
+`DISJOINT`, same-parent, and face/face point-only results plan
+`NO_TOPOLOGY`. `REUSE_EXISTING` is non-creative and revision-neutral when the
+compatible edge or relationship exists; absence rejects before mutation.
+
+## Fail-closed unsupported matrix
+
+| Case | Typed result | Strict-audit result | Mutation | Required capability or fallback |
+|---|---|---|---|---|
+| general mixed Spline/Arc or non-coincident Arc pairs | `UNSUPPORTED` | `BLOCKER`, `UNSUPPORTED_CANDIDATE` | blocked | add a verified analytical/numerical qualifier |
+| general bounded non-Plane/Cylinder surface pair | `UNSUPPORTED` | `BLOCKER`, `UNSUPPORTED_CANDIDATE` | blocked | add a qualified surface predicate |
+| inconclusive or ill-conditioned predicate | `UNCLASSIFIED` | `BLOCKER`, `UNCLASSIFIED_CANDIDATE` | blocked | improve conditioning or provide verified evidence |
+| general planar overlay without Shapely | `CAPABILITY_MISSING` | `BLOCKER`, `CAPABILITY_MISSING` | blocked | install the `planar` extra (`shapely>=2.0`) |
+| region-dimensional shell `CONNECT` | `UNSUPPORTED` plan | blocking if unresolved | blocked | choose explicit `MutationPolicy.IMPRINT` |
+| face/face point-only imprint | `UNSUPPORTED` plan | blocking if conformality is required | blocked | record an appropriate non-topological intent downstream |
+| legacy relationship with no residual/tolerance evidence | loaded as `UNVERIFIED` | `BLOCKER`, `UNVERIFIED_CLASSIFICATION` | not promoted to exact topology | re-query/requalify under schema 4 |
+| closure request with `include_features=True` | explicit `GeometryError` | not certifiable as a feature closure | blocked | materialize a supported feature baseline separately |
+
+No unsupported case is converted into sampling-based topology, an empty
+success, or coordinate-proximity connection inference.
+
+## Verification evidence
+
+### Environment and baseline
+
+- Windows 11 `10.0.26200`, CPython 3.13.9, NumPy 2.4.3, Shapely 2.1.2.
+- Base commit test collection: 132 tests; 131 passed and one failed because the
+  declared `src/anygeometry/py.typed` marker was absent from the base commit.
+- Base commit: `19f16746ceee76838b7df9d08a95028699e3a738`.
+
+### Final tests
+
+- Full repository suite: `python -m pytest -q` -> **389 passed in 11.94 s**.
+- Schema-4 persistence/feature milestone matrix: **116 passed**.
+- Final evaluator contract independently reproduced by coordination:
+  **26 passed**.
+- Final intersection/policy/radial workflow matrix independently reproduced:
+  **67 passed in 7.66 s**.
+- Final generalized Attachment/source/radial/curved-split matrix independently
+  reproduced: **45 passed in 0.25 s**.
+- The full suite ran with Shapely installed. It also contains an explicit
+  import-denial regression proving the general planar path returns typed
+  `CAPABILITY_MISSING` when Shapely is absent.
+- No formatter, linter, or static type checker is configured in
+  `pyproject.toml`; none was invented for this release. The installed wheel
+  independently verified the PEP 561 `py.typed` marker.
+
+### CLI and package qualification
+
+- Direct source `python -m anygeometry --version` initially failed with
+  `No module named anygeometry` because the checkout is not installed and the
+  pytest-only `pythonpath` setting does not affect normal Python. With
+  `PYTHONPATH=src`, version, `--write-example`, and readback `--json` all
+  passed; readback reported 12 vertices, 17 edges, six faces, and valid
+  topology. The generated example was removed.
+- Build tools: build 1.5.0, wheel 0.45.1, Twine 6.2.0, pip 26.1.1.
+- The first isolated build attempt truthfully failed when build isolation tried
+  to fetch `wheel` through the restricted network. The registered offline
+  command `python -m build --no-isolation --outdir dist_gap_closure` then built
+  both artifacts without network access. Twine reported **PASSED** for both.
+- A first in-repository wheel-origin harness was invalid because its target and
+  origin assertion could not be independent of the checkout. A second external
+  TEMP harness installed the wheel but failed before import because Windows
+  stripped nested `python -c` quotes; its 8.3/long-path cleanup guard also
+  refused, and the exact orphan was subsequently removed under an explicit
+  canonical-path guard. No package claim was made from either run.
+- The final registered external-TEMP smoke decoded its verifier over stdin,
+  cleared Python path/home/venv state, installed with `--no-index --no-deps`,
+  and passed. `sys.executable`, `sys.prefix`, and `anygeometry.__file__` were
+  all below the fresh TEMP venv and the module was outside this repository;
+  version was 0.2.1, `py.typed` existed, packaged CLI printed 0.2.1, and exact
+  cleanup reported `target_exists=False`.
+
+Artifacts (generated evidence; intentionally not committed):
+
+- `anygeometry-0.2.1.tar.gz`: 327,454 bytes, SHA-256
+  `2E923E14407480FA25489963948A19691E8121C0674DC78C1ACCDC96E3F265F1`.
+- `anygeometry-0.2.1-py3-none-any.whl`: 274,758 bytes, SHA-256
+  `99D3035806E109341E92475B555D21CA89EBB12E6D9410C13132920122CA5E95`.
 
 ## Performance qualification
 
-The benchmark runner uses public APIs and records elapsed time, peak Python
-allocation where practical, entity counts, changed-entity/index-update counts,
-and strict-audit broad/narrow-phase work. Machine times are evidence, not
-hard-coded acceptance thresholds.
+`benchmarks/kernel_benchmarks.py` uses public APIs and records wall time,
+traced peak Python allocation where practical, entity counts, changed keys,
+spatial updates, local structural-validation visits, and broad/narrow-phase
+candidate accounting.
 
-Final qualification profile and measurements (normal uninstrumented runtime is
-shown where the runner records both normal and allocation-instrumented time):
+The renewed runner adds changed-region audit, schema migration,
+feature-closure checksum, typed intersection query/plan/apply, a 22,500-face
+indexed-query grid, and separate local Member and plate edits inside one
+persistent mixed Sheet/Member model. The 150 x 150 larger grid is the practical
+release cap on the supported runner; this report does not imply that a
+near-100,000-face wall-clock qualification was executed.
 
-| Workload | Delivered result | Qualification evidence |
-|---|---:|---:|
-| 100 x 100 plate grid | 10,201 vertices, 20,200 edges, 10,000 faces | 1.964 s construction; 30.2 MB traced peak |
-| Clean grid strict audit | clean and certifiable | 259,000/259,000 candidates classified, 0 unclassified, 72.725 s |
-| One large-grid point edit | 5 records changed, 8 index updates | 0.200 s, 128,544 B traced peak; baseline 12.066 s |
-| Grid schema-3 serialization | 40,401 geometry records | 0.920 s normal, 5.723 s allocation-instrumented; baseline 0.937 s |
-| 10,000-member lattice | 20,000 vertices, 10,000 edges, 10,000 persistent members | 0.712 s normal, 3.652 s allocation-instrumented |
-| Mixed stiffened panel | 2,601 vertices, 5,100 edges, 2,500 faces, 98 members | 0.661 s normal; baseline 19.843 s |
-| Curved cylinder | 10,496 vertices, 10,368 edges, 5,120 faces, 167 members | 6.678 s normal, 35.241 s allocation-instrumented |
-| Hostile duplicate/crossing model | 8,000 vertices, 6,000 edges, 2,000 members | 30,000/30,000 candidates classified, 0 unclassified, 6,000 issues, 7.102 s audit |
-| 1,000-step replacement lineage | 1,001 descendants | 0.00294 s resolution; baseline 0.184 s |
+The first renewed run exposed a lifecycle measurement defect and a real cold
+construction cost: the 22,500-face query built an index for all 90,601
+vertex/edge/face records through sequential inserts under allocation tracing
+before returning four candidates (214.412 s, 135,371,776 B). The initial
+changed-region record similarly included a cold 40,401-record build and took
+99.312 s. Those values remain failure evidence, not local-query timings.
 
-The local edit is about 60 times faster than the schema-2 baseline while
-touching only its five-record dependency closure. The mixed structural panel
-is about 30 times faster in normal runtime than the baseline despite now
-creating persistent member ownership. Serialization normal runtime remains at
-baseline scale while carrying the larger checksummed schema-3 document.
+The fixed constructor bulk-builds a deterministic balanced tree. The final
+22,500-face cold query took 17.2843 s under tracing and returned the same four
+candidates as the 0.000948 s steady query. Cold time fell 91.94% relative to
+the defective run, while traced peak allocation **increased 5.86%** to
+143,303,312 B; this report makes no memory-improvement claim. The 10,000-face
+cold/steady pair was 7.27885 s / 0.000873 s with nine identical candidates.
 
-The clean grid's 259,000 broad-phase candidates are 99.97% fewer than the
-approximately 816 million naive unordered pairs among its 40,401 geometry
-records. Every admitted candidate was qualified; no uncertainty was hidden.
+### Comparable Wave-0 to final measurements
 
-The retained baseline file is `benchmarks/wave0_qualification.json`; the final
-file is `benchmarks/wave5_qualification.json`. Both are committed alongside the
-public benchmark runner for reproducibility.
+`seconds` below is allocation-traced when a peak is present. Final
+`untraced_seconds` is normal-runtime evidence, but Wave 0 did not record an
+untraced counterpart, so no cross-mode time delta is claimed.
 
-The performance release criterion is scaling behavior: local edits must remain
-proportional to the dependency closure, sparse audit must begin with spatial
-candidates rather than all pairs, and no ordinary edit may deep-copy the full
-model. Construction and persistence costs are reported explicitly even when
-the richer identity/structural model exceeds the schema-2 baseline.
+| Workload | Wave 0 -> final traced seconds | Time change | Peak change | Final untraced |
+|---|---:|---:|---:|---:|
+| 10k-face construction | 1.5882 -> 12.6854 | +698.73% | +54.28% | 2.2330 s |
+| 10k persistent-member lattice | 0.3530 -> 6.6457 | +1782.52% | +311.80% | 2.7641 s |
+| mixed stiffened panel | 19.8431 -> 5.7519 | -71.01% | +396.52% | 2.1858 s |
+| cylinder with members | 2.9802 -> 47.5142 | +1494.33% | +455.33% | 13.8698 s |
+| duplicate/crossing construction | 0.1304 -> 1.8149 | +1291.45% | +254.18% | n/a |
+| large-model local edit | 12.0664 -> 0.3692 | **-96.94%** | **-99.23%** | n/a |
+| schema serialization | 0.9368 -> 6.1808 | +559.80% | +7.61% | 1.0447 s |
+| lineage construction | 0.2802 -> 1.4579 | +420.34% | +44.86% | n/a |
+| lineage resolution | 0.1840 -> 0.002894 | **-98.43%** | **-52.62%** | n/a |
 
-## Known limitations and fail-closed boundaries
+The construction regressions exceed the plan's 10%/25% review thresholds and
+are explicitly accepted by the lead for correctness scope, not dismissed:
+Wave 0's member benchmarks stored bare edges/groups, whereas the final cases
+construct and validate persistent Parts, Sheets, Members, ordered uses,
+relationships, reverse incidence, monotonic identity, and rollback journals.
+Schema-4 serialization writes and validates identity, tolerance, ownership,
+evidence, lineage, feature history, and checksum that schema 2 did not carry.
+`peak_python_bytes` is transient construction allocation, not retained topology
+size, but the added persistent records also have a real documented storage
+cost. The decisive locality measurements improve sharply and avoid complete
+model copying/audit on ordinary edits.
 
-- This remains a structural-surface kernel, not a general solid CAD kernel.
-- Certified curved coverage is intentionally narrower than query coverage.
-  Unsupported spline/surface, cone, ruled, Coons, oblique, or curved-trim
-  candidates block certification rather than being sampled as disjoint.
-- General ellipses and NURBS are not represented. Anisotropic transforms of
-  arcs, cylinders, and cones reject.
-- The qualified transverse plane/cylinder closed-ring imprint requires a
-  complete conformal cylinder band and a supported plane trim. More general
-  shell booleans remain non-mutating query workflows.
-- `EntityRef` is model-unbound and therefore unsafe as persistent
-  cross-document identity; it remains only for local compatibility.
-- Schema-1/2 migration cannot infer physical members, attachments, junctions,
-  or historical ownership intent that was never serialized.
-- Full strict audit is deliberately more expensive than incremental commit
-  validation. Certified output pays that full-model qualification cost.
-- ANYmesher requires a separate downstream update to consume the new member,
-  attachment, junction, and `ChangeSet` contracts. That work is outside this
-  run.
+### Final locality and audit evidence
 
-## Commit and artifact record
+- Changed-region audit after index materialization: 2.91818 s traced,
+  813,600 B, 1,348 candidates = 1,348 narrow-phase classifications,
+  16,719 node visits, 2,914 leaf tests, nine index updates, and correctly
+  non-certifiable `CHANGED_REGION` scope.
+- Mixed-model local Member edit: 0.01149 s, 51 structural changes, 153
+  structural keys visited, and `full_structural_validation=false`.
+- Mixed-model local plate edit: 0.00247 s, two geometry changes, three index
+  updates, and no structural closure scan.
+- 10,000-face full audit: 60.2833 s untraced, 299,000 candidates = narrow
+  phases = classifications, zero unclassified, clean. A 400-face smoke audit
+  admitted 11,800 candidates; 25x faces produced 25.34x candidates, showing
+  near-linear sparse growth rather than quadratic enumeration.
+- Duplicate/crossing audit: 2.40234 s untraced, 30,000 fully classified
+  candidates, zero unclassified, 6,000 issues.
+- Strict-audit transient allocation is reported by the traced 400-face smoke
+  audit: 5,444,774 B. Qualification audits intentionally disable tracing so
+  candidate/classification timing is not distorted.
+- Query/plan/apply: 0.003168 / 0.000205 / 0.018382 s; apply changed 19 records.
+- Feature checksum: 0.000352 s and a 64-character SHA-256.
+- Schema migration: 19.8157 s traced, 127,488,153 B.
+
+Deterministic unit tests additionally enforce AVL/index invariants, brute-force
+candidate oracles, zero constructor refits/rotations, bounded local validation
+visits, and subquadratic sparse work counts. Correctness and performance retain
+equal release priority: every admitted audit candidate is classified, while
+ordinary local edits avoid whole-model snapshots and full strict audit.
+
+The renewed qualification ran on the fully integrated working tree before its
+final commit, rather than from a previously clean commit. This is a documented
+procedural deviation from the original clean-checkout preference. Coordination
+accepted the full/spatial/package evidence after inspection; no source, test,
+or benchmark code changed after that run, and the exact result JSON is included
+with the same implementation state. Only this report and overview were
+reconciled afterward.
+
+## Exact final commands
+
+```powershell
+python -m pytest -q
+python benchmarks/kernel_benchmarks.py --output benchmarks/wave_gap_closure_smoke.json
+python benchmarks/kernel_benchmarks.py --qualification --output benchmarks/wave_gap_closure_qualification.json --baseline benchmarks/wave0_qualification.json
+python -m build --no-isolation --outdir dist_gap_closure
+python -m twine check dist_gap_closure\anygeometry-0.2.1.tar.gz dist_gap_closure\anygeometry-0.2.1-py3-none-any.whl
+$env:PYTHONPATH=(Resolve-Path src).Path; python -m anygeometry --version
+python -m anygeometry --write-example strict-kernel-example.anygeometry.json
+python -m anygeometry strict-kernel-example.anygeometry.json --json
+```
+
+The installed-wheel command used a fresh GUID child of the canonical long TEMP
+root, `python -m venv --copies --system-site-packages`, offline `pip install`,
+and a Base64-decoded verifier streamed to `python -`; its complete registered
+PowerShell guard is retained in the ecosystem coordination ledger.
+
+## Known typed boundaries
+
+- This is a structural-surface kernel, not a general solid/NURBS CAD kernel.
+- General mixed spline/arc pairs, non-coincident arc pairs, and general bounded
+  non-Plane/Cylinder surface intersections remain typed `UNSUPPORTED` or
+  `CAPABILITY_MISSING`; no sampling result is promoted to exact topology.
+- Region-dimensional shell `CONNECT` is unsupported; explicit coplanar
+  `MutationPolicy.IMPRINT` is required.
+- `extract_model_closure(..., include_features=True)` is explicitly unsupported;
+  selecting structural handles while disabling structural closure rejects.
+- A complete Sheet may be expanded for manifold/orientation validation. A
+  selected ownership parent includes only the complete children required by
+  the selected semantic closure unless that parent was explicitly selected.
+- Full strict audit is intentionally more expensive than transaction-time
+  changed-closure validation.
+- Finite-element generation, seeding, numbering, smoothing, mapped
+  decomposition, materials, sections, loads, supports, solver state, and
+  results remain outside ANYgeometry.
+
+## Commit, artifact, and closeout record
 
 - Base: `19f16746ceee76838b7df9d08a95028699e3a738`
-- Implementation commit:
-  `dc1860feb418fb5ab43b38297ca7aa710a7dce34`
-  (`feat: add strict mixed plate-member kernel`)
-- Test commit:
-  `9f8df6f181c6e8e40e5a365768dede0de01c1910`
-  (`test: qualify strict kernel invariants`)
-- Qualification and migration documentation commit:
-  `59c48a59467aae4be603f96f5e882b3a1c337228`
-  (`docs: record kernel qualification and migration`)
-- This report is committed separately as the final branch handoff record; its
-  enclosing commit is listed by `git log kernel_update..HEAD`.
-- Release artifacts: `anygeometry-0.2.0.tar.gz` and
-  `anygeometry-0.2.0-py3-none-any.whl`
+- Pre-gap-closure branch head: `f2d7793d7d32a6dcd772c7ed8701aca11b459288`
+- Kernel implementation and tests:
+  `5e1c1d9250737db6d5c1fb23868bdc3f6d6ca658`.
+- Contracts, documentation, benchmark runner, and accepted result JSON:
+  `6c2e8ae7ee2de9320e7d5b93e3132cb5de9c70bd`.
+- Final report metadata: the branch-tip commit containing this record; its exact
+  SHA is included in the completion packet and draft pull request.
+- Release artifacts and hashes: recorded above; generated artifacts are
+  intentionally excluded from Git.
+- Remote branch and pushed SHA: **PENDING**
+- Ecosystem closeout verdict: **PENDING `ECOSYSTEM CLOSEOUT: OK`**
