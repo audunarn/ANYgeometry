@@ -1,7 +1,9 @@
-# ANYgeometry strict-kernel update overview
+# ANYgeometry strict-kernel update and gap-closure overview
 
-This document is the shared architecture and wave contract for the
-`codex/strict-kernel-update` implementation.  It is deliberately concise
+This document is the shared architecture and wave contract for the strict
+kernel update and its additive mesher-facing gap closure.  The original
+implementation branch was `codex/strict-kernel-update`; the coordinated
+gap-closure branch is `native_hybrid_mesher`.  It is deliberately concise
 enough to stay useful during integration.  When an implementation decision
 changes, the lead agent updates this document before dependent work proceeds.
 
@@ -10,7 +12,8 @@ changes, the lead agent updates this document before dependent work proceeds.
 - Repository: `audunarn/ANYgeometry`
 - Authoritative base: local `kernel_update`
 - Base commit: `19f16746ceee76838b7df9d08a95028699e3a738`
-- Working branch: `codex/strict-kernel-update`
+- Original implementation branch: `codex/strict-kernel-update`
+- Coordinated gap-closure branch: `native_hybrid_mesher`
 - `origin/kernel_update` did not exist when Wave 0 fetched all remotes.
 - `main` is not substituted as the task base, even though it currently points
   to the same commit.
@@ -36,7 +39,7 @@ branch state.  The CLI smoke workflow passed when run with `src` on
 `PYTHONPATH`.  Source and wheel builds succeeded, and both artifacts passed
 `twine check`.
 
-The current architecture is a useful structural-surface modelling layer:
+The Wave-0 base architecture was a useful structural-surface modelling layer:
 
 - `model.py` owns mutable vertex/edge/face dictionaries, construction,
   evaluation, lineage, groups, tags, snapshots, and many edits.
@@ -149,8 +152,8 @@ Part
  +- Sheet -> FaceUse -> Face -> Coedge/EdgeUse -> Edge -> Vertex
  `- Member -> MemberEdgeUse --------------------^
 
-Attachment  (member/face or member/edge incidence with parameters)
-Junction    (typed multi-member and/or member-sheet connection)
+Attachment  (typed qualified incidence with parameters and evidence)
+Junction    (typed member/member, member/sheet, or shell/sheet connection)
 ```
 
 - A `Part` owns zero or more sheets and members and distinguishes intentional
@@ -164,9 +167,12 @@ Junction    (typed multi-member and/or member-sheet connection)
   ordered axis composed of `MemberEdgeUse` records with orientation and parent
   parameter ranges.  Edge subdivision rewrites the member chain without
   changing member identity.
-- An `Attachment` records qualified member-on-face, member-on-boundary,
-  member-through-face, or endpoint attachment semantics and parameters on both
-  parents.
+- An `Attachment` records a qualified source/target relationship.  Supported
+  classifications distinguish member/face, member/boundary, member/sheet,
+  member/member endpoint, vertex incidence, coincident axes, and deliberately
+  disconnected geometry.  Its immutable evidence includes parameter ranges,
+  residual, tolerance, context, provenance, and lineage.  Source kinds and
+  target kinds are validated against each classification and must resolve.
 - A `Junction` records endpoint, crossing, overlap, or multi-way connection
   intent.  Mere geometric coincidence is not automatically a connection.
 
@@ -214,6 +220,9 @@ CROSS
 OVERLAP_CURVE
 OVERLAP_REGION
 COINCIDENT
+CONTAINED
+UNSUPPORTED
+CAPABILITY_MISSING
 UNCLASSIFIED
 ```
 
@@ -226,8 +235,10 @@ coincident cases to `None`.
 Face-line clipping returns all material intervals and subtracts holes; it does
 not take only the minimum and maximum boundary hit.  Planar clipping uses the
 qualified Shapely backend.  Numerical curves require maximum-residual checks
-against both parents.  Unsupported or uncertain narrow phase yields
-`UNCLASSIFIED` and blocks strict mutation/audit.
+against both parents.  Geometry outside the qualified kernel boundary returns
+`UNSUPPORTED`; an absent optional backend returns `CAPABILITY_MISSING`; and an
+ill-conditioned or inconclusive predicate returns `UNCLASSIFIED`.  All three
+block strict mutation and certification.
 
 Mutation policy is explicit: `REJECT`, `REUSE_EXISTING`, `WELD`, `IMPRINT`, or
 `KEEP_SEPARATE_PART`.  Queries never choose one implicitly.
@@ -271,7 +282,7 @@ the actual affected closure.
 
 ## Serialization and migration
 
-The next document schema stores:
+The current schema-4 document stores:
 
 - required schema/version;
 - model UUID and revision;
@@ -283,12 +294,20 @@ The next document schema stores:
 - namespaced extensions;
 - SHA-256 checksum over the canonical document payload.
 
-Schema-1/2 loading is a one-way migration and records migration metadata.
+ANYgeometry 0.2.1 writes schema 4 and reads schemas 1–4. Schema-1/2 loading
+retains conservative ownership migration; schema 3 receives explicit defaults
+for every new field and its relationships remain `UNVERIFIED`. All legacy
+loads are one-way migrations on the next write. Older 0.2.0 readers reject
+schema 4, even though the live Python API remains compatible with
+`ANYgeometry>=0.2,<0.3`.
+
 Schema-current loading rejects missing required fields, duplicate identifiers,
 duplicate tag/history records, invalid high-water marks, unexpected core
 fields, checksum mismatch, and invalid topology.  Ordinary serialization
 validates topology; certified serialization additionally requires a clean
-strict audit.
+strict audit. Certification is a write-time gate rather than a schema field:
+the resulting payload shape is unchanged, and an `AuditReport` applies only to
+the exact model UUID, revision, and audit policy for which it was produced.
 
 Feature materialization checksums operate on the selected closure directly,
 not by serializing the complete model per feature.  Mapped face corner values
@@ -360,3 +379,78 @@ candidate-count scaling.
   data, or results
 - general solid CAD, booleans, NURBS/ellipse implementation
 - edits to any sibling repository
+
+## Gap-closure wave on `native_hybrid_mesher`
+
+The original update is merged, but final conformance is not claimed until the
+remaining requirements from `ANYgeometry_kernel_update_codex_plan.md` are
+implemented and qualified.  This wave keeps every sibling repository outside
+the write scope and coordinates its public read contract with the concurrently
+running ANYmesher update.
+
+The implementation objectives delivered by this wave are:
+
+- extend the typed intersection algebra with dimension, parent identity,
+  tolerance provenance, `CONTAINED`, `UNSUPPORTED`, and
+  `CAPABILITY_MISSING` outcomes;
+- separate `query_intersection`, `plan_imprint`, and `apply_imprint`, with a
+  deterministic immutable plan and an explicit connection/mutation policy;
+- add `CONNECT`, `KEEP_DISCONNECTED`, and `CONTACT_ONLY` structural intent;
+- complete member/sheet attachment classifications, qualified evidence, and
+  public ownership/reverse-incidence queries;
+- distinguish construction/control geometry from topological connectivity and
+  preserve authoritative support separately from optional parameterization;
+- complete tolerance/coordinate metadata, changed-region audit, vertex-face
+  and orphan-control audit coverage, and typed fail-closed diagnostics;
+- remove avoidable all-pairs/linear public query paths and add missing batch
+  construction/bounds APIs;
+- add the prescribed qualification matrix, performance instrumentation,
+  migration/export compatibility, and required documentation.  Final package,
+  Git, and ecosystem closeout evidence is recorded separately in
+  `KERNEL_UPDATE_REPORT.md`.
+
+The mesher-facing public API delivered by this wave is:
+
+```text
+extract_model_closure(...)
+evaluate_edge_many(...)
+edge_tangent_many(...)
+evaluate_face_many(...)
+face_derivatives_many(...)
+face_normal_many(...)
+project_to_face_many(...)
+audit_changed_region(...)
+find_coplanar_overlaps(..., face_ids/changed_aabbs/candidate_pairs)
+query_intersection(...)
+plan_imprint(...)
+apply_imprint(...)
+```
+
+Qualified shell/sheet T-junctions use the same public workflow. A
+curve-dimensional face/face result planned with `ConnectionIntent.CONNECT`
+selects `ImprintOperation.FACE_IMPRINT`; applying it atomically creates or
+reuses the shared intersection edge and updates both Sheets' persistent
+`FaceUse`/`Coedge` topology. This is the authoritative connection record:
+downstream code must not infer shell coupling from coincident coordinates.
+Region-dimensional `CONNECT` is typed `UNSUPPORTED` and requires a separate,
+explicit `MutationPolicy.IMPRINT` decision.
+
+Closure extraction returns a new working model plus bidirectional model-bound
+handle maps and source identity/revision metadata.  It includes only complete
+selected structural parents and complete qualifying attachments/junctions.
+Changed-region audit uses the maintained index, labels its scope explicitly,
+and never claims full-model certification.  Vectorized evaluation is
+deterministic for Plane, Cylinder, Cone, RuledSurface, and CoonsSurface and
+does not import meshing policy into the kernel.
+
+Gap-closure ownership is serialized as follows:
+
+1. Intersection worker: predicates, policies, intersection query/plan/apply,
+   and focused tests.
+2. Topology worker: structural/control/support records, model ownership and
+   adjacency APIs, tolerance/coordinates, and focused tests.
+3. Audit/performance worker: audit algebra/checkers, indexed overlap/closest
+   queries, benchmarks, and focused tests.
+4. Lead integration: vectorized evaluation/closure extraction, serialization,
+   package exports, documentation, compatibility, full qualification, and
+   release report.

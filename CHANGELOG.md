@@ -2,6 +2,36 @@
 
 All notable user-visible changes to ANYgeometry are documented here.
 
+## 0.2.1 - 2026-08-12
+
+- Added the mesher-facing `ModelClosure` extractor with model-bound
+  bidirectional handle maps, complete structural parents, preserved document
+  settings, and deterministic vectorized edge/face evaluation and projection.
+- Added typed `query_intersection` / `plan_imprint` / `apply_imprint` APIs,
+  multi-component and coplanar planar imprinting, explicit connection intent,
+  qualified member/member and member/sheet relations, persisted face/face
+  shell-sheet T-junctions under explicit `CONNECT`, and idempotent reuse.
+- Made `REUSE_EXISTING` strictly non-creative, preflighted invalid pair/policy
+  combinations, preserved endpoint and Sheet-specific relationship kinds, and
+  made disjoint/same-parent/point-only face operations fail closed before edit.
+- Canonicalized straight sketch-extrusion walls to exact Plane support and
+  aligned arc walls to Cylinder support; genuine non-planar Coons walls remain
+  typed unsupported.
+- Added batched analytic closest projection for Plane, Cylinder, and Cone,
+  one-time trim preparation, deterministic sweep-boundary behavior, and
+  bounded-memory spline evaluation.
+- Added construction/control vertex roles, optional face parameterization
+  separate from authoritative support, Member orientation references,
+  structural split lineage, richer Attachment/Junction evidence, and complete
+  local reverse-incidence queries.
+- Added changed-region non-certifying audit, richer audit evidence, indexed
+  overlap selectors and nearest queries, local-scope batch/bounds paths, and
+  pair-local tolerance scaling.
+- Advanced geometry writing to strict checksummed schema 4. The 0.2.1 reader
+  accepts schemas 1–4 and migrates 1–3 one-way; schema-3 attachment evidence
+  becomes explicitly `UNVERIFIED` and cannot certify. Older 0.2.0 readers fail
+  closed on schema-4 documents despite the compatible Python version range.
+
 ## 0.2.0 - 2026-08-12
 
 - Added model-bound UUID entity handles, monotonic non-reused geometry and

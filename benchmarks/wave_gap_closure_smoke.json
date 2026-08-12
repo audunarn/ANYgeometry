@@ -1,0 +1,219 @@
+{
+  "measurements": {
+    "changed_region_audit": {
+      "candidate_count": 1348,
+      "certifiable": false,
+      "index_leaf_tests": 2914,
+      "index_node_visits": 13629,
+      "index_updates": 9,
+      "narrow_phase_count": 1348,
+      "peak_python_bytes": 638339,
+      "seconds": 2.944642300004489
+    },
+    "cylinder_member_construction": {
+      "entities": {
+        "attachments": 0,
+        "edges": 1296,
+        "faces": 640,
+        "junctions": 0,
+        "members": 55,
+        "parts": 1,
+        "sheets": 1,
+        "vertices": 1312
+      },
+      "peak_python_bytes": 10037176,
+      "seconds": 5.4090228999994,
+      "untraced_seconds": 1.0353737999976147
+    },
+    "duplicate_crossing_construction": {
+      "entities": {
+        "attachments": 0,
+        "edges": 300,
+        "faces": 0,
+        "junctions": 0,
+        "members": 100,
+        "parts": 1,
+        "sheets": 0,
+        "vertices": 400
+      },
+      "peak_python_bytes": 615127,
+      "seconds": 0.08506330000818707
+    },
+    "duplicate_crossing_full_audit": {
+      "available": true,
+      "candidate_count": 1500,
+      "classified_count": 1500,
+      "clean": false,
+      "index_leaf_tests": 3700,
+      "index_node_visits": 20644,
+      "index_updates": 0,
+      "issues": 300,
+      "narrow_phase_count": 1500,
+      "peak_python_bytes": 1790838,
+      "seconds": 0.5826052999909734,
+      "unclassified_count": 0
+    },
+    "feature_checksum": {
+      "entities": {
+        "attachments": 0,
+        "edges": 4,
+        "faces": 1,
+        "junctions": 0,
+        "members": 0,
+        "parts": 0,
+        "sheets": 0,
+        "vertices": 4
+      },
+      "peak_python_bytes": 6979,
+      "seconds": 0.000294700002996251,
+      "sha256_length": 64
+    },
+    "imprint_apply": {
+      "changed": 19,
+      "peak_python_bytes": 130005,
+      "seconds": 0.019475000008242205
+    },
+    "imprint_plan": {
+      "peak_python_bytes": 1792,
+      "seconds": 0.00023839999630581588
+    },
+    "intersection_query": {
+      "components": 1,
+      "peak_python_bytes": 10090,
+      "seconds": 0.003404300005058758
+    },
+    "large_model_local_edit": {
+      "changed": 5,
+      "index_updates": 9,
+      "peak_python_bytes": 133884,
+      "seconds": 0.37028669999563135
+    },
+    "member_lattice_construction": {
+      "entities": {
+        "attachments": 0,
+        "edges": 500,
+        "faces": 0,
+        "junctions": 0,
+        "members": 500,
+        "parts": 1,
+        "sheets": 0,
+        "vertices": 1000
+      },
+      "peak_python_bytes": 2163501,
+      "seconds": 0.23415340000065044,
+      "untraced_seconds": 0.03729469999962021
+    },
+    "mixed_model_local_member_edit": {
+      "changed": 0,
+      "full_structural_validation": false,
+      "index_updates": 0,
+      "peak_python_bytes": 20968,
+      "seconds": 0.0024400999973295256,
+      "structural_changes": 11,
+      "structural_keys_visited": 33
+    },
+    "mixed_model_local_plate_edit": {
+      "changed": 2,
+      "full_structural_validation": false,
+      "index_updates": 3,
+      "peak_python_bytes": 16777,
+      "seconds": 0.002181400006520562,
+      "structural_changes": 0,
+      "structural_keys_visited": 0
+    },
+    "mixed_stiffened_panel_construction": {
+      "entities": {
+        "attachments": 0,
+        "edges": 220,
+        "faces": 100,
+        "junctions": 0,
+        "members": 18,
+        "parts": 1,
+        "sheets": 1,
+        "vertices": 121
+      },
+      "peak_python_bytes": 1376246,
+      "seconds": 0.16680649999761954,
+      "untraced_seconds": 0.02771549999306444
+    },
+    "plate_grid_construction": {
+      "entities": {
+        "attachments": 0,
+        "edges": 840,
+        "faces": 400,
+        "junctions": 0,
+        "members": 0,
+        "parts": 0,
+        "sheets": 0,
+        "vertices": 441
+      },
+      "peak_python_bytes": 1684985,
+      "seconds": 0.49108049999631476,
+      "untraced_seconds": 0.08330199999909382
+    },
+    "plate_grid_full_audit": {
+      "available": true,
+      "candidate_count": 11800,
+      "classified_count": 11800,
+      "clean": true,
+      "index_leaf_tests": 25281,
+      "index_node_visits": 119975,
+      "index_updates": 0,
+      "issues": 0,
+      "narrow_phase_count": 11800,
+      "peak_python_bytes": 5444774,
+      "seconds": 9.57968960001017,
+      "unclassified_count": 0
+    },
+    "plate_grid_local_query_steady": {
+      "candidate_count": 9,
+      "peak_python_bytes": 2032,
+      "seconds": 0.0006040999869583175
+    },
+    "plate_grid_serialization": {
+      "document_records": 1681,
+      "peak_python_bytes": 1454838,
+      "seconds": 0.5610368000052404,
+      "untraced_seconds": 0.11691620000055991
+    },
+    "plate_grid_spatial_cold_query": {
+      "candidate_count": 9,
+      "peak_python_bytes": 2466080,
+      "seconds": 0.2790353000018513
+    },
+    "replacement_lineage_construction": {
+      "peak_python_bytes": 224946,
+      "seconds": 0.14025099998980295
+    },
+    "replacement_lineage_resolution": {
+      "descendants": 101,
+      "peak_python_bytes": 10776,
+      "seconds": 0.00029719999292865396
+    },
+    "schema_migration": {
+      "entities": {
+        "attachments": 0,
+        "edges": 840,
+        "faces": 400,
+        "junctions": 0,
+        "members": 0,
+        "parts": 1,
+        "sheets": 400,
+        "vertices": 441
+      },
+      "peak_python_bytes": 5328181,
+      "seconds": 1.4641318999929354
+    }
+  },
+  "parameters": {
+    "hostile_sets": 100,
+    "larger_plate_grid": null,
+    "lineage_length": 100,
+    "members": 500,
+    "plate_grid": [
+      20,
+      20
+    ]
+  },
+  "profile": "smoke"
+}

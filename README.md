@@ -184,11 +184,13 @@ coincident entities.
 
 ## Serialization and CLI
 
-Geometry schema 3 is deterministic and checksummed. It preserves model UUID
-and revision, coordinates and tolerance policy, all allocator high-water
-marks, curves/surfaces/trims, structural ownership and relationships, groups,
-tags, lineage, extensions, and feature history. Schema 1 and 2 documents are
-migrated conservatively; malformed current documents fail closed:
+Geometry schema 4 is deterministic and checksummed. It preserves model UUID
+and revision, coordinates/CRS and tolerance policy, allocator high-water
+marks, support surfaces and optional parameterizations, construction/control
+ownership, curves/trims, structural ownership and qualified relationships,
+groups, tags, geometry and structural lineage, extensions, and feature
+history. Schemas 1–3 migrate conservatively and one-way; malformed current
+documents fail closed:
 
 ```python
 from anygeometry import read_geometry, write_geometry
@@ -203,11 +205,24 @@ Certified output additionally requires a clean strict audit:
 write_geometry("panel.certified.anygeometry.json", geometry, certified=True)
 ```
 
+`certified=True` is a validation gate, not a persisted certificate. The audit
+report is an ephemeral result bound to the exact model UUID, revision, and
+audit policy; schema 4 intentionally stores no reusable certification flag.
+Consumers that require a qualified handoff must retain or rerun
+`strict_audit()` for that exact revision.
+
 JSON and gzip-compressed JSON are supported. Mesh and FEM/project
 serialization remain outside ANYgeometry.
 
+ANYgeometry 0.2.1 reads schemas 1–4 and writes schema 4. The Python API remains
+within `ANYgeometry>=0.2,<0.3`, but a 0.2.0 reader intentionally rejects a
+schema-4 document. Downstream packages should use the public codecs rather
+than parse schema records. Legacy relationship evidence migrates as
+`UNVERIFIED` and never implies exactness or certification.
+
 Ordinary output revalidates complete topological and structural integrity.
-Certified output adds the full global geometric audit. Feature history is
+Certified output adds the full global geometric audit before writing, but the
+ordinary and certified schema-4 payload shapes are identical. Feature history is
 owner-observed and validated before writing; direct record tampering is never
 accepted as a checksummed document.
 

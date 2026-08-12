@@ -30,14 +30,40 @@ Topology-changing intersections now require an explicit `MutationPolicy`.
 Use query mode when no mutation is intended and `IMPRINT`, `WELD`,
 `REUSE_EXISTING`, `KEEP_SEPARATE_PART`, or `REJECT` only after choosing the
 desired ownership behavior. A clean `strict_audit()` is required for certified
-schema-v3 output.
+output.
 
-Schema 1 and 2 inputs still load through conservative one-way migration.
-Schema 3 writes checksummed model identity, coordinate/tolerance settings,
-non-reused allocator high-water marks, structural ownership, relationships,
-semantics, extensions, and feature history. Code that edits a serialized
-dictionary must recompute the complete document through ANYgeometry rather
-than retaining the old checksum.
+### 0.2.1 document boundary
+
+ANYgeometry 0.2.1 reads geometry schemas 1, 2, 3, and 4 and writes only
+canonical schema 4. Loading schemas 1–3 is a deterministic, one-way migration;
+the next write is schema 4. Schema 4 adds CRS metadata, separate support and
+parameterization fields, expanded tolerances, construction ownership, Member
+orientation references, qualified Attachment/Junction evidence and context,
+and structural replacement lineage.
+
+| Reader | Reads | Writes |
+| --- | --- | --- |
+| ANYgeometry 0.2.0 | schemas 1–3 | schema 3 |
+| ANYgeometry 0.2.1 | schemas 1–4 | schema 4 |
+
+The Python package dependency remains compatible with `ANYgeometry>=0.2,<0.3`,
+but the document format is forward-incompatible: a 0.2.0 reader intentionally
+rejects a schema-4 document. Exchange persisted geometry with 0.2.1 or newer,
+and use only `to_dict`, `from_dict`, `write_geometry`, and `read_geometry`
+rather than parsing core records in downstream packages.
+
+Legacy schema-3 Attachments did not carry qualification evidence. Migration
+therefore sets their evidence to `UNVERIFIED`, with zero residual/tolerance
+placeholders. Those zeros do not mean exact geometry and block certified
+handoff until the relation is requalified through the intersection
+query/plan/apply workflow. Code that edits a serialized dictionary must
+recompute the complete document checksum through ANYgeometry.
+
+Certification is not a document field. Passing `certified=True` to a public
+writer runs a strict full-model audit as a write-time gate, but produces the
+same schema-4 shape as an ordinary write. An `AuditReport` applies only to its
+exact model UUID, revision, and policy and must be retained or recomputed by a
+consumer that needs qualified handoff evidence.
 
 ## Import mapping
 

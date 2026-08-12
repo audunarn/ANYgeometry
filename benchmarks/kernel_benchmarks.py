@@ -24,8 +24,22 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from anygeometry import EntityRef, GeometryModel, OrientedEdge, Plane, to_dict  # noqa: E402
+from anygeometry import (  # noqa: E402
+    EntityRef,
+    GeometryModel,
+    MutationPolicy,
+    OrientedEdge,
+    Plane,
+    to_dict,
+)
 from anygeometry.generators import cylinder, stiffened_panel  # noqa: E402
+from anygeometry.intersections import (  # noqa: E402
+    apply_imprint,
+    plan_imprint,
+    query_intersection,
+)
+from anygeometry.serialization import from_dict  # noqa: E402
+from anygeometry.strict_audit import audit_changed_region  # noqa: E402
 
 
 @contextmanager
@@ -186,8 +200,20 @@ def audit_diagnostics(model: GeometryModel) -> dict[str, Any]:
     }
 
 
+def overlapping_pair() -> tuple[GeometryModel, int, int]:
+    model = GeometryModel()
+    first = model.add_plate(
+        model.add_points(((0, 0, 0), (2, 0, 0), (2, 2, 0), (0, 2, 0)))
+    )
+    second = model.add_plate(
+        model.add_points(((1, 1, 0), (3, 1, 0), (3, 3, 0), (1, 3, 0)))
+    )
+    return model, first, second
+
+
 def run(*, qualification: bool) -> dict[str, Any]:
     face_side = 100 if qualification else 20
+    larger_face_side = 150 if qualification else None
     member_count = 10_000 if qualification else 500
     hostile_count = 2_000 if qualification else 100
     lineage_length = 1_000 if qualification else 100
@@ -195,6 +221,11 @@ def run(*, qualification: bool) -> dict[str, Any]:
         "profile": "qualification" if qualification else "smoke",
         "parameters": {
             "plate_grid": [face_side, face_side],
+            "larger_plate_grid": (
+                None
+                if larger_face_side is None
+                else [larger_face_side, larger_face_side]
+            ),
             "members": member_count,
             "hostile_sets": hostile_count,
             "lineage_length": lineage_length,
@@ -212,6 +243,35 @@ def run(*, qualification: bool) -> dict[str, Any]:
     plate = holder["plate"]
     measurements["plate_grid_construction"]["entities"] = counts(plate)
 
+    if larger_face_side is not None:
+        with measured(measurements, "larger_plate_grid_construction"):
+            larger_plate = grid(larger_face_side, larger_face_side)
+        measurements["larger_plate_grid_construction"]["entities"] = counts(
+            larger_plate
+        )
+        centre = 0.5 * float(larger_face_side)
+        with measured(measurements, "larger_plate_grid_spatial_cold_query"):
+            cold_candidates = larger_plate.spatial_candidates(
+                (centre - 0.1, centre - 0.1, -0.1),
+                (centre + 0.1, centre + 0.1, 0.1),
+                kinds=("face",),
+            )
+        measurements["larger_plate_grid_spatial_cold_query"]["candidate_count"] = len(
+            cold_candidates
+        )
+        with measured(measurements, "larger_plate_grid_local_query_steady"):
+            steady_candidates = larger_plate.spatial_candidates(
+                (centre - 0.1, centre - 0.1, -0.1),
+                (centre + 0.1, centre + 0.1, 0.1),
+                kinds=("face",),
+            )
+        measurements["larger_plate_grid_local_query_steady"]["candidate_count"] = len(
+            steady_candidates
+        )
+        if steady_candidates != cold_candidates:
+            raise RuntimeError("cold and steady spatial query candidates disagree")
+        del larger_plate
+
     # Qualify the intentionally conformal grid before the edit below deforms
     # one shared vertex out of its neighbouring planar supports.  The edit is
     # a transaction/index benchmark, not a valid final design state.
@@ -227,8 +287,26 @@ def run(*, qualification: bool) -> dict[str, Any]:
     measurements["plate_grid_full_audit"].update(plate_audit)
 
     center = (face_side // 2) * (face_side + 1) + face_side // 2 + 1
+    position = plate.vertex_position(center)
+    with measured(measurements, "plate_grid_spatial_cold_query"):
+        cold_candidates = plate.spatial_candidates(
+            (float(position[0]) - 0.1, float(position[1]) - 0.1, -0.1),
+            (float(position[0]) + 0.1, float(position[1]) + 0.1, 0.1),
+        )
+    measurements["plate_grid_spatial_cold_query"]["candidate_count"] = len(
+        cold_candidates
+    )
+    with measured(measurements, "plate_grid_local_query_steady"):
+        steady_candidates = plate.spatial_candidates(
+            (float(position[0]) - 0.1, float(position[1]) - 0.1, -0.1),
+            (float(position[0]) + 0.1, float(position[1]) + 0.1, 0.1),
+        )
+    measurements["plate_grid_local_query_steady"]["candidate_count"] = len(
+        steady_candidates
+    )
+    if steady_candidates != cold_candidates:
+        raise RuntimeError("cold and steady spatial query candidates disagree")
     with measured(measurements, "large_model_local_edit"):
-        position = plate.vertex_position(center)
         plate.move_point(center, float(position[0]), float(position[1]), 0.125)
     change_set = getattr(plate, "last_change_set", None)
     if change_set is not None:
@@ -237,6 +315,18 @@ def run(*, qualification: bool) -> dict[str, Any]:
         )
         measurements["large_model_local_edit"]["index_updates"] = len(
             getattr(change_set, "spatial_updates", ())
+        )
+        with measured(measurements, "changed_region_audit"):
+            changed_report = audit_changed_region(plate, change_set)
+        measurements["changed_region_audit"].update(
+            {
+                "certifiable": changed_report.certifiable,
+                "candidate_count": changed_report.metrics.candidate_count,
+                "narrow_phase_count": changed_report.metrics.narrow_phase_tests,
+                "index_node_visits": changed_report.metrics.index_node_visits,
+                "index_leaf_tests": changed_report.metrics.index_leaf_tests,
+                "index_updates": changed_report.metrics.index_updates,
+            }
         )
 
     with measured(measurements, "plate_grid_serialization"):
@@ -255,6 +345,60 @@ def run(*, qualification: bool) -> dict[str, Any]:
     )
     measurements["plate_grid_serialization"]["document_records"] = sum(
         len(document.get(key, ())) for key in ("vertices", "edges", "faces")
+    )
+
+    legacy = {
+        key: document[key]
+        for key in (
+            "schema",
+            "id_state",
+            "vertices",
+            "edges",
+            "faces",
+            "groups",
+            "tags",
+            "replacement_history",
+        )
+    }
+    legacy["version"] = 2
+    legacy["id_state"] = {
+        kind: document["id_state"][kind]
+        for kind in ("vertex", "edge", "face")
+    }
+    with measured(measurements, "schema_migration"):
+        migrated = from_dict(legacy)
+    measurements["schema_migration"]["entities"] = counts(migrated)
+
+    feature_model = GeometryModel()
+    a, b, c, d = feature_model.add_points(
+        ((0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0))
+    )
+    feature_face = feature_model.add_plate((a, b, c, d))
+    feature = feature_model.features.append("benchmark.checksum")
+    feature.outputs = {"face": EntityRef("face", feature_face)}
+    with measured(measurements, "feature_checksum"):
+        checksum = feature_model.features.materialization_checksum(
+            feature, feature_model
+        )
+    measurements["feature_checksum"]["sha256_length"] = len(checksum)
+    measurements["feature_checksum"]["entities"] = counts(feature_model)
+
+    query_model, first_face, second_face = overlapping_pair()
+    with measured(measurements, "intersection_query"):
+        intersection = query_intersection(query_model, first_face, second_face)
+    measurements["intersection_query"]["components"] = len(intersection.components)
+    with measured(measurements, "imprint_plan"):
+        imprint_plan = plan_imprint(
+            query_model,
+            intersection,
+            policy=MutationPolicy.IMPRINT,
+        )
+    with measured(measurements, "imprint_apply"):
+        imprint_result = apply_imprint(
+            query_model, imprint_plan, policy=MutationPolicy.IMPRINT
+        )
+    measurements["imprint_apply"]["changed"] = len(
+        imprint_result.change_set.changed
     )
 
     with measured(measurements, "member_lattice_construction"):
@@ -283,6 +427,54 @@ def run(*, qualification: bool) -> dict[str, Any]:
         )
     )
     measurements["mixed_stiffened_panel_construction"]["entities"] = counts(holder["panel"])
+
+    panel = holder["panel"]
+    local_member = min(panel.members)
+    with measured(measurements, "mixed_model_local_member_edit"):
+        panel.reverse_member(local_member)
+    member_change = panel.last_change_set
+    member_diagnostics = panel.last_structural_validation_diagnostics
+    measurements["mixed_model_local_member_edit"].update(
+        {
+            "changed": len(member_change.changed),
+            "structural_changes": len(
+                member_change.ownership_changes
+                + member_change.member_changes
+                + member_change.attachment_changes
+            ),
+            "index_updates": len(member_change.spatial_updates),
+            "structural_keys_visited": member_diagnostics.visited_count,
+            "full_structural_validation": member_diagnostics.full_model,
+        }
+    )
+
+    # Exercise a geometry edit in the same persistent Sheet/Member model.  A
+    # boundary vertex keeps every planar support exact while still qualifying
+    # dependency-closure and maintained-index work.
+    local_vertex = min(panel.vertices)
+    local_position = panel.vertex_position(local_vertex)
+    with measured(measurements, "mixed_model_local_plate_edit"):
+        panel.move_point(
+            local_vertex,
+            float(local_position[0]) + 0.125,
+            float(local_position[1]),
+            float(local_position[2]),
+        )
+    plate_change = panel.last_change_set
+    plate_diagnostics = panel.last_structural_validation_diagnostics
+    measurements["mixed_model_local_plate_edit"].update(
+        {
+            "changed": len(plate_change.changed),
+            "structural_changes": len(
+                plate_change.ownership_changes
+                + plate_change.member_changes
+                + plate_change.attachment_changes
+            ),
+            "index_updates": len(plate_change.spatial_updates),
+            "structural_keys_visited": plate_diagnostics.visited_count,
+            "full_structural_validation": plate_diagnostics.full_model,
+        }
+    )
 
     with measured(measurements, "cylinder_member_construction"):
         holder["cylinder"] = cylinder(
@@ -332,12 +524,51 @@ def run(*, qualification: bool) -> dict[str, Any]:
     return results
 
 
+def compare_baseline(
+    results: dict[str, Any], baseline: dict[str, Any]
+) -> dict[str, dict[str, float]]:
+    """Return stable percentage changes for like-for-like numeric measures."""
+
+    comparisons: dict[str, dict[str, float]] = {}
+    current_measurements = results.get("measurements", {})
+    baseline_measurements = baseline.get("measurements", {})
+    if not isinstance(current_measurements, dict) or not isinstance(
+        baseline_measurements, dict
+    ):
+        return comparisons
+    for name in sorted(set(current_measurements) & set(baseline_measurements)):
+        current = current_measurements[name]
+        previous = baseline_measurements[name]
+        if not isinstance(current, dict) or not isinstance(previous, dict):
+            continue
+        made: dict[str, float] = {}
+        for metric in sorted(set(current) & set(previous)):
+            new_value, old_value = current[metric], previous[metric]
+            if (
+                isinstance(new_value, (int, float))
+                and not isinstance(new_value, bool)
+                and isinstance(old_value, (int, float))
+                and not isinstance(old_value, bool)
+                and float(old_value) != 0.0
+            ):
+                made[metric] = 100.0 * (
+                    float(new_value) - float(old_value)
+                ) / float(old_value)
+        if made:
+            comparisons[name] = made
+    return comparisons
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--qualification", action="store_true")
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--baseline", type=Path)
     options = parser.parse_args()
     results = run(qualification=options.qualification)
+    if options.baseline is not None:
+        baseline = json.loads(options.baseline.read_text(encoding="utf-8"))
+        results["percentage_change"] = compare_baseline(results, baseline)
     encoded = json.dumps(results, indent=2, sort_keys=True)
     if options.output is not None:
         options.output.write_text(encoded + "\n", encoding="utf-8")
