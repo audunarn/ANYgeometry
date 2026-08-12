@@ -21,7 +21,8 @@ release is available from PyPI, install the sibling checkout directly:
 python -m pip install -e C:\Github\ANYgeometry
 ```
 
-Planar/UV workflows may opt into Shapely without making it a core dependency:
+Planar clipping and strict planar qualification use the optional Shapely
+backend. Install the `planar` extra for those workflows:
 
 ```powershell
 python -m pip install -e "C:\Github\ANYgeometry[planar]"
@@ -39,7 +40,8 @@ vertices = geometry.add_points(
     [(0, 0, 0), (4, 0, 0), (4, 3, 0), (0, 3, 0)]
 )
 face_id = geometry.add_plate(vertices)
-face_ref = geometry.entity_ref("face", face_id)
+face_ref = geometry.entity_ref("face", face_id)  # local compatibility reference
+face_handle = geometry.handle("face", face_id)   # model-bound public identity
 geometry.add_to_group("deck", [face_ref])
 ```
 
@@ -59,14 +61,25 @@ deck_faces = geometry.group("deck")
 stiffener_edges = geometry.group("longitudinal_stiffeners")
 ```
 
-`EntityRef(kind, id)` is the stable cross-package identity. IDs are allocated
-monotonically and are not silently reused. Splitting or fragmenting an entity
-records its descendants, updates geometry groups and tags, and lets clients
-resolve a stale selection with `geometry.resolve_ref(old_ref)`.
+`EntityHandle(model_id, kind, id)` is the model-bound cross-package identity.
+The legacy `EntityRef(kind, id)` remains a compact local compatibility value.
+IDs are allocated monotonically and are never reused, including after rollback
+or compatibility undo. Splitting or fragmenting an entity records descendants,
+updates groups, tags, and structural uses, and lets clients resolve a stale
+selection explicitly.
 
 ## Geometry model
 
 - `Vertex`, `Edge`, and `Face` provide topology with persistent IDs.
+- Public entity stores and records are read-only. Edits go through atomic model
+  methods or a nested `GeometryModel.transaction()`.
+- Model identity, revision, tolerance, units, and coordinate arrays are
+  owner-controlled. Use `set_document_settings(...)` for revisioned coordinate
+  or tolerance changes; returned arrays cannot be written in place.
+- `Part`, `Sheet`, `FaceUse`, and `Coedge` persist plate ownership/incidence;
+  `Member` and `MemberEdgeUse` persist a physical beam axis across edge splits.
+- `Attachment` and `Junction` distinguish declared beam/plate and beam/beam
+  relationships from mere geometric coincidence.
 - `Straight`, `Arc`, and lightweight Bezier `Spline` curves are topology-owned.
 - `Plane`, `Cylinder`, `Cone`, `RuledSurface`, and explicit or topology-backed
   Coons patches provide evaluation and local UV coordinates.
@@ -89,6 +102,12 @@ lineage, groups, tags, and exact plane/cylinder surfaces are preserved.
 `FaceIntersection.edges` contains the complete ring while the compatible
 `FaceIntersection.edge` accessor remains its deterministic first edge.
 
+Topology-changing intersections require caller intent, for example
+`intersect_faces(model, a, b, policy=MutationPolicy.IMPRINT)`. Query-only
+calls use `fragment=False`; `KEEP_SEPARATE_PART` retains both inputs without
+imprinting. `clip_line_to_face` returns every planar material interval and
+subtracts holes instead of collapsing a concave or holed face to one span.
+
 The qualified closed-ring topology path deliberately requires at least three
 positive-sweep cylinder patches forming one complete conformal band, a cut
 strictly inside the cylinder height, and a convex straight-edged plane face
@@ -97,12 +116,30 @@ nonconformal bands, and planes needing nested trim classification remain
 non-mutating intersection-query workflows rather than being approximated with
 unrelated edges.
 
+Qualified predicates return typed `IntersectionResult` values that distinguish
+crossing, touching, overlap, coincidence, disjoint, and unclassified cases.
+The model-owned `TolerancePolicy` separates computational, merge, angular,
+parameter, area, and surface-residual tolerances using local feature extent,
+so translating a complete model does not change a local classification.
+
+`geometry.strict_audit()` performs deterministic fail-closed full-model
+qualification with a spatial broad phase. It checks duplicate/crossing/
+overlapping edges, T-junctions, sheet manifoldness, structural member intent,
+member-face relationships, face overlap, lineage, and unsupported candidates.
+Any unclassified candidate blocks certification.
+
+Large beam lattices should use `GeometryModel.add_members(...)`, which builds
+all member chains under one part update and one structural validation. Public
+`remove_member`, `remove_sheet`, `remove_part`, `remove_attachment`, and
+`remove_junction` methods enforce dependency order and rollback atomically.
+
 ## Editable feature history and owner editing
 
 `GeometryModel.features` stores an ordered, suppressible modelling history.
 Feature inputs use `FeatureOutputRef` so downstream intent does not depend on
-the materialized IDs allocated by a later regeneration.  `EntityRef` remains
-the topology identity passed to mesh and analysis packages.
+the materialized IDs allocated by a later regeneration. `EntityHandle` is the
+model-bound identity for mesh and analysis packages; feature executors and
+local compatibility APIs continue to use compact `EntityRef` values.
 
 ```python
 from anygeometry import FeatureOutputRef, GeometryModel
@@ -147,8 +184,11 @@ coincident entities.
 
 ## Serialization and CLI
 
-Geometry serialization is versioned and preserves IDs, ID counters, curves,
-surfaces, holes, metadata, semantic groups, tags, and replacement history:
+Geometry schema 3 is deterministic and checksummed. It preserves model UUID
+and revision, coordinates and tolerance policy, all allocator high-water
+marks, curves/surfaces/trims, structural ownership and relationships, groups,
+tags, lineage, extensions, and feature history. Schema 1 and 2 documents are
+migrated conservatively; malformed current documents fail closed:
 
 ```python
 from anygeometry import read_geometry, write_geometry
@@ -157,8 +197,19 @@ write_geometry("panel.anygeometry.json", geometry)
 restored = read_geometry("panel.anygeometry.json")
 ```
 
+Certified output additionally requires a clean strict audit:
+
+```python
+write_geometry("panel.certified.anygeometry.json", geometry, certified=True)
+```
+
 JSON and gzip-compressed JSON are supported. Mesh and FEM/project
 serialization remain outside ANYgeometry.
+
+Ordinary output revalidates complete topological and structural integrity.
+Certified output adds the full global geometric audit. Feature history is
+owner-observed and validated before writing; direct record tampering is never
+accepted as a checksummed document.
 
 The package module can create an example or inspect a saved geometry:
 
@@ -195,3 +246,8 @@ python -m twine check dist\*
 The test suite qualifies persistent identity and history, topology, curves,
 surfaces, generators, operations, serialization, intersections, CLI behavior,
 and import boundaries.
+
+The strict-kernel design, invariants, benchmark scope, and completed release
+qualification are recorded in
+[`docs/KERNEL_UPDATE_OVERVIEW.md`](docs/KERNEL_UPDATE_OVERVIEW.md) and
+[`KERNEL_UPDATE_REPORT.md`](KERNEL_UPDATE_REPORT.md).

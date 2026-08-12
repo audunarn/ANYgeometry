@@ -2,16 +2,40 @@
 
 All notable user-visible changes to ANYgeometry are documented here.
 
-## Unreleased
+## 0.2.0 - 2026-08-12
 
+- Added model-bound UUID entity handles, monotonic non-reused geometry and
+  structural IDs, immutable public records/stores, and revisioned document
+  settings.
+- Made feature-history edits owner-observed and revisioned, published feature
+  regeneration atomically with topology, prohibited snapshot mutation from
+  change hooks, and preserved coedge identity across orientation-only edits.
+- Replaced whole-model edit snapshots with nested delta transactions,
+  deterministic change sets, incremental reverse incidence, and a maintained
+  dynamic AABB index for changed-region work.
+- Added persistent parts, sheets, face uses, coedges, physical members,
+  member-edge uses, beam/plate attachments, and beam/beam junctions, including
+  split/copy/reversal/lifecycle bookkeeping and batched member construction.
+- Added a model-owned scale- and translation-stable tolerance policy, typed
+  qualified line/plane/cylinder and segment predicates, multi-interval planar
+  face clipping, and explicit mutation policies for welding and imprinting.
+- Added deterministic fail-closed full-model auditing for duplicates,
+  crossings, overlaps, T-junctions, manifoldness, ownership, member intent,
+  face intersections, spatial-index consistency, and unsupported candidates.
+- Added schema-v3 checksummed serialization for model identity, revision,
+  coordinate settings, tolerance, allocator high-water marks, all structural
+  ownership and relationships, semantics, extensions, and feature history.
+  Schema 1 and 2 documents migrate conservatively; certified output requires
+  a clean strict audit.
 - Added a persistent, dependency-aware, suppressible feature history with
   extensible namespaced executors, stable feature-output references, atomic
   regeneration, and replacement-lineage preservation.
-- Added schema-v2 history serialization while retaining schema-v1 loading as
-  an immutable legacy base materialization.
-- Added atomic model insertion, deep cloning, topology-closure copying,
-  mirroring, linear and circular patterns, orientation reversal, and typed
-  geometry measurements.
+- Added atomic model insertion, deep cloning, topology/structural-closure
+  copying, mirroring, linear and circular patterns, orientation reversal, and
+  typed geometry measurements.
+- Added qualification benchmarks, hostile regression tests, package typing
+  verification, and a public kernel architecture/report set. ANYmesher and
+  downstream analysis packages remain unchanged in this release.
 
 ## 0.1.0 - 2026-08-08
 
@@ -48,5 +72,5 @@ All notable user-visible changes to ANYgeometry are documented here.
   correcting parameter handedness and sweep direction, and made public normal
   evaluation boundary-safe for ruled surfaces.
 - Added a typed-package marker and a lightweight `python -m anygeometry` CLI.
-- Kept NumPy as the only core runtime dependency; Shapely remains optional for
-  future planar/UV topology workflows.
+- Kept NumPy as the only core runtime dependency; Shapely is an optional
+  backend for planar clipping and qualification workflows.

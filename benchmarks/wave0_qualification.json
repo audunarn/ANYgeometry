@@ -1,0 +1,87 @@
+{
+  "measurements": {
+    "cylinder_member_construction": {
+      "entities": {
+        "edges": 10368,
+        "faces": 5120,
+        "vertices": 10496
+      },
+      "peak_python_bytes": 15478064,
+      "seconds": 2.9802072000020416
+    },
+    "duplicate_crossing_construction": {
+      "entities": {
+        "edges": 6000,
+        "faces": 0,
+        "vertices": 8000
+      },
+      "peak_python_bytes": 3631069,
+      "seconds": 0.1304344999953173
+    },
+    "duplicate_crossing_full_audit": {
+      "available": false,
+      "peak_python_bytes": 120,
+      "seconds": 6.800008122809231e-06
+    },
+    "large_model_local_edit": {
+      "peak_python_bytes": 24307624,
+      "seconds": 12.066366099999868
+    },
+    "member_lattice_construction": {
+      "entities": {
+        "edges": 10000,
+        "faces": 0,
+        "vertices": 20000
+      },
+      "peak_python_bytes": 11747792,
+      "seconds": 0.3530196000065189
+    },
+    "mixed_stiffened_panel_construction": {
+      "entities": {
+        "edges": 5100,
+        "faces": 2500,
+        "vertices": 2601
+      },
+      "peak_python_bytes": 6621528,
+      "seconds": 19.843057999998564
+    },
+    "plate_grid_construction": {
+      "entities": {
+        "edges": 20200,
+        "faces": 10000,
+        "vertices": 10201
+      },
+      "peak_python_bytes": 21247664,
+      "seconds": 1.5882018999982392
+    },
+    "plate_grid_full_audit": {
+      "available": false,
+      "peak_python_bytes": 144,
+      "seconds": 1.2600008631125093e-05
+    },
+    "plate_grid_serialization": {
+      "document_records": 40401,
+      "peak_python_bytes": 31976364,
+      "seconds": 0.9367606000014348
+    },
+    "replacement_lineage_construction": {
+      "peak_python_bytes": 1465800,
+      "seconds": 0.28018620000511874
+    },
+    "replacement_lineage_resolution": {
+      "descendants": 1001,
+      "peak_python_bytes": 357568,
+      "seconds": 0.18403519999992568
+    }
+  },
+  "parameters": {
+    "hostile_sets": 2000,
+    "lineage_length": 1000,
+    "members": 10000,
+    "plate_grid": [
+      100,
+      100
+    ]
+  },
+  "profile": "qualification"
+}

@@ -1,0 +1,89 @@
+{
+  "measurements": {
+    "cylinder_member_construction": {
+      "entities": {
+        "edges": 1296,
+        "faces": 640,
+        "vertices": 1312
+      },
+      "peak_python_bytes": 3918880,
+      "seconds": 15.787873699999182
+    },
+    "duplicate_crossing_construction": {
+      "entities": {
+        "edges": 300,
+        "faces": 0,
+        "vertices": 400
+      },
+      "peak_python_bytes": 401596,
+      "seconds": 0.0598459000029834
+    },
+    "duplicate_crossing_full_audit": {
+      "available": false,
+      "peak_python_bytes": 0,
+      "seconds": 1.7999991541728377e-06
+    },
+    "large_model_local_edit": {
+      "changed": 5,
+      "index_updates": 0,
+      "peak_python_bytes": 307416,
+      "seconds": 0.21551860000181478
+    },
+    "member_lattice_construction": {
+      "entities": {
+        "edges": 500,
+        "faces": 0,
+        "vertices": 1000
+      },
+      "peak_python_bytes": 1199156,
+      "seconds": 0.1573461999942083
+    },
+    "mixed_stiffened_panel_construction": {
+      "entities": {
+        "edges": 220,
+        "faces": 100,
+        "vertices": 121
+      },
+      "peak_python_bytes": 435356,
+      "seconds": 0.18319569999584928
+    },
+    "plate_grid_construction": {
+      "entities": {
+        "edges": 840,
+        "faces": 400,
+        "vertices": 441
+      },
+      "peak_python_bytes": 1822820,
+      "seconds": 0.8906848000042373
+    },
+    "plate_grid_full_audit": {
+      "available": false,
+      "peak_python_bytes": 144,
+      "seconds": 4.599991370923817e-06
+    },
+    "plate_grid_serialization": {
+      "document_records": 1681,
+      "peak_python_bytes": 1202692,
+      "seconds": 0.03395739999541547
+    },
+    "replacement_lineage_construction": {
+      "peak_python_bytes": 201160,
+      "seconds": 0.03536540000641253
+    },
+    "replacement_lineage_resolution": {
+      "descendants": 101,
+      "peak_python_bytes": 38608,
+      "seconds": 0.0021004999871365726
+    }
+  },
+  "parameters": {
+    "hostile_sets": 100,
+    "lineage_length": 100,
+    "members": 500,
+    "plate_grid": [
+      20,
+      20
+    ]
+  },
+  "profile": "smoke"
+}
