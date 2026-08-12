@@ -17,6 +17,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
+import heapq
 import math
 from numbers import Real
 from typing import TypeAlias
@@ -27,6 +28,7 @@ __all__ = [
     "IndexDiagnostics",
     "IndexUpdate",
     "IndexUpdateKind",
+    "NearestQueryResult",
     "PairQueryResult",
     "QueryDiagnostics",
     "SpatialKey",
@@ -262,6 +264,24 @@ class AABB:
             ),
         )
 
+    def squared_distance_to_point(self, point: Sequence[Real]) -> float:
+        """Squared Euclidean lower bound from a point to this closed box."""
+
+        candidate = _vector3(point, name="point")
+        return sum(
+            (lo - value) ** 2
+            if value < lo
+            else (value - hi) ** 2
+            if value > hi
+            else 0.0
+            for value, lo, hi in zip(
+                candidate, self.minimum, self.maximum, strict=True
+            )
+        )
+
+    def distance_to_point(self, point: Sequence[Real]) -> float:
+        return math.sqrt(self.squared_distance_to_point(point))
+
 
 @dataclass(frozen=True, slots=True)
 class QueryDiagnostics:
@@ -310,6 +330,27 @@ class SpatialQueryResult:
 class PairQueryResult:
     pairs: tuple[tuple[SpatialKey, SpatialKey], ...]
     diagnostics: QueryDiagnostics
+
+
+@dataclass(frozen=True, slots=True)
+class NearestQueryResult:
+    """Nearest indexed key plus deterministic traversal diagnostics."""
+
+    key: SpatialKey | None
+    distance: float
+    diagnostics: QueryDiagnostics
+
+    def __post_init__(self) -> None:
+        if self.key is not None:
+            _key(self.key)
+        value = float(self.distance)
+        if math.isnan(value) or value < 0.0:
+            raise ValueError("nearest distance must be non-negative")
+        if self.key is None and not math.isinf(value):
+            raise ValueError("an empty nearest result must have infinite distance")
+        if self.key is not None and not math.isfinite(value):
+            raise ValueError("a nearest hit must have finite distance")
+        object.__setattr__(self, "distance", value)
 
 
 class IndexUpdateKind(str, Enum):
@@ -395,8 +436,18 @@ class AABBTree:
         self._reinsertions = 0
         self._rotations = 0
         self._refit_steps = 0
+        prepared: list[tuple[SpatialKey, AABB]] = []
         for key, bounds in items:
-            self.insert(key, bounds)
+            normalized = _key(key)
+            if not isinstance(bounds, AABB):
+                raise TypeError("bounds must be an AABB")
+            if normalized in self._boxes:
+                raise KeyError(f"spatial key already exists: {normalized!r}")
+            self._boxes[normalized] = bounds
+            prepared.append((normalized, self._fatten(bounds)))
+        if prepared:
+            self._root = self._build_balanced(prepared)
+            self._insertions = len(prepared)
 
     def __len__(self) -> int:
         return len(self._boxes)
@@ -602,6 +653,100 @@ class AABBTree:
 
     query_changed_regions = query_regions
 
+    def nearest(
+        self,
+        point: Sequence[Real],
+        distance_evaluator: Callable[[SpatialKey], Real],
+        *,
+        kinds: Iterable[str] | None = None,
+    ) -> NearestQueryResult:
+        """Return the exact nearest key using AABB lower-bound pruning.
+
+        ``distance_evaluator`` supplies the non-negative exact distance to one
+        leaf.  The tree calls it only while the leaf's conservative lower
+        bound can improve (or tie) the current result.  Equal distances are
+        resolved by :class:`SpatialKey`, independent of tree shape.
+        """
+
+        candidate = _vector3(point, name="point")
+        if not callable(distance_evaluator):
+            raise TypeError("distance_evaluator must be callable")
+        accepted_kinds = None if kinds is None else frozenset(kinds)
+        if accepted_kinds is not None and any(
+            not isinstance(kind, str) or not kind for kind in accepted_kinds
+        ):
+            raise TypeError("kinds must contain non-empty strings")
+        if self._root is None:
+            return NearestQueryResult(None, math.inf, QueryDiagnostics(region_count=1))
+
+        root = self._nodes[self._root]
+        queue: list[tuple[float, SpatialKey, int]] = [
+            (root.aabb.distance_to_point(candidate), root.minimum_key, self._root)
+        ]
+        best_key: SpatialKey | None = None
+        best_distance = math.inf
+        node_visits = 0
+        branch_visits = 0
+        leaf_tests = 0
+        evaluations = 0
+        while queue:
+            lower_bound, _minimum_key, node_id = heapq.heappop(queue)
+            if lower_bound > best_distance:
+                break
+            node = self._nodes[node_id]
+            node_visits += 1
+            if node.is_leaf:
+                leaf_tests += 1
+                assert node.key is not None
+                key = node.key
+                if accepted_kinds is not None and key[0] not in accepted_kinds:
+                    continue
+                exact_lower = self._boxes[key].distance_to_point(candidate)
+                if exact_lower > best_distance:
+                    continue
+                distance = float(distance_evaluator(key))
+                if not math.isfinite(distance) or distance < 0.0:
+                    raise ValueError(
+                        "distance_evaluator must return a finite non-negative distance"
+                    )
+                # A tiny roundoff allowance is necessary for points projected
+                # to an analytic boundary represented by the same AABB.
+                if distance + 1.0e-12 * max(1.0, exact_lower) < exact_lower:
+                    raise ValueError(
+                        "distance_evaluator returned a distance below the AABB lower bound"
+                    )
+                evaluations += 1
+                if distance < best_distance or (
+                    distance == best_distance
+                    and (best_key is None or key < best_key)
+                ):
+                    best_key = key
+                    best_distance = distance
+                continue
+
+            branch_visits += 1
+            assert node.left is not None and node.right is not None
+            for child_id in (node.left, node.right):
+                child = self._nodes[child_id]
+                child_lower = child.aabb.distance_to_point(candidate)
+                if child_lower <= best_distance:
+                    heapq.heappush(
+                        queue, (child_lower, child.minimum_key, child_id)
+                    )
+
+        return NearestQueryResult(
+            best_key,
+            best_distance,
+            QueryDiagnostics(
+                region_count=1,
+                node_visits=node_visits,
+                branch_visits=branch_visits,
+                leaf_tests=leaf_tests,
+                raw_candidate_hits=evaluations,
+                candidate_count=evaluations,
+            ),
+        )
+
     def overlap_pairs(
         self,
         *,
@@ -710,6 +855,74 @@ class AABBTree:
         self._next_node += 1
         self._nodes[identifier] = node
         return identifier
+
+    def _build_balanced(self, items: list[tuple[SpatialKey, AABB]]) -> int:
+        """Build a deterministic spatially clustered AVL tree in bulk.
+
+        Lazy model-index materialization can supply tens of thousands of
+        entities at once. Replaying incremental insertion for that initial
+        state performs avoidable sibling searches, refits, and rotations.
+        Median splitting on the widest centroid axis creates the same exact
+        leaf boxes in ``O(n log^2 n)`` comparison work, bounded linear peak
+        storage, and zero mutation refits. Nearly equal leaf counts guarantee
+        the height invariant recursively; later edits still use the ordinary
+        incremental insert/update/remove paths.
+        """
+
+        if len(items) == 1:
+            key, bounds = items[0]
+            leaf = self._allocate_node(
+                _Node(
+                    aabb=bounds,
+                    parent=None,
+                    left=None,
+                    right=None,
+                    height=0,
+                    key=key,
+                    minimum_key=key,
+                )
+            )
+            self._leaves[key] = leaf
+            return leaf
+
+        spans = []
+        for axis in range(3):
+            coordinates = (
+                bounds.minimum[axis] + bounds.maximum[axis]
+                for _key_value, bounds in items
+            )
+            first = next(coordinates)
+            minimum = maximum = first
+            for value in coordinates:
+                minimum = min(minimum, value)
+                maximum = max(maximum, value)
+            spans.append(maximum - minimum)
+        axis = max(range(3), key=lambda value: (spans[value], -value))
+        items.sort(
+            key=lambda item: (
+                item[1].minimum[axis] + item[1].maximum[axis],
+                item[0],
+            )
+        )
+        middle = len(items) // 2
+        left = self._build_balanced(items[:middle])
+        right = self._build_balanced(items[middle:])
+        left_node = self._nodes[left]
+        right_node = self._nodes[right]
+        parent = self._allocate_node(
+            _Node(
+                aabb=left_node.aabb.union(right_node.aabb),
+                parent=None,
+                left=left,
+                right=right,
+                height=1 + max(left_node.height, right_node.height),
+                key=None,
+                minimum_key=min(left_node.minimum_key, right_node.minimum_key),
+            )
+        )
+        left_node.parent = parent
+        right_node.parent = parent
+        return parent
 
     def _insert_leaf(self, leaf: int) -> int:
         if self._root is None:

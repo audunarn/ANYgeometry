@@ -9,6 +9,7 @@ import pytest
 
 from anygeometry.errors import GeometryError
 from anygeometry.predicates import (
+    IntersectionDimension,
     IntersectionKind,
     IntersectionQuality,
     ParameterRange,
@@ -85,6 +86,7 @@ def test_qualified_line_line_cross_skew_coincident_and_physical_parameters() -> 
     )
 
     assert crossing.kind is IntersectionKind.CROSS
+    assert crossing.dimension is IntersectionDimension.POINT
     assert np.asarray(crossing.witnesses) == pytest.approx(
         np.asarray(((0.5, 0.0, 0.0),))
     )
@@ -94,6 +96,7 @@ def test_qualified_line_line_cross_skew_coincident_and_physical_parameters() -> 
     assert skew.kind is IntersectionKind.DISJOINT
     assert skew.components == ()
     assert coincident.kind is IntersectionKind.COINCIDENT
+    assert coincident.dimension is IntersectionDimension.CURVE
     assert coincident.components[0].direction == pytest.approx((1.0, 0.0, 0.0))
 
 
@@ -277,6 +280,20 @@ def test_collinear_segment_partial_and_full_reversed_overlap_have_oriented_range
     assert full_reversed.components[0].second_parameter_range == ParameterRange(1.0, 0.0)
     assert full_reversed.components[0].second_parameter_range.lower == 0.0
     assert full_reversed.components[0].second_parameter_range.upper == 1.0
+
+
+def test_collinear_segment_containment_is_first_class() -> None:
+    contained = qualified_segment_segment(
+        (0.0, 0.0, 0.0),
+        (4.0, 0.0, 0.0),
+        (1.0, 0.0, 0.0),
+        (3.0, 0.0, 0.0),
+    )
+
+    assert contained.kind is IntersectionKind.CONTAINED
+    assert contained.dimension is IntersectionDimension.CURVE
+    assert contained.components[0].first_parameter_range == ParameterRange(0.25, 0.75)
+    assert contained.components[0].second_parameter_range == ParameterRange(0.0, 1.0)
 
 
 def test_segment_near_tolerance_cases_use_local_length_not_global_coordinates() -> None:

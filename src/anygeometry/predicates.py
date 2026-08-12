@@ -17,10 +17,12 @@ from typing import Sequence
 import numpy as np
 
 from .errors import GeometryError
+from .identity import EntityHandle
 from .tolerance import DEFAULT_TOLERANCE_POLICY, TolerancePolicy, feature_extent
 
 __all__ = [
     "IntersectionComponent",
+    "IntersectionDimension",
     "IntersectionKind",
     "IntersectionQuality",
     "IntersectionResult",
@@ -46,8 +48,20 @@ class IntersectionKind(str, Enum):
     CROSS = "cross"
     OVERLAP_CURVE = "overlap_curve"
     OVERLAP_REGION = "overlap_region"
+    CONTAINED = "contained"
     COINCIDENT = "coincident"
+    UNSUPPORTED = "unsupported"
+    CAPABILITY_MISSING = "capability_missing"
     UNCLASSIFIED = "unclassified"
+
+
+class IntersectionDimension(str, Enum):
+    """Topological dimension of the qualified intersection set."""
+
+    NONE = "none"
+    POINT = "point"
+    CURVE = "curve"
+    REGION = "region"
 
 
 class IntersectionQuality(str, Enum):
@@ -124,8 +138,12 @@ class IntersectionComponent:
     second_parameter: ParameterValue | None = None
     first_parameter_range: ParameterRange | None = None
     second_parameter_range: ParameterRange | None = None
+    first_parameter_path: tuple[ParameterValue, ...] = ()
+    second_parameter_path: tuple[ParameterValue, ...] = ()
     direction: Point3 | None = None
     max_residual: float = 0.0
+    first_subparent: EntityHandle | None = None
+    second_subparent: EntityHandle | None = None
 
     def __post_init__(self) -> None:
         witnesses = tuple(
@@ -157,8 +175,28 @@ class IntersectionComponent:
             "second_parameter",
             _parameter(self.second_parameter, "second parameter"),
         )
+        object.__setattr__(
+            self,
+            "first_parameter_path",
+            tuple(
+                _parameter(value, "first parameter path")  # type: ignore[arg-type]
+                for value in self.first_parameter_path
+            ),
+        )
+        object.__setattr__(
+            self,
+            "second_parameter_path",
+            tuple(
+                _parameter(value, "second parameter path")  # type: ignore[arg-type]
+                for value in self.second_parameter_path
+            ),
+        )
         object.__setattr__(self, "direction", direction)
         object.__setattr__(self, "max_residual", residual)
+        for name in ("first_subparent", "second_subparent"):
+            parent = getattr(self, name)
+            if parent is not None and not isinstance(parent, EntityHandle):
+                raise GeometryError(f"{name} must be an EntityHandle")
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,6 +206,10 @@ class IntersectionResult:
     kind: IntersectionKind
     components: tuple[IntersectionComponent, ...] = ()
     diagnostics: tuple[str, ...] = ()
+    dimension: IntersectionDimension | None = None
+    first_parent: EntityHandle | None = None
+    second_parent: EntityHandle | None = None
+    tolerance_used: float | None = None
 
     def __post_init__(self) -> None:
         try:
@@ -176,20 +218,60 @@ class IntersectionResult:
             raise GeometryError("invalid intersection kind") from error
         components = tuple(self.components)
         diagnostics = tuple(str(item) for item in self.diagnostics)
-        if kind in (IntersectionKind.DISJOINT, IntersectionKind.UNCLASSIFIED):
+        empty_kinds = (
+            IntersectionKind.DISJOINT,
+            IntersectionKind.UNCLASSIFIED,
+            IntersectionKind.UNSUPPORTED,
+            IntersectionKind.CAPABILITY_MISSING,
+        )
+        if kind in empty_kinds:
             if components:
                 raise GeometryError(f"{kind.value} results cannot contain components")
         elif not components:
             raise GeometryError(f"{kind.value} results require a component")
-        if kind is IntersectionKind.UNCLASSIFIED and not diagnostics:
-            raise GeometryError("unclassified results require a diagnostic")
+        if kind in (
+            IntersectionKind.UNCLASSIFIED,
+            IntersectionKind.UNSUPPORTED,
+            IntersectionKind.CAPABILITY_MISSING,
+        ) and not diagnostics:
+            raise GeometryError(f"{kind.value} results require a diagnostic")
+        dimension = self.dimension
+        if dimension is None:
+            dimension = _intersection_dimension(kind, components)
+        else:
+            try:
+                dimension = IntersectionDimension(dimension)
+            except (TypeError, ValueError) as error:
+                raise GeometryError("invalid intersection dimension") from error
+        if kind in empty_kinds and dimension is not IntersectionDimension.NONE:
+            raise GeometryError(f"{kind.value} results must have dimension NONE")
+        if kind not in empty_kinds and dimension is IntersectionDimension.NONE:
+            raise GeometryError(f"{kind.value} results cannot have dimension NONE")
+        for name in ("first_parent", "second_parent"):
+            parent = getattr(self, name)
+            if parent is not None and not isinstance(parent, EntityHandle):
+                raise GeometryError(f"{name} must be an EntityHandle")
+        tolerance = self.tolerance_used
+        if tolerance is not None:
+            try:
+                tolerance = float(tolerance)
+            except (TypeError, ValueError, OverflowError) as error:
+                raise GeometryError("intersection tolerance must be finite") from error
+            if not np.isfinite(tolerance) or tolerance < 0.0:
+                raise GeometryError("intersection tolerance must be non-negative and finite")
         object.__setattr__(self, "kind", kind)
         object.__setattr__(self, "components", components)
         object.__setattr__(self, "diagnostics", diagnostics)
+        object.__setattr__(self, "dimension", dimension)
+        object.__setattr__(self, "tolerance_used", tolerance)
 
     @property
     def classified(self) -> bool:
-        return self.kind is not IntersectionKind.UNCLASSIFIED
+        return self.kind not in (
+            IntersectionKind.UNCLASSIFIED,
+            IntersectionKind.UNSUPPORTED,
+            IntersectionKind.CAPABILITY_MISSING,
+        )
 
     @property
     def quality(self) -> IntersectionQuality:
@@ -204,13 +286,89 @@ class IntersectionResult:
             return IntersectionQuality.EXACT
         return (
             IntersectionQuality.UNVERIFIED
-            if self.kind is IntersectionKind.UNCLASSIFIED
+            if self.kind
+            in (
+                IntersectionKind.UNCLASSIFIED,
+                IntersectionKind.UNSUPPORTED,
+                IntersectionKind.CAPABILITY_MISSING,
+            )
             else IntersectionQuality.EXACT
         )
 
     @property
     def witnesses(self) -> tuple[Point3, ...]:
         return tuple(point for component in self.components for point in component.witnesses)
+
+    @property
+    def max_residual(self) -> float:
+        """Maximum verified component residual, zero for an empty result."""
+
+        return max((item.max_residual for item in self.components), default=0.0)
+
+    def with_context(
+        self,
+        *,
+        first_parent: EntityHandle | None = None,
+        second_parent: EntityHandle | None = None,
+        tolerance_used: float | None = None,
+    ) -> "IntersectionResult":
+        """Return this result qualified with model-bound parent provenance."""
+
+        from dataclasses import replace
+
+        return replace(
+            self,
+            first_parent=self.first_parent if first_parent is None else first_parent,
+            second_parent=self.second_parent if second_parent is None else second_parent,
+            tolerance_used=(
+                self.tolerance_used if tolerance_used is None else tolerance_used
+            ),
+        )
+
+
+def _intersection_dimension(
+    kind: IntersectionKind,
+    components: tuple[IntersectionComponent, ...],
+) -> IntersectionDimension:
+    if kind in (
+        IntersectionKind.DISJOINT,
+        IntersectionKind.UNCLASSIFIED,
+        IntersectionKind.UNSUPPORTED,
+        IntersectionKind.CAPABILITY_MISSING,
+    ):
+        return IntersectionDimension.NONE
+    if kind is IntersectionKind.OVERLAP_REGION:
+        return IntersectionDimension.REGION
+    if kind is IntersectionKind.OVERLAP_CURVE:
+        return IntersectionDimension.CURVE
+    if kind is IntersectionKind.CONTAINED:
+        if any(
+            item.direction is not None
+            or item.first_parameter_range is not None
+            or item.second_parameter_range is not None
+            for item in components
+        ):
+            return IntersectionDimension.CURVE
+        return IntersectionDimension.REGION
+    if kind is IntersectionKind.COINCIDENT:
+        return (
+            IntersectionDimension.CURVE
+            if any(
+                item.direction is not None
+                or item.first_parameter_range is not None
+                or item.second_parameter_range is not None
+                for item in components
+            )
+            else IntersectionDimension.REGION
+        )
+    if any(
+        item.direction is not None
+        or item.first_parameter_range is not None
+        or item.second_parameter_range is not None
+        for item in components
+    ):
+        return IntersectionDimension.CURVE
+    return IntersectionDimension.POINT
 
 
 @dataclass(frozen=True, slots=True)
@@ -914,7 +1072,11 @@ def qualified_segment_segment(
         kind = (
             IntersectionKind.COINCIDENT
             if first_full and second_full
-            else IntersectionKind.OVERLAP_CURVE
+            else (
+                IntersectionKind.CONTAINED
+                if first_full != second_full
+                else IntersectionKind.OVERLAP_CURVE
+            )
         )
         return IntersectionResult(kind, (component,))
 

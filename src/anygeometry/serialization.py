@@ -28,12 +28,15 @@ from .features import (
 from .model import GeometryModel
 from .structural import (
     Attachment,
+    AttachmentEvidence,
     AttachmentKind,
     AttachmentTargetKind,
     BoundaryPolicy,
     Coedge,
     ConnectivityPolicy,
+    ConnectionIntent,
     FaceUse,
+    FrozenMetadata,
     Junction,
     JunctionKind,
     JunctionMemberUse,
@@ -50,7 +53,7 @@ from .surfaces import CoonsSurface, Cone, Cylinder, Plane, RuledSurface
 from .tolerance import TolerancePolicy
 
 SCHEMA = "anygeometry"
-VERSION = 3
+VERSION = 4
 
 _GEOMETRY_KINDS = ("vertex", "edge", "face")
 _STRUCTURAL_KINDS = (
@@ -79,10 +82,16 @@ _CURRENT_REQUIRED_FIELDS = {
     "groups",
     "tags",
     "replacement_history",
+    "structural_replacement_history",
+    "construction_vertices",
     "extensions",
     "checksum",
 }
 _CURRENT_OPTIONAL_FIELDS = {"features"}
+_V3_REQUIRED_FIELDS = _CURRENT_REQUIRED_FIELDS - {
+    "structural_replacement_history",
+    "construction_vertices",
+}
 
 __all__ = ["SCHEMA", "VERSION", "from_dict", "read_geometry", "to_dict", "write_geometry"]
 
@@ -105,6 +114,12 @@ def _positive_integer(value: object, name: str) -> int:
     if made <= 0:
         raise GeometryError(f"{name} must be positive")
     return made
+
+
+def _optional_positive_integer(value: object, name: str) -> int | None:
+    if value is None:
+        return None
+    return _positive_integer(value, name)
 
 
 def _object(value: object, name: str) -> Mapping[str, object]:
@@ -216,6 +231,26 @@ def _unique_ids(records: list[object], name: str) -> None:
 
 def _ref(reference: EntityRef) -> list[object]:
     return [reference.kind, int(reference.id)]
+
+
+def _entity_key_value(reference: tuple[str, int]) -> list[object]:
+    return [reference[0], int(reference[1])]
+
+
+def _decode_entity_key(
+    value: object,
+    name: str,
+    *,
+    allowed_kinds: tuple[str, ...] | None = None,
+) -> tuple[str, int]:
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        raise GeometryError(f"{name} must be [kind, id]")
+    kind, identifier = value
+    if not isinstance(kind, str) or not kind:
+        raise GeometryError(f"{name} kind must be a non-empty string")
+    if allowed_kinds is not None and kind not in allowed_kinds:
+        raise GeometryError(f"{name} has unsupported kind {kind!r}")
+    return kind, _positive_integer(identifier, f"{name} ID")
 
 
 def _loop(loop: tuple[OrientedEdge, ...]) -> list[list[object]]:
@@ -334,6 +369,11 @@ def _structural_document(geometry: GeometryModel) -> dict[str, object]:
                 "edge_use_ids": list(item.edge_use_ids),
                 "name": item.name,
                 "metadata": item.metadata.to_dict(),
+                "orientation_reference": (
+                    None
+                    if item.orientation_reference is None
+                    else _entity_key_value(item.orientation_reference)
+                ),
             }
             for item in sorted(geometry.members.values(), key=lambda record: record.id)
         ],
@@ -362,6 +402,16 @@ def _structural_document(geometry: GeometryModel) -> dict[str, object]:
                     _parameter_range_value(value) for value in item.target_parameters
                 ],
                 "metadata": item.metadata.to_dict(),
+                "connection_intent": item.connection_intent.value,
+                "evidence": item.evidence.value,
+                "max_residual": item.max_residual,
+                "tolerance_used": item.tolerance_used,
+                "part_id": item.part_id,
+                "sheet_id": item.sheet_id,
+                "provenance": item.provenance.to_dict(),
+                "lineage": [_entity_key_value(value) for value in item.lineage],
+                "source_kind": item.source_kind,
+                "source_id": item.source_id,
             }
             for item in sorted(
                 geometry.attachments.values(), key=lambda record: record.id
@@ -381,6 +431,8 @@ def _structural_document(geometry: GeometryModel) -> dict[str, object]:
                 "sheet_ids": list(item.sheet_ids),
                 "attachment_ids": list(item.attachment_ids),
                 "metadata": item.metadata.to_dict(),
+                "connection_intent": item.connection_intent.value,
+                "provenance": item.provenance.to_dict(),
             }
             for item in sorted(geometry.junctions.values(), key=lambda record: record.id)
         ],
@@ -558,6 +610,7 @@ def to_dict(
             "units": geometry.units,
             "local_origin": local_origin.tolist(),
             "coordinate_transform": None if transform is None else transform.tolist(),
+            "crs": geometry.crs_metadata.to_dict(),
         },
         "tolerance": {
             item.name: getattr(geometry.tolerance, item.name)
@@ -576,6 +629,7 @@ def to_dict(
                 "corners": list(face.corners),
                 "holes": [_loop(loop) for loop in face.holes],
                 "surface": _surface(face.surface),
+                "parameterization": _surface(face.parameterization),
                 "metadata": _json_value(face.metadata),
             }
             for face in sorted(geometry.faces.values(), key=lambda item: item.id)
@@ -597,6 +651,20 @@ def to_dict(
                 geometry.replacement_history().items(),
                 key=lambda item: (item[0].kind, item[0].id),
             )
+        ],
+        "structural_replacement_history": [
+            {
+                "old": _entity_key_value(old),
+                "new": [_entity_key_value(item) for item in new],
+            }
+            for old, new in sorted(
+                geometry.structural_replacement_history().items(),
+                key=lambda item: (item[0][0], item[0][1]),
+            )
+        ],
+        "construction_vertices": [
+            {"vertex_id": vertex_id, "part_id": part_id}
+            for vertex_id, part_id in sorted(geometry.construction_vertices.items())
         ],
         "extensions": dict(extensions),
     }
@@ -857,7 +925,9 @@ def _decode_surface(value: object, *, strict: bool = False) -> object:
     return constructors[kind](**data)  # type: ignore[index,operator]
 
 
-def _decode_structural(value: object, geometry: GeometryModel) -> None:
+def _decode_structural(
+    value: object, geometry: GeometryModel, *, schema_version: int
+) -> None:
     data = _object(value, "structural topology")
     fields_by_store = {
         "parts",
@@ -974,17 +1044,30 @@ def _decode_structural(value: object, geometry: GeometryModel) -> None:
 
     for raw in records["members"]:
         item = _object(raw, "member record")
+        member_fields = {"id", "part_id", "edge_use_ids", "name", "metadata"}
+        if schema_version >= 4:
+            member_fields.add("orientation_reference")
         _exact_fields(
             item,
-            required={"id", "part_id", "edge_use_ids", "name", "metadata"},
+            required=member_fields,
             name="member record",
         )
+        raw_orientation_reference = item.get("orientation_reference")
         made = Member(
             id=_positive_integer(item["id"], "member ID"),
             part_id=_positive_integer(item["part_id"], "part ID"),
             edge_use_ids=_ids(item["edge_use_ids"], "member-edge-use ID"),
             name=item["name"],  # type: ignore[arg-type]
             metadata=_metadata(item["metadata"], "member metadata"),
+            orientation_reference=(
+                None
+                if raw_orientation_reference is None
+                else _decode_entity_key(
+                    raw_orientation_reference,
+                    "member orientation reference",
+                    allowed_kinds=_GEOMETRY_KINDS,
+                )
+            ),
         )
         geometry._put_structural("member", made)  # noqa: SLF001
 
@@ -1016,28 +1099,63 @@ def _decode_structural(value: object, geometry: GeometryModel) -> None:
 
     for raw in records["attachments"]:
         item = _object(raw, "attachment record")
+        legacy_attachment_fields = {
+            "id",
+            "member_id",
+            "kind",
+            "target_kind",
+            "target_id",
+            "member_range",
+            "target_parameters",
+            "metadata",
+        }
+        qualified_attachment_fields = {
+            "connection_intent",
+            "evidence",
+            "max_residual",
+            "tolerance_used",
+            "part_id",
+            "sheet_id",
+            "provenance",
+            "lineage",
+            "source_kind",
+            "source_id",
+        }
         _exact_fields(
             item,
-            required={
-                "id",
-                "member_id",
-                "kind",
-                "target_kind",
-                "target_id",
-                "member_range",
-                "target_parameters",
-                "metadata",
-            },
+            required=(
+                legacy_attachment_fields | qualified_attachment_fields
+                if schema_version >= 4
+                else legacy_attachment_fields
+            ),
             name="attachment record",
         )
         try:
             attachment_kind = AttachmentKind(item["kind"])
             target_kind = AttachmentTargetKind(item["target_kind"])
+            connection_intent = ConnectionIntent(
+                item.get("connection_intent", ConnectionIntent.CONNECT.value)
+            )
+            evidence = AttachmentEvidence(
+                item.get("evidence", AttachmentEvidence.UNVERIFIED.value)
+            )
         except (TypeError, ValueError) as error:
             raise GeometryError("attachment contains an unknown enum value") from error
+        raw_lineage = _list(item.get("lineage", []), "attachment lineage")
+        raw_source_kind = item.get("source_kind")
+        if raw_source_kind is not None and not isinstance(raw_source_kind, str):
+            raise GeometryError("attachment source kind must be a string or null")
+        if schema_version >= 4 and (
+            not isinstance(raw_source_kind, str) or not raw_source_kind
+        ):
+            raise GeometryError(
+                "schema-4 attachment source kind must be explicit"
+            )
+        if schema_version >= 4 and item.get("source_id") is None:
+            raise GeometryError("schema-4 attachment source ID must be explicit")
         made = Attachment(
             id=_positive_integer(item["id"], "attachment ID"),
-            member_id=_positive_integer(item["member_id"], "member ID"),
+            member_id=_optional_positive_integer(item["member_id"], "member ID"),
             kind=attachment_kind,
             target_kind=target_kind,
             target_id=_positive_integer(item["target_id"], "attachment target ID"),
@@ -1047,25 +1165,52 @@ def _decode_structural(value: object, geometry: GeometryModel) -> None:
                 for value in _list(item["target_parameters"], "target parameters")
             ),
             metadata=_metadata(item["metadata"], "attachment metadata"),
+            connection_intent=connection_intent,
+            evidence=evidence,
+            max_residual=item.get("max_residual", 0.0),  # type: ignore[arg-type]
+            tolerance_used=item.get("tolerance_used", 0.0),  # type: ignore[arg-type]
+            part_id=_optional_positive_integer(item.get("part_id"), "part ID"),
+            sheet_id=_optional_positive_integer(item.get("sheet_id"), "sheet ID"),
+            provenance=_metadata(
+                item.get("provenance", {}), "attachment provenance"
+            ),
+            lineage=tuple(
+                _decode_entity_key(
+                    value,
+                    "attachment lineage reference",
+                    allowed_kinds=_ID_KINDS,
+                )
+                for value in raw_lineage
+            ),
+            source_kind=raw_source_kind,
+            source_id=_optional_positive_integer(
+                item.get("source_id"), "attachment source ID"
+            ),
         )
         geometry._put_structural("attachment", made)  # noqa: SLF001
 
     for raw in records["junctions"]:
         item = _object(raw, "junction record")
+        junction_fields = {
+            "id",
+            "kind",
+            "member_uses",
+            "sheet_ids",
+            "attachment_ids",
+            "metadata",
+        }
+        if schema_version >= 4:
+            junction_fields.update({"connection_intent", "provenance"})
         _exact_fields(
             item,
-            required={
-                "id",
-                "kind",
-                "member_uses",
-                "sheet_ids",
-                "attachment_ids",
-                "metadata",
-            },
+            required=junction_fields,
             name="junction record",
         )
         try:
             junction_kind = JunctionKind(item["kind"])
+            connection_intent = ConnectionIntent(
+                item.get("connection_intent", ConnectionIntent.CONNECT.value)
+            )
         except (TypeError, ValueError) as error:
             raise GeometryError("junction contains an unknown enum value") from error
         member_uses: list[JunctionMemberUse] = []
@@ -1091,6 +1236,10 @@ def _decode_structural(value: object, geometry: GeometryModel) -> None:
             sheet_ids=_ids(item["sheet_ids"], "sheet ID"),
             attachment_ids=_ids(item["attachment_ids"], "attachment ID"),
             metadata=_metadata(item["metadata"], "junction metadata"),
+            connection_intent=connection_intent,
+            provenance=_metadata(
+                item.get("provenance", {}), "junction provenance"
+            ),
         )
         geometry._put_structural("junction", made)  # noqa: SLF001
 
@@ -1154,8 +1303,9 @@ def _migrate_legacy_structural(geometry: GeometryModel, source_version: int) -> 
 
 
 def _decode_geometry_records(
-    document: Mapping[str, object], geometry: GeometryModel, *, strict: bool
+    document: Mapping[str, object], geometry: GeometryModel, *, schema_version: int
 ) -> None:
+    strict = schema_version >= 3
     vertices = _list(document.get("vertices", []), "vertices")
     edges = _list(document.get("edges", []), "edges")
     faces = _list(document.get("faces", []), "faces")
@@ -1217,9 +1367,14 @@ def _decode_geometry_records(
     for raw in faces:
         item = _object(raw, "face record")
         if strict:
+            face_fields = {
+                "id", "loop", "corners", "holes", "surface", "metadata"
+            }
+            if schema_version >= 4:
+                face_fields.add("parameterization")
             _exact_fields(
                 item,
-                required={"id", "loop", "corners", "holes", "surface", "metadata"},
+                required=face_fields,
                 name="face record",
             )
         identifier = _positive_integer(item["id"], "face ID")
@@ -1227,18 +1382,21 @@ def _decode_geometry_records(
         geometry._put_entity(  # noqa: SLF001
             "face",
             Face(
-                identifier,
-                _oriented_loop(item["loop"]),
-                tuple(
+                id=identifier,
+                loop=_oriented_loop(item["loop"]),
+                corners=tuple(
                     _non_negative_integer(value, "face corner")
                     for value in item.get("corners", [])  # type: ignore[union-attr]
                 ),
-                metadata,
-                tuple(
+                metadata=metadata,
+                holes=tuple(
                     _oriented_loop(loop)
                     for loop in _list(item.get("holes", []), "face holes")
                 ),
-                _decode_surface(item.get("surface"), strict=strict),
+                surface=_decode_surface(item.get("surface"), strict=strict),
+                parameterization=_decode_surface(
+                    item.get("parameterization"), strict=strict
+                ),
             ),
         )
 
@@ -1325,6 +1483,63 @@ def _decode_semantics(
         geometry._replacement_history[old] = replacements  # noqa: SLF001
 
 
+def _decode_additive_kernel_state(
+    document: Mapping[str, object], geometry: GeometryModel
+) -> None:
+    """Decode kernel state required by schema 4."""
+
+    seen_vertices: set[int] = set()
+    for raw in _list(document.get("construction_vertices", []), "construction vertices"):
+        item = _object(raw, "construction-vertex record")
+        _exact_fields(
+            item,
+            required={"vertex_id", "part_id"},
+            name="construction-vertex record",
+        )
+        vertex_id = _positive_integer(item["vertex_id"], "construction vertex ID")
+        if vertex_id in seen_vertices:
+            raise GeometryError(f"duplicate construction vertex {vertex_id}")
+        seen_vertices.add(vertex_id)
+        geometry._construction_vertices[vertex_id] = _optional_positive_integer(  # noqa: SLF001
+            item["part_id"], "construction vertex part ID"
+        )
+
+    seen_history: set[tuple[str, int]] = set()
+    for raw in _list(
+        document.get("structural_replacement_history", []),
+        "structural replacement history",
+    ):
+        item = _object(raw, "structural replacement-history record")
+        _exact_fields(
+            item,
+            required={"old", "new"},
+            name="structural replacement-history record",
+        )
+        old = _decode_entity_key(
+            item["old"],
+            "structural replacement source",
+            allowed_kinds=_STRUCTURAL_KINDS,
+        )
+        if old in seen_history:
+            raise GeometryError(
+                f"duplicate structural replacement-history record for {old}"
+            )
+        seen_history.add(old)
+        descendants = tuple(
+            _decode_entity_key(
+                value,
+                "structural replacement descendant",
+                allowed_kinds=_STRUCTURAL_KINDS,
+            )
+            for value in _list(item["new"], "structural replacement descendants")
+        )
+        if len(set(descendants)) != len(descendants):
+            raise GeometryError(
+                f"duplicate structural replacement descendant for {old}"
+            )
+        geometry._structural_replacement_history[old] = descendants  # noqa: SLF001
+
+
 def from_dict(document: Mapping[str, Any]) -> GeometryModel:
     """Restore a complete geometry document and validate all references."""
 
@@ -1333,16 +1548,25 @@ def from_dict(document: Mapping[str, Any]) -> GeometryModel:
     if document.get("schema", SCHEMA) != SCHEMA:
         raise GeometryError("not an ANYgeometry document")
     version = _integer(document.get("version", 1), "version")
-    if version not in (1, 2, VERSION):
+    if version not in (1, 2, 3, VERSION):
         raise GeometryError(f"unsupported ANYgeometry version {version}")
-    strict = version == VERSION
-    if strict:
+    strict_document = version >= 3
+    current = version == VERSION
+    if current:
         _exact_fields(
             document,
             required=_CURRENT_REQUIRED_FIELDS,
             optional=_CURRENT_OPTIONAL_FIELDS,
+            name="schema-4 geometry document",
+        )
+    elif version == 3:
+        _exact_fields(
+            document,
+            required=_V3_REQUIRED_FIELDS,
+            optional={"features"},
             name="schema-3 geometry document",
         )
+    if strict_document:
         try:
             model_id = UUID(str(document["model_id"]))
         except (ValueError, TypeError, AttributeError) as error:
@@ -1352,9 +1576,19 @@ def from_dict(document: Mapping[str, Any]) -> GeometryModel:
         revision = _non_negative_integer(document["revision"], "model revision")
         raw_tolerance = _object(document["tolerance"], "tolerance policy")
         tolerance_fields = {item.name for item in fields(TolerancePolicy)}
+        legacy_tolerance_fields = {
+            "length",
+            "merge_length",
+            "angular",
+            "parameter",
+            "area",
+            "surface_residual",
+            "relative_length",
+            "relative_area",
+        }
         _exact_fields(
             raw_tolerance,
-            required=tolerance_fields,
+            required=(tolerance_fields if current else legacy_tolerance_fields),
             name="tolerance policy",
         )
         try:
@@ -1366,7 +1600,12 @@ def from_dict(document: Mapping[str, Any]) -> GeometryModel:
         coordinates = _object(document["coordinates"], "coordinates")
         _exact_fields(
             coordinates,
-            required={"units", "local_origin", "coordinate_transform"},
+            required={
+                "units",
+                "local_origin",
+                "coordinate_transform",
+                *({"crs"} if current else set()),
+            },
             name="coordinates",
         )
         units = coordinates["units"]
@@ -1390,6 +1629,12 @@ def from_dict(document: Mapping[str, Any]) -> GeometryModel:
                 raise GeometryError("coordinate transform must be nonsingular")
             transform.flags.writeable = False
             geometry._coordinate_transform = transform  # noqa: SLF001
+        geometry._crs_metadata = FrozenMetadata(  # noqa: SLF001
+            _metadata(
+                coordinates["crs"] if current else {},
+                "coordinate CRS metadata",
+            )
+        )
         extensions = _object(document["extensions"], "extensions")
         for namespace, value in extensions.items():
             if not namespace or ":" not in namespace:
@@ -1402,16 +1647,22 @@ def from_dict(document: Mapping[str, Any]) -> GeometryModel:
         geometry = GeometryModel()
 
     try:
-        _decode_geometry_records(document, geometry, strict=strict)
-        if strict:
-            _decode_structural(document["structural"], geometry)
+        _decode_geometry_records(document, geometry, schema_version=version)
+        if strict_document:
+            _decode_structural(
+                document["structural"], geometry, schema_version=version
+            )
         else:
             _migrate_legacy_structural(geometry, version)
-        _restore_counters(document, geometry, strict=strict)
-        _decode_semantics(document, geometry, strict=strict)
+        _restore_counters(document, geometry, strict=strict_document)
+        _decode_semantics(document, geometry, strict=strict_document)
+        if current:
+            _decode_additive_kernel_state(document, geometry)
         if version >= 2 and "features" in document:
             geometry._install_feature_history(  # noqa: SLF001
-                _decode_feature_history(document["features"], strict=strict)
+                _decode_feature_history(
+                    document["features"], strict=strict_document
+                )
             )
     except (KeyError, TypeError, ValueError) as error:
         raise GeometryError(f"malformed geometry document: {error}") from error
@@ -1513,7 +1764,7 @@ def from_dict(document: Mapping[str, Any]) -> GeometryModel:
             if record.materialization_checksum is None:
                 # Documents written before checksummed frozen features remain
                 # viewable; the next write persists the derived checksum.
-                if strict:
+                if strict_document:
                     record.state = "invalid"
                     record.diagnostic = (
                         f"feature {record.feature_id} has no materialization checksum"
@@ -1532,7 +1783,7 @@ def from_dict(document: Mapping[str, Any]) -> GeometryModel:
                 if diagnostic is None
                 else diagnostic
             )
-    if strict:
+    if strict_document:
         _verify_checksum(document)
     return geometry
 

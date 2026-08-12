@@ -6,15 +6,22 @@ import numpy as np
 import pytest
 
 from anygeometry import (
+    ConnectionIntent,
     EntityRef,
     GeometryModel,
+    ImprintOperation,
+    IntersectionKind,
     SketchConstraint,
     SketchDefinition,
+    apply_imprint,
     face_sketch_plane,
     from_dict,
+    plan_imprint,
+    query_intersection,
     solve_sketch,
     to_dict,
 )
+from anygeometry.surfaces import Plane
 
 
 def _plate() -> tuple[GeometryModel, int]:
@@ -74,6 +81,68 @@ def test_sketch_feature_extrudes_shell_faces_and_regenerates_editably():
     assert all(geometry.resolve_ref(reference) for reference in first_outputs.values())
     new_top = geometry.features.get(feature.feature_id).outputs["point/c"]
     assert geometry.vertices[new_top.id].position[1] == pytest.approx(1.8)
+
+
+def test_straight_sketch_extrusion_has_exact_planar_support_and_connects() -> None:
+    geometry, support_face = _plate()
+    geometry.features.capture_baseline(geometry)
+    feature = geometry.features.append(
+        "geometry.sketch.extrude",
+        parameters=_definition().to_parameters(),
+        inputs={"support_face": (EntityRef("face", support_face),)},
+    )
+    assert geometry.regenerate_features().success
+    outputs = geometry.features.get(feature.feature_id).outputs
+    walls = tuple(
+        reference.id
+        for key, reference in sorted(outputs.items())
+        if key.startswith("extrusion/face/")
+    )
+
+    assert len(walls) == 4
+    assert all(isinstance(geometry.faces[face_id].surface, Plane) for face_id in walls)
+    support_sheet = geometry.add_sheet((support_face,))
+    wall_sheet = geometry.add_sheet(walls)
+
+    result = query_intersection(
+        geometry,
+        geometry.handle("face", support_face),
+        geometry.handle("face", walls[0]),
+    )
+    plan = plan_imprint(geometry, result, policy=ConnectionIntent.CONNECT)
+    assert plan.operation is ImprintOperation.FACE_IMPRINT
+    application = apply_imprint(
+        geometry, plan, policy=ConnectionIntent.CONNECT
+    )
+    assert application.face_intersection is not None
+    shared_edge = application.face_intersection.edge.id
+    sheet_ids = {
+        geometry.face_uses[use_id].sheet_id
+        for use_id in geometry.face_uses_using_edge(shared_edge)
+    }
+    assert sheet_ids == {support_sheet, wall_sheet}
+    assert geometry.validate_topology() == ()
+    assert geometry._validate_structural() == ()
+
+
+def test_nonplanar_spline_extrusion_remains_typed_unsupported() -> None:
+    geometry, support_face = _plate()
+    start, control, end = geometry.add_points(
+        ((0.5, 0.5, 0.0), (1.5, 1.5, 0.0), (2.5, 0.5, 0.0))
+    )
+    spline = geometry.add_spline(start, (control,), end)
+    wall = geometry.extrude((spline,), (0.0, 0.0, 1.0))[0]
+
+    result = query_intersection(
+        geometry,
+        geometry.handle("face", support_face),
+        geometry.handle("face", wall),
+    )
+
+    assert result.kind is IntersectionKind.UNSUPPORTED
+    assert not result.classified
+    plan = plan_imprint(geometry, result, policy=ConnectionIntent.CONNECT)
+    assert plan.operation is ImprintOperation.NO_TOPOLOGY
 
 
 def test_sketch_feature_round_trips_with_constraints_and_support_identity():

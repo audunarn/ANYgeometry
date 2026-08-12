@@ -35,7 +35,7 @@ __all__ = [
 def surface_point(
     geometry: GeometryModel, face: Face | int, u: float, v: float
 ) -> np.ndarray:
-    """Evaluate the authoritative surface carried by a face."""
+    """Evaluate the face's public parameterization (support when absent)."""
 
     face_id = face if isinstance(face, int) else face.id
     return geometry.face_point(face_id, float(u), float(v))
@@ -46,26 +46,68 @@ def closest_point(
     point: Sequence[float],
     references: Iterable[EntityRef] | None = None,
 ) -> Tuple[EntityRef, np.ndarray, float]:
-    """Return the closest point on selected geometry entities."""
+    """Return the closest point on selected geometry entities.
+
+    The default whole-model query traverses the maintained AABB tree in
+    nearest-lower-bound order and stops once remaining boxes cannot improve
+    the exact result.  An explicit reference subset retains selection-order
+    compatibility and is evaluated directly.
+    """
 
     target = np.asarray(point, dtype=float)
     if target.shape != (3,) or not np.all(np.isfinite(target)):
         raise GeometryError("point must be a finite 3-vector")
-    refs = list(references) if references is not None else [
-        *(vertex.ref for vertex in geometry.vertices.values()),
-        *(edge.ref for edge in geometry.edges.values()),
-        *(face.ref for face in geometry.faces.values()),
-    ]
-    if not refs:
+    refs = None if references is None else list(references)
+    if refs is not None and not refs:
         raise GeometryError("closest_point needs at least one entity")
+
+    def evaluated(reference: EntityRef) -> np.ndarray:
+        if reference.kind == "vertex":
+            return geometry.vertex_position(reference.id).copy()
+        if reference.kind == "edge":
+            return _closest_on_edge(geometry, reference.id, target)
+        if reference.kind == "face":
+            return geometry.project_to_face(reference.id, target)[0]
+        raise GeometryError(f"closest_point does not support {reference.kind!r}")
+
+    # A query made inside a compound mutation must see provisional additions
+    # and moves.  The committed tree overlay is intentionally kept private to
+    # GeometryModel.spatial_candidates, so this exceptional path evaluates
+    # the live records directly instead of consulting stale bounds.
+    active_journal = getattr(geometry, "_transaction_journal", None)
+    if refs is None and not (
+        active_journal is not None and getattr(active_journal, "changed", ())
+    ):
+        made_by_key: dict[tuple[str, int], np.ndarray] = {}
+
+        def exact_distance(key: tuple[str, int]) -> float:
+            reference = EntityRef(*key)
+            made = evaluated(reference)
+            made_by_key[key] = made
+            return float(np.linalg.norm(made - target))
+
+        nearest = geometry._spatial().nearest(  # noqa: SLF001
+            target,
+            exact_distance,
+            kinds=("vertex", "edge", "face"),
+        )
+        if nearest.key is None:
+            raise GeometryError("closest_point needs at least one entity")
+        reference = EntityRef(*nearest.key)
+        made = made_by_key[nearest.key]
+        return reference, made, nearest.distance
+
+    if refs is None:
+        refs = [
+            *(vertex.ref for vertex in geometry.vertices.values()),
+            *(edge.ref for edge in geometry.edges.values()),
+            *(face.ref for face in geometry.faces.values()),
+        ]
+        if not refs:
+            raise GeometryError("closest_point needs at least one entity")
     candidates: List[Tuple[float, str, int, EntityRef, np.ndarray]] = []
     for reference in refs:
-        if reference.kind == "vertex":
-            made = geometry.vertex_position(reference.id).copy()
-        elif reference.kind == "edge":
-            made = _closest_on_edge(geometry, reference.id, target)
-        else:
-            made, _uv, _distance = geometry.project_to_face(reference.id, target)
+        made = evaluated(reference)
         distance = float(np.linalg.norm(made - target))
         candidates.append((distance, reference.kind, reference.id, reference, made))
     distance, _kind, _id, reference, made = min(
@@ -125,6 +167,7 @@ def _split_face_between_impl(
         geometry, face, start_vertex, end_vertex, tolerance=tolerance
     )
     surface = face.surface
+    parameterization = face.parameterization
     metadata = dict(face.metadata)
     groups = [name for name, members in geometry.groups.items() if face.ref in members]
     tags = geometry.tags_for(face.ref)
@@ -147,6 +190,7 @@ def _split_face_between_impl(
                 holes=holes,
                 metadata=dict(metadata),
                 surface=surface,
+                parameterization=parameterization,
             ),
         )
         geometry.tag(EntityRef("face", made), *tags)
@@ -313,12 +357,14 @@ def _surface_divider(
     end = geometry.vertex_position(end_vertex)
     if isinstance(face.surface, Plane) or face.surface is None:
         return geometry.add_line(start_vertex, end_vertex)
-    start_uv = geometry.face_local_uv(face.id, start)
-    end_uv = geometry.face_local_uv(face.id, end)
+    # Divider geometry lies on the authoritative physical support. Optional
+    # display/meshing parameterizations must never move topology off it.
+    start_uv = geometry.face_support_local_uv(face.id, start)
+    end_uv = geometry.face_support_local_uv(face.id, end)
     parameters = np.linspace(0.0, 1.0, 17)
     samples = np.asarray(
         [
-            geometry.face_point(
+            geometry.face_support_point(
                 face.id,
                 (1.0 - step) * start_uv[0] + step * end_uv[0],
                 (1.0 - step) * start_uv[1] + step * end_uv[1],
@@ -341,8 +387,14 @@ def _surface_divider(
             return arc
         geometry.remove_edge(arc, record=False)
         geometry.remove_vertex(via, record=False)
-    control_ids = [geometry.add_point(*sample) for sample in samples[1:-1:4]]
-    return geometry.add_spline(start_vertex, control_ids, end_vertex)
+    # Treat sampled points as interpolation targets, not Bezier controls.
+    # This kernel has no exact general support-intersection curve type yet, so
+    # topology mutation must fail closed rather than invent an unverified
+    # divider that merely passes near the samples.
+    raise GeometryError(
+        "unsupported support divider: no exact line or circular arc fits "
+        "within the requested residual tolerance"
+    )
 
 
 def _split_face_at_impl(
@@ -670,44 +722,43 @@ def _transform_impl(
                         vertex_ids.add(edge.curve.via_vertex)
                     elif isinstance(edge.curve, Spline):
                         vertex_ids.update(edge.curve.control_vertices)
-    affected_faces = {
-        face.id
-        for face in geometry.faces.values()
-        if any(
-            geometry.oriented_start_vertex(item) in vertex_ids
-            or geometry.oriented_end_vertex(item) in vertex_ids
-            for loop in (face.loop,) + face.holes
-            for item in loop
-        )
-    }
-    complete_faces = {
-        face.id
-        for face in geometry.faces.values()
-        if {
-            vertex
-            for loop in (face.loop,) + face.holes
-            for item in loop
-            for vertex in (
-                geometry.oriented_start_vertex(item),
-                geometry.oriented_end_vertex(item),
-            )
-        } <= vertex_ids
-    }
+    # Reverse incidence makes a selected transform proportional to its
+    # dependency closure.  A whole-model transform still visits everything by
+    # definition, but a local vertex/member/face selection never scans
+    # unrelated edge or face stores merely to discover dependants.
     affected_edges = {
-        edge.id
-        for edge in geometry.edges.values()
-        if {
-            edge.start,
-            edge.end,
-            *(
-                (edge.curve.via_vertex,)
-                if isinstance(edge.curve, Arc)
-                else edge.curve.control_vertices
-                if isinstance(edge.curve, Spline)
-                else ()
-            ),
-        }
-        & vertex_ids
+        edge_id
+        for vertex_id in vertex_ids
+        for edge_id in geometry.edges_using_vertex(vertex_id)
+    }
+    affected_faces = {
+        face_id
+        for edge_id in affected_edges
+        for face_id in geometry.faces_using_edge(edge_id)
+    }
+
+    def defining_vertices(edge_id: int) -> set[int]:
+        edge = geometry.edges[edge_id]
+        controls = (
+            (edge.curve.via_vertex,)
+            if isinstance(edge.curve, Arc)
+            else edge.curve.control_vertices
+            if isinstance(edge.curve, Spline)
+            else ()
+        )
+        return {edge.start, edge.end, *controls}
+
+    complete_faces = {
+        face_id
+        for face_id in affected_faces
+        if all(
+            defining_vertices(oriented.edge) <= vertex_ids
+            for loop in (
+                geometry.faces[face_id].loop,
+                *geometry.faces[face_id].holes,
+            )
+            for oriented in loop
+        )
     }
     is_uniform = np.allclose(
         singular_values,
@@ -720,6 +771,7 @@ def _transform_impl(
         for edge_id in affected_edges
     ) or any(
         isinstance(geometry.faces[face_id].surface, (Cylinder, Cone))
+        or isinstance(geometry.faces[face_id].parameterization, (Cylinder, Cone))
         for face_id in affected_faces
     )
     if not is_uniform and has_circular_geometry:
@@ -729,6 +781,12 @@ def _transform_impl(
         )
     transformed_surfaces = {
         face_id: _transform_surface(geometry.faces[face_id].surface, transform_matrix)
+        for face_id in complete_faces
+    }
+    transformed_parameterizations = {
+        face_id: _transform_surface(
+            geometry.faces[face_id].parameterization, transform_matrix
+        )
         for face_id in complete_faces
     }
     # Dependency bounds must be captured before any defining vertex moves.
@@ -766,6 +824,7 @@ def _transform_impl(
                 replace(
                     geometry.faces[face_id],
                     surface=transformed_surfaces[face_id],
+                    parameterization=transformed_parameterizations[face_id],
                 ),
             )
         else:
@@ -778,6 +837,7 @@ def _transform_impl(
                         if len(geometry.faces[face_id].corners) == 4
                         else None
                     ),
+                    parameterization=None,
                 ),
             )
     return tuple(EntityRef("vertex", item) for item in sorted(vertex_ids))

@@ -148,6 +148,27 @@ def test_overlap_pairs_are_unique_sorted_and_insertion_order_independent() -> No
     assert cross_kind.pairs == ((("edge", 2), ("face", 7)),)
 
 
+def test_bulk_constructor_is_deterministic_and_avoids_incremental_refits() -> None:
+    items = [
+        (("face", 9), box(10.0, 11.0, y=5.0)),
+        (("edge", 4), box(0.0, 2.0)),
+        (("edge", 2), box(1.0, 3.0)),
+        (("vertex", 1), AABB.around_point((100.0, 100.0, 100.0))),
+        (("face", 7), box(2.5, 4.0)),
+    ]
+    forward = AABBTree(items, fat_margin=0.1, relative_margin=0.01)
+    backward = AABBTree(reversed(items), fat_margin=0.1, relative_margin=0.01)
+
+    forward.validate()
+    backward.validate()
+    assert forward.items == backward.items == tuple(sorted(items))
+    assert forward.query(box(1.5, 2.6)) == backward.query(box(1.5, 2.6))
+    assert forward.overlap_pairs() == backward.overlap_pairs()
+    assert forward.diagnostics.insertions == len(items)
+    assert forward.diagnostics.refit_steps == 0
+    assert forward.diagnostics.rotations == 0
+
+
 def test_random_mutation_sequence_preserves_tree_invariants() -> None:
     generator = random.Random(7391)
     tree = AABBTree(fat_margin=0.05, relative_margin=0.02)
@@ -208,6 +229,9 @@ def test_large_ordered_grid_build_remains_balanced() -> None:
 
     tree.validate()
     assert tree.diagnostics.height <= 2 * math.ceil(math.log2(len(tree)))
+    assert tree.diagnostics.insertions == len(tree)
+    assert tree.diagnostics.refit_steps == 0
+    assert tree.diagnostics.rotations == 0
 
 
 @pytest.mark.parametrize("count", (256, 1024))

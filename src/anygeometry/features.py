@@ -823,7 +823,7 @@ class FeatureHistory:
 
             # The strict loader can preserve an unavailable executor only as
             # an explicitly frozen, checksummed last-good materialization.
-            # Requiring its canonical state here makes every accepted schema-3
+            # Requiring its canonical state here makes every accepted current-schema
             # document stable under a to_dict -> from_dict -> to_dict cycle.
             if not record.outputs or record.materialization_checksum is None:
                 raise GeometryError(

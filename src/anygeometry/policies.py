@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from enum import Enum
 
-__all__ = ["MutationPolicy"]
+from .structural import ConnectionIntent
+
+__all__ = ["ConnectionIntent", "MutationPolicy"]
 
 
 class MutationPolicy(str, Enum):

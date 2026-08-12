@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 from anygeometry import (
     EntityRef,
     GeometryError,
     GeometryModel,
+    Plane,
     find_coplanar_overlaps,
     fragment_coplanar_overlaps,
     to_dict,
@@ -49,6 +51,30 @@ def test_overlap_audit_ignores_shared_boundary_but_reports_positive_area():
 
 def test_fragmentation_makes_a_only_overlap_and_b_only_conformal_plates():
     geometry, first, second = _overlapping()
+    first_support = Plane(
+        np.asarray((0.0, 0.0, 0.0)),
+        np.asarray((4.0, 0.0, 0.0)),
+        np.asarray((0.0, 2.0, 0.0)),
+    )
+    second_support = Plane(
+        np.asarray((1.0, 0.0, 0.0)),
+        np.asarray((2.0, 0.0, 0.0)),
+        np.asarray((0.0, 1.0, 0.0)),
+    )
+    first_mapping = Plane(
+        np.asarray((0.0, 0.0, 0.0)),
+        np.asarray((2.0, 0.0, 0.0)),
+        np.asarray((0.0, 1.0, 0.0)),
+    )
+    second_mapping = Plane(
+        np.asarray((1.0, 0.0, 0.0)),
+        np.asarray((2.0, 0.0, 0.0)),
+        np.asarray((0.0, 1.0, 0.0)),
+    )
+    geometry.set_face_surface(first, first_support)
+    geometry.set_face_surface(second, second_support)
+    geometry.set_face_parameterization(first, first_mapping)
+    geometry.set_face_parameterization(second, second_mapping)
     original_edges = tuple(
         item.edge for face_id in (first, second) for item in geometry.faces[face_id].loop
     )
@@ -63,6 +89,16 @@ def test_fragmentation_makes_a_only_overlap_and_b_only_conformal_plates():
     assert find_coplanar_overlaps(geometry) == ()
     assert geometry.validate_topology() == ()
     assert geometry.faces[result.overlap_faces[0]].metadata["section"] == "first"
+    assert all(
+        geometry.faces[item].surface is first_support
+        and geometry.faces[item].parameterization is first_mapping
+        for item in result.descendants[first]
+    )
+    assert all(
+        geometry.faces[item].surface is second_support
+        and geometry.faces[item].parameterization is second_mapping
+        for item in result.descendants[second]
+    )
     assert geometry.resolve_ref(EntityRef("face", first)) == tuple(
         EntityRef("face", item) for item in result.descendants[first]
     )

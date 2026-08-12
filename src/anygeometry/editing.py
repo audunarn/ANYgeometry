@@ -11,21 +11,15 @@ import numpy as np
 from .curves import Arc, Spline
 from .entities import EntityRef, OrientedEdge
 from .errors import GeometryError
+from .identity import EntityKey, validate_local_id
 from .model import GeometryModel
 from .operations import transform
 from .structural import (
     Attachment,
     AttachmentTargetKind,
-    Coedge,
-    FaceUse,
-    Junction,
     JunctionMemberUse,
-    Member,
-    MemberEdgeUse,
     Orientation,
     ParameterRange,
-    Part,
-    Sheet,
 )
 from .surfaces import CoonsSurface, Cone, Cylinder, Plane, RuledSurface
 
@@ -87,8 +81,13 @@ def _expanded_refs(
         return set(geometry.vertices), set(geometry.edges), set(geometry.faces)
     current: list[EntityRef] = []
     for reference in references:
-        geometry.entity_ref(reference.kind, reference.id)
-        current.extend(geometry.resolve_ref(reference))
+        if not isinstance(reference, EntityRef):
+            raise GeometryError("copy selection must contain EntityRef values")
+        canonical = geometry.entity_ref(
+            reference.kind,
+            validate_local_id(reference.id, name="copy selection entity ID"),
+        )
+        current.extend(geometry.resolve_ref(canonical))
     vertices = {item.id for item in current if item.kind == "vertex"}
     edges = {item.id for item in current if item.kind == "edge"}
     faces = {item.id for item in current if item.kind == "face"}
@@ -159,6 +158,7 @@ def _insert_selected(
                 destination.faces[made],
                 holes=tuple(mapped_loop(loop) for loop in face.holes),
                 metadata=deepcopy(face.metadata),
+                parameterization=deepcopy(face.parameterization),
             ),
         )
         mapping[EntityRef("face", face_id)] = EntityRef("face", made)
@@ -167,6 +167,7 @@ def _insert_selected(
         destination,
         source,
         mapping,
+        vertex_ids,
         edge_ids,
         face_ids,
         include_empty_parts=references is None,
@@ -205,6 +206,7 @@ def _copy_structural_closure(
     destination: GeometryModel,
     source: GeometryModel,
     entity_mapping: Mapping[EntityRef, EntityRef],
+    vertex_ids: set[int],
     edge_ids: set[int],
     face_ids: set[int],
     *,
@@ -216,6 +218,15 @@ def _copy_structural_closure(
     member.  Complete sheets/members, and relationships whose every parent is
     copied, retain their exact neutral structural records.
     """
+
+    selected_geometry: Mapping[str, set[int]] = {
+        "vertex": vertex_ids,
+        "edge": edge_ids,
+        "face": face_ids,
+    }
+
+    def has_selected_geometry(key: EntityKey | None) -> bool:
+        return key is None or key[1] in selected_geometry[key[0]]
 
     eligible_sheets = {
         sheet.id
@@ -232,6 +243,15 @@ def _copy_structural_closure(
             source.member_edge_uses[use_id].edge_id in edge_ids
             for use_id in member.edge_use_ids
         )
+        and has_selected_geometry(member.orientation_reference)
+    }
+    selected_construction = {
+        vertex_id: source.construction_vertices[vertex_id]
+        for vertex_id in vertex_ids
+        if vertex_id in source.construction_vertices
+    }
+    construction_owner_parts = {
+        part_id for part_id in selected_construction.values() if part_id is not None
     }
     eligible_parts = {
         part.id
@@ -239,6 +259,7 @@ def _copy_structural_closure(
         if include_empty_parts
         or any(item in eligible_sheets for item in part.sheet_ids)
         or any(item in eligible_members for item in part.member_ids)
+        or part.id in construction_owner_parts
     }
     eligible_sheets = {
         item for item in eligible_sheets
@@ -248,9 +269,6 @@ def _copy_structural_closure(
         item for item in eligible_members
         if source.members[item].part_id in eligible_parts
     }
-    if not eligible_parts:
-        return
-
     sheet_use_ids = {
         use_id
         for sheet_id in eligible_sheets
@@ -266,15 +284,37 @@ def _copy_structural_closure(
         for member_id in eligible_members
         for use_id in source.members[member_id].edge_use_ids
     }
+    present_parents: Mapping[str, set[int]] = {
+        **selected_geometry,
+        "member": eligible_members,
+        "sheet": eligible_sheets,
+    }
+
+    def attachment_is_complete(attachment: Attachment) -> bool:
+        assert attachment.source_kind is not None
+        assert attachment.source_id is not None
+        return (
+            attachment.source_id in present_parents[attachment.source_kind]
+            and attachment.target_id
+            in present_parents[attachment.target_kind.value]
+            and (
+                attachment.member_id is None
+                or attachment.member_id in eligible_members
+            )
+            and (
+                attachment.part_id is None
+                or attachment.part_id in eligible_parts
+            )
+            and (
+                attachment.sheet_id is None
+                or attachment.sheet_id in eligible_sheets
+            )
+        )
+
     eligible_attachments = {
         attachment.id
         for attachment in source.attachments.values()
-        if attachment.member_id in eligible_members
-        and (
-            attachment.target_id in face_ids
-            if attachment.target_kind.value == "face"
-            else attachment.target_id in edge_ids
-        )
+        if attachment_is_complete(attachment)
     }
     eligible_junctions = {
         junction.id
@@ -299,49 +339,82 @@ def _copy_structural_closure(
     attachment_map = fresh("attachment", eligible_attachments)
     junction_map = fresh("junction", eligible_junctions)
 
+    structural_maps: Mapping[str, Mapping[int, int]] = {
+        "part": part_map,
+        "sheet": sheet_map,
+        "face_use": face_use_map,
+        "coedge": coedge_map,
+        "member": member_map,
+        "member_edge_use": member_use_map,
+        "attachment": attachment_map,
+        "junction": junction_map,
+    }
+
+    def mapped_geometry_key(key: EntityKey) -> EntityKey:
+        mapped = entity_mapping.get(EntityRef(key[0], key[1]))  # type: ignore[arg-type]
+        if mapped is None:
+            raise GeometryError(
+                f"structural copy is missing {key[0]} parent {key[1]}"
+            )
+        return mapped.kind, mapped.id
+
+    def mapped_parent_id(kind: str, identifier: int) -> int:
+        if kind in selected_geometry:
+            return mapped_geometry_key((kind, identifier))[1]
+        try:
+            return structural_maps[kind][identifier]
+        except KeyError as error:
+            raise GeometryError(
+                f"structural copy is missing {kind} parent {identifier}"
+            ) from error
+
+    def mapped_lineage_key(key: EntityKey) -> EntityKey:
+        kind, identifier = key
+        if kind in selected_geometry:
+            mapped = entity_mapping.get(EntityRef(kind, identifier))  # type: ignore[arg-type]
+            return key if mapped is None else (mapped.kind, mapped.id)
+        mapped = structural_maps.get(kind, {}).get(identifier)
+        return key if mapped is None else (kind, mapped)
+
     for old_id in sorted(coedge_ids):
         old = source.coedges[old_id]
         destination._put_structural(  # noqa: SLF001
             "coedge",
-            Coedge(
-                coedge_map[old_id],
-                face_use_map[old.face_use_id],
-                entity_mapping[EntityRef("edge", old.edge_id)].id,
-                old.orientation,
-                old.metadata,
+            replace(
+                old,
+                id=coedge_map[old_id],
+                face_use_id=face_use_map[old.face_use_id],
+                edge_id=entity_mapping[EntityRef("edge", old.edge_id)].id,
             ),
         )
     for old_id in sorted(sheet_use_ids):
         old = source.face_uses[old_id]
         destination._put_structural(  # noqa: SLF001
             "face_use",
-            FaceUse(
-                face_use_map[old_id],
-                sheet_map[old.sheet_id],
-                entity_mapping[EntityRef("face", old.face_id)].id,
-                tuple(
+            replace(
+                old,
+                id=face_use_map[old_id],
+                sheet_id=sheet_map[old.sheet_id],
+                face_id=entity_mapping[EntityRef("face", old.face_id)].id,
+                loops=tuple(
                     tuple(coedge_map[item] for item in loop)
                     for loop in old.loops
                 ),
-                old.orientation,
-                old.metadata,
             ),
         )
     for old_id in sorted(eligible_sheets):
         old = source.sheets[old_id]
         destination._put_structural(  # noqa: SLF001
             "sheet",
-            Sheet(
-                sheet_map[old_id],
-                part_map[old.part_id],
-                tuple(face_use_map[item] for item in old.face_use_ids),
-                old.policy,
-                tuple(
+            replace(
+                old,
+                id=sheet_map[old_id],
+                part_id=part_map[old.part_id],
+                face_use_ids=tuple(face_use_map[item] for item in old.face_use_ids),
+                declared_non_manifold_edges=tuple(
                     entity_mapping[EntityRef("edge", item)].id
                     for item in old.declared_non_manifold_edges
                 ),
-                old.name,
-                old.metadata,
             ),
         )
 
@@ -349,60 +422,72 @@ def _copy_structural_closure(
         old = source.member_edge_uses[old_id]
         destination._put_structural(  # noqa: SLF001
             "member_edge_use",
-            MemberEdgeUse(
-                member_use_map[old_id],
-                member_map[old.member_id],
-                entity_mapping[EntityRef("edge", old.edge_id)].id,
-                old.parent_range,
-                old.orientation,
-                old.metadata,
+            replace(
+                old,
+                id=member_use_map[old_id],
+                member_id=member_map[old.member_id],
+                edge_id=entity_mapping[EntityRef("edge", old.edge_id)].id,
             ),
         )
     for old_id in sorted(eligible_members):
         old = source.members[old_id]
         destination._put_structural(  # noqa: SLF001
             "member",
-            Member(
-                member_map[old_id],
-                part_map[old.part_id],
-                tuple(member_use_map[item] for item in old.edge_use_ids),
-                old.name,
-                old.metadata,
+            replace(
+                old,
+                id=member_map[old_id],
+                part_id=part_map[old.part_id],
+                edge_use_ids=tuple(
+                    member_use_map[item] for item in old.edge_use_ids
+                ),
+                orientation_reference=(
+                    None
+                    if old.orientation_reference is None
+                    else mapped_geometry_key(old.orientation_reference)
+                ),
             ),
         )
 
     for old_id in sorted(eligible_attachments):
         old = source.attachments[old_id]
-        target = entity_mapping[
-            EntityRef(old.target_kind.value, old.target_id)  # type: ignore[arg-type]
-        ].id
         destination._put_structural(  # noqa: SLF001
             "attachment",
-            Attachment(
-                attachment_map[old_id],
-                member_map[old.member_id],
-                old.kind,
-                old.target_kind,
-                target,
-                old.member_range,
-                old.target_parameters,
-                old.metadata,
+            replace(
+                old,
+                id=attachment_map[old_id],
+                member_id=(
+                    None
+                    if old.member_id is None
+                    else member_map[old.member_id]
+                ),
+                source_id=mapped_parent_id(old.source_kind, old.source_id),
+                target_id=mapped_parent_id(
+                    old.target_kind.value, old.target_id
+                ),
+                part_id=(
+                    None if old.part_id is None else part_map[old.part_id]
+                ),
+                sheet_id=(
+                    None if old.sheet_id is None else sheet_map[old.sheet_id]
+                ),
+                lineage=tuple(mapped_lineage_key(key) for key in old.lineage),
             ),
         )
     for old_id in sorted(eligible_junctions):
         old = source.junctions[old_id]
         destination._put_structural(  # noqa: SLF001
             "junction",
-            Junction(
-                junction_map[old_id],
-                old.kind,
-                tuple(
+            replace(
+                old,
+                id=junction_map[old_id],
+                member_uses=tuple(
                     JunctionMemberUse(member_map[item.member_id], item.member_range)
                     for item in old.member_uses
                 ),
-                tuple(sheet_map[item] for item in old.sheet_ids),
-                tuple(attachment_map[item] for item in old.attachment_ids),
-                old.metadata,
+                sheet_ids=tuple(sheet_map[item] for item in old.sheet_ids),
+                attachment_ids=tuple(
+                    attachment_map[item] for item in old.attachment_ids
+                ),
             ),
         )
 
@@ -410,12 +495,22 @@ def _copy_structural_closure(
         old = source.parts[old_id]
         destination._put_structural(  # noqa: SLF001
             "part",
-            Part(
-                part_map[old_id],
-                tuple(sheet_map[item] for item in old.sheet_ids if item in sheet_map),
-                tuple(member_map[item] for item in old.member_ids if item in member_map),
-                old.name,
-                old.metadata,
+            replace(
+                old,
+                id=part_map[old_id],
+                sheet_ids=tuple(
+                    sheet_map[item] for item in old.sheet_ids if item in sheet_map
+                ),
+                member_ids=tuple(
+                    member_map[item] for item in old.member_ids if item in member_map
+                ),
+            ),
+        )
+    for old_vertex_id, old_part_id in sorted(selected_construction.items()):
+        destination.mark_construction_vertices(
+            (entity_mapping[EntityRef("vertex", old_vertex_id)].id,),
+            part_id=(
+                None if old_part_id is None else part_map[old_part_id]
             ),
         )
     destination._rebuild_member_incidence()  # noqa: SLF001
@@ -623,7 +718,9 @@ def mirror_entities(
 def reverse_edge(geometry: GeometryModel, edge_id: int) -> EntityRef:
     """Reverse edge parameterization while preserving dependent semantics."""
 
-    edge = geometry._require_edge(int(edge_id))  # noqa: SLF001
+    edge = geometry._require_edge(  # noqa: SLF001
+        validate_local_id(edge_id, name="edge ID")
+    )
     with geometry.transaction():
         curve = edge.curve
         if isinstance(curve, Spline):
@@ -776,7 +873,9 @@ def _reverse_face_attachment_parameters(
 def reverse_face(geometry: GeometryModel, face_id: int) -> EntityRef:
     """Reverse a face orientation, including its authoritative surface normal."""
 
-    face = geometry._require_face(int(face_id))  # noqa: SLF001
+    face = geometry._require_face(  # noqa: SLF001
+        validate_local_id(face_id, name="face ID")
+    )
     with geometry.transaction():
         corner_vertices = set(geometry.face_corner_vertices(face.id))
         loop = _reverse_loop(face.loop)
@@ -793,6 +892,7 @@ def reverse_face(geometry: GeometryModel, face_id: int) -> EntityRef:
             holes=tuple(_reverse_loop(item) for item in face.holes),
             corners=corners,
             surface=_reverse_surface(face.surface),
+            parameterization=_reverse_surface(face.parameterization),
         )
         geometry._put_entity("face", made)  # noqa: SLF001
         for attachment in tuple(geometry.attachments.values()):
@@ -805,7 +905,11 @@ def reverse_face(geometry: GeometryModel, face_id: int) -> EntityRef:
                     replace(
                         attachment,
                         target_parameters=_reverse_face_attachment_parameters(
-                            face.surface,
+                            (
+                                face.parameterization
+                                if face.parameterization is not None
+                                else face.surface
+                            ),
                             attachment.target_parameters,
                         ),
                     ),

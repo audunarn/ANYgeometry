@@ -8,12 +8,50 @@ import pytest
 
 from anygeometry import EntityRef, GeometryError, GeometryModel, OrientedEdge
 from anygeometry.structural import (
+    Attachment,
     AttachmentKind,
     AttachmentTargetKind,
     Coedge,
+    ConnectionIntent,
     JunctionMemberUse,
     ParameterRange,
 )
+
+
+def _generalized_source_model() -> tuple[GeometryModel, dict[str, int]]:
+    model = GeometryModel()
+    corners = model.add_points(
+        ((0.0, 0.0, 0.0), (2.0, 0.0, 0.0), (2.0, 1.0, 0.0), (0.0, 1.0, 0.0))
+    )
+    face = model.add_plate(corners)
+    part = model.add_part(name="source-validation")
+    sheet = model.add_sheet((face,), part_id=part)
+    edges = tuple(item.edge for item in model.faces[face].loop)
+    return model, {
+        "edge": edges[0],
+        "face": face,
+        "sheet": sheet,
+        "target_edge": edges[1],
+    }
+
+
+def _add_generalized_attachment(
+    model: GeometryModel,
+    identifiers: dict[str, int],
+    source_kind: str,
+    source_id: int,
+) -> int:
+    return model.add_attachment(
+        None,
+        AttachmentKind.INTENTIONALLY_DISCONNECTED,
+        AttachmentTargetKind.EDGE,
+        identifiers["target_edge"],
+        ParameterRange(0.0, 1.0),
+        (ParameterRange(0.0, 1.0),),
+        source_kind=source_kind,
+        source_id=source_id,
+        connection_intent=ConnectionIntent.KEEP_DISCONNECTED,
+    )
 
 
 def _owned_plate_and_member() -> tuple[GeometryModel, int, int, int, int, int]:
@@ -41,20 +79,98 @@ def test_add_members_batches_one_part_update_and_one_validation(
     ]
     part = geometry.add_part()
     validations = 0
-    original = geometry._validate_structural  # noqa: SLF001
+    original = geometry._validate_structural_changed  # noqa: SLF001
 
-    def counted_validation() -> tuple[str, ...]:
+    def counted_validation(journal) -> tuple[str, ...]:
         nonlocal validations
         validations += 1
-        return original()
+        return original(journal)
 
-    monkeypatch.setattr(geometry, "_validate_structural", counted_validation)
+    monkeypatch.setattr(
+        geometry, "_validate_structural_changed", counted_validation
+    )
     members = geometry.add_members(((edge,) for edge in edges), part_id=part)
 
     assert len(members) == count
     assert geometry.parts[part].member_ids == tuple(members)
     assert validations == 1
+    assert geometry.last_structural_validation_diagnostics.visited_count < count * 6
     assert all(len(geometry._edge_member_uses[edge]) == 1 for edge in edges)  # noqa: SLF001
+
+
+@pytest.mark.parametrize("source_kind", ("edge", "face", "sheet"))
+def test_public_add_attachment_rolls_back_a_missing_generalized_source(
+    source_kind: str,
+) -> None:
+    model, identifiers = _generalized_source_model()
+    revision_before = model.revision
+    change_before = model.last_change_set
+    attachments_before = dict(model.attachments)
+
+    with pytest.raises(GeometryError, match=rf"missing source {source_kind}"):
+        _add_generalized_attachment(model, identifiers, source_kind, 999_999)
+
+    assert dict(model.attachments) == attachments_before
+    assert model.revision == revision_before
+    assert model.last_change_set == change_before
+    assert model.validate_topology() == ()
+
+
+@pytest.mark.parametrize(
+    ("kind", "target_kind", "target_parameters", "member_id", "source_kind", "expected"),
+    (
+        (
+            AttachmentKind.MEMBER_ON_FACE,
+            AttachmentTargetKind.FACE,
+            (ParameterRange.point(0.5), ParameterRange.point(0.5)),
+            None,
+            "edge",
+            "requires a member source",
+        ),
+        (
+            AttachmentKind.ENDPOINT,
+            AttachmentTargetKind.EDGE,
+            (ParameterRange.point(0.5),),
+            None,
+            "sheet",
+            "requires a member source",
+        ),
+        (
+            AttachmentKind.VERTEX_ON_FACE,
+            AttachmentTargetKind.FACE,
+            (ParameterRange.point(0.5), ParameterRange.point(0.5)),
+            1,
+            "member",
+            "requires a vertex source",
+        ),
+    ),
+)
+def test_attachment_kind_rejects_incompatible_source_classification(
+    kind: AttachmentKind,
+    target_kind: AttachmentTargetKind,
+    target_parameters: tuple[ParameterRange, ...],
+    member_id: int | None,
+    source_kind: str,
+    expected: str,
+) -> None:
+    member_range = (
+        ParameterRange.point(0.0)
+        if kind is AttachmentKind.ENDPOINT
+        else ParameterRange.point(0.5)
+    )
+
+    with pytest.raises(GeometryError, match=expected):
+        Attachment(
+            1,
+            member_id,
+            kind,
+            target_kind,
+            1,
+            member_range,
+            target_parameters,
+            source_kind=source_kind,
+            source_id=1,
+        )
 
 
 def test_structural_removals_are_dependency_ordered_and_fail_closed() -> None:

@@ -22,10 +22,12 @@ from .identity import EntityKey, STRUCTURAL_ENTITY_KINDS, validate_local_id
 __all__ = [
     "Attachment",
     "AttachmentKind",
+    "AttachmentEvidence",
     "AttachmentTargetKind",
     "BoundaryPolicy",
     "Coedge",
     "ConnectivityPolicy",
+    "ConnectionIntent",
     "FaceUse",
     "FrozenMetadata",
     "Junction",
@@ -198,6 +200,21 @@ def _finite_tolerance(value: object) -> float:
     return made
 
 
+def _optional_id(value: object, name: str) -> int | None:
+    if value is None:
+        return None
+    return validate_local_id(value, name=name)
+
+
+def _non_negative_finite(value: object, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise GeometryError(f"{name} must be a non-negative finite number")
+    made = float(value)
+    if not isfinite(made) or made < 0.0:
+        raise GeometryError(f"{name} must be a non-negative finite number")
+    return made
+
+
 class Orientation(IntEnum):
     """Traversal orientation relative to an underlying geometry definition."""
 
@@ -226,11 +243,33 @@ class ConnectivityPolicy(StrEnum):
     ALLOW_DISCONNECTED = "allow_disconnected"
 
 
+class ConnectionIntent(StrEnum):
+    """Explicit physical intent for a qualified structural relationship."""
+
+    CONNECT = "connect"
+    KEEP_DISCONNECTED = "keep_disconnected"
+    CONTACT_ONLY = "contact_only"
+    REJECT = "reject"
+    REUSE_EXISTING = "reuse_existing"
+    IMPRINT = "imprint"
+
+
+class AttachmentEvidence(StrEnum):
+    """Qualification strength carried by a persistent attachment witness."""
+
+    EXACT = "exact"
+    VERIFIED_APPROXIMATE = "verified_approximate"
+    UNVERIFIED = "unverified"
+
+
 class AttachmentTargetKind(StrEnum):
     """Geometry definition qualified by an attachment."""
 
     FACE = "face"
     EDGE = "edge"
+    VERTEX = "vertex"
+    MEMBER = "member"
+    SHEET = "sheet"
 
 
 class AttachmentKind(StrEnum):
@@ -240,6 +279,16 @@ class AttachmentKind(StrEnum):
     MEMBER_ON_BOUNDARY = "member_on_boundary"
     MEMBER_THROUGH_FACE = "member_through_face"
     ENDPOINT = "endpoint"
+    VERTEX_ON_EDGE = "vertex_on_edge"
+    VERTEX_ON_FACE = "vertex_on_face"
+    MEMBER_ENDPOINT_ON_MEMBER = "member_endpoint_on_member"
+    MEMBER_ENDPOINT_ON_SHEET = "member_endpoint_on_sheet"
+    MEMBER_CROSS_SHEET = "member_cross_sheet"
+    MEMBER_ON_SHEET = "member_on_sheet"
+    MEMBER_ON_FACE_BOUNDARY = "member_on_face_boundary"
+    MEMBER_ON_SHEET_INTERSECTION = "member_on_sheet_intersection"
+    COINCIDENT_MEMBER_AXES = "coincident_member_axes"
+    INTENTIONALLY_DISCONNECTED = "intentionally_disconnected"
 
 
 class JunctionKind(StrEnum):
@@ -482,6 +531,7 @@ class Member:
     edge_use_ids: tuple[int, ...]
     name: str = ""
     metadata: FrozenMetadata | Mapping[str, object] = _EMPTY_METADATA
+    orientation_reference: EntityKey | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "id", validate_local_id(self.id, name="member ID"))
@@ -500,6 +550,22 @@ class Member:
         )
         object.__setattr__(self, "name", _name(self.name, "member"))
         object.__setattr__(self, "metadata", freeze_metadata(self.metadata))
+        if self.orientation_reference is not None:
+            try:
+                kind, identifier = self.orientation_reference
+            except (TypeError, ValueError) as error:
+                raise GeometryError(
+                    "member orientation reference must be a (kind, ID) pair"
+                ) from error
+            if kind not in ("vertex", "edge", "face"):
+                raise GeometryError(
+                    "member orientation reference must name geometry"
+                )
+            object.__setattr__(
+                self,
+                "orientation_reference",
+                (kind, validate_local_id(identifier, name="orientation reference ID")),
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -542,25 +608,84 @@ class Attachment:
     """Qualified member incidence with one geometry face or edge."""
 
     id: int
-    member_id: int
+    member_id: int | None
     kind: AttachmentKind | str
     target_kind: AttachmentTargetKind | str
     target_id: int
     member_range: ParameterRange
     target_parameters: tuple[ParameterRange, ...]
     metadata: FrozenMetadata | Mapping[str, object] = _EMPTY_METADATA
+    connection_intent: ConnectionIntent | str = ConnectionIntent.CONNECT
+    evidence: AttachmentEvidence | str = AttachmentEvidence.UNVERIFIED
+    max_residual: float = 0.0
+    tolerance_used: float = 0.0
+    part_id: int | None = None
+    sheet_id: int | None = None
+    provenance: FrozenMetadata | Mapping[str, object] = _EMPTY_METADATA
+    lineage: tuple[EntityKey, ...] = ()
+    source_kind: str | None = None
+    source_id: int | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "id", validate_local_id(self.id, name="attachment ID"))
-        object.__setattr__(
-            self, "member_id", validate_local_id(self.member_id, name="member ID")
+        member_id = _optional_id(self.member_id, "member ID")
+        source_kind = "member" if self.source_kind is None else str(self.source_kind)
+        source_id = member_id if self.source_id is None else validate_local_id(
+            self.source_id, name="attachment source ID"
         )
+        if source_kind not in ("vertex", "edge", "face", "member", "sheet"):
+            raise GeometryError("invalid attachment source kind")
+        if source_id is None:
+            raise GeometryError("attachment source requires an ID")
+        if source_kind == "member":
+            if member_id is None:
+                member_id = source_id
+            elif member_id != source_id:
+                raise GeometryError("attachment member/source IDs disagree")
+        elif member_id is not None:
+            raise GeometryError("non-member attachment source cannot carry member_id")
+        object.__setattr__(self, "member_id", member_id)
+        object.__setattr__(self, "source_kind", source_kind)
+        object.__setattr__(self, "source_id", source_id)
         kind = _enum_value(AttachmentKind, self.kind, "attachment kind")
         target_kind = _enum_value(
             AttachmentTargetKind, self.target_kind, "attachment target kind"
         )
+        expected_source = {
+            AttachmentKind.MEMBER_ON_FACE: "member",
+            AttachmentKind.MEMBER_ON_BOUNDARY: "member",
+            AttachmentKind.MEMBER_THROUGH_FACE: "member",
+            AttachmentKind.ENDPOINT: "member",
+            AttachmentKind.VERTEX_ON_EDGE: "vertex",
+            AttachmentKind.VERTEX_ON_FACE: "vertex",
+            AttachmentKind.MEMBER_ENDPOINT_ON_MEMBER: "member",
+            AttachmentKind.MEMBER_ENDPOINT_ON_SHEET: "member",
+            AttachmentKind.MEMBER_CROSS_SHEET: "member",
+            AttachmentKind.MEMBER_ON_SHEET: "member",
+            AttachmentKind.MEMBER_ON_FACE_BOUNDARY: "member",
+            AttachmentKind.MEMBER_ON_SHEET_INTERSECTION: "member",
+            AttachmentKind.COINCIDENT_MEMBER_AXES: "member",
+        }.get(kind)
+        if expected_source is not None and source_kind != expected_source:
+            raise GeometryError(
+                f"{kind.value} requires a {expected_source} source"
+            )
         object.__setattr__(self, "kind", kind)
         object.__setattr__(self, "target_kind", target_kind)
+        object.__setattr__(
+            self,
+            "connection_intent",
+            _enum_value(
+                ConnectionIntent,
+                self.connection_intent,
+                "attachment connection intent",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "evidence",
+            _enum_value(AttachmentEvidence, self.evidence, "attachment evidence"),
+        )
         object.__setattr__(
             self, "target_id", validate_local_id(self.target_id, name="target ID")
         )
@@ -576,9 +701,11 @@ class Attachment:
             )
         except TypeError as error:
             raise GeometryError("target parameters must be an iterable of ranges") from error
-        expected_parameters = (
-            2 if target_kind is AttachmentTargetKind.FACE else 1
-        )
+        expected_parameters = {
+            AttachmentTargetKind.FACE: 2,
+            AttachmentTargetKind.SHEET: 2,
+            AttachmentTargetKind.VERTEX: 0,
+        }.get(target_kind, 1)
         if len(target_parameters) != expected_parameters:
             raise GeometryError(
                 f"{target_kind.value} attachment requires "
@@ -588,6 +715,15 @@ class Attachment:
             AttachmentKind.MEMBER_ON_FACE: AttachmentTargetKind.FACE,
             AttachmentKind.MEMBER_ON_BOUNDARY: AttachmentTargetKind.EDGE,
             AttachmentKind.MEMBER_THROUGH_FACE: AttachmentTargetKind.FACE,
+            AttachmentKind.VERTEX_ON_EDGE: AttachmentTargetKind.EDGE,
+            AttachmentKind.VERTEX_ON_FACE: AttachmentTargetKind.FACE,
+            AttachmentKind.MEMBER_ENDPOINT_ON_MEMBER: AttachmentTargetKind.MEMBER,
+            AttachmentKind.MEMBER_ENDPOINT_ON_SHEET: AttachmentTargetKind.SHEET,
+            AttachmentKind.MEMBER_CROSS_SHEET: AttachmentTargetKind.SHEET,
+            AttachmentKind.MEMBER_ON_SHEET: AttachmentTargetKind.SHEET,
+            AttachmentKind.MEMBER_ON_FACE_BOUNDARY: AttachmentTargetKind.EDGE,
+            AttachmentKind.MEMBER_ON_SHEET_INTERSECTION: AttachmentTargetKind.EDGE,
+            AttachmentKind.COINCIDENT_MEMBER_AXES: AttachmentTargetKind.MEMBER,
         }.get(kind)
         if expected_target is not None and target_kind is not expected_target:
             raise GeometryError(
@@ -598,7 +734,11 @@ class Attachment:
                 not value.is_point for value in target_parameters
             ):
                 raise GeometryError("member-through-face attachment must be point-valued")
-        if kind is AttachmentKind.ENDPOINT:
+        if kind in (
+            AttachmentKind.ENDPOINT,
+            AttachmentKind.MEMBER_ENDPOINT_ON_MEMBER,
+            AttachmentKind.MEMBER_ENDPOINT_ON_SHEET,
+        ):
             if not member_range.is_point or member_range.start not in (0.0, 1.0):
                 raise GeometryError("endpoint attachment must use member parameter 0 or 1")
             if any(not value.is_point for value in target_parameters):
@@ -606,10 +746,53 @@ class Attachment:
         object.__setattr__(self, "member_range", member_range)
         object.__setattr__(self, "target_parameters", target_parameters)
         object.__setattr__(self, "metadata", freeze_metadata(self.metadata))
+        object.__setattr__(
+            self,
+            "max_residual",
+            _non_negative_finite(self.max_residual, "attachment maximum residual"),
+        )
+        object.__setattr__(
+            self,
+            "tolerance_used",
+            _non_negative_finite(self.tolerance_used, "attachment tolerance"),
+        )
+        if self.evidence is not AttachmentEvidence.UNVERIFIED:
+            if self.max_residual > self.tolerance_used:
+                raise GeometryError(
+                    "verified attachment residual exceeds its qualification tolerance"
+                )
+            if (
+                self.evidence is AttachmentEvidence.VERIFIED_APPROXIMATE
+                and self.tolerance_used == 0.0
+            ):
+                raise GeometryError(
+                    "verified approximate attachment requires a positive tolerance"
+                )
+        object.__setattr__(self, "part_id", _optional_id(self.part_id, "part ID"))
+        object.__setattr__(self, "sheet_id", _optional_id(self.sheet_id, "sheet ID"))
+        object.__setattr__(self, "provenance", freeze_metadata(self.provenance))
+        try:
+            lineage = tuple(
+                (
+                    str(key[0]),
+                    validate_local_id(key[1], name="lineage entity ID"),
+                )
+                for key in self.lineage
+            )
+        except (TypeError, IndexError) as error:
+            raise GeometryError("attachment lineage must contain (kind, ID) pairs") from error
+        if any(not kind for kind, _identifier in lineage):
+            raise GeometryError("attachment lineage kinds must be non-empty")
+        object.__setattr__(self, "lineage", lineage)
 
     @property
     def target_key(self) -> EntityKey:
         return (self.target_kind.value, self.target_id)
+
+    @property
+    def source_key(self) -> EntityKey:
+        assert self.source_kind is not None and self.source_id is not None
+        return (self.source_kind, self.source_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -642,11 +825,17 @@ class Junction:
     sheet_ids: tuple[int, ...] = ()
     attachment_ids: tuple[int, ...] = ()
     metadata: FrozenMetadata | Mapping[str, object] = _EMPTY_METADATA
+    connection_intent: ConnectionIntent | str = ConnectionIntent.CONNECT
+    provenance: FrozenMetadata | Mapping[str, object] = _EMPTY_METADATA
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "id", validate_local_id(self.id, name="junction ID"))
         kind = _enum_value(JunctionKind, self.kind, "junction kind")
         object.__setattr__(self, "kind", kind)
+        intent = _enum_value(
+            ConnectionIntent, self.connection_intent, "junction connection intent"
+        )
+        object.__setattr__(self, "connection_intent", intent)
         try:
             member_uses = tuple(self.member_uses)
         except TypeError as error:
@@ -677,11 +866,13 @@ class Junction:
         ):
             raise GeometryError("crossing junction must be point-valued")
         if kind is JunctionKind.OVERLAP:
-            if len(member_uses) < 2 or any(
-                use.member_range.is_point for use in member_uses
+            if (
+                any(use.member_range.is_point for use in member_uses)
+                or (len(member_uses) < 2 and not sheet_ids)
             ):
                 raise GeometryError(
-                    "overlap junction requires non-degenerate ranges on two members"
+                    "overlap junction requires non-degenerate ranges "
+                    "with either two members or a participating sheet"
                 )
         if kind is JunctionKind.MULTI_WAY and participant_count < 3:
             raise GeometryError("multi-way junction requires at least three participants")
@@ -689,6 +880,7 @@ class Junction:
         object.__setattr__(self, "sheet_ids", sheet_ids)
         object.__setattr__(self, "attachment_ids", attachment_ids)
         object.__setattr__(self, "metadata", freeze_metadata(self.metadata))
+        object.__setattr__(self, "provenance", freeze_metadata(self.provenance))
 
     @property
     def member_ids(self) -> tuple[int, ...]:
@@ -794,6 +986,7 @@ def validate_structural_topology(
     junctions: Mapping[int, Junction],
     edge_ids: Collection[int] | None = None,
     face_ids: Collection[int] | None = None,
+    vertex_ids: Collection[int] | None = None,
     edge_vertices: Mapping[int, tuple[int, int]] | None = None,
     parameter_tolerance: float = 1.0e-12,
 ) -> tuple[str, ...]:
@@ -836,6 +1029,7 @@ def validate_structural_topology(
 
     known_edges = _known_ids(edge_ids, "edge ID", errors)
     known_faces = _known_ids(face_ids, "face ID", errors)
+    known_vertices = _known_ids(vertex_ids, "vertex ID", errors)
     if edge_vertices is not None:
         normalized_vertices: dict[int, tuple[int, int]] = {}
         for raw_edge, raw_vertices in sorted(
@@ -857,6 +1051,13 @@ def validate_structural_topology(
             except GeometryError as error:
                 errors.append(str(error))
         edge_vertices = normalized_vertices
+        endpoint_vertices = {
+            vertex for pair in normalized_vertices.values() for vertex in pair
+        }
+        if known_vertices is None:
+            known_vertices = endpoint_vertices
+        elif not endpoint_vertices.issubset(known_vertices):
+            errors.append("edge_vertices references vertices absent from vertex_ids")
         vertex_edge_ids = set(edge_vertices)
         if known_edges is None:
             known_edges = vertex_edge_ids
@@ -902,6 +1103,16 @@ def validate_structural_topology(
             errors.append(
                 f"member {member_id} is not listed by owning part {member.part_id}"
             )
+        if member.orientation_reference is not None:
+            kind, identifier = member.orientation_reference
+            if kind == "edge" and known_edges is not None and identifier not in known_edges:
+                errors.append(
+                    f"member {member_id} references missing orientation edge {identifier}"
+                )
+            elif kind == "face" and known_faces is not None and identifier not in known_faces:
+                errors.append(
+                    f"member {member_id} references missing orientation face {identifier}"
+                )
 
     # Face-use/coedge ownership and optional geometry continuity.
     used_coedges: dict[int, int] = {}
@@ -1133,21 +1344,82 @@ def validate_structural_topology(
     for attachment_id, raw_attachment in checked_attachments.items():
         attachment = raw_attachment
         assert isinstance(attachment, Attachment)
-        if attachment.member_id not in checked_members:
+        if attachment.source_kind == "member" and attachment.source_id not in checked_members:
             errors.append(
                 f"attachment {attachment_id} references missing member "
-                f"{attachment.member_id}"
+                f"{attachment.source_id}"
             )
+        elif attachment.source_kind == "vertex":
+            if known_vertices is not None and attachment.source_id not in known_vertices:
+                errors.append(
+                    f"attachment {attachment_id} references missing source vertex "
+                    f"{attachment.source_id}"
+                )
+        elif attachment.source_kind == "edge":
+            if known_edges is not None and attachment.source_id not in known_edges:
+                errors.append(
+                    f"attachment {attachment_id} references missing source edge "
+                    f"{attachment.source_id}"
+                )
+        elif attachment.source_kind == "face":
+            if known_faces is not None and attachment.source_id not in known_faces:
+                errors.append(
+                    f"attachment {attachment_id} references missing source face "
+                    f"{attachment.source_id}"
+                )
+        elif attachment.source_kind == "sheet":
+            if attachment.source_id not in checked_sheets:
+                errors.append(
+                    f"attachment {attachment_id} references missing source sheet "
+                    f"{attachment.source_id}"
+                )
         if attachment.target_kind is AttachmentTargetKind.FACE:
             if known_faces is not None and attachment.target_id not in known_faces:
                 errors.append(
                     f"attachment {attachment_id} references missing face "
                     f"{attachment.target_id}"
                 )
-        elif known_edges is not None and attachment.target_id not in known_edges:
+        elif attachment.target_kind is AttachmentTargetKind.EDGE:
+            if known_edges is not None and attachment.target_id not in known_edges:
+                errors.append(
+                    f"attachment {attachment_id} references missing edge "
+                    f"{attachment.target_id}"
+                )
+        elif attachment.target_kind is AttachmentTargetKind.MEMBER:
+            if attachment.target_id not in checked_members:
+                errors.append(
+                    f"attachment {attachment_id} references missing member "
+                    f"{attachment.target_id}"
+                )
+        elif attachment.target_kind is AttachmentTargetKind.SHEET:
+            if attachment.target_id not in checked_sheets:
+                errors.append(
+                    f"attachment {attachment_id} references missing sheet "
+                    f"{attachment.target_id}"
+                )
+        elif known_vertices is not None and attachment.target_id not in known_vertices:
             errors.append(
-                f"attachment {attachment_id} references missing edge "
+                f"attachment {attachment_id} references missing vertex "
                 f"{attachment.target_id}"
+            )
+        if attachment.part_id is not None:
+            part = checked_parts.get(attachment.part_id)
+            if part is None:
+                errors.append(
+                    f"attachment {attachment_id} references missing part "
+                    f"{attachment.part_id}"
+                )
+            else:
+                member = checked_members.get(attachment.member_id)
+                if isinstance(member, Member) and member.part_id != attachment.part_id:
+                    errors.append(
+                        f"attachment {attachment_id} part context does not own member "
+                        f"{attachment.member_id}"
+                    )
+        if attachment.sheet_id is not None and attachment.sheet_id not in checked_sheets:
+            errors.append(
+                f"attachment {attachment_id} references missing sheet context "
+                f"{attachment.sheet_id}"
             )
 
     for junction_id, raw_junction in checked_junctions.items():
@@ -1177,7 +1449,11 @@ def validate_structural_topology(
                 )
                 continue
             assert isinstance(attachment, Attachment)
-            if attachment.member_id not in member_ids:
+            if attachment.member_id is None:
+                errors.append(
+                    f"junction {junction_id} attachment {attachment_id} has no member source"
+                )
+            elif attachment.member_id not in member_ids:
                 errors.append(
                     f"junction {junction_id} attachment {attachment_id} belongs "
                     f"to non-participating member {attachment.member_id}"
@@ -1200,7 +1476,9 @@ def validate_structural_topology(
                 sheet_id = face_to_sheet.get(attachment.target_id)
                 if sheet_id is not None:
                     target_sheets.add(sheet_id)
-            else:
+            elif attachment.target_kind is AttachmentTargetKind.SHEET:
+                target_sheets.add(attachment.target_id)
+            elif attachment.target_kind is AttachmentTargetKind.EDGE:
                 target_sheets.update(edge_to_sheets.get(attachment.target_id, ()))
         for sheet_id in junction.sheet_ids:
             if sheet_id not in target_sheets:

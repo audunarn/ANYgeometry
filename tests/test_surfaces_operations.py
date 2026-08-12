@@ -30,6 +30,25 @@ from anygeometry import (
 from anygeometry.surfaces import closest_uv, surface_normal
 
 
+def test_custom_bounded_surface_normal_uses_one_sided_endpoint_difference() -> None:
+    class BoundedSurface:
+        def evaluate(self, u: float, v: float) -> np.ndarray:
+            if not 0.0 <= u <= 1.0 or not 0.0 <= v <= 1.0:
+                raise GeometryError("parameter outside bounded patch")
+            return np.asarray((u, v, u * v), dtype=float)
+
+        def local_uv(self, point: object) -> tuple[float, float]:
+            value = np.asarray(point, dtype=float)
+            return float(value[0]), float(value[1])
+
+    expected = np.asarray((-0.5, 0.0, 1.0))
+    expected /= np.linalg.norm(expected)
+
+    assert surface_normal(BoundedSurface(), 0.0, 0.5) == pytest.approx(
+        expected, abs=2.0e-6
+    )
+
+
 def test_explicit_surface_evaluation_uv_and_normals() -> None:
     plane = Plane(
         np.asarray((1.0, 2.0, 3.0)),
@@ -329,6 +348,36 @@ def test_transform_preserves_ids_and_moves_all_curve_definition_vertices() -> No
     )
 
 
+def test_transform_updates_or_invalidates_optional_face_parameterization() -> None:
+    geometry = GeometryModel()
+    vertices = geometry.add_points(
+        ((0.0, 0.0, 0.0), (2.0, 0.0, 0.0), (2.0, 1.0, 0.0), (0.0, 1.0, 0.0))
+    )
+    face = geometry.add_plate(vertices)
+    geometry.set_face_parameterization(
+        face,
+        Plane((0.0, 0.0, 1.0), (2.0, 0.0, 0.0), (0.0, 1.0, 0.0)),
+    )
+    matrix = np.eye(4)
+    matrix[:3, 3] = (3.0, -2.0, 5.0)
+
+    transform(geometry, matrix)
+
+    support = geometry.faces[face].surface
+    parameterization = geometry.faces[face].parameterization
+    assert isinstance(support, Plane)
+    assert isinstance(parameterization, Plane)
+    assert support.origin == pytest.approx((3.0, -2.0, 5.0))
+    assert parameterization.origin == pytest.approx((3.0, -2.0, 6.0))
+    assert geometry.face_point(face, 0.25, 0.5) == pytest.approx((3.5, -1.5, 6.0))
+
+    local = np.eye(4)
+    local[2, 3] = 0.25
+    transform(geometry, local, (EntityRef("vertex", vertices[0]),))
+
+    assert geometry.faces[face].parameterization is None
+
+
 def test_split_and_strip_faces_preserve_lineage_groups_and_exact_plane() -> None:
     geometry = GeometryModel()
     face = geometry.add_plate(
@@ -474,12 +523,19 @@ def test_diagonal_face_split_supports_triangles_with_evaluable_plane() -> None:
         ((0.0, 0.0, 0.0), (4.0, 0.0, 0.0), (4.0, 4.0, 0.0), (0.0, 4.0, 0.0))
     )
     face = geometry.add_plate(vertices)
+    mapping = Plane(
+        np.asarray((0.0, 0.0, 0.0)),
+        np.asarray((4.0, 0.0, 0.0)),
+        np.asarray((0.0, 4.0, 0.0)),
+    )
+    geometry.set_face_parameterization(face, mapping)
 
     divider, made = split_face_between(geometry, face, vertices[0], vertices[2])
 
     assert len(made) == 2
     assert all(len(geometry.faces[item].loop) == 3 for item in made)
     assert all(isinstance(geometry.faces[item].surface, Plane) for item in made)
+    assert all(geometry.faces[item].parameterization is mapping for item in made)
     assert len(geometry.faces_using_edge(divider)) == 2
     assert all(np.all(np.isfinite(geometry.face_point(item, 0.2, 0.2))) for item in made)
     assert geometry.validate_topology() == ()

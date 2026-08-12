@@ -344,6 +344,215 @@ class CoonsSurface:
 Surface = Union[Plane, Cylinder, Cone, RuledSurface, CoonsSurface]
 
 
+def _piecewise_boundary_many(
+    points: np.ndarray, parameters: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Evaluate a sampled polyline and its deterministic piecewise derivative."""
+
+    raw = np.asarray(parameters, dtype=float).reshape(-1)
+    clipped = np.clip(raw, 0.0, 1.0)
+    scaled = clipped * (len(points) - 1)
+    indices = np.minimum(np.floor(scaled).astype(int), len(points) - 2)
+    local = scaled - indices
+    values = (
+        (1.0 - local)[:, None] * points[indices]
+        + local[:, None] * points[indices + 1]
+    )
+    derivatives = (len(points) - 1) * (
+        points[indices + 1] - points[indices]
+    )
+    derivatives[(raw < 0.0) | (raw > 1.0)] = 0.0
+    return values, derivatives
+
+
+def _evaluate_surface_many(surface: SurfaceProtocol, uv: np.ndarray) -> np.ndarray:
+    """Allocation-conscious vector evaluation used by the model batch API."""
+
+    values = np.asarray(uv, dtype=float)
+    u, v = values[:, 0], values[:, 1]
+    if isinstance(surface, Plane):
+        return (
+            surface.origin
+            + u[:, None] * surface.u_vector
+            + v[:, None] * surface.v_vector
+        )
+    if isinstance(surface, (Cylinder, Cone)):
+        angles = surface.start_angle + u * surface.sweep_angle
+        radial = (
+            np.cos(angles)[:, None] * surface.radial_direction
+            + np.sin(angles)[:, None] * surface.circumferential_direction
+        )
+        radius = (
+            np.full(len(values), surface.radius, dtype=float)
+            if isinstance(surface, Cylinder)
+            else surface.radius_start
+            + v * (surface.radius_end - surface.radius_start)
+        )
+        return (
+            surface.origin
+            + radius[:, None] * radial
+            + (v * surface.height)[:, None] * surface.axis
+        )
+    if isinstance(surface, RuledSurface):
+        first, _first_derivative = _piecewise_boundary_many(
+            surface.first_boundary, u
+        )
+        second, _second_derivative = _piecewise_boundary_many(
+            surface.second_boundary, u
+        )
+        return (1.0 - v)[:, None] * first + v[:, None] * second
+    if isinstance(surface, CoonsSurface):
+        if not surface.has_boundaries:
+            raise GeometryError(
+                "topology-backed Coons batch evaluation requires GeometryModel"
+            )
+        assert (
+            surface.bottom is not None
+            and surface.right is not None
+            and surface.top is not None
+            and surface.left is not None
+        )
+        bottom, _bottom_derivative = _piecewise_boundary_many(surface.bottom, u)
+        top, _top_derivative = _piecewise_boundary_many(surface.top, u)
+        left, _left_derivative = _piecewise_boundary_many(surface.left, v)
+        right, _right_derivative = _piecewise_boundary_many(surface.right, v)
+        corner_00, corner_10 = surface.bottom[0], surface.bottom[-1]
+        corner_01, corner_11 = surface.top[0], surface.top[-1]
+        blend = (
+            ((1.0 - u) * (1.0 - v))[:, None] * corner_00
+            + (u * (1.0 - v))[:, None] * corner_10
+            + (u * v)[:, None] * corner_11
+            + ((1.0 - u) * v)[:, None] * corner_01
+        )
+        return (
+            (1.0 - v)[:, None] * bottom
+            + v[:, None] * top
+            + (1.0 - u)[:, None] * left
+            + u[:, None] * right
+            - blend
+        )
+    return np.asarray(
+        [surface.evaluate(float(first), float(second)) for first, second in values],
+        dtype=float,
+    ).reshape((-1, 3))
+
+
+def _surface_derivatives_many(
+    surface: SurfaceProtocol, uv: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Exact batch derivatives for every built-in explicit surface."""
+
+    values = np.asarray(uv, dtype=float)
+    u, v = values[:, 0], values[:, 1]
+    if isinstance(surface, Plane):
+        return (
+            np.repeat(surface.u_vector[None, :], len(values), axis=0),
+            np.repeat(surface.v_vector[None, :], len(values), axis=0),
+        )
+    if isinstance(surface, (Cylinder, Cone)):
+        angles = surface.start_angle + u * surface.sweep_angle
+        radial = (
+            np.cos(angles)[:, None] * surface.radial_direction
+            + np.sin(angles)[:, None] * surface.circumferential_direction
+        )
+        circumferential = (
+            -np.sin(angles)[:, None] * surface.radial_direction
+            + np.cos(angles)[:, None] * surface.circumferential_direction
+        )
+        if isinstance(surface, Cylinder):
+            radius = np.full(len(values), surface.radius, dtype=float)
+            radial_slope = 0.0
+        else:
+            radial_slope = surface.radius_end - surface.radius_start
+            radius = surface.radius_start + v * radial_slope
+        du = (radius * surface.sweep_angle)[:, None] * circumferential
+        dv = np.repeat((surface.height * surface.axis)[None, :], len(values), axis=0)
+        if radial_slope:
+            dv = dv + radial_slope * radial
+        return du, dv
+    if isinstance(surface, RuledSurface):
+        first, first_derivative = _piecewise_boundary_many(
+            surface.first_boundary, u
+        )
+        second, second_derivative = _piecewise_boundary_many(
+            surface.second_boundary, u
+        )
+        return (
+            (1.0 - v)[:, None] * first_derivative
+            + v[:, None] * second_derivative,
+            second - first,
+        )
+    if isinstance(surface, CoonsSurface):
+        if not surface.has_boundaries:
+            raise GeometryError(
+                "topology-backed Coons batch derivatives require GeometryModel"
+            )
+        assert (
+            surface.bottom is not None
+            and surface.right is not None
+            and surface.top is not None
+            and surface.left is not None
+        )
+        bottom, bottom_derivative = _piecewise_boundary_many(surface.bottom, u)
+        top, top_derivative = _piecewise_boundary_many(surface.top, u)
+        left, left_derivative = _piecewise_boundary_many(surface.left, v)
+        right, right_derivative = _piecewise_boundary_many(surface.right, v)
+        corner_00, corner_10 = surface.bottom[0], surface.bottom[-1]
+        corner_01, corner_11 = surface.top[0], surface.top[-1]
+        blend_du = (
+            -(1.0 - v)[:, None] * corner_00
+            + (1.0 - v)[:, None] * corner_10
+            + v[:, None] * corner_11
+            - v[:, None] * corner_01
+        )
+        blend_dv = (
+            -(1.0 - u)[:, None] * corner_00
+            - u[:, None] * corner_10
+            + u[:, None] * corner_11
+            + (1.0 - u)[:, None] * corner_01
+        )
+        return (
+            (1.0 - v)[:, None] * bottom_derivative
+            + v[:, None] * top_derivative
+            - left
+            + right
+            - blend_du,
+            -bottom
+            + top
+            + (1.0 - u)[:, None] * left_derivative
+            + u[:, None] * right_derivative
+            - blend_dv,
+        )
+
+    step = 1.0e-6
+
+    def bounded_derivative(axis: int) -> np.ndarray:
+        lower = values.copy()
+        upper = values.copy()
+        parameters = values[:, axis]
+        lower[:, axis] = np.where(
+            (parameters >= 0.0) & (parameters < step),
+            parameters,
+            parameters - step,
+        )
+        upper[:, axis] = np.where(
+            (parameters <= 1.0) & (parameters > 1.0 - step),
+            parameters,
+            parameters + step,
+        )
+        denominator = upper[:, axis] - lower[:, axis]
+        if np.any(denominator == 0.0):
+            raise GeometryError("surface has a degenerate parameter direction")
+        return (
+            _evaluate_surface_many(surface, upper)
+            - _evaluate_surface_many(surface, lower)
+        ) / denominator[:, None]
+
+    du = bounded_derivative(0)
+    dv = bounded_derivative(1)
+    return du, dv
+
+
 def _angle_on_sweep(angle: float, start: float, sweep: float) -> float:
     raw = float(angle - start)
     tolerance = 64.0 * np.finfo(float).eps * max(
@@ -384,26 +593,9 @@ def closest_uv(
 
 
 def surface_normal(surface: SurfaceProtocol, u: float, v: float) -> np.ndarray:
-    """Numerical unit normal shared by all surface implementations."""
+    """Unit normal using exact built-in derivatives when available."""
 
-    step = 1.0e-6
-    u_value, v_value = float(u), float(v)
-
-    def derivative(parameter: float, axis: int) -> np.ndarray:
-        if parameter <= step:
-            lower, upper = parameter, parameter + step
-        elif parameter >= 1.0 - step:
-            lower, upper = parameter - step, parameter
-        else:
-            lower, upper = parameter - step, parameter + step
-        if axis == 0:
-            first = surface.evaluate(lower, v_value)
-            second = surface.evaluate(upper, v_value)
-        else:
-            first = surface.evaluate(u_value, lower)
-            second = surface.evaluate(u_value, upper)
-        return (second - first) / (upper - lower)
-
-    du = derivative(u_value, 0)
-    dv = derivative(v_value, 1)
-    return _unit(np.cross(du, dv), "surface normal")
+    du, dv = _surface_derivatives_many(
+        surface, np.asarray(((float(u), float(v)),), dtype=float)
+    )
+    return _unit(np.cross(du[0], dv[0]), "surface normal")

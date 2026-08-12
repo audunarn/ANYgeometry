@@ -21,8 +21,9 @@ import numpy as np
 from .curves import Straight
 from .entities import EntityRef, OrientedEdge
 from .errors import GeometryError
+from .identity import validate_local_id
 from .sketch import SketchPlane, face_sketch_plane
-from .surfaces import Plane
+from .spatial import AABB, SpatialKey
 
 __all__ = [
     "FaceOverlap",
@@ -104,7 +105,12 @@ def _face_polygon(
 
 
 def _plane_and_polygons(
-    geometry, face_ids: Sequence[int], tolerance: float, *, strict_straight: bool
+    geometry,
+    face_ids: Sequence[int],
+    tolerance: float,
+    *,
+    strict_straight: bool,
+    absolute_tolerance: bool = False,
 ) -> tuple[SketchPlane, dict[int, object], float]:
     if not face_ids:
         raise GeometryError("select at least one plate")
@@ -122,7 +128,11 @@ def _plane_and_polygons(
     )
     # Classification must be invariant under translating the complete model.
     scale = max(float(np.linalg.norm(np.ptp(participating, axis=0))), 1.0)
-    length_tolerance = float(tolerance) * max(scale, 1.0)
+    length_tolerance = (
+        float(tolerance)
+        if absolute_tolerance
+        else float(tolerance) * max(scale, 1.0)
+    )
     polygons: dict[int, object] = {}
     for face_id in face_ids:
         face = geometry.faces.get(int(face_id))
@@ -165,31 +175,197 @@ def _parts(value, minimum_area: float):
 
 
 def find_coplanar_overlaps(
-    geometry, face_ids: Iterable[int] | None = None, *, tolerance: float = 1.0e-9
+    geometry,
+    face_ids: Iterable[int] | None = None,
+    *,
+    changed_aabbs: Iterable[object] | None = None,
+    candidate_pairs: Iterable[tuple[int, int] | tuple[SpatialKey, SpatialKey]] | None = None,
+    tolerance: float | None = None,
 ) -> tuple[FaceOverlap, ...]:
-    """Return positive-area coplanar overlaps; shared boundaries are ignored."""
+    """Return positive-area coplanar overlaps from an indexed candidate set.
 
-    identifiers = tuple(
-        geometry.faces if face_ids is None else dict.fromkeys(int(item) for item in face_ids)
+    Exactly one optional selector may be supplied:
+
+    * ``face_ids`` qualifies pairs wholly inside a selected face set;
+    * ``changed_aabbs`` qualifies face pairs incident to those regions; or
+    * ``candidate_pairs`` consumes an already computed narrow-phase worklist.
+
+    With no selector, face pairs come from the model's maintained AABB tree;
+    the function never begins with a quadratic nested loop over all faces.
+    Shared boundaries remain ignored.
+    """
+
+    tolerance_value = None if tolerance is None else float(tolerance)
+    if tolerance_value is not None and (
+        not np.isfinite(tolerance_value) or tolerance_value <= 0.0
+    ):
+        raise GeometryError("overlap tolerance must be finite and positive")
+
+    supplied = sum(
+        selector is not None
+        for selector in (face_ids, changed_aabbs, candidate_pairs)
     )
-    if len(identifiers) < 2:
+    if supplied > 1:
+        raise GeometryError(
+            "face_ids, changed_aabbs, and candidate_pairs are mutually exclusive"
+        )
+
+    def normalized_pair(value: object) -> tuple[int, int]:
+        try:
+            first_raw, second_raw = value  # type: ignore[misc]
+        except (TypeError, ValueError) as error:
+            raise GeometryError("candidate pairs must contain two face IDs") from error
+
+        def face_identifier(item: object) -> int:
+            if (
+                isinstance(item, tuple)
+                and len(item) == 2
+                and item[0] == "face"
+            ):
+                item = item[1]
+            identifier = validate_local_id(item, name="face ID")
+            if identifier not in geometry.faces:
+                raise GeometryError(f"no plate {identifier}")
+            return identifier
+
+        first, second = face_identifier(first_raw), face_identifier(second_raw)
+        if first == second:
+            raise GeometryError("an overlap candidate must contain two distinct faces")
+        return (first, second) if first < second else (second, first)
+
+    if candidate_pairs is not None:
+        pairs = tuple(sorted({normalized_pair(pair) for pair in candidate_pairs}))
+    else:
+        tree = geometry._spatial()  # noqa: SLF001 - kernel-maintained query index
+
+        def face_margin(key: SpatialKey) -> float:
+            if tolerance_value is not None:
+                return tolerance_value
+            bounds = tree.bounds(key)
+            extent = float(np.linalg.norm(bounds.extents))
+            policy = getattr(geometry, "tolerance", None)
+            if policy is None:
+                return 1.0e-9 * max(extent, 1.0)
+            return max(
+                float(getattr(policy, "aabb_padding", 0.0)),
+                float(policy.effective_length(extent)),
+            )
+
+        def indexed_pairs(
+            seeds: Iterable[SpatialKey],
+            *,
+            selected: frozenset[SpatialKey] | None = None,
+        ) -> tuple[tuple[int, int], ...]:
+            made: set[tuple[int, int]] = set()
+            for seed in sorted(set(seeds)):
+                if seed not in tree or seed[0] != "face":
+                    continue
+                nearby = tree.query(
+                    tree.bounds(seed).expanded(face_margin(seed)),
+                    kinds=("face",),
+                )
+                for other in nearby.keys:
+                    if other == seed or (selected is not None and other not in selected):
+                        continue
+                    first_key, second_key = (
+                        (seed, other) if seed < other else (other, seed)
+                    )
+                    made.add((first_key[1], second_key[1]))
+            return tuple(sorted(made))
+
+        if face_ids is not None:
+            selected = tuple(
+                dict.fromkeys(
+                    validate_local_id(item, name="face ID") for item in face_ids
+                )
+            )
+            missing = tuple(identifier for identifier in selected if identifier not in geometry.faces)
+            if missing:
+                raise GeometryError(f"no plate {missing[0]}")
+            if len(selected) < 2:
+                return ()
+            selected_keys = frozenset(("face", identifier) for identifier in selected)
+            pairs = indexed_pairs(selected_keys, selected=selected_keys)
+        elif changed_aabbs is not None:
+            regions: list[AABB] = []
+            for value in changed_aabbs:
+                if isinstance(value, AABB):
+                    regions.append(value)
+                    continue
+                before = getattr(value, "before", None)
+                after = getattr(value, "after", None)
+                if hasattr(value, "before") and hasattr(value, "after"):
+                    for bounds in (before, after):
+                        if bounds is not None:
+                            regions.append(AABB(tuple(bounds[:3]), tuple(bounds[3:])))
+                    continue
+                try:
+                    raw = tuple(value)  # type: ignore[arg-type]
+                except TypeError as error:
+                    raise GeometryError(
+                        "changed_aabbs must contain AABB, AABBChange, or six-value bounds"
+                    ) from error
+                if len(raw) == 6:
+                    regions.append(AABB(tuple(raw[:3]), tuple(raw[3:])))
+                elif len(raw) == 2:
+                    regions.append(AABB(tuple(raw[0]), tuple(raw[1])))
+                else:
+                    raise GeometryError(
+                        "changed_aabbs must contain AABB, AABBChange, or six-value bounds"
+                    )
+            if not regions:
+                return ()
+            policy = getattr(geometry, "tolerance", None)
+            padding = (
+                float(getattr(policy, "aabb_padding", getattr(policy, "length", 1.0e-9)))
+                if tolerance_value is None
+                else tolerance_value
+            )
+            regions = [region.expanded(padding) for region in regions]
+            changed_faces = tree.query_regions(regions, kinds=("face",)).keys
+            if not changed_faces:
+                return ()
+            pairs = indexed_pairs(changed_faces)
+        else:
+            pairs = indexed_pairs(key for key in tree.keys if key[0] == "face")
+
+    if not pairs:
         return ()
     overlaps: list[FaceOverlap] = []
     # Each coplanar cluster may use a different deterministic frame.  Trying a
     # pair independently also lets non-coplanar faces remain ordinary models.
-    for index, first in enumerate(identifiers):
-        for second in identifiers[index + 1 :]:
-            try:
-                _plane, polygons, length_tolerance = _plane_and_polygons(
-                    geometry, (first, second), tolerance, strict_straight=False
+    for first, second in pairs:
+        try:
+            pair_tolerance = tolerance_value
+            if pair_tolerance is None:
+                first_raw = geometry._entity_bounds(("face", first))  # noqa: SLF001
+                second_raw = geometry._entity_bounds(("face", second))  # noqa: SLF001
+                if first_raw is None or second_raw is None:
+                    raise GeometryError("selected plate cannot be conservatively bounded")
+                pair_bounds = AABB(
+                    tuple(first_raw[:3]), tuple(first_raw[3:])
+                ).union(AABB(tuple(second_raw[:3]), tuple(second_raw[3:])))
+                extent = float(np.linalg.norm(pair_bounds.extents))
+                policy = getattr(geometry, "tolerance", None)
+                pair_tolerance = float(
+                    policy.effective_length(extent)
+                    if policy is not None and hasattr(policy, "effective_length")
+                    else 1.0e-9 * max(extent, 1.0)
                 )
-            except GeometryError as error:
-                if "not coplanar" in str(error) or "flat plate" in str(error):
-                    continue
-                raise
-            area = float(polygons[first].intersection(polygons[second]).area)
-            if area > length_tolerance * length_tolerance:
-                overlaps.append(FaceOverlap(first, second, area))
+            _plane, polygons, length_tolerance = _plane_and_polygons(
+                geometry,
+                (first, second),
+                pair_tolerance,
+                strict_straight=False,
+                absolute_tolerance=True,
+            )
+        except GeometryError as error:
+            if "not coplanar" in str(error) or "flat plate" in str(error):
+                continue
+            raise
+        area = float(polygons[first].intersection(polygons[second]).area)
+        if area > length_tolerance * length_tolerance:
+            overlaps.append(FaceOverlap(first, second, area))
     return tuple(overlaps)
 
 
@@ -319,15 +495,22 @@ def fragment_coplanar_overlaps(
         for polygon, memberships, owner_order in ordered_cells:
             owner_id = identifiers[owner_order]
             outer = loop(polygon.exterior.coords)
-            corners = geometry._detect_corners(outer) if len(outer) == 4 else ()  # noqa: SLF001
-            made = geometry.add_face_from_loop(outer, corners, surface=Plane(
-                plane.origin, plane.x_axis, plane.y_axis
-            ))
+            corners = (  # noqa: SLF001
+                geometry._detect_corners(outer) if len(outer) == 4 else None
+            )
+            owner_face = old_faces[owner_id]
+            made = geometry.add_face_from_loop(
+                outer,
+                corners,
+                surface=owner_face.surface,
+            )
             geometry._put_entity(  # noqa: SLF001
                 "face",
                 replace(
                     geometry.faces[made],
                     holes=tuple(loop(ring.coords) for ring in polygon.interiors),
+                    surface=owner_face.surface,
+                    parameterization=owner_face.parameterization,
                     metadata={
                         **old_faces[owner_id].metadata,
                     "overlap_fragment": True,

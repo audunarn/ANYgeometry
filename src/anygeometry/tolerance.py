@@ -82,19 +82,36 @@ class TolerancePolicy:
 
     length: float = 1.0e-9
     merge_length: float = 1.0e-7
+    coincidence: float | None = None
+    healing: float | None = None
     angular: float = 1.0e-10
     parameter: float = 1.0e-10
     area: float = 1.0e-18
     surface_residual: float = 1.0e-8
+    curve_fit_residual: float | None = None
+    aabb_padding: float | None = None
     relative_length: float = 1.0e-12
     relative_area: float = 1.0e-14
 
     def __post_init__(self) -> None:
+        # ``None`` is an input-only compatibility sentinel.  It lets legacy
+        # callers keep specifying ``merge_length`` while the richer policy
+        # gains independent coincidence/healing and qualification values.
+        # Every published record is normalized to concrete floats.
+        defaults = {
+            "coincidence": self.length,
+            "healing": self.merge_length,
+            "curve_fit_residual": self.surface_residual,
+            "aabb_padding": self.length,
+        }
         for item in fields(self):
+            value = getattr(self, item.name)
+            if value is None:
+                value = defaults[item.name]
             object.__setattr__(
                 self,
                 item.name,
-                _positive_finite(getattr(self, item.name), item.name),
+                _positive_finite(value, item.name),
             )
 
     def effective_length(self, extent: float = 0.0) -> float:
@@ -106,8 +123,21 @@ class TolerancePolicy:
     def effective_merge_length(self, extent: float = 0.0) -> float:
         """Intentional merge/heal tolerance for a local participating extent."""
 
+        return self.effective_healing(extent)
+
+    def effective_coincidence(self, extent: float = 0.0) -> float:
+        """Geometric coincidence tolerance without authorizing mutation."""
+
         local = _non_negative_finite(extent, "feature extent")
-        return max(self.merge_length, self.relative_length * local)
+        assert self.coincidence is not None
+        return max(self.coincidence, self.relative_length * local)
+
+    def effective_healing(self, extent: float = 0.0) -> float:
+        """Intentional user-authorized healing tolerance."""
+
+        local = _non_negative_finite(extent, "feature extent")
+        assert self.healing is not None
+        return max(self.healing, self.relative_length * local)
 
     def effective_parameter(self, feature_length: float, extent: float | None = None) -> float:
         """Dimensionless parameter tolerance for a bounded curve.
@@ -135,6 +165,20 @@ class TolerancePolicy:
         local = _non_negative_finite(extent, "feature extent")
         return max(self.surface_residual, self.relative_length * local)
 
+    def effective_curve_fit_residual(self, extent: float = 0.0) -> float:
+        """Maximum accepted curve-fitting residual for a local extent."""
+
+        local = _non_negative_finite(extent, "feature extent")
+        assert self.curve_fit_residual is not None
+        return max(self.curve_fit_residual, self.relative_length * local)
+
+    def effective_aabb_padding(self, extent: float = 0.0) -> float:
+        """Conservative broad-phase padding for a local participating extent."""
+
+        local = _non_negative_finite(extent, "feature extent")
+        assert self.aabb_padding is not None
+        return max(self.aabb_padding, self.relative_length * local)
+
     def scaled(self, factor: float) -> "TolerancePolicy":
         """Return the same physical policy after a uniform unit/geometry scale."""
 
@@ -142,10 +186,14 @@ class TolerancePolicy:
         return TolerancePolicy(
             length=self.length * scale,
             merge_length=self.merge_length * scale,
+            coincidence=self.coincidence * scale,  # type: ignore[operator]
+            healing=self.healing * scale,  # type: ignore[operator]
             angular=self.angular,
             parameter=self.parameter,
             area=self.area * scale * scale,
             surface_residual=self.surface_residual * scale,
+            curve_fit_residual=self.curve_fit_residual * scale,  # type: ignore[operator]
+            aabb_padding=self.aabb_padding * scale,  # type: ignore[operator]
             relative_length=self.relative_length,
             relative_area=self.relative_area,
         )

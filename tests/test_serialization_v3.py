@@ -117,13 +117,13 @@ def _mixed_model() -> GeometryModel:
     return model
 
 
-def test_schema_3_round_trip_preserves_identity_coordinates_and_structural_uses() -> None:
+def test_schema_4_round_trip_preserves_identity_coordinates_and_structural_uses() -> None:
     model = _mixed_model()
     document = to_dict(model)
 
     restored = from_dict(deepcopy(document))
 
-    assert document["version"] == 3
+    assert document["version"] == 4
     assert to_dict(restored) == document
     assert restored.model_id == model.model_id
     assert restored.revision == model.revision
@@ -288,7 +288,7 @@ def test_certified_output_requires_a_clean_strict_audit() -> None:
         ),
     ),
 )
-def test_schema_3_rejects_duplicate_records_invalid_allocator_and_enum(
+def test_schema_4_rejects_duplicate_records_invalid_allocator_and_enum(
     mutation: object, message: str
 ) -> None:
     document = to_dict(_mixed_model())
@@ -298,7 +298,7 @@ def test_schema_3_rejects_duplicate_records_invalid_allocator_and_enum(
         from_dict(document)
 
 
-def test_schema_3_rejects_missing_and_unexpected_core_fields() -> None:
+def test_schema_4_rejects_missing_and_unexpected_core_fields() -> None:
     missing = to_dict(_mixed_model())
     del missing["tolerance"]
     with pytest.raises(GeometryError, match="missing required field.*tolerance"):
@@ -308,6 +308,41 @@ def test_schema_3_rejects_missing_and_unexpected_core_fields() -> None:
     unexpected["vendor_data"] = {}
     with pytest.raises(GeometryError, match="unexpected field.*vendor_data"):
         from_dict(unexpected)
+
+
+@pytest.mark.parametrize(
+    "remove, message",
+    (
+        (
+            lambda data: data["coordinates"].pop("crs"),
+            "coordinates is missing required field.*crs",
+        ),
+        (
+            lambda data: data["faces"][0].pop("parameterization"),
+            "face record is missing required field.*parameterization",
+        ),
+        (
+            lambda data: data["structural"]["members"][0].pop(
+                "orientation_reference"
+            ),
+            "member record is missing required field.*orientation_reference",
+        ),
+        (
+            lambda data: data["structural"]["attachments"][0].pop("evidence"),
+            "attachment record is missing required field.*evidence",
+        ),
+        (
+            lambda data: data.pop("structural_replacement_history"),
+            "schema-4 geometry document is missing required field.*structural_replacement_history",
+        ),
+    ),
+)
+def test_schema_4_requires_new_semantic_fields(remove: object, message: str) -> None:
+    document = to_dict(_mixed_model())
+    remove(document)  # type: ignore[operator]
+    _rehash(document)
+    with pytest.raises(GeometryError, match=message):
+        from_dict(document)
 
 
 def test_file_reader_rejects_duplicate_json_object_keys(tmp_path) -> None:
@@ -342,7 +377,7 @@ def test_schema_2_migration_infers_only_face_ownership_and_records_provenance() 
     migrated_document = to_dict(migrated)
     assert migrated_document["extensions"]["anygeometry:migration"] == {
         "source_version": 2,
-        "target_version": 3,
+        "target_version": 4,
         "inferred": "face ownership only; no members inferred",
     }
 

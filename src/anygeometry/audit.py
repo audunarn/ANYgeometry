@@ -25,6 +25,7 @@ __all__ = [
     "AuditCollector",
     "AuditContext",
     "AuditEntity",
+    "AuditEvidenceQuality",
     "AuditIssue",
     "AuditMetrics",
     "AuditPolicy",
@@ -80,6 +81,7 @@ class AuditCode(str, Enum):
 
     VERTEX_COINCIDENCE = "vertex_coincidence"
     VERTEX_EDGE_T_JUNCTION = "vertex_edge_t_junction"
+    VERTEX_FACE_INTERIOR = "vertex_face_interior"
     EDGE_CROSSING = "edge_crossing"
     EDGE_DUPLICATE = "edge_duplicate"
     EDGE_REVERSED_DUPLICATE = "edge_reversed_duplicate"
@@ -102,7 +104,10 @@ class AuditCode(str, Enum):
     UNRESOLVED_LINEAGE = "unresolved_lineage"
     UNOWNED_STRUCTURAL_USE = "unowned_structural_use"
     MULTIPLY_OWNED_STRUCTURAL_USE = "multiply_owned_structural_use"
+    ORPHAN_CONTROL_GEOMETRY = "orphan_control_geometry"
     INTENTIONAL_COINCIDENCE = "intentional_coincidence"
+    UNSUPPORTED_CANDIDATE = "unsupported_candidate"
+    CAPABILITY_MISSING = "capability_missing"
     UNCLASSIFIED_CANDIDATE = "unclassified_candidate"
     UNVERIFIED_CLASSIFICATION = "unverified_classification"
     SPATIAL_INDEX_INCONSISTENT = "spatial_index_inconsistent"
@@ -112,6 +117,14 @@ class AuditCode(str, Enum):
 class AuditScope(str, Enum):
     FULL_MODEL = "full_model"
     CHANGED_REGION = "changed_region"
+
+
+class AuditEvidenceQuality(str, Enum):
+    """How strongly the geometry supporting an issue was qualified."""
+
+    EXACT = "exact"
+    VERIFIED_APPROXIMATE = "verified_approximate"
+    UNVERIFIED = "unverified"
 
 
 @runtime_checkable
@@ -198,8 +211,18 @@ class AuditIssue:
     severity: AuditSeverity
     message: str
     entities: tuple[AuditEntity, ...] = ()
+    context: tuple[AuditEntity, ...] = ()
     witnesses: tuple[AuditWitness, ...] = ()
     classification: str | None = None
+    measured_gap: float | None = None
+    measured_angle: float | None = None
+    overlap_length: float | None = None
+    overlap_area: float | None = None
+    tolerance_used: float | None = None
+    classification_confidence: float = 1.0
+    evidence_quality: AuditEvidenceQuality = AuditEvidenceQuality.EXACT
+    recommended_action: str | None = None
+    blocks_strict_handoff: bool | None = None
     details: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
@@ -215,6 +238,9 @@ class AuditIssue:
         entities = tuple(sorted(self.entities))
         if any(not isinstance(entity, AuditEntity) for entity in entities):
             raise TypeError("entities must contain AuditEntity values")
+        context = tuple(sorted(set(self.context)))
+        if any(not isinstance(entity, AuditEntity) for entity in context):
+            raise TypeError("context must contain AuditEntity values")
         witnesses = tuple(sorted(self.witnesses))
         if any(not isinstance(witness, AuditWitness) for witness in witnesses):
             raise TypeError("witnesses must contain AuditWitness values")
@@ -223,6 +249,44 @@ class AuditIssue:
             if self.classification is None
             else _text(self.classification, name="classification")
         )
+        measurements: dict[str, float | None] = {}
+        for name in (
+            "measured_gap",
+            "measured_angle",
+            "overlap_length",
+            "overlap_area",
+            "tolerance_used",
+        ):
+            value = getattr(self, name)
+            if value is not None:
+                value = float(value)
+                if not math.isfinite(value) or value < 0.0:
+                    raise ValueError(f"{name} must be finite and non-negative")
+            measurements[name] = value
+        confidence = float(self.classification_confidence)
+        if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
+            raise ValueError("classification_confidence must be between zero and one")
+        quality = (
+            self.evidence_quality
+            if isinstance(self.evidence_quality, AuditEvidenceQuality)
+            else AuditEvidenceQuality(self.evidence_quality)
+        )
+        action = (
+            None
+            if self.recommended_action is None
+            else _text(self.recommended_action, name="recommended_action")
+        )
+        if action is None:
+            action = (
+                "no action required"
+                if severity is AuditSeverity.INFO
+                else "review and resolve this finding before strict handoff"
+            )
+        blocks = self.blocks_strict_handoff
+        if blocks is None:
+            blocks = severity >= AuditSeverity.WARNING
+        elif not isinstance(blocks, bool):
+            raise TypeError("blocks_strict_handoff must be a boolean")
         normalized_details: list[tuple[str, str]] = []
         seen: set[str] = set()
         for key, value in self.details:
@@ -243,8 +307,15 @@ class AuditIssue:
         object.__setattr__(self, "severity", severity)
         object.__setattr__(self, "message", message)
         object.__setattr__(self, "entities", entities)
+        object.__setattr__(self, "context", context)
         object.__setattr__(self, "witnesses", witnesses)
         object.__setattr__(self, "classification", classification)
+        for name, value in measurements.items():
+            object.__setattr__(self, name, value)
+        object.__setattr__(self, "classification_confidence", confidence)
+        object.__setattr__(self, "evidence_quality", quality)
+        object.__setattr__(self, "recommended_action", action)
+        object.__setattr__(self, "blocks_strict_handoff", blocks)
         object.__setattr__(self, "details", tuple(sorted(normalized_details)))
 
     @classmethod
@@ -255,8 +326,18 @@ class AuditIssue:
         message: str,
         *,
         entities: Iterable[AuditEntity] = (),
+        context: Iterable[AuditEntity] = (),
         witnesses: Iterable[AuditWitness] = (),
         classification: object | None = None,
+        measured_gap: float | None = None,
+        measured_angle: float | None = None,
+        overlap_length: float | None = None,
+        overlap_area: float | None = None,
+        tolerance_used: float | None = None,
+        classification_confidence: float = 1.0,
+        evidence_quality: AuditEvidenceQuality = AuditEvidenceQuality.EXACT,
+        recommended_action: str | None = None,
+        blocks_strict_handoff: bool | None = None,
         details: Mapping[str, object] | None = None,
     ) -> "AuditIssue":
         canonical_details = ()
@@ -264,17 +345,52 @@ class AuditIssue:
             canonical_details = tuple(
                 (str(key), _canonical_detail(value)) for key, value in details.items()
             )
+
+            def inferred(*names: str) -> float | None:
+                for name in names:
+                    value = details.get(name)
+                    if isinstance(value, Real) and not isinstance(value, bool):
+                        made = float(value)
+                        if math.isfinite(made) and made >= 0.0:
+                            return made
+                return None
+
+            if measured_gap is None:
+                measured_gap = inferred(
+                    "distance",
+                    "maximum_distance",
+                    "maximum_sample_distance",
+                    "max_residual",
+                )
+            if measured_angle is None:
+                measured_angle = inferred("angle", "measured_angle")
+            if overlap_length is None:
+                overlap_length = inferred("overlap_length")
+            if overlap_area is None:
+                overlap_area = inferred("overlap_area", "area")
+            if tolerance_used is None:
+                tolerance_used = inferred("tolerance", "tolerance_used")
         return cls(
             code=code,
             severity=severity,
             message=message,
             entities=tuple(entities),
+            context=tuple(context),
             witnesses=tuple(witnesses),
             classification=(
                 None
                 if classification is None
                 else _text(classification, name="classification")
             ),
+            measured_gap=measured_gap,
+            measured_angle=measured_angle,
+            overlap_length=overlap_length,
+            overlap_area=overlap_area,
+            tolerance_used=tolerance_used,
+            classification_confidence=classification_confidence,
+            evidence_quality=evidence_quality,
+            recommended_action=recommended_action,
+            blocks_strict_handoff=blocks_strict_handoff,
             details=canonical_details,
         )
 
@@ -286,7 +402,13 @@ class AuditIssue:
             -int(self.severity),
             self.code.value,
             self.entities,
+            self.context,
             self.classification or "",
+            self.evidence_quality.value,
+            self.measured_gap if self.measured_gap is not None else -1.0,
+            self.measured_angle if self.measured_angle is not None else -1.0,
+            self.overlap_length if self.overlap_length is not None else -1.0,
+            self.overlap_area if self.overlap_area is not None else -1.0,
             self.witnesses,
             self.message,
             self.details,
@@ -298,8 +420,18 @@ class AuditIssue:
             "severity": self.severity.name.lower(),
             "message": self.message,
             "entities": [entity.to_dict() for entity in self.entities],
+            "context": [entity.to_dict() for entity in self.context],
             "witnesses": [witness.to_dict() for witness in self.witnesses],
             "classification": self.classification,
+            "measured_gap": self.measured_gap,
+            "measured_angle": self.measured_angle,
+            "overlap_length": self.overlap_length,
+            "overlap_area": self.overlap_area,
+            "tolerance_used": self.tolerance_used,
+            "classification_confidence": self.classification_confidence,
+            "evidence_quality": self.evidence_quality.value,
+            "recommended_action": self.recommended_action,
+            "blocks_strict_handoff": self.blocks_strict_handoff,
             "details": {key: json.loads(value) for key, value in self.details},
         }
 
@@ -307,6 +439,8 @@ class AuditIssue:
 _FAIL_CLOSED_CODES = frozenset(
     {
         AuditCode.UNCLASSIFIED_CANDIDATE,
+        AuditCode.UNSUPPORTED_CANDIDATE,
+        AuditCode.CAPABILITY_MISSING,
         AuditCode.UNVERIFIED_CLASSIFICATION,
         AuditCode.SPATIAL_INDEX_INCONSISTENT,
         AuditCode.CHECK_FAILED,
@@ -491,6 +625,10 @@ class AuditReport:
 
     @property
     def certifiable(self) -> bool:
+        # A local report is useful invalidation evidence, never proof that
+        # unrelated model regions satisfy the full strict-kernel contract.
+        if self.scope is AuditScope.CHANGED_REGION:
+            return False
         if not self.clean or not self.metrics.classification_complete:
             return False
         if self.policy.require_full_model_for_certification:
@@ -610,7 +748,10 @@ class AuditCollector:
             if entity.model_id != self.model_id:
                 raise ValueError("audit issue entity belongs to a different model")
         self._issues.append(issue)
-        if issue.code is AuditCode.UNVERIFIED_CLASSIFICATION:
+        if (
+            issue.code is AuditCode.UNVERIFIED_CLASSIFICATION
+            or issue.evidence_quality is AuditEvidenceQuality.UNVERIFIED
+        ):
             self._verified = False
         return issue
 
@@ -621,7 +762,22 @@ class AuditCollector:
         message: str,
         **kwargs: object,
     ) -> AuditIssue:
-        allowed = {"entities", "witnesses", "classification", "details"}
+        allowed = {
+            "entities",
+            "context",
+            "witnesses",
+            "classification",
+            "measured_gap",
+            "measured_angle",
+            "overlap_length",
+            "overlap_area",
+            "tolerance_used",
+            "classification_confidence",
+            "evidence_quality",
+            "recommended_action",
+            "blocks_strict_handoff",
+            "details",
+        }
         unexpected = set(kwargs) - allowed
         if unexpected:
             names = ", ".join(sorted(unexpected))
@@ -631,8 +787,22 @@ class AuditCollector:
             severity,
             message,
             entities=kwargs.get("entities", ()),  # type: ignore[arg-type]
+            context=kwargs.get("context", ()),  # type: ignore[arg-type]
             witnesses=kwargs.get("witnesses", ()),  # type: ignore[arg-type]
             classification=kwargs.get("classification"),
+            measured_gap=kwargs.get("measured_gap"),  # type: ignore[arg-type]
+            measured_angle=kwargs.get("measured_angle"),  # type: ignore[arg-type]
+            overlap_length=kwargs.get("overlap_length"),  # type: ignore[arg-type]
+            overlap_area=kwargs.get("overlap_area"),  # type: ignore[arg-type]
+            tolerance_used=kwargs.get("tolerance_used"),  # type: ignore[arg-type]
+            classification_confidence=kwargs.get(  # type: ignore[arg-type]
+                "classification_confidence", 1.0
+            ),
+            evidence_quality=kwargs.get(  # type: ignore[arg-type]
+                "evidence_quality", AuditEvidenceQuality.EXACT
+            ),
+            recommended_action=kwargs.get("recommended_action"),  # type: ignore[arg-type]
+            blocks_strict_handoff=kwargs.get("blocks_strict_handoff"),  # type: ignore[arg-type]
             details=kwargs.get("details"),  # type: ignore[arg-type]
         )
         return self.add(issue)

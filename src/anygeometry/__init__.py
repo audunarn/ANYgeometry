@@ -1,7 +1,8 @@
 """Lightweight structural-surface geometry shared by the ANY ecosystem."""
 
 from .curves import Arc, ArcFrame, CurveShape, DegenerateArcError, Spline, Straight
-from .entities import Edge, EntityKind, EntityRef, Face, OrientedEdge, Vertex
+from .closure import ModelClosure, extract_model_closure
+from .entities import Edge, EntityKind, EntityRef, Face, OrientedEdge, Vertex, VertexRole
 from .editing import (
     InsertResult,
     Measurement,
@@ -16,6 +17,14 @@ from .editing import (
     reverse_face,
 )
 from .errors import GeometryError, GeometryTopologyError
+from .evaluation import (
+    edge_tangent_many,
+    evaluate_edge_many,
+    evaluate_face_many,
+    face_derivatives_many,
+    face_normal_many,
+    project_to_face_many,
+)
 from .features import (
     FeatureExecution,
     FeatureExecutor,
@@ -30,7 +39,12 @@ from .features import (
     builtin_feature_registry,
 )
 from .intersections import (
+    ExpectedImprintChange,
     FaceIntersection,
+    ImprintApplication,
+    ImprintOperation,
+    ImprintPlan,
+    apply_imprint,
     clip_line_to_face,
     intersect_faces,
     intersect_surfaces,
@@ -40,6 +54,8 @@ from .intersections import (
     numerical_surface_intersection,
     plane_cylinder,
     plane_plane,
+    plan_imprint,
+    query_intersection,
 )
 from .model import GeometryModel
 from .identity import EntityHandle, Resolution, ResolutionStatus
@@ -47,6 +63,7 @@ from .transactions import AABBChange, ChangeSet, TopologyTransaction
 from .tolerance import DEFAULT_TOLERANCE_POLICY, TolerancePolicy, feature_extent
 from .predicates import (
     IntersectionComponent,
+    IntersectionDimension,
     IntersectionKind,
     IntersectionQuality,
     IntersectionResult,
@@ -58,8 +75,16 @@ from .predicates import (
     qualified_segment_segment,
 )
 from .policies import MutationPolicy
-from .spatial import AABB, AABBTree, IndexDiagnostics, IndexUpdate, IndexUpdateKind
+from .spatial import (
+    AABB,
+    AABBTree,
+    IndexDiagnostics,
+    IndexUpdate,
+    IndexUpdateKind,
+    NearestQueryResult,
+)
 from .audit import (
+    AuditEvidenceQuality,
     AuditEntity,
     AuditCode,
     AuditIssue,
@@ -71,14 +96,16 @@ from .audit import (
     AuditWitness,
     BroadPhaseDiagnostics,
 )
-from .strict_audit import strict_audit
+from .strict_audit import audit_changed_region, strict_audit
 from .structural import (
     Attachment,
+    AttachmentEvidence,
     AttachmentKind,
     AttachmentTargetKind,
     BoundaryPolicy,
     Coedge,
     ConnectivityPolicy,
+    ConnectionIntent,
     FaceUse,
     FrozenMetadata,
     Junction,
@@ -140,10 +167,12 @@ __all__ = [
     "Arc",
     "ArcFrame",
     "Attachment",
+    "AttachmentEvidence",
     "AttachmentKind",
     "AttachmentTargetKind",
     "AuditCode",
     "AuditEntity",
+    "AuditEvidenceQuality",
     "AuditIssue",
     "AuditMetrics",
     "AuditPolicy",
@@ -156,6 +185,7 @@ __all__ = [
     "ChangeSet",
     "Coedge",
     "ConnectivityPolicy",
+    "ConnectionIntent",
     "CoonsSurface",
     "Cone",
     "CurveShape",
@@ -165,6 +195,7 @@ __all__ = [
     "EntityKind",
     "EntityHandle",
     "EntityRef",
+    "ExpectedImprintChange",
     "Face",
     "FaceIntersection",
     "FaceOverlap",
@@ -185,7 +216,11 @@ __all__ = [
     "IndexDiagnostics",
     "IndexUpdate",
     "IndexUpdateKind",
+    "ImprintApplication",
+    "ImprintOperation",
+    "ImprintPlan",
     "IntersectionComponent",
+    "IntersectionDimension",
     "IntersectionKind",
     "IntersectionParameterRange",
     "IntersectionQuality",
@@ -194,7 +229,9 @@ __all__ = [
     "Measurement",
     "Member",
     "MemberEdgeUse",
+    "ModelClosure",
     "MutationPolicy",
+    "NearestQueryResult",
     "NonManifoldPolicy",
     "Orientation",
     "OrientedEdge",
@@ -219,11 +256,20 @@ __all__ = [
     "TolerancePolicy",
     "TopologyTransaction",
     "Vertex",
+    "VertexRole",
+    "apply_imprint",
+    "audit_changed_region",
     "closest_point",
     "clip_line_to_face",
     "closest_uv",
     "copy_entities",
     "circular_pattern",
+    "edge_tangent_many",
+    "evaluate_edge_many",
+    "evaluate_face_many",
+    "extract_model_closure",
+    "face_derivatives_many",
+    "face_normal_many",
     "fragment_face",
     "fragment_coplanar_overlaps",
     "face_sketch_plane",
@@ -248,7 +294,10 @@ __all__ = [
     "numerical_surface_intersection",
     "plane_cylinder",
     "plane_plane",
+    "plan_imprint",
+    "query_intersection",
     "project",
+    "project_to_face_many",
     "punch_hole",
     "read_geometry",
     "reverse_edge",
@@ -272,4 +321,4 @@ __all__ = [
     "JunctionMemberUse",
 ]
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"

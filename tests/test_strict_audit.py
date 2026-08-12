@@ -88,6 +88,29 @@ def test_classification_is_unchanged_by_a_large_translation() -> None:
     assert origin.metrics == translated.metrics
 
 
+def test_classification_is_equivalent_in_metres_and_millimetres() -> None:
+    def made(scale: float, units: str) -> GeometryModel:
+        geometry = GeometryModel(tolerance=TolerancePolicy().scaled(scale))
+        geometry.set_document_settings(units=units)
+        vertices = geometry.add_points(
+            (
+                (0.0 * scale, 0.0 * scale, 0.0),
+                (2.0 * scale, 0.0 * scale, 0.0),
+                (1.0 * scale, -1.0 * scale, 0.0),
+                (1.0 * scale, 1.0 * scale, 0.0),
+            )
+        )
+        geometry.add_line(vertices[0], vertices[1])
+        geometry.add_line(vertices[2], vertices[3])
+        return geometry
+
+    metres = strict_audit(made(1.0, "m"))
+    millimetres = strict_audit(made(1000.0, "mm"))
+
+    assert metres.issue_counts == millimetres.issue_counts == {"edge_crossing": 1}
+    assert metres.metrics == millimetres.metrics
+
+
 def test_member_overlap_needs_junction_but_declared_or_separate_is_intentional() -> None:
     geometry = GeometryModel()
     vertices = geometry.add_points(

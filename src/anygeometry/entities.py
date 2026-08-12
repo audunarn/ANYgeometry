@@ -10,6 +10,7 @@ the model is edited and re-meshed.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import TYPE_CHECKING, Literal, Mapping, Tuple
 
 import numpy as np
@@ -28,9 +29,25 @@ __all__ = [
     "Face",
     "OrientedEdge",
     "Vertex",
+    "VertexRole",
 ]
 
 EntityKind = Literal["vertex", "edge", "face"]
+
+
+class VertexRole(StrEnum):
+    """Semantic role of a point in topology and curve construction.
+
+    Roles are queried from :class:`GeometryModel`; they are deliberately not
+    stored on every compact vertex record.  A point can consequently move
+    between roles as immutable edge definitions are replaced without risking
+    stale per-vertex flags.
+    """
+
+    TOPOLOGICAL = "topological"
+    CURVE_CONTROL = "curve_control"
+    CONSTRUCTION = "construction"
+    MIXED = "mixed"
 
 
 @dataclass(frozen=True)
@@ -109,6 +126,7 @@ class Face:
     metadata: FrozenMetadata | Mapping[str, object] = FrozenMetadata()
     holes: Tuple[Tuple[OrientedEdge, ...], ...] = ()
     surface: "Surface | None" = None
+    parameterization: "Surface | None" = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "loop", tuple(self.loop))
@@ -119,6 +137,12 @@ class Face:
             tuple(tuple(loop) for loop in self.holes),
         )
         object.__setattr__(self, "metadata", freeze_metadata(self.metadata))
+
+    @property
+    def support_surface(self) -> "Surface | None":
+        """Authoritative geometric support (``surface`` compatibility alias)."""
+
+        return self.surface
 
     @property
     def ref(self) -> EntityRef:

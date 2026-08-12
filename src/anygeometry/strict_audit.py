@@ -44,8 +44,9 @@ from .predicates import (
     qualified_plane_plane,
     qualified_segment_segment,
 )
-from .spatial import AABB, AABBTree, SpatialKey
+from .spatial import AABB, AABBTree, QueryDiagnostics, SpatialKey
 from .structural import (
+    AttachmentEvidence,
     AttachmentKind,
     AttachmentTargetKind,
     JunctionKind,
@@ -59,11 +60,12 @@ from .tolerance import (
     TolerancePolicy,
     feature_extent,
 )
+from .transactions import ChangeSet
 
 if TYPE_CHECKING:
     from .model import GeometryModel
 
-__all__ = ["strict_audit"]
+__all__ = ["audit_changed_region", "strict_audit"]
 
 
 _GEOMETRY_KINDS = frozenset(("vertex", "edge", "face"))
@@ -71,6 +73,7 @@ _PAIR_KINDS = frozenset(
     (
         frozenset(("vertex",)),
         frozenset(("vertex", "edge")),
+        frozenset(("vertex", "face")),
         frozenset(("edge",)),
         frozenset(("edge", "face")),
         frozenset(("face",)),
@@ -167,47 +170,96 @@ class _StrictAuditState:
         self._edge_bounds: dict[int, AABB] = {}
         self._face_bounds: dict[int, AABB] = {}
         self._face_points: dict[int, np.ndarray] = {}
+        self._face_support_trim_uv: dict[int, tuple[np.ndarray, ...]] = {}
         self._polygon_cache: dict[tuple[int, int], object] = {}
 
-        self.edge_members: dict[int, set[int]] = defaultdict(set)
-        for use in model.member_edge_uses.values():
-            if use.member_id in model.members and use.edge_id in model.edges:
-                self.edge_members[use.edge_id].add(use.member_id)
-        self.vertex_members: dict[int, set[int]] = defaultdict(set)
-        for edge_id, members in self.edge_members.items():
-            edge = model.edges.get(edge_id)
-            if edge is None:
-                continue
-            self.vertex_members[edge.start].update(members)
-            self.vertex_members[edge.end].update(members)
+        # Ownership/incidence is resolved lazily from the model's maintained
+        # reverse indices.  A changed-region audit therefore does not begin by
+        # traversing every structural record in an otherwise unrelated model.
+        self.edge_members: dict[int, set[int]] = {}
+        self.vertex_members: dict[int, set[int]] = {}
+        self.face_parts: dict[int, set[int]] = {}
+        self.face_sheets: dict[int, set[int]] = {}
+        self.edge_parts: dict[int, set[int]] = {}
+        self.vertex_parts: dict[int, set[int]] = {}
 
-        self.face_parts: dict[int, set[int]] = defaultdict(set)
-        self.face_sheets: dict[int, set[int]] = defaultdict(set)
-        for use in model.face_uses.values():
-            sheet = model.sheets.get(use.sheet_id)
-            if sheet is None:
-                continue
-            self.face_parts[use.face_id].add(sheet.part_id)
-            self.face_sheets[use.face_id].add(sheet.id)
-        self.edge_parts: dict[int, set[int]] = defaultdict(set)
-        for edge_id, members in self.edge_members.items():
-            self.edge_parts[edge_id].update(
-                model.members[member_id].part_id
-                for member_id in members
-                if member_id in model.members
-            )
-        for coedge in model.coedges.values():
-            face_use = model.face_uses.get(coedge.face_use_id)
-            if face_use is not None:
-                self.edge_parts[coedge.edge_id].update(
-                    self.face_parts.get(face_use.face_id, ())
+    def members_for_edge(self, edge_id: int) -> set[int]:
+        identifier = int(edge_id)
+        if identifier not in self.edge_members:
+            use_ids = getattr(self.model, "_edge_member_uses", {}).get(identifier, ())
+            self.edge_members[identifier] = {
+                self.model.member_edge_uses[use_id].member_id
+                for use_id in use_ids
+                if use_id in self.model.member_edge_uses
+                and self.model.member_edge_uses[use_id].member_id in self.model.members
+            }
+        return self.edge_members[identifier]
+
+    def members_for_vertex(self, vertex_id: int) -> set[int]:
+        identifier = int(vertex_id)
+        if identifier not in self.vertex_members:
+            getter = getattr(self.model, "topological_edges_using_vertex", None)
+            if callable(getter):
+                edge_ids = getter(identifier)
+            else:
+                edge_ids = (
+                    edge_id
+                    for edge_id in self.model.edges_using_vertex(identifier)
+                    if self.model.edges[edge_id].start == identifier
+                    or self.model.edges[edge_id].end == identifier
                 )
-        self.vertex_parts: dict[int, set[int]] = defaultdict(set)
-        for edge_id, parts in self.edge_parts.items():
-            edge = model.edges.get(edge_id)
-            if edge is not None:
-                self.vertex_parts[edge.start].update(parts)
-                self.vertex_parts[edge.end].update(parts)
+            self.vertex_members[identifier] = {
+                member_id
+                for edge_id in edge_ids
+                for member_id in self.members_for_edge(edge_id)
+            }
+        return self.vertex_members[identifier]
+
+    def sheets_for_face(self, face_id: int) -> set[int]:
+        identifier = int(face_id)
+        if identifier not in self.face_sheets:
+            use_ids = getattr(self.model, "_face_structural_uses", {}).get(identifier, ())
+            self.face_sheets[identifier] = {
+                self.model.face_uses[use_id].sheet_id
+                for use_id in use_ids
+                if use_id in self.model.face_uses
+                and self.model.face_uses[use_id].sheet_id in self.model.sheets
+            }
+        return self.face_sheets[identifier]
+
+    def parts_for_face(self, face_id: int) -> set[int]:
+        identifier = int(face_id)
+        if identifier not in self.face_parts:
+            self.face_parts[identifier] = {
+                self.model.sheets[sheet_id].part_id
+                for sheet_id in self.sheets_for_face(identifier)
+            }
+        return self.face_parts[identifier]
+
+    def parts_for_edge(self, edge_id: int) -> set[int]:
+        identifier = int(edge_id)
+        if identifier not in self.edge_parts:
+            parts = {
+                self.model.members[member_id].part_id
+                for member_id in self.members_for_edge(identifier)
+            }
+            parts.update(
+                part_id
+                for face_id in self.model.faces_using_edge(identifier)
+                for part_id in self.parts_for_face(face_id)
+            )
+            self.edge_parts[identifier] = parts
+        return self.edge_parts[identifier]
+
+    def parts_for_vertex(self, vertex_id: int) -> set[int]:
+        identifier = int(vertex_id)
+        if identifier not in self.vertex_parts:
+            self.vertex_parts[identifier] = {
+                part_id
+                for edge_id in self.model.edges_using_vertex(identifier)
+                for part_id in self.parts_for_edge(edge_id)
+            }
+        return self.vertex_parts[identifier]
 
     def _bounds_length_tolerance(self, bounds: AABB) -> float:
         """Return tolerance scaled only by the bounded participating entity."""
@@ -241,26 +293,82 @@ class _StrictAuditState:
         witnesses: Iterable[AuditWitness] = (),
         classification: object | None = None,
         details: Mapping[str, object] | None = None,
+        **evidence: object,
     ) -> None:
+        made_keys = tuple(keys)
+        structural_context: set[SpatialKey] = set()
+        for key in made_keys:
+            structural_context.update(("part", item) for item in self.parts_for(key))
+            if key[0] == "face":
+                structural_context.update(
+                    ("sheet", item) for item in self.sheets_for_face(key[1])
+                )
+            if key[0] == "edge":
+                structural_context.update(
+                    ("member", item) for item in self.members_for_edge(key[1])
+                )
+            if key[0] == "vertex":
+                structural_context.update(
+                    ("member", item) for item in self.members_for_vertex(key[1])
+                )
+            if key[0] == "sheet":
+                sheet = self.model.sheets.get(key[1])
+                if sheet is not None:
+                    structural_context.add(("part", sheet.part_id))
+            if key[0] == "attachment":
+                attachment = self.model.attachments.get(key[1])
+                if attachment is not None:
+                    if attachment.member_id is not None:
+                        structural_context.add(("member", attachment.member_id))
+                        member = self.model.members.get(attachment.member_id)
+                        if member is not None:
+                            structural_context.add(("part", member.part_id))
+                    if attachment.part_id is not None:
+                        structural_context.add(("part", attachment.part_id))
+                    if attachment.sheet_id is not None:
+                        structural_context.add(("sheet", attachment.sheet_id))
+            if key[0] == "junction":
+                junction = self.model.junctions.get(key[1])
+                if junction is not None:
+                    structural_context.update(
+                        ("member", member_id) for member_id in junction.member_ids
+                    )
+                    structural_context.update(
+                        ("sheet", sheet_id) for sheet_id in junction.sheet_ids
+                    )
         self.collector.issue(
             code,
             severity,
             message,
-            entities=tuple(self.entity(key) for key in keys),
+            entities=tuple(self.entity(key) for key in made_keys),
+            context=tuple(self.entity(key) for key in sorted(structural_context)),
             witnesses=tuple(witnesses),
             classification=classification,
             details=details or {},
+            **evidence,
         )
 
     def unclassified(
-        self, first: SpatialKey, second: SpatialKey, reason: str
+        self,
+        first: SpatialKey,
+        second: SpatialKey,
+        reason: str,
+        kind: IntersectionKind = IntersectionKind.UNCLASSIFIED,
     ) -> _PairClassification:
+        code = {
+            IntersectionKind.UNSUPPORTED: AuditCode.UNSUPPORTED_CANDIDATE,
+            IntersectionKind.CAPABILITY_MISSING: AuditCode.CAPABILITY_MISSING,
+        }.get(kind, AuditCode.UNCLASSIFIED_CANDIDATE)
         self.issue(
-            AuditCode.UNCLASSIFIED_CANDIDATE,
+            code,
             AuditSeverity.BLOCKER,
             "a broad-phase candidate has no verified narrow-phase classification",
             keys=(first, second),
-            classification=IntersectionKind.UNCLASSIFIED,
+            classification=kind,
+            classification_confidence=0.0,
+            evidence_quality="unverified",
+            recommended_action="add a verified qualifier or remove the unsupported relation",
+            blocks_strict_handoff=True,
             details={"reason": reason},
         )
         return _PairClassification(False)
@@ -268,11 +376,11 @@ class _StrictAuditState:
     def parts_for(self, key: SpatialKey) -> frozenset[int]:
         kind, identifier = key
         if kind == "vertex":
-            return frozenset(self.vertex_parts.get(identifier, ()))
+            return frozenset(self.parts_for_vertex(identifier))
         if kind == "edge":
-            return frozenset(self.edge_parts.get(identifier, ()))
+            return frozenset(self.parts_for_edge(identifier))
         if kind == "face":
-            return frozenset(self.face_parts.get(identifier, ()))
+            return frozenset(self.parts_for_face(identifier))
         if kind == "member" and identifier in self.model.members:
             return frozenset((self.model.members[identifier].part_id,))
         return frozenset()
@@ -314,7 +422,10 @@ class _StrictAuditState:
                 made.append(float(parameter))
             if not made:
                 return ()
-            if kind is IntersectionKind.OVERLAP_CURVE:
+            if kind in (
+                IntersectionKind.OVERLAP_CURVE,
+                IntersectionKind.CONTAINED,
+            ):
                 local_ranges = ((min(made), max(made)),)
             else:
                 # Point components remain distinct.  Collapsing two circle
@@ -369,6 +480,7 @@ class _StrictAuditState:
         acceptable = {
             IntersectionKind.COINCIDENT: {JunctionKind.OVERLAP, JunctionKind.MULTI_WAY},
             IntersectionKind.OVERLAP_CURVE: {JunctionKind.OVERLAP, JunctionKind.MULTI_WAY},
+            IntersectionKind.CONTAINED: {JunctionKind.OVERLAP, JunctionKind.MULTI_WAY},
             IntersectionKind.CROSS: {JunctionKind.CROSSING, JunctionKind.MULTI_WAY},
             IntersectionKind.TOUCH_POINT: {
                 JunctionKind.ENDPOINT,
@@ -416,10 +528,34 @@ class _StrictAuditState:
     ) -> tuple[str, int | None] | None:
         if self.separate_part_intent(first, second):
             return "separate_parts", None
+        if {first[0], second[0]} in ({"vertex", "edge"}, {"vertex", "face"}):
+            vertex_key = first if first[0] == "vertex" else second
+            target_key = second if first[0] == "vertex" else first
+            getter_name = (
+                "attachments_for_face"
+                if target_key[0] == "face"
+                else "attachments_for_edge"
+            )
+            getter = getattr(self.model, getter_name, None)
+            attachment_ids = (
+                getter(target_key[1])
+                if callable(getter)
+                else getattr(self.model, "_target_attachments", {}).get(
+                    target_key, ()
+                )
+            )
+            for attachment_id in attachment_ids:
+                attachment = self.model.attachments.get(attachment_id)
+                if (
+                    attachment is not None
+                    and attachment.source_key == vertex_key
+                    and attachment.target_key == target_key
+                ):
+                    return "declared_attachment", attachment_id
         points = tuple(_point(witness) for witness in witnesses)
         if first[0] == second[0] == "edge":
-            for first_member in sorted(self.edge_members.get(first[1], ())):
-                for second_member in sorted(self.edge_members.get(second[1], ())):
+            for first_member in sorted(self.members_for_edge(first[1])):
+                for second_member in sorted(self.members_for_edge(second[1])):
                     if first_member == second_member:
                         continue
                     junction = self.declared_junction(
@@ -436,8 +572,8 @@ class _StrictAuditState:
                     if junction is not None:
                         return "declared_junction", junction
         if first[0] == second[0] == "vertex":
-            for first_member in sorted(self.vertex_members.get(first[1], ())):
-                for second_member in sorted(self.vertex_members.get(second[1], ())):
+            for first_member in sorted(self.members_for_vertex(first[1])):
+                for second_member in sorted(self.members_for_vertex(second[1])):
                     if first_member == second_member:
                         continue
                     junction = self.declared_junction(
@@ -456,8 +592,8 @@ class _StrictAuditState:
         if {first[0], second[0]} == {"vertex", "edge"}:
             vertex_key = first if first[0] == "vertex" else second
             edge_key = second if first[0] == "vertex" else first
-            for first_member in sorted(self.vertex_members.get(vertex_key[1], ())):
-                for second_member in sorted(self.edge_members.get(edge_key[1], ())):
+            for first_member in sorted(self.members_for_vertex(vertex_key[1])):
+                for second_member in sorted(self.members_for_edge(edge_key[1])):
                     if first_member == second_member:
                         continue
                     junction = self.declared_junction(
@@ -567,6 +703,97 @@ class _StrictAuditState:
             raise GeometryError(f"face {face_id} has invalid boundary samples")
         self._face_points[face_id] = result
         return result
+
+    def face_support_trim_loops_uv(self, face_id: int) -> tuple[np.ndarray, ...]:
+        """Return trim loops in the authoritative support's coordinates.
+
+        ``GeometryModel.face_trim_loops_uv`` intentionally follows an optional
+        display/meshing parameterization when one is present.  Qualification
+        must instead invert the persistent support surface directly, so an
+        unrelated parameterization can never move a physical relationship.
+        """
+
+        cached = self._face_support_trim_uv.get(face_id)
+        if cached is not None:
+            return cached
+        face = self.model.faces[face_id]
+        if face.support_surface is None:
+            raise GeometryError(
+                f"face {face_id} has no authoritative support surface"
+            )
+        loops: list[np.ndarray] = []
+        for loop in (face.loop,) + tuple(face.holes):
+            points: list[tuple[float, float]] = []
+            for oriented in loop:
+                edge = self.model.edges[oriented.edge]
+                count = 2 if isinstance(edge.curve, Straight) else 33
+                samples = self.model.sample_edge(
+                    oriented.edge, np.linspace(0.0, 1.0, count)
+                )
+                if not oriented.forward:
+                    samples = samples[::-1]
+                points.extend(
+                    self.model.face_support_local_uv(face_id, point)
+                    for point in samples[:-1]
+                )
+            polygon = np.asarray(points, dtype=float)
+            if (
+                polygon.ndim != 2
+                or polygon.shape[1:] != (2,)
+                or not np.all(np.isfinite(polygon))
+            ):
+                raise GeometryError(
+                    f"face {face_id} has an invalid support-space trim"
+                )
+            loops.append(polygon)
+        result = tuple(loops)
+        self._face_support_trim_uv[face_id] = result
+        return result
+
+    def face_support_contains_uv(
+        self, face_id: int, uv: Sequence[float]
+    ) -> bool:
+        """Whether a support-space coordinate lies in the physical trim."""
+
+        candidate = np.asarray(uv, dtype=float)
+        if candidate.shape != (2,) or not np.all(np.isfinite(candidate)):
+            raise GeometryError("support coordinates must contain finite u and v")
+        polygons = self.face_support_trim_loops_uv(face_id)
+        if not polygons or not self.model._point_in_polygon(  # noqa: SLF001
+            candidate, polygons[0]
+        ):
+            return False
+        return not any(
+            self.model._point_in_polygon(  # noqa: SLF001
+                candidate, hole, include_boundary=False
+            )
+            for hole in polygons[1:]
+        )
+
+    def project_to_face_support(
+        self, face_id: int, point: Sequence[float]
+    ) -> tuple[np.ndarray, tuple[float, float], float]:
+        """Project onto a face's authoritative support and physical trim."""
+
+        target = _point(point)
+        uv = self.model.face_support_local_uv(face_id, target)
+        projected = self.model.face_support_point(face_id, *uv)
+        if not self.face_support_contains_uv(face_id, uv):
+            face = self.model.faces[face_id]
+            candidates = tuple(
+                self.model.closest_edge_point(oriented.edge, target)
+                for loop in (face.loop,) + tuple(face.holes)
+                for oriented in loop
+            )
+            if not candidates:
+                raise GeometryError(f"face {face_id} has no trim boundary")
+            boundary, _parameter, _distance = min(
+                candidates, key=lambda item: item[2]
+            )
+            uv = self.model.face_support_local_uv(face_id, boundary)
+            projected = self.model.face_support_point(face_id, *uv)
+        distance = float(np.linalg.norm(projected - target))
+        return projected, (float(uv[0]), float(uv[1])), distance
 
     def face_bounds(self, face_id: int) -> AABB:
         cached = self._face_bounds.get(face_id)
@@ -695,6 +922,7 @@ class _StrictAuditState:
             junctions=self.model.junctions,
             edge_ids=tuple(self.model.edges),
             face_ids=tuple(self.model.faces),
+            vertex_ids=tuple(self.model.vertices),
             edge_vertices={
                 edge.id: (edge.start, edge.end)
                 for edge in self.model.edges.values()
@@ -711,7 +939,42 @@ class _StrictAuditState:
             )
 
         self.audit_non_manifold_edges()
+        self.audit_orphan_control_geometry()
         self.audit_existing_spatial_index()
+
+    def audit_orphan_control_geometry(
+        self, vertex_ids: Iterable[int] | None = None
+    ) -> None:
+        """Report explicitly designated control points without an owner.
+
+        Control-geometry storage is model-owned and intentionally kept out of
+        this audit module.  The small callback-style public protocol avoids an
+        import cycle while allowing older schema models (which expose no such
+        designation) to remain compatible.
+        """
+
+        getter = getattr(self.model, "orphan_control_vertices", None)
+        if not callable(getter):
+            return
+        selected = None if vertex_ids is None else frozenset(int(item) for item in vertex_ids)
+        construction = getattr(self.model, "construction_vertices", {})
+        for vertex_id in sorted(int(item) for item in getter()):
+            if selected is not None and vertex_id not in selected:
+                continue
+            # Part-owned construction/reference points are legitimate
+            # structural geometry even when no curve consumes them.  Only an
+            # unowned designation is an orphan curve-control finding.
+            if construction.get(vertex_id) is not None:
+                continue
+            self.issue(
+                AuditCode.ORPHAN_CONTROL_GEOMETRY,
+                AuditSeverity.ERROR,
+                "a curve-control vertex has no owning curve dependency",
+                keys=(("vertex", vertex_id),),
+                classification="orphan_control_vertex",
+                recommended_action="remove the orphan control point or assign it to a curve",
+                blocks_strict_handoff=True,
+            )
 
     def audit_existing_spatial_index(self) -> None:
         index = getattr(self.model, "_spatial_index", None)
@@ -746,19 +1009,26 @@ class _StrictAuditState:
                 details={"exception_type": type(error).__qualname__},
             )
 
-    def audit_non_manifold_edges(self) -> None:
+    def audit_non_manifold_edges(
+        self, edge_ids: Iterable[int] | None = None
+    ) -> None:
         uses: dict[int, set[int]] = defaultdict(set)
-        for face_id, face in self.model.faces.items():
-            for loop in (face.loop,) + tuple(face.holes):
-                for oriented in loop:
-                    uses[oriented.edge].add(face_id)
+        if edge_ids is None:
+            for face_id, face in self.model.faces.items():
+                for loop in (face.loop,) + tuple(face.holes):
+                    for oriented in loop:
+                        uses[oriented.edge].add(face_id)
+        else:
+            for edge_id in sorted(set(int(item) for item in edge_ids)):
+                if edge_id in self.model.edges:
+                    uses[edge_id].update(self.model.faces_using_edge(edge_id))
         for edge_id, face_ids in sorted(uses.items()):
             if len(face_ids) <= 2:
                 continue
             owning_sheets = {
                 sheet_id
                 for face_id in face_ids
-                for sheet_id in self.face_sheets.get(face_id, ())
+                for sheet_id in self.sheets_for_face(face_id)
             }
             declared = bool(owning_sheets) and all(
                 edge_id in self.model.sheets[sheet_id].declared_non_manifold_edges
@@ -835,6 +1105,180 @@ class _StrictAuditState:
                 verified=classification.verified,
             )
 
+    def changed_geometry_closure(self, change_set: ChangeSet) -> set[SpatialKey]:
+        """Resolve a committed ChangeSet to active geometry without global scans."""
+
+        result: set[SpatialKey] = set()
+
+        def add_vertex(vertex_id: int, *, dependants: bool = True) -> None:
+            if vertex_id not in self.model.vertices:
+                return
+            result.add(("vertex", vertex_id))
+            if dependants:
+                for edge_id in self.model.edges_using_vertex(vertex_id):
+                    add_edge(edge_id)
+
+        def add_edge(edge_id: int, *, neighbouring_faces: bool = True) -> None:
+            edge = self.model.edges.get(edge_id)
+            if edge is None:
+                return
+            result.add(("edge", edge_id))
+            add_vertex(edge.start, dependants=False)
+            add_vertex(edge.end, dependants=False)
+            if isinstance(edge.curve, Arc):
+                add_vertex(edge.curve.via_vertex, dependants=False)
+            elif isinstance(edge.curve, Spline):
+                for vertex_id in edge.curve.control_vertices:
+                    add_vertex(vertex_id, dependants=False)
+            if neighbouring_faces:
+                for face_id in self.model.faces_using_edge(edge_id):
+                    result.add(("face", face_id))
+
+        def add_face(face_id: int) -> None:
+            face = self.model.faces.get(face_id)
+            if face is None:
+                return
+            result.add(("face", face_id))
+            for loop in (face.loop,) + tuple(face.holes):
+                for oriented in loop:
+                    add_edge(oriented.edge, neighbouring_faces=False)
+
+        def add_member(member_id: int) -> None:
+            member = self.model.members.get(member_id)
+            if member is None:
+                return
+            for use_id in member.edge_use_ids:
+                use = self.model.member_edge_uses.get(use_id)
+                if use is not None:
+                    add_edge(use.edge_id)
+
+        def add_sheet(sheet_id: int) -> None:
+            sheet = self.model.sheets.get(sheet_id)
+            if sheet is None:
+                return
+            for use_id in sheet.face_use_ids:
+                use = self.model.face_uses.get(use_id)
+                if use is not None:
+                    add_face(use.face_id)
+
+        active_geometry = {
+            *change_set.changed,
+            *change_set.invalidated_caches,
+            *change_set.spatial_updates,
+        }
+        for kind, identifier in sorted(active_geometry):
+            if kind == "vertex":
+                add_vertex(identifier)
+            elif kind == "edge":
+                add_edge(identifier)
+            elif kind == "face":
+                add_face(identifier)
+
+        for kind, identifier in sorted(change_set.member_changes):
+            if kind == "member":
+                add_member(identifier)
+            elif kind == "member_edge_use":
+                use = self.model.member_edge_uses.get(identifier)
+                if use is not None:
+                    add_edge(use.edge_id)
+        for _kind, identifier in sorted(change_set.attachment_changes):
+            attachment = self.model.attachments.get(identifier)
+            if attachment is None:
+                continue
+            if attachment.member_id is not None:
+                add_member(attachment.member_id)
+            if attachment.target_kind is AttachmentTargetKind.FACE:
+                add_face(attachment.target_id)
+            else:
+                add_edge(attachment.target_id)
+        for kind, identifier in sorted(change_set.ownership_changes):
+            if kind == "part":
+                part = self.model.parts.get(identifier)
+                if part is not None:
+                    for sheet_id in part.sheet_ids:
+                        add_sheet(sheet_id)
+                    for member_id in part.member_ids:
+                        add_member(member_id)
+            elif kind == "sheet":
+                add_sheet(identifier)
+            elif kind == "face_use":
+                use = self.model.face_uses.get(identifier)
+                if use is not None:
+                    add_face(use.face_id)
+            elif kind == "coedge":
+                coedge = self.model.coedges.get(identifier)
+                if coedge is not None:
+                    add_edge(coedge.edge_id)
+            elif kind == "junction":
+                junction = self.model.junctions.get(identifier)
+                if junction is not None:
+                    for member_id in junction.member_ids:
+                        add_member(member_id)
+                    for sheet_id in junction.sheet_ids:
+                        add_sheet(sheet_id)
+        return result
+
+    def audit_changed_spatial_pairs(self, change_set: ChangeSet) -> set[SpatialKey]:
+        """Qualify current pairs incident to changed bounds through the index."""
+
+        tree = self.model._spatial()  # noqa: SLF001 - maintained kernel index
+        seeds = self.changed_geometry_closure(change_set)
+        regions: list[AABB] = []
+        for change in change_set.affected_aabbs:
+            for raw in (change.before, change.after):
+                if raw is None:
+                    continue
+                bounds = AABB(tuple(raw[:3]), tuple(raw[3:]))
+                regions.append(bounds.expanded(self._bounds_length_tolerance(bounds)))
+        totals = QueryDiagnostics()
+        if regions:
+            nearby = tree.query_regions(regions, kinds=_GEOMETRY_KINDS)
+            seeds.update(nearby.keys)
+            totals = totals.combined(nearby.diagnostics)
+
+        active = tuple(sorted(key for key in seeds if key in tree))
+        pairs: set[tuple[SpatialKey, SpatialKey]] = set()
+        for seed in active:
+            bounds = self.bounds(seed)
+            nearby = tree.query(
+                bounds.expanded(self._bounds_length_tolerance(bounds)),
+                kinds=_GEOMETRY_KINDS,
+            )
+            totals = totals.combined(nearby.diagnostics)
+            for other in nearby.keys:
+                if other == seed:
+                    continue
+                pair = (seed, other) if seed < other else (other, seed)
+                if self.pair_filter(*pair):
+                    pairs.add(pair)
+
+        ordered = tuple(sorted(pairs))
+        self.collector.record_broad_phase(
+            QueryDiagnostics(
+                region_count=totals.region_count,
+                node_visits=totals.node_visits,
+                branch_visits=totals.branch_visits,
+                leaf_tests=totals.leaf_tests,
+                raw_candidate_hits=totals.raw_candidate_hits,
+                candidate_count=len(ordered),
+            )
+        )
+        for first, second in ordered:
+            self.collector.record_narrow_phase()
+            try:
+                classification = self.classify_pair(first, second)
+            except Exception as error:
+                classification = self.unclassified(
+                    first,
+                    second,
+                    f"{type(error).__qualname__}:narrow_phase_failed",
+                )
+            self.collector.record_classification(
+                classified=classification.classified,
+                verified=classification.verified,
+            )
+        return set(active)
+
     def classify_pair(
         self, first: SpatialKey, second: SpatialKey
     ) -> _PairClassification:
@@ -845,6 +1289,10 @@ class _StrictAuditState:
             vertex = first if first[0] == "vertex" else second
             edge = second if first[0] == "vertex" else first
             return self.classify_vertex_edge(vertex, edge)
+        if set(kinds) == {"vertex", "face"}:
+            vertex = first if first[0] == "vertex" else second
+            face = second if first[0] == "vertex" else first
+            return self.classify_vertex_face(vertex, face)
         if kinds == ("edge", "edge"):
             return self.classify_edge_edge(first, second)
         if set(kinds) == {"edge", "face"}:
@@ -856,9 +1304,31 @@ class _StrictAuditState:
         return self.unclassified(first, second, "unsupported_pair_kind")
 
     # ----------------------------------------------------------- vertex pairs
+    def _is_control_only_vertex(self, vertex_id: int) -> bool:
+        role_getter = getattr(self.model, "vertex_role", None)
+        if callable(role_getter):
+            role = role_getter(vertex_id)
+            value = getattr(role, "value", role)
+            if str(value) in {"curve_control", "construction"}:
+                return True
+            if str(value) in {"topological", "mixed"}:
+                return False
+        users = self.model.edges_using_vertex(vertex_id)
+        if not users:
+            return False
+        return not any(
+            self.model.edges[edge_id].start == vertex_id
+            or self.model.edges[edge_id].end == vertex_id
+            for edge_id in users
+        )
+
     def classify_vertex_vertex(
         self, first: SpatialKey, second: SpatialKey
     ) -> _PairClassification:
+        if self._is_control_only_vertex(first[1]) or self._is_control_only_vertex(
+            second[1]
+        ):
+            return _PairClassification(True)
         first_point = self.model.vertex_position(first[1])
         second_point = self.model.vertex_position(second[1])
         extent = feature_extent((first_point, second_point))
@@ -877,6 +1347,8 @@ class _StrictAuditState:
                     keys=(first, second),
                     witnesses=(_as_witness("coincident", 0.5 * (first_point + second_point)),),
                     classification=IntersectionKind.TOUCH_POINT,
+                    measured_gap=distance,
+                    tolerance_used=tolerance,
                     details={"intent": reason, "junction_id": junction_id},
                 )
             else:
@@ -887,6 +1359,9 @@ class _StrictAuditState:
                     keys=(first, second),
                     witnesses=(_as_witness("coincident", 0.5 * (first_point + second_point)),),
                     classification=IntersectionKind.TOUCH_POINT,
+                    measured_gap=distance,
+                    tolerance_used=tolerance,
+                    recommended_action="reuse one vertex or declare separate-part intent",
                     details={"distance": distance},
                 )
         return _PairClassification(True)
@@ -895,6 +1370,8 @@ class _StrictAuditState:
         self, vertex_key: SpatialKey, edge_key: SpatialKey
     ) -> _PairClassification:
         vertex_id, edge_id = vertex_key[1], edge_key[1]
+        if self._is_control_only_vertex(vertex_id):
+            return _PairClassification(True)
         edge = self.model.edges[edge_id]
         dependent_vertices = {edge.start, edge.end}
         if isinstance(edge.curve, Arc):
@@ -935,8 +1412,71 @@ class _StrictAuditState:
                     keys=(vertex_key, edge_key),
                     witnesses=(_as_witness("t_junction", closest),),
                     classification=IntersectionKind.TOUCH_POINT,
+                    measured_gap=distance,
+                    tolerance_used=tolerance,
+                    recommended_action="split the edge at this vertex or declare connection intent",
                     details={"edge_parameter": parameter, "distance": distance},
                 )
+        return _PairClassification(True)
+
+    def classify_vertex_face(
+        self, vertex_key: SpatialKey, face_key: SpatialKey
+    ) -> _PairClassification:
+        vertex_id, face_id = vertex_key[1], face_key[1]
+        if self._is_control_only_vertex(vertex_id):
+            return _PairClassification(True)
+        face = self.model.faces[face_id]
+        boundary_vertices = {
+            self.model.oriented_start_vertex(oriented)
+            for loop in (face.loop,) + tuple(face.holes)
+            for oriented in loop
+        }
+        if vertex_id in boundary_vertices:
+            return _PairClassification(True)
+        point = self.model.vertex_position(vertex_id)
+        projected, uv, distance = self.project_to_face_support(face_id, point)
+        extent = feature_extent(self.face_points(face_id))
+        tolerance = self.tolerance.effective_surface_residual(extent)
+        if distance > tolerance or not self.face_support_contains_uv(face_id, uv):
+            return _PairClassification(True)
+        boundary_distance = min(
+            (
+                self.model.closest_edge_point(oriented.edge, point)[2]
+                for loop in (face.loop,) + tuple(face.holes)
+                for oriented in loop
+            ),
+            default=float("inf"),
+        )
+        location = "boundary" if boundary_distance <= tolerance else "interior"
+        intent = self.ownership_intent(
+            vertex_key, face_key, IntersectionKind.TOUCH_POINT
+        )
+        if intent is not None:
+            reason, junction_id = intent
+            self.issue(
+                AuditCode.INTENTIONAL_COINCIDENCE,
+                AuditSeverity.INFO,
+                "a vertex-on-face incidence is separated by ownership intent",
+                keys=(vertex_key, face_key),
+                witnesses=(_as_witness("vertex_face", projected),),
+                classification=f"vertex_on_face_{location}",
+                measured_gap=distance,
+                tolerance_used=tolerance,
+                details={"intent": reason, "junction_id": junction_id},
+            )
+        else:
+            self.issue(
+                AuditCode.VERTEX_FACE_INTERIOR,
+                AuditSeverity.ERROR,
+                "a vertex lies on a face without shared topology",
+                keys=(vertex_key, face_key),
+                witnesses=(_as_witness("vertex_face", projected),),
+                classification=f"vertex_on_face_{location}",
+                measured_gap=distance,
+                tolerance_used=tolerance,
+                recommended_action="imprint the vertex into the face or declare separate-part intent",
+                details={"location": location, "uv": tuple(float(item) for item in uv)},
+            )
         return _PairClassification(True)
 
     # ------------------------------------------------------------- edge pairs
@@ -1402,7 +1942,11 @@ class _StrictAuditState:
             second_end,
             policy=self.tolerance,
         )
-        if result.kind is IntersectionKind.UNCLASSIFIED:
+        if result.kind in (
+            IntersectionKind.UNCLASSIFIED,
+            IntersectionKind.UNSUPPORTED,
+            IntersectionKind.CAPABILITY_MISSING,
+        ):
             reason = result.diagnostics[0] if result.diagnostics else "segment_unclassified"
             return self.unclassified(first_key, second_key, reason)
         if result.kind is IntersectionKind.DISJOINT:
@@ -1423,6 +1967,22 @@ class _StrictAuditState:
 
         intent = self.ownership_intent(
             first_key, second_key, result.kind, witnesses=result.witnesses
+        )
+        overlap_length = (
+            float(
+                np.linalg.norm(
+                    np.asarray(result.witnesses[-1])
+                    - np.asarray(result.witnesses[0])
+                )
+            )
+            if result.kind
+            in (
+                IntersectionKind.COINCIDENT,
+                IntersectionKind.OVERLAP_CURVE,
+                IntersectionKind.CONTAINED,
+            )
+            and len(result.witnesses) >= 2
+            else None
         )
         if result.kind is IntersectionKind.COINCIDENT:
             tolerance = self.tolerance.effective_length(
@@ -1445,6 +2005,8 @@ class _StrictAuditState:
                     keys=(first_key, second_key),
                     witnesses=witnesses,
                     classification=result.kind,
+                    overlap_length=overlap_length,
+                    tolerance_used=result.tolerance_used,
                 )
             else:
                 reason, junction_id = intent
@@ -1455,9 +2017,14 @@ class _StrictAuditState:
                     keys=(first_key, second_key),
                     witnesses=witnesses,
                     classification=result.kind,
+                    overlap_length=overlap_length,
+                    tolerance_used=result.tolerance_used,
                     details={"intent": reason, "junction_id": junction_id},
                 )
-        elif result.kind is IntersectionKind.OVERLAP_CURVE:
+        elif result.kind in (
+            IntersectionKind.OVERLAP_CURVE,
+            IntersectionKind.CONTAINED,
+        ):
             if intent is None:
                 self.issue(
                     AuditCode.EDGE_COLLINEAR_OVERLAP,
@@ -1466,6 +2033,9 @@ class _StrictAuditState:
                     keys=(first_key, second_key),
                     witnesses=witnesses,
                     classification=result.kind,
+                    overlap_length=overlap_length,
+                    tolerance_used=result.tolerance_used,
+                    recommended_action="split/imprint or declare overlap intent",
                 )
             else:
                 reason, junction_id = intent
@@ -1476,6 +2046,8 @@ class _StrictAuditState:
                     keys=(first_key, second_key),
                     witnesses=witnesses,
                     classification=result.kind,
+                    overlap_length=overlap_length,
+                    tolerance_used=result.tolerance_used,
                     details={"intent": reason, "junction_id": junction_id},
                 )
         elif result.kind in (IntersectionKind.CROSS, IntersectionKind.TOUCH_POINT):
@@ -1487,6 +2059,8 @@ class _StrictAuditState:
                     keys=(first_key, second_key),
                     witnesses=witnesses,
                     classification=result.kind,
+                    tolerance_used=result.tolerance_used,
+                    recommended_action="split/imprint the edges or declare connection intent",
                 )
             else:
                 reason, junction_id = intent
@@ -1497,6 +2071,7 @@ class _StrictAuditState:
                     keys=(first_key, second_key),
                     witnesses=witnesses,
                     classification=result.kind,
+                    tolerance_used=result.tolerance_used,
                     details={"intent": reason, "junction_id": junction_id},
                 )
 
@@ -1513,14 +2088,15 @@ class _StrictAuditState:
         if kind not in (
             IntersectionKind.COINCIDENT,
             IntersectionKind.OVERLAP_CURVE,
+            IntersectionKind.CONTAINED,
             IntersectionKind.CROSS,
             IntersectionKind.TOUCH_POINT,
         ):
             return
         made_witnesses = tuple(witnesses)
         points = tuple(np.asarray(witness.point) for witness in made_witnesses)
-        for first_member in sorted(self.edge_members.get(first_edge[1], ())):
-            for second_member in sorted(self.edge_members.get(second_edge[1], ())):
+        for first_member in sorted(self.members_for_edge(first_edge[1])):
+            for second_member in sorted(self.members_for_edge(second_edge[1])):
                 if first_member == second_member:
                     continue
                 first_geometry = self.model.edges[first_edge[1]]
@@ -1550,7 +2126,11 @@ class _StrictAuditState:
                     continue
                 code = (
                     AuditCode.MEMBER_MEMBER_OVERLAP
-                    if kind in (IntersectionKind.COINCIDENT, IntersectionKind.OVERLAP_CURVE)
+                    if kind in (
+                        IntersectionKind.COINCIDENT,
+                        IntersectionKind.OVERLAP_CURVE,
+                        IntersectionKind.CONTAINED,
+                    )
                     else AuditCode.MEMBER_MEMBER_CROSSING
                 )
                 self.issue(
@@ -1577,7 +2157,7 @@ class _StrictAuditState:
     ) -> tuple[int, object] | None:
         boundary = self._face_boundary_edges(face_id)
         for identifier, attachment in sorted(self.model.attachments.items()):
-            if attachment.member_id != member_id:
+            if attachment.member_id is None or attachment.member_id != member_id:
                 continue
             if (
                 attachment.target_kind is AttachmentTargetKind.FACE
@@ -1858,7 +2438,7 @@ class _StrictAuditState:
     ) -> _PairClassification:
         edge_id, face_id = edge_key[1], face_key[1]
         edge = self.model.edges[edge_id]
-        members = sorted(self.edge_members.get(edge_id, ()))
+        members = sorted(self.members_for_edge(edge_id))
         edge_length = self.model.edge_length(edge_id)
         face_extent = feature_extent(self.face_points(face_id))
         local_extent = max(edge_length, face_extent)
@@ -1924,7 +2504,11 @@ class _StrictAuditState:
                     feature_extent(self.face_points(face_id)),
                 ),
             )
-            if result.kind is IntersectionKind.UNCLASSIFIED:
+            if result.kind in (
+                IntersectionKind.UNCLASSIFIED,
+                IntersectionKind.UNSUPPORTED,
+                IntersectionKind.CAPABILITY_MISSING,
+            ):
                 return self.unclassified(
                     edge_key,
                     face_key,
@@ -1963,7 +2547,10 @@ class _StrictAuditState:
                 ).covers(Point(*uv)):
                     relationship = "crossing"
                     witnesses = (_as_witness("edge_face_crossing", world),)
-            elif result.kind is IntersectionKind.OVERLAP_CURVE:
+            elif result.kind in (
+                IntersectionKind.OVERLAP_CURVE,
+                IntersectionKind.CONTAINED,
+            ):
                 try:
                     from shapely.geometry import LineString
                 except ImportError as error:  # pragma: no cover
@@ -2323,7 +2910,11 @@ class _StrictAuditState:
                 feature_extent(self.face_points(second_face.id)),
             ),
         )
-        if result.kind is IntersectionKind.UNCLASSIFIED:
+        if result.kind in (
+            IntersectionKind.UNCLASSIFIED,
+            IntersectionKind.UNSUPPORTED,
+            IntersectionKind.CAPABILITY_MISSING,
+        ):
             return self.unclassified(
                 first_key,
                 second_key,
@@ -2384,6 +2975,8 @@ class _StrictAuditState:
                     "coplanar face overlap is retained across separate parts",
                     keys=(first_key, second_key),
                     classification=relation,
+                    overlap_area=area,
+                    tolerance_used=pair_area_tolerance,
                     details={"area": area, "intent": "separate_parts"},
                 )
             else:
@@ -2396,6 +2989,9 @@ class _StrictAuditState:
                     keys=(first_key, second_key),
                     witnesses=(_as_witness("overlap", world),),
                     classification=relation,
+                    overlap_area=area,
+                    tolerance_used=pair_area_tolerance,
+                    recommended_action="imprint/fragment the overlap or declare separate-part intent",
                     details={"area": area},
                 )
             return _PairClassification(True)
@@ -2484,15 +3080,23 @@ class _StrictAuditState:
                 keys=(first_key, second_key),
                 witnesses=witnesses,
                 classification=IntersectionKind.CROSS,
+                overlap_length=sum(upper - lower for lower, upper in overlaps),
+                tolerance_used=pair_length_tolerance,
+                recommended_action="imprint the shared intersection curves",
                 details={"component_count": len(overlaps)},
             )
         return _PairClassification(True)
 
     # ------------------------------------------------------ structural pairs
-    def audit_same_edge_members(self) -> None:
+    def audit_same_edge_members(
+        self, edge_ids: Iterable[int] | None = None
+    ) -> None:
+        selected = None if edge_ids is None else frozenset(int(item) for item in edge_ids)
         candidates = [
             (edge_id, first, second)
-            for edge_id, member_ids in sorted(self.edge_members.items())
+            for edge_id in sorted(self.model.edges if selected is None else selected)
+            if edge_id in self.model.edges
+            for member_ids in (self.members_for_edge(edge_id),)
             for index, first in enumerate(sorted(member_ids))
             for second in sorted(member_ids)[index + 1 :]
         ]
@@ -2573,7 +3177,9 @@ class _StrictAuditState:
         )
         return tuple(sorted(values))
 
-    def audit_attachment_geometry(self) -> None:
+    def audit_attachment_geometry(
+        self, attachment_ids: Iterable[int] | None = None
+    ) -> None:
         """Qualify declared relationships even when their AABBs do not meet.
 
         Spatial member/face classification cannot discover a false attachment
@@ -2584,12 +3190,117 @@ class _StrictAuditState:
         Other curve/surface combinations remain explicitly unclassified.
         """
 
-        attachments = tuple(sorted(self.model.attachments.items()))
+        selected = (
+            None
+            if attachment_ids is None
+            else frozenset(int(item) for item in attachment_ids)
+        )
+        attachments = tuple(
+            (identifier, attachment)
+            for identifier, attachment in sorted(self.model.attachments.items())
+            if selected is None or identifier in selected
+        )
         self.collector.record_candidates(len(attachments))
         for attachment_id, attachment in attachments:
             self.collector.record_narrow_phase()
             attachment_key = ("attachment", attachment_id)
+            if attachment.evidence is AttachmentEvidence.UNVERIFIED:
+                self.issue(
+                    AuditCode.UNVERIFIED_CLASSIFICATION,
+                    AuditSeverity.BLOCKER,
+                    "attachment evidence is explicitly unverified",
+                    keys=(attachment_key, attachment.source_key, attachment.target_key),
+                    classification="unverified_attachment",
+                    classification_confidence=0.0,
+                    evidence_quality="unverified",
+                    tolerance_used=attachment.tolerance_used,
+                    recommended_action=(
+                        "requalify the attachment through a verified intersection plan"
+                    ),
+                    blocks_strict_handoff=True,
+                    details={
+                        "declared_max_residual": attachment.max_residual,
+                        "declared_tolerance": attachment.tolerance_used,
+                    },
+                )
             try:
+                if attachment.source_kind == "vertex":
+                    source_point = self.model.vertex_position(attachment.source_id)
+                    if attachment.target_kind is AttachmentTargetKind.FACE:
+                        u_range, v_range = attachment.target_parameters
+                        uv = (u_range.start, v_range.start)
+                        target_point = self.model.face_support_point(
+                            attachment.target_id, *uv
+                        )
+                        trim_valid = self.face_support_contains_uv(
+                            attachment.target_id, uv
+                        )
+                        extent = feature_extent(
+                            self.face_points(attachment.target_id)
+                        )
+                    elif attachment.target_kind is AttachmentTargetKind.EDGE:
+                        parameter = attachment.target_parameters[0].start
+                        target_point = self.model.sample_edge(
+                            attachment.target_id, np.asarray((parameter,))
+                        )[0]
+                        trim_valid = True
+                        extent = self.model.edge_length(attachment.target_id)
+                    elif attachment.target_kind is AttachmentTargetKind.VERTEX:
+                        target_point = self.model.vertex_position(attachment.target_id)
+                        trim_valid = True
+                        extent = feature_extent((source_point, target_point))
+                    elif attachment.target_kind is AttachmentTargetKind.MEMBER:
+                        parameter = attachment.target_parameters[0].start
+                        target_point = self.member_point(
+                            attachment.target_id, parameter
+                        )
+                        trim_valid = True
+                        extent = feature_extent((source_point, target_point))
+                    else:
+                        self.issue(
+                            AuditCode.UNSUPPORTED_CANDIDATE,
+                            AuditSeverity.BLOCKER,
+                            "vertex-to-sheet attachment has no unambiguous face parameterization",
+                            keys=(
+                                attachment_key,
+                                attachment.source_key,
+                                attachment.target_key,
+                            ),
+                            classification=IntersectionKind.UNSUPPORTED,
+                            classification_confidence=0.0,
+                            evidence_quality="unverified",
+                            recommended_action="record the qualified target face for this attachment",
+                            blocks_strict_handoff=True,
+                        )
+                        self.collector.record_classification(classified=False)
+                        continue
+                    tolerance = self.tolerance.effective_surface_residual(extent)
+                    distance = float(np.linalg.norm(source_point - target_point))
+                    if distance > tolerance or not trim_valid:
+                        self.issue(
+                            AuditCode.ATTACHMENT_INCONSISTENT,
+                            AuditSeverity.ERROR,
+                            "declared vertex attachment does not match target geometry",
+                            keys=(
+                                attachment_key,
+                                attachment.source_key,
+                                attachment.target_key,
+                            ),
+                            witnesses=(
+                                _as_witness("attachment/source", source_point),
+                                _as_witness("attachment/target", target_point),
+                            ),
+                            classification="inconsistent",
+                            measured_gap=distance,
+                            tolerance_used=tolerance,
+                            recommended_action="update or remove the stale attachment",
+                            details={"target_trim_contains_point": trim_valid},
+                        )
+                    self.collector.record_classification(classified=True)
+                    continue
+
+                if attachment.member_id is None:
+                    raise GeometryError("attachment source is not a member or vertex")
                 member = self.model.members[attachment.member_id]
                 uses = tuple(
                     self.model.member_edge_uses[use_id]
@@ -2609,11 +3320,44 @@ class _StrictAuditState:
                     exactly_supported = exactly_supported and (
                         point_valued or isinstance(face.surface, Plane)
                     )
-                else:
+                elif attachment.target_kind is AttachmentTargetKind.EDGE:
                     target_edge = self.model.edges[attachment.target_id]
                     exactly_supported = exactly_supported and (
                         point_valued or isinstance(target_edge.curve, Straight)
                     )
+                elif attachment.target_kind is AttachmentTargetKind.MEMBER:
+                    target_member = self.model.members[attachment.target_id]
+                    target_uses = tuple(
+                        self.model.member_edge_uses[use_id]
+                        for use_id in target_member.edge_use_ids
+                    )
+                    exactly_supported = exactly_supported and (
+                        point_valued
+                        or all(
+                            isinstance(self.model.edges[use.edge_id].curve, Straight)
+                            for use in target_uses
+                        )
+                    )
+                elif attachment.target_kind is AttachmentTargetKind.VERTEX:
+                    exactly_supported = point_valued
+                else:
+                    self.issue(
+                        AuditCode.UNSUPPORTED_CANDIDATE,
+                        AuditSeverity.BLOCKER,
+                        "sheet attachment has no unambiguous target face parameterization",
+                        keys=(
+                            attachment_key,
+                            attachment.source_key,
+                            attachment.target_key,
+                        ),
+                        classification=IntersectionKind.UNSUPPORTED,
+                        classification_confidence=0.0,
+                        evidence_quality="unverified",
+                        recommended_action="record the qualified target face fragments",
+                        blocks_strict_handoff=True,
+                    )
+                    self.collector.record_classification(classified=False)
+                    continue
                 if not exactly_supported:
                     self.issue(
                         AuditCode.UNCLASSIFIED_CANDIDATE,
@@ -2656,13 +3400,15 @@ class _StrictAuditState:
                         v = v_range.start + fraction * (
                             v_range.end - v_range.start
                         )
-                        trim_valid = trim_valid and self.model.face_contains_uv(
+                        trim_valid = trim_valid and self.face_support_contains_uv(
                             attachment.target_id, (u, v)
                         )
                         target_points.append(
-                            self.model.face_point(attachment.target_id, u, v)
+                            self.model.face_support_point(
+                                attachment.target_id, u, v
+                            )
                         )
-                    else:
+                    elif attachment.target_kind is AttachmentTargetKind.EDGE:
                         edge_range = attachment.target_parameters[0]
                         edge_parameter = edge_range.start + fraction * (
                             edge_range.end - edge_range.start
@@ -2672,6 +3418,18 @@ class _StrictAuditState:
                                 attachment.target_id,
                                 np.asarray((edge_parameter,)),
                             )[0]
+                        )
+                    elif attachment.target_kind is AttachmentTargetKind.MEMBER:
+                        target_range = attachment.target_parameters[0]
+                        target_parameter = target_range.start + fraction * (
+                            target_range.end - target_range.start
+                        )
+                        target_points.append(
+                            self.member_point(attachment.target_id, target_parameter)
+                        )
+                    else:
+                        target_points.append(
+                            self.model.vertex_position(attachment.target_id)
                         )
 
                 if (
@@ -2735,6 +3493,9 @@ class _StrictAuditState:
                             ),
                         ),
                         classification="inconsistent",
+                        measured_gap=maximum,
+                        tolerance_used=tolerance,
+                        recommended_action="update or remove the stale attachment",
                         details={
                             "maximum_distance": maximum,
                             "target_trim_contains_path": trim_valid,
@@ -2752,8 +3513,17 @@ class _StrictAuditState:
                 )
                 self.collector.record_classification(classified=False)
 
-    def audit_junction_geometry(self) -> None:
-        junctions = tuple(sorted(self.model.junctions.items()))
+    def audit_junction_geometry(
+        self, junction_ids: Iterable[int] | None = None
+    ) -> None:
+        selected = (
+            None if junction_ids is None else frozenset(int(item) for item in junction_ids)
+        )
+        junctions = tuple(
+            (identifier, junction)
+            for identifier, junction in sorted(self.model.junctions.items())
+            if selected is None or identifier in selected
+        )
         self.collector.record_candidates(len(junctions))
         for junction_id, junction in junctions:
             self.collector.record_narrow_phase()
@@ -2897,6 +3667,334 @@ class _StrictAuditState:
         self.audit_attachment_geometry()
         self.audit_junction_geometry()
 
+    def run_changed(self, change_set: ChangeSet) -> None:
+        if change_set.revision_after != self.model.revision:
+            raise GeometryError(
+                "changed-region audit requires the ChangeSet for the current model revision"
+            )
+        if change_set.revision_before > change_set.revision_after:
+            raise GeometryError("ChangeSet revisions are not monotonic")
+
+        self.audit_changed_structural(change_set)
+        active = self.audit_changed_spatial_pairs(change_set)
+        edge_ids = {identifier for kind, identifier in active if kind == "edge"}
+        face_ids = {identifier for kind, identifier in active if kind == "face"}
+        vertex_ids = {identifier for kind, identifier in active if kind == "vertex"}
+        member_ids = {
+            member_id
+            for edge_id in edge_ids
+            for member_id in self.members_for_edge(edge_id)
+        }
+        for kind, identifier in change_set.member_changes:
+            if kind == "member" and identifier in self.model.members:
+                member_ids.add(identifier)
+            elif kind == "member_edge_use":
+                use = self.model.member_edge_uses.get(identifier)
+                if use is not None:
+                    member_ids.add(use.member_id)
+        sheet_ids = {
+            sheet_id
+            for face_id in face_ids
+            for sheet_id in self.sheets_for_face(face_id)
+        }
+        for kind, identifier in change_set.ownership_changes:
+            if kind == "sheet" and identifier in self.model.sheets:
+                sheet_ids.add(identifier)
+            elif kind == "face_use":
+                use = self.model.face_uses.get(identifier)
+                if use is not None:
+                    sheet_ids.add(use.sheet_id)
+            elif kind == "coedge":
+                coedge = self.model.coedges.get(identifier)
+                if coedge is not None:
+                    use = self.model.face_uses.get(coedge.face_use_id)
+                    if use is not None:
+                        sheet_ids.add(use.sheet_id)
+
+        self.audit_orphan_control_geometry(vertex_ids)
+        self.audit_non_manifold_edges(edge_ids)
+        self.audit_same_edge_members(edge_ids)
+
+        attachment_ids = {
+            identifier
+            for kind, identifier in change_set.attachment_changes
+            if kind == "attachment" and identifier in self.model.attachments
+        }
+        source_getter = getattr(self.model, "attachments_for_source", None)
+        target_index = getattr(self.model, "_target_attachments", {})
+        for key in sorted(active):
+            attachment_ids.update(int(item) for item in target_index.get(key, ()))
+            if callable(source_getter):
+                attachment_ids.update(
+                    int(item) for item in source_getter(key[0], key[1])
+                )
+        for member_id in sorted(member_ids):
+            getter = getattr(self.model, "attachments_for_member", None)
+            if callable(getter):
+                attachment_ids.update(int(item) for item in getter(member_id))
+        for face_id in sorted(face_ids):
+            getter = getattr(self.model, "attachments_for_face", None)
+            if callable(getter):
+                attachment_ids.update(int(item) for item in getter(face_id))
+        for sheet_id in sorted(sheet_ids):
+            getter = getattr(self.model, "attachments_for_sheet", None)
+            if callable(getter):
+                attachment_ids.update(int(item) for item in getter(sheet_id))
+        self.audit_attachment_geometry(attachment_ids)
+
+        junction_ids = {
+            identifier
+            for kind, identifier in (
+                *change_set.ownership_changes,
+                *change_set.attachment_changes,
+            )
+            if kind == "junction" and identifier in self.model.junctions
+        }
+        junction_getter = getattr(self.model, "junctions_for_member", None)
+        for member_id in sorted(member_ids):
+            if callable(junction_getter):
+                junction_ids.update(int(item) for item in junction_getter(member_id))
+            else:
+                junction_ids.update(
+                    int(item)
+                    for item in getattr(self.model, "_member_junctions", {}).get(
+                        member_id, ()
+                    )
+                )
+        self.audit_junction_geometry(junction_ids)
+
+        # A removed structural record has no old parent closure in ChangeSet.
+        # If no geometry bound changed with it, the current API cannot localize
+        # the relation.  Report that limitation explicitly instead of claiming
+        # a false-clean changed-region qualification.
+        semantic_keys = {
+            *change_set.member_changes,
+            *change_set.attachment_changes,
+            *change_set.ownership_changes,
+        }
+        unresolved_removed = tuple(
+            sorted(
+                key
+                for key in semantic_keys
+                if key[0]
+                in {
+                    "part",
+                    "sheet",
+                    "face_use",
+                    "coedge",
+                    "member",
+                    "member_edge_use",
+                    "attachment",
+                    "junction",
+                }
+                and not self.model._contains_entity(*key)  # noqa: SLF001
+            )
+        )
+        if unresolved_removed:
+            self.issue(
+                AuditCode.CAPABILITY_MISSING,
+                AuditSeverity.BLOCKER,
+                "removed structural relationships lack old geometric dependency bounds",
+                keys=unresolved_removed,
+                classification=IntersectionKind.CAPABILITY_MISSING,
+                classification_confidence=0.0,
+                evidence_quality="unverified",
+                recommended_action=(
+                    "run a full strict audit or supply structural dependency bounds in ChangeSet"
+                ),
+                blocks_strict_handoff=True,
+                details={"removed_keys": unresolved_removed},
+            )
+
+    def audit_changed_structural(self, change_set: ChangeSet) -> None:
+        """Validate active structural records in the semantic delta closure."""
+
+        errors: list[tuple[AuditCode, str, tuple[SpatialKey, ...]]] = []
+
+        def error(
+            code: AuditCode, message: str, *keys: SpatialKey
+        ) -> None:
+            errors.append((code, message, tuple(keys)))
+
+        member_ids: set[int] = set()
+        for kind, identifier in change_set.member_changes:
+            if kind == "member" and identifier in self.model.members:
+                member_ids.add(identifier)
+            elif kind == "member_edge_use":
+                use = self.model.member_edge_uses.get(identifier)
+                if use is not None:
+                    member_ids.add(use.member_id)
+        for member_id in sorted(member_ids):
+            member = self.model.members[member_id]
+            part = self.model.parts.get(member.part_id)
+            if part is None or member_id not in part.member_ids:
+                error(
+                    AuditCode.UNOWNED_STRUCTURAL_USE,
+                    f"member {member_id} is not owned by part {member.part_id}",
+                    ("member", member_id),
+                    ("part", member.part_id),
+                )
+            previous_end: int | None = None
+            previous_parameter: float | None = None
+            for use_id in member.edge_use_ids:
+                use = self.model.member_edge_uses.get(use_id)
+                if use is None or use.member_id != member_id:
+                    error(
+                        AuditCode.UNOWNED_STRUCTURAL_USE,
+                        f"member {member_id} has an invalid axis use {use_id}",
+                        ("member", member_id),
+                        ("member_edge_use", use_id),
+                    )
+                    continue
+                edge = self.model.edges.get(use.edge_id)
+                if edge is None:
+                    error(
+                        AuditCode.UNOWNED_STRUCTURAL_USE,
+                        f"member-edge use {use_id} references missing edge {use.edge_id}",
+                        ("member_edge_use", use_id),
+                        ("edge", use.edge_id),
+                    )
+                    continue
+                start, end = (
+                    (edge.start, edge.end)
+                    if use.orientation is Orientation.FORWARD
+                    else (edge.end, edge.start)
+                )
+                if previous_end is not None and previous_end != start:
+                    error(
+                        AuditCode.NONCONFORMAL_INTERFACE,
+                        f"member {member_id} axis is discontinuous at use {use_id}",
+                        ("member", member_id),
+                        ("member_edge_use", use_id),
+                    )
+                if (
+                    previous_parameter is not None
+                    and abs(use.parent_range.start - previous_parameter)
+                    > self.tolerance.parameter
+                ):
+                    error(
+                        AuditCode.NONCONFORMAL_INTERFACE,
+                        f"member {member_id} parent ranges are discontinuous at use {use_id}",
+                        ("member", member_id),
+                        ("member_edge_use", use_id),
+                    )
+                previous_end = end
+                previous_parameter = use.parent_range.end
+
+        sheet_ids: set[int] = set()
+        for kind, identifier in change_set.ownership_changes:
+            if kind == "sheet" and identifier in self.model.sheets:
+                sheet_ids.add(identifier)
+            elif kind == "face_use":
+                use = self.model.face_uses.get(identifier)
+                if use is not None:
+                    sheet_ids.add(use.sheet_id)
+            elif kind == "coedge":
+                coedge = self.model.coedges.get(identifier)
+                if coedge is not None:
+                    use = self.model.face_uses.get(coedge.face_use_id)
+                    if use is not None:
+                        sheet_ids.add(use.sheet_id)
+        for sheet_id in sorted(sheet_ids):
+            sheet = self.model.sheets[sheet_id]
+            part = self.model.parts.get(sheet.part_id)
+            if part is None or sheet_id not in part.sheet_ids:
+                error(
+                    AuditCode.UNOWNED_STRUCTURAL_USE,
+                    f"sheet {sheet_id} is not owned by part {sheet.part_id}",
+                    ("sheet", sheet_id),
+                    ("part", sheet.part_id),
+                )
+            for use_id in sheet.face_use_ids:
+                use = self.model.face_uses.get(use_id)
+                if (
+                    use is None
+                    or use.sheet_id != sheet_id
+                    or use.face_id not in self.model.faces
+                ):
+                    error(
+                        AuditCode.UNOWNED_STRUCTURAL_USE,
+                        f"sheet {sheet_id} has an invalid face use {use_id}",
+                        ("sheet", sheet_id),
+                        ("face_use", use_id),
+                    )
+                    continue
+                for coedge_id in use.coedge_ids:
+                    coedge = self.model.coedges.get(coedge_id)
+                    if (
+                        coedge is None
+                        or coedge.face_use_id != use_id
+                        or coedge.edge_id not in self.model.edges
+                    ):
+                        error(
+                            AuditCode.UNOWNED_STRUCTURAL_USE,
+                            f"face use {use_id} has an invalid coedge {coedge_id}",
+                            ("face_use", use_id),
+                            ("coedge", coedge_id),
+                        )
+
+        attachment_ids = {
+            identifier
+            for kind, identifier in change_set.attachment_changes
+            if kind == "attachment" and identifier in self.model.attachments
+        }
+        for attachment_id in sorted(attachment_ids):
+            attachment = self.model.attachments[attachment_id]
+            if not self.model._contains_entity(*attachment.source_key):  # noqa: SLF001
+                error(
+                    AuditCode.ATTACHMENT_INCONSISTENT,
+                    f"attachment {attachment_id} references a missing source",
+                    ("attachment", attachment_id),
+                    attachment.source_key,
+                )
+            if not self.model._contains_entity(*attachment.target_key):  # noqa: SLF001
+                error(
+                    AuditCode.ATTACHMENT_INCONSISTENT,
+                    f"attachment {attachment_id} references a missing target",
+                    ("attachment", attachment_id),
+                    attachment.target_key,
+                )
+
+        junction_ids = {
+            identifier
+            for kind, identifier in (
+                *change_set.ownership_changes,
+                *change_set.attachment_changes,
+            )
+            if kind == "junction" and identifier in self.model.junctions
+        }
+        for junction_id in sorted(junction_ids):
+            junction = self.model.junctions[junction_id]
+            for use in junction.member_uses:
+                if use.member_id not in self.model.members:
+                    error(
+                        AuditCode.JUNCTION_INCONSISTENT,
+                        f"junction {junction_id} references missing member {use.member_id}",
+                        ("junction", junction_id),
+                        ("member", use.member_id),
+                    )
+            for attachment_id in junction.attachment_ids:
+                if attachment_id not in self.model.attachments:
+                    error(
+                        AuditCode.JUNCTION_INCONSISTENT,
+                        f"junction {junction_id} references missing attachment {attachment_id}",
+                        ("junction", junction_id),
+                        ("attachment", attachment_id),
+                    )
+
+        for code, message, keys in sorted(
+            errors, key=lambda item: (item[0].value, item[2], item[1])
+        ):
+            self.issue(
+                code,
+                AuditSeverity.ERROR,
+                message,
+                keys=keys,
+                classification="invalid_structural_topology",
+                recommended_action="repair the changed structural ownership or incidence",
+                blocks_strict_handoff=True,
+            )
+
 
 def _strict_check(
     model: "GeometryModel",
@@ -2904,6 +4002,18 @@ def _strict_check(
     collector: AuditCollector,
 ) -> None:
     _StrictAuditState(model, context, collector).run()
+
+
+def _changed_check(change_set: ChangeSet):
+    def check(
+        model: "GeometryModel",
+        context: AuditContext,
+        collector: AuditCollector,
+    ) -> None:
+        _StrictAuditState(model, context, collector).run_changed(change_set)
+
+    check.audit_name = "changed_region"  # type: ignore[attr-defined]
+    return check
 
 
 def strict_audit(
@@ -2926,4 +4036,40 @@ def strict_audit(
         revision_getter=lambda source: source.revision,
         scope=AuditScope.FULL_MODEL,
         policy=policy,
+    )
+
+
+def audit_changed_region(
+    model: "GeometryModel",
+    change_set: ChangeSet,
+    policy: AuditPolicy | None = None,
+) -> AuditReport:
+    """Qualify only the committed region touched by ``change_set``.
+
+    The maintained spatial index supplies current neighbours while both old
+    and new affected AABBs localize moves/removals.  The result is always
+    labelled :attr:`AuditScope.CHANGED_REGION` and can never certify the full
+    model, even when it is locally clean.
+    """
+
+    if not isinstance(change_set, ChangeSet):
+        raise TypeError("change_set must be a ChangeSet")
+    changed = {
+        *change_set.changed,
+        *change_set.member_changes,
+        *change_set.attachment_changes,
+        *change_set.ownership_changes,
+    }
+    entities = tuple(
+        AuditEntity.from_key(model.model_id, key) for key in sorted(changed)
+    )
+    return run_audit(
+        model,
+        (_changed_check(change_set),),
+        model_id_getter=lambda source: source.model_id,
+        revision_getter=lambda source: source.revision,
+        scope=AuditScope.CHANGED_REGION,
+        policy=policy,
+        changed_entities=entities,
+        index_updates=len(change_set.spatial_updates),
     )

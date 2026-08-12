@@ -242,14 +242,31 @@ def sample_spline(control_points: np.ndarray, t: np.ndarray) -> np.ndarray:
     if points.ndim != 2 or points.shape[1] != 3 or len(points) < 2:
         raise ValueError("a spline needs at least two finite 3D control points")
     result = np.empty((len(parameters), 3), dtype=float)
-    for index, parameter in enumerate(parameters):
-        work = points.copy()
+    # Vectorize within bounded chunks. A single broadcast over a very large
+    # batch would require O(samples * control_points) live storage plus
+    # similarly sized temporaries, which is hostile to mesher-scale calls.
+    maximum_work_values = 262_144
+    chunk_size = max(
+        1,
+        min(
+            len(parameters),
+            maximum_work_values // max(1, len(points) * 3),
+        ),
+    )
+    for start in range(0, len(parameters), chunk_size):
+        stop = min(len(parameters), start + chunk_size)
+        selected = parameters[start:stop]
+        work = np.broadcast_to(
+            points[None, :, :], (len(selected), len(points), 3)
+        ).copy()
+        weights = selected[:, None, None]
         for level in range(1, len(points)):
-            work[: len(points) - level] = (
-                (1.0 - parameter) * work[: len(points) - level]
-                + parameter * work[1 : len(points) - level + 1]
+            width = len(points) - level
+            work[:, :width, :] = (
+                (1.0 - weights) * work[:, :width, :]
+                + weights * work[:, 1 : width + 1, :]
             )
-        result[index] = work[0]
+        result[start:stop] = work[:, 0, :]
     return result
 
 
