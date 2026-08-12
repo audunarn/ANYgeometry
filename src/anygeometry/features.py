@@ -789,6 +789,26 @@ def builtin_feature_registry() -> FeatureRegistry:
         geometry.extrude([item.id for item in edges], feature.parameters["vector"])
         return _created_outputs(geometry, before)
 
+    def sketch_extrude(geometry, feature, inputs):
+        from .sketch import SketchDefinition, materialize_sketch
+
+        support = _one(inputs, "support_face", "face")
+        definition = SketchDefinition.from_parameters(feature.parameters)
+        return materialize_sketch(geometry, support.id, definition)
+
+    def fragment_overlaps(geometry, feature, inputs):
+        del feature
+        from .overlaps import fragment_coplanar_overlaps
+
+        faces = inputs.get("faces", ())
+        if len(faces) < 2 or any(item.kind != "face" for item in faces):
+            raise GeometryError(
+                "plate overlap fragmentation needs at least two ordered faces"
+            )
+        return fragment_coplanar_overlaps(
+            geometry, [item.id for item in faces]
+        ).outputs
+
     def revolve(geometry, feature, inputs):
         edges = inputs.get("edges", ())
         if not edges or any(item.kind != "edge" for item in edges):
@@ -977,6 +997,8 @@ def builtin_feature_registry() -> FeatureRegistry:
         "geometry.face": face,
         "geometry.plate": plate,
         "geometry.extrude": extrude,
+        "geometry.sketch.extrude": sketch_extrude,
+        "geometry.fragment.overlaps": fragment_overlaps,
         "geometry.revolve": revolve,
         "geometry.transform": transform_feature,
         "geometry.split_edge": split_edge,

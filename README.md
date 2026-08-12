@@ -130,6 +130,15 @@ add executors without a reverse dependency. Regeneration is atomic, retains
 replacement lineage, and reserves IDs above the old materialization so a
 stale `EntityRef` can never be silently reused for a different output.
 
+Flat-face sketches use the built-in `geometry.sketch.extrude` feature. A
+`SketchDefinition` stores named plane-local points, their ordered path,
+distance/coincidence constraints, and the signed normal extrusion distance.
+Points are not restricted to the support-face boundary. `on_edge` and
+`on_vertex` constraints follow the oriented support boundary, and regeneration
+returns stable `point/*`, `profile/edge/*`, and `extrusion/face/*` output keys.
+The small constraint solver uses minimum-norm corrections and rejects
+inconsistent dimensions without changing the live geometry.
+
 High-level owner operations include `insert_model`, `copy_entities`, linear
 and circular patterns, mirroring, edge/face reversal, deep `clone`, and typed
 `measure` results. Insertion remaps all topology with fresh IDs, preserves

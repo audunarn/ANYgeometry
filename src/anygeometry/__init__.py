@@ -41,6 +41,12 @@ from .intersections import (
     plane_plane,
 )
 from .model import GeometryModel
+from .overlaps import (
+    FaceOverlap,
+    OverlapFragmentation,
+    find_coplanar_overlaps,
+    fragment_coplanar_overlaps,
+)
 from .operations import (
     closest_point,
     fragment_face,
@@ -55,6 +61,14 @@ from .operations import (
     trim_face,
 )
 from .serialization import from_dict, read_geometry, to_dict, write_geometry
+from .sketch import (
+    SketchConstraint,
+    SketchDefinition,
+    SketchPlane,
+    face_sketch_plane,
+    materialize_sketch,
+    solve_sketch,
+)
 from .surfaces import (
     CoonsSurface,
     Cone,
@@ -80,6 +94,7 @@ __all__ = [
     "EntityRef",
     "Face",
     "FaceIntersection",
+    "FaceOverlap",
     "FeatureExecution",
     "FeatureExecutor",
     "FeatureHistory",
@@ -95,10 +110,14 @@ __all__ = [
     "InsertResult",
     "Measurement",
     "OrientedEdge",
+    "OverlapFragmentation",
     "Plane",
     "PatternResult",
     "RegenerationReport",
     "RuledSurface",
+    "SketchConstraint",
+    "SketchDefinition",
+    "SketchPlane",
     "Spline",
     "Straight",
     "Surface",
@@ -109,7 +128,10 @@ __all__ = [
     "copy_entities",
     "circular_pattern",
     "fragment_face",
+    "fragment_coplanar_overlaps",
+    "face_sketch_plane",
     "from_dict",
+    "find_coplanar_overlaps",
     "intersect_faces",
     "intersect_surfaces",
     "insert_model",
@@ -118,6 +140,7 @@ __all__ = [
     "line_plane",
     "linear_pattern",
     "measure",
+    "materialize_sketch",
     "mirror_entities",
     "numerical_surface_intersection",
     "plane_cylinder",
@@ -131,6 +154,7 @@ __all__ = [
     "split_face_at",
     "split_face_between",
     "strip_face",
+    "solve_sketch",
     "surface_normal",
     "surface_point",
     "to_dict",
