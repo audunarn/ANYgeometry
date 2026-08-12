@@ -1,9 +1,9 @@
 # ANYgeometry 0.2.1 kernel gap-closure report
 
 Status: implementation, repository tests, performance qualification, offline
-package build, Twine validation, and isolated installed-wheel smoke are
-complete. Final commits, branch publication, downstream public-tree rerun,
-and ecosystem closeout remain pending.
+package build, Twine validation, isolated installed-wheel smoke, local commits,
+branch publication, and draft PR creation are complete. The downstream
+public-tree rerun and ecosystem closeout remain pending.
 
 This report covers the strict mixed plate/member kernel and the additive
 mesher-facing gap closure. All source changes are confined to ANYgeometry.
@@ -392,9 +392,13 @@ PowerShell guard is retained in the ecosystem coordination ledger.
   `5e1c1d9250737db6d5c1fb23868bdc3f6d6ca658`.
 - Contracts, documentation, benchmark runner, and accepted result JSON:
   `6c2e8ae7ee2de9320e7d5b93e3132cb5de9c70bd`.
-- Final report metadata: the branch-tip commit containing this record; its exact
+- Initial reconciled report metadata:
+  `8828019e0f940b0d6f240b98f8be17d6f306155b`.
+- Publication metadata: the branch-tip commit containing this record; its exact
   SHA is included in the completion packet and draft pull request.
 - Release artifacts and hashes: recorded above; generated artifacts are
   intentionally excluded from Git.
-- Remote branch and pushed SHA: **PENDING**
+- Remote branch: `origin/native_hybrid_mesher`.
+- Draft pull request: `https://github.com/audunarn/ANYgeometry/pull/2`, targeting
+  `main` because `origin/kernel_update` does not exist.
 - Ecosystem closeout verdict: **PENDING `ECOSYSTEM CLOSEOUT: OK`**
