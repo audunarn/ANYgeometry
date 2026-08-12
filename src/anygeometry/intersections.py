@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Sequence
 
 import numpy as np
@@ -11,13 +11,190 @@ from .curves import Arc, Spline, Straight
 from .entities import EntityRef, OrientedEdge
 from .errors import GeometryError
 from .model import GeometryModel
-from .surfaces import CoonsSurface, Cylinder, Plane, SurfaceProtocol
+from .policies import MutationPolicy
+from .predicates import (
+    IntersectionComponent,
+    IntersectionKind,
+    IntersectionQuality,
+    IntersectionResult,
+    ParameterRange as IntersectionParameterRange,
+    qualified_line_plane,
+)
+from .surfaces import Cylinder, Plane, SurfaceProtocol
 
 __all__ = [
-    "FaceIntersection", "intersect_faces", "intersect_surfaces", "line_cylinder", "line_line",
+    "FaceIntersection", "clip_line_to_face", "intersect_faces", "intersect_surfaces", "line_cylinder", "line_line",
     "line_plane", "numerical_surface_intersection", "plane_cylinder",
     "plane_plane",
 ]
+
+
+def clip_line_to_face(
+    geometry: GeometryModel,
+    face_id: int,
+    line_point_value: Sequence[float],
+    line_direction: Sequence[float],
+) -> IntersectionResult:
+    """Return every material interval of a line clipped by a planar face.
+
+    Holes are subtracted by the polygon backend, so concave faces and multiple
+    disconnected material intervals are preserved.  Curved trim edges and
+    non-planar supports fail closed instead of being sampled into topology.
+    Line parameters are signed physical distances.
+    """
+
+    try:
+        from shapely.geometry import LineString, Point, Polygon
+    except ImportError as error:  # pragma: no cover - optional dependency
+        raise GeometryError(
+            "planar face-line clipping requires the 'planar' extra"
+        ) from error
+
+    face = geometry.faces.get(int(face_id))
+    if face is None:
+        raise GeometryError(f"no face {face_id}")
+    if not isinstance(face.surface, Plane):
+        return IntersectionResult(
+            IntersectionKind.UNCLASSIFIED,
+            diagnostics=("face_line_clipping_requires_a_planar_support",),
+        )
+    for loop in (face.loop,) + face.holes:
+        if any(not isinstance(geometry.edges[item.edge].curve, Straight) for item in loop):
+            return IntersectionResult(
+                IntersectionKind.UNCLASSIFIED,
+                diagnostics=("curved_planar_trim_requires_a_qualified_curve_backend",),
+            )
+
+    point = _point(line_point_value, "line_point")
+    raw_direction = _point(line_direction, "line_direction")
+    direction_length = float(np.linalg.norm(raw_direction))
+    if direction_length <= 0.0:
+        return IntersectionResult(
+            IntersectionKind.UNCLASSIFIED,
+            diagnostics=("degenerate_line_direction",),
+        )
+    direction = raw_direction / direction_length
+    support_result = qualified_line_plane(point, direction, face.surface)
+    if support_result.kind is IntersectionKind.UNCLASSIFIED:
+        return support_result
+    if support_result.kind is IntersectionKind.DISJOINT:
+        return support_result
+
+    def loop_uv(loop: Sequence[OrientedEdge]) -> list[tuple[float, float]]:
+        made = []
+        for item in loop:
+            vertex = geometry.oriented_start_vertex(item)
+            made.append(tuple(float(value) for value in face.surface.local_uv(
+                geometry.vertices[vertex].position
+            )))
+        return made
+
+    polygon = Polygon(loop_uv(face.loop), [loop_uv(loop) for loop in face.holes])
+    if polygon.is_empty or not polygon.is_valid:
+        return IntersectionResult(
+            IntersectionKind.UNCLASSIFIED,
+            diagnostics=("invalid_planar_face_polygon",),
+        )
+
+    def component_for_point(world: np.ndarray) -> IntersectionComponent:
+        uv = face.surface.local_uv(world)
+        parameter = float((world - point) @ direction)
+        return IntersectionComponent(
+            (tuple(float(value) for value in world),),
+            IntersectionQuality.VERIFIED_APPROXIMATE,
+            first_parameter=(parameter,),
+            second_parameter=uv,
+        )
+
+    if support_result.kind is IntersectionKind.CROSS:
+        world = np.asarray(support_result.witnesses[0], dtype=float)
+        uv = face.surface.local_uv(world)
+        candidate = Point(uv)
+        if not polygon.covers(candidate):
+            return IntersectionResult(
+                IntersectionKind.DISJOINT,
+                diagnostics=("line_plane_hit_outside_face_material",),
+            )
+        kind = (
+            IntersectionKind.TOUCH_POINT
+            if polygon.boundary.covers(candidate)
+            else IntersectionKind.CROSS
+        )
+        return IntersectionResult(kind, (component_for_point(world),))
+
+    # The line lies in the support plane.  Span it beyond every trim vertex;
+    # polygon intersection then returns all disjoint line strings with holes
+    # already removed.
+    world_vertices = np.asarray(
+        [
+            geometry.vertices[geometry.oriented_start_vertex(item)].position
+            for loop in (face.loop,) + face.holes
+            for item in loop
+        ],
+        dtype=float,
+    )
+    parameters = (world_vertices - point) @ direction
+    extent = max(float(np.ptp(parameters)), 1.0)
+    lower = float(np.min(parameters) - extent)
+    upper = float(np.max(parameters) + extent)
+    endpoints_uv = [
+        face.surface.local_uv(point + value * direction)
+        for value in (lower, upper)
+    ]
+    clipped = polygon.intersection(LineString(endpoints_uv))
+
+    line_components: list[IntersectionComponent] = []
+    point_components: list[IntersectionComponent] = []
+
+    def collect(value) -> None:
+        if value.is_empty:
+            return
+        if value.geom_type == "LineString":
+            coordinates = list(value.coords)
+            if len(coordinates) < 2:
+                return
+            worlds = tuple(
+                np.asarray(face.surface.evaluate(float(uv[0]), float(uv[1])), dtype=float)
+                for uv in (coordinates[0], coordinates[-1])
+            )
+            line_parameters = tuple(float((world - point) @ direction) for world in worlds)
+            if line_parameters[1] < line_parameters[0]:
+                worlds = (worlds[1], worlds[0])
+                line_parameters = (line_parameters[1], line_parameters[0])
+            line_components.append(
+                IntersectionComponent(
+                    tuple(tuple(float(item) for item in world) for world in worlds),
+                    IntersectionQuality.VERIFIED_APPROXIMATE,
+                    first_parameter_range=IntersectionParameterRange(*line_parameters),
+                    direction=tuple(float(item) for item in direction),
+                )
+            )
+            return
+        if value.geom_type == "Point":
+            uv = tuple(value.coords)[0]
+            world = np.asarray(face.surface.evaluate(float(uv[0]), float(uv[1])), dtype=float)
+            point_components.append(component_for_point(world))
+            return
+        for child in getattr(value, "geoms", ()):
+            collect(child)
+
+    collect(clipped)
+    if line_components:
+        line_components.sort(
+            key=lambda item: item.first_parameter_range.lower  # type: ignore[union-attr]
+        )
+        return IntersectionResult(
+            IntersectionKind.OVERLAP_CURVE,
+            tuple(line_components),
+            diagnostics=("planar_material_intervals",),
+        )
+    if point_components:
+        point_components.sort(key=lambda item: item.first_parameter or ())
+        return IntersectionResult(IntersectionKind.TOUCH_POINT, tuple(point_components))
+    return IntersectionResult(
+        IntersectionKind.DISJOINT,
+        diagnostics=("coplanar_line_misses_face_material",),
+    )
 
 
 def _point(value: Sequence[float], name: str) -> np.ndarray:
@@ -43,7 +220,14 @@ def line_line(
     parameters, *_ = np.linalg.lstsq(matrix, q - p, rcond=None)
     first = p + parameters[0] * a
     second = q + parameters[1] * b
-    scale = max(float(np.linalg.norm(p)), float(np.linalg.norm(q)), 1.0)
+    # Residual scaling is local to the participating lines.  Translating both
+    # lines by a large world offset must not change the classification.
+    scale = max(
+        float(np.linalg.norm(q - p)),
+        float(np.linalg.norm(first - p)),
+        float(np.linalg.norm(second - q)),
+        1.0,
+    )
     return 0.5 * (first + second) if float(np.linalg.norm(first-second)) <= tolerance*scale else None
 
 
@@ -267,9 +451,24 @@ def _line_face_interval(geometry: GeometryModel, face_id: int, point: np.ndarray
     return min(values), max(values)
 
 
+def _face_length_scale(geometry: GeometryModel, face_id: int) -> float:
+    """Translation-invariant characteristic extent for one bounded face."""
+
+    bounds = geometry._entity_bounds(("face", int(face_id)))  # noqa: SLF001
+    extent = 0.0
+    if bounds is not None:
+        extent = float(
+            np.linalg.norm(np.asarray(bounds[3:], dtype=float) - bounds[:3])
+        )
+    surface = geometry.faces[int(face_id)].surface
+    if isinstance(surface, Cylinder):
+        extent = max(extent, surface.radius, abs(surface.height))
+    return max(extent, 1.0)
+
+
 def _boundary_vertex(geometry: GeometryModel, face_id: int, point: np.ndarray) -> int:
     face = geometry.faces[face_id]
-    scale = max(float(np.linalg.norm(point)), 1.0)
+    scale = _face_length_scale(geometry, face_id)
     for item in face.loop:
         for vertex_id in (geometry.oriented_start_vertex(item), geometry.oriented_end_vertex(item)):
             if float(np.linalg.norm(geometry.vertex_position(vertex_id)-point)) <= 1e-7*scale:
@@ -292,22 +491,31 @@ def _boundary_vertex(geometry: GeometryModel, face_id: int, point: np.ndarray) -
 def _merge_vertex(geometry: GeometryModel, old: int, new: int) -> None:
     if old == new:
         return
-    for edge in geometry.edges.values():
-        if edge.start == old:
-            edge.start = new
-        if edge.end == old:
-            edge.end = new
-        if isinstance(edge.curve, Arc) and edge.curve.via_vertex == old:
-            edge.curve = Arc(new)
-        elif isinstance(edge.curve, Spline) and old in edge.curve.control_vertices:
-            edge.curve = Spline(
+    # Reverse incidence gives the exact changed closure.  Replace records via
+    # the journal owner so vertex-edge incidence is detached and reattached
+    # before the obsolete vertex is retired.
+    for edge_id in tuple(geometry.edges_using_vertex(old)):
+        edge = geometry.edges[edge_id]
+        curve = edge.curve
+        if isinstance(curve, Arc) and curve.via_vertex == old:
+            curve = Arc(new)
+        elif isinstance(curve, Spline) and old in curve.control_vertices:
+            curve = Spline(
                 tuple(
                     new if vertex == old else vertex
-                    for vertex in edge.curve.control_vertices
+                    for vertex in curve.control_vertices
                 )
             )
-    if not geometry.edges_using_vertex(old):
-        geometry.remove_vertex(old, record=False)
+        geometry._put_entity(  # noqa: SLF001
+            "edge",
+            replace(
+                edge,
+                start=new if edge.start == old else edge.start,
+                end=new if edge.end == old else edge.end,
+                curve=curve,
+            ),
+        )
+    geometry.remove_vertex(old, record=False)
     geometry.record_replacement(EntityRef("vertex", old), (EntityRef("vertex", new),))
 
 
@@ -331,16 +539,16 @@ def _fragment_with_edge(geometry: GeometryModel, face_id: int, start: int, end: 
         (first_holes, second_holes),
     ):
         corners = geometry._detect_corners(loop) if len(loop) >= 4 else None  # noqa: SLF001
-        identifier = geometry.add_face_from_loop(loop, corners)
-        child = geometry.faces[identifier]
-        child.holes = holes
-        child.metadata.update(metadata)
-        if isinstance(surface, Plane) and corners is None:
-            child.surface = surface
-        elif corners is not None:
-            child.surface = CoonsSurface()
-        else:
-            child.surface = surface
+        identifier = geometry.add_face_from_loop(loop, corners, surface=surface)
+        geometry._put_entity(  # noqa: SLF001
+            "face",
+            replace(
+                geometry.faces[identifier],
+                holes=holes,
+                metadata=dict(metadata),
+                surface=surface,
+            ),
+        )
         geometry.tag(EntityRef("face",identifier), *tags)
         made.append(identifier)
     geometry.record_replacement(EntityRef("face",face_id), tuple(EntityRef("face",item) for item in made))
@@ -353,8 +561,7 @@ def _imprint_segment(
     second_face: int,
     endpoints: tuple[np.ndarray, np.ndarray],
 ) -> FaceIntersection:
-    snapshot = geometry.topology_snapshot()
-    try:
+    with geometry.transaction():
         first_vertices = [_boundary_vertex(geometry, first_face, endpoint) for endpoint in endpoints]
         second_vertices = [_boundary_vertex(geometry, second_face, endpoint) for endpoint in endpoints]
         for old, new in zip(second_vertices, first_vertices):
@@ -368,14 +575,11 @@ def _imprint_segment(
                 "intersection imprint produced invalid topology: "
                 + "; ".join(errors)
             )
-    except Exception:
-        geometry.restore_topology(snapshot)
-        raise
-    return FaceIntersection(
-        EntityRef("edge", edge),
-        tuple(EntityRef("face", item) for item in first_made),
-        tuple(EntityRef("face", item) for item in second_made),
-    )
+        return FaceIntersection(
+            EntityRef("edge", edge),
+            tuple(EntityRef("face", item) for item in first_made),
+            tuple(EntityRef("face", item) for item in second_made),
+        )
 
 
 def _axial_plane_cylinder_segment(
@@ -400,7 +604,10 @@ def _axial_plane_cylinder_segment(
         for face_id in (plane_face, cylinder_face):
             for point in curve:
                 projected, uv, distance = geometry.project_to_face(face_id, point)
-                scale = max(float(np.linalg.norm(point)), 1.0)
+                scale = max(
+                    _face_length_scale(geometry, plane_face),
+                    _face_length_scale(geometry, cylinder_face),
+                )
                 if distance > 1.0e-7*scale or not geometry.face_contains_uv(face_id, uv):
                     inside = False
                     break
@@ -445,12 +652,7 @@ def _loop_signed_area(
 def _same_cylinder_band(
     candidate: Cylinder, reference: Cylinder, *, tolerance: float
 ) -> bool:
-    scale = max(
-        float(np.linalg.norm(reference.origin)),
-        abs(reference.height),
-        reference.radius,
-        1.0,
-    )
+    scale = max(abs(reference.height), reference.radius, 1.0)
     return (
         float(np.linalg.norm(candidate.origin - reference.origin))
         <= tolerance * scale
@@ -482,7 +684,7 @@ def _boundary_edge_at_point(
         )
         ranked.append((distance, item.edge))
     distance, edge_id = min(ranked)
-    scale = max(float(np.linalg.norm(point)), 1.0)
+    scale = _face_length_scale(geometry, face_id)
     if distance > 1.0e-7 * scale:
         raise GeometryError(
             f"cylinder face {face_id} is not bounded by its surface patch"
@@ -558,7 +760,7 @@ def _transverse_cylinder_band(
         current_end = current[2].evaluate(1.0, fraction)
         following_start = following[2].evaluate(0.0, fraction)
         if float(np.linalg.norm(current_end - following_start)) > tolerance * max(
-            float(np.linalg.norm(current_end)), 1.0
+            reference.radius, abs(reference.height), 1.0
         ):
             raise GeometryError("adjacent cylinder patches do not meet exactly")
         if _boundary_edge_at_point(
@@ -613,7 +815,7 @@ def _transverse_cylinder_band(
         geometry.closest_edge_point(item.edge, centre)[2]
         for item in plane_data.loop
     )
-    scale = max(float(np.linalg.norm(centre)), reference.radius, 1.0)
+    scale = max(reference.radius, abs(reference.height), 1.0)
     if boundary_distance <= reference.radius + tolerance * scale:
         raise GeometryError(
             "the complete intersection ring must lie strictly inside the plane face"
@@ -673,8 +875,6 @@ def _fragment_cylinder_transverse(
         loop = tuple(chain) + (oriented_ring,)
         corners = geometry._detect_corners(loop) if len(loop) >= 4 else None  # noqa: SLF001
         identifier = geometry.add_face_from_loop(loop, corners)
-        child = geometry.faces[identifier]
-        child.metadata.update(metadata)
         axial_values = [
             float(
                 (
@@ -686,10 +886,19 @@ def _fragment_cylinder_transverse(
             / surface.height
             for item in chain
         ]
-        child.surface = _cylinder_fragment_surface(
-            surface, fraction, upper=float(np.mean(axial_values)) > fraction
+        geometry._put_entity(  # noqa: SLF001
+            "face",
+            replace(
+                geometry.faces[identifier],
+                metadata=dict(metadata),
+                surface=_cylinder_fragment_surface(
+                    surface,
+                    fraction,
+                    upper=float(np.mean(axial_values)) > fraction,
+                ),
+            ),
         )
-        geometry.tag(child.ref, *tags)
+        geometry.tag(EntityRef("face", identifier), *tags)
         made.append(identifier)
     geometry.record_replacement(
         EntityRef("face", face_id),
@@ -713,10 +922,19 @@ def _fragment_plane_with_ring(
         ring_loop = _reverse_loop(ring_loop)
     geometry.remove_face(plane_face, record=False)
     annulus = geometry.add_face_from_loop(outer_loop, corners, surface=surface)
-    geometry.faces[annulus].holes = (_reverse_loop(ring_loop),)
+    geometry._put_entity(  # noqa: SLF001
+        "face",
+        replace(
+            geometry.faces[annulus],
+            holes=(_reverse_loop(ring_loop),),
+            metadata=dict(metadata),
+        ),
+    )
     disk = geometry.add_face_from_loop(ring_loop, surface=surface)
+    geometry._put_entity(  # noqa: SLF001
+        "face", replace(geometry.faces[disk], metadata=dict(metadata))
+    )
     for identifier in (annulus, disk):
-        geometry.faces[identifier].metadata.update(metadata)
         geometry.tag(EntityRef("face", identifier), *tags)
     geometry.record_replacement(
         EntityRef("face", plane_face),
@@ -738,8 +956,7 @@ def _imprint_transverse_plane_cylinder(
     if not fragment:
         return _transverse_ring_curve(geometry, face_ids, fraction)
 
-    snapshot = geometry.topology_snapshot()
-    try:
+    with geometry.transaction():
         vertices: list[tuple[int, int]] = []
         edges = []
         for face_id in face_ids:
@@ -774,16 +991,13 @@ def _imprint_transverse_plane_cylinder(
                 "closed plane-cylinder imprint produced invalid topology: "
                 + "; ".join(errors)
             )
-    except Exception:
-        geometry.restore_topology(snapshot)
-        raise
-    references = tuple(EntityRef("edge", edge_id) for edge_id in edges)
-    return FaceIntersection(
-        references[0],
-        tuple(EntityRef("face", item) for item in plane_faces),
-        tuple(EntityRef("face", item) for item in cylinder_faces),
-        references,
-    )
+        references = tuple(EntityRef("edge", edge_id) for edge_id in edges)
+        return FaceIntersection(
+            references[0],
+            tuple(EntityRef("face", item) for item in plane_faces),
+            tuple(EntityRef("face", item) for item in cylinder_faces),
+            references,
+        )
 
 
 def intersect_faces(
@@ -792,6 +1006,7 @@ def intersect_faces(
     second_face: int,
     *,
     fragment: bool = True,
+    policy: MutationPolicy | str | None = None,
 ) -> FaceIntersection | tuple[np.ndarray, np.ndarray] | np.ndarray:
     """Imprint shared topology for qualified structural-surface crossings.
 
@@ -800,6 +1015,26 @@ def intersect_faces(
     plane regions and by both axial fragments of every cylinder patch.
     """
 
+    if fragment and policy is None:
+        raise GeometryError(
+            "topology-changing face intersection requires an explicit mutation policy"
+        )
+    if policy is not None:
+        try:
+            mutation_policy = MutationPolicy(policy)
+        except (TypeError, ValueError) as error:
+            raise GeometryError(f"invalid mutation policy {policy!r}") from error
+        if fragment and mutation_policy is MutationPolicy.REJECT:
+            raise GeometryError("intersection mutation rejected by policy")
+        if fragment and mutation_policy is MutationPolicy.KEEP_SEPARATE_PART:
+            fragment = False
+        elif fragment and mutation_policy in (
+            MutationPolicy.REUSE_EXISTING,
+            MutationPolicy.WELD,
+        ):
+            raise GeometryError(
+                f"{mutation_policy.value} is not qualified for face imprinting"
+            )
     if first_face == second_face:
         raise GeometryError("two distinct faces are required")
     first_surface = geometry.faces[first_face].surface

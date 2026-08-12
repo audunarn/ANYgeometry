@@ -9,12 +9,14 @@ the model is edited and re-meshed.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal, Tuple
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal, Mapping, Tuple
 
 import numpy as np
 
 from .curves import CurveShape
+from .errors import GeometryError
+from .structural import FrozenMetadata, freeze_metadata
 
 if TYPE_CHECKING:
     from .surfaces import Surface
@@ -42,19 +44,26 @@ class EntityRef:
         return f"{self.kind}{self.id}"
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class Vertex:
     """A modelled point."""
 
     id: int
     position: np.ndarray
 
+    def __post_init__(self) -> None:
+        position = np.array(self.position, dtype=float, copy=True)
+        if position.shape != (3,) or not np.all(np.isfinite(position)):
+            raise GeometryError("vertex position must be a finite 3-vector")
+        position.flags.writeable = False
+        object.__setattr__(self, "position", position)
+
     @property
     def ref(self) -> EntityRef:
         return EntityRef("vertex", self.id)
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class Edge:
     """A line between two vertices, with a curve shape."""
 
@@ -85,7 +94,7 @@ class OrientedEdge:
     forward: bool
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class Face:
     """A structural surface bounded by an outer loop and optional inner loops.
 
@@ -97,9 +106,19 @@ class Face:
     id: int
     loop: Tuple[OrientedEdge, ...]
     corners: Tuple[int, ...] = ()
-    metadata: dict = field(default_factory=dict)
+    metadata: FrozenMetadata | Mapping[str, object] = FrozenMetadata()
     holes: Tuple[Tuple[OrientedEdge, ...], ...] = ()
     surface: "Surface | None" = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "loop", tuple(self.loop))
+        object.__setattr__(self, "corners", tuple(self.corners))
+        object.__setattr__(
+            self,
+            "holes",
+            tuple(tuple(loop) for loop in self.holes),
+        )
+        object.__setattr__(self, "metadata", freeze_metadata(self.metadata))
 
     @property
     def ref(self) -> EntityRef:

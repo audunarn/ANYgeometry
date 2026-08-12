@@ -23,9 +23,10 @@ __all__ = [
 
 
 def _vector3(value: object, name: str) -> np.ndarray:
-    vector = np.asarray(value, dtype=float)
+    vector = np.array(value, dtype=float, copy=True)
     if vector.shape != (3,) or not np.all(np.isfinite(vector)):
         raise GeometryError(f"{name} must be a finite 3-vector")
+    vector.flags.writeable = False
     return vector
 
 
@@ -34,7 +35,9 @@ def _unit(value: object, name: str) -> np.ndarray:
     length = float(np.linalg.norm(vector))
     if length <= 0.0:
         raise GeometryError(f"{name} must be non-zero")
-    return vector / length
+    result = vector / length
+    result.flags.writeable = False
+    return result
 
 
 @runtime_checkable
@@ -213,8 +216,8 @@ class RuledSurface:
     second_boundary: np.ndarray
 
     def __post_init__(self) -> None:
-        first = np.asarray(self.first_boundary, dtype=float)
-        second = np.asarray(self.second_boundary, dtype=float)
+        first = np.array(self.first_boundary, dtype=float, copy=True)
+        second = np.array(self.second_boundary, dtype=float, copy=True)
         if (
             first.ndim != 2
             or first.shape[1:] != (3,)
@@ -224,6 +227,8 @@ class RuledSurface:
             or not np.all(np.isfinite(second))
         ):
             raise GeometryError("ruled boundaries must be matching finite (n, 3) arrays")
+        first.flags.writeable = False
+        second.flags.writeable = False
         object.__setattr__(self, "first_boundary", first)
         object.__setattr__(self, "second_boundary", second)
 
@@ -264,7 +269,7 @@ class CoonsSurface:
             return
         if any(value is None for value in supplied):
             raise GeometryError("a Coons surface needs all four boundaries")
-        arrays = tuple(np.asarray(value, dtype=float) for value in supplied)
+        arrays = tuple(np.array(value, dtype=float, copy=True) for value in supplied)
         if any(
             array.ndim != 2
             or array.shape[1:] != (3,)
@@ -297,6 +302,7 @@ class CoonsSurface:
                     f"(tolerance {tolerance:.6g})"
                 )
         for name, array in zip(("bottom", "right", "top", "left"), arrays):
+            array.flags.writeable = False
             object.__setattr__(self, name, array)
 
     @property

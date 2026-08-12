@@ -84,9 +84,10 @@ def _integer_at_least(value: object, minimum: int, name: str) -> int:
     return int(numeric)
 
 
-def _planar_grid(
+def _planar_grid_impl(
     x_values: Sequence[float], y_values: Sequence[float], *, origin: Sequence[float],
     u_direction: Sequence[float], v_direction: Sequence[float], semantic_group: str,
+    geometry: GeometryModel,
 ) -> GeometryModel:
     base = _vector3(origin, "origin")
     u_axis, v_axis = _unit(u_direction, "u_direction"), _unit(v_direction, "v_direction")
@@ -94,7 +95,6 @@ def _planar_grid(
         raise GeometryError("plate directions must be independent")
     if not isinstance(semantic_group, str) or not semantic_group.strip():
         raise GeometryError("semantic_group must be a non-empty string")
-    geometry = GeometryModel()
     vertices = {(i, j): geometry.add_point(*(base + x*u_axis + y*v_axis)) for j, y in enumerate(y_values) for i, x in enumerate(x_values)}
     vertex_indices = {vertex: index for index, vertex in vertices.items()}
     edge_cache: dict[tuple[int, int], int] = {}
@@ -111,13 +111,24 @@ def _planar_grid(
         for i in range(len(x_values) - 1):
             ring = [vertices[i, j], vertices[i+1, j], vertices[i+1, j+1], vertices[i, j+1]]
             loop = tuple(oriented(a, b) for a, b in zip(ring, ring[1:] + ring[:1]))
-            face_id = geometry.add_face_from_loop(loop, (0, 1, 2, 3))
-            geometry.faces[face_id].surface = Plane(
-                geometry.vertex_position(ring[0]),
-                geometry.vertex_position(ring[1]) - geometry.vertex_position(ring[0]),
-                geometry.vertex_position(ring[3]) - geometry.vertex_position(ring[0]),
+            face_id = geometry.add_face_from_loop(
+                loop,
+                (0, 1, 2, 3),
+                surface=Plane(
+                    geometry.vertex_position(ring[0]),
+                    geometry.vertex_position(ring[1])
+                    - geometry.vertex_position(ring[0]),
+                    geometry.vertex_position(ring[3])
+                    - geometry.vertex_position(ring[0]),
+                ),
             )
             faces.append(EntityRef("face", face_id))
+    part = geometry.add_part(name=semantic_group)
+    geometry.add_sheet(
+        tuple(reference.id for reference in faces),
+        part_id=part,
+        name=semantic_group,
+    )
     geometry.add_to_group("shell", faces)
     geometry.add_to_group("plate", faces)
     if semantic_group not in ("shell", "plate"):
@@ -134,7 +145,45 @@ def _planar_grid(
             longitudinal.append(edge.ref)
     geometry.add_to_group("longitudinal_stiffeners", longitudinal)
     geometry.add_to_group("transverse_stiffeners", transverse)
+    member_chains: list[tuple[OrientedEdge, ...]] = []
+    member_names: list[str] = []
+    for j in range(1, len(y_values) - 1):
+        axis = []
+        for i in range(len(x_values) - 1):
+            first, second = vertices[i, j], vertices[i + 1, j]
+            edge = geometry.edges[edge_cache[tuple(sorted((first, second)))]]
+            axis.append(OrientedEdge(edge.id, edge.start == first))
+        member_chains.append(tuple(axis))
+        member_names.append(f"longitudinal_stiffener_{j}")
+    for i in range(1, len(x_values) - 1):
+        axis = []
+        for j in range(len(y_values) - 1):
+            first, second = vertices[i, j], vertices[i, j + 1]
+            edge = geometry.edges[edge_cache[tuple(sorted((first, second)))]]
+            axis.append(OrientedEdge(edge.id, edge.start == first))
+        member_chains.append(tuple(axis))
+        member_names.append(f"transverse_stiffener_{i}")
+    geometry.add_members(member_chains, part_id=part, names=member_names)
     return geometry
+
+
+def _planar_grid(
+    x_values: Sequence[float], y_values: Sequence[float], *, origin: Sequence[float],
+    u_direction: Sequence[float], v_direction: Sequence[float], semantic_group: str,
+) -> GeometryModel:
+    """Build one compound panel as a single validated transaction."""
+
+    geometry = GeometryModel()
+    with geometry.transaction():
+        return _planar_grid_impl(
+            x_values,
+            y_values,
+            origin=origin,
+            u_direction=u_direction,
+            v_direction=v_direction,
+            semantic_group=semantic_group,
+            geometry=geometry,
+        )
 
 
 def plate(
@@ -171,10 +220,11 @@ def stiffened_panel(
     )
 
 
-def _revolved(
+def _revolved_impl(
     radius_start: float, radius_end: float, height: float, *, circumferential_segments: int,
     longitudinal_spacing: float | None, ring_spacing: float | None,
     origin: Sequence[float], axis: Sequence[float], radial_direction: Sequence[float], is_cone: bool,
+    geometry: GeometryModel,
 ) -> GeometryModel:
     r0, r1, height = _positive(radius_start, "radius_start", zero=True), _positive(radius_end, "radius_end", zero=True), _positive(height, "height")
     if max(r0, r1) <= 0.0:
@@ -205,7 +255,6 @@ def _revolved(
         )
     )
     levels = cleanup_axis((0.0, *stations, height), height)
-    geometry = GeometryModel()
     rings: list[list[int]] = []
     level_radii: list[float] = []
     for z in levels:
@@ -234,6 +283,16 @@ def _revolved(
     for j in range(len(levels)-1):
         for i in range(segments):
             lower_arc, upper_arc = arcs[j][i], arcs[j+1][i]
+            common = dict(origin=base+levels[j]*axial, axis=axial, radial_direction=radial, height=levels[j+1]-levels[j], start_angle=2*np.pi*i/segments, sweep_angle=2*np.pi/segments)
+            face_surface = (
+                Cone(
+                    radius_start=r0+(r1-r0)*levels[j]/height,
+                    radius_end=r0+(r1-r0)*levels[j+1]/height,
+                    **common,
+                )
+                if is_cone
+                else Cylinder(radius=r0, **common)
+            )
             if lower_arc is None:
                 assert upper_arc is not None
                 loop = (
@@ -241,23 +300,26 @@ def _revolved(
                     OrientedEdge(upper_arc, True),
                     OrientedEdge(generators[j][(i+1)%segments], False),
                 )
-                face_id = geometry.add_face_from_loop(loop)
+                face_id = geometry.add_face_from_loop(loop, surface=face_surface)
             elif upper_arc is None:
                 loop = (
                     OrientedEdge(lower_arc, True),
                     OrientedEdge(generators[j][(i+1)%segments], True),
                     OrientedEdge(generators[j][i], False),
                 )
-                face_id = geometry.add_face_from_loop(loop)
+                face_id = geometry.add_face_from_loop(loop, surface=face_surface)
             else:
                 loop = (OrientedEdge(lower_arc, True), OrientedEdge(generators[j][(i+1)%segments], True), OrientedEdge(upper_arc, False), OrientedEdge(generators[j][i], False))
-                face_id = geometry.add_face_from_loop(loop, (0,1,2,3))
-            common = dict(origin=base+levels[j]*axial, axis=axial, radial_direction=radial, height=levels[j+1]-levels[j], start_angle=2*np.pi*i/segments, sweep_angle=2*np.pi/segments)
-            if is_cone:
-                geometry.faces[face_id].surface = Cone(radius_start=r0+(r1-r0)*levels[j]/height, radius_end=r0+(r1-r0)*levels[j+1]/height, **common)
-            else:
-                geometry.faces[face_id].surface = Cylinder(radius=r0, **common)
+                face_id = geometry.add_face_from_loop(
+                    loop, (0,1,2,3), surface=face_surface
+                )
             faces.append(EntityRef("face", face_id))
+    part = geometry.add_part(name="cone" if is_cone else "cylinder")
+    geometry.add_sheet(
+        tuple(reference.id for reference in faces),
+        part_id=part,
+        name="shell",
+    )
     geometry.add_to_group("shell", faces)
     bottom = (
         [EntityRef("vertex", rings[0][0])]
@@ -274,7 +336,44 @@ def _revolved(
     geometry.add_to_group("boundaries", (*bottom, *top))
     geometry.add_to_group("longitudinal_stiffeners", [EntityRef("edge", edge) for row in generators for edge in row])
     geometry.add_to_group("ring_stiffeners", [EntityRef("edge", int(edge)) for row in arcs[1:-1] for edge in row if edge is not None])
+    member_chains = [
+        tuple(OrientedEdge(row[i], True) for row in generators)
+        for i in range(segments)
+    ]
+    member_names = [f"longitudinal_stiffener_{i}" for i in range(segments)]
+    for level, row in enumerate(arcs[1:-1], start=1):
+        ring = tuple(
+            OrientedEdge(int(edge), True) for edge in row if edge is not None
+        )
+        if ring:
+            member_chains.append(ring)
+            member_names.append(f"ring_stiffener_{level}")
+    geometry.add_members(member_chains, part_id=part, names=member_names)
     return geometry
+
+
+def _revolved(
+    radius_start: float, radius_end: float, height: float, *, circumferential_segments: int,
+    longitudinal_spacing: float | None, ring_spacing: float | None,
+    origin: Sequence[float], axis: Sequence[float], radial_direction: Sequence[float], is_cone: bool,
+) -> GeometryModel:
+    """Build one compound revolved shell as a single validated transaction."""
+
+    geometry = GeometryModel()
+    with geometry.transaction():
+        return _revolved_impl(
+            radius_start,
+            radius_end,
+            height,
+            circumferential_segments=circumferential_segments,
+            longitudinal_spacing=longitudinal_spacing,
+            ring_spacing=ring_spacing,
+            origin=origin,
+            axis=axis,
+            radial_direction=radial_direction,
+            is_cone=is_cone,
+            geometry=geometry,
+        )
 
 
 def cylinder(radius: float, height: float, *, circumferential_segments: int = 12, longitudinal_spacing: float | None = None, ring_spacing: float | None = None, origin: Sequence[float] = (0,0,0), axis: Sequence[float] = (0,0,1), radial_direction: Sequence[float] = (1,0,0)) -> GeometryModel:
@@ -306,6 +405,8 @@ def girder(length: float, *, origin: Sequence[float] = (0,0,0), direction: Seque
     start = geometry.add_point(*start_point)
     end = geometry.add_point(*(start_point + _positive(length, "length")*_unit(direction, "direction")))
     edge = geometry.add_line(start, end)
+    part = geometry.add_part(name="girder")
+    geometry.add_member((edge,), part_id=part, name="girder")
     reference = EntityRef("edge", edge)
     geometry.add_to_group("girder", [reference])
     geometry.add_to_group("girders", [reference])
@@ -314,8 +415,9 @@ def girder(length: float, *, origin: Sequence[float] = (0,0,0), direction: Seque
 
 def stiffener(*args: object, **kwargs: object) -> GeometryModel:
     geometry = girder(*args, **kwargs)
-    references = geometry.groups.pop("girder")
-    geometry.groups.pop("girders")
-    geometry.groups["stiffener"] = set(references)
-    geometry.groups["stiffeners"] = set(references)
+    references = geometry.group("girder", resolve=False)
+    geometry.remove_group("girder")
+    geometry.remove_group("girders")
+    geometry.add_to_group("stiffener", references)
+    geometry.add_to_group("stiffeners", references)
     return geometry

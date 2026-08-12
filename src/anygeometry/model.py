@@ -14,7 +14,11 @@ metadata; they are not a restriction on neutral face topology.
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Dict, Iterable, List, Mapping, Sequence, Set, Tuple
+from dataclasses import fields, is_dataclass, replace
+from functools import wraps
+from types import MappingProxyType
+from typing import Dict, Hashable, Iterable, Iterator, List, Mapping, Sequence, Set, Tuple
+from uuid import UUID, uuid4
 
 import numpy as np
 
@@ -36,6 +40,42 @@ from .errors import GeometryError
 from .entities import Edge, EntityRef, Face, OrientedEdge, Vertex
 from .features import FeatureHistory, FeatureRegistry, RegenerationReport
 from .surfaces import CoonsSurface, Plane, Surface, closest_uv
+from .transactions import (
+    AABBChange,
+    ChangeHook,
+    ChangeSet,
+    EntityKey,
+    TopologyTransaction,
+    _MISSING,
+    _TransactionJournal,
+)
+from .identity import (
+    EntityHandle,
+    Resolution,
+    ResolutionStatus,
+    canonical_model_id,
+    validate_entity_kind,
+    validate_local_id,
+)
+from .tolerance import DEFAULT_TOLERANCE_POLICY, TolerancePolicy
+from .structural import (
+    Attachment,
+    AttachmentKind,
+    AttachmentTargetKind,
+    Coedge,
+    FaceUse,
+    Junction,
+    JunctionMemberUse,
+    Member,
+    MemberEdgeUse,
+    Orientation,
+    ParameterRange,
+    Part,
+    Sheet,
+    SheetTopologyPolicy,
+    replace_member_edge_use,
+    validate_structural_topology,
+)
 
 # GeometryError is re-exported for temporary compatibility imports.
 __all__ = ["GeometryError", "GeometryModel"]
@@ -60,26 +100,987 @@ def _rotate_about_axis(
     )
 
 
+def _records_equal(first: object, second: object) -> bool:
+    """NumPy-safe equality for the small records captured by a delta journal."""
+
+    if first is second:
+        return True
+    if isinstance(first, np.ndarray) or isinstance(second, np.ndarray):
+        try:
+            return bool(np.array_equal(first, second))
+        except (TypeError, ValueError):
+            return False
+    if type(first) is not type(second):
+        return False
+    if is_dataclass(first) and not isinstance(first, type):
+        return all(
+            _records_equal(getattr(first, item.name), getattr(second, item.name))
+            for item in fields(first)
+        )
+    if isinstance(first, Mapping):
+        return (
+            first.keys() == second.keys()  # type: ignore[union-attr]
+            and all(_records_equal(first[key], second[key]) for key in first)  # type: ignore[index]
+        )
+    if isinstance(first, (tuple, list)):
+        return len(first) == len(second) and all(  # type: ignore[arg-type]
+            _records_equal(left, right)
+            for left, right in zip(first, second)  # type: ignore[arg-type]
+        )
+    try:
+        return bool(first == second)
+    except (TypeError, ValueError):
+        return False
+
+
+def _transactional(method):
+    """Join the current model transaction or create one for a public edit."""
+
+    @wraps(method)
+    def wrapped(self: "GeometryModel", *args, **kwargs):
+        with self.transaction():
+            return method(self, *args, **kwargs)
+
+    return wrapped
+
+
+class _ReadOnlySetMapping(Mapping):
+    """Live mapping view whose set values cannot mutate owner state."""
+
+    __slots__ = ("_source",)
+
+    def __init__(self, source: Mapping[Hashable, Set[object]]) -> None:
+        self._source = source
+
+    def __getitem__(self, key: Hashable) -> frozenset[object]:
+        return frozenset(self._source[key])
+
+    def __iter__(self) -> Iterator[Hashable]:
+        return iter(self._source)
+
+    def __len__(self) -> int:
+        return len(self._source)
+
+
 class GeometryModel:
     """A container of vertices, edges and faces with persistent IDs."""
 
-    def __init__(self) -> None:
-        self.vertices: Dict[int, Vertex] = {}
-        self.edges: Dict[int, Edge] = {}
-        self.faces: Dict[int, Face] = {}
+    def __init__(
+        self,
+        *,
+        model_id: UUID | str | None = None,
+        tolerance: TolerancePolicy = DEFAULT_TOLERANCE_POLICY,
+    ) -> None:
+        self._model_id = canonical_model_id(uuid4() if model_id is None else model_id)
+        if not isinstance(tolerance, TolerancePolicy):
+            raise TypeError("tolerance must be a TolerancePolicy")
+        self._tolerance = tolerance
+        self._revision = 0
+        self._units = "m"
+        self._local_origin = np.zeros(3, dtype=float)
+        self._local_origin.flags.writeable = False
+        self._coordinate_transform: np.ndarray | None = None
+
+        # Private stores are the only mutation authority. Public access is a
+        # live read-only view over immutable entity records.
+        self._vertices: Dict[int, Vertex] = {}
+        self._edges: Dict[int, Edge] = {}
+        self._faces: Dict[int, Face] = {}
+        self.vertices: Mapping[int, Vertex] = MappingProxyType(self._vertices)
+        self.edges: Mapping[int, Edge] = MappingProxyType(self._edges)
+        self.faces: Mapping[int, Face] = MappingProxyType(self._faces)
         self._next_id: Dict[str, int] = {"vertex": 1, "edge": 1, "face": 1}
         self._arc_cache: Dict[int, Tuple[int, ArcFrame]] = {}
+        self._edge_length_cache: Dict[int, Tuple[int, float]] = {}
+        self._entity_versions: Dict[EntityKey, int] = {}
+        self._vertex_edges: Dict[int, Set[int]] = {}
+        self._edge_faces: Dict[int, Set[int]] = {}
+        self._spatial_index = None
+        self._parts: Dict[int, Part] = {}
+        self._sheets: Dict[int, Sheet] = {}
+        self._face_uses: Dict[int, FaceUse] = {}
+        self._coedges: Dict[int, Coedge] = {}
+        self._members: Dict[int, Member] = {}
+        self._member_edge_uses: Dict[int, MemberEdgeUse] = {}
+        self._attachments: Dict[int, Attachment] = {}
+        self._junctions: Dict[int, Junction] = {}
+        self.parts: Mapping[int, Part] = MappingProxyType(self._parts)
+        self.sheets: Mapping[int, Sheet] = MappingProxyType(self._sheets)
+        self.face_uses: Mapping[int, FaceUse] = MappingProxyType(self._face_uses)
+        self.coedges: Mapping[int, Coedge] = MappingProxyType(self._coedges)
+        self.members: Mapping[int, Member] = MappingProxyType(self._members)
+        self.member_edge_uses: Mapping[int, MemberEdgeUse] = MappingProxyType(
+            self._member_edge_uses
+        )
+        self.attachments: Mapping[int, Attachment] = MappingProxyType(
+            self._attachments
+        )
+        self.junctions: Mapping[int, Junction] = MappingProxyType(self._junctions)
+        self._next_structural_id: Dict[str, int] = {
+            "part": 1,
+            "sheet": 1,
+            "face_use": 1,
+            "coedge": 1,
+            "member": 1,
+            "member_edge_use": 1,
+            "attachment": 1,
+            "junction": 1,
+        }
+        self._edge_member_uses: Dict[int, Set[int]] = {}
+        self._face_structural_uses: Dict[int, Set[int]] = {}
+        self._transaction_journal: _TransactionJournal | None = None
+        self._notifying_hooks = False
+        self._last_change_set = ChangeSet(0, 0)
+        self._change_hooks: List[ChangeHook] = []
         # What each removed entity was replaced by, so attributes attached to
         # it can follow.  Splitting a line that carries a load must not throw
         # the load away.
         self._replacements: List[Tuple[EntityRef, Tuple[EntityRef, ...]]] = []
         self._replacement_history: Dict[EntityRef, Tuple[EntityRef, ...]] = {}
-        self.groups: Dict[str, Set[EntityRef]] = {}
-        self.tags: Dict[EntityRef, Set[str]] = {}
+        self._groups: Dict[str, Set[EntityRef]] = {}
+        self._tags: Dict[EntityRef, Set[str]] = {}
+        self._group_view = _ReadOnlySetMapping(self._groups)
+        self._tag_view = _ReadOnlySetMapping(self._tags)
         # Persistent design intent is separate from the materialized topology,
         # but travels with its owner so a geometry document cannot silently
         # lose its editable feature tree.
-        self.features = FeatureHistory()
+        self._features = FeatureHistory()
+        self._features._bind_owner(self)  # noqa: SLF001
+
+    @property
+    def model_id(self) -> UUID:
+        """Stable document identity; it cannot change while handles exist."""
+
+        return self._model_id
+
+    @property
+    def revision(self) -> int:
+        """Monotonic committed document revision."""
+
+        return self._revision
+
+    @property
+    def tolerance(self) -> TolerancePolicy:
+        return self._tolerance
+
+    @property
+    def units(self) -> str:
+        return self._units
+
+    @property
+    def local_origin(self) -> np.ndarray:
+        return self._local_origin
+
+    @property
+    def coordinate_transform(self) -> np.ndarray | None:
+        return self._coordinate_transform
+
+    @property
+    def features(self) -> FeatureHistory:
+        """Owner-bound persistent feature history."""
+
+        return self._features
+
+    def _install_feature_history(self, history: FeatureHistory) -> None:
+        """Install decoded history on an unpublished/staged model."""
+
+        if not isinstance(history, FeatureHistory):
+            raise TypeError("features must be a FeatureHistory")
+        history.validate()
+        history._bind_owner(self)  # noqa: SLF001
+        self._features = history
+
+    def _feature_history_will_change(self, history: FeatureHistory) -> None:
+        """Guard the start of one owner-aware history edit."""
+
+        if history is not self._features:
+            raise GeometryError("feature history is not owned by this model")
+        if self._transaction_journal is not None:
+            raise GeometryError("feature history cannot change inside a topology transaction")
+        if self._notifying_hooks:
+            raise GeometryError("change hooks are read-only observers")
+
+    def _feature_history_did_change(self, history: FeatureHistory) -> None:
+        """Publish one successfully validated feature-history edit."""
+
+        if history is not self._features:
+            raise GeometryError("feature history is not owned by this model")
+        history.validate()
+        revision_before = self._revision
+        self._revision += 1
+        change_set = ChangeSet(
+            revision_before,
+            self._revision,
+            feature_history_changed=True,
+        )
+        self._last_change_set = change_set
+        self._notifying_hooks = True
+        try:
+            for hook in tuple(self._change_hooks):
+                try:
+                    hook(change_set)
+                except Exception:
+                    continue
+        finally:
+            self._notifying_hooks = False
+
+    def set_document_settings(
+        self,
+        *,
+        tolerance: TolerancePolicy | None = None,
+        units: str | None = None,
+        local_origin: Sequence[float] | None = None,
+        coordinate_transform: object = _MISSING,
+    ) -> None:
+        """Atomically update revisioned coordinate/tolerance document state."""
+
+        if self._transaction_journal is not None or self._notifying_hooks:
+            raise GeometryError("document settings cannot change during a transaction or hook")
+        made_tolerance = self._tolerance if tolerance is None else tolerance
+        if not isinstance(made_tolerance, TolerancePolicy):
+            raise TypeError("tolerance must be a TolerancePolicy")
+        made_units = self._units if units is None else str(units)
+        if not made_units or "\x00" in made_units:
+            raise GeometryError("units must be a non-empty string without NUL")
+        made_origin = (
+            self._local_origin
+            if local_origin is None
+            else np.asarray(local_origin, dtype=float)
+        )
+        if made_origin.shape != (3,) or not np.all(np.isfinite(made_origin)):
+            raise GeometryError("local_origin must be a finite 3-vector")
+        made_origin = np.array(made_origin, dtype=float, copy=True)
+        made_origin.flags.writeable = False
+        if coordinate_transform is _MISSING:
+            made_transform = self._coordinate_transform
+        elif coordinate_transform is None:
+            made_transform = None
+        else:
+            made_transform = np.asarray(coordinate_transform, dtype=float)
+            if (
+                made_transform.shape != (4, 4)
+                or not np.all(np.isfinite(made_transform))
+                or not np.allclose(made_transform[3], (0.0, 0.0, 0.0, 1.0))
+                or abs(float(np.linalg.det(made_transform[:3, :3])))
+                <= np.finfo(float).eps
+            ):
+                raise GeometryError("coordinate_transform must be a finite invertible affine 4x4 matrix")
+            made_transform = np.array(made_transform, dtype=float, copy=True)
+            made_transform.flags.writeable = False
+        same_transform = (
+            (made_transform is None and self._coordinate_transform is None)
+            or (
+                made_transform is not None
+                and self._coordinate_transform is not None
+                and np.array_equal(made_transform, self._coordinate_transform)
+            )
+        )
+        if (
+            made_tolerance == self._tolerance
+            and made_units == self._units
+            and np.array_equal(made_origin, self._local_origin)
+            and same_transform
+        ):
+            return
+        revision_before = self._revision
+        self._tolerance = made_tolerance
+        self._units = made_units
+        self._local_origin = made_origin
+        self._coordinate_transform = made_transform
+        self._arc_cache.clear()
+        self._edge_length_cache.clear()
+        self._spatial_index = None
+        self._revision += 1
+        change_set = ChangeSet(
+            revision_before,
+            self._revision,
+            document_settings_changed=True,
+        )
+        self._last_change_set = change_set
+        self._notifying_hooks = True
+        try:
+            for hook in tuple(self._change_hooks):
+                try:
+                    hook(change_set)
+                except Exception:
+                    continue
+        finally:
+            self._notifying_hooks = False
+
+    @property
+    def groups(self) -> Mapping[str, frozenset[EntityRef]]:
+        """Live read-only semantic groups."""
+
+        return self._group_view  # type: ignore[return-value]
+
+    @property
+    def tags(self) -> Mapping[EntityRef, frozenset[str]]:
+        """Live read-only entity tags."""
+
+        return self._tag_view  # type: ignore[return-value]
+
+    # ------------------------------------------------------------------
+    # delta transactions and changed-region state
+    # ------------------------------------------------------------------
+    def transaction(self) -> TopologyTransaction:
+        """Return a nested delta transaction context for public mutation."""
+
+        return TopologyTransaction(self)
+
+    def handle(self, kind: str, identifier: int) -> EntityHandle:
+        """Return a model-bound public handle after local existence checking."""
+
+        key = (validate_entity_kind(kind), validate_local_id(identifier))
+        if not self._contains_entity(*key):
+            raise GeometryError(f"no {kind} {identifier}")
+        return EntityHandle(self.model_id, key[0], key[1])
+
+    def resolve_handle(self, handle: EntityHandle) -> Resolution:
+        """Resolve a public handle with an explicit status."""
+
+        if not isinstance(handle, EntityHandle):
+            raise TypeError("resolve_handle needs an EntityHandle")
+        if handle.model_id != self.model_id:
+            return Resolution.terminal(
+                handle,
+                ResolutionStatus.WRONG_MODEL,
+                model_id=self.model_id,
+                diagnostic="handle belongs to another geometry model",
+            )
+        if handle.kind in ("vertex", "edge", "face"):
+            local = EntityRef(handle.kind, handle.id)  # type: ignore[arg-type]
+            current = self.resolve_ref(local)
+            if self._contains_entity(handle.kind, handle.id):
+                return Resolution.active(handle)
+            if current:
+                return Resolution.replaced(
+                    handle,
+                    (
+                        EntityHandle(self.model_id, item.kind, item.id)
+                        for item in current
+                    ),
+                )
+            if local in self._replacement_history:
+                return Resolution.terminal(handle, ResolutionStatus.DELETED)
+        elif self._contains_entity(handle.kind, handle.id):
+            return Resolution.active(handle)
+        elif (
+            handle.kind in self._next_structural_id
+            and handle.id < self._next_structural_id[handle.kind]
+        ):
+            return Resolution.terminal(handle, ResolutionStatus.DELETED)
+        return Resolution.terminal(handle, ResolutionStatus.UNKNOWN)
+
+    @property
+    def last_change_set(self) -> ChangeSet:
+        return self._last_change_set
+
+    def add_change_hook(self, hook: ChangeHook) -> None:
+        """Subscribe to committed changes without creating a package dependency."""
+
+        if not callable(hook):
+            raise TypeError("a change hook must be callable")
+        if hook not in self._change_hooks:
+            self._change_hooks.append(hook)
+
+    def remove_change_hook(self, hook: ChangeHook) -> None:
+        try:
+            self._change_hooks.remove(hook)
+        except ValueError:
+            pass
+
+    def _enter_transaction(self) -> None:
+        if self._notifying_hooks:
+            raise GeometryError("change hooks are read-only observers")
+        journal = self._transaction_journal
+        if journal is None:
+            journal = _TransactionJournal(
+                revision_before=self.revision,
+                replacement_log_start=len(self._replacements),
+            )
+            self._transaction_journal = journal
+        journal.depth += 1
+
+    def _exit_transaction(self, error: BaseException | None) -> None:
+        journal = self._transaction_journal
+        if journal is None or journal.depth <= 0:
+            raise RuntimeError("transaction exit without a matching entry")
+        journal.depth -= 1
+        if journal.depth:
+            if error is not None:
+                # The exception continues through the outer context, which
+                # owns rollback.  No nested savepoint is implied.
+                journal.failure = error
+                return
+            return
+        try:
+            failure = error if error is not None else journal.failure
+            if failure is not None:
+                self._rollback_transaction(journal)
+                if error is None:
+                    raise GeometryError(
+                        "transaction cannot commit after a nested edit failed"
+                    ) from failure
+                return
+            try:
+                self._capture_direct_mutations(journal)
+                # Every public edit, including a pure addition, must publish a
+                # valid committed state.  Standalone vertices and edges are
+                # valid neutral geometry; new faces additionally receive the
+                # same changed-closure trim/surface checks as edited faces.
+                validates_commit = bool(journal.entity_before) or bool(
+                    journal.structural_before
+                    or journal.group_changes
+                    or journal.tag_changes
+                    or journal.ownership_changes
+                    or journal.member_changes
+                    or journal.attachment_changes
+                )
+                if validates_commit:
+                    problems = self._validate_incremental(journal)
+                    if problems:
+                        raise GeometryError("; ".join(problems))
+                self._commit_transaction(journal)
+            except BaseException:
+                self._rollback_transaction(journal)
+                raise
+        finally:
+            self._transaction_journal = None
+
+    def _entity_store(self, kind: str) -> Dict[int, object]:
+        try:
+            return {
+                "vertex": self._vertices,
+                "edge": self._edges,
+                "face": self._faces,
+            }[kind]
+        except KeyError:
+            raise GeometryError(f"unknown entity kind {kind!r}") from None
+
+    def _contains_entity(self, kind: str, identifier: int) -> bool:
+        """Check one compact key without materializing the whole key set."""
+
+        if kind in ("vertex", "edge", "face"):
+            return int(identifier) in self._entity_store(kind)
+        try:
+            return int(identifier) in self._structural_store(kind)
+        except KeyError:
+            return False
+
+    def _entity_bounds(self, key: EntityKey) -> tuple[float, ...] | None:
+        kind, identifier = key
+        if kind == "vertex":
+            vertex = self._vertices.get(identifier)
+            if vertex is None:
+                return None
+            point = np.asarray(vertex.position, dtype=float)
+            return (*point, *point)
+        if kind == "edge":
+            edge = self._edges.get(identifier)
+            if edge is None:
+                return None
+            if isinstance(edge.curve, Arc):
+                frame = self._arc_frame(edge)
+                angles = [0.0, frame.sweep]
+                for coordinate in range(3):
+                    phase = float(
+                        np.arctan2(frame.e2[coordinate], frame.e1[coordinate])
+                    )
+                    for candidate in (phase, phase + np.pi):
+                        if self._angle_on_arc_sweep(candidate, frame.sweep):
+                            angles.append(candidate)
+                samples = np.asarray(
+                    [
+                        frame.center
+                        + frame.radius
+                        * (
+                            np.cos(angle) * frame.e1
+                            + np.sin(angle) * frame.e2
+                        )
+                        for angle in angles
+                    ]
+                )
+            elif isinstance(edge.curve, Spline):
+                # A Bezier curve is contained in the convex hull of its
+                # control polygon, so this bound is analytic and conservative.
+                samples = self._spline_points(edge)
+            else:
+                samples = np.asarray(
+                    (
+                        self._vertices[edge.start].position,
+                        self._vertices[edge.end].position,
+                    )
+                )
+            lower, upper = np.min(samples, axis=0), np.max(samples, axis=0)
+            return (*lower, *upper)
+        if kind == "face":
+            face = self._faces.get(identifier)
+            if face is None:
+                return None
+            bounds = [
+                self._entity_bounds(("edge", item.edge))
+                for loop in (face.loop,) + face.holes
+                for item in loop
+                if item.edge in self._edges
+            ]
+            if not bounds:
+                return None
+            lower = np.min(np.asarray([item[:3] for item in bounds]), axis=0)
+            upper = np.max(np.asarray([item[3:] for item in bounds]), axis=0)
+            return (*lower, *upper)
+        return None
+
+    @staticmethod
+    def _angle_on_arc_sweep(angle: float, sweep: float) -> bool:
+        period = 2.0 * np.pi
+        if sweep >= 0.0:
+            delta = float(angle % period)
+            return delta <= sweep + 1.0e-14
+        delta = float((-angle) % period)
+        return delta <= -sweep + 1.0e-14
+
+    def _spatial(self):
+        """Return the lazily materialized deterministic entity AABB tree."""
+
+        if self._spatial_index is None:
+            from .spatial import AABB, AABBTree
+
+            items = []
+            for key in sorted(self.entity_keys()):
+                bounds = self._entity_bounds(key)
+                if bounds is not None:
+                    items.append((key, AABB(bounds[:3], bounds[3:])))
+            self._spatial_index = AABBTree(items)
+        return self._spatial_index
+
+    def spatial_candidates(
+        self,
+        lower: Sequence[float],
+        upper: Sequence[float],
+        *,
+        kinds: Iterable[str] | None = None,
+    ) -> tuple[EntityKey, ...]:
+        """Return stable candidate keys intersecting a world-space box."""
+
+        from .spatial import AABB
+
+        allowed = None if kinds is None else frozenset(str(item) for item in kinds)
+        region = AABB(tuple(lower), tuple(upper))
+        journal = self._transaction_journal
+        if journal is not None and journal.changed:
+            # Queries made by a compound edit must observe provisional owner
+            # writes.  Use a changed-key overlay on the committed tree: stale
+            # hits are rechecked against current exact bounds and provisional
+            # additions/moves are tested explicitly.  This remains O(log n+k+c)
+            # for a local edit with c changed records.
+            committed = set(self._spatial().query(region).keys)
+            changed = set(journal.changed) | set(journal.spatial_updates)
+            committed.difference_update(changed)
+            for key in changed:
+                bounds = self._entity_bounds(key)
+                if bounds is not None and region.intersects(
+                    AABB(bounds[:3], bounds[3:])
+                ):
+                    committed.add(key)
+            made = tuple(sorted(committed))
+        else:
+            made = self._spatial().query(region).keys
+        return tuple(
+            key for key in made if allowed is None or key[0] in allowed
+        )
+
+    def strict_audit(self, *, policy=None):
+        """Run deterministic, fail-closed full-model qualification."""
+
+        from .strict_audit import strict_audit
+
+        return strict_audit(self, policy=policy)
+
+    def _capture_entity(self, kind: str, identifier: int) -> None:
+        journal = self._transaction_journal
+        if journal is None or journal.rolling_back:
+            return
+        key = (kind, int(identifier))
+        store = self._entity_store(kind)
+        current = store.get(int(identifier), _MISSING)
+        if key not in journal.entity_before:
+            journal.bounds_before[key] = self._entity_bounds(key)
+            journal.versions_before[key] = self._entity_versions.get(key, _MISSING)
+            captured = _MISSING if current is _MISSING else deepcopy(current)
+            journal.capture_entity(key, captured)
+        else:
+            journal.changed.add(key)
+        journal.invalidated_caches.add(key)
+
+    def _detach_entity(self, kind: str, value: object) -> None:
+        if kind == "edge":
+            edge = value
+            assert isinstance(edge, Edge)
+            for vertex_id in {edge.start, edge.end, *(
+                (edge.curve.via_vertex,)
+                if isinstance(edge.curve, Arc)
+                else edge.curve.control_vertices
+                if isinstance(edge.curve, Spline)
+                else ()
+            )}:
+                uses = self._vertex_edges.get(vertex_id)
+                if uses is not None:
+                    uses.discard(edge.id)
+                    if not uses:
+                        self._vertex_edges.pop(vertex_id, None)
+        elif kind == "face":
+            face = value
+            assert isinstance(face, Face)
+            for edge_id in {item.edge for loop in (face.loop,) + face.holes for item in loop}:
+                uses = self._edge_faces.get(edge_id)
+                if uses is not None:
+                    uses.discard(face.id)
+                    if not uses:
+                        self._edge_faces.pop(edge_id, None)
+
+    def _attach_entity(self, kind: str, value: object) -> None:
+        if kind == "edge":
+            edge = value
+            assert isinstance(edge, Edge)
+            vertices = {edge.start, edge.end}
+            if isinstance(edge.curve, Arc):
+                vertices.add(edge.curve.via_vertex)
+            elif isinstance(edge.curve, Spline):
+                vertices.update(edge.curve.control_vertices)
+            for vertex_id in vertices:
+                self._vertex_edges.setdefault(vertex_id, set()).add(edge.id)
+        elif kind == "face":
+            face = value
+            assert isinstance(face, Face)
+            for edge_id in {item.edge for loop in (face.loop,) + face.holes for item in loop}:
+                self._edge_faces.setdefault(edge_id, set()).add(face.id)
+
+    def _rebuild_incidence(self) -> None:
+        """Rebuild reverse incidence after trusted document materialization."""
+
+        self._vertex_edges.clear()
+        self._edge_faces.clear()
+        for edge in self._edges.values():
+            self._attach_entity("edge", edge)
+        for face in self._faces.values():
+            self._attach_entity("face", face)
+
+    def _put_entity(self, kind: str, value: Vertex | Edge | Face) -> None:
+        identifier = int(value.id)
+        self._capture_entity(kind, identifier)
+        if self._transaction_journal is not None:
+            self._transaction_journal.owner_writes.add((kind, identifier))
+        store = self._entity_store(kind)
+        previous = store.get(identifier)
+        if previous is not None:
+            self._detach_entity(kind, previous)
+        store[identifier] = value
+        self._attach_entity(kind, value)
+        if kind == "face" and isinstance(value, Face):
+            self._synchronize_face_uses(value)
+        key = (kind, identifier)
+        self._entity_versions[key] = self._entity_versions.get(key, 0) + 1
+        if kind == "vertex":
+            for edge_id in self._vertex_edges.get(identifier, ()):
+                self._arc_cache.pop(edge_id, None)
+                self._edge_length_cache.pop(edge_id, None)
+                if self._transaction_journal is not None:
+                    self._transaction_journal.invalidated_caches.add(("edge", edge_id))
+        elif kind == "edge":
+            self._arc_cache.pop(identifier, None)
+            self._edge_length_cache.pop(identifier, None)
+
+    def _capture_direct_mutations(self, journal: _TransactionJournal) -> None:
+        """Discover legacy direct field/store writes before commit.
+
+        Core operations are migrating to ``_put_entity``.  During that
+        migration, older qualified edit code still assigns dataclass fields
+        directly.  Comparing the first-write baseline lets the transaction
+        maintain incidence and rollback correctness without a full-model
+        snapshot; only records already touched by the operation are checked.
+        """
+
+        for key, before in tuple(journal.entity_before.items()):
+            if before is _MISSING or key in journal.owner_writes:
+                continue
+            after = self._entity_store(key[0]).get(key[1], _MISSING)
+            if after is _MISSING:
+                continue
+            changed = not _records_equal(before, after)
+            if changed:
+                self._detach_entity(key[0], before)
+                self._attach_entity(key[0], after)
+                journal.changed.add(key)
+
+    def _delete_entity(self, kind: str, identifier: int) -> object:
+        store = self._entity_store(kind)
+        try:
+            previous = store[int(identifier)]
+        except KeyError:
+            raise GeometryError(f"no {kind} {identifier}") from None
+        self._capture_entity(kind, int(identifier))
+        if self._transaction_journal is not None:
+            self._transaction_journal.owner_writes.add((kind, int(identifier)))
+        self._detach_entity(kind, previous)
+        del store[int(identifier)]
+        key = (kind, int(identifier))
+        self._entity_versions[key] = self._entity_versions.get(key, 0) + 1
+        self._arc_cache.pop(int(identifier), None)
+        self._edge_length_cache.pop(int(identifier), None)
+        return previous
+
+    def _set_entity_unjournalled(
+        self, kind: str, identifier: int, value: object
+    ) -> None:
+        store = self._entity_store(kind)
+        current = store.pop(identifier, None)
+        if current is not None:
+            self._detach_entity(kind, current)
+        if value is not _MISSING:
+            store[identifier] = value
+            self._attach_entity(kind, value)
+        self._arc_cache.pop(identifier, None)
+        self._edge_length_cache.pop(identifier, None)
+
+    def _capture_mapping(self, namespace: str, key: object, value: object) -> None:
+        journal = self._transaction_journal
+        if journal is not None and not journal.rolling_back:
+            journal.capture_mapping(namespace, key, value)
+
+    def _rollback_transaction(self, journal: _TransactionJournal) -> None:
+        journal.rolling_back = True
+        # Remove current changed records from dependency-rich to foundational
+        # order, then reattach originals in the inverse order.
+        for kind in ("face", "edge", "vertex"):
+            for current_kind, identifier in sorted(journal.entity_before, reverse=True):
+                if current_kind == kind:
+                    self._set_entity_unjournalled(kind, identifier, _MISSING)
+        for kind in ("vertex", "edge", "face"):
+            for (current_kind, identifier), original in sorted(journal.entity_before.items()):
+                if current_kind == kind and original is not _MISSING:
+                    self._set_entity_unjournalled(kind, identifier, original)
+        for key, original in journal.versions_before.items():
+            if original is _MISSING:
+                self._entity_versions.pop(key, None)
+            else:
+                self._entity_versions[key] = int(original)
+
+        for (namespace, key), original in reversed(tuple(journal.mapping_before.items())):
+            mapping = {
+                "group": self._groups,
+                "tag": self._tags,
+                "replacement": self._replacement_history,
+            }.get(namespace)
+            if mapping is None:
+                continue
+            if original is _MISSING:
+                mapping.pop(key, None)
+            else:
+                if isinstance(original, (set, dict, list)):
+                    original = deepcopy(original)
+                mapping[key] = original
+        for (kind, identifier), original in reversed(
+            tuple(journal.structural_before.items())
+        ):
+            store = self._structural_store(kind)
+            if original is _MISSING:
+                store.pop(identifier, None)
+            else:
+                store[identifier] = original
+        self._rebuild_member_incidence()
+        del self._replacements[journal.replacement_log_start :]
+        # Values may have been queried while provisional geometry was live.
+        # Rollback is exceptional, so discard the small derived caches and the
+        # lazily rebuilt tree instead of attempting a fragile inverse update.
+        self._arc_cache.clear()
+        self._edge_length_cache.clear()
+        self._spatial_index = None
+        # High-water marks deliberately remain at their highest allocation.
+        self._revision = journal.revision_before
+        journal.rolling_back = False
+
+    def _validate_incremental(self, journal: _TransactionJournal) -> tuple[str, ...]:
+        keys = set(journal.changed) | set(journal.invalidated_caches)
+        for kind, identifier in tuple(keys):
+            if kind == "vertex":
+                keys.update(("edge", edge) for edge in self._vertex_edges.get(identifier, ()))
+            if kind == "edge":
+                keys.update(("face", face) for face in self._edge_faces.get(identifier, ()))
+        for kind, identifier in tuple(keys):
+            if kind == "edge":
+                keys.update(("face", face) for face in self._edge_faces.get(identifier, ()))
+
+        errors: List[str] = []
+        for kind, identifier in sorted(keys):
+            if kind == "vertex":
+                vertex = self._vertices.get(identifier)
+                if vertex is not None and (
+                    vertex.id != identifier
+                    or np.asarray(vertex.position).shape != (3,)
+                    or not np.all(np.isfinite(vertex.position))
+                ):
+                    errors.append(f"vertex {identifier} has invalid coordinates or identity")
+            elif kind == "edge":
+                edge = self._edges.get(identifier)
+                if edge is None:
+                    continue
+                if edge.id != identifier:
+                    errors.append(f"edge key {identifier} does not match ID {edge.id}")
+                    continue
+                if edge.start not in self._vertices or edge.end not in self._vertices:
+                    errors.append(f"edge {identifier} references a missing endpoint")
+                    continue
+                if edge.start == edge.end:
+                    errors.append(f"edge {identifier} has coincident topology endpoints")
+                    continue
+                start = self._vertices[edge.start].position
+                end = self._vertices[edge.end].position
+                length = float(np.linalg.norm(end - start))
+                if length <= self.tolerance.effective_length(length):
+                    errors.append(f"edge {identifier} has zero geometric length")
+                    continue
+                if isinstance(edge.curve, Arc):
+                    if edge.curve.via_vertex not in self._vertices:
+                        errors.append(f"arc edge {identifier} references a missing via vertex")
+                    else:
+                        try:
+                            self._arc_frame(edge)
+                        except (ValueError, GeometryError) as exc:
+                            errors.append(f"arc edge {identifier} is invalid: {exc}")
+                elif isinstance(edge.curve, Spline):
+                    missing = [item for item in edge.curve.control_vertices if item not in self._vertices]
+                    if missing:
+                        errors.append(f"spline edge {identifier} has missing control vertices {missing}")
+            elif kind == "face":
+                face = self._faces.get(identifier)
+                if face is None:
+                    continue
+                if face.id != identifier:
+                    errors.append(f"face key {identifier} does not match ID {face.id}")
+                    continue
+                loops = (face.loop,) + face.holes
+                for loop in loops:
+                    if len(loop) < 3:
+                        errors.append(f"face {identifier} has a loop with fewer than three edges")
+                        continue
+                    if any(item.edge not in self._edges for item in loop):
+                        errors.append(f"face {identifier} references a missing edge")
+                        continue
+                    for current, following in zip(loop, loop[1:] + loop[:1]):
+                        if self.oriented_end_vertex(current) != self.oriented_start_vertex(following):
+                            errors.append(f"face {identifier} has a discontinuous loop")
+                            break
+                if not errors:
+                    errors.extend(self._validate_face_geometry(identifier))
+
+        for name in sorted(journal.group_changes):
+            for reference in self._groups.get(name, ()):
+                if not self._contains_entity(reference.kind, reference.id):
+                    errors.append(f"group {name!r} references missing entity {reference}")
+        for kind, identifier in sorted(journal.tag_changes):
+            reference = EntityRef(kind, identifier)  # type: ignore[arg-type]
+            if reference in self._tags and not self._contains_entity(kind, identifier):
+                errors.append(f"tags reference missing entity {kind}{identifier}")
+        if (
+            journal.ownership_changes
+            or journal.member_changes
+            or journal.attachment_changes
+            or any(
+                key[0] in ("edge", "face")
+                and self._entity_store(key[0]).get(key[1]) is None
+                for key in journal.entity_before
+            )
+        ):
+            errors.extend(self._validate_structural())
+        return tuple(dict.fromkeys(errors))
+
+    def _commit_transaction(self, journal: _TransactionJournal) -> None:
+        from .spatial import AABB
+
+        added: List[EntityKey] = []
+        removed: List[EntityKey] = []
+        modified: List[EntityKey] = []
+        aabbs: List[AABBChange] = []
+        for key, before in sorted(journal.entity_before.items()):
+            after = self._entity_store(key[0]).get(key[1], _MISSING)
+            if before is _MISSING and after is not _MISSING:
+                added.append(key)
+            elif before is not _MISSING and after is _MISSING:
+                removed.append(key)
+            elif before is not _MISSING and after is not _MISSING:
+                modified.append(key)
+            before_bounds = journal.bounds_before.get(key)
+            after_bounds = self._entity_bounds(key)
+            if before_bounds != after_bounds:
+                aabbs.append(AABBChange(key, before_bounds, after_bounds))
+
+        spatial_updates: Set[EntityKey] = set(journal.spatial_updates)
+        if self._spatial_index is not None:
+            # The lazy tree may have been materialized from provisional state
+            # by a read-your-writes query.  Reconcile every locally touched
+            # geometry key, including net-zero add/remove or move/move-back
+            # edits whose committed before/after bounds compare equal.
+            reconcile = {
+                *(change.entity for change in aabbs),
+                *journal.changed,
+                *journal.spatial_updates,
+            }
+            for key in sorted(reconcile):
+                after_bounds = self._entity_bounds(key)
+                if after_bounds is None:
+                    self._spatial_index.discard(key)
+                else:
+                    self._spatial_index.upsert(
+                        key, AABB(after_bounds[:3], after_bounds[3:])
+                    )
+                spatial_updates.add(key)
+
+        semantic_change = bool(
+            journal.structural_before
+            or journal.group_changes
+            or journal.tag_changes
+            or journal.ownership_changes
+            or journal.member_changes
+            or journal.attachment_changes
+            or len(self._replacements) != journal.replacement_log_start
+        )
+        changed = bool(added or removed or modified or semantic_change)
+        revision_after = self.revision + (1 if changed else 0)
+        change_set = ChangeSet(
+            revision_before=journal.revision_before,
+            revision_after=revision_after,
+            added=tuple(added),
+            removed=tuple(removed),
+            modified=tuple(modified),
+            replacements=tuple(self._replacements[journal.replacement_log_start :]),
+            ownership_changes=tuple(sorted(journal.ownership_changes)),
+            member_changes=tuple(sorted(journal.member_changes)),
+            attachment_changes=tuple(sorted(journal.attachment_changes)),
+            group_changes=tuple(sorted(journal.group_changes)),
+            tag_changes=tuple(sorted(journal.tag_changes)),
+            affected_aabbs=tuple(aabbs),
+            invalidated_caches=tuple(sorted(journal.invalidated_caches)),
+            spatial_updates=tuple(sorted(spatial_updates)),
+        )
+        self._revision = revision_after
+        self._last_change_set = change_set
+        if changed:
+            # Detach the committed journal before notifying downstream
+            # observers.  Hooks are deliberately read-only: allowing one to
+            # join the just-committed journal recursively corrupts revision
+            # and ChangeSet boundaries.
+            self._transaction_journal = None
+            self._notifying_hooks = True
+            try:
+                for hook in tuple(self._change_hooks):
+                    try:
+                        hook(change_set)
+                    except Exception:
+                        # A consumer callback cannot make a valid commit
+                        # partial or prevent other observers from running.
+                        continue
+            finally:
+                self._notifying_hooks = False
 
     # ------------------------------------------------------------------
     # replacement log
@@ -94,6 +1095,7 @@ class GeometryModel:
 
         return list(self._replacements)
 
+    @_transactional
     def record_replacement(
         self, old: EntityRef, new: Sequence[EntityRef]
     ) -> None:
@@ -106,7 +1108,7 @@ class GeometryModel:
             or old.id >= self._next_id[old.kind]
         ):
             raise GeometryError(f"replacement history references missing entity {old}")
-        if (old.kind, old.id) in self.entity_keys():
+        if self._contains_entity(old.kind, old.id):
             raise GeometryError(
                 f"cannot record replacement for surviving entity {old}"
             )
@@ -118,14 +1120,13 @@ class GeometryModel:
             raise GeometryError("an entity cannot replace itself")
         if old in self._replacement_history:
             raise GeometryError(f"replacement history already exists for {old}")
-        keys = self.entity_keys()
         for reference in replacements:
             if reference.id <= 0 or reference.id >= self._next_id[reference.kind]:
                 raise GeometryError(
                     f"replacement history references missing entity {reference}"
                 )
             if (
-                (reference.kind, reference.id) not in keys
+                not self._contains_entity(reference.kind, reference.id)
                 and reference not in self._replacement_history
             ):
                 raise GeometryError(
@@ -145,16 +1146,42 @@ class GeometryModel:
 
         if any(reaches_old(reference, set()) for reference in replacements):
             raise GeometryError(f"replacement history contains a cycle at {old}")
+        self._capture_mapping(
+            "replacement",
+            old,
+            self._replacement_history.get(old, _MISSING),
+        )
         self._replacements.append((old, replacements))
         self._replacement_history[old] = replacements
-        for name, members in self.groups.items():
+        if old.kind == "face":
+            self._replace_structural_face_ownership(
+                old.id,
+                tuple(reference.id for reference in replacements),
+            )
+        for name, members in self._groups.items():
             if old in members:
+                self._capture_mapping("group", name, set(members))
+                assert self._transaction_journal is not None
+                self._transaction_journal.group_changes.add(name)
                 members.discard(old)
                 members.update(replacements)
-        inherited = self.tags.pop(old, set())
+        self._capture_mapping("tag", old, set(self._tags.get(old, ())) if old in self._tags else _MISSING)
+        inherited = self._tags.pop(old, set())
+        if self._transaction_journal is not None:
+            self._transaction_journal.tag_changes.add((old.kind, old.id))
         for replacement in replacements:
-            self.tags.setdefault(replacement, set()).update(inherited)
+            self._capture_mapping(
+                "tag",
+                replacement,
+                set(self._tags.get(replacement, ())) if replacement in self._tags else _MISSING,
+            )
+            self._tags.setdefault(replacement, set()).update(inherited)
+            if self._transaction_journal is not None:
+                self._transaction_journal.tag_changes.add(
+                    (replacement.kind, replacement.id)
+                )
 
+    @_transactional
     def record_replacements_atomic(
         self,
         entries: Iterable[Tuple[EntityRef, Sequence[EntityRef]]],
@@ -184,7 +1211,7 @@ class GeometryModel:
                         f"replacement history already exists for {old}"
                     )
                 continue
-            if (old.kind, old.id) in self.entity_keys():
+            if self._contains_entity(old.kind, old.id):
                 raise GeometryError(
                     f"cannot record replacement for surviving entity {old}"
                 )
@@ -205,30 +1232,67 @@ class GeometryModel:
         previous_history = dict(self._replacement_history)
         previous_log = list(self._replacements)
         previous_groups = {
-            name: set(items) for name, items in self.groups.items()
+            name: set(items) for name, items in self._groups.items()
         }
         previous_tags = {
-            reference: set(values) for reference, values in self.tags.items()
+            reference: set(values) for reference, values in self._tags.items()
         }
         try:
+            for old, _descendants in normalized:
+                self._capture_mapping(
+                    "replacement",
+                    old,
+                    self._replacement_history.get(old, _MISSING),
+                )
             self._replacement_history.update(normalized)
             errors = self._validate_replacement_history()
             if errors:
                 raise GeometryError("; ".join(errors))
+            for old, _descendants in normalized:
+                if old.kind == "face" and self._face_structural_uses.get(old.id):
+                    resolved = tuple(
+                        reference.id
+                        for reference in self.resolve_ref(old)
+                        if reference.kind == "face"
+                    )
+                    self._replace_structural_face_ownership(old.id, resolved)
             for old, descendants in normalized:
                 self._replacements.append((old, descendants))
-                for members in self.groups.values():
+                for name, members in self._groups.items():
                     if old in members:
+                        self._capture_mapping("group", name, set(members))
+                        if self._transaction_journal is not None:
+                            self._transaction_journal.group_changes.add(name)
                         members.discard(old)
                         members.update(descendants)
-                inherited = self.tags.pop(old, set())
+                self._capture_mapping(
+                    "tag",
+                    old,
+                    set(self._tags.get(old, ())) if old in self._tags else _MISSING,
+                )
+                inherited = self._tags.pop(old, set())
+                if self._transaction_journal is not None:
+                    self._transaction_journal.tag_changes.add((old.kind, old.id))
                 for descendant in descendants:
-                    self.tags.setdefault(descendant, set()).update(inherited)
+                    self._capture_mapping(
+                        "tag",
+                        descendant,
+                        set(self._tags.get(descendant, ()))
+                        if descendant in self._tags
+                        else _MISSING,
+                    )
+                    self._tags.setdefault(descendant, set()).update(inherited)
+                    if self._transaction_journal is not None:
+                        self._transaction_journal.tag_changes.add(
+                            (descendant.kind, descendant.id)
+                        )
         except Exception:
             self._replacement_history = previous_history
             self._replacements = previous_log
-            self.groups = previous_groups
-            self.tags = previous_tags
+            self._groups.clear()
+            self._groups.update(previous_groups)
+            self._tags.clear()
+            self._tags.update(previous_tags)
             raise
 
     def replacement_history(self) -> Dict[EntityRef, Tuple[EntityRef, ...]]:
@@ -249,33 +1313,77 @@ class GeometryModel:
             seen.add(current)
             replacements = self._replacement_history.get(current)
             if replacements is None:
-                if (current.kind, current.id) in self.entity_keys():
+                if self._contains_entity(current.kind, current.id):
                     resolved.append(current)
             else:
                 pending.extend(replacements)
         return tuple(resolved)
 
+    @_transactional
     def add_to_group(self, name: str, references: Iterable[EntityRef]) -> None:
         """Add checked entities to a persistent semantic group."""
 
-        group = self.groups.setdefault(str(name), set())
+        key = str(name)
+        self._capture_mapping(
+            "group", key, set(self._groups[key]) if key in self._groups else _MISSING
+        )
+        group = self._groups.setdefault(key, set())
         for reference in references:
             self.entity_ref(reference.kind, reference.id)
             group.add(reference)
+        if self._transaction_journal is not None:
+            self._transaction_journal.group_changes.add(key)
+
+    @_transactional
+    def remove_group(self, name: str) -> None:
+        """Remove a semantic group without exposing its mutable backing set."""
+
+        key = str(name)
+        if key not in self._groups:
+            return
+        self._capture_mapping("group", key, set(self._groups[key]))
+        self._groups.pop(key)
+        assert self._transaction_journal is not None
+        self._transaction_journal.group_changes.add(key)
+
+    @_transactional
+    def untag(self, reference: EntityRef, *values: str) -> None:
+        """Remove selected tags, or every tag when no values are supplied."""
+
+        current = self._tags.get(reference)
+        if current is None:
+            return
+        self._capture_mapping("tag", reference, set(current))
+        if values:
+            current.difference_update(str(value) for value in values)
+            if not current:
+                self._tags.pop(reference, None)
+        else:
+            self._tags.pop(reference, None)
+        assert self._transaction_journal is not None
+        self._transaction_journal.tag_changes.add((reference.kind, reference.id))
 
     def group(self, name: str, *, resolve: bool = True) -> Tuple[EntityRef, ...]:
-        members = self.groups.get(str(name), set())
+        members = self._groups.get(str(name), set())
         if not resolve:
             return tuple(sorted(members, key=lambda ref: (ref.kind, ref.id)))
         current = {item for member in members for item in self.resolve_ref(member)}
         return tuple(sorted(current, key=lambda ref: (ref.kind, ref.id)))
 
+    @_transactional
     def tag(self, reference: EntityRef, *values: str) -> None:
         self.entity_ref(reference.kind, reference.id)
-        self.tags.setdefault(reference, set()).update(str(value) for value in values)
+        self._capture_mapping(
+            "tag",
+            reference,
+            set(self._tags[reference]) if reference in self._tags else _MISSING,
+        )
+        self._tags.setdefault(reference, set()).update(str(value) for value in values)
+        if self._transaction_journal is not None:
+            self._transaction_journal.tag_changes.add((reference.kind, reference.id))
 
     def tags_for(self, reference: EntityRef) -> Tuple[str, ...]:
-        return tuple(sorted(self.tags.get(reference, set())))
+        return tuple(sorted(self._tags.get(reference, set())))
 
     # ------------------------------------------------------------------
     # identity
@@ -292,16 +1400,28 @@ class GeometryModel:
         return entity_id
 
     def id_state(self) -> Dict[str, int]:
-        """Snapshot the ID counters.
-
-        Undo restores this so a redone operation re-allocates exactly the same
-        IDs, which keeps every attribute reference valid across undo and redo.
-        """
+        """Return allocator high-water marks; gaps are intentional and valid."""
 
         return dict(self._next_id)
 
     def restore_id_state(self, state: Mapping[str, int]) -> None:
-        self._next_id = dict(state)
+        """Raise allocator floors without permitting public identity rewind.
+
+        The historical method name is retained for schema-1/2 loaders.  It no
+        longer means that public undo may reuse a committed identifier.
+        """
+
+        normalized: Dict[str, int] = {}
+        for kind in ("vertex", "edge", "face"):
+            if kind not in state:
+                raise GeometryError(f"missing {kind} ID counter")
+            value = int(state[kind])
+            if value < self._next_id[kind]:
+                raise GeometryError(
+                    f"cannot rewind committed {kind} ID high-water mark"
+                )
+            normalized[kind] = value
+        self._next_id.update(normalized)
 
     def reserve_id_state(self, state: Mapping[str, int]) -> None:
         """Raise allocator floors without ever moving a counter backwards."""
@@ -315,11 +1435,11 @@ class GeometryModel:
             self._next_id[kind] = max(self._next_id[kind], value)
 
     def topology_snapshot(self) -> Dict[str, object]:
-        """Cheap snapshot of the whole topology, for undo.
+        """Return an explicit, expensive compatibility snapshot for undo.
 
-        Entity objects are referenced rather than copied; face loops and
-        corners are captured as the tuples they are, because operations like
-        splitting an edge rewrite them in place.
+        New kernel edits use delta transactions. This full-model form remains
+        temporarily for feature/history compatibility while those callers
+        migrate.
         """
 
         return {
@@ -349,6 +1469,17 @@ class GeometryModel:
             "tags": {reference: set(values) for reference, values in self.tags.items()},
             "replacement_history": dict(self._replacement_history),
             "replacements": list(self._replacements),
+            "structural": {
+                "parts": dict(self.parts),
+                "sheets": dict(self.sheets),
+                "face_uses": dict(self.face_uses),
+                "coedges": dict(self.coedges),
+                "members": dict(self.members),
+                "member_edge_uses": dict(self.member_edge_uses),
+                "attachments": dict(self.attachments),
+                "junctions": dict(self.junctions),
+            },
+            "structural_ids": dict(self._next_structural_id),
         }
 
     def design_snapshot(self) -> Dict[str, object]:
@@ -360,46 +1491,305 @@ class GeometryModel:
         }
 
     def restore_topology(self, snapshot: Mapping[str, object]) -> None:
-        """Put the model back exactly as ``topology_snapshot`` found it."""
+        """Atomically restore a compatibility snapshot and publish the change.
 
-        self.vertices.clear()
-        self.vertices.update(snapshot["vertices"])  # type: ignore[arg-type]
-        self.edges.clear()
-        self.edges.update(snapshot["edges"])  # type: ignore[arg-type]
-        self.faces.clear()
-        self.faces.update(snapshot["faces"])  # type: ignore[arg-type]
-        for vertex_id, position in snapshot.get("vertex_state", {}).items():  # type: ignore[union-attr]
-            self.vertices[vertex_id].position = np.asarray(position, dtype=float).copy()
-        for edge_id, (start, end, curve) in snapshot.get("edge_state", {}).items():  # type: ignore[union-attr]
-            edge = self.edges[edge_id]
-            edge.start = start
-            edge.end = end
-            edge.curve = deepcopy(curve)
-        for face_id, (loop, corners, metadata, holes, surface) in snapshot["face_state"].items():  # type: ignore[union-attr]
-            self.faces[face_id].loop = loop
-            self.faces[face_id].corners = corners
-            self.faces[face_id].metadata = deepcopy(metadata)
-            self.faces[face_id].holes = holes
-            self.faces[face_id].surface = deepcopy(surface)
-        self._next_id = dict(snapshot["ids"])  # type: ignore[arg-type]
-        self.groups = {name: set(members) for name, members in snapshot.get("groups", {}).items()}  # type: ignore[union-attr]
-        self.tags = {reference: set(values) for reference, values in snapshot.get("tags", {}).items()}  # type: ignore[union-attr]
+        Decoding happens in an unpublished staging model.  A malformed or
+        stale snapshot therefore cannot partially clear the live topology.
+        Allocator high-water marks remain monotonic, even when the snapshot is
+        older than the current model.
+        """
+
+        if self._transaction_journal is not None or self._notifying_hooks:
+            raise GeometryError(
+                "topology snapshots cannot be restored inside a transaction or change hook"
+            )
+        candidate = GeometryModel(model_id=self.model_id, tolerance=self.tolerance)
+        candidate._next_id.update(self._next_id)
+        candidate._next_structural_id.update(self._next_structural_id)
+        try:
+            candidate._restore_topology_unchecked(snapshot)
+        except GeometryError:
+            raise
+        except (KeyError, TypeError, ValueError) as error:
+            raise GeometryError(f"invalid topology snapshot: {error}") from error
+        problems = (*candidate.validate_topology(), *candidate._validate_structural())
+        if problems:
+            raise GeometryError("invalid topology snapshot: " + "; ".join(problems))
+
+        geometry_kinds = ("vertex", "edge", "face")
+        old_records = {
+            (kind, identifier): value
+            for kind in geometry_kinds
+            for identifier, value in self._entity_store(kind).items()
+        }
+        new_records = {
+            (kind, identifier): value
+            for kind in geometry_kinds
+            for identifier, value in candidate._entity_store(kind).items()
+        }
+        old_keys, new_keys = set(old_records), set(new_records)
+        added = tuple(sorted(new_keys - old_keys))
+        removed = tuple(sorted(old_keys - new_keys))
+        modified = tuple(
+            sorted(
+                key
+                for key in old_keys & new_keys
+                if not _records_equal(old_records[key], new_records[key])
+            )
+        )
+        changed_geometry = set(added) | set(removed) | set(modified)
+        bounds_before = {
+            key: self._entity_bounds(key) for key in changed_geometry
+        }
+
+        structural_changes: Dict[str, Set[EntityKey]] = {
+            "ownership": set(),
+            "member": set(),
+            "attachment": set(),
+        }
+        for kind in self._next_structural_id:
+            before = self._structural_store(kind)
+            after = candidate._structural_store(kind)
+            category = (
+                "member"
+                if kind in ("member", "member_edge_use")
+                else "attachment"
+                if kind == "attachment"
+                else "ownership"
+            )
+            for identifier in set(before) | set(after):
+                if (
+                    identifier not in before
+                    or identifier not in after
+                    or not _records_equal(before[identifier], after[identifier])
+                ):
+                    structural_changes[category].add((kind, identifier))
+
+        group_changes = tuple(
+            sorted(
+                name
+                for name in set(self._groups) | set(candidate._groups)
+                if self._groups.get(name) != candidate._groups.get(name)
+            )
+        )
+        tag_changes = tuple(
+            sorted(
+                ((reference.kind, reference.id) for reference in set(self._tags) | set(candidate._tags)
+                 if self._tags.get(reference) != candidate._tags.get(reference)),
+            )
+        )
+        semantic_change = bool(
+            structural_changes["ownership"]
+            or structural_changes["member"]
+            or structural_changes["attachment"]
+            or group_changes
+            or tag_changes
+            or self._replacement_history != candidate._replacement_history
+        )
+        if not changed_geometry and not semantic_change:
+            return
+
+        for kind in geometry_kinds:
+            destination = self._entity_store(kind)
+            destination.clear()
+            destination.update(candidate._entity_store(kind))
+        for kind in self._next_structural_id:
+            destination = self._structural_store(kind)
+            destination.clear()
+            destination.update(candidate._structural_store(kind))
+        self._groups.clear()
+        self._groups.update(candidate._groups)
+        self._tags.clear()
+        self._tags.update(candidate._tags)
+        self._replacement_history = dict(candidate._replacement_history)
+        self._replacements = list(candidate._replacements)
+        self._next_id.update(candidate._next_id)
+        self._next_structural_id.update(candidate._next_structural_id)
+        self._rebuild_incidence()
+        self._rebuild_structural_incidence()
+        self._arc_cache.clear()
+        self._edge_length_cache.clear()
+        self._spatial_index = None
+        for key in changed_geometry:
+            self._entity_versions[key] = self._entity_versions.get(key, 0) + 1
+
+        aabbs = []
+        for key in sorted(changed_geometry):
+            before = bounds_before[key]
+            after = self._entity_bounds(key)
+            if before != after:
+                aabbs.append(AABBChange(key, before, after))
+        revision_before = self.revision
+        self._revision += 1
+        change_set = ChangeSet(
+            revision_before,
+            self._revision,
+            added=added,
+            removed=removed,
+            modified=modified,
+            ownership_changes=tuple(sorted(structural_changes["ownership"])),
+            member_changes=tuple(sorted(structural_changes["member"])),
+            attachment_changes=tuple(sorted(structural_changes["attachment"])),
+            group_changes=group_changes,
+            tag_changes=tag_changes,
+            affected_aabbs=tuple(aabbs),
+            invalidated_caches=tuple(sorted(changed_geometry)),
+            spatial_updates=tuple(sorted(changed_geometry)),
+        )
+        self._last_change_set = change_set
+        self._notifying_hooks = True
+        try:
+            for hook in tuple(self._change_hooks):
+                try:
+                    hook(change_set)
+                except Exception:
+                    continue
+        finally:
+            self._notifying_hooks = False
+
+    def _restore_topology_unchecked(self, snapshot: Mapping[str, object]) -> None:
+        """Decode into an unpublished staging model."""
+
+        vertex_state = snapshot.get("vertex_state", {})
+        self._vertices.clear()
+        for vertex_id, vertex in snapshot["vertices"].items():  # type: ignore[union-attr]
+            position = vertex_state.get(vertex_id, vertex.position)  # type: ignore[union-attr]
+            self._vertices[int(vertex_id)] = replace(vertex, position=position)
+        edge_state = snapshot.get("edge_state", {})
+        self._edges.clear()
+        for edge_id, edge in snapshot["edges"].items():  # type: ignore[union-attr]
+            start, end, curve = edge_state.get(  # type: ignore[union-attr]
+                edge_id, (edge.start, edge.end, edge.curve)
+            )
+            self._edges[int(edge_id)] = replace(
+                edge, start=start, end=end, curve=deepcopy(curve)
+            )
+        face_state = snapshot.get("face_state", {})
+        self._faces.clear()
+        for face_id, face in snapshot["faces"].items():  # type: ignore[union-attr]
+            loop, corners, metadata, holes, surface = face_state.get(  # type: ignore[union-attr]
+                face_id,
+                (face.loop, face.corners, face.metadata, face.holes, face.surface),
+            )
+            self._faces[int(face_id)] = replace(
+                face,
+                loop=loop,
+                corners=corners,
+                metadata=metadata,
+                holes=holes,
+                surface=deepcopy(surface),
+            )
+        saved_ids = dict(snapshot["ids"])  # type: ignore[arg-type]
+        for kind in self._next_id:
+            self._next_id[kind] = max(self._next_id[kind], int(saved_ids[kind]))
+        self._groups.clear()
+        self._groups.update(
+            {name: set(members) for name, members in snapshot.get("groups", {}).items()}  # type: ignore[union-attr]
+        )
+        self._tags.clear()
+        self._tags.update(
+            {reference: set(values) for reference, values in snapshot.get("tags", {}).items()}  # type: ignore[union-attr]
+        )
         self._replacement_history = dict(snapshot.get("replacement_history", {}))  # type: ignore[arg-type]
         self._replacements = list(snapshot.get("replacements", []))  # type: ignore[arg-type]
+        structural = snapshot.get("structural", {})
+        if isinstance(structural, Mapping):
+            for name, store in (
+                ("parts", self._parts),
+                ("sheets", self._sheets),
+                ("face_uses", self._face_uses),
+                ("coedges", self._coedges),
+                ("members", self._members),
+                ("member_edge_uses", self._member_edge_uses),
+                ("attachments", self._attachments),
+                ("junctions", self._junctions),
+            ):
+                store.clear()
+                store.update(structural.get(name, {}))  # type: ignore[arg-type]
+        saved_structural_ids = snapshot.get("structural_ids", {})
+        if isinstance(saved_structural_ids, Mapping):
+            for kind in self._next_structural_id:
+                if kind in saved_structural_ids:
+                    self._next_structural_id[kind] = max(
+                        self._next_structural_id[kind],
+                        int(saved_structural_ids[kind]),
+                    )
         self._arc_cache.clear()
+        self._edge_length_cache.clear()
+        self._rebuild_incidence()
+        self._rebuild_member_incidence()
+        self._spatial_index = None
 
     def restore_design(self, snapshot: Mapping[str, object]) -> None:
-        """Restore a snapshot made by :meth:`design_snapshot`."""
+        """Restore topology and feature intent as one staged publication."""
 
-        self.restore_topology(snapshot["topology"])  # type: ignore[arg-type]
-        self.features.restore(snapshot["features"])  # type: ignore[arg-type]
+        if self._transaction_journal is not None or self._notifying_hooks:
+            raise GeometryError(
+                "design snapshots cannot be restored inside a transaction or change hook"
+            )
+        if not isinstance(snapshot, Mapping):
+            raise GeometryError("design snapshot must be a mapping")
+        try:
+            topology = snapshot["topology"]
+            feature_snapshot = snapshot["features"]
+        except KeyError as error:
+            raise GeometryError(f"design snapshot is missing {error.args[0]!r}") from error
+        if not isinstance(topology, Mapping) or not isinstance(feature_snapshot, Mapping):
+            raise GeometryError("design snapshot topology/features must be mappings")
+
+        staged_features = FeatureHistory()
+        try:
+            staged_features.restore(feature_snapshot)
+            staged_features.validate()
+        except (GeometryError, TypeError, ValueError, AttributeError) as error:
+            raise GeometryError(f"invalid feature snapshot: {error}") from error
+
+        feature_changed = not _records_equal(
+            self.features.snapshot(), staged_features.snapshot()
+        )
+        events: list[ChangeSet] = []
+        original_hooks = self._change_hooks
+        self._change_hooks = [events.append]
+        try:
+            self.restore_topology(topology)
+        finally:
+            self._change_hooks = original_hooks
+        # Keep the owner-bound history object stable so previously acquired
+        # read handles cannot become a detached mutable design history.
+        self._features._restore_unchecked(staged_features.snapshot())  # noqa: SLF001
+        if events or feature_changed:
+            if events:
+                change_set = replace(events[0], feature_history_changed=feature_changed)
+            else:
+                revision_before = self.revision
+                self._revision += 1
+                change_set = ChangeSet(
+                    revision_before,
+                    self._revision,
+                    feature_history_changed=True,
+                )
+            self._last_change_set = change_set
+            # Feature intent is outside compact topology key space, but it is
+            # still one document mutation.  Publish the already-committed
+            # ChangeSet exactly once after both halves are installed.
+            self._notifying_hooks = True
+            try:
+                for hook in tuple(original_hooks):
+                    try:
+                        hook(change_set)
+                    except Exception:
+                        continue
+            finally:
+                self._notifying_hooks = False
 
     def clone(self, *, include_features: bool = True) -> "GeometryModel":
         """Return a deep, independently mutable geometry copy."""
 
         from .serialization import from_dict, to_dict
 
-        return from_dict(to_dict(self, include_features=include_features))
+        made = from_dict(to_dict(self, include_features=include_features))
+        made._model_id = canonical_model_id(uuid4())
+        return made
 
     def insert_model(
         self,
@@ -434,7 +1824,746 @@ class GeometryModel:
             {("vertex", key) for key in self.vertices}
             | {("edge", key) for key in self.edges}
             | {("face", key) for key in self.faces}
+            | {("part", key) for key in self.parts}
+            | {("sheet", key) for key in self.sheets}
+            | {("face_use", key) for key in self.face_uses}
+            | {("coedge", key) for key in self.coedges}
+            | {("member", key) for key in self.members}
+            | {("member_edge_use", key) for key in self.member_edge_uses}
+            | {("attachment", key) for key in self.attachments}
+            | {("junction", key) for key in self.junctions}
         )
+
+    def _allocate_structural(self, kind: str) -> int:
+        identifier = self._next_structural_id[kind]
+        self._next_structural_id[kind] = identifier + 1
+        return identifier
+
+    def _structural_store(self, kind: str) -> Dict[int, object]:
+        return {
+            "part": self._parts,
+            "sheet": self._sheets,
+            "face_use": self._face_uses,
+            "coedge": self._coedges,
+            "member": self._members,
+            "member_edge_use": self._member_edge_uses,
+            "attachment": self._attachments,
+            "junction": self._junctions,
+        }[kind]
+
+    def _put_structural(self, kind: str, value: object) -> None:
+        identifier = int(value.id)  # type: ignore[attr-defined]
+        store = self._structural_store(kind)
+        key = (kind, identifier)
+        journal = self._transaction_journal
+        if journal is not None and key not in journal.structural_before:
+            journal.structural_before[key] = store.get(identifier, _MISSING)
+            if kind in ("member", "member_edge_use"):
+                journal.member_changes.add(key)
+            elif kind == "attachment":
+                journal.attachment_changes.add(key)
+            else:
+                journal.ownership_changes.add(key)
+        previous = store.get(identifier)
+        if previous is not None:
+            self._detach_structural_incidence(kind, previous)
+        store[identifier] = value
+        self._attach_structural_incidence(kind, value)
+
+    def _delete_structural(self, kind: str, identifier: int) -> object:
+        store = self._structural_store(kind)
+        if identifier not in store:
+            raise GeometryError(f"no {kind} {identifier}")
+        journal = self._transaction_journal
+        key = (kind, int(identifier))
+        if journal is not None and key not in journal.structural_before:
+            journal.structural_before[key] = store[identifier]
+            if kind in ("member", "member_edge_use"):
+                journal.member_changes.add(key)
+            elif kind == "attachment":
+                journal.attachment_changes.add(key)
+            else:
+                journal.ownership_changes.add(key)
+        previous = store.pop(identifier)
+        self._detach_structural_incidence(kind, previous)
+        return previous
+
+    def _detach_structural_incidence(self, kind: str, value: object) -> None:
+        """Remove one immutable structural record from maintained reverse incidence."""
+
+        if kind == "face_use":
+            assert isinstance(value, FaceUse)
+            uses = self._face_structural_uses.get(value.face_id)
+            if uses is not None:
+                uses.discard(value.id)
+                if not uses:
+                    self._face_structural_uses.pop(value.face_id, None)
+        elif kind == "member_edge_use":
+            assert isinstance(value, MemberEdgeUse)
+            uses = self._edge_member_uses.get(value.edge_id)
+            if uses is not None:
+                uses.discard(value.id)
+                if not uses:
+                    self._edge_member_uses.pop(value.edge_id, None)
+
+    def _attach_structural_incidence(self, kind: str, value: object) -> None:
+        """Add one immutable structural record to maintained reverse incidence."""
+
+        if kind == "face_use":
+            assert isinstance(value, FaceUse)
+            self._face_structural_uses.setdefault(value.face_id, set()).add(value.id)
+        elif kind == "member_edge_use":
+            assert isinstance(value, MemberEdgeUse)
+            self._edge_member_uses.setdefault(value.edge_id, set()).add(value.id)
+
+    def _validate_structural(self) -> tuple[str, ...]:
+        errors = list(validate_structural_topology(
+            parts=self.parts,
+            sheets=self.sheets,
+            face_uses=self.face_uses,
+            coedges=self.coedges,
+            members=self.members,
+            member_edge_uses=self.member_edge_uses,
+            attachments=self.attachments,
+            junctions=self.junctions,
+            edge_ids=tuple(self.edges),
+            face_ids=tuple(self.faces),
+            edge_vertices={
+                edge.id: (edge.start, edge.end) for edge in self.edges.values()
+            },
+        ))
+        for face_use in self.face_uses.values():
+            face = self.faces.get(face_use.face_id)
+            if face is None:
+                continue
+            expected = tuple(
+                tuple(
+                    (
+                        item.edge,
+                        Orientation.FORWARD
+                        if item.forward
+                        else Orientation.REVERSED,
+                    )
+                    for item in loop
+                )
+                for loop in (face.loop,) + face.holes
+            )
+            try:
+                actual = tuple(
+                    tuple(
+                        (
+                            self.coedges[coedge_id].edge_id,
+                            self.coedges[coedge_id].orientation,
+                        )
+                        for coedge_id in loop
+                    )
+                    for loop in face_use.loops
+                )
+            except KeyError:
+                continue
+            if actual != expected:
+                errors.append(
+                    f"face use {face_use.id} coedges do not match face "
+                    f"{face.id} trim loops"
+                )
+        expected_face_incidence: Dict[int, Set[int]] = {}
+        for use in self.face_uses.values():
+            expected_face_incidence.setdefault(use.face_id, set()).add(use.id)
+        if expected_face_incidence != self._face_structural_uses:
+            errors.append("face structural reverse incidence is stale")
+        expected_member_incidence: Dict[int, Set[int]] = {}
+        for use in self.member_edge_uses.values():
+            expected_member_incidence.setdefault(use.edge_id, set()).add(use.id)
+        if expected_member_incidence != self._edge_member_uses:
+            errors.append("member-edge reverse incidence is stale")
+        return tuple(sorted(set(errors)))
+
+    def _rebuild_structural_incidence(self) -> None:
+        self._face_structural_uses.clear()
+        for use in self.face_uses.values():
+            self._face_structural_uses.setdefault(use.face_id, set()).add(use.id)
+        self._edge_member_uses.clear()
+        for use in self.member_edge_uses.values():
+            self._edge_member_uses.setdefault(use.edge_id, set()).add(use.id)
+
+    def _rebuild_member_incidence(self) -> None:
+        """Compatibility alias for internal callers predating face-use incidence."""
+
+        self._rebuild_structural_incidence()
+
+    def _synchronize_face_uses(self, face: Face) -> None:
+        """Keep persistent coedges aligned with one replaced face trim."""
+
+        for face_use_id in tuple(sorted(self._face_structural_uses.get(face.id, ()))):
+            face_use = self.face_uses[face_use_id]
+            available: Dict[int, List[int]] = {}
+            for coedge_id in face_use.coedge_ids:
+                coedge = self.coedges.get(coedge_id)
+                if coedge is not None:
+                    available.setdefault(coedge.edge_id, []).append(coedge_id)
+
+            loops: List[tuple[int, ...]] = []
+            reused: Set[int] = set()
+            for loop in (face.loop,) + face.holes:
+                made: List[int] = []
+                for item in loop:
+                    orientation = (
+                        Orientation.FORWARD
+                        if item.forward
+                        else Orientation.REVERSED
+                    )
+                    candidates = [
+                        identifier
+                        for identifier in available.get(item.edge, ())
+                        if identifier not in reused
+                    ]
+                    exact = [
+                        identifier
+                        for identifier in candidates
+                        if self.coedges[identifier].orientation is orientation
+                    ]
+                    if len(exact) == 1:
+                        coedge_id = exact[0]
+                        reused.add(coedge_id)
+                    elif len(candidates) == 1:
+                        # Reversing an edge or a complete face changes only
+                        # the use orientation/order.  The underlying edge ID
+                        # still identifies the same persistent coedge
+                        # unambiguously, so update that record in place rather
+                        # than retiring its public identity.
+                        coedge_id = candidates[0]
+                        reused.add(coedge_id)
+                        coedge = self.coedges[coedge_id]
+                        if coedge.orientation is not orientation:
+                            self._put_structural(
+                                "coedge",
+                                replace(coedge, orientation=orientation),
+                            )
+                    else:
+                        coedge_id = self._allocate_structural("coedge")
+                        self._put_structural(
+                            "coedge",
+                            Coedge(
+                                coedge_id,
+                                face_use.id,
+                                item.edge,
+                                orientation,
+                            ),
+                        )
+                    made.append(coedge_id)
+                loops.append(tuple(made))
+
+            target = tuple(loops)
+            if target != face_use.loops:
+                self._put_structural(
+                    "face_use", replace(face_use, loops=target)
+                )
+            for coedge_id in set(face_use.coedge_ids) - reused:
+                if coedge_id in self.coedges and all(
+                    coedge_id not in loop for loop in target
+                ):
+                    self._delete_structural("coedge", coedge_id)
+
+    def _new_face_use(
+        self,
+        face_use_id: int,
+        sheet_id: int,
+        face_id: int,
+        *,
+        orientation: Orientation = Orientation.FORWARD,
+        metadata: Mapping[str, object] | object | None = None,
+    ) -> FaceUse:
+        face = self._require_face(face_id)
+        loops: List[tuple[int, ...]] = []
+        for loop in (face.loop,) + face.holes:
+            made: List[int] = []
+            for item in loop:
+                coedge_id = self._allocate_structural("coedge")
+                self._put_structural(
+                    "coedge",
+                    Coedge(
+                        coedge_id,
+                        face_use_id,
+                        item.edge,
+                        Orientation.FORWARD
+                        if item.forward
+                        else Orientation.REVERSED,
+                    ),
+                )
+                made.append(coedge_id)
+            loops.append(tuple(made))
+        return FaceUse(
+            face_use_id,
+            sheet_id,
+            face_id,
+            tuple(loops),
+            orientation=orientation,
+            metadata={} if metadata is None else metadata,  # type: ignore[arg-type]
+        )
+
+    def _replace_structural_face_ownership(
+        self, old_face_id: int, new_face_ids: Sequence[int]
+    ) -> None:
+        """Transfer a sheet face use across one geometry replacement event."""
+
+        replacements = tuple(int(identifier) for identifier in new_face_ids)
+        if len(set(replacements)) != len(replacements):
+            raise GeometryError("face replacement contains duplicate descendants")
+        for face_id in replacements:
+            self._require_face(face_id)
+        owners = tuple(
+            self.face_uses[identifier]
+            for identifier in sorted(
+                self._face_structural_uses.get(old_face_id, ())
+            )
+        )
+        if len(owners) > 1:
+            raise GeometryError(
+                f"face {old_face_id} has multiple structural owners"
+            )
+        attachments = sorted(
+            attachment.id
+            for attachment in self.attachments.values()
+            if attachment.target_kind is AttachmentTargetKind.FACE
+            and attachment.target_id == old_face_id
+        )
+        if attachments:
+            raise GeometryError(
+                f"cannot replace face {old_face_id}: attachments {attachments} "
+                "require an explicit parameter remap"
+            )
+        if not owners:
+            return
+        conflicts = sorted(
+            use_id
+            for face_id in replacements
+            for use_id in self._face_structural_uses.get(face_id, ())
+        )
+        if conflicts:
+            raise GeometryError(
+                "cannot transfer face ownership: replacement face(s) are "
+                f"already owned by face uses {conflicts}"
+            )
+        for old_use in owners:
+            sheet = self.sheets[old_use.sheet_id]
+            replacement_use_ids: List[int] = []
+            if replacements:
+                first_face = replacements[0]
+                self._put_structural(
+                    "face_use", replace(old_use, face_id=first_face)
+                )
+                self._synchronize_face_uses(self._require_face(first_face))
+                replacement_use_ids.append(old_use.id)
+                for face_id in replacements[1:]:
+                    use_id = self._allocate_structural("face_use")
+                    made = self._new_face_use(
+                        use_id,
+                        sheet.id,
+                        int(face_id),
+                        orientation=old_use.orientation,
+                        metadata=old_use.metadata,
+                    )
+                    self._put_structural("face_use", made)
+                    replacement_use_ids.append(use_id)
+            else:
+                for coedge_id in old_use.coedge_ids:
+                    self._delete_structural("coedge", coedge_id)
+                self._delete_structural("face_use", old_use.id)
+
+            retained = [
+                identifier
+                for identifier in sheet.face_use_ids
+                if identifier != old_use.id
+            ]
+            retained.extend(replacement_use_ids)
+            if retained:
+                self._put_structural(
+                    "sheet", replace(sheet, face_use_ids=tuple(retained))
+                )
+            else:
+                part = self.parts[sheet.part_id]
+                self._delete_structural("sheet", sheet.id)
+                self._put_structural(
+                    "part",
+                    replace(
+                        part,
+                        sheet_ids=tuple(
+                            value
+                            for value in part.sheet_ids
+                            if value != sheet.id
+                        ),
+                    ),
+                )
+
+    @_transactional
+    def add_part(
+        self,
+        *,
+        name: str = "",
+        metadata: Mapping[str, object] | None = None,
+    ) -> int:
+        identifier = self._allocate_structural("part")
+        self._put_structural(
+            "part", Part(identifier, name=name, metadata=metadata or {})
+        )
+        return identifier
+
+    @_transactional
+    def add_member(
+        self,
+        edge_ids: Sequence[int | OrientedEdge],
+        *,
+        part_id: int | None = None,
+        name: str = "",
+        metadata: Mapping[str, object] | None = None,
+    ) -> int:
+        """Create one persistent physical member over an ordered edge chain."""
+
+        if not edge_ids:
+            raise GeometryError("a member needs at least one axis edge")
+        if part_id is None:
+            part_id = self.add_part()
+        if part_id not in self.parts:
+            raise GeometryError(f"no part {part_id}")
+        member_id = self._stage_member(
+            edge_ids,
+            part_id=part_id,
+            name=name,
+            metadata=metadata,
+        )
+        part = self.parts[part_id]
+        self._put_structural(
+            "part",
+            replace(part, member_ids=tuple((*part.member_ids, member_id))),
+        )
+        return member_id
+
+    def _stage_member(
+        self,
+        edge_ids: Sequence[int | OrientedEdge],
+        *,
+        part_id: int,
+        name: str = "",
+        metadata: Mapping[str, object] | None = None,
+    ) -> int:
+        """Materialize one member without repeatedly copying its owning part."""
+
+        if not edge_ids:
+            raise GeometryError("a member needs at least one axis edge")
+        oriented: List[tuple[int, Orientation]] = []
+        previous_end: int | None = None
+        for raw in edge_ids:
+            if isinstance(raw, OrientedEdge):
+                edge_id = raw.edge
+                orientation = Orientation.FORWARD if raw.forward else Orientation.REVERSED
+            else:
+                edge_id = int(raw)
+                edge = self._require_edge(edge_id)
+                if previous_end is None or edge.start == previous_end:
+                    orientation = Orientation.FORWARD
+                elif edge.end == previous_end:
+                    orientation = Orientation.REVERSED
+                else:
+                    raise GeometryError("member axis edges are not continuous")
+            edge = self._require_edge(edge_id)
+            start = edge.start if orientation is Orientation.FORWARD else edge.end
+            end = edge.end if orientation is Orientation.FORWARD else edge.start
+            if previous_end is not None and start != previous_end:
+                raise GeometryError("member axis edges are not continuous")
+            previous_end = end
+            oriented.append((edge_id, orientation))
+
+        member_id = self._allocate_structural("member")
+        lengths = [self.edge_length(edge_id) for edge_id, _ in oriented]
+        total = sum(lengths)
+        if total <= 0.0:
+            raise GeometryError("member axis has zero total length")
+        uses: List[int] = []
+        station = 0.0
+        for index, ((edge_id, orientation), length) in enumerate(zip(oriented, lengths)):
+            use_id = self._allocate_structural("member_edge_use")
+            end = 1.0 if index == len(oriented) - 1 else station + length / total
+            use = MemberEdgeUse(
+                use_id,
+                member_id,
+                edge_id,
+                ParameterRange(station, end),
+                orientation,
+            )
+            self._put_structural("member_edge_use", use)
+            uses.append(use_id)
+            station = end
+        self._put_structural(
+            "member",
+            Member(
+                member_id,
+                part_id,
+                tuple(uses),
+                name=name,
+                metadata=metadata or {},
+            ),
+        )
+        return member_id
+
+    @_transactional
+    def add_members(
+        self,
+        edge_chains: Iterable[Sequence[int | OrientedEdge]],
+        *,
+        part_id: int | None = None,
+        names: Iterable[str] | None = None,
+        metadata: Iterable[Mapping[str, object] | None] | None = None,
+    ) -> List[int]:
+        """Create many members with one part update and one outer validation.
+
+        This is the construction path for large beam lattices.  It avoids the
+        quadratic tuple copying and repeated whole-structure validation that
+        would result from committing each member separately.
+        """
+
+        chains = tuple(tuple(chain) for chain in edge_chains)
+        if not chains:
+            return []
+        made_names = (
+            ("",) * len(chains)
+            if names is None
+            else tuple(str(value) for value in names)
+        )
+        made_metadata = (
+            (None,) * len(chains) if metadata is None else tuple(metadata)
+        )
+        if len(made_names) != len(chains) or len(made_metadata) != len(chains):
+            raise GeometryError("member names/metadata must match the number of chains")
+        if part_id is None:
+            part_id = self.add_part()
+        if part_id not in self.parts:
+            raise GeometryError(f"no part {part_id}")
+        member_ids = [
+            self._stage_member(
+                chain,
+                part_id=part_id,
+                name=name,
+                metadata=item_metadata,
+            )
+            for chain, name, item_metadata in zip(
+                chains, made_names, made_metadata
+            )
+        ]
+        part = self.parts[part_id]
+        self._put_structural(
+            "part",
+            replace(part, member_ids=tuple((*part.member_ids, *member_ids))),
+        )
+        return member_ids
+
+    @_transactional
+    def add_sheet(
+        self,
+        face_ids: Sequence[int],
+        *,
+        part_id: int | None = None,
+        name: str = "",
+        policy: SheetTopologyPolicy = SheetTopologyPolicy(),
+    ) -> int:
+        """Create an oriented structural sheet and persistent loop coedges."""
+
+        if not face_ids:
+            raise GeometryError("a sheet needs at least one face")
+        if part_id is None:
+            part_id = self.add_part()
+        if part_id not in self.parts:
+            raise GeometryError(f"no part {part_id}")
+        sheet_id = self._allocate_structural("sheet")
+        use_ids: List[int] = []
+        for face_id in face_ids:
+            face = self._require_face(int(face_id))
+            use_id = self._allocate_structural("face_use")
+            loop_ids: List[tuple[int, ...]] = []
+            for loop in (face.loop,) + face.holes:
+                made: List[int] = []
+                for item in loop:
+                    coedge_id = self._allocate_structural("coedge")
+                    self._put_structural(
+                        "coedge",
+                        Coedge(
+                            coedge_id,
+                            use_id,
+                            item.edge,
+                            Orientation.FORWARD if item.forward else Orientation.REVERSED,
+                        ),
+                    )
+                    made.append(coedge_id)
+                loop_ids.append(tuple(made))
+            self._put_structural(
+                "face_use", FaceUse(use_id, sheet_id, face.id, tuple(loop_ids))
+            )
+            use_ids.append(use_id)
+        self._put_structural(
+            "sheet", Sheet(sheet_id, part_id, tuple(use_ids), policy, name=name)
+        )
+        part = self.parts[part_id]
+        self._put_structural(
+            "part",
+            replace(part, sheet_ids=tuple(sorted((*part.sheet_ids, sheet_id)))),
+        )
+        return sheet_id
+
+    @_transactional
+    def add_attachment(
+        self,
+        member_id: int,
+        kind: AttachmentKind | str,
+        target_kind: AttachmentTargetKind | str,
+        target_id: int,
+        member_range: ParameterRange,
+        target_parameters: Sequence[ParameterRange],
+    ) -> int:
+        identifier = self._allocate_structural("attachment")
+        self._put_structural(
+            "attachment",
+            Attachment(
+                identifier,
+                member_id,
+                kind,
+                target_kind,
+                target_id,
+                member_range,
+                tuple(target_parameters),
+            ),
+        )
+        return identifier
+
+    @_transactional
+    def add_junction(
+        self,
+        kind: str,
+        member_uses: Sequence[JunctionMemberUse],
+        *,
+        sheet_ids: Sequence[int] = (),
+        attachment_ids: Sequence[int] = (),
+    ) -> int:
+        identifier = self._allocate_structural("junction")
+        self._put_structural(
+            "junction",
+            Junction(
+                identifier,
+                kind,
+                tuple(member_uses),
+                tuple(sheet_ids),
+                tuple(attachment_ids),
+            ),
+        )
+        return identifier
+
+    @_transactional
+    def remove_junction(self, junction_id: int) -> None:
+        """Remove an explicit connection intent record."""
+
+        if junction_id not in self.junctions:
+            raise GeometryError(f"no junction {junction_id}")
+        self._delete_structural("junction", junction_id)
+
+    @_transactional
+    def remove_attachment(self, attachment_id: int) -> None:
+        """Remove an attachment that is not still used by a junction."""
+
+        if attachment_id not in self.attachments:
+            raise GeometryError(f"no attachment {attachment_id}")
+        junctions = sorted(
+            junction.id
+            for junction in self.junctions.values()
+            if attachment_id in junction.attachment_ids
+        )
+        if junctions:
+            raise GeometryError(
+                f"cannot remove attachment {attachment_id}: junction(s) "
+                f"{junctions} still reference it"
+            )
+        self._delete_structural("attachment", attachment_id)
+
+    @_transactional
+    def remove_member(self, member_id: int) -> None:
+        """Remove a member and its owned axis uses when externally unreferenced."""
+
+        member = self.members.get(member_id)
+        if member is None:
+            raise GeometryError(f"no member {member_id}")
+        attachments = sorted(
+            attachment.id
+            for attachment in self.attachments.values()
+            if attachment.member_id == member_id
+        )
+        junctions = sorted(
+            junction.id
+            for junction in self.junctions.values()
+            if member_id in junction.member_ids
+        )
+        if attachments or junctions:
+            raise GeometryError(
+                f"cannot remove member {member_id}: attachments {attachments} "
+                f"or junctions {junctions} still reference it"
+            )
+        for use_id in member.edge_use_ids:
+            self._delete_structural("member_edge_use", use_id)
+        self._delete_structural("member", member_id)
+        part = self.parts[member.part_id]
+        self._put_structural(
+            "part",
+            replace(
+                part,
+                member_ids=tuple(
+                    value for value in part.member_ids if value != member_id
+                ),
+            ),
+        )
+
+    @_transactional
+    def remove_sheet(self, sheet_id: int) -> None:
+        """Remove a sheet and its owned face uses/coedges when unreferenced."""
+
+        sheet = self.sheets.get(sheet_id)
+        if sheet is None:
+            raise GeometryError(f"no sheet {sheet_id}")
+        junctions = sorted(
+            junction.id
+            for junction in self.junctions.values()
+            if sheet_id in junction.sheet_ids
+        )
+        if junctions:
+            raise GeometryError(
+                f"cannot remove sheet {sheet_id}: junction(s) {junctions} "
+                "still reference it"
+            )
+        for face_use_id in sheet.face_use_ids:
+            face_use = self.face_uses[face_use_id]
+            for coedge_id in face_use.coedge_ids:
+                self._delete_structural("coedge", coedge_id)
+            self._delete_structural("face_use", face_use_id)
+        self._delete_structural("sheet", sheet_id)
+        part = self.parts[sheet.part_id]
+        self._put_structural(
+            "part",
+            replace(
+                part,
+                sheet_ids=tuple(
+                    value for value in part.sheet_ids if value != sheet_id
+                ),
+            ),
+        )
+
+    @_transactional
+    def remove_part(self, part_id: int) -> None:
+        """Remove an empty ownership boundary without cascading physical data."""
+
+        part = self.parts.get(part_id)
+        if part is None:
+            raise GeometryError(f"no part {part_id}")
+        if part.sheet_ids or part.member_ids:
+            raise GeometryError(
+                f"cannot remove non-empty part {part_id}: sheets "
+                f"{list(part.sheet_ids)} or members {list(part.member_ids)} remain"
+            )
+        self._delete_structural("part", part_id)
 
     # ------------------------------------------------------------------
     # dependencies and removal
@@ -442,34 +2571,40 @@ class GeometryModel:
     def edges_using_vertex(self, vertex_id: int) -> List[int]:
         """Edges that reference a vertex, as an end point or as an arc's via."""
 
-        return [
-            edge.id
-            for edge in self.edges.values()
-            if vertex_id in (edge.start, edge.end)
-            or (isinstance(edge.curve, Arc) and edge.curve.via_vertex == vertex_id)
-            or (
-                isinstance(edge.curve, Spline)
-                and vertex_id in edge.curve.control_vertices
-            )
-        ]
+        self._require_vertex(vertex_id)
+        return sorted(self._vertex_edges.get(vertex_id, ()))
 
     def faces_using_edge(self, edge_id: int) -> List[int]:
-        return [
-            face.id
-            for face in self.faces.values()
-            if any(
-                item.edge == edge_id
-                for loop in (face.loop,) + tuple(face.holes)
-                for item in loop
-            )
-        ]
+        self._require_edge(edge_id)
+        return sorted(self._edge_faces.get(edge_id, ()))
 
+    @_transactional
     def remove_face(self, face_id: int, *, record: bool = True) -> None:
         self._require_face(face_id)
-        del self.faces[face_id]
+        structural_uses = sorted(self._face_structural_uses.get(face_id, ()))
+        attachments = sorted(
+            attachment.id
+            for attachment in self.attachments.values()
+            if attachment.target_kind is AttachmentTargetKind.FACE
+            and attachment.target_id == face_id
+        )
+        # ``record=False`` is the internal retirement half of an atomic
+        # replacement.  The enclosing operation creates the replacement
+        # faces and calls ``record_replacement`` before commit, which moves
+        # each persistent FaceUse to the descendants.  A public deletion
+        # (``record=True``) must never leave either ownership or intent
+        # dangling, and attachments are not yet geometrically remapped by a
+        # face split, so they remain blocking in both modes.
+        if (record and structural_uses) or attachments:
+            raise GeometryError(
+                f"cannot remove face {face_id}: structural face uses "
+                f"{structural_uses} or attachments {attachments} still reference it"
+            )
+        self._delete_entity("face", face_id)
         if record:
             self.record_replacement(EntityRef("face", face_id), ())
 
+    @_transactional
     def remove_edge(self, edge_id: int, *, record: bool = True) -> None:
         self._require_edge(edge_id)
         users = self.faces_using_edge(edge_id)
@@ -477,11 +2612,24 @@ class GeometryModel:
             raise GeometryError(
                 f"cannot remove edge {edge_id}: it bounds face(s) {sorted(users)}"
             )
-        del self.edges[edge_id]
+        member_uses = sorted(self._edge_member_uses.get(edge_id, ()))
+        attachments = sorted(
+            attachment.id
+            for attachment in self.attachments.values()
+            if attachment.target_kind is AttachmentTargetKind.EDGE
+            and attachment.target_id == edge_id
+        )
+        if member_uses or attachments:
+            raise GeometryError(
+                f"cannot remove edge {edge_id}: structural member uses "
+                f"{member_uses} or attachments {attachments} still reference it"
+            )
+        self._delete_entity("edge", edge_id)
         self._arc_cache.pop(edge_id, None)
         if record:
             self.record_replacement(EntityRef("edge", edge_id), ())
 
+    @_transactional
     def remove_vertex(self, vertex_id: int, *, record: bool = True) -> None:
         self._require_vertex(vertex_id)
         users = self.edges_using_vertex(vertex_id)
@@ -490,10 +2638,11 @@ class GeometryModel:
                 f"cannot remove point {vertex_id}: it is used by edge(s) "
                 f"{sorted(users)}"
             )
-        del self.vertices[vertex_id]
+        self._delete_entity("vertex", vertex_id)
         if record:
             self.record_replacement(EntityRef("vertex", vertex_id), ())
 
+    @_transactional
     def remove_entities(self, keys: Iterable[Tuple[str, int]]) -> None:
         """Remove a set of entities, innermost dependency last."""
 
@@ -510,6 +2659,7 @@ class GeometryModel:
     # ------------------------------------------------------------------
     # construction
     # ------------------------------------------------------------------
+    @_transactional
     def add_point(self, x: float, y: float, z: float = 0.0) -> int:
         """Place a point and return its vertex ID."""
 
@@ -517,16 +2667,16 @@ class GeometryModel:
         if position.shape != (3,) or not np.all(np.isfinite(position)):
             raise GeometryError("point coordinates must be a finite 3-vector")
         vertex_id = self._allocate("vertex")
-        self.vertices[vertex_id] = Vertex(
-            id=vertex_id, position=position
-        )
+        self._put_entity("vertex", Vertex(id=vertex_id, position=position))
         return vertex_id
 
+    @_transactional
     def add_points(self, positions: Iterable[Sequence[float]]) -> List[int]:
         """Place several points at once."""
 
         return [self.add_point(*np.asarray(p, dtype=float)) for p in positions]
 
+    @_transactional
     def add_line(self, start: int, end: int) -> int:
         """Connect two points with a straight line."""
 
@@ -542,6 +2692,7 @@ class GeometryModel:
             raise GeometryError("a line needs two spatially distinct points")
         return self._add_edge(start, end, Straight())
 
+    @_transactional
     def add_arc(self, start: int, via: int, end: int) -> int:
         """Connect two points with a circular arc through a third point."""
 
@@ -559,6 +2710,7 @@ class GeometryModel:
         )
         return self._add_edge(start, end, Arc(via_vertex=via))
 
+    @_transactional
     def add_spline(
         self, start: int, control_vertices: Sequence[int], end: int
     ) -> int:
@@ -573,6 +2725,7 @@ class GeometryModel:
             raise GeometryError("a spline needs two distinct end points")
         return self._add_edge(start, end, Spline(controls))
 
+    @_transactional
     def add_polyline(self, vertex_ids: Sequence[int], close: bool = False) -> List[int]:
         """Connect a run of points with straight lines."""
 
@@ -586,9 +2739,12 @@ class GeometryModel:
 
     def _add_edge(self, start: int, end: int, curve: CurveShape) -> int:
         edge_id = self._allocate("edge")
-        self.edges[edge_id] = Edge(id=edge_id, start=start, end=end, curve=curve)
+        self._put_entity(
+            "edge", Edge(id=edge_id, start=start, end=end, curve=curve)
+        )
         return edge_id
 
+    @_transactional
     def add_face(
         self,
         edge_ids: Sequence[int],
@@ -616,6 +2772,7 @@ class GeometryModel:
 
         return self._order_loop(edge_ids)
 
+    @_transactional
     def add_face_from_loop(
         self,
         loop: Sequence[OrientedEdge],
@@ -657,14 +2814,18 @@ class GeometryModel:
         surface: Surface | None = None,
     ) -> int:
         face_id = self._allocate("face")
-        self.faces[face_id] = Face(
-            id=face_id,
-            loop=loop,
-            corners=corners,
-            surface=surface or (CoonsSurface() if len(corners) == 4 else None),
+        self._put_entity(
+            "face",
+            Face(
+                id=face_id,
+                loop=loop,
+                corners=corners,
+                surface=surface or (CoonsSurface() if len(corners) == 4 else None),
+            ),
         )
         return face_id
 
+    @_transactional
     def add_plate(self, vertex_ids: Sequence[int]) -> int:
         """Create a plate directly from an ordered ring of points.
 
@@ -679,7 +2840,13 @@ class GeometryModel:
             u_vector = corners[1] - origin
             v_vector = corners[-1] - origin
             if float(np.linalg.norm(np.cross(u_vector, v_vector))) > 1.0e-14:
-                self.faces[face_id].surface = Plane(origin, u_vector, v_vector)
+                self._put_entity(
+                    "face",
+                    replace(
+                        self.faces[face_id],
+                        surface=Plane(origin, u_vector, v_vector),
+                    ),
+                )
         return face_id
 
     def validate_topology(self) -> Tuple[str, ...]:
@@ -702,12 +2869,8 @@ class GeometryModel:
             if edge.start in self.vertices and edge.end in self.vertices:
                 start = self.vertices[edge.start].position
                 end = self.vertices[edge.end].position
-                scale = max(
-                    float(np.linalg.norm(start)),
-                    float(np.linalg.norm(end)),
-                    1.0,
-                )
-                if float(np.linalg.norm(end - start)) <= 1.0e-12 * scale:
+                length = float(np.linalg.norm(end - start))
+                if length <= self.tolerance.effective_length(length):
                     errors.append(f"edge {edge_id} has zero geometric length")
             if isinstance(edge.curve, Arc) and edge.curve.via_vertex not in self.vertices:
                 errors.append(
@@ -853,7 +3016,17 @@ class GeometryModel:
         points: List[np.ndarray] = []
         for item in loop:
             edge = self.edges[item.edge]
-            count = 3 if isinstance(edge.curve, Straight) else 17
+            # Circular arcs are analytical and four quarter-parameter spans
+            # are sufficient to qualify their trim winding and residual on an
+            # analytical support.  Keep the denser fallback for splines,
+            # whose shape is not fixed by three defining vertices.
+            count = (
+                3
+                if isinstance(edge.curve, Straight)
+                else 5
+                if isinstance(edge.curve, Arc)
+                else 17
+            )
             samples = self.sample_edge(item.edge, np.linspace(0.0, 1.0, count))
             if not item.forward:
                 samples = samples[::-1]
@@ -865,6 +3038,14 @@ class GeometryModel:
 
         face = self.faces[face_id]
         loops = (face.loop,) + tuple(face.holes)
+        if isinstance(face.surface, Plane) and all(
+            isinstance(self.edges[item.edge].curve, Straight)
+            for loop in loops
+            for item in loop
+        ):
+            if len(loops) == 1 and len(face.loop) == 4:
+                return self._validate_planar_straight_quad_geometry(face_id)
+            return self._validate_planar_straight_face_geometry(face_id)
         points_3d = [self._validation_loop_points(loop) for loop in loops]
         if any(len(points) < 3 for points in points_3d):
             return []
@@ -872,8 +3053,8 @@ class GeometryModel:
         combined = np.vstack(points_3d)
         origin = combined.mean(axis=0)
         _values, singular, vectors = np.linalg.svd(combined - origin)
-        scale = max(float(singular[0]), 1.0)
-        planar = len(singular) < 3 or float(singular[-1]) <= 1.0e-8 * scale
+        extent = float(np.linalg.norm(np.ptp(combined, axis=0)))
+        planar = len(singular) < 3 or float(singular[-1]) <= self.tolerance.effective_surface_residual(extent)
         surface = face.surface
         if surface is not None and not (
             isinstance(surface, CoonsSurface) and not surface.has_boundaries
@@ -882,10 +3063,9 @@ class GeometryModel:
                 for point in combined:
                     uv = surface.local_uv(point)
                     projected = np.asarray(surface.evaluate(*uv), dtype=float)
-                    point_scale = max(float(np.linalg.norm(point)), 1.0)
                     if (
                         float(np.linalg.norm(projected - point))
-                        > 1.0e-7 * point_scale
+                        > self.tolerance.effective_surface_residual(extent)
                     ):
                         return [
                             f"face {face_id} boundary is inconsistent with its explicit surface"
@@ -931,8 +3111,8 @@ class GeometryModel:
                     )
                 )
             )
-            scale = max(float(np.ptp(polygon, axis=0).max()), 1.0)
-            if area <= 1.0e-12 * scale * scale:
+            extent = float(np.linalg.norm(np.ptp(polygon, axis=0)))
+            if area <= self.tolerance.effective_area(extent):
                 result.append(f"face {face_id} loop {index} has zero area")
             if self._polygon_self_intersects(polygon):
                 result.append(f"face {face_id} loop {index} self-intersects")
@@ -1038,6 +3218,7 @@ class GeometryModel:
     # ------------------------------------------------------------------
     # operations
     # ------------------------------------------------------------------
+    @_transactional
     def extrude(
         self, edge_ids: Sequence[int], vector: Sequence[float]
     ) -> List[int]:
@@ -1093,6 +3274,7 @@ class GeometryModel:
             face_ids.append(self._add_face_from_loop(loop, (0, 1, 2, 3)))
         return face_ids
 
+    @_transactional
     def revolve(
         self,
         edge_ids: Sequence[int],
@@ -1287,6 +3469,7 @@ class GeometryModel:
     # ------------------------------------------------------------------
     # splitting
     # ------------------------------------------------------------------
+    @_transactional
     def split_edge(
         self, edge_id: int, t: float = 0.5
     ) -> Tuple[int, Tuple[int, int]]:
@@ -1299,6 +3482,18 @@ class GeometryModel:
         """
 
         edge = self._require_edge(edge_id)
+        edge_attachments = sorted(
+            attachment.id
+            for attachment in self.attachments.values()
+            if attachment.target_kind is AttachmentTargetKind.EDGE
+            and attachment.target_id == edge_id
+        )
+        if edge_attachments:
+            raise GeometryError(
+                f"cannot split edge {edge_id}: attachments {edge_attachments} "
+                "require an explicit parameter remap"
+            )
+        member_use_ids = tuple(sorted(self._edge_member_uses.get(edge_id, ())))
         if not 0.0 < float(t) < 1.0:
             raise GeometryError(
                 f"split parameter must be strictly between 0 and 1, got {t}"
@@ -1325,11 +3520,47 @@ class GeometryModel:
             first = self.add_line(edge.start, new_vertex)
             second = self.add_line(new_vertex, edge.end)
 
-        for face in self.faces.values():
-            self._replace_edge_in_loop(face, edge_id, first, second)
+        for face_id in self.faces_using_edge(edge_id):
+            self._put_entity(
+                "face",
+                self._replace_edge_in_loop(
+                    self.faces[face_id], edge_id, first, second
+                ),
+            )
 
-        del self.edges[edge_id]
-        self._arc_cache.pop(edge_id, None)
+        self._delete_entity("edge", edge_id)
+        for use_id in member_use_ids:
+            original_use = self.member_edge_uses[use_id]
+            member = self.members[original_use.member_id]
+            use_ids = (
+                self._allocate_structural("member_edge_use"),
+                self._allocate_structural("member_edge_use"),
+            )
+            span = original_use.parent_range.end - original_use.parent_range.start
+            forward = original_use.orientation is Orientation.FORWARD
+            split_fraction = float(t) if forward else 1.0 - float(t)
+            split_parent = original_use.parent_range.start + split_fraction * span
+            axes = (first, second) if forward else (second, first)
+            children = (
+                MemberEdgeUse(
+                    use_ids[0],
+                    member.id,
+                    axes[0],
+                    ParameterRange(original_use.parent_range.start, split_parent),
+                    original_use.orientation,
+                ),
+                MemberEdgeUse(
+                    use_ids[1],
+                    member.id,
+                    axes[1],
+                    ParameterRange(split_parent, original_use.parent_range.end),
+                    original_use.orientation,
+                ),
+            )
+            self._put_structural("member", replace_member_edge_use(member, original_use, children))
+            for child in children:
+                self._put_structural("member_edge_use", child)
+            self._delete_structural("member_edge_use", original_use.id)
         self.record_replacement(
             EntityRef("edge", edge_id),
             (EntityRef("edge", first), EntityRef("edge", second)),
@@ -1339,10 +3570,13 @@ class GeometryModel:
     @staticmethod
     def _replace_edge_in_loop(
         face: Face, edge_id: int, first: int, second: int
-    ) -> None:
+    ) -> Face:
+        corners = face.corners
+
         def replaced(
             loop: Tuple[OrientedEdge, ...], *, update_corners: bool
         ) -> Tuple[OrientedEdge, ...]:
+            nonlocal corners
             positions = [
                 index for index, item in enumerate(loop) if item.edge == edge_id
             ]
@@ -1363,24 +3597,62 @@ class GeometryModel:
                 if update_corners:
                     # A corner sitting on the split edge still starts where it
                     # did; everything after it moves along by one.
-                    face.corners = tuple(  # type: ignore[assignment]
+                    corners = tuple(
                         corner + 1 if corner > position else corner
-                        for corner in face.corners
+                        for corner in corners
                     )
             return loop
 
-        face.loop = replaced(face.loop, update_corners=True)
-        face.holes = tuple(
-            replaced(loop, update_corners=False) for loop in face.holes
+        loop = replaced(face.loop, update_corners=True)
+        holes = tuple(replaced(item, update_corners=False) for item in face.holes)
+        return replace(
+            face,
+            loop=loop,
+            corners=corners,
+            holes=holes,
         )
 
+    @_transactional
     def set_face_corners(self, face_id: int, corners: Sequence[int]) -> None:
         """Override which loop positions begin each of the four sides."""
 
         face = self._require_face(face_id)
-        face.corners = self._validate_corners(
-            tuple(int(c) for c in corners), len(face.loop)
+        self._put_entity(
+            "face",
+            replace(
+                face,
+                corners=self._validate_corners(
+                    tuple(int(c) for c in corners), len(face.loop)
+                ),
+            ),
         )
+
+    @_transactional
+    def set_face_surface(self, face_id: int, surface: Surface | None) -> None:
+        """Replace a face support surface through the transaction owner."""
+
+        face = self._require_face(face_id)
+        self._put_entity("face", replace(face, surface=surface))
+
+    @_transactional
+    def set_face_metadata(
+        self, face_id: int, metadata: Mapping[str, object]
+    ) -> None:
+        """Replace immutable face metadata with a checked JSON mapping."""
+
+        face = self._require_face(face_id)
+        self._put_entity("face", replace(face, metadata=metadata))
+
+    @_transactional
+    def update_face_metadata(
+        self, face_id: int, **values: object
+    ) -> None:
+        """Return a face to committed state with selected metadata updates."""
+
+        face = self._require_face(face_id)
+        metadata = face.metadata.to_dict()  # type: ignore[union-attr]
+        metadata.update(values)
+        self._put_entity("face", replace(face, metadata=metadata))
 
     def face_side_lengths(self, face_id: int) -> Tuple[float, float, float, float]:
         face = self._require_face(face_id)
@@ -1412,16 +3684,215 @@ class GeometryModel:
 
     def edge_length(self, edge_id: int) -> float:
         edge = self._require_edge(edge_id)
+        version = self._entity_versions.get(("edge", edge_id), 0)
+        cached = self._edge_length_cache.get(edge_id)
+        if cached is not None and cached[0] == version:
+            return cached[1]
         if isinstance(edge.curve, Arc):
-            return self._arc_frame(edge).length
-        if isinstance(edge.curve, Spline):
+            result = self._arc_frame(edge).length
+        elif isinstance(edge.curve, Spline):
             samples = sample_spline(
                 self._spline_points(edge), np.linspace(0.0, 1.0, 65)
             )
-            return float(np.linalg.norm(np.diff(samples, axis=0), axis=1).sum())
-        start = self.vertices[edge.start].position
-        end = self.vertices[edge.end].position
-        return float(np.linalg.norm(end - start))
+            result = float(np.linalg.norm(np.diff(samples, axis=0), axis=1).sum())
+        else:
+            start = self.vertices[edge.start].position
+            end = self.vertices[edge.end].position
+            result = float(np.linalg.norm(end - start))
+        self._edge_length_cache[edge_id] = (version, result)
+        return result
+
+    def _validate_planar_straight_quad_geometry(self, face_id: int) -> List[str]:
+        """Exact allocation-light validation for the dominant plate cell."""
+
+        face = self.faces[face_id]
+        surface = face.surface
+        assert isinstance(surface, Plane)
+        world = tuple(
+            self.vertices[self.oriented_start_vertex(item)].position
+            for item in face.loop
+        )
+        minimum = np.minimum(np.minimum(world[0], world[1]), np.minimum(world[2], world[3]))
+        maximum = np.maximum(np.maximum(world[0], world[1]), np.maximum(world[2], world[3]))
+        extent = float(np.linalg.norm(maximum - minimum))
+        normal_value = np.cross(surface.u_vector, surface.v_vector)
+        normal_length = float(np.linalg.norm(normal_value))
+        if not np.isfinite(normal_length) or normal_length <= 0.0:
+            return [f"face {face_id} has invalid surface geometry"]
+        normal = normal_value / normal_length
+        residual_tolerance = self.tolerance.effective_surface_residual(extent)
+        if any(
+            abs(float((point - surface.origin) @ normal)) > residual_tolerance
+            for point in world
+        ):
+            return [
+                f"face {face_id} boundary is inconsistent with its explicit surface"
+            ]
+
+        first_axis = surface.u_vector / float(np.linalg.norm(surface.u_vector))
+        second_axis = np.cross(normal, first_axis)
+        points = tuple(
+            (
+                float((point - surface.origin) @ first_axis),
+                float((point - surface.origin) @ second_axis),
+            )
+            for point in world
+        )
+        area_twice = abs(
+            sum(
+                points[index][0] * points[(index + 1) % 4][1]
+                - points[(index + 1) % 4][0] * points[index][1]
+                for index in range(4)
+            )
+        )
+        min_x = min(point[0] for point in points)
+        max_x = max(point[0] for point in points)
+        min_y = min(point[1] for point in points)
+        max_y = max(point[1] for point in points)
+        local_extent = float(np.hypot(max_x - min_x, max_y - min_y))
+        result: List[str] = []
+        if 0.5 * area_twice <= self.tolerance.effective_area(local_extent):
+            result.append(f"face {face_id} loop 0 has zero area")
+
+        def cross(first: tuple[float, float], second: tuple[float, float]) -> float:
+            return first[0] * second[1] - first[1] * second[0]
+
+        def subtract(
+            first: tuple[float, float], second: tuple[float, float]
+        ) -> tuple[float, float]:
+            return first[0] - second[0], first[1] - second[1]
+
+        def intersects(
+            first_start: tuple[float, float],
+            first_end: tuple[float, float],
+            second_start: tuple[float, float],
+            second_end: tuple[float, float],
+        ) -> bool:
+            first = subtract(first_end, first_start)
+            second = subtract(second_end, second_start)
+            denominator = cross(first, second)
+            offset = subtract(second_start, first_start)
+            tolerance = 1.0e-10
+            if abs(denominator) <= tolerance:
+                if abs(cross(offset, first)) > tolerance:
+                    return False
+                axis = 0 if abs(first[0]) >= abs(first[1]) else 1
+                if abs(first[axis]) <= tolerance:
+                    delta = subtract(first_start, second_start)
+                    return float(np.hypot(*delta)) <= tolerance
+                interval = sorted(
+                    (
+                        (second_start[axis] - first_start[axis]) / first[axis],
+                        (second_end[axis] - first_start[axis]) / first[axis],
+                    )
+                )
+                return max(0.0, interval[0]) <= min(1.0, interval[1]) + tolerance
+            first_parameter = cross(offset, second) / denominator
+            second_parameter = cross(offset, first) / denominator
+            return (
+                -tolerance <= first_parameter <= 1.0 + tolerance
+                and -tolerance <= second_parameter <= 1.0 + tolerance
+            )
+
+        if intersects(points[0], points[1], points[2], points[3]) or intersects(
+            points[1], points[2], points[3], points[0]
+        ):
+            result.append(f"face {face_id} loop 0 self-intersects")
+        return result
+
+    def _validate_planar_straight_face_geometry(self, face_id: int) -> List[str]:
+        """Validate a straight-trimmed plane without sampling or per-face SVD.
+
+        This exact common path keeps full geometric validation linear in the
+        trim size for large plate grids.  Curved trims and non-planar supports
+        continue through the general sampled/residual-qualified path above.
+        """
+
+        face = self.faces[face_id]
+        surface = face.surface
+        assert isinstance(surface, Plane)
+        loops = (face.loop,) + tuple(face.holes)
+        points_3d = [
+            np.asarray(
+                [
+                    self.vertices[self.oriented_start_vertex(item)].position
+                    for item in loop
+                ],
+                dtype=float,
+            )
+            for loop in loops
+        ]
+        if any(len(points) < 3 for points in points_3d):
+            return []
+
+        combined = np.vstack(points_3d)
+        extent = float(np.linalg.norm(np.ptp(combined, axis=0)))
+        normal = np.cross(surface.u_vector, surface.v_vector)
+        normal_length = float(np.linalg.norm(normal))
+        if not np.isfinite(normal_length) or normal_length <= 0.0:
+            return [f"face {face_id} has invalid surface geometry"]
+        normal = normal / normal_length
+        residuals = np.abs((combined - surface.origin) @ normal)
+        if float(np.max(residuals, initial=0.0)) > self.tolerance.effective_surface_residual(extent):
+            return [
+                f"face {face_id} boundary is inconsistent with its explicit surface"
+            ]
+
+        first_axis = surface.u_vector / float(np.linalg.norm(surface.u_vector))
+        second_axis = np.cross(normal, first_axis)
+        polygons = [
+            np.column_stack(
+                (
+                    (points - surface.origin) @ first_axis,
+                    (points - surface.origin) @ second_axis,
+                )
+            )
+            for points in points_3d
+        ]
+
+        result: List[str] = []
+        for index, polygon in enumerate(polygons):
+            following = np.roll(polygon, -1, axis=0)
+            area = 0.5 * abs(
+                float(
+                    np.sum(
+                        polygon[:, 0] * following[:, 1]
+                        - following[:, 0] * polygon[:, 1]
+                    )
+                )
+            )
+            local_extent = float(np.linalg.norm(np.ptp(polygon, axis=0)))
+            if area <= self.tolerance.effective_area(local_extent):
+                result.append(f"face {face_id} loop {index} has zero area")
+            if self._polygon_self_intersects(polygon):
+                result.append(f"face {face_id} loop {index} self-intersects")
+
+        outer = polygons[0]
+        for index, hole in enumerate(polygons[1:], start=1):
+            if not all(
+                self._point_in_polygon(point, outer, include_boundary=False)
+                for point in hole
+            ):
+                result.append(
+                    f"face {face_id} hole {index} is not strictly inside the outer loop"
+                )
+            if self._polygons_intersect(outer, hole):
+                result.append(f"face {face_id} hole {index} intersects the outer loop")
+        for first in range(1, len(polygons)):
+            for second in range(first + 1, len(polygons)):
+                if (
+                    self._polygons_intersect(polygons[first], polygons[second])
+                    or self._point_in_polygon(
+                        polygons[first][0], polygons[second], include_boundary=True
+                    )
+                    or self._point_in_polygon(
+                        polygons[second][0], polygons[first], include_boundary=True
+                    )
+                ):
+                    result.append(
+                        f"face {face_id} holes {first} and {second} overlap"
+                    )
+        return result
 
     def edge_tangent(self, edge_id: int, t: float) -> np.ndarray:
         """Unit tangent along the edge's own direction at parameter ``t``."""
@@ -1519,6 +3990,7 @@ class GeometryModel:
             )
         )
 
+    @_transactional
     def move_point(self, vertex_id: int, x: float, y: float, z: float = 0.0) -> None:
         """Move a point; every curve referencing it follows."""
 
@@ -1528,45 +4000,72 @@ class GeometryModel:
             raise GeometryError("point coordinates must be finite")
         if np.array_equal(vertex.position, position):
             return
-        snapshot = self.topology_snapshot()
+        affected_edges = tuple(self.edges_using_vertex(vertex_id))
         affected_faces = {
             face_id
-            for edge_id in self.edges_using_vertex(vertex_id)
+            for edge_id in affected_edges
             for face_id in self.faces_using_edge(edge_id)
         }
-        try:
-            vertex.position = position
-            self._arc_cache.clear()
-            # A point-wise edit is not, in general, a rigid transform of an
-            # analytical surface.  Boundary-backed Coons faces remain exact.
-            # Non-mapped faces keep a still-valid explicit surface, or receive
-            # a deterministic fitted plane when their edited boundary remains
-            # planar; otherwise the edit is rejected rather than leaving an
-            # unevaluable face.
-            for face_id in affected_faces:
-                face = self.faces[face_id]
-                if len(face.corners) == 4:
-                    face.surface = CoonsSurface()
-                    continue
-                if face.surface is not None and self._face_matches_surface(
-                    face_id, face.surface
-                ):
-                    continue
-                fitted = self._fit_face_plane(face_id)
-                if fitted is None:
+        assert self._transaction_journal is not None
+        # A face AABB is derived through its boundary edges.  Capture every
+        # dependent bound while the original vertex is still live; capturing
+        # it later from an unchanged immutable Face record would already see
+        # the new point and lose the old changed region.
+        for face_id in sorted(affected_faces):
+            face_key = ("face", face_id)
+            self._transaction_journal.bounds_before.setdefault(
+                face_key, self._entity_bounds(face_key)
+            )
+            self._transaction_journal.spatial_updates.add(face_key)
+        self._put_entity("vertex", replace(vertex, position=position))
+        if affected_edges:
+            for edge_id in affected_edges:
+                edge_key = ("edge", edge_id)
+                if edge_key not in self._transaction_journal.bounds_before:
+                    # Reconstruct the previous bound from the journalled point
+                    # without copying unrelated geometry.
+                    current = self._vertices[vertex_id]
+                    self._vertices[vertex_id] = vertex
+                    try:
+                        self._transaction_journal.bounds_before[edge_key] = (
+                            self._entity_bounds(edge_key)
+                        )
+                    finally:
+                        self._vertices[vertex_id] = current
+                self._transaction_journal.spatial_updates.add(edge_key)
+        for edge_id in affected_edges:
+            edge = self._edges[edge_id]
+            if isinstance(edge.curve, Arc):
+                try:
+                    self._arc_frame(edge)
+                except (ValueError, GeometryError) as exc:
                     raise GeometryError(
-                        f"moving point {vertex_id} would leave face {face_id} "
-                        "without a valid evaluable surface"
-                    )
-                face.surface = fitted
-            errors = self.validate_topology()
-            if errors:
-                raise GeometryError(
-                    "point move produced invalid geometry: " + "; ".join(errors)
+                        f"moving point {vertex_id} creates invalid arc geometry: {exc}"
+                    ) from exc
+
+        # A point-wise edit is not, in general, a rigid transform of an
+        # analytical surface.  Boundary-backed Coons faces remain exact.
+        # Non-mapped faces keep a still-valid explicit surface, or receive a
+        # deterministic fitted plane when their edited boundary remains
+        # planar; otherwise the transaction fails closed.
+        for face_id in sorted(affected_faces):
+            face = self.faces[face_id]
+            if len(face.corners) == 4:
+                self._put_entity(
+                    "face", replace(face, surface=CoonsSurface())
                 )
-        except Exception:
-            self.restore_topology(snapshot)
-            raise
+                continue
+            if face.surface is not None and self._face_matches_surface(
+                face_id, face.surface
+            ):
+                continue
+            fitted = self._fit_face_plane(face_id)
+            if fitted is None:
+                raise GeometryError(
+                    f"moving point {vertex_id} would leave face {face_id} "
+                    "without a valid evaluable surface"
+                )
+            self._put_entity("face", replace(face, surface=fitted))
 
     def _face_matches_surface(self, face_id: int, surface: object) -> bool:
         if isinstance(surface, CoonsSurface) and not surface.has_boundaries:
@@ -1577,8 +4076,12 @@ class GeometryModel:
                 for point in self._validation_loop_points(loop):
                     uv = surface.local_uv(point)  # type: ignore[union-attr]
                     projected = np.asarray(surface.evaluate(*uv), dtype=float)  # type: ignore[union-attr]
-                    scale = max(float(np.linalg.norm(point)), 1.0)
-                    if float(np.linalg.norm(projected - point)) > 1.0e-7 * scale:
+                    extent = float(
+                        np.linalg.norm(
+                            np.ptp(self._validation_loop_points(loop), axis=0)
+                        )
+                    )
+                    if float(np.linalg.norm(projected - point)) > self.tolerance.effective_surface_residual(extent):
                         return False
         except (AttributeError, ValueError, GeometryError, np.linalg.LinAlgError):
             return False
@@ -1594,8 +4097,8 @@ class GeometryModel:
         )
         centre = points.mean(axis=0)
         _values, singular, vectors = np.linalg.svd(points - centre)
-        scale = max(float(singular[0]), 1.0)
-        if len(singular) >= 3 and float(singular[-1]) > 1.0e-8 * scale:
+        extent = float(np.linalg.norm(np.ptp(points, axis=0)))
+        if len(singular) >= 3 and float(singular[-1]) > self.tolerance.effective_surface_residual(extent):
             return None
         coordinates = np.column_stack(
             ((points - centre) @ vectors[0], (points - centre) @ vectors[1])
@@ -1603,7 +4106,7 @@ class GeometryModel:
         minimum = coordinates.min(axis=0)
         maximum = coordinates.max(axis=0)
         spans = maximum - minimum
-        if np.any(spans <= 1.0e-12 * scale):
+        if np.any(spans <= self.tolerance.effective_length(extent)):
             return None
         origin = centre + minimum[0] * vectors[0] + minimum[1] * vectors[1]
         return Plane(origin, spans[0] * vectors[0], spans[1] * vectors[1])

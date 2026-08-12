@@ -105,6 +105,12 @@ class ArcFrame:
     normal: np.ndarray
     sweep: float
 
+    def __post_init__(self) -> None:
+        for name in ("center", "e1", "e2", "normal"):
+            value = np.array(getattr(self, name), dtype=float, copy=True)
+            value.flags.writeable = False
+            object.__setattr__(self, name, value)
+
     @property
     def length(self) -> float:
         return float(self.radius * abs(self.sweep))

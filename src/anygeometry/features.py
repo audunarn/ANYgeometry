@@ -16,10 +16,15 @@ from dataclasses import dataclass, field
 from enum import Enum
 import hashlib
 import json
+from numbers import Integral, Real
 from typing import Any, Callable, Dict, Iterable, Mapping, Protocol, Sequence, TYPE_CHECKING
 
-from .entities import EntityKind, EntityRef
+import numpy as np
+
+from .curves import Arc, Spline, Straight
+from .entities import Edge, EntityKind, EntityRef, Face, Vertex
 from .errors import GeometryError
+from .surfaces import CoonsSurface, Cone, Cylinder, Plane, RuledSurface
 
 if TYPE_CHECKING:
     from .model import GeometryModel
@@ -40,6 +45,230 @@ __all__ = [
 
 
 _KINDS = ("vertex", "edge", "face")
+
+
+def _frozen_feature_diagnostic(kind: str) -> str:
+    """Canonical loader-visible diagnostic for an unavailable executor."""
+
+    return (
+        f"executor for feature kind {kind!r} is unavailable; "
+        "using its verified last-good materialization"
+    )
+
+
+def _values_equal(first: object, second: object) -> bool:
+    """Deep equality for JSON-like feature state, including NumPy values."""
+
+    if first is second:
+        return True
+    if isinstance(first, np.ndarray) or isinstance(second, np.ndarray):
+        try:
+            return bool(np.array_equal(first, second))
+        except (TypeError, ValueError):
+            return False
+    if type(first) is not type(second):
+        return False
+    if isinstance(first, Mapping):
+        return (
+            first.keys() == second.keys()  # type: ignore[union-attr]
+            and all(_values_equal(first[key], second[key]) for key in first)  # type: ignore[index]
+        )
+    if isinstance(first, (tuple, list)):
+        return len(first) == len(second) and all(  # type: ignore[arg-type]
+            _values_equal(left, right)
+            for left, right in zip(first, second)  # type: ignore[arg-type]
+        )
+    if isinstance(first, FeatureRecord):
+        return all(
+            _values_equal(getattr(first, name), getattr(second, name))
+            for name in (
+                "feature_id",
+                "kind",
+                "name",
+                "parameters",
+                "inputs",
+                "suppressed",
+                "kind_version",
+                "dependencies",
+                "outputs",
+                "state",
+                "diagnostic",
+                "materialization_checksum",
+            )
+        )
+    try:
+        return bool(first == second)
+    except (TypeError, ValueError):
+        return False
+
+
+def _validate_json_value(value: object, path: str) -> None:
+    """Reject values that cannot survive the strict JSON feature codec."""
+
+    if value is None or isinstance(value, (bool, str)):
+        return
+    if isinstance(value, Integral):
+        return
+    if isinstance(value, Real):
+        if not np.isfinite(float(value)):
+            raise GeometryError(f"{path} must be finite")
+        return
+    if isinstance(value, np.ndarray):
+        _validate_json_value(value.tolist(), path)
+        return
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if not isinstance(key, str) or not key:
+                raise GeometryError(f"{path} keys must be non-empty strings")
+            _validate_json_value(item, f"{path}.{key}")
+        return
+    if isinstance(value, (list, tuple)):
+        for position, item in enumerate(value):
+            _validate_json_value(item, f"{path}[{position}]")
+        return
+    raise GeometryError(
+        f"{path} value of type {type(value).__name__} is not JSON serializable"
+    )
+
+
+def _positive_int(value: object, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, Integral) or int(value) <= 0:
+        raise GeometryError(f"{name} must be a positive integer")
+    return int(value)
+
+
+def _validate_entity_ref(reference: object, name: str) -> None:
+    if not isinstance(reference, EntityRef):
+        raise GeometryError(f"{name} must be an EntityRef")
+    if reference.kind not in _KINDS:
+        raise GeometryError(f"{name} has unknown entity kind {reference.kind!r}")
+    _positive_int(reference.id, f"{name} entity ID")
+
+
+def _validate_feature_output_ref(reference: object, name: str) -> None:
+    if not isinstance(reference, FeatureOutputRef):
+        raise GeometryError(f"{name} must be a FeatureOutputRef")
+    _positive_int(reference.feature_id, f"{name} feature ID")
+    if not isinstance(reference.output_key, str) or not reference.output_key.strip():
+        raise GeometryError(f"{name} needs a non-empty output key")
+    if reference.kind not in _KINDS:
+        raise GeometryError(f"{name} has unknown entity kind {reference.kind!r}")
+
+
+def _closure_surface(surface: object) -> dict[str, object] | None:
+    """Encode one support surface exactly as the geometry document does."""
+
+    if surface is None:
+        return None
+    if isinstance(surface, CoonsSurface):
+        if not surface.has_boundaries:
+            return {"type": "coons"}
+        assert (
+            surface.bottom is not None
+            and surface.right is not None
+            and surface.top is not None
+            and surface.left is not None
+        )
+        return {
+            "type": "coons",
+            "bottom": surface.bottom.tolist(),
+            "right": surface.right.tolist(),
+            "top": surface.top.tolist(),
+            "left": surface.left.tolist(),
+        }
+    if isinstance(surface, Plane):
+        return {
+            "type": "plane",
+            "origin": surface.origin.tolist(),
+            "u_vector": surface.u_vector.tolist(),
+            "v_vector": surface.v_vector.tolist(),
+        }
+    if isinstance(surface, Cylinder):
+        return {
+            "type": "cylinder",
+            "origin": surface.origin.tolist(),
+            "axis": surface.axis.tolist(),
+            "radial_direction": surface.radial_direction.tolist(),
+            "radius": surface.radius,
+            "height": surface.height,
+            "start_angle": surface.start_angle,
+            "sweep_angle": surface.sweep_angle,
+        }
+    if isinstance(surface, Cone):
+        return {
+            "type": "cone",
+            "origin": surface.origin.tolist(),
+            "axis": surface.axis.tolist(),
+            "radial_direction": surface.radial_direction.tolist(),
+            "radius_start": surface.radius_start,
+            "radius_end": surface.radius_end,
+            "height": surface.height,
+            "start_angle": surface.start_angle,
+            "sweep_angle": surface.sweep_angle,
+        }
+    if isinstance(surface, RuledSurface):
+        return {
+            "type": "ruled",
+            "first_boundary": surface.first_boundary.tolist(),
+            "second_boundary": surface.second_boundary.tolist(),
+        }
+    raise GeometryError(f"unsupported surface type {type(surface).__name__}")
+
+
+def _closure_vertex(vertex: Vertex) -> dict[str, object]:
+    return {"id": vertex.id, "position": vertex.position.tolist()}
+
+
+def _closure_edge(edge: Edge) -> dict[str, object]:
+    if isinstance(edge.curve, Straight):
+        curve: dict[str, object] = {"type": "straight"}
+    elif isinstance(edge.curve, Arc):
+        curve = {"type": "arc", "via_vertex": edge.curve.via_vertex}
+    elif isinstance(edge.curve, Spline):
+        curve = {
+            "type": "spline",
+            "control_vertices": list(edge.curve.control_vertices),
+        }
+    else:  # pragma: no cover - closed public union
+        raise GeometryError(f"unsupported curve type {type(edge.curve).__name__}")
+    return {
+        "id": edge.id,
+        "start": edge.start,
+        "end": edge.end,
+        "curve": curve,
+    }
+
+
+def _closure_face(face: Face) -> dict[str, object]:
+    return {
+        "id": face.id,
+        "loop": [[item.edge, item.forward] for item in face.loop],
+        "corners": list(face.corners),
+        "holes": [
+            [[item.edge, item.forward] for item in loop] for loop in face.holes
+        ],
+        "surface": _closure_surface(face.surface),
+        "metadata": face.metadata.to_dict(),  # type: ignore[union-attr]
+    }
+
+
+def _face_corner_vertex_ids(face: Face, geometry: "GeometryModel") -> tuple[int, ...]:
+    """Resolve mapped corner loop positions to their oriented start vertices."""
+
+    made: list[int] = []
+    for position in face.corners:
+        if position < 0 or position >= len(face.loop):
+            raise GeometryError(
+                f"face {face.id} mapped corner position {position} is outside its loop"
+            )
+        oriented = face.loop[position]
+        edge = geometry.edges.get(oriented.edge)
+        if edge is None:
+            raise GeometryError(
+                f"face {face.id} corner references missing edge {oriented.edge}"
+            )
+        made.append(edge.start if oriented.forward else edge.end)
+    return tuple(made)
 
 
 class FeatureStatus(str, Enum):
@@ -220,17 +449,34 @@ class FeatureHistory:
         records: Iterable[FeatureRecord] = (),
         next_id: int = 1,
     ) -> None:
-        self.baseline: Dict[str, Any] | None = (
+        self._baseline: Dict[str, Any] | None = (
             None if baseline is None else deepcopy(dict(baseline))
         )
-        self.records: list[FeatureRecord] = [deepcopy(item) for item in records]
+        self._records: list[FeatureRecord] = [deepcopy(item) for item in records]
+        if isinstance(next_id, bool) or not isinstance(next_id, Integral):
+            raise GeometryError("next feature ID must be a positive integer")
         self._next_id = int(next_id)
-        self._normalize_next_id()
+        self._owner: GeometryModel | None = None
+        self.validate()
 
-    def _normalize_next_id(self) -> None:
-        minimum = max((item.feature_id for item in self.records), default=0) + 1
-        if self._next_id < minimum:
-            self._next_id = minimum
+    def _bind_owner(self, owner: "GeometryModel") -> None:
+        """Bind this history to its sole document owner without publishing."""
+
+        if self._owner is not None and self._owner is not owner:
+            raise GeometryError("a feature history cannot belong to two models")
+        self._owner = owner
+
+    @property
+    def baseline(self) -> Dict[str, Any] | None:
+        """Detached baseline copy; use ``capture_baseline`` to replace it."""
+
+        return deepcopy(self._baseline)
+
+    @property
+    def records(self) -> list[FeatureRecord]:
+        """Detached records; persistent edits go through owner-aware methods."""
+
+        return deepcopy(self._records)
 
     @property
     def next_id(self) -> int:
@@ -238,25 +484,62 @@ class FeatureHistory:
 
     def snapshot(self) -> Dict[str, Any]:
         return {
-            "baseline": deepcopy(self.baseline),
-            "records": deepcopy(self.records),
+            "baseline": deepcopy(self._baseline),
+            "records": deepcopy(self._records),
             "next_id": self._next_id,
         }
 
     def restore(self, snapshot: Mapping[str, Any]) -> None:
-        self.baseline = deepcopy(snapshot.get("baseline"))
-        self.records = deepcopy(list(snapshot.get("records", ())))
-        self._next_id = int(snapshot.get("next_id", 1))
-        self._normalize_next_id()
+        """Atomically restore feature state and notify an attached owner once."""
+
+        self._apply_mutation(lambda: self._restore_unchecked(snapshot))
+
+    def _restore_unchecked(self, snapshot: Mapping[str, Any]) -> None:
+        self._baseline = deepcopy(snapshot.get("baseline"))
+        self._records = deepcopy(list(snapshot.get("records", ())))
+        raw_next = snapshot.get("next_id", 1)
+        if isinstance(raw_next, bool) or not isinstance(raw_next, Integral):
+            raise GeometryError("next feature ID must be a positive integer")
+        self._next_id = int(raw_next)
+
+    def _apply_mutation(self, operation: Callable[[], Any]) -> Any:
+        """Run one history edit with rollback and one owner publication."""
+
+        before = self.snapshot()
+        if self._owner is not None:
+            self._owner._feature_history_will_change(self)  # noqa: SLF001
+        try:
+            result = operation()
+            self.validate()
+        except Exception:
+            self._restore_unchecked(before)
+            raise
+        if not _values_equal(before, self.snapshot()) and self._owner is not None:
+            self._owner._feature_history_did_change(self)  # noqa: SLF001
+        return result
 
     def capture_baseline(self, geometry: "GeometryModel", *, force: bool = False) -> None:
         """Capture current materialized topology before the first feature."""
 
-        if self.baseline is not None and not force:
+        if self._owner is not None and geometry is not self._owner:
+            raise GeometryError("a feature baseline must be captured from its owner model")
+        if self._baseline is not None and not force:
             return
         from .serialization import to_dict
 
-        self.baseline = to_dict(geometry, include_features=False)
+        baseline = to_dict(geometry, include_features=False)
+        self._apply_mutation(lambda: setattr(self, "_baseline", deepcopy(baseline)))
+
+    def _capture_baseline_unchecked(
+        self, geometry: "GeometryModel", *, force: bool = False
+    ) -> None:
+        """Loader-only baseline capture without revision publication."""
+
+        if self._baseline is not None and not force:
+            return
+        from .serialization import to_dict
+
+        self._baseline = to_dict(geometry, include_features=False)
 
     def append(
         self,
@@ -282,18 +565,20 @@ class FeatureHistory:
             kind_version=kind_version,
             dependencies=tuple(dependencies),
         )
-        self.records.append(record)
-        self._next_id += 1
-        try:
-            self.validate()
-        except Exception:
-            self.records.pop()
-            self._next_id -= 1
-            raise
-        return record
+        def apply() -> None:
+            self._records.append(record)
+            self._next_id += 1
+
+        self._apply_mutation(apply)
+        return deepcopy(record)
 
     def get(self, feature_id: int) -> FeatureRecord:
-        for record in self.records:
+        """Return a detached feature record safe for inspection."""
+
+        return deepcopy(self._get_record(feature_id))
+
+    def _get_record(self, feature_id: int) -> FeatureRecord:
+        for record in self._records:
             if record.feature_id == int(feature_id):
                 return record
         raise KeyError(f"no feature {feature_id}")
@@ -306,14 +591,27 @@ class FeatureHistory:
                 f"feature {wanted} is used by feature(s) {list(dependents)}"
             )
         removed = {wanted, *(dependents if cascade else ())}
-        before = len(self.records)
-        self.records[:] = [item for item in self.records if item.feature_id not in removed]
-        if len(self.records) == before:
+        if not any(item.feature_id == wanted for item in self._records):
             raise KeyError(f"no feature {wanted}")
+
+        def apply() -> None:
+            self._records[:] = [
+                item for item in self._records if item.feature_id not in removed
+            ]
+
+        self._apply_mutation(apply)
         return tuple(sorted(removed))
 
     def set_suppressed(self, feature_id: int, suppressed: bool = True) -> None:
-        self.get(feature_id).suppressed = bool(suppressed)
+        record = self._get_record(feature_id)
+        made = bool(suppressed)
+        if record.suppressed == made:
+            return
+
+        def apply() -> None:
+            record.suppressed = made
+
+        self._apply_mutation(apply)
 
     def update(
         self,
@@ -326,45 +624,41 @@ class FeatureHistory:
     ) -> FeatureRecord:
         """Atomically replace editable fields and revalidate dependencies."""
 
-        record = self.get(feature_id)
-        previous = deepcopy(record)
-        if name is not None:
-            if not str(name).strip():
-                raise ValueError("a feature name cannot be empty")
-            record.name = str(name)
-        if parameters is not None:
-            record.parameters = deepcopy(dict(parameters))
-        if inputs is not None:
-            record.inputs = {
-                str(port): tuple(references)
-                for port, references in inputs.items()
-            }
-        if dependencies is not None:
-            record.dependencies = tuple(
-                dict.fromkeys(int(item) for item in dependencies)
-            )
-        try:
-            self.validate()
-        except Exception:
-            index = self.records.index(record)
-            self.records[index] = previous
-            raise
-        return record
+        record = self._get_record(feature_id)
+
+        def apply() -> None:
+            if name is not None:
+                if not str(name).strip():
+                    raise ValueError("a feature name cannot be empty")
+                record.name = str(name)
+            if parameters is not None:
+                record.parameters = deepcopy(dict(parameters))
+            if inputs is not None:
+                record.inputs = {
+                    str(port): tuple(references)
+                    for port, references in inputs.items()
+                }
+            if dependencies is not None:
+                record.dependencies = tuple(int(item) for item in dependencies)
+
+        self._apply_mutation(apply)
+        return deepcopy(record)
 
     def move(self, feature_id: int, index: int) -> None:
-        record = self.get(feature_id)
-        old = self.records.index(record)
-        self.records.pop(old)
-        self.records.insert(max(0, min(int(index), len(self.records))), record)
-        try:
-            self.validate()
-        except Exception:
-            self.records.remove(record)
-            self.records.insert(old, record)
-            raise
+        record = self._get_record(feature_id)
+        old = self._records.index(record)
+        target = max(0, min(int(index), len(self._records) - 1))
+        if target == old:
+            return
+
+        def apply() -> None:
+            self._records.pop(old)
+            self._records.insert(target, record)
+
+        self._apply_mutation(apply)
 
     def dependencies_of(self, record: FeatureRecord | int) -> tuple[int, ...]:
-        made = self.get(record) if isinstance(record, int) else record
+        made = self._get_record(record) if isinstance(record, int) else record
         dependencies = list(made.dependencies)
         for references in made.inputs.values():
             dependencies.extend(
@@ -381,7 +675,7 @@ class FeatureHistory:
             parent = pending.pop(0)
             direct = [
                 item.feature_id
-                for item in self.records
+                for item in self._records
                 if parent in self.dependencies_of(item) and item.feature_id not in found
             ]
             found.extend(direct)
@@ -390,30 +684,165 @@ class FeatureHistory:
         return tuple(found)
 
     def validate(self) -> None:
+        """Validate every persisted field after possible hostile tampering."""
+
+        _positive_int(self._next_id, "next feature ID")
+        if self._baseline is not None:
+            if not isinstance(self._baseline, Mapping):
+                raise GeometryError("feature-history baseline must be a geometry object")
+            if "features" in self._baseline:
+                raise GeometryError("feature-history baseline cannot contain another history")
+            _validate_json_value(self._baseline, "feature-history baseline")
+
         seen: set[int] = set()
-        for record in self.records:
-            if record.feature_id in seen:
-                raise GeometryError(f"duplicate feature ID {record.feature_id}")
+        for position, record in enumerate(self._records):
+            if not isinstance(record, FeatureRecord):
+                raise GeometryError(
+                    f"feature record {position} has type {type(record).__name__}, "
+                    "expected FeatureRecord"
+                )
+            feature_id = _positive_int(record.feature_id, "feature ID")
+            if feature_id in seen:
+                raise GeometryError(f"duplicate feature ID {feature_id}")
+            if not isinstance(record.kind, str) or not record.kind.strip():
+                raise GeometryError(f"feature {feature_id} kind must be a non-empty string")
+            if not isinstance(record.name, str) or not record.name.strip():
+                raise GeometryError(f"feature {feature_id} name must be a non-empty string")
+            if "\x00" in record.kind or "\x00" in record.name:
+                raise GeometryError(f"feature {feature_id} kind/name cannot contain NUL")
+            _positive_int(record.kind_version, f"feature {feature_id} kind version")
+            if not isinstance(record.suppressed, bool):
+                raise GeometryError(f"feature {feature_id} suppressed must be boolean")
+            if not isinstance(record.parameters, Mapping):
+                raise GeometryError(f"feature {feature_id} parameters must be an object")
+            _validate_json_value(record.parameters, f"feature {feature_id} parameters")
+
+            if not isinstance(record.dependencies, (tuple, list)):
+                raise GeometryError(f"feature {feature_id} dependencies must be ordered")
+            dependencies = tuple(
+                _positive_int(item, f"feature {feature_id} dependency")
+                for item in record.dependencies
+            )
+            if len(set(dependencies)) != len(dependencies):
+                raise GeometryError(f"feature {feature_id} has duplicate dependencies")
+
+            if not isinstance(record.inputs, Mapping):
+                raise GeometryError(f"feature {feature_id} inputs must be an object")
+            for port, references in record.inputs.items():
+                if not isinstance(port, str) or not port:
+                    raise GeometryError(
+                        f"feature {feature_id} input ports must be non-empty strings"
+                    )
+                if not isinstance(references, (tuple, list)):
+                    raise GeometryError(
+                        f"feature {feature_id} input port {port!r} must be ordered"
+                    )
+                for reference in references:
+                    if isinstance(reference, EntityRef):
+                        _validate_entity_ref(
+                            reference, f"feature {feature_id} input port {port!r}"
+                        )
+                    elif isinstance(reference, FeatureOutputRef):
+                        _validate_feature_output_ref(
+                            reference, f"feature {feature_id} input port {port!r}"
+                        )
+                    else:
+                        raise GeometryError(
+                            f"feature {feature_id} has an invalid input reference"
+                        )
+                try:
+                    unique_references = set(references)
+                except TypeError as error:
+                    raise GeometryError(
+                        f"feature {feature_id} input port {port!r} is not hashable"
+                    ) from error
+                if len(unique_references) != len(references):
+                    raise GeometryError(
+                        f"feature {feature_id} input port {port!r} has duplicate references"
+                    )
+
+            if not isinstance(record.outputs, Mapping):
+                raise GeometryError(f"feature {feature_id} outputs must be an object")
+            for key, reference in record.outputs.items():
+                if not isinstance(key, str) or not key:
+                    raise GeometryError(
+                        f"feature {feature_id} output keys must be non-empty strings"
+                    )
+                _validate_entity_ref(reference, f"feature {feature_id} output {key!r}")
+
+            try:
+                FeatureStatus(record.state)
+            except (TypeError, ValueError) as error:
+                raise GeometryError(
+                    f"feature {feature_id} state contains an unknown enum value"
+                ) from error
+            if record.diagnostic is not None and not isinstance(record.diagnostic, str):
+                raise GeometryError(
+                    f"feature {feature_id} diagnostic must be a string or null"
+                )
+            checksum = record.materialization_checksum
+            if checksum is not None and (
+                not isinstance(checksum, str)
+                or len(checksum) != 64
+                or checksum.lower() != checksum
+                or any(character not in "0123456789abcdef" for character in checksum)
+            ):
+                raise GeometryError(
+                    f"feature {feature_id} materialization checksum must be lowercase SHA-256"
+                )
+
             for dependency in self.dependencies_of(record):
                 if dependency not in seen:
                     raise GeometryError(
-                        f"feature {record.feature_id} depends on later or missing "
+                        f"feature {feature_id} depends on later or missing "
                         f"feature {dependency}"
                     )
-            for references in record.inputs.values():
-                for reference in references:
-                    if not isinstance(reference, (EntityRef, FeatureOutputRef)):
-                        raise GeometryError(
-                            f"feature {record.feature_id} has an invalid input reference"
-                        )
-            seen.add(record.feature_id)
+            seen.add(feature_id)
+        if self._next_id <= max(seen, default=0):
+            raise GeometryError("next feature ID would reuse an existing feature ID")
+
+    def validate_persistence(self, geometry: "GeometryModel") -> None:
+        """Reject history that the strict loader could not restore faithfully."""
+
+        self.validate()
+        registry = builtin_feature_registry()
+        for record in self._records:
+            known = registry.has(record.kind)
+            if known and record.state in ("ok", "active") and not record.outputs:
+                raise GeometryError(
+                    f"active feature {record.feature_id} has no materialized outputs"
+                )
+            for key, reference in record.outputs.items():
+                if not geometry.resolve_ref(reference):
+                    raise GeometryError(
+                        f"feature {record.feature_id} output {key!r} references "
+                        f"missing entity {reference}"
+                    )
+            if known or record.suppressed:
+                continue
+
+            # The strict loader can preserve an unavailable executor only as
+            # an explicitly frozen, checksummed last-good materialization.
+            # Requiring its canonical state here makes every accepted schema-3
+            # document stable under a to_dict -> from_dict -> to_dict cycle.
+            if not record.outputs or record.materialization_checksum is None:
+                raise GeometryError(
+                    f"unknown feature {record.feature_id} requires verified "
+                    "last-good outputs and a materialization checksum"
+                )
+            diagnostic = self.validate_materialization(record, geometry)
+            if diagnostic is not None:
+                raise GeometryError(
+                    f"unknown feature {record.feature_id} has no verified "
+                    f"last-good materialization: {diagnostic}"
+                )
 
     def resolve(
         self, reference: FeatureInputRef, geometry: "GeometryModel"
     ) -> tuple[EntityRef, ...]:
         if isinstance(reference, EntityRef):
             return geometry.resolve_ref(reference)
-        record = self.get(reference.feature_id)
+        record = self._get_record(reference.feature_id)
         if record.suppressed or record.state not in ("ok", "active", "frozen"):
             return ()
         materialized = record.outputs.get(reference.output_key)
@@ -431,13 +860,7 @@ class FeatureHistory:
         excludes labels and unrelated downstream topology.
         """
 
-        made = self.get(record) if isinstance(record, int) else record
-        from .serialization import to_dict
-
-        document = to_dict(geometry, include_features=False)
-        vertices = {int(item["id"]): item for item in document["vertices"]}
-        edges = {int(item["id"]): item for item in document["edges"]}
-        faces = {int(item["id"]): item for item in document["faces"]}
+        made = self._get_record(record) if isinstance(record, int) else record
         selected: dict[str, set[int]] = {kind: set() for kind in _KINDS}
         resolved_outputs: dict[str, list[list[object]]] = {}
 
@@ -448,27 +871,25 @@ class FeatureHistory:
                 selected[item.kind].add(item.id)
 
         for face_id in tuple(selected["face"]):
-            face = faces.get(face_id)
+            face = geometry.faces.get(face_id)
             if face is None:
                 continue
-            for edge_id, _forward in face["loop"]:
-                selected["edge"].add(int(edge_id))
-            for loop in face.get("holes", ()):
-                for edge_id, _forward in loop:
-                    selected["edge"].add(int(edge_id))
-            selected["vertex"].update(int(item) for item in face.get("corners", ()))
+            for loop in (face.loop,) + tuple(face.holes):
+                selected["edge"].update(item.edge for item in loop)
+            # ``Face.corners`` contains loop positions, not entity IDs.  The
+            # oriented-start translation is explicit even though the complete
+            # edge closure below normally contributes the same vertices.
+            selected["vertex"].update(_face_corner_vertex_ids(face, geometry))
 
         for edge_id in tuple(selected["edge"]):
-            edge = edges.get(edge_id)
+            edge = geometry.edges.get(edge_id)
             if edge is None:
                 continue
-            selected["vertex"].update((int(edge["start"]), int(edge["end"])))
-            curve = edge.get("curve", {})
-            if "via_vertex" in curve:
-                selected["vertex"].add(int(curve["via_vertex"]))
-            selected["vertex"].update(
-                int(item) for item in curve.get("control_vertices", ())
-            )
+            selected["vertex"].update((edge.start, edge.end))
+            if isinstance(edge.curve, Arc):
+                selected["vertex"].add(edge.curve.via_vertex)
+            elif isinstance(edge.curve, Spline):
+                selected["vertex"].update(edge.curve.control_vertices)
 
         selected_refs = {
             (kind, identifier)
@@ -477,18 +898,43 @@ class FeatureHistory:
         }
         payload = {
             "outputs": resolved_outputs,
-            "vertices": [vertices[item] for item in sorted(selected["vertex"]) if item in vertices],
-            "edges": [edges[item] for item in sorted(selected["edge"]) if item in edges],
-            "faces": [faces[item] for item in sorted(selected["face"]) if item in faces],
+            "vertices": [
+                _closure_vertex(geometry.vertices[item])
+                for item in sorted(selected["vertex"])
+                if item in geometry.vertices
+            ],
+            "edges": [
+                _closure_edge(geometry.edges[item])
+                for item in sorted(selected["edge"])
+                if item in geometry.edges
+            ],
+            "faces": [
+                _closure_face(geometry.faces[item])
+                for item in sorted(selected["face"])
+                if item in geometry.faces
+            ],
             "groups": {
-                name: [reference for reference in members if tuple(reference) in selected_refs]
-                for name, members in sorted(document.get("groups", {}).items())
-                if any(tuple(reference) in selected_refs for reference in members)
+                name: [
+                    [reference.kind, reference.id]
+                    for reference in geometry.group(name, resolve=False)
+                    if (reference.kind, reference.id) in selected_refs
+                ]
+                for name in sorted(geometry.groups)
+                if any(
+                    (reference.kind, reference.id) in selected_refs
+                    for reference in geometry.group(name, resolve=False)
+                )
             },
             "tags": [
-                item
-                for item in document.get("tags", ())
-                if tuple(item["entity"]) in selected_refs
+                {
+                    "entity": [reference.kind, reference.id],
+                    "values": sorted(values),
+                }
+                for reference, values in sorted(
+                    geometry.tags.items(),
+                    key=lambda item: (item[0].kind, item[0].id),
+                )
+                if (reference.kind, reference.id) in selected_refs
             ],
         }
         encoded = json.dumps(
@@ -501,7 +947,7 @@ class FeatureHistory:
     ) -> str | None:
         """Return a blocking diagnostic when a frozen materialization is bad."""
 
-        made = self.get(record) if isinstance(record, int) else record
+        made = self._get_record(record) if isinstance(record, int) else record
         if made.suppressed:
             return None
         if not made.outputs:
@@ -529,7 +975,7 @@ class FeatureHistory:
         self.validate()
         unknown = [
             record
-            for record in self.records
+            for record in self._records
             if not record.suppressed and not registry.has(record.kind)
         ]
         if unknown:
@@ -555,20 +1001,23 @@ class FeatureHistory:
                 tuple(results),
                 diagnostic=f"regeneration is disabled: {detail}",
             )
-        if self.baseline is None:
-            self.capture_baseline(geometry)
-        assert self.baseline is not None
-        from .serialization import from_dict
+        from .serialization import from_dict, to_dict
+
+        baseline = (
+            to_dict(geometry, include_features=False)
+            if self._baseline is None
+            else deepcopy(self._baseline)
+        )
 
         previous_history = geometry.replacement_history()
         previous_outputs = {
             (record.feature_id, key): geometry.resolve_ref(reference)
-            for record in self.records
+            for record in self._records
             for key, reference in record.outputs.items()
         }
-        working = from_dict(deepcopy(self.baseline))
+        working = from_dict(deepcopy(baseline))
         working.reserve_id_state(geometry.id_state())
-        replayed = deepcopy(self.records)
+        replayed = deepcopy(self._records)
         by_id = {record.feature_id: record for record in replayed}
         results: list[FeatureResult] = []
 
@@ -675,14 +1124,23 @@ class FeatureHistory:
                 diagnostic=f"cannot preserve feature lineage: {error}",
             )
 
-        geometry.restore_topology(working.topology_snapshot())
-        self.records = replayed
-        for record in self.records:
+        for record in replayed:
             record.materialization_checksum = (
-                self.materialization_checksum(record, geometry)
+                self.materialization_checksum(record, working)
                 if record.state == "ok" and record.outputs
                 else None
             )
+        staged = FeatureHistory(
+            baseline=baseline,
+            records=replayed,
+            next_id=self._next_id,
+        )
+        geometry.restore_design(
+            {
+                "topology": working.topology_snapshot(),
+                "features": staged.snapshot(),
+            }
+        )
         return RegenerationReport(True, tuple(results), tuple(transitions))
 
 
