@@ -67,7 +67,8 @@ from .identity import (
     validate_entity_kind,
     validate_local_id,
 )
-from .tolerance import DEFAULT_TOLERANCE_POLICY, TolerancePolicy
+from .tolerance import DEFAULT_TOLERANCE_POLICY, TolerancePolicy, feature_extent
+from .predicates import IntersectionKind, IntersectionResult, qualified_segment_segment
 from .structural import (
     Attachment,
     AttachmentEvidence,
@@ -4782,6 +4783,122 @@ class GeometryModel:
             points.extend(samples[:-1])
         return np.asarray(points, dtype=float)
 
+    def _topology_coons_outer_loop_uv(
+        self, face_id: int, samples_per_edge: Sequence[int]
+    ) -> np.ndarray:
+        """Exact construction UV for a four-side topology Coons outer loop.
+
+        Side fractions use the same cumulative edge-length convention as
+        :meth:`_chain_point_and_derivative`.  Values are then restored to the
+        original ``Face.loop`` order because the first mapped corner need not
+        be loop position zero.
+        """
+
+        face = self._require_face(face_id)
+        if len(face.corners) != 4:
+            raise GeometryError(
+                f"face {face_id} has no four-side topology parameterization"
+            )
+        counts = tuple(int(value) for value in samples_per_edge)
+        if len(counts) != len(face.loop) or any(value < 2 for value in counts):
+            raise GeometryError("topology Coons sampling must cover every edge")
+
+        count = len(face.loop)
+        sides = face.sides()
+        position_by_edge = {
+            item.edge: position for position, item in enumerate(face.loop)
+        }
+        if len(position_by_edge) != count:
+            raise GeometryError("topology Coons outer loop reuses an edge")
+        by_position: List[np.ndarray | None] = [None] * count
+        for side_index, side in enumerate(sides):
+            positions = tuple(position_by_edge[item.edge] for item in side)
+            if any(
+                face.loop[position] != item
+                for position, item in zip(positions, side)
+            ):
+                raise GeometryError("topology Coons sides do not match the outer loop")
+            lengths = np.asarray(
+                [self.edge_length(item.edge) for item in side],
+                dtype=float,
+            )
+            total = float(lengths.sum())
+            if (
+                not np.all(np.isfinite(lengths))
+                or np.any(lengths <= 0.0)
+                or not np.isfinite(total)
+                or total <= 0.0
+            ):
+                raise GeometryError("topology Coons side has invalid edge lengths")
+
+            cumulative = 0.0
+            for position, length in zip(positions, lengths):
+                local = np.linspace(0.0, 1.0, counts[position])[:-1]
+                fraction = (cumulative + local * float(length)) / total
+                zeros = np.zeros_like(fraction)
+                ones = np.ones_like(fraction)
+                if side_index == 0:
+                    values = np.column_stack((fraction, zeros))
+                elif side_index == 1:
+                    values = np.column_stack((ones, fraction))
+                elif side_index == 2:
+                    values = np.column_stack((1.0 - fraction, ones))
+                else:
+                    values = np.column_stack((zeros, 1.0 - fraction))
+                by_position[position] = values
+                cumulative += float(length)
+
+        if any(values is None for values in by_position):
+            raise GeometryError("topology Coons sides do not cover the outer loop")
+        return np.vstack(by_position)  # type: ignore[arg-type]
+
+    def _straight_loop_self_intersects_3d(self, points: np.ndarray) -> bool:
+        """Fail-closed qualified intersection check for a straight 3D loop."""
+
+        try:
+            made = np.asarray(points, dtype=float)
+            if (
+                made.ndim != 2
+                or made.shape[1:] != (3,)
+                or len(made) < 3
+                or not np.all(np.isfinite(made))
+            ):
+                return True
+            extent = feature_extent(made)
+            distance_tolerance = self.tolerance.effective_length(extent)
+            if not np.isfinite(distance_tolerance) or distance_tolerance <= 0.0:
+                return True
+            count = len(made)
+            for first in range(count):
+                first_next = (first + 1) % count
+                for second in range(first + 1, count):
+                    second_next = (second + 1) % count
+                    if (
+                        first == second
+                        or first_next == second
+                        or second_next == first
+                    ):
+                        continue
+                    result = qualified_segment_segment(
+                        made[first],
+                        made[first_next],
+                        made[second],
+                        made[second_next],
+                        policy=self.tolerance,
+                        characteristic_length=extent,
+                    )
+                    # DISJOINT is deliberately the sole accepting outcome.
+                    # Every intersection, uncertainty, malformed result, and
+                    # future result-algebra extension rejects fail closed.
+                    if (
+                        not isinstance(result, IntersectionResult)
+                        or result.kind is not IntersectionKind.DISJOINT
+                    ):
+                        return True
+            return False
+        except Exception:
+            return True
+
     def _validate_face_geometry(self, face_id: int) -> List[str]:
         """Validate trim geometry after its topology references are known valid."""
 
@@ -4838,6 +4955,26 @@ class GeometryModel:
                 ]
             except (ValueError, GeometryError, np.linalg.LinAlgError) as error:
                 return [f"face {face_id} has invalid surface geometry: {error}"]
+        elif (
+            isinstance(surface, CoonsSurface)
+            and not surface.has_boundaries
+            and len(face.corners) == 4
+            and not face.holes
+            and all(
+                isinstance(self.edges[item.edge].curve, Straight)
+                for item in face.loop
+            )
+        ):
+            if self._straight_loop_self_intersects_3d(points_3d[0]):
+                return [f"face {face_id} loop 0 self-intersects"]
+            try:
+                polygons = [
+                    self._topology_coons_outer_loop_uv(
+                        face_id, (3,) * len(face.loop)
+                    )
+                ]
+            except (ValueError, GeometryError, np.linalg.LinAlgError) as error:
+                return [f"face {face_id} has invalid Coons geometry: {error}"]
         elif len(face.corners) == 4:
             try:
                 polygons = [
@@ -6626,6 +6763,23 @@ class GeometryModel:
         count = int(curve_samples)
         if count < 3:
             raise GeometryError("trim curve sampling needs at least three points")
+
+        if (
+            isinstance(face.surface, CoonsSurface)
+            and not face.surface.has_boundaries
+            and len(face.corners) == 4
+            and face.parameterization is None
+            and not face.holes
+        ):
+            sample_counts = tuple(
+                2
+                if isinstance(self.edges[item.edge].curve, Straight)
+                else count
+                for item in face.loop
+            )
+            return (
+                self._topology_coons_outer_loop_uv(face_id, sample_counts),
+            )
 
         def polygon(loop: Sequence[OrientedEdge]) -> np.ndarray:
             points: List[np.ndarray] = []
