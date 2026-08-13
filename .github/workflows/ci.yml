@@ -36,7 +36,7 @@ jobs:
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
+          python -m pip install -e ".[dev,planar]"
       - name: Run tests
         run: python -m pytest
       - name: Verify package import and CLI version
@@ -44,10 +44,12 @@ jobs:
           python -c "import anygeometry; assert anygeometry.__version__ == '0.2.1'"
           python -m anygeometry --version
 
-  planar-extra:
-    name: pytest (Shapely extra)
+  planar-absence:
+    name: pytest (planar backend absent)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
+    env:
+      ABSENCE_VENV: ${{ runner.temp }}/anygeometry-planar-absence
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -58,17 +60,26 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-      - name: Install planar test dependencies
+      - name: Create isolated environment without the planar extra
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev,planar]"
-      - name: Run tests with Shapely
-        run: python -m pytest
+          python -m venv "$ABSENCE_VENV"
+          "$ABSENCE_VENV/bin/python" -m pip install --upgrade pip
+          "$ABSENCE_VENV/bin/python" -m pip install -e ".[dev]"
+      - name: Verify the typed missing-capability contract
+        run: |
+          "$ABSENCE_VENV/bin/python" - <<'PY'
+          import importlib.util
+
+          assert importlib.util.find_spec("shapely") is None
+          PY
+          "$ABSENCE_VENV/bin/python" -m pytest tests/test_intersection_workflow.py::test_planar_backend_absence_is_typed_capability_missing
 
   wheel:
     name: Build and verify wheel
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      WHEEL_SMOKE: ${{ runner.temp }}/anygeometry-wheel-smoke
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -136,18 +147,38 @@ jobs:
               assert sdist_metadata["Name"] == "ANYgeometry"
               assert sdist_metadata["Version"] == version
           PY
-      - name: Install wheel in an isolated environment
+      - name: Create external wheel-smoke environment
         run: |
-          python -m venv .wheel-smoke
-          .wheel-smoke/bin/python -m pip install --upgrade pip
-          .wheel-smoke/bin/python -m pip install "numpy>=1.26"
-          .wheel-smoke/bin/python -m pip install --no-index --no-deps dist/*.whl
+          python - <<'PY'
+          import os
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          root = Path(os.environ["WHEEL_SMOKE"]).resolve()
+          workspace = Path(os.environ["GITHUB_WORKSPACE"]).resolve()
+          assert not root.is_relative_to(workspace), (root, workspace)
+          subprocess.run(
+              [sys.executable, "-m", "venv", "--copies", str(root)],
+              check=True,
+          )
+          candidates = (root / "Scripts" / "python.exe", root / "bin" / "python")
+          executable, = [candidate.resolve() for candidate in candidates if candidate.is_file()]
+          assert executable.is_relative_to(root), (executable, root)
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as environment:
+              print(f"WHEEL_PYTHON={executable}", file=environment)
+          PY
+      - name: Install wheel in the external environment
+        run: |
+          "$WHEEL_PYTHON" -m pip install --upgrade pip
+          "$WHEEL_PYTHON" -m pip install "numpy>=1.26"
+          "$WHEEL_PYTHON" -m pip install --no-index --no-deps dist/*.whl
       - name: Verify installed-wheel origin, schema, typing, and CLI
         env:
           PACKAGE_VERSION: ${{ steps.contract.outputs.version }}
         run: |
           cd /tmp
-          "$GITHUB_WORKSPACE/.wheel-smoke/bin/python" - <<'PY'
+          "$WHEEL_PYTHON" - <<'PY'
           import os
           import sys
           from pathlib import Path
@@ -156,12 +187,18 @@ jobs:
           from anygeometry.serialization import VERSION as SCHEMA_VERSION
 
           workspace = Path(os.environ["GITHUB_WORKSPACE"]).resolve()
+          environment = Path(os.environ["WHEEL_SMOKE"]).resolve()
+          executable = Path(sys.executable).resolve()
           prefix = Path(sys.prefix).resolve()
           module = Path(anygeometry.__file__).resolve()
+          assert executable.is_relative_to(environment), (executable, environment)
+          assert prefix.is_relative_to(environment), (prefix, environment)
           assert module.is_relative_to(prefix), (module, prefix)
+          assert not executable.is_relative_to(workspace), (executable, workspace)
+          assert not prefix.is_relative_to(workspace), (prefix, workspace)
           assert not module.is_relative_to(workspace), (module, workspace)
           assert anygeometry.__version__ == os.environ["PACKAGE_VERSION"]
           assert SCHEMA_VERSION == 4
           assert (module.parent / "py.typed").is_file()
           PY
-          test "$("$GITHUB_WORKSPACE/.wheel-smoke/bin/python" -m anygeometry --version)" = "$PACKAGE_VERSION"
+          test "$("$WHEEL_PYTHON" -m anygeometry --version)" = "$PACKAGE_VERSION"
