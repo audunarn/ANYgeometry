@@ -1,0 +1,185 @@
+name: Publish
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Validate and build distributions
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'release' &&
+       !github.event.release.draft &&
+       !github.event.release.prerelease)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      version: ${{ steps.contract.outputs.version }}
+    steps:
+      - name: Check out the triggering ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Validate ref and package contract
+        id: contract
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_DRAFT: ${{ github.event.release.draft }}
+          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "release" ]; then
+            git merge-base --is-ancestor HEAD origin/main || {
+              echo "Release tag must point to a commit reachable from main" >&2
+              exit 1
+            }
+          fi
+          python - <<'PY'
+          import os
+          import re
+          import tomllib
+          from pathlib import Path
+
+          metadata = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+          version = metadata["project"]["version"]
+          init_text = Path("src/anygeometry/__init__.py").read_text(encoding="utf-8")
+          match = re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']', init_text, re.MULTILINE)
+          if match is None or match.group(1) != version:
+              raise SystemExit("pyproject.toml and anygeometry.__version__ disagree")
+
+          event = os.environ["GITHUB_EVENT_NAME"]
+          ref = os.environ["GITHUB_REF"]
+          if event == "release":
+              if os.environ["RELEASE_DRAFT"] != "false" or os.environ["RELEASE_PRERELEASE"] != "false":
+                  raise SystemExit("draft and prerelease publication is forbidden")
+              tag = os.environ["RELEASE_TAG"]
+              expected = f"v{version}"
+              if tag != expected or ref != f"refs/tags/{tag}":
+                  raise SystemExit(
+                      f"release tag/ref must be {expected!r}/refs/tags/{expected}; "
+                      f"received {tag!r}/{ref!r}"
+                  )
+          elif event == "workflow_dispatch":
+              if ref != "refs/heads/main":
+                  raise SystemExit("manual TestPyPI publication is allowed only from main")
+          else:
+              raise SystemExit(f"unsupported publication event: {event}")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              print(f"version={version}", file=output)
+          PY
+      - name: Build and check distributions
+        env:
+          PACKAGE_VERSION: ${{ steps.contract.outputs.version }}
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "build>=1.2,<2" "twine>=5,<7"
+          python -m build
+          python -m twine check dist/*
+          python - <<'PY'
+          import email
+          import os
+          import tarfile
+          import zipfile
+          from pathlib import Path
+
+          version = os.environ["PACKAGE_VERSION"]
+          paths = sorted(path for path in Path("dist").iterdir() if path.is_file())
+          actual = [path.name for path in paths]
+          expected = [
+              f"anygeometry-{version}-py3-none-any.whl",
+              f"anygeometry-{version}.tar.gz",
+          ]
+          if actual != expected:
+              raise SystemExit(f"unexpected distribution set: {actual!r}; expected {expected!r}")
+
+          wheel = Path("dist", expected[0])
+          with zipfile.ZipFile(wheel) as archive:
+              names = archive.namelist()
+              if "anygeometry/py.typed" not in names:
+                  raise SystemExit("wheel is missing anygeometry/py.typed")
+              metadata_name, = [name for name in names if name.endswith(".dist-info/METADATA")]
+              metadata = email.message_from_bytes(archive.read(metadata_name))
+              if metadata["Name"] != "ANYgeometry" or metadata["Version"] != version:
+                  raise SystemExit("wheel metadata does not match the package contract")
+
+          sdist = Path("dist", expected[1])
+          with tarfile.open(sdist, "r:gz") as archive:
+              members = {member.name: member for member in archive.getmembers()}
+              root = f"anygeometry-{version}"
+              if f"{root}/src/anygeometry/py.typed" not in members:
+                  raise SystemExit("sdist is missing src/anygeometry/py.typed")
+              package_info = archive.extractfile(members[f"{root}/PKG-INFO"])
+              if package_info is None:
+                  raise SystemExit("sdist is missing readable PKG-INFO")
+              metadata = email.message_from_binary_file(package_info)
+              if metadata["Name"] != "ANYgeometry" or metadata["Version"] != version:
+                  raise SystemExit("sdist metadata does not match the package contract")
+          PY
+      - name: Upload immutable distributions
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: python-package-distributions-${{ steps.contract.outputs.version }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  testpypi:
+    name: Publish to TestPyPI
+    if: github.event_name == 'workflow_dispatch'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/ANYgeometry
+    permissions:
+      id-token: write
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: python-package-distributions-${{ needs.build.outputs.version }}
+          path: dist/
+      - name: Publish distributions to TestPyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  pypi:
+    name: Publish to PyPI
+    if: >-
+      github.event_name == 'release' &&
+      !github.event.release.draft &&
+      !github.event.release.prerelease
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/p/ANYgeometry
+    permissions:
+      id-token: write
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: python-package-distributions-${{ needs.build.outputs.version }}
+          path: dist/
+      - name: Publish distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1

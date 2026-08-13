@@ -1,0 +1,167 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    name: pytest (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: Run tests
+        run: python -m pytest
+      - name: Verify package import and CLI version
+        run: |
+          python -c "import anygeometry; assert anygeometry.__version__ == '0.2.1'"
+          python -m anygeometry --version
+
+  planar-extra:
+    name: pytest (Shapely extra)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install planar test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,planar]"
+      - name: Run tests with Shapely
+        run: python -m pytest
+
+  wheel:
+    name: Build and verify wheel
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Build distributions
+        id: contract
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "build>=1.2,<2" "twine>=5,<7"
+          python - <<'PY'
+          import re
+          import tomllib
+          from pathlib import Path
+
+          metadata = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+          version = metadata["project"]["version"]
+          init_text = Path("src/anygeometry/__init__.py").read_text(encoding="utf-8")
+          match = re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']', init_text, re.MULTILINE)
+          assert match is not None and match.group(1) == version, (match, version)
+          with open(Path(__import__("os").environ["GITHUB_OUTPUT"]), "a", encoding="utf-8") as output:
+              print(f"version={version}", file=output)
+          PY
+          python -m build
+          python -m twine check dist/*
+      - name: Require one wheel and one source distribution
+        env:
+          PACKAGE_VERSION: ${{ steps.contract.outputs.version }}
+        run: |
+          python - <<'PY'
+          import email
+          import os
+          import tarfile
+          import zipfile
+          from pathlib import Path
+
+          version = os.environ["PACKAGE_VERSION"]
+          wheels = sorted(Path("dist").glob("*.whl"))
+          sdists = sorted(Path("dist").glob("*.tar.gz"))
+          assert len(wheels) == 1, wheels
+          assert len(sdists) == 1, sdists
+          assert wheels[0].name == f"anygeometry-{version}-py3-none-any.whl", wheels[0]
+          assert sdists[0].name == f"anygeometry-{version}.tar.gz", sdists[0]
+
+          with zipfile.ZipFile(wheels[0]) as archive:
+              names = archive.namelist()
+              assert "anygeometry/py.typed" in names
+              metadata_name, = [name for name in names if name.endswith(".dist-info/METADATA")]
+              wheel_metadata = email.message_from_bytes(archive.read(metadata_name))
+              assert wheel_metadata["Name"] == "ANYgeometry"
+              assert wheel_metadata["Version"] == version
+
+          with tarfile.open(sdists[0], "r:gz") as archive:
+              members = {member.name: member for member in archive.getmembers()}
+              root = f"anygeometry-{version}"
+              assert f"{root}/src/anygeometry/py.typed" in members
+              package_info = archive.extractfile(members[f"{root}/PKG-INFO"])
+              assert package_info is not None
+              sdist_metadata = email.message_from_binary_file(package_info)
+              assert sdist_metadata["Name"] == "ANYgeometry"
+              assert sdist_metadata["Version"] == version
+          PY
+      - name: Install wheel in an isolated environment
+        run: |
+          python -m venv .wheel-smoke
+          .wheel-smoke/bin/python -m pip install --upgrade pip
+          .wheel-smoke/bin/python -m pip install "numpy>=1.26"
+          .wheel-smoke/bin/python -m pip install --no-index --no-deps dist/*.whl
+      - name: Verify installed-wheel origin, schema, typing, and CLI
+        env:
+          PACKAGE_VERSION: ${{ steps.contract.outputs.version }}
+        run: |
+          cd /tmp
+          "$GITHUB_WORKSPACE/.wheel-smoke/bin/python" - <<'PY'
+          import os
+          import sys
+          from pathlib import Path
+
+          import anygeometry
+          from anygeometry.serialization import VERSION as SCHEMA_VERSION
+
+          workspace = Path(os.environ["GITHUB_WORKSPACE"]).resolve()
+          prefix = Path(sys.prefix).resolve()
+          module = Path(anygeometry.__file__).resolve()
+          assert module.is_relative_to(prefix), (module, prefix)
+          assert not module.is_relative_to(workspace), (module, workspace)
+          assert anygeometry.__version__ == os.environ["PACKAGE_VERSION"]
+          assert SCHEMA_VERSION == 4
+          assert (module.parent / "py.typed").is_file()
+          PY
+          test "$("$GITHUB_WORKSPACE/.wheel-smoke/bin/python" -m anygeometry --version)" = "$PACKAGE_VERSION"
