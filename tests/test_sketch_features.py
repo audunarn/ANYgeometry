@@ -125,7 +125,7 @@ def test_straight_sketch_extrusion_has_exact_planar_support_and_connects() -> No
     assert geometry._validate_structural() == ()
 
 
-def test_nonplanar_spline_extrusion_remains_typed_unsupported() -> None:
+def test_nonplanar_spline_extrusion_boundary_is_exactly_qualified() -> None:
     geometry, support_face = _plate()
     start, control, end = geometry.add_points(
         ((0.5, 0.5, 0.0), (1.5, 1.5, 0.0), (2.5, 0.5, 0.0))
@@ -139,10 +139,12 @@ def test_nonplanar_spline_extrusion_remains_typed_unsupported() -> None:
         geometry.handle("face", wall),
     )
 
-    assert result.kind is IntersectionKind.UNSUPPORTED
-    assert not result.classified
+    assert result.kind is IntersectionKind.CONTAINED
+    assert result.classified
+    assert len(result.components) == 1
+    assert result.components[0].second_subparent == geometry.handle("edge", spline)
     plan = plan_imprint(geometry, result, policy=ConnectionIntent.CONNECT)
-    assert plan.operation is ImprintOperation.NO_TOPOLOGY
+    assert plan.operation is ImprintOperation.FACE_IMPRINT
 
 
 def test_sketch_feature_round_trips_with_constraints_and_support_identity():
