@@ -9,7 +9,7 @@ from uuid import UUID
 
 import numpy as np
 
-from .curves import Arc, Spline, Straight
+from .curves import Arc, Spline, Straight, arc_frame
 from .entities import EntityRef, OrientedEdge
 from .errors import GeometryError
 from .identity import (
@@ -1646,6 +1646,301 @@ def _query_planar_faces(
     )
 
 
+def _curve_definition_points(
+    geometry: GeometryModel, edge_id: int
+) -> tuple[np.ndarray, ...]:
+    edge = geometry.edges[edge_id]
+    vertex_ids = [edge.start]
+    if isinstance(edge.curve, Arc):
+        vertex_ids.append(edge.curve.via_vertex)
+    elif isinstance(edge.curve, Spline):
+        vertex_ids.extend(edge.curve.control_vertices)
+    vertex_ids.append(edge.end)
+    return tuple(geometry.vertex_position(vertex_id) for vertex_id in vertex_ids)
+
+
+def _angle_on_arc_sweep(angle: float, sweep: float, angular_tolerance: float) -> bool:
+    for offset in range(-2, 3):
+        candidate = angle + offset * 2.0 * np.pi
+        if sweep >= 0.0:
+            if -angular_tolerance <= candidate <= sweep + angular_tolerance:
+                return True
+        elif sweep - angular_tolerance <= candidate <= angular_tolerance:
+            return True
+    return False
+
+
+def _certified_curve_inside_convex_support(
+    geometry: GeometryModel,
+    support_face_id: int,
+    edge_id: int,
+    *,
+    tolerance: float,
+) -> tuple[bool, str]:
+    """Certify a complete existing curve strictly inside a planar face.
+
+    The certificate is deliberately sufficient rather than permissive.  A
+    straight segment and a Bezier curve use their defining-point convex hull;
+    a circular arc uses analytical half-space extrema over its actual sweep.
+    No sampled curve is ever promoted into persistent topology.
+    """
+
+    face = geometry.faces[support_face_id]
+    surface = face.surface
+    if not isinstance(surface, Plane):
+        return False, "boundary_curve_support_requires_plane"
+    if face.holes:
+        return False, "boundary_curve_support_holes_are_unsupported"
+    if len(face.loop) < 3 or any(
+        not isinstance(geometry.edges[item.edge].curve, Straight)
+        for item in face.loop
+    ):
+        return False, "boundary_curve_support_requires_straight_convex_trim"
+
+    boundary = np.asarray(
+        [
+            surface.local_uv(
+                geometry.vertex_position(geometry.oriented_start_vertex(item))
+            )
+            for item in face.loop
+        ],
+        dtype=float,
+    )
+    vectors = np.roll(boundary, -1, axis=0) - boundary
+    lengths = np.linalg.norm(vectors, axis=1)
+    if np.any(lengths <= tolerance):
+        return False, "boundary_curve_support_has_degenerate_trim"
+    area_twice = float(
+        np.sum(
+            boundary[:, 0] * np.roll(boundary[:, 1], -1)
+            - boundary[:, 1] * np.roll(boundary[:, 0], -1)
+        )
+    )
+    area_tolerance = geometry.tolerance.effective_area(
+        _face_length_scale(geometry, support_face_id)
+    )
+    if abs(area_twice) <= area_tolerance:
+        return False, "boundary_curve_support_has_degenerate_trim"
+    orientation = 1.0 if area_twice > 0.0 else -1.0
+    turns = orientation * np.asarray(
+        [
+            vectors[index, 0] * vectors[(index + 1) % len(vectors), 1]
+            - vectors[index, 1] * vectors[(index + 1) % len(vectors), 0]
+            for index in range(len(vectors))
+        ],
+        dtype=float,
+    )
+    if np.any(turns < -area_tolerance):
+        return False, "boundary_curve_support_must_be_convex"
+    inward = orientation * np.column_stack((-vectors[:, 1], vectors[:, 0]))
+    inward /= lengths[:, None]
+
+    definition_points = _curve_definition_points(geometry, edge_id)
+    residual_tolerance = geometry.tolerance.effective_surface_residual(
+        _face_length_scale(geometry, support_face_id)
+    )
+    if any(
+        abs(float((point - surface.origin) @ surface.normal)) > residual_tolerance
+        for point in definition_points
+    ):
+        return False, "boundary_curve_is_not_coplanar_with_support"
+
+    edge = geometry.edges[edge_id]
+    if isinstance(edge.curve, Arc):
+        frame = arc_frame(
+            definition_points[0], definition_points[1], definition_points[2]
+        )
+        center_uv = np.asarray(surface.local_uv(frame.center), dtype=float)
+        e1_uv = (
+            np.asarray(surface.local_uv(frame.center + frame.e1), dtype=float)
+            - center_uv
+        )
+        e2_uv = (
+            np.asarray(surface.local_uv(frame.center + frame.e2), dtype=float)
+            - center_uv
+        )
+        for origin, normal in zip(boundary, inward):
+            constant = float(normal @ (center_uv - origin))
+            cosine = float(frame.radius * (normal @ e1_uv))
+            sine = float(frame.radius * (normal @ e2_uv))
+            angles = [0.0, frame.sweep]
+            minimum_angle = float(np.arctan2(sine, cosine) + np.pi)
+            for offset in range(-2, 3):
+                candidate = minimum_angle + offset * 2.0 * np.pi
+                if _angle_on_arc_sweep(
+                    candidate, frame.sweep, geometry.tolerance.angular
+                ):
+                    angles.append(candidate)
+            minimum = min(
+                constant + cosine * np.cos(angle) + sine * np.sin(angle)
+                for angle in angles
+            )
+            if minimum <= tolerance:
+                return False, "boundary_curve_touches_or_leaves_support_trim"
+        return True, "arc_sweep_halfspace_certificate"
+
+    definition_uv = np.asarray(
+        [surface.local_uv(point) for point in definition_points], dtype=float
+    )
+    margins = np.asarray(
+        [
+            inward[index] @ (definition_uv - boundary[index]).T
+            for index in range(len(boundary))
+        ]
+    )
+    if np.any(margins <= tolerance):
+        return False, "boundary_curve_control_hull_touches_or_leaves_support_trim"
+    certificate = (
+        "bezier_control_hull_certificate"
+        if isinstance(edge.curve, Spline)
+        else "straight_endpoint_certificate"
+    )
+    return True, certificate
+
+
+def _boundary_curve_component(
+    geometry: GeometryModel,
+    first: EntityHandle,
+    second: EntityHandle,
+    *,
+    plane_face_id: int,
+    edge_id: int,
+    first_is_plane: bool,
+) -> IntersectionComponent:
+    edge = geometry.edges[edge_id]
+    endpoints = tuple(
+        tuple(float(value) for value in geometry.vertex_position(vertex_id))
+        for vertex_id in (edge.start, edge.end)
+    )
+    plane = geometry.faces[plane_face_id].surface
+    assert isinstance(plane, Plane)
+    plane_path = tuple(
+        tuple(float(value) for value in plane.local_uv(point)) for point in endpoints
+    )
+    edge_path = ((0.0,), (1.0,))
+    edge_handle = geometry.handle("edge", edge_id)
+    return IntersectionComponent(
+        endpoints,
+        IntersectionQuality.EXACT,
+        first_parameter_path=plane_path if first_is_plane else edge_path,
+        second_parameter_path=edge_path if first_is_plane else plane_path,
+        first_subparent=first if first_is_plane else edge_handle,
+        second_subparent=edge_handle if first_is_plane else second,
+    )
+
+
+def _query_planar_support_boundary_curve(
+    geometry: GeometryModel,
+    first: EntityHandle,
+    second: EntityHandle,
+    *,
+    plane_face_id: int,
+    curved_face_id: int,
+    first_is_plane: bool,
+) -> IntersectionResult:
+    scale = max(
+        _face_length_scale(geometry, plane_face_id),
+        _face_length_scale(geometry, curved_face_id),
+    )
+    tolerance = geometry.tolerance.effective_length(scale)
+    plane_edges = {
+        item.edge
+        for loop in (geometry.faces[plane_face_id].loop,)
+        + geometry.faces[plane_face_id].holes
+        for item in loop
+    }
+    curved_edges = tuple(
+        sorted(
+            {
+                item.edge
+                for loop in (geometry.faces[curved_face_id].loop,)
+                + geometry.faces[curved_face_id].holes
+                for item in loop
+            }
+        )
+    )
+    shared = tuple(edge_id for edge_id in curved_edges if edge_id in plane_edges)
+    if len(shared) == 1:
+        component = _boundary_curve_component(
+            geometry,
+            first,
+            second,
+            plane_face_id=plane_face_id,
+            edge_id=shared[0],
+            first_is_plane=first_is_plane,
+        )
+        return _qualified_result(
+            geometry,
+            first,
+            second,
+            IntersectionKind.OVERLAP_CURVE,
+            (component,),
+            diagnostics=("existing_shared_boundary_curve",),
+            dimension=IntersectionDimension.CURVE,
+            tolerance_used=tolerance,
+        )
+    if len(shared) > 1:
+        return _qualified_result(
+            geometry,
+            first,
+            second,
+            IntersectionKind.UNSUPPORTED,
+            diagnostics=("multiple_shared_boundary_curves_are_unsupported",),
+            tolerance_used=tolerance,
+        )
+
+    certified: list[tuple[int, str]] = []
+    rejections: list[str] = []
+    for edge_id in curved_edges:
+        accepted, diagnostic = _certified_curve_inside_convex_support(
+            geometry,
+            plane_face_id,
+            edge_id,
+            tolerance=tolerance,
+        )
+        if accepted:
+            certified.append((edge_id, diagnostic))
+        else:
+            rejections.append(f"edge_{edge_id}:{diagnostic}")
+    if len(certified) != 1:
+        diagnostic = (
+            "multiple_complete_boundary_curves_on_planar_support"
+            if len(certified) > 1
+            else "no_complete_boundary_curve_on_planar_support"
+        )
+        return _qualified_result(
+            geometry,
+            first,
+            second,
+            IntersectionKind.UNSUPPORTED,
+            diagnostics=(diagnostic, *rejections),
+            tolerance_used=tolerance,
+        )
+    edge_id, certificate = certified[0]
+    component = _boundary_curve_component(
+        geometry,
+        first,
+        second,
+        plane_face_id=plane_face_id,
+        edge_id=edge_id,
+        first_is_plane=first_is_plane,
+    )
+    return _qualified_result(
+        geometry,
+        first,
+        second,
+        IntersectionKind.CONTAINED,
+        (component,),
+        diagnostics=(
+            "certified_nonplanar_boundary_curve_on_planar_support",
+            certificate,
+            f"boundary_edge:{edge_id}",
+        ),
+        dimension=IntersectionDimension.CURVE,
+        tolerance_used=tolerance,
+    )
+
+
 def _query_plane_cylinder_faces(
     geometry: GeometryModel,
     first: EntityHandle,
@@ -1799,6 +2094,32 @@ def _query_face_face(
             second,
             second.id,
             first.id,
+            first_is_plane=False,
+        )
+    if (
+        isinstance(first_surface, Plane)
+        and second_surface is not None
+        and not isinstance(second_surface, (Plane, Cylinder))
+    ):
+        return _query_planar_support_boundary_curve(
+            geometry,
+            first,
+            second,
+            plane_face_id=first.id,
+            curved_face_id=second.id,
+            first_is_plane=True,
+        )
+    if (
+        isinstance(second_surface, Plane)
+        and first_surface is not None
+        and not isinstance(first_surface, (Plane, Cylinder))
+    ):
+        return _query_planar_support_boundary_curve(
+            geometry,
+            first,
+            second,
+            plane_face_id=second.id,
+            curved_face_id=first.id,
             first_is_plane=False,
         )
     if first_surface is None and second_surface is None:
@@ -3789,6 +4110,14 @@ def _shared_edges_for_components(
     for component in components:
         if len(component.witnesses) < 2:
             return ()
+        exact_subparents = tuple(
+            parent.id
+            for parent in (component.first_subparent, component.second_subparent)
+            if parent is not None and parent.kind == "edge" and parent.id in shared
+        )
+        if len(exact_subparents) == 1:
+            matched.append(exact_subparents[0])
+            continue
         endpoints = tuple(
             np.asarray(point, dtype=float)
             for point in (component.witnesses[0], component.witnesses[-1])
@@ -3814,6 +4143,76 @@ def _shared_edges_for_components(
             return ()
         matched.append(match)
     return tuple(dict.fromkeys(matched))
+
+
+def _boundary_edge_for_curved_face_component(
+    geometry: GeometryModel,
+    result: IntersectionResult,
+    curved_face_id: int,
+) -> int | None:
+    if len(result.components) != 1:
+        return None
+    curved_edges = {
+        item.edge
+        for loop in (geometry.faces[curved_face_id].loop,)
+        + geometry.faces[curved_face_id].holes
+        for item in loop
+    }
+    candidates = tuple(
+        parent.id
+        for parent in (
+            result.components[0].first_subparent,
+            result.components[0].second_subparent,
+        )
+        if parent is not None and parent.kind == "edge" and parent.id in curved_edges
+    )
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _imprint_planar_support_with_boundary_curve(
+    geometry: GeometryModel,
+    *,
+    plane_face_id: int,
+    curved_face_id: int,
+    edge_id: int,
+    plane_is_first: bool,
+    tolerance: float,
+) -> FaceIntersection:
+    edge = geometry.edges[edge_id]
+    endpoints = tuple(
+        geometry.vertex_position(vertex_id) for vertex_id in (edge.start, edge.end)
+    )
+    vertex_by_key = {
+        _world_key(point, tolerance): vertex_id
+        for point, vertex_id in zip(endpoints, (edge.start, edge.end))
+    }
+    edge_by_vertices = {tuple(sorted((edge.start, edge.end))): edge_id}
+    plane_children, relation_edges = _fragment_planar_face_by_segments(
+        geometry,
+        plane_face_id,
+        ((endpoints[0], endpoints[1]),),
+        vertex_by_key,
+        edge_by_vertices,
+        tolerance=tolerance,
+    )
+    if edge_id not in relation_edges:
+        raise GeometryError(
+            "planar boundary-curve imprint did not reuse the certified edge"
+        )
+    errors = geometry.validate_topology()
+    if errors:
+        raise GeometryError(
+            "boundary-curve imprint produced invalid topology: " + "; ".join(errors)
+        )
+    edge_reference = EntityRef("edge", edge_id)
+    plane_faces = tuple(EntityRef("face", item) for item in plane_children)
+    curved_faces = (EntityRef("face", curved_face_id),)
+    return FaceIntersection(
+        edge_reference,
+        plane_faces if plane_is_first else curved_faces,
+        curved_faces if plane_is_first else plane_faces,
+        (edge_reference,),
+    )
 
 
 def _fragment_planar_face_by_segments(
@@ -4141,6 +4540,26 @@ def _face_imprint_application(
             (),
             True,
         )
+    plane_is_first = isinstance(first_surface, Plane)
+    plane_is_second = isinstance(second_surface, Plane)
+    if plane_is_first != plane_is_second:
+        plane_face = first_face if plane_is_first else second_face
+        curved_face = second_face if plane_is_first else first_face
+        curved_surface = second_surface if plane_is_first else first_surface
+        if curved_surface is not None and not isinstance(curved_surface, Cylinder):
+            boundary_edge = _boundary_edge_for_curved_face_component(
+                geometry, revalidated, curved_face
+            )
+            if boundary_edge is not None:
+                made = _imprint_planar_support_with_boundary_curve(
+                    geometry,
+                    plane_face_id=plane_face,
+                    curved_face_id=curved_face,
+                    edge_id=boundary_edge,
+                    plane_is_first=plane_is_first,
+                    tolerance=tolerance,
+                )
+                return made, (), False
     if _policy_name(plan.policy) == "reuse_existing":
         raise GeometryError(
             "REUSE_EXISTING requires a compatible shared face-intersection edge"

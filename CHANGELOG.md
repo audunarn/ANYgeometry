@@ -2,6 +2,19 @@
 
 All notable user-visible changes to ANYgeometry are documented here.
 
+## Unreleased
+
+## 0.2.2 - 2026-08-21
+
+- Qualify exact face/face CONNECT when a complete topology-owned straight,
+  circular-arc, or Bezier boundary of a nonplanar face lies strictly inside a
+  convex hole-free planar support. Reuse the original Edge and persist shared
+  FaceUse/Coedge ownership without sampled or coordinate-inferred topology.
+- Keep partial, ambiguous, holed, nonconvex, trim-touching, and general
+  nonplanar intersections typed and fail-closed.
+- Make the release workflow artifact-building only; PyPI publication remains
+  an explicit manual Twine operation.
+
 ## 0.2.1 - 2026-08-12
 
 - Added the mesher-facing `ModelClosure` extractor with model-bound

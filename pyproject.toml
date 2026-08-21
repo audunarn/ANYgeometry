@@ -4,12 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ANYgeometry"
-version = "0.2.1"
+version = "0.2.2"
 description = "Lightweight deterministic structural-surface geometry kernel"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "GPL-3.0-or-later"
 authors = [{ name = "Audun Arnesen Nyhus", email = "audunarn@gmail.com" }]
+classifiers = ["Development Status :: 3 - Alpha"]
 dependencies = ["numpy>=1.26"]
 
 [project.scripts]

@@ -1,54 +1,35 @@
-name: Publish
+name: Build release artifacts
 
 on:
   workflow_dispatch:
-  release:
-    types: [published]
 
 permissions:
   contents: read
 
 concurrency:
-  group: publish-${{ github.event_name }}-${{ github.ref }}
+  group: release-artifacts-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   build:
     name: Validate and build distributions
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'release' &&
-       !github.event.release.draft &&
-       !github.event.release.prerelease)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     outputs:
       version: ${{ steps.contract.outputs.version }}
     steps:
-      - name: Check out the triggering ref
+      - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.sha }}
-          fetch-depth: 0
           persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
           cache: pip
-      - name: Validate ref and package contract
+      - name: Validate package contract
         id: contract
-        env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-          RELEASE_DRAFT: ${{ github.event.release.draft }}
-          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
         run: |
-          if [ "$GITHUB_EVENT_NAME" = "release" ]; then
-            git merge-base --is-ancestor HEAD origin/main || {
-              echo "Release tag must point to a commit reachable from main" >&2
-              exit 1
-            }
-          fi
           python - <<'PY'
           import os
           import re
@@ -56,29 +37,16 @@ jobs:
           from pathlib import Path
 
           metadata = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
-          version = metadata["project"]["version"]
+          project = metadata["project"]
+          version = project["version"]
+          if version != "0.2.2":
+              raise SystemExit(f"release workflow requires version 0.2.2, got {version}")
+          if "Development Status :: 3 - Alpha" not in project["classifiers"]:
+              raise SystemExit("release metadata must retain the Alpha classifier")
           init_text = Path("src/anygeometry/__init__.py").read_text(encoding="utf-8")
           match = re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']', init_text, re.MULTILINE)
           if match is None or match.group(1) != version:
               raise SystemExit("pyproject.toml and anygeometry.__version__ disagree")
-
-          event = os.environ["GITHUB_EVENT_NAME"]
-          ref = os.environ["GITHUB_REF"]
-          if event == "release":
-              if os.environ["RELEASE_DRAFT"] != "false" or os.environ["RELEASE_PRERELEASE"] != "false":
-                  raise SystemExit("draft and prerelease publication is forbidden")
-              tag = os.environ["RELEASE_TAG"]
-              expected = f"v{version}"
-              if tag != expected or ref != f"refs/tags/{tag}":
-                  raise SystemExit(
-                      f"release tag/ref must be {expected!r}/refs/tags/{expected}; "
-                      f"received {tag!r}/{ref!r}"
-                  )
-          elif event == "workflow_dispatch":
-              if ref != "refs/heads/main":
-                  raise SystemExit("manual TestPyPI publication is allowed only from main")
-          else:
-              raise SystemExit(f"unsupported publication event: {event}")
 
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               print(f"version={version}", file=output)
@@ -90,7 +58,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install "build>=1.2,<2" "twine>=5,<7"
           python -m build
-          python -m twine check dist/*
+          python -m twine check --strict dist/*.whl dist/*.tar.gz
           python - <<'PY'
           import email
           import os
@@ -131,55 +99,10 @@ jobs:
               if metadata["Name"] != "ANYgeometry" or metadata["Version"] != version:
                   raise SystemExit("sdist metadata does not match the package contract")
           PY
-      - name: Upload immutable distributions
+      - name: Upload immutable release bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: python-package-distributions-${{ steps.contract.outputs.version }}
+          name: ANYgeometry-${{ steps.contract.outputs.version }}-release-bundle
           path: dist/
           if-no-files-found: error
           retention-days: 7
-
-  testpypi:
-    name: Publish to TestPyPI
-    if: github.event_name == 'workflow_dispatch'
-    needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    environment:
-      name: testpypi
-      url: https://test.pypi.org/p/ANYgeometry
-    permissions:
-      id-token: write
-    steps:
-      - name: Download distributions
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: python-package-distributions-${{ needs.build.outputs.version }}
-          path: dist/
-      - name: Publish distributions to TestPyPI
-        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
-        with:
-          repository-url: https://test.pypi.org/legacy/
-
-  pypi:
-    name: Publish to PyPI
-    if: >-
-      github.event_name == 'release' &&
-      !github.event.release.draft &&
-      !github.event.release.prerelease
-    needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    environment:
-      name: pypi
-      url: https://pypi.org/p/ANYgeometry
-    permissions:
-      id-token: write
-    steps:
-      - name: Download distributions
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: python-package-distributions-${{ needs.build.outputs.version }}
-          path: dist/
-      - name: Publish distributions to PyPI
-        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
