@@ -79,18 +79,22 @@ def test_core_and_optional_dependencies_match_release_metadata() -> None:
     assert "Development Status :: 3 - Alpha" in project["classifiers"]
 
 
-def test_release_workflow_builds_artifacts_without_publishing() -> None:
+def test_release_workflow_publishes_only_by_manual_oidc_dispatch() -> None:
     workflow = (ROOT / ".github" / "workflows" / "publish.yml").read_text(
         encoding="utf-8"
     )
 
     assert workflow.startswith(
-        "name: Build release artifacts\n\non:\n  workflow_dispatch:\n"
+        "name: Publish to PyPI\n\non:\n  workflow_dispatch:\n"
     )
     assert "release:" not in workflow
-    assert "gh-action-pypi-publish" not in workflow
     assert "repository-url:" not in workflow
-    assert "id-token: write" not in workflow
+    assert "environment:\n      name: pypi" in workflow
+    assert "id-token: write" in workflow
+    assert (
+        "pypa/gh-action-pypi-publish@"
+        "dc37677b2e1c63e2034f94d8a5b11f265b73ba33"
+    ) in workflow
     assert "python -m twine check --strict dist/*.whl dist/*.tar.gz" in workflow
     assert "ANYgeometry-${{ steps.contract.outputs.version }}-release-bundle" in workflow
 
