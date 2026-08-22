@@ -3484,19 +3484,58 @@ class GeometryModel:
         part_id: int | None = None,
         name: str = "",
         policy: SheetTopologyPolicy = SheetTopologyPolicy(),
+        orientations: Sequence[Orientation | int] | None = None,
     ) -> int:
-        """Create an oriented structural sheet and persistent loop coedges."""
+        """Create an oriented structural sheet and persistent loop coedges.
+
+        ``orientations`` expresses each face use relative to the underlying
+        geometric face without changing that face's topology or normal.  It
+        is therefore the safe owner-level API for joining independently
+        authored faces whose boundary loops do not already have a consistent
+        sheet traversal.  Omitting it retains the historical all-forward
+        behaviour.
+        """
 
         if not face_ids:
             raise GeometryError("a sheet needs at least one face")
+        made_face_ids = tuple(int(face_id) for face_id in face_ids)
+        if orientations is None:
+            made_orientations = (Orientation.FORWARD,) * len(made_face_ids)
+        else:
+            if isinstance(orientations, (str, bytes)):
+                raise GeometryError(
+                    "sheet orientations must be an ordered sequence with one "
+                    "entry per face"
+                )
+            try:
+                raw_orientations = tuple(orientations)
+            except TypeError as error:
+                raise GeometryError(
+                    "sheet orientations must be an ordered sequence with one "
+                    "entry per face"
+                ) from error
+            if len(raw_orientations) != len(made_face_ids):
+                raise GeometryError(
+                    "sheet orientations must contain exactly one entry per face"
+                )
+            try:
+                if any(isinstance(value, bool) for value in raw_orientations):
+                    raise ValueError
+                made_orientations = tuple(
+                    Orientation(value) for value in raw_orientations
+                )
+            except (TypeError, ValueError) as error:
+                raise GeometryError(
+                    "sheet orientation must be FORWARD or REVERSED"
+                ) from error
         if part_id is None:
             part_id = self.add_part()
         if part_id not in self.parts:
             raise GeometryError(f"no part {part_id}")
         sheet_id = self._allocate_structural("sheet")
         use_ids: List[int] = []
-        for face_id in face_ids:
-            face = self._require_face(int(face_id))
+        for face_id, orientation in zip(made_face_ids, made_orientations):
+            face = self._require_face(face_id)
             use_id = self._allocate_structural("face_use")
             loop_ids: List[tuple[int, ...]] = []
             for loop in (face.loop,) + face.holes:
@@ -3515,7 +3554,14 @@ class GeometryModel:
                     made.append(coedge_id)
                 loop_ids.append(tuple(made))
             self._put_structural(
-                "face_use", FaceUse(use_id, sheet_id, face.id, tuple(loop_ids))
+                "face_use",
+                FaceUse(
+                    use_id,
+                    sheet_id,
+                    face.id,
+                    tuple(loop_ids),
+                    orientation=orientation,
+                ),
             )
             use_ids.append(use_id)
         self._put_structural(

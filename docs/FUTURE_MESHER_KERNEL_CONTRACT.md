@@ -84,7 +84,7 @@ The supported Python dependency remains:
 ANYgeometry>=0.2,<0.3
 ```
 
-ANYgeometry 0.2.1 reads geometry schemas 1–4 and writes canonical schema 4.
+ANYgeometry 0.2.2 reads geometry schemas 1–4 and writes canonical schema 4.
 Schemas 1–3 migrate one-way. A 0.2.0 reader intentionally rejects schema 4;
 therefore package-range compatibility does not imply forward document
 compatibility. ANYmesher uses the public geometry codecs and must not parse or

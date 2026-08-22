@@ -294,7 +294,7 @@ The current schema-4 document stores:
 - namespaced extensions;
 - SHA-256 checksum over the canonical document payload.
 
-ANYgeometry 0.2.1 writes schema 4 and reads schemas 1–4. Schema-1/2 loading
+ANYgeometry 0.2.2 writes schema 4 and reads schemas 1–4. Schema-1/2 loading
 retains conservative ownership migration; schema 3 receives explicit defaults
 for every new field and its relationships remain `UNVERIFIED`. All legacy
 loads are one-way migrations on the next write. Older 0.2.0 readers reject

@@ -45,12 +45,17 @@ and structural replacement lineage.
 | --- | --- | --- |
 | ANYgeometry 0.2.0 | schemas 1–3 | schema 3 |
 | ANYgeometry 0.2.1 | schemas 1–4 | schema 4 |
+| ANYgeometry 0.2.2 | schemas 1–4 | schema 4 |
 
 The Python package dependency remains compatible with `ANYgeometry>=0.2,<0.3`,
 but the document format is forward-incompatible: a 0.2.0 reader intentionally
 rejects a schema-4 document. Exchange persisted geometry with 0.2.1 or newer,
 and use only `to_dict`, `from_dict`, `write_geometry`, and `read_geometry`
 rather than parsing core records in downstream packages.
+
+Version 0.2.2 does not change the document schema. Importers that previously
+mutated detached `FeatureRecord` objects should instead call the atomic
+`FeatureHistory.adopt_frozen(...)` owner API.
 
 Legacy schema-3 Attachments did not carry qualification evidence. Migration
 therefore sets their evidence to `UNVERIFIED`, with zero residual/tolerance

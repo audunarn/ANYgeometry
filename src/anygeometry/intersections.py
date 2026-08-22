@@ -32,7 +32,7 @@ from .predicates import (
     qualified_segment_segment,
 )
 from .transactions import ChangeSet
-from .surfaces import Cylinder, Plane, SurfaceProtocol
+from .surfaces import CoonsSurface, Cylinder, Plane, SurfaceProtocol
 
 __all__ = [
     "ExpectedImprintChange", "FaceIntersection", "ImprintApplication",
@@ -74,7 +74,9 @@ def clip_line_to_face(
             second_parent=face_handle,
             tolerance_used=tolerance_used,
         )
-    if not isinstance(face.surface, Plane):
+    try:
+        plane = _qualified_face_plane(geometry, face_id)
+    except GeometryError:
         return IntersectionResult(
             IntersectionKind.UNSUPPORTED,
             diagnostics=("face_line_clipping_requires_a_planar_support",),
@@ -101,7 +103,7 @@ def clip_line_to_face(
             tolerance_used=tolerance_used,
         )
     direction = raw_direction / direction_length
-    support_result = qualified_line_plane(point, direction, face.surface).with_context(
+    support_result = qualified_line_plane(point, direction, plane).with_context(
         second_parent=face_handle, tolerance_used=tolerance_used
     )
     if not support_result.classified:
@@ -113,7 +115,7 @@ def clip_line_to_face(
         made = []
         for item in loop:
             vertex = geometry.oriented_start_vertex(item)
-            made.append(tuple(float(value) for value in face.surface.local_uv(
+            made.append(tuple(float(value) for value in plane.local_uv(
                 geometry.vertices[vertex].position
             )))
         return made
@@ -128,7 +130,7 @@ def clip_line_to_face(
         )
 
     def component_for_point(world: np.ndarray) -> IntersectionComponent:
-        uv = face.surface.local_uv(world)
+        uv = plane.local_uv(world)
         parameter = float((world - point) @ direction)
         return IntersectionComponent(
             (tuple(float(value) for value in world),),
@@ -142,7 +144,7 @@ def clip_line_to_face(
 
     if support_result.kind is IntersectionKind.CROSS:
         world = np.asarray(support_result.witnesses[0], dtype=float)
-        uv = face.surface.local_uv(world)
+        uv = plane.local_uv(world)
         candidate = Point(uv)
         if not polygon.covers(candidate):
             return IntersectionResult(
@@ -179,7 +181,7 @@ def clip_line_to_face(
     lower = float(np.min(parameters) - extent)
     upper = float(np.max(parameters) + extent)
     endpoints_uv = [
-        face.surface.local_uv(point + value * direction)
+        plane.local_uv(point + value * direction)
         for value in (lower, upper)
     ]
     clipped = polygon.intersection(LineString(endpoints_uv))
@@ -195,7 +197,7 @@ def clip_line_to_face(
             if len(coordinates) < 2:
                 return
             worlds = tuple(
-                np.asarray(face.surface.evaluate(float(uv[0]), float(uv[1])), dtype=float)
+                np.asarray(plane.evaluate(float(uv[0]), float(uv[1])), dtype=float)
                 for uv in (coordinates[0], coordinates[-1])
             )
             line_parameters = tuple(float((world - point) @ direction) for world in worlds)
@@ -219,7 +221,7 @@ def clip_line_to_face(
             return
         if value.geom_type == "Point":
             uv = tuple(value.coords)[0]
-            world = np.asarray(face.surface.evaluate(float(uv[0]), float(uv[1])), dtype=float)
+            world = np.asarray(plane.evaluate(float(uv[0]), float(uv[1])), dtype=float)
             point_components.append(component_for_point(world))
             return
         for child in getattr(value, "geoms", ()):
@@ -580,6 +582,50 @@ def _face_plane(geometry: GeometryModel, face_id: int) -> Plane:
     u_vector = vectors[0]
     v_vector = np.cross(vectors[-1], u_vector)
     return Plane(origin, u_vector, v_vector)
+
+
+def _qualified_face_plane(geometry: GeometryModel, face_id: int) -> Plane:
+    """Return an exact planar support without reinterpreting curved faces.
+
+    Partitioning a planar plate produces topology-backed Coons patches.  Four
+    straight coplanar boundaries define an exactly planar Coons surface, even
+    though its serialization intentionally retains the generic support kind.
+    Recognising that identity lets structural line clipping remain on the
+    public query/plan/apply path.  Explicit curved Coons boundaries and every
+    other curved support continue to fail closed.
+    """
+
+    face = geometry.faces[face_id]
+    if isinstance(face.surface, Plane):
+        return face.surface
+    if face.surface is None:
+        return _face_plane(geometry, face_id)
+    if not isinstance(face.surface, CoonsSurface):
+        raise GeometryError(f"face {face_id} has a non-planar support")
+    if any(
+        not isinstance(geometry.edges[item.edge].curve, Straight)
+        for loop in (face.loop,) + face.holes
+        for item in loop
+    ):
+        raise GeometryError(f"face {face_id} has curved Coons boundaries")
+
+    plane = _face_plane(geometry, face_id)
+    if face.surface.has_boundaries:
+        samples = np.vstack(
+            (
+                face.surface.bottom,
+                face.surface.right,
+                face.surface.top,
+                face.surface.left,
+            )
+        )
+        residual = np.abs((samples - plane.origin) @ plane.normal)
+        extent = float(np.linalg.norm(np.ptp(samples, axis=0)))
+        if float(np.max(residual)) > geometry.tolerance.effective_surface_residual(
+            extent
+        ):
+            raise GeometryError(f"face {face_id} has a non-planar Coons support")
+    return plane
 
 
 def _face_length_scale(geometry: GeometryModel, face_id: int) -> float:
@@ -1679,10 +1725,10 @@ def _certified_curve_inside_convex_support(
 ) -> tuple[bool, str]:
     """Certify a complete existing curve strictly inside a planar face.
 
-    The certificate is deliberately sufficient rather than permissive.  A
-    straight segment and a Bezier curve use their defining-point convex hull;
-    a circular arc uses analytical half-space extrema over its actual sweep.
-    No sampled curve is ever promoted into persistent topology.
+    Straight segments and Bezier curves use their defining-point convex hull;
+    circular arcs use analytical half-space extrema over their actual sweep.
+    The certificate is deliberately sufficient rather than permissive, and no
+    sampled curve is ever promoted into persistent topology.
     """
 
     face = geometry.faces[support_face_id]
@@ -1949,10 +1995,13 @@ def _query_plane_cylinder_faces(
     cylinder_face: int,
     *,
     first_is_plane: bool,
+    plane: Plane | None = None,
 ) -> IntersectionResult:
-    plane = geometry.faces[plane_face].surface
+    if plane is None:
+        candidate = geometry.faces[plane_face].surface
+        plane = candidate if isinstance(candidate, Plane) else None
     cylinder = geometry.faces[cylinder_face].surface
-    assert isinstance(plane, Plane) and isinstance(cylinder, Cylinder)
+    assert plane is not None and isinstance(cylinder, Cylinder)
     scale = max(
         _face_length_scale(geometry, plane_face),
         _face_length_scale(geometry, cylinder_face),
@@ -2074,11 +2123,19 @@ def _query_face_face(
         )
     first_surface = geometry.faces[first.id].surface
     second_surface = geometry.faces[second.id].surface
-    if isinstance(first_surface, Plane) and isinstance(second_surface, Plane):
+    try:
+        first_plane = _qualified_face_plane(geometry, first.id)
+    except GeometryError:
+        first_plane = None
+    try:
+        second_plane = _qualified_face_plane(geometry, second.id)
+    except GeometryError:
+        second_plane = None
+    if first_plane is not None and second_plane is not None:
         return _query_planar_faces(
-            geometry, first, second, first_surface, second_surface
+            geometry, first, second, first_plane, second_plane
         )
-    if isinstance(first_surface, Plane) and isinstance(second_surface, Cylinder):
+    if first_plane is not None and isinstance(second_surface, Cylinder):
         return _query_plane_cylinder_faces(
             geometry,
             first,
@@ -2086,14 +2143,42 @@ def _query_face_face(
             first.id,
             second.id,
             first_is_plane=True,
+            plane=first_plane,
         )
-    if isinstance(first_surface, Cylinder) and isinstance(second_surface, Plane):
+    if isinstance(first_surface, Cylinder) and second_plane is not None:
         return _query_plane_cylinder_faces(
             geometry,
             first,
             second,
             second.id,
             first.id,
+            first_is_plane=False,
+            plane=second_plane,
+        )
+    if (
+        isinstance(first_surface, Plane)
+        and second_surface is not None
+        and not isinstance(second_surface, (Plane, Cylinder))
+    ):
+        return _query_planar_support_boundary_curve(
+            geometry,
+            first,
+            second,
+            plane_face_id=first.id,
+            curved_face_id=second.id,
+            first_is_plane=True,
+        )
+    if (
+        isinstance(second_surface, Plane)
+        and first_surface is not None
+        and not isinstance(first_surface, (Plane, Cylinder))
+    ):
+        return _query_planar_support_boundary_curve(
+            geometry,
+            first,
+            second,
+            plane_face_id=second.id,
+            curved_face_id=first.id,
             first_is_plane=False,
         )
     if (
@@ -2496,7 +2581,10 @@ def _query_member_material(
                         unsupported.append(f"face_{face_id}_missing_support")
                         continue
                     uv_path = tuple(
-                        tuple(float(item) for item in face.surface.local_uv(point))
+                        tuple(
+                            float(item)
+                            for item in geometry.face_local_uv(face_id, point)
+                        )
                         for point in witnesses
                     )
                     components.append(
@@ -2533,7 +2621,10 @@ def _query_member_material(
                 if face.surface is None:
                     unsupported.append(f"face_{face_id}_missing_support")
                     continue
-                uv = tuple(float(item) for item in face.surface.local_uv(witness))
+                uv = tuple(
+                    float(item)
+                    for item in geometry.face_local_uv(face_id, witness)
+                )
                 components.append(
                     IntersectionComponent(
                         (tuple(float(item) for item in witness),),

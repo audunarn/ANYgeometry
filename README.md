@@ -182,6 +182,16 @@ and circular patterns, mirroring, edge/face reversal, deep `clone`, and typed
 groups, tags, surfaces, holes, and metadata, and deliberately does not weld
 coincident entities.
 
+`AffineTransform` provides validated translation, axis-angle rotation, scale,
+reflection, composition, inverse, and point-array evaluation. In-place
+`translate_entities` / `rotate_entities` preserve model-bound identities;
+`copy_translated` / `copy_rotated` allocate fresh identities. Arbitrary
+transform lists use `pattern_entities`, while `rectangular_pattern` creates a
+deterministic one-, two-, or three-axis Cartesian array. Rectangular counts are
+copy steps beyond the unchanged original, so counts `(1, 1)` produce the other
+three positions of a 2x2 array. Pattern implementations extract the selected
+geometry and structural closure once rather than cloning unrelated model data.
+
 ## Serialization and CLI
 
 Geometry schema 4 is deterministic and checksummed. It preserves model UUID
@@ -214,11 +224,37 @@ Consumers that require a qualified handoff must retain or rerun
 JSON and gzip-compressed JSON are supported. Mesh and FEM/project
 serialization remain outside ANYgeometry.
 
-ANYgeometry 0.2.1 reads schemas 1–4 and writes schema 4. The Python API remains
+ANYgeometry 0.2.4 reads schemas 1–4 and writes schema 4. The Python API remains
 within `ANYgeometry>=0.2,<0.3`, but a 0.2.0 reader intentionally rejects a
 schema-4 document. Downstream packages should use the public codecs rather
 than parse schema records. Legacy relationship evidence migrates as
 `UNVERIFIED` and never implies exactness or certification.
+
+Trusted importers and local script features that have already materialized
+topology through `GeometryModel` operations can bind that exact last-good
+materialization without mutating detached feature records:
+
+```python
+geometry.features.adopt_frozen(
+    geometry,
+    kind="vendor.script.feature",
+    outputs={"face": EntityRef("face", face_id)},
+)
+```
+
+`adopt_frozen` accepts only active IDs in the history's owning model; it never
+retargets through replacement lineage or geometric proximity. ANYgeometry
+computes the closure checksum and publishes the history update atomically.
+Callers that already certified a closure may pass `expected_checksum=` to make
+the adoption fail closed if the topology changed.
+
+Feature edits mark the affected record dirty. For additive modelling features,
+regeneration starts at the earliest dirty record on a clone of the live
+materialization. The clean prefix keeps its exact entity IDs. A replayed output
+keeps its prior binding only when its stable output-key set and complete
+ID-independent topology closure are exactly equal; otherwise its replacement is
+allocated above the previous ID high-water mark and lineage is extended. This
+comparison uses no distance, tolerance, or nearest-geometry retargeting.
 
 Ordinary output revalidates complete topological and structural integrity.
 Certified output adds the full global geometric audit before writing, but the

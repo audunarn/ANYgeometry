@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ANYgeometry"
-version = "0.2.2"
+version = "0.2.4"
 description = "Lightweight deterministic structural-surface geometry kernel"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -34,4 +34,4 @@ anygeometry = ["py.typed"]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 pythonpath = ["src"]
-addopts = ["-ra", "-p", "no:cacheprovider", "--basetemp=.pytest_tmp"]
+addopts = ["-ra", "-p", "no:cacheprovider"]

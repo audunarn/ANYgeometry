@@ -532,6 +532,22 @@ def test_planar_line_clipping_returns_all_material_intervals_minus_holes() -> No
     assert [component.first_parameter_range.end for component in result.components] == pytest.approx((2.0, 5.0))
 
 
+def test_line_clipping_recognizes_a_straight_coplanar_topology_coons_face() -> None:
+    geometry = GeometryModel()
+    corners = geometry.add_points(
+        ((0, 0, 0), (4, 0, 0), (4, 2, 0), (0, 2, 0))
+    )
+    face = geometry.add_face(geometry.add_polyline(corners, close=True))
+
+    result = clip_line_to_face(geometry, face, (-1, 1, 0), (1, 0, 0))
+
+    assert result.kind is IntersectionKind.OVERLAP_CURVE
+    assert len(result.components) == 1
+    interval = result.components[0].first_parameter_range
+    assert interval is not None
+    assert (interval.start, interval.end) == pytest.approx((1.0, 5.0))
+
+
 def test_face_intersection_requires_explicit_supported_mutation_policy() -> None:
     geometry = GeometryModel()
     first = geometry.add_plate(

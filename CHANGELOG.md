@@ -2,7 +2,16 @@
 
 All notable user-visible changes to ANYgeometry are documented here.
 
-## Unreleased
+## 0.2.4 - 2026-08-22
+
+- Add atomic exact `FeatureHistory.adopt_frozen(...)` for imported, scripted,
+  unavailable-executor and committed mesh-partition materializations. Adoption
+  validates active outputs and structural topology, persists a canonical
+  closure checksum, and never follows lineage or geometric proximity.
+- Preserve stable prefix outputs during additive feature regeneration and make
+  dirty suffix replay fail closed on incompatible structural ownership.
+- Add oriented Sheet ownership, deterministic structural intersection
+  contracts, and the boundary-curve support required by ANYmesher 0.2.5.
 
 ## 0.2.2 - 2026-08-21
 
@@ -14,6 +23,23 @@ All notable user-visible changes to ANYgeometry are documented here.
   nonplanar intersections typed and fail-closed.
 - Make the release workflow artifact-building only; PyPI publication remains
   an explicit manual Twine operation.
+- Added owner-aware `FeatureHistory.adopt_frozen(...)` for trusted importers
+  and script features. It binds exact active output IDs, computes and persists
+  the canonical materialization checksum, optionally verifies a caller's
+  expected checksum, and rolls back without publication on any failure.
+- Made additive feature regeneration start at the earliest dirty record on a
+  working clone of the live materialization. Clean-prefix IDs remain active;
+  dirty outputs are matched only by stable output key plus exact complete
+  closure, and changed outputs allocate above the previous high-water mark.
+  Appending an unrelated feature and editing or undoing a suffix therefore no
+  longer invalidates raw IDs belonging to unchanged upstream outputs.
+- Qualified the package-owner boundary for crossing Sheets, Member/Sheet
+  relations, and Member/Member connections. Queries and plans remain strictly
+  read-only; topology and structural ownership change only through an explicit
+  `apply_imprint(...)` with declared connection intent. No proximity welding is
+  inferred or restored.
+- Kept geometry document schema 4 and feature-history schema 1 unchanged;
+  0.2.2 is an API and contract-hardening release.
 
 ## 0.2.1 - 2026-08-12
 

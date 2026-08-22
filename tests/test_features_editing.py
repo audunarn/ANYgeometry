@@ -12,6 +12,7 @@ from anygeometry import (
     AttachmentKind,
     AttachmentTargetKind,
     EntityRef,
+    FeatureRecord,
     FeatureOutputRef,
     GeometryError,
     GeometryModel,
@@ -176,12 +177,104 @@ def test_materialization_checksum_resolves_face_corner_positions_to_vertices() -
     assert geometry.features.materialization_checksum(feature, geometry) != checksum
 
 
-def test_feature_regeneration_uses_fresh_ids_and_preserves_lineage() -> None:
-    geometry, _first, second, _line = _feature_line()
+def test_adopt_frozen_persists_exact_checksumming_as_one_owner_edit() -> None:
+    geometry = GeometryModel()
+    point = geometry.add_point(1.0, 2.0, 3.0)
+    feature_id = geometry.features.next_id
+    detached = FeatureRecord(
+        feature_id=feature_id,
+        kind="vendor.script.point",
+        name="Script point",
+        parameters={"source": "point = model.add_point(1, 2, 3)"},
+    )
+    output = EntityRef("vertex", point)
+    detached.outputs = {"point": output}
+    expected = geometry.features.materialization_checksum(detached, geometry)
+    events = []
+    geometry.add_change_hook(events.append)
+    revision = geometry.revision
+
+    adopted = geometry.features.adopt_frozen(
+        geometry,
+        kind="vendor.script.point",
+        name="Script point",
+        outputs={"point": output},
+        parameters={"source": "point = model.add_point(1, 2, 3)"},
+        expected_checksum=expected,
+    )
+
+    assert adopted.feature_id == feature_id
+    assert adopted.state == "frozen"
+    assert adopted.outputs == {"point": output}
+    assert adopted.materialization_checksum == expected
+    assert geometry.features.validate_materialization(feature_id, geometry) is None
+    assert geometry.features.resolve(
+        FeatureOutputRef(feature_id, "point", "vertex"), geometry
+    ) == (output,)
+    assert geometry.revision == revision + 1
+    assert len(events) == 1
+    assert events[0].feature_history_changed
+
+    document = to_dict(geometry)
+    assert to_dict(from_dict(deepcopy(document))) == document
+    adopted.outputs.clear()
+    assert geometry.features.get(feature_id).outputs == {"point": output}
+
+
+def test_adopt_frozen_checksum_failure_rolls_back_without_publication() -> None:
+    geometry = GeometryModel()
+    point = geometry.add_point(1.0, 2.0, 3.0)
+    before = geometry.features.snapshot()
+    revision = geometry.revision
+    events = []
+    geometry.add_change_hook(events.append)
+
+    with pytest.raises(GeometryError, match="does not match the expected checksum"):
+        geometry.features.adopt_frozen(
+            geometry,
+            kind="vendor.script.point",
+            outputs={"point": EntityRef("vertex", point)},
+            expected_checksum="0" * 64,
+        )
+
+    assert geometry.features.snapshot() == before
+    assert geometry.revision == revision
+    assert events == []
+
+
+def test_adopt_frozen_rejects_wrong_owner_and_replaced_output_exactly() -> None:
+    geometry = GeometryModel()
+    vertices = geometry.add_points(((0.0, 0.0, 0.0), (2.0, 0.0, 0.0)))
+    edge = geometry.add_line(*vertices)
+    other = GeometryModel()
+    other_point = other.add_point(0.0, 0.0, 0.0)
+    before = geometry.features.snapshot()
+
+    with pytest.raises(GeometryError, match="history owner"):
+        geometry.features.adopt_frozen(
+            other,
+            kind="vendor.script.point",
+            outputs={"point": EntityRef("vertex", other_point)},
+        )
+
+    geometry.split_edge(edge)
+    revision = geometry.revision
+    with pytest.raises(GeometryError, match="never follows lineage"):
+        geometry.features.adopt_frozen(
+            geometry,
+            kind="vendor.script.line",
+            outputs={"edge": EntityRef("edge", edge)},
+        )
+
+    assert geometry.features.snapshot() == before
+    assert geometry.revision == revision
+
+
+def test_feature_regeneration_preserves_clean_prefix_and_replaces_dirty_suffix() -> None:
+    geometry, first, second, line = _feature_line()
     old_outputs = {
-        key: reference
+        feature.feature_id: dict(feature.outputs)
         for feature in geometry.features.records
-        for key, reference in feature.outputs.items()
     }
     old_state = geometry.id_state()
 
@@ -191,13 +284,65 @@ def test_feature_regeneration_uses_fresh_ids_and_preserves_lineage() -> None:
     report = geometry.regenerate_features()
 
     assert report.success
-    assert min(geometry.vertices) >= old_state["vertex"]
-    assert min(geometry.edges) >= old_state["edge"]
+    assert geometry.features.get(first.feature_id).outputs == old_outputs[first.feature_id]
+    changed_point = geometry.features.get(second.feature_id).outputs["point"]
+    changed_line = geometry.features.get(line.feature_id).outputs["edge"]
+    assert changed_point.id >= old_state["vertex"]
+    assert changed_line.id >= old_state["edge"]
     assert geometry.validate_topology() == ()
-    for old in old_outputs.values():
-        resolved = geometry.resolve_ref(old)
-        assert resolved
-        assert all(item.id >= old_state[item.kind] for item in resolved)
+    clean_point = old_outputs[first.feature_id]["point"]
+    assert geometry.resolve_ref(clean_point) == (clean_point,)
+    assert geometry.resolve_ref(old_outputs[second.feature_id]["point"]) == (
+        changed_point,
+    )
+    assert geometry.resolve_ref(old_outputs[line.feature_id]["edge"]) == (
+        changed_line,
+    )
+
+
+def test_append_unrelated_edit_and_undo_keep_existing_output_closure_ids() -> None:
+    geometry, first, second, line = _feature_line()
+    prefix = {
+        feature.feature_id: dict(feature.outputs)
+        for feature in geometry.features.records
+    }
+    old_state = geometry.id_state()
+    unrelated = geometry.features.append(
+        "geometry.point", parameters={"position": [9.0, 0.0, 0.0]}
+    )
+
+    assert geometry.regenerate_features().success
+    assert {
+        feature.feature_id: dict(feature.outputs)
+        for feature in geometry.features.records[:3]
+    } == prefix
+    unrelated_output = geometry.features.get(unrelated.feature_id).outputs["point"]
+    assert unrelated_output.id >= old_state["vertex"]
+    for feature_id in (first.feature_id, second.feature_id, line.feature_id):
+        for reference in prefix[feature_id].values():
+            assert geometry.resolve_ref(reference) == (reference,)
+
+    undo = geometry.design_snapshot()
+    edit_state = geometry.id_state()
+    geometry.features.update(
+        unrelated.feature_id, parameters={"position": [10.0, 0.0, 0.0]}
+    )
+    assert geometry.regenerate_features().success
+    edited = geometry.features.get(unrelated.feature_id).outputs["point"]
+    assert edited.id >= edit_state["vertex"]
+    assert geometry.resolve_ref(unrelated_output) == (edited,)
+    assert {
+        feature.feature_id: dict(feature.outputs)
+        for feature in geometry.features.records[:3]
+    } == prefix
+
+    geometry.restore_design(undo)
+    assert geometry.features.get(unrelated.feature_id).outputs["point"] == unrelated_output
+    assert geometry.vertex_position(unrelated_output.id) == pytest.approx((9.0, 0.0, 0.0))
+    assert {
+        feature.feature_id: dict(feature.outputs)
+        for feature in geometry.features.records[:3]
+    } == prefix
 
 
 def test_failed_regeneration_leaves_materialized_geometry_untouched() -> None:

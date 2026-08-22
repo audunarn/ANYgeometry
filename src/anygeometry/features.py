@@ -45,6 +45,39 @@ __all__ = [
 
 
 _KINDS = ("vertex", "edge", "face")
+_FULL_REPLAY_DIAGNOSTIC = "feature-history structure changed; full replay required"
+_INCREMENTAL_ADDITIVE_FEATURES = frozenset(
+    {
+        "geometry.point",
+        "geometry.line",
+        "geometry.arc",
+        "geometry.spline",
+        "geometry.polyline",
+        "geometry.face",
+        "geometry.plate",
+        "geometry.extrude",
+        "geometry.sketch.extrude",
+        "geometry.revolve",
+        "geometry.copy",
+        "geometry.mirror",
+        "geometry.pattern.linear",
+        "geometry.pattern.circular",
+        "geometry.pattern.rectangular",
+        "geometry.pattern.transforms",
+    }
+)
+_INCREMENTAL_MUTATING_FEATURES = frozenset(
+    {
+        "geometry.fragment.overlaps",
+        "geometry.transform",
+        "geometry.split_edge",
+        "geometry.split_face",
+        "geometry.strip_face",
+        "geometry.trim_hole",
+        "geometry.set_face_corners",
+        "geometry.reverse",
+    }
+)
 
 
 def _frozen_feature_diagnostic(kind: str) -> str:
@@ -250,6 +283,148 @@ def _closure_face(face: Face) -> dict[str, object]:
         "surface": _closure_surface(face.surface),
         "metadata": face.metadata.to_dict(),  # type: ignore[union-attr]
     }
+
+
+def _exact_entity_payload(
+    reference: EntityRef,
+    geometry: "GeometryModel",
+    memo: dict[EntityRef, object],
+) -> object:
+    """Return an ID-independent, exact topology payload for one active entity."""
+
+    cached = memo.get(reference)
+    if cached is not None:
+        return cached
+    if reference.kind == "vertex":
+        vertex = geometry.vertices[reference.id]
+        payload: object = {
+            "kind": "vertex",
+            "position": vertex.position.tolist(),
+        }
+    elif reference.kind == "edge":
+        edge = geometry.edges[reference.id]
+        if isinstance(edge.curve, Straight):
+            curve: object = {"type": "straight"}
+        elif isinstance(edge.curve, Arc):
+            curve = {
+                "type": "arc",
+                "via": _exact_entity_payload(
+                    EntityRef("vertex", edge.curve.via_vertex), geometry, memo
+                ),
+            }
+        elif isinstance(edge.curve, Spline):
+            curve = {
+                "type": "spline",
+                "controls": [
+                    _exact_entity_payload(EntityRef("vertex", item), geometry, memo)
+                    for item in edge.curve.control_vertices
+                ],
+            }
+        else:  # pragma: no cover - closed public union
+            raise GeometryError(f"unsupported curve type {type(edge.curve).__name__}")
+        payload = {
+            "kind": "edge",
+            "start": _exact_entity_payload(
+                EntityRef("vertex", edge.start), geometry, memo
+            ),
+            "end": _exact_entity_payload(
+                EntityRef("vertex", edge.end), geometry, memo
+            ),
+            "curve": curve,
+        }
+    else:
+        face = geometry.faces[reference.id]
+
+        def loop_payload(loop: Sequence[object]) -> list[object]:
+            return [
+                {
+                    "edge": _exact_entity_payload(
+                        EntityRef("edge", item.edge), geometry, memo  # type: ignore[attr-defined]
+                    ),
+                    "forward": bool(item.forward),  # type: ignore[attr-defined]
+                }
+                for item in loop
+            ]
+
+        payload = {
+            "kind": "face",
+            "loop": loop_payload(face.loop),
+            "corners": list(face.corners),
+            "holes": [loop_payload(loop) for loop in face.holes],
+            "surface": _closure_surface(face.surface),
+            "parameterization": _closure_surface(face.parameterization),
+            "metadata": face.metadata.to_dict(),  # type: ignore[union-attr]
+        }
+    memo[reference] = payload
+    return payload
+
+
+def _exact_outputs_equal(
+    old_outputs: Mapping[str, EntityRef],
+    old_geometry: "GeometryModel",
+    new_outputs: Mapping[str, EntityRef],
+    new_geometry: "GeometryModel",
+) -> bool:
+    """Compare output slots and complete closures without ID/proximity matching."""
+
+    if old_outputs.keys() != new_outputs.keys():
+        return False
+    old_memo: dict[EntityRef, object] = {}
+    new_memo: dict[EntityRef, object] = {}
+    for key in sorted(old_outputs):
+        old_resolved = old_geometry.resolve_ref(old_outputs[key])
+        new_resolved = new_geometry.resolve_ref(new_outputs[key])
+        if len(old_resolved) != len(new_resolved):
+            return False
+        old_payloads = [
+            _exact_entity_payload(item, old_geometry, old_memo)
+            for item in old_resolved
+        ]
+        new_payloads = [
+            _exact_entity_payload(item, new_geometry, new_memo)
+            for item in new_resolved
+        ]
+        encode = lambda value: json.dumps(  # noqa: E731
+            value, sort_keys=True, separators=(",", ":"), allow_nan=False
+        )
+        if sorted(map(encode, old_payloads)) != sorted(map(encode, new_payloads)):
+            return False
+    return True
+
+
+def _entity_closure_refs(
+    references: Iterable[EntityRef], geometry: "GeometryModel"
+) -> set[EntityRef]:
+    """Return exact active topology closure without crossing replacement by proximity."""
+
+    selected: set[EntityRef] = set()
+    pending = list(references)
+    while pending:
+        reference = pending.pop()
+        for active in geometry.resolve_ref(reference):
+            if active in selected:
+                continue
+            selected.add(active)
+            if active.kind == "face":
+                face = geometry.faces[active.id]
+                pending.extend(
+                    EntityRef("edge", item.edge)
+                    for loop in (face.loop,) + tuple(face.holes)
+                    for item in loop
+                )
+            elif active.kind == "edge":
+                edge = geometry.edges[active.id]
+                pending.extend(
+                    (EntityRef("vertex", edge.start), EntityRef("vertex", edge.end))
+                )
+                if isinstance(edge.curve, Arc):
+                    pending.append(EntityRef("vertex", edge.curve.via_vertex))
+                elif isinstance(edge.curve, Spline):
+                    pending.extend(
+                        EntityRef("vertex", item)
+                        for item in edge.curve.control_vertices
+                    )
+    return selected
 
 
 def _face_corner_vertex_ids(face: Face, geometry: "GeometryModel") -> tuple[int, ...]:
@@ -593,11 +768,20 @@ class FeatureHistory:
         removed = {wanted, *(dependents if cascade else ())}
         if not any(item.feature_id == wanted for item in self._records):
             raise KeyError(f"no feature {wanted}")
+        earliest = min(
+            index
+            for index, item in enumerate(self._records)
+            if item.feature_id in removed
+        )
 
         def apply() -> None:
             self._records[:] = [
                 item for item in self._records if item.feature_id not in removed
             ]
+            if self._records:
+                marker = self._records[min(earliest, len(self._records) - 1)]
+                marker.state = FeatureStatus.PENDING.value
+                marker.diagnostic = _FULL_REPLAY_DIAGNOSTIC
 
         self._apply_mutation(apply)
         return tuple(sorted(removed))
@@ -610,6 +794,8 @@ class FeatureHistory:
 
         def apply() -> None:
             record.suppressed = made
+            record.state = FeatureStatus.PENDING.value
+            record.diagnostic = None
 
         self._apply_mutation(apply)
 
@@ -627,6 +813,12 @@ class FeatureHistory:
         record = self._get_record(feature_id)
 
         def apply() -> None:
+            before = (
+                record.name,
+                deepcopy(record.parameters),
+                deepcopy(record.inputs),
+                tuple(record.dependencies),
+            )
             if name is not None:
                 if not str(name).strip():
                     raise ValueError("a feature name cannot be empty")
@@ -640,6 +832,148 @@ class FeatureHistory:
                 }
             if dependencies is not None:
                 record.dependencies = tuple(int(item) for item in dependencies)
+            after = (
+                record.name,
+                record.parameters,
+                record.inputs,
+                record.dependencies,
+            )
+            if not _values_equal(before, after):
+                record.state = FeatureStatus.PENDING.value
+                record.diagnostic = None
+
+        self._apply_mutation(apply)
+        return deepcopy(record)
+
+    def adopt_frozen(
+        self,
+        geometry: "GeometryModel",
+        *,
+        kind: str,
+        outputs: Mapping[str, EntityRef],
+        name: str | None = None,
+        parameters: Mapping[str, Any] | None = None,
+        inputs: Mapping[str, Sequence[FeatureInputRef]] | None = None,
+        kind_version: int = 1,
+        dependencies: Sequence[int] = (),
+        expected_checksum: str | None = None,
+        diagnostic: str | None = None,
+    ) -> FeatureRecord:
+        """Append an exact, already-materialized feature as frozen.
+
+        This is the public bridge for trusted importers or script features that
+        materialize topology through owner-controlled geometry operations but
+        have no replay executor in ANYgeometry.  Output references must name
+        active entities in ``geometry`` exactly; replacement lineage is never
+        followed while adopting a binding.  The canonical closure checksum is
+        computed by ANYgeometry and persisted with the record.
+
+        When this history belongs to a model, ``geometry`` must be that owner.
+        Feature-ID allocation, record insertion, checksum verification,
+        validation, rollback, model revision, and change notification are one
+        owner-aware atomic edit.
+        ``expected_checksum`` is optional, but lets an importer fail closed if
+        the materialization changed between its own validation and adoption.
+        """
+
+        from .model import GeometryModel
+
+        if not isinstance(geometry, GeometryModel):
+            raise TypeError("frozen feature adoption needs a GeometryModel")
+        if self._owner is not None and geometry is not self._owner:
+            raise GeometryError(
+                "a frozen feature materialization must belong to its history owner"
+            )
+        if not isinstance(outputs, Mapping):
+            raise GeometryError("frozen feature outputs must be an object")
+
+        made: Dict[str, EntityRef] = {}
+        for key, reference in outputs.items():
+            if not isinstance(key, str) or not key or "\x00" in key:
+                raise GeometryError(
+                    "frozen feature output keys must be non-empty strings without NUL"
+                )
+            _validate_entity_ref(reference, f"frozen feature output {key!r}")
+            store = {
+                "vertex": geometry.vertices,
+                "edge": geometry.edges,
+                "face": geometry.faces,
+            }[reference.kind]
+            if reference.id not in store:
+                raise GeometryError(
+                    f"frozen feature output {key!r} does not reference an active "
+                    f"{reference.kind} {reference.id}; adoption never follows lineage"
+                )
+            made[key] = reference
+        if not made:
+            raise GeometryError("a frozen feature needs at least one output")
+
+        if expected_checksum is not None:
+            if (
+                not isinstance(expected_checksum, str)
+                or len(expected_checksum) != 64
+                or expected_checksum.lower() != expected_checksum
+                or any(character not in "0123456789abcdef" for character in expected_checksum)
+            ):
+                raise GeometryError(
+                    "expected frozen materialization checksum must be lowercase SHA-256"
+                )
+        if diagnostic is not None and (
+            not isinstance(diagnostic, str) or not diagnostic.strip() or "\x00" in diagnostic
+        ):
+            raise GeometryError(
+                "frozen feature diagnostic must be a non-empty string without NUL"
+            )
+
+        integrity_errors = (
+            *geometry.validate_topology(),
+            *geometry._validate_structural(),  # noqa: SLF001
+        )
+        if integrity_errors:
+            raise GeometryError(
+                "cannot adopt a frozen materialization from an invalid owner model: "
+                + "; ".join(integrity_errors)
+            )
+
+        record = FeatureRecord(
+            feature_id=self._next_id,
+            kind=str(kind),
+            name=name or str(kind),
+            parameters={} if parameters is None else dict(parameters),
+            inputs={
+                str(port): tuple(references)
+                for port, references in ({} if inputs is None else inputs).items()
+            },
+            kind_version=kind_version,
+            dependencies=tuple(dependencies),
+            outputs=dict(made),
+            state=FeatureStatus.FROZEN.value,
+        )
+        frozen_diagnostic = diagnostic or (
+            f"feature kind {record.kind!r} uses an explicitly adopted, verified "
+            "frozen materialization; regeneration requires a compatible executor"
+        )
+        record.diagnostic = frozen_diagnostic
+
+        def apply() -> None:
+            self._records.append(record)
+            self._next_id += 1
+            record.materialization_checksum = self.materialization_checksum(
+                record, geometry
+            )
+            if (
+                expected_checksum is not None
+                and record.materialization_checksum != expected_checksum
+            ):
+                raise GeometryError(
+                    f"feature {record.feature_id} frozen materialization checksum "
+                    "does not match the expected checksum"
+                )
+            invalid = self.validate_materialization(record, geometry)
+            if invalid is not None:
+                raise GeometryError(
+                    f"cannot adopt feature {record.feature_id} materialization: {invalid}"
+                )
 
         self._apply_mutation(apply)
         return deepcopy(record)
@@ -654,6 +988,8 @@ class FeatureHistory:
         def apply() -> None:
             self._records.pop(old)
             self._records.insert(target, record)
+            record.state = FeatureStatus.PENDING.value
+            record.diagnostic = None
 
         self._apply_mutation(apply)
 
@@ -965,6 +1301,295 @@ class FeatureHistory:
             return f"feature {made.feature_id} materialization checksum does not match"
         return None
 
+    @staticmethod
+    def _incremental_additive(kind: str) -> bool:
+        return kind in _INCREMENTAL_ADDITIVE_FEATURES or kind.startswith("generator.")
+
+    def _incremental_start(self, dirty_index: int) -> tuple[int, bool] | None:
+        """Return a safe replay start and whether the suffix needs fresh closure."""
+
+        start = dirty_index
+        force_new = False
+        positions = {
+            record.feature_id: index for index, record in enumerate(self._records)
+        }
+        while True:
+            earlier = start
+            for record in self._records[start:]:
+                if self._incremental_additive(record.kind) or record.suppressed:
+                    continue
+                if record.kind not in _INCREMENTAL_MUTATING_FEATURES:
+                    return None
+                force_new = True
+                for references in record.inputs.values():
+                    for reference in references:
+                        if isinstance(reference, FeatureOutputRef):
+                            earlier = min(earlier, positions[reference.feature_id])
+                        elif record.outputs:
+                            # A materialized modifier with a raw topology input
+                            # has no exact pre-feature checkpoint to replay.
+                            return None
+            if earlier == start:
+                return start, force_new
+            start = earlier
+
+    def _earliest_dirty_index(self) -> int | None:
+        for index, record in enumerate(self._records):
+            clean_state = (
+                FeatureStatus.SUPPRESSED.value
+                if record.suppressed
+                else FeatureStatus.OK.value
+            )
+            if record.state not in (clean_state, FeatureStatus.ACTIVE.value):
+                return index
+        return None
+
+    def _regenerate_incremental(
+        self,
+        geometry: "GeometryModel",
+        registry: FeatureRegistry,
+        dirty_index: int,
+        *,
+        force_new: bool = False,
+    ) -> RegenerationReport:
+        """Replay one additive dirty suffix on a clone of live materialization.
+
+        Clean prefix entities stay in the clone with their active IDs.  Each
+        dirty feature executes above the owner's allocator high-water mark.
+        Stable output keys and exact ID-independent closure payloads decide
+        whether the old binding is retained; no spatial or tolerance match is
+        involved.
+        """
+
+        from .serialization import from_dict, to_dict
+
+        working = from_dict(to_dict(geometry, include_features=False))
+        working.reserve_id_state(geometry.id_state())
+        replayed = deepcopy(self._records)
+        by_id = {record.feature_id: record for record in replayed}
+        previous_outputs = {
+            (record.feature_id, key): geometry.resolve_ref(reference)
+            for record in self._records
+            for key, reference in record.outputs.items()
+        }
+        results = [
+            FeatureResult(
+                record.feature_id,
+                record.state,
+                dict(record.outputs),
+                record.diagnostic,
+            )
+            for record in replayed[:dirty_index]
+        ]
+        discard_new: set[EntityRef] = set()
+        retire_old: set[EntityRef] = set()
+
+        for record, previous in zip(
+            replayed[dirty_index:], self._records[dirty_index:]
+        ):
+            old_outputs = dict(previous.outputs)
+            record.diagnostic = None
+            if record.suppressed:
+                record.outputs = {}
+                record.state = FeatureStatus.SUPPRESSED.value
+                for reference in old_outputs.values():
+                    retire_old.update(_entity_closure_refs((reference,), geometry))
+                results.append(FeatureResult(record.feature_id, record.state))
+                continue
+
+            resolved: Dict[str, tuple[EntityRef, ...]] = {}
+            blocked = next(
+                (
+                    f"dependency {dependency} is not active"
+                    for dependency in record.dependencies
+                    if by_id[dependency].state != FeatureStatus.OK.value
+                ),
+                None,
+            )
+            for port, references in record.inputs.items():
+                if blocked:
+                    break
+                made: list[EntityRef] = []
+                for reference in references:
+                    if isinstance(reference, EntityRef):
+                        current = working.resolve_ref(reference)
+                    else:
+                        source = by_id[reference.feature_id]
+                        materialized = source.outputs.get(reference.output_key)
+                        current = (
+                            ()
+                            if source.state != FeatureStatus.OK.value
+                            or materialized is None
+                            else working.resolve_ref(materialized)
+                        )
+                    if not current:
+                        blocked = f"input {port!r} cannot be resolved"
+                        break
+                    made.extend(current)
+                if blocked:
+                    break
+                resolved[port] = tuple(dict.fromkeys(made))
+            if blocked:
+                record.outputs = {}
+                record.state = FeatureStatus.BLOCKED.value
+                record.diagnostic = blocked
+                for reference in old_outputs.values():
+                    retire_old.update(_entity_closure_refs((reference,), geometry))
+                results.append(
+                    FeatureResult(record.feature_id, record.state, diagnostic=blocked)
+                )
+                continue
+
+            snapshot = working.topology_snapshot()
+            try:
+                execution = registry.execute(working, record, resolved)
+                outputs = {str(key): value for key, value in execution.outputs.items()}
+                for key, reference in outputs.items():
+                    if not key or not isinstance(reference, EntityRef):
+                        raise GeometryError(
+                            f"feature {record.feature_id} returned an invalid output"
+                        )
+                    store = {
+                        "vertex": working.vertices,
+                        "edge": working.edges,
+                        "face": working.faces,
+                    }[reference.kind]
+                    if reference.id not in store:
+                        raise GeometryError(
+                            f"feature {record.feature_id} output {key!r} is missing"
+                        )
+                errors = working.validate_topology()
+                if errors:
+                    raise GeometryError("; ".join(errors))
+            except Exception as error:
+                working.restore_topology(snapshot)
+                detail = str(error) or type(error).__name__
+                return RegenerationReport(
+                    False,
+                    tuple(results)
+                    + (FeatureResult(record.feature_id, "failed", diagnostic=detail),),
+                    diagnostic=f"feature {record.feature_id} failed: {detail}",
+                )
+
+            if not force_new and old_outputs and _exact_outputs_equal(
+                old_outputs, geometry, outputs, working
+            ):
+                record.outputs = old_outputs
+                for reference in outputs.values():
+                    discard_new.update(_entity_closure_refs((reference,), working))
+            else:
+                record.outputs = outputs
+                for reference in old_outputs.values():
+                    retire_old.update(_entity_closure_refs((reference,), geometry))
+            record.state = FeatureStatus.OK.value
+            results.append(
+                FeatureResult(record.feature_id, record.state, dict(record.outputs))
+            )
+
+        transition_by_old: Dict[EntityRef, tuple[EntityRef, ...]] = {}
+        new_by_id = {record.feature_id: record for record in replayed}
+        for (feature_id, key), old_items in previous_outputs.items():
+            new_binding = new_by_id[feature_id].outputs.get(key)
+            descendants = (
+                () if new_binding is None else working.resolve_ref(new_binding)
+            )
+            for old in old_items:
+                same_kind = tuple(item for item in descendants if item.kind == old.kind)
+                if old not in same_kind:
+                    transition_by_old[old] = same_kind
+        transitions = tuple(transition_by_old.items())
+
+        kept = _entity_closure_refs(
+            (
+                reference
+                for record in replayed
+                for reference in record.outputs.values()
+            ),
+            working,
+        )
+        protected_inputs: set[EntityRef] = set()
+        for record in replayed:
+            for references in record.inputs.values():
+                for reference in references:
+                    if isinstance(reference, EntityRef):
+                        current = working.resolve_ref(reference)
+                    else:
+                        source = new_by_id[reference.feature_id]
+                        binding = source.outputs.get(reference.output_key)
+                        current = () if binding is None else working.resolve_ref(binding)
+                    protected_inputs.update(_entity_closure_refs(current, working))
+        kept.update(protected_inputs)
+        conflicting = [
+            old
+            for old, descendants in transitions
+            if old in kept and old not in descendants
+        ]
+        if conflicting:
+            return RegenerationReport(
+                False,
+                tuple(results),
+                diagnostic=(
+                    "cannot replace feature output shared by a preserved output: "
+                    + ", ".join(map(str, conflicting))
+                ),
+            )
+        discard_new.difference_update(kept)
+        retire_old.difference_update(kept)
+
+        def remove_exact(references: Iterable[EntityRef]) -> None:
+            selected = set(references)
+            for reference in sorted(
+                selected,
+                key=lambda item: (
+                    {"face": 0, "edge": 1, "vertex": 2}[item.kind],
+                    -item.id,
+                ),
+            ):
+                store = {
+                    "vertex": working.vertices,
+                    "edge": working.edges,
+                    "face": working.faces,
+                }[reference.kind]
+                if reference.id not in store:
+                    continue
+                if reference.kind == "face":
+                    working.remove_face(reference.id, record=False)
+                elif reference.kind == "edge":
+                    working.remove_edge(reference.id, record=False)
+                else:
+                    working.remove_vertex(reference.id, record=False)
+
+        try:
+            with working.transaction():
+                remove_exact(discard_new)
+                remove_exact(retire_old)
+                working.record_replacements_atomic(transitions)
+        except GeometryError as error:
+            return RegenerationReport(
+                False,
+                tuple(results),
+                diagnostic=f"cannot preserve feature lineage: {error}",
+            )
+
+        for record in replayed:
+            record.materialization_checksum = (
+                self.materialization_checksum(record, working)
+                if record.state == FeatureStatus.OK.value and record.outputs
+                else None
+            )
+        staged = FeatureHistory(
+            baseline=self._baseline,
+            records=replayed,
+            next_id=self._next_id,
+        )
+        geometry.restore_design(
+            {
+                "topology": working.topology_snapshot(),
+                "features": staged.snapshot(),
+            }
+        )
+        return RegenerationReport(True, tuple(results), transitions)
+
     def regenerate(
         self,
         geometry: "GeometryModel",
@@ -1000,6 +1625,65 @@ class FeatureHistory:
                 False,
                 tuple(results),
                 diagnostic=f"regeneration is disabled: {detail}",
+            )
+
+        dirty_index = self._earliest_dirty_index()
+        force_full_replay = any(
+            record.diagnostic == _FULL_REPLAY_DIAGNOSTIC
+            for record in self._records
+        )
+        if dirty_index is None and self._records:
+            return RegenerationReport(
+                True,
+                tuple(
+                    FeatureResult(
+                        record.feature_id,
+                        record.state,
+                        dict(record.outputs),
+                        record.diagnostic,
+                    )
+                    for record in self._records
+                ),
+            )
+        dirty_index = 0 if dirty_index is None else dirty_index
+        incremental = None if force_full_replay else self._incremental_start(dirty_index)
+        if incremental is not None:
+            start, force_new = incremental
+            if not (start == 0 and force_new):
+                incremental_report = self._regenerate_incremental(
+                    geometry, registry, start, force_new=force_new
+                )
+                if (
+                    incremental_report.success
+                    or "cannot transfer face ownership: replacement face(s) are already owned"
+                    not in (incremental_report.diagnostic or "")
+                ):
+                    return incremental_report
+                # Structural generators materialize their own fresh Sheet.
+                # Incremental replay temporarily contains both that owner and
+                # the old generated owner, so lineage transfer is ambiguous.
+                # Retry the already-detached operation from the exact feature
+                # baseline, where only the new generator owner exists.  This
+                # is identity/history replay, never a proximity repair.
+                force_full_replay = True
+                dirty_index = 0
+        if dirty_index > 0 and not force_full_replay:
+            return RegenerationReport(
+                False,
+                tuple(
+                    FeatureResult(
+                        record.feature_id,
+                        record.state,
+                        dict(record.outputs),
+                        record.diagnostic,
+                    )
+                    for record in self._records
+                ),
+                diagnostic=(
+                    "regeneration requires an exact pre-feature checkpoint: "
+                    "a dirty mutating feature uses raw topology after a clean prefix; "
+                    "bind feature-owned inputs with FeatureOutputRef"
+                ),
             )
         from .serialization import from_dict, to_dict
 
@@ -1419,6 +2103,36 @@ def builtin_feature_registry() -> FeatureRegistry:
             for key, reference in instance.outputs.items()
         }
 
+    def rectangular_pattern_feature(geometry, feature, inputs):
+        from .editing import rectangular_pattern
+
+        result = rectangular_pattern(
+            geometry,
+            inputs.get("entities", ()),
+            feature.parameters["directions"],
+            feature.parameters["spacings"],
+            feature.parameters["counts"],
+        )
+        return {
+            f"instance/{index}/{key}": reference
+            for index, instance in enumerate(result.instances)
+            for key, reference in instance.outputs.items()
+        }
+
+    def transform_pattern_feature(geometry, feature, inputs):
+        from .editing import pattern_entities
+
+        result = pattern_entities(
+            geometry,
+            inputs.get("entities", ()),
+            feature.parameters["matrices"],
+        )
+        return {
+            f"instance/{index}/{key}": reference
+            for index, instance in enumerate(result.instances)
+            for key, reference in instance.outputs.items()
+        }
+
     def reverse_feature(geometry, feature, inputs):
         from .editing import reverse_edge, reverse_face
 
@@ -1468,6 +2182,8 @@ def builtin_feature_registry() -> FeatureRegistry:
         "geometry.mirror": mirror_feature,
         "geometry.pattern.linear": linear_pattern_feature,
         "geometry.pattern.circular": circular_pattern_feature,
+        "geometry.pattern.rectangular": rectangular_pattern_feature,
+        "geometry.pattern.transforms": transform_pattern_feature,
         "geometry.reverse": reverse_feature,
     }.items():
         registry.register(kind, executor)

@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from uuid import uuid4
+
 import numpy as np
 import pytest
 
 from anygeometry import GeometryModel
+
+
+def pytest_configure(config):
+    if getattr(config.option, "basetemp", None) is None:
+        root = Path(__file__).resolve().parents[1]
+        config.option.basetemp = str(root / f".pytest_tmp_{uuid4().hex}")
 
 
 @pytest.fixture

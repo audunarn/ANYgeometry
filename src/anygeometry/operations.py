@@ -14,8 +14,10 @@ import numpy as np
 from .curves import Arc, Spline
 from .entities import EntityRef, Face, OrientedEdge
 from .errors import GeometryError
+from .identity import EntityHandle, EntityKey
 from .model import GeometryModel
 from .surfaces import CoonsSurface, Cone, Cylinder, Plane, RuledSurface
+from .transforms import AffineLike, coerce_affine_transform
 
 __all__ = [
     "closest_point",
@@ -683,16 +685,12 @@ def fragment_face(
 
 def _transform_impl(
     geometry: GeometryModel,
-    matrix: Sequence[Sequence[float]],
+    matrix: AffineLike,
     references: Iterable[EntityRef] | None = None,
 ) -> Tuple[EntityRef, ...]:
     """Apply a finite homogeneous transform while preserving entity IDs."""
 
-    transform_matrix = np.asarray(matrix, dtype=float)
-    if transform_matrix.shape != (4, 4) or not np.all(np.isfinite(transform_matrix)):
-        raise GeometryError("transform must be a finite 4x4 matrix")
-    if not np.allclose(transform_matrix[3], (0.0, 0.0, 0.0, 1.0), atol=1e-14):
-        raise GeometryError("only affine homogeneous transforms are supported")
+    transform_matrix = coerce_affine_transform(matrix).matrix
     linear = transform_matrix[:3, :3]
     singular_values = np.linalg.svd(linear, compute_uv=False)
     scale = float(singular_values.max())
@@ -845,13 +843,41 @@ def _transform_impl(
 
 def transform(
     geometry: GeometryModel,
-    matrix: Sequence[Sequence[float]],
-    references: Iterable[EntityRef] | None = None,
+    matrix: AffineLike,
+    references: Iterable[EntityRef | EntityHandle | EntityKey] | None = None,
 ) -> Tuple[EntityRef, ...]:
-    """Atomically apply a finite homogeneous transform."""
+    """Atomically apply an affine transform while preserving entity IDs.
+
+    Geometry references retain their historical behavior. Model-bound handles
+    and compact keys may additionally select Parts, Sheets, Members, uses,
+    Attachments, or Junctions; their complete active geometry closure moves as
+    one operation while the structural identities remain unchanged.
+    """
+
+    affine = coerce_affine_transform(matrix)
+    selected: tuple[EntityRef, ...] | None
+    if references is None:
+        selected = None
+    else:
+        requested = tuple(references)
+        if not requested:
+            return ()
+        from .closure import extract_model_closure
+
+        closure = extract_model_closure(
+            geometry,
+            requested,
+            include_structural_closure=True,
+            include_features=False,
+        )
+        selected = tuple(
+            EntityRef(handle.kind, handle.id)  # type: ignore[arg-type]
+            for handle in closure.source_to_work
+            if handle.kind in ("vertex", "edge", "face")
+        )
 
     with geometry.transaction():
-        return _transform_impl(geometry, matrix, references)
+        return _transform_impl(geometry, affine, selected)
 
 
 def _transform_surface(surface: object, matrix: np.ndarray) -> object:

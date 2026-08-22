@@ -9,12 +9,19 @@ from .editing import (
     PatternResult,
     circular_pattern,
     copy_entities,
+    copy_rotated,
+    copy_translated,
     insert_model,
     linear_pattern,
     measure,
     mirror_entities,
+    move_entities,
+    pattern_entities,
+    rectangular_pattern,
     reverse_edge,
     reverse_face,
+    rotate_entities,
+    translate_entities,
 )
 from .errors import GeometryError, GeometryTopologyError
 from .evaluation import (
@@ -61,6 +68,7 @@ from .model import GeometryModel
 from .identity import EntityHandle, Resolution, ResolutionStatus
 from .transactions import AABBChange, ChangeSet, TopologyTransaction
 from .tolerance import DEFAULT_TOLERANCE_POLICY, TolerancePolicy, feature_extent
+from .transforms import AffineTransform
 from .predicates import (
     IntersectionComponent,
     IntersectionDimension,
@@ -164,6 +172,7 @@ __all__ = [
     "AABB",
     "AABBChange",
     "AABBTree",
+    "AffineTransform",
     "Arc",
     "ArcFrame",
     "Attachment",
@@ -263,6 +272,8 @@ __all__ = [
     "clip_line_to_face",
     "closest_uv",
     "copy_entities",
+    "copy_rotated",
+    "copy_translated",
     "circular_pattern",
     "edge_tangent_many",
     "evaluate_edge_many",
@@ -291,7 +302,9 @@ __all__ = [
     "measure",
     "materialize_sketch",
     "mirror_entities",
+    "move_entities",
     "numerical_surface_intersection",
+    "pattern_entities",
     "plane_cylinder",
     "plane_plane",
     "plan_imprint",
@@ -300,8 +313,10 @@ __all__ = [
     "project_to_face_many",
     "punch_hole",
     "read_geometry",
+    "rectangular_pattern",
     "reverse_edge",
     "reverse_face",
+    "rotate_entities",
     "split_face",
     "split_face_at",
     "split_face_between",
@@ -312,6 +327,7 @@ __all__ = [
     "surface_point",
     "to_dict",
     "transform",
+    "translate_entities",
     "trim_face",
     "write_geometry",
     "builtin_feature_registry",
@@ -321,4 +337,4 @@ __all__ = [
     "JunctionMemberUse",
 ]
 
-__version__ = "0.2.2"
+__version__ = "0.2.4"

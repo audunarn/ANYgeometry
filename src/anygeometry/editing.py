@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
+from itertools import product
 from typing import Iterable, Mapping, Sequence
 
 import numpy as np
 
+from .closure import ModelClosure, extract_model_closure
 from .curves import Arc, Spline
 from .entities import EntityRef, OrientedEdge
 from .errors import GeometryError
-from .identity import EntityKey, validate_local_id
+from .identity import EntityHandle, EntityKey, validate_local_id
 from .model import GeometryModel
 from .operations import transform
 from .structural import (
@@ -22,6 +24,7 @@ from .structural import (
     ParameterRange,
 )
 from .surfaces import CoonsSurface, Cone, Cylinder, Plane, RuledSurface
+from .transforms import AffineLike, AffineTransform, coerce_affine_transform
 
 __all__ = [
     "InsertResult",
@@ -29,12 +32,19 @@ __all__ = [
     "PatternResult",
     "circular_pattern",
     "copy_entities",
+    "copy_rotated",
+    "copy_translated",
     "insert_model",
     "linear_pattern",
     "measure",
     "mirror_entities",
+    "move_entities",
+    "pattern_entities",
+    "rectangular_pattern",
     "reverse_edge",
     "reverse_face",
+    "rotate_entities",
+    "translate_entities",
 ]
 
 
@@ -45,14 +55,21 @@ class InsertResult:
     entity_map: Mapping[EntityRef, EntityRef]
     groups: Mapping[str, tuple[EntityRef, ...]]
     outputs: Mapping[str, EntityRef]
+    handle_map: Mapping[EntityHandle, EntityHandle] = field(default_factory=dict)
 
     def mapped(self, reference: EntityRef) -> EntityRef:
         return self.entity_map[reference]
+
+    def mapped_handle(self, handle: EntityHandle) -> EntityHandle:
+        """Return the fresh model-bound identity corresponding to ``handle``."""
+
+        return self.handle_map[handle]
 
 
 @dataclass(frozen=True)
 class PatternResult:
     instances: tuple[InsertResult, ...]
+    transforms: tuple[AffineTransform, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -63,15 +80,11 @@ class Measurement:
     witnesses: tuple[tuple[float, float, float], ...] = ()
 
 
-def _affine_matrix(value: Sequence[Sequence[float]] | None) -> np.ndarray:
-    if value is None:
-        return np.eye(4)
-    matrix = np.asarray(value, dtype=float)
-    if matrix.shape != (4, 4) or not np.all(np.isfinite(matrix)):
-        raise GeometryError("transform must be a finite 4x4 matrix")
-    if not np.allclose(matrix[3], (0.0, 0.0, 0.0, 1.0), atol=1.0e-14):
-        raise GeometryError("only affine homogeneous transforms are supported")
-    return matrix
+Selection = EntityRef | EntityHandle | EntityKey
+
+
+def _affine_transform(value: AffineLike | None) -> AffineTransform:
+    return coerce_affine_transform(value, default_identity=True)
 
 
 def _expanded_refs(
@@ -163,7 +176,7 @@ def _insert_selected(
         )
         mapping[EntityRef("face", face_id)] = EntityRef("face", made)
 
-    _copy_structural_closure(
+    structural_mapping = _copy_structural_closure(
         destination,
         source,
         mapping,
@@ -199,7 +212,20 @@ def _insert_selected(
             mapping.items(), key=lambda item: (item[0].kind, item[0].id)
         )
     }
-    return InsertResult(dict(mapping), made_groups, outputs)
+    handle_mapping = {
+        source.handle(old.kind, old.id): destination.handle(new.kind, new.id)
+        for old, new in mapping.items()
+    }
+    handle_mapping.update(
+        {
+            source.handle(kind, identifier): destination.handle(
+                mapped_kind, mapped_identifier
+            )
+            for (kind, identifier), (mapped_kind, mapped_identifier)
+            in structural_mapping.items()
+        }
+    )
+    return InsertResult(dict(mapping), made_groups, outputs, handle_mapping)
 
 
 def _copy_structural_closure(
@@ -211,7 +237,7 @@ def _copy_structural_closure(
     face_ids: set[int],
     *,
     include_empty_parts: bool,
-) -> None:
+) -> dict[EntityKey, EntityKey]:
     """Copy every complete structural ownership closure with fresh IDs.
 
     A partial selection does not invent ownership for an incomplete sheet or
@@ -513,19 +539,22 @@ def _copy_structural_closure(
                 None if old_part_id is None else part_map[old_part_id]
             ),
         )
-    destination._rebuild_member_incidence()  # noqa: SLF001
-    problems = destination._validate_structural()  # noqa: SLF001
-    if problems:
-        raise GeometryError(
-            "structural copy produced invalid topology: " + "; ".join(problems)
-        )
+    # ``_put_structural`` maintains every reverse-incidence bucket above. The
+    # surrounding owner transaction validates the complete changed structural
+    # closure at commit, so no full destination-model rebuild or scan is
+    # needed for each pattern instance.
+    return {
+        (kind, old_id): (kind, new_id)
+        for kind, identifiers in structural_maps.items()
+        for old_id, new_id in identifiers.items()
+    }
 
 
 def insert_model(
     destination: GeometryModel,
     source: GeometryModel,
     *,
-    matrix: Sequence[Sequence[float]] | None = None,
+    matrix: AffineLike | None = None,
     group_prefix: str | None = None,
 ) -> InsertResult:
     """Insert all current source topology with fresh destination identities.
@@ -540,8 +569,8 @@ def insert_model(
         raise GeometryError("cannot insert invalid geometry: " + "; ".join(errors))
     with destination.transaction():
         prepared = source.clone(include_features=False)
-        affine = _affine_matrix(matrix)
-        if not np.allclose(affine, np.eye(4)):
+        affine = _affine_transform(matrix)
+        if affine != AffineTransform.identity():
             transform(prepared, affine)
         result = _insert_selected(
             destination, prepared, None, group_prefix=group_prefix
@@ -549,38 +578,209 @@ def insert_model(
         errors = destination.validate_topology()
         if errors:
             raise GeometryError("insert produced invalid topology: " + "; ".join(errors))
-        return result
+        return InsertResult(
+            result.entity_map,
+            result.groups,
+            result.outputs,
+            {
+                source.handle(prepared.kind, prepared.id): mapped
+                for prepared, mapped in result.handle_map.items()
+            },
+        )
+
+
+def _copy_closure(
+    geometry: GeometryModel,
+    references: Iterable[Selection],
+) -> ModelClosure:
+    selected = tuple(references)
+    if not selected:
+        raise GeometryError("copy needs at least one entity")
+    return extract_model_closure(
+        geometry,
+        selected,
+        include_structural_closure=True,
+        include_features=False,
+    )
+
+
+def _source_result(result: InsertResult, closure: ModelClosure) -> InsertResult:
+    """Translate one working-model result back to original model identities."""
+
+    handles: dict[EntityHandle, EntityHandle] = {}
+    entities: dict[EntityRef, EntityRef] = {}
+    for prepared, destination in result.handle_map.items():
+        working = EntityHandle(
+            closure.working_model.model_id,
+            prepared.kind,
+            prepared.id,
+        )
+        source = closure.work_to_source.get(working)
+        if source is None:
+            raise GeometryError(
+                f"copy result contains unmapped working {prepared.kind} {prepared.id}"
+            )
+        handles[source] = destination
+        if source.kind in ("vertex", "edge", "face"):
+            entities[EntityRef(source.kind, source.id)] = EntityRef(  # type: ignore[arg-type]
+                destination.kind,
+                destination.id,
+            )
+    outputs = {
+        f"{old.kind}/{old.id}": new
+        for old, new in sorted(
+            entities.items(), key=lambda item: (item[0].kind, item[0].id)
+        )
+    }
+    return InsertResult(entities, result.groups, outputs, handles)
+
+
+def _insert_closure_instance(
+    destination: GeometryModel,
+    closure: ModelClosure,
+    affine: AffineTransform,
+    *,
+    group_prefix: str | None,
+) -> InsertResult:
+    source = closure.working_model
+    if affine == AffineTransform.identity():
+        prepared = source
+    else:
+        # Clone only the selected dependency closure, never the complete live
+        # destination. Pattern cost is therefore proportional to selected
+        # topology and instance count rather than total model size.
+        prepared = source.clone(include_features=False)
+        transform(prepared, affine)
+    return _source_result(
+        _insert_selected(destination, prepared, None, group_prefix=group_prefix),
+        closure,
+    )
 
 
 def copy_entities(
     geometry: GeometryModel,
-    references: Iterable[EntityRef],
+    references: Iterable[Selection],
     *,
-    matrix: Sequence[Sequence[float]] | None = None,
+    matrix: AffineLike | None = None,
     group_prefix: str | None = None,
 ) -> InsertResult:
-    """Copy a selected topology closure into the same model."""
+    """Copy a selected geometry/structural closure into the same model.
 
-    selected = tuple(references)
-    if not selected:
-        raise GeometryError("copy needs at least one entity")
+    The selection accepts model-bound handles, local geometry references, and
+    compact keys. Copied entities receive fresh IDs and the returned
+    ``handle_map`` binds every copied geometry and structural record to the
+    destination model.
+    """
+
+    closure = _copy_closure(geometry, references)
+    affine = _affine_transform(matrix)
     with geometry.transaction():
-        source = geometry.clone(include_features=False)
-        affine = _affine_matrix(matrix)
-        if not np.allclose(affine, np.eye(4)):
-            transform(source, affine, selected)
-        result = _insert_selected(
-            geometry, source, selected, group_prefix=group_prefix
+        return _insert_closure_instance(
+            geometry,
+            closure,
+            affine,
+            group_prefix=group_prefix,
         )
-        errors = geometry.validate_topology()
-        if errors:
-            raise GeometryError("copy produced invalid topology: " + "; ".join(errors))
-        return result
+
+
+def move_entities(
+    geometry: GeometryModel,
+    references: Iterable[Selection],
+    affine: AffineLike,
+) -> tuple[EntityRef, ...]:
+    """Transform a selected closure in place while preserving every identity."""
+
+    return transform(geometry, coerce_affine_transform(affine), references)
+
+
+def translate_entities(
+    geometry: GeometryModel,
+    references: Iterable[Selection],
+    vector: Sequence[float],
+) -> tuple[EntityRef, ...]:
+    return move_entities(geometry, references, AffineTransform.translation(vector))
+
+
+def rotate_entities(
+    geometry: GeometryModel,
+    references: Iterable[Selection],
+    axis_point: Sequence[float],
+    axis_direction: Sequence[float],
+    angle: float,
+) -> tuple[EntityRef, ...]:
+    return move_entities(
+        geometry,
+        references,
+        AffineTransform.rotation(axis_point, axis_direction, angle),
+    )
+
+
+def copy_translated(
+    geometry: GeometryModel,
+    references: Iterable[Selection],
+    vector: Sequence[float],
+    *,
+    group_prefix: str | None = None,
+) -> InsertResult:
+    return copy_entities(
+        geometry,
+        references,
+        matrix=AffineTransform.translation(vector),
+        group_prefix=group_prefix,
+    )
+
+
+def copy_rotated(
+    geometry: GeometryModel,
+    references: Iterable[Selection],
+    axis_point: Sequence[float],
+    axis_direction: Sequence[float],
+    angle: float,
+    *,
+    group_prefix: str | None = None,
+) -> InsertResult:
+    return copy_entities(
+        geometry,
+        references,
+        matrix=AffineTransform.rotation(axis_point, axis_direction, angle),
+        group_prefix=group_prefix,
+    )
+
+
+def pattern_entities(
+    geometry: GeometryModel,
+    references: Iterable[Selection],
+    transforms: Iterable[AffineLike],
+    *,
+    group_prefix: str | None = None,
+) -> PatternResult:
+    """Create one fresh selected-closure copy for every supplied transform."""
+
+    made_transforms = tuple(coerce_affine_transform(item) for item in transforms)
+    if not made_transforms:
+        raise GeometryError("a pattern needs at least one transform")
+    closure = _copy_closure(geometry, references)
+    instances: list[InsertResult] = []
+    with geometry.transaction():
+        for index, affine in enumerate(made_transforms, start=1):
+            instances.append(
+                _insert_closure_instance(
+                    geometry,
+                    closure,
+                    affine,
+                    group_prefix=(
+                        None
+                        if group_prefix is None
+                        else f"{group_prefix}/{index}"
+                    ),
+                )
+            )
+    return PatternResult(tuple(instances), made_transforms)
 
 
 def linear_pattern(
     geometry: GeometryModel,
-    references: Iterable[EntityRef],
+    references: Iterable[Selection],
     direction: Sequence[float],
     spacing: float,
     count: int,
@@ -600,44 +800,21 @@ def linear_pattern(
     spacing = float(spacing)
     if not np.isfinite(spacing) or spacing <= 0.0:
         raise GeometryError("pattern spacing must be finite and positive")
-    selected = tuple(references)
-    made: list[InsertResult] = []
-    with geometry.transaction():
-        unit = vector / length
-        for index in range(1, int(count) + 1):
-            matrix = np.eye(4)
-            matrix[:3, 3] = unit * spacing * index
-            made.append(
-                copy_entities(
-                    geometry,
-                    selected,
-                    matrix=matrix,
-                    group_prefix=(
-                        None
-                        if group_prefix is None
-                        else f"{group_prefix}/{index}"
-                    ),
-                )
-            )
-        return PatternResult(tuple(made))
-
-
-def _rotation_matrix(
-    point: np.ndarray, direction: np.ndarray, angle: float
-) -> np.ndarray:
-    x, y, z = direction
-    cosine, sine = float(np.cos(angle)), float(np.sin(angle))
-    cross = np.asarray(((0.0, -z, y), (z, 0.0, -x), (-y, x, 0.0)))
-    rotation = cosine * np.eye(3) + sine * cross + (1.0 - cosine) * np.outer(direction, direction)
-    matrix = np.eye(4)
-    matrix[:3, :3] = rotation
-    matrix[:3, 3] = point - rotation @ point
-    return matrix
+    unit = vector / length
+    return pattern_entities(
+        geometry,
+        references,
+        (
+            AffineTransform.translation(unit * spacing * index)
+            for index in range(1, int(count) + 1)
+        ),
+        group_prefix=group_prefix,
+    )
 
 
 def circular_pattern(
     geometry: GeometryModel,
-    references: Iterable[EntityRef],
+    references: Iterable[Selection],
     axis_point: Sequence[float],
     axis_direction: Sequence[float],
     angle_step: float,
@@ -663,29 +840,85 @@ def circular_pattern(
         raise GeometryError("pattern angle step must be finite and non-zero")
     if isinstance(count, bool) or int(count) != count or int(count) < 1:
         raise GeometryError("pattern count must be a positive integer")
-    direction /= length
-    selected = tuple(references)
-    made: list[InsertResult] = []
-    with geometry.transaction():
-        for index in range(1, int(count) + 1):
-            made.append(
-                copy_entities(
-                    geometry,
-                    selected,
-                    matrix=_rotation_matrix(point, direction, float(angle_step) * index),
-                    group_prefix=(
-                        None
-                        if group_prefix is None
-                        else f"{group_prefix}/{index}"
-                    ),
-                )
+    return pattern_entities(
+        geometry,
+        references,
+        (
+            AffineTransform.rotation(
+                point,
+                direction,
+                float(angle_step) * index,
             )
-        return PatternResult(tuple(made))
+            for index in range(1, int(count) + 1)
+        ),
+        group_prefix=group_prefix,
+    )
+
+
+def rectangular_pattern(
+    geometry: GeometryModel,
+    references: Iterable[Selection],
+    directions: Sequence[Sequence[float]],
+    spacings: Sequence[float],
+    counts: Sequence[int],
+    *,
+    group_prefix: str | None = None,
+) -> PatternResult:
+    """Create a deterministic 1D, 2D, or 3D Cartesian copy array.
+
+    Each count is the number of copied steps beyond the original along that
+    axis. For example, counts ``(1, 1)`` produce three copies and, together
+    with the untouched original, form a 2x2 array.
+    """
+
+    axes = tuple(np.asarray(item, dtype=float) for item in directions)
+    spacing_values = tuple(float(item) for item in spacings)
+    count_values = tuple(counts)
+    if not 1 <= len(axes) <= 3 or not (
+        len(axes) == len(spacing_values) == len(count_values)
+    ):
+        raise GeometryError(
+            "rectangular pattern needs matching one to three directions, spacings, and counts"
+        )
+    units: list[np.ndarray] = []
+    for axis in axes:
+        if axis.shape != (3,) or not np.all(np.isfinite(axis)):
+            raise GeometryError("pattern directions must be finite 3-vectors")
+        length = float(np.linalg.norm(axis))
+        if length <= 0.0:
+            raise GeometryError("pattern directions must be non-zero")
+        units.append(axis / length)
+    if np.linalg.matrix_rank(np.asarray(units), tol=1.0e-12) != len(units):
+        raise GeometryError("rectangular pattern directions must be independent")
+    if any(not np.isfinite(item) or item <= 0.0 for item in spacing_values):
+        raise GeometryError("pattern spacings must be finite and positive")
+    made_counts: list[int] = []
+    for item in count_values:
+        if isinstance(item, bool) or int(item) != item or int(item) < 1:
+            raise GeometryError("pattern counts must be positive integers")
+        made_counts.append(int(item))
+    offsets = (
+        sum(
+            (
+                units[axis] * spacing_values[axis] * index[axis]
+                for axis in range(len(units))
+            ),
+            start=np.zeros(3),
+        )
+        for index in product(*(range(item + 1) for item in made_counts))
+        if any(index)
+    )
+    return pattern_entities(
+        geometry,
+        references,
+        (AffineTransform.translation(offset) for offset in offsets),
+        group_prefix=group_prefix,
+    )
 
 
 def mirror_entities(
     geometry: GeometryModel,
-    references: Iterable[EntityRef],
+    references: Iterable[Selection],
     plane_point: Sequence[float],
     plane_normal: Sequence[float],
     *,
@@ -693,25 +926,11 @@ def mirror_entities(
 ) -> InsertResult:
     """Copy selected topology reflected about a plane."""
 
-    point = np.asarray(plane_point, dtype=float)
-    normal = np.asarray(plane_normal, dtype=float)
-    if (
-        point.shape != (3,)
-        or normal.shape != (3,)
-        or not np.all(np.isfinite(point))
-        or not np.all(np.isfinite(normal))
-    ):
-        raise GeometryError("mirror plane needs a finite point and normal")
-    length = float(np.linalg.norm(normal))
-    if length <= 0.0:
-        raise GeometryError("mirror plane normal must be non-zero")
-    normal /= length
-    linear = np.eye(3) - 2.0 * np.outer(normal, normal)
-    matrix = np.eye(4)
-    matrix[:3, :3] = linear
-    matrix[:3, 3] = point - linear @ point
     return copy_entities(
-        geometry, references, matrix=matrix, group_prefix=group_prefix
+        geometry,
+        references,
+        matrix=AffineTransform.reflection(plane_point, plane_normal),
+        group_prefix=group_prefix,
     )
 
 
