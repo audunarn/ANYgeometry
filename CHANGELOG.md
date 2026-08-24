@@ -2,6 +2,26 @@
 
 All notable user-visible changes to ANYgeometry are documented here.
 
+## 0.3.0 - 2026-08-24
+
+- Add dependency-free automation protocol version 1 under
+  `anygeometry.automation`. It provides strict immutable request/response
+  records, JSON Schema/tool discovery, model-bound descriptions, bounded
+  declarative selectors, explicit units/frames, measurements, and qualified
+  intersection queries without parsing prompts or executing generated code.
+- Add revision-bound `CommandBatch` planning and canonical SHA-256 `EditPlan`
+  application. Symbolic point/edge/owned-plate construction, transforms,
+  copies, mirrors, patterns, groups/tags, dependency-safe deletion, and
+  explicit imprint policies commit through one outer kernel transaction.
+  Planning and failed/stale/tampered application preserve revision, identity
+  allocator high-water marks, and caches.
+- Add the separate `ANYgeometry-mcp` reference package. It exposes exactly
+  seven MCP tools against one startup-bound document, isolates session retry
+  receipts, requires explicit mutation approval, and makes write-back both a
+  startup capability and a per-call opt-in. The kernel has no MCP dependency.
+- Keep persistent geometry document schema 4 unchanged. Automation protocol
+  version 1 is a separate transport contract.
+
 ## 0.2.4 - 2026-08-22
 
 - Add atomic exact `FeatureHistory.adopt_frozen(...)` for imported, scripted,

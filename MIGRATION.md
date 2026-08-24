@@ -70,6 +70,24 @@ same schema-4 shape as an ordinary write. An `AuditReport` applies only to its
 exact model UUID, revision, and policy and must be retained or recomputed by a
 consumer that needs qualified handoff evidence.
 
+## Updating from ANYgeometry 0.2 to 0.3
+
+ANYgeometry 0.3 keeps geometry document schema 4 and continues to read schemas
+1–4. The breaking version boundary introduces automation protocol version 1;
+it does not reinterpret or migrate persisted geometry.
+
+Automation clients should import `anygeometry.automation` and exchange only
+its strict records/mappings. Every model-bound request includes protocol
+version, request ID, model UUID, and expected revision. Mutations must call
+`plan_commands(...)` and then `apply_plan(...)`; direct dynamic method names,
+Python expressions, prompt text, and caller-selected file paths are not part
+of the kernel contract.
+
+The optional reference MCP server is a separate distribution named
+`ANYgeometry-mcp` with dependency `ANYgeometry>=0.3,<0.4`. Downstream packages
+that only consume geometry schema 4 do not need to adopt the automation API or
+MCP dependency.
+
 ## Import mapping
 
 | Historical import | Owner import |

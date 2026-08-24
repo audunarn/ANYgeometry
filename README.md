@@ -14,8 +14,14 @@ package, or a solver.
 
 ## Installation
 
-ANYgeometry requires Python 3.11 or newer and NumPy. Until the first compatible
-release is available from PyPI, install the sibling checkout directly:
+ANYgeometry requires Python 3.11 or newer and NumPy. Install the released
+package or a sibling checkout directly:
+
+```powershell
+python -m pip install ANYgeometry
+```
+
+For editable development:
 
 ```powershell
 python -m pip install -e C:\Github\ANYgeometry
@@ -44,6 +50,36 @@ face_ref = geometry.entity_ref("face", face_id)  # local compatibility reference
 face_handle = geometry.handle("face", face_id)   # model-bound public identity
 geometry.add_to_group("deck", [face_ref])
 ```
+
+## LLM and automation contract
+
+`anygeometry.automation` is a provider-neutral protocol boundary. An LLM may
+translate natural language into its bounded JSON/record algebra, but the
+kernel never parses prompts, executes generated code, accepts arbitrary method
+names, or imports an LLM/MCP SDK.
+
+```python
+from anygeometry.automation import Command, CommandBatch, apply_plan, plan_commands
+
+q = lambda xyz: {"value": xyz, "unit": "m", "frame": "model_local"}
+commands = tuple(
+    Command(f"p{i}", "create_point", {"position": q(point)})
+    for i, point in enumerate(((0, 0, 0), (4, 0, 0), (4, 3, 0), (0, 3, 0)), 1)
+) + (
+    Command("deck", "create_plate", {"vertices": [f"p{i}.vertex" for i in range(1, 5)]}),
+)
+batch = CommandBatch(1, "make-deck", geometry.model_id, geometry.revision, commands)
+plan = plan_commands(geometry, batch)  # no IDs allocated; no revision/cache change
+result = apply_plan(geometry, plan)    # one owner transaction / one ChangeSet
+deck_sheet = result.outputs["deck.sheet"][0]
+```
+
+Selectors cover canonical handles and aliases (`point`→`vertex`,
+`plate`→`sheet`), groups/tags, ownership and incidence, exact metadata,
+spatial/range predicates, bounded nearest queries, Boolean composition,
+deterministic ordering, pagination, and explicit mutation cardinality.
+Positions and transforms require both units and `model_local`/`world` frame.
+See [`docs/AUTOMATION_PROTOCOL.md`](docs/AUTOMATION_PROTOCOL.md).
 
 Or use a structural generator:
 
@@ -224,8 +260,9 @@ Consumers that require a qualified handoff must retain or rerun
 JSON and gzip-compressed JSON are supported. Mesh and FEM/project
 serialization remain outside ANYgeometry.
 
-ANYgeometry 0.2.4 reads schemas 1–4 and writes schema 4. The Python API remains
-within `ANYgeometry>=0.2,<0.3`, but a 0.2.0 reader intentionally rejects a
+ANYgeometry 0.3.0 reads schemas 1–4 and writes schema 4. Automation consumers
+use `ANYgeometry>=0.3,<0.4`; geometry-only consumers may continue using schema
+4 through the public codecs. A 0.2.0 reader intentionally rejects a
 schema-4 document. Downstream packages should use the public codecs rather
 than parse schema records. Legacy relationship evidence migrates as
 `UNVERIFIED` and never implies exactness or certification.
