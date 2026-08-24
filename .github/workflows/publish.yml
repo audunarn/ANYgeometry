@@ -39,8 +39,8 @@ jobs:
           metadata = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
           project = metadata["project"]
           version = project["version"]
-          if version != "0.2.4":
-              raise SystemExit(f"release workflow requires version 0.2.4, got {version}")
+          if version != "0.3.0":
+              raise SystemExit(f"release workflow requires version 0.3.0, got {version}")
           if "Development Status :: 3 - Alpha" not in project["classifiers"]:
               raise SystemExit("release metadata must retain the Alpha classifier")
           init_text = Path("src/anygeometry/__init__.py").read_text(encoding="utf-8")

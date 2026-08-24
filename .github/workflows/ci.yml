@@ -41,7 +41,7 @@ jobs:
         run: python -m pytest
       - name: Verify package import and CLI version
         run: |
-          python -c "import anygeometry; assert anygeometry.__version__ == '0.2.4'"
+          python -c "import anygeometry; assert anygeometry.__version__ == '0.3.0'"
           python -m anygeometry --version
 
   planar-absence:
