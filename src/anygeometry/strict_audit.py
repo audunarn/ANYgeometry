@@ -38,7 +38,10 @@ from .audit import (
 from .curves import Arc, Spline, Straight
 from .errors import GeometryError
 from .predicates import (
+    DEFAULT_INTERSECTION_QUALIFICATION_POLICY,
+    IntersectionDimension,
     IntersectionKind,
+    IntersectionQualificationPolicy,
     IntersectionResult,
     qualified_line_plane,
     qualified_plane_plane,
@@ -157,6 +160,7 @@ class _StrictAuditState:
         model: "GeometryModel",
         context: AuditContext,
         collector: AuditCollector,
+        qualification: IntersectionQualificationPolicy | None = None,
     ) -> None:
         self.model = model
         self.context = context
@@ -167,6 +171,17 @@ class _StrictAuditState:
             if isinstance(candidate_policy, TolerancePolicy)
             else DEFAULT_TOLERANCE_POLICY
         )
+        self.qualification = (
+            DEFAULT_INTERSECTION_QUALIFICATION_POLICY
+            if qualification is None
+            else qualification
+        )
+        if not isinstance(
+            self.qualification, IntersectionQualificationPolicy
+        ):
+            raise TypeError(
+                "qualification must be IntersectionQualificationPolicy"
+            )
         self._edge_bounds: dict[int, AABB] = {}
         self._face_bounds: dict[int, AABB] = {}
         self._face_points: dict[int, np.ndarray] = {}
@@ -347,7 +362,6 @@ class _StrictAuditState:
             details=details or {},
             **evidence,
         )
-
     def unclassified(
         self,
         first: SpatialKey,
@@ -372,6 +386,18 @@ class _StrictAuditState:
             details={"reason": reason},
         )
         return _PairClassification(False)
+
+    def record_intersection_certificate(self, result) -> None:
+        """Expose public narrow-phase work without duplicating its predicates."""
+
+        certificate = getattr(result, "certificate", None)
+        if certificate is None:
+            return
+        self.collector.record_intersection_work(
+            boxes_examined=certificate.boxes_examined,
+            subdivisions=certificate.subdivisions,
+            trace_segments=certificate.trace_segments,
+        )
 
     def parts_for(self, key: SpatialKey) -> frozenset[int]:
         kind, identifier = key
@@ -1744,6 +1770,126 @@ class _StrictAuditState:
             first.id, second.id
         )
         if not isinstance(first.curve, Straight) or not isinstance(second.curve, Straight):
+            from .intersections import query_intersection
+
+            result = query_intersection(
+                self.model,
+                self.model.handle("edge", first.id),
+                self.model.handle("edge", second.id),
+                qualification=self.qualification,
+            )
+            self.record_intersection_certificate(result)
+            if result.kind in (
+                IntersectionKind.UNCLASSIFIED,
+                IntersectionKind.UNSUPPORTED,
+                IntersectionKind.CAPABILITY_MISSING,
+            ):
+                return self.unclassified(
+                    first_key,
+                    second_key,
+                    result.diagnostics[0]
+                    if result.diagnostics
+                    else "curved_edge_pair_unclassified",
+                )
+            if result.certificate is None or not result.certificate.complete:
+                return self.unclassified(
+                    first_key,
+                    second_key,
+                    "curved_edge_pair_certificate_incomplete",
+                )
+            if result.kind is IntersectionKind.DISJOINT:
+                return _PairClassification(True)
+            shared_vertices = {first.start, first.end} & {
+                second.start,
+                second.end,
+            }
+            components = result.components or ()
+            if result.kind is IntersectionKind.COINCIDENT:
+                forward, reversed_match = self._edge_definition_matches(
+                    first.id, second.id
+                )
+                code = (
+                    AuditCode.EDGE_REVERSED_DUPLICATE
+                    if reversed_match and not forward
+                    else AuditCode.EDGE_DUPLICATE
+                )
+                message = "distinct curved edge identities describe the same curve"
+            elif result.kind is IntersectionKind.OVERLAP_CURVE:
+                code = AuditCode.EDGE_COLLINEAR_OVERLAP
+                message = "curved edges overlap over a positive length"
+            else:
+                code = AuditCode.EDGE_CROSSING
+                message = "curved edges touch or cross without shared topology"
+            for component in components or (None,):
+                raw_points = (
+                    tuple(np.asarray(point, dtype=float) for point in component.witnesses)
+                    if component is not None
+                    else ()
+                )
+                witnesses = tuple(
+                    _as_witness(f"intersection/{index}", point)
+                    for index, point in enumerate(raw_points)
+                )
+                ordinary_shared_touch = (
+                    result.kind is IntersectionKind.TOUCH_POINT
+                    and bool(shared_vertices)
+                    and raw_points
+                    and all(
+                        any(
+                            float(
+                                np.linalg.norm(
+                                    point
+                                    - self.model.vertex_position(vertex_id)
+                                )
+                            )
+                            <= pair_length_tolerance
+                            for vertex_id in shared_vertices
+                        )
+                        for point in raw_points
+                    )
+                )
+                if ordinary_shared_touch:
+                    self.audit_member_relation(
+                        first_key,
+                        second_key,
+                        result.kind,
+                        witnesses,
+                    )
+                    continue
+                intent = self.ownership_intent(
+                    first_key,
+                    second_key,
+                    result.kind,
+                    witnesses=raw_points,
+                )
+                if intent is None:
+                    self.issue(
+                        code,
+                        AuditSeverity.ERROR,
+                        message,
+                        keys=(first_key, second_key),
+                        witnesses=witnesses,
+                        classification=result.kind,
+                        measured_gap=result.certificate.max_residual
+                        if result.certificate is not None
+                        else None,
+                        tolerance_used=result.tolerance_used,
+                    )
+                else:
+                    reason, junction_id = intent
+                    self.issue(
+                        AuditCode.INTENTIONAL_COINCIDENCE,
+                        AuditSeverity.INFO,
+                        "a curved-edge relationship is separated by ownership or junction intent",
+                        keys=(first_key, second_key),
+                        witnesses=witnesses,
+                        classification=result.kind,
+                        details={"intent": reason, "junction_id": junction_id},
+                    )
+                self.audit_member_relation(
+                    first_key, second_key, result.kind, witnesses
+                )
+            return _PairClassification(True)
             if isinstance(first.curve, Arc) and isinstance(second.curve, Arc):
                 relation = self._arc_arc_relation(first.id, second.id)
                 if relation[0] is IntersectionKind.UNCLASSIFIED:
@@ -2470,27 +2616,55 @@ class _StrictAuditState:
         plane = _surface_plane(face)
         relationship: str | None = None
         witnesses: tuple[AuditWitness, ...] = ()
-        if isinstance(face.surface, Cylinder):
-            cylinder_result = self._cylinder_edge_relation(edge_id, face.surface)
-            if cylinder_result is None:
+        if plane is None or not isinstance(edge.curve, Straight):
+            from .intersections import query_intersection
+
+            result = query_intersection(
+                self.model,
+                self.model.handle("edge", edge_id),
+                self.model.handle("face", face_id),
+                qualification=self.qualification,
+            )
+            self.record_intersection_certificate(result)
+            if result.kind in (
+                IntersectionKind.UNCLASSIFIED,
+                IntersectionKind.UNSUPPORTED,
+                IntersectionKind.CAPABILITY_MISSING,
+            ):
                 return self.unclassified(
                     edge_key,
                     face_key,
-                    "edge_cylinder_pair_requires_an_additional_qualified_predicate",
+                    result.diagnostics[0]
+                    if result.diagnostics
+                    else "edge_face_pair_unclassified",
+                    result.kind,
                 )
-            relationship, raw_witnesses = cylinder_result
-            if relationship == "disjoint":
+            if result.certificate is None or not result.certificate.complete:
+                return self.unclassified(
+                    edge_key,
+                    face_key,
+                    "edge_face_pair_certificate_incomplete",
+                )
+            if result.kind is IntersectionKind.DISJOINT:
                 return _PairClassification(True)
-            witnesses = tuple(
-                _as_witness(f"edge_face/{index}", point)
-                for index, point in enumerate(raw_witnesses)
-            )
-        elif plane is None or not isinstance(edge.curve, Straight):
-            return self.unclassified(
-                edge_key,
-                face_key,
-                "edge_face_pair_requires_straight_edge_and_planar_face",
-            )
+            witnesses = _component_witnesses(result)
+            if result.dimension is IntersectionDimension.POINT:
+                relationship = "touch" if result.kind is IntersectionKind.TOUCH_POINT else "crossing"
+            elif result.dimension in (
+                IntersectionDimension.CURVE,
+                IntersectionDimension.REGION,
+            ):
+                relationship = (
+                    "boundary"
+                    if any(edge_id == item for item in boundary)
+                    else "embedded"
+                )
+            else:
+                return self.unclassified(
+                    edge_key,
+                    face_key,
+                    "qualified edge-face result has no material dimension",
+                )
         else:
             start = self.model.vertex_position(edge.start)
             end = self.model.vertex_position(edge.end)
@@ -2875,6 +3049,108 @@ class _StrictAuditState:
             for oriented in loop
         )
         shared_vertices = first_vertices & second_vertices
+        if not (
+            isinstance(first_face.surface, Plane)
+            and isinstance(second_face.surface, Plane)
+        ):
+            from .intersections import query_intersection
+
+            qualified = query_intersection(
+                self.model,
+                self.model.handle("face", first_face.id),
+                self.model.handle("face", second_face.id),
+                qualification=self.qualification,
+            )
+            self.record_intersection_certificate(qualified)
+            if qualified.kind in (
+                IntersectionKind.UNCLASSIFIED,
+                IntersectionKind.UNSUPPORTED,
+                IntersectionKind.CAPABILITY_MISSING,
+            ):
+                return self.unclassified(
+                    first_key,
+                    second_key,
+                    qualified.diagnostics[0]
+                    if qualified.diagnostics
+                    else "curved_face_pair_unclassified",
+                    qualified.kind,
+                )
+            if qualified.certificate is None or not qualified.certificate.complete:
+                return self.unclassified(
+                    first_key,
+                    second_key,
+                    "curved_face_pair_certificate_incomplete",
+                )
+            if qualified.kind is IntersectionKind.DISJOINT:
+                return _PairClassification(True)
+            witnesses = _component_witnesses(qualified)
+            if (
+                qualified.dimension is IntersectionDimension.CURVE
+                and shared_edges
+                and qualified.kind
+                in (IntersectionKind.OVERLAP_CURVE, IntersectionKind.COINCIDENT)
+            ):
+                return _PairClassification(True)
+            if (
+                qualified.dimension is IntersectionDimension.POINT
+                and shared_vertices
+                and qualified.witnesses
+            ):
+                tolerance = self.tolerance.effective_length(
+                    self._face_pair_extent(first_face.id, second_face.id)
+                )
+                if all(
+                    any(
+                        float(
+                            np.linalg.norm(
+                                np.asarray(point, dtype=float)
+                                - self.model.vertex_position(vertex_id)
+                            )
+                        )
+                        <= tolerance
+                        for vertex_id in shared_vertices
+                    )
+                    for point in qualified.witnesses
+                ):
+                    return _PairClassification(True)
+            if qualified.dimension is IntersectionDimension.REGION:
+                code = (
+                    AuditCode.FACE_COINCIDENT
+                    if qualified.kind is IntersectionKind.COINCIDENT
+                    else AuditCode.FACE_CONTAINMENT
+                    if qualified.kind is IntersectionKind.CONTAINED
+                    else AuditCode.FACE_COPLANAR_OVERLAP
+                )
+                message = "curved faces have a qualified coincident region"
+            else:
+                code = AuditCode.FACE_FACE_CROSSING
+                message = "curved faces intersect without conformal shared topology"
+            if self.separate_part_intent(first_key, second_key):
+                self.issue(
+                    AuditCode.INTENTIONAL_COINCIDENCE,
+                    AuditSeverity.INFO,
+                    "a curved-face relationship is retained across separate parts",
+                    keys=(first_key, second_key),
+                    witnesses=witnesses,
+                    classification=qualified.kind,
+                    details={"intent": "separate_parts"},
+                )
+            else:
+                self.issue(
+                    code,
+                    AuditSeverity.ERROR,
+                    message,
+                    keys=(first_key, second_key),
+                    witnesses=witnesses,
+                    classification=qualified.kind,
+                    measured_gap=(
+                        qualified.certificate.max_residual
+                        if qualified.certificate is not None
+                        else None
+                    ),
+                    tolerance_used=qualified.tolerance_used,
+                )
+            return _PairClassification(True)
         if (
             isinstance(first_face.surface, Cylinder)
             and isinstance(second_face.surface, Cylinder)
@@ -3761,6 +4037,35 @@ class _StrictAuditState:
                         member_id, ()
                     )
                 )
+        structural_keys: set[SpatialKey] = {
+            *(("member", identifier) for identifier in member_ids),
+            *(("sheet", identifier) for identifier in sheet_ids),
+            *(("attachment", identifier) for identifier in attachment_ids),
+            *(("junction", identifier) for identifier in junction_ids),
+        }
+        for member_id in member_ids:
+            member = self.model.members.get(member_id)
+            if member is not None:
+                structural_keys.add(("part", member.part_id))
+                structural_keys.update(
+                    ("member_edge_use", use_id) for use_id in member.edge_use_ids
+                )
+        for sheet_id in sheet_ids:
+            sheet = self.model.sheets.get(sheet_id)
+            if sheet is not None:
+                structural_keys.add(("part", sheet.part_id))
+                structural_keys.update(
+                    ("face_use", use_id) for use_id in sheet.face_use_ids
+                )
+                for use_id in sheet.face_use_ids:
+                    use = self.model.face_uses.get(use_id)
+                    if use is not None:
+                        structural_keys.update(
+                            ("coedge", coedge_id)
+                            for loop in use.loops
+                            for coedge_id in loop
+                        )
+        self.collector.record_affected_structural_keys(len(structural_keys))
         self.audit_junction_geometry(junction_ids)
 
         # A removed structural record has no old parent closure in ChangeSet.
@@ -4016,10 +4321,44 @@ def _changed_check(change_set: ChangeSet):
     return check
 
 
+def _strict_check_with_qualification(
+    qualification: IntersectionQualificationPolicy,
+):
+    def check(
+        model: "GeometryModel",
+        context: AuditContext,
+        collector: AuditCollector,
+    ) -> None:
+        _StrictAuditState(
+            model, context, collector, qualification=qualification
+        ).run()
+
+    check.audit_name = "strict_geometry"  # type: ignore[attr-defined]
+    return check
+
+
+def _changed_check_with_qualification(
+    change_set: ChangeSet,
+    qualification: IntersectionQualificationPolicy,
+):
+    def check(
+        model: "GeometryModel",
+        context: AuditContext,
+        collector: AuditCollector,
+    ) -> None:
+        _StrictAuditState(
+            model, context, collector, qualification=qualification
+        ).run_changed(change_set)
+
+    check.audit_name = "changed_region"  # type: ignore[attr-defined]
+    return check
+
+
 def strict_audit(
     model: "GeometryModel",
     *,
     policy: AuditPolicy | None = None,
+    qualification: IntersectionQualificationPolicy | None = None,
 ) -> AuditReport:
     """Return a full-model strict qualification report.
 
@@ -4029,9 +4368,16 @@ def strict_audit(
     is caught by :func:`run_audit` and becomes a stable fail-closed blocker.
     """
 
+    qualified_policy = (
+        DEFAULT_INTERSECTION_QUALIFICATION_POLICY
+        if qualification is None
+        else qualification
+    )
+    if not isinstance(qualified_policy, IntersectionQualificationPolicy):
+        raise TypeError("qualification must be IntersectionQualificationPolicy")
     return run_audit(
         model,
-        (_strict_check,),
+        (_strict_check_with_qualification(qualified_policy),),
         model_id_getter=lambda source: source.model_id,
         revision_getter=lambda source: source.revision,
         scope=AuditScope.FULL_MODEL,
@@ -4043,6 +4389,8 @@ def audit_changed_region(
     model: "GeometryModel",
     change_set: ChangeSet,
     policy: AuditPolicy | None = None,
+    *,
+    qualification: IntersectionQualificationPolicy | None = None,
 ) -> AuditReport:
     """Qualify only the committed region touched by ``change_set``.
 
@@ -4063,9 +4411,16 @@ def audit_changed_region(
     entities = tuple(
         AuditEntity.from_key(model.model_id, key) for key in sorted(changed)
     )
+    qualified_policy = (
+        DEFAULT_INTERSECTION_QUALIFICATION_POLICY
+        if qualification is None
+        else qualification
+    )
+    if not isinstance(qualified_policy, IntersectionQualificationPolicy):
+        raise TypeError("qualification must be IntersectionQualificationPolicy")
     return run_audit(
         model,
-        (_changed_check(change_set),),
+        (_changed_check_with_qualification(change_set, qualified_policy),),
         model_id_getter=lambda source: source.model_id,
         revision_getter=lambda source: source.revision,
         scope=AuditScope.CHANGED_REGION,

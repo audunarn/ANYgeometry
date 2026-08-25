@@ -546,6 +546,10 @@ class AuditMetrics:
     index_node_visits: int = 0
     index_leaf_tests: int = 0
     index_updates: int = 0
+    boxes_examined: int = 0
+    subdivisions: int = 0
+    trace_segments: int = 0
+    affected_structural_keys: int = 0
 
     def __post_init__(self) -> None:
         for name in (
@@ -556,6 +560,10 @@ class AuditMetrics:
             "index_node_visits",
             "index_leaf_tests",
             "index_updates",
+            "boxes_examined",
+            "subdivisions",
+            "trace_segments",
+            "affected_structural_keys",
         ):
             _non_negative_integer(getattr(self, name), name=name)
         if self.classified_count + self.unclassified_count > self.candidate_count:
@@ -579,6 +587,10 @@ class AuditMetrics:
             "index_node_visits": self.index_node_visits,
             "index_leaf_tests": self.index_leaf_tests,
             "index_updates": self.index_updates,
+            "boxes_examined": self.boxes_examined,
+            "subdivisions": self.subdivisions,
+            "trace_segments": self.trace_segments,
+            "affected_structural_keys": self.affected_structural_keys,
         }
 
 
@@ -729,6 +741,10 @@ class AuditCollector:
         self._unclassified_count = 0
         self._index_node_visits = 0
         self._index_leaf_tests = 0
+        self._boxes_examined = 0
+        self._subdivisions = 0
+        self._trace_segments = 0
+        self._affected_structural_keys = 0
         self._index_updates = _non_negative_integer(
             index_updates, name="index_updates"
         )
@@ -835,6 +851,34 @@ class AuditCollector:
         self._ensure_open()
         self._narrow_phase_tests += _non_negative_integer(count, name="count")
 
+    def record_intersection_work(
+        self,
+        *,
+        boxes_examined: int = 0,
+        subdivisions: int = 0,
+        trace_segments: int = 0,
+    ) -> None:
+        """Accumulate bounded-work evidence from a public intersection certificate."""
+
+        self._ensure_open()
+        self._boxes_examined += _non_negative_integer(
+            boxes_examined, name="boxes_examined"
+        )
+        self._subdivisions += _non_negative_integer(
+            subdivisions, name="subdivisions"
+        )
+        self._trace_segments += _non_negative_integer(
+            trace_segments, name="trace_segments"
+        )
+
+    def record_affected_structural_keys(self, count: int) -> None:
+        """Record the structural dependency closure visited by a local audit."""
+
+        self._ensure_open()
+        self._affected_structural_keys += _non_negative_integer(
+            count, name="affected_structural_keys"
+        )
+
     def record_classification(
         self,
         *,
@@ -901,6 +945,10 @@ class AuditCollector:
             index_node_visits=self._index_node_visits,
             index_leaf_tests=self._index_leaf_tests,
             index_updates=self._index_updates,
+            boxes_examined=self._boxes_examined,
+            subdivisions=self._subdivisions,
+            trace_segments=self._trace_segments,
+            affected_structural_keys=self._affected_structural_keys,
         )
         self._finished = True
         return AuditReport(

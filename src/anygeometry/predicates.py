@@ -21,12 +21,18 @@ from .identity import EntityHandle
 from .tolerance import DEFAULT_TOLERANCE_POLICY, TolerancePolicy, feature_extent
 
 __all__ = [
+    "DEFAULT_INTERSECTION_QUALIFICATION_POLICY",
+    "IntersectionCertificate",
+    "CertifiedCurveTrace",
     "IntersectionComponent",
     "IntersectionDimension",
     "IntersectionKind",
+    "IntersectionQualificationPolicy",
     "IntersectionQuality",
     "IntersectionResult",
+    "ParameterLoop",
     "ParameterRange",
+    "ParameterRegion",
     "qualified_line_line",
     "qualified_line_cylinder",
     "qualified_line_plane",
@@ -37,6 +43,15 @@ __all__ = [
 
 Point3 = tuple[float, float, float]
 ParameterValue = tuple[float, ...]
+
+
+def _positive_integer(value: object, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
+        raise GeometryError(f"{name} must be a positive integer")
+    made = int(value)
+    if made <= 0:
+        raise GeometryError(f"{name} must be a positive integer")
+    return made
 
 
 class IntersectionKind(str, Enum):
@@ -70,6 +85,167 @@ class IntersectionQuality(str, Enum):
     EXACT = "exact"
     VERIFIED_APPROXIMATE = "verified_approximate"
     UNVERIFIED = "unverified"
+
+
+@dataclass(frozen=True, slots=True)
+class IntersectionQualificationPolicy:
+    """Deterministic resource limits for certified narrow-phase work.
+
+    Numerical tolerances remain model-owned in :class:`TolerancePolicy`.
+    This policy controls only bounded work and is deliberately not serialized
+    as part of geometry schema 4.
+    """
+
+    max_boxes_per_pair: int = 200_000
+    max_subdivision_depth: int = 32
+    max_components: int = 4_096
+    max_trace_segments: int = 65_536
+    max_newton_iterations: int = 16
+
+    def __post_init__(self) -> None:
+        for name in (
+            "max_boxes_per_pair",
+            "max_subdivision_depth",
+            "max_components",
+            "max_trace_segments",
+            "max_newton_iterations",
+        ):
+            object.__setattr__(self, name, _positive_integer(getattr(self, name), name))
+
+
+DEFAULT_INTERSECTION_QUALIFICATION_POLICY = IntersectionQualificationPolicy()
+
+
+@dataclass(frozen=True, slots=True)
+class IntersectionCertificate:
+    """Finite evidence supporting one complete intersection classification."""
+
+    algorithm: str
+    tolerance: float
+    max_residual: float = 0.0
+    max_enclosure_width: float = 0.0
+    separation_bound: float | None = None
+    boxes_examined: int = 0
+    subdivisions: int = 0
+    trace_segments: int = 0
+    complete: bool = True
+
+    def __post_init__(self) -> None:
+        algorithm = str(self.algorithm).strip()
+        if not algorithm:
+            raise GeometryError("intersection certificate algorithm cannot be empty")
+        for name in ("tolerance", "max_residual", "max_enclosure_width"):
+            try:
+                value = float(getattr(self, name))
+            except (TypeError, ValueError, OverflowError) as error:
+                raise GeometryError(f"intersection certificate {name} must be finite") from error
+            if not np.isfinite(value) or value < 0.0:
+                raise GeometryError(
+                    f"intersection certificate {name} must be non-negative and finite"
+                )
+            object.__setattr__(self, name, value)
+        separation = self.separation_bound
+        if separation is not None:
+            try:
+                separation = float(separation)
+            except (TypeError, ValueError, OverflowError) as error:
+                raise GeometryError("intersection separation bound must be finite") from error
+            if not np.isfinite(separation) or separation < 0.0:
+                raise GeometryError(
+                    "intersection separation bound must be non-negative and finite"
+                )
+        for name in ("boxes_examined", "subdivisions", "trace_segments"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
+                raise GeometryError(f"intersection certificate {name} must be an integer")
+            if int(value) < 0:
+                raise GeometryError(f"intersection certificate {name} cannot be negative")
+            object.__setattr__(self, name, int(value))
+        object.__setattr__(self, "algorithm", algorithm)
+        object.__setattr__(self, "separation_bound", separation)
+        object.__setattr__(self, "complete", bool(self.complete))
+        if self.complete and self.max_residual > self.tolerance:
+            raise GeometryError(
+                "a complete intersection certificate cannot exceed its tolerance"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class ParameterLoop:
+    """Canonical implicitly closed loop in one parent's parameter space."""
+
+    points: tuple[ParameterValue, ...]
+
+    def __post_init__(self) -> None:
+        points = tuple(_parameter(item, "parameter loop point") for item in self.points)
+        if len(points) < 3:
+            raise GeometryError("a parameter loop needs at least three points")
+        assert all(item is not None for item in points)
+        dimensions = {len(item) for item in points if item is not None}
+        if len(dimensions) != 1:
+            raise GeometryError("parameter loop points must have one dimension")
+        made = tuple(item for item in points if item is not None)
+        if made[0] == made[-1]:
+            made = made[:-1]
+        if len(made) < 3:
+            raise GeometryError("a parameter loop needs three distinct vertices")
+        object.__setattr__(self, "points", made)
+
+
+@dataclass(frozen=True, slots=True)
+class ParameterRegion:
+    """One connected parameter-space material region with optional holes."""
+
+    outer: ParameterLoop
+    holes: tuple[ParameterLoop, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.outer, ParameterLoop):
+            raise GeometryError("parameter region outer must be a ParameterLoop")
+        holes = tuple(self.holes)
+        if any(not isinstance(item, ParameterLoop) for item in holes):
+            raise GeometryError("parameter region holes must be ParameterLoop values")
+        object.__setattr__(self, "holes", holes)
+
+
+@dataclass(frozen=True, slots=True)
+class CertifiedCurveTrace:
+    """One deterministic, residual-qualified connected curve trace.
+
+    ``points`` are ordered world-space witnesses.  The two parameter paths
+    have the same length and are expressed in the corresponding parents'
+    native parameter spaces.  They are evidence for a certified trace, not a
+    request to create an interpolating polyline.
+    """
+
+    points: tuple[Point3, ...]
+    first_parameter_path: tuple[ParameterValue, ...]
+    second_parameter_path: tuple[ParameterValue, ...]
+    certificate: IntersectionCertificate
+    closed: bool = False
+
+    def __post_init__(self) -> None:
+        points = tuple(_point_tuple(item, "curve trace point") for item in self.points)
+        first = tuple(
+            _parameter(item, "curve trace first parameter")  # type: ignore[arg-type]
+            for item in self.first_parameter_path
+        )
+        second = tuple(
+            _parameter(item, "curve trace second parameter")  # type: ignore[arg-type]
+            for item in self.second_parameter_path
+        )
+        if len(points) < 2 or len(first) != len(points) or len(second) != len(points):
+            raise GeometryError(
+                "a certified curve trace needs matching world and parameter paths"
+            )
+        if not isinstance(self.certificate, IntersectionCertificate):
+            raise GeometryError("curve trace certificate must be IntersectionCertificate")
+        if not self.certificate.complete:
+            raise GeometryError("a certified curve trace needs complete evidence")
+        object.__setattr__(self, "points", points)
+        object.__setattr__(self, "first_parameter_path", first)
+        object.__setattr__(self, "second_parameter_path", second)
+        object.__setattr__(self, "closed", bool(self.closed))
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,8 +316,13 @@ class IntersectionComponent:
     second_parameter_range: ParameterRange | None = None
     first_parameter_path: tuple[ParameterValue, ...] = ()
     second_parameter_path: tuple[ParameterValue, ...] = ()
+    boundary_paths: tuple[tuple[Point3, ...], ...] = ()
+    curve_traces: tuple[CertifiedCurveTrace, ...] = ()
+    first_region: ParameterRegion | None = None
+    second_region: ParameterRegion | None = None
     direction: Point3 | None = None
     max_residual: float = 0.0
+    certificate: IntersectionCertificate | None = None
     first_subparent: EntityHandle | None = None
     second_subparent: EntityHandle | None = None
 
@@ -191,8 +372,36 @@ class IntersectionComponent:
                 for value in self.second_parameter_path
             ),
         )
+        boundary_paths = tuple(
+            tuple(_point_tuple(point, "intersection boundary point") for point in path)
+            for path in self.boundary_paths
+        )
+        if any(len(path) < 2 for path in boundary_paths):
+            raise GeometryError("intersection boundary paths need at least two points")
+        curve_traces = tuple(self.curve_traces)
+        if any(not isinstance(item, CertifiedCurveTrace) for item in curve_traces):
+            raise GeometryError("component curve traces must be CertifiedCurveTrace values")
+        for name in ("first_region", "second_region"):
+            region = getattr(self, name)
+            if region is not None and not isinstance(region, ParameterRegion):
+                raise GeometryError(f"{name} must be a ParameterRegion")
+        certificate = self.certificate
+        if certificate is not None and not isinstance(certificate, IntersectionCertificate):
+            raise GeometryError("component certificate must be IntersectionCertificate")
+        if certificate is None and quality is not IntersectionQuality.UNVERIFIED:
+            certificate = IntersectionCertificate(
+                "analytical_exact" if quality is IntersectionQuality.EXACT else "qualified_residual",
+                max(residual, 0.0),
+                max_residual=residual,
+                complete=True,
+            )
+        if certificate is not None and certificate.max_residual + np.finfo(float).eps < residual:
+            raise GeometryError("component residual exceeds its certificate")
+        object.__setattr__(self, "boundary_paths", boundary_paths)
+        object.__setattr__(self, "curve_traces", curve_traces)
         object.__setattr__(self, "direction", direction)
         object.__setattr__(self, "max_residual", residual)
+        object.__setattr__(self, "certificate", certificate)
         for name in ("first_subparent", "second_subparent"):
             parent = getattr(self, name)
             if parent is not None and not isinstance(parent, EntityHandle):
@@ -210,6 +419,7 @@ class IntersectionResult:
     first_parent: EntityHandle | None = None
     second_parent: EntityHandle | None = None
     tolerance_used: float | None = None
+    certificate: IntersectionCertificate | None = None
 
     def __post_init__(self) -> None:
         try:
@@ -259,11 +469,53 @@ class IntersectionResult:
                 raise GeometryError("intersection tolerance must be finite") from error
             if not np.isfinite(tolerance) or tolerance < 0.0:
                 raise GeometryError("intersection tolerance must be non-negative and finite")
+        certificate = self.certificate
+        if certificate is not None and not isinstance(certificate, IntersectionCertificate):
+            raise GeometryError("result certificate must be IntersectionCertificate")
+        if certificate is None and kind not in (
+            IntersectionKind.UNCLASSIFIED,
+            IntersectionKind.UNSUPPORTED,
+            IntersectionKind.CAPABILITY_MISSING,
+        ):
+            summary_residual = max(
+                (item.max_residual for item in components), default=0.0
+            )
+            summary_tolerance = max(
+                0.0 if tolerance is None else tolerance,
+                summary_residual,
+                *(item.certificate.tolerance for item in components if item.certificate is not None),
+            )
+            certificate = IntersectionCertificate(
+                "component_summary" if components else "analytical_separation",
+                summary_tolerance,
+                max_residual=summary_residual,
+                separation_bound=(0.0 if kind is IntersectionKind.DISJOINT else None),
+                boxes_examined=sum(
+                    item.certificate.boxes_examined
+                    for item in components
+                    if item.certificate is not None
+                ),
+                subdivisions=sum(
+                    item.certificate.subdivisions
+                    for item in components
+                    if item.certificate is not None
+                ),
+                trace_segments=sum(
+                    item.certificate.trace_segments
+                    for item in components
+                    if item.certificate is not None
+                ),
+                complete=all(
+                    item.certificate is not None and item.certificate.complete
+                    for item in components
+                ) if components else True,
+            )
         object.__setattr__(self, "kind", kind)
         object.__setattr__(self, "components", components)
         object.__setattr__(self, "diagnostics", diagnostics)
         object.__setattr__(self, "dimension", dimension)
         object.__setattr__(self, "tolerance_used", tolerance)
+        object.__setattr__(self, "certificate", certificate)
 
     @property
     def classified(self) -> bool:
@@ -271,7 +523,7 @@ class IntersectionResult:
             IntersectionKind.UNCLASSIFIED,
             IntersectionKind.UNSUPPORTED,
             IntersectionKind.CAPABILITY_MISSING,
-        )
+        ) and self.certificate is not None and self.certificate.complete
 
     @property
     def quality(self) -> IntersectionQuality:

@@ -2,6 +2,27 @@
 
 All notable user-visible changes to ANYgeometry are documented here.
 
+## 0.4.0 - 2026-08-24
+
+- Add a shared NumPy-only qualified intersection engine for every unordered
+  Straight/Arc/Spline pair and every curve/face and face/face combination of
+  Plane, Cylinder, Cone, RuledSurface, and CoonsSurface. Public results carry
+  bounded-work certificates, oriented parameter ranges, parameter-space
+  paths/regions, residuals, enclosure widths, and typed certified traces.
+- Route curved strict and changed-region audit candidates through the same
+  public engine. Incomplete work, singularity, nonfinite arithmetic, and
+  resource exhaustion remain blocking and fail closed; audit metrics expose
+  boxes, subdivisions, trace segments, spatial work, and affected structural
+  closure size.
+- Add atomic multi-component curved imprinting and qualified full/contained
+  coincident-region CONNECT while preserving Sheet/FaceUse/Coedge ownership,
+  support and parameterization, semantic lineage, and structural relations.
+  Reapplication is idempotent and rollback restores live state and derived
+  caches without reusing provisional IDs.
+- Add translation/scale, trim/hole/nonconvex, ownership-remap, locality,
+  rollback, and complete built-in family matrices. Geometry document schema 4
+  and automation protocol version 1 remain unchanged.
+
 ## 0.3.0 - 2026-08-24
 
 - Add dependency-free automation protocol version 1 under

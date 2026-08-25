@@ -7,11 +7,17 @@ Geometry queries and topology mutation are deliberately separate.
 `IntersectionResult` identifies both parents, classification, dimension,
 deterministically ordered components, parameters/ranges on both parents,
 witnesses, qualification quality, maximum residual, and the tolerance used.
+Curved results additionally expose an `IntersectionCertificate` and typed
+`CertifiedCurveTrace`, `ParameterLoop`, and `ParameterRegion` records. The
+certificate reports residual and enclosure bounds plus boxes examined,
+subdivisions, and trace segments.
 
 Classifications include disjoint, touch, tangent, cross, overlap, contained,
 coincident, unsupported, capability missing, and unclassified. Dimensions are
 none, point, curve, and region. Unsupported or capability-missing is a typed
 result, not an empty result or an approximate guess.
+For a built-in curved pair, exhausted work or unresolved degeneracy is
+`UNCLASSIFIED`, never a classified sampled approximation.
 
 ## Three-stage workflow
 
@@ -26,6 +32,12 @@ result, not an empty result or an approximate guess.
 A stale, unverified, unsupported, or capability-missing plan cannot mutate.
 Repeating a qualified plan reuses compatible topology and does not duplicate
 vertices, edges, relationships, or lineage.
+
+`query_intersection`, `plan_imprint`, `strict_audit`, and
+`audit_changed_region` accept an optional `IntersectionQualificationPolicy`.
+Defaults cap work at 200,000 parameter boxes, subdivision depth 32, 4,096
+components, 65,536 trace segments, and 16 Newton iterations. Geometry
+tolerances remain model-owned and use only participating local geometry.
 
 `DISJOINT`, a same-parent query, or a face/face point contact plans
 `NO_TOPOLOGY`; none can fail late inside a mutation transaction. Point-only
@@ -62,10 +74,19 @@ is blocked.
 
 Analytical predicates cover straight segment/segment, line/line, line/plane,
 plane/plane, line/cylinder, qualified plane/cylinder, same-circle arc overlap,
-straight edge/planar face, and planar face overlay. Numerical results are
-usable for mutation only after residual qualification against both parents.
-Other curved overlaps return `UNSUPPORTED` or `UNCLASSIFIED`; strict audit
-records a blocking issue and no topology fallback is attempted.
+straight edge/planar face, and planar face overlay. The shared bounded engine
+covers all six unordered Straight/Arc/Spline families, all fifteen curve and
+Plane/Cylinder/Cone/Ruled/Coons families, and all fifteen unordered built-in
+face-support families in either operand order. Same-support trims return every
+connected coincident material cell with parameter loops and holes.
+
+Curved components are persisted only from complete certificates; adaptive
+traces become fitted Bezier chains rather than uncertified polylines.
+Multi-component imprints commit in one transaction. Full coincidence and
+certified contained partial regions can share one Face between distinct Sheet
+owners. Unresolved singular or degenerate configurations are `UNCLASSIFIED`;
+optional capability absence remains `CAPABILITY_MISSING`. Both block mutation
+and strict handoff.
 
 ## Indexed overlap queries
 

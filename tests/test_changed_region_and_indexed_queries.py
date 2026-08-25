@@ -5,7 +5,13 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from anygeometry import EntityRef, GeometryError, GeometryModel, Plane
+from anygeometry import (
+    EntityRef,
+    GeometryError,
+    GeometryModel,
+    IntersectionQualificationPolicy,
+    Plane,
+)
 from anygeometry.audit import AuditCode, AuditEvidenceQuality, AuditScope
 from anygeometry.operations import closest_point, transform
 from anygeometry.overlaps import find_coplanar_overlaps
@@ -318,7 +324,7 @@ def test_overlap_explicit_tolerance_straddles_fixed_gap() -> None:
     assert find_coplanar_overlaps(geometry, tolerance=1.0e-7) == ()
 
 
-def test_changed_region_uses_conservative_coons_interior_bounds() -> None:
+def test_changed_region_qualifies_conservative_coons_interior_candidate() -> None:
     geometry = GeometryModel()
     boundary = geometry.add_points(
         (
@@ -345,13 +351,78 @@ def test_changed_region_uses_conservative_coons_interior_bounds() -> None:
 
     assert not report.clean and not report.certifiable
     assert any(
-        issue.code is AuditCode.UNCLASSIFIED_CANDIDATE
+        issue.code is AuditCode.NONCONFORMAL_INTERFACE
         and any(
             entity.kind == "edge" and entity.id == crossing_edge
             for entity in issue.entities
         )
         for issue in report.issues
     )
+
+
+def test_curved_changed_region_work_is_independent_of_remote_geometry() -> None:
+    def qualify(remote_count: int):
+        geometry = GeometryModel()
+        _plate(geometry, 0.0, 0.0, 2.0, 2.0)
+        start, control, end = geometry.add_points(
+            ((1.0, 1.0, -1.0), (1.0, 1.0, 0.0), (1.0, 1.0, 1.0))
+        )
+        geometry.add_spline(start, (control,), end)
+        if remote_count:
+            geometry.add_points(
+                (1000.0 + 10.0 * index, 1000.0, 1000.0)
+                for index in range(remote_count)
+            )
+        geometry.spatial_candidates((-2.0, -2.0, -2.0), (3.0, 3.0, 3.0))
+        geometry.move_point(control, 1.0, 1.0, 0.05)
+        return audit_changed_region(geometry, geometry.last_change_set).metrics
+
+    small = qualify(0)
+    large = qualify(128)
+    assert (
+        small.candidate_count,
+        small.narrow_phase_tests,
+        small.boxes_examined,
+        small.subdivisions,
+        small.trace_segments,
+        small.affected_structural_keys,
+    ) == (
+        large.candidate_count,
+        large.narrow_phase_tests,
+        large.boxes_examined,
+        large.subdivisions,
+        large.trace_segments,
+        large.affected_structural_keys,
+    )
+    assert large.index_node_visits >= small.index_node_visits
+
+
+def test_strict_audit_exposes_exhausted_curved_work_and_fails_closed() -> None:
+    geometry = GeometryModel()
+    vertices = geometry.add_points(
+        (
+            (-1.0, 0.0, 0.0),
+            (0.0, 1.0, 0.0),
+            (1.0, 0.0, 0.0),
+            (-1.0, 0.5, 0.0),
+            (0.0, -0.5, 0.0),
+            (1.0, 0.5, 0.0),
+        )
+    )
+    geometry.add_spline(vertices[0], (vertices[1],), vertices[2])
+    geometry.add_spline(vertices[3], (vertices[4],), vertices[5])
+
+    report = strict_audit(
+        geometry,
+        qualification=IntersectionQualificationPolicy(max_boxes_per_pair=1),
+    )
+
+    assert not report.clean and not report.certifiable
+    assert report.metrics.unclassified_count > 0
+    assert report.metrics.boxes_examined > 0
+    assert AuditCode.UNCLASSIFIED_CANDIDATE in {
+        issue.code for issue in report.issues
+    }
 
 
 def test_nearest_tree_prunes_unrelated_exact_evaluations_deterministically() -> None:

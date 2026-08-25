@@ -167,6 +167,10 @@ def test_rollback_discards_values_cached_from_provisional_geometry() -> None:
     first, second = geometry.add_points(((0, 0, 0), (1, 0, 0)))
     edge = geometry.add_line(first, second)
     assert geometry.edge_length(edge) == pytest.approx(1.0)
+    geometry.spatial_candidates((-1.0, -1.0, -1.0), (2.0, 2.0, 2.0))
+    cached_lengths = dict(geometry._edge_length_cache)
+    cached_arcs = dict(geometry._arc_cache)
+    spatial = geometry._spatial_index
 
     with pytest.raises(RuntimeError, match="rollback"):
         with geometry.transaction():
@@ -179,6 +183,9 @@ def test_rollback_discards_values_cached_from_provisional_geometry() -> None:
             raise RuntimeError("rollback")
 
     assert geometry.edge_length(edge) == pytest.approx(1.0)
+    assert geometry._edge_length_cache == cached_lengths
+    assert geometry._arc_cache == cached_arcs
+    assert geometry._spatial_index is spatial
     assert geometry.spatial_candidates(
         (8.5, 8.5, 8.5), (9.5, 9.5, 9.5)
     ) == ()

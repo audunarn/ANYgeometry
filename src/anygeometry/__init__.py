@@ -70,12 +70,18 @@ from .transactions import AABBChange, ChangeSet, TopologyTransaction
 from .tolerance import DEFAULT_TOLERANCE_POLICY, TolerancePolicy, feature_extent
 from .transforms import AffineTransform
 from .predicates import (
+    CertifiedCurveTrace,
+    DEFAULT_INTERSECTION_QUALIFICATION_POLICY,
+    IntersectionCertificate,
     IntersectionComponent,
     IntersectionDimension,
     IntersectionKind,
+    IntersectionQualificationPolicy,
     IntersectionQuality,
     IntersectionResult,
+    ParameterLoop,
     ParameterRange as IntersectionParameterRange,
+    ParameterRegion,
     qualified_line_line,
     qualified_line_cylinder,
     qualified_line_plane,
@@ -192,6 +198,7 @@ __all__ = [
     "BoundaryPolicy",
     "BroadPhaseDiagnostics",
     "ChangeSet",
+    "CertifiedCurveTrace",
     "Coedge",
     "ConnectivityPolicy",
     "ConnectionIntent",
@@ -200,6 +207,7 @@ __all__ = [
     "CurveShape",
     "Cylinder",
     "DegenerateArcError",
+    "DEFAULT_INTERSECTION_QUALIFICATION_POLICY",
     "Edge",
     "EntityKind",
     "EntityHandle",
@@ -229,11 +237,14 @@ __all__ = [
     "ImprintOperation",
     "ImprintPlan",
     "IntersectionComponent",
+    "IntersectionCertificate",
     "IntersectionDimension",
     "IntersectionKind",
+    "IntersectionQualificationPolicy",
     "IntersectionParameterRange",
     "IntersectionQuality",
     "IntersectionResult",
+    "ParameterLoop",
     "InsertResult",
     "Measurement",
     "Member",
@@ -248,6 +259,7 @@ __all__ = [
     "Plane",
     "PatternResult",
     "ParameterRange",
+    "ParameterRegion",
     "Part",
     "RegenerationReport",
     "Resolution",
@@ -337,4 +349,4 @@ __all__ = [
     "JunctionMemberUse",
 ]
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"

@@ -93,7 +93,7 @@ def test_complete_spline_boundary_connect_reuses_edge_and_sheet_topology() -> No
     assert geometry.revision == repeated_revision
 
 
-def test_boundary_curve_connect_rejects_nonconvex_or_trim_touching_support() -> None:
+def test_boundary_curve_connect_fails_closed_for_unresolved_nonconvex_or_trim_touching_support() -> None:
     cases = (
         ((0, 0, 0), (3, 0, 0), (1.5, 0.75, 0), (3, 2, 0), (0, 2, 0)),
         ((0.5, 0.5, 0), (2.5, 0.5, 0), (2.5, 1.5, 0), (0.5, 1.5, 0)),
@@ -112,7 +112,7 @@ def test_boundary_curve_connect_rejects_nonconvex_or_trim_touching_support() -> 
         )
         plan = plan_imprint(geometry, result, policy="connect")
 
-        assert result.kind is IntersectionKind.UNSUPPORTED
+        assert result.kind is IntersectionKind.UNCLASSIFIED
         assert not result.classified
         assert plan.operation is ImprintOperation.NO_TOPOLOGY
         assert geometry.revision == revision

@@ -671,6 +671,7 @@ class GeometryModel:
             journal = _TransactionJournal(
                 revision_before=self.revision,
                 replacement_log_start=len(self._replacements),
+                spatial_index_before=self._spatial_index,
             )
             self._transaction_journal = journal
         journal.depth += 1
@@ -977,30 +978,44 @@ class GeometryModel:
             key for key in made if allowed is None or key[0] in allowed
         )
 
-    def strict_audit(self, *, policy=None):
+    def strict_audit(self, *, policy=None, qualification=None):
         """Run deterministic, fail-closed full-model qualification."""
 
         from .strict_audit import strict_audit
 
-        return strict_audit(self, policy=policy)
+        return strict_audit(
+            self, policy=policy, qualification=qualification
+        )
 
     def audit(self, *, policy=None):
         """Run a complete-model audit (compatibility name for strict audit)."""
 
         return self.strict_audit(policy=policy)
 
-    def audit_changed_region(self, change_set: ChangeSet, *, policy=None):
+    def audit_changed_region(
+        self, change_set: ChangeSet, *, policy=None, qualification=None
+    ):
         """Audit one committed changed region without claiming certification."""
 
         from .strict_audit import audit_changed_region
 
-        return audit_changed_region(self, change_set, policy=policy)
+        return audit_changed_region(
+            self,
+            change_set,
+            policy=policy,
+            qualification=qualification,
+        )
 
     def _capture_entity(self, kind: str, identifier: int) -> None:
         journal = self._transaction_journal
         if journal is None or journal.rolling_back:
             return
         key = (kind, int(identifier))
+        if kind == "edge":
+            self._capture_edge_caches(int(identifier))
+        elif kind == "vertex":
+            for edge_id in self._vertex_edges.get(int(identifier), ()):
+                self._capture_edge_caches(edge_id)
         store = self._entity_store(kind)
         current = store.get(int(identifier), _MISSING)
         if key not in journal.entity_before:
@@ -1011,6 +1026,20 @@ class GeometryModel:
         else:
             journal.changed.add(key)
         journal.invalidated_caches.add(key)
+
+    def _capture_edge_caches(self, edge_id: int) -> None:
+        """Journal one derived-cache entry before a transaction changes it."""
+
+        journal = self._transaction_journal
+        if journal is None or journal.rolling_back:
+            return
+        edge_id = int(edge_id)
+        journal.arc_cache_before.setdefault(
+            edge_id, self._arc_cache.get(edge_id, _MISSING)
+        )
+        journal.edge_length_cache_before.setdefault(
+            edge_id, self._edge_length_cache.get(edge_id, _MISSING)
+        )
 
     def _detach_entity(self, kind: str, value: object) -> None:
         if kind == "edge":
@@ -1211,12 +1240,25 @@ class GeometryModel:
                 store[identifier] = original
         self._rebuild_member_incidence()
         del self._replacements[journal.replacement_log_start :]
-        # Values may have been queried while provisional geometry was live.
-        # Rollback is exceptional, so discard the small derived caches and the
-        # lazily rebuilt tree instead of attempting a fragile inverse update.
-        self._arc_cache.clear()
-        self._edge_length_cache.clear()
-        self._spatial_index = None
+        # Restore every cache entry that was invalidated or populated while
+        # provisional geometry was live.  The maintained tree is not edited
+        # before commit; restoring its original pointer also discards a tree
+        # that may have been lazily materialized from provisional state.
+        for edge_id, original in journal.arc_cache_before.items():
+            if original is _MISSING:
+                self._arc_cache.pop(edge_id, None)
+            else:
+                self._arc_cache[edge_id] = original  # type: ignore[assignment]
+        for edge_id, original in journal.edge_length_cache_before.items():
+            if original is _MISSING:
+                self._edge_length_cache.pop(edge_id, None)
+            else:
+                self._edge_length_cache[edge_id] = original  # type: ignore[assignment]
+        self._spatial_index = (
+            None
+            if journal.spatial_index_before is _MISSING
+            else journal.spatial_index_before
+        )
         # High-water marks deliberately remain at their highest allocation.
         self._revision = journal.revision_before
         journal.rolling_back = False
@@ -3219,7 +3261,11 @@ class GeometryModel:
                 self._face_structural_uses.get(old_face_id, ())
             )
         )
-        if len(owners) > 1:
+        shared_region_owners = bool(owners) and all(
+            owner.metadata.get("anygeometry.shared_region") is True
+            for owner in owners
+        ) and len({owner.sheet_id for owner in owners}) == len(owners)
+        if len(owners) > 1 and not shared_region_owners:
             raise GeometryError(
                 f"face {old_face_id} has multiple structural owners"
             )
@@ -5763,6 +5809,7 @@ class GeometryModel:
             start = self.vertices[edge.start].position
             end = self.vertices[edge.end].position
             result = float(np.linalg.norm(end - start))
+        self._capture_edge_caches(edge_id)
         self._edge_length_cache[edge_id] = (version, result)
         return result
 
@@ -6041,6 +6088,7 @@ class GeometryModel:
             self.vertices[edge.curve.via_vertex].position,
             self.vertices[edge.end].position,
         )
+        self._capture_edge_caches(edge.id)
         self._arc_cache[edge.id] = (stamp, frame)
         return frame
 

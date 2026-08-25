@@ -128,8 +128,11 @@ selection explicitly.
 General operations include projection, closest-point queries, transforms,
 edge/face splitting, trimming, holes, fragmentation, and shell/shell
 intersection imprinting. Analytical line/plane/cylinder intersections cover
-common structural cases; a deterministic sampled fallback is available for
-other supported parametric surface pairs. Planar crossings and axial
+common structural cases; a bounded NumPy-only engine qualifies every built-in
+Straight/Arc/Spline and Plane/Cylinder/Cone/Ruled/Coons operand family. It
+returns complete point, curve, or trim-aware region components with local
+parameter evidence and fails closed when a work budget or degeneracy remains
+unresolved. Planar crossings and axial
 plane/cylinder cuts become real shared edges immediately. A transverse closed
 ring through a complete conformal cylinder band is imprinted atomically as
 exact shared arcs: the plane becomes an inner disk plus an outer annular face,
@@ -154,6 +157,12 @@ unrelated edges.
 
 Qualified predicates return typed `IntersectionResult` values that distinguish
 crossing, touching, overlap, coincidence, disjoint, and unclassified cases.
+Curved components carry `IntersectionCertificate` evidence and typed parameter
+loops/traces; only complete certificates may feed atomic imprinting. An
+optional `IntersectionQualificationPolicy` controls bounded work without
+changing model-owned tolerances. Multi-component curve imprints and qualified
+full or contained coincident-region CONNECT preserve structural ownership and
+are idempotent on immediate reapplication.
 The model-owned `TolerancePolicy` separates computational, merge, angular,
 parameter, area, and surface-residual tolerances using local feature extent,
 so translating a complete model does not change a local classification.
@@ -162,7 +171,10 @@ so translating a complete model does not change a local classification.
 qualification with a spatial broad phase. It checks duplicate/crossing/
 overlapping edges, T-junctions, sheet manifoldness, structural member intent,
 member-face relationships, face overlap, lineage, and unsupported candidates.
-Any unclassified candidate blocks certification.
+Curved candidates use the same public predicate engine in full and
+changed-region audit. Any incomplete certificate or unclassified candidate
+blocks certification; reports expose subdivision/trace and affected-closure
+work counters.
 
 Large beam lattices should use `GeometryModel.add_members(...)`, which builds
 all member chains under one part update and one structural validation. Public
@@ -260,8 +272,8 @@ Consumers that require a qualified handoff must retain or rerun
 JSON and gzip-compressed JSON are supported. Mesh and FEM/project
 serialization remain outside ANYgeometry.
 
-ANYgeometry 0.3.0 reads schemas 1–4 and writes schema 4. Automation consumers
-use `ANYgeometry>=0.3,<0.4`; geometry-only consumers may continue using schema
+ANYgeometry 0.4.0 reads schemas 1–4 and writes schema 4. Automation consumers
+use `ANYgeometry>=0.4,<0.5`; geometry-only consumers may continue using schema
 4 through the public codecs. A 0.2.0 reader intentionally rejects a
 schema-4 document. Downstream packages should use the public codecs rather
 than parse schema records. Legacy relationship evidence migrates as

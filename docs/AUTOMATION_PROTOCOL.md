@@ -72,7 +72,8 @@ ownership closure around the resulting Face and returns every created handle.
 
 ## Reference MCP adapter
 
-The separate `ANYgeometry-mcp` package depends on `ANYgeometry>=0.3,<0.4` and
+The separate `ANYgeometry-mcp` package for this release depends on
+`ANYgeometry>=0.4,<0.5` and
 the official MCP Python SDK. It exposes exactly seven tools: discovery, model
 summary, selection, entity description, query, planning, and application. One
 geometry file is bound at startup; tool input cannot select another path.

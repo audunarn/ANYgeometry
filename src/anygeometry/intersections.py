@@ -10,6 +10,11 @@ from uuid import UUID
 import numpy as np
 
 from .curves import Arc, Spline, Straight, arc_frame
+from .curved_intersections import (
+    qualified_curve_curve,
+    qualified_curve_face,
+    qualified_face_face,
+)
 from .entities import EntityRef, OrientedEdge
 from .errors import GeometryError
 from .identity import (
@@ -21,9 +26,12 @@ from .identity import (
 from .model import GeometryModel
 from .policies import MutationPolicy
 from .predicates import (
+    DEFAULT_INTERSECTION_QUALIFICATION_POLICY,
+    CertifiedCurveTrace,
     IntersectionComponent,
     IntersectionDimension,
     IntersectionKind,
+    IntersectionQualificationPolicy,
     IntersectionQuality,
     IntersectionResult,
     ParameterRange as IntersectionParameterRange,
@@ -32,7 +40,8 @@ from .predicates import (
     qualified_segment_segment,
 )
 from .transactions import ChangeSet
-from .surfaces import CoonsSurface, Cylinder, Plane, SurfaceProtocol
+from .surfaces import CoonsSurface, Cylinder, Plane, RuledSurface, SurfaceProtocol
+from .structural import ParameterRange as StructuralParameterRange
 
 __all__ = [
     "ExpectedImprintChange", "FaceIntersection", "ImprintApplication",
@@ -367,14 +376,34 @@ def plane_cylinder(
         return (points,) if len(points) else ()
     signed = (bases-plane.origin) @ plane.normal
     crossings = []
+    def signed_at(angle: float) -> float:
+        radial_direction = (
+            np.cos(angle) * cylinder.radial_direction
+            + np.sin(angle) * cylinder.circumferential_direction
+        )
+        return float(
+            (cylinder.origin + cylinder.radius * radial_direction - plane.origin)
+            @ plane.normal
+        )
+
     for index in range(len(signed)-1):
-        if signed[index] == 0.0:
+        if abs(float(signed[index])) <= tolerance:
             angle = angles[index]
         elif signed[index]*signed[index+1] > 0.0:
             continue
         else:
-            ratio = signed[index]/(signed[index]-signed[index+1])
-            angle = angles[index] + ratio*(angles[index+1]-angles[index])
+            lower, upper = float(angles[index]), float(angles[index + 1])
+            lower_value = float(signed[index])
+            for _ in range(64):
+                angle = 0.5 * (lower + upper)
+                value = signed_at(angle)
+                if abs(value) <= tolerance:
+                    break
+                if lower_value * value <= 0.0:
+                    upper = angle
+                else:
+                    lower = angle
+                    lower_value = value
         base = cylinder.origin + cylinder.radius*(np.cos(angle)*cylinder.radial_direction + np.sin(angle)*cylinder.circumferential_direction)
         crossings.append(np.vstack((base, base+cylinder.height*cylinder.axis)))
     return tuple(crossings)
@@ -518,6 +547,9 @@ class ImprintPlan:
     operation: ImprintOperation | str
     expected_changes: tuple[ExpectedImprintChange, ...] = ()
     affected: tuple[EntityHandle, ...] = ()
+    qualification: IntersectionQualificationPolicy = (
+        DEFAULT_INTERSECTION_QUALIFICATION_POLICY
+    )
 
     def __post_init__(self) -> None:
         if not isinstance(self.model_id, UUID) or self.model_id.int == 0:
@@ -538,6 +570,10 @@ class ImprintPlan:
         affected = tuple(sorted(set(self.affected)))
         if any(item.model_id != self.model_id for item in affected):
             raise GeometryError("affected handles must belong to the imprint model")
+        if not isinstance(self.qualification, IntersectionQualificationPolicy):
+            raise GeometryError(
+                "imprint qualification must be IntersectionQualificationPolicy"
+            )
         object.__setattr__(self, "revision", int(self.revision))
         object.__setattr__(self, "operation", operation)
         object.__setattr__(self, "expected_changes", changes)
@@ -713,6 +749,201 @@ def _merge_vertex(geometry: GeometryModel, old: int, new: int) -> None:
     geometry.record_replacement(EntityRef("vertex", old), (EntityRef("vertex", new),))
 
 
+def _capture_face_attachments(geometry: GeometryModel, face_id: int):
+    snapshots = []
+    for attachment_id in sorted(
+        geometry._target_attachments.get(("face", face_id), ())  # noqa: SLF001
+    ):
+        attachment = geometry.attachments[attachment_id]
+        if len(attachment.target_parameters) != 2:
+            raise GeometryError(
+                f"attachment {attachment_id} has no face parameter rectangle"
+            )
+        first_range, second_range = attachment.target_parameters
+        # Include the centre and edge midpoints.  A split can place the four
+        # corners in different descendants, and retaining only corners would
+        # lose a thin but valid attachment fragment.
+        first_values = tuple(
+            sorted(
+                set(
+                    (
+                        first_range.start,
+                        0.5 * (first_range.start + first_range.end),
+                        first_range.end,
+                    )
+                )
+            )
+        )
+        second_values = tuple(
+            sorted(
+                set(
+                    (
+                        second_range.start,
+                        0.5 * (second_range.start + second_range.end),
+                        second_range.end,
+                    )
+                )
+            )
+        )
+        samples_uv = tuple(
+            (first, second)
+            for first in first_values
+            for second in second_values
+        )
+        world_samples = tuple(
+            geometry.face_point(face_id, first, second)
+            for first, second in samples_uv
+        )
+        snapshots.append(("target", attachment, world_samples))
+    for attachment_id in sorted(
+        geometry._source_attachments.get(("face", face_id), ())  # noqa: SLF001
+    ):
+        if attachment_id not in {
+            item[1].id for item in snapshots
+        }:
+            snapshots.append(("source", geometry.attachments[attachment_id], ()))
+    return tuple(snapshots)
+
+
+def _remap_face_attachments(
+    geometry: GeometryModel,
+    old_face,
+    descendants: Sequence[int],
+    snapshots,
+) -> None:
+    """Retarget or split qualified face attachments across descendants."""
+
+    for role, attachment, world_samples in snapshots:
+        attachment_id = attachment.id
+        if role == "source":
+            made_ids: list[int] = []
+            lineage = tuple(
+                dict.fromkeys((*attachment.lineage, ("face", old_face.id)))
+            )
+            for index, face_id in enumerate(sorted(descendants)):
+                if index == 0:
+                    geometry._put_structural(  # noqa: SLF001
+                        "attachment",
+                        replace(
+                            attachment,
+                            source_id=face_id,
+                            lineage=lineage,
+                        ),
+                    )
+                    made_ids.append(attachment_id)
+                else:
+                    made_ids.append(
+                        geometry.add_attachment(
+                            attachment.member_id,
+                            attachment.kind,
+                            attachment.target_kind,
+                            attachment.target_id,
+                            attachment.member_range,
+                            attachment.target_parameters,
+                            connection_intent=attachment.connection_intent,
+                            evidence=attachment.evidence,
+                            max_residual=attachment.max_residual,
+                            tolerance_used=attachment.tolerance_used,
+                            part_id=attachment.part_id,
+                            sheet_id=attachment.sheet_id,
+                            provenance=attachment.provenance,
+                            lineage=lineage,
+                            source_kind="face",
+                            source_id=face_id,
+                            metadata=attachment.metadata,
+                        )
+                    )
+            if len(made_ids) > 1:
+                for junction_id in tuple(
+                    sorted(geometry._attachment_junctions.get(attachment_id, ()))  # noqa: SLF001
+                ):
+                    junction = geometry.junctions[junction_id]
+                    expanded: list[int] = []
+                    for identifier in junction.attachment_ids:
+                        expanded.extend(
+                            made_ids if identifier == attachment_id else (identifier,)
+                        )
+                    geometry._put_structural(  # noqa: SLF001
+                        "junction",
+                        replace(
+                            junction,
+                            attachment_ids=tuple(dict.fromkeys(expanded)),
+                        ),
+                    )
+            continue
+        candidates: list[tuple[int, tuple[tuple[float, float], ...]]] = []
+        for face_id in sorted(descendants):
+            mapped = tuple(
+                tuple(float(value) for value in geometry.face_local_uv(face_id, point))
+                for point in world_samples
+            )
+            retained = tuple(
+                uv for uv in mapped if geometry.face_contains_uv(face_id, uv)
+            )
+            if retained:
+                candidates.append((face_id, retained))
+        if not candidates:
+            raise GeometryError(
+                f"attachment {attachment_id} cannot be mapped to a face fragment"
+            )
+        made_ids: list[int] = []
+        lineage = tuple(
+            dict.fromkeys((*attachment.lineage, ("face", old_face.id)))
+        )
+        for index, (face_id, mapped) in enumerate(candidates):
+            u_values = [item[0] for item in mapped]
+            v_values = [item[1] for item in mapped]
+            parameters = (
+                StructuralParameterRange(min(u_values), max(u_values)),
+                StructuralParameterRange(min(v_values), max(v_values)),
+            )
+            if index == 0:
+                geometry._put_structural(  # noqa: SLF001
+                    "attachment",
+                    replace(
+                        attachment,
+                        target_id=face_id,
+                        target_parameters=parameters,
+                        lineage=lineage,
+                    ),
+                )
+                made_ids.append(attachment_id)
+                continue
+            made_ids.append(
+                geometry.add_attachment(
+                    attachment.member_id,
+                    attachment.kind,
+                    attachment.target_kind,
+                    face_id,
+                    attachment.member_range,
+                    parameters,
+                    connection_intent=attachment.connection_intent,
+                    evidence=attachment.evidence,
+                    max_residual=attachment.max_residual,
+                    tolerance_used=attachment.tolerance_used,
+                    part_id=attachment.part_id,
+                    sheet_id=attachment.sheet_id,
+                    provenance=attachment.provenance,
+                    lineage=lineage,
+                    source_kind=attachment.source_kind,
+                    source_id=attachment.source_id,
+                    metadata=attachment.metadata,
+                )
+            )
+        if len(made_ids) > 1:
+            for junction_id in tuple(
+                sorted(geometry._attachment_junctions.get(attachment_id, ()))  # noqa: SLF001
+            ):
+                junction = geometry.junctions[junction_id]
+                expanded: list[int] = []
+                for identifier in junction.attachment_ids:
+                    expanded.extend(made_ids if identifier == attachment_id else (identifier,))
+                geometry._put_structural(  # noqa: SLF001
+                    "junction",
+                    replace(junction, attachment_ids=tuple(dict.fromkeys(expanded))),
+                )
+
+
 def _fragment_with_edge(geometry: GeometryModel, face_id: int, start: int, end: int, edge_id: int) -> tuple[int,int]:
     from .operations import _partition_face_holes, _split_loop  # internal topology primitives
 
@@ -724,7 +955,8 @@ def _fragment_with_edge(geometry: GeometryModel, face_id: int, start: int, end: 
     surface = face.surface
     parameterization = face.parameterization
     metadata, tags = dict(face.metadata), geometry.tags_for(face.ref)
-    geometry.remove_face(face_id, record=False)
+    attachment_snapshots = _capture_face_attachments(geometry, face_id)
+    geometry._delete_entity("face", face_id)  # noqa: SLF001
     made = []
     for loop, holes in zip(
         (
@@ -747,8 +979,628 @@ def _fragment_with_edge(geometry: GeometryModel, face_id: int, start: int, end: 
         )
         geometry.tag(EntityRef("face",identifier), *tags)
         made.append(identifier)
+    _remap_face_attachments(geometry, face, made, attachment_snapshots)
     geometry.record_replacement(EntityRef("face",face_id), tuple(EntityRef("face",item) for item in made))
     return made[0], made[1]
+
+
+def _fragment_with_edge_chain(
+    geometry: GeometryModel,
+    face_id: int,
+    start: int,
+    end: int,
+    edge_ids: Sequence[int],
+) -> tuple[int, int]:
+    """Split one face by an oriented, shared multi-edge curve chain."""
+
+    from .operations import _partition_face_holes, _split_loop
+
+    made_edges = tuple(validate_local_id(item, name="imprint edge ID") for item in edge_ids)
+    if not made_edges:
+        raise GeometryError("an imprint chain needs at least one edge")
+    current = start
+    for edge_id in made_edges:
+        edge = geometry.edges[edge_id]
+        if edge.start != current:
+            raise GeometryError("imprint edge chain is not continuously oriented")
+        current = edge.end
+    if current != end:
+        raise GeometryError("imprint edge chain does not reach its end vertex")
+    face = geometry.faces[face_id]
+    first_chain, second_chain = _split_loop(face, start, end, geometry)
+    first_holes, second_holes = _partition_face_holes(
+        geometry, face, first_chain, second_chain, start, end
+    )
+    reverse_path = tuple(OrientedEdge(edge_id, False) for edge_id in reversed(made_edges))
+    forward_path = tuple(OrientedEdge(edge_id, True) for edge_id in made_edges)
+    surface = face.surface
+    parameterization = face.parameterization
+    metadata, tags = dict(face.metadata), geometry.tags_for(face.ref)
+    attachment_snapshots = _capture_face_attachments(geometry, face_id)
+    geometry._delete_entity("face", face_id)  # noqa: SLF001
+    made = []
+    for loop, holes in zip(
+        (tuple(first_chain) + reverse_path, tuple(second_chain) + forward_path),
+        (first_holes, second_holes),
+    ):
+        corners = geometry._detect_corners(loop) if len(loop) >= 4 else None  # noqa: SLF001
+        identifier = geometry.add_face_from_loop(loop, corners, surface=surface)
+        geometry._put_entity(  # noqa: SLF001
+            "face",
+            replace(
+                geometry.faces[identifier],
+                holes=holes,
+                metadata=dict(metadata),
+                surface=surface,
+                parameterization=parameterization,
+            ),
+        )
+        geometry.tag(EntityRef("face", identifier), *tags)
+        made.append(identifier)
+    _remap_face_attachments(geometry, face, made, attachment_snapshots)
+    geometry.record_replacement(
+        EntityRef("face", face_id),
+        tuple(EntityRef("face", item) for item in made),
+    )
+    return made[0], made[1]
+
+
+def _fragment_with_closed_chain(
+    geometry: GeometryModel,
+    face_id: int,
+    edge_ids: Sequence[int | OrientedEdge],
+) -> tuple[int, int]:
+    """Split a face into an outer remainder and an inner curved region."""
+
+    ring = tuple(
+        item
+        if isinstance(item, OrientedEdge)
+        else OrientedEdge(validate_local_id(item, name="imprint edge ID"), True)
+        for item in edge_ids
+    )
+    if len(ring) < 3:
+        raise GeometryError("a closed imprint chain needs at least three edges")
+    current = geometry.oriented_start_vertex(ring[0])
+    start = current
+    for oriented in ring:
+        if geometry.oriented_start_vertex(oriented) != current:
+            raise GeometryError("closed imprint chain is discontinuous")
+        current = geometry.oriented_end_vertex(oriented)
+    if current != start:
+        raise GeometryError("closed imprint chain is not closed")
+    face = geometry.faces[face_id]
+    surface = face.surface
+    parameterization = face.parameterization
+    metadata, tags = dict(face.metadata), geometry.tags_for(face.ref)
+    if _loop_signed_area(geometry, face_id, face.loop) * _loop_signed_area(
+        geometry, face_id, ring
+    ) < 0.0:
+        ring = _reverse_loop(ring)
+    attachment_snapshots = _capture_face_attachments(geometry, face_id)
+    geometry._delete_entity("face", face_id)  # noqa: SLF001
+    outer = geometry.add_face_from_loop(face.loop, face.corners, surface=surface)
+    geometry._put_entity(  # noqa: SLF001
+        "face",
+        replace(
+            geometry.faces[outer],
+            holes=tuple(face.holes) + (_reverse_loop(ring),),
+            metadata=dict(metadata),
+            surface=surface,
+            parameterization=parameterization,
+        ),
+    )
+    inner = geometry.add_face_from_loop(ring, surface=surface)
+    geometry._put_entity(  # noqa: SLF001
+        "face",
+        replace(
+            geometry.faces[inner],
+            metadata=dict(metadata),
+            surface=surface,
+            parameterization=parameterization,
+        ),
+    )
+    for identifier in (outer, inner):
+        geometry.tag(EntityRef("face", identifier), *tags)
+    _remap_face_attachments(
+        geometry, face, (outer, inner), attachment_snapshots
+    )
+    geometry.record_replacement(
+        EntityRef("face", face_id),
+        (EntityRef("face", outer), EntityRef("face", inner)),
+    )
+    return outer, inner
+
+
+def _point_segment_distance_value(
+    point: np.ndarray, start: np.ndarray, end: np.ndarray
+) -> float:
+    direction = end - start
+    length_squared = float(direction @ direction)
+    if length_squared <= np.finfo(float).tiny:
+        return float(np.linalg.norm(point - start))
+    parameter = float(np.clip((point - start) @ direction / length_squared, 0.0, 1.0))
+    return float(np.linalg.norm(point - (start + parameter * direction)))
+
+
+def _region_boundary_matches_loop(
+    geometry: GeometryModel,
+    loop: Sequence[OrientedEdge],
+    boundary: Sequence[Sequence[float]],
+    tolerance: float,
+) -> bool:
+    """Whether one certified path is exactly one model trim loop."""
+
+    points = tuple(np.asarray(point, dtype=float) for point in boundary)
+    if len(points) < 3:
+        return False
+    for point in points:
+        distance = min(
+            geometry.closest_edge_point(item.edge, point)[2]
+            for item in loop
+        )
+        if distance > tolerance:
+            return False
+    for item in loop:
+        point = geometry.vertex_position(geometry.oriented_start_vertex(item))
+        if min(float(np.linalg.norm(point - candidate)) for candidate in points) > tolerance:
+            return False
+    return True
+
+
+def _region_boundary_matches_face(
+    geometry: GeometryModel,
+    face_id: int,
+    boundaries: Sequence[Sequence[Sequence[float]]],
+    tolerance: float,
+) -> bool:
+    face = geometry.faces[face_id]
+    if len(boundaries) != 1 + len(face.holes):
+        return False
+    if not _region_boundary_matches_loop(
+        geometry, face.loop, boundaries[0], tolerance
+    ):
+        return False
+    unused = set(range(1, len(boundaries)))
+    for hole in face.holes:
+        matches = [
+            index
+            for index in sorted(unused)
+            if _region_boundary_matches_loop(
+                geometry, hole, boundaries[index], tolerance
+            )
+        ]
+        if len(matches) != 1:
+            return False
+        unused.remove(matches[0])
+    return not unused
+
+
+def _connect_contained_curved_region(
+    geometry: GeometryModel,
+    first_face: int,
+    second_face: int,
+    component: IntersectionComponent,
+    tolerance: float,
+) -> tuple[EntityHandle, ...]:
+    """Connect a certified coincident region equal to one parent's material."""
+
+    if not component.boundary_paths:
+        raise GeometryError("coincident region has no certified boundary path")
+    boundaries = component.boundary_paths
+    first_matches = _region_boundary_matches_face(
+        geometry, first_face, boundaries, tolerance
+    )
+    second_matches = _region_boundary_matches_face(
+        geometry, second_face, boundaries, tolerance
+    )
+    if first_matches == second_matches:
+        raise GeometryError(
+            "partial curved coincident region is not a single contained face"
+        )
+    contained = first_face if first_matches else second_face
+    containing = second_face if first_matches else first_face
+    contained_face = geometry.faces[contained]
+    containing_face = geometry.faces[containing]
+    if _region_boundary_matches_loop(
+        geometry, containing_face.loop, boundaries[0], tolerance
+    ):
+        overlap = containing
+    else:
+        _outside, overlap = _fragment_with_closed_chain(
+            geometry,
+            containing,
+            contained_face.loop,
+        )
+    for hole in contained_face.holes:
+        overlap, _hole_material = _fragment_with_closed_chain(
+            geometry, overlap, hole
+        )
+    return _connect_fully_coincident_faces(geometry, contained, overlap)
+
+
+def _face_accepts_component_endpoints(
+    geometry: GeometryModel,
+    face_id: int,
+    endpoints: tuple[np.ndarray, np.ndarray],
+) -> bool:
+    scale = _face_length_scale(geometry, face_id)
+    tolerance = geometry.tolerance.effective_surface_residual(scale)
+    face = geometry.faces[face_id]
+    for point in endpoints:
+        best = min(
+            (
+                geometry.closest_edge_point(oriented.edge, point)[2]
+                for loop in (face.loop,) + face.holes
+                for oriented in loop
+            ),
+            default=float("inf"),
+        )
+        if best > tolerance:
+            return False
+    return True
+
+
+def _component_boundary_edge(
+    geometry: GeometryModel,
+    face_id: int,
+    endpoints: tuple[np.ndarray, np.ndarray],
+    tolerance: float,
+) -> int | None:
+    candidates: list[int] = []
+    face = geometry.faces[face_id]
+    for oriented in tuple(item for loop in (face.loop,) + face.holes for item in loop):
+        edge = geometry.edges[oriented.edge]
+        start = geometry.vertex_position(edge.start)
+        end = geometry.vertex_position(edge.end)
+        direct = (
+            float(np.linalg.norm(start - endpoints[0])) <= tolerance
+            and float(np.linalg.norm(end - endpoints[1])) <= tolerance
+        )
+        reversed_match = (
+            float(np.linalg.norm(start - endpoints[1])) <= tolerance
+            and float(np.linalg.norm(end - endpoints[0])) <= tolerance
+        )
+        if direct or reversed_match:
+            candidates.append(edge.id)
+    return min(candidates) if candidates else None
+
+
+def _trace_vertices_and_edges(
+    geometry: GeometryModel,
+    first_face: int,
+    second_face: int,
+    witnesses: Sequence[Sequence[float]],
+    *,
+    closed: bool,
+) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    points = [np.asarray(point, dtype=float) for point in witnesses]
+    tolerance = max(
+        geometry.tolerance.effective_curve_fit_residual(
+            max(_face_length_scale(geometry, first_face), _face_length_scale(geometry, second_face))
+        ),
+        geometry.tolerance.length,
+    )
+    compact: list[np.ndarray] = []
+    for point in points:
+        if not compact or float(np.linalg.norm(point - compact[-1])) > tolerance:
+            compact.append(point)
+    if closed and len(compact) > 1 and float(np.linalg.norm(compact[0] - compact[-1])) <= tolerance:
+        compact.pop()
+    minimum = 3 if closed else 2
+    if len(compact) < minimum:
+        raise GeometryError("qualified imprint trace has too few distinct points")
+    # Preserve exact primitive topology whenever the certified trace lies on
+    # one line or circle.  This covers the analytical and common
+    # Cylinder/Cone ring cases without replacing them by tolerance-sensitive
+    # sampled chords.
+    if not closed:
+        chord = compact[-1] - compact[0]
+        chord_length = float(np.linalg.norm(chord))
+        if chord_length > 0.0:
+            line_error = max(
+                float(
+                    np.linalg.norm(
+                        (point - compact[0])
+                        - float((point - compact[0]) @ chord / (chord_length * chord_length)) * chord
+                    )
+                )
+                for point in compact
+            )
+            if line_error <= tolerance:
+                first_vertices = [
+                    _boundary_vertex(geometry, first_face, compact[0]),
+                    _boundary_vertex(geometry, first_face, compact[-1]),
+                ]
+                second_vertices = [
+                    _boundary_vertex(geometry, second_face, compact[0]),
+                    _boundary_vertex(geometry, second_face, compact[-1]),
+                ]
+                for old, new in zip(second_vertices, first_vertices):
+                    _merge_vertex(geometry, old, new)
+                edge_id = geometry.add_line(*first_vertices)
+                return tuple(first_vertices), (edge_id,)
+        if len(compact) >= 3:
+            middle_index = len(compact) // 2
+            try:
+                frame = arc_frame(compact[0], compact[middle_index], compact[-1])
+            except (ValueError, GeometryError):
+                frame = None
+            if frame is not None:
+                circle_error = max(
+                    max(
+                        abs(float(np.linalg.norm(point - frame.center)) - frame.radius),
+                        abs(float((point - frame.center) @ frame.normal)),
+                    )
+                    for point in compact
+                )
+                if circle_error <= tolerance:
+                    first_vertices = [
+                        _boundary_vertex(geometry, first_face, compact[0]),
+                        _boundary_vertex(geometry, first_face, compact[-1]),
+                    ]
+                    second_vertices = [
+                        _boundary_vertex(geometry, second_face, compact[0]),
+                        _boundary_vertex(geometry, second_face, compact[-1]),
+                    ]
+                    for old, new in zip(second_vertices, first_vertices):
+                        _merge_vertex(geometry, old, new)
+                    via = geometry.add_point(*compact[middle_index])
+                    edge_id = geometry.add_arc(first_vertices[0], via, first_vertices[1])
+                    return (first_vertices[0], via, first_vertices[1]), (edge_id,)
+    elif len(compact) >= 6:
+        half = len(compact) // 2
+        quarter = max(1, half // 2)
+        three_quarter = min(len(compact) - 1, half + max(1, (len(compact) - half) // 2))
+        try:
+            first_frame = arc_frame(compact[0], compact[quarter], compact[half])
+            second_frame = arc_frame(compact[half], compact[three_quarter], compact[0])
+            circle_error = max(
+                max(
+                    abs(float(np.linalg.norm(point - first_frame.center)) - first_frame.radius),
+                    abs(float((point - first_frame.center) @ first_frame.normal)),
+                )
+                for point in compact
+            )
+        except (ValueError, GeometryError):
+            first_frame = second_frame = None
+            circle_error = float("inf")
+        if first_frame is not None and second_frame is not None and circle_error <= tolerance:
+            start_vertex = geometry.add_point(*compact[0])
+            middle_vertex = geometry.add_point(*compact[half])
+            first_via = geometry.add_point(*compact[quarter])
+            second_via = geometry.add_point(*compact[three_quarter])
+            edges = (
+                geometry.add_arc(start_vertex, first_via, middle_vertex),
+                geometry.add_arc(middle_vertex, second_via, start_vertex),
+            )
+            return (start_vertex, first_via, middle_vertex, second_via), edges
+    if closed:
+        endpoint_indices = list(range(0, len(compact), 2))
+        vertices = [geometry.add_point(*compact[index]) for index in endpoint_indices]
+        edges: list[int] = []
+        for position, start_index in enumerate(endpoint_indices):
+            end_position = (position + 1) % len(endpoint_indices)
+            end_index = endpoint_indices[end_position]
+            middle_index = (start_index + 1) % len(compact)
+            if end_position == 0 and middle_index == 0:
+                control_point = 0.5 * (compact[start_index] + compact[end_index])
+            else:
+                middle_point = compact[middle_index]
+                control_point = (
+                    2.0 * middle_point
+                    - 0.5 * (compact[start_index] + compact[end_index])
+                )
+            control = geometry.add_point(*control_point)
+            edges.append(
+                geometry.add_spline(
+                    vertices[position],
+                    (control,),
+                    vertices[end_position],
+                )
+            )
+        return tuple(vertices), tuple(edges)
+    else:
+        first_vertices = [
+            _boundary_vertex(geometry, first_face, compact[0]),
+            _boundary_vertex(geometry, first_face, compact[-1]),
+        ]
+        second_vertices = [
+            _boundary_vertex(geometry, second_face, compact[0]),
+            _boundary_vertex(geometry, second_face, compact[-1]),
+        ]
+        for old, new in zip(second_vertices, first_vertices):
+            _merge_vertex(geometry, old, new)
+        endpoint_indices = list(range(0, len(compact), 2))
+        if endpoint_indices[-1] != len(compact) - 1:
+            endpoint_indices.append(len(compact) - 1)
+        vertices = [first_vertices[0]]
+        vertices.extend(
+            geometry.add_point(*compact[index])
+            for index in endpoint_indices[1:-1]
+        )
+        vertices.append(first_vertices[1])
+        edges: list[int] = []
+        for position, (start_index, end_index) in enumerate(
+            zip(endpoint_indices, endpoint_indices[1:])
+        ):
+            if end_index - start_index == 2:
+                middle_point = compact[start_index + 1]
+                control_point = (
+                    2.0 * middle_point
+                    - 0.5 * (compact[start_index] + compact[end_index])
+                )
+            else:
+                control_point = 0.5 * (
+                    compact[start_index] + compact[end_index]
+                )
+            control = geometry.add_point(*control_point)
+            edges.append(
+                geometry.add_spline(
+                    vertices[position],
+                    (control,),
+                    vertices[position + 1],
+                )
+            )
+        return tuple(vertices), tuple(edges)
+
+
+def _imprint_components(
+    geometry: GeometryModel,
+    first_face: int,
+    second_face: int,
+    components: Sequence[IntersectionComponent],
+) -> FaceIntersection:
+    """Atomically imprint every certified open/closed curved trace."""
+
+    with geometry.transaction():
+        first_active = [first_face]
+        second_active = [second_face]
+        relation_edges: list[int] = []
+        for component in components:
+            witnesses = tuple(np.asarray(point, dtype=float) for point in component.witnesses)
+            if len(witnesses) < 2:
+                raise GeometryError("curved face imprint needs complete trace witnesses")
+            scale = max(
+                _face_length_scale(geometry, first_active[0]),
+                _face_length_scale(geometry, second_active[0]),
+            )
+            tolerance = geometry.tolerance.effective_curve_fit_residual(scale)
+            closed = len(witnesses) >= 3 and float(np.linalg.norm(witnesses[0] - witnesses[-1])) <= tolerance
+            if closed:
+                first_target = next(
+                    (
+                        face_id
+                        for face_id in first_active
+                        if geometry.face_contains_uv(
+                            face_id,
+                            geometry.face_local_uv(face_id, witnesses[0]),
+                        )
+                    ),
+                    None,
+                )
+                second_target = next(
+                    (
+                        face_id
+                        for face_id in second_active
+                        if geometry.face_contains_uv(
+                            face_id,
+                            geometry.face_local_uv(face_id, witnesses[0]),
+                        )
+                    ),
+                    None,
+                )
+            else:
+                endpoints = (witnesses[0], witnesses[-1])
+                first_target = next(
+                    (face_id for face_id in first_active if _face_accepts_component_endpoints(geometry, face_id, endpoints)),
+                    None,
+                )
+                second_target = next(
+                    (face_id for face_id in second_active if _face_accepts_component_endpoints(geometry, face_id, endpoints)),
+                    None,
+                )
+            if first_target is None or second_target is None:
+                raise GeometryError("imprint component does not map to one active face descendant")
+            if not closed:
+                endpoints = (witnesses[0], witnesses[-1])
+                first_boundary = _component_boundary_edge(
+                    geometry, first_target, endpoints, tolerance
+                )
+                second_boundary = _component_boundary_edge(
+                    geometry, second_target, endpoints, tolerance
+                )
+                boundary_edge = first_boundary or second_boundary
+                if boundary_edge is not None:
+                    edge = geometry.edges[boundary_edge]
+                    edge_points = (
+                        geometry.vertex_position(edge.start),
+                        geometry.vertex_position(edge.end),
+                    )
+                    if first_boundary is None:
+                        made_vertices = tuple(
+                            _boundary_vertex(geometry, first_target, point)
+                            for point in edge_points
+                        )
+                        for old, new in zip(made_vertices, (edge.start, edge.end)):
+                            _merge_vertex(geometry, old, new)
+                        first_children = _fragment_with_edge_chain(
+                            geometry,
+                            first_target,
+                            edge.start,
+                            edge.end,
+                            (boundary_edge,),
+                        )
+                        first_active.remove(first_target)
+                        first_active.extend(first_children)
+                    if second_boundary is None:
+                        made_vertices = tuple(
+                            _boundary_vertex(geometry, second_target, point)
+                            for point in edge_points
+                        )
+                        for old, new in zip(made_vertices, (edge.start, edge.end)):
+                            _merge_vertex(geometry, old, new)
+                        second_children = _fragment_with_edge_chain(
+                            geometry,
+                            second_target,
+                            edge.start,
+                            edge.end,
+                            (boundary_edge,),
+                        )
+                        second_active.remove(second_target)
+                        second_active.extend(second_children)
+                    relation_edges.append(boundary_edge)
+                    continue
+            _vertices, edges = _trace_vertices_and_edges(
+                geometry,
+                first_target,
+                second_target,
+                witnesses,
+                closed=closed,
+            )
+            relation_edges.extend(edges)
+            if closed:
+                first_children = _fragment_with_closed_chain(geometry, first_target, edges)
+                second_children = _fragment_with_closed_chain(geometry, second_target, edges)
+            else:
+                first_children = _fragment_with_edge_chain(
+                    geometry,
+                    first_target,
+                    geometry.edges[edges[0]].start,
+                    geometry.edges[edges[-1]].end,
+                    edges,
+                )
+                second_children = _fragment_with_edge_chain(
+                    geometry,
+                    second_target,
+                    geometry.edges[edges[0]].start,
+                    geometry.edges[edges[-1]].end,
+                    edges,
+                )
+            first_active.remove(first_target)
+            first_active.extend(first_children)
+            second_active.remove(second_target)
+            second_active.extend(second_children)
+        errors = geometry.validate_topology()
+        if errors:
+            raise GeometryError(
+                "multi-component curved imprint produced invalid topology: "
+                + "; ".join(errors)
+            )
+        # A component can already be a boundary edge of both participating
+        # descendants.  Keep the first deterministic occurrence while
+        # avoiding duplicate references in the public result.
+        references = tuple(
+            EntityRef("edge", edge_id)
+            for edge_id in dict.fromkeys(relation_edges)
+        )
+        if not references:
+            raise GeometryError("curved imprint produced no relation edges")
+        return FaceIntersection(
+            references[0],
+            tuple(EntityRef("face", item) for item in sorted(first_active)),
+            tuple(EntityRef("face", item) for item in sorted(second_active)),
+            references,
+        )
 
 
 def _imprint_segment(
@@ -832,11 +1684,10 @@ def _reverse_loop(loop: Sequence[OrientedEdge]) -> tuple[OrientedEdge, ...]:
 def _loop_signed_area(
     geometry: GeometryModel, face_id: int, loop: Sequence[OrientedEdge]
 ) -> float:
-    plane = geometry.faces[face_id].surface
-    assert isinstance(plane, Plane)
     points = np.asarray(
         [
-            plane.local_uv(
+            geometry.face_support_local_uv(
+                face_id,
                 geometry.vertex_position(geometry.oriented_start_vertex(item))
             )
             for item in loop
@@ -1074,7 +1925,8 @@ def _fragment_cylinder_transverse(
     first_chain, second_chain = _split_loop(face, start, end, geometry)
     metadata, tags = dict(face.metadata), geometry.tags_for(face.ref)
     parameterization = face.parameterization
-    geometry.remove_face(face_id, record=False)
+    attachment_snapshots = _capture_face_attachments(geometry, face_id)
+    geometry._delete_entity("face", face_id)  # noqa: SLF001
     made = []
     for chain, oriented_ring in (
         (first_chain, OrientedEdge(edge_id, False)),
@@ -1109,6 +1961,7 @@ def _fragment_cylinder_transverse(
         )
         geometry.tag(EntityRef("face", identifier), *tags)
         made.append(identifier)
+    _remap_face_attachments(geometry, face, made, attachment_snapshots)
     geometry.record_replacement(
         EntityRef("face", face_id),
         tuple(EntityRef("face", item) for item in made),
@@ -1130,7 +1983,8 @@ def _fragment_plane_with_ring(
         geometry, plane_face, ring_loop
     ) < 0.0:
         ring_loop = _reverse_loop(ring_loop)
-    geometry.remove_face(plane_face, record=False)
+    attachment_snapshots = _capture_face_attachments(geometry, plane_face)
+    geometry._delete_entity("face", plane_face)  # noqa: SLF001
     annulus = geometry.add_face_from_loop(outer_loop, corners, surface=surface)
     geometry._put_entity(  # noqa: SLF001
         "face",
@@ -1152,6 +2006,9 @@ def _fragment_plane_with_ring(
     )
     for identifier in (annulus, disk):
         geometry.tag(EntityRef("face", identifier), *tags)
+    _remap_face_attachments(
+        geometry, face, (annulus, disk), attachment_snapshots
+    )
     geometry.record_replacement(
         EntityRef("face", plane_face),
         (EntityRef("face", annulus), EntityRef("face", disk)),
@@ -1620,8 +2477,44 @@ def _query_planar_faces(
         for component in second_clip.components
         if component.first_parameter_range is not None
     )
+    first_points = tuple(
+        component.first_parameter[0]
+        for component in first_clip.components
+        if component.first_parameter is not None
+    )
+    second_points = tuple(
+        component.first_parameter[0]
+        for component in second_clip.components
+        if component.first_parameter is not None
+    )
     intersections: list[IntersectionComponent] = []
     touches: list[IntersectionComponent] = []
+
+    def append_touch(parameter: float) -> None:
+        witness = point + parameter * direction
+        if any(
+            float(
+                np.linalg.norm(
+                    np.asarray(existing.witnesses[0], dtype=float) - witness
+                )
+            )
+            <= tolerance
+            for existing in touches
+        ):
+            return
+        touches.append(
+            IntersectionComponent(
+                (tuple(float(item) for item in witness),),
+                IntersectionQuality.VERIFIED_APPROXIMATE,
+                first_parameter=(parameter,),
+                second_parameter=tuple(
+                    float(item) for item in second_plane.local_uv(witness)
+                ),
+                first_subparent=first,
+                second_subparent=second,
+            )
+        )
+
     for first_range in first_intervals:
         for second_range in second_intervals:
             lower = max(first_range.lower, second_range.lower)
@@ -1629,19 +2522,7 @@ def _query_planar_faces(
             if upper < lower - tolerance:
                 continue
             if upper - lower <= tolerance:
-                witness = point + 0.5 * (lower + upper) * direction
-                touches.append(
-                    IntersectionComponent(
-                        (tuple(float(item) for item in witness),),
-                        IntersectionQuality.VERIFIED_APPROXIMATE,
-                        first_parameter=(0.5 * (lower + upper),),
-                        second_parameter=tuple(
-                            float(item) for item in second_plane.local_uv(witness)
-                        ),
-                        first_subparent=first,
-                        second_subparent=second,
-                    )
-                )
+                append_touch(0.5 * (lower + upper))
                 continue
             witnesses = tuple(point + value * direction for value in (lower, upper))
             intersections.append(
@@ -1659,6 +2540,18 @@ def _query_planar_faces(
                     second_subparent=second,
                 )
             )
+    for parameter in first_points:
+        if any(
+            interval.lower - tolerance <= parameter <= interval.upper + tolerance
+            for interval in second_intervals
+        ) or any(abs(parameter - other) <= tolerance for other in second_points):
+            append_touch(parameter)
+    for parameter in second_points:
+        if any(
+            interval.lower - tolerance <= parameter <= interval.upper + tolerance
+            for interval in first_intervals
+        ):
+            append_touch(parameter)
     if intersections:
         intersections.sort(key=lambda item: item.first_parameter_range.lower)  # type: ignore[union-attr]
         return _qualified_result(
@@ -2095,6 +2988,7 @@ def _query_face_face(
     geometry: GeometryModel,
     first: EntityHandle,
     second: EntityHandle,
+    qualification: IntersectionQualificationPolicy = DEFAULT_INTERSECTION_QUALIFICATION_POLICY,
 ) -> IntersectionResult:
     if first.id == second.id:
         component = IntersectionComponent(
@@ -2135,32 +3029,8 @@ def _query_face_face(
         return _query_planar_faces(
             geometry, first, second, first_plane, second_plane
         )
-    if first_plane is not None and isinstance(second_surface, Cylinder):
-        return _query_plane_cylinder_faces(
-            geometry,
-            first,
-            second,
-            first.id,
-            second.id,
-            first_is_plane=True,
-            plane=first_plane,
-        )
-    if isinstance(first_surface, Cylinder) and second_plane is not None:
-        return _query_plane_cylinder_faces(
-            geometry,
-            first,
-            second,
-            second.id,
-            first.id,
-            first_is_plane=False,
-            plane=second_plane,
-        )
-    if (
-        isinstance(first_surface, Plane)
-        and second_surface is not None
-        and not isinstance(second_surface, (Plane, Cylinder))
-    ):
-        return _query_planar_support_boundary_curve(
+    if first_plane is not None and second_surface is not None:
+        boundary = _query_planar_support_boundary_curve(
             geometry,
             first,
             second,
@@ -2168,72 +3038,72 @@ def _query_face_face(
             curved_face_id=second.id,
             first_is_plane=True,
         )
-    if (
-        isinstance(second_surface, Plane)
-        and first_surface is not None
-        and not isinstance(first_surface, (Plane, Cylinder))
-    ):
-        return _query_planar_support_boundary_curve(
-            geometry,
-            first,
-            second,
-            plane_face_id=second.id,
-            curved_face_id=first.id,
-            first_is_plane=False,
-        )
-    if (
-        isinstance(first_surface, Plane)
-        and second_surface is not None
-        and not isinstance(second_surface, (Plane, Cylinder))
-    ):
-        return _query_planar_support_boundary_curve(
-            geometry,
-            first,
-            second,
-            plane_face_id=first.id,
-            curved_face_id=second.id,
-            first_is_plane=True,
-        )
-    if (
-        isinstance(second_surface, Plane)
-        and first_surface is not None
-        and not isinstance(first_surface, (Plane, Cylinder))
-    ):
-        return _query_planar_support_boundary_curve(
-            geometry,
-            first,
-            second,
-            plane_face_id=second.id,
-            curved_face_id=first.id,
-            first_is_plane=False,
-        )
-    if first_surface is None and second_surface is None:
-        try:
-            return _query_planar_faces(
-                geometry,
-                first,
-                second,
-                _face_plane(geometry, first.id),
-                _face_plane(geometry, second.id),
+        if boundary.kind not in (
+            IntersectionKind.UNSUPPORTED,
+            IntersectionKind.UNCLASSIFIED,
+            IntersectionKind.CAPABILITY_MISSING,
+        ):
+            return boundary
+        if isinstance(second_surface, (RuledSurface, CoonsSurface)) and any(
+            marker in diagnostic
+            for diagnostic in boundary.diagnostics
+            for marker in (
+                "must_be_convex",
+                "holes_are_unsupported",
+                "curved_trim",
+                "touches_or_leaves_support_trim",
             )
-        except GeometryError as error:
+        ):
             return _qualified_result(
                 geometry,
                 first,
                 second,
-                IntersectionKind.UNSUPPORTED,
-                diagnostics=(str(error),),
+                IntersectionKind.UNCLASSIFIED,
+                diagnostics=(
+                    "planar_boundary_curve_material_qualification_unresolved",
+                    *boundary.diagnostics,
+                ),
             )
-    return _qualified_result(
-        geometry,
-        first,
-        second,
-        IntersectionKind.UNSUPPORTED,
-        diagnostics=(
-            "qualified bounded face intersection is unavailable for "
-            f"{type(first_surface).__name__}/{type(second_surface).__name__}",
-        ),
-    )
+    elif second_plane is not None and first_surface is not None:
+        boundary = _query_planar_support_boundary_curve(
+            geometry,
+            first,
+            second,
+            plane_face_id=second.id,
+            curved_face_id=first.id,
+            first_is_plane=False,
+        )
+        if boundary.kind not in (
+            IntersectionKind.UNSUPPORTED,
+            IntersectionKind.UNCLASSIFIED,
+            IntersectionKind.CAPABILITY_MISSING,
+        ):
+            return boundary
+        if isinstance(first_surface, (RuledSurface, CoonsSurface)) and any(
+            marker in diagnostic
+            for diagnostic in boundary.diagnostics
+            for marker in (
+                "must_be_convex",
+                "holes_are_unsupported",
+                "curved_trim",
+                "touches_or_leaves_support_trim",
+            )
+        ):
+            return _qualified_result(
+                geometry,
+                first,
+                second,
+                IntersectionKind.UNCLASSIFIED,
+                diagnostics=(
+                    "planar_boundary_curve_material_qualification_unresolved",
+                    *boundary.diagnostics,
+                ),
+            )
+    # Every built-in curved support pair, including Plane/curved pairs, is
+    # routed through the shared certified engine used by strict and local
+    # audit.  Legacy sampled special cases remain private compatibility
+    # helpers; they no longer classify the public query workflow.
+    return qualified_face_face(geometry, first, second, qualification)
 
 
 def _member_parameter(use, edge_parameter: float) -> float:
@@ -2411,6 +3281,7 @@ def _query_member_member(
     geometry: GeometryModel,
     first: EntityHandle,
     second: EntityHandle,
+    qualification: IntersectionQualificationPolicy = DEFAULT_INTERSECTION_QUALIFICATION_POLICY,
 ) -> IntersectionResult:
     first_member = geometry.members[first.id]
     second_member = geometry.members[second.id]
@@ -2423,23 +3294,12 @@ def _query_member_member(
         for second_use_id in second_member.edge_use_ids:
             second_use = geometry.member_edge_uses[second_use_id]
             second_edge = geometry.edges[second_use.edge_id]
-            if isinstance(first_edge.curve, Straight) and isinstance(second_edge.curve, Straight):
-                local = qualified_segment_segment(
-                    geometry.vertex_position(first_edge.start),
-                    geometry.vertex_position(first_edge.end),
-                    geometry.vertex_position(second_edge.start),
-                    geometry.vertex_position(second_edge.end),
-                    policy=geometry.tolerance,
-                )
-            elif isinstance(first_edge.curve, Arc) and isinstance(second_edge.curve, Arc):
-                local = _query_same_circle_arcs(
-                    geometry, first_edge.id, second_edge.id
-                )
-            else:
-                unsupported.append(
-                    f"edge_pair_{first_edge.id}_{second_edge.id}_curve_types"
-                )
-                continue
+            local = _query_edge_edge(
+                geometry,
+                geometry.handle("edge", first_edge.id),
+                geometry.handle("edge", second_edge.id),
+                qualification,
+            )
             tolerance = max(tolerance, local.tolerance_used or 0.0)
             if local.kind in (
                 IntersectionKind.UNSUPPORTED,
@@ -2524,6 +3384,7 @@ def _query_member_material(
     member: EntityHandle,
     target: EntityHandle,
     face_ids: Sequence[int],
+    qualification: IntersectionQualificationPolicy = DEFAULT_INTERSECTION_QUALIFICATION_POLICY,
 ) -> IntersectionResult:
     member_record = geometry.members[member.id]
     components: list[IntersectionComponent] = []
@@ -2534,7 +3395,54 @@ def _query_member_material(
         use = geometry.member_edge_uses[use_id]
         edge = geometry.edges[use.edge_id]
         if not isinstance(edge.curve, Straight):
-            unsupported.append(f"member_edge_{edge.id}_curved_face_query")
+            edge_handle = geometry.handle("edge", edge.id)
+            for face_id in face_ids:
+                face_handle = geometry.handle("face", face_id)
+                local = _query_edge_face(
+                    geometry, edge_handle, face_handle, qualification
+                )
+                tolerance = max(tolerance, local.tolerance_used or 0.0)
+                if local.kind in (
+                    IntersectionKind.UNSUPPORTED,
+                    IntersectionKind.CAPABILITY_MISSING,
+                    IntersectionKind.UNCLASSIFIED,
+                ):
+                    unsupported.extend(local.diagnostics)
+                    continue
+                for component in local.components:
+                    first_parameter = (
+                        None
+                        if component.first_parameter is None
+                        else (_member_parameter(use, component.first_parameter[0]),)
+                    )
+                    first_range = None
+                    if component.first_parameter_range is not None:
+                        mapped_start = _member_parameter(
+                            use, component.first_parameter_range.start
+                        )
+                        mapped_end = _member_parameter(
+                            use, component.first_parameter_range.end
+                        )
+                        first_range = IntersectionParameterRange(
+                            mapped_start, mapped_end
+                        )
+                    mapped_path = tuple(
+                        (_member_parameter(use, value[0]),)
+                        for value in component.first_parameter_path
+                        if value
+                    )
+                    components.append(
+                        replace(
+                            component,
+                            first_parameter=first_parameter,
+                            first_parameter_range=first_range,
+                            first_parameter_path=mapped_path,
+                            first_subparent=edge_handle,
+                            second_subparent=face_handle,
+                        )
+                    )
+                    if first_range is None:
+                        point_kinds.append(local.kind)
             continue
         edge_start = geometry.vertex_position(edge.start)
         edge_end = geometry.vertex_position(edge.end)
@@ -2720,6 +3628,7 @@ def _query_edge_edge(
     geometry: GeometryModel,
     first: EntityHandle,
     second: EntityHandle,
+    qualification: IntersectionQualificationPolicy = DEFAULT_INTERSECTION_QUALIFICATION_POLICY,
 ) -> IntersectionResult:
     first_edge = geometry.edges[first.id]
     second_edge = geometry.edges[second.id]
@@ -2733,11 +3642,10 @@ def _query_edge_edge(
         )
     elif isinstance(first_edge.curve, Arc) and isinstance(second_edge.curve, Arc):
         result = _query_same_circle_arcs(geometry, first.id, second.id)
+        if result.kind is IntersectionKind.UNSUPPORTED:
+            result = qualified_curve_curve(geometry, first, second, qualification)
     else:
-        result = IntersectionResult(
-            IntersectionKind.UNSUPPORTED,
-            diagnostics=("qualified_curve_pair_unavailable",),
-        )
+        result = qualified_curve_curve(geometry, first, second, qualification)
     scale = max(geometry.edge_length(first.id), geometry.edge_length(second.id))
     return result.with_context(
         first_parent=first,
@@ -2754,16 +3662,11 @@ def _query_edge_face(
     geometry: GeometryModel,
     edge: EntityHandle,
     face: EntityHandle,
+    qualification: IntersectionQualificationPolicy = DEFAULT_INTERSECTION_QUALIFICATION_POLICY,
 ) -> IntersectionResult:
     edge_record = geometry.edges[edge.id]
     if not isinstance(edge_record.curve, Straight):
-        return _qualified_result(
-            geometry,
-            edge,
-            face,
-            IntersectionKind.UNSUPPORTED,
-            diagnostics=("straight_edge_planar_face_query_requires_a_straight_edge",),
-        )
+        return qualified_curve_face(geometry, edge, face, qualification)
     start = geometry.vertex_position(edge_record.start)
     end = geometry.vertex_position(edge_record.end)
     vector = end - start
@@ -2784,14 +3687,19 @@ def _query_edge_face(
         IntersectionKind.CAPABILITY_MISSING,
         IntersectionKind.UNCLASSIFIED,
     ):
-        return _qualified_result(
-            geometry,
-            edge,
-            face,
-            clipped.kind,
-            diagnostics=clipped.diagnostics,
-            tolerance_used=clipped.tolerance_used,
-        )
+        if clipped.kind is IntersectionKind.CAPABILITY_MISSING:
+            return _qualified_result(
+                geometry,
+                edge,
+                face,
+                clipped.kind,
+                diagnostics=clipped.diagnostics,
+                tolerance_used=clipped.tolerance_used,
+            )
+        # Curved supports and trims are handled by the shared built-in engine;
+        # a missing optional planar backend must not make core curved queries
+        # unavailable.
+        return qualified_curve_face(geometry, edge, face, qualification)
     components: list[IntersectionComponent] = []
     for component in clipped.components:
         if component.first_parameter_range is not None:
@@ -2910,10 +3818,38 @@ def _query_edge_face(
     )
 
 
+def _swap_component_parents(component: IntersectionComponent) -> IntersectionComponent:
+    return replace(
+        component,
+        first_parameter=component.second_parameter,
+        second_parameter=component.first_parameter,
+        first_parameter_range=component.second_parameter_range,
+        second_parameter_range=component.first_parameter_range,
+        first_parameter_path=component.second_parameter_path,
+        second_parameter_path=component.first_parameter_path,
+        first_region=component.second_region,
+        second_region=component.first_region,
+        first_subparent=component.second_subparent,
+        second_subparent=component.first_subparent,
+        curve_traces=tuple(
+            CertifiedCurveTrace(
+                trace.points,
+                trace.second_parameter_path,
+                trace.first_parameter_path,
+                trace.certificate,
+                closed=trace.closed,
+            )
+            for trace in component.curve_traces
+        ),
+    )
+
+
 def query_intersection(
     geometry: GeometryModel,
     first: EntityHandle | EntityRef | tuple[str, int] | int,
     second: EntityHandle | EntityRef | tuple[str, int] | int,
+    *,
+    qualification: IntersectionQualificationPolicy | None = None,
 ) -> IntersectionResult:
     """Query a qualified intersection without mutating model state.
 
@@ -2924,32 +3860,36 @@ def query_intersection(
 
     if not isinstance(geometry, GeometryModel):
         raise TypeError("query_intersection needs a GeometryModel")
+    qualified_policy = (
+        DEFAULT_INTERSECTION_QUALIFICATION_POLICY
+        if qualification is None
+        else qualification
+    )
+    if not isinstance(qualified_policy, IntersectionQualificationPolicy):
+        raise GeometryError(
+            "qualification must be IntersectionQualificationPolicy"
+        )
     revision = geometry.revision
     first_handle = _normalize_operand(geometry, first)
     second_handle = _normalize_operand(geometry, second)
     pair = (first_handle.kind, second_handle.kind)
     if pair == ("face", "face"):
-        result = _query_face_face(geometry, first_handle, second_handle)
-    elif pair == ("edge", "edge"):
-        result = _query_edge_edge(geometry, first_handle, second_handle)
-    elif pair == ("edge", "face"):
-        result = _query_edge_face(geometry, first_handle, second_handle)
-    elif pair == ("face", "edge"):
-        forward = _query_edge_face(geometry, second_handle, first_handle)
-        components = tuple(
-            replace(
-                item,
-                first_parameter=item.second_parameter,
-                second_parameter=item.first_parameter,
-                first_parameter_range=item.second_parameter_range,
-                second_parameter_range=item.first_parameter_range,
-                first_parameter_path=item.second_parameter_path,
-                second_parameter_path=item.first_parameter_path,
-                first_subparent=item.second_subparent,
-                second_subparent=item.first_subparent,
-            )
-            for item in forward.components
+        result = _query_face_face(
+            geometry, first_handle, second_handle, qualified_policy
         )
+    elif pair == ("edge", "edge"):
+        result = _query_edge_edge(
+            geometry, first_handle, second_handle, qualified_policy
+        )
+    elif pair == ("edge", "face"):
+        result = _query_edge_face(
+            geometry, first_handle, second_handle, qualified_policy
+        )
+    elif pair == ("face", "edge"):
+        forward = _query_edge_face(
+            geometry, second_handle, first_handle, qualified_policy
+        )
+        components = tuple(_swap_component_parents(item) for item in forward.components)
         result = _qualified_result(
             geometry,
             first_handle,
@@ -2961,7 +3901,9 @@ def query_intersection(
             tolerance_used=forward.tolerance_used,
         )
     elif pair == ("member", "member"):
-        result = _query_member_member(geometry, first_handle, second_handle)
+        result = _query_member_member(
+            geometry, first_handle, second_handle, qualified_policy
+        )
     elif pair in (("member", "face"), ("member", "sheet")):
         face_ids = (
             (second_handle.id,)
@@ -2969,7 +3911,11 @@ def query_intersection(
             else _sheet_face_ids(geometry, second_handle.id)
         )
         result = _query_member_material(
-            geometry, first_handle, second_handle, face_ids
+            geometry,
+            first_handle,
+            second_handle,
+            face_ids,
+            qualified_policy,
         )
     elif pair in (("face", "member"), ("sheet", "member")):
         face_ids = (
@@ -2978,22 +3924,13 @@ def query_intersection(
             else _sheet_face_ids(geometry, first_handle.id)
         )
         forward = _query_member_material(
-            geometry, second_handle, first_handle, face_ids
+            geometry,
+            second_handle,
+            first_handle,
+            face_ids,
+            qualified_policy,
         )
-        components = tuple(
-            replace(
-                item,
-                first_parameter=item.second_parameter,
-                second_parameter=item.first_parameter,
-                first_parameter_range=item.second_parameter_range,
-                second_parameter_range=item.first_parameter_range,
-                first_parameter_path=item.second_parameter_path,
-                second_parameter_path=item.first_parameter_path,
-                first_subparent=item.second_subparent,
-                second_subparent=item.first_subparent,
-            )
-            for item in forward.components
-        )
+        components = tuple(_swap_component_parents(item) for item in forward.components)
         result = _qualified_result(
             geometry,
             first_handle,
@@ -3119,10 +4056,10 @@ def _face_imprint_limitation(
     face_ids = (result.first_parent.id, result.second_parent.id)
     for face_id in face_ids:
         attachments = geometry.attachments_for_face(face_id)
-        if attachments:
+        if attachments and result.dimension is IntersectionDimension.REGION:
             return (
                 f"face {face_id} has attachments {list(attachments)} whose "
-                "parameters require an explicit remap"
+                "region-fragment parameters require an explicit remap"
             )
         face = geometry.faces[face_id]
         for edge_id in sorted(
@@ -3140,10 +4077,6 @@ def _face_imprint_limitation(
                     f"{list(member_ids)} or attachments {list(edge_attachments)} "
                     "whose parameters require an explicit remap"
                 )
-    if len(result.components) > 1:
-        supports = tuple(geometry.faces[face_id].surface for face_id in face_ids)
-        if not all(isinstance(surface, Plane) for surface in supports):
-            return "multi-component curved-support face imprint is unsupported"
     return None
 
 
@@ -3153,10 +4086,20 @@ def plan_imprint(
     second: EntityHandle | EntityRef | tuple[str, int] | int | None = None,
     *,
     policy: object,
+    qualification: IntersectionQualificationPolicy | None = None,
 ) -> ImprintPlan:
     """Create an immutable deterministic plan without changing the model."""
 
     revision = geometry.revision
+    qualified_policy = (
+        DEFAULT_INTERSECTION_QUALIFICATION_POLICY
+        if qualification is None
+        else qualification
+    )
+    if not isinstance(qualified_policy, IntersectionQualificationPolicy):
+        raise GeometryError(
+            "qualification must be IntersectionQualificationPolicy"
+        )
     normalized_policy = _normalize_intersection_policy(policy)
     if isinstance(result_or_first, IntersectionResult):
         if second is not None:
@@ -3172,7 +4115,9 @@ def plan_imprint(
     else:
         if second is None:
             raise GeometryError("plan_imprint needs two operands or a qualified result")
-        result = query_intersection(geometry, result_or_first, second)
+        result = query_intersection(
+            geometry, result_or_first, second, qualification=qualified_policy
+        )
         assert result.first_parent is not None and result.second_parent is not None
         first_parent, second_parent = result.first_parent, result.second_parent
 
@@ -3191,20 +4136,26 @@ def plan_imprint(
         # shell/sheet T-junction operation.  It uses the same B-rep imprint as
         # explicit IMPRINT, including FaceUse/Coedge replacement, so callers
         # never need to infer shell coupling from coincident coordinates.
-        connect_curve = (
+        connect_geometry = (
             policy_value == "connect"
             and result.classified
-            and result.dimension is IntersectionDimension.CURVE
+            and result.dimension in (
+                IntersectionDimension.CURVE,
+                IntersectionDimension.REGION,
+            )
         )
         if (
             policy_value == "connect"
             and result.classified
-            and result.dimension is not IntersectionDimension.CURVE
+            and result.dimension not in (
+                IntersectionDimension.CURVE,
+                IntersectionDimension.REGION,
+            )
         ):
             result = _unsupported_imprint_result(
                 result,
-                "face-face CONNECT requires a qualified curve intersection; "
-                "use explicit IMPRINT for region fragmentation",
+                "face-face CONNECT requires a qualified curve or coincident "
+                "region intersection",
             )
         if (
             policy_value == "imprint"
@@ -3234,7 +4185,7 @@ def plan_imprint(
         )
         wants_face_imprint = (
             policy_value == "imprint"
-            or connect_curve
+            or connect_geometry
             or len(reuse_components) == len(result.components) > 0
         )
         if wants_face_imprint and result.classified:
@@ -3386,6 +4337,7 @@ def plan_imprint(
         operation,
         tuple(changes),
         tuple(sorted(affected)),
+        qualified_policy,
     )
     if geometry.revision != revision:
         raise RuntimeError("imprint planning unexpectedly mutated the geometry model")
@@ -4478,7 +5430,8 @@ def _fragment_planar_face_by_segments(
     metadata = face.metadata.to_dict()
     parameterization = face.parameterization
     tags = geometry.tags_for(face.ref)
-    geometry.remove_face(face_id, record=False)
+    attachment_snapshots = _capture_face_attachments(geometry, face_id)
+    geometry._delete_entity("face", face_id)  # noqa: SLF001
     cut_edge_ids: set[int] = set()
 
     def vertex(uv: Sequence[float]) -> int:
@@ -4533,11 +5486,148 @@ def _fragment_planar_face_by_segments(
         )
         geometry.tag(EntityRef("face", child), *tags)
         children.append(child)
+    _remap_face_attachments(
+        geometry, face, children, attachment_snapshots
+    )
     geometry.record_replacement(
         EntityRef("face", face_id),
         tuple(EntityRef("face", child) for child in children),
     )
     return tuple(children), tuple(sorted(cut_edge_ids))
+
+
+def _sheet_ids_for_face(geometry: GeometryModel, face_id: int) -> tuple[int, ...]:
+    return tuple(
+        sorted(
+            {
+                geometry.face_uses[use_id].sheet_id
+                for use_id in geometry._face_structural_uses.get(face_id, ())  # noqa: SLF001
+            }
+        )
+    )
+
+
+def _ensure_face_used_by_sheet(
+    geometry: GeometryModel, face_id: int, sheet_id: int
+) -> EntityHandle | None:
+    """Add one persistent FaceUse when a shared region gains another Sheet owner."""
+
+    existing_use_ids = tuple(
+        sorted(geometry._face_structural_uses.get(face_id, ()))  # noqa: SLF001
+    )
+    for use_id in existing_use_ids:
+        if geometry.face_uses[use_id].sheet_id == sheet_id:
+            return None
+    for use_id in existing_use_ids:
+        existing = geometry.face_uses[use_id]
+        geometry._put_structural(  # noqa: SLF001
+            "face_use",
+            replace(
+                existing,
+                metadata={
+                    **dict(existing.metadata),
+                    "anygeometry.shared_region": True,
+                },
+            ),
+        )
+    sheet = geometry.sheets[sheet_id]
+    use_id = geometry._allocate_structural("face_use")  # noqa: SLF001
+    made = geometry._new_face_use(  # noqa: SLF001
+        use_id,
+        sheet_id,
+        face_id,
+        metadata={"anygeometry.shared_region": True},
+    )
+    geometry._put_structural("face_use", made)  # noqa: SLF001
+    geometry._put_structural(  # noqa: SLF001
+        "sheet", replace(sheet, face_use_ids=(*sheet.face_use_ids, use_id))
+    )
+    return geometry.handle("face_use", use_id)
+
+
+def _share_planar_overlap_ownership(
+    geometry: GeometryModel,
+    overlap_faces: Sequence[EntityRef],
+    sheet_ids: Sequence[int],
+) -> tuple[EntityHandle, ...]:
+    relations: list[EntityHandle] = []
+    for face_ref in sorted(overlap_faces, key=lambda item: item.id):
+        relations.append(geometry.handle("face", face_ref.id))
+        for sheet_id in sorted(set(sheet_ids)):
+            made = _ensure_face_used_by_sheet(geometry, face_ref.id, sheet_id)
+            if made is not None:
+                relations.append(made)
+    return tuple(relations)
+
+
+def _connect_fully_coincident_faces(
+    geometry: GeometryModel,
+    first_face: int,
+    second_face: int,
+) -> tuple[EntityHandle, ...]:
+    """Represent full curved coincidence as one face used by every owner Sheet."""
+
+    if first_face == second_face:
+        return (geometry.handle("face", first_face),)
+    canonical, retired = sorted((first_face, second_face))
+    canonical_face = geometry.faces[canonical]
+    retired_face = geometry.faces[retired]
+    if canonical_face.holes and retired_face.holes:
+        oriented_holes: list[tuple[OrientedEdge, ...]] = []
+        changed_holes = False
+        for canonical_hole in canonical_face.holes:
+            matching = next(
+                (
+                    retired_hole
+                    for retired_hole in retired_face.holes
+                    if {item.edge for item in retired_hole}
+                    == {item.edge for item in canonical_hole}
+                ),
+                None,
+            )
+            if matching is not None:
+                oriented_holes.append(tuple(matching))
+                changed_holes = changed_holes or tuple(matching) != tuple(canonical_hole)
+            else:
+                oriented_holes.append(tuple(canonical_hole))
+        if changed_holes:
+            geometry._put_entity(  # noqa: SLF001
+                "face",
+                replace(canonical_face, holes=tuple(oriented_holes)),
+            )
+    retired_uses = tuple(
+        geometry.face_uses[use_id]
+        for use_id in sorted(geometry._face_structural_uses.get(retired, ()))  # noqa: SLF001
+    )
+    snapshots = _capture_face_attachments(geometry, retired)
+    geometry._delete_entity("face", retired)  # noqa: SLF001
+    relation_handles: list[EntityHandle] = [geometry.handle("face", canonical)]
+    for old_use in retired_uses:
+        made = _ensure_face_used_by_sheet(geometry, canonical, old_use.sheet_id)
+        if made is not None:
+            relation_handles.append(made)
+        for coedge_id in old_use.coedge_ids:
+            if coedge_id in geometry.coedges:
+                geometry._delete_structural("coedge", coedge_id)  # noqa: SLF001
+        geometry._delete_structural("face_use", old_use.id)  # noqa: SLF001
+        sheet = geometry.sheets[old_use.sheet_id]
+        retained = tuple(item for item in sheet.face_use_ids if item != old_use.id)
+        geometry._put_structural(  # noqa: SLF001
+            "sheet", replace(sheet, face_use_ids=retained)
+        )
+    _remap_face_attachments(
+        geometry, retired_face, (canonical,), snapshots
+    )
+    geometry.record_replacement(
+        EntityRef("face", retired), (EntityRef("face", canonical),)
+    )
+    errors = geometry.validate_topology()
+    if errors:
+        raise GeometryError(
+            "coincident-region connection produced invalid topology: "
+            + "; ".join(errors)
+        )
+    return tuple(relation_handles)
 
 
 def _face_imprint_application(
@@ -4563,14 +5653,55 @@ def _face_imprint_application(
             + "; ".join(revalidated.diagnostics)
         )
     if revalidated.dimension is IntersectionDimension.REGION:
+        first_face, second_face = plan.first_parent.id, plan.second_parent.id
+        first_surface = geometry.faces[first_face].surface
+        second_surface = geometry.faces[second_face].surface
+        if (
+            revalidated.kind is IntersectionKind.COINCIDENT
+            and not (
+                isinstance(first_surface, Plane)
+                and isinstance(second_surface, Plane)
+            )
+        ):
+            with geometry.transaction():
+                relations = _connect_fully_coincident_faces(
+                    geometry, first_face, second_face
+                )
+            return None, relations, False
+        if not (
+            isinstance(first_surface, Plane)
+            and isinstance(second_surface, Plane)
+        ):
+            if len(revalidated.components) != 1:
+                raise GeometryError(
+                    "curved coincident-region connection needs one certified cell"
+                )
+            with geometry.transaction():
+                relations = _connect_contained_curved_region(
+                    geometry,
+                    first_face,
+                    second_face,
+                    revalidated.components[0],
+                    revalidated.tolerance_used or geometry.tolerance.length,
+                )
+            return None, relations, False
         from .overlaps import fragment_coplanar_overlaps
 
-        fragmented = fragment_coplanar_overlaps(
-            geometry, (plan.first_parent.id, plan.second_parent.id)
+        sheet_ids = tuple(
+            sorted(
+                set(
+                    (*_sheet_ids_for_face(geometry, first_face),
+                     *_sheet_ids_for_face(geometry, second_face))
+                )
+            )
         )
-        relation_handles = tuple(
-            geometry.handle("face", reference.id)
-            for _name, reference in sorted(fragmented.outputs.items())
+        fragmented = fragment_coplanar_overlaps(
+            geometry, (first_face, second_face)
+        )
+        relation_handles = _share_planar_overlap_ownership(
+            geometry,
+            tuple(EntityRef("face", item) for item in fragmented.overlap_faces),
+            sheet_ids,
         )
         return None, relation_handles, False
     if revalidated.kind is IntersectionKind.DISJOINT:
@@ -4734,13 +5865,9 @@ def _face_imprint_application(
             (),
             False,
         )
-    if len(segments) != 1:
-        raise GeometryError(
-            "multi-component curved-support face imprint is unsupported"
-        )
     return (
-        _imprint_segment(
-            geometry, first_face, second_face, segments[0]
+        _imprint_components(
+            geometry, first_face, second_face, revalidated.components
         ),
         (),
         False,
@@ -4778,7 +5905,10 @@ def apply_imprint(
             + "; ".join(plan.result.diagnostics)
         )
     revalidated = query_intersection(
-        geometry, plan.first_parent, plan.second_parent
+        geometry,
+        plan.first_parent,
+        plan.second_parent,
+        qualification=plan.qualification,
     )
     if (
         revalidated.kind != plan.result.kind

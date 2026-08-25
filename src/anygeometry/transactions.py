@@ -100,6 +100,9 @@ class _TransactionJournal:
     group_changes: set[str] = field(default_factory=set)
     tag_changes: set[EntityKey] = field(default_factory=set)
     invalidated_caches: set[EntityKey] = field(default_factory=set)
+    arc_cache_before: dict[int, object] = field(default_factory=dict)
+    edge_length_cache_before: dict[int, object] = field(default_factory=dict)
+    spatial_index_before: object = _MISSING
     spatial_updates: set[EntityKey] = field(default_factory=set)
     bounds_before: dict[EntityKey, Bounds | None] = field(default_factory=dict)
     replacement_log_start: int = 0

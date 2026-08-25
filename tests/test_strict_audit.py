@@ -224,7 +224,7 @@ def test_non_manifold_and_corrupt_structural_ownership_are_not_clean() -> None:
     assert AuditCode.UNOWNED_STRUCTURAL_USE in {issue.code for issue in report.issues}
 
 
-def test_unsupported_curved_candidate_fails_closed() -> None:
+def test_spline_candidate_uses_the_shared_qualified_predicate() -> None:
     geometry = GeometryModel()
     (
         first_start,
@@ -249,8 +249,9 @@ def test_unsupported_curved_candidate_fails_closed() -> None:
     report = strict_audit(geometry)
 
     assert not report.clean and not report.certifiable
-    assert report.metrics.unclassified_count > 0
-    assert AuditCode.UNCLASSIFIED_CANDIDATE in {issue.code for issue in report.issues}
+    assert report.metrics.classification_complete
+    assert report.metrics.unclassified_count == 0
+    assert AuditCode.EDGE_CROSSING in {issue.code for issue in report.issues}
 
 
 def test_declared_junction_and_attachment_geometry_are_verified() -> None:
@@ -520,7 +521,7 @@ def test_loose_edge_face_candidates_and_far_attachments_cannot_certify_clean() -
     assert report.metrics.classification_complete
 
 
-def test_coons_interior_outside_boundary_aabb_is_broad_phased_fail_closed() -> None:
+def test_coons_interior_outside_boundary_aabb_is_qualified_by_shared_predicate() -> None:
     geometry = GeometryModel()
     boundary = geometry.add_points(
         (
@@ -544,14 +545,14 @@ def test_coons_interior_outside_boundary_aabb_is_broad_phased_fail_closed() -> N
 
     assert not report.clean and not report.certifiable
     assert any(
-        issue.code is AuditCode.UNCLASSIFIED_CANDIDATE
+        issue.code is AuditCode.NONCONFORMAL_INTERFACE
         and any(
             entity.kind == "edge" and entity.id == crossing_edge
             for entity in issue.entities
         )
         for issue in report.issues
     )
-    assert not report.metrics.classification_complete
+    assert report.metrics.classification_complete
 
 
 def test_shared_endpoint_curves_and_generated_cylinders_are_conformal() -> None:

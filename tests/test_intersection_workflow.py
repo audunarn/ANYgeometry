@@ -504,7 +504,7 @@ def test_face_connect_persists_shell_sheet_t_junction_topology() -> None:
     assert geometry.revision == revision
 
 
-def test_face_connect_region_is_typed_unsupported_without_mutation() -> None:
+def test_face_connect_region_creates_shared_brep_ownership() -> None:
     geometry = GeometryModel()
     first = geometry.add_plate(
         geometry.add_points(((0, 0, 0), (3, 0, 0), (3, 2, 0), (0, 2, 0)))
@@ -512,7 +512,10 @@ def test_face_connect_region_is_typed_unsupported_without_mutation() -> None:
     second = geometry.add_plate(
         geometry.add_points(((1, -1, 0), (4, -1, 0), (4, 1, 0), (1, 1, 0)))
     )
-    revision = geometry.revision
+    geometry.add_sheet((first,))
+    geometry.add_sheet((second,))
+    first_sheet = geometry.face_uses[next(iter(geometry._face_structural_uses[first]))].sheet_id
+    second_sheet = geometry.face_uses[next(iter(geometry._face_structural_uses[second]))].sheet_id
 
     plan = plan_imprint(
         geometry,
@@ -521,12 +524,20 @@ def test_face_connect_region_is_typed_unsupported_without_mutation() -> None:
         policy=ConnectionIntent.CONNECT,
     )
 
-    assert plan.result.kind is IntersectionKind.UNSUPPORTED
-    assert plan.operation is ImprintOperation.NO_TOPOLOGY
-    assert "explicit IMPRINT" in plan.result.diagnostics[-1]
-    with pytest.raises(GeometryError, match="unqualified"):
-        apply_imprint(geometry, plan, policy=ConnectionIntent.CONNECT)
-    assert geometry.revision == revision
+    assert plan.result.kind is IntersectionKind.OVERLAP_REGION
+    assert plan.operation is ImprintOperation.FACE_IMPRINT
+    applied = apply_imprint(geometry, plan, policy=ConnectionIntent.CONNECT)
+    overlap_faces = [
+        handle.id for handle in applied.relations if handle.kind == "face"
+    ]
+    assert overlap_faces
+    for face_id in overlap_faces:
+        owners = {
+            geometry.face_uses[use_id].sheet_id
+            for use_id in geometry._face_structural_uses[face_id]
+        }
+        assert owners == {first_sheet, second_sheet}
+    assert geometry.validate_topology() == ()
 
 
 def test_plan_staleness_policy_mismatch_and_failed_apply_do_not_mutate() -> None:

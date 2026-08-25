@@ -1135,10 +1135,18 @@ def validate_structural_topology(
             )
         previous_owner = face_owner.setdefault(face_use.face_id, face_use_id)
         if previous_owner != face_use_id:
-            errors.append(
-                f"face {face_use.face_id} has multiple structural uses "
-                f"{previous_owner} and {face_use_id}"
+            previous_use = checked_face_uses[previous_owner]
+            assert isinstance(previous_use, FaceUse)
+            shared_region = (
+                previous_use.sheet_id != face_use.sheet_id
+                and previous_use.metadata.get("anygeometry.shared_region") is True
+                and face_use.metadata.get("anygeometry.shared_region") is True
             )
+            if not shared_region:
+                errors.append(
+                    f"face {face_use.face_id} has multiple structural uses "
+                    f"{previous_owner} and {face_use_id}"
+                )
         for loop_number, loop in enumerate(face_use.loops):
             oriented: list[tuple[int, int] | None] = []
             loop_edges: set[int] = set()
