@@ -38,7 +38,7 @@ def test_public_owner_exports_use_one_geometry_and_reference_type() -> None:
     assert anygeometry.GeometryModel is GeometryModel
     assert anygeometry.EntityRef is EntityRef
     assert geometry.entity_ref("vertex", vertex).__class__ is EntityRef
-    assert anygeometry.__version__ == "0.4.0"
+    assert anygeometry.__version__ == "0.4.1"
     assert set(anygeometry.__all__) >= {
         "GeometryModel",
         "EntityRef",
@@ -75,11 +75,11 @@ def test_core_and_optional_dependencies_match_release_metadata() -> None:
     assert project["scripts"] == {"anygeometry": "anygeometry.__main__:main"}
     assert (PACKAGE / "py.typed").is_file()
     assert project["readme"] == "README.md"
-    assert project["version"] == "0.4.0"
+    assert project["version"] == "0.4.1"
     assert "Development Status :: 3 - Alpha" in project["classifiers"]
 
 
-def test_release_workflow_publishes_only_by_manual_oidc_dispatch() -> None:
+def test_manual_release_workflow_builds_without_production_publication() -> None:
     workflow = (ROOT / ".github" / "workflows" / "publish.yml").read_text(
         encoding="utf-8"
     )
@@ -88,15 +88,24 @@ def test_release_workflow_publishes_only_by_manual_oidc_dispatch() -> None:
         "name: Publish to PyPI\n\non:\n  workflow_dispatch:\n"
     )
     assert "release:" not in workflow
+    assert "sha256sum *.whl *.tar.gz > SHA256SUMS" in workflow
     assert "repository-url:" not in workflow
-    assert "environment:\n      name: pypi" in workflow
-    assert "id-token: write" in workflow
-    assert (
-        "pypa/gh-action-pypi-publish@"
-        "dc37677b2e1c63e2034f94d8a5b11f265b73ba33"
-    ) in workflow
+    assert "production publication consumes verified GitHub release assets" in workflow
     assert "python -m twine check --strict dist/*.whl dist/*.tar.gz" in workflow
     assert "ANYgeometry-${{ steps.contract.outputs.version }}-release-bundle" in workflow
+
+
+def test_production_release_verifies_prebuilt_assets_before_publish() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "publish-release-assets.yml").read_text(encoding="utf-8")
+    assert "types: [published]" in workflow
+    assert "gh release download" in workflow
+    assert "--pattern 'SHA256SUMS'" in workflow
+    assert "SHA256SUMS does not bind the exact artifact set" in workflow
+    assert "hashlib.sha256(path.read_bytes()).hexdigest()" in workflow
+    assert "python -m build" not in workflow
+    assert "id-token: write" in workflow
+    assert "pypa/gh-action-pypi-publish@release/v1" in workflow
+    assert "timeout-minutes: 20" not in workflow
 
 
 def test_fresh_import_does_not_load_consumers_gui_mesh_or_solver(tmp_path) -> None:

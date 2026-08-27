@@ -99,6 +99,8 @@ jobs:
               if metadata["Name"] != "ANYgeometry" or metadata["Version"] != version:
                   raise SystemExit("sdist metadata does not match the package contract")
           PY
+      - name: Generate release checksums
+        run: cd dist && sha256sum *.whl *.tar.gz > SHA256SUMS
       - name: Upload immutable release bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -109,6 +111,7 @@ jobs:
 
   publish:
     name: Publish distributions to PyPI
+    if: ${{ false }} # production publication consumes verified GitHub release assets
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 10
