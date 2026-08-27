@@ -93,6 +93,43 @@ def test_complete_spline_boundary_connect_reuses_edge_and_sheet_topology() -> No
     assert geometry.revision == repeated_revision
 
 
+def test_corner_to_corner_diagonal_extrusion_splits_support_and_reuses_edge() -> None:
+    geometry = GeometryModel()
+    corners = geometry.add_points(
+        ((0.0, 0.0, 0.0), (2.0, 0.0, 0.0), (2.0, 2.0, 0.0), (0.0, 2.0, 0.0))
+    )
+    support = geometry.add_plate(corners)
+    diagonal = geometry.add_line(corners[0], corners[2])
+    wall = geometry.extrude((diagonal,), (0.0, 0.0, 1.0))[0]
+    support_sheet = geometry.add_sheet((support,))
+    wall_sheet = geometry.add_sheet((wall,))
+
+    result = query_intersection(
+        geometry,
+        geometry.handle("face", support),
+        geometry.handle("face", wall),
+    )
+    plan = plan_imprint(geometry, result, policy="connect")
+    application = apply_imprint(geometry, plan, policy="connect")
+
+    assert result.kind is IntersectionKind.CROSS
+    assert application.face_intersection is not None
+    assert application.face_intersection.edge.id == diagonal
+    assert application.face_intersection.edges == (
+        application.face_intersection.edge,
+    )
+    assert len(application.face_intersection.first_faces) == 2
+    assert tuple(
+        reference.id for reference in application.face_intersection.second_faces
+    ) == (wall,)
+    assert {
+        geometry.face_uses[face_use_id].sheet_id
+        for face_use_id in geometry.face_uses_using_edge(diagonal)
+    } == {support_sheet, wall_sheet}
+    assert geometry.validate_topology() == ()
+    assert geometry._validate_structural() == ()
+
+
 def test_boundary_curve_connect_fails_closed_for_unresolved_nonconvex_or_trim_touching_support() -> None:
     cases = (
         ((0, 0, 0), (3, 0, 0), (1.5, 0.75, 0), (3, 2, 0), (0, 2, 0)),

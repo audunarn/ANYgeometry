@@ -5329,6 +5329,54 @@ def _fragment_planar_face_by_segments(
     if polygon.is_empty or not polygon.is_valid:
         raise GeometryError("invalid planar face polygon")
 
+    # Certified predicates may return a witness a few ulps inside an existing
+    # trim corner (for example 1.9999999999999996 for an exact coordinate of
+    # 2.0).  Passing that value to polygonize leaves a microscopic dangling
+    # segment instead of noding the cut into the boundary, so the valid split
+    # is silently reconstructed as one cell.  Snap only to existing trim
+    # vertices within the participating model tolerance, before any UV
+    # linework is created.  Distance then vertex ID provides a deterministic
+    # choice if a tolerance-sized model contains more than one candidate.
+    trim_vertex_ids = tuple(
+        sorted(
+            {
+                vertex_id
+                for loop in (face.loop,) + face.holes
+                for item in loop
+                for vertex_id in (
+                    geometry.edges[item.edge].start,
+                    geometry.edges[item.edge].end,
+                )
+            }
+        )
+    )
+    trim_vertices = tuple(
+        (vertex_id, geometry.vertex_position(vertex_id))
+        for vertex_id in trim_vertex_ids
+    )
+
+    def snap_endpoint(point: np.ndarray) -> np.ndarray:
+        raw = np.asarray(point, dtype=float)
+        if not trim_vertices:
+            return raw
+        distance, vertex_id, exact = min(
+            (
+                float(np.linalg.norm(raw - position)),
+                candidate_id,
+                position,
+            )
+            for candidate_id, position in trim_vertices
+        )
+        if distance > tolerance:
+            return raw
+        vertex_by_key[_world_key(raw, tolerance)] = vertex_id
+        vertex_by_key[_world_key(exact, tolerance)] = vertex_id
+        return exact
+
+    segments = tuple(
+        (snap_endpoint(start), snap_endpoint(end)) for start, end in segments
+    )
+
     direction = segments[0][1] - segments[0][0]
     direction_length = float(np.linalg.norm(direction))
     if direction_length <= tolerance:
