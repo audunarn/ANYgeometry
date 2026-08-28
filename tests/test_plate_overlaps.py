@@ -132,6 +132,15 @@ def test_overlap_feature_regenerates_and_failed_operation_is_atomic():
     report = geometry.regenerate_features()
     assert report.success
     assert len(geometry.features.get(record.feature_id).outputs) == 3
+    replay = geometry.regenerate_features()
+    assert replay.success
+    replayed_outputs = geometry.features.get(record.feature_id).outputs
+    assert len(replayed_outputs) == 3
+    assert all(
+        reference.kind == "face" and reference.id in geometry.faces
+        for reference in replayed_outputs.values()
+    )
+    assert geometry.validate_topology() == ()
 
     separate = GeometryModel()
     a = separate.add_plate(

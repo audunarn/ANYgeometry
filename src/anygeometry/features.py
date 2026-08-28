@@ -433,6 +433,9 @@ def _bind_topology_roles(
     new: EntityRef,
     new_geometry: "GeometryModel",
     bindings: Dict[EntityRef, tuple[EntityRef, ...]],
+    *,
+    _reverse_edge: bool = False,
+    _edge_directions: Dict[EntityRef, bool] | None = None,
 ) -> None:
     """Bind two feature-output closures by their exact topological roles.
 
@@ -443,19 +446,42 @@ def _bind_topology_roles(
     match.  Any structural disagreement is rejected instead of guessed.
     """
 
+    if _edge_directions is None:
+        _edge_directions = {}
     if old.kind != new.kind:
         raise GeometryError("feature output topology changes entity kind")
     made = (new,)
     previous = bindings.get(old)
     if previous is not None:
-        if previous != made:
-            raise GeometryError(
-                f"feature output topology has conflicting roles for {old}"
-            )
-        return
+        if previous == made:
+            if old.kind == "edge":
+                previous_direction = _edge_directions.setdefault(
+                    old, _reverse_edge
+                )
+                if previous_direction != _reverse_edge:
+                    raise GeometryError(
+                        "feature output topology has conflicting edge orientation "
+                        f"for {old}"
+                    )
+            return
+        if len(previous) > 1:
+            # A downstream topology feature has already replaced this upstream
+            # role with a more precise ordered descendant set. Preserve that
+            # lineage; the descendants themselves are rebound by the later
+            # feature outputs during this replay.
+            return
+        raise GeometryError(
+            f"feature output topology has conflicting roles for {old}"
+        )
     if old == new:
         return
     bindings[old] = made
+    if old.kind == "edge":
+        previous_direction = _edge_directions.setdefault(old, _reverse_edge)
+        if previous_direction != _reverse_edge:
+            raise GeometryError(
+                f"feature output topology has conflicting edge orientation for {old}"
+            )
 
     if old.kind == "vertex":
         return
@@ -464,19 +490,23 @@ def _bind_topology_roles(
         new_edge = new_geometry.edges[new.id]
         if type(old_edge.curve) is not type(new_edge.curve):
             raise GeometryError("feature output topology changes curve type")
+        new_start = new_edge.end if _reverse_edge else new_edge.start
+        new_end = new_edge.start if _reverse_edge else new_edge.end
         _bind_topology_roles(
             EntityRef("vertex", old_edge.start),
             old_geometry,
-            EntityRef("vertex", new_edge.start),
+            EntityRef("vertex", new_start),
             new_geometry,
             bindings,
+            _edge_directions=_edge_directions,
         )
         _bind_topology_roles(
             EntityRef("vertex", old_edge.end),
             old_geometry,
-            EntityRef("vertex", new_edge.end),
+            EntityRef("vertex", new_end),
             new_geometry,
             bindings,
+            _edge_directions=_edge_directions,
         )
         if isinstance(old_edge.curve, Arc):
             assert isinstance(new_edge.curve, Arc)
@@ -486,6 +516,7 @@ def _bind_topology_roles(
                 EntityRef("vertex", new_edge.curve.via_vertex),
                 new_geometry,
                 bindings,
+                _edge_directions=_edge_directions,
             )
         elif isinstance(old_edge.curve, Spline):
             assert isinstance(new_edge.curve, Spline)
@@ -495,9 +526,12 @@ def _bind_topology_roles(
                 raise GeometryError(
                     "feature output topology changes spline control count"
                 )
+            new_controls = new_edge.curve.control_vertices
+            if _reverse_edge:
+                new_controls = tuple(reversed(new_controls))
             for old_vertex, new_vertex in zip(
                 old_edge.curve.control_vertices,
-                new_edge.curve.control_vertices,
+                new_controls,
             ):
                 _bind_topology_roles(
                     EntityRef("vertex", old_vertex),
@@ -505,6 +539,7 @@ def _bind_topology_roles(
                     EntityRef("vertex", new_vertex),
                     new_geometry,
                     bindings,
+                    _edge_directions=_edge_directions,
                 )
         return
 
@@ -523,14 +558,14 @@ def _bind_topology_roles(
         (new_face.loop,) + tuple(new_face.holes),
     ):
         for old_item, new_item in zip(old_loop, new_loop):
-            if old_item.forward != new_item.forward:
-                raise GeometryError("feature output topology changes loop orientation")
             _bind_topology_roles(
                 EntityRef("edge", old_item.edge),
                 old_geometry,
                 EntityRef("edge", new_item.edge),
                 new_geometry,
                 bindings,
+                _reverse_edge=old_item.forward != new_item.forward,
+                _edge_directions=_edge_directions,
             )
 
 
@@ -1635,7 +1670,9 @@ class FeatureHistory:
             )
 
         transition_by_old: Dict[EntityRef, tuple[EntityRef, ...]] = {}
+        edge_directions: Dict[EntityRef, bool] = {}
         new_by_id = {record.feature_id: record for record in replayed}
+        working_history = working.replacement_history()
         try:
             for (feature_id, key), old_items in previous_outputs.items():
                 new_binding = new_by_id[feature_id].outputs.get(key)
@@ -1644,12 +1681,17 @@ class FeatureHistory:
                 )
                 if len(old_items) == len(descendants):
                     for old, new in zip(old_items, descendants):
+                        exact_replacement = working_history.get(old)
+                        if exact_replacement == (new,):
+                            transition_by_old[old] = exact_replacement
+                            continue
                         _bind_topology_roles(
                             old,
                             geometry,
                             new,
                             working,
                             transition_by_old,
+                            _edge_directions=edge_directions,
                         )
                 else:
                     for old in old_items:
@@ -1978,7 +2020,9 @@ class FeatureHistory:
             results.append(FeatureResult(record.feature_id, "ok", dict(outputs)))
 
         transition_by_old: Dict[EntityRef, tuple[EntityRef, ...]] = {}
+        edge_directions: Dict[EntityRef, bool] = {}
         new_by_id = {record.feature_id: record for record in replayed}
+        working_history = working.replacement_history()
         # A downstream topology feature and its upstream producer can resolve
         # to the same old terminal entity.  Iterate in history order and let
         # the latest producer own that transition; otherwise an upstream
@@ -1991,12 +2035,17 @@ class FeatureHistory:
                 )
                 if len(old_items) == len(descendants):
                     for old, new in zip(old_items, descendants):
+                        exact_replacement = working_history.get(old)
+                        if exact_replacement == (new,):
+                            transition_by_old[old] = exact_replacement
+                            continue
                         _bind_topology_roles(
                             old,
                             geometry,
                             new,
                             working,
                             transition_by_old,
+                            _edge_directions=edge_directions,
                         )
                 else:
                     for old in old_items:

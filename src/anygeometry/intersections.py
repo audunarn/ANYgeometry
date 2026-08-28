@@ -5707,11 +5707,38 @@ def _fragment_planar_face_by_segments(
         ordered_uv, ordered_uv[1:]
     ):
         seam_lines.append(LineString((previous_end, following_start)))
-    for point_uv in (ordered_uv[0][0], ordered_uv[-1][1]):
+    endpoint_extensions = (
+        (ordered_uv[0][0], ordered_uv[0][1]),
+        (ordered_uv[-1][1], ordered_uv[-1][0]),
+    )
+    minimum_x, minimum_y, maximum_x, maximum_y = polygon.bounds
+    extension_length = 4.0 * max(
+        math.hypot(maximum_x - minimum_x, maximum_y - minimum_y),
+        1.0,
+    )
+    for point_uv, interior_uv in endpoint_extensions:
         point = Point(point_uv)
         if float(point.distance(polygon.boundary)) <= tolerance:
             continue
-        _source, boundary = nearest_points(point, polygon.boundary)
+        away = np.asarray(point_uv, dtype=float) - np.asarray(
+            interior_uv, dtype=float
+        )
+        away_length = float(np.linalg.norm(away))
+        if away_length <= tolerance:
+            raise GeometryError("planned face cut has no endpoint direction")
+        far_uv = np.asarray(point_uv, dtype=float) + (
+            extension_length / away_length
+        ) * away
+        ray = LineString((point_uv, tuple(float(item) for item in far_uv)))
+        crossing = ray.intersection(polygon.boundary)
+        if crossing.is_empty:
+            _source, boundary = nearest_points(point, polygon.boundary)
+        else:
+            # Continue the qualified intersection direction to the trim.  A
+            # nearest-boundary seam can fold back onto the material segment at
+            # a concave T-junction and fail to partition an otherwise valid
+            # face.
+            _source, boundary = nearest_points(point, crossing)
         boundary_uv = tuple(boundary.coords)[0]
         seam_lines.append(LineString((point_uv, boundary_uv)))
         boundary_world.append(
@@ -5826,6 +5853,95 @@ def _fragment_planar_face_by_segments(
         tuple(EntityRef("face", child) for child in children),
     )
     return tuple(children), tuple(sorted(cut_edge_ids))
+
+
+def _canonicalize_coincident_boundary_edges(
+    geometry: GeometryModel,
+    candidates: Sequence[int],
+    *,
+    tolerance: float,
+) -> int:
+    """Make certified coincident face-boundary edges share one identity.
+
+    Separate sketch extrusions can create the same physical shell junction with
+    independent vertices and edges. A CONNECT imprint needs one topological
+    relation, so retire duplicates after rewiring their faces to the lowest-ID
+    edge. Structural member uses and attachments fail closed because they need
+    their own intent-preserving remap.
+    """
+
+    edge_ids = tuple(sorted(set(candidates)))
+    if not edge_ids:
+        raise GeometryError("coincident boundary canonicalization needs an edge")
+    canonical_id = edge_ids[0]
+    canonical = geometry.edges[canonical_id]
+    canonical_points = geometry.sample_edge(
+        canonical_id, np.asarray((0.0, 1.0))
+    )
+
+    for duplicate_id in edge_ids[1:]:
+        duplicate = geometry.edges[duplicate_id]
+        duplicate_points = geometry.sample_edge(
+            duplicate_id, np.asarray((0.0, 1.0))
+        )
+        direct = (
+            float(np.linalg.norm(duplicate_points[0] - canonical_points[0]))
+            <= tolerance
+            and float(np.linalg.norm(duplicate_points[1] - canonical_points[1]))
+            <= tolerance
+        )
+        reverse = (
+            float(np.linalg.norm(duplicate_points[0] - canonical_points[1]))
+            <= tolerance
+            and float(np.linalg.norm(duplicate_points[1] - canonical_points[0]))
+            <= tolerance
+        )
+        if not (direct or reverse):
+            raise GeometryError("candidate boundary edges are not coincident")
+        if geometry.members_using_edge(duplicate_id) or geometry._target_attachments.get(  # noqa: SLF001
+            ("edge", duplicate_id), ()
+        ):
+            raise GeometryError(
+                "cannot canonicalize a coincident boundary edge with structural "
+                "member use or attachments"
+            )
+
+        endpoint_pairs = (
+            ((duplicate.start, canonical.start), (duplicate.end, canonical.end))
+            if direct
+            else ((duplicate.start, canonical.end), (duplicate.end, canonical.start))
+        )
+        for old_vertex, new_vertex in endpoint_pairs:
+            _merge_vertex(geometry, old_vertex, new_vertex)
+
+        for face_id in tuple(geometry.faces_using_edge(duplicate_id)):
+            face = geometry.faces[face_id]
+
+            def replace_loop(loop: Sequence[OrientedEdge]) -> tuple[OrientedEdge, ...]:
+                return tuple(
+                    OrientedEdge(
+                        canonical_id,
+                        item.forward if direct else not item.forward,
+                    )
+                    if item.edge == duplicate_id
+                    else item
+                    for item in loop
+                )
+
+            geometry._put_entity(  # noqa: SLF001
+                "face",
+                replace(
+                    face,
+                    loop=replace_loop(face.loop),
+                    holes=tuple(replace_loop(loop) for loop in face.holes),
+                ),
+            )
+        geometry.remove_edge(duplicate_id, record=False)
+        geometry.record_replacement(
+            EntityRef("edge", duplicate_id), (EntityRef("edge", canonical_id),)
+        )
+
+    return canonical_id
 
 
 def _sheet_ids_for_face(geometry: GeometryModel, face_id: int) -> tuple[int, ...]:
@@ -6158,7 +6274,9 @@ def _face_imprint_application(
                         ):
                             candidates.append(edge.id)
             if candidates:
-                edge_id = min(candidates)
+                edge_id = _canonicalize_coincident_boundary_edges(
+                    geometry, candidates, tolerance=tolerance
+                )
                 edge = geometry.edges[edge_id]
                 for vertex_id in (edge.start, edge.end):
                     vertex_by_key[_world_key(
