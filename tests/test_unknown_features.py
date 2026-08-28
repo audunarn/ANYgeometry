@@ -122,9 +122,13 @@ def test_downstream_mutator_replays_from_exact_feature_output() -> None:
 
     def split(model: GeometryModel, feature: object, inputs: object) -> dict:
         face = inputs["face"][0]
-        _divider, children = split_face_at(
+        _divider, first_children = split_face_at(
             model, face.id, 0, float(feature.parameters["fraction"])
         )
+        _nested_divider, nested = split_face_at(
+            model, first_children[0], 1, 0.5
+        )
+        children = (*nested, first_children[1])
         return {
             f"face/{index}": EntityRef("face", identifier)
             for index, identifier in enumerate(children)
@@ -136,21 +140,31 @@ def test_downstream_mutator_replays_from_exact_feature_output() -> None:
 
     assert geometry.regenerate_features(registry).success
     assert geometry.features.get(modifier.feature_id).state == "ok"
-    assert len(geometry.faces) == 2
-    # The split legitimately replaces the two crossed edges; the two parallel
-    # boundary edges belong to the clean prefix and retain their identities.
-    assert len(original_edges.intersection(geometry.edges)) == 2
+    assert len(geometry.faces) == 3
+    # The two chained splits legitimately replace three crossed boundary edges;
+    # the untouched edge belongs to the clean prefix and retains its identity.
+    assert len(original_edges.intersection(geometry.edges)) == 1
     assert original_vertices <= set(geometry.vertices)
     assert all(
         geometry.features.validate_materialization(record, geometry) is None
         for record in geometry.features.records
+    )
+    first_materialization = tuple(
+        EntityRef(kind, identifier)
+        for kind, identifiers in (
+            ("vertex", geometry.vertices),
+            ("edge", geometry.edges),
+            ("face", geometry.faces),
+        )
+        for identifier in identifiers
     )
 
     geometry.features.update(
         modifier.feature_id, parameters={"fraction": 0.4}
     )
     assert geometry.regenerate_features(registry).success
-    assert len(geometry.faces) == 2
+    assert len(geometry.faces) == 3
+    assert all(geometry.resolve_ref(reference) for reference in first_materialization)
     assert geometry.validate_topology() == ()
 
 

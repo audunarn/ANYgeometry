@@ -427,6 +427,113 @@ def _entity_closure_refs(
     return selected
 
 
+def _bind_topology_roles(
+    old: EntityRef,
+    old_geometry: "GeometryModel",
+    new: EntityRef,
+    new_geometry: "GeometryModel",
+    bindings: Dict[EntityRef, tuple[EntityRef, ...]],
+) -> None:
+    """Bind two feature-output closures by their exact topological roles.
+
+    A mutating downstream executor may replace entities which were themselves
+    descendants in an earlier replacement graph.  On an edit, those terminal
+    descendants have to lead to the new materialization too.  Stable output
+    slots and ordered loops provide that identity without a spatial/tolerance
+    match.  Any structural disagreement is rejected instead of guessed.
+    """
+
+    if old.kind != new.kind:
+        raise GeometryError("feature output topology changes entity kind")
+    made = (new,)
+    previous = bindings.get(old)
+    if previous is not None:
+        if previous != made:
+            raise GeometryError(
+                f"feature output topology has conflicting roles for {old}"
+            )
+        return
+    if old == new:
+        return
+    bindings[old] = made
+
+    if old.kind == "vertex":
+        return
+    if old.kind == "edge":
+        old_edge = old_geometry.edges[old.id]
+        new_edge = new_geometry.edges[new.id]
+        if type(old_edge.curve) is not type(new_edge.curve):
+            raise GeometryError("feature output topology changes curve type")
+        _bind_topology_roles(
+            EntityRef("vertex", old_edge.start),
+            old_geometry,
+            EntityRef("vertex", new_edge.start),
+            new_geometry,
+            bindings,
+        )
+        _bind_topology_roles(
+            EntityRef("vertex", old_edge.end),
+            old_geometry,
+            EntityRef("vertex", new_edge.end),
+            new_geometry,
+            bindings,
+        )
+        if isinstance(old_edge.curve, Arc):
+            assert isinstance(new_edge.curve, Arc)
+            _bind_topology_roles(
+                EntityRef("vertex", old_edge.curve.via_vertex),
+                old_geometry,
+                EntityRef("vertex", new_edge.curve.via_vertex),
+                new_geometry,
+                bindings,
+            )
+        elif isinstance(old_edge.curve, Spline):
+            assert isinstance(new_edge.curve, Spline)
+            if len(old_edge.curve.control_vertices) != len(
+                new_edge.curve.control_vertices
+            ):
+                raise GeometryError(
+                    "feature output topology changes spline control count"
+                )
+            for old_vertex, new_vertex in zip(
+                old_edge.curve.control_vertices,
+                new_edge.curve.control_vertices,
+            ):
+                _bind_topology_roles(
+                    EntityRef("vertex", old_vertex),
+                    old_geometry,
+                    EntityRef("vertex", new_vertex),
+                    new_geometry,
+                    bindings,
+                )
+        return
+
+    old_face = old_geometry.faces[old.id]
+    new_face = new_geometry.faces[new.id]
+    if (
+        type(old_face.surface) is not type(new_face.surface)
+        or type(old_face.parameterization) is not type(new_face.parameterization)
+        or len(old_face.loop) != len(new_face.loop)
+        or len(old_face.holes) != len(new_face.holes)
+        or tuple(map(len, old_face.holes)) != tuple(map(len, new_face.holes))
+    ):
+        raise GeometryError("feature output topology changes face structure")
+    for old_loop, new_loop in zip(
+        (old_face.loop,) + tuple(old_face.holes),
+        (new_face.loop,) + tuple(new_face.holes),
+    ):
+        for old_item, new_item in zip(old_loop, new_loop):
+            if old_item.forward != new_item.forward:
+                raise GeometryError("feature output topology changes loop orientation")
+            _bind_topology_roles(
+                EntityRef("edge", old_item.edge),
+                old_geometry,
+                EntityRef("edge", new_item.edge),
+                new_geometry,
+                bindings,
+            )
+
+
 def _face_corner_vertex_ids(face: Face, geometry: "GeometryModel") -> tuple[int, ...]:
     """Resolve mapped corner loop positions to their oriented start vertices."""
 
@@ -1529,15 +1636,34 @@ class FeatureHistory:
 
         transition_by_old: Dict[EntityRef, tuple[EntityRef, ...]] = {}
         new_by_id = {record.feature_id: record for record in replayed}
-        for (feature_id, key), old_items in previous_outputs.items():
-            new_binding = new_by_id[feature_id].outputs.get(key)
-            descendants = (
-                () if new_binding is None else working.resolve_ref(new_binding)
+        try:
+            for (feature_id, key), old_items in previous_outputs.items():
+                new_binding = new_by_id[feature_id].outputs.get(key)
+                descendants = (
+                    () if new_binding is None else working.resolve_ref(new_binding)
+                )
+                if len(old_items) == len(descendants):
+                    for old, new in zip(old_items, descendants):
+                        _bind_topology_roles(
+                            old,
+                            geometry,
+                            new,
+                            working,
+                            transition_by_old,
+                        )
+                else:
+                    for old in old_items:
+                        same_kind = tuple(
+                            item for item in descendants if item.kind == old.kind
+                        )
+                        if old not in same_kind:
+                            transition_by_old[old] = same_kind
+        except GeometryError as error:
+            return RegenerationReport(
+                False,
+                tuple(results),
+                diagnostic=f"cannot preserve feature lineage: {error}",
             )
-            for old in old_items:
-                same_kind = tuple(item for item in descendants if item.kind == old.kind)
-                if old not in same_kind:
-                    transition_by_old[old] = same_kind
         transitions = tuple(transition_by_old.items())
 
         kept = _entity_closure_refs(
@@ -1577,6 +1703,24 @@ class FeatureHistory:
         discard_new.difference_update(kept)
         retire_old.difference_update(kept)
 
+        existing_history = working.replacement_history()
+        pending_transitions: list[
+            tuple[EntityRef, tuple[EntityRef, ...]]
+        ] = []
+        for old, descendants in transitions:
+            if old not in existing_history:
+                pending_transitions.append((old, descendants))
+                continue
+            if working.resolve_ref(old) != descendants:
+                return RegenerationReport(
+                    False,
+                    tuple(results),
+                    diagnostic=(
+                        "cannot preserve feature lineage: replacement history "
+                        f"conflicts for {old}"
+                    ),
+                )
+
         def remove_exact(references: Iterable[EntityRef]) -> None:
             selected = set(references)
             for reference in sorted(
@@ -1604,7 +1748,7 @@ class FeatureHistory:
             with working.transaction():
                 remove_exact(discard_new)
                 remove_exact(retire_old)
-                working.record_replacements_atomic(transitions)
+                working.record_replacements_atomic(pending_transitions)
         except GeometryError as error:
             return RegenerationReport(
                 False,
@@ -1839,15 +1983,34 @@ class FeatureHistory:
         # to the same old terminal entity.  Iterate in history order and let
         # the latest producer own that transition; otherwise an upstream
         # aggregate output could conflict with the child's more precise slot.
-        for (feature_id, key), old_items in previous_outputs.items():
-            new_binding = new_by_id[feature_id].outputs.get(key)
-            descendants = (
-                () if new_binding is None else working.resolve_ref(new_binding)
+        try:
+            for (feature_id, key), old_items in previous_outputs.items():
+                new_binding = new_by_id[feature_id].outputs.get(key)
+                descendants = (
+                    () if new_binding is None else working.resolve_ref(new_binding)
+                )
+                if len(old_items) == len(descendants):
+                    for old, new in zip(old_items, descendants):
+                        _bind_topology_roles(
+                            old,
+                            geometry,
+                            new,
+                            working,
+                            transition_by_old,
+                        )
+                else:
+                    for old in old_items:
+                        same_kind = tuple(
+                            item for item in descendants if item.kind == old.kind
+                        )
+                        if old not in same_kind:
+                            transition_by_old[old] = same_kind
+        except GeometryError as error:
+            return RegenerationReport(
+                False,
+                tuple(results),
+                diagnostic=f"cannot preserve feature lineage: {error}",
             )
-            for old in old_items:
-                same_kind = tuple(item for item in descendants if item.kind == old.kind)
-                if old not in same_kind:
-                    transition_by_old[old] = same_kind
         transitions = list(transition_by_old.items())
 
         historical = list(previous_history.items())
