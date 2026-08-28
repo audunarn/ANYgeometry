@@ -552,6 +552,7 @@ class FeatureRegistry:
 
     def __init__(self) -> None:
         self._executors: Dict[str, FeatureExecutor | ExecutorCallable] = {}
+        self._replay_modes: Dict[str, str] = {}
 
     def register(
         self,
@@ -559,19 +560,43 @@ class FeatureRegistry:
         executor: FeatureExecutor | ExecutorCallable,
         *,
         replace: bool = False,
+        replay_mode: str | None = None,
     ) -> None:
         key = str(kind).strip()
         if not key:
             raise ValueError("a feature executor needs a non-empty kind")
-        if key in self._executors and not replace:
-            raise ValueError(f"a feature executor is already registered for {key!r}")
+        if replay_mode not in (None, "additive", "mutating"):
+            raise ValueError(
+                "feature replay_mode must be 'additive', 'mutating', or None"
+            )
+        if key in self._executors:
+            if not replace:
+                raise ValueError(
+                    f"a feature executor is already registered for {key!r}"
+                )
+            if replay_mode != self._replay_modes.get(key):
+                raise ValueError(
+                    f"replacement executor for {key!r} conflicts with its "
+                    "registered replay_mode; unregister it explicitly first"
+                )
         self._executors[key] = executor
+        if replay_mode is None:
+            self._replay_modes.pop(key, None)
+        else:
+            self._replay_modes[key] = replay_mode
 
     def unregister(self, kind: str) -> None:
-        self._executors.pop(str(kind), None)
+        key = str(kind)
+        self._executors.pop(key, None)
+        self._replay_modes.pop(key, None)
 
     def has(self, kind: str) -> bool:
         return str(kind) in self._executors
+
+    def replay_mode(self, kind: str) -> str | None:
+        """Return the registered incremental scheduling contract, if any."""
+
+        return self._replay_modes.get(str(kind))
 
     def execute(
         self,
@@ -1305,7 +1330,9 @@ class FeatureHistory:
     def _incremental_additive(kind: str) -> bool:
         return kind in _INCREMENTAL_ADDITIVE_FEATURES or kind.startswith("generator.")
 
-    def _incremental_start(self, dirty_index: int) -> tuple[int, bool] | None:
+    def _incremental_start(
+        self, dirty_index: int, registry: FeatureRegistry
+    ) -> tuple[int, bool] | None:
         """Return a safe replay start and whether the suffix needs fresh closure."""
 
         start = dirty_index
@@ -1316,9 +1343,17 @@ class FeatureHistory:
         while True:
             earlier = start
             for record in self._records[start:]:
-                if self._incremental_additive(record.kind) or record.suppressed:
+                replay_mode = registry.replay_mode(record.kind)
+                if (
+                    self._incremental_additive(record.kind)
+                    or replay_mode == "additive"
+                    or record.suppressed
+                ):
                     continue
-                if record.kind not in _INCREMENTAL_MUTATING_FEATURES:
+                if (
+                    record.kind not in _INCREMENTAL_MUTATING_FEATURES
+                    and replay_mode != "mutating"
+                ):
                     return None
                 force_new = True
                 for references in record.inputs.values():
@@ -1646,10 +1681,21 @@ class FeatureHistory:
                 ),
             )
         dirty_index = 0 if dirty_index is None else dirty_index
-        incremental = None if force_full_replay else self._incremental_start(dirty_index)
+        incremental = (
+            None
+            if force_full_replay
+            else self._incremental_start(dirty_index, registry)
+        )
         if incremental is not None:
             start, force_new = incremental
-            if not (start == 0 and force_new):
+            if start == 0 and force_new:
+                # A modifier whose exact FeatureOutputRef dependency reaches
+                # the beginning of history must replay from the captured
+                # baseline.  It cannot use the live-topology incremental path,
+                # but the dependency walk above has proved a full replay safe.
+                force_full_replay = True
+                dirty_index = 0
+            else:
                 incremental_report = self._regenerate_incremental(
                     geometry, registry, start, force_new=force_new
                 )

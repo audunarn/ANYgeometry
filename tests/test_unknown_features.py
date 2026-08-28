@@ -14,6 +14,7 @@ from anygeometry import (
     FeatureRegistry,
     GeometryError,
     GeometryModel,
+    builtin_feature_registry,
     from_dict,
     to_dict,
 )
@@ -97,6 +98,79 @@ def test_custom_executor_output_serializes_as_portable_frozen_materialization() 
     record = first["features"]["records"][0]
     assert record["state"] == "frozen"
     assert "verified last-good materialization" in record["diagnostic"]
+
+
+def test_downstream_mutator_replays_from_exact_feature_output() -> None:
+    from anygeometry.operations import split_face_at
+
+    geometry = GeometryModel()
+    geometry.features.capture_baseline(geometry)
+    plate = geometry.features.append(
+        "generator.plate", parameters={"length": 4.0, "width": 3.0}
+    )
+    assert geometry.regenerate_features().success
+    modifier = geometry.features.append(
+        "vendor.mesh.butterfly",
+        parameters={"fraction": 0.5},
+        inputs={
+            "face": (FeatureOutputRef(plate.feature_id, "face/1", "face"),)
+        },
+    )
+    registry = builtin_feature_registry()
+
+    def split(model: GeometryModel, feature: object, inputs: object) -> dict:
+        face = inputs["face"][0]
+        _divider, children = split_face_at(
+            model, face.id, 0, float(feature.parameters["fraction"])
+        )
+        return {
+            f"face/{index}": EntityRef("face", identifier)
+            for index, identifier in enumerate(children)
+        }
+
+    registry.register(
+        "vendor.mesh.butterfly", split, replay_mode="mutating"
+    )
+
+    assert geometry.regenerate_features(registry).success
+    assert geometry.features.get(modifier.feature_id).state == "ok"
+    assert len(geometry.faces) == 2
+
+    geometry.features.update(
+        modifier.feature_id, parameters={"fraction": 0.4}
+    )
+    assert geometry.regenerate_features(registry).success
+    assert len(geometry.faces) == 2
+    assert geometry.validate_topology() == ()
+
+
+def test_feature_registry_replay_mode_is_strict_and_removed_with_executor() -> None:
+    registry = FeatureRegistry()
+
+    def executor(_geometry, _feature, _inputs):
+        return {}
+
+    with pytest.raises(ValueError, match="replay_mode"):
+        registry.register("vendor.bad", executor, replay_mode="unsafe")
+
+    registry.register("vendor.good", executor, replay_mode="mutating")
+    assert registry.replay_mode("vendor.good") == "mutating"
+    with pytest.raises(ValueError, match="already registered"):
+        registry.register("vendor.good", executor, replay_mode="additive")
+    with pytest.raises(ValueError, match="conflicts with.*replay_mode"):
+        registry.register(
+            "vendor.good",
+            executor,
+            replay_mode="additive",
+            replace=True,
+        )
+    registry.register(
+        "vendor.good", executor, replay_mode="mutating", replace=True
+    )
+
+    registry.unregister("vendor.good")
+    assert not registry.has("vendor.good")
+    assert registry.replay_mode("vendor.good") is None
 
 
 def test_tampered_unknown_materialization_fails_document_integrity() -> None:
