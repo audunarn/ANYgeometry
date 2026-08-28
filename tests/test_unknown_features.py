@@ -109,6 +109,8 @@ def test_downstream_mutator_replays_from_exact_feature_output() -> None:
         "generator.plate", parameters={"length": 4.0, "width": 3.0}
     )
     assert geometry.regenerate_features().success
+    original_edges = frozenset(geometry.edges)
+    original_vertices = frozenset(geometry.vertices)
     modifier = geometry.features.append(
         "vendor.mesh.butterfly",
         parameters={"fraction": 0.5},
@@ -135,6 +137,14 @@ def test_downstream_mutator_replays_from_exact_feature_output() -> None:
     assert geometry.regenerate_features(registry).success
     assert geometry.features.get(modifier.feature_id).state == "ok"
     assert len(geometry.faces) == 2
+    # The split legitimately replaces the two crossed edges; the two parallel
+    # boundary edges belong to the clean prefix and retain their identities.
+    assert len(original_edges.intersection(geometry.edges)) == 2
+    assert original_vertices <= set(geometry.vertices)
+    assert all(
+        geometry.features.validate_materialization(record, geometry) is None
+        for record in geometry.features.records
+    )
 
     geometry.features.update(
         modifier.feature_id, parameters={"fraction": 0.4}

@@ -1356,6 +1356,12 @@ class FeatureHistory:
                 ):
                     return None
                 force_new = True
+                if not record.outputs:
+                    # A newly appended modifier has an exact live prefix to
+                    # consume and no earlier materialization to retire.  Run
+                    # it directly so feature-authored boundary identities are
+                    # not needlessly regenerated on first publication.
+                    continue
                 for references in record.inputs.values():
                     for reference in references:
                         if isinstance(reference, FeatureOutputRef):
