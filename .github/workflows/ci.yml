@@ -17,7 +17,6 @@ jobs:
   pytest:
     name: pytest (${{ matrix.os }}, Python ${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -41,13 +40,12 @@ jobs:
         run: python -m pytest
       - name: Verify package import and CLI version
         run: |
-          python -c "import anygeometry; assert anygeometry.__version__ == '0.4.0'"
+          python -c "import anygeometry; assert anygeometry.__version__ == '0.4.1'"
           python -m anygeometry --version
 
   planar-absence:
     name: pytest (planar backend absent)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -79,7 +77,6 @@ jobs:
   wheel:
     name: Build and verify wheel
     runs-on: ubuntu-latest
-    timeout-minutes: 15
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

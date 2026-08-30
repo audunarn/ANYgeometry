@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Sequence
@@ -28,6 +29,7 @@ from .policies import MutationPolicy
 from .predicates import (
     DEFAULT_INTERSECTION_QUALIFICATION_POLICY,
     CertifiedCurveTrace,
+    IntersectionCertificate,
     IntersectionComponent,
     IntersectionDimension,
     IntersectionKind,
@@ -3164,6 +3166,231 @@ def _component_on_members(
     )
 
 
+def _canonical_member_point_components(
+    geometry: GeometryModel,
+    first_member_id: int,
+    second_member_id: int,
+    components: Sequence[IntersectionComponent],
+    tolerance: float,
+) -> tuple[IntersectionComponent, ...]:
+    """Collapse edge-use duplicates of one physical Member intersection.
+
+    A Member parameter is continuous across its ordered edge-use chain.  When
+    two already-fragmented Members meet at a shared internal vertex, every
+    adjacent edge-use pair reports the same point.  Those reports are one
+    connected intersection component, not separate physical crossings.
+
+    Parent parameters are part of the equivalence test so distinct visits to
+    the same world point (for example, on a self-intersecting Member) remain
+    distinct and therefore fail closed in the current single-junction planner.
+    """
+
+    def member_parameter_tolerance(member_id: int) -> float:
+        member = geometry.members[member_id]
+        length = sum(
+            geometry.edge_length(geometry.member_edge_uses[use_id].edge_id)
+            for use_id in member.edge_use_ids
+        )
+        return geometry.tolerance.effective_parameter(length, length)
+
+    first_parameter_tolerance = member_parameter_tolerance(first_member_id)
+    second_parameter_tolerance = member_parameter_tolerance(second_member_id)
+
+    def witness_distance(
+        first_witness: Sequence[float], second_witness: Sequence[float]
+    ) -> float:
+        distance = math.dist(first_witness, second_witness)
+        if distance == 0.0 and tuple(first_witness) != tuple(second_witness):
+            return math.nextafter(0.0, math.inf)
+        return distance
+
+    def equivalent(
+        first_component: IntersectionComponent,
+        second_component: IntersectionComponent,
+    ) -> bool:
+        if (
+            len(first_component.witnesses) != 1
+            or len(second_component.witnesses) != 1
+            or first_component.first_parameter is None
+            or second_component.first_parameter is None
+            or first_component.second_parameter is None
+            or second_component.second_parameter is None
+            or len(first_component.first_parameter) != 1
+            or len(second_component.first_parameter) != 1
+            or len(first_component.second_parameter) != 1
+            or len(second_component.second_parameter) != 1
+        ):
+            return False
+        return (
+            abs(
+                first_component.first_parameter[0]
+                - second_component.first_parameter[0]
+            )
+            <= first_parameter_tolerance
+            and abs(
+                first_component.second_parameter[0]
+                - second_component.second_parameter[0]
+            )
+            <= second_parameter_tolerance
+            and witness_distance(
+                first_component.witnesses[0], second_component.witnesses[0]
+            )
+            <= tolerance
+        )
+
+    # Threshold equivalence is symmetric but not transitive.  A greedy
+    # single-link cluster can therefore join two distinct visits through an
+    # intermediate component, and the outcome can change when the operands
+    # (and hence the parameter sort order) are swapped.  Build the complete
+    # equivalence graph instead.  A connected component is collapsed only
+    # when it is a clique; an ambiguous chain is kept component-by-component
+    # so the single-junction planner continues to fail closed.
+    adjacency = [{index} for index in range(len(components))]
+    for first_index in range(len(components)):
+        for second_index in range(first_index + 1, len(components)):
+            if equivalent(components[first_index], components[second_index]):
+                adjacency[first_index].add(second_index)
+                adjacency[second_index].add(first_index)
+
+    visited: set[int] = set()
+    group_indices: list[tuple[int, ...]] = []
+    for seed in range(len(components)):
+        if seed in visited:
+            continue
+        pending = [seed]
+        connected: list[int] = []
+        while pending:
+            current = pending.pop()
+            if current in visited:
+                continue
+            visited.add(current)
+            connected.append(current)
+            pending.extend(sorted(adjacency[current] - visited, reverse=True))
+        connected.sort()
+        is_clique = all(
+            second_index in adjacency[first_index]
+            for position, first_index in enumerate(connected)
+            for second_index in connected[position + 1 :]
+        )
+        if is_clique:
+            group_indices.append(tuple(connected))
+        else:
+            group_indices.extend((index,) for index in connected)
+    group_indices.sort(key=lambda group: group[0])
+    groups = [
+        [components[index] for index in indices] for indices in group_indices
+    ]
+
+    quality_rank = {
+        IntersectionQuality.EXACT: 0,
+        IntersectionQuality.VERIFIED_APPROXIMATE: 1,
+        IntersectionQuality.UNVERIFIED: 2,
+    }
+
+    def parent_key(parameter, subparent) -> tuple[tuple[float, ...], tuple]:
+        return (
+            () if parameter is None else tuple(parameter),
+            ("", -1, -1) if subparent is None else subparent.sort_key,
+        )
+
+    def representative_key(component: IntersectionComponent) -> tuple:
+        parents = tuple(
+            sorted(
+                (
+                    parent_key(
+                        component.first_parameter, component.first_subparent
+                    ),
+                    parent_key(
+                        component.second_parameter, component.second_subparent
+                    ),
+                )
+            )
+        )
+        return (component.witnesses, parents)
+
+    canonical: list[IntersectionComponent] = []
+    for group in groups:
+        if len(group) == 1:
+            canonical.append(group[0])
+            continue
+        representative = min(group, key=representative_key)
+        certificates = tuple(item.certificate for item in group)
+        canonicalization_displacements = tuple(
+            witness_distance(representative.witnesses[0], item.witnesses[0])
+            for item in group
+        )
+        non_identical_witnesses = any(
+            item.witnesses != representative.witnesses for item in group
+        )
+        maximum_residual = max(
+            displacement
+            + max(
+                item.max_residual,
+                0.0 if certificate is None else certificate.max_residual,
+            )
+            for item, certificate, displacement in zip(
+                group, certificates, canonicalization_displacements
+            )
+        )
+        maximum_enclosure_width = max(
+            displacement
+            + (
+                0.0
+                if certificate is None
+                else certificate.max_enclosure_width
+            )
+            for certificate, displacement in zip(
+                certificates, canonicalization_displacements
+            )
+        )
+        merged_quality = max(
+            (
+                *(item.quality for item in group),
+                *(
+                    (IntersectionQuality.VERIFIED_APPROXIMATE,)
+                    if non_identical_witnesses
+                    else ()
+                ),
+            ),
+            key=quality_rank.__getitem__,
+        )
+        certificate = IntersectionCertificate(
+            "canonical_member_point_component",
+            max(
+                tolerance,
+                maximum_residual,
+                *(
+                    item.tolerance
+                    for item in certificates
+                    if item is not None
+                ),
+            ),
+            max_residual=maximum_residual,
+            max_enclosure_width=maximum_enclosure_width,
+            boxes_examined=sum(
+                item.boxes_examined for item in certificates if item is not None
+            ),
+            subdivisions=sum(
+                item.subdivisions for item in certificates if item is not None
+            ),
+            trace_segments=sum(
+                item.trace_segments for item in certificates if item is not None
+            ),
+            complete=all(
+                item is not None and item.complete for item in certificates
+            ),
+        )
+        canonical.append(
+            replace(
+                representative,
+                quality=merged_quality,
+                max_residual=maximum_residual,
+                certificate=certificate,
+            )
+        )
+    return tuple(canonical)
+
+
 def _query_same_circle_arcs(
     geometry: GeometryModel,
     first_edge_id: int,
@@ -3286,7 +3513,8 @@ def _query_member_member(
     first_member = geometry.members[first.id]
     second_member = geometry.members[second.id]
     components: list[tuple[IntersectionKind, IntersectionComponent]] = []
-    unsupported: list[str] = []
+    unresolved: list[tuple[int, int, IntersectionResult]] = []
+    local_certificates: list[IntersectionCertificate] = []
     tolerance = geometry.tolerance.length
     for first_use_id in first_member.edge_use_ids:
         first_use = geometry.member_edge_uses[first_use_id]
@@ -3301,12 +3529,14 @@ def _query_member_member(
                 qualification,
             )
             tolerance = max(tolerance, local.tolerance_used or 0.0)
+            if local.certificate is not None:
+                local_certificates.append(local.certificate)
             if local.kind in (
                 IntersectionKind.UNSUPPORTED,
                 IntersectionKind.CAPABILITY_MISSING,
                 IntersectionKind.UNCLASSIFIED,
             ):
-                unsupported.extend(local.diagnostics)
+                unresolved.append((first_edge.id, second_edge.id, local))
                 continue
             for component in local.components:
                 components.append(
@@ -3322,16 +3552,58 @@ def _query_member_member(
                         ),
                     )
                 )
-    if not components:
-        if unsupported:
-            return _qualified_result(
-                geometry,
-                first,
-                second,
+    if unresolved:
+        unresolved_kinds = {local.kind for _, _, local in unresolved}
+        unresolved_kind = next(
+            kind
+            for kind in (
+                IntersectionKind.CAPABILITY_MISSING,
                 IntersectionKind.UNSUPPORTED,
-                diagnostics=tuple(sorted(set(unsupported))),
-                tolerance_used=tolerance,
+                IntersectionKind.UNCLASSIFIED,
             )
+            if kind in unresolved_kinds
+        )
+        diagnostics = {"member_axis_edge_pair_incomplete"}
+        for first_edge_id, second_edge_id, local in unresolved:
+            diagnostics.add(
+                f"member_axis_edge_pair {first_edge_id}/{second_edge_id} "
+                f"{local.kind.value}"
+            )
+            diagnostics.update(local.diagnostics)
+        maximum_residual = max(
+            (item.max_residual for item in local_certificates), default=0.0
+        )
+        return IntersectionResult(
+            unresolved_kind,
+            diagnostics=tuple(sorted(diagnostics)),
+            first_parent=first,
+            second_parent=second,
+            tolerance_used=tolerance,
+            certificate=IntersectionCertificate(
+                "member_axis_edge_pair_incomplete",
+                max(
+                    tolerance,
+                    maximum_residual,
+                    *(item.tolerance for item in local_certificates),
+                ),
+                max_residual=maximum_residual,
+                max_enclosure_width=max(
+                    (item.max_enclosure_width for item in local_certificates),
+                    default=0.0,
+                ),
+                boxes_examined=sum(
+                    item.boxes_examined for item in local_certificates
+                ),
+                subdivisions=sum(
+                    item.subdivisions for item in local_certificates
+                ),
+                trace_segments=sum(
+                    item.trace_segments for item in local_certificates
+                ),
+                complete=False,
+            ),
+        )
+    if not components:
         return _qualified_result(
             geometry,
             first,
@@ -3361,6 +3633,18 @@ def _query_member_member(
     )
     kind = next(item for item in precedence if item in kinds)
     selected = tuple(component for component_kind, component in components if component_kind is kind)
+    if kind in (
+        IntersectionKind.CROSS,
+        IntersectionKind.TOUCH_POINT,
+        IntersectionKind.TANGENT,
+    ):
+        selected = _canonical_member_point_components(
+            geometry,
+            first.id,
+            second.id,
+            selected,
+            tolerance,
+        )
     return _qualified_result(
         geometry,
         first,
@@ -5329,6 +5613,54 @@ def _fragment_planar_face_by_segments(
     if polygon.is_empty or not polygon.is_valid:
         raise GeometryError("invalid planar face polygon")
 
+    # Certified predicates may return a witness a few ulps inside an existing
+    # trim corner (for example 1.9999999999999996 for an exact coordinate of
+    # 2.0).  Passing that value to polygonize leaves a microscopic dangling
+    # segment instead of noding the cut into the boundary, so the valid split
+    # is silently reconstructed as one cell.  Snap only to existing trim
+    # vertices within the participating model tolerance, before any UV
+    # linework is created.  Distance then vertex ID provides a deterministic
+    # choice if a tolerance-sized model contains more than one candidate.
+    trim_vertex_ids = tuple(
+        sorted(
+            {
+                vertex_id
+                for loop in (face.loop,) + face.holes
+                for item in loop
+                for vertex_id in (
+                    geometry.edges[item.edge].start,
+                    geometry.edges[item.edge].end,
+                )
+            }
+        )
+    )
+    trim_vertices = tuple(
+        (vertex_id, geometry.vertex_position(vertex_id))
+        for vertex_id in trim_vertex_ids
+    )
+
+    def snap_endpoint(point: np.ndarray) -> np.ndarray:
+        raw = np.asarray(point, dtype=float)
+        if not trim_vertices:
+            return raw
+        distance, vertex_id, exact = min(
+            (
+                float(np.linalg.norm(raw - position)),
+                candidate_id,
+                position,
+            )
+            for candidate_id, position in trim_vertices
+        )
+        if distance > tolerance:
+            return raw
+        vertex_by_key[_world_key(raw, tolerance)] = vertex_id
+        vertex_by_key[_world_key(exact, tolerance)] = vertex_id
+        return exact
+
+    segments = tuple(
+        (snap_endpoint(start), snap_endpoint(end)) for start, end in segments
+    )
+
     direction = segments[0][1] - segments[0][0]
     direction_length = float(np.linalg.norm(direction))
     if direction_length <= tolerance:
@@ -5375,11 +5707,38 @@ def _fragment_planar_face_by_segments(
         ordered_uv, ordered_uv[1:]
     ):
         seam_lines.append(LineString((previous_end, following_start)))
-    for point_uv in (ordered_uv[0][0], ordered_uv[-1][1]):
+    endpoint_extensions = (
+        (ordered_uv[0][0], ordered_uv[0][1]),
+        (ordered_uv[-1][1], ordered_uv[-1][0]),
+    )
+    minimum_x, minimum_y, maximum_x, maximum_y = polygon.bounds
+    extension_length = 4.0 * max(
+        math.hypot(maximum_x - minimum_x, maximum_y - minimum_y),
+        1.0,
+    )
+    for point_uv, interior_uv in endpoint_extensions:
         point = Point(point_uv)
         if float(point.distance(polygon.boundary)) <= tolerance:
             continue
-        _source, boundary = nearest_points(point, polygon.boundary)
+        away = np.asarray(point_uv, dtype=float) - np.asarray(
+            interior_uv, dtype=float
+        )
+        away_length = float(np.linalg.norm(away))
+        if away_length <= tolerance:
+            raise GeometryError("planned face cut has no endpoint direction")
+        far_uv = np.asarray(point_uv, dtype=float) + (
+            extension_length / away_length
+        ) * away
+        ray = LineString((point_uv, tuple(float(item) for item in far_uv)))
+        crossing = ray.intersection(polygon.boundary)
+        if crossing.is_empty:
+            _source, boundary = nearest_points(point, polygon.boundary)
+        else:
+            # Continue the qualified intersection direction to the trim.  A
+            # nearest-boundary seam can fold back onto the material segment at
+            # a concave T-junction and fail to partition an otherwise valid
+            # face.
+            _source, boundary = nearest_points(point, crossing)
         boundary_uv = tuple(boundary.coords)[0]
         seam_lines.append(LineString((point_uv, boundary_uv)))
         boundary_world.append(
@@ -5494,6 +5853,95 @@ def _fragment_planar_face_by_segments(
         tuple(EntityRef("face", child) for child in children),
     )
     return tuple(children), tuple(sorted(cut_edge_ids))
+
+
+def _canonicalize_coincident_boundary_edges(
+    geometry: GeometryModel,
+    candidates: Sequence[int],
+    *,
+    tolerance: float,
+) -> int:
+    """Make certified coincident face-boundary edges share one identity.
+
+    Separate sketch extrusions can create the same physical shell junction with
+    independent vertices and edges. A CONNECT imprint needs one topological
+    relation, so retire duplicates after rewiring their faces to the lowest-ID
+    edge. Structural member uses and attachments fail closed because they need
+    their own intent-preserving remap.
+    """
+
+    edge_ids = tuple(sorted(set(candidates)))
+    if not edge_ids:
+        raise GeometryError("coincident boundary canonicalization needs an edge")
+    canonical_id = edge_ids[0]
+    canonical = geometry.edges[canonical_id]
+    canonical_points = geometry.sample_edge(
+        canonical_id, np.asarray((0.0, 1.0))
+    )
+
+    for duplicate_id in edge_ids[1:]:
+        duplicate = geometry.edges[duplicate_id]
+        duplicate_points = geometry.sample_edge(
+            duplicate_id, np.asarray((0.0, 1.0))
+        )
+        direct = (
+            float(np.linalg.norm(duplicate_points[0] - canonical_points[0]))
+            <= tolerance
+            and float(np.linalg.norm(duplicate_points[1] - canonical_points[1]))
+            <= tolerance
+        )
+        reverse = (
+            float(np.linalg.norm(duplicate_points[0] - canonical_points[1]))
+            <= tolerance
+            and float(np.linalg.norm(duplicate_points[1] - canonical_points[0]))
+            <= tolerance
+        )
+        if not (direct or reverse):
+            raise GeometryError("candidate boundary edges are not coincident")
+        if geometry.members_using_edge(duplicate_id) or geometry._target_attachments.get(  # noqa: SLF001
+            ("edge", duplicate_id), ()
+        ):
+            raise GeometryError(
+                "cannot canonicalize a coincident boundary edge with structural "
+                "member use or attachments"
+            )
+
+        endpoint_pairs = (
+            ((duplicate.start, canonical.start), (duplicate.end, canonical.end))
+            if direct
+            else ((duplicate.start, canonical.end), (duplicate.end, canonical.start))
+        )
+        for old_vertex, new_vertex in endpoint_pairs:
+            _merge_vertex(geometry, old_vertex, new_vertex)
+
+        for face_id in tuple(geometry.faces_using_edge(duplicate_id)):
+            face = geometry.faces[face_id]
+
+            def replace_loop(loop: Sequence[OrientedEdge]) -> tuple[OrientedEdge, ...]:
+                return tuple(
+                    OrientedEdge(
+                        canonical_id,
+                        item.forward if direct else not item.forward,
+                    )
+                    if item.edge == duplicate_id
+                    else item
+                    for item in loop
+                )
+
+            geometry._put_entity(  # noqa: SLF001
+                "face",
+                replace(
+                    face,
+                    loop=replace_loop(face.loop),
+                    holes=tuple(replace_loop(loop) for loop in face.holes),
+                ),
+            )
+        geometry.remove_edge(duplicate_id, record=False)
+        geometry.record_replacement(
+            EntityRef("edge", duplicate_id), (EntityRef("edge", canonical_id),)
+        )
+
+    return canonical_id
 
 
 def _sheet_ids_for_face(geometry: GeometryModel, face_id: int) -> tuple[int, ...]:
@@ -5826,7 +6274,9 @@ def _face_imprint_application(
                         ):
                             candidates.append(edge.id)
             if candidates:
-                edge_id = min(candidates)
+                edge_id = _canonicalize_coincident_boundary_edges(
+                    geometry, candidates, tolerance=tolerance
+                )
                 edge = geometry.edges[edge_id]
                 for vertex_id in (edge.start, edge.end):
                     vertex_by_key[_world_key(

@@ -427,6 +427,148 @@ def _entity_closure_refs(
     return selected
 
 
+def _bind_topology_roles(
+    old: EntityRef,
+    old_geometry: "GeometryModel",
+    new: EntityRef,
+    new_geometry: "GeometryModel",
+    bindings: Dict[EntityRef, tuple[EntityRef, ...]],
+    *,
+    _reverse_edge: bool = False,
+    _edge_directions: Dict[EntityRef, bool] | None = None,
+) -> None:
+    """Bind two feature-output closures by their exact topological roles.
+
+    A mutating downstream executor may replace entities which were themselves
+    descendants in an earlier replacement graph.  On an edit, those terminal
+    descendants have to lead to the new materialization too.  Stable output
+    slots and ordered loops provide that identity without a spatial/tolerance
+    match.  Any structural disagreement is rejected instead of guessed.
+    """
+
+    if _edge_directions is None:
+        _edge_directions = {}
+    if old.kind != new.kind:
+        raise GeometryError("feature output topology changes entity kind")
+    made = (new,)
+    previous = bindings.get(old)
+    if previous is not None:
+        if previous == made:
+            if old.kind == "edge":
+                previous_direction = _edge_directions.setdefault(
+                    old, _reverse_edge
+                )
+                if previous_direction != _reverse_edge:
+                    raise GeometryError(
+                        "feature output topology has conflicting edge orientation "
+                        f"for {old}"
+                    )
+            return
+        if len(previous) > 1:
+            # A downstream topology feature has already replaced this upstream
+            # role with a more precise ordered descendant set. Preserve that
+            # lineage; the descendants themselves are rebound by the later
+            # feature outputs during this replay.
+            return
+        raise GeometryError(
+            f"feature output topology has conflicting roles for {old}"
+        )
+    if old == new:
+        return
+    bindings[old] = made
+    if old.kind == "edge":
+        previous_direction = _edge_directions.setdefault(old, _reverse_edge)
+        if previous_direction != _reverse_edge:
+            raise GeometryError(
+                f"feature output topology has conflicting edge orientation for {old}"
+            )
+
+    if old.kind == "vertex":
+        return
+    if old.kind == "edge":
+        old_edge = old_geometry.edges[old.id]
+        new_edge = new_geometry.edges[new.id]
+        if type(old_edge.curve) is not type(new_edge.curve):
+            raise GeometryError("feature output topology changes curve type")
+        new_start = new_edge.end if _reverse_edge else new_edge.start
+        new_end = new_edge.start if _reverse_edge else new_edge.end
+        _bind_topology_roles(
+            EntityRef("vertex", old_edge.start),
+            old_geometry,
+            EntityRef("vertex", new_start),
+            new_geometry,
+            bindings,
+            _edge_directions=_edge_directions,
+        )
+        _bind_topology_roles(
+            EntityRef("vertex", old_edge.end),
+            old_geometry,
+            EntityRef("vertex", new_end),
+            new_geometry,
+            bindings,
+            _edge_directions=_edge_directions,
+        )
+        if isinstance(old_edge.curve, Arc):
+            assert isinstance(new_edge.curve, Arc)
+            _bind_topology_roles(
+                EntityRef("vertex", old_edge.curve.via_vertex),
+                old_geometry,
+                EntityRef("vertex", new_edge.curve.via_vertex),
+                new_geometry,
+                bindings,
+                _edge_directions=_edge_directions,
+            )
+        elif isinstance(old_edge.curve, Spline):
+            assert isinstance(new_edge.curve, Spline)
+            if len(old_edge.curve.control_vertices) != len(
+                new_edge.curve.control_vertices
+            ):
+                raise GeometryError(
+                    "feature output topology changes spline control count"
+                )
+            new_controls = new_edge.curve.control_vertices
+            if _reverse_edge:
+                new_controls = tuple(reversed(new_controls))
+            for old_vertex, new_vertex in zip(
+                old_edge.curve.control_vertices,
+                new_controls,
+            ):
+                _bind_topology_roles(
+                    EntityRef("vertex", old_vertex),
+                    old_geometry,
+                    EntityRef("vertex", new_vertex),
+                    new_geometry,
+                    bindings,
+                    _edge_directions=_edge_directions,
+                )
+        return
+
+    old_face = old_geometry.faces[old.id]
+    new_face = new_geometry.faces[new.id]
+    if (
+        type(old_face.surface) is not type(new_face.surface)
+        or type(old_face.parameterization) is not type(new_face.parameterization)
+        or len(old_face.loop) != len(new_face.loop)
+        or len(old_face.holes) != len(new_face.holes)
+        or tuple(map(len, old_face.holes)) != tuple(map(len, new_face.holes))
+    ):
+        raise GeometryError("feature output topology changes face structure")
+    for old_loop, new_loop in zip(
+        (old_face.loop,) + tuple(old_face.holes),
+        (new_face.loop,) + tuple(new_face.holes),
+    ):
+        for old_item, new_item in zip(old_loop, new_loop):
+            _bind_topology_roles(
+                EntityRef("edge", old_item.edge),
+                old_geometry,
+                EntityRef("edge", new_item.edge),
+                new_geometry,
+                bindings,
+                _reverse_edge=old_item.forward != new_item.forward,
+                _edge_directions=_edge_directions,
+            )
+
+
 def _face_corner_vertex_ids(face: Face, geometry: "GeometryModel") -> tuple[int, ...]:
     """Resolve mapped corner loop positions to their oriented start vertices."""
 
@@ -552,6 +694,7 @@ class FeatureRegistry:
 
     def __init__(self) -> None:
         self._executors: Dict[str, FeatureExecutor | ExecutorCallable] = {}
+        self._replay_modes: Dict[str, str] = {}
 
     def register(
         self,
@@ -559,19 +702,43 @@ class FeatureRegistry:
         executor: FeatureExecutor | ExecutorCallable,
         *,
         replace: bool = False,
+        replay_mode: str | None = None,
     ) -> None:
         key = str(kind).strip()
         if not key:
             raise ValueError("a feature executor needs a non-empty kind")
-        if key in self._executors and not replace:
-            raise ValueError(f"a feature executor is already registered for {key!r}")
+        if replay_mode not in (None, "additive", "mutating"):
+            raise ValueError(
+                "feature replay_mode must be 'additive', 'mutating', or None"
+            )
+        if key in self._executors:
+            if not replace:
+                raise ValueError(
+                    f"a feature executor is already registered for {key!r}"
+                )
+            if replay_mode != self._replay_modes.get(key):
+                raise ValueError(
+                    f"replacement executor for {key!r} conflicts with its "
+                    "registered replay_mode; unregister it explicitly first"
+                )
         self._executors[key] = executor
+        if replay_mode is None:
+            self._replay_modes.pop(key, None)
+        else:
+            self._replay_modes[key] = replay_mode
 
     def unregister(self, kind: str) -> None:
-        self._executors.pop(str(kind), None)
+        key = str(kind)
+        self._executors.pop(key, None)
+        self._replay_modes.pop(key, None)
 
     def has(self, kind: str) -> bool:
         return str(kind) in self._executors
+
+    def replay_mode(self, kind: str) -> str | None:
+        """Return the registered incremental scheduling contract, if any."""
+
+        return self._replay_modes.get(str(kind))
 
     def execute(
         self,
@@ -1305,7 +1472,9 @@ class FeatureHistory:
     def _incremental_additive(kind: str) -> bool:
         return kind in _INCREMENTAL_ADDITIVE_FEATURES or kind.startswith("generator.")
 
-    def _incremental_start(self, dirty_index: int) -> tuple[int, bool] | None:
+    def _incremental_start(
+        self, dirty_index: int, registry: FeatureRegistry
+    ) -> tuple[int, bool] | None:
         """Return a safe replay start and whether the suffix needs fresh closure."""
 
         start = dirty_index
@@ -1316,11 +1485,25 @@ class FeatureHistory:
         while True:
             earlier = start
             for record in self._records[start:]:
-                if self._incremental_additive(record.kind) or record.suppressed:
+                replay_mode = registry.replay_mode(record.kind)
+                if (
+                    self._incremental_additive(record.kind)
+                    or replay_mode == "additive"
+                    or record.suppressed
+                ):
                     continue
-                if record.kind not in _INCREMENTAL_MUTATING_FEATURES:
+                if (
+                    record.kind not in _INCREMENTAL_MUTATING_FEATURES
+                    and replay_mode != "mutating"
+                ):
                     return None
                 force_new = True
+                if not record.outputs:
+                    # A newly appended modifier has an exact live prefix to
+                    # consume and no earlier materialization to retire.  Run
+                    # it directly so feature-authored boundary identities are
+                    # not needlessly regenerated on first publication.
+                    continue
                 for references in record.inputs.values():
                     for reference in references:
                         if isinstance(reference, FeatureOutputRef):
@@ -1487,16 +1670,42 @@ class FeatureHistory:
             )
 
         transition_by_old: Dict[EntityRef, tuple[EntityRef, ...]] = {}
+        edge_directions: Dict[EntityRef, bool] = {}
         new_by_id = {record.feature_id: record for record in replayed}
-        for (feature_id, key), old_items in previous_outputs.items():
-            new_binding = new_by_id[feature_id].outputs.get(key)
-            descendants = (
-                () if new_binding is None else working.resolve_ref(new_binding)
+        working_history = working.replacement_history()
+        try:
+            for (feature_id, key), old_items in previous_outputs.items():
+                new_binding = new_by_id[feature_id].outputs.get(key)
+                descendants = (
+                    () if new_binding is None else working.resolve_ref(new_binding)
+                )
+                if len(old_items) == len(descendants):
+                    for old, new in zip(old_items, descendants):
+                        exact_replacement = working_history.get(old)
+                        if exact_replacement == (new,):
+                            transition_by_old[old] = exact_replacement
+                            continue
+                        _bind_topology_roles(
+                            old,
+                            geometry,
+                            new,
+                            working,
+                            transition_by_old,
+                            _edge_directions=edge_directions,
+                        )
+                else:
+                    for old in old_items:
+                        same_kind = tuple(
+                            item for item in descendants if item.kind == old.kind
+                        )
+                        if old not in same_kind:
+                            transition_by_old[old] = same_kind
+        except GeometryError as error:
+            return RegenerationReport(
+                False,
+                tuple(results),
+                diagnostic=f"cannot preserve feature lineage: {error}",
             )
-            for old in old_items:
-                same_kind = tuple(item for item in descendants if item.kind == old.kind)
-                if old not in same_kind:
-                    transition_by_old[old] = same_kind
         transitions = tuple(transition_by_old.items())
 
         kept = _entity_closure_refs(
@@ -1536,6 +1745,24 @@ class FeatureHistory:
         discard_new.difference_update(kept)
         retire_old.difference_update(kept)
 
+        existing_history = working.replacement_history()
+        pending_transitions: list[
+            tuple[EntityRef, tuple[EntityRef, ...]]
+        ] = []
+        for old, descendants in transitions:
+            if old not in existing_history:
+                pending_transitions.append((old, descendants))
+                continue
+            if working.resolve_ref(old) != descendants:
+                return RegenerationReport(
+                    False,
+                    tuple(results),
+                    diagnostic=(
+                        "cannot preserve feature lineage: replacement history "
+                        f"conflicts for {old}"
+                    ),
+                )
+
         def remove_exact(references: Iterable[EntityRef]) -> None:
             selected = set(references)
             for reference in sorted(
@@ -1563,7 +1790,7 @@ class FeatureHistory:
             with working.transaction():
                 remove_exact(discard_new)
                 remove_exact(retire_old)
-                working.record_replacements_atomic(transitions)
+                working.record_replacements_atomic(pending_transitions)
         except GeometryError as error:
             return RegenerationReport(
                 False,
@@ -1646,10 +1873,21 @@ class FeatureHistory:
                 ),
             )
         dirty_index = 0 if dirty_index is None else dirty_index
-        incremental = None if force_full_replay else self._incremental_start(dirty_index)
+        incremental = (
+            None
+            if force_full_replay
+            else self._incremental_start(dirty_index, registry)
+        )
         if incremental is not None:
             start, force_new = incremental
-            if not (start == 0 and force_new):
+            if start == 0 and force_new:
+                # A modifier whose exact FeatureOutputRef dependency reaches
+                # the beginning of history must replay from the captured
+                # baseline.  It cannot use the live-topology incremental path,
+                # but the dependency walk above has proved a full replay safe.
+                force_full_replay = True
+                dirty_index = 0
+            else:
                 incremental_report = self._regenerate_incremental(
                     geometry, registry, start, force_new=force_new
                 )
@@ -1782,20 +2020,46 @@ class FeatureHistory:
             results.append(FeatureResult(record.feature_id, "ok", dict(outputs)))
 
         transition_by_old: Dict[EntityRef, tuple[EntityRef, ...]] = {}
+        edge_directions: Dict[EntityRef, bool] = {}
         new_by_id = {record.feature_id: record for record in replayed}
+        working_history = working.replacement_history()
         # A downstream topology feature and its upstream producer can resolve
         # to the same old terminal entity.  Iterate in history order and let
         # the latest producer own that transition; otherwise an upstream
         # aggregate output could conflict with the child's more precise slot.
-        for (feature_id, key), old_items in previous_outputs.items():
-            new_binding = new_by_id[feature_id].outputs.get(key)
-            descendants = (
-                () if new_binding is None else working.resolve_ref(new_binding)
+        try:
+            for (feature_id, key), old_items in previous_outputs.items():
+                new_binding = new_by_id[feature_id].outputs.get(key)
+                descendants = (
+                    () if new_binding is None else working.resolve_ref(new_binding)
+                )
+                if len(old_items) == len(descendants):
+                    for old, new in zip(old_items, descendants):
+                        exact_replacement = working_history.get(old)
+                        if exact_replacement == (new,):
+                            transition_by_old[old] = exact_replacement
+                            continue
+                        _bind_topology_roles(
+                            old,
+                            geometry,
+                            new,
+                            working,
+                            transition_by_old,
+                            _edge_directions=edge_directions,
+                        )
+                else:
+                    for old in old_items:
+                        same_kind = tuple(
+                            item for item in descendants if item.kind == old.kind
+                        )
+                        if old not in same_kind:
+                            transition_by_old[old] = same_kind
+        except GeometryError as error:
+            return RegenerationReport(
+                False,
+                tuple(results),
+                diagnostic=f"cannot preserve feature lineage: {error}",
             )
-            for old in old_items:
-                same_kind = tuple(item for item in descendants if item.kind == old.kind)
-                if old not in same_kind:
-                    transition_by_old[old] = same_kind
         transitions = list(transition_by_old.items())
 
         historical = list(previous_history.items())

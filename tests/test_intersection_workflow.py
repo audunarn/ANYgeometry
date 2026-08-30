@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 
 import numpy as np
 import pytest
@@ -10,13 +10,21 @@ import pytest
 from anygeometry.errors import GeometryError
 from anygeometry.intersections import (
     ImprintOperation,
+    _canonical_member_point_components,
     apply_imprint,
     plan_imprint,
     query_intersection,
 )
 from anygeometry.model import GeometryModel
 from anygeometry.policies import ConnectionIntent, MutationPolicy
-from anygeometry.predicates import IntersectionDimension, IntersectionKind
+from anygeometry.predicates import (
+    IntersectionCertificate,
+    IntersectionComponent,
+    IntersectionDimension,
+    IntersectionKind,
+    IntersectionQuality,
+    IntersectionResult,
+)
 from anygeometry.structural import (
     AttachmentKind,
     AttachmentTargetKind,
@@ -748,6 +756,541 @@ def test_connect_member_crossing_splits_axes_preserves_members_and_is_idempotent
     )
     assert repeated.reused
     assert geometry.revision == revision
+
+
+def test_fragmented_members_share_one_connectable_internal_vertex_component() -> None:
+    geometry = GeometryModel()
+    left, centre, right, lower, upper = geometry.add_points(
+        ((-1, 0, 0), (0, 0, 0), (1, 0, 0), (0, -1, 0), (0, 1, 0))
+    )
+    first_member = geometry.add_member(
+        (geometry.add_line(left, centre), geometry.add_line(centre, right))
+    )
+    second_member = geometry.add_member(
+        (geometry.add_line(lower, centre), geometry.add_line(centre, upper))
+    )
+    geometry_counts = (len(geometry.vertices), len(geometry.edges))
+
+    result = query_intersection(
+        geometry,
+        geometry.handle("member", first_member),
+        geometry.handle("member", second_member),
+    )
+
+    assert result.kind is IntersectionKind.TOUCH_POINT
+    assert result.dimension is IntersectionDimension.POINT
+    assert len(result.components) == 1
+    assert result.components[0].witnesses == ((0.0, 0.0, 0.0),)
+    assert result.components[0].first_parameter == pytest.approx((0.5,))
+    assert result.components[0].second_parameter == pytest.approx((0.5,))
+
+    plan = plan_imprint(geometry, result, policy=ConnectionIntent.CONNECT)
+    assert plan.operation is ImprintOperation.MEMBER_CONNECTION
+    application = apply_imprint(
+        geometry, plan, policy=ConnectionIntent.CONNECT
+    )
+
+    assert geometry_counts == (len(geometry.vertices), len(geometry.edges))
+    assert len(application.relations) == 1
+    junction = geometry.junctions[application.relations[0].id]
+    assert junction.kind is JunctionKind.CROSSING
+    assert geometry.validate_topology() == ()
+
+
+def test_fragmented_member_point_is_symmetric_after_member_reversal() -> None:
+    geometry = GeometryModel()
+    left, centre, right, lower, upper = geometry.add_points(
+        ((-2, 0, 0), (0, 0, 0), (1, 0, 0), (0, -1, 0), (0, 3, 0))
+    )
+    first_member = geometry.add_member(
+        (geometry.add_line(left, centre), geometry.add_line(centre, right))
+    )
+    second_member = geometry.add_member(
+        (geometry.add_line(lower, centre), geometry.add_line(centre, upper))
+    )
+    first_handle = geometry.handle("member", first_member)
+    second_handle = geometry.handle("member", second_member)
+
+    forward = query_intersection(geometry, first_handle, second_handle)
+    swapped = query_intersection(geometry, second_handle, first_handle)
+
+    assert len(forward.components) == len(swapped.components) == 1
+    assert forward.components[0].first_parameter == pytest.approx((2 / 3,))
+    assert forward.components[0].second_parameter == pytest.approx((1 / 4,))
+    assert swapped.components[0].first_parameter == pytest.approx(
+        forward.components[0].second_parameter
+    )
+    assert swapped.components[0].second_parameter == pytest.approx(
+        forward.components[0].first_parameter
+    )
+    assert swapped.components[0].witnesses == forward.components[0].witnesses
+    for result in (forward, swapped):
+        assert plan_imprint(
+            geometry, result, policy=ConnectionIntent.CONNECT
+        ).operation is ImprintOperation.MEMBER_CONNECTION
+
+    geometry.reverse_member(first_member)
+    geometry.reverse_member(second_member)
+    reversed_forward = query_intersection(geometry, first_handle, second_handle)
+    reversed_swapped = query_intersection(geometry, second_handle, first_handle)
+
+    assert len(reversed_forward.components) == len(reversed_swapped.components) == 1
+    assert reversed_forward.components[0].first_parameter == pytest.approx((1 / 3,))
+    assert reversed_forward.components[0].second_parameter == pytest.approx((3 / 4,))
+    assert reversed_swapped.components[0].first_parameter == pytest.approx(
+        reversed_forward.components[0].second_parameter
+    )
+    assert reversed_swapped.components[0].second_parameter == pytest.approx(
+        reversed_forward.components[0].first_parameter
+    )
+    assert (
+        reversed_swapped.components[0].witnesses
+        == reversed_forward.components[0].witnesses
+    )
+    for result in (reversed_forward, reversed_swapped):
+        assert plan_imprint(
+            geometry, result, policy=ConnectionIntent.CONNECT
+        ).operation is ImprintOperation.MEMBER_CONNECTION
+
+
+def test_fragmented_member_query_fails_closed_on_unresolved_edge_pair() -> None:
+    geometry = GeometryModel()
+    lower, centre, upper, near_parallel_end, left, right = geometry.add_points(
+        (
+            (0, -1, 0),
+            (0, 0, 0),
+            (0, 1, 0),
+            (1, 1.000000001, 0),
+            (-1, 0, 0),
+            (1, 0, 0),
+        )
+    )
+    first_edges = (
+        geometry.add_line(lower, centre),
+        geometry.add_line(centre, upper),
+        geometry.add_line(upper, near_parallel_end),
+    )
+    second_edges = (
+        geometry.add_line(left, centre),
+        geometry.add_line(centre, right),
+    )
+    first_member = geometry.add_member(first_edges)
+    second_member = geometry.add_member(second_edges)
+    first_handle = geometry.handle("member", first_member)
+    second_handle = geometry.handle("member", second_member)
+    local_kinds = tuple(
+        query_intersection(
+            geometry,
+            geometry.handle("edge", first_edge),
+            geometry.handle("edge", second_edge),
+        ).kind
+        for first_edge in first_edges
+        for second_edge in second_edges
+    )
+
+    assert local_kinds.count(IntersectionKind.TOUCH_POINT) == 4
+    assert local_kinds.count(IntersectionKind.UNCLASSIFIED) == 2
+
+    for first, second in (
+        (first_handle, second_handle),
+        (second_handle, first_handle),
+    ):
+        result = query_intersection(geometry, first, second)
+
+        assert result.kind is IntersectionKind.UNCLASSIFIED
+        assert result.dimension is IntersectionDimension.NONE
+        assert not result.components
+        assert not result.classified
+        assert result.certificate is not None
+        assert not result.certificate.complete
+        assert result.certificate.algorithm == "member_axis_edge_pair_incomplete"
+        assert "member_axis_edge_pair_incomplete" in result.diagnostics
+        assert "ill_conditioned_segment_segment" in result.diagnostics
+        assert any(" unclassified" in item for item in result.diagnostics)
+
+        plan = plan_imprint(geometry, result, policy=ConnectionIntent.CONNECT)
+        assert plan.operation is ImprintOperation.NO_TOPOLOGY
+        assert plan.operation is not ImprintOperation.MEMBER_CONNECTION
+
+
+def test_member_component_tolerance_chain_remains_expanded_and_fail_closed() -> None:
+    geometry = GeometryModel()
+    first_member = geometry.add_member(
+        (
+            geometry.add_line(
+                *geometry.add_points(((-1, 0, 0), (1, 0, 0)))
+            ),
+        )
+    )
+    second_member = geometry.add_member(
+        (
+            geometry.add_line(
+                *geometry.add_points(((0, -1, 0), (0, 1, 0)))
+            ),
+        )
+    )
+    parameter_tolerance = geometry.tolerance.effective_parameter(2.0, 2.0)
+    base = 0.25
+
+    def component(first: float, second: float) -> IntersectionComponent:
+        return IntersectionComponent(
+            ((0.0, 0.0, 0.0),),
+            IntersectionQuality.EXACT,
+            first_parameter=(first,),
+            second_parameter=(second,),
+        )
+
+    source = (
+        component(base, base),
+        component(
+            base + 0.4 * parameter_tolerance,
+            base + 1.6 * parameter_tolerance,
+        ),
+        component(
+            base + 0.8 * parameter_tolerance,
+            base + 0.8 * parameter_tolerance,
+        ),
+    )
+    forward = _canonical_member_point_components(
+        geometry,
+        first_member,
+        second_member,
+        source,
+        geometry.tolerance.length,
+    )
+    swapped_source = tuple(
+        sorted(
+            (
+                replace(
+                    item,
+                    first_parameter=item.second_parameter,
+                    second_parameter=item.first_parameter,
+                )
+                for item in source
+            ),
+            key=lambda item: (item.first_parameter, item.second_parameter),
+        )
+    )
+    swapped = _canonical_member_point_components(
+        geometry,
+        second_member,
+        first_member,
+        swapped_source,
+        geometry.tolerance.length,
+    )
+
+    assert len(forward) == len(swapped) == 3
+    result_pairs = (
+        (
+            geometry.handle("member", first_member),
+            geometry.handle("member", second_member),
+            forward,
+        ),
+        (
+            geometry.handle("member", second_member),
+            geometry.handle("member", first_member),
+            swapped,
+        ),
+    )
+    for first_parent, second_parent, components in result_pairs:
+        result = IntersectionResult(
+            IntersectionKind.CROSS,
+            components,
+            first_parent=first_parent,
+            second_parent=second_parent,
+            tolerance_used=geometry.tolerance.length,
+        )
+        plan = plan_imprint(geometry, result, policy=ConnectionIntent.CONNECT)
+        assert plan.operation is ImprintOperation.NO_TOPOLOGY
+        assert plan.result.kind is IntersectionKind.UNSUPPORTED
+
+
+def test_single_member_point_component_preserves_certificate_provenance() -> None:
+    geometry = GeometryModel()
+    first_vertices = geometry.add_points(((-1, 0, 0), (1, 0, 0)))
+    second_vertices = geometry.add_points(((0, -1, 0), (0, 1, 0)))
+    first_edge = geometry.add_line(*first_vertices)
+    second_edge = geometry.add_line(*second_vertices)
+    first_member = geometry.add_member((first_edge,))
+    second_member = geometry.add_member((second_edge,))
+    tolerance = geometry.tolerance.length
+    certificate = IntersectionCertificate(
+        "source_member_point_certificate",
+        tolerance,
+        max_residual=0.5 * tolerance,
+        max_enclosure_width=0.25 * tolerance,
+        boxes_examined=3,
+        subdivisions=2,
+        trace_segments=1,
+    )
+    component = IntersectionComponent(
+        ((0.0, 0.0, 0.0),),
+        IntersectionQuality.VERIFIED_APPROXIMATE,
+        first_parameter=(0.5,),
+        second_parameter=(0.5,),
+        max_residual=0.25 * tolerance,
+        certificate=certificate,
+        first_subparent=geometry.handle("edge", first_edge),
+        second_subparent=geometry.handle("edge", second_edge),
+    )
+
+    canonical = _canonical_member_point_components(
+        geometry,
+        first_member,
+        second_member,
+        (component,),
+        tolerance,
+    )
+
+    assert canonical == (component,)
+    assert canonical[0] is component
+    assert canonical[0].certificate is certificate
+    assert canonical[0].certificate.algorithm == "source_member_point_certificate"
+
+
+def test_member_point_approximate_merge_bounds_displacement_and_is_symmetric() -> None:
+    geometry = GeometryModel()
+    first_vertices = geometry.add_points(((-1, 0, 0), (1, 0, 0)))
+    second_vertices = geometry.add_points(((0, -1, 0), (0, 1, 0)))
+    first_edge = geometry.add_line(*first_vertices)
+    second_edge = geometry.add_line(*second_vertices)
+    first_member = geometry.add_member((first_edge,))
+    second_member = geometry.add_member((second_edge,))
+    tolerance = geometry.tolerance.length
+    displacement = 0.5 * tolerance
+
+    def component(witness: tuple[float, float, float]) -> IntersectionComponent:
+        return IntersectionComponent(
+            (witness,),
+            IntersectionQuality.EXACT,
+            first_parameter=(0.25,),
+            second_parameter=(0.75,),
+            first_subparent=geometry.handle("edge", first_edge),
+            second_subparent=geometry.handle("edge", second_edge),
+        )
+
+    source = (
+        component((0.0, 0.0, 0.0)),
+        component((displacement, 0.0, 0.0)),
+    )
+    forward = _canonical_member_point_components(
+        geometry,
+        first_member,
+        second_member,
+        source,
+        tolerance,
+    )
+    reversed_input = _canonical_member_point_components(
+        geometry,
+        first_member,
+        second_member,
+        tuple(reversed(source)),
+        tolerance,
+    )
+    swapped_source = tuple(
+        replace(
+            item,
+            first_parameter=item.second_parameter,
+            second_parameter=item.first_parameter,
+            first_subparent=item.second_subparent,
+            second_subparent=item.first_subparent,
+        )
+        for item in source
+    )
+    swapped = _canonical_member_point_components(
+        geometry,
+        second_member,
+        first_member,
+        swapped_source,
+        tolerance,
+    )
+
+    assert forward == reversed_input
+    assert len(forward) == len(swapped) == 1
+    for made in (*forward, *swapped):
+        assert made.witnesses == ((0.0, 0.0, 0.0),)
+        assert made.quality is IntersectionQuality.VERIFIED_APPROXIMATE
+        assert made.max_residual == pytest.approx(displacement)
+        assert made.certificate is not None
+        assert made.certificate.complete
+        assert made.certificate.max_residual == pytest.approx(displacement)
+        assert made.certificate.max_enclosure_width == pytest.approx(displacement)
+    assert swapped[0].certificate == forward[0].certificate
+    assert swapped[0].first_parameter == forward[0].second_parameter
+    assert swapped[0].second_parameter == forward[0].first_parameter
+    assert swapped[0].first_subparent == forward[0].second_subparent
+    assert swapped[0].second_subparent == forward[0].first_subparent
+
+
+def test_member_point_certificate_aggregation_is_conservative_and_ordered() -> None:
+    geometry = GeometryModel()
+    first_vertices = geometry.add_points(((-1, 0, 0), (1, 0, 0)))
+    second_vertices = geometry.add_points(((0, -1, 0), (0, 1, 0)))
+    first_edge = geometry.add_line(*first_vertices)
+    second_edge = geometry.add_line(*second_vertices)
+    first_member = geometry.add_member((first_edge,))
+    second_member = geometry.add_member((second_edge,))
+    tolerance = geometry.tolerance.length
+    first_certificate = IntersectionCertificate(
+        "first_source_certificate",
+        tolerance,
+        boxes_examined=2,
+        subdivisions=3,
+        trace_segments=5,
+    )
+    second_certificate = IntersectionCertificate(
+        "second_source_certificate",
+        tolerance,
+        max_residual=0.8 * tolerance,
+        max_enclosure_width=0.2 * tolerance,
+        boxes_examined=7,
+        subdivisions=11,
+        trace_segments=13,
+        complete=False,
+    )
+
+    def component(
+        witness: tuple[float, float, float],
+        quality: IntersectionQuality,
+        residual: float,
+        certificate: IntersectionCertificate,
+    ) -> IntersectionComponent:
+        return IntersectionComponent(
+            (witness,),
+            quality,
+            first_parameter=(0.5,),
+            second_parameter=(0.5,),
+            max_residual=residual,
+            certificate=certificate,
+            first_subparent=geometry.handle("edge", first_edge),
+            second_subparent=geometry.handle("edge", second_edge),
+        )
+
+    source = (
+        component(
+            (0.0, 0.0, 0.0),
+            IntersectionQuality.EXACT,
+            0.0,
+            first_certificate,
+        ),
+        component(
+            (0.1 * tolerance, 0.0, 0.0),
+            IntersectionQuality.VERIFIED_APPROXIMATE,
+            0.2 * tolerance,
+            second_certificate,
+        ),
+    )
+    forward = _canonical_member_point_components(
+        geometry,
+        first_member,
+        second_member,
+        source,
+        tolerance,
+    )
+    reversed_input = _canonical_member_point_components(
+        geometry,
+        first_member,
+        second_member,
+        tuple(reversed(source)),
+        tolerance,
+    )
+
+    assert forward == reversed_input
+    assert len(forward) == 1
+    made = forward[0]
+    assert made.quality is IntersectionQuality.VERIFIED_APPROXIMATE
+    assert made.max_residual == pytest.approx(0.9 * tolerance)
+    assert made.certificate is not None
+    assert made.certificate.algorithm == "canonical_member_point_component"
+    assert made.certificate.max_residual == pytest.approx(0.9 * tolerance)
+    assert made.certificate.max_enclosure_width == pytest.approx(0.3 * tolerance)
+    assert made.certificate.boxes_examined == 9
+    assert made.certificate.subdivisions == 14
+    assert made.certificate.trace_segments == 18
+    assert not made.certificate.complete
+
+
+def test_same_world_point_distinct_member_visits_remain_separate() -> None:
+    geometry = GeometryModel()
+    left, right, lower, centre, upper_right, upper_left, upper = (
+        geometry.add_points(
+            (
+                (-2, 0, 0),
+                (2, 0, 0),
+                (0, -2, 0),
+                (0, 0, 0),
+                (1, 1, 0),
+                (-1, 1, 0),
+                (0, 2, 0),
+            )
+        )
+    )
+    first_member = geometry.add_member((geometry.add_line(left, right),))
+    second_path = (lower, centre, upper_right, upper_left, centre, upper)
+    second_member = geometry.add_member(
+        tuple(
+            geometry.add_line(first, second)
+            for first, second in zip(second_path, second_path[1:])
+        )
+    )
+    first_handle = geometry.handle("member", first_member)
+    second_handle = geometry.handle("member", second_member)
+
+    forward = query_intersection(geometry, first_handle, second_handle)
+    swapped = query_intersection(geometry, second_handle, first_handle)
+
+    assert forward.kind is swapped.kind is IntersectionKind.TOUCH_POINT
+    assert len(forward.components) == len(swapped.components) == 2
+    assert all(
+        component.witnesses == ((0.0, 0.0, 0.0),)
+        for component in (*forward.components, *swapped.components)
+    )
+    total_length = 6.0 + 2.0 * np.sqrt(2.0)
+    visits = (2.0 / total_length, (4.0 + 2.0 * np.sqrt(2.0)) / total_length)
+    assert [
+        component.second_parameter[0] for component in forward.components
+    ] == pytest.approx(visits)
+    assert [
+        component.first_parameter[0] for component in swapped.components
+    ] == pytest.approx(visits)
+    for result in (forward, swapped):
+        plan = plan_imprint(geometry, result, policy=ConnectionIntent.CONNECT)
+        assert plan.operation is ImprintOperation.NO_TOPOLOGY
+        assert plan.result.kind is IntersectionKind.UNSUPPORTED
+
+
+def test_distinct_member_crossings_remain_separate_and_fail_closed() -> None:
+    geometry = GeometryModel()
+    first_member = geometry.add_member(
+        (
+            geometry.add_line(
+                *geometry.add_points(((-2, 0, 0), (2, 0, 0)))
+            ),
+        )
+    )
+    zigzag = geometry.add_points(
+        ((-1, -1, 0), (-0.5, 1, 0), (0.5, 1, 0), (1, -1, 0))
+    )
+    second_member = geometry.add_member(
+        tuple(
+            geometry.add_line(first, second)
+            for first, second in zip(zigzag, zigzag[1:])
+        )
+    )
+
+    result = query_intersection(
+        geometry,
+        geometry.handle("member", first_member),
+        geometry.handle("member", second_member),
+    )
+
+    assert result.kind is IntersectionKind.CROSS
+    assert result.dimension is IntersectionDimension.POINT
+    assert len(result.components) == 2
+    plan = plan_imprint(geometry, result, policy=ConnectionIntent.CONNECT)
+    assert plan.operation is ImprintOperation.NO_TOPOLOGY
+    assert plan.result.kind is IntersectionKind.UNSUPPORTED
+    assert "exactly one qualified intersection component" in plan.result.diagnostics[-1]
 
 
 def test_connected_member_overlap_is_typed_unsupported_during_planning() -> None:

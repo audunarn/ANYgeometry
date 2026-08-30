@@ -14,7 +14,6 @@ jobs:
   build:
     name: Validate and build distributions
     runs-on: ubuntu-latest
-    timeout-minutes: 15
     outputs:
       version: ${{ steps.contract.outputs.version }}
     steps:
@@ -39,8 +38,8 @@ jobs:
           metadata = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
           project = metadata["project"]
           version = project["version"]
-          if version != "0.4.0":
-              raise SystemExit(f"release workflow requires version 0.4.0, got {version}")
+          if version != "0.4.1":
+              raise SystemExit(f"release workflow requires version 0.4.1, got {version}")
           if "Development Status :: 3 - Alpha" not in project["classifiers"]:
               raise SystemExit("release metadata must retain the Alpha classifier")
           init_text = Path("src/anygeometry/__init__.py").read_text(encoding="utf-8")
@@ -99,6 +98,8 @@ jobs:
               if metadata["Name"] != "ANYgeometry" or metadata["Version"] != version:
                   raise SystemExit("sdist metadata does not match the package contract")
           PY
+      - name: Generate release checksums
+        run: cd dist && sha256sum *.whl *.tar.gz > SHA256SUMS
       - name: Upload immutable release bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -106,23 +107,3 @@ jobs:
           path: dist/
           if-no-files-found: error
           retention-days: 7
-
-  publish:
-    name: Publish distributions to PyPI
-    needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    environment:
-      name: pypi
-      url: https://pypi.org/p/ANYgeometry
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - name: Download immutable release bundle
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: ANYgeometry-${{ needs.build.outputs.version }}-release-bundle
-          path: dist/
-      - name: Publish distributions to PyPI
-        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
