@@ -416,6 +416,52 @@ def test_transverse_plane_cylinder_imprints_atomic_shared_ring() -> None:
     assert restored.validate_topology() == ()
 
 
+def test_transverse_plane_reuses_an_existing_generated_cylinder_ring() -> None:
+    geometry = cylinder(
+        0.5,
+        2.0,
+        circumferential_segments=12,
+        longitudinal_spacing=0.5,
+        ring_spacing=1.0,
+    )
+    cylinder_faces = tuple(reference.id for reference in geometry.group("shell"))
+    ring_edges = tuple(
+        reference.id for reference in geometry.group("ring_stiffeners")
+    )
+    plane_face = geometry.add_plate(
+        geometry.add_points(
+            (
+                (-1.0, -1.0, 1.0),
+                (1.0, -1.0, 1.0),
+                (1.0, 1.0, 1.0),
+                (-1.0, 1.0, 1.0),
+            )
+        )
+    )
+    old_cylinders = tuple(EntityRef("face", item) for item in cylinder_faces)
+
+    result = intersect_faces(
+        geometry,
+        cylinder_faces[0],
+        plane_face,
+        policy=MutationPolicy.IMPRINT,
+    )
+
+    assert isinstance(result, FaceIntersection)
+    assert {reference.id for reference in result.edges} == set(ring_edges)
+    assert len(result.first_faces) == 12
+    assert len(result.second_faces) == 2
+    assert all(
+        geometry.resolve_ref(reference) == (reference,)
+        for reference in old_cylinders
+    )
+    assert all(
+        len(geometry.faces_using_edge(edge_id)) == 4
+        for edge_id in ring_edges
+    )
+    assert geometry.validate_topology() == ()
+
+
 def test_transverse_ring_is_deterministic_and_preserves_argument_order() -> None:
     first, first_plane, first_cylinders = _transverse_shell()
     second, second_plane, second_cylinders = _transverse_shell()

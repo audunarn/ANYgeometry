@@ -1751,6 +1751,7 @@ def _transverse_cylinder_band(
     cylinder_face: int,
     *,
     tolerance: float | None = None,
+    allow_boundary: bool = False,
 ) -> tuple[tuple[int, ...], float, np.ndarray]:
     """Preflight one complete conformal cylindrical band without mutation."""
 
@@ -1781,7 +1782,19 @@ def _transverse_cylinder_band(
     denominator = float(plane.normal @ reference.axis)
     axial = float(plane.normal @ (plane.origin - reference.origin)) / denominator
     fraction = axial / reference.height
-    if not parameter_tolerance < fraction < 1.0 - parameter_tolerance:
+    if allow_boundary:
+        if (
+            fraction < -parameter_tolerance
+            or fraction > 1.0 + parameter_tolerance
+        ):
+            raise GeometryError(
+                "the transverse plane lies outside the cylinder height"
+            )
+        if abs(fraction) <= parameter_tolerance:
+            fraction = 0.0
+        elif abs(fraction - 1.0) <= parameter_tolerance:
+            fraction = 1.0
+    elif not parameter_tolerance < fraction < 1.0 - parameter_tolerance:
         raise GeometryError(
             "the transverse plane must cut strictly inside the cylinder height"
         )
@@ -2026,12 +2039,45 @@ def _imprint_transverse_plane_cylinder(
     fragment: bool,
 ) -> FaceIntersection | np.ndarray:
     face_ids, fraction, _centre = _transverse_cylinder_band(
-        geometry, plane_face, cylinder_face
+        geometry, plane_face, cylinder_face, allow_boundary=True
     )
     if not fragment:
         return _transverse_ring_curve(geometry, face_ids, fraction)
 
     with geometry.transaction():
+        if fraction in (0.0, 1.0):
+            edges = [
+                _boundary_edge_at_point(
+                    geometry,
+                    face_id,
+                    geometry.faces[face_id].surface.evaluate(0.5, fraction),
+                )
+                for face_id in face_ids
+            ]
+            vertices = [
+                (geometry.edges[edge_id].start, geometry.edges[edge_id].end)
+                for edge_id in edges
+            ]
+            for current, following in zip(vertices, vertices[1:] + vertices[:1]):
+                if current[1] != following[0]:
+                    raise GeometryError(
+                        "the existing cylinder ring is not a continuous topology loop"
+                    )
+            plane_faces = _fragment_plane_with_ring(geometry, plane_face, edges)
+            errors = geometry.validate_topology()
+            if errors:
+                raise GeometryError(
+                    "existing plane-cylinder ring imprint produced invalid topology: "
+                    + "; ".join(errors)
+                )
+            references = tuple(EntityRef("edge", edge_id) for edge_id in edges)
+            return FaceIntersection(
+                references[0],
+                tuple(EntityRef("face", item) for item in plane_faces),
+                tuple(EntityRef("face", item) for item in face_ids),
+                references,
+            )
+
         vertices: list[tuple[int, int]] = []
         edges = []
         for face_id in face_ids:
@@ -6165,6 +6211,8 @@ def _face_imprint_application(
     first_face, second_face = plan.first_parent.id, plan.second_parent.id
     first_surface = geometry.faces[first_face].surface
     second_surface = geometry.faces[second_face].surface
+    plane_is_first = isinstance(first_surface, Plane)
+    plane_is_second = isinstance(second_surface, Plane)
     if isinstance(first_surface, Plane) and isinstance(second_surface, Cylinder):
         alignment = abs(float(first_surface.normal @ second_surface.axis))
         if abs(alignment - 1.0) <= geometry.tolerance.angular:
@@ -6210,8 +6258,6 @@ def _face_imprint_application(
             (),
             True,
         )
-    plane_is_first = isinstance(first_surface, Plane)
-    plane_is_second = isinstance(second_surface, Plane)
     if plane_is_first != plane_is_second:
         plane_face = first_face if plane_is_first else second_face
         curved_face = second_face if plane_is_first else first_face
