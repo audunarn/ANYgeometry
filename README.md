@@ -272,7 +272,7 @@ Consumers that require a qualified handoff must retain or rerun
 JSON and gzip-compressed JSON are supported. Mesh and FEM/project
 serialization remain outside ANYgeometry.
 
-ANYgeometry 0.4.0 reads schemas 1–4 and writes schema 4. Automation consumers
+ANYgeometry 0.4.2 reads schemas 1–4 and writes schema 4. Automation consumers
 use `ANYgeometry>=0.4,<0.5`; geometry-only consumers may continue using schema
 4 through the public codecs. A 0.2.0 reader intentionally rejects a
 schema-4 document. Downstream packages should use the public codecs rather
@@ -351,3 +351,12 @@ The strict-kernel design, invariants, benchmark scope, and completed release
 qualification are recorded in
 [`docs/KERNEL_UPDATE_OVERVIEW.md`](docs/KERNEL_UPDATE_OVERVIEW.md) and
 [`KERNEL_UPDATE_REPORT.md`](KERNEL_UPDATE_REPORT.md).
+
+## License
+
+Starting with version 0.4.2, ANYgeometry source code is licensed under the
+[Mozilla Public License 2.0](LICENSE). Earlier releases retain the license
+terms that applied when they were published. Original project documentation
+is licensed separately as described in [docs/LICENSE.md](docs/LICENSE.md), and
+third-party components retain their own terms as recorded in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

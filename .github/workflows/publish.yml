@@ -38,8 +38,10 @@ jobs:
           metadata = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
           project = metadata["project"]
           version = project["version"]
-          if version != "0.4.1":
-              raise SystemExit(f"release workflow requires version 0.4.1, got {version}")
+          if version != "0.4.2":
+              raise SystemExit(f"release workflow requires version 0.4.2, got {version}")
+          if project.get("license") != "MPL-2.0":
+              raise SystemExit("release metadata must declare MPL-2.0")
           if "Development Status :: 3 - Alpha" not in project["classifiers"]:
               raise SystemExit("release metadata must retain the Alpha classifier")
           init_text = Path("src/anygeometry/__init__.py").read_text(encoding="utf-8")
@@ -55,7 +57,8 @@ jobs:
           PACKAGE_VERSION: ${{ steps.contract.outputs.version }}
         run: |
           python -m pip install --upgrade pip
-          python -m pip install "build>=1.2,<2" "twine>=5,<7"
+          python -m pip install -e ".[dev,planar]"
+          python tools/check_licenses.py --check-installed
           python -m build
           python -m twine check --strict dist/*.whl dist/*.tar.gz
           python - <<'PY'
@@ -84,6 +87,21 @@ jobs:
               metadata = email.message_from_bytes(archive.read(metadata_name))
               if metadata["Name"] != "ANYgeometry" or metadata["Version"] != version:
                   raise SystemExit("wheel metadata does not match the package contract")
+              if metadata["License-Expression"] != "MPL-2.0":
+                  raise SystemExit("wheel metadata does not declare MPL-2.0")
+              license_root = metadata_name.rsplit("/", 1)[0] + "/licenses/"
+              required = {
+                  license_root + relative
+                  for relative in (
+                      "LICENSE",
+                      "NOTICE",
+                      "THIRD_PARTY_NOTICES.md",
+                      "dependency-licenses.json",
+                      "docs/LICENSE.md",
+                  )
+              }
+              if not required <= set(names):
+                  raise SystemExit(f"wheel license artifacts missing: {sorted(required - set(names))!r}")
 
           sdist = Path("dist", expected[1])
           with tarfile.open(sdist, "r:gz") as archive:
@@ -91,12 +109,23 @@ jobs:
               root = f"anygeometry-{version}"
               if f"{root}/src/anygeometry/py.typed" not in members:
                   raise SystemExit("sdist is missing src/anygeometry/py.typed")
+              for relative in (
+                  "LICENSE",
+                  "NOTICE",
+                  "THIRD_PARTY_NOTICES.md",
+                  "dependency-licenses.json",
+                  "docs/LICENSE.md",
+              ):
+                  if f"{root}/{relative}" not in members:
+                      raise SystemExit(f"sdist is missing {relative}")
               package_info = archive.extractfile(members[f"{root}/PKG-INFO"])
               if package_info is None:
                   raise SystemExit("sdist is missing readable PKG-INFO")
               metadata = email.message_from_binary_file(package_info)
               if metadata["Name"] != "ANYgeometry" or metadata["Version"] != version:
                   raise SystemExit("sdist metadata does not match the package contract")
+              if metadata["License-Expression"] != "MPL-2.0":
+                  raise SystemExit("sdist metadata does not declare MPL-2.0")
           PY
       - name: Generate release checksums
         run: cd dist && sha256sum *.whl *.tar.gz > SHA256SUMS

@@ -1,0 +1,63 @@
+{
+  "dependencies": [
+    {
+      "bundled": false,
+      "license_expression": "MIT",
+      "name": "build",
+      "requirement": "build>=1.2",
+      "scope": "development",
+      "upstream": "https://github.com/pypa/build"
+    },
+    {
+      "bundled": false,
+      "license_expression": "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0",
+      "name": "numpy",
+      "requirement": "numpy>=1.26",
+      "scope": "runtime",
+      "upstream": "https://numpy.org/"
+    },
+    {
+      "bundled": false,
+      "license_expression": "MIT",
+      "name": "pytest",
+      "requirement": "pytest>=8",
+      "scope": "development",
+      "upstream": "https://pytest.org/"
+    },
+    {
+      "bundled": false,
+      "license_expression": "BSD-3-Clause",
+      "name": "shapely",
+      "requirement": "shapely>=2.0",
+      "scope": "optional:planar",
+      "upstream": "https://shapely.readthedocs.io/"
+    },
+    {
+      "bundled": false,
+      "license_expression": "MIT",
+      "name": "setuptools",
+      "requirement": "setuptools>=77.0.3",
+      "scope": "build",
+      "upstream": "https://github.com/pypa/setuptools"
+    },
+    {
+      "bundled": false,
+      "license_expression": "Apache-2.0",
+      "name": "twine",
+      "requirement": "twine>=5",
+      "scope": "development",
+      "upstream": "https://twine.readthedocs.io/"
+    },
+    {
+      "bundled": false,
+      "license_expression": "MIT",
+      "name": "wheel",
+      "requirement": "wheel",
+      "scope": "build",
+      "upstream": "https://github.com/pypa/wheel"
+    }
+  ],
+  "project": "ANYgeometry",
+  "project_license": "MPL-2.0",
+  "schema": "anyecosystem.dependency-licenses-v1"
+}

@@ -37,10 +37,12 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev,planar]"
       - name: Run tests
-        run: python -m pytest
+        run: |
+          python tools/check_licenses.py --check-installed
+          python -m pytest
       - name: Verify package import and CLI version
         run: |
-          python -c "import anygeometry; assert anygeometry.__version__ == '0.4.1'"
+          python -c "import anygeometry; assert anygeometry.__version__ == '0.4.2'"
           python -m anygeometry --version
 
   planar-absence:
@@ -63,6 +65,7 @@ jobs:
           python -m venv --copies "$ABSENCE_VENV"
           "$ABSENCE_VENV/bin/python" -m pip install --upgrade pip
           "$ABSENCE_VENV/bin/python" -m pip install -e ".[dev]"
+          "$ABSENCE_VENV/bin/python" tools/check_licenses.py
       - name: Verify the typed missing-capability contract
         env:
           ABSENCE_VENV: ${{ runner.temp }}/anygeometry-planar-absence
@@ -91,7 +94,8 @@ jobs:
         id: contract
         run: |
           python -m pip install --upgrade pip
-          python -m pip install "build>=1.2,<2" "twine>=5,<7"
+          python -m pip install -e ".[dev,planar]"
+          python tools/check_licenses.py --check-installed
           python - <<'PY'
           import re
           import tomllib
@@ -133,16 +137,38 @@ jobs:
               wheel_metadata = email.message_from_bytes(archive.read(metadata_name))
               assert wheel_metadata["Name"] == "ANYgeometry"
               assert wheel_metadata["Version"] == version
+              assert wheel_metadata["License-Expression"] == "MPL-2.0"
+              license_root = metadata_name.rsplit("/", 1)[0] + "/licenses/"
+              expected_licenses = {
+                  license_root + relative
+                  for relative in (
+                      "LICENSE",
+                      "NOTICE",
+                      "THIRD_PARTY_NOTICES.md",
+                      "dependency-licenses.json",
+                      "docs/LICENSE.md",
+                  )
+              }
+              assert expected_licenses <= set(names), (expected_licenses - set(names))
 
           with tarfile.open(sdists[0], "r:gz") as archive:
               members = {member.name: member for member in archive.getmembers()}
               root = f"anygeometry-{version}"
               assert f"{root}/src/anygeometry/py.typed" in members
+              for relative in (
+                  "LICENSE",
+                  "NOTICE",
+                  "THIRD_PARTY_NOTICES.md",
+                  "dependency-licenses.json",
+                  "docs/LICENSE.md",
+              ):
+                  assert f"{root}/{relative}" in members, relative
               package_info = archive.extractfile(members[f"{root}/PKG-INFO"])
               assert package_info is not None
               sdist_metadata = email.message_from_binary_file(package_info)
               assert sdist_metadata["Name"] == "ANYgeometry"
               assert sdist_metadata["Version"] == version
+              assert sdist_metadata["License-Expression"] == "MPL-2.0"
           PY
       - name: Create external wheel-smoke environment
         env:

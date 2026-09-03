@@ -1,14 +1,21 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77.0.3", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "ANYgeometry"
-version = "0.4.1"
+version = "0.4.2"
 description = "Lightweight deterministic structural-surface geometry kernel"
 readme = "README.md"
 requires-python = ">=3.11"
-license = "GPL-3.0-or-later"
+license = "MPL-2.0"
+license-files = [
+    "LICENSE",
+    "NOTICE",
+    "THIRD_PARTY_NOTICES.md",
+    "dependency-licenses.json",
+    "docs/LICENSE.md",
+]
 authors = [{ name = "Audun Arnesen Nyhus", email = "audunarn@gmail.com" }]
 classifiers = ["Development Status :: 3 - Alpha"]
 dependencies = ["numpy>=1.26"]

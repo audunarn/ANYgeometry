@@ -2,6 +2,26 @@
 
 All notable user-visible changes to ANYgeometry are documented here.
 
+## 0.4.2 - 2026-09-03
+
+- Change the license for ANYgeometry source code distributed from this release
+  onward from GPL-3.0-or-later to MPL-2.0. Earlier published versions retain
+  the license terms under which they were released.
+- License original project documentation under CC BY 4.0, preserve distinct
+  terms for code snippets and third-party material, and add explicit copyright
+  and third-party dependency notices.
+- Add deterministic licensing validation to CI and release builds, including
+  package-metadata, dependency-inventory, wheel, and source-archive gates.
+- Keep geometry serialization schema 4 and automation protocol version 1
+  unchanged.
+
+## 0.4.1 - 2026-08-29
+
+- Fix corner-to-corner planar imprinting by snapping qualified intersection
+  endpoints to existing trim vertices before polygonization.
+- Harden immutable release-ledger verification and the hosted distribution
+  qualification workflow.
+
 ## 0.4.0 - 2026-08-24
 
 - Add a shared NumPy-only qualified intersection engine for every unordered

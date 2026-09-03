@@ -44,16 +44,16 @@ jobs:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           python tools/verify_release_authority.py \
-            --ledger docs/release/anygeometry-0.4.1-ledger.json \
+            --ledger docs/release/anygeometry-0.4.2-ledger.json \
             --assets release-assets \
             --output dist \
             --tag "$RELEASE_TAG" \
             --protected-ref refs/remotes/origin/main \
-            --expected-terminal ACCEPTED_ANYGEOMETRY_0_4_1_RELEASE \
+            --expected-terminal ACCEPTED_ANYGEOMETRY_0_4_2_RELEASE \
             --distribution ANYgeometry \
-            --version 0.4.1 \
-            --artifact anygeometry-0.4.1-py3-none-any.whl \
-            --artifact anygeometry-0.4.1.tar.gz
+            --version 0.4.2 \
+            --artifact anygeometry-0.4.2-py3-none-any.whl \
+            --artifact anygeometry-0.4.2.tar.gz
       - name: Publish exact ledger-authorized distributions
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
         with:
