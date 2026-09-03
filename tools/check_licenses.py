@@ -113,6 +113,11 @@ def _license_from_metadata(distribution: importlib_metadata.Distribution) -> str
 
 def _check_installed(rows: list[dict[str, object]]) -> None:
     for row in rows:
+        # PEP 517 build requirements run in a separate isolated environment.
+        # Their exact declarations and licenses are audited statically above;
+        # the caller environment is not evidence that they are installed.
+        if row["scope"] == "build":
+            continue
         name = str(row["name"])
         try:
             distribution = importlib_metadata.distribution(name)
