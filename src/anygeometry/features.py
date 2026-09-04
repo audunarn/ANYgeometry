@@ -39,8 +39,10 @@ __all__ = [
     "FeatureRegistry",
     "FeatureResult",
     "FeatureStatus",
+    "FeatureTopologyRole",
     "RegenerationReport",
     "builtin_feature_registry",
+    "feature_entity_owners",
 ]
 
 
@@ -601,6 +603,25 @@ class FeatureStatus(str, Enum):
     INVALID = "invalid"
 
 
+class FeatureTopologyRole(str, Enum):
+    """How a feature relates its materialized topology to user intent.
+
+    ``AUTHORED`` outputs are independently authored geometry, such as a point
+    or line. ``COMPOSITE`` outputs are subordinate implementation topology of
+    one higher-level feature, such as the panels, edges, and vertices used to
+    represent a cylinder. ``MODIFIER`` features alter existing topology and
+    must not steal presentation ownership from the feature that originated it.
+
+    The role is an executor contract rather than serialized document state.
+    It therefore has no effect on regeneration, persistent IDs, or file
+    compatibility.
+    """
+
+    AUTHORED = "authored"
+    COMPOSITE = "composite"
+    MODIFIER = "modifier"
+
+
 @dataclass(frozen=True)
 class FeatureOutputRef:
     """Stable address of one named output of a modelling feature."""
@@ -695,6 +716,7 @@ class FeatureRegistry:
     def __init__(self) -> None:
         self._executors: Dict[str, FeatureExecutor | ExecutorCallable] = {}
         self._replay_modes: Dict[str, str] = {}
+        self._topology_roles: Dict[str, FeatureTopologyRole] = {}
 
     def register(
         self,
@@ -703,6 +725,7 @@ class FeatureRegistry:
         *,
         replace: bool = False,
         replay_mode: str | None = None,
+        topology_role: FeatureTopologyRole | str = FeatureTopologyRole.COMPOSITE,
     ) -> None:
         key = str(kind).strip()
         if not key:
@@ -711,6 +734,13 @@ class FeatureRegistry:
             raise ValueError(
                 "feature replay_mode must be 'additive', 'mutating', or None"
             )
+        try:
+            role = FeatureTopologyRole(topology_role)
+        except ValueError:
+            raise ValueError(
+                "feature topology_role must be 'authored', 'composite', "
+                "or 'modifier'"
+            ) from None
         if key in self._executors:
             if not replace:
                 raise ValueError(
@@ -721,7 +751,13 @@ class FeatureRegistry:
                     f"replacement executor for {key!r} conflicts with its "
                     "registered replay_mode; unregister it explicitly first"
                 )
+            if role != self._topology_roles.get(key):
+                raise ValueError(
+                    f"replacement executor for {key!r} conflicts with its "
+                    "registered topology_role; unregister it explicitly first"
+                )
         self._executors[key] = executor
+        self._topology_roles[key] = role
         if replay_mode is None:
             self._replay_modes.pop(key, None)
         else:
@@ -731,6 +767,7 @@ class FeatureRegistry:
         key = str(kind)
         self._executors.pop(key, None)
         self._replay_modes.pop(key, None)
+        self._topology_roles.pop(key, None)
 
     def has(self, kind: str) -> bool:
         return str(kind) in self._executors
@@ -739,6 +776,11 @@ class FeatureRegistry:
         """Return the registered incremental scheduling contract, if any."""
 
         return self._replay_modes.get(str(kind))
+
+    def topology_role(self, kind: str) -> FeatureTopologyRole | None:
+        """Return the registered topology-intent role, if known."""
+
+        return self._topology_roles.get(str(kind))
 
     def execute(
         self,
@@ -761,6 +803,49 @@ class FeatureRegistry:
     @property
     def kinds(self) -> tuple[str, ...]:
         return tuple(sorted(self._executors))
+
+
+def feature_entity_owners(
+    geometry: "GeometryModel",
+    *,
+    registry: FeatureRegistry | None = None,
+) -> dict[EntityRef, int]:
+    """Map active composite topology to its original feature exactly.
+
+    Only features registered as :attr:`FeatureTopologyRole.COMPOSITE` claim
+    subordinate entities. Authored geometry remains independently exposed,
+    while modifiers preserve the earlier owner. Unknown/frozen feature kinds
+    conservatively behave as composites so imported generated topology stays
+    grouped beneath its feature.
+
+    Output references are resolved solely through persistent replacement
+    lineage. The query never compares coordinates or performs proximity
+    matching. When several composite histories resolve to the same entity,
+    the earliest feature is the stable owner.
+    """
+
+    active_registry = builtin_feature_registry() if registry is None else registry
+    owners: dict[EntityRef, int] = {}
+    collections = {
+        "vertex": geometry.vertices,
+        "edge": geometry.edges,
+        "face": geometry.faces,
+    }
+    for record in sorted(
+        geometry.features.records,
+        key=lambda item: int(item.feature_id),
+    ):
+        if record.suppressed:
+            continue
+        role = active_registry.topology_role(record.kind)
+        if role not in (None, FeatureTopologyRole.COMPOSITE):
+            continue
+        for output in record.outputs.values():
+            for current in geometry.resolve_ref(output):
+                collection = collections.get(current.kind)
+                if collection is not None and current.id in collection:
+                    owners.setdefault(current, int(record.feature_id))
+    return owners
 
 
 @dataclass(frozen=True)
@@ -2424,7 +2509,7 @@ def builtin_feature_registry() -> FeatureRegistry:
 
         return execute
 
-    for kind, executor in {
+    executors = {
         "geometry.point": point,
         "geometry.line": line,
         "geometry.arc": arc,
@@ -2449,8 +2534,35 @@ def builtin_feature_registry() -> FeatureRegistry:
         "geometry.pattern.rectangular": rectangular_pattern_feature,
         "geometry.pattern.transforms": transform_pattern_feature,
         "geometry.reverse": reverse_feature,
-    }.items():
-        registry.register(kind, executor)
+    }
+    authored = {
+        "geometry.point",
+        "geometry.line",
+        "geometry.arc",
+        "geometry.spline",
+        "geometry.polyline",
+        "geometry.face",
+        "geometry.plate",
+    }
+    modifiers = {
+        "geometry.fragment.overlaps",
+        "geometry.transform",
+        "geometry.split_edge",
+        "geometry.split_face",
+        "geometry.strip_face",
+        "geometry.trim_hole",
+        "geometry.set_face_corners",
+        "geometry.reverse",
+    }
+    for kind, executor in executors.items():
+        role = (
+            FeatureTopologyRole.AUTHORED
+            if kind in authored
+            else FeatureTopologyRole.MODIFIER
+            if kind in modifiers
+            else FeatureTopologyRole.COMPOSITE
+        )
+        registry.register(kind, executor, topology_role=role)
     for name in (
         "plate",
         "stiffened_panel",
@@ -2462,5 +2574,9 @@ def builtin_feature_registry() -> FeatureRegistry:
         "girder",
         "stiffener",
     ):
-        registry.register(f"generator.{name}", generator(name))
+        registry.register(
+            f"generator.{name}",
+            generator(name),
+            topology_role=FeatureTopologyRole.COMPOSITE,
+        )
     return registry

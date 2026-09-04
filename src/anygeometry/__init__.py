@@ -42,8 +42,10 @@ from .features import (
     FeatureRegistry,
     FeatureResult,
     FeatureStatus,
+    FeatureTopologyRole,
     RegenerationReport,
     builtin_feature_registry,
+    feature_entity_owners,
 )
 from .intersections import (
     ExpectedImprintChange,
@@ -226,6 +228,7 @@ __all__ = [
     "FeatureRegistry",
     "FeatureResult",
     "FeatureStatus",
+    "FeatureTopologyRole",
     "GeometryError",
     "GeometryModel",
     "GeometryTopologyError",
@@ -295,6 +298,7 @@ __all__ = [
     "face_normal_many",
     "fragment_face",
     "fragment_coplanar_overlaps",
+    "feature_entity_owners",
     "face_sketch_plane",
     "from_dict",
     "find_coplanar_overlaps",

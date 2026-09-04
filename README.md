@@ -215,6 +215,16 @@ add executors without a reverse dependency. Regeneration is atomic, retains
 replacement lineage, and reserves IDs above the old materialization so a
 stale `EntityRef` can never be silently reused for a different output.
 
+Feature executors also declare a `FeatureTopologyRole`: independently
+`AUTHORED` geometry, subordinate `COMPOSITE` topology, or a `MODIFIER` that
+must preserve the earlier owner. `feature_entity_owners(geometry)` resolves
+the active topology of composite features through exact replacement lineage.
+It allows model trees and viewers to present a cylinder, cone, panel, or other
+generator as one intent-level object without removing the vertices, edges, and
+faces needed for geometry and meshing. The query never uses coordinates or
+proximity matching; unknown frozen feature kinds conservatively remain
+composite.
+
 Flat-face sketches use the built-in `geometry.sketch.extrude` feature. A
 `SketchDefinition` stores named plane-local points, their ordered path,
 distance/coincidence constraints, and the signed normal extrusion distance.

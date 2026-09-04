@@ -2,6 +2,12 @@
 
 All notable user-visible changes to ANYgeometry are documented here.
 
+## Unreleased
+
+- Add public feature-topology roles and exact `feature_entity_owners()`
+  resolution so consumers can present composite generators as lightweight
+  intent objects without duplicating feature-kind policy or changing topology.
+
 ## 0.4.2 - 2026-09-03
 
 - Change the license for ANYgeometry source code distributed from this release
