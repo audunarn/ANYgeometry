@@ -622,6 +622,41 @@ class FeatureTopologyRole(str, Enum):
     MODIFIER = "modifier"
 
 
+_AUTHORED_FEATURE_KINDS = frozenset(
+    {
+        "geometry.point",
+        "geometry.line",
+        "geometry.arc",
+        "geometry.spline",
+        "geometry.polyline",
+        "geometry.face",
+        "geometry.plate",
+    }
+)
+_MODIFIER_FEATURE_KINDS = frozenset(
+    {
+        "geometry.fragment.overlaps",
+        "geometry.transform",
+        "geometry.split_edge",
+        "geometry.split_face",
+        "geometry.strip_face",
+        "geometry.trim_hole",
+        "geometry.set_face_corners",
+        "geometry.reverse",
+    }
+)
+
+
+def _builtin_topology_role(kind: str) -> FeatureTopologyRole:
+    """Return built-in presentation ownership without building executors."""
+
+    if kind in _AUTHORED_FEATURE_KINDS:
+        return FeatureTopologyRole.AUTHORED
+    if kind in _MODIFIER_FEATURE_KINDS:
+        return FeatureTopologyRole.MODIFIER
+    return FeatureTopologyRole.COMPOSITE
+
+
 @dataclass(frozen=True)
 class FeatureOutputRef:
     """Stable address of one named output of a modelling feature."""
@@ -824,28 +859,7 @@ def feature_entity_owners(
     the earliest feature is the stable owner.
     """
 
-    active_registry = builtin_feature_registry() if registry is None else registry
-    owners: dict[EntityRef, int] = {}
-    collections = {
-        "vertex": geometry.vertices,
-        "edge": geometry.edges,
-        "face": geometry.faces,
-    }
-    for record in sorted(
-        geometry.features.records,
-        key=lambda item: int(item.feature_id),
-    ):
-        if record.suppressed:
-            continue
-        role = active_registry.topology_role(record.kind)
-        if role not in (None, FeatureTopologyRole.COMPOSITE):
-            continue
-        for output in record.outputs.values():
-            for current in geometry.resolve_ref(output):
-                collection = collections.get(current.kind)
-                if collection is not None and current.id in collection:
-                    owners.setdefault(current, int(record.feature_id))
-    return owners
+    return geometry.features.entity_owners(geometry, registry=registry)
 
 
 @dataclass(frozen=True)
@@ -904,6 +918,50 @@ class FeatureHistory:
         """Detached records; persistent edits go through owner-aware methods."""
 
         return deepcopy(self._records)
+
+    def __len__(self) -> int:
+        """Return the number of feature definitions without copying them."""
+
+        return len(self._records)
+
+    def entity_owners(
+        self,
+        geometry: "GeometryModel",
+        *,
+        registry: FeatureRegistry | None = None,
+    ) -> dict[EntityRef, int]:
+        """Map active composite topology to its originating feature.
+
+        The history performs this read-only query internally so consumers do
+        not have to request detached deep copies of every record merely to
+        inspect current output references. Returned owners and all public
+        records remain detached; no mutable history storage is exposed.
+        """
+
+        if self._owner is not None and geometry is not self._owner:
+            raise GeometryError("feature ownership must be queried on its owner model")
+        owners: dict[EntityRef, int] = {}
+        collections = {
+            "vertex": geometry.vertices,
+            "edge": geometry.edges,
+            "face": geometry.faces,
+        }
+        for record in sorted(self._records, key=lambda item: int(item.feature_id)):
+            if record.suppressed:
+                continue
+            role = (
+                _builtin_topology_role(record.kind)
+                if registry is None
+                else registry.topology_role(record.kind)
+            )
+            if role not in (None, FeatureTopologyRole.COMPOSITE):
+                continue
+            for output in record.outputs.values():
+                for current in geometry.resolve_ref(output):
+                    collection = collections.get(current.kind)
+                    if collection is not None and current.id in collection:
+                        owners.setdefault(current, int(record.feature_id))
+        return owners
 
     @property
     def next_id(self) -> int:
@@ -1629,9 +1687,7 @@ class FeatureHistory:
         involved.
         """
 
-        from .serialization import from_dict, to_dict
-
-        working = from_dict(to_dict(geometry, include_features=False))
+        working = geometry.clone(include_features=False)
         working.reserve_id_state(geometry.id_state())
         replayed = deepcopy(self._records)
         by_id = {record.feature_id: record for record in replayed}
@@ -2501,10 +2557,11 @@ def builtin_feature_registry() -> FeatureRegistry:
         def execute(geometry, feature, inputs):
             del inputs
             from . import generators
+            from .editing import _insert_validated_model
 
             build = getattr(generators, name)
             source = build(**feature.parameters)
-            inserted = geometry.insert_model(source)
+            inserted = _insert_validated_model(geometry, source)
             return inserted.outputs
 
         return execute
@@ -2535,34 +2592,12 @@ def builtin_feature_registry() -> FeatureRegistry:
         "geometry.pattern.transforms": transform_pattern_feature,
         "geometry.reverse": reverse_feature,
     }
-    authored = {
-        "geometry.point",
-        "geometry.line",
-        "geometry.arc",
-        "geometry.spline",
-        "geometry.polyline",
-        "geometry.face",
-        "geometry.plate",
-    }
-    modifiers = {
-        "geometry.fragment.overlaps",
-        "geometry.transform",
-        "geometry.split_edge",
-        "geometry.split_face",
-        "geometry.strip_face",
-        "geometry.trim_hole",
-        "geometry.set_face_corners",
-        "geometry.reverse",
-    }
     for kind, executor in executors.items():
-        role = (
-            FeatureTopologyRole.AUTHORED
-            if kind in authored
-            else FeatureTopologyRole.MODIFIER
-            if kind in modifiers
-            else FeatureTopologyRole.COMPOSITE
+        registry.register(
+            kind,
+            executor,
+            topology_role=_builtin_topology_role(kind),
         )
-        registry.register(kind, executor, topology_role=role)
     for name in (
         "plate",
         "stiffened_panel",

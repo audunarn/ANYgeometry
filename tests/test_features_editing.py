@@ -567,6 +567,25 @@ def test_clone_copy_mirror_and_patterns_are_independent_and_valid() -> None:
     assert geometry.validate_topology() == ()
 
 
+def test_clone_is_an_in_memory_copy_independent_of_the_file_codec(monkeypatch) -> None:
+    geometry = plate(2.0, 1.0, semantic_group="deck")
+    geometry.features.capture_baseline(geometry)
+
+    def codec_used(*_args, **_kwargs):
+        raise AssertionError("clone must not serialize")
+
+    monkeypatch.setattr("anygeometry.serialization.to_dict", codec_used)
+    monkeypatch.setattr("anygeometry.serialization.from_dict", codec_used)
+
+    cloned = geometry.clone()
+
+    assert cloned.model_id != geometry.model_id
+    assert cloned.revision == geometry.revision
+    assert cloned.entity_keys() == geometry.entity_keys()
+    assert cloned.group("deck") == geometry.group("deck")
+    assert cloned.features.snapshot() == geometry.features.snapshot()
+
+
 def test_full_model_insert_preserves_sheet_and_member_identity_closures() -> None:
     source = GeometryModel()
     vertices = source.add_points(

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import numpy as np
 import pytest
 
@@ -120,3 +122,19 @@ def test_registry_topology_roles_are_strict_and_removed_with_executor():
         )
     registry.unregister("vendor.feature")
     assert registry.topology_role("vendor.feature") is None
+
+
+def test_owner_query_does_not_deep_copy_feature_history():
+    geometry = GeometryModel()
+    geometry.features.capture_baseline(geometry)
+    geometry.features.append(
+        "generator.plate",
+        parameters={"length": 2.0, "width": 1.0},
+    )
+    assert geometry.regenerate_features().success
+
+    with patch("anygeometry.features.deepcopy", side_effect=AssertionError):
+        owners = feature_entity_owners(geometry)
+
+    assert owners
+    assert len(geometry.features) == 1

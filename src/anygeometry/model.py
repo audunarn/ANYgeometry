@@ -2200,10 +2200,28 @@ class GeometryModel:
     def clone(self, *, include_features: bool = True) -> "GeometryModel":
         """Return a deep, independently mutable geometry copy."""
 
-        from .serialization import from_dict, to_dict
-
-        made = from_dict(to_dict(self, include_features=include_features))
-        made._model_id = canonical_model_id(uuid4())
+        # Publicly committed models already satisfy the kernel invariants.
+        # Cloning through the JSON codec repeated full schema conversion and
+        # validation, which dominated feature staging for generated shells.
+        # The compatibility snapshot path performs the same detached copies
+        # directly and keeps serialization out of in-memory transactions.
+        made = GeometryModel(tolerance=self.tolerance)
+        made._restore_topology_unchecked(self.topology_snapshot())
+        made._revision = self._revision
+        made._entity_versions = dict(self._entity_versions)
+        made._units = self._units
+        made._local_origin = np.array(self._local_origin, dtype=float, copy=True)
+        made._local_origin.flags.writeable = False
+        made._coordinate_transform = (
+            None
+            if self._coordinate_transform is None
+            else np.array(self._coordinate_transform, dtype=float, copy=True)
+        )
+        if made._coordinate_transform is not None:
+            made._coordinate_transform.flags.writeable = False
+        made._crs_metadata = deepcopy(self._crs_metadata)
+        if include_features:
+            made._features._restore_unchecked(self.features.snapshot())  # noqa: SLF001
         return made
 
     def insert_model(
@@ -5014,20 +5032,30 @@ class GeometryModel:
         extent = float(np.linalg.norm(np.ptp(combined, axis=0)))
         planar = len(singular) < 3 or float(singular[-1]) <= self.tolerance.effective_surface_residual(extent)
         surface = face.surface
+        support_uv: np.ndarray | None = None
         if surface is not None and not (
             isinstance(surface, CoonsSurface) and not surface.has_boundaries
         ):
             try:
-                for point in combined:
-                    uv = surface.local_uv(point)
-                    projected = np.asarray(surface.evaluate(*uv), dtype=float)
-                    if (
-                        float(np.linalg.norm(projected - point))
-                        > self.tolerance.effective_surface_residual(extent)
-                    ):
-                        return [
-                            f"face {face_id} boundary is inconsistent with its explicit surface"
-                        ]
+                if isinstance(surface, (Plane, Cylinder, Cone)):
+                    support_uv = self._builtin_local_uv_many(surface, combined)
+                    projected = _evaluate_surface_many(surface, support_uv)
+                else:
+                    support_uv = np.asarray(
+                        [surface.local_uv(point) for point in combined],
+                        dtype=float,
+                    )
+                    projected = np.asarray(
+                        [surface.evaluate(*uv) for uv in support_uv],
+                        dtype=float,
+                    )
+                if np.any(
+                    np.linalg.norm(projected - combined, axis=1)
+                    > self.tolerance.effective_surface_residual(extent)
+                ):
+                    return [
+                        f"face {face_id} boundary is inconsistent with its explicit surface"
+                    ]
             except (ValueError, GeometryError, np.linalg.LinAlgError) as error:
                 return [f"face {face_id} has invalid surface geometry: {error}"]
         if planar:
@@ -5041,10 +5069,13 @@ class GeometryModel:
             isinstance(surface, CoonsSurface) and not surface.has_boundaries
         ):
             try:
-                polygons = [
-                    np.asarray([surface.local_uv(point) for point in points])
-                    for points in points_3d
-                ]
+                if support_uv is None:
+                    support_uv = np.asarray(
+                        [surface.local_uv(point) for point in combined],
+                        dtype=float,
+                    )
+                boundaries = np.cumsum([len(points) for points in points_3d])[:-1]
+                polygons = list(np.split(support_uv, boundaries))
             except (ValueError, GeometryError, np.linalg.LinAlgError) as error:
                 return [f"face {face_id} has invalid surface geometry: {error}"]
         elif (
@@ -6635,6 +6666,45 @@ class GeometryModel:
                 1.0,
             )
         return np.column_stack((u, v)), np.ones(len(targets), dtype=bool)
+
+    @staticmethod
+    def _builtin_local_uv_many(
+        surface: Plane | Cylinder | Cone,
+        targets: np.ndarray,
+    ) -> np.ndarray:
+        """Vectorized, unbounded equivalent of built-in ``local_uv`` calls."""
+
+        offsets = np.asarray(targets, dtype=float) - surface.origin
+        if isinstance(surface, Plane):
+            matrix = np.column_stack((surface.u_vector, surface.v_vector))
+            return np.linalg.lstsq(matrix, offsets.T, rcond=None)[0].T
+
+        axial = offsets @ surface.axis
+        radial = offsets - axial[:, None] * surface.axis
+        angles = np.arctan2(
+            radial @ surface.circumferential_direction,
+            radial @ surface.radial_direction,
+        )
+        raw = angles - surface.start_angle
+        period = 2.0 * float(np.pi)
+        if surface.sweep_angle > 0.0:
+            delta = np.mod(raw, period)
+            endpoint = np.abs(delta - period)
+        else:
+            delta = -np.mod(-raw, period)
+            endpoint = np.abs(delta + period)
+        tolerance = 64.0 * np.finfo(float).eps * np.maximum.reduce(
+            (
+                np.ones_like(raw),
+                np.abs(angles),
+                np.full_like(raw, abs(surface.start_angle)),
+                np.full_like(raw, abs(surface.sweep_angle)),
+            )
+        )
+        delta = np.where((np.abs(raw) <= tolerance) | (endpoint <= tolerance), 0.0, delta)
+        return np.column_stack(
+            (delta / surface.sweep_angle, axial / surface.height)
+        )
 
     def _project_builtin_face_many(
         self,

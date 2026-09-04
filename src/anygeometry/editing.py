@@ -550,6 +550,47 @@ def _copy_structural_closure(
     }
 
 
+def _insert_validated_model(
+    destination: GeometryModel,
+    source: GeometryModel,
+    *,
+    matrix: AffineLike | None = None,
+    group_prefix: str | None = None,
+) -> InsertResult:
+    """Insert a known-valid model with fresh destination identities.
+
+    This internal path is used by built-in generators, whose returned model
+    has already committed a validating transaction. The destination still
+    validates the complete changed closure before its transaction commits.
+    """
+
+    with destination.transaction():
+        affine = _affine_transform(matrix)
+        if affine == AffineTransform.identity():
+            # Selection expansion and insertion only read the source. Avoid a
+            # serialization round trip for the overwhelmingly common identity
+            # insert used by generator features.
+            prepared = source
+        else:
+            prepared = source.clone(include_features=False)
+            transform(prepared, affine)
+        result = _insert_selected(
+            destination, prepared, None, group_prefix=group_prefix
+        )
+        # The outer transaction validates the complete changed geometry and
+        # structural closure atomically. A second whole-model validation here
+        # duplicated that work and made generator insertion scale poorly.
+        return InsertResult(
+            result.entity_map,
+            result.groups,
+            result.outputs,
+            {
+                source.handle(prepared.kind, prepared.id): mapped
+                for prepared, mapped in result.handle_map.items()
+            },
+        )
+
+
 def insert_model(
     destination: GeometryModel,
     source: GeometryModel,
@@ -567,26 +608,12 @@ def insert_model(
     errors = source.validate_topology()
     if errors:
         raise GeometryError("cannot insert invalid geometry: " + "; ".join(errors))
-    with destination.transaction():
-        prepared = source.clone(include_features=False)
-        affine = _affine_transform(matrix)
-        if affine != AffineTransform.identity():
-            transform(prepared, affine)
-        result = _insert_selected(
-            destination, prepared, None, group_prefix=group_prefix
-        )
-        errors = destination.validate_topology()
-        if errors:
-            raise GeometryError("insert produced invalid topology: " + "; ".join(errors))
-        return InsertResult(
-            result.entity_map,
-            result.groups,
-            result.outputs,
-            {
-                source.handle(prepared.kind, prepared.id): mapped
-                for prepared, mapped in result.handle_map.items()
-            },
-        )
+    return _insert_validated_model(
+        destination,
+        source,
+        matrix=matrix,
+        group_prefix=group_prefix,
+    )
 
 
 def _copy_closure(
