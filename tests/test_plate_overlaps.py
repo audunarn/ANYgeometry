@@ -9,6 +9,7 @@ from anygeometry import (
     EntityRef,
     GeometryError,
     GeometryModel,
+    OverlapOwnershipPolicy,
     Plane,
     find_coplanar_overlaps,
     fragment_coplanar_overlaps,
@@ -79,7 +80,7 @@ def test_fragmentation_makes_a_only_overlap_and_b_only_conformal_plates():
         item.edge for face_id in (first, second) for item in geometry.faces[face_id].loop
     )
 
-    result = fragment_coplanar_overlaps(geometry, (first, second))
+    result = fragment_coplanar_overlaps(geometry, (first, second), ownership_policy=OverlapOwnershipPolicy.FIRST_SELECTED)
 
     assert len(geometry.faces) == 3
     assert len(result.descendants[first]) == 2
@@ -127,6 +128,7 @@ def test_overlap_feature_regenerates_and_failed_operation_is_atomic():
     geometry.features.capture_baseline(geometry)
     record = geometry.features.append(
         "geometry.fragment.overlaps",
+        parameters={"ownership_policy": "first_selected"},
         inputs={"faces": (EntityRef("face", first), EntityRef("face", second))},
     )
     report = geometry.regenerate_features()
@@ -151,5 +153,5 @@ def test_overlap_feature_regenerates_and_failed_operation_is_atomic():
     )
     before = to_dict(separate)
     with pytest.raises(GeometryError, match="no positive-area overlap"):
-        fragment_coplanar_overlaps(separate, (a, b))
+        fragment_coplanar_overlaps(separate, (a, b), ownership_policy=OverlapOwnershipPolicy.FIRST_SELECTED)
     assert to_dict(separate) == before

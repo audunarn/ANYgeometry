@@ -24,7 +24,7 @@ def test_project_metadata_and_notices_define_the_042_license_boundary() -> None:
     metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     project = metadata["project"]
 
-    assert project["version"] == "0.4.2"
+    assert project["version"] == "0.4.3"
     assert project["license"] == "MPL-2.0"
     assert project["license-files"] == EXPECTED_FILES
     assert all((ROOT / relative).is_file() for relative in EXPECTED_FILES)

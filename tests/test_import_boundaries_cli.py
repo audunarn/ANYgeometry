@@ -45,7 +45,7 @@ def test_public_owner_exports_use_one_geometry_and_reference_type() -> None:
     assert anygeometry.GeometryModel is GeometryModel
     assert anygeometry.EntityRef is EntityRef
     assert geometry.entity_ref("vertex", vertex).__class__ is EntityRef
-    assert anygeometry.__version__ == "0.4.2"
+    assert anygeometry.__version__ == "0.4.3"
     assert set(anygeometry.__all__) >= {
         "GeometryModel",
         "EntityRef",
@@ -82,7 +82,7 @@ def test_core_and_optional_dependencies_match_release_metadata() -> None:
     assert project["scripts"] == {"anygeometry": "anygeometry.__main__:main"}
     assert (PACKAGE / "py.typed").is_file()
     assert project["readme"] == "README.md"
-    assert project["version"] == "0.4.2"
+    assert project["version"] == "0.4.3"
     assert project["license"] == "MPL-2.0"
     assert project["license-files"] == [
         "LICENSE",
@@ -107,7 +107,7 @@ def test_manual_release_workflow_builds_without_production_publication() -> None
     assert "repository-url:" not in workflow
     assert "gh-action-pypi-publish" not in workflow
     assert "timeout-minutes:" not in workflow
-    assert 'version != "0.4.2"' in workflow
+    assert 'version != "0.4.3"' in workflow
     assert "python tools/check_licenses.py --check-installed" in workflow
     assert "python -m twine check --strict dist/*.whl dist/*.tar.gz" in workflow
     assert "ANYgeometry-${{ steps.contract.outputs.version }}-release-bundle" in workflow

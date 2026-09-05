@@ -282,7 +282,7 @@ Consumers that require a qualified handoff must retain or rerun
 JSON and gzip-compressed JSON are supported. Mesh and FEM/project
 serialization remain outside ANYgeometry.
 
-ANYgeometry 0.4.2 reads schemas 1–4 and writes schema 4. Automation consumers
+ANYgeometry 0.4.3 reads schemas 1–4 and writes schema 4. Automation consumers
 use `ANYgeometry>=0.4,<0.5`; geometry-only consumers may continue using schema
 4 through the public codecs. A 0.2.0 reader intentionally rejects a
 schema-4 document. Downstream packages should use the public codecs rather

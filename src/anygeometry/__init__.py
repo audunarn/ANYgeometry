@@ -139,6 +139,11 @@ from .structural import (
 from .overlaps import (
     FaceOverlap,
     OverlapFragmentation,
+    OverlapFragmentationPlan,
+    OverlapOwnershipPolicy,
+    OverlapQualificationError,
+    plan_coplanar_fragmentation,
+    apply_coplanar_fragmentation,
     find_coplanar_overlaps,
     fragment_coplanar_overlaps,
 )
@@ -259,6 +264,11 @@ __all__ = [
     "Orientation",
     "OrientedEdge",
     "OverlapFragmentation",
+    "OverlapFragmentationPlan",
+    "OverlapOwnershipPolicy",
+    "OverlapQualificationError",
+    "plan_coplanar_fragmentation",
+    "apply_coplanar_fragmentation",
     "Plane",
     "PatternResult",
     "ParameterRange",
@@ -353,4 +363,4 @@ __all__ = [
     "JunctionMemberUse",
 ]
 
-__version__ = "0.4.2"
+__version__ = "0.4.3"

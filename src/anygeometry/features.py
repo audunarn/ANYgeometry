@@ -1037,6 +1037,16 @@ class FeatureHistory:
         kind_version: int = 1,
         dependencies: Sequence[int] = (),
     ) -> FeatureRecord:
+        if kind == "geometry.fragment.overlaps":
+            from .overlaps import OverlapOwnershipPolicy
+
+            parameters = {} if parameters is None else dict(parameters)
+            if "ownership_policy" not in parameters:
+                raise GeometryError("overlap feature requires explicit ownership_policy")
+            try:
+                parameters["ownership_policy"] = OverlapOwnershipPolicy(parameters["ownership_policy"]).value
+            except (ValueError, TypeError) as error:
+                raise GeometryError("unknown overlap ownership policy") from error
         record = FeatureRecord(
             feature_id=self._next_id,
             kind=str(kind),
@@ -2344,8 +2354,7 @@ def builtin_feature_registry() -> FeatureRegistry:
         return materialize_sketch(geometry, support.id, definition)
 
     def fragment_overlaps(geometry, feature, inputs):
-        del feature
-        from .overlaps import fragment_coplanar_overlaps
+        from .overlaps import OverlapOwnershipPolicy, fragment_coplanar_overlaps
 
         faces = inputs.get("faces", ())
         if len(faces) < 2 or any(item.kind != "face" for item in faces):
@@ -2353,7 +2362,8 @@ def builtin_feature_registry() -> FeatureRegistry:
                 "plate overlap fragmentation needs at least two ordered faces"
             )
         return fragment_coplanar_overlaps(
-            geometry, [item.id for item in faces]
+            geometry, [item.id for item in faces],
+            ownership_policy=feature.parameters.get("ownership_policy", OverlapOwnershipPolicy.FIRST_SELECTED),
         ).outputs
 
     def revolve(geometry, feature, inputs):

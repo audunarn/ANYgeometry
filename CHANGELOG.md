@@ -4,6 +4,29 @@ All notable user-visible changes to ANYgeometry are documented here.
 
 ## Unreleased
 
+### 0.4.3 — overlap safety and strict bookkeeping
+
+- Require explicit `OverlapOwnershipPolicy.FIRST_SELECTED` for planar
+  fragmentation and newly authored overlap features. Add immutable,
+  revision-bound preview/apply APIs documenting owner and label consequences.
+  Legacy saved overlap features retain their recorded first-selected semantics.
+- Stop using sampled curved boundaries to return overlap/disjoint decisions.
+  Incomplete curved qualification or unavailable certified region area raises
+  `OverlapQualificationError`; no partial result is returned.
+- Reject noncanonical Sheet/fragmentation IDs before allocation, freeze overlap
+  result mappings, and avoid empty inherited tag entries.
+- Limit fragmentation edge searches to incident/output topology and batch label
+  propagation. Reuse projected polygons within overlap queries.
+- Share dimensional planar segment checks between validation paths, including
+  tiny plates and unequal-length near-parallel crossings. Preserve original
+  Sheet/FaceUse orientation, labels, and both-source lineage during CONNECT.
+- Keep cache invalidation kind-bound: deleting or rolling back a face/vertex
+  no longer clears an unrelated edge cache with the same integer ID.
+- Keep geometry schema 4, automation protocol 1, and MPL-2.0 unchanged.
+
+See [0.4.3 compatibility notes](docs/OVERLAP_SAFETY_043.md) for migration examples
+and the intentionally conservative curved/dependency boundaries.
+
 - Add public feature-topology roles and exact `feature_entity_owners()`
   resolution so consumers can present composite generators as lightweight
   intent objects without duplicating feature-kind policy or changing topology.

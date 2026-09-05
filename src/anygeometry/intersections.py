@@ -6179,7 +6179,7 @@ def _face_imprint_application(
                     revalidated.tolerance_used or geometry.tolerance.length,
                 )
             return None, relations, False
-        from .overlaps import fragment_coplanar_overlaps
+        from .overlaps import OverlapOwnershipPolicy, fragment_coplanar_overlaps
 
         sheet_ids = tuple(
             sorted(
@@ -6189,14 +6189,84 @@ def _face_imprint_application(
                 )
             )
         )
+        source_sheets = {identifier: geometry.sheets[identifier] for identifier in sheet_ids}
+        source_uses = {}
+        source_normals = {}
+        source_labels = {
+            face_id: (
+                tuple(name for name, refs in geometry.groups.items() if EntityRef("face", face_id) in refs),
+                geometry.tags_for(EntityRef("face", face_id)),
+            ) for face_id in (first_face, second_face)
+        }
+        for face_id in (first_face, second_face):
+            for use_id in sorted(geometry._face_structural_uses.get(face_id, ())):
+                use = geometry.face_uses[use_id]
+                if use.sheet_id not in source_uses:
+                    source_uses[use.sheet_id] = use
+                    source_normals[use.sheet_id] = geometry.face_normal(face_id, 0.5, 0.5)
         fragmented = fragment_coplanar_overlaps(
-            geometry, (first_face, second_face)
+            geometry, (first_face, second_face),
+            ownership_policy=OverlapOwnershipPolicy.FIRST_SELECTED,
         )
+        # FIRST_SELECTED retires an owner with no exclusive material. CONNECT
+        # instead retains that exact Sheet identity for shared-region uses.
+        for sheet_id, sheet in source_sheets.items():
+            if sheet_id not in geometry.sheets:
+                face_id = fragmented.overlap_faces[0]
+                for use_id in tuple(geometry._face_structural_uses.get(face_id, ())):
+                    use = geometry.face_uses[use_id]
+                    geometry._put_structural("face_use", replace(
+                        use, metadata={**use.metadata, "anygeometry.shared_region": True},
+                    ))
+                original_use = source_uses[sheet_id]
+                use_id = original_use.id
+                made = geometry._new_face_use(use_id, sheet_id, face_id,
+                                              orientation=original_use.orientation,
+                                              metadata={**original_use.metadata, "anygeometry.shared_region": True})
+                geometry._put_structural("face_use", made)
+                geometry._put_structural("sheet", replace(sheet, face_use_ids=(use_id,)))
+                part = geometry.parts[sheet.part_id]
+                geometry._put_structural("part", replace(
+                    part, sheet_ids=tuple(sorted((*part.sheet_ids, sheet_id))),
+                ))
         relation_handles = _share_planar_overlap_ownership(
             geometry,
             tuple(EntityRef("face", item) for item in fragmented.overlap_faces),
             sheet_ids,
         )
+        # A new shared use retains the source owner's orientation/metadata,
+        # expressed relative to the canonical fragment's geometric normal.
+        from .structural import Orientation
+        for face_id in fragmented.overlap_faces:
+            normal = geometry.face_normal(face_id, 0.5, 0.5)
+            for use_id in tuple(geometry._face_structural_uses.get(face_id, ())):
+                use = geometry.face_uses[use_id]
+                original_use = source_uses[use.sheet_id]
+                sign = 1 if float(normal @ source_normals[use.sheet_id]) > 0 else -1
+                geometry._put_structural("face_use", replace(
+                    use, orientation=Orientation(int(original_use.orientation) * sign),
+                    metadata={**original_use.metadata, "anygeometry.shared_region": True},
+                ))
+        # CONNECT material belongs to both sources, unlike FIRST_SELECTED
+        # fragmentation. Extend lineage and semantic memberships accordingly;
+        # face metadata itself still comes only from the canonical owner.
+        common_refs = tuple(EntityRef("face", i) for i in fragmented.overlap_faces)
+        for face_id in (first_face, second_face):
+            old = EntityRef("face", face_id)
+            previous = geometry._replacement_history[old]
+            descendants = tuple(sorted(set((*previous, *common_refs)), key=lambda ref: ref.id))
+            geometry._capture_mapping("replacement", old, previous)
+            geometry._replacement_history[old] = descendants
+            for index in range(len(geometry._replacements) - 1, -1, -1):
+                if geometry._replacements[index][0] == old:
+                    geometry._replacements[index] = (old, descendants)
+                    break
+            group_names, tags = source_labels[face_id]
+            for name in group_names:
+                geometry.add_to_group(name, common_refs)
+            if tags:
+                for ref in common_refs:
+                    geometry.tag(ref, *tags)
         return None, relation_handles, False
     if revalidated.kind is IntersectionKind.DISJOINT:
         detail = "; ".join(revalidated.diagnostics)

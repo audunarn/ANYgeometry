@@ -1173,8 +1173,9 @@ class GeometryModel:
         del store[int(identifier)]
         key = (kind, int(identifier))
         self._entity_versions[key] = self._entity_versions.get(key, 0) + 1
-        self._arc_cache.pop(int(identifier), None)
-        self._edge_length_cache.pop(int(identifier), None)
+        if kind == "edge":
+            self._arc_cache.pop(int(identifier), None)
+            self._edge_length_cache.pop(int(identifier), None)
         return previous
 
     def _set_entity_unjournalled(
@@ -1187,8 +1188,9 @@ class GeometryModel:
         if value is not _MISSING:
             store[identifier] = value
             self._attach_entity(kind, value)
-        self._arc_cache.pop(identifier, None)
-        self._edge_length_cache.pop(identifier, None)
+        if kind == "edge":
+            self._arc_cache.pop(identifier, None)
+            self._edge_length_cache.pop(identifier, None)
 
     def _capture_mapping(self, namespace: str, key: object, value: object) -> None:
         journal = self._transaction_journal
@@ -1466,9 +1468,15 @@ class GeometryModel:
 
         return list(self._replacements)
 
-    @_transactional
     def record_replacement(
         self, old: EntityRef, new: Sequence[EntityRef]
+    ) -> None:
+        """Note that one entity has been superseded, propagating its labels."""
+        self._record_replacement(old, new)
+
+    @_transactional
+    def _record_replacement(
+        self, old: EntityRef, new: Sequence[EntityRef], *, _propagate_labels: bool = True
     ) -> None:
         """Note that one entity has been superseded by others."""
 
@@ -1529,28 +1537,43 @@ class GeometryModel:
                 old.id,
                 tuple(reference.id for reference in replacements),
             )
+        if _propagate_labels:
+            self._propagate_replacement_labels(((old, replacements),))
+
+    def _propagate_replacement_labels(self, entries) -> None:
+        """Update a local replacement batch with one pass over group membership."""
+        replacements_by_old = dict(entries)
+        old_refs = set(replacements_by_old)
         for name, members in self._groups.items():
-            if old in members:
+            affected = old_refs.intersection(members)
+            if affected:
                 self._capture_mapping("group", name, set(members))
                 assert self._transaction_journal is not None
                 self._transaction_journal.group_changes.add(name)
-                members.discard(old)
-                members.update(replacements)
-        self._capture_mapping("tag", old, set(self._tags.get(old, ())) if old in self._tags else _MISSING)
-        inherited = self._tags.pop(old, set())
-        if self._transaction_journal is not None:
-            self._transaction_journal.tag_changes.add((old.kind, old.id))
-        for replacement in replacements:
-            self._capture_mapping(
-                "tag",
-                replacement,
-                set(self._tags.get(replacement, ())) if replacement in self._tags else _MISSING,
-            )
-            self._tags.setdefault(replacement, set()).update(inherited)
+                members.difference_update(affected)
+                for old in affected:
+                    members.update(replacements_by_old[old])
+        for old, replacements in replacements_by_old.items():
+            if old not in self._tags:
+                continue
+            inherited = set(self._tags[old])
+            self._capture_mapping("tag", old, inherited)
+            del self._tags[old]
+            if not inherited:
+                continue
             if self._transaction_journal is not None:
-                self._transaction_journal.tag_changes.add(
-                    (replacement.kind, replacement.id)
+                self._transaction_journal.tag_changes.add((old.kind, old.id))
+            for replacement in replacements:
+                existing = self._tags.get(replacement, set())
+                if inherited.issubset(existing):
+                    continue
+                self._capture_mapping(
+                    "tag", replacement,
+                    set(existing) if replacement in self._tags else _MISSING,
                 )
+                self._tags.setdefault(replacement, set()).update(inherited)
+                if self._transaction_journal is not None:
+                    self._transaction_journal.tag_changes.add((replacement.kind, replacement.id))
 
     @_transactional
     def record_replacements_atomic(
@@ -1629,34 +1652,9 @@ class GeometryModel:
                     self._replace_structural_face_ownership(old.id, resolved)
             for old, descendants in normalized:
                 self._replacements.append((old, descendants))
-                for name, members in self._groups.items():
-                    if old in members:
-                        self._capture_mapping("group", name, set(members))
-                        if self._transaction_journal is not None:
-                            self._transaction_journal.group_changes.add(name)
-                        members.discard(old)
-                        members.update(descendants)
-                self._capture_mapping(
-                    "tag",
-                    old,
-                    set(self._tags.get(old, ())) if old in self._tags else _MISSING,
-                )
-                inherited = self._tags.pop(old, set())
-                if self._transaction_journal is not None:
-                    self._transaction_journal.tag_changes.add((old.kind, old.id))
-                for descendant in descendants:
-                    self._capture_mapping(
-                        "tag",
-                        descendant,
-                        set(self._tags.get(descendant, ()))
-                        if descendant in self._tags
-                        else _MISSING,
-                    )
-                    self._tags.setdefault(descendant, set()).update(inherited)
-                    if self._transaction_journal is not None:
-                        self._transaction_journal.tag_changes.add(
-                            (descendant.kind, descendant.id)
-                        )
+            self._propagate_replacement_labels(
+                (old, self.resolve_ref(old)) for old, _descendants in normalized
+            )
         except Exception:
             self._replacement_history = previous_history
             self._replacements = previous_log
@@ -3562,7 +3560,15 @@ class GeometryModel:
 
         if not face_ids:
             raise GeometryError("a sheet needs at least one face")
-        made_face_ids = tuple(int(face_id) for face_id in face_ids)
+        made_face_ids = tuple(validate_local_id(face_id, name="face ID") for face_id in face_ids)
+        if len(set(made_face_ids)) != len(made_face_ids):
+            raise GeometryError("a sheet cannot repeat a face ID")
+        for face_id in made_face_ids:
+            self._require_face(face_id)
+        if part_id is not None:
+            part_id = validate_local_id(part_id, name="part ID")
+            if part_id not in self.parts:
+                raise GeometryError(f"no part {part_id}")
         if orientations is None:
             made_orientations = (Orientation.FORWARD,) * len(made_face_ids)
         else:
@@ -4823,10 +4829,25 @@ class GeometryModel:
 
         first = first_end - first_start
         second = second_end - second_start
+        first_length = float(np.linalg.norm(first))
+        second_length = float(np.linalg.norm(second))
+        if not np.all(np.isfinite((first_length, second_length, tolerance))) or tolerance < 0:
+            return True
+        if first_length <= tolerance or second_length <= tolerance:
+            # Degenerate validation segments cannot establish a valid boundary.
+            return True
         denominator = cross(first, second)
         offset = second_start - first_start
-        if abs(denominator) <= tolerance:
-            if abs(cross(offset, first)) > tolerance:
+        first_slack = tolerance / first_length
+        second_slack = tolerance / second_length
+        # Cross products have units of length squared; parameter slack is
+        # dimensionless. Mixing these previously rejected tiny valid plates.
+        if abs(denominator) <= tolerance * max(first_length, second_length):
+            start_side = cross(offset, first)
+            end_side = cross(second_end - first_start, first)
+            side_tolerance = tolerance * first_length
+            if ((start_side > side_tolerance and end_side > side_tolerance)
+                    or (start_side < -side_tolerance and end_side < -side_tolerance)):
                 return False
             axis = int(np.argmax(np.abs(first)))
             if abs(float(first[axis])) <= tolerance:
@@ -4837,12 +4858,12 @@ class GeometryModel:
                     float((second_end[axis] - first_start[axis]) / first[axis]),
                 )
             )
-            return max(0.0, interval[0]) <= min(1.0, interval[1]) + tolerance
+            return max(0.0, interval[0]) <= min(1.0, interval[1]) + first_slack
         first_parameter = cross(offset, second) / denominator
         second_parameter = cross(offset, first) / denominator
         return (
-            -tolerance <= first_parameter <= 1.0 + tolerance
-            and -tolerance <= second_parameter <= 1.0 + tolerance
+            -first_slack <= first_parameter <= 1.0 + first_slack
+            and -second_slack <= second_parameter <= 1.0 + second_slack
         )
 
     @classmethod
@@ -5123,7 +5144,9 @@ class GeometryModel:
             extent = float(np.linalg.norm(np.ptp(polygon, axis=0)))
             if area <= self.tolerance.effective_area(extent):
                 result.append(f"face {face_id} loop {index} has zero area")
-            if self._polygon_self_intersects(polygon):
+            if self._polygon_self_intersects(
+                polygon, self.tolerance.effective_length(extent) if planar else self.tolerance.parameter
+            ):
                 result.append(f"face {face_id} loop {index} self-intersects")
 
         outer = polygons[0]
@@ -5875,8 +5898,8 @@ class GeometryModel:
         second_axis = np.cross(normal, first_axis)
         points = tuple(
             (
-                float((point - surface.origin) @ first_axis),
-                float((point - surface.origin) @ second_axis),
+                float((point - world[0]) @ first_axis),
+                float((point - world[0]) @ second_axis),
             )
             for point in world
         )
@@ -5896,48 +5919,9 @@ class GeometryModel:
         if 0.5 * area_twice <= self.tolerance.effective_area(local_extent):
             result.append(f"face {face_id} loop 0 has zero area")
 
-        def cross(first: tuple[float, float], second: tuple[float, float]) -> float:
-            return first[0] * second[1] - first[1] * second[0]
-
-        def subtract(
-            first: tuple[float, float], second: tuple[float, float]
-        ) -> tuple[float, float]:
-            return first[0] - second[0], first[1] - second[1]
-
-        def intersects(
-            first_start: tuple[float, float],
-            first_end: tuple[float, float],
-            second_start: tuple[float, float],
-            second_end: tuple[float, float],
-        ) -> bool:
-            first = subtract(first_end, first_start)
-            second = subtract(second_end, second_start)
-            denominator = cross(first, second)
-            offset = subtract(second_start, first_start)
-            tolerance = 1.0e-10
-            if abs(denominator) <= tolerance:
-                if abs(cross(offset, first)) > tolerance:
-                    return False
-                axis = 0 if abs(first[0]) >= abs(first[1]) else 1
-                if abs(first[axis]) <= tolerance:
-                    delta = subtract(first_start, second_start)
-                    return float(np.hypot(*delta)) <= tolerance
-                interval = sorted(
-                    (
-                        (second_start[axis] - first_start[axis]) / first[axis],
-                        (second_end[axis] - first_start[axis]) / first[axis],
-                    )
-                )
-                return max(0.0, interval[0]) <= min(1.0, interval[1]) + tolerance
-            first_parameter = cross(offset, second) / denominator
-            second_parameter = cross(offset, first) / denominator
-            return (
-                -tolerance <= first_parameter <= 1.0 + tolerance
-                and -tolerance <= second_parameter <= 1.0 + tolerance
-            )
-
-        if intersects(points[0], points[1], points[2], points[3]) or intersects(
-            points[1], points[2], points[3], points[0]
+        # Share the dimensional predicate with the general planar validator.
+        if self._polygon_self_intersects(
+            np.asarray(points), self.tolerance.effective_length(local_extent)
         ):
             result.append(f"face {face_id} loop 0 self-intersects")
         return result
@@ -5985,8 +5969,8 @@ class GeometryModel:
         polygons = [
             np.column_stack(
                 (
-                    (points - surface.origin) @ first_axis,
-                    (points - surface.origin) @ second_axis,
+                    (points - combined[0]) @ first_axis,
+                    (points - combined[0]) @ second_axis,
                 )
             )
             for points in points_3d
@@ -6006,7 +5990,7 @@ class GeometryModel:
             local_extent = float(np.linalg.norm(np.ptp(polygon, axis=0)))
             if area <= self.tolerance.effective_area(local_extent):
                 result.append(f"face {face_id} loop {index} has zero area")
-            if self._polygon_self_intersects(polygon):
+            if self._polygon_self_intersects(polygon, self.tolerance.effective_length(local_extent)):
                 result.append(f"face {face_id} loop {index} self-intersects")
 
         outer = polygons[0]
