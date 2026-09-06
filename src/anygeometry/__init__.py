@@ -67,6 +67,10 @@ from .intersections import (
     query_intersection,
 )
 from .model import GeometryModel
+from .trim_domains import (
+    TrimBoundaryContact, TrimDomainError, TrimDomainErrorCode, TrimDomainResult,
+    TrimInteriorRelation, query_trim_domain_relation, validate_trim_domain_binding,
+)
 from .identity import EntityHandle, Resolution, ResolutionStatus
 from .transactions import AABBChange, ChangeSet, TopologyTransaction
 from .tolerance import DEFAULT_TOLERANCE_POLICY, TolerancePolicy, feature_extent
@@ -182,6 +186,9 @@ from .surfaces import (
 )
 
 __all__ = [
+    "TrimBoundaryContact", "TrimDomainError", "TrimDomainErrorCode",
+    "TrimDomainResult", "TrimInteriorRelation", "query_trim_domain_relation",
+    "validate_trim_domain_binding",
     "AABB",
     "AABBChange",
     "AABBTree",
