@@ -190,3 +190,13 @@ The accepted trim commit is now remote on GitHub; its hosted gate is tracked
 separately. No wheel from that commit has yet been handed off as qualified.
 Historical wheels and the existing public 0.4.3 label are not substitutes for an
 exact source/artifact pin. Atlas code is not published or activated by this document.
+# Principal-cut lifting
+
+Vertex coordinates whose certified Cartesian interval crosses the negative
+radial ray are represented by both principal-angle images. The atlas lifts each
+image independently to the same sector/reference target and joins them only
+when the lifted intervals overlap with width below pi. Origin-containing boxes,
+ambiguous period choices and disconnected images still fail closed. Scalar
+arithmetic, surface tolerances, carrier qualification and topology identity are
+unchanged. Reference-vertex caches retain Cartesian intervals so that a target
+does not inherit a prematurely selected principal branch.

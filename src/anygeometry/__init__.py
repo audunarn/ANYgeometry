@@ -10,6 +10,13 @@ from .cylinder_charts import (
     validate_cylinder_atlas_binding, evaluate_cylinder_occurrences,
 )
 from .closure import ModelClosure, extract_model_closure
+from .cylinder_patch import (
+    CylinderPatchStatus, CylinderPatchErrorCode, CylinderPatchError,
+    CylinderPatchPolicy, CylinderPatchCertificate, CylinderPatchOccurrence,
+    CylinderPatchLoop, CylinderPatchResult, CylinderPatchOccurrenceRequest,
+    CylinderPatchSample, CylinderPatchEvaluation, query_cylinder_patch,
+    validate_cylinder_patch_binding, evaluate_cylinder_patch_occurrences,
+)
 from .entities import Edge, EntityKind, EntityRef, Face, OrientedEdge, Vertex, VertexRole
 from .editing import (
     InsertResult,
@@ -194,6 +201,11 @@ from .surfaces import (
 )
 
 __all__ = [
+    "CylinderPatchStatus", "CylinderPatchErrorCode", "CylinderPatchError",
+    "CylinderPatchPolicy", "CylinderPatchCertificate", "CylinderPatchOccurrence",
+    "CylinderPatchLoop", "CylinderPatchResult", "CylinderPatchOccurrenceRequest",
+    "CylinderPatchSample", "CylinderPatchEvaluation", "query_cylinder_patch",
+    "validate_cylinder_patch_binding", "evaluate_cylinder_patch_occurrences",
     "CylinderAtlasStatus", "CylinderAtlasErrorCode", "CylinderAtlasError",
     "CylinderAtlasPolicy", "CylinderAtlasCertificate", "CylinderSectorChart",
     "CylinderOccurrence", "CylinderInterface", "CylinderBoundaryCycle",

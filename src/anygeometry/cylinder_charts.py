@@ -898,6 +898,27 @@ class _GeometryProof:
             raise _Refusal("angular_lift_ambiguous")
         return p.add(angle, p.mul(low, period)), low
 
+    def lifted_vertex_angle(self, x, y, target):
+        """Lift a connected Cartesian interval across the principal cut.
+
+        Scalar atan2 deliberately cannot represent both principal images at
+        once. Only the strict negative-radial-ray case is split here; boxes
+        containing the origin retain the arithmetic owner's refusal.
+        """
+        p = self.p
+        if not (x.hi < 0 and y.lo < 0 < y.hi):
+            return self.periodic_near(p.atan2(y, x), target)[0]
+        negative = p.atan2(p.i(y.lo, 0), x)
+        positive = p.atan2(p.i(0, y.hi), x)
+        first = self.periodic_near(negative, target)[0]
+        second = self.periodic_near(positive, target)[0]
+        if first.lo > second.hi or second.lo > first.hi:
+            raise _Refusal("angular_lift_disconnected")
+        joined = _hull((first, second))
+        if joined.hi - joined.lo >= p.pi_bound().lo:
+            raise _Refusal("angular_lift_ambiguous")
+        return joined
+
     def frame_map(self, surface):
         p = self.p
         p.counts["frame_tests"] += 1
@@ -959,8 +980,7 @@ class _GeometryProof:
         surface = mapping["surface"]
         point = self.point(self.context.vertices[vertex_id].position)
         x, y, z = self.coordinates(p.vsub(point, mapping["origin"]), mapping["basis"])
-        angle = p.atan2(y, x)
-        angle, _ = self.periodic_near(angle, _q(surface.start_angle)+_q(surface.sweep_angle)/2)
+        angle = self.lifted_vertex_angle(x, y, _q(surface.start_angle)+_q(surface.sweep_angle)/2)
         u = p.div(p.sub(angle, surface.start_angle), surface.sweep_angle)
         v = p.div(z, _q(surface.height)/self.scale)
         if min(u.lo, v.lo) < -self.parameter_tolerance or max(u.hi, v.hi) > 1+self.parameter_tolerance:
@@ -972,9 +992,9 @@ class _GeometryProof:
         if vertex_id not in self.vertex_coordinates:
             point = self.point(self.context.vertices[vertex_id].position)
             x, y, z = self.coordinates(point, self.reference_basis)
-            self.vertex_coordinates[vertex_id] = (p.atan2(y, x), z)
-        angle, z = self.vertex_coordinates[vertex_id]
-        angle, _ = self.periodic_near(angle, target)
+            self.vertex_coordinates[vertex_id] = (x, y, z)
+        x, y, z = self.vertex_coordinates[vertex_id]
+        angle = self.lifted_vertex_angle(x, y, target)
         return angle, z
 
     def frame(self, edge):
