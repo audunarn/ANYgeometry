@@ -330,3 +330,25 @@ def test_hole_without_qualified_clearance_is_not_admitted():
         assert not result.certificate.complete
         assert result.loops==()
     assert repr(m.__dict__)==before
+
+
+def test_oversized_single_evidence_string_rejects_before_encoding():
+    from anygeometry.cylinder_patch import _EvidenceBudget
+    with pytest.raises(CylinderPatchError):
+        _EvidenceBudget().visit('\U0001f600'*2049)
+
+
+def test_hole_count_is_bounded_before_iteration():
+    from types import SimpleNamespace
+    from anygeometry.cylinder_patch import _Refusal
+    m,selected,_=patch()
+    use=m.face_uses[selected[0].id]
+    face=m.faces[use.face_id]
+    class TooManyHoles:
+        def __len__(self): return 2
+        def __iter__(self): raise AssertionError('unbounded holes copied')
+    source=SimpleNamespace(model_id=m.model_id,face_uses=m.face_uses,
+        sheets=m.sheets,parts=m.parts,faces={face.id:SimpleNamespace(
+            surface=face.surface,parameterization=None,loop=face.loop,holes=TooManyHoles())})
+    with pytest.raises(_Refusal,match='patch_loop_family'):
+        _PatchSource(source,selected,_PatchProof(CylinderPatchPolicy(),None))

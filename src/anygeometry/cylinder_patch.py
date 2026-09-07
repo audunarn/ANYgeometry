@@ -75,7 +75,9 @@ class _EvidenceBudget:
         if self.proof is not None and self.nodes % 16 == 0:
             self.proof.cancel('patch evidence validation')
         if isinstance(value,str):
-            if len(value)>3200000-self.bytes:
+            # No protocol string needs an unbounded single allocation. This
+            # also bounds UTF-8 expansion before encoding a hostile value.
+            if len(value)>2048 or len(value)>3200000-self.bytes:
                 raise _error(CylinderPatchErrorCode.INVALID_RESULT,'evidence byte budget')
             self.bytes += len(value.encode('utf-8'))
         else:
@@ -312,9 +314,9 @@ class _PatchSource:
         if not isinstance(self.surface, Cylinder) or (
                 self.face.parameterization is not None and self.face.parameterization is not self.surface):
             raise _Refusal('support_or_parameterization_out_of_scope', missing=True)
-        loops = (self.face.loop, *self.face.holes)
-        if len(loops) > 2 or len(self.use.loops) != len(loops):
+        if len(self.face.holes)>1 or len(self.use.loops)!=1+len(self.face.holes):
             raise _Refusal('patch_loop_family', missing=True)
+        loops = (self.face.loop, *self.face.holes)
         if sum(len(loop) for loop in loops) > proof.policy.max_occurrences:
             raise _Refusal('patch_occurrence_budget')
         self.edges, self.vertices, self.coedges, self.incidence = {}, {}, {}, {}

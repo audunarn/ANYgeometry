@@ -1,8 +1,8 @@
-# Standalone Cylinder patch contract — candidate
+# Standalone Cylinder patch contract
 
-This implementation is under qualification. It is not consumer activation or a
-release announcement. Independent numerical review and remaining hostile-input,
-platform and package gates are required before adoption.
+This is a bounded, read-only owner contract, not automatic consumer activation
+or a package release announcement. Admission depends on a complete certificate,
+not simply on the presence of an API symbol or package version.
 
 ## Scope and authority
 
@@ -68,7 +68,7 @@ They are source identity keys, not mesh IDs or coordinate-based weld decisions.
 Policy defaults/caps: 32 occurrences, 96 vertices, 200000 interval operations,
 65536 pair tests, 4096 evaluations and 256 external incidences. Callers can only
 lower them. One FaceUse and two loops are fixed limits. Evidence is bounded by
-200000 nodes, 3.2MB UTF-8 and fixed nesting/tuple limits. Arithmetic uses the
+200000 nodes, 3.2MB UTF-8, 2048 characters per string and fixed nesting/tuple limits. Arithmetic uses the
 existing 80-bit outward grid with bounded rational/series work.
 
 Queries do not mutate source stores, revision, IDs, incidence or caches. Busy
@@ -79,11 +79,12 @@ work rather than resetting its budget per row. Budget exhaustion fails closed.
 This contract adds no persistence schema, protocol, version or license change.
 It does not supersede the separate complete-periodic Cylinder atlas contract.
 
-## Qualification status
+## Verification and limits
 
 Focused authoring/source/carrier/material/query/binding/sampling coverage includes
 all mandatory quarter, wide, hole, sign, reversal, translated/rotated and axial
 trim fixtures. Independent Decimal residual checks are supplemental test oracles,
 not substitutes for the production interval proof or independent source review.
-Full hostile evidence/accounting review and consumer artifact qualification are
-still pending. No speedup or release-readiness claim is made here.
+Final provenance belongs to the commit-specific CI and package qualification
+records. Consumer meshing activation is separate from this owner API. No speedup
+claim is made here; unsupported trim families remain explicit refusals.
