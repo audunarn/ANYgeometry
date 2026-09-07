@@ -1,6 +1,14 @@
 """Lightweight structural-surface geometry shared by the ANY ecosystem."""
 
 from .curves import Arc, ArcFrame, CurveShape, DegenerateArcError, Spline, Straight
+from .cylinder_charts import (
+    CylinderAtlasStatus, CylinderAtlasErrorCode, CylinderAtlasError,
+    CylinderAtlasPolicy, CylinderAtlasCertificate, CylinderSectorChart,
+    CylinderOccurrence, CylinderInterface, CylinderBoundaryCycle,
+    CylinderAtlasResult, CylinderOccurrenceRequest, CylinderOccurrenceSample,
+    CylinderOccurrenceEvaluation, query_cylinder_atlas,
+    validate_cylinder_atlas_binding, evaluate_cylinder_occurrences,
+)
 from .closure import ModelClosure, extract_model_closure
 from .entities import Edge, EntityKind, EntityRef, Face, OrientedEdge, Vertex, VertexRole
 from .editing import (
@@ -186,6 +194,12 @@ from .surfaces import (
 )
 
 __all__ = [
+    "CylinderAtlasStatus", "CylinderAtlasErrorCode", "CylinderAtlasError",
+    "CylinderAtlasPolicy", "CylinderAtlasCertificate", "CylinderSectorChart",
+    "CylinderOccurrence", "CylinderInterface", "CylinderBoundaryCycle",
+    "CylinderAtlasResult", "CylinderOccurrenceRequest", "CylinderOccurrenceSample",
+    "CylinderOccurrenceEvaluation", "query_cylinder_atlas",
+    "validate_cylinder_atlas_binding", "evaluate_cylinder_occurrences",
     "TrimBoundaryContact", "TrimDomainError", "TrimDomainErrorCode",
     "TrimDomainResult", "TrimInteriorRelation", "query_trim_domain_relation",
     "validate_trim_domain_binding",
