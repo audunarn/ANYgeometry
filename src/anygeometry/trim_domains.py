@@ -19,7 +19,7 @@ from uuid import UUID
 
 import numpy as np
 
-from .curves import Arc, Straight, _COLLINEAR_RTOL, arc_frame
+from .curves import Arc, Spline, Straight, _COLLINEAR_RTOL, arc_frame
 from .errors import GeometryError
 from .identity import EntityHandle
 from .intersections import query_intersection
@@ -298,8 +298,13 @@ def _copy_pair(model, parents, proof):
         if index % 16 == 0:
             proof.cancel()
         edge = model.edges[key]  # Unexpected store/API failures propagate.
-        if not isinstance(edge.curve, (Arc, Straight)):
+        if not isinstance(edge.curve, (Arc, Straight, Spline)):
             raise _Unresolved("curve_family_out_of_scope")
+        if isinstance(edge.curve, Spline):
+            if len(edge.curve.control_vertices) != 1:
+                raise _Unresolved("quadratic_partition_only")
+            vertex_ids.update(edge.curve.control_vertices)
+            proof.add(0, 1)  # charge the bounded control copy
         edges.append(edge)
         vertex_ids.update((edge.start, edge.end))
         if isinstance(edge.curve, Arc):
@@ -507,6 +512,183 @@ def _sum(proof, values):
     return total
 
 
+def _partition_lineage(model, parents, proof):
+    """Bounded owner-local view; linkage is a prerequisite, never a proof."""
+    history = model._replacement_history
+    if len(history) > 256:
+        raise _Unresolved("partition_lineage_budget")
+    target = {p.id for p in parents}
+    matches = []
+    references = 0
+    referenced = set()
+    for old, children in history.items():
+        proof.cancel()
+        references += len(children)
+        if references > 512:
+            raise _Unresolved("partition_lineage_budget")
+        proof.add(0, 1)
+        for child in children:
+            proof.add(0, 1)
+            referenced.add(child)
+        if old.kind != 'face':
+            continue
+        if any(c.kind == 'face' and c.id in target for c in children):
+            if (old.id in model.faces or old.id in target or len(children) != 2
+                    or any(c.kind != 'face' for c in children)
+                    or {c.id for c in children} != target):
+                raise _Unresolved("partition_lineage_ambiguous")
+            matches.append(old)
+    if len(matches) != 1:
+        raise _Unresolved("partition_lineage_missing_or_ambiguous")
+    # An indirect/wider ancestral chain is deliberately not certified.
+    if matches[0] in referenced:
+        raise _Unresolved("partition_lineage_indirect")
+
+
+def _quadratic_partition(model, parents, normal, points, proof):
+    """Exact convex-domain crosscut proof; no historical-parent area claim."""
+    faces = [model.faces[p.id] for p in parents]
+    if any(f.holes for f in faces):
+        raise _Unresolved("partition_holes_out_of_scope")
+    for face in faces:
+        u = tuple(proof.q(float(x)) for x in face.surface.u_vector)
+        v = tuple(proof.q(float(x)) for x in face.surface.v_vector)
+        if not any(proof.cross(u,v)):
+            raise _Unresolved("partition_degenerate_support")
+    loops = [f.loop for f in faces]
+    shared = {u.edge for u in loops[0]} & {u.edge for u in loops[1]}
+    splines = {e.id for e in model.edges.values() if isinstance(e.curve, Spline)}
+    if (len(splines) != 1 or not splines <= shared or not 1 <= len(shared) <= 3
+            or any(not isinstance(e.curve, (Straight, Spline)) for e in model.edges.values())):
+        raise _Unresolved("partition_curve_family")
+    start = model.oriented_start_vertex
+    end = model.oriented_end_vertex
+    for loop in loops:
+        if len({start(u) for u in loop}) != len(loop):
+            raise _Unresolved("partition_repeated_vertex")
+    def chain(loop):
+        transitions = [i for i,u in enumerate(loop)
+                       if u.edge in shared and loop[i-1].edge not in shared]
+        if len(transitions) != 1:
+            raise _Unresolved("partition_disconnected_crosscut")
+        rotated = loop[transitions[0]:] + loop[:transitions[0]]
+        cut = tuple(rotated[:len(shared)])
+        if {u.edge for u in cut} != shared:
+            raise _Unresolved("partition_disconnected_crosscut")
+        return cut
+    cut, other = (chain(loop) for loop in loops)
+    if tuple((u.edge,u.forward) for u in cut) != tuple(
+            (u.edge,not u.forward) for u in reversed(other)):
+        raise _Unresolved("partition_crosscut_orientation")
+    spline_index = next(i for i,u in enumerate(cut) if u.edge in splines)
+    if spline_index > 1 or len(cut)-spline_index-1 > 1:
+        raise _Unresolved("partition_extension_count")
+    exterior = [u for loop in loops for u in loop if u.edge not in shared]
+    by_start = {start(u):u for u in exterior}
+    if len(by_start) != len(exterior) or len(exterior) < 3:
+        raise _Unresolved("partition_exterior_incidence")
+    ring = []
+    current = min(by_start)
+    for _ in exterior:
+        if current not in by_start or current in ring:
+            raise _Unresolved("partition_exterior_incidence")
+        ring.append(current)
+        current = end(by_start[current])
+    if current != ring[0]:
+        raise _Unresolved("partition_exterior_incidence")
+    endpoints = (start(cut[0]),end(cut[-1]))
+    if endpoints[0] == endpoints[1] or any(v not in ring for v in endpoints):
+        raise _Unresolved("partition_endpoint_incidence")
+    interior_ids = {end(u) for u in cut[:-1]}
+    if interior_ids & set(ring):
+        raise _Unresolved("partition_interior_incidence")
+    outer = [points[v] for v in ring]
+    if len(set(outer)) != len(outer):
+        raise _Unresolved("partition_exterior_repeated_point")
+    extent = tuple(proof.sub(max(p[i] for p in points.values()),min(p[i] for p in points.values()))
+                   for i in range(3))
+    extent2 = proof.dot(extent,extent)
+    if extent2 <= 0 or extent2 > Fraction.from_float(float(np.finfo(float).max)):
+        raise _Unresolved("extent_representation_unqualified")
+    length = math.sqrt(float(extent2))
+    for _ in range(4):
+        if math.isfinite(length) and proof.square(proof.q(length)) >= extent2:
+            break
+        length = math.nextafter(length,math.inf)
+    if not math.isfinite(length) or length <= 0 or proof.square(proof.q(length)) < extent2:
+        raise _Unresolved("extent_representation_unqualified")
+    proof.tolerance = model.tolerance.effective_length(length)
+    tau = proof.q(proof.tolerance)
+    tau2 = proof.square(tau)
+    directions = [proof.vsub(outer[(i+1)%len(outer)],p) for i,p in enumerate(outer)]
+    turns = [proof.det(normal,d,directions[(i+1)%len(outer)]) for i,d in enumerate(directions)]
+    nonzero = [v for v in turns if v]
+    if not nonzero or any((v>0)!=(nonzero[0]>0) for v in nonzero):
+        raise _Unresolved("partition_exterior_nonconvex")
+    sign = 1 if nonzero[0]>0 else -1
+    halfspaces = []
+    for i,(p,d) in enumerate(zip(outer,directions)):
+        proof.cancel()
+        if proof.dot(d,d) <= tau2:
+            raise _Unresolved("partition_degenerate_edge")
+        inward = proof.vmul(proof.cross(normal,d),sign)
+        h2 = proof.dot(inward,inward)
+        for j,q in enumerate(outer):
+            h = proof.dot(inward,proof.vsub(q,p))
+            proof.counts['halfspace_tests'] += 1
+            if h < 0:
+                raise _Unresolved("partition_exterior_nonconvex")
+            if h == 0:
+                # Collinear split vertices must lie on the same oriented side;
+                # adjacent reverse runs are not a convex boundary.
+                if j == (i+2)%len(outer) and proof.dot(d,directions[(i+1)%len(outer)]) <= 0:
+                    raise _Unresolved("partition_exterior_retrace")
+            elif not _length_clearance(proof,h,h2,tau):
+                raise _Unresolved("partition_exterior_clearance")
+        halfspaces.append((p,inward,h2))
+    controls = []
+    for u in cut:
+        edge = model.edges[u.edge]
+        ids = (edge.start, *getattr(edge.curve,'control_vertices',()), edge.end)
+        if not u.forward:
+            ids = tuple(reversed(ids))
+        controls.append(tuple(points[v] for v in ids))
+    quadratic_controls = next(c for c in controls if len(c)==3)
+    if proof.det(normal,proof.vsub(quadratic_controls[1],quadratic_controls[0]),
+                 proof.vsub(quadratic_controls[2],quadratic_controls[0])) == 0:
+        raise _Unresolved("partition_degenerate_quadratic")
+    # A deterministic outer-edge axis must certify every Bernstein derivative
+    # coefficient, not just the endpoint displacement of the curve.
+    monotone = False
+    for axis in directions:
+        values = [proof.dot(axis,proof.vsub(b,a)) for c in controls for a,b in zip(c,c[1:])]
+        axis2 = proof.dot(axis,axis)
+        if values and (all(v>0 for v in values) or all(v<0 for v in values)) and all(
+                _length_clearance(proof,abs(v),axis2,tau) for v in values):
+            monotone = True
+            break
+    if not monotone:
+        raise _Unresolved("partition_monotonicity_unqualified")
+    for i,c in enumerate(controls):
+        proof.cancel()
+        for p,inward,h2 in halfspaces:
+            for j,q in enumerate(c):
+                h = proof.dot(inward,proof.vsub(q,p))
+                proof.counts['halfspace_tests'] += 1
+                endpoint = (i==0 and j==0) or (i==len(controls)-1 and j==len(c)-1)
+                if h == 0 and endpoint:
+                    continue
+                if not _length_clearance(proof,h,h2,tau):
+                    raise _Unresolved("partition_crosscut_clearance")
+    # Endpoints cannot occupy one common outer supporting line.
+    if any(all(proof.dot(n,proof.vsub(points[v],p)) == 0 for v in endpoints)
+           for p,n,_ in halfspaces):
+        raise _Unresolved("partition_endpoint_sides")
+    proof.counts['ring_edges'] = len(exterior)+len(cut)
+    proof.counts['winding_edges'] = len(exterior)
+    return tuple(sorted(shared))
+
+
 def query_trim_domain_relation(
     model: GeometryModel, first: EntityHandle, second: EntityHandle, *,
     expected_revision: int,
@@ -528,7 +710,12 @@ def query_trim_domain_relation(
         _unchanged(model, expected_revision)
         normal, points = _common_plane(detached, (first, second), proof)
         all_straight = all(isinstance(e.curve, Straight) for e in detached.edges.values())
-        shared_ids = _complement(detached, (first, second), normal, points, proof)
+        quadratic = any(isinstance(e.curve, Spline) for e in detached.edges.values())
+        if quadratic:
+            _partition_lineage(model, (first,second), proof)
+            shared_ids = _quadratic_partition(detached, (first,second), normal, points, proof)
+        else:
+            shared_ids = _complement(detached, (first, second), normal, points, proof)
         complementary_tolerance = proof.tolerance
         owner = None
         if all_straight:
@@ -551,7 +738,8 @@ def query_trim_domain_relation(
             boundary = TrimBoundaryContact.CURVE
             complementary = True
             shared = tuple(EntityHandle(model.model_id, "edge", key) for key in shared_ids)
-            algorithm = "exact_topology_star_ring_v1"
+            algorithm = ("exact_quadratic_partition_crosscut_v1" if quadratic
+                         else "exact_topology_star_ring_v1")
             proof.tolerance = complementary_tolerance
             residual = 0.0
         elif owner is not None:

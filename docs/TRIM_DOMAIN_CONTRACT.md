@@ -1,5 +1,73 @@
 # Bounded trimmed-domain owner query
 
+## Quadratic partition extension — candidate pending independent acceptance
+
+The bounded proposal `ANYGEOMETRY_SPLINE_PARTITION_TRIM_PROPOSAL.md`, SHA256
+`E7BED0990B8BB1F92E33BF054B3117847B33B12CB5DA8CDB681C948690B547A4`,
+authorizes an additional sufficient proof, not a general curved overlay.
+Existing public signatures and result shape are unchanged. The algorithm name
+`exact_quadratic_partition_crosscut_v1` identifies this distinct evidence.
+
+Two hole-free, exactly common-plane Plane descendants must share one connected
+crosscut: exactly one quadratic Bezier-Spline and at most one Straight extension
+on each end. Native Edge/Vertex identities pair the crosscut in opposite traversal.
+Each face loop must be precisely one exterior path and one orientation of that
+crosscut. The cancelled exterior is a simple convex Straight ring; collinear
+side splits are allowed but repeated coordinates, retracing and nonconvexity refuse.
+Exact rational Bernstein derivative signs establish strict monotonicity and
+injectivity of the entire separator along a deterministic exterior-edge axis.
+Full control-hull halfspace signs, endpoint incidence and model-tolerance
+clearance establish that its open interior is strictly inside the exterior.
+Only declared outer endpoints may have zero side distance. The crosscut theorem,
+not the presence of shared edges or lineage, establishes disjoint open interiors.
+
+A unique inactive direct Face predecessor with exactly these two active children
+is required. Missing, ambiguous, wider and indirect linkage refuses. This is
+recorded linkage only: the deleted parent's geometry is unavailable. Therefore
+`complementary=true` certifies coverage of the **reconstructed convex union**,
+never historical-parent coverage or proof that a particular past command ran.
+The existing consumer must still validate fresh model/revision/ordered-parent
+binding and require DISJOINT_INTERIORS, complementary=true and boundary=CURVE.
+The shared boundary lists canonical source Edge handles in stable handle order.
+Its digest is integrity evidence, not a proof signature.
+
+Before allocation, lineage is capped at 256 entries and 512 references. It is
+read through a bounded owner-local view, never an unbounded copied history.
+Existing rational bit/work, loop/entity and cancellation limits remain in force;
+lineage/control work is charged to rational_operations. Geometric work depends
+on the pair; unrelated lineage is conservatively bounded, not silently ignored.
+No live caches, stores, allocators, indices, incidence or revision are changed.
+Callback and operational failures propagate; uncertified geometry returns
+UNRESOLVED without a partial exemption.
+
+Excluded: cubic/higher-degree Spline, mixed Arc/Spline, holes, multiple crosscuts,
+general overlay/area, missing topology, general transform covariance and any
+imprint repair. This extension does not change find_coplanar_overlaps itself.
+An application without this positively validated proof still receives its
+existing conservative curved-overlay failure.
+
+Gate 1 reconstructed the unchanged public ANYmesh quadratic extrusion/CONNECT
+fixture: 1 passed in 0.24s. Faces 3/4 share Edges 13/5/14 oppositely; cancelling
+them yields the split rectangle. The exact quadratic has x'(t)=2 and
+y(t)=1/2+2t-2t², with two horizontal endpoint extensions to the rectangle sides.
+The recorded direct predecessor is face 1. This uses actual generated records,
+not a rewritten consumer fixture or approximate polygon proof.
+
+Focused command (repository cwd, source-only PYTHONPATH, user site disabled):
+`python -B -m pytest tests/test_trim_spline_partition_contract.py tests/test_trim_domain_contract.py -q`.
+Each run used an external subprocess timeout of 60 seconds and reaped its child.
+History is retained: initial Python 3.13 run had 101 pass/6 fail in 24.21s; all
+six were fixture setup attempts to assign read-only model.tolerance. Correcting
+setup to public set_document_settings produced 107 pass in 12.96s (supervisor
+14.795116s). No assertion or owner tolerance was relaxed.
+Final expanded Python 3.13 matrix: 112 passed in 16.60s, supervisor 18.091593s,
+exit 0. It includes independent analytic signs, strict refusal/crossing cases,
+shifted IDs, external radial ownership, exact representable translation/scale,
+fresh binding/tamper, warm/cold purity, cancellation, bit/work caps and locality.
+Python 3.14: 112 passed in 13.49s, supervisor 14.669206s, exit 0, child reaped.
+Independent exact-diff acceptance remains pending. No broad suite, consumer acceptance, commit, push or
+package publication is implied by this candidate.
+
 Implementation under focused qualification; no release or actual-case integration
 claim. Governing plan: `ANYGEOMETRY_TRIM_DOMAIN_OWNER_CONTRACT_PLAN.md`, SHA-256
 `D1AF0BAC87758111CC344285C8F41472E184A70C733D77B0B33D8981A181FE1E`.
