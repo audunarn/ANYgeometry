@@ -652,7 +652,8 @@ def _rectangle(source, geometry, proof, curves, loop_index):
     starts = [i for i,row in enumerate(rows) if (row['axis'],row['sign']) !=
               (rows[i-1]['axis'],rows[i-1]['sign'])]
     if len(starts)!=4:
-        raise _Refusal('patch_nonrectangular_loop',missing=True)
+        from ._cylinder_patch_orthogonal import certify_loop
+        return certify_loop(rows, identifiers, loop_index, geometry, proof)
     rows=rows[starts[0]:]+rows[:starts[0]]
     groups=[]
     for row in rows:
@@ -683,11 +684,15 @@ def _rectangle(source, geometry, proof, curves, loop_index):
     # Sign of the first two orthogonal progress directions is winding sign.
     a,b=groups[0][0],groups[1][0]
     winding=a['sign']*b['sign']*(1 if a['axis']==0 else -1)
-    return dict(index=loop_index,coedges=tuple(identifiers),bounds=bounds,winding=winding)
+    return dict(index=loop_index,coedges=tuple(identifiers),bounds=bounds,winding=winding,
+                rows=tuple(rows))
 
 
 def _material(source, geometry, proof, curves):
     loops=tuple(_rectangle(source,geometry,proof,curves,i) for i in range(len(source.use.loops)))
+    if any(loop.get('orthogonal',False) for loop in loops):
+        from ._cylinder_patch_orthogonal import certify_material
+        return certify_material(loops, geometry, proof)
     p=proof
     outer=loops[0]['bounds']
     for value in outer:
@@ -749,7 +754,9 @@ def _certificate(model, proof, geometry, complete):
     def upper(value):
         rounded=float(value)
         return math.nextafter(rounded,math.inf) if _q(rounded)<value else rounded
-    return CylinderPatchCertificate('cylinder-partial-rectangle-v1',complete,
+    algorithm=('cylinder-partial-orthogonal-v1' if proof.counts.get('orthogonal_loops',0)
+               else 'cylinder-partial-rectangle-v1')
+    return CylinderPatchCertificate(algorithm,complete,
         float(model.tolerance.effective_length(extent)),float(model.tolerance.effective_surface_residual(extent)),
         float(model.tolerance.angular),upper(geometry.max_residual) if geometry else 0.,
         upper(geometry.max_width) if geometry else 0.,tuple(sorted(proof.counts.items())))

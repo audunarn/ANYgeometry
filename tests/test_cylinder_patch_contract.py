@@ -307,14 +307,23 @@ def test_late_receipt_cancellation_preserves_identity_and_state():
     assert repr(m.__dict__)==before
 
 
-def test_nonrectangular_hole_is_explicitly_unqualified():
+def test_nonrectangular_hole_has_owner_qualified_material_and_void_seeds():
     # Orthogonal L-shaped void uses genuine axial/circular source edges.
     m,selected,_=patch(hole_uv=((.2,.2),(.2,.8),(.5,.8),(.5,.5),(.8,.5),(.8,.2)))
     before=repr(m.__dict__)
     result=query_cylinder_patch(m,selected,expected_revision=m.revision)
-    assert result.status is not CylinderPatchStatus.QUALIFIED
-    assert 'patch_nonrectangular_loop' in result.diagnostics
-    assert result.loops==result.occurrences==()
+    assert result.status is CylinderPatchStatus.QUALIFIED, result.diagnostics
+    assert result.certificate.complete
+    assert result.certificate.algorithm == 'cylinder-partial-orthogonal-v1'
+    assert len(result.loops) == 2 and len(result.occurrences) == 10
+    outer, hole = result.loops
+    assert outer.winding == -hole.winding
+    u, v = hole.seed_uv
+    assert .2 < u < .8 and .2 < v < .8 and (u < .5 or v < .5)
+    u, v = outer.seed_uv
+    assert 0 < u < 1 and 0 < v < 1
+    assert not (.2 < u < .8 and .2 < v < .8 and (u < .5 or v < .5))
+    validate_cylinder_patch_binding(m,result,selected,expected_revision=m.revision)
     assert repr(m.__dict__)==before
 
 
