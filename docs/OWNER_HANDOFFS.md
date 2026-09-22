@@ -39,6 +39,15 @@ mapping. Leave external export blocked until that adapter work is accepted.
 
 ## Consumer gate failures
 
+Hosted MCP access requires an owner-configured `ANYGEOMETRY_MCP_READ_TOKEN`
+repository secret in ANYgeometry with only Contents: read access to the private
+ANYgeometry-mcp repository. The default GitHub job token cannot read that
+repository. Do not copy the private adapter source into the public repository
+or relax its visibility to work around this boundary. Until access is supplied,
+the separate MCP gates remain explicitly blocked while public consumer gates
+run independently. Local SDK 2 comparisons are evidence only for their recorded
+Windows environments.
+
 Each isolated run produces candidate and released-0.4.3 reports. A failure in
 both is an existing consumer/environment issue; a candidate-only failure is a
 geometry regression candidate. Neither classification turns a failed gate green.

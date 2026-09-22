@@ -87,7 +87,7 @@ def main():
     parser.add_argument("mode", choices=("wheel", "consumers"))
     parser.add_argument("--candidate", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path, help="new directory outside source checkouts")
-    parser.add_argument("--profile", choices=("full", "macos"), default="full")
+    parser.add_argument("--profile", choices=("full", "macos", "public", "mesher", "mcp"), default="full")
     parser.add_argument("--mcp-source", type=Path, help="checkout containing the frozen MCP source commit")
     parser.add_argument("--wheelhouse", type=Path, help="optional offline dependency wheel directory")
     parser.add_argument("--baseline-wheel", type=Path)
@@ -103,7 +103,9 @@ def main():
     name, version = wheel_metadata(candidate)
     if name != "anygeometry":
         parser.error("candidate must be an ANYgeometry wheel")
-    if args.mode == "consumers" and args.mcp_source is None:
+    with_mcp = args.profile in {"full", "macos", "mcp"}
+    with_full = args.profile in {"full", "public"}
+    if args.mode == "consumers" and with_mcp and args.mcp_source is None:
         parser.error("consumer checks require a checkout containing the frozen MCP source")
     root.mkdir(parents=True)
     print(f"REPORT_ROOT={root}", flush=True)
@@ -123,9 +125,11 @@ def main():
     wheels = root / "dependencies"
     wheels.mkdir()
     try:
-        owners = dict(CONSUMERS, **FULL) if args.profile == "full" else dict(CONSUMERS)
+        owners = {} if args.profile == "mcp" else dict(CONSUMERS)
+        if with_full:
+            owners.update(FULL)
         requirements = [str(candidate), "numpy>=1.26", "shapely>=2.0"]
-        if args.mode == "consumers":
+        if args.mode == "consumers" and with_mcp:
             archive = root / "mcp-source.tar"
             runner.run(["git", "-C", args.mcp_source.resolve(strict=True), "archive",
                         "--format=tar", "--output", archive, MCP_SOURCE])
@@ -139,7 +143,9 @@ def main():
             if wheel_metadata(mcp_wheel) != ("anygeometry-mcp", "0.1.0"):
                 raise ValueError("MCP artifact does not match frozen adapter metadata")
             report["mcp"] = dict(identity(mcp_wheel), source=MCP_SOURCE, archive=identity(archive))
-            requirements += [str(mcp_wheel), *(f"{n}=={v}" for n, v in owners.items())]
+            requirements.append(str(mcp_wheel))
+        if args.mode == "consumers":
+            requirements.extend(f"{n}=={v}" for n, v in owners.items())
         runner.run([*download, "--dest", wheels, *requirements])
         artifacts = sorted(wheels.glob("*.whl"))
         report["resolved_artifacts"] = [dict(identity(p), distribution=wheel_metadata(p)[0],
@@ -163,10 +169,14 @@ def main():
                     modules["shapely"] = "shapely"
                 if consumer:
                     modules.update({n: MODULES[n] for n in owners})
-                    modules.update({"ANYgeometry-mcp": "anygeometry_mcp", "mcp": "mcp"})
-                    versions.update(owners, **{"ANYgeometry-mcp": "0.1.0"})
-                    checks += ["mesher", "mcp"]
-                    if args.profile == "full":
+                    versions.update(owners)
+                    if "ANYmesher" in owners:
+                        checks.append("mesher")
+                    if with_mcp:
+                        modules.update({"ANYgeometry-mcp": "anygeometry_mcp", "mcp": "mcp"})
+                        versions["ANYgeometry-mcp"] = "0.1.0"
+                        checks.append("mcp")
+                    if with_full:
                         checks += ["fem", "fileio"]
                 config = {"environment": str(environment), "wheel": str(wheel),
                           "wheel_sha256": identity(wheel)["sha256"], "modules": modules,

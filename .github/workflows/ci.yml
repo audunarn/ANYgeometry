@@ -244,7 +244,7 @@ jobs:
             ${{ runner.temp }}/geometry-wheel-smoke/with-planar/*.json
 
   consumers:
-    name: Installed consumers (${{ matrix.os }}, ${{ matrix.profile }})
+    name: Installed public consumers (${{ matrix.os }}, ${{ matrix.profile }})
     needs: wheel
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -253,23 +253,17 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            profile: full
+            profile: public
           - os: ubuntu-latest
-            profile: full
+            profile: public
           - os: macos-15
-            profile: macos
+            profile: mesher
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          persist-credentials: false
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: audunarn/ANYgeometry-mcp
-          ref: 4253c001b07263fa2e9015082cf4950db65cd2d3
-          path: .ecosystem/ANYgeometry-mcp
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -278,13 +272,10 @@ jobs:
         with:
           name: anygeometry-candidate
           path: candidate
-      - name: Install tooling for the frozen MCP wheel build
-        run: python -m pip install 'setuptools>=77.0.3' wheel
       - name: Compare installed candidate and released geometry
         run: >-
           python tools/check_compatibility.py consumers
           --candidate candidate/*.whl
-          --mcp-source .ecosystem/ANYgeometry-mcp
           --profile ${{ matrix.profile }}
           --expected-machine "${{ matrix.os == 'macos-15' && 'arm64' || '' }}"
           --output "$RUNNER_TEMP/geometry-consumers"
@@ -300,3 +291,83 @@ jobs:
             ${{ runner.temp }}/geometry-consumers/command-*.log
             ${{ runner.temp }}/geometry-consumers/candidate/*.json
             ${{ runner.temp }}/geometry-consumers/baseline/*.json
+
+  mcp-consumers:
+    name: Installed MCP consumer (${{ matrix.os }})
+    needs: wheel
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-15]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - name: Require explicitly scoped access to the private adapter
+        env:
+          HAS_MCP_ACCESS: ${{ secrets.ANYGEOMETRY_MCP_READ_TOKEN != '' }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          if os.environ['HAS_MCP_ACCESS'] != 'true':
+              root = Path(os.environ['RUNNER_TEMP']) / 'geometry-mcp'
+              root.mkdir()
+              report = {'status': 'blocked', 'reason': 'ANYGEOMETRY_MCP_READ_TOKEN is not configured; Contents: read access to audunarn/ANYgeometry-mcp is required.'}
+              (root / 'report.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
+              print('::error::' + report['reason'])
+              raise SystemExit(1)
+          PY
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: audunarn/ANYgeometry-mcp
+          ref: 4253c001b07263fa2e9015082cf4950db65cd2d3
+          path: .ecosystem/ANYgeometry-mcp
+          token: ${{ secrets.ANYGEOMETRY_MCP_READ_TOKEN }}
+          persist-credentials: false
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: anygeometry-candidate
+          path: candidate
+      - run: python -m pip install 'setuptools>=77.0.3' wheel
+      - name: Compare installed MCP consumers
+        run: >-
+          python tools/check_compatibility.py consumers
+          --candidate candidate/*.whl
+          --mcp-source .ecosystem/ANYgeometry-mcp
+          --profile mcp
+          --expected-machine "${{ matrix.os == 'macos-15' && 'arm64' || '' }}"
+          --output "$RUNNER_TEMP/geometry-mcp"
+      - name: Record setup failures without losing the access diagnosis
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP']) / 'geometry-mcp'
+          if not (root / 'report.json').exists():
+              root.mkdir(exist_ok=True)
+              (root / 'report.json').write_text(json.dumps({'status': 'failed', 'reason': 'Adapter checkout or job setup failed before the probe; see job logs.'}), encoding='utf-8')
+          PY
+      - name: Preserve MCP comparison or blocked-prerequisite evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mcp-consumers-${{ matrix.os }}
+          retention-days: 30
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/geometry-mcp/report.json
+            ${{ runner.temp }}/geometry-mcp/command-*.log
+            ${{ runner.temp }}/geometry-mcp/candidate/*.json
+            ${{ runner.temp }}/geometry-mcp/baseline/*.json

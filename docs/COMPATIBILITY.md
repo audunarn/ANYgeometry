@@ -31,6 +31,14 @@ Configured jobs are not passing evidence. Tests on one operating system or
 architecture do not qualify another. macOS Intel downstream native packages,
 other macOS versions and desktop application packaging are not covered here.
 
+Public consumer and private MCP jobs are independent required gates. The
+private `audunarn/ANYgeometry-mcp` checkout needs the repository secret
+`ANYGEOMETRY_MCP_READ_TOKEN`, scoped to Contents: read on that repository only.
+Without it, MCP CI reports a blocked prerequisite and fails explicitly; the
+public consumer checks still run. A successful public subset is not acceptance
+of the complete consumer set. Credentials are neither created nor copied by
+these workflows. Configure the secret only for trusted CI access to that source.
+
 ## Dependencies and consumers
 
 | Package | Contract / frozen consumer baseline |
@@ -72,7 +80,10 @@ python tools/check_compatibility.py wheel --candidate <wheel> --output <new-exte
 python tools/check_compatibility.py consumers --candidate <wheel> --mcp-source <adapter-checkout> --profile full --output <another-new-external-directory>
 ```
 
-Use `--profile macos` for the Apple silicon mesher/MCP subset, and
+Use `--profile macos` for the Apple silicon mesher/MCP subset. Hosted CI splits
+this into `--profile mesher` and `--profile mcp`; Windows/Linux split the full set
+into `--profile public` and `--profile mcp`. The public/mesher profiles require no
+MCP checkout. Use
 `--expected-machine arm64` or `--expected-machine x86_64` to assert the selected
 Mac architecture. The MCP checkout must contain the frozen commit above; its
 committed archive is built, never its potentially edited working files.
