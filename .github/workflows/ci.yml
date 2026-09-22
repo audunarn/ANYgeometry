@@ -17,10 +17,11 @@ jobs:
   pytest:
     name: pytest (${{ matrix.os }}, Python ${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        os: [windows-latest, ubuntu-latest, macos-15, macos-15-intel]
         python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
       - name: Check out source
@@ -32,6 +33,12 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
+      - name: Verify the requested Mac architecture
+        if: runner.os == 'macOS'
+        env:
+          MAC_LABEL: ${{ matrix.os }}
+        run: >-
+          python -c "import os, platform; expected = 'x86_64' if os.environ['MAC_LABEL'] == 'macos-15-intel' else 'arm64'; assert platform.machine() == expected, (platform.machine(), expected)"
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
@@ -48,6 +55,7 @@ jobs:
   planar-absence:
     name: pytest (planar backend absent)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -80,6 +88,7 @@ jobs:
   wheel:
     name: Build and verify wheel
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -170,63 +179,195 @@ jobs:
               assert sdist_metadata["Version"] == version
               assert sdist_metadata["License-Expression"] == "MPL-2.0"
           PY
-      - name: Create external wheel-smoke environment
+      - name: Retain the single candidate build
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: anygeometry-candidate
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+
+  minimum-dependencies:
+    name: Minimum dependencies (Linux, Python 3.11)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -e '.[dev,planar]' 'numpy==1.26.0' 'shapely==2.0.0'
+      - run: python -m pytest
+
+  wheel-smoke:
+    name: Installed wheel (${{ matrix.os }})
+    needs: wheel
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-15, macos-15-intel]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: anygeometry-candidate
+          path: candidate
+      - name: Verify the artifact in isolated base and planar environments
+        run: >-
+          python tools/check_compatibility.py wheel
+          --candidate candidate/*.whl
+          --expected-machine "${{ matrix.os == 'macos-15-intel' && 'x86_64' || matrix.os == 'macos-15' && 'arm64' || '' }}"
+          --output "$RUNNER_TEMP/geometry-wheel-smoke"
+      - name: Preserve complete smoke evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wheel-smoke-${{ matrix.os }}
+          retention-days: 30
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/geometry-wheel-smoke/report.json
+            ${{ runner.temp }}/geometry-wheel-smoke/command-*.log
+            ${{ runner.temp }}/geometry-wheel-smoke/without-planar/*.json
+            ${{ runner.temp }}/geometry-wheel-smoke/with-planar/*.json
+
+  consumers:
+    name: Installed public consumers (${{ matrix.os }}, ${{ matrix.profile }})
+    needs: wheel
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            profile: public
+          - os: ubuntu-latest
+            profile: public
+          - os: macos-15
+            profile: mesher
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: anygeometry-candidate
+          path: candidate
+      - name: Compare installed candidate and released geometry
+        run: >-
+          python tools/check_compatibility.py consumers
+          --candidate candidate/*.whl
+          --profile ${{ matrix.profile }}
+          --expected-machine "${{ matrix.os == 'macos-15' && 'arm64' || '' }}"
+          --output "$RUNNER_TEMP/geometry-consumers"
+      - name: Preserve complete consumer comparison evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: consumers-${{ matrix.os }}
+          retention-days: 30
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/geometry-consumers/report.json
+            ${{ runner.temp }}/geometry-consumers/command-*.log
+            ${{ runner.temp }}/geometry-consumers/candidate/*.json
+            ${{ runner.temp }}/geometry-consumers/baseline/*.json
+
+  mcp-consumers:
+    name: Installed MCP consumer (${{ matrix.os }})
+    needs: wheel
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-15]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - name: Require explicitly scoped access to the private adapter
         env:
-          WHEEL_SMOKE: ${{ runner.temp }}/anygeometry-wheel-smoke
+          HAS_MCP_ACCESS: ${{ secrets.ANYGEOMETRY_MCP_READ_TOKEN != '' }}
         run: |
           python - <<'PY'
+          import json
           import os
-          import subprocess
-          import sys
           from pathlib import Path
-
-          root = Path(os.environ["WHEEL_SMOKE"]).resolve()
-          workspace = Path(os.environ["GITHUB_WORKSPACE"]).resolve()
-          assert not root.is_relative_to(workspace), (root, workspace)
-          subprocess.run(
-              [sys.executable, "-m", "venv", "--copies", str(root)],
-              check=True,
-          )
-          candidates = (root / "Scripts" / "python.exe", root / "bin" / "python")
-          executable, = [candidate.resolve() for candidate in candidates if candidate.is_file()]
-          assert executable.is_relative_to(root), (executable, root)
-          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as environment:
-              print(f"WHEEL_PYTHON={executable}", file=environment)
+          if os.environ['HAS_MCP_ACCESS'] != 'true':
+              root = Path(os.environ['RUNNER_TEMP']) / 'geometry-mcp'
+              root.mkdir()
+              report = {'status': 'blocked', 'reason': 'ANYGEOMETRY_MCP_READ_TOKEN is not configured; Contents: read access to audunarn/ANYgeometry-mcp is required.'}
+              (root / 'report.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
+              print('::error::' + report['reason'])
+              raise SystemExit(1)
           PY
-      - name: Install wheel in the external environment
-        env:
-          WHEEL_SMOKE: ${{ runner.temp }}/anygeometry-wheel-smoke
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: audunarn/ANYgeometry-mcp
+          ref: 4253c001b07263fa2e9015082cf4950db65cd2d3
+          path: .ecosystem/ANYgeometry-mcp
+          token: ${{ secrets.ANYGEOMETRY_MCP_READ_TOKEN }}
+          persist-credentials: false
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: anygeometry-candidate
+          path: candidate
+      - run: python -m pip install 'setuptools>=77.0.3' wheel
+      - name: Compare installed MCP consumers
+        run: >-
+          python tools/check_compatibility.py consumers
+          --candidate candidate/*.whl
+          --mcp-source .ecosystem/ANYgeometry-mcp
+          --profile mcp
+          --expected-machine "${{ matrix.os == 'macos-15' && 'arm64' || '' }}"
+          --output "$RUNNER_TEMP/geometry-mcp"
+      - name: Record setup failures without losing the access diagnosis
+        if: always()
         run: |
-          "$WHEEL_PYTHON" -m pip install --upgrade pip
-          "$WHEEL_PYTHON" -m pip install "numpy>=1.26"
-          "$WHEEL_PYTHON" -m pip install --no-index --no-deps dist/*.whl
-      - name: Verify installed-wheel origin, schema, typing, and CLI
-        env:
-          PACKAGE_VERSION: ${{ steps.contract.outputs.version }}
-          WHEEL_SMOKE: ${{ runner.temp }}/anygeometry-wheel-smoke
-        run: |
-          cd /tmp
-          "$WHEEL_PYTHON" - <<'PY'
+          python - <<'PY'
+          import json
           import os
-          import sys
           from pathlib import Path
-
-          import anygeometry
-          from anygeometry.serialization import VERSION as SCHEMA_VERSION
-
-          workspace = Path(os.environ["GITHUB_WORKSPACE"]).resolve()
-          environment = Path(os.environ["WHEEL_SMOKE"]).resolve()
-          executable = Path(sys.executable).resolve()
-          prefix = Path(sys.prefix).resolve()
-          module = Path(anygeometry.__file__).resolve()
-          assert executable.is_relative_to(environment), (executable, environment)
-          assert prefix.is_relative_to(environment), (prefix, environment)
-          assert module.is_relative_to(prefix), (module, prefix)
-          assert not executable.is_relative_to(workspace), (executable, workspace)
-          assert not prefix.is_relative_to(workspace), (prefix, workspace)
-          assert not module.is_relative_to(workspace), (module, workspace)
-          assert anygeometry.__version__ == os.environ["PACKAGE_VERSION"]
-          assert SCHEMA_VERSION == 4
-          assert (module.parent / "py.typed").is_file()
+          root = Path(os.environ['RUNNER_TEMP']) / 'geometry-mcp'
+          if not (root / 'report.json').exists():
+              root.mkdir(exist_ok=True)
+              (root / 'report.json').write_text(json.dumps({'status': 'failed', 'reason': 'Adapter checkout or job setup failed before the probe; see job logs.'}), encoding='utf-8')
           PY
-          test "$("$WHEEL_PYTHON" -m anygeometry --version)" = "$PACKAGE_VERSION"
+      - name: Preserve MCP comparison or blocked-prerequisite evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mcp-consumers-${{ matrix.os }}
+          retention-days: 30
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/geometry-mcp/report.json
+            ${{ runner.temp }}/geometry-mcp/command-*.log
+            ${{ runner.temp }}/geometry-mcp/candidate/*.json
+            ${{ runner.temp }}/geometry-mcp/baseline/*.json

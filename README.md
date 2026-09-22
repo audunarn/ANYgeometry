@@ -14,6 +14,10 @@ package, or a solver.
 
 ## Installation
 
+See [compatibility and verification status](docs/COMPATIBILITY.md) for supported
+consumer versions, platform coverage and known limitations, and the
+[coordinate conversion contract](docs/COORDINATES.md) for model/world helpers.
+
 ANYgeometry requires Python 3.11 or newer and NumPy. Install the released
 package or a sibling checkout directly:
 
