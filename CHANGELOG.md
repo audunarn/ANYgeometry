@@ -10,6 +10,9 @@ All notable user-visible changes to ANYgeometry are documented here.
   installed-wheel smoke checks, and isolated consumer compatibility checks.
 - Correct current contract documentation and add compatibility and owner
   handoff records. Newly configured CI coverage is not a historical qualification.
+- Complete the planned platform and installed-consumer gates: all 29 hosted
+  jobs passed. Preserve exact source, artifacts, dependencies and prior setup
+  failures in the [maintenance record](docs/MAINTENANCE_20260922.md).
 
 ## 0.4.3 - 2026-09-16
 

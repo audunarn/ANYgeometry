@@ -1,0 +1,3936 @@
+{
+  "record_format": 1,
+  "purpose": "Maintenance implementation verification; not release authorization or independent acceptance",
+  "date": "2026-09-22",
+  "implementation_commit": "14e360f5dde8b4125a674df8593a3e4a6d3429bd",
+  "git_objects": {
+    "src/anygeometry": "cdf7f02cc1919058d7c37be6f9614e869a56a153",
+    "tests": "6f15ca9b9205832d02260d22fd7c0c8184d58530",
+    "tools": "7246db4b5aef19eacea6feb719ad2be607c71f0f",
+    "pyproject.toml": "685477d08a198b41bac3f38f7b3dc226de5006df",
+    "MANIFEST.in": "cc7626379cd07c59805bd30c648d770b1da1d304",
+    ".github/workflows/ci.yml": "43b9eacf545583f137978105fba4493579f3de68"
+  },
+  "workflow": {
+    "run_id": 35708515183,
+    "final_attempt": 3,
+    "status": "success",
+    "url": "https://github.com/audunarn/ANYgeometry/actions/runs/35708515183",
+    "jobs_passed": 29
+  },
+  "candidate_wheel_sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad",
+  "published_control_wheel_sha256": "6ab8f398de8ad1cc19b5c0d70a9787e1a15d3f5253c1125134eeb5050ec4b8b5",
+  "prior_attempts": [
+    {
+      "attempt": 1,
+      "mcp_outcome": "blocked: secret absent; 26 other jobs passed"
+    },
+    {
+      "attempt": 2,
+      "mcp_outcome": "private checkout authentication failed before consumer execution"
+    },
+    {
+      "attempt": 3,
+      "mcp_outcome": "all three jobs passed after user corrected secret value; same source and candidate"
+    }
+  ],
+  "artifact_selection": "Exact IDs identify successful attempts; names alone may select an older failed attempt.",
+  "artifacts": [
+    {
+      "id": 10685841701,
+      "name": "anygeometry-candidate",
+      "size_in_bytes": 989005,
+      "digest": "sha256:8c7ed470fdb52efacdc547e32057e0a3e1d5d30e7ea01c526a6bb8364de05211",
+      "created_at": "2026-09-22T09:07:59Z",
+      "expires_at": "2026-10-22T09:07:58Z"
+    },
+    {
+      "id": 10685831901,
+      "name": "consumers-ubuntu-latest",
+      "size_in_bytes": 158257,
+      "digest": "sha256:2667be1fa81f311889ed21c99a2c6e13d110fb2ce37cff2c7dbadb7aa36e5938",
+      "created_at": "2026-09-22T09:08:46Z",
+      "expires_at": "2026-10-22T09:08:45Z"
+    },
+    {
+      "id": 10685612285,
+      "name": "consumers-windows-latest",
+      "size_in_bytes": 158072,
+      "digest": "sha256:3680e720ba9a00c37f3f44bf22b11bc3aa3bdeb195b7ed9c9cb029a7d9d21b86",
+      "created_at": "2026-09-22T09:09:09Z",
+      "expires_at": "2026-10-22T09:09:07Z"
+    },
+    {
+      "id": 10685442476,
+      "name": "wheel-smoke-ubuntu-latest",
+      "size_in_bytes": 28600,
+      "digest": "sha256:d57592763c8f473cfca2bad269c58ae1374533748f1dba40a44604f0aae25d72",
+      "created_at": "2026-09-22T09:08:25Z",
+      "expires_at": "2026-10-22T09:08:24Z"
+    },
+    {
+      "id": 10685374131,
+      "name": "wheel-smoke-macos-15",
+      "size_in_bytes": 28680,
+      "digest": "sha256:5583181433c361c26720b4fc83790bfb6ba75bd699485d6989c95ba256fd4a15",
+      "created_at": "2026-09-22T09:15:44Z",
+      "expires_at": "2026-10-22T09:15:43Z"
+    },
+    {
+      "id": 10685213357,
+      "name": "consumers-macos-15",
+      "size_in_bytes": 41909,
+      "digest": "sha256:ec8127a95b363fb22aa214dd04cd1d58834834be355610ecce59fa36e1ddb504",
+      "created_at": "2026-09-22T09:14:54Z",
+      "expires_at": "2026-10-22T09:14:52Z"
+    },
+    {
+      "id": 10685207628,
+      "name": "wheel-smoke-windows-latest",
+      "size_in_bytes": 28512,
+      "digest": "sha256:8352b3f182d2812bdcfefbe355caf2a6bd3c447d1904c494d3f400af46089225",
+      "created_at": "2026-09-22T09:08:46Z",
+      "expires_at": "2026-10-22T09:08:46Z"
+    },
+    {
+      "id": 10685193327,
+      "name": "wheel-smoke-macos-15-intel",
+      "size_in_bytes": 28680,
+      "digest": "sha256:624a6712f9cd0e2311bbf29bb9e5d90d1c4f0473e60c22896c9ee62923eb57e0",
+      "created_at": "2026-09-22T09:14:08Z",
+      "expires_at": "2026-10-22T09:14:07Z"
+    },
+    {
+      "id": 10687945454,
+      "name": "mcp-consumers-ubuntu-latest",
+      "size_in_bytes": 191029,
+      "digest": "sha256:b22c0401c068411794c4c54d86dd8e7ad2c363f379a742cfbb820e3930d427f9",
+      "created_at": "2026-09-22T09:57:33Z",
+      "expires_at": "2026-10-22T09:57:32Z"
+    },
+    {
+      "id": 10687860610,
+      "name": "mcp-consumers-windows-latest",
+      "size_in_bytes": 198529,
+      "digest": "sha256:f061b8fbee0a49b208eb3bdcbe9faf0c99625e98108068a27aa9668350efd4ab",
+      "created_at": "2026-09-22T09:58:00Z",
+      "expires_at": "2026-10-22T09:58:00Z"
+    },
+    {
+      "id": 10687531114,
+      "name": "mcp-consumers-macos-15",
+      "size_in_bytes": 190978,
+      "digest": "sha256:a74659f306110437dfa67264ab36c1026377713b133d39de0fe955eeb722feaf",
+      "created_at": "2026-09-22T09:57:40Z",
+      "expires_at": "2026-10-22T09:57:38Z"
+    }
+  ],
+  "jobs": [
+    {
+      "id": 106698630516,
+      "name": "Installed MCP consumer (macos-15)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/audunarn/ANYgeometry/actions/runs/35708515183/job/106698630516",
+      "started_at": "2026-09-22T09:57:08Z",
+      "completed_at": "2026-09-22T09:57:44Z"
+    },
+    {
+      "id": 106698630863,
+      "name": "Installed MCP consumer (ubuntu-latest)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/audunarn/ANYgeometry/actions/runs/35708515183/job/106698630863",
+      "started_at": "2026-09-22T09:57:00Z",
+      "completed_at": "2026-09-22T09:57:34Z"
+    },
+    {
+      "id": 106698630949,
+      "name": "Installed MCP consumer (windows-latest)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/audunarn/ANYgeometry/actions/runs/35708515183/job/106698630949",
+      "started_at": "2026-09-22T09:56:59Z",
+      "completed_at": "2026-09-22T09:58:07Z"
+    },
+    {
+      "id": 106698631329,
+      "name": "Build and verify wheel",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/audunarn/ANYgeometry/actions/runs/35708515183/job/106698631329",
+      "started_at": "2026-09-22T09:07:41Z",
+      "completed_at": "2026-09-22T09:08:01Z"
+    },
+    {
+      "id": 106698631773,
+      "name": "pytest (windows-latest, Python 3.13)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/audunarn/ANYgeometry/actions/runs/35708515183/job/106698631773",
+      "started_at": "2026-09-22T09:07:42Z",
+      "completed_at": "2026-09-22T09:15:32Z"
+    },
+    {
+      "id": 106698631806,
+      "name": "pytest (ubuntu-latest, Python 3.14)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/audunarn/ANYgeometry/actions/runs/35708515183/job/106698631806",
+      "started_at": "2026-09-22T09:08:50Z",
+      "completed_at": "2026-09-22T09:15:12Z"
+    },
+    {
+      "id": 106698631843,
+      "name": "Installed public consumers (windows-latest, public)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/audunarn/ANYgeometry/actions/runs/35708515183/job/106698631843",
+      "started_at": "2026-09-22T09:08:04Z",
+      "completed_at": "2026-09-22T09:09:13Z"
+    },
+    {
+      "id": 106698631995,
+      "name": "pytest (macos-15, Python 3.11)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/audunarn/ANYgeometry/actions/runs/35708515183/job/106698631995",
+      "started_at": "2026-09-22T09:07:46Z",
+      "completed_at": "2026-09-22T09:11:33Z"
+    },
+    {
+      "id": 106698632020,
+      "name": "Installed wheel (macos-15-intel)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/audunarn/ANYgeometry/actions/runs/35708515183/job/106698632020",
+      "started_at": "2026-09-22T09:13:02Z",
+      "completed_at": "2026-09-22T09:14:14Z"
+    },
+    {
+      "id": 106698632054,
+      "name": "pytest (windows-latest, Python 3.14)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/audunarn/ANYgeometry/actions/runs/35708515183/job/106698632054",
+      "started_at": "2026-09-22T09:07:43Z",
+      "completed_at": "2026-09-22T09:15:42Z"
+    },
+    {
+      "id": 106698632055,
+      "name": "Installed wheel (windows-latest)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/audunarn/ANYgeometry/actions/runs/35708515183/job/106698632055",
+      "started_at": "2026-09-22T09:08:07Z",
+      "completed_at": "2026-09-22T09:08:50Z"
+    },
+    {
+      "id": 106698632081,
+      "name": "pytest (ubuntu-latest, Python 3.12)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/audunarn/ANYgeometry/actions/runs/35708515183/job/106698632081",
+      "started_at": "2026-09-22T09:07:41Z",
+      "completed_at": "2026-09-22T09:14:08Z"
+    },
+    {
+      "id": 106698632139,
+      "name": "pytest (macos-15, Python 3.13)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/audunarn/ANYgeometry/actions/runs/35708515183/job/106698632139",
+      "started_at": "2026-09-22T09:07:48Z",
+      "completed_at": "2026-09-22T09:12:06Z"
+    },
+    {
+      "id": 106698632192,
+      "name": "pytest (ubuntu-latest, Python 3.13)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/audunarn/ANYgeometry/actions/runs/35708515183/job/106698632192",
+      "started_at": "2026-09-22T09:07:42Z",
+      "completed_at": "2026-09-22T09:14:13Z"
+    },
+    {
+      "id": 106698632220,
+      "name": "pytest (ubuntu-latest, Python 3.11)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/audunarn/ANYgeometry/actions/runs/35708515183/job/106698632220",
+      "started_at": "2026-09-22T09:07:42Z",
+      "completed_at": "2026-09-22T09:12:34Z"
+    },
+    {
+      "id": 106698632259,
+      "name": "Installed wheel (macos-15)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/audunarn/ANYgeometry/actions/runs/35708515183/job/106698632259",
+      "started_at": "2026-09-22T09:15:23Z",
+      "completed_at": "2026-09-22T09:15:48Z"
+    },
+    {
+      "id": 106698632314,
+      "name": "Installed public consumers (ubuntu-latest, public)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/audunarn/ANYgeometry/actions/runs/35708515183/job/106698632314",
+      "started_at": "2026-09-22T09:08:04Z",
+      "completed_at": "2026-09-22T09:08:48Z"
+    },
+    {
+      "id": 106698632532,
+      "name": "pytest (macos-15-intel, Python 3.11)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/audunarn/ANYgeometry/actions/runs/35708515183/job/106698632532",
+      "started_at": "2026-09-22T09:11:37Z",
+      "completed_at": "2026-09-22T09:24:05Z"
+    },
+    {
+      "id": 106698632614,
+      "name": "pytest (macos-15-intel, Python 3.14)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/audunarn/ANYgeometry/actions/runs/35708515183/job/106698632614",
+      "started_at": "2026-09-22T09:11:24Z",
+      "completed_at": "2026-09-22T09:24:05Z"
+    },
+    {
+      "id": 106698632638,
+      "name": "pytest (macos-15, Python 3.14)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/audunarn/ANYgeometry/actions/runs/35708515183/job/106698632638",
+      "started_at": "2026-09-22T09:07:47Z",
+      "completed_at": "2026-09-22T09:12:59Z"
+    },
+    {
+      "id": 106698632664,
+      "name": "pytest (macos-15, Python 3.12)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/audunarn/ANYgeometry/actions/runs/35708515183/job/106698632664",
+      "started_at": "2026-09-22T09:07:46Z",
+      "completed_at": "2026-09-22T09:11:21Z"
+    },
+    {
+      "id": 106698632709,
+      "name": "pytest (macos-15-intel, Python 3.13)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/audunarn/ANYgeometry/actions/runs/35708515183/job/106698632709",
+      "started_at": "2026-09-22T09:12:11Z",
+      "completed_at": "2026-09-22T09:26:09Z"
+    },
+    {
+      "id": 106698632785,
+      "name": "pytest (macos-15-intel, Python 3.12)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/audunarn/ANYgeometry/actions/runs/35708515183/job/106698632785",
+      "started_at": "2026-09-22T09:07:42Z",
+      "completed_at": "2026-09-22T09:17:47Z"
+    },
+    {
+      "id": 106698632886,
+      "name": "Installed public consumers (macos-15, mesher)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/audunarn/ANYgeometry/actions/runs/35708515183/job/106698632886",
+      "started_at": "2026-09-22T09:14:25Z",
+      "completed_at": "2026-09-22T09:14:59Z"
+    },
+    {
+      "id": 106698654547,
+      "name": "Minimum dependencies (Linux, Python 3.11)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/audunarn/ANYgeometry/actions/runs/35708515183/job/106698654547",
+      "started_at": "2026-09-22T09:07:41Z",
+      "completed_at": "2026-09-22T09:13:47Z"
+    },
+    {
+      "id": 106698663543,
+      "name": "Installed wheel (ubuntu-latest)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/audunarn/ANYgeometry/actions/runs/35708515183/job/106698663543",
+      "started_at": "2026-09-22T09:08:04Z",
+      "completed_at": "2026-09-22T09:08:27Z"
+    },
+    {
+      "id": 106698665454,
+      "name": "pytest (planar backend absent)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/audunarn/ANYgeometry/actions/runs/35708515183/job/106698665454",
+      "started_at": "2026-09-22T09:07:41Z",
+      "completed_at": "2026-09-22T09:07:59Z"
+    },
+    {
+      "id": 106698665610,
+      "name": "pytest (windows-latest, Python 3.11)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/audunarn/ANYgeometry/actions/runs/35708515183/job/106698665610",
+      "started_at": "2026-09-22T09:07:41Z",
+      "completed_at": "2026-09-22T09:13:58Z"
+    },
+    {
+      "id": 106698670491,
+      "name": "pytest (windows-latest, Python 3.12)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/audunarn/ANYgeometry/actions/runs/35708515183/job/106698670491",
+      "started_at": "2026-09-22T09:07:41Z",
+      "completed_at": "2026-09-22T09:15:16Z"
+    }
+  ],
+  "kernel_and_minimum_test_counts": [
+    {
+      "job": "Minimum dependencies (Linux, Python 3.11)",
+      "passed": 953,
+      "warnings": 11,
+      "seconds": 351.61
+    },
+    {
+      "job": "pytest (windows-latest, Python 3.12)",
+      "passed": 953,
+      "warnings": 0,
+      "seconds": 410.21
+    },
+    {
+      "job": "pytest (planar backend absent)",
+      "passed": 1,
+      "warnings": 0,
+      "seconds": 0.18
+    },
+    {
+      "job": "pytest (ubuntu-latest, Python 3.12)",
+      "passed": 953,
+      "warnings": 0,
+      "seconds": 370.91
+    },
+    {
+      "job": "pytest (macos-15, Python 3.11)",
+      "passed": 953,
+      "warnings": 0,
+      "seconds": 207.48
+    },
+    {
+      "job": "pytest (macos-15, Python 3.13)",
+      "passed": 953,
+      "warnings": 0,
+      "seconds": 235.67
+    },
+    {
+      "job": "pytest (macos-15-intel, Python 3.14)",
+      "passed": 953,
+      "warnings": 0,
+      "seconds": 718.35
+    },
+    {
+      "job": "pytest (windows-latest, Python 3.11)",
+      "passed": 953,
+      "warnings": 0,
+      "seconds": 332.83
+    },
+    {
+      "job": "pytest (macos-15-intel, Python 3.12)",
+      "passed": 953,
+      "warnings": 0,
+      "seconds": 569.13
+    },
+    {
+      "job": "pytest (macos-15, Python 3.14)",
+      "passed": 953,
+      "warnings": 0,
+      "seconds": 285.17
+    },
+    {
+      "job": "pytest (windows-latest, Python 3.14)",
+      "passed": 953,
+      "warnings": 0,
+      "seconds": 420.5
+    },
+    {
+      "job": "pytest (ubuntu-latest, Python 3.11)",
+      "passed": 953,
+      "warnings": 0,
+      "seconds": 274.44
+    },
+    {
+      "job": "pytest (ubuntu-latest, Python 3.14)",
+      "passed": 953,
+      "warnings": 0,
+      "seconds": 358.52
+    },
+    {
+      "job": "pytest (macos-15-intel, Python 3.13)",
+      "passed": 953,
+      "warnings": 0,
+      "seconds": 734.64
+    },
+    {
+      "job": "pytest (ubuntu-latest, Python 3.13)",
+      "passed": 953,
+      "warnings": 0,
+      "seconds": 368.84
+    },
+    {
+      "job": "pytest (windows-latest, Python 3.13)",
+      "passed": 953,
+      "warnings": 0,
+      "seconds": 419.37
+    },
+    {
+      "job": "pytest (macos-15-intel, Python 3.11)",
+      "passed": 953,
+      "warnings": 0,
+      "seconds": 690.58
+    },
+    {
+      "job": "pytest (macos-15, Python 3.12)",
+      "passed": 953,
+      "warnings": 0,
+      "seconds": 191.43
+    }
+  ],
+  "installed_package_gates": [
+    {
+      "name": "consumers-ubuntu-latest",
+      "artifact_id": 10685831901,
+      "run_attempt": 1,
+      "status": "passed",
+      "profile": "public",
+      "python": "3.13.15 (main, Aug  6 2026, 02:15:18) [GCC 13.3.0]",
+      "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+      "checkout_commit": "275940a95be5c2c717ce0ef178f77d3a5399c9ca",
+      "probe_sha256": "b5675e1c6381d867c9d68a6803c69e7fee04bc8c3ffa214fd1bede1552eb082e",
+      "candidate": {
+        "filename": "anygeometry-0.4.3-py3-none-any.whl",
+        "bytes": 403847,
+        "sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad"
+      },
+      "baseline": {
+        "filename": "anygeometry-0.4.3-py3-none-any.whl",
+        "bytes": 402329,
+        "sha256": "6ab8f398de8ad1cc19b5c0d70a9787e1a15d3f5253c1125134eeb5050ec4b8b5"
+      },
+      "mcp": null,
+      "resolved_artifacts": [
+        {
+          "filename": "anyfem-0.4.1-py3-none-any.whl",
+          "bytes": 502451,
+          "sha256": "734fa27c683682eaa151ee7a9d8bd4cd64c8ec054ec1c717ff73bb27ee293d45",
+          "distribution": "anyfem",
+          "version": "0.4.1"
+        },
+        {
+          "filename": "anyfileio-0.3.2-py3-none-any.whl",
+          "bytes": 101760,
+          "sha256": "aa1cc2f4d6af2edcd1671f4834c49df6c9440cc0ab938297d02c746936a43d2d",
+          "distribution": "anyfileio",
+          "version": "0.3.2"
+        },
+        {
+          "filename": "anygeometry-0.4.3-py3-none-any.whl",
+          "bytes": 403847,
+          "sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad",
+          "distribution": "anygeometry",
+          "version": "0.4.3"
+        },
+        {
+          "filename": "anymaterial-0.2.0-py3-none-any.whl",
+          "bytes": 70171,
+          "sha256": "2620403f8f5cbf78d0335a93eb199e34cf761a7199669fb8d1a5c54c73a60a50",
+          "distribution": "anymaterial",
+          "version": "0.2.0"
+        },
+        {
+          "filename": "anymesher-0.5.0-cp313-cp313-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl",
+          "bytes": 2360302,
+          "sha256": "31ec5d87cf57c1fdc1eb7e938ae3da384ca315c75cb9f240b545e1d649ffe316",
+          "distribution": "anymesher",
+          "version": "0.5.0"
+        },
+        {
+          "filename": "anysolver-0.4.6-py3-none-any.whl",
+          "bytes": 1941421,
+          "sha256": "df949e3cac4f3380d6cd228284bbbdfa1b3d4609ce0ca8b422700ada5a85322f",
+          "distribution": "anysolver",
+          "version": "0.4.6"
+        },
+        {
+          "filename": "h5py-3.16.0-cp313-cp313-manylinux_2_28_x86_64.whl",
+          "bytes": 5400417,
+          "sha256": "9300ad32dea9dfc5171f94d5f6948e159ed93e4701280b0f508773b3f582f402",
+          "distribution": "h5py",
+          "version": "3.16.0"
+        },
+        {
+          "filename": "numpy-2.5.3-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+          "bytes": 16708577,
+          "sha256": "a5fa86b80fd24bcd1aff83ad23be44ea323de3f787be8f8b15d4a65621e25321",
+          "distribution": "numpy",
+          "version": "2.5.3"
+        },
+        {
+          "filename": "platformdirs-4.11.12-py3-none-any.whl",
+          "bytes": 24976,
+          "sha256": "b1ba966ac76153d9985a0787ffab951e7c18416189873d4e4ddb2c8a04a0a254",
+          "distribution": "platformdirs",
+          "version": "4.11.12"
+        },
+        {
+          "filename": "scipy-1.18.1-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+          "bytes": 35312578,
+          "sha256": "fdaf5ea890a6183d0565f51a61799d67081bd5b1cf03c5f4b3fd3732108625c9",
+          "distribution": "scipy",
+          "version": "1.18.1"
+        },
+        {
+          "filename": "shapely-2.1.2-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+          "bytes": 3082855,
+          "sha256": "7ed1a5bbfb386ee8332713bf7508bc24e32d24b74fc9a7b9f8529a55db9f4ee6",
+          "distribution": "shapely",
+          "version": "2.1.2"
+        },
+        {
+          "filename": "threadpoolctl-3.7.0-py3-none-any.whl",
+          "bytes": 26362,
+          "sha256": "cd8b60b5641b45c67bbf73c64c843235fc2d8a480c87389f52f5dbee893b86be",
+          "distribution": "threadpoolctl",
+          "version": "3.7.0"
+        }
+      ],
+      "lanes": [
+        {
+          "name": "candidate",
+          "status": "passed",
+          "machine": "x86_64",
+          "distributions": [
+            {
+              "name": "ANYfem",
+              "version": "0.4.1"
+            },
+            {
+              "name": "ANYfileio",
+              "version": "0.3.2"
+            },
+            {
+              "name": "ANYgeometry",
+              "version": "0.4.3"
+            },
+            {
+              "name": "ANYmaterial",
+              "version": "0.2.0"
+            },
+            {
+              "name": "ANYmesher",
+              "version": "0.5.0"
+            },
+            {
+              "name": "ANYsolver",
+              "version": "0.4.6"
+            },
+            {
+              "name": "h5py",
+              "version": "3.16.0"
+            },
+            {
+              "name": "numpy",
+              "version": "2.5.3"
+            },
+            {
+              "name": "pip",
+              "version": "26.2.1"
+            },
+            {
+              "name": "platformdirs",
+              "version": "4.11.12"
+            },
+            {
+              "name": "scipy",
+              "version": "1.18.1"
+            },
+            {
+              "name": "shapely",
+              "version": "2.1.2"
+            },
+            {
+              "name": "threadpoolctl",
+              "version": "3.7.0"
+            }
+          ],
+          "cases": [
+            {
+              "name": "environment_before",
+              "status": "passed"
+            },
+            {
+              "name": "core",
+              "status": "passed"
+            },
+            {
+              "name": "planar",
+              "status": "passed"
+            },
+            {
+              "name": "mesher",
+              "status": "passed"
+            },
+            {
+              "name": "fem",
+              "status": "passed"
+            },
+            {
+              "name": "fileio",
+              "status": "passed"
+            },
+            {
+              "name": "environment_after",
+              "status": "passed"
+            }
+          ],
+          "origin_and_wheel_checks": [
+            {
+              "origins": {
+                "anygeometry": "/home/runner/work/_temp/geometry-consumers/candidate-venv/lib/python3.13/site-packages/anygeometry/__init__.py",
+                "numpy": "/home/runner/work/_temp/geometry-consumers/candidate-venv/lib/python3.13/site-packages/numpy/__init__.py",
+                "shapely": "/home/runner/work/_temp/geometry-consumers/candidate-venv/lib/python3.13/site-packages/shapely/__init__.py",
+                "anymesher": "/home/runner/work/_temp/geometry-consumers/candidate-venv/lib/python3.13/site-packages/anymesher/__init__.py",
+                "anyfem": "/home/runner/work/_temp/geometry-consumers/candidate-venv/lib/python3.13/site-packages/anyfem/__init__.py",
+                "anysolver": "/home/runner/work/_temp/geometry-consumers/candidate-venv/lib/python3.13/site-packages/anysolver/__init__.py",
+                "anymaterial": "/home/runner/work/_temp/geometry-consumers/candidate-venv/lib/python3.13/site-packages/anymaterial/__init__.py",
+                "anyfileio": "/home/runner/work/_temp/geometry-consumers/candidate-venv/lib/python3.13/site-packages/anyfileio/__init__.py"
+              },
+              "wheel_sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad",
+              "verified_files": 51
+            },
+            {
+              "origins": {
+                "anygeometry": "/home/runner/work/_temp/geometry-consumers/candidate-venv/lib/python3.13/site-packages/anygeometry/__init__.py",
+                "numpy": "/home/runner/work/_temp/geometry-consumers/candidate-venv/lib/python3.13/site-packages/numpy/__init__.py",
+                "shapely": "/home/runner/work/_temp/geometry-consumers/candidate-venv/lib/python3.13/site-packages/shapely/__init__.py",
+                "anymesher": "/home/runner/work/_temp/geometry-consumers/candidate-venv/lib/python3.13/site-packages/anymesher/__init__.py",
+                "anyfem": "/home/runner/work/_temp/geometry-consumers/candidate-venv/lib/python3.13/site-packages/anyfem/__init__.py",
+                "anysolver": "/home/runner/work/_temp/geometry-consumers/candidate-venv/lib/python3.13/site-packages/anysolver/__init__.py",
+                "anymaterial": "/home/runner/work/_temp/geometry-consumers/candidate-venv/lib/python3.13/site-packages/anymaterial/__init__.py",
+                "anyfileio": "/home/runner/work/_temp/geometry-consumers/candidate-venv/lib/python3.13/site-packages/anyfileio/__init__.py"
+              },
+              "wheel_sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad",
+              "verified_files": 51
+            }
+          ]
+        },
+        {
+          "name": "baseline",
+          "status": "passed",
+          "machine": "x86_64",
+          "distributions": [
+            {
+              "name": "ANYfem",
+              "version": "0.4.1"
+            },
+            {
+              "name": "ANYfileio",
+              "version": "0.3.2"
+            },
+            {
+              "name": "ANYgeometry",
+              "version": "0.4.3"
+            },
+            {
+              "name": "ANYmaterial",
+              "version": "0.2.0"
+            },
+            {
+              "name": "ANYmesher",
+              "version": "0.5.0"
+            },
+            {
+              "name": "ANYsolver",
+              "version": "0.4.6"
+            },
+            {
+              "name": "h5py",
+              "version": "3.16.0"
+            },
+            {
+              "name": "numpy",
+              "version": "2.5.3"
+            },
+            {
+              "name": "pip",
+              "version": "26.2.1"
+            },
+            {
+              "name": "platformdirs",
+              "version": "4.11.12"
+            },
+            {
+              "name": "scipy",
+              "version": "1.18.1"
+            },
+            {
+              "name": "shapely",
+              "version": "2.1.2"
+            },
+            {
+              "name": "threadpoolctl",
+              "version": "3.7.0"
+            }
+          ],
+          "cases": [
+            {
+              "name": "environment_before",
+              "status": "passed"
+            },
+            {
+              "name": "core",
+              "status": "passed"
+            },
+            {
+              "name": "planar",
+              "status": "passed"
+            },
+            {
+              "name": "mesher",
+              "status": "passed"
+            },
+            {
+              "name": "fem",
+              "status": "passed"
+            },
+            {
+              "name": "fileio",
+              "status": "passed"
+            },
+            {
+              "name": "environment_after",
+              "status": "passed"
+            }
+          ],
+          "origin_and_wheel_checks": [
+            {
+              "origins": {
+                "anygeometry": "/home/runner/work/_temp/geometry-consumers/baseline-venv/lib/python3.13/site-packages/anygeometry/__init__.py",
+                "numpy": "/home/runner/work/_temp/geometry-consumers/baseline-venv/lib/python3.13/site-packages/numpy/__init__.py",
+                "shapely": "/home/runner/work/_temp/geometry-consumers/baseline-venv/lib/python3.13/site-packages/shapely/__init__.py",
+                "anymesher": "/home/runner/work/_temp/geometry-consumers/baseline-venv/lib/python3.13/site-packages/anymesher/__init__.py",
+                "anyfem": "/home/runner/work/_temp/geometry-consumers/baseline-venv/lib/python3.13/site-packages/anyfem/__init__.py",
+                "anysolver": "/home/runner/work/_temp/geometry-consumers/baseline-venv/lib/python3.13/site-packages/anysolver/__init__.py",
+                "anymaterial": "/home/runner/work/_temp/geometry-consumers/baseline-venv/lib/python3.13/site-packages/anymaterial/__init__.py",
+                "anyfileio": "/home/runner/work/_temp/geometry-consumers/baseline-venv/lib/python3.13/site-packages/anyfileio/__init__.py"
+              },
+              "wheel_sha256": "6ab8f398de8ad1cc19b5c0d70a9787e1a15d3f5253c1125134eeb5050ec4b8b5",
+              "verified_files": 50
+            },
+            {
+              "origins": {
+                "anygeometry": "/home/runner/work/_temp/geometry-consumers/baseline-venv/lib/python3.13/site-packages/anygeometry/__init__.py",
+                "numpy": "/home/runner/work/_temp/geometry-consumers/baseline-venv/lib/python3.13/site-packages/numpy/__init__.py",
+                "shapely": "/home/runner/work/_temp/geometry-consumers/baseline-venv/lib/python3.13/site-packages/shapely/__init__.py",
+                "anymesher": "/home/runner/work/_temp/geometry-consumers/baseline-venv/lib/python3.13/site-packages/anymesher/__init__.py",
+                "anyfem": "/home/runner/work/_temp/geometry-consumers/baseline-venv/lib/python3.13/site-packages/anyfem/__init__.py",
+                "anysolver": "/home/runner/work/_temp/geometry-consumers/baseline-venv/lib/python3.13/site-packages/anysolver/__init__.py",
+                "anymaterial": "/home/runner/work/_temp/geometry-consumers/baseline-venv/lib/python3.13/site-packages/anymaterial/__init__.py",
+                "anyfileio": "/home/runner/work/_temp/geometry-consumers/baseline-venv/lib/python3.13/site-packages/anyfileio/__init__.py"
+              },
+              "wheel_sha256": "6ab8f398de8ad1cc19b5c0d70a9787e1a15d3f5253c1125134eeb5050ec4b8b5",
+              "verified_files": 50
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "consumers-windows-latest",
+      "artifact_id": 10685612285,
+      "run_attempt": 1,
+      "status": "passed",
+      "profile": "public",
+      "python": "3.13.15 (tags/v3.13.15:4061bc4, Aug  5 2026, 13:05:39) [MSC v.1944 64 bit (AMD64)]",
+      "platform": "Windows-2025Server-10.0.26100-SP0",
+      "checkout_commit": "275940a95be5c2c717ce0ef178f77d3a5399c9ca",
+      "probe_sha256": "98b2179540f3be5c1ec8504924da75b8c77182ede333c4c4aad54b3059366c05",
+      "candidate": {
+        "filename": "anygeometry-0.4.3-py3-none-any.whl",
+        "bytes": 403847,
+        "sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad"
+      },
+      "baseline": {
+        "filename": "anygeometry-0.4.3-py3-none-any.whl",
+        "bytes": 402329,
+        "sha256": "6ab8f398de8ad1cc19b5c0d70a9787e1a15d3f5253c1125134eeb5050ec4b8b5"
+      },
+      "mcp": null,
+      "resolved_artifacts": [
+        {
+          "filename": "anyfem-0.4.1-py3-none-any.whl",
+          "bytes": 502451,
+          "sha256": "734fa27c683682eaa151ee7a9d8bd4cd64c8ec054ec1c717ff73bb27ee293d45",
+          "distribution": "anyfem",
+          "version": "0.4.1"
+        },
+        {
+          "filename": "anyfileio-0.3.2-py3-none-any.whl",
+          "bytes": 101760,
+          "sha256": "aa1cc2f4d6af2edcd1671f4834c49df6c9440cc0ab938297d02c746936a43d2d",
+          "distribution": "anyfileio",
+          "version": "0.3.2"
+        },
+        {
+          "filename": "anygeometry-0.4.3-py3-none-any.whl",
+          "bytes": 403847,
+          "sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad",
+          "distribution": "anygeometry",
+          "version": "0.4.3"
+        },
+        {
+          "filename": "anymaterial-0.2.0-py3-none-any.whl",
+          "bytes": 70171,
+          "sha256": "2620403f8f5cbf78d0335a93eb199e34cf761a7199669fb8d1a5c54c73a60a50",
+          "distribution": "anymaterial",
+          "version": "0.2.0"
+        },
+        {
+          "filename": "anymesher-0.5.0-cp313-cp313-win_amd64.whl",
+          "bytes": 723493,
+          "sha256": "33abadb82e334e961870ba2e8abffcbe55c6129731d34f24447f3ad6c58a81ff",
+          "distribution": "anymesher",
+          "version": "0.5.0"
+        },
+        {
+          "filename": "anysolver-0.4.6-py3-none-any.whl",
+          "bytes": 1941421,
+          "sha256": "df949e3cac4f3380d6cd228284bbbdfa1b3d4609ce0ca8b422700ada5a85322f",
+          "distribution": "anysolver",
+          "version": "0.4.6"
+        },
+        {
+          "filename": "h5py-3.16.0-cp313-cp313-win_amd64.whl",
+          "bytes": 3175509,
+          "sha256": "18f2bbcd545e6991412253b98727374c356d67caa920e68dc79eab36bf5fedad",
+          "distribution": "h5py",
+          "version": "3.16.0"
+        },
+        {
+          "filename": "numpy-2.5.3-cp313-cp313-win_amd64.whl",
+          "bytes": 12560965,
+          "sha256": "71cad2b2a7451ab79d8f5e71b453485b6775963d5cf794179144a7463fe6e8ec",
+          "distribution": "numpy",
+          "version": "2.5.3"
+        },
+        {
+          "filename": "platformdirs-4.11.12-py3-none-any.whl",
+          "bytes": 24976,
+          "sha256": "b1ba966ac76153d9985a0787ffab951e7c18416189873d4e4ddb2c8a04a0a254",
+          "distribution": "platformdirs",
+          "version": "4.11.12"
+        },
+        {
+          "filename": "scipy-1.18.1-cp313-cp313-win_amd64.whl",
+          "bytes": 36622841,
+          "sha256": "559ed65f60c1af5a03f3912605a1b5114f522c7c32fb23c3376ae8f03219fe28",
+          "distribution": "scipy",
+          "version": "1.18.1"
+        },
+        {
+          "filename": "shapely-2.1.2-cp313-cp313-win_amd64.whl",
+          "bytes": 1722151,
+          "sha256": "ca2591bff6645c216695bdf1614fca9c82ea1144d4a7591a466fef64f28f0715",
+          "distribution": "shapely",
+          "version": "2.1.2"
+        },
+        {
+          "filename": "threadpoolctl-3.7.0-py3-none-any.whl",
+          "bytes": 26362,
+          "sha256": "cd8b60b5641b45c67bbf73c64c843235fc2d8a480c87389f52f5dbee893b86be",
+          "distribution": "threadpoolctl",
+          "version": "3.7.0"
+        }
+      ],
+      "lanes": [
+        {
+          "name": "candidate",
+          "status": "passed",
+          "machine": "AMD64",
+          "distributions": [
+            {
+              "name": "ANYfem",
+              "version": "0.4.1"
+            },
+            {
+              "name": "ANYfileio",
+              "version": "0.3.2"
+            },
+            {
+              "name": "ANYgeometry",
+              "version": "0.4.3"
+            },
+            {
+              "name": "ANYmaterial",
+              "version": "0.2.0"
+            },
+            {
+              "name": "ANYmesher",
+              "version": "0.5.0"
+            },
+            {
+              "name": "ANYsolver",
+              "version": "0.4.6"
+            },
+            {
+              "name": "h5py",
+              "version": "3.16.0"
+            },
+            {
+              "name": "numpy",
+              "version": "2.5.3"
+            },
+            {
+              "name": "pip",
+              "version": "26.2.1"
+            },
+            {
+              "name": "platformdirs",
+              "version": "4.11.12"
+            },
+            {
+              "name": "scipy",
+              "version": "1.18.1"
+            },
+            {
+              "name": "shapely",
+              "version": "2.1.2"
+            },
+            {
+              "name": "threadpoolctl",
+              "version": "3.7.0"
+            }
+          ],
+          "cases": [
+            {
+              "name": "environment_before",
+              "status": "passed"
+            },
+            {
+              "name": "core",
+              "status": "passed"
+            },
+            {
+              "name": "planar",
+              "status": "passed"
+            },
+            {
+              "name": "mesher",
+              "status": "passed"
+            },
+            {
+              "name": "fem",
+              "status": "passed"
+            },
+            {
+              "name": "fileio",
+              "status": "passed"
+            },
+            {
+              "name": "environment_after",
+              "status": "passed"
+            }
+          ],
+          "origin_and_wheel_checks": [
+            {
+              "origins": {
+                "anygeometry": "D:\\a\\_temp\\geometry-consumers\\candidate-venv\\Lib\\site-packages\\anygeometry\\__init__.py",
+                "numpy": "D:\\a\\_temp\\geometry-consumers\\candidate-venv\\Lib\\site-packages\\numpy\\__init__.py",
+                "shapely": "D:\\a\\_temp\\geometry-consumers\\candidate-venv\\Lib\\site-packages\\shapely\\__init__.py",
+                "anymesher": "D:\\a\\_temp\\geometry-consumers\\candidate-venv\\Lib\\site-packages\\anymesher\\__init__.py",
+                "anyfem": "D:\\a\\_temp\\geometry-consumers\\candidate-venv\\Lib\\site-packages\\anyfem\\__init__.py",
+                "anysolver": "D:\\a\\_temp\\geometry-consumers\\candidate-venv\\Lib\\site-packages\\anysolver\\__init__.py",
+                "anymaterial": "D:\\a\\_temp\\geometry-consumers\\candidate-venv\\Lib\\site-packages\\anymaterial\\__init__.py",
+                "anyfileio": "D:\\a\\_temp\\geometry-consumers\\candidate-venv\\Lib\\site-packages\\anyfileio\\__init__.py"
+              },
+              "wheel_sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad",
+              "verified_files": 51
+            },
+            {
+              "origins": {
+                "anygeometry": "D:\\a\\_temp\\geometry-consumers\\candidate-venv\\Lib\\site-packages\\anygeometry\\__init__.py",
+                "numpy": "D:\\a\\_temp\\geometry-consumers\\candidate-venv\\Lib\\site-packages\\numpy\\__init__.py",
+                "shapely": "D:\\a\\_temp\\geometry-consumers\\candidate-venv\\Lib\\site-packages\\shapely\\__init__.py",
+                "anymesher": "D:\\a\\_temp\\geometry-consumers\\candidate-venv\\Lib\\site-packages\\anymesher\\__init__.py",
+                "anyfem": "D:\\a\\_temp\\geometry-consumers\\candidate-venv\\Lib\\site-packages\\anyfem\\__init__.py",
+                "anysolver": "D:\\a\\_temp\\geometry-consumers\\candidate-venv\\Lib\\site-packages\\anysolver\\__init__.py",
+                "anymaterial": "D:\\a\\_temp\\geometry-consumers\\candidate-venv\\Lib\\site-packages\\anymaterial\\__init__.py",
+                "anyfileio": "D:\\a\\_temp\\geometry-consumers\\candidate-venv\\Lib\\site-packages\\anyfileio\\__init__.py"
+              },
+              "wheel_sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad",
+              "verified_files": 51
+            }
+          ]
+        },
+        {
+          "name": "baseline",
+          "status": "passed",
+          "machine": "AMD64",
+          "distributions": [
+            {
+              "name": "ANYfem",
+              "version": "0.4.1"
+            },
+            {
+              "name": "ANYfileio",
+              "version": "0.3.2"
+            },
+            {
+              "name": "ANYgeometry",
+              "version": "0.4.3"
+            },
+            {
+              "name": "ANYmaterial",
+              "version": "0.2.0"
+            },
+            {
+              "name": "ANYmesher",
+              "version": "0.5.0"
+            },
+            {
+              "name": "ANYsolver",
+              "version": "0.4.6"
+            },
+            {
+              "name": "h5py",
+              "version": "3.16.0"
+            },
+            {
+              "name": "numpy",
+              "version": "2.5.3"
+            },
+            {
+              "name": "pip",
+              "version": "26.2.1"
+            },
+            {
+              "name": "platformdirs",
+              "version": "4.11.12"
+            },
+            {
+              "name": "scipy",
+              "version": "1.18.1"
+            },
+            {
+              "name": "shapely",
+              "version": "2.1.2"
+            },
+            {
+              "name": "threadpoolctl",
+              "version": "3.7.0"
+            }
+          ],
+          "cases": [
+            {
+              "name": "environment_before",
+              "status": "passed"
+            },
+            {
+              "name": "core",
+              "status": "passed"
+            },
+            {
+              "name": "planar",
+              "status": "passed"
+            },
+            {
+              "name": "mesher",
+              "status": "passed"
+            },
+            {
+              "name": "fem",
+              "status": "passed"
+            },
+            {
+              "name": "fileio",
+              "status": "passed"
+            },
+            {
+              "name": "environment_after",
+              "status": "passed"
+            }
+          ],
+          "origin_and_wheel_checks": [
+            {
+              "origins": {
+                "anygeometry": "D:\\a\\_temp\\geometry-consumers\\baseline-venv\\Lib\\site-packages\\anygeometry\\__init__.py",
+                "numpy": "D:\\a\\_temp\\geometry-consumers\\baseline-venv\\Lib\\site-packages\\numpy\\__init__.py",
+                "shapely": "D:\\a\\_temp\\geometry-consumers\\baseline-venv\\Lib\\site-packages\\shapely\\__init__.py",
+                "anymesher": "D:\\a\\_temp\\geometry-consumers\\baseline-venv\\Lib\\site-packages\\anymesher\\__init__.py",
+                "anyfem": "D:\\a\\_temp\\geometry-consumers\\baseline-venv\\Lib\\site-packages\\anyfem\\__init__.py",
+                "anysolver": "D:\\a\\_temp\\geometry-consumers\\baseline-venv\\Lib\\site-packages\\anysolver\\__init__.py",
+                "anymaterial": "D:\\a\\_temp\\geometry-consumers\\baseline-venv\\Lib\\site-packages\\anymaterial\\__init__.py",
+                "anyfileio": "D:\\a\\_temp\\geometry-consumers\\baseline-venv\\Lib\\site-packages\\anyfileio\\__init__.py"
+              },
+              "wheel_sha256": "6ab8f398de8ad1cc19b5c0d70a9787e1a15d3f5253c1125134eeb5050ec4b8b5",
+              "verified_files": 50
+            },
+            {
+              "origins": {
+                "anygeometry": "D:\\a\\_temp\\geometry-consumers\\baseline-venv\\Lib\\site-packages\\anygeometry\\__init__.py",
+                "numpy": "D:\\a\\_temp\\geometry-consumers\\baseline-venv\\Lib\\site-packages\\numpy\\__init__.py",
+                "shapely": "D:\\a\\_temp\\geometry-consumers\\baseline-venv\\Lib\\site-packages\\shapely\\__init__.py",
+                "anymesher": "D:\\a\\_temp\\geometry-consumers\\baseline-venv\\Lib\\site-packages\\anymesher\\__init__.py",
+                "anyfem": "D:\\a\\_temp\\geometry-consumers\\baseline-venv\\Lib\\site-packages\\anyfem\\__init__.py",
+                "anysolver": "D:\\a\\_temp\\geometry-consumers\\baseline-venv\\Lib\\site-packages\\anysolver\\__init__.py",
+                "anymaterial": "D:\\a\\_temp\\geometry-consumers\\baseline-venv\\Lib\\site-packages\\anymaterial\\__init__.py",
+                "anyfileio": "D:\\a\\_temp\\geometry-consumers\\baseline-venv\\Lib\\site-packages\\anyfileio\\__init__.py"
+              },
+              "wheel_sha256": "6ab8f398de8ad1cc19b5c0d70a9787e1a15d3f5253c1125134eeb5050ec4b8b5",
+              "verified_files": 50
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "wheel-smoke-ubuntu-latest",
+      "artifact_id": 10685442476,
+      "run_attempt": 1,
+      "status": "passed",
+      "profile": "full",
+      "python": "3.13.15 (main, Aug  6 2026, 02:15:18) [GCC 13.3.0]",
+      "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+      "checkout_commit": "275940a95be5c2c717ce0ef178f77d3a5399c9ca",
+      "probe_sha256": "b5675e1c6381d867c9d68a6803c69e7fee04bc8c3ffa214fd1bede1552eb082e",
+      "candidate": {
+        "filename": "anygeometry-0.4.3-py3-none-any.whl",
+        "bytes": 403847,
+        "sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad"
+      },
+      "baseline": null,
+      "mcp": null,
+      "resolved_artifacts": [
+        {
+          "filename": "anygeometry-0.4.3-py3-none-any.whl",
+          "bytes": 403847,
+          "sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad",
+          "distribution": "anygeometry",
+          "version": "0.4.3"
+        },
+        {
+          "filename": "numpy-2.5.3-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+          "bytes": 16708577,
+          "sha256": "a5fa86b80fd24bcd1aff83ad23be44ea323de3f787be8f8b15d4a65621e25321",
+          "distribution": "numpy",
+          "version": "2.5.3"
+        },
+        {
+          "filename": "shapely-2.1.2-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+          "bytes": 3082855,
+          "sha256": "7ed1a5bbfb386ee8332713bf7508bc24e32d24b74fc9a7b9f8529a55db9f4ee6",
+          "distribution": "shapely",
+          "version": "2.1.2"
+        }
+      ],
+      "lanes": [
+        {
+          "name": "without-planar",
+          "status": "passed",
+          "machine": "x86_64",
+          "distributions": [
+            {
+              "name": "ANYgeometry",
+              "version": "0.4.3"
+            },
+            {
+              "name": "numpy",
+              "version": "2.5.3"
+            },
+            {
+              "name": "pip",
+              "version": "26.2.1"
+            }
+          ],
+          "cases": [
+            {
+              "name": "environment_before",
+              "status": "passed"
+            },
+            {
+              "name": "core",
+              "status": "passed"
+            },
+            {
+              "name": "planar",
+              "status": "passed"
+            },
+            {
+              "name": "environment_after",
+              "status": "passed"
+            }
+          ],
+          "origin_and_wheel_checks": [
+            {
+              "origins": {
+                "anygeometry": "/home/runner/work/_temp/geometry-wheel-smoke/without-planar-venv/lib/python3.13/site-packages/anygeometry/__init__.py",
+                "numpy": "/home/runner/work/_temp/geometry-wheel-smoke/without-planar-venv/lib/python3.13/site-packages/numpy/__init__.py"
+              },
+              "wheel_sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad",
+              "verified_files": 51
+            },
+            {
+              "origins": {
+                "anygeometry": "/home/runner/work/_temp/geometry-wheel-smoke/without-planar-venv/lib/python3.13/site-packages/anygeometry/__init__.py",
+                "numpy": "/home/runner/work/_temp/geometry-wheel-smoke/without-planar-venv/lib/python3.13/site-packages/numpy/__init__.py"
+              },
+              "wheel_sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad",
+              "verified_files": 51
+            }
+          ]
+        },
+        {
+          "name": "with-planar",
+          "status": "passed",
+          "machine": "x86_64",
+          "distributions": [
+            {
+              "name": "ANYgeometry",
+              "version": "0.4.3"
+            },
+            {
+              "name": "numpy",
+              "version": "2.5.3"
+            },
+            {
+              "name": "pip",
+              "version": "26.2.1"
+            },
+            {
+              "name": "shapely",
+              "version": "2.1.2"
+            }
+          ],
+          "cases": [
+            {
+              "name": "environment_before",
+              "status": "passed"
+            },
+            {
+              "name": "core",
+              "status": "passed"
+            },
+            {
+              "name": "planar",
+              "status": "passed"
+            },
+            {
+              "name": "environment_after",
+              "status": "passed"
+            }
+          ],
+          "origin_and_wheel_checks": [
+            {
+              "origins": {
+                "anygeometry": "/home/runner/work/_temp/geometry-wheel-smoke/with-planar-venv/lib/python3.13/site-packages/anygeometry/__init__.py",
+                "numpy": "/home/runner/work/_temp/geometry-wheel-smoke/with-planar-venv/lib/python3.13/site-packages/numpy/__init__.py",
+                "shapely": "/home/runner/work/_temp/geometry-wheel-smoke/with-planar-venv/lib/python3.13/site-packages/shapely/__init__.py"
+              },
+              "wheel_sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad",
+              "verified_files": 51
+            },
+            {
+              "origins": {
+                "anygeometry": "/home/runner/work/_temp/geometry-wheel-smoke/with-planar-venv/lib/python3.13/site-packages/anygeometry/__init__.py",
+                "numpy": "/home/runner/work/_temp/geometry-wheel-smoke/with-planar-venv/lib/python3.13/site-packages/numpy/__init__.py",
+                "shapely": "/home/runner/work/_temp/geometry-wheel-smoke/with-planar-venv/lib/python3.13/site-packages/shapely/__init__.py"
+              },
+              "wheel_sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad",
+              "verified_files": 51
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "wheel-smoke-macos-15",
+      "artifact_id": 10685374131,
+      "run_attempt": 1,
+      "status": "passed",
+      "profile": "full",
+      "python": "3.13.15 (v3.13.15:4061bc4c35f, Aug  5 2026, 09:08:51) [Clang 21.0.0 (clang-2100.1.1.101)]",
+      "platform": "macOS-15.7.9-arm64-arm-64bit-Mach-O",
+      "checkout_commit": "275940a95be5c2c717ce0ef178f77d3a5399c9ca",
+      "probe_sha256": "b5675e1c6381d867c9d68a6803c69e7fee04bc8c3ffa214fd1bede1552eb082e",
+      "candidate": {
+        "filename": "anygeometry-0.4.3-py3-none-any.whl",
+        "bytes": 403847,
+        "sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad"
+      },
+      "baseline": null,
+      "mcp": null,
+      "resolved_artifacts": [
+        {
+          "filename": "anygeometry-0.4.3-py3-none-any.whl",
+          "bytes": 403847,
+          "sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad",
+          "distribution": "anygeometry",
+          "version": "0.4.3"
+        },
+        {
+          "filename": "numpy-2.5.3-cp313-cp313-macosx_14_0_arm64.whl",
+          "bytes": 5439695,
+          "sha256": "f9a2353b37a1a9e78fd82b27ad7e2a32a2d036604d18f02b05e3136c62ca3b09",
+          "distribution": "numpy",
+          "version": "2.5.3"
+        },
+        {
+          "filename": "shapely-2.1.2-cp313-cp313-macosx_11_0_arm64.whl",
+          "bytes": 1642887,
+          "sha256": "8cff473e81017594d20ec55d86b54bc635544897e13a7cfc12e36909c5309a2a",
+          "distribution": "shapely",
+          "version": "2.1.2"
+        }
+      ],
+      "lanes": [
+        {
+          "name": "without-planar",
+          "status": "passed",
+          "machine": "arm64",
+          "distributions": [
+            {
+              "name": "ANYgeometry",
+              "version": "0.4.3"
+            },
+            {
+              "name": "numpy",
+              "version": "2.5.3"
+            },
+            {
+              "name": "pip",
+              "version": "26.2.1"
+            }
+          ],
+          "cases": [
+            {
+              "name": "environment_before",
+              "status": "passed"
+            },
+            {
+              "name": "core",
+              "status": "passed"
+            },
+            {
+              "name": "planar",
+              "status": "passed"
+            },
+            {
+              "name": "environment_after",
+              "status": "passed"
+            }
+          ],
+          "origin_and_wheel_checks": [
+            {
+              "origins": {
+                "anygeometry": "/Users/runner/work/_temp/geometry-wheel-smoke/without-planar-venv/lib/python3.13/site-packages/anygeometry/__init__.py",
+                "numpy": "/Users/runner/work/_temp/geometry-wheel-smoke/without-planar-venv/lib/python3.13/site-packages/numpy/__init__.py"
+              },
+              "wheel_sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad",
+              "verified_files": 51
+            },
+            {
+              "origins": {
+                "anygeometry": "/Users/runner/work/_temp/geometry-wheel-smoke/without-planar-venv/lib/python3.13/site-packages/anygeometry/__init__.py",
+                "numpy": "/Users/runner/work/_temp/geometry-wheel-smoke/without-planar-venv/lib/python3.13/site-packages/numpy/__init__.py"
+              },
+              "wheel_sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad",
+              "verified_files": 51
+            }
+          ]
+        },
+        {
+          "name": "with-planar",
+          "status": "passed",
+          "machine": "arm64",
+          "distributions": [
+            {
+              "name": "ANYgeometry",
+              "version": "0.4.3"
+            },
+            {
+              "name": "numpy",
+              "version": "2.5.3"
+            },
+            {
+              "name": "pip",
+              "version": "26.2.1"
+            },
+            {
+              "name": "shapely",
+              "version": "2.1.2"
+            }
+          ],
+          "cases": [
+            {
+              "name": "environment_before",
+              "status": "passed"
+            },
+            {
+              "name": "core",
+              "status": "passed"
+            },
+            {
+              "name": "planar",
+              "status": "passed"
+            },
+            {
+              "name": "environment_after",
+              "status": "passed"
+            }
+          ],
+          "origin_and_wheel_checks": [
+            {
+              "origins": {
+                "anygeometry": "/Users/runner/work/_temp/geometry-wheel-smoke/with-planar-venv/lib/python3.13/site-packages/anygeometry/__init__.py",
+                "numpy": "/Users/runner/work/_temp/geometry-wheel-smoke/with-planar-venv/lib/python3.13/site-packages/numpy/__init__.py",
+                "shapely": "/Users/runner/work/_temp/geometry-wheel-smoke/with-planar-venv/lib/python3.13/site-packages/shapely/__init__.py"
+              },
+              "wheel_sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad",
+              "verified_files": 51
+            },
+            {
+              "origins": {
+                "anygeometry": "/Users/runner/work/_temp/geometry-wheel-smoke/with-planar-venv/lib/python3.13/site-packages/anygeometry/__init__.py",
+                "numpy": "/Users/runner/work/_temp/geometry-wheel-smoke/with-planar-venv/lib/python3.13/site-packages/numpy/__init__.py",
+                "shapely": "/Users/runner/work/_temp/geometry-wheel-smoke/with-planar-venv/lib/python3.13/site-packages/shapely/__init__.py"
+              },
+              "wheel_sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad",
+              "verified_files": 51
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "consumers-macos-15",
+      "artifact_id": 10685213357,
+      "run_attempt": 1,
+      "status": "passed",
+      "profile": "mesher",
+      "python": "3.13.15 (v3.13.15:4061bc4c35f, Aug  5 2026, 09:08:51) [Clang 21.0.0 (clang-2100.1.1.101)]",
+      "platform": "macOS-15.7.9-arm64-arm-64bit-Mach-O",
+      "checkout_commit": "275940a95be5c2c717ce0ef178f77d3a5399c9ca",
+      "probe_sha256": "b5675e1c6381d867c9d68a6803c69e7fee04bc8c3ffa214fd1bede1552eb082e",
+      "candidate": {
+        "filename": "anygeometry-0.4.3-py3-none-any.whl",
+        "bytes": 403847,
+        "sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad"
+      },
+      "baseline": {
+        "filename": "anygeometry-0.4.3-py3-none-any.whl",
+        "bytes": 402329,
+        "sha256": "6ab8f398de8ad1cc19b5c0d70a9787e1a15d3f5253c1125134eeb5050ec4b8b5"
+      },
+      "mcp": null,
+      "resolved_artifacts": [
+        {
+          "filename": "anygeometry-0.4.3-py3-none-any.whl",
+          "bytes": 403847,
+          "sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad",
+          "distribution": "anygeometry",
+          "version": "0.4.3"
+        },
+        {
+          "filename": "anymesher-0.5.0-cp313-cp313-macosx_11_0_arm64.whl",
+          "bytes": 560600,
+          "sha256": "f55da174e90d3f9229fc6bc9c497450558756bde56423c8ab9db86b1d7b1de77",
+          "distribution": "anymesher",
+          "version": "0.5.0"
+        },
+        {
+          "filename": "numpy-2.5.3-cp313-cp313-macosx_14_0_arm64.whl",
+          "bytes": 5439695,
+          "sha256": "f9a2353b37a1a9e78fd82b27ad7e2a32a2d036604d18f02b05e3136c62ca3b09",
+          "distribution": "numpy",
+          "version": "2.5.3"
+        },
+        {
+          "filename": "shapely-2.1.2-cp313-cp313-macosx_11_0_arm64.whl",
+          "bytes": 1642887,
+          "sha256": "8cff473e81017594d20ec55d86b54bc635544897e13a7cfc12e36909c5309a2a",
+          "distribution": "shapely",
+          "version": "2.1.2"
+        }
+      ],
+      "lanes": [
+        {
+          "name": "candidate",
+          "status": "passed",
+          "machine": "arm64",
+          "distributions": [
+            {
+              "name": "ANYgeometry",
+              "version": "0.4.3"
+            },
+            {
+              "name": "ANYmesher",
+              "version": "0.5.0"
+            },
+            {
+              "name": "numpy",
+              "version": "2.5.3"
+            },
+            {
+              "name": "pip",
+              "version": "26.2.1"
+            },
+            {
+              "name": "shapely",
+              "version": "2.1.2"
+            }
+          ],
+          "cases": [
+            {
+              "name": "environment_before",
+              "status": "passed"
+            },
+            {
+              "name": "core",
+              "status": "passed"
+            },
+            {
+              "name": "planar",
+              "status": "passed"
+            },
+            {
+              "name": "mesher",
+              "status": "passed"
+            },
+            {
+              "name": "environment_after",
+              "status": "passed"
+            }
+          ],
+          "origin_and_wheel_checks": [
+            {
+              "origins": {
+                "anygeometry": "/Users/runner/work/_temp/geometry-consumers/candidate-venv/lib/python3.13/site-packages/anygeometry/__init__.py",
+                "numpy": "/Users/runner/work/_temp/geometry-consumers/candidate-venv/lib/python3.13/site-packages/numpy/__init__.py",
+                "shapely": "/Users/runner/work/_temp/geometry-consumers/candidate-venv/lib/python3.13/site-packages/shapely/__init__.py",
+                "anymesher": "/Users/runner/work/_temp/geometry-consumers/candidate-venv/lib/python3.13/site-packages/anymesher/__init__.py"
+              },
+              "wheel_sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad",
+              "verified_files": 51
+            },
+            {
+              "origins": {
+                "anygeometry": "/Users/runner/work/_temp/geometry-consumers/candidate-venv/lib/python3.13/site-packages/anygeometry/__init__.py",
+                "numpy": "/Users/runner/work/_temp/geometry-consumers/candidate-venv/lib/python3.13/site-packages/numpy/__init__.py",
+                "shapely": "/Users/runner/work/_temp/geometry-consumers/candidate-venv/lib/python3.13/site-packages/shapely/__init__.py",
+                "anymesher": "/Users/runner/work/_temp/geometry-consumers/candidate-venv/lib/python3.13/site-packages/anymesher/__init__.py"
+              },
+              "wheel_sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad",
+              "verified_files": 51
+            }
+          ]
+        },
+        {
+          "name": "baseline",
+          "status": "passed",
+          "machine": "arm64",
+          "distributions": [
+            {
+              "name": "ANYgeometry",
+              "version": "0.4.3"
+            },
+            {
+              "name": "ANYmesher",
+              "version": "0.5.0"
+            },
+            {
+              "name": "numpy",
+              "version": "2.5.3"
+            },
+            {
+              "name": "pip",
+              "version": "26.2.1"
+            },
+            {
+              "name": "shapely",
+              "version": "2.1.2"
+            }
+          ],
+          "cases": [
+            {
+              "name": "environment_before",
+              "status": "passed"
+            },
+            {
+              "name": "core",
+              "status": "passed"
+            },
+            {
+              "name": "planar",
+              "status": "passed"
+            },
+            {
+              "name": "mesher",
+              "status": "passed"
+            },
+            {
+              "name": "environment_after",
+              "status": "passed"
+            }
+          ],
+          "origin_and_wheel_checks": [
+            {
+              "origins": {
+                "anygeometry": "/Users/runner/work/_temp/geometry-consumers/baseline-venv/lib/python3.13/site-packages/anygeometry/__init__.py",
+                "numpy": "/Users/runner/work/_temp/geometry-consumers/baseline-venv/lib/python3.13/site-packages/numpy/__init__.py",
+                "shapely": "/Users/runner/work/_temp/geometry-consumers/baseline-venv/lib/python3.13/site-packages/shapely/__init__.py",
+                "anymesher": "/Users/runner/work/_temp/geometry-consumers/baseline-venv/lib/python3.13/site-packages/anymesher/__init__.py"
+              },
+              "wheel_sha256": "6ab8f398de8ad1cc19b5c0d70a9787e1a15d3f5253c1125134eeb5050ec4b8b5",
+              "verified_files": 50
+            },
+            {
+              "origins": {
+                "anygeometry": "/Users/runner/work/_temp/geometry-consumers/baseline-venv/lib/python3.13/site-packages/anygeometry/__init__.py",
+                "numpy": "/Users/runner/work/_temp/geometry-consumers/baseline-venv/lib/python3.13/site-packages/numpy/__init__.py",
+                "shapely": "/Users/runner/work/_temp/geometry-consumers/baseline-venv/lib/python3.13/site-packages/shapely/__init__.py",
+                "anymesher": "/Users/runner/work/_temp/geometry-consumers/baseline-venv/lib/python3.13/site-packages/anymesher/__init__.py"
+              },
+              "wheel_sha256": "6ab8f398de8ad1cc19b5c0d70a9787e1a15d3f5253c1125134eeb5050ec4b8b5",
+              "verified_files": 50
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "wheel-smoke-windows-latest",
+      "artifact_id": 10685207628,
+      "run_attempt": 1,
+      "status": "passed",
+      "profile": "full",
+      "python": "3.13.15 (tags/v3.13.15:4061bc4, Aug  5 2026, 13:05:39) [MSC v.1944 64 bit (AMD64)]",
+      "platform": "Windows-2025Server-10.0.26100-SP0",
+      "checkout_commit": "275940a95be5c2c717ce0ef178f77d3a5399c9ca",
+      "probe_sha256": "98b2179540f3be5c1ec8504924da75b8c77182ede333c4c4aad54b3059366c05",
+      "candidate": {
+        "filename": "anygeometry-0.4.3-py3-none-any.whl",
+        "bytes": 403847,
+        "sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad"
+      },
+      "baseline": null,
+      "mcp": null,
+      "resolved_artifacts": [
+        {
+          "filename": "anygeometry-0.4.3-py3-none-any.whl",
+          "bytes": 403847,
+          "sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad",
+          "distribution": "anygeometry",
+          "version": "0.4.3"
+        },
+        {
+          "filename": "numpy-2.5.3-cp313-cp313-win_amd64.whl",
+          "bytes": 12560965,
+          "sha256": "71cad2b2a7451ab79d8f5e71b453485b6775963d5cf794179144a7463fe6e8ec",
+          "distribution": "numpy",
+          "version": "2.5.3"
+        },
+        {
+          "filename": "shapely-2.1.2-cp313-cp313-win_amd64.whl",
+          "bytes": 1722151,
+          "sha256": "ca2591bff6645c216695bdf1614fca9c82ea1144d4a7591a466fef64f28f0715",
+          "distribution": "shapely",
+          "version": "2.1.2"
+        }
+      ],
+      "lanes": [
+        {
+          "name": "without-planar",
+          "status": "passed",
+          "machine": "AMD64",
+          "distributions": [
+            {
+              "name": "ANYgeometry",
+              "version": "0.4.3"
+            },
+            {
+              "name": "numpy",
+              "version": "2.5.3"
+            },
+            {
+              "name": "pip",
+              "version": "26.2.1"
+            }
+          ],
+          "cases": [
+            {
+              "name": "environment_before",
+              "status": "passed"
+            },
+            {
+              "name": "core",
+              "status": "passed"
+            },
+            {
+              "name": "planar",
+              "status": "passed"
+            },
+            {
+              "name": "environment_after",
+              "status": "passed"
+            }
+          ],
+          "origin_and_wheel_checks": [
+            {
+              "origins": {
+                "anygeometry": "D:\\a\\_temp\\geometry-wheel-smoke\\without-planar-venv\\Lib\\site-packages\\anygeometry\\__init__.py",
+                "numpy": "D:\\a\\_temp\\geometry-wheel-smoke\\without-planar-venv\\Lib\\site-packages\\numpy\\__init__.py"
+              },
+              "wheel_sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad",
+              "verified_files": 51
+            },
+            {
+              "origins": {
+                "anygeometry": "D:\\a\\_temp\\geometry-wheel-smoke\\without-planar-venv\\Lib\\site-packages\\anygeometry\\__init__.py",
+                "numpy": "D:\\a\\_temp\\geometry-wheel-smoke\\without-planar-venv\\Lib\\site-packages\\numpy\\__init__.py"
+              },
+              "wheel_sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad",
+              "verified_files": 51
+            }
+          ]
+        },
+        {
+          "name": "with-planar",
+          "status": "passed",
+          "machine": "AMD64",
+          "distributions": [
+            {
+              "name": "ANYgeometry",
+              "version": "0.4.3"
+            },
+            {
+              "name": "numpy",
+              "version": "2.5.3"
+            },
+            {
+              "name": "pip",
+              "version": "26.2.1"
+            },
+            {
+              "name": "shapely",
+              "version": "2.1.2"
+            }
+          ],
+          "cases": [
+            {
+              "name": "environment_before",
+              "status": "passed"
+            },
+            {
+              "name": "core",
+              "status": "passed"
+            },
+            {
+              "name": "planar",
+              "status": "passed"
+            },
+            {
+              "name": "environment_after",
+              "status": "passed"
+            }
+          ],
+          "origin_and_wheel_checks": [
+            {
+              "origins": {
+                "anygeometry": "D:\\a\\_temp\\geometry-wheel-smoke\\with-planar-venv\\Lib\\site-packages\\anygeometry\\__init__.py",
+                "numpy": "D:\\a\\_temp\\geometry-wheel-smoke\\with-planar-venv\\Lib\\site-packages\\numpy\\__init__.py",
+                "shapely": "D:\\a\\_temp\\geometry-wheel-smoke\\with-planar-venv\\Lib\\site-packages\\shapely\\__init__.py"
+              },
+              "wheel_sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad",
+              "verified_files": 51
+            },
+            {
+              "origins": {
+                "anygeometry": "D:\\a\\_temp\\geometry-wheel-smoke\\with-planar-venv\\Lib\\site-packages\\anygeometry\\__init__.py",
+                "numpy": "D:\\a\\_temp\\geometry-wheel-smoke\\with-planar-venv\\Lib\\site-packages\\numpy\\__init__.py",
+                "shapely": "D:\\a\\_temp\\geometry-wheel-smoke\\with-planar-venv\\Lib\\site-packages\\shapely\\__init__.py"
+              },
+              "wheel_sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad",
+              "verified_files": 51
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "wheel-smoke-macos-15-intel",
+      "artifact_id": 10685193327,
+      "run_attempt": 1,
+      "status": "passed",
+      "profile": "full",
+      "python": "3.13.15 (v3.13.15:4061bc4c35f, Aug  5 2026, 09:08:51) [Clang 21.0.0 (clang-2100.1.1.101)]",
+      "platform": "macOS-15.7.9-x86_64-i386-64bit-Mach-O",
+      "checkout_commit": "275940a95be5c2c717ce0ef178f77d3a5399c9ca",
+      "probe_sha256": "b5675e1c6381d867c9d68a6803c69e7fee04bc8c3ffa214fd1bede1552eb082e",
+      "candidate": {
+        "filename": "anygeometry-0.4.3-py3-none-any.whl",
+        "bytes": 403847,
+        "sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad"
+      },
+      "baseline": null,
+      "mcp": null,
+      "resolved_artifacts": [
+        {
+          "filename": "anygeometry-0.4.3-py3-none-any.whl",
+          "bytes": 403847,
+          "sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad",
+          "distribution": "anygeometry",
+          "version": "0.4.3"
+        },
+        {
+          "filename": "numpy-2.5.3-cp313-cp313-macosx_14_0_x86_64.whl",
+          "bytes": 6779395,
+          "sha256": "ccbc4665079665c3cf3bab4db9f6b095370cd6437d66be549b6c2a1fd19e1958",
+          "distribution": "numpy",
+          "version": "2.5.3"
+        },
+        {
+          "filename": "shapely-2.1.2-cp313-cp313-macosx_10_13_x86_64.whl",
+          "bytes": 1832644,
+          "sha256": "b510dda1a3672d6879beb319bc7c5fd302c6c354584690973c838f46ec3e0fa8",
+          "distribution": "shapely",
+          "version": "2.1.2"
+        }
+      ],
+      "lanes": [
+        {
+          "name": "without-planar",
+          "status": "passed",
+          "machine": "x86_64",
+          "distributions": [
+            {
+              "name": "ANYgeometry",
+              "version": "0.4.3"
+            },
+            {
+              "name": "numpy",
+              "version": "2.5.3"
+            },
+            {
+              "name": "pip",
+              "version": "26.2.1"
+            }
+          ],
+          "cases": [
+            {
+              "name": "environment_before",
+              "status": "passed"
+            },
+            {
+              "name": "core",
+              "status": "passed"
+            },
+            {
+              "name": "planar",
+              "status": "passed"
+            },
+            {
+              "name": "environment_after",
+              "status": "passed"
+            }
+          ],
+          "origin_and_wheel_checks": [
+            {
+              "origins": {
+                "anygeometry": "/Users/runner/work/_temp/geometry-wheel-smoke/without-planar-venv/lib/python3.13/site-packages/anygeometry/__init__.py",
+                "numpy": "/Users/runner/work/_temp/geometry-wheel-smoke/without-planar-venv/lib/python3.13/site-packages/numpy/__init__.py"
+              },
+              "wheel_sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad",
+              "verified_files": 51
+            },
+            {
+              "origins": {
+                "anygeometry": "/Users/runner/work/_temp/geometry-wheel-smoke/without-planar-venv/lib/python3.13/site-packages/anygeometry/__init__.py",
+                "numpy": "/Users/runner/work/_temp/geometry-wheel-smoke/without-planar-venv/lib/python3.13/site-packages/numpy/__init__.py"
+              },
+              "wheel_sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad",
+              "verified_files": 51
+            }
+          ]
+        },
+        {
+          "name": "with-planar",
+          "status": "passed",
+          "machine": "x86_64",
+          "distributions": [
+            {
+              "name": "ANYgeometry",
+              "version": "0.4.3"
+            },
+            {
+              "name": "numpy",
+              "version": "2.5.3"
+            },
+            {
+              "name": "pip",
+              "version": "26.2.1"
+            },
+            {
+              "name": "shapely",
+              "version": "2.1.2"
+            }
+          ],
+          "cases": [
+            {
+              "name": "environment_before",
+              "status": "passed"
+            },
+            {
+              "name": "core",
+              "status": "passed"
+            },
+            {
+              "name": "planar",
+              "status": "passed"
+            },
+            {
+              "name": "environment_after",
+              "status": "passed"
+            }
+          ],
+          "origin_and_wheel_checks": [
+            {
+              "origins": {
+                "anygeometry": "/Users/runner/work/_temp/geometry-wheel-smoke/with-planar-venv/lib/python3.13/site-packages/anygeometry/__init__.py",
+                "numpy": "/Users/runner/work/_temp/geometry-wheel-smoke/with-planar-venv/lib/python3.13/site-packages/numpy/__init__.py",
+                "shapely": "/Users/runner/work/_temp/geometry-wheel-smoke/with-planar-venv/lib/python3.13/site-packages/shapely/__init__.py"
+              },
+              "wheel_sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad",
+              "verified_files": 51
+            },
+            {
+              "origins": {
+                "anygeometry": "/Users/runner/work/_temp/geometry-wheel-smoke/with-planar-venv/lib/python3.13/site-packages/anygeometry/__init__.py",
+                "numpy": "/Users/runner/work/_temp/geometry-wheel-smoke/with-planar-venv/lib/python3.13/site-packages/numpy/__init__.py",
+                "shapely": "/Users/runner/work/_temp/geometry-wheel-smoke/with-planar-venv/lib/python3.13/site-packages/shapely/__init__.py"
+              },
+              "wheel_sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad",
+              "verified_files": 51
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "mcp-consumers-ubuntu-latest",
+      "artifact_id": 10687945454,
+      "run_attempt": 3,
+      "status": "passed",
+      "profile": "mcp",
+      "python": "3.13.15 (main, Aug  6 2026, 02:15:18) [GCC 13.3.0]",
+      "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+      "checkout_commit": "275940a95be5c2c717ce0ef178f77d3a5399c9ca",
+      "probe_sha256": "b5675e1c6381d867c9d68a6803c69e7fee04bc8c3ffa214fd1bede1552eb082e",
+      "candidate": {
+        "filename": "anygeometry-0.4.3-py3-none-any.whl",
+        "bytes": 403847,
+        "sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad"
+      },
+      "baseline": {
+        "filename": "anygeometry-0.4.3-py3-none-any.whl",
+        "bytes": 402329,
+        "sha256": "6ab8f398de8ad1cc19b5c0d70a9787e1a15d3f5253c1125134eeb5050ec4b8b5"
+      },
+      "mcp": {
+        "filename": "anygeometry_mcp-0.1.0-py3-none-any.whl",
+        "bytes": 5474,
+        "sha256": "cc596d6e0a8dac556aebf46343d838ee4969e1d4f229c570178760cce6bc9832",
+        "source": "4253c001b07263fa2e9015082cf4950db65cd2d3",
+        "archive": {
+          "filename": "mcp-source.tar",
+          "bytes": 30720,
+          "sha256": "2a84d2e1809b69a321d2ec74b2db48c7c7629f146177b02dc7503c3b6e944259"
+        }
+      },
+      "resolved_artifacts": [
+        {
+          "filename": "annotated_types-0.8.0-py3-none-any.whl",
+          "bytes": 13427,
+          "sha256": "f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0",
+          "distribution": "annotated-types",
+          "version": "0.8.0"
+        },
+        {
+          "filename": "anygeometry-0.4.3-py3-none-any.whl",
+          "bytes": 403847,
+          "sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad",
+          "distribution": "anygeometry",
+          "version": "0.4.3"
+        },
+        {
+          "filename": "anygeometry_mcp-0.1.0-py3-none-any.whl",
+          "bytes": 5474,
+          "sha256": "cc596d6e0a8dac556aebf46343d838ee4969e1d4f229c570178760cce6bc9832",
+          "distribution": "anygeometry-mcp",
+          "version": "0.1.0"
+        },
+        {
+          "filename": "anyio-4.15.1-py3-none-any.whl",
+          "bytes": 132079,
+          "sha256": "6152fdbbf9a77fdec97731721bebf7c4c44f7c29b424b0065826173efc7ed101",
+          "distribution": "anyio",
+          "version": "4.15.1"
+        },
+        {
+          "filename": "attrs-26.1.0-py3-none-any.whl",
+          "bytes": 67548,
+          "sha256": "c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309",
+          "distribution": "attrs",
+          "version": "26.1.0"
+        },
+        {
+          "filename": "cffi-2.1.1-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+          "bytes": 221824,
+          "sha256": "a931079504ecc49efed7744c476a5c343a92fabf66dec2db95edb1b2fdc770e2",
+          "distribution": "cffi",
+          "version": "2.1.1"
+        },
+        {
+          "filename": "click-8.5.0-py3-none-any.whl",
+          "bytes": 125251,
+          "sha256": "255bc9599cf7748b4b1a446ccc735421bd08a2ae529a8b88597d3de5664ee360",
+          "distribution": "click",
+          "version": "8.5.0"
+        },
+        {
+          "filename": "cryptography-50.0.1-cp311-abi3-manylinux_2_34_x86_64.whl",
+          "bytes": 4746230,
+          "sha256": "51afcfceb15597cf2635068e4ac9a56b2abde622edde17f37d85fd7b5306497a",
+          "distribution": "cryptography",
+          "version": "50.0.1"
+        },
+        {
+          "filename": "h11-0.16.0-py3-none-any.whl",
+          "bytes": 37515,
+          "sha256": "63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86",
+          "distribution": "h11",
+          "version": "0.16.0"
+        },
+        {
+          "filename": "httpcore2-2.13.0-py3-none-any.whl",
+          "bytes": 83162,
+          "sha256": "35ae5be347aa40467b4a5dc032ac67ebb6d27189fc97e8cebcf99616f6a1bb9e",
+          "distribution": "httpcore2",
+          "version": "2.13.0"
+        },
+        {
+          "filename": "httpx2-2.13.0-py3-none-any.whl",
+          "bytes": 95565,
+          "sha256": "fc12720cedf72faa26cca6b4ca394e05c894e7d7933fc45cafe767960804e49a",
+          "distribution": "httpx2",
+          "version": "2.13.0"
+        },
+        {
+          "filename": "idna-3.20-py3-none-any.whl",
+          "bytes": 69583,
+          "sha256": "ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c",
+          "distribution": "idna",
+          "version": "3.20"
+        },
+        {
+          "filename": "jsonschema-4.26.0-py3-none-any.whl",
+          "bytes": 90630,
+          "sha256": "d489f15263b8d200f8387e64b4c3a75f06629559fb73deb8fdfb525f2dab50ce",
+          "distribution": "jsonschema",
+          "version": "4.26.0"
+        },
+        {
+          "filename": "jsonschema_specifications-2025.9.1-py3-none-any.whl",
+          "bytes": 18437,
+          "sha256": "98802fee3a11ee76ecaca44429fda8a41bff98b00a0f2838151b113f210cc6fe",
+          "distribution": "jsonschema-specifications",
+          "version": "2025.9.1"
+        },
+        {
+          "filename": "mcp-2.2.0-py3-none-any.whl",
+          "bytes": 365656,
+          "sha256": "bde982589473a060ae145e3406e9a5333fe538c97229ba841f5a7f92be004f81",
+          "distribution": "mcp",
+          "version": "2.2.0"
+        },
+        {
+          "filename": "mcp_types-2.2.0-py3-none-any.whl",
+          "bytes": 69106,
+          "sha256": "ea476b73ee86709ab5abc9452385ed36cc05907e582355622e294595c9a04f13",
+          "distribution": "mcp-types",
+          "version": "2.2.0"
+        },
+        {
+          "filename": "numpy-2.5.3-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+          "bytes": 16708577,
+          "sha256": "a5fa86b80fd24bcd1aff83ad23be44ea323de3f787be8f8b15d4a65621e25321",
+          "distribution": "numpy",
+          "version": "2.5.3"
+        },
+        {
+          "filename": "opentelemetry_api-1.44.0-py3-none-any.whl",
+          "bytes": 60018,
+          "sha256": "94b98c893a91b88657eaac1e3ba89618cdb85be6918196705354f34728b2cdef",
+          "distribution": "opentelemetry-api",
+          "version": "1.44.0"
+        },
+        {
+          "filename": "pycparser-3.0-py3-none-any.whl",
+          "bytes": 48172,
+          "sha256": "b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992",
+          "distribution": "pycparser",
+          "version": "3.0"
+        },
+        {
+          "filename": "pydantic-2.13.5-py3-none-any.whl",
+          "bytes": 472589,
+          "sha256": "346a034f080da3755d8e9cb5e00e8b07de1d39e4f6e2c87d8ab7cafa0b269a73",
+          "distribution": "pydantic",
+          "version": "2.13.5"
+        },
+        {
+          "filename": "pydantic_core-2.46.5-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+          "bytes": 2066633,
+          "sha256": "6f7b393a8b3da82f5c1fc0751e6d01ac6c55b93c18226a60bdfba4a724efafd1",
+          "distribution": "pydantic-core",
+          "version": "2.46.5"
+        },
+        {
+          "filename": "pyjwt-2.14.0-py3-none-any.whl",
+          "bytes": 32896,
+          "sha256": "ad0cef71c756a56e74863c2919cf0985f72decbcfcb550ee2f422e7c62b5eedc",
+          "distribution": "pyjwt",
+          "version": "2.14.0"
+        },
+        {
+          "filename": "python_multipart-0.0.32-py3-none-any.whl",
+          "bytes": 30042,
+          "sha256": "ff6d3f776f16878c894e52e107296ffc890e913c611b1a4ec6c44e2821fe2e23",
+          "distribution": "python-multipart",
+          "version": "0.0.32"
+        },
+        {
+          "filename": "referencing-0.37.0-py3-none-any.whl",
+          "bytes": 26766,
+          "sha256": "381329a9f99628c9069361716891d34ad94af76e461dcb0335825aecc7692231",
+          "distribution": "referencing",
+          "version": "0.37.0"
+        },
+        {
+          "filename": "rpds_py-2026.6.3-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+          "bytes": 365678,
+          "sha256": "acac386b453c2516111b50985d60ce46e7fadb5ea71ae7b25f4c946935bf27cf",
+          "distribution": "rpds-py",
+          "version": "2026.6.3"
+        },
+        {
+          "filename": "shapely-2.1.2-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+          "bytes": 3082855,
+          "sha256": "7ed1a5bbfb386ee8332713bf7508bc24e32d24b74fc9a7b9f8529a55db9f4ee6",
+          "distribution": "shapely",
+          "version": "2.1.2"
+        },
+        {
+          "filename": "sse_starlette-3.4.11-py3-none-any.whl",
+          "bytes": 17122,
+          "sha256": "c7b2244bdff016fe7f64e10075e89a3e6bbf899649cc89b0fe884b5545042453",
+          "distribution": "sse-starlette",
+          "version": "3.4.11"
+        },
+        {
+          "filename": "starlette-1.6.0-py3-none-any.whl",
+          "bytes": 75969,
+          "sha256": "a86dd39d14bb45f85a3d18525215a9ef0cfd1f192ac793220e72598c90335f0c",
+          "distribution": "starlette",
+          "version": "1.6.0"
+        },
+        {
+          "filename": "truststore-0.10.4-py3-none-any.whl",
+          "bytes": 18660,
+          "sha256": "adaeaecf1cbb5f4de3b1959b42d41f6fab57b2b1666adb59e89cb0b53361d981",
+          "distribution": "truststore",
+          "version": "0.10.4"
+        },
+        {
+          "filename": "typing_extensions-4.16.0-py3-none-any.whl",
+          "bytes": 45571,
+          "sha256": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8",
+          "distribution": "typing-extensions",
+          "version": "4.16.0"
+        },
+        {
+          "filename": "typing_inspection-0.4.4-py3-none-any.whl",
+          "bytes": 14750,
+          "sha256": "65b8397ba37ccbce054456aaccddfc91e6e3083c92824df348d96ca832f3f147",
+          "distribution": "typing-inspection",
+          "version": "0.4.4"
+        },
+        {
+          "filename": "uvicorn-0.53.0-py3-none-any.whl",
+          "bytes": 87081,
+          "sha256": "e8dca71ec86dce5f04e333f0d56cdedf942446e6643b9cea1af0d6d3a02cb03e",
+          "distribution": "uvicorn",
+          "version": "0.53.0"
+        }
+      ],
+      "lanes": [
+        {
+          "name": "candidate",
+          "status": "passed",
+          "machine": "x86_64",
+          "distributions": [
+            {
+              "name": "annotated-types",
+              "version": "0.8.0"
+            },
+            {
+              "name": "ANYgeometry",
+              "version": "0.4.3"
+            },
+            {
+              "name": "ANYgeometry-mcp",
+              "version": "0.1.0"
+            },
+            {
+              "name": "anyio",
+              "version": "4.15.1"
+            },
+            {
+              "name": "attrs",
+              "version": "26.1.0"
+            },
+            {
+              "name": "cffi",
+              "version": "2.1.1"
+            },
+            {
+              "name": "click",
+              "version": "8.5.0"
+            },
+            {
+              "name": "cryptography",
+              "version": "50.0.1"
+            },
+            {
+              "name": "h11",
+              "version": "0.16.0"
+            },
+            {
+              "name": "httpcore2",
+              "version": "2.13.0"
+            },
+            {
+              "name": "httpx2",
+              "version": "2.13.0"
+            },
+            {
+              "name": "idna",
+              "version": "3.20"
+            },
+            {
+              "name": "jsonschema",
+              "version": "4.26.0"
+            },
+            {
+              "name": "jsonschema-specifications",
+              "version": "2025.9.1"
+            },
+            {
+              "name": "mcp",
+              "version": "2.2.0"
+            },
+            {
+              "name": "mcp-types",
+              "version": "2.2.0"
+            },
+            {
+              "name": "numpy",
+              "version": "2.5.3"
+            },
+            {
+              "name": "opentelemetry-api",
+              "version": "1.44.0"
+            },
+            {
+              "name": "pip",
+              "version": "26.2.1"
+            },
+            {
+              "name": "pycparser",
+              "version": "3.0"
+            },
+            {
+              "name": "pydantic",
+              "version": "2.13.5"
+            },
+            {
+              "name": "pydantic_core",
+              "version": "2.46.5"
+            },
+            {
+              "name": "PyJWT",
+              "version": "2.14.0"
+            },
+            {
+              "name": "python-multipart",
+              "version": "0.0.32"
+            },
+            {
+              "name": "referencing",
+              "version": "0.37.0"
+            },
+            {
+              "name": "rpds-py",
+              "version": "2026.6.3"
+            },
+            {
+              "name": "shapely",
+              "version": "2.1.2"
+            },
+            {
+              "name": "sse-starlette",
+              "version": "3.4.11"
+            },
+            {
+              "name": "starlette",
+              "version": "1.6.0"
+            },
+            {
+              "name": "truststore",
+              "version": "0.10.4"
+            },
+            {
+              "name": "typing-inspection",
+              "version": "0.4.4"
+            },
+            {
+              "name": "typing_extensions",
+              "version": "4.16.0"
+            },
+            {
+              "name": "uvicorn",
+              "version": "0.53.0"
+            }
+          ],
+          "cases": [
+            {
+              "name": "environment_before",
+              "status": "passed"
+            },
+            {
+              "name": "core",
+              "status": "passed"
+            },
+            {
+              "name": "planar",
+              "status": "passed"
+            },
+            {
+              "name": "mcp",
+              "status": "passed"
+            },
+            {
+              "name": "environment_after",
+              "status": "passed"
+            }
+          ],
+          "origin_and_wheel_checks": [
+            {
+              "origins": {
+                "anygeometry": "/home/runner/work/_temp/geometry-mcp/candidate-venv/lib/python3.13/site-packages/anygeometry/__init__.py",
+                "numpy": "/home/runner/work/_temp/geometry-mcp/candidate-venv/lib/python3.13/site-packages/numpy/__init__.py",
+                "shapely": "/home/runner/work/_temp/geometry-mcp/candidate-venv/lib/python3.13/site-packages/shapely/__init__.py",
+                "anygeometry_mcp": "/home/runner/work/_temp/geometry-mcp/candidate-venv/lib/python3.13/site-packages/anygeometry_mcp/__init__.py",
+                "mcp": "/home/runner/work/_temp/geometry-mcp/candidate-venv/lib/python3.13/site-packages/mcp/__init__.py"
+              },
+              "wheel_sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad",
+              "verified_files": 51
+            },
+            {
+              "origins": {
+                "anygeometry": "/home/runner/work/_temp/geometry-mcp/candidate-venv/lib/python3.13/site-packages/anygeometry/__init__.py",
+                "numpy": "/home/runner/work/_temp/geometry-mcp/candidate-venv/lib/python3.13/site-packages/numpy/__init__.py",
+                "shapely": "/home/runner/work/_temp/geometry-mcp/candidate-venv/lib/python3.13/site-packages/shapely/__init__.py",
+                "anygeometry_mcp": "/home/runner/work/_temp/geometry-mcp/candidate-venv/lib/python3.13/site-packages/anygeometry_mcp/__init__.py",
+                "mcp": "/home/runner/work/_temp/geometry-mcp/candidate-venv/lib/python3.13/site-packages/mcp/__init__.py"
+              },
+              "wheel_sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad",
+              "verified_files": 51
+            }
+          ]
+        },
+        {
+          "name": "baseline",
+          "status": "passed",
+          "machine": "x86_64",
+          "distributions": [
+            {
+              "name": "annotated-types",
+              "version": "0.8.0"
+            },
+            {
+              "name": "ANYgeometry",
+              "version": "0.4.3"
+            },
+            {
+              "name": "ANYgeometry-mcp",
+              "version": "0.1.0"
+            },
+            {
+              "name": "anyio",
+              "version": "4.15.1"
+            },
+            {
+              "name": "attrs",
+              "version": "26.1.0"
+            },
+            {
+              "name": "cffi",
+              "version": "2.1.1"
+            },
+            {
+              "name": "click",
+              "version": "8.5.0"
+            },
+            {
+              "name": "cryptography",
+              "version": "50.0.1"
+            },
+            {
+              "name": "h11",
+              "version": "0.16.0"
+            },
+            {
+              "name": "httpcore2",
+              "version": "2.13.0"
+            },
+            {
+              "name": "httpx2",
+              "version": "2.13.0"
+            },
+            {
+              "name": "idna",
+              "version": "3.20"
+            },
+            {
+              "name": "jsonschema",
+              "version": "4.26.0"
+            },
+            {
+              "name": "jsonschema-specifications",
+              "version": "2025.9.1"
+            },
+            {
+              "name": "mcp",
+              "version": "2.2.0"
+            },
+            {
+              "name": "mcp-types",
+              "version": "2.2.0"
+            },
+            {
+              "name": "numpy",
+              "version": "2.5.3"
+            },
+            {
+              "name": "opentelemetry-api",
+              "version": "1.44.0"
+            },
+            {
+              "name": "pip",
+              "version": "26.2.1"
+            },
+            {
+              "name": "pycparser",
+              "version": "3.0"
+            },
+            {
+              "name": "pydantic",
+              "version": "2.13.5"
+            },
+            {
+              "name": "pydantic_core",
+              "version": "2.46.5"
+            },
+            {
+              "name": "PyJWT",
+              "version": "2.14.0"
+            },
+            {
+              "name": "python-multipart",
+              "version": "0.0.32"
+            },
+            {
+              "name": "referencing",
+              "version": "0.37.0"
+            },
+            {
+              "name": "rpds-py",
+              "version": "2026.6.3"
+            },
+            {
+              "name": "shapely",
+              "version": "2.1.2"
+            },
+            {
+              "name": "sse-starlette",
+              "version": "3.4.11"
+            },
+            {
+              "name": "starlette",
+              "version": "1.6.0"
+            },
+            {
+              "name": "truststore",
+              "version": "0.10.4"
+            },
+            {
+              "name": "typing-inspection",
+              "version": "0.4.4"
+            },
+            {
+              "name": "typing_extensions",
+              "version": "4.16.0"
+            },
+            {
+              "name": "uvicorn",
+              "version": "0.53.0"
+            }
+          ],
+          "cases": [
+            {
+              "name": "environment_before",
+              "status": "passed"
+            },
+            {
+              "name": "core",
+              "status": "passed"
+            },
+            {
+              "name": "planar",
+              "status": "passed"
+            },
+            {
+              "name": "mcp",
+              "status": "passed"
+            },
+            {
+              "name": "environment_after",
+              "status": "passed"
+            }
+          ],
+          "origin_and_wheel_checks": [
+            {
+              "origins": {
+                "anygeometry": "/home/runner/work/_temp/geometry-mcp/baseline-venv/lib/python3.13/site-packages/anygeometry/__init__.py",
+                "numpy": "/home/runner/work/_temp/geometry-mcp/baseline-venv/lib/python3.13/site-packages/numpy/__init__.py",
+                "shapely": "/home/runner/work/_temp/geometry-mcp/baseline-venv/lib/python3.13/site-packages/shapely/__init__.py",
+                "anygeometry_mcp": "/home/runner/work/_temp/geometry-mcp/baseline-venv/lib/python3.13/site-packages/anygeometry_mcp/__init__.py",
+                "mcp": "/home/runner/work/_temp/geometry-mcp/baseline-venv/lib/python3.13/site-packages/mcp/__init__.py"
+              },
+              "wheel_sha256": "6ab8f398de8ad1cc19b5c0d70a9787e1a15d3f5253c1125134eeb5050ec4b8b5",
+              "verified_files": 50
+            },
+            {
+              "origins": {
+                "anygeometry": "/home/runner/work/_temp/geometry-mcp/baseline-venv/lib/python3.13/site-packages/anygeometry/__init__.py",
+                "numpy": "/home/runner/work/_temp/geometry-mcp/baseline-venv/lib/python3.13/site-packages/numpy/__init__.py",
+                "shapely": "/home/runner/work/_temp/geometry-mcp/baseline-venv/lib/python3.13/site-packages/shapely/__init__.py",
+                "anygeometry_mcp": "/home/runner/work/_temp/geometry-mcp/baseline-venv/lib/python3.13/site-packages/anygeometry_mcp/__init__.py",
+                "mcp": "/home/runner/work/_temp/geometry-mcp/baseline-venv/lib/python3.13/site-packages/mcp/__init__.py"
+              },
+              "wheel_sha256": "6ab8f398de8ad1cc19b5c0d70a9787e1a15d3f5253c1125134eeb5050ec4b8b5",
+              "verified_files": 50
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "mcp-consumers-windows-latest",
+      "artifact_id": 10687860610,
+      "run_attempt": 3,
+      "status": "passed",
+      "profile": "mcp",
+      "python": "3.13.15 (tags/v3.13.15:4061bc4, Aug  5 2026, 13:05:39) [MSC v.1944 64 bit (AMD64)]",
+      "platform": "Windows-2025Server-10.0.26100-SP0",
+      "checkout_commit": "275940a95be5c2c717ce0ef178f77d3a5399c9ca",
+      "probe_sha256": "98b2179540f3be5c1ec8504924da75b8c77182ede333c4c4aad54b3059366c05",
+      "candidate": {
+        "filename": "anygeometry-0.4.3-py3-none-any.whl",
+        "bytes": 403847,
+        "sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad"
+      },
+      "baseline": {
+        "filename": "anygeometry-0.4.3-py3-none-any.whl",
+        "bytes": 402329,
+        "sha256": "6ab8f398de8ad1cc19b5c0d70a9787e1a15d3f5253c1125134eeb5050ec4b8b5"
+      },
+      "mcp": {
+        "filename": "anygeometry_mcp-0.1.0-py3-none-any.whl",
+        "bytes": 5511,
+        "sha256": "bcacc8dc9b7f992ff390260a57b42d59d212a1cab3cc164e9fffb7dd96f6b379",
+        "source": "4253c001b07263fa2e9015082cf4950db65cd2d3",
+        "archive": {
+          "filename": "mcp-source.tar",
+          "bytes": 30720,
+          "sha256": "20a3d376b561b96808c2fbf9d03f6ec8b0d8428501b48e0f4d5554afa1be5e63"
+        }
+      },
+      "resolved_artifacts": [
+        {
+          "filename": "annotated_types-0.8.0-py3-none-any.whl",
+          "bytes": 13427,
+          "sha256": "f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0",
+          "distribution": "annotated-types",
+          "version": "0.8.0"
+        },
+        {
+          "filename": "anygeometry-0.4.3-py3-none-any.whl",
+          "bytes": 403847,
+          "sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad",
+          "distribution": "anygeometry",
+          "version": "0.4.3"
+        },
+        {
+          "filename": "anygeometry_mcp-0.1.0-py3-none-any.whl",
+          "bytes": 5511,
+          "sha256": "bcacc8dc9b7f992ff390260a57b42d59d212a1cab3cc164e9fffb7dd96f6b379",
+          "distribution": "anygeometry-mcp",
+          "version": "0.1.0"
+        },
+        {
+          "filename": "anyio-4.15.1-py3-none-any.whl",
+          "bytes": 132079,
+          "sha256": "6152fdbbf9a77fdec97731721bebf7c4c44f7c29b424b0065826173efc7ed101",
+          "distribution": "anyio",
+          "version": "4.15.1"
+        },
+        {
+          "filename": "attrs-26.1.0-py3-none-any.whl",
+          "bytes": 67548,
+          "sha256": "c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309",
+          "distribution": "attrs",
+          "version": "26.1.0"
+        },
+        {
+          "filename": "cffi-2.1.1-cp313-cp313-win_amd64.whl",
+          "bytes": 185688,
+          "sha256": "1aa5645c30469b09530c4ebca77ebf8f17618293c58f8549cb1a543a50236e7d",
+          "distribution": "cffi",
+          "version": "2.1.1"
+        },
+        {
+          "filename": "click-8.5.0-py3-none-any.whl",
+          "bytes": 125251,
+          "sha256": "255bc9599cf7748b4b1a446ccc735421bd08a2ae529a8b88597d3de5664ee360",
+          "distribution": "click",
+          "version": "8.5.0"
+        },
+        {
+          "filename": "cryptography-50.0.1-cp311-abi3-win_amd64.whl",
+          "bytes": 3842826,
+          "sha256": "aed8db4f6d71c51efb89530e12d9464e7bf2923d46c3205dc794a2a93f8c0648",
+          "distribution": "cryptography",
+          "version": "50.0.1"
+        },
+        {
+          "filename": "h11-0.16.0-py3-none-any.whl",
+          "bytes": 37515,
+          "sha256": "63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86",
+          "distribution": "h11",
+          "version": "0.16.0"
+        },
+        {
+          "filename": "httpcore2-2.13.0-py3-none-any.whl",
+          "bytes": 83162,
+          "sha256": "35ae5be347aa40467b4a5dc032ac67ebb6d27189fc97e8cebcf99616f6a1bb9e",
+          "distribution": "httpcore2",
+          "version": "2.13.0"
+        },
+        {
+          "filename": "httpx2-2.13.0-py3-none-any.whl",
+          "bytes": 95565,
+          "sha256": "fc12720cedf72faa26cca6b4ca394e05c894e7d7933fc45cafe767960804e49a",
+          "distribution": "httpx2",
+          "version": "2.13.0"
+        },
+        {
+          "filename": "idna-3.20-py3-none-any.whl",
+          "bytes": 69583,
+          "sha256": "ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c",
+          "distribution": "idna",
+          "version": "3.20"
+        },
+        {
+          "filename": "jsonschema-4.26.0-py3-none-any.whl",
+          "bytes": 90630,
+          "sha256": "d489f15263b8d200f8387e64b4c3a75f06629559fb73deb8fdfb525f2dab50ce",
+          "distribution": "jsonschema",
+          "version": "4.26.0"
+        },
+        {
+          "filename": "jsonschema_specifications-2025.9.1-py3-none-any.whl",
+          "bytes": 18437,
+          "sha256": "98802fee3a11ee76ecaca44429fda8a41bff98b00a0f2838151b113f210cc6fe",
+          "distribution": "jsonschema-specifications",
+          "version": "2025.9.1"
+        },
+        {
+          "filename": "mcp-2.2.0-py3-none-any.whl",
+          "bytes": 365656,
+          "sha256": "bde982589473a060ae145e3406e9a5333fe538c97229ba841f5a7f92be004f81",
+          "distribution": "mcp",
+          "version": "2.2.0"
+        },
+        {
+          "filename": "mcp_types-2.2.0-py3-none-any.whl",
+          "bytes": 69106,
+          "sha256": "ea476b73ee86709ab5abc9452385ed36cc05907e582355622e294595c9a04f13",
+          "distribution": "mcp-types",
+          "version": "2.2.0"
+        },
+        {
+          "filename": "numpy-2.5.3-cp313-cp313-win_amd64.whl",
+          "bytes": 12560965,
+          "sha256": "71cad2b2a7451ab79d8f5e71b453485b6775963d5cf794179144a7463fe6e8ec",
+          "distribution": "numpy",
+          "version": "2.5.3"
+        },
+        {
+          "filename": "opentelemetry_api-1.44.0-py3-none-any.whl",
+          "bytes": 60018,
+          "sha256": "94b98c893a91b88657eaac1e3ba89618cdb85be6918196705354f34728b2cdef",
+          "distribution": "opentelemetry-api",
+          "version": "1.44.0"
+        },
+        {
+          "filename": "pycparser-3.0-py3-none-any.whl",
+          "bytes": 48172,
+          "sha256": "b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992",
+          "distribution": "pycparser",
+          "version": "3.0"
+        },
+        {
+          "filename": "pydantic-2.13.5-py3-none-any.whl",
+          "bytes": 472589,
+          "sha256": "346a034f080da3755d8e9cb5e00e8b07de1d39e4f6e2c87d8ab7cafa0b269a73",
+          "distribution": "pydantic",
+          "version": "2.13.5"
+        },
+        {
+          "filename": "pydantic_core-2.46.5-cp313-cp313-win_amd64.whl",
+          "bytes": 2041980,
+          "sha256": "15f4a94963c95accac15b7b657bb177d3ad82bb90b0d0526d9a9b85079925db5",
+          "distribution": "pydantic-core",
+          "version": "2.46.5"
+        },
+        {
+          "filename": "pyjwt-2.14.0-py3-none-any.whl",
+          "bytes": 32896,
+          "sha256": "ad0cef71c756a56e74863c2919cf0985f72decbcfcb550ee2f422e7c62b5eedc",
+          "distribution": "pyjwt",
+          "version": "2.14.0"
+        },
+        {
+          "filename": "python_multipart-0.0.32-py3-none-any.whl",
+          "bytes": 30042,
+          "sha256": "ff6d3f776f16878c894e52e107296ffc890e913c611b1a4ec6c44e2821fe2e23",
+          "distribution": "python-multipart",
+          "version": "0.0.32"
+        },
+        {
+          "filename": "pywin32-312-cp313-cp313-win_amd64.whl",
+          "bytes": 6914298,
+          "sha256": "c53e878d15a1c44788082bfe712a905433473aa38f86375b7cf8b45e3acbaaf9",
+          "distribution": "pywin32",
+          "version": "312"
+        },
+        {
+          "filename": "referencing-0.37.0-py3-none-any.whl",
+          "bytes": 26766,
+          "sha256": "381329a9f99628c9069361716891d34ad94af76e461dcb0335825aecc7692231",
+          "distribution": "referencing",
+          "version": "0.37.0"
+        },
+        {
+          "filename": "rpds_py-2026.6.3-cp313-cp313-win_amd64.whl",
+          "bytes": 219454,
+          "sha256": "9250a9a0a6fd4648b3f868da8d91a4c52b5811a62df58e753d50ae4454a36f80",
+          "distribution": "rpds-py",
+          "version": "2026.6.3"
+        },
+        {
+          "filename": "shapely-2.1.2-cp313-cp313-win_amd64.whl",
+          "bytes": 1722151,
+          "sha256": "ca2591bff6645c216695bdf1614fca9c82ea1144d4a7591a466fef64f28f0715",
+          "distribution": "shapely",
+          "version": "2.1.2"
+        },
+        {
+          "filename": "sse_starlette-3.4.11-py3-none-any.whl",
+          "bytes": 17122,
+          "sha256": "c7b2244bdff016fe7f64e10075e89a3e6bbf899649cc89b0fe884b5545042453",
+          "distribution": "sse-starlette",
+          "version": "3.4.11"
+        },
+        {
+          "filename": "starlette-1.6.0-py3-none-any.whl",
+          "bytes": 75969,
+          "sha256": "a86dd39d14bb45f85a3d18525215a9ef0cfd1f192ac793220e72598c90335f0c",
+          "distribution": "starlette",
+          "version": "1.6.0"
+        },
+        {
+          "filename": "truststore-0.10.4-py3-none-any.whl",
+          "bytes": 18660,
+          "sha256": "adaeaecf1cbb5f4de3b1959b42d41f6fab57b2b1666adb59e89cb0b53361d981",
+          "distribution": "truststore",
+          "version": "0.10.4"
+        },
+        {
+          "filename": "typing_extensions-4.16.0-py3-none-any.whl",
+          "bytes": 45571,
+          "sha256": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8",
+          "distribution": "typing-extensions",
+          "version": "4.16.0"
+        },
+        {
+          "filename": "typing_inspection-0.4.4-py3-none-any.whl",
+          "bytes": 14750,
+          "sha256": "65b8397ba37ccbce054456aaccddfc91e6e3083c92824df348d96ca832f3f147",
+          "distribution": "typing-inspection",
+          "version": "0.4.4"
+        },
+        {
+          "filename": "uvicorn-0.53.0-py3-none-any.whl",
+          "bytes": 87081,
+          "sha256": "e8dca71ec86dce5f04e333f0d56cdedf942446e6643b9cea1af0d6d3a02cb03e",
+          "distribution": "uvicorn",
+          "version": "0.53.0"
+        }
+      ],
+      "lanes": [
+        {
+          "name": "candidate",
+          "status": "passed",
+          "machine": "AMD64",
+          "distributions": [
+            {
+              "name": "annotated-types",
+              "version": "0.8.0"
+            },
+            {
+              "name": "ANYgeometry",
+              "version": "0.4.3"
+            },
+            {
+              "name": "ANYgeometry-mcp",
+              "version": "0.1.0"
+            },
+            {
+              "name": "anyio",
+              "version": "4.15.1"
+            },
+            {
+              "name": "attrs",
+              "version": "26.1.0"
+            },
+            {
+              "name": "cffi",
+              "version": "2.1.1"
+            },
+            {
+              "name": "click",
+              "version": "8.5.0"
+            },
+            {
+              "name": "cryptography",
+              "version": "50.0.1"
+            },
+            {
+              "name": "h11",
+              "version": "0.16.0"
+            },
+            {
+              "name": "httpcore2",
+              "version": "2.13.0"
+            },
+            {
+              "name": "httpx2",
+              "version": "2.13.0"
+            },
+            {
+              "name": "idna",
+              "version": "3.20"
+            },
+            {
+              "name": "jsonschema",
+              "version": "4.26.0"
+            },
+            {
+              "name": "jsonschema-specifications",
+              "version": "2025.9.1"
+            },
+            {
+              "name": "mcp",
+              "version": "2.2.0"
+            },
+            {
+              "name": "mcp-types",
+              "version": "2.2.0"
+            },
+            {
+              "name": "numpy",
+              "version": "2.5.3"
+            },
+            {
+              "name": "opentelemetry-api",
+              "version": "1.44.0"
+            },
+            {
+              "name": "pip",
+              "version": "26.2.1"
+            },
+            {
+              "name": "pycparser",
+              "version": "3.0"
+            },
+            {
+              "name": "pydantic",
+              "version": "2.13.5"
+            },
+            {
+              "name": "pydantic_core",
+              "version": "2.46.5"
+            },
+            {
+              "name": "PyJWT",
+              "version": "2.14.0"
+            },
+            {
+              "name": "python-multipart",
+              "version": "0.0.32"
+            },
+            {
+              "name": "pywin32",
+              "version": "312"
+            },
+            {
+              "name": "referencing",
+              "version": "0.37.0"
+            },
+            {
+              "name": "rpds-py",
+              "version": "2026.6.3"
+            },
+            {
+              "name": "shapely",
+              "version": "2.1.2"
+            },
+            {
+              "name": "sse-starlette",
+              "version": "3.4.11"
+            },
+            {
+              "name": "starlette",
+              "version": "1.6.0"
+            },
+            {
+              "name": "truststore",
+              "version": "0.10.4"
+            },
+            {
+              "name": "typing-inspection",
+              "version": "0.4.4"
+            },
+            {
+              "name": "typing_extensions",
+              "version": "4.16.0"
+            },
+            {
+              "name": "uvicorn",
+              "version": "0.53.0"
+            }
+          ],
+          "cases": [
+            {
+              "name": "environment_before",
+              "status": "passed"
+            },
+            {
+              "name": "core",
+              "status": "passed"
+            },
+            {
+              "name": "planar",
+              "status": "passed"
+            },
+            {
+              "name": "mcp",
+              "status": "passed"
+            },
+            {
+              "name": "environment_after",
+              "status": "passed"
+            }
+          ],
+          "origin_and_wheel_checks": [
+            {
+              "origins": {
+                "anygeometry": "D:\\a\\_temp\\geometry-mcp\\candidate-venv\\Lib\\site-packages\\anygeometry\\__init__.py",
+                "numpy": "D:\\a\\_temp\\geometry-mcp\\candidate-venv\\Lib\\site-packages\\numpy\\__init__.py",
+                "shapely": "D:\\a\\_temp\\geometry-mcp\\candidate-venv\\Lib\\site-packages\\shapely\\__init__.py",
+                "anygeometry_mcp": "D:\\a\\_temp\\geometry-mcp\\candidate-venv\\Lib\\site-packages\\anygeometry_mcp\\__init__.py",
+                "mcp": "D:\\a\\_temp\\geometry-mcp\\candidate-venv\\Lib\\site-packages\\mcp\\__init__.py"
+              },
+              "wheel_sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad",
+              "verified_files": 51
+            },
+            {
+              "origins": {
+                "anygeometry": "D:\\a\\_temp\\geometry-mcp\\candidate-venv\\Lib\\site-packages\\anygeometry\\__init__.py",
+                "numpy": "D:\\a\\_temp\\geometry-mcp\\candidate-venv\\Lib\\site-packages\\numpy\\__init__.py",
+                "shapely": "D:\\a\\_temp\\geometry-mcp\\candidate-venv\\Lib\\site-packages\\shapely\\__init__.py",
+                "anygeometry_mcp": "D:\\a\\_temp\\geometry-mcp\\candidate-venv\\Lib\\site-packages\\anygeometry_mcp\\__init__.py",
+                "mcp": "D:\\a\\_temp\\geometry-mcp\\candidate-venv\\Lib\\site-packages\\mcp\\__init__.py"
+              },
+              "wheel_sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad",
+              "verified_files": 51
+            }
+          ]
+        },
+        {
+          "name": "baseline",
+          "status": "passed",
+          "machine": "AMD64",
+          "distributions": [
+            {
+              "name": "annotated-types",
+              "version": "0.8.0"
+            },
+            {
+              "name": "ANYgeometry",
+              "version": "0.4.3"
+            },
+            {
+              "name": "ANYgeometry-mcp",
+              "version": "0.1.0"
+            },
+            {
+              "name": "anyio",
+              "version": "4.15.1"
+            },
+            {
+              "name": "attrs",
+              "version": "26.1.0"
+            },
+            {
+              "name": "cffi",
+              "version": "2.1.1"
+            },
+            {
+              "name": "click",
+              "version": "8.5.0"
+            },
+            {
+              "name": "cryptography",
+              "version": "50.0.1"
+            },
+            {
+              "name": "h11",
+              "version": "0.16.0"
+            },
+            {
+              "name": "httpcore2",
+              "version": "2.13.0"
+            },
+            {
+              "name": "httpx2",
+              "version": "2.13.0"
+            },
+            {
+              "name": "idna",
+              "version": "3.20"
+            },
+            {
+              "name": "jsonschema",
+              "version": "4.26.0"
+            },
+            {
+              "name": "jsonschema-specifications",
+              "version": "2025.9.1"
+            },
+            {
+              "name": "mcp",
+              "version": "2.2.0"
+            },
+            {
+              "name": "mcp-types",
+              "version": "2.2.0"
+            },
+            {
+              "name": "numpy",
+              "version": "2.5.3"
+            },
+            {
+              "name": "opentelemetry-api",
+              "version": "1.44.0"
+            },
+            {
+              "name": "pip",
+              "version": "26.2.1"
+            },
+            {
+              "name": "pycparser",
+              "version": "3.0"
+            },
+            {
+              "name": "pydantic",
+              "version": "2.13.5"
+            },
+            {
+              "name": "pydantic_core",
+              "version": "2.46.5"
+            },
+            {
+              "name": "PyJWT",
+              "version": "2.14.0"
+            },
+            {
+              "name": "python-multipart",
+              "version": "0.0.32"
+            },
+            {
+              "name": "pywin32",
+              "version": "312"
+            },
+            {
+              "name": "referencing",
+              "version": "0.37.0"
+            },
+            {
+              "name": "rpds-py",
+              "version": "2026.6.3"
+            },
+            {
+              "name": "shapely",
+              "version": "2.1.2"
+            },
+            {
+              "name": "sse-starlette",
+              "version": "3.4.11"
+            },
+            {
+              "name": "starlette",
+              "version": "1.6.0"
+            },
+            {
+              "name": "truststore",
+              "version": "0.10.4"
+            },
+            {
+              "name": "typing-inspection",
+              "version": "0.4.4"
+            },
+            {
+              "name": "typing_extensions",
+              "version": "4.16.0"
+            },
+            {
+              "name": "uvicorn",
+              "version": "0.53.0"
+            }
+          ],
+          "cases": [
+            {
+              "name": "environment_before",
+              "status": "passed"
+            },
+            {
+              "name": "core",
+              "status": "passed"
+            },
+            {
+              "name": "planar",
+              "status": "passed"
+            },
+            {
+              "name": "mcp",
+              "status": "passed"
+            },
+            {
+              "name": "environment_after",
+              "status": "passed"
+            }
+          ],
+          "origin_and_wheel_checks": [
+            {
+              "origins": {
+                "anygeometry": "D:\\a\\_temp\\geometry-mcp\\baseline-venv\\Lib\\site-packages\\anygeometry\\__init__.py",
+                "numpy": "D:\\a\\_temp\\geometry-mcp\\baseline-venv\\Lib\\site-packages\\numpy\\__init__.py",
+                "shapely": "D:\\a\\_temp\\geometry-mcp\\baseline-venv\\Lib\\site-packages\\shapely\\__init__.py",
+                "anygeometry_mcp": "D:\\a\\_temp\\geometry-mcp\\baseline-venv\\Lib\\site-packages\\anygeometry_mcp\\__init__.py",
+                "mcp": "D:\\a\\_temp\\geometry-mcp\\baseline-venv\\Lib\\site-packages\\mcp\\__init__.py"
+              },
+              "wheel_sha256": "6ab8f398de8ad1cc19b5c0d70a9787e1a15d3f5253c1125134eeb5050ec4b8b5",
+              "verified_files": 50
+            },
+            {
+              "origins": {
+                "anygeometry": "D:\\a\\_temp\\geometry-mcp\\baseline-venv\\Lib\\site-packages\\anygeometry\\__init__.py",
+                "numpy": "D:\\a\\_temp\\geometry-mcp\\baseline-venv\\Lib\\site-packages\\numpy\\__init__.py",
+                "shapely": "D:\\a\\_temp\\geometry-mcp\\baseline-venv\\Lib\\site-packages\\shapely\\__init__.py",
+                "anygeometry_mcp": "D:\\a\\_temp\\geometry-mcp\\baseline-venv\\Lib\\site-packages\\anygeometry_mcp\\__init__.py",
+                "mcp": "D:\\a\\_temp\\geometry-mcp\\baseline-venv\\Lib\\site-packages\\mcp\\__init__.py"
+              },
+              "wheel_sha256": "6ab8f398de8ad1cc19b5c0d70a9787e1a15d3f5253c1125134eeb5050ec4b8b5",
+              "verified_files": 50
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "mcp-consumers-macos-15",
+      "artifact_id": 10687531114,
+      "run_attempt": 3,
+      "status": "passed",
+      "profile": "mcp",
+      "python": "3.13.15 (v3.13.15:4061bc4c35f, Aug  5 2026, 09:08:51) [Clang 21.0.0 (clang-2100.1.1.101)]",
+      "platform": "macOS-15.7.9-arm64-arm-64bit-Mach-O",
+      "checkout_commit": "275940a95be5c2c717ce0ef178f77d3a5399c9ca",
+      "probe_sha256": "b5675e1c6381d867c9d68a6803c69e7fee04bc8c3ffa214fd1bede1552eb082e",
+      "candidate": {
+        "filename": "anygeometry-0.4.3-py3-none-any.whl",
+        "bytes": 403847,
+        "sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad"
+      },
+      "baseline": {
+        "filename": "anygeometry-0.4.3-py3-none-any.whl",
+        "bytes": 402329,
+        "sha256": "6ab8f398de8ad1cc19b5c0d70a9787e1a15d3f5253c1125134eeb5050ec4b8b5"
+      },
+      "mcp": {
+        "filename": "anygeometry_mcp-0.1.0-py3-none-any.whl",
+        "bytes": 5474,
+        "sha256": "e35d0c25e3df4eb54841bfbbbdc4fe7f9685f4c1ee93dab8109bb61b141ec325",
+        "source": "4253c001b07263fa2e9015082cf4950db65cd2d3",
+        "archive": {
+          "filename": "mcp-source.tar",
+          "bytes": 30720,
+          "sha256": "2a84d2e1809b69a321d2ec74b2db48c7c7629f146177b02dc7503c3b6e944259"
+        }
+      },
+      "resolved_artifacts": [
+        {
+          "filename": "annotated_types-0.8.0-py3-none-any.whl",
+          "bytes": 13427,
+          "sha256": "f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0",
+          "distribution": "annotated-types",
+          "version": "0.8.0"
+        },
+        {
+          "filename": "anygeometry-0.4.3-py3-none-any.whl",
+          "bytes": 403847,
+          "sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad",
+          "distribution": "anygeometry",
+          "version": "0.4.3"
+        },
+        {
+          "filename": "anygeometry_mcp-0.1.0-py3-none-any.whl",
+          "bytes": 5474,
+          "sha256": "e35d0c25e3df4eb54841bfbbbdc4fe7f9685f4c1ee93dab8109bb61b141ec325",
+          "distribution": "anygeometry-mcp",
+          "version": "0.1.0"
+        },
+        {
+          "filename": "anyio-4.15.1-py3-none-any.whl",
+          "bytes": 132079,
+          "sha256": "6152fdbbf9a77fdec97731721bebf7c4c44f7c29b424b0065826173efc7ed101",
+          "distribution": "anyio",
+          "version": "4.15.1"
+        },
+        {
+          "filename": "attrs-26.1.0-py3-none-any.whl",
+          "bytes": 67548,
+          "sha256": "c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309",
+          "distribution": "attrs",
+          "version": "26.1.0"
+        },
+        {
+          "filename": "cffi-2.1.1-cp313-cp313-macosx_11_0_arm64.whl",
+          "bytes": 184764,
+          "sha256": "19ee6127ee34de7d83ce3d371ebc5ed91addbdcc39f9ab15ce4eb35a4e534971",
+          "distribution": "cffi",
+          "version": "2.1.1"
+        },
+        {
+          "filename": "click-8.5.0-py3-none-any.whl",
+          "bytes": 125251,
+          "sha256": "255bc9599cf7748b4b1a446ccc735421bd08a2ae529a8b88597d3de5664ee360",
+          "distribution": "click",
+          "version": "8.5.0"
+        },
+        {
+          "filename": "cryptography-50.0.1-cp311-abi3-macosx_11_0_arm64.whl",
+          "bytes": 4010153,
+          "sha256": "b8f852c65863251b9e3a1b8c150ce21e59b522dbb6a7d4bc80e680d38388e986",
+          "distribution": "cryptography",
+          "version": "50.0.1"
+        },
+        {
+          "filename": "h11-0.16.0-py3-none-any.whl",
+          "bytes": 37515,
+          "sha256": "63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86",
+          "distribution": "h11",
+          "version": "0.16.0"
+        },
+        {
+          "filename": "httpcore2-2.13.0-py3-none-any.whl",
+          "bytes": 83162,
+          "sha256": "35ae5be347aa40467b4a5dc032ac67ebb6d27189fc97e8cebcf99616f6a1bb9e",
+          "distribution": "httpcore2",
+          "version": "2.13.0"
+        },
+        {
+          "filename": "httpx2-2.13.0-py3-none-any.whl",
+          "bytes": 95565,
+          "sha256": "fc12720cedf72faa26cca6b4ca394e05c894e7d7933fc45cafe767960804e49a",
+          "distribution": "httpx2",
+          "version": "2.13.0"
+        },
+        {
+          "filename": "idna-3.20-py3-none-any.whl",
+          "bytes": 69583,
+          "sha256": "ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c",
+          "distribution": "idna",
+          "version": "3.20"
+        },
+        {
+          "filename": "jsonschema-4.26.0-py3-none-any.whl",
+          "bytes": 90630,
+          "sha256": "d489f15263b8d200f8387e64b4c3a75f06629559fb73deb8fdfb525f2dab50ce",
+          "distribution": "jsonschema",
+          "version": "4.26.0"
+        },
+        {
+          "filename": "jsonschema_specifications-2025.9.1-py3-none-any.whl",
+          "bytes": 18437,
+          "sha256": "98802fee3a11ee76ecaca44429fda8a41bff98b00a0f2838151b113f210cc6fe",
+          "distribution": "jsonschema-specifications",
+          "version": "2025.9.1"
+        },
+        {
+          "filename": "mcp-2.2.0-py3-none-any.whl",
+          "bytes": 365656,
+          "sha256": "bde982589473a060ae145e3406e9a5333fe538c97229ba841f5a7f92be004f81",
+          "distribution": "mcp",
+          "version": "2.2.0"
+        },
+        {
+          "filename": "mcp_types-2.2.0-py3-none-any.whl",
+          "bytes": 69106,
+          "sha256": "ea476b73ee86709ab5abc9452385ed36cc05907e582355622e294595c9a04f13",
+          "distribution": "mcp-types",
+          "version": "2.2.0"
+        },
+        {
+          "filename": "numpy-2.5.3-cp313-cp313-macosx_14_0_arm64.whl",
+          "bytes": 5439695,
+          "sha256": "f9a2353b37a1a9e78fd82b27ad7e2a32a2d036604d18f02b05e3136c62ca3b09",
+          "distribution": "numpy",
+          "version": "2.5.3"
+        },
+        {
+          "filename": "opentelemetry_api-1.44.0-py3-none-any.whl",
+          "bytes": 60018,
+          "sha256": "94b98c893a91b88657eaac1e3ba89618cdb85be6918196705354f34728b2cdef",
+          "distribution": "opentelemetry-api",
+          "version": "1.44.0"
+        },
+        {
+          "filename": "pycparser-3.0-py3-none-any.whl",
+          "bytes": 48172,
+          "sha256": "b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992",
+          "distribution": "pycparser",
+          "version": "3.0"
+        },
+        {
+          "filename": "pydantic-2.13.5-py3-none-any.whl",
+          "bytes": 472589,
+          "sha256": "346a034f080da3755d8e9cb5e00e8b07de1d39e4f6e2c87d8ab7cafa0b269a73",
+          "distribution": "pydantic",
+          "version": "2.13.5"
+        },
+        {
+          "filename": "pydantic_core-2.46.5-cp313-cp313-macosx_11_0_arm64.whl",
+          "bytes": 1922768,
+          "sha256": "f332f0e72a5a0400141f830744e141bf9f97917878dbe968669e8a7fefea78ff",
+          "distribution": "pydantic-core",
+          "version": "2.46.5"
+        },
+        {
+          "filename": "pyjwt-2.14.0-py3-none-any.whl",
+          "bytes": 32896,
+          "sha256": "ad0cef71c756a56e74863c2919cf0985f72decbcfcb550ee2f422e7c62b5eedc",
+          "distribution": "pyjwt",
+          "version": "2.14.0"
+        },
+        {
+          "filename": "python_multipart-0.0.32-py3-none-any.whl",
+          "bytes": 30042,
+          "sha256": "ff6d3f776f16878c894e52e107296ffc890e913c611b1a4ec6c44e2821fe2e23",
+          "distribution": "python-multipart",
+          "version": "0.0.32"
+        },
+        {
+          "filename": "referencing-0.37.0-py3-none-any.whl",
+          "bytes": 26766,
+          "sha256": "381329a9f99628c9069361716891d34ad94af76e461dcb0335825aecc7692231",
+          "distribution": "referencing",
+          "version": "0.37.0"
+        },
+        {
+          "filename": "rpds_py-2026.6.3-cp313-cp313-macosx_11_0_arm64.whl",
+          "bytes": 338203,
+          "sha256": "f4d78253f6996be4901669ad25319f842f740eccf4d58e3c7f3dd39e6dde1d8f",
+          "distribution": "rpds-py",
+          "version": "2026.6.3"
+        },
+        {
+          "filename": "shapely-2.1.2-cp313-cp313-macosx_11_0_arm64.whl",
+          "bytes": 1642887,
+          "sha256": "8cff473e81017594d20ec55d86b54bc635544897e13a7cfc12e36909c5309a2a",
+          "distribution": "shapely",
+          "version": "2.1.2"
+        },
+        {
+          "filename": "sse_starlette-3.4.11-py3-none-any.whl",
+          "bytes": 17122,
+          "sha256": "c7b2244bdff016fe7f64e10075e89a3e6bbf899649cc89b0fe884b5545042453",
+          "distribution": "sse-starlette",
+          "version": "3.4.11"
+        },
+        {
+          "filename": "starlette-1.6.0-py3-none-any.whl",
+          "bytes": 75969,
+          "sha256": "a86dd39d14bb45f85a3d18525215a9ef0cfd1f192ac793220e72598c90335f0c",
+          "distribution": "starlette",
+          "version": "1.6.0"
+        },
+        {
+          "filename": "truststore-0.10.4-py3-none-any.whl",
+          "bytes": 18660,
+          "sha256": "adaeaecf1cbb5f4de3b1959b42d41f6fab57b2b1666adb59e89cb0b53361d981",
+          "distribution": "truststore",
+          "version": "0.10.4"
+        },
+        {
+          "filename": "typing_extensions-4.16.0-py3-none-any.whl",
+          "bytes": 45571,
+          "sha256": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8",
+          "distribution": "typing-extensions",
+          "version": "4.16.0"
+        },
+        {
+          "filename": "typing_inspection-0.4.4-py3-none-any.whl",
+          "bytes": 14750,
+          "sha256": "65b8397ba37ccbce054456aaccddfc91e6e3083c92824df348d96ca832f3f147",
+          "distribution": "typing-inspection",
+          "version": "0.4.4"
+        },
+        {
+          "filename": "uvicorn-0.53.0-py3-none-any.whl",
+          "bytes": 87081,
+          "sha256": "e8dca71ec86dce5f04e333f0d56cdedf942446e6643b9cea1af0d6d3a02cb03e",
+          "distribution": "uvicorn",
+          "version": "0.53.0"
+        }
+      ],
+      "lanes": [
+        {
+          "name": "candidate",
+          "status": "passed",
+          "machine": "arm64",
+          "distributions": [
+            {
+              "name": "annotated-types",
+              "version": "0.8.0"
+            },
+            {
+              "name": "ANYgeometry",
+              "version": "0.4.3"
+            },
+            {
+              "name": "ANYgeometry-mcp",
+              "version": "0.1.0"
+            },
+            {
+              "name": "anyio",
+              "version": "4.15.1"
+            },
+            {
+              "name": "attrs",
+              "version": "26.1.0"
+            },
+            {
+              "name": "cffi",
+              "version": "2.1.1"
+            },
+            {
+              "name": "click",
+              "version": "8.5.0"
+            },
+            {
+              "name": "cryptography",
+              "version": "50.0.1"
+            },
+            {
+              "name": "h11",
+              "version": "0.16.0"
+            },
+            {
+              "name": "httpcore2",
+              "version": "2.13.0"
+            },
+            {
+              "name": "httpx2",
+              "version": "2.13.0"
+            },
+            {
+              "name": "idna",
+              "version": "3.20"
+            },
+            {
+              "name": "jsonschema",
+              "version": "4.26.0"
+            },
+            {
+              "name": "jsonschema-specifications",
+              "version": "2025.9.1"
+            },
+            {
+              "name": "mcp",
+              "version": "2.2.0"
+            },
+            {
+              "name": "mcp-types",
+              "version": "2.2.0"
+            },
+            {
+              "name": "numpy",
+              "version": "2.5.3"
+            },
+            {
+              "name": "opentelemetry-api",
+              "version": "1.44.0"
+            },
+            {
+              "name": "pip",
+              "version": "26.2.1"
+            },
+            {
+              "name": "pycparser",
+              "version": "3.0"
+            },
+            {
+              "name": "pydantic",
+              "version": "2.13.5"
+            },
+            {
+              "name": "pydantic_core",
+              "version": "2.46.5"
+            },
+            {
+              "name": "PyJWT",
+              "version": "2.14.0"
+            },
+            {
+              "name": "python-multipart",
+              "version": "0.0.32"
+            },
+            {
+              "name": "referencing",
+              "version": "0.37.0"
+            },
+            {
+              "name": "rpds-py",
+              "version": "2026.6.3"
+            },
+            {
+              "name": "shapely",
+              "version": "2.1.2"
+            },
+            {
+              "name": "sse-starlette",
+              "version": "3.4.11"
+            },
+            {
+              "name": "starlette",
+              "version": "1.6.0"
+            },
+            {
+              "name": "truststore",
+              "version": "0.10.4"
+            },
+            {
+              "name": "typing-inspection",
+              "version": "0.4.4"
+            },
+            {
+              "name": "typing_extensions",
+              "version": "4.16.0"
+            },
+            {
+              "name": "uvicorn",
+              "version": "0.53.0"
+            }
+          ],
+          "cases": [
+            {
+              "name": "environment_before",
+              "status": "passed"
+            },
+            {
+              "name": "core",
+              "status": "passed"
+            },
+            {
+              "name": "planar",
+              "status": "passed"
+            },
+            {
+              "name": "mcp",
+              "status": "passed"
+            },
+            {
+              "name": "environment_after",
+              "status": "passed"
+            }
+          ],
+          "origin_and_wheel_checks": [
+            {
+              "origins": {
+                "anygeometry": "/Users/runner/work/_temp/geometry-mcp/candidate-venv/lib/python3.13/site-packages/anygeometry/__init__.py",
+                "numpy": "/Users/runner/work/_temp/geometry-mcp/candidate-venv/lib/python3.13/site-packages/numpy/__init__.py",
+                "shapely": "/Users/runner/work/_temp/geometry-mcp/candidate-venv/lib/python3.13/site-packages/shapely/__init__.py",
+                "anygeometry_mcp": "/Users/runner/work/_temp/geometry-mcp/candidate-venv/lib/python3.13/site-packages/anygeometry_mcp/__init__.py",
+                "mcp": "/Users/runner/work/_temp/geometry-mcp/candidate-venv/lib/python3.13/site-packages/mcp/__init__.py"
+              },
+              "wheel_sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad",
+              "verified_files": 51
+            },
+            {
+              "origins": {
+                "anygeometry": "/Users/runner/work/_temp/geometry-mcp/candidate-venv/lib/python3.13/site-packages/anygeometry/__init__.py",
+                "numpy": "/Users/runner/work/_temp/geometry-mcp/candidate-venv/lib/python3.13/site-packages/numpy/__init__.py",
+                "shapely": "/Users/runner/work/_temp/geometry-mcp/candidate-venv/lib/python3.13/site-packages/shapely/__init__.py",
+                "anygeometry_mcp": "/Users/runner/work/_temp/geometry-mcp/candidate-venv/lib/python3.13/site-packages/anygeometry_mcp/__init__.py",
+                "mcp": "/Users/runner/work/_temp/geometry-mcp/candidate-venv/lib/python3.13/site-packages/mcp/__init__.py"
+              },
+              "wheel_sha256": "4de647b2f7468b76609a914018db977850d1459de8afbe02108f7fab969f92ad",
+              "verified_files": 51
+            }
+          ]
+        },
+        {
+          "name": "baseline",
+          "status": "passed",
+          "machine": "arm64",
+          "distributions": [
+            {
+              "name": "annotated-types",
+              "version": "0.8.0"
+            },
+            {
+              "name": "ANYgeometry",
+              "version": "0.4.3"
+            },
+            {
+              "name": "ANYgeometry-mcp",
+              "version": "0.1.0"
+            },
+            {
+              "name": "anyio",
+              "version": "4.15.1"
+            },
+            {
+              "name": "attrs",
+              "version": "26.1.0"
+            },
+            {
+              "name": "cffi",
+              "version": "2.1.1"
+            },
+            {
+              "name": "click",
+              "version": "8.5.0"
+            },
+            {
+              "name": "cryptography",
+              "version": "50.0.1"
+            },
+            {
+              "name": "h11",
+              "version": "0.16.0"
+            },
+            {
+              "name": "httpcore2",
+              "version": "2.13.0"
+            },
+            {
+              "name": "httpx2",
+              "version": "2.13.0"
+            },
+            {
+              "name": "idna",
+              "version": "3.20"
+            },
+            {
+              "name": "jsonschema",
+              "version": "4.26.0"
+            },
+            {
+              "name": "jsonschema-specifications",
+              "version": "2025.9.1"
+            },
+            {
+              "name": "mcp",
+              "version": "2.2.0"
+            },
+            {
+              "name": "mcp-types",
+              "version": "2.2.0"
+            },
+            {
+              "name": "numpy",
+              "version": "2.5.3"
+            },
+            {
+              "name": "opentelemetry-api",
+              "version": "1.44.0"
+            },
+            {
+              "name": "pip",
+              "version": "26.2.1"
+            },
+            {
+              "name": "pycparser",
+              "version": "3.0"
+            },
+            {
+              "name": "pydantic",
+              "version": "2.13.5"
+            },
+            {
+              "name": "pydantic_core",
+              "version": "2.46.5"
+            },
+            {
+              "name": "PyJWT",
+              "version": "2.14.0"
+            },
+            {
+              "name": "python-multipart",
+              "version": "0.0.32"
+            },
+            {
+              "name": "referencing",
+              "version": "0.37.0"
+            },
+            {
+              "name": "rpds-py",
+              "version": "2026.6.3"
+            },
+            {
+              "name": "shapely",
+              "version": "2.1.2"
+            },
+            {
+              "name": "sse-starlette",
+              "version": "3.4.11"
+            },
+            {
+              "name": "starlette",
+              "version": "1.6.0"
+            },
+            {
+              "name": "truststore",
+              "version": "0.10.4"
+            },
+            {
+              "name": "typing-inspection",
+              "version": "0.4.4"
+            },
+            {
+              "name": "typing_extensions",
+              "version": "4.16.0"
+            },
+            {
+              "name": "uvicorn",
+              "version": "0.53.0"
+            }
+          ],
+          "cases": [
+            {
+              "name": "environment_before",
+              "status": "passed"
+            },
+            {
+              "name": "core",
+              "status": "passed"
+            },
+            {
+              "name": "planar",
+              "status": "passed"
+            },
+            {
+              "name": "mcp",
+              "status": "passed"
+            },
+            {
+              "name": "environment_after",
+              "status": "passed"
+            }
+          ],
+          "origin_and_wheel_checks": [
+            {
+              "origins": {
+                "anygeometry": "/Users/runner/work/_temp/geometry-mcp/baseline-venv/lib/python3.13/site-packages/anygeometry/__init__.py",
+                "numpy": "/Users/runner/work/_temp/geometry-mcp/baseline-venv/lib/python3.13/site-packages/numpy/__init__.py",
+                "shapely": "/Users/runner/work/_temp/geometry-mcp/baseline-venv/lib/python3.13/site-packages/shapely/__init__.py",
+                "anygeometry_mcp": "/Users/runner/work/_temp/geometry-mcp/baseline-venv/lib/python3.13/site-packages/anygeometry_mcp/__init__.py",
+                "mcp": "/Users/runner/work/_temp/geometry-mcp/baseline-venv/lib/python3.13/site-packages/mcp/__init__.py"
+              },
+              "wheel_sha256": "6ab8f398de8ad1cc19b5c0d70a9787e1a15d3f5253c1125134eeb5050ec4b8b5",
+              "verified_files": 50
+            },
+            {
+              "origins": {
+                "anygeometry": "/Users/runner/work/_temp/geometry-mcp/baseline-venv/lib/python3.13/site-packages/anygeometry/__init__.py",
+                "numpy": "/Users/runner/work/_temp/geometry-mcp/baseline-venv/lib/python3.13/site-packages/numpy/__init__.py",
+                "shapely": "/Users/runner/work/_temp/geometry-mcp/baseline-venv/lib/python3.13/site-packages/shapely/__init__.py",
+                "anygeometry_mcp": "/Users/runner/work/_temp/geometry-mcp/baseline-venv/lib/python3.13/site-packages/anygeometry_mcp/__init__.py",
+                "mcp": "/Users/runner/work/_temp/geometry-mcp/baseline-venv/lib/python3.13/site-packages/mcp/__init__.py"
+              },
+              "wheel_sha256": "6ab8f398de8ad1cc19b5c0d70a9787e1a15d3f5253c1125134eeb5050ec4b8b5",
+              "verified_files": 50
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

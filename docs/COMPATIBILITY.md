@@ -17,19 +17,27 @@ new source changes were included in that artifact.
 
 ## Verification matrix
 
+The maintenance implementation at `14e360f5dde8b4125a674df8593a3e4a6d3429bd`
+passed [all 29 hosted jobs](https://github.com/audunarn/ANYgeometry/actions/runs/35708515183)
+on 2026-09-22. These results identify the development candidate, not the
+published 0.4.3 wheel. See the [completed maintenance record](MAINTENANCE_20260922.md)
+and [per-platform dependency/artifact evidence](verification/maintenance-20260922.json).
+
 | Configuration | Python | Status |
 | --- | --- | --- |
-| Windows and Linux kernel | 3.11–3.14 | Released baseline CI passed; changed source requires fresh CI |
-| macOS 15 Apple silicon (`macos-15`) kernel | 3.11–3.14 | Maintenance CI configured; hosted result required |
-| macOS 15 Intel (`macos-15-intel`) kernel | 3.11–3.14 | Maintenance CI configured; hosted result required |
-| Installed candidate wheel, all four platforms | 3.13 | Maintenance gate; exact artifact report required |
-| NumPy 1.26.0 + Shapely 2.0.0, Linux | 3.11 | Minimum-dependency gate; hosted result required |
-| Complete consumer set, Windows/Linux | 3.13 | Isolated baseline/candidate comparison required |
-| Mesher and MCP consumers, macOS Apple silicon | 3.13 | Isolated baseline/candidate comparison required |
+| Windows and Linux kernel | 3.11–3.14 | Passed: 953 tests per configuration |
+| macOS 15 Apple silicon (`macos-15`) kernel | 3.11–3.14 | Passed: 953 tests per configuration; arm64 asserted |
+| macOS 15 Intel (`macos-15-intel`) kernel | 3.11–3.14 | Passed: 953 tests per configuration; x86_64 asserted |
+| Installed candidate wheel, all four platforms | 3.13 | Passed with and without Shapely; same wheel verified |
+| NumPy 1.26.0 + Shapely 2.0.0, Linux | 3.11 | Passed: 953 tests; 11 Shapely intersection warnings |
+| Complete consumer set, Windows/Linux | 3.13 | Candidate and released control passed public and MCP gates |
+| Mesher and MCP consumers, macOS Apple silicon | 3.13 | Candidate and released control passed both gates |
 
-Configured jobs are not passing evidence. Tests on one operating system or
-architecture do not qualify another. macOS Intel downstream native packages,
-other macOS versions and desktop application packaging are not covered here.
+The results above apply to the recorded source and artifacts. Changed inputs
+require new evidence. Tests on one operating system or architecture do not
+qualify another. macOS Intel downstream native packages, other macOS versions
+and desktop application packaging are not covered here. No numerical acceptance
+tolerances were loosened for these results.
 
 Public consumer and private MCP jobs are independent required gates. The
 private `audunarn/ANYgeometry-mcp` checkout needs the repository secret
@@ -38,6 +46,11 @@ Without it, MCP CI reports a blocked prerequisite and fails explicitly; the
 public consumer checks still run. A successful public subset is not acceptance
 of the complete consumer set. Credentials are neither created nor copied by
 these workflows. Configure the secret only for trusted CI access to that source.
+
+The scoped secret was supplied for the recorded run. Attempts 1 and 2 failed
+before MCP consumer execution (absent secret, then checkout authentication);
+attempt 3 passed on all three platforms using MCP SDK 2.2.0. These setup failures
+remain recorded and were not treated as successful consumer coverage.
 
 ## Dependencies and consumers
 
