@@ -81,7 +81,7 @@ the serialized document.
 The supported Python dependency remains:
 
 ```text
-ANYgeometry>=0.2,<0.3
+ANYgeometry[planar]>=0.4.3,<0.5
 ```
 
 ANYgeometry 0.2.2 reads geometry schemas 1–4 and writes canonical schema 4.

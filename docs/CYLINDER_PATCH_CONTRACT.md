@@ -11,16 +11,23 @@ cancellation_check=None)` qualifies exactly one active, model-bound FaceUse.
 It reads the actual Part/Sheet/Face/Coedge ownership. It never constructs a
 hidden ring, virtual sectors or replacement trim topology.
 
-The supported sufficient-proof family is a regular Cylinder with rectangular
-outer material and at most one strictly interior rectangular hole. Horizontal
+The supported sufficient-proof family is a regular Cylinder with simple
+orthogonal outer material (including concave/notched trims) and at most one
+strictly interior, separated orthogonal hole. Rectangles retain their specialized
+proof path. Horizontal
 sides use actual coaxial minor Arcs, each at most a quarter turn; axial sides use
 actual Straight edges. Multiple consecutive Arcs can make a wide side. Support
 sweeps extend through 15*pi/8 but remain strictly below a full period with a
 tolerance-qualified gap. Either sweep/height sign is allowed. Axial trimming
 does not replace the original support. A separate nonidentical parameterization,
-full-period patch, nonrectangular trim, notch, multiple holes, Spline or oblique
+full-period patch, nonorthogonal trim, multiple holes, Spline or oblique
 carrier is outside this sufficient-proof scope. Refusal is not a declaration
 that the source geometry is invalid.
+
+The public query still rejects more than one hole. Internal multi-hole material
+proof tests do not widen that public admission contract. Orthogonal proof and
+material witnesses use the same bounded, whole-carrier evidence requirements;
+sampled outlines do not establish qualification.
 
 ## Evidence and coordinates
 

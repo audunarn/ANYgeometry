@@ -13,6 +13,7 @@ from ..curves import Arc
 from ..editing import measure
 from ..entities import EntityRef
 from ..errors import GeometryError
+from ..coordinates import world_to_model_points
 from ..identity import ENTITY_KINDS, EntityHandle, ResolutionStatus, validate_entity_kind
 from ..model import GeometryModel
 from ..operations import closest_point
@@ -106,11 +107,10 @@ def _to_local_point(model: GeometryModel, quantity: Quantity) -> np.ndarray:
     if quantity.frame is None:
         raise _error("UNKNOWN_FRAME", "positions require model_local or world frame")
     if quantity.frame == "world" and model.coordinate_transform is not None:
-        inverse = np.linalg.inv(np.asarray(model.coordinate_transform, dtype=float))
-        homogeneous = inverse @ np.asarray((*point, 1.0))
-        if abs(float(homogeneous[3])) <= np.finfo(float).eps:
-            raise _error("CAPABILITY_MISSING", "world transform produced an invalid homogeneous point")
-        point = homogeneous[:3] / homogeneous[3]
+        try:
+            point = world_to_model_points(model, point)
+        except GeometryError as error:
+            raise _error("CAPABILITY_MISSING", str(error)) from error
     return point
 
 

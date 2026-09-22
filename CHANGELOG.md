@@ -4,7 +4,17 @@ All notable user-visible changes to ANYgeometry are documented here.
 
 ## Unreleased
 
-### 0.4.3 — overlap safety and strict bookkeeping
+- Add public, read-only model/world point and vector conversion helpers while
+  preserving document units, metadata and automation protocol 1 behavior.
+- Add explicit macOS Apple silicon/Intel and minimum-dependency CI coverage,
+  installed-wheel smoke checks, and isolated consumer compatibility checks.
+- Correct current contract documentation and add compatibility and owner
+  handoff records. Newly configured CI coverage is not a historical qualification.
+
+## 0.4.3 - 2026-09-16
+
+Overlap safety and strict bookkeeping. Published release evidence is linked
+from [the compatibility record](docs/COMPATIBILITY.md).
 
 - Require explicit `OverlapOwnershipPolicy.FIRST_SELECTED` for planar
   fragmentation and newly authored overlap features. Add immutable,

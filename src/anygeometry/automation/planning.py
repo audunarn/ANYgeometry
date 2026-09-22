@@ -25,6 +25,7 @@ from ..editing import (
 )
 from ..entities import EntityRef
 from ..errors import GeometryError
+from ..coordinates import world_to_model_vectors
 from ..identity import EntityHandle, ResolutionStatus
 from ..intersections import apply_imprint, plan_imprint, query_intersection
 from ..model import GeometryModel
@@ -181,7 +182,10 @@ def _quantity_vector(model: GeometryModel, raw: object, *, path: str, direction:
             raise _error("MALFORMED_QUANTITY", "directions require unit '1' and an explicit frame", path=path)
         vector = np.asarray(value.value, dtype=float)
         if value.frame == "world" and model.coordinate_transform is not None:
-            vector = np.linalg.inv(np.asarray(model.coordinate_transform)[:3, :3]) @ vector
+            try:
+                vector = world_to_model_vectors(model, vector)
+            except GeometryError as error:
+                raise _error("MALFORMED_QUANTITY", str(error), path=path) from error
     else:
         origin = _to_local_point(model, Quantity((0.0, 0.0, 0.0), value.unit, value.frame))
         vector = _to_local_point(model, value) - origin

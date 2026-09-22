@@ -1,6 +1,10 @@
 """Lightweight structural-surface geometry shared by the ANY ecosystem."""
 
 from .curves import Arc, ArcFrame, CurveShape, DegenerateArcError, Spline, Straight
+from .coordinates import (
+    model_to_world_points, world_to_model_points,
+    model_to_world_vectors, world_to_model_vectors,
+)
 from .cylinder_charts import (
     CylinderAtlasStatus, CylinderAtlasErrorCode, CylinderAtlasError,
     CylinderAtlasPolicy, CylinderAtlasCertificate, CylinderSectorChart,
@@ -201,6 +205,10 @@ from .surfaces import (
 )
 
 __all__ = [
+    "model_to_world_points",
+    "world_to_model_points",
+    "model_to_world_vectors",
+    "world_to_model_vectors",
     "CylinderPatchStatus", "CylinderPatchErrorCode", "CylinderPatchError",
     "CylinderPatchPolicy", "CylinderPatchCertificate", "CylinderPatchOccurrence",
     "CylinderPatchLoop", "CylinderPatchResult", "CylinderPatchOccurrenceRequest",

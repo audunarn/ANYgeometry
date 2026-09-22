@@ -1,5 +1,10 @@
 # Cylinder sector occurrence atlas (candidate owner contract)
 
+**Current-status note:** the candidate/checkpoint statements below are historical
+qualification records. For the published 0.4.3 artifact and current consumer
+coverage, see [COMPATIBILITY.md](COMPATIBILITY.md). An individual query still
+requires its own complete, revision-bound certificate.
+
 This additive contract is under focused qualification. Do not infer acceptance
 from the presence of public symbols or package version 0.4.3. The accepted planar
 trim contract is source commit `12683ae5d6dbb2620f5020b67c0a7673f2601766`;

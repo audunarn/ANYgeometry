@@ -58,6 +58,11 @@ Dimensional inputs are `Quantity` objects. Length units are `m`, `mm`, `cm`,
 Positions, directions, boxes, and transforms require `model_local` or `world`.
 Unknown/nonfinite values and unsupported document unit metadata fail closed.
 
+The document transform maps model-local to world coordinates in model units.
+`local_origin` is not an additional offset and CRS metadata does not request
+reprojection. See the [public coordinate helpers](COORDINATES.md); automation
+retains its explicit unit conversion before applying that mapping.
+
 ## Commands
 
 Batches contain 1–256 uniquely named commands. A command may consume an
