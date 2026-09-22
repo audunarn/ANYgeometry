@@ -145,13 +145,23 @@ def mesher(work, config):
     feature_model.features.capture_baseline(feature_model)
     feature = feature_model.features.append("generator.plate", parameters={"length": 2., "width": 1.})
     assert feature_model.regenerate_features().success
+    downstream_refs = tuple(feature_model.features.get(feature.feature_id).outputs.values())
+    source_id, source_revision = feature_model.model_id, feature_model.revision
     mesh_and_check(feature_model)
     feature_model.features.update(feature.feature_id, parameters={"length": 3., "width": 1.})
     assert feature_model.regenerate_features().success
+    assert feature_model.model_id == source_id and feature_model.revision > source_revision
+    assert downstream_refs and all(feature_model.resolve_ref(ref) for ref in downstream_refs)
     remesh = mesh_and_check(feature_model)
     outputs = feature_model.features.get(feature.feature_id).outputs.values()
     faces = [ref for output in outputs for ref in feature_model.resolve_ref(output) if ref.kind == "face"]
     assert faces and all(remesh.elements_on(ref) for ref in faces)
+    owners = ag.feature_entity_owners(feature_model)
+    for previous in downstream_refs:
+        for current in feature_model.resolve_ref(previous):
+            assert owners[current] == feature.feature_id
+            if current.kind == "face":
+                assert remesh.elements_on(current)
     assert feature_model.features.get(feature.feature_id).feature_id == feature.feature_id
 
 
@@ -177,6 +187,7 @@ def fem(work, config):
 
 
 def fileio(work, config):
+    import anymaterial
     import anymesher
     from anyfileio import read_sesam_semantics
     # Minimal owner-neutral SESAM records, no native CAD provider involved.
@@ -195,6 +206,9 @@ def fileio(work, config):
     assert result.mesh.num_nodes == 3 and result.mesh.num_elements == 1
     assert result.mesh.tris[100] == (1, 2, 3)
     assert result.thickness_of_element[100] == .02
+    assert result.material_of_element[100] == 1
+    assert isinstance(result.materials[1], anymaterial.MaterialSpec)
+    assert result.materials[1].constants["elastic_modulus"] == 2.1e11
 
 
 def mcp(work, config):
