@@ -91,6 +91,16 @@ def test_explicit_surface_evaluation_uv_and_normals() -> None:
     assert closest_uv(ruled, (0.5, 0.5, 0.5)) == pytest.approx((0.25, 0.5), abs=1.0e-5)
 
 
+def test_ruled_inverse_near_upper_parameter_boundary() -> None:
+    ruled = RuledSurface(
+        np.asarray(((1.0, 0.0, 0.0), (2.0, 0.0, 0.0))),
+        np.asarray(((1.0, 1.0, 0.25), (2.0, 1.0, 0.5))),
+    )
+    uv = (0.99647272, 0.98407935)
+    point = ruled.evaluate(*uv)
+    assert closest_uv(ruled, point) == pytest.approx(uv, abs=1.0e-9)
+
+
 def test_coons_face_uses_the_topology_boundary_convention(
     rectangle: tuple[GeometryModel, int, tuple[int, ...], tuple[int, ...]],
 ) -> None:

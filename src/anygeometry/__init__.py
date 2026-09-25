@@ -21,6 +21,12 @@ from .cylinder_patch import (
     CylinderPatchSample, CylinderPatchEvaluation, query_cylinder_patch,
     validate_cylinder_patch_binding, evaluate_cylinder_patch_occurrences,
 )
+from .cylinder_open_component import (
+    CylinderOpenComponentErrorCode, CylinderOpenComponentError,
+    CylinderOpenComponentResult, CylinderOpenComponentEvaluation,
+    query_cylinder_open_component, validate_cylinder_open_component_binding,
+    evaluate_cylinder_open_component_occurrences,
+)
 from .entities import Edge, EntityKind, EntityRef, Face, OrientedEdge, Vertex, VertexRole
 from .editing import (
     InsertResult,

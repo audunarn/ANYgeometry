@@ -6501,6 +6501,29 @@ class GeometryModel:
 
         return closest_uv(_TopologySurface(), point)
 
+    def face_local_uv_many(
+        self, face_id: int, points: Sequence[Sequence[float]] | np.ndarray
+    ) -> np.ndarray:
+        """Return bounded local coordinates for finite points, shaped ``(n, 2)``.
+
+        Built-in analytic surfaces use the same inverse as scalar ``local_uv``;
+        other surfaces retain the scalar owner implementation.
+        """
+        face = self._require_face(face_id)
+        values = np.asarray(points, dtype=float)
+        if values.size == 0:
+            if values.ndim != 2 or values.shape[1] != 3:
+                raise GeometryError("face local UV points must have shape (n, 3)")
+            return np.empty((0, 2), dtype=float)
+        if values.ndim != 2 or values.shape[1] != 3 or not np.all(np.isfinite(values)):
+            raise GeometryError("face local UV points must be finite (n, 3) coordinates")
+        evaluable = face.parameterization if face.parameterization is not None else face.surface
+        if isinstance(evaluable, (Plane, Cylinder, Cone)):
+            return np.clip(self._builtin_local_uv_many(evaluable, values), 0.0, 1.0)
+        return np.asarray(
+            [self.face_local_uv(face_id, point) for point in values], dtype=float,
+        ).reshape((-1, 2))
+
     def face_support_local_uv(
         self, face_id: int, point: Sequence[float]
     ) -> Tuple[float, float]:

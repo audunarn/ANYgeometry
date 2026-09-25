@@ -493,6 +493,7 @@ def test_face_batch_contract_accepts_empty_and_rejects_noninteger_id() -> None:
 
     assert geometry.evaluate_face_many(face, []).shape == (0, 3)
     assert geometry.face_normal_many(face, []).shape == (0, 3)
+    assert geometry.face_local_uv_many(face, np.empty((0, 3))).shape == (0, 2)
     projected, uv, distances = geometry.project_to_face_many(face, [])
     assert projected.shape == (0, 3)
     assert uv.shape == (0, 2)
@@ -501,6 +502,27 @@ def test_face_batch_contract_accepts_empty_and_rejects_noninteger_id() -> None:
         geometry.evaluate_face_many(True, ((0.5, 0.5),))
     with pytest.raises(GeometryError, match="positive integer"):
         geometry.project_to_face_many(1.0, ((0.0, 0.0, 0.0),))
+    with pytest.raises(GeometryError, match="positive integer"):
+        geometry.face_local_uv_many(True, np.empty((0, 3)))
+    with pytest.raises(GeometryError, match="finite"):
+        geometry.face_local_uv_many(face, ((np.nan, 0.0, 0.0),))
+
+
+@pytest.mark.parametrize("sweep", (0.5, -0.5))
+def test_face_local_uv_many_matches_scalar_across_cylinder_seam(sweep: float) -> None:
+    surface = Cylinder(
+        np.asarray((12.0, -4.0, 1.5)), np.asarray((0.0, 0.0, 1.0)),
+        np.asarray((1.0, 0.0, 0.0)), 2.0, 3.0,
+        start_angle=0.2, sweep_angle=sweep,
+    )
+    geometry = GeometryModel()
+    face = _surface_face(geometry, surface)
+    points = np.asarray([
+        surface.evaluate(u, v)
+        for u, v in ((0.0, 0.2), (1e-12, 0.4), (0.5, 0.6), (1.0, 0.8))
+    ])
+    expected = np.asarray([geometry.face_local_uv(face, point) for point in points])
+    assert geometry.face_local_uv_many(face, points) == pytest.approx(expected, abs=1e-12)
 
 
 @pytest.mark.parametrize(
@@ -551,6 +573,9 @@ def test_builtin_projection_is_batched_and_builds_trim_once(
     face = _surface_face(geometry, surface)
     points = np.asarray([surface.evaluate(*value) for value in uv])
     points += np.asarray((0.2, -0.15, 0.35))
+    assert geometry.face_local_uv_many(face, points) == pytest.approx(
+        np.asarray([geometry.face_local_uv(face, point) for point in points]), abs=1e-12,
+    )
     expected = tuple(geometry.project_to_face(face, point) for point in points)
 
     calls = 0
