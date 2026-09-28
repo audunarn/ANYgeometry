@@ -1,0 +1,28 @@
+{
+  "artifact_source": {
+    "commit": "14d607d2aa9795a86d977deffd51c61a9d07b04b",
+    "tree": "a8c870233ddea767cf1ad259dd7193668daca725"
+  },
+  "artifacts": [
+    {
+      "bytes": 407889,
+      "filename": "anygeometry-0.4.4-py3-none-any.whl",
+      "sha256": "5F0783C75D0F864480EEC225EE9EAA9CA24E889040367B0C5FD7DA93FBF72569"
+    },
+    {
+      "bytes": 607635,
+      "filename": "anygeometry-0.4.4.tar.gz",
+      "sha256": "F36B9A104FB5DBC9661A3FAA5BC427190F1ECF4B89531D974F1EDC48E6453A70"
+    }
+  ],
+  "distribution": "ANYgeometry",
+  "publication_authorized": true,
+  "qualification": {
+    "accepted_terminal": "ACCEPTED_ANYGEOMETRY_0_4_4_RELEASE",
+    "evidence_sha256": "A45D0C69BA87DD32E9974AECDF551118B7075A801764F5EEF9AE7D2BB51D8D61",
+    "independent_review_sha256": "90020C8124B67419DC76470EC4606B9BF9E035A5302792F195D9297073EF4E66"
+  },
+  "schema": "anyecosystem.release-ledger-v1",
+  "tag": "v0.4.4",
+  "version": "0.4.4"
+}
