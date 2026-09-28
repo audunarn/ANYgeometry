@@ -862,6 +862,7 @@ class _GeometryProof:
         self.reference_basis = self.basis(self.reference)
         self.maps = {}
         self.vertex_coordinates = {}
+        self.local_vertex_coordinates = {}
         self.arc_frames = {}
         self.arc_frame_errors = {}
         self.max_residual = Fraction(0)
@@ -976,6 +977,12 @@ class _GeometryProof:
         self.max_residual = max(self.max_residual, bound.hi*self.scale)
 
     def local_vertex(self, vertex_id, mapping):
+        # One source vertex is visited by multiple coedges of the same face.
+        # Keep its interval inverse only for this fresh qualification call;
+        # a new owner query builds a new proof and recomputes it.
+        key = (id(mapping), vertex_id)
+        if key in self.local_vertex_coordinates:
+            return self.local_vertex_coordinates[key]
         p = self.p
         surface = mapping["surface"]
         point = self.point(self.context.vertices[vertex_id].position)
@@ -985,7 +992,9 @@ class _GeometryProof:
         v = p.div(z, _q(surface.height)/self.scale)
         if min(u.lo, v.lo) < -self.parameter_tolerance or max(u.hi, v.hi) > 1+self.parameter_tolerance:
             raise _Refusal("trim_outside_sector")
-        return angle, z, (u, v)
+        result = angle, z, (u, v)
+        self.local_vertex_coordinates[key] = result
+        return result
 
     def reference_vertex(self, vertex_id, target):
         p = self.p

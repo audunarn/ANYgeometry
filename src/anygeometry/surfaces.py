@@ -581,8 +581,18 @@ def closest_uv(
     step = 1.0e-6
     for _ in range(int(iterations)):
         current = surface.evaluate(float(uv[0]), float(uv[1]))
-        du = (surface.evaluate(float(uv[0] + step), float(uv[1])) - current) / step
-        dv = (surface.evaluate(float(uv[0]), float(uv[1] + step)) - current) / step
+        derivatives = []
+        for axis in range(2):
+            low = uv.copy()
+            high = uv.copy()
+            low[axis] = max(0.0, uv[axis] - step)
+            high[axis] = min(1.0, uv[axis] + step)
+            span = float(high[axis] - low[axis])
+            derivatives.append(
+                (surface.evaluate(float(high[0]), float(high[1]))
+                 - surface.evaluate(float(low[0]), float(low[1]))) / span
+            )
+        du, dv = derivatives
         jacobian = np.column_stack((du, dv))
         delta, *_ = np.linalg.lstsq(jacobian, target - current, rcond=None)
         uv += delta
