@@ -1785,6 +1785,9 @@ def from_dict(document: Mapping[str, Any]) -> GeometryModel:
             )
     if strict_document:
         _verify_checksum(document)
+    # The revision was assigned before content was restored.
+    geometry._trim_loops_cache.clear()  # noqa: SLF001
+    geometry._topology_corner_cache.clear()  # noqa: SLF001
     return geometry
 
 

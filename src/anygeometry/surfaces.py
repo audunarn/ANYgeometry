@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Protocol, Union, runtime_checkable
 
@@ -28,6 +29,15 @@ def _vector3(value: object, name: str) -> np.ndarray:
         raise GeometryError(f"{name} must be a finite 3-vector")
     vector.flags.writeable = False
     return vector
+
+
+def _clamp01(value: float) -> float:
+    """``np.clip(float(value), 0.0, 1.0)`` without the NumPy scalar dispatch.
+
+    Identical for every float, including signed zeros, infinities and NaN.
+    """
+    value = float(value)
+    return 0.0 if value < 0.0 else (1.0 if value > 1.0 else value)
 
 
 def _unit(value: object, name: str) -> np.ndarray:
@@ -115,10 +125,13 @@ class Cylinder:
         object.__setattr__(self, "height", height)
         object.__setattr__(self, "start_angle", float(self.start_angle))
         object.__setattr__(self, "sweep_angle", sweep)
+        # Derived, not a dataclass field: equality, repr and serialization
+        # are unchanged.  Read on every evaluation, so compute it once.
+        object.__setattr__(self, "_circumferential", np.cross(axis, radial))
 
     @property
     def circumferential_direction(self) -> np.ndarray:
-        return np.cross(self.axis, self.radial_direction)
+        return self._circumferential.copy()
 
     def evaluate(self, u: float, v: float) -> np.ndarray:
         angle = self.start_angle + float(u) * self.sweep_angle
@@ -179,10 +192,13 @@ class Cone:
         object.__setattr__(self, "sweep_angle", cylinder.sweep_angle)
         object.__setattr__(self, "radius_start", r0)
         object.__setattr__(self, "radius_end", r1)
+        object.__setattr__(
+            self, "_circumferential", np.cross(cylinder.axis, cylinder.radial_direction)
+        )
 
     @property
     def circumferential_direction(self) -> np.ndarray:
-        return np.cross(self.axis, self.radial_direction)
+        return self._circumferential.copy()
 
     def evaluate(self, u: float, v: float) -> np.ndarray:
         v = float(v)
@@ -234,8 +250,8 @@ class RuledSurface:
 
     @staticmethod
     def _sample(points: np.ndarray, u: float) -> np.ndarray:
-        parameter = np.clip(float(u), 0.0, 1.0) * (len(points) - 1)
-        index = min(int(np.floor(parameter)), len(points) - 2)
+        parameter = _clamp01(u) * (len(points) - 1)
+        index = min(math.floor(parameter), len(points) - 2)
         local = parameter - index
         return (1.0 - local) * points[index] + local * points[index + 1]
 
@@ -311,8 +327,8 @@ class CoonsSurface:
 
     @staticmethod
     def _sample(points: np.ndarray, parameter: float) -> np.ndarray:
-        scaled = np.clip(float(parameter), 0.0, 1.0) * (len(points)-1)
-        index = min(int(np.floor(scaled)), len(points)-2)
+        scaled = _clamp01(parameter) * (len(points)-1)
+        index = min(math.floor(scaled), len(points)-2)
         local = scaled-index
         return (1.0-local)*points[index] + local*points[index+1]
 
@@ -577,29 +593,75 @@ def closest_uv(
     """Deterministic bounded Gauss-Newton closest-point parameters."""
 
     target = _vector3(point, "point")
-    uv = np.asarray(initial, dtype=float).copy()
-    step = 1.0e-6
+    start = np.asarray(initial, dtype=float).copy()
+    u, v = float(start[0]), float(start[1])
+    step = _CLOSEST_UV_STEP
     for _ in range(int(iterations)):
-        current = surface.evaluate(float(uv[0]), float(uv[1]))
-        derivatives = []
-        for axis in range(2):
-            low = uv.copy()
-            high = uv.copy()
-            low[axis] = max(0.0, uv[axis] - step)
-            high[axis] = min(1.0, uv[axis] + step)
-            span = float(high[axis] - low[axis])
-            derivatives.append(
-                (surface.evaluate(float(high[0]), float(high[1]))
-                 - surface.evaluate(float(low[0]), float(low[1]))) / span
-            )
-        du, dv = derivatives
+        current = surface.evaluate(u, v)
+        # Bounded central differences; the same float operations as a
+        # per-axis ``low``/``high`` array copy.
+        low_u, high_u = max(0.0, u - step), min(1.0, u + step)
+        low_v, high_v = max(0.0, v - step), min(1.0, v + step)
+        du = (surface.evaluate(high_u, v) - surface.evaluate(low_u, v)) / (high_u - low_u)
+        dv = (surface.evaluate(u, high_v) - surface.evaluate(u, low_v)) / (high_v - low_v)
         jacobian = np.column_stack((du, dv))
         delta, *_ = np.linalg.lstsq(jacobian, target - current, rcond=None)
-        uv += delta
-        uv[:] = np.clip(uv, 0.0, 1.0)
+        u = _clamp01(u + float(delta[0]))
+        v = _clamp01(v + float(delta[1]))
         if float(np.linalg.norm(delta)) <= 1.0e-12:
             break
-    return float(uv[0]), float(uv[1])
+    return u, v
+
+
+_CLOSEST_UV_STEP = 1.0e-6
+
+
+def _closest_uv_many(
+    surface: RuledSurface | CoonsSurface,
+    points: np.ndarray,
+    *,
+    iterations: int = 30,
+) -> np.ndarray:
+    """``closest_uv`` for many points on an explicit ruled or Coons surface.
+
+    Row for row identical to the scalar function: surface evaluation is
+    vectorized over the points still iterating, with the scalar evaluation's
+    element-wise operation order, and each point keeps its own
+    ``np.linalg.lstsq`` step, clamp and convergence test.
+    """
+
+    targets = np.asarray(points, dtype=float).reshape((-1, 3))
+    uv = np.full((len(targets), 2), 0.5, dtype=float)
+    active = np.arange(len(targets))
+    step = _CLOSEST_UV_STEP
+    for _ in range(int(iterations)):
+        if not len(active):
+            break
+        params = uv[active]
+        current = _evaluate_surface_many(surface, params)
+        derivatives = []
+        for axis in range(2):
+            low = params.copy()
+            high = params.copy()
+            low[:, axis] = np.maximum(0.0, params[:, axis] - step)
+            high[:, axis] = np.minimum(1.0, params[:, axis] + step)
+            span = high[:, axis] - low[:, axis]
+            derivatives.append(
+                (_evaluate_surface_many(surface, high) - _evaluate_surface_many(surface, low))
+                / span[:, None]
+            )
+        du, dv = derivatives
+        residual = targets[active] - current
+        still: list[int] = []
+        for row, index in enumerate(active.tolist()):
+            jacobian = np.column_stack((du[row], dv[row]))
+            delta, *_ = np.linalg.lstsq(jacobian, residual[row], rcond=None)
+            uv[index, 0] = _clamp01(float(uv[index, 0]) + float(delta[0]))
+            uv[index, 1] = _clamp01(float(uv[index, 1]) + float(delta[1]))
+            if float(np.linalg.norm(delta)) > 1.0e-12:
+                still.append(index)
+        active = np.asarray(still, dtype=int)
+    return uv
 
 
 def surface_normal(surface: SurfaceProtocol, u: float, v: float) -> np.ndarray:

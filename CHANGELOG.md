@@ -2,6 +2,34 @@
 
 All notable user-visible changes to ANYgeometry are documented here.
 
+## Unreleased
+
+Faster projection and cylinder-atlas qualification. Every result is
+bit-for-bit identical to 0.4.4, including atlas certificates, work counts,
+cancellation callbacks and budget refusals.
+
+- Ruled and Coons surfaces evaluate without per-call NumPy scalar clipping.
+  `face_local_uv_many` and `face_trim_loops_uv` invert explicit ruled and
+  Coons patches for all points at once. The batch runs the same Gauss-Newton
+  steps as `closest_uv`, row for row.
+- Cylinders and cones compute their circumferential direction once.
+- `face_trim_loops_uv` reuses loops computed at the same committed revision
+  for the same `Face`. Nothing is cached inside a transaction, callers receive
+  copies, and clone/deserialization start empty.
+- Point-in-trim tests for small batches evaluate all edges at once.
+- Topology-backed Coons evaluation reuses its four corner points at the same
+  committed revision (same rule as trim loops), reuses boundary-chain length
+  arrays keyed by the exact edge lengths, and blends per component in the
+  former operation order. Curved face-face qualification on hole-punched
+  plates, which calls this evaluation millions of times, is several times
+  faster.
+- The cylinder-atlas interval engine uses exact integer rounding for
+  addition and multiplication. Repeated pure interval operations within one
+  proof are memoized and replay their recorded work charges. Every query and
+  binding validation still requalifies from scratch.
+- `tests/test_projection_equivalence.py` keeps the 0.4.4 implementations as
+  bit-exact oracles.
+
 ## 0.4.4 - 2026-09-28
 
 - Add public, read-only model/world point and vector conversion helpers while

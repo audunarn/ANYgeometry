@@ -453,11 +453,15 @@ class _I:
 
 
 def _q(value):
-    if isinstance(value, (float, np.floating)):
-        if not math.isfinite(value):
-            raise _Refusal("nonfinite_geometry")
-        value = float(value)
-    made = Fraction(value)
+    if type(value) is Fraction:
+        # Already exact and normalized; Fraction(value) would only copy it.
+        made = value
+    else:
+        if isinstance(value, (float, np.floating)):
+            if not math.isfinite(value):
+                raise _Refusal("nonfinite_geometry")
+            value = float(value)
+        made = Fraction(value)
     if max(abs(made.numerator).bit_length(), made.denominator.bit_length()) > 8192:
         raise _Refusal("rational_bit_budget")
     return made
@@ -471,6 +475,12 @@ class _Proof:
         self.counts = dict.fromkeys(_COUNTS, 0)
         self.callback_error = None
         self.pi = None
+        # Pure interval operations repeated within this proof return their
+        # memoized enclosure and replay the recorded charges, so work counts,
+        # cancellation checks and budget refusals are exactly those of
+        # recomputation (see ``_memo``).
+        self._memos = {}
+        self._recording = None
 
     def cancel(self, phase="cylinder atlas qualification"):
         self.counts["cancellation_checks"] += 1
@@ -486,6 +496,8 @@ class _Proof:
         if self.counts[key] >= maximum:
             raise _Refusal("qualification_budget_exhausted:" + key)
         self.counts[key] += 1
+        if self._recording is not None:
+            self._recording.append((key, limit, period))
         if self.counts[key] % period == 0:
             self.cancel()
 
@@ -503,7 +515,16 @@ class _Proof:
             raise _Refusal("invalid_interval")
         if any(abs(x.numerator).bit_length() + 80 > 8192 for x in (lo, hi)):
             raise _Refusal("rational_bit_budget")
-        return _I(Fraction((lo * _GRID).__floor__(), _GRID), Fraction((hi * _GRID).__ceil__(), _GRID))
+        # floor(lo*G) and ceil(hi*G) in integers; identical to rounding the
+        # Fraction products, without constructing them.
+        return _I(Fraction((lo.numerator * _GRID) // lo.denominator, _GRID),
+                  Fraction(-((-hi.numerator * _GRID) // hi.denominator), _GRID))
+
+    @staticmethod
+    def _grid(lo_n, lo_d, hi_n, hi_d):
+        """Outward grid rounding of ``lo_n/lo_d`` and ``hi_n/hi_d`` (d > 0)."""
+        return _I(Fraction((lo_n * _GRID) // lo_d, _GRID),
+                  Fraction(-((-hi_n * _GRID) // hi_d), _GRID))
 
     def add(self, a, b):
         self.charge()
@@ -513,7 +534,18 @@ class _Proof:
                    abs(y.numerator).bit_length() + x.denominator.bit_length(),
                    x.denominator.bit_length() + y.denominator.bit_length()) + 1 > 8192:
                 raise _Refusal("rational_bit_budget")
-        return self.rounded(a.lo + b.lo, a.hi + b.hi)
+        # Exact integer fast path.  The unnormalized numerator bounds the
+        # normalized one, so when it passes the ``rounded`` budget the
+        # normalized sum does too, and the grid floor/ceil are identical.
+        lo_n = a.lo.numerator * b.lo.denominator + b.lo.numerator * a.lo.denominator
+        hi_n = a.hi.numerator * b.hi.denominator + b.hi.numerator * a.hi.denominator
+        if max(abs(lo_n).bit_length(), abs(hi_n).bit_length()) + 80 > 8192:
+            return self.rounded(a.lo + b.lo, a.hi + b.hi)
+        lo_d = a.lo.denominator * b.lo.denominator
+        hi_d = a.hi.denominator * b.hi.denominator
+        if lo_n * hi_d > hi_n * lo_d:
+            raise _Refusal("invalid_interval")
+        return self._grid(lo_n, lo_d, hi_n, hi_d)
 
     def neg(self, a):
         a = self.i(a)
@@ -528,8 +560,22 @@ class _Proof:
         for x, y in ((a.lo, b.lo), (a.lo, b.hi), (a.hi, b.lo), (a.hi, b.hi)):
             if max(abs(x.numerator).bit_length(), x.denominator.bit_length()) + max(abs(y.numerator).bit_length(), y.denominator.bit_length()) + 1 > 8192:
                 raise _Refusal("rational_bit_budget")
-        values = (a.lo*b.lo, a.lo*b.hi, a.hi*b.lo, a.hi*b.hi)
-        return self.rounded(min(values), max(values))
+        pairs = ((a.lo, b.lo), (a.lo, b.hi), (a.hi, b.lo), (a.hi, b.hi))
+        nums = [x.numerator * y.numerator for x, y in pairs]
+        if max(abs(n).bit_length() for n in nums) + 80 > 8192:
+            values = (a.lo*b.lo, a.lo*b.hi, a.hi*b.lo, a.hi*b.hi)
+            return self.rounded(min(values), max(values))
+        # Exact integer fast path: order the four unnormalized products by
+        # cross-multiplication (denominators are positive) and round the
+        # extremes; identical to ``rounded(min(values), max(values))``.
+        dens = [x.denominator * y.denominator for x, y in pairs]
+        low = high = 0
+        for k in (1, 2, 3):
+            if nums[k] * dens[low] < nums[low] * dens[k]:
+                low = k
+            if nums[k] * dens[high] > nums[high] * dens[k]:
+                high = k
+        return self._grid(nums[low], dens[low], nums[high], dens[high])
 
     def div(self, a, b):
         b = self.i(b)
@@ -568,7 +614,36 @@ class _Proof:
             result = self.add(result, self.square(v))
         return self.sqrt(result)
 
+    def _memo(self, name, key, compute):
+        """Evaluate ``compute()`` once per exact ``key`` within this proof.
+
+        Only for operations whose charge sequence depends on their inputs
+        alone.  A hit replays the recorded charges in order; nested memoized
+        calls forward their charges to the enclosing recording.
+        """
+        table = self._memos.setdefault(name, {})
+        hit = table.get(key)
+        if hit is not None:
+            result, charges = hit
+            for charge in charges:
+                self.charge(*charge)
+            return result
+        outer, self._recording = self._recording, []
+        try:
+            result = compute()
+            charges = tuple(self._recording)
+        finally:
+            recorded, self._recording = self._recording, outer
+            if outer is not None:
+                outer.extend(recorded)
+        table[key] = (result, charges)
+        return result
+
     def cross(self, a, b):
+        a, b = tuple(a), tuple(b)
+        return self._memo("cross", (a, b), lambda: self._cross(a, b))
+
+    def _cross(self, a, b):
         return tuple(self.sub(self.mul(a[i], b[j]), self.mul(a[j], b[i])) for i, j in ((1, 2), (2, 0), (0, 1)))
 
     def vsub(self, a, b):
@@ -590,6 +665,9 @@ class _Proof:
 
     def atan_series(self, x):
         x = self.i(x)
+        return self._memo("atan_series", (x.lo, x.hi), lambda: self._atan_series(x))
+
+    def _atan_series(self, x):
         if max(abs(x.lo), abs(x.hi)) > Fraction(1, 2):
             raise _Refusal("atan_reduction_unqualified")
         power, square, result = x, self.square(x), self.i(0)
@@ -627,6 +705,13 @@ class _Proof:
 
     def atan2(self, y, x):
         y, x = self.i(y), self.i(x)
+        if self.pi is None:
+            # The first pi enclosure is charged to whichever call needs it;
+            # memoize only once it exists, so replayed charges never include it.
+            return self._atan2(y, x)
+        return self._memo("atan2", (y, x), lambda: self._atan2(y, x))
+
+    def _atan2(self, y, x):
         if x.lo > 0:
             return self.atan(self.div(y, x))
         if x.hi < 0 and y.lo >= 0:
@@ -641,6 +726,11 @@ class _Proof:
 
     def sincos(self, x):
         x = self.i(x)
+        if self.pi is None:
+            return self._sincos(x)
+        return self._memo("sincos", x, lambda: self._sincos(x))
+
+    def _sincos(self, x):
         pi = self.pi_bound()
         if max(abs(x.lo), abs(x.hi)) > 8*pi.hi:
             raise _Refusal("angle_range_out_of_scope", missing=True)
