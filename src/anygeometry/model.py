@@ -17,7 +17,7 @@ from copy import deepcopy
 from dataclasses import dataclass, fields, is_dataclass, replace
 from functools import wraps
 from types import MappingProxyType
-from typing import Dict, Hashable, Iterable, Iterator, List, Mapping, Sequence, Set, Tuple
+from typing import Any, Dict, Hashable, Iterable, Iterator, List, Mapping, Sequence, Set, Tuple
 from uuid import UUID, uuid4
 
 import numpy as np
@@ -46,8 +46,11 @@ from .surfaces import (
     Plane,
     RuledSurface,
     Surface,
+    _clamp01,
+    _closest_uv_many,
     _evaluate_surface_many,
     _surface_derivatives_many,
+    _vector3,
     closest_uv,
 )
 from .transactions import (
@@ -226,6 +229,18 @@ class GeometryModel:
         self._next_id: Dict[str, int] = {"vertex": 1, "edge": 1, "face": 1}
         self._arc_cache: Dict[int, Tuple[int, ArcFrame]] = {}
         self._edge_length_cache: Dict[int, Tuple[int, float]] = {}
+        # (face ID, curve samples) -> (revision, Face, loops). Written only in
+        # committed state; see ``face_trim_loops_uv``.
+        self._trim_loops_cache: Dict[
+            Tuple[int, int], Tuple[int, Face, Tuple[np.ndarray, ...]]
+        ] = {}
+        # face ID -> (revision, Face, sides, corners) of a topology Coons map;
+        # same validity rule as ``_trim_loops_cache``.
+        self._topology_corner_cache: Dict[int, Tuple[int, Face, Any, Any]] = {}
+        # Exact edge-length tuple -> (lengths, total, cumulative) arrays.
+        self._chain_arrays: Dict[
+            Tuple[float, ...], Tuple[np.ndarray, float, np.ndarray]
+        ] = {}
         self._entity_versions: Dict[EntityKey, int] = {}
         self._vertex_edges: Dict[int, Set[int]] = {}
         self._vertex_topology_edges: Dict[int, Set[int]] = {}
@@ -2206,6 +2221,8 @@ class GeometryModel:
         made = GeometryModel(tolerance=self.tolerance)
         made._restore_topology_unchecked(self.topology_snapshot())
         made._revision = self._revision
+        made._trim_loops_cache.clear()
+        made._topology_corner_cache.clear()
         made._entity_versions = dict(self._entity_versions)
         made._units = self._units
         made._local_origin = np.array(self._local_origin, dtype=float, copy=True)
@@ -5783,7 +5800,11 @@ class GeometryModel:
         ``t`` gives uniform arc length for both straight lines and arcs.
         """
 
-        edge = self._require_edge(edge_id)
+        return self._sample_edge_object(self._require_edge(edge_id), t)
+
+    def _sample_edge_object(self, edge: Edge, t: np.ndarray) -> np.ndarray:
+        """``sample_edge`` for an already resolved edge."""
+
         start = self.vertices[edge.start].position
         end = self.vertices[edge.end].position
         if isinstance(edge.curve, Arc):
@@ -6333,70 +6354,71 @@ class GeometryModel:
             raise GeometryError(
                 f"face {face_id} has no four-side topology parameterization"
             )
-        sides = face.sides()
-        point_a, derivative_a = self._chain_point_and_derivative(sides[0], u)
-        point_b, derivative_b = self._chain_point_and_derivative(sides[1], v)
-        point_c, derivative_c_raw = self._chain_point_and_derivative(
-            sides[2], 1.0 - u
-        )
-        point_d, derivative_d_raw = self._chain_point_and_derivative(
-            sides[3], 1.0 - v
-        )
+        # Sides, their chain data and the four corners are fixed for a
+        # committed revision and Face (the ``face_trim_loops_uv`` rule); a
+        # miss evaluates in the original order, so errors surface as before.
+        committed = self._transaction_journal is None
+        cached = self._topology_corner_cache.get(int(face_id)) if committed else None
+        if cached is not None and cached[0] == self._revision and cached[1] is face:
+            data = cached[2]
+            point_a, derivative_a = self._chain_eval(data[0], u)
+            point_b, derivative_b = self._chain_eval(data[1], v)
+            point_c, derivative_c_raw = self._chain_eval(data[2], 1.0 - u)
+            point_d, derivative_d_raw = self._chain_eval(data[3], 1.0 - v)
+            corners = tuple(corner.copy() for corner in cached[3])
+        else:
+            sides = face.sides()
+            first = self._chain_data(sides[0])
+            point_a, derivative_a = self._chain_eval(first, u)
+            second = self._chain_data(sides[1])
+            point_b, derivative_b = self._chain_eval(second, v)
+            third = self._chain_data(sides[2])
+            point_c, derivative_c_raw = self._chain_eval(third, 1.0 - u)
+            fourth = self._chain_data(sides[3])
+            point_d, derivative_d_raw = self._chain_eval(fourth, 1.0 - v)
+            corners = (
+                self._chain_eval(first, 0.0)[0],
+                self._chain_eval(first, 1.0)[0],
+                self._chain_eval(third, 0.0)[0],
+                self._chain_eval(third, 1.0)[0],
+            )
+            if committed:
+                self._topology_corner_cache[int(face_id)] = (
+                    self._revision, face, (first, second, third, fourth),
+                    tuple(corner.copy() for corner in corners),
+                )
         derivative_c = -derivative_c_raw
         derivative_d = -derivative_d_raw
-        corner_00, _ = self._chain_point_and_derivative(sides[0], 0.0)
-        corner_10, _ = self._chain_point_and_derivative(sides[0], 1.0)
-        corner_11, _ = self._chain_point_and_derivative(sides[2], 0.0)
-        corner_01, _ = self._chain_point_and_derivative(sides[2], 1.0)
+        corner_00, corner_10, corner_11, corner_01 = corners
 
-        anchor = corner_00
-        point_a = point_a - anchor
-        point_b = point_b - anchor
-        point_c = point_c - anchor
-        point_d = point_d - anchor
-        corner_00 = corner_00 - anchor
-        corner_10 = corner_10 - anchor
-        corner_11 = corner_11 - anchor
-        corner_01 = corner_01 - anchor
-        blend = (
-            (1.0 - u) * (1.0 - v) * corner_00
-            + u * (1.0 - v) * corner_10
-            + u * v * corner_11
-            + (1.0 - u) * v * corner_01
-        )
-        blend_du = (
-            -(1.0 - v) * corner_00
-            + (1.0 - v) * corner_10
-            + v * corner_11
-            - v * corner_01
-        )
-        blend_dv = (
-            -(1.0 - u) * corner_00
-            - u * corner_10
-            + u * corner_11
-            + (1.0 - u) * corner_01
-        )
-        point = anchor + (
-            (1.0 - v) * point_a
-            + v * point_c
-            + (1.0 - u) * point_d
-            + u * point_b
-            - blend
-        )
-        du = (
-            (1.0 - v) * derivative_a
-            + v * derivative_c
-            - point_d
-            + point_b
-            - blend_du
-        )
-        dv = (
-            -point_a
-            + point_c
-            + (1.0 - u) * derivative_d
-            + u * derivative_b
-            - blend_dv
-        )
+        # Per-component float arithmetic in exactly the order of the former
+        # NumPy (3,)-vector expressions: element-wise IEEE operations, no
+        # fusion, so every component is bit-for-bit unchanged.
+        anchor = corner_00.tolist()
+
+        def rel(vector: np.ndarray) -> List[float]:
+            return [x - a for x, a in zip(vector.tolist(), anchor)]
+
+        pa, pb, pc, pd = rel(point_a), rel(point_b), rel(point_c), rel(point_d)
+        c00, c10, c11, c01 = rel(corner_00), rel(corner_10), rel(corner_11), rel(corner_01)
+        da, db = derivative_a.tolist(), derivative_b.tolist()
+        dc, dd = derivative_c.tolist(), derivative_d.tolist()
+        w00, w10 = (1.0 - u) * (1.0 - v), u * (1.0 - v)
+        w11, w01 = u * v, (1.0 - u) * v
+        mu, mv = 1.0 - u, 1.0 - v
+        point_values, du_values, dv_values = [], [], []
+        for k in range(3):
+            blend = w00 * c00[k] + w10 * c10[k] + w11 * c11[k] + w01 * c01[k]
+            blend_du = -mv * c00[k] + mv * c10[k] + v * c11[k] - v * c01[k]
+            blend_dv = -mu * c00[k] - u * c10[k] + u * c11[k] + mu * c01[k]
+            point_values.append(
+                anchor[k] + (mv * pa[k] + v * pc[k] + mu * pd[k] + u * pb[k] - blend)
+            )
+            du_values.append(mv * da[k] + v * dc[k] - pd[k] + pb[k] - blend_du)
+            dv_values.append(-pa[k] + pc[k] + mu * dd[k] + u * db[k] - blend_dv)
+        point = np.asarray(point_values, dtype=float)
+        du = np.asarray(du_values, dtype=float)
+        dv = np.asarray(dv_values, dtype=float)
         return point, du, dv
 
     @staticmethod
@@ -6520,8 +6542,32 @@ class GeometryModel:
         evaluable = face.parameterization if face.parameterization is not None else face.surface
         if isinstance(evaluable, (Plane, Cylinder, Cone)):
             return np.clip(self._builtin_local_uv_many(evaluable, values), 0.0, 1.0)
+        return self._face_local_uv_rows(face_id, values)
+
+    def _face_local_uv_rows(
+        self, face_id: int, points: Sequence[Sequence[float]] | np.ndarray
+    ) -> np.ndarray:
+        """``face_local_uv`` for each point, row for row, shaped ``(n, 2)``.
+
+        Explicit ruled and Coons patches run the scalar Gauss-Newton inverse
+        for all points at once (``_closest_uv_many`` is identical per row);
+        every other surface uses the scalar call.
+        """
+        face = self._require_face(face_id)
+        evaluable = (
+            face.parameterization
+            if face.parameterization is not None
+            else face.surface
+        )
+        if type(evaluable) is RuledSurface or (
+            type(evaluable) is CoonsSurface and evaluable.has_boundaries
+        ):
+            targets = np.asarray(
+                [_vector3(point, "point") for point in points], dtype=float
+            ).reshape((-1, 3))
+            return np.clip(_closest_uv_many(evaluable, targets), 0.0, 1.0)
         return np.asarray(
-            [self.face_local_uv(face_id, point) for point in values], dtype=float,
+            [self.face_local_uv(face_id, point) for point in points], dtype=float,
         ).reshape((-1, 2))
 
     def face_support_local_uv(
@@ -6895,6 +6941,10 @@ class GeometryModel:
 
         if len(polygon) < 3:
             return np.zeros(len(points), dtype=bool)
+        if len(points) * len(polygon) <= 65536 and np.all(np.isfinite(polygon)):
+            return GeometryModel._points_in_polygon_block(
+                points, polygon, include_boundary=include_boundary
+            )
         x = points[:, 0]
         y = points[:, 1]
         inside = np.zeros(len(points), dtype=bool)
@@ -6920,6 +6970,44 @@ class GeometryModel:
             previous = current
         return np.where(on_boundary, include_boundary, inside)
 
+    @staticmethod
+    def _points_in_polygon_block(
+        points: np.ndarray,
+        polygon: np.ndarray,
+        *,
+        include_boundary: bool,
+    ) -> np.ndarray:
+        """``_points_in_polygon`` with points x edges evaluated at once.
+
+        The same per-edge element-wise expressions as the edge loop; the
+        on-boundary flag is their OR and the crossing parity their XOR.
+        Degenerate horizontal edges never contribute a crossing.
+        """
+
+        x = points[:, 0][:, None]
+        y = points[:, 1][:, None]
+        current = np.asarray(polygon, dtype=float)
+        previous = np.roll(current, 1, axis=0)
+        x1, y1 = previous[:, 0][None, :], previous[:, 1][None, :]
+        x2, y2 = current[:, 0][None, :], current[:, 1][None, :]
+        segment_x, segment_y = x2 - x1, y2 - y1
+        offset_x, offset_y = x - x1, y - y1
+        cross = np.abs(segment_x * offset_y - segment_y * offset_x)
+        on_boundary = np.any(
+            (cross <= 1.0e-10)
+            & (x >= np.minimum(x1, x2) - 1.0e-10)
+            & (x <= np.maximum(x1, x2) + 1.0e-10)
+            & (y >= np.minimum(y1, y2) - 1.0e-10)
+            & (y <= np.maximum(y1, y2) + 1.0e-10),
+            axis=1,
+        )
+        sloped = segment_y != 0.0
+        with np.errstate(divide="ignore", invalid="ignore"):
+            crossing_x = x1 + (y - y1) * segment_x / segment_y
+        crosses = sloped & ((y1 > y) != (y2 > y)) & (x < crossing_x)
+        inside = (np.count_nonzero(crosses, axis=1) % 2).astype(bool)
+        return np.where(on_boundary, include_boundary, inside)
+
     def face_trim_loops_uv(
         self, face_id: int, *, curve_samples: int = 17
     ) -> Tuple[np.ndarray, ...]:
@@ -6935,6 +7023,27 @@ class GeometryModel:
         if count < 3:
             raise GeometryError("trim curve sampling needs at least three points")
 
+        # Projection asks for the same loops on every call.  A committed
+        # revision identifies the whole document state (the owner contract
+        # also used by atlas and meshing staleness checks), so reuse loops
+        # computed at this revision for the same Face object.  Nothing is
+        # cached inside a transaction; callers receive copies.
+        key = (int(face_id), count)
+        committed = self._transaction_journal is None
+        if committed:
+            cached = self._trim_loops_cache.get(key)
+            if cached is not None and cached[0] == self._revision and cached[1] is face:
+                return tuple(loop.copy() for loop in cached[2])
+        loops = self._compute_face_trim_loops_uv(face_id, face, count)
+        if committed:
+            self._trim_loops_cache[key] = (
+                self._revision, face, tuple(loop.copy() for loop in loops)
+            )
+        return loops
+
+    def _compute_face_trim_loops_uv(
+        self, face_id: int, face: Face, count: int
+    ) -> Tuple[np.ndarray, ...]:
         if (
             isinstance(face.surface, CoonsSurface)
             and not face.surface.has_boundaries
@@ -6967,10 +7076,9 @@ class GeometryModel:
                 if not item.forward:
                     samples = samples[::-1]
                 points.extend(samples[:-1])
-            return np.asarray(
-                [self.face_local_uv(face_id, point) for point in points],
-                dtype=float,
-            )
+            if not points:
+                return np.asarray([], dtype=float)
+            return self._face_local_uv_rows(face_id, points)
 
         return tuple(polygon(loop) for loop in (face.loop,) + tuple(face.holes))
 
@@ -7079,7 +7187,13 @@ class GeometryModel:
     def _edge_parameter_derivative(self, edge_id: int, parameter: float) -> np.ndarray:
         """Derivative with respect to the edge's normalized parameter."""
 
-        edge = self._require_edge(edge_id)
+        return self._edge_parameter_derivative_object(
+            self._require_edge(edge_id), parameter
+        )
+
+    def _edge_parameter_derivative_object(
+        self, edge: Edge, parameter: float
+    ) -> np.ndarray:
         if isinstance(edge.curve, Arc):
             frame = self._arc_frame(edge)
             angle = float(parameter) * frame.sweep
@@ -7100,20 +7214,41 @@ class GeometryModel:
     def _chain_point_and_derivative(
         self, chain: Sequence[OrientedEdge], fraction: float
     ) -> Tuple[np.ndarray, np.ndarray]:
+        return self._chain_eval(self._chain_data(chain), fraction)
+
+    def _chain_data(self, chain: Sequence[OrientedEdge]) -> Tuple[Any, ...]:
+        """Length arrays and resolved edges of a boundary chain."""
+
         if not chain:
             raise GeometryError("cannot evaluate an empty boundary chain")
-        lengths = np.asarray([self.edge_length(item.edge) for item in chain])
-        total = float(lengths.sum())
+        # The arrays depend only on the exact edge lengths; reuse them.
+        key = tuple(self.edge_length(item.edge) for item in chain)
+        arrays = self._chain_arrays.get(key)
+        if arrays is None:
+            lengths = np.asarray(list(key))
+            cumulative = np.concatenate(([0.0], np.cumsum(lengths)))
+            arrays = (lengths, float(lengths.sum()), cumulative)
+            if len(self._chain_arrays) >= 4096:
+                self._chain_arrays.clear()
+            self._chain_arrays[key] = arrays
+        lengths, total, cumulative = arrays
         if total <= 0.0:
             raise GeometryError("cannot evaluate a zero-length boundary chain")
-        target = float(np.clip(fraction, 0.0, 1.0)) * total
-        cumulative = np.concatenate(([0.0], np.cumsum(lengths)))
+        edges = tuple(self._require_edge(item.edge) for item in chain)
+        return tuple(chain), lengths, total, cumulative, edges
+
+    def _chain_eval(
+        self, data: Tuple[Any, ...], fraction: float
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        chain, lengths, total, cumulative, edges = data
+        target = _clamp01(fraction) * total
         index = min(int(np.searchsorted(cumulative, target, side="right") - 1), len(chain) - 1)
         local = (target - cumulative[index]) / lengths[index]
         item = chain[index]
         parameter = local if item.forward else 1.0 - local
-        point = self.sample_edge(item.edge, np.asarray([parameter]))[0]
-        derivative = self._edge_parameter_derivative(item.edge, parameter)
+        edge = edges[index]
+        point = self._sample_edge_object(edge, np.asarray([parameter]))[0]
+        derivative = self._edge_parameter_derivative_object(edge, parameter)
         derivative *= total / lengths[index]
         if not item.forward:
             derivative *= -1.0
