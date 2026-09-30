@@ -4,7 +4,17 @@ All notable user-visible changes to ANYgeometry are documented here.
 
 ## Unreleased
 
-Faster projection and cylinder-atlas qualification. Every result is
+General-intersection development (not yet qualified for generalized meshing):
+
+- Root-exported immutable `EllipticArc` and `CylinderIntersectionCurve`
+  definitions, with evaluation, derivatives, bounds, projection, splitting and
+  affine copying. Analytic support intersections retain exact curves and isolate
+  finite-height, angular seam and branch-transition events.
+- Geometry schema 5 stores the new edge definitions and reads schemas 1–4.
+  Automation remains protocol 1. Readers limited to schema 4 must update before
+  reading documents written by this development head.
+
+Faster projection and cylinder-atlas qualification below. Every performance result is
 bit-for-bit identical to 0.4.4, including atlas certificates, work counts,
 cancellation callbacks and budget refusals.
 

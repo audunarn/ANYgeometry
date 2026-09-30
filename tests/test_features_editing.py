@@ -388,7 +388,7 @@ def test_feature_history_round_trip_and_v1_migration() -> None:
 
     restored = from_dict(deepcopy(document))
 
-    assert document["version"] == 4
+    assert document["version"] == 5
     assert to_dict(restored) == document
     assert len(restored.features.records) == 3
 
@@ -411,7 +411,7 @@ def test_feature_history_round_trip_and_v1_migration() -> None:
     migrated = from_dict(legacy)
     assert migrated.features.records == []
     assert migrated.features.baseline is not None
-    assert to_dict(migrated)["version"] == 4
+    assert to_dict(migrated)["version"] == 5
 
 
 def test_generator_feature_inserts_stable_local_output_keys() -> None:

@@ -1,10 +1,11 @@
 """Curve shapes carried by edges.
 
 An edge owns its topology (a start and an end vertex); the curve shape says how
-the edge sweeps between them.  Curve shapes never store coordinates, so moving
-a point moves every curve that references it.
+the edge sweeps between them. Point-driven curves refer to topology vertices;
+analytic intersection curves retain immutable geometric definitions. Their
+endpoint vertices must agree with those definitions.
 
-Three lightweight shapes cover the modelling paradigm:
+The point-driven shapes are:
 
 ``Straight``
     A line between the two end points.
@@ -17,6 +18,9 @@ Three lightweight shapes cover the modelling paradigm:
 ``Spline``
     A Bezier curve whose control points are persistent topology vertices.
 
+``EllipticArc`` and ``CylinderIntersectionCurve``
+    Exact intersection geometry, transformed together with its endpoints.
+
 A full circle is modelled as two arcs.  That keeps every edge open, so the
 topology never needs a special case for an edge whose start and end coincide.
 """
@@ -28,8 +32,12 @@ from typing import Tuple, Union
 
 import numpy as np
 
+from .exact_curves import EllipticArc, CylinderIntersectionCurve
+
 __all__ = [
     "Arc",
+    "EllipticArc",
+    "CylinderIntersectionCurve",
     "ArcFrame",
     "CurveShape",
     "DegenerateArcError",
@@ -85,7 +93,7 @@ class Spline:
     control_vertices: Tuple[int, ...]
 
 
-CurveShape = Union[Straight, Arc, Spline]
+CurveShape = Union[Straight, Arc, Spline, EllipticArc, CylinderIntersectionCurve]
 
 
 @dataclass(frozen=True)

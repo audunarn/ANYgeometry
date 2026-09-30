@@ -123,7 +123,7 @@ def test_schema_4_round_trip_preserves_identity_coordinates_and_structural_uses(
 
     restored = from_dict(deepcopy(document))
 
-    assert document["version"] == 4
+    assert document["version"] == 5
     assert to_dict(restored) == document
     assert restored.model_id == model.model_id
     assert restored.revision == model.revision
@@ -333,7 +333,7 @@ def test_schema_4_rejects_missing_and_unexpected_core_fields() -> None:
         ),
         (
             lambda data: data.pop("structural_replacement_history"),
-            "schema-4 geometry document is missing required field.*structural_replacement_history",
+            "schema-5 geometry document is missing required field.*structural_replacement_history",
         ),
     ),
 )
@@ -377,7 +377,7 @@ def test_schema_2_migration_infers_only_face_ownership_and_records_provenance() 
     migrated_document = to_dict(migrated)
     assert migrated_document["extensions"]["anygeometry:migration"] == {
         "source_version": 2,
-        "target_version": 4,
+        "target_version": 5,
         "inferred": "face ownership only; no members inferred",
     }
 

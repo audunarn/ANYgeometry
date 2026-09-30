@@ -65,7 +65,7 @@ def square(model: GeometryModel):
 def test_capabilities_and_schema_are_dependency_free_and_versioned():
     capabilities = describe_capabilities()
     assert capabilities["protocol_version"] == PROTOCOL_VERSION == 1
-    assert capabilities["geometry_schema_version"] == 4
+    assert capabilities["geometry_schema_version"] == 5
     assert len(tool_catalog()) == 7
     assert {item["name"] for item in tool_catalog()} == {
         "kernel_capabilities",

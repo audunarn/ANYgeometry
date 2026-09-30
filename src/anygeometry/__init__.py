@@ -1,6 +1,7 @@
 """Lightweight structural-surface geometry shared by the ANY ecosystem."""
 
 from .curves import Arc, ArcFrame, CurveShape, DegenerateArcError, Spline, Straight
+from .exact_curves import EllipticArc, CylinderIntersectionCurve
 from .coordinates import (
     model_to_world_points, world_to_model_points,
     model_to_world_vectors, world_to_model_vectors,
@@ -234,6 +235,8 @@ __all__ = [
     "AABBTree",
     "AffineTransform",
     "Arc",
+    "EllipticArc",
+    "CylinderIntersectionCurve",
     "ArcFrame",
     "Attachment",
     "AttachmentEvidence",

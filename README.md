@@ -256,12 +256,12 @@ geometry and structural closure once rather than cloning unrelated model data.
 
 ## Serialization and CLI
 
-Geometry schema 4 is deterministic and checksummed. It preserves model UUID
+The development head writes deterministic, checksummed geometry schema 5. It preserves model UUID
 and revision, coordinates/CRS and tolerance policy, allocator high-water
 marks, support surfaces and optional parameterizations, construction/control
 ownership, curves/trims, structural ownership and qualified relationships,
 groups, tags, geometry and structural lineage, extensions, and feature
-history. Schemas 1–3 migrate conservatively and one-way; malformed current
+history, including exact elliptic and cylinder-intersection curves. Schemas 1–4 migrate conservatively and one-way; malformed current
 documents fail closed:
 
 ```python
@@ -279,17 +279,17 @@ write_geometry("panel.certified.anygeometry.json", geometry, certified=True)
 
 `certified=True` is a validation gate, not a persisted certificate. The audit
 report is an ephemeral result bound to the exact model UUID, revision, and
-audit policy; schema 4 intentionally stores no reusable certification flag.
+audit policy; schema 5 intentionally stores no reusable certification flag.
 Consumers that require a qualified handoff must retain or rerun
 `strict_audit()` for that exact revision.
 
 JSON and gzip-compressed JSON are supported. Mesh and FEM/project
 serialization remain outside ANYgeometry.
 
-ANYgeometry 0.4.3 reads schemas 1–4 and writes schema 4. Automation consumers
-use `ANYgeometry>=0.4,<0.5`; geometry-only consumers may continue using schema
-4 through the public codecs. A 0.2.0 reader intentionally rejects a
-schema-4 document. Downstream packages should use the public codecs rather
+Released ANYgeometry 0.4.4 reads schemas 1–4 and writes schema 4. The development
+head reads schemas 1–5 and writes schema 5; older readers reject schema 5.
+Automation protocol 1 is unchanged. Consumers of the new curves must update
+their geometry owner together with the schema reader. Downstream packages should use the public codecs rather
 than parse schema records. Legacy relationship evidence migrates as
 `UNVERIFIED` and never implies exactness or certification.
 
@@ -321,7 +321,7 @@ comparison uses no distance, tolerance, or nearest-geometry retargeting.
 
 Ordinary output revalidates complete topological and structural integrity.
 Certified output adds the full global geometric audit before writing, but the
-ordinary and certified schema-4 payload shapes are identical. Feature history is
+ordinary and certified schema-5 payload shapes are identical. Feature history is
 owner-observed and validated before writing; direct record tampering is never
 accepted as a checksummed document.
 

@@ -21,6 +21,7 @@ import numpy as np
 
 from .curves import Arc, Spline, Straight
 from .errors import GeometryError
+from .exact_curves import EXACT_CURVES, EllipticArc, CylinderIntersectionCurve
 from .identity import EntityHandle
 from .predicates import (
     DEFAULT_INTERSECTION_QUALIFICATION_POLICY,
@@ -238,6 +239,9 @@ def _curve_bounds(model, edge_id: int, lower: float, upper: float) -> _Bounds:
                 if frame.sweep != 0.0:
                     parameters.append(float(np.clip(angle / frame.sweep, lower, upper)))
         points = _edge_points(model, edge_id, parameters)
+    elif isinstance(edge.curve, EXACT_CURVES):
+        low, high = edge.curve.bounds(lower, upper)
+        return _Bounds(low, high)
     else:  # pragma: no cover - closed built-in curve algebra
         raise GeometryError(f"unsupported curve {type(edge.curve).__name__}")
     low = np.nextafter(points.min(axis=0), -np.inf)
@@ -255,6 +259,8 @@ def _curve_derivative(model, edge_id: int, parameter: float) -> np.ndarray:
         return frame.radius * frame.sweep * (
             -np.sin(angle) * frame.e1 + np.cos(angle) * frame.e2
         )
+    if isinstance(edge.curve, EXACT_CURVES):
+        return edge.curve.derivative(float(parameter))
     assert isinstance(edge.curve, Spline)
     points = model._spline_points(edge)  # noqa: SLF001
     derivative = (len(points) - 1) * (points[1:] - points[:-1])
@@ -922,6 +928,33 @@ def _curve_exactly_on_support(
         residuals = np.abs((points - surface.origin) @ surface.normal)
         return bool(np.all(np.isfinite(residuals)) and float(np.max(residuals)) <= tolerance)
 
+    if isinstance(edge.curve, EllipticArc):
+        curve = edge.curve
+        offset = np.asarray(curve.center)-surface.origin
+        u, v = np.asarray(curve.u_vector), np.asarray(curve.v_vector)
+        if isinstance(surface, Plane):
+            return (abs(float(offset @ surface.normal))+abs(float(u @ surface.normal))
+                    + abs(float(v @ surface.normal))) <= tolerance
+        if isinstance(surface, Cylinder):
+            project = np.eye(3)-np.outer(surface.axis, surface.axis)
+            q0, qc, qs = project @ offset, project @ u, project @ v
+            coefficients = (
+                float(q0 @ q0+.5*(qc @ qc+qs @ qs)-surface.radius**2),
+                float(2*q0 @ qc), float(2*q0 @ qs),
+                float(.5*(qc @ qc-qs @ qs)), float(qc @ qs))
+            return sum(abs(value) for value in coefficients) <= tolerance*(2*surface.radius+tolerance)
+        return False
+    if isinstance(edge.curve, CylinderIntersectionCurve):
+        if not isinstance(surface, Cylinder) or not np.array_equal(edge.curve.transform, np.eye(4)):
+            return False
+        for support in (edge.curve.first, edge.curve.second):
+            axis = np.asarray(support.axis)
+            offset = np.asarray(support.origin)-surface.origin
+            if (np.linalg.norm(np.cross(axis, surface.axis)) <= model.tolerance.angular
+                    and np.linalg.norm(offset-float(offset @ surface.axis)*surface.axis) <= tolerance
+                    and abs(support.radius-surface.radius) <= tolerance):
+                return True
+        return False
     if not isinstance(edge.curve, Arc):
         return False
     frame = model.arc_frame(edge_id)

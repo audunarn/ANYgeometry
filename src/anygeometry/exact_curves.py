@@ -1,0 +1,412 @@
+"""Immutable analytic curves used by surface intersections.
+
+These definitions carry geometry, never a display polyline. Edge endpoint
+vertices must agree with the definition; moving an endpoint alone is rejected
+by topology validation. Whole-model transformations transform the definition.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, replace
+import math
+import heapq
+import numpy as np
+
+from .errors import GeometryError
+from .surfaces import Cylinder
+from .analytic_roots import trigonometric_roots
+
+
+def _vector(value, name):
+    try:
+        result = np.asarray(value, dtype=float)
+    except (TypeError, ValueError) as exc:
+        raise GeometryError(f"{name} must be a finite 3-vector") from exc
+    if result.shape != (3,) or not np.all(np.isfinite(result)):
+        raise GeometryError(f"{name} must be a finite 3-vector")
+    return tuple(float(item) for item in result)
+
+
+def _parameters(value):
+    try:
+        result = np.asarray(value, dtype=float)
+    except (TypeError, ValueError) as exc:
+        raise GeometryError("curve parameters must be finite and in [0, 1]") from exc
+    if not np.all(np.isfinite(result)) or np.any((result < 0) | (result > 1)):
+        raise GeometryError("curve parameters must be finite and in [0, 1]")
+    return result
+
+
+def _angles(start, sweep):
+    try:
+        start, sweep = float(start), float(sweep)
+    except (TypeError, ValueError) as exc:
+        raise GeometryError("curve angles must be finite") from exc
+    if not math.isfinite(start) or not math.isfinite(sweep) or sweep == 0:
+        raise GeometryError("curve angles must be finite with a nonzero sweep")
+    if abs(sweep) > math.tau + 16 * np.finfo(float).eps:
+        raise GeometryError("one curve interval cannot exceed a full turn")
+    return start, sweep
+
+
+def _affine(value):
+    matrix = np.asarray(value, dtype=float)
+    if matrix.shape != (4, 4) or not np.all(np.isfinite(matrix)):
+        raise GeometryError("curve transformation must be a finite 4x4 matrix")
+    if not np.array_equal(matrix[3], (0, 0, 0, 1)) or np.linalg.det(matrix[:3, :3]) == 0:
+        raise GeometryError("curve transformation must be nonsingular and affine")
+    return matrix
+
+
+def analytic_curve_length(curve, tolerance):
+    """Adaptive Gaussian integration of the analytic derivative."""
+    previous = None
+    count = 16
+    while True:
+        nodes, weights = np.polynomial.legendre.leggauss(count)
+        value = .5*float(weights @ np.linalg.norm(curve.derivative(.5*(nodes+1)), axis=-1))
+        if previous is not None and abs(value-previous) <= tolerance:
+            return value
+        if count >= 1024:
+            raise GeometryError("analytic curve length did not converge to the requested tolerance")
+        previous, count = value, count*2
+
+
+def project_analytic_curve(curve, point, tolerance):
+    """Global bounded projection; samples are upper bounds, never exclusions."""
+    target = np.asarray(_vector(point, "projection point"))
+    if not math.isfinite(tolerance) or tolerance <= 0:
+        raise GeometryError("projection tolerance must be finite and positive")
+    seeds = np.asarray((0., .5, 1.))
+    points = curve.evaluate(seeds)
+    distances = np.linalg.norm(points-target, axis=-1)
+    index = int(np.argmin(distances))
+    best, parameter, made = float(distances[index]), float(seeds[index]), points[index]
+
+    def bound(a, b):
+        lo, hi = curve.bounds(a, b)
+        return float(np.linalg.norm(np.maximum(np.maximum(lo-target, target-hi), 0)))
+
+    queue = [(bound(0., 1.), 0., 1.)]
+    while queue:
+        distance, a, b = heapq.heappop(queue)
+        if best-distance <= tolerance:
+            return made.copy(), parameter, best
+        mid = .5*(a+b)
+        if mid == a or mid == b:
+            raise GeometryError("analytic projection cannot resolve the requested tolerance")
+        point = curve.evaluate(mid)
+        residual = float(np.linalg.norm(point-target))
+        if residual < best:
+            best, parameter, made = residual, mid, point
+        for start, end in ((a, mid), (mid, b)):
+            lower_bound = bound(start, end)
+            if lower_bound < best-tolerance:
+                heapq.heappush(queue, (lower_bound, start, end))
+    return made.copy(), parameter, best
+
+
+@dataclass(frozen=True, slots=True)
+class EllipticArc:
+    """Exact affine ellipse: center + u*cos(angle) + v*sin(angle).
+
+    ``u_vector`` and ``v_vector`` are independent, not necessarily orthogonal.
+    Parameters run from zero to one over the signed angular interval.
+    """
+    center: tuple[float, float, float]
+    u_vector: tuple[float, float, float]
+    v_vector: tuple[float, float, float]
+    start_angle: float = 0.0
+    sweep_angle: float = math.tau
+
+    def __post_init__(self):
+        for name in ("center", "u_vector", "v_vector"):
+            object.__setattr__(self, name, _vector(getattr(self, name), name))
+        u, v = np.asarray(self.u_vector), np.asarray(self.v_vector)
+        if np.linalg.norm(np.cross(u, v)) == 0:
+            raise GeometryError("ellipse basis vectors must be independent")
+        start, sweep = _angles(self.start_angle, self.sweep_angle)
+        object.__setattr__(self, "start_angle", start)
+        object.__setattr__(self, "sweep_angle", sweep)
+
+    def evaluate(self, parameters):
+        angle = self.start_angle + self.sweep_angle * _parameters(parameters)
+        return (np.asarray(self.center) + np.cos(angle)[..., None] * self.u_vector
+                + np.sin(angle)[..., None] * self.v_vector)
+
+    def derivative(self, parameters):
+        angle = self.start_angle + self.sweep_angle * _parameters(parameters)
+        return self.sweep_angle * (-np.sin(angle)[..., None] * self.u_vector
+                                  + np.cos(angle)[..., None] * self.v_vector)
+
+    def bounds(self, lower=0.0, upper=1.0):
+        values = _parameters((lower, upper))
+        if values[0] > values[1]:
+            raise GeometryError("curve bound interval is reversed")
+        a, b = sorted(self.start_angle + self.sweep_angle * values)
+        angles = [a, b]
+        for u, v in zip(self.u_vector, self.v_vector):
+            phase = math.atan2(v, u)
+            angles.extend(phase + k * math.pi for k in range(
+                math.ceil((a-phase)/math.pi), math.floor((b-phase)/math.pi)+1))
+        angle = np.asarray(angles)
+        points = (self.center + np.cos(angle)[:, None] * self.u_vector
+                  + np.sin(angle)[:, None] * self.v_vector)
+        margin = 16*np.finfo(float).eps*(np.abs(self.center)+np.abs(self.u_vector)+np.abs(self.v_vector))
+        return (np.nextafter(points.min(axis=0)-margin, -np.inf),
+                np.nextafter(points.max(axis=0)+margin, np.inf))
+
+    def subcurve(self, lower, upper):
+        lower, upper = _parameters((lower, upper))
+        if lower == upper:
+            raise GeometryError("curve interval must have positive length")
+        return replace(self, start_angle=self.start_angle + lower*self.sweep_angle,
+                       sweep_angle=(upper-lower)*self.sweep_angle)
+
+    def transformed(self, matrix):
+        matrix = _affine(matrix)
+        return replace(self, center=matrix[:3, :3] @ self.center + matrix[:3, 3],
+                       u_vector=matrix[:3, :3] @ self.u_vector,
+                       v_vector=matrix[:3, :3] @ self.v_vector)
+
+
+@dataclass(frozen=True, slots=True)
+class _CylinderSupport:
+    origin: tuple[float, float, float]
+    axis: tuple[float, float, float]
+    radial_direction: tuple[float, float, float]
+    radius: float
+    height: float
+    start_angle: float
+    sweep_angle: float
+
+    @classmethod
+    def from_surface(cls, surface):
+        if isinstance(surface, cls):
+            return surface
+        if not isinstance(surface, Cylinder):
+            raise GeometryError("intersection curve supports must be Cylinders")
+        return cls(tuple(surface.origin), tuple(surface.axis),
+                   tuple(surface.radial_direction), surface.radius, surface.height,
+                   surface.start_angle, surface.sweep_angle)
+
+    def surface(self):
+        return Cylinder(**self.to_dict())
+
+    def to_dict(self):
+        return {name: getattr(self, name) for name in self.__dataclass_fields__}
+
+
+@dataclass(frozen=True, slots=True)
+class CylinderIntersectionCurve:
+    """One analytic quadratic-root branch of two cylinder supports.
+
+    The first support supplies angle; the axial coordinate is the selected
+    exact root of the second cylinder equation. Parallel supports are handled
+    as generators/coincident regions, not by this nonparallel branch type.
+    ``parameterization`` regularizes a simple discriminant root at an endpoint.
+    An affine image is retained exactly through ``transform``.
+    """
+    first: Cylinder | _CylinderSupport
+    second: Cylinder | _CylinderSupport
+    start_angle: float
+    sweep_angle: float
+    branch: int
+    parameterization: str = "linear"
+    transform: tuple[tuple[float, ...], ...] = (
+        (1., 0., 0., 0.), (0., 1., 0., 0.),
+        (0., 0., 1., 0.), (0., 0., 0., 1.))
+
+    def __post_init__(self):
+        object.__setattr__(self, "first", _CylinderSupport.from_surface(self.first))
+        object.__setattr__(self, "second", _CylinderSupport.from_surface(self.second))
+        start, sweep = _angles(self.start_angle, self.sweep_angle)
+        object.__setattr__(self, "start_angle", start)
+        object.__setattr__(self, "sweep_angle", sweep)
+        if type(self.branch) is not int or self.branch not in (-1, 1):
+            raise GeometryError("intersection branch must be -1 or 1")
+        if self.parameterization not in ("linear", "left_square", "right_square", "both_sine"):
+            raise GeometryError("invalid intersection branch parameterization")
+        transform = _affine(self.transform)
+        object.__setattr__(self, "transform", tuple(tuple(row) for row in transform))
+        if np.linalg.norm(np.cross(self.first.axis, self.second.axis)) == 0:
+            raise GeometryError("parallel cylinders require generator or region intersections")
+        # A public branch chart must stay real over its entire interval.
+        # Inspect every stationary value of its degree-two trigonometric
+        # discriminant, not a set of witness samples.
+        first, second = self.first, self.second
+        project = np.eye(3)-np.outer(second.axis, second.axis)
+        q0 = project @ (np.asarray(first.origin)-second.origin)
+        qc = project @ (first.radius*np.asarray(first.radial_direction))
+        qs = project @ (first.radius*np.cross(first.axis, first.radial_direction))
+        w = project @ np.asarray(first.axis)
+        a = float(w @ w)
+        b0, bc, bs = 2*float(q0 @ w), 2*float(qc @ w), 2*float(qs @ w)
+        c1 = 2*b0*bc-8*a*float(q0 @ qc)
+        c2 = 2*b0*bs-8*a*float(q0 @ qs)
+        c3 = .5*(bc*bc-bs*bs)-2*a*float(qc @ qc-qs @ qs)
+        c4 = bc*bs-4*a*float(qc @ qs)
+        stationary = ()
+        if any(value != 0 for value in (c1, c2, c3, c4)):
+            stationary = trigonometric_roots((0., c2, -c1, 2*c4, -2*c3),
+                start=start, sweep=sweep, tolerance=4*np.finfo(float).eps)
+        self._root_at_angles(np.asarray((start, start+sweep, *stationary)))
+
+    def _angle(self, parameters):
+        t = _parameters(parameters)
+        if self.parameterization == "left_square":
+            value, derivative = t*t, 2*t
+        elif self.parameterization == "right_square":
+            value, derivative = 1-(1-t)**2, 2*(1-t)
+        elif self.parameterization == "both_sine":
+            value = np.sin(.5*np.pi*t)**2
+            derivative = .5*np.pi*np.sin(np.pi*t)
+        else:
+            value, derivative = t, np.ones_like(t)
+        return self.start_angle+self.sweep_angle*value, self.sweep_angle*derivative
+
+    def _coefficients(self, angle):
+        first, second = self.first, self.second
+        axis = np.asarray(first.axis)
+        other_axis = np.asarray(second.axis)
+        e1 = np.asarray(first.radial_direction)
+        e2 = np.cross(axis, e1)
+        base = (first.origin + first.radius*(np.cos(angle)[..., None]*e1
+                                             + np.sin(angle)[..., None]*e2))
+        base_derivative = first.radius*(-np.sin(angle)[..., None]*e1
+                                       + np.cos(angle)[..., None]*e2)
+        offset = base-second.origin
+        q = offset-(offset @ other_axis)[..., None]*other_axis
+        dq = base_derivative-(base_derivative @ other_axis)[..., None]*other_axis
+        w = axis-float(axis @ other_axis)*other_axis
+        a = float(w @ w)
+        b = 2*(q @ w)
+        c = np.sum(q*q, axis=-1)-second.radius**2
+        db, dc = 2*(dq @ w), 2*np.sum(q*dq, axis=-1)
+        return base, base_derivative, a, b, c, db, dc
+
+    def _root_at_angles(self, angle):
+        base, dbase, a, b, c, db, dc = self._coefficients(angle)
+        disc = b*b-4*a*c
+        roundoff = 64*np.finfo(float).eps*(b*b+4*a*np.abs(c)+self.second.radius**2*a)
+        if np.any(disc < -roundoff):
+            raise GeometryError("intersection branch leaves the real cylinder intersection")
+        root = np.sqrt(np.maximum(disc, 0))
+        q = -.5*(b+np.copysign(root, b))
+        # Stable quadratic roots, including an exactly zero root.
+        alternate = np.divide(c, q, out=np.zeros_like(c), where=q != 0)
+        z = np.maximum(q/a, alternate) if self.branch == 1 else np.minimum(q/a, alternate)
+        return base, dbase, z, a, b, root, db, dc
+
+    def _root(self, parameters):
+        t = _parameters(parameters)
+        angle, angle_derivative = self._angle(t)
+        base, dbase, z, a, b, root, db, dc = self._root_at_angles(angle)
+        regular = ((t == 0) & (self.parameterization in ("left_square", "both_sine"))) | (
+                   (t == 1) & (self.parameterization in ("right_square", "both_sine")))
+        if np.any(regular):
+            # Certified discriminant events are represented by a floating
+            # angular witness. Avoid sqrt(roundoff) separating the two
+            # branches at their shared endpoint. The implicit residual is
+            # bounded by the same arithmetic envelope used above.
+            envelope = 64*np.finfo(float).eps*(b*b+a*self.second.radius**2)
+            if np.any(regular & (root*root > envelope)):
+                raise GeometryError("regular endpoint is not a discriminant transition")
+            z = np.where(regular, -b/(2*a), z)
+            root = np.where(regular, 0., root)
+        return base, dbase, z, a, b, root, db, dc, angle_derivative
+
+    def evaluate(self, parameters):
+        base, _d, z, *_rest = self._root(parameters)
+        points = base+z[..., None]*self.first.axis
+        matrix = np.asarray(self.transform)
+        return points @ matrix[:3, :3].T+matrix[:3, 3]
+
+    def derivative(self, parameters):
+        t = _parameters(parameters)
+        _base, dbase, z, a, b, root, db, dc, da = self._root(t)
+        denominator = 2*a*z+b
+        dz = np.divide(-(db*z+dc)*da, denominator,
+                       out=np.zeros_like(z), where=denominator != 0)
+        singular = denominator == 0
+        if np.any(singular):
+            ddisc = 2*b*db-4*a*dc
+            left = t == 0
+            right = t == 1
+            left_scale = self.sweep_angle*(np.pi**2/4 if self.parameterization == "both_sine" else 1)
+            limit = self.branch*np.sqrt(np.maximum(ddisc*left_scale, 0))/a
+            end_limit = -self.branch*np.sqrt(np.maximum(-ddisc*left_scale, 0))/a
+            regular_left = left & (self.parameterization in ("left_square", "both_sine"))
+            regular_right = right & (self.parameterization in ("right_square", "both_sine"))
+            if np.any(singular & ~(regular_left | regular_right)):
+                raise GeometryError("intersection branch needs a regular endpoint chart")
+            dz = np.where(singular & regular_left, limit, dz)
+            dz = np.where(singular & regular_right, end_limit, dz)
+        result = dbase*da[..., None]+dz[..., None]*self.first.axis
+        return result @ np.asarray(self.transform)[:3, :3].T
+
+    def subcurve(self, lower, upper):
+        lower, upper = _parameters((lower, upper))
+        angles, _ = self._angle(np.asarray((lower, upper)))
+        if lower == upper:
+            raise GeometryError("curve interval must have positive length")
+        low, high = min(lower, upper), max(lower, upper)
+        left = low == 0 and self.parameterization in ("left_square", "both_sine")
+        right = high == 1 and self.parameterization in ("right_square", "both_sine")
+        mode = "both_sine" if left and right else "left_square" if left else "right_square" if right else "linear"
+        if upper < lower:
+            mode = {"left_square": "right_square", "right_square": "left_square"}.get(mode, mode)
+        return replace(self, start_angle=float(angles[0]),
+                       sweep_angle=float(angles[1]-angles[0]), parameterization=mode)
+
+    def transformed(self, matrix):
+        matrix = _affine(matrix) @ np.asarray(self.transform)
+        return replace(self, transform=tuple(tuple(row) for row in matrix))
+
+    def bounds(self, lower=0.0, upper=1.0):
+        """Outward interval enclosure of the analytic quadratic branch."""
+        interval = _parameters((lower, upper))
+        if lower > upper:
+            raise GeometryError("curve bound interval is reversed")
+        first, second = self.first, self.second
+        angles, _ = self._angle(interval)
+        e1 = np.asarray(first.radial_direction)
+        e2 = np.cross(first.axis, e1)
+        sweep = float(angles[1]-angles[0])
+        if sweep == 0:
+            point = self.evaluate(lower)
+            return np.nextafter(point, -np.inf), np.nextafter(point, np.inf)
+        base_lo, base_hi = EllipticArc(first.origin, first.radius*e1,
+                                     first.radius*e2, float(angles[0]), sweep).bounds()
+        other_axis = np.asarray(second.axis)
+        projection = np.eye(3)-np.outer(other_axis, other_axis)
+        center, half = .5*(base_lo+base_hi)-second.origin, .5*(base_hi-base_lo)
+        qcenter, qhalf = projection @ center, np.abs(projection) @ half
+        qlo, qhi = qcenter-qhalf, qcenter+qhalf
+        w = projection @ np.asarray(first.axis)
+        a = float(w @ w)
+        bcenter, bhalf = 2*float(w @ qcenter), 2*float(np.abs(w) @ qhalf)
+        blo, bhi = bcenter-bhalf, bcenter+bhalf
+        clo = float(np.maximum(np.maximum(qlo, -qhi), 0) @ np.maximum(np.maximum(qlo, -qhi), 0))-second.radius**2
+        chi = float(np.maximum(qlo*qlo, qhi*qhi).sum())-second.radius**2
+        bsqlo = 0 if blo <= 0 <= bhi else min(blo*blo, bhi*bhi)
+        bsqhi = max(blo*blo, bhi*bhi)
+        rounding = 128*np.finfo(float).eps*(bsqhi+4*a*max(abs(clo), abs(chi))+a*second.radius**2)
+        dlo = max(bsqlo-4*a*chi-rounding, 0)
+        dhi = max(bsqhi-4*a*clo+rounding, 0)
+        rlo, rhi = math.sqrt(dlo), math.sqrt(dhi)
+        zlo, zhi = -bhi/(2*a), -blo/(2*a)
+        if self.branch == 1:
+            zlo, zhi = zlo+rlo/(2*a), zhi+rhi/(2*a)
+        else:
+            zlo, zhi = zlo-rhi/(2*a), zhi-rlo/(2*a)
+        axis = np.asarray(first.axis)
+        lower = base_lo+np.minimum(axis*zlo, axis*zhi)
+        upper = base_hi+np.maximum(axis*zlo, axis*zhi)
+        matrix = np.asarray(self.transform)
+        center, half = .5*(lower+upper), .5*(upper-lower)
+        center = matrix[:3, :3] @ center+matrix[:3, 3]
+        half = np.abs(matrix[:3, :3]) @ half
+        return np.nextafter(center-half, -np.inf), np.nextafter(center+half, np.inf)
+
+
+EXACT_CURVES = (EllipticArc, CylinderIntersectionCurve)

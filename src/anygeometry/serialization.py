@@ -15,6 +15,7 @@ from uuid import UUID
 import numpy as np
 
 from .curves import Arc, Spline, Straight
+from .exact_curves import EllipticArc, CylinderIntersectionCurve
 from .entities import Edge, EntityRef, Face, OrientedEdge, Vertex
 from .errors import GeometryError
 from .features import (
@@ -53,7 +54,7 @@ from .surfaces import CoonsSurface, Cone, Cylinder, Plane, RuledSurface
 from .tolerance import TolerancePolicy
 
 SCHEMA = "anygeometry"
-VERSION = 4
+VERSION = 5
 
 _GEOMETRY_KINDS = ("vertex", "edge", "face")
 _STRUCTURAL_KINDS = (
@@ -596,6 +597,16 @@ def to_dict(
             curve = {"type": "arc", "via_vertex": edge.curve.via_vertex}
         elif isinstance(edge.curve, Spline):
             curve = {"type": "spline", "control_vertices": list(edge.curve.control_vertices)}
+        elif isinstance(edge.curve, EllipticArc):
+            curve = {"type": "elliptic_arc", **{
+                name: getattr(edge.curve, name) for name in
+                ("center", "u_vector", "v_vector", "start_angle", "sweep_angle")}}
+        elif isinstance(edge.curve, CylinderIntersectionCurve):
+            curve = {"type": "cylinder_intersection",
+                     "first": _surface(edge.curve.first.surface()),
+                     "second": _surface(edge.curve.second.surface()),
+                     **{name: getattr(edge.curve, name) for name in
+                        ("start_angle", "sweep_angle", "branch", "parameterization", "transform")}}
         else:  # pragma: no cover - closed public union
             raise GeometryError(f"unsupported curve type {type(edge.curve).__name__}")
         curves.append({"id": edge.id, "start": edge.start, "end": edge.end, "curve": curve})
@@ -1352,6 +1363,20 @@ def _decode_geometry_records(
                     name="spline curve",
                 )
             curve = Spline(_ids(curve_data["control_vertices"], "spline control vertex"))
+        elif curve_kind in ("elliptic_arc", "cylinder_intersection"):
+            if schema_version < 5:
+                raise GeometryError("analytic intersection curves require schema 5")
+            fields = ({"center", "u_vector", "v_vector", "start_angle", "sweep_angle"}
+                      if curve_kind == "elliptic_arc" else
+                      {"first", "second", "start_angle", "sweep_angle", "branch", "parameterization", "transform"})
+            _exact_fields(curve_data, required={"type", *fields}, name="analytic curve")
+            data = {name: curve_data[name] for name in fields}
+            if curve_kind == "elliptic_arc":
+                curve = EllipticArc(**data)
+            else:
+                data["first"] = _decode_surface(data["first"], strict=True)
+                data["second"] = _decode_surface(data["second"], strict=True)
+                curve = CylinderIntersectionCurve(**data)
         else:
             raise GeometryError(f"unsupported curve type {curve_kind!r}")
         geometry._put_entity(  # noqa: SLF001
@@ -1548,16 +1573,19 @@ def from_dict(document: Mapping[str, Any]) -> GeometryModel:
     if document.get("schema", SCHEMA) != SCHEMA:
         raise GeometryError("not an ANYgeometry document")
     version = _integer(document.get("version", 1), "version")
-    if version not in (1, 2, 3, VERSION):
+    if version not in (1, 2, 3, 4, VERSION):
         raise GeometryError(f"unsupported ANYgeometry version {version}")
     strict_document = version >= 3
-    current = version == VERSION
+    # Schemas 4 and 5 share identity, tolerance and additive semantic fields.
+    # Schema 5 adds analytic edge definitions; old schema-4 state must not be
+    # routed through the older, reduced schema-3 decoder.
+    current = version >= 4
     if current:
         _exact_fields(
             document,
             required=_CURRENT_REQUIRED_FIELDS,
             optional=_CURRENT_OPTIONAL_FIELDS,
-            name="schema-4 geometry document",
+            name=f"schema-{version} geometry document",
         )
     elif version == 3:
         _exact_fields(

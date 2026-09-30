@@ -8,6 +8,7 @@ from typing import Iterable, Mapping
 from uuid import UUID
 
 from .curves import Arc, Spline
+from .exact_curves import EXACT_CURVES
 from .entities import EntityRef, Face
 from .errors import GeometryError
 from .identity import EntityHandle, EntityKey, ResolutionStatus
@@ -425,7 +426,9 @@ def extract_model_closure(
                     end,
                 )
             else:
-                work_id = work.add_line(start, end)
+                work_id = (work.add_curve(start, end, edge.curve)
+                           if isinstance(edge.curve, EXACT_CURVES)
+                           else work.add_line(start, end))
             remember("edge", source_id, work_id)
         for source_id in sorted(faces):
             face = geometry.faces[source_id]

@@ -1,0 +1,37 @@
+........................................................................ [  7%]
+........................................................................ [ 14%]
+........................................................................ [ 21%]
+........................................................................ [ 28%]
+........................................................................ [ 35%]
+........................................................................ [ 43%]
+........................................................................ [ 50%]
+........................................................................ [ 57%]
+........................................................................ [ 64%]
+........................................................................ [ 71%]
+........................................................................ [ 79%]
+........................................................................ [ 86%]
+..F..................................................................... [ 93%]
+.................................................................        [100%]
+================================== FAILURES ===================================
+_______ test_face_split_assigns_intact_hole_and_rolls_back_crossing_cut _______
+tests\test_surfaces_operations.py:562: in test_face_split_assigns_intact_hole_and_rolls_back_crossing_cut
+    _divider, made = split_face_at(geometry, face, 0, 0.5)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\operations.py:440: in split_face_at
+    return _split_face_at_impl(
+src\anygeometry\operations.py:424: in _split_face_at_impl
+    return split_face_between(
+src\anygeometry\operations.py:223: in split_face_between
+    return _split_face_between_impl(
+src\anygeometry\operations.py:161: in _split_face_between_impl
+    first_holes, second_holes = _partition_face_holes(
+src\anygeometry\operations.py:286: in _partition_face_holes
+    for point in _sample_oriented_chain(geometry, first_chain)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\operations.py:258: in _sample_oriented_chain
+    count = 2 if isinstance(edge.curve, Straight) else samples
+                                        ^^^^^^^^
+E   NameError: name 'Straight' is not defined
+=========================== short test summary info ===========================
+FAILED tests/test_surfaces_operations.py::test_face_split_assigns_intact_hole_and_rolls_back_crossing_cut
+1 failed, 1000 passed in 163.76s (0:02:43)
