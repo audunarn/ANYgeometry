@@ -562,6 +562,19 @@ def to_dict(
         if not certifiable:
             raise GeometryError("certified serialization requires a clean strict audit")
 
+    return _serialized_model_state(geometry, include_features=include_features)
+
+
+def _serialized_model_state(
+    geometry: GeometryModel, *, include_features: bool = True,
+) -> dict[str, object]:
+    """Encode complete persisted content for binding already-qualified evidence.
+
+    This private encoder does not qualify topology. Public serialization always
+    performs qualification first. Consumers must not treat this fingerprint as
+    evidence of validity; it only detects changes to existing evidence bindings.
+    """
+
     try:
         model_id = str(UUID(str(geometry.model_id)))
     except (TypeError, ValueError, AttributeError) as error:
@@ -1152,6 +1165,8 @@ def _decode_structural(
             )
         except (TypeError, ValueError) as error:
             raise GeometryError("attachment contains an unknown enum value") from error
+        if schema_version<5 and attachment_kind is AttachmentKind.SHEET_ON_JOINT:
+            raise GeometryError("sheet joint attachments require geometry schema 5")
         raw_lineage = _list(item.get("lineage", []), "attachment lineage")
         raw_source_kind = item.get("source_kind")
         if raw_source_kind is not None and not isinstance(raw_source_kind, str):
@@ -1224,6 +1239,8 @@ def _decode_structural(
             )
         except (TypeError, ValueError) as error:
             raise GeometryError("junction contains an unknown enum value") from error
+        if schema_version<5 and junction_kind is JunctionKind.SHEET_JOINT:
+            raise GeometryError("Sheet joints require geometry schema 5")
         member_uses: list[JunctionMemberUse] = []
         for raw_use in _list(item["member_uses"], "junction member uses"):
             use = _object(raw_use, "junction member-use record")

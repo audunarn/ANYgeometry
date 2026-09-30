@@ -131,7 +131,7 @@ def test_disjoint_and_same_identity_plan_as_no_topology() -> None:
     assert same.expected_changes == ()
 
 
-def test_point_only_face_imprint_is_typed_unsupported() -> None:
+def test_point_only_face_imprint_shares_the_trim_contact() -> None:
     geometry = GeometryModel()
     first = geometry.add_plate(
         geometry.add_points(((0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)))
@@ -146,10 +146,16 @@ def test_point_only_face_imprint_is_typed_unsupported() -> None:
         policy=MutationPolicy.IMPRINT,
     )
 
-    assert plan.result.kind is IntersectionKind.UNSUPPORTED
-    assert plan.result.dimension is IntersectionDimension.NONE
-    assert "point-only contact" in plan.result.diagnostics[-1]
-    assert plan.operation is ImprintOperation.NO_TOPOLOGY
+    assert plan.result.kind is IntersectionKind.TOUCH_POINT
+    assert plan.result.dimension is IntersectionDimension.POINT
+    assert plan.operation is ImprintOperation.FACE_IMPRINT
+    assert plan.batch_plan.face_contacts
+    apply_imprint(geometry,plan,policy=MutationPolicy.IMPRINT)
+    vertices=[vertex.id for vertex in geometry.vertices.values() if tuple(vertex.position)==(1,1,0)]
+    assert len(vertices)==1
+    assert {face for edge in geometry.edges_using_vertex(vertices[0])
+            for face in geometry.faces_using_edge(edge)}=={first,second}
+    assert geometry.validate_topology()==()
 
 
 def _crossing_members() -> tuple[GeometryModel, int, int]:
@@ -1259,7 +1265,7 @@ def test_same_world_point_distinct_member_visits_remain_separate() -> None:
         assert plan.result.kind is IntersectionKind.UNSUPPORTED
 
 
-def test_distinct_member_crossings_remain_separate_and_fail_closed() -> None:
+def test_distinct_member_crossings_are_applied_atomically() -> None:
     geometry = GeometryModel()
     first_member = geometry.add_member(
         (
@@ -1287,10 +1293,26 @@ def test_distinct_member_crossings_remain_separate_and_fail_closed() -> None:
     assert result.kind is IntersectionKind.CROSS
     assert result.dimension is IntersectionDimension.POINT
     assert len(result.components) == 2
+    from anygeometry import to_dict
+    before = to_dict(geometry)
     plan = plan_imprint(geometry, result, policy=ConnectionIntent.CONNECT)
-    assert plan.operation is ImprintOperation.NO_TOPOLOGY
-    assert plan.result.kind is IntersectionKind.UNSUPPORTED
-    assert "exactly one qualified intersection component" in plan.result.diagnostics[-1]
+    assert to_dict(geometry) == before
+    assert plan.operation is ImprintOperation.MEMBER_CONNECTION
+    applied = apply_imprint(geometry, plan, policy=ConnectionIntent.CONNECT)
+    joints = [geometry.junctions[item.id] for item in applied.relations
+              if item.kind == "junction"]
+    assert len(joints) == 2
+    assert all(set(joint.member_ids) == {first_member, second_member} for joint in joints)
+    vertices = []
+    for member in (first_member, second_member):
+        vertices.append({vertex for identifier in geometry.members[member].edge_use_ids
+                         for edge in (geometry.edges[geometry.member_edge_uses[identifier].edge_id],)
+                         for vertex in (edge.start,edge.end)})
+    assert len(vertices[0] & vertices[1]) == 2
+    geometry.validate_topology()
+    after = to_dict(geometry)
+    assert apply_imprint(geometry, plan, policy=ConnectionIntent.CONNECT).reused
+    assert to_dict(geometry) == after
 
 
 def test_connected_member_overlap_is_typed_unsupported_during_planning() -> None:
@@ -1364,17 +1386,17 @@ def test_connected_member_apply_rolls_back_when_second_split_fails(
         tuple(geometry.members[second_member].edge_use_ids),
         geometry.revision,
     )
-    original = geometry.split_edge
+    original = GeometryModel.split_edge
     calls = 0
 
-    def interrupted(edge_id: int, t: float = 0.5):
+    def interrupted(self, edge_id: int, t: float = 0.5):
         nonlocal calls
         calls += 1
         if calls == 2:
             raise RuntimeError("injected second split failure")
-        return original(edge_id, t)
+        return original(self, edge_id, t)
 
-    monkeypatch.setattr(geometry, "split_edge", interrupted)
+    monkeypatch.setattr(GeometryModel, "split_edge", interrupted)
     with pytest.raises(RuntimeError, match="injected"):
         apply_imprint(geometry, plan, policy=ConnectionIntent.CONNECT)
 

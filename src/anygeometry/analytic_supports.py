@@ -86,7 +86,8 @@ def plane_cylinder_support(plane, cylinder, *, tolerance=1e-10, cancellation_che
                                      angle_tolerance, cancellation_check))
     # Every returned edge has an open parameter interval with distinct ends.
     # A periodic seam is represented by two charts, even without another cut.
-    events.append(cylinder.start_angle+.5*cylinder.sweep_angle)
+    if abs(abs(cylinder.sweep_angle)-math.tau) <= angle_tolerance:
+        events.append(cylinder.start_angle+.5*cylinder.sweep_angle)
     events = _ordered(events, cylinder, angle_tolerance)
     curves, points = [], []
     for start, end in zip(events, events[1:]):
@@ -94,7 +95,7 @@ def plane_cylinder_support(plane, cylinder, *, tolerance=1e-10, cancellation_che
         if _inside(cylinder, curve.evaluate(.5), tolerance):
             curves.append(curve)
     for angle in events:
-        point = ellipse.evaluate((angle-cylinder.start_angle)/cylinder.sweep_angle)
+        point = ellipse.evaluate(min(1., max(0., (angle-cylinder.start_angle)/cylinder.sweep_angle)))
         if _inside(cylinder, point, tolerance) and not any(
             np.linalg.norm(point-curve.evaluate(t)) <= tolerance
             for curve in curves for t in (0., 1.)):

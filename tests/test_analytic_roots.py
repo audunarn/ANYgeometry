@@ -44,3 +44,39 @@ def test_coincidence_and_cancellation_fail_without_partial_results():
         isolate_real_roots((0, 0))
     with pytest.raises(GeometryError, match="cancelled"):
         isolate_real_roots((-2, 0, 1), cancellation_check=lambda: True)
+
+
+def test_bounded_projective_charts_enclose_known_roots_without_cauchy_bound():
+    # Exact factor oracle includes both chart borders, a repeated border,
+    # narrow interior roots and roots far outside the tangent chart.
+    expected=(Fraction(-10**80),Fraction(-1),Fraction(-1,7),Fraction(0),
+              Fraction(1,7),Fraction(1),Fraction(10**70))
+    coefficients=[Fraction(1)]
+    for root in (*expected,Fraction(1)):
+        product=[Fraction(0)]*(len(coefficients)+1)
+        for index,value in enumerate(coefficients):
+            product[index]-=root*value
+            product[index+1]+=value
+        coefficients=product
+    intervals=isolate_real_roots(coefficients,interval=(-1,1),tolerance=Fraction(1,10**14))
+    assert len(intervals)==5
+    for root,interval in zip(expected[1:-1],intervals):
+        assert interval.lower<=root<=interval.upper
+        assert interval.upper-interval.lower<=Fraction(1,10**14)
+    reciprocal=isolate_real_roots(tuple(reversed(coefficients)),interval=(-1,1),tolerance=Fraction(1,10**14))
+    reciprocal_expected=sorted(1/root for root in expected if root and abs(root)>=1)
+    assert len(reciprocal)==len(reciprocal_expected)
+    for root,interval in zip(reciprocal_expected,reciprocal):
+        assert interval.lower<=root<=interval.upper
+
+
+@pytest.mark.parametrize('interval',((1,1),(2,-1),(0,float('inf')),(0,),True))
+def test_root_interval_rejects_invalid_bounds(interval):
+    with pytest.raises(GeometryError,match='interval'):
+        isolate_real_roots((-2,0,1),interval=interval)
+
+
+def test_bounded_root_cancellation_also_applies_to_constant_and_exact_endpoints():
+    for polynomial in ((1,),(-1,1),(0,1)):
+        with pytest.raises(GeometryError,match='cancelled'):
+            isolate_real_roots(polynomial,interval=(-1,1),cancellation_check=lambda:True)

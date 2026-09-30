@@ -688,6 +688,7 @@ class GeometryModel:
                 revision_before=self.revision,
                 replacement_log_start=len(self._replacements),
                 spatial_index_before=self._spatial_index,
+                allocator_state_before=(dict(self._next_id),dict(self._next_structural_id)),
             )
             self._transaction_journal = journal
         journal.depth += 1
@@ -1261,6 +1262,9 @@ class GeometryModel:
                 store[identifier] = original
         self._rebuild_member_incidence()
         del self._replacements[journal.replacement_log_start :]
+        if journal.exact_allocator_rollback and journal.allocator_state_before is not None:
+            self._next_id=dict(journal.allocator_state_before[0])
+            self._next_structural_id=dict(journal.allocator_state_before[1])
         # Restore every cache entry that was invalidated or populated while
         # provisional geometry was live.  The maintained tree is not edited
         # before commit; restoring its original pointer also discards a tree
@@ -1904,6 +1908,7 @@ class GeometryModel:
             raise GeometryError(
                 "topology snapshots cannot be restored inside a transaction or change hook"
             )
+        previous_replacements = dict(self._replacement_history)
         candidate = GeometryModel(model_id=self.model_id, tolerance=self.tolerance)
         candidate._next_id.update(self._next_id)
         candidate._next_structural_id.update(self._next_structural_id)
@@ -2046,6 +2051,11 @@ class GeometryModel:
             added=added,
             removed=removed,
             modified=modified,
+            replacements=tuple(sorted(
+                ((old, descendants) for old, descendants in self._replacement_history.items()
+                 if previous_replacements.get(old) != descendants),
+                key=lambda item: (item[0].kind, item[0].id),
+            )),
             ownership_changes=tuple(sorted(structural_changes["ownership"])),
             member_changes=tuple(sorted(structural_changes["member"])),
             attachment_changes=tuple(sorted(structural_changes["attachment"])),
@@ -2222,7 +2232,7 @@ class GeometryModel:
             finally:
                 self._notifying_hooks = False
 
-    def clone(self, *, include_features: bool = True) -> "GeometryModel":
+    def clone(self, *, include_features: bool = True, preserve_identity: bool = False) -> "GeometryModel":
         """Return a deep, independently mutable geometry copy."""
 
         # Publicly committed models already satisfy the kernel invariants.
@@ -2230,7 +2240,7 @@ class GeometryModel:
         # validation, which dominated feature staging for generated shells.
         # The compatibility snapshot path performs the same detached copies
         # directly and keeps serialization out of in-memory transactions.
-        made = GeometryModel(tolerance=self.tolerance)
+        made = GeometryModel(model_id=self.model_id if preserve_identity else None, tolerance=self.tolerance)
         made._restore_topology_unchecked(self.topology_snapshot())
         made._revision = self._revision
         made._trim_loops_cache.clear()
@@ -3828,6 +3838,9 @@ class GeometryModel:
         candidate_ids: Set[int] | None = None
         for member_id in candidate.member_ids:
             current = set(self._member_junctions.get(member_id, ()))
+            candidate_ids = current if candidate_ids is None else candidate_ids & current
+        for sheet_id in candidate.sheet_ids:
+            current = set(self._sheet_junctions.get(sheet_id, ()))
             candidate_ids = current if candidate_ids is None else candidate_ids & current
         if candidate_ids is None:
             candidate_ids = set()
@@ -5681,6 +5694,7 @@ class GeometryModel:
                     axes[0],
                     ParameterRange(original_use.parent_range.start, split_parent),
                     original_use.orientation,
+                    original_use.metadata,
                 ),
                 MemberEdgeUse(
                     use_ids[1],
@@ -5688,6 +5702,7 @@ class GeometryModel:
                     axes[1],
                     ParameterRange(split_parent, original_use.parent_range.end),
                     original_use.orientation,
+                    original_use.metadata,
                 ),
             )
             self._put_structural("member", replace_member_edge_use(member, original_use, children))

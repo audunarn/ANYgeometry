@@ -7,6 +7,7 @@ by topology validation. Whole-model transformations transform the definition.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from fractions import Fraction
 import math
 import heapq
 import numpy as np
@@ -76,6 +77,8 @@ def project_analytic_curve(curve, point, tolerance):
     target = np.asarray(_vector(point, "projection point"))
     if not math.isfinite(tolerance) or tolerance <= 0:
         raise GeometryError("projection tolerance must be finite and positive")
+    if isinstance(curve, EllipticArc):
+        return _project_ellipse(curve, target, tolerance)
     seeds = np.asarray((0., .5, 1.))
     points = curve.evaluate(seeds)
     distances = np.linalg.norm(points-target, axis=-1)
@@ -103,6 +106,39 @@ def project_analytic_curve(curve, point, tolerance):
             if lower_bound < best-tolerance:
                 heapq.heappush(queue, (lower_bound, start, end))
     return made.copy(), parameter, best
+
+
+def _project_ellipse(curve, target, tolerance):
+    """Global minimum from endpoints and every stationary angular root.
+
+    The squared-distance derivative has two harmonics. Exact rational dot
+    products preserve an identically zero derivative (for example projection
+    from a circle's axis), rather than forcing box refinement of every point
+    of a constant-distance arc. Sturm isolation supplies all stationary roots.
+    """
+    offset = tuple(Fraction(c)-Fraction(float(p))
+                   for c, p in zip(curve.center, target))
+    u = tuple(map(Fraction, curve.u_vector))
+    v = tuple(map(Fraction, curve.v_vector))
+    def dot(left, right):
+        return sum(a*b for a, b in zip(left, right))
+    coefficients = (Fraction(0), dot(offset, v), -dot(offset, u),
+                    dot(u, v), (dot(v, v)-dot(u, u))/2)
+    if not any(coefficients):
+        parameters = np.asarray((0.,))
+    else:
+        angular_tolerance = min(1e-12, tolerance/(8*(
+            np.linalg.norm(curve.u_vector)+np.linalg.norm(curve.v_vector))))
+        angles = trigonometric_roots(coefficients, start=curve.start_angle,
+                                    sweep=curve.sweep_angle,
+                                    tolerance=angular_tolerance)
+        parameters = np.asarray((0., 1., *(
+            (angle-curve.start_angle)/curve.sweep_angle for angle in angles)))
+        parameters = np.clip(parameters, 0., 1.)
+    points = curve.evaluate(parameters)
+    distances = np.linalg.norm(points-target, axis=-1)
+    index = int(np.argmin(distances))
+    return points[index].copy(), float(parameters[index]), float(distances[index])
 
 
 @dataclass(frozen=True, slots=True)
@@ -241,15 +277,27 @@ class CylinderIntersectionCurve:
         w = project @ np.asarray(first.axis)
         a = float(w @ w)
         b0, bc, bs = 2*float(q0 @ w), 2*float(qc @ w), 2*float(qs @ w)
-        c1 = 2*b0*bc-8*a*float(q0 @ qc)
-        c2 = 2*b0*bs-8*a*float(q0 @ qs)
-        c3 = .5*(bc*bc-bs*bs)-2*a*float(qc @ qc-qs @ qs)
-        c4 = bc*bs-4*a*float(qc @ qs)
+        cross=np.cross(first.axis,second.axis)
+        magnitude=float(np.linalg.norm(cross))
+        n0=float((np.asarray(first.origin)-second.origin) @ cross)
+        nc=first.radius*float(np.asarray(first.radial_direction) @ cross)
+        ns=first.radius*float(np.cross(first.axis,first.radial_direction) @ cross)
+        c0=4*magnitude*magnitude*second.radius**2-4*n0*n0-2*(nc*nc+ns*ns)
+        c1,c2,c3,c4=-8*n0*nc,-8*n0*ns,-2*(nc*nc-ns*ns),-4*nc*ns
+        transitions=[]
+        for sign in (-1,1):
+            transitions.extend(trigonometric_roots((n0-sign*magnitude*second.radius,nc,ns,0.,0.),
+                start=start,sweep=sweep,tolerance=4*np.finfo(float).eps))
         stationary = ()
         if any(value != 0 for value in (c1, c2, c3, c4)):
             stationary = trigonometric_roots((0., c2, -c1, 2*c4, -2*c3),
                 start=start, sweep=sweep, tolerance=4*np.finfo(float).eps)
         self._root_at_angles(np.asarray((start, start+sweep, *stationary)))
+        endpoint_envelope=64*np.finfo(float).eps*max(1.,abs(start),abs(start+sweep))
+        if any(min(abs(angle-start),abs(angle-start-sweep))>endpoint_envelope
+               for angle in transitions):
+            raise GeometryError("intersection branch chart must split at every discriminant transition")
+
 
     def _angle(self, parameters):
         t = _parameters(parameters)
@@ -284,25 +332,90 @@ class CylinderIntersectionCurve:
         db, dc = 2*(dq @ w), 2*np.sum(q*dq, axis=-1)
         return base, base_derivative, a, b, c, db, dc
 
-    def _root_at_angles(self, angle):
+    def _root_at_angles(self, angle, *, discriminant=None):
         base, dbase, a, b, c, db, dc = self._coefficients(angle)
-        disc = b*b-4*a*c
+        # Evaluate the geometric discriminant before subtracting translated
+        # axial quadratics. At a double transition b*b and 4*a*c can be large
+        # while their difference is the square of a tiny sine. That cancellation
+        # corrupts both the curve and its area integral near a branch endpoint.
+        cross = np.cross(self.first.axis,self.second.axis)
+        n0 = float((np.asarray(self.first.origin)-self.second.origin) @ cross)
+        nc = float(self.first.radius*np.asarray(self.first.radial_direction) @ cross)
+        ns = float(self.first.radius*np.cross(self.first.axis,self.first.radial_direction) @ cross)
+        magnitude = math.hypot(nc,ns)
+        # Rotate sine/cosine algebraically. Subtracting a phase near pi would
+        # lose the tiny angle and turn an exact transition into a false root.
+        if magnitude:
+            cosine=(nc*np.cos(angle)+ns*np.sin(angle))/magnitude
+            sine=(nc*np.sin(angle)-ns*np.cos(angle))/magnitude
+        else:
+            cosine,sine=np.zeros_like(angle),np.zeros_like(angle)
+        # This identity preserves the exact equal-radius double-root case
+        # without subtracting nearly equal cosine squares.
+        remainder = math.fsum((float(cross @ cross)*self.second.radius**2,-magnitude**2,-n0*n0))
+        disc = 4*(remainder+magnitude**2*sine*sine-2*n0*magnitude*cosine)
+        if discriminant is not None:
+            disc=discriminant
         roundoff = 64*np.finfo(float).eps*(b*b+4*a*np.abs(c)+self.second.radius**2*a)
         if np.any(disc < -roundoff):
             raise GeometryError("intersection branch leaves the real cylinder intersection")
         root = np.sqrt(np.maximum(disc, 0))
-        q = -.5*(b+np.copysign(root, b))
-        # Stable quadratic roots, including an exactly zero root.
-        alternate = np.divide(c, q, out=np.zeros_like(c), where=q != 0)
-        z = np.maximum(q/a, alternate) if self.branch == 1 else np.minimum(q/a, alternate)
+        # The old c/q alternate reintroduced the same cancelled discriminant
+        # through c near symmetric double roots (one branch collapsed to zero).
+        # Use the certified geometric separation for both named branches.
+        z = (-b+self.branch*root)/(2*a)
         return base, dbase, z, a, b, root, db, dc
 
     def _root(self, parameters):
         t = _parameters(parameters)
         angle, angle_derivative = self._angle(t)
-        base, dbase, z, a, b, root, db, dc = self._root_at_angles(angle)
+        discriminant=None
+        if self.parameterization != 'linear':
+            # Evaluate D(theta)-D(anchor) with trig difference identities.
+            # The certified endpoint represents D(anchor)=0; its float angular
+            # witness has an arithmetic residual. Subtracting that residual
+            # before the square root prevents error amplification as t -> 0.
+            # The original support residual is still bounded by the existing
+            # endpoint arithmetic envelope, independently of the parameter.
+            left = (np.ones_like(t,dtype=bool) if self.parameterization=='left_square' else
+                    np.zeros_like(t,dtype=bool) if self.parameterization=='right_square' else t<=.5)
+            anchor=np.where(left,self.start_angle,self.start_angle+self.sweep_angle)
+            if self.parameterization=='left_square':
+                delta=self.sweep_angle*t*t
+            elif self.parameterization=='right_square':
+                delta=-self.sweep_angle*(1-t)*(1-t)
+            else:
+                delta=np.where(left,self.sweep_angle*np.sin(.5*np.pi*t)**2,
+                               -self.sweep_angle*np.cos(.5*np.pi*t)**2)
+            _base,_dbase,_z,a,b,endpoint_root,_db,_dc=self._root_at_angles(anchor)
+            envelope=64*np.finfo(float).eps*(b*b+a*self.second.radius**2)
+            if np.any(endpoint_root*endpoint_root>envelope):
+                raise GeometryError("regular endpoint is not a discriminant transition")
+            cross=np.cross(self.first.axis,self.second.axis)
+            n0=float((np.asarray(self.first.origin)-self.second.origin) @ cross)
+            nc=float(self.first.radius*np.asarray(self.first.radial_direction) @ cross)
+            ns=float(self.first.radius*np.cross(self.first.axis,self.first.radial_direction) @ cross)
+            middle=anchor+.5*delta
+            discriminant=-16*np.sin(.5*delta)*(-nc*np.sin(middle)+ns*np.cos(middle))*(
+                n0+(nc*np.cos(middle)+ns*np.sin(middle))*np.cos(.5*delta))
+        base, dbase, z, a, b, root, db, dc = self._root_at_angles(angle,discriminant=discriminant)
         regular = ((t == 0) & (self.parameterization in ("left_square", "both_sine"))) | (
                    (t == 1) & (self.parameterization in ("right_square", "both_sine")))
+        # A double transition at an angular seam can have sin(pi) roundoff
+        # rather than a floating zero. Qualify the endpoint using the stable
+        # geometric discriminant and its first two derivatives; interior
+        # parameters and ordinary near-transition branches are not snapped.
+        cross=np.cross(self.first.axis,self.second.axis)
+        n0=float((np.asarray(self.first.origin)-self.second.origin) @ cross)
+        nc=float(self.first.radius*np.asarray(self.first.radial_direction) @ cross)
+        ns=float(self.first.radius*np.cross(self.first.axis,self.first.radial_direction) @ cross)
+        n=n0+nc*np.cos(angle)+ns*np.sin(angle)
+        dn=-nc*np.sin(angle)+ns*np.cos(angle)
+        ddn=-nc*np.cos(angle)-ns*np.sin(angle)
+        envelope=64*np.finfo(float).eps*(b*b+a*self.second.radius**2)
+        double=((t==0)|(t==1)) & (root*root<=envelope) & (
+            np.abs(-8*n*dn)<=2*envelope) & (-8*(dn*dn+n*ddn)>0)
+        regular=regular|double
         if np.any(regular):
             # Certified discriminant events are represented by a floating
             # angular witness. Avoid sqrt(roundoff) separating the two
@@ -324,7 +437,7 @@ class CylinderIntersectionCurve:
     def derivative(self, parameters):
         t = _parameters(parameters)
         _base, dbase, z, a, b, root, db, dc, da = self._root(t)
-        denominator = 2*a*z+b
+        denominator = self.branch*root
         dz = np.divide(-(db*z+dc)*da, denominator,
                        out=np.zeros_like(z), where=denominator != 0)
         singular = denominator == 0
@@ -337,11 +450,74 @@ class CylinderIntersectionCurve:
             end_limit = -self.branch*np.sqrt(np.maximum(-ddisc*left_scale, 0))/a
             regular_left = left & (self.parameterization in ("left_square", "both_sine"))
             regular_right = right & (self.parameterization in ("right_square", "both_sine"))
-            if np.any(singular & ~(regular_left | regular_right)):
+            angle, _ = self._angle(t)
+            first, second = self.first, self.second
+            axis = np.asarray(second.axis)
+            project = np.eye(3)-np.outer(axis, axis)
+            radial = first.radius*(np.cos(angle)[..., None]*first.radial_direction
+                       + np.sin(angle)[..., None]*np.cross(first.axis, first.radial_direction))
+            q = (_base-second.origin) @ project.T
+            dq, ddq = dbase @ project.T, -radial @ project.T
+            w = project @ np.asarray(first.axis)
+            ddb = 2*(ddq @ w)
+            ddc = 2*(np.sum(dq*dq, axis=-1)+np.sum(q*ddq, axis=-1))
+            d2disc = 2*(db*db+b*ddb)-4*a*ddc
+            envelope = 128*np.finfo(float).eps*(b*b+a*second.radius**2)
+            double = (np.abs(ddisc) <= envelope) & (d2disc > 0) & (left | right)
+            double_limit = -db*da/(2*a)+self.branch*np.where(left, 1., -1.)*np.abs(da)*np.sqrt(np.maximum(.5*d2disc, 0))/(2*a)
+            if np.any(singular & ~(regular_left | regular_right | double)):
                 raise GeometryError("intersection branch needs a regular endpoint chart")
             dz = np.where(singular & regular_left, limit, dz)
             dz = np.where(singular & regular_right, end_limit, dz)
+            dz = np.where(singular & double & ~(regular_left | regular_right), double_limit, dz)
         result = dbase*da[..., None]+dz[..., None]*self.first.axis
+        return result @ np.asarray(self.transform)[:3, :3].T
+
+    def second_derivative(self, parameters):
+        """Analytic second derivative, including one-sided endpoint jets."""
+        t = _parameters(parameters)
+        base, dbase, z, a, b, root, db, dc, da = self._root(t)
+        angle, _ = self._angle(t)
+        if self.parameterization == "left_square":
+            dda = np.full_like(t, 2*self.sweep_angle)
+        elif self.parameterization == "right_square":
+            dda = np.full_like(t, -2*self.sweep_angle)
+        elif self.parameterization == "both_sine":
+            dda = .5*np.pi**2*self.sweep_angle*np.cos(np.pi*t)
+        else:
+            dda = np.zeros_like(t)
+        first, second = self.first, self.second
+        project = np.eye(3)-np.outer(second.axis, second.axis)
+        radial = first.radius*(np.cos(angle)[..., None]*first.radial_direction
+                   + np.sin(angle)[..., None]*np.cross(first.axis, first.radial_direction))
+        d2base = -radial
+        q, dq, ddq = (base-second.origin) @ project.T, dbase @ project.T, d2base @ project.T
+        w = project @ np.asarray(first.axis)
+        ddb = 2*(ddq @ w)
+        ddc = 2*(np.sum(dq*dq, axis=-1)+np.sum(q*ddq, axis=-1))
+        denominator = self.branch*root
+        dz = np.divide(-(db*z+dc), denominator, out=np.zeros_like(z), where=denominator != 0)
+        ddz = np.divide(-(2*a*dz*dz+2*db*dz+ddb*z+ddc), denominator,
+                        out=np.zeros_like(z), where=denominator != 0)
+        axial_second = ddz*da*da+dz*dda
+        singular = denominator == 0
+        regular = ((t == 0) & (self.parameterization in ("left_square", "both_sine"))) | (
+                   (t == 1) & (self.parameterization in ("right_square", "both_sine")))
+        axial_second = np.where(singular & regular, -db*dda/(2*a), axial_second)
+        ddisc = 2*b*db-4*a*dc
+        d2disc = 2*(db*db+b*ddb)-4*a*ddc
+        d3c = 2*(3*np.sum(dq*ddq, axis=-1)-np.sum(q*dq, axis=-1))
+        d3disc = 6*db*ddb-2*b*db-4*a*d3c
+        envelope = 128*np.finfo(float).eps*(b*b+a*second.radius**2)
+        double = (np.abs(ddisc) <= envelope) & (d2disc > 0) & ((t == 0) | (t == 1))
+        side = np.where(t == 0, 1., -1.)*np.sign(self.sweep_angle)
+        double_second = (-ddb/(2*a)+np.divide(
+            self.branch*side*np.sqrt(np.maximum(.5*d2disc, 0))*d3disc,
+            6*a*d2disc, out=np.zeros_like(z), where=d2disc != 0))*da*da
+        axial_second = np.where(singular & double & ~regular, double_second, axial_second)
+        if np.any(singular & ~(regular | double)):
+            raise GeometryError("intersection endpoint needs a regular second-derivative chart")
+        result = d2base*da[..., None]**2+dbase*dda[..., None]+axial_second[..., None]*first.axis
         return result @ np.asarray(self.transform)[:3, :3].T
 
     def subcurve(self, lower, upper):

@@ -52,6 +52,32 @@ def test_composite_generator_owns_internal_topology_but_authored_geometry_does_n
     assert len([ref for ref in owners if ref.kind == "face"]) == 8
 
 
+def test_regenerating_unchanged_cylinder_with_stiffeners_retains_owners_and_groups():
+    from anygeometry import to_dict,from_dict
+    geometry=GeometryModel()
+    geometry.features.capture_baseline(geometry)
+    feature=geometry.features.append('generator.cylinder',parameters={
+        'radius':1.,'height':4.,'circumferential_segments':12,
+        'longitudinal_spacing':.5,'ring_spacing':1.})
+    assert geometry.regenerate_features().success
+    core=geometry.entity_keys()
+    members=dict(geometry.members)
+    sheets=dict(geometry.sheets)
+    groups=dict(geometry.groups)
+    outputs=geometry.features.get(feature.feature_id).outputs
+    assert members and sheets
+    geometry.features.update(feature.feature_id,name='Cylinder regenerated')
+    report=geometry.regenerate_features()
+    assert report.success,report.diagnostic
+    assert geometry.entity_keys()==core
+    assert dict(geometry.members)==members
+    assert dict(geometry.sheets)==sheets
+    assert dict(geometry.groups)==groups
+    assert geometry.features.get(feature.feature_id).outputs==outputs
+    assert geometry.validate_topology()==()
+    assert from_dict(to_dict(geometry)).validate_topology()==()
+
+
 def test_modifier_does_not_claim_authored_topology():
     geometry = GeometryModel()
     geometry.features.capture_baseline(geometry)

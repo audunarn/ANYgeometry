@@ -552,6 +552,7 @@ class ImprintPlan:
     qualification: IntersectionQualificationPolicy = (
         DEFAULT_INTERSECTION_QUALIFICATION_POLICY
     )
+    batch_plan: object | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.model_id, UUID) or self.model_id.int == 0:
@@ -580,6 +581,15 @@ class ImprintPlan:
         object.__setattr__(self, "operation", operation)
         object.__setattr__(self, "expected_changes", changes)
         object.__setattr__(self, "affected", affected)
+        if self.batch_plan is not None:
+            from .batch_intersections import IntersectionPlan
+            if (not isinstance(self.batch_plan,IntersectionPlan)
+                    or self.batch_plan.model_id != self.model_id
+                    or self.batch_plan.revision != self.revision
+                    or not {self.first_parent,self.second_parent} <= set(self.batch_plan.operands)
+                    or _policy_name(self.batch_plan.policy.intent) != _policy_name(self.policy)
+                    or operation not in (ImprintOperation.FACE_IMPRINT,ImprintOperation.MEMBER_CONNECTION)):
+                raise GeometryError("imprint batch plan does not match its public pair binding")
 
 
 @dataclass(frozen=True, slots=True)
@@ -747,6 +757,19 @@ def _merge_vertex(geometry: GeometryModel, old: int, new: int) -> None:
                 curve=curve,
             ),
         )
+    # Preserve structural references to the canonical point before retiring
+    # the duplicate. Replacement lineage propagates groups/tags afterwards.
+    for attachment_id in tuple(geometry._source_attachments.get(('vertex',old),())):
+        attachment=geometry.attachments[attachment_id]
+        geometry._put_structural('attachment',replace(attachment,source_id=new,
+            lineage=tuple(dict.fromkeys((*attachment.lineage,('vertex',old))))))
+    for attachment_id in tuple(geometry._target_attachments.get(('vertex',old),())):
+        attachment=geometry.attachments[attachment_id]
+        geometry._put_structural('attachment',replace(attachment,target_id=new,
+            lineage=tuple(dict.fromkeys((*attachment.lineage,('vertex',old))))))
+    for member_id in tuple(geometry._orientation_members.get(('vertex',old),())):
+        member=geometry.members[member_id]
+        geometry._put_structural('member',replace(member,orientation_reference=('vertex',new)))
     geometry.remove_vertex(old, record=False)
     geometry.record_replacement(EntityRef("vertex", old), (EntityRef("vertex", new),))
 
@@ -4207,6 +4230,14 @@ def query_intersection(
         result = _query_face_face(
             geometry, first_handle, second_handle, qualified_policy
         )
+        if not result.classified:
+            from .material_pair import domains_for_pair, query_exact_pair
+            try:
+                domains_for_pair(geometry, first_handle, second_handle)
+            except GeometryError:
+                pass
+            else:
+                result = query_exact_pair(geometry,first_handle,second_handle)
     elif pair == ("edge", "edge"):
         result = _query_edge_edge(
             geometry, first_handle, second_handle, qualified_policy
@@ -4458,6 +4489,7 @@ def plan_imprint(
     same_parent = first_parent == second_parent
     no_geometric_intersection = result.kind is IntersectionKind.DISJOINT
     pair = {first_parent.kind, second_parent.kind}
+    batch_plan = None
     if same_parent or no_geometric_intersection:
         operation = ImprintOperation.NO_TOPOLOGY
         changes = ()
@@ -4470,6 +4502,7 @@ def plan_imprint(
             policy_value == "connect"
             and result.classified
             and result.dimension in (
+                IntersectionDimension.POINT,
                 IntersectionDimension.CURVE,
                 IntersectionDimension.REGION,
             )
@@ -4478,19 +4511,21 @@ def plan_imprint(
             policy_value == "connect"
             and result.classified
             and result.dimension not in (
+                IntersectionDimension.POINT,
                 IntersectionDimension.CURVE,
                 IntersectionDimension.REGION,
             )
         ):
             result = _unsupported_imprint_result(
                 result,
-                "face-face CONNECT requires a qualified curve or coincident "
+                "face-face CONNECT requires a qualified point, curve or coincident "
                 "region intersection",
             )
         if (
             policy_value == "imprint"
             and result.classified
             and result.dimension not in (
+                IntersectionDimension.POINT,
                 IntersectionDimension.CURVE,
                 IntersectionDimension.REGION,
             )
@@ -4519,7 +4554,19 @@ def plan_imprint(
             or len(reuse_components) == len(result.components) > 0
         )
         if wants_face_imprint and result.classified:
-            limitation = _face_imprint_limitation(geometry, result)
+            from .material_pair import domains_for_pair
+            try:
+                domains_for_pair(geometry, first_parent, second_parent)
+            except GeometryError:
+                general_domains = False
+            else:
+                general_domains = result.dimension in (IntersectionDimension.POINT,IntersectionDimension.CURVE)
+            if general_domains and policy_value in ('connect','imprint'):
+                from .batch_intersections import plan_intersections
+                from .material_pair import pair_plan_operands
+                batch_plan = plan_intersections(geometry,pair_plan_operands(geometry,first_parent,second_parent),
+                                                 policy=normalized_policy)
+            limitation = None if batch_plan is not None else _face_imprint_limitation(geometry, result)
             if limitation is not None:
                 result = _unsupported_imprint_result(result, limitation)
         operation = (
@@ -4539,6 +4586,28 @@ def plan_imprint(
             else ()
         )
     elif pair == {"member"}:
+        general_points=(policy_value=='connect' and result.classified
+                        and result.dimension is IntersectionDimension.POINT
+                        and bool(result.components))
+        if general_points and len(result.components)>1:
+            fresh=query_intersection(geometry,first_parent,second_parent)
+            consistent=(len(fresh.components)==len(result.components) and all(
+                np.allclose(original.first_parameter,current.first_parameter,
+                            rtol=0.,atol=geometry.tolerance.parameter)
+                and np.allclose(original.second_parameter,current.second_parameter,
+                                rtol=0.,atol=geometry.tolerance.parameter)
+                and np.allclose(original.witnesses,current.witnesses,
+                                rtol=0.,atol=result.tolerance_used)
+                for original,current in zip(result.components,fresh.components)))
+            repeated=any(np.linalg.norm(np.asarray(first.witnesses[0])-second.witnesses[0])
+                         <=result.tolerance_used
+                         for index,first in enumerate(result.components)
+                         for second in result.components[index+1:])
+            if not consistent or repeated:
+                general_points=False
+        if general_points:
+            from .batch_intersections import plan_intersections
+            batch_plan=plan_intersections(geometry,(first_parent,second_parent),policy=normalized_policy)
         existing_relation = None
         if policy_value != "reject" and result.classified:
             existing_relation = (
@@ -4563,6 +4632,7 @@ def plan_imprint(
                 and policy_value != "reject"
                 and result.classified
                 and len(result.components) != 1
+                and not general_points
             ):
                 result = _unsupported_imprint_result(
                     result,
@@ -4668,6 +4738,7 @@ def plan_imprint(
         tuple(changes),
         tuple(sorted(affected)),
         qualified_policy,
+        batch_plan,
     )
     if geometry.revision != revision:
         raise RuntimeError("imprint planning unexpectedly mutated the geometry model")
@@ -6455,6 +6526,43 @@ def apply_imprint(
         raise GeometryError("apply policy does not match the planned policy")
     if geometry.model_id != plan.model_id:
         raise GeometryError("imprint plan belongs to another geometry model")
+    if plan.batch_plan is not None:
+        from .batch_intersections import apply_intersections
+        from .material_pair import pair_plan_operands
+        if geometry.revision == plan.revision and set(plan.batch_plan.operands) != set(
+                pair_plan_operands(geometry,plan.first_parent,plan.second_parent)):
+            raise GeometryError("imprint batch operand binding changed")
+        application = apply_intersections(geometry,plan.batch_plan,policy=normalized_policy)
+        if plan.operation is ImprintOperation.MEMBER_CONNECTION:
+            from .structural import ConnectionIntent
+            participants={plan.first_parent.id,plan.second_parent.id}
+            selected=[joint for joint in geometry.junctions.values()
+                if participants<=set(joint.member_ids)
+                and joint.connection_intent is ConnectionIntent.CONNECT]
+            relations=tuple(sorted({geometry.handle('junction',joint.id) for joint in selected}
+                | {geometry.handle('attachment',identifier) for joint in selected
+                   for identifier in joint.attachment_ids}))
+            return ImprintApplication(plan,plan.result,application.change_set,relations,
+                                      None,application.reused)
+        def faces(parent):
+            other=plan.second_parent if parent==plan.first_parent else plan.first_parent
+            selected=(parent,*[operand for operand in plan.batch_plan.operands
+                               if operand not in (parent,other)])
+            # Expanded operands belong to the cylinder side, identified by
+            # their original immutable material arrangement supports.
+            support=next((item.support for item in plan.batch_plan.arrangements
+                          if item.face_id==parent.id),
+                         geometry.faces[parent.id].surface if parent.id in geometry.faces else None)
+            if not isinstance(support,Cylinder):
+                selected=(parent,)
+            return tuple(EntityRef('face',item.id) for operand in selected
+                         for item in geometry.resolve_handle(operand).resolved
+                         if item.kind == 'face')
+        edges = tuple(EntityRef('edge',edge.id) for edge in application.joint_edges)
+        face_intersection = (FaceIntersection(edges[0],faces(plan.first_parent),
+                            faces(plan.second_parent),edges) if edges else None)
+        return ImprintApplication(plan,plan.result,application.change_set,(),
+                                  face_intersection,application.reused)
     if geometry.revision != plan.revision:
         reused_application = _reuse_stale_face_plan(geometry, plan)
         if reused_application is not None:

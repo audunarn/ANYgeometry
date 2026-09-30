@@ -11,6 +11,24 @@ from anygeometry import (EllipticArc, CylinderIntersectionCurve, Cylinder,
                          to_dict, from_dict)
 
 
+@pytest.mark.parametrize('angle',(0.,np.pi))
+@pytest.mark.parametrize('sweep',(-np.pi/4,np.pi/4))
+def test_double_transition_seam_uses_the_certified_one_sided_jet(angle,sweep):
+    first=Cylinder((0,0,-1.5),(0,0,1),(1,0,0),1,3)
+    second=Cylinder((0,-1.5,0),(0,1,0),(1,0,0),1,3)
+    for branch in (-1,1):
+        curve=CylinderIntersectionCurve(first,second,angle,sweep,branch)
+        expected=np.asarray((-np.sin(angle)*sweep,np.cos(angle)*sweep,branch*abs(sweep)))
+        assert curve.derivative(0.)==pytest.approx(expected,abs=1e-13)
+        assert curve.second_derivative(0.)==pytest.approx(
+            (-np.cos(angle)*sweep*sweep,-np.sin(angle)*sweep*sweep,0.),abs=1e-13)
+        # Independent analytic solution is x^2+y^2=x^2+z^2=1.
+        for parameter in (1e-12,1e-6,.5,1.):
+            theta=angle+sweep*parameter
+            assert curve.evaluate(parameter)==pytest.approx(
+                (np.cos(theta),np.sin(theta),branch*abs(np.sin(theta))),abs=1e-13)
+
+
 def model_curve(curve):
     geometry = GeometryModel()
     start, end = geometry.add_points(curve.evaluate(np.asarray((0., 1.))))
@@ -55,6 +73,37 @@ def test_global_ellipse_projection_and_affine_copy():
     assert g.validate_topology() == ()
 
 
+@pytest.mark.parametrize('start,sweep', ((-.7, 2*np.pi), (2.3, -4.1), (.2, .8)))
+def test_circle_axis_projection_has_constant_distance_without_box_refinement(monkeypatch,start,sweep):
+    curve=EllipticArc((2.,-3.,4.),(2.,0.,0.),(0.,2.,0.),start,sweep)
+    def no_refinement(*args,**kwargs):
+        pytest.fail('constant-distance ellipse projection must use its analytic derivative')
+    monkeypatch.setattr(EllipticArc,'bounds',no_refinement)
+    # closest_edge_point first asks for a whole-edge scale, independently of
+    # the projection. Exercise the projection helper directly here.
+    from anygeometry.exact_curves import project_analytic_curve
+    made,parameter,distance=project_analytic_curve(curve,(2.,-3.,7.),1e-9)
+    np.testing.assert_allclose(made,curve.evaluate(0.),atol=1e-14)
+    assert parameter==0.
+    assert distance==pytest.approx(np.sqrt(13.),abs=1e-14)
+
+
+@pytest.mark.parametrize('start,sweep', ((0.,2*np.pi),(2.7,-5.8),(1.,.2)))
+def test_ellipse_projection_includes_all_stationary_points_and_endpoints(start,sweep):
+    from anygeometry.exact_curves import project_analytic_curve
+    curve=EllipticArc((0.,0.,0.),(2.,0.,0.),(0.,1.,0.),start,sweep)
+    # From the ellipse centre the global minima are exactly its two minor-axis
+    # points when included, otherwise an endpoint of the requested arc.
+    candidates=[0.,1.]
+    for angle in (-3*np.pi/2,-np.pi/2,np.pi/2,3*np.pi/2,5*np.pi/2):
+        parameter=(angle-start)/sweep
+        if 0<=parameter<=1:candidates.append(parameter)
+    expected=min(np.hypot(2*np.cos(start+sweep*t),np.sin(start+sweep*t)) for t in candidates)
+    made,parameter,distance=project_analytic_curve(curve,(0.,0.,3.),1e-9)
+    assert distance==pytest.approx(np.hypot(expected,3.),abs=1e-12)
+    assert made==pytest.approx(curve.evaluate(parameter),abs=1e-14)
+
+
 @pytest.mark.parametrize('branch', (-1, 1))
 def test_cylinder_branch_decimal_equations_derivative_and_codec(branch):
     first = Cylinder((0,0,0), (0,0,1), (1,0,0), 1., 4.)
@@ -96,6 +145,16 @@ def test_regular_discriminant_endpoint():
     assert np.linalg.norm(reversed_curve.derivative(1.)) > 0
     with pytest.raises(GeometryError, match='leaves the real'):
         CylinderIntersectionCurve(first,second,0.,np.pi,1)
+
+
+@pytest.mark.parametrize('branch', (-1, 1))
+def test_double_discriminant_endpoint_has_one_sided_analytic_tangent(branch):
+    first=Cylinder((0,0,0),(0,0,1),(1,0,0),1.,4.)
+    second=Cylinder((0,0,0),(0,1,0),(1,0,0),1.,4.)
+    curve=CylinderIntersectionCurve(first,second,0.,np.pi/2,branch)
+    np.testing.assert_allclose(curve.derivative(0.), (0.,np.pi/2,branch*np.pi/2), atol=1e-14)
+    reversed_curve=curve.subcurve(1.,0.)
+    np.testing.assert_allclose(reversed_curve.derivative(1.), -curve.derivative(0.), atol=1e-14)
 
 
 def test_schema_four_still_reads_all_semantics_and_refuses_new_curves():

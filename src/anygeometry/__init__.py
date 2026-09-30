@@ -2,6 +2,15 @@
 
 from .curves import Arc, ArcFrame, CurveShape, DegenerateArcError, Spline, Straight
 from .exact_curves import EllipticArc, CylinderIntersectionCurve
+from .batch_intersections import (
+    IntersectionBatchPolicy, IntersectionPlan, IntersectionApplication,
+    plan_intersections, apply_intersections,
+)
+from .trimmed_charts import (
+    TrimmedSurfaceChart, TrimmedSurfaceCharts, query_trimmed_surface_charts,
+    validate_trimmed_surface_charts_binding, evaluate_trimmed_surface_chart,
+)
+from .joint_edges import JointEdge, query_joint_edge
 from .coordinates import (
     model_to_world_points, world_to_model_points,
     model_to_world_vectors, world_to_model_vectors,
@@ -236,6 +245,18 @@ __all__ = [
     "AffineTransform",
     "Arc",
     "EllipticArc",
+    "IntersectionBatchPolicy",
+    "IntersectionPlan",
+    "IntersectionApplication",
+    "plan_intersections",
+    "apply_intersections",
+    "TrimmedSurfaceChart",
+    "TrimmedSurfaceCharts",
+    "query_trimmed_surface_charts",
+    "validate_trimmed_surface_charts_binding",
+    "evaluate_trimmed_surface_chart",
+    "JointEdge",
+    "query_joint_edge",
     "CylinderIntersectionCurve",
     "ArcFrame",
     "Attachment",

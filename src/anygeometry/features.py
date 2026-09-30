@@ -429,6 +429,126 @@ def _entity_closure_refs(
     return selected
 
 
+def _discard_equivalent_unpublished_owners(working,original,discarded,roles,*,
+                                           preserve_parent_ranges=False):
+    """Discard a proven duplicate generator closure without deleting owners.
+
+    Exact output-role correspondence qualifies the unpublished core topology.
+    Fresh structural owners must additionally match a retained owner in their
+    complete axis/face-use definitions and ownership metadata. Referenced fresh
+    owners still obey normal removal guards; an ambiguous match fails atomically.
+    """
+    from .definition_binding import definition_checksum
+    edges={ref.id for ref in discarded if ref.kind=='edge'}
+    faces={ref.id for ref in discarded if ref.kind=='face'}
+    def reference(kind,identifier,mapped):
+        ref=EntityRef(kind,identifier)
+        if not mapped:
+            return ref
+        selected=roles.get(ref,())
+        if len(selected)!=1 or selected[0].kind!=kind:
+            raise GeometryError('discarded structural output lacks exact retained topology roles')
+        return selected[0]
+    def part_equal(new,old):
+        return new.name==old.name and new.metadata==old.metadata
+    def member_signature(model,member,mapped):
+        orientation=member.orientation_reference
+        if orientation is not None and mapped:
+            orientation=reference(orientation.kind,orientation.id,True)
+        return definition_checksum((member.name,member.metadata,orientation,tuple(
+            (reference('edge',use.edge_id,mapped),use.orientation,
+             None if preserve_parent_ranges else use.parent_range,use.metadata)
+            for identifier in member.edge_use_ids for use in (model.member_edge_uses[identifier],))))
+    def sheet_signature(model,sheet,mapped):
+        return definition_checksum((sheet.name,sheet.metadata,sheet.policy,
+            tuple(reference('edge',edge,mapped) for edge in sheet.declared_non_manifold_edges),
+            tuple((reference('face',use.face_id,mapped),use.orientation,use.metadata)
+                  for identifier in sheet.face_use_ids for use in (model.face_uses[identifier],))))
+    members=[member for member in working.members.values()
+        if member.id not in original.members and all(
+            working.member_edge_uses[identifier].edge_id in edges for identifier in member.edge_use_ids)]
+    sheets=[sheet for sheet in working.sheets.values()
+        if sheet.id not in original.sheets and all(
+            working.face_uses[identifier].face_id in faces for identifier in sheet.face_use_ids)]
+    for made,store,signature in ((members,original.members,member_signature),
+                                 (sheets,original.sheets,sheet_signature)):
+        for owner in made:
+            expected=signature(working,owner,True)
+            matches=[old for old in store.values()
+                if part_equal(working.parts[owner.part_id],original.parts[old.part_id])
+                and signature(original,old,False)==expected]
+            if len(matches)!=1:
+                raise GeometryError('discarded structural output is not equivalent to one retained owner')
+    for member in members:
+        working.remove_member(member.id)
+    for sheet in sheets:
+        working.remove_sheet(sheet.id)
+    for part in tuple(working.parts.values()):
+        if part.id not in original.parts and not part.member_ids and not part.sheet_ids:
+            working.remove_part(part.id)
+
+
+def _transfer_regenerated_structural_owners(working,original,retired,roles,directions):
+    """Keep structural identity across unambiguous changed output roles.
+
+    Generator replay creates unpublished structural duplicates. Exact closure
+    roles identify those duplicates independently of coordinates; the retained
+    owners then acquire the changed geometry. Normal attachment/removal guards
+    continue to refuse any relation lacking a qualified parameter remap.
+    """
+    from dataclasses import replace
+    from .structural import Orientation
+    retired=set(retired)
+    reverse={}
+    for old in retired:
+        selected=roles.get(old,())
+        if len(selected)==1 and selected[0].kind==old.kind:
+            made=selected[0]
+            if made in reverse and reverse[made]!=(old,):
+                raise GeometryError('regenerated structural roles are not one-to-one')
+            reverse[made]=(old,)
+    # Changed geometry retains the original authored parent parameterization.
+    # Generated arclength fractions are not replacement identity (even uniform
+    # scale changes their last bits); exact ordered edge roles supply the map.
+    _discard_equivalent_unpublished_owners(working,original,set(reverse),reverse,
+                                          preserve_parent_ranges=True)
+
+    def replacement(kind,identifier):
+        old=EntityRef(kind,identifier)
+        if old not in retired:
+            return identifier
+        selected=roles.get(old,())
+        if len(selected)!=1 or selected[0].kind!=kind:
+            raise GeometryError('regenerated structural owner lacks one exact replacement role')
+        return selected[0].id
+
+    for identifier,use in tuple(working.member_edge_uses.items()):
+        if use.member_id not in original.members:
+            continue
+        edge=replacement('edge',use.edge_id)
+        if edge!=use.edge_id:
+            orientation=use.orientation
+            if directions.get(EntityRef('edge',use.edge_id),False):
+                orientation=(Orientation.REVERSED if orientation is Orientation.FORWARD
+                             else Orientation.FORWARD)
+            working._put_structural('member_edge_use',replace(use,edge_id=edge,orientation=orientation))
+    for member in tuple(working.members.values()):
+        reference=member.orientation_reference
+        if member.id in original.members and reference is not None:
+            made=EntityRef(reference.kind,replacement(reference.kind,reference.id))
+            if made!=reference:
+                working._put_structural('member',replace(member,orientation_reference=made))
+    for sheet in tuple(working.sheets.values()):
+        if sheet.id not in original.sheets:
+            continue
+        edges=tuple(replacement('edge',edge) for edge in sheet.declared_non_manifold_edges)
+        if edges!=sheet.declared_non_manifold_edges:
+            working._put_structural('sheet',replace(sheet,declared_non_manifold_edges=edges))
+    for old in sorted(retired,key=lambda reference:(reference.kind,reference.id)):
+        if old.kind=='face' and working._face_structural_uses.get(old.id):
+            working._replace_structural_face_ownership(old.id,(replacement('face',old.id),))
+
+
 def _bind_topology_roles(
     old: EntityRef,
     old_geometry: "GeometryModel",
@@ -1717,6 +1837,7 @@ class FeatureHistory:
         ]
         discard_new: set[EntityRef] = set()
         retire_old: set[EntityRef] = set()
+        discarded_roles: Dict[EntityRef, tuple[EntityRef, ...]] = {}
 
         for record, previous in zip(
             replayed[dirty_index:], self._records[dirty_index:]
@@ -1808,6 +1929,9 @@ class FeatureHistory:
             if not force_new and old_outputs and _exact_outputs_equal(
                 old_outputs, geometry, outputs, working
             ):
+                for key in old_outputs:
+                    _bind_topology_roles(outputs[key],working,old_outputs[key],geometry,
+                                         discarded_roles)
                 record.outputs = old_outputs
                 for reference in outputs.values():
                     discard_new.update(_entity_closure_refs((reference,), working))
@@ -1939,9 +2063,13 @@ class FeatureHistory:
 
         try:
             with working.transaction():
+                _discard_equivalent_unpublished_owners(
+                    working,geometry,discard_new,discarded_roles)
+                _transfer_regenerated_structural_owners(
+                    working,geometry,retire_old,transition_by_old,edge_directions)
                 remove_exact(discard_new)
                 remove_exact(retire_old)
-                working.record_replacements_atomic(pending_transitions)
+                working.record_replacements_atomic((*discarded_roles.items(),*pending_transitions))
         except GeometryError as error:
             return RegenerationReport(
                 False,

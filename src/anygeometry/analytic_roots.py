@@ -32,6 +32,17 @@ def _value(p, x):
     return value
 
 
+def _integer_value(polynomial,point):
+    """Homogeneous Horner numerator; a positive denominator preserves zeros."""
+    numerator,denominator=point.numerator,point.denominator
+    value=polynomial[-1]
+    power=denominator
+    for coefficient in reversed(polynomial[:-1]):
+        value=value*numerator+coefficient*power
+        power*=denominator
+    return value
+
+
 def _division(p, q):
     remainder = list(p)
     if q == (0,):
@@ -64,12 +75,29 @@ def _sturm(p):
         # changing any variation count.
         magnitude = abs(remainder[-1])
         sequence.append(tuple(-value/magnitude for value in remainder))
-    return sequence
+    # Integerize each row once. Positive scaling preserves its signs and
+    # every Sturm variation, while avoiding repeated Fraction normalization
+    # at every bisection point for degree-eight cylinder resultants.
+    integer_rows=[]
+    for row in sequence:
+        denominator=math.lcm(*(value.denominator for value in row))
+        values=tuple(value.numerator*(denominator//value.denominator) for value in row)
+        divisor=math.gcd(*values)
+        integer_rows.append(tuple(value//divisor for value in values))
+    return tuple(integer_rows)
 
 
 def _variations(sequence, point):
-    signs = [1 if value > 0 else -1 for polynomial in sequence
-             if (value := _value(polynomial, point)) != 0]
+    numerator,denominator=point.numerator,point.denominator
+    signs=[]
+    for polynomial in sequence:
+        value=polynomial[-1]
+        power=denominator
+        for coefficient in reversed(polynomial[:-1]):
+            value=value*numerator+coefficient*power
+            power*=denominator
+        if value:
+            signs.append(1 if value>0 else -1)
     return sum(a != b for a, b in zip(signs, signs[1:]))
 
 
@@ -83,12 +111,13 @@ class IsolatedRoot:
         return float((self.lower+self.upper)/2)
 
 
-def isolate_real_roots(coefficients, *, tolerance=1e-13, cancellation_check=None):
+def isolate_real_roots(coefficients, *, tolerance=1e-13, cancellation_check=None, interval=None):
     """Isolate every distinct real root; coefficients ascend by power.
 
     The zero polynomial represents a coincident constraint and is rejected,
     rather than being reported as an empty root set. There is no root-count
-    cap. Cancellation raises before a partial result can be returned.
+    cap. Cancellation raises before a partial result can be returned. An
+    explicit closed rational interval selects only roots inside that interval.
     """
     try:
         p = _trim([Fraction(value) for value in coefficients])
@@ -97,13 +126,33 @@ def isolate_real_roots(coefficients, *, tolerance=1e-13, cancellation_check=None
         raise GeometryError("root isolation needs finite coefficients and tolerance") from exc
     if not p or p == (0,) or tolerance <= 0:
         raise GeometryError("root isolation needs a nonzero polynomial and positive tolerance")
+    if cancellation_check is not None and cancellation_check():
+        raise GeometryError("analytic root isolation cancelled")
+    if interval is not None:
+        try:
+            lower,upper=(Fraction(value) for value in interval)
+            if lower>=upper:
+                raise ValueError('empty interval')
+        except (TypeError,ValueError,OverflowError,ZeroDivisionError) as exc:
+            raise GeometryError('root isolation interval must have two finite increasing endpoints') from exc
     if len(p) == 1:
         return ()
     p = _square_free(p)
     sequence = _sturm(p)
-    bound = Fraction(2)+max(abs(value/p[-1]) for value in p[:-1])
-    # The strict Cauchy bound puts all roots inside, not on the endpoints.
-    pending = [(-bound, bound)]
+    if interval is None:
+        bound = Fraction(2)+max(abs(value/p[-1]) for value in p[:-1])
+        # The strict Cauchy bound puts all roots inside, not on the endpoints.
+        lower,upper=-bound,bound
+    else:
+        for endpoint in (lower,upper):
+            if _integer_value(sequence[0],endpoint)==0:
+                quotient,remainder=_division(p,(-endpoint,Fraction(1)))
+                if remainder!=(0,):
+                    raise GeometryError('inconsistent interval endpoint root')
+                remaining=isolate_real_roots(quotient,tolerance=tolerance,interval=(lower,upper),
+                                             cancellation_check=cancellation_check)
+                return tuple(sorted((IsolatedRoot(endpoint,endpoint),*remaining),key=lambda item:item.lower))
+    pending = [(lower,upper)]
     roots = []
     while pending:
         if cancellation_check is not None and cancellation_check():
@@ -116,7 +165,7 @@ def isolate_real_roots(coefficients, *, tolerance=1e-13, cancellation_check=None
             roots.append(IsolatedRoot(lower, upper))
             continue
         middle = (lower+upper)/2
-        if _value(p, middle) == 0:
+        if _integer_value(sequence[0],middle) == 0:
             # Remove an exact dyadic root and restart on its quotient. This
             # keeps the isolating endpoints away from every remaining root.
             roots.append(IsolatedRoot(middle, middle))
@@ -124,7 +173,7 @@ def isolate_real_roots(coefficients, *, tolerance=1e-13, cancellation_check=None
             if remainder != (0,):
                 raise GeometryError("inconsistent exact root isolation")
             remaining = isolate_real_roots(quotient, tolerance=tolerance,
-                                          cancellation_check=cancellation_check)
+                                          cancellation_check=cancellation_check,interval=interval)
             # The quotient includes roots isolated earlier in this traversal;
             # discard those earlier intervals rather than duplicate them.
             return tuple(sorted((IsolatedRoot(middle, middle), *remaining),

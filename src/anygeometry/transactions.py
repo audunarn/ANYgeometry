@@ -108,6 +108,8 @@ class _TransactionJournal:
     replacement_log_start: int = 0
     rolling_back: bool = False
     failure: BaseException | None = None
+    allocator_state_before: tuple[dict[str,int],dict[str,int]] | None = None
+    exact_allocator_rollback: bool = False
 
     def capture_entity(self, key: EntityKey, value: object = _MISSING) -> None:
         self.entity_before.setdefault(key, value)
