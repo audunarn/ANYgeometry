@@ -60,33 +60,90 @@ def _division(p, q):
     return _trim(quotient), _trim(remainder)
 
 
+def _integer_row(values):
+    """The primitive integer polynomial on the positive ray of ``values`` (ints or Fractions, ascending)."""
+    if all(type(value) is int for value in values):
+        integers = list(values)
+    else:
+        fractions = [Fraction(value) for value in values]
+        denominator = math.lcm(*(value.denominator for value in fractions))
+        integers = [value.numerator*(denominator//value.denominator) for value in fractions]
+    divisor = math.gcd(*integers)
+    return tuple(_trim_integers([value//divisor for value in integers] if divisor else integers))
+
+
+def _trim_integers(values):
+    while len(values) > 1 and values[-1] == 0:
+        values.pop()
+    return values
+
+
+def _pseudo_remainder(a, b):
+    """A positive multiple of the remainder of ``a`` divided by ``b`` (integer coefficients, ascending).
+
+    Every step scales by ``|lc(b)|``, so no sign of the true remainder changes.
+    """
+    a = list(a)
+    lead = abs(b[-1])
+    sign = 1 if b[-1] > 0 else -1
+    degree = len(b)-1
+    while len(a)-1 >= degree and any(a):
+        top = a[-1]
+        shift = len(a)-1-degree
+        a = [lead*value for value in a]
+        for index, coefficient in enumerate(b):
+            a[shift+index] -= sign*top*coefficient
+        a.pop()                                      # the leading coefficient cancelled exactly
+        a = _trim_integers(a) if a else [0]
+    return a
+
+
+def _integer_gcd(a, b):
+    """The primitive greatest common divisor of two integer polynomials (primitive remainder sequence)."""
+    a, b = _integer_row(a), _integer_row(b)
+    if len(a) < len(b):
+        a, b = b, a
+    while any(b):
+        remainder = _pseudo_remainder(a, b)
+        if not any(remainder):
+            return b
+        a, b = b, _integer_row(remainder)
+    return a
+
+
+def _exact_quotient(a, divisor):
+    """``a / divisor`` for integer polynomials where the division is exact and ``a`` is primitive."""
+    a = list(a)
+    quotient = [0]*(len(a)-len(divisor)+1)
+    lead = divisor[-1]
+    for k in range(len(quotient)-1, -1, -1):
+        value, remainder = divmod(a[k+len(divisor)-1], lead)
+        if remainder:
+            raise GeometryError("inconsistent exact polynomial division")
+        quotient[k] = value
+        for index, coefficient in enumerate(divisor):
+            a[k+index] -= value*coefficient
+    return tuple(quotient)
+
+
 def _square_free(p):
-    first, second = p, _derivative(p)
-    while second != (0,):
-        first, second = second, _division(first, second)[1]
-    return _division(p, first)[0]
+    a = _integer_row(p)
+    if len(a) < 2:
+        return (Fraction(1),)
+    divisor = _integer_gcd(a, _derivative(a))
+    quotient = _exact_quotient(a, divisor) if len(divisor) > 1 else a
+    return tuple(Fraction(value) for value in quotient)
 
 
 def _sturm(p):
-    sequence = [p, _derivative(p)]
-    while sequence[-1] != (0,):
-        remainder = _division(sequence[-2], sequence[-1])[1]
-        if remainder == (0,):
+    """Sturm rows as primitive integer polynomials; positive scaling preserves every variation count."""
+    rows = [_integer_row(p), _integer_row(_derivative(p))]
+    while any(rows[-1]):
+        remainder = _pseudo_remainder(rows[-2], rows[-1])
+        if not any(remainder):
             break
-        # Positive rescaling reduces rational arithmetic growth without
-        # changing any variation count.
-        magnitude = abs(remainder[-1])
-        sequence.append(tuple(-value/magnitude for value in remainder))
-    # Integerize each row once. Positive scaling preserves its signs and
-    # every Sturm variation, while avoiding repeated Fraction normalization
-    # at every bisection point for degree-eight cylinder resultants.
-    integer_rows=[]
-    for row in sequence:
-        denominator=math.lcm(*(value.denominator for value in row))
-        values=tuple(value.numerator*(denominator//value.denominator) for value in row)
-        divisor=math.gcd(*values)
-        integer_rows.append(tuple(value//divisor for value in values))
-    return tuple(integer_rows)
+        rows.append(_integer_row(tuple(-value for value in remainder)))
+    return tuple(rows)
 
 
 def _variations(sequence, point):

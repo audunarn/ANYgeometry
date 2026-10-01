@@ -19,6 +19,32 @@ from anygeometry import analytic_roots as roots
 from anygeometry.analytic_roots import IsolatedRoot, isolate_real_roots, root_isolation_memo
 
 
+def _reference_square_free(p):
+    """The Fraction Euclidean square-free part (the sequences of 0.4.5)."""
+    first, second = p, roots._derivative(p)
+    while second != (0,):
+        first, second = second, roots._division(first, second)[1]
+    return roots._division(p, first)[0]
+
+
+def _reference_sturm(p):
+    """The Fraction remainder sequence of 0.4.5, integerized row by row."""
+    sequence = [p, roots._derivative(p)]
+    while sequence[-1] != (0,):
+        remainder = roots._division(sequence[-2], sequence[-1])[1]
+        if remainder == (0,):
+            break
+        magnitude = abs(remainder[-1])
+        sequence.append(tuple(-value / magnitude for value in remainder))
+    rows = []
+    for row in sequence:
+        denominator = math.lcm(*(value.denominator for value in row))
+        values = tuple(value.numerator * (denominator // value.denominator) for value in row)
+        divisor = math.gcd(*values)
+        rows.append(tuple(value // divisor for value in values))
+    return tuple(rows)
+
+
 def _reference_isolation(coefficients, *, tolerance=1e-13, cancellation_check=None, interval=None):
     """The 0.4.5 bisection: both endpoint Sturm counts at every node."""
     p = roots._trim([Fraction(value) for value in coefficients])
@@ -31,8 +57,8 @@ def _reference_isolation(coefficients, *, tolerance=1e-13, cancellation_check=No
         lower, upper = (Fraction(value) for value in interval)
     if len(p) == 1:
         return ()
-    p = roots._square_free(p)
-    sequence = roots._sturm(p)
+    p = _reference_square_free(p)
+    sequence = _reference_sturm(p)
     if interval is None:
         bound = Fraction(2) + max(abs(value / p[-1]) for value in p[:-1])
         lower, upper = -bound, bound
@@ -108,6 +134,93 @@ def test_root_isolation_visits_the_same_intervals_and_polls_as_the_reference(opt
         for cancel_at in (None, 4):
             assert (_polled(isolate_real_roots, coefficients, cancel_at=cancel_at, **options)
                     == _polled(_reference_isolation, coefficients, cancel_at=cancel_at, **options))
+
+
+def _integer_polynomials(seed, count):
+    """Integer polynomials with repeated factors and coefficients of hundreds of bits (as the exact quadric plans make)."""
+    rng = random.Random(seed)
+    for _ in range(count):
+        factors = rng.randint(1, 5)
+        polynomial = [rng.randint(1, 10 ** rng.randint(1, 60))]
+        for _ in range(factors):
+            if rng.random() < .6:
+                factor = [rng.randint(-10 ** rng.randint(1, 40), 10 ** rng.randint(1, 40)), rng.randint(1, 10 ** rng.randint(1, 40))]
+            else:
+                factor = [rng.randint(-10 ** 30, 10 ** 30), rng.randint(-10 ** 30, 10 ** 30), rng.randint(1, 10 ** 30)]
+            for _ in range(rng.choice((1, 1, 1, 2, 3))):                      # a repeated factor
+                polynomial = [sum(polynomial[i] * factor[k - i] for i in range(len(polynomial)) if 0 <= k - i < len(factor))
+                              for k in range(len(polynomial) + len(factor) - 1)]
+        if rng.random() < .2:
+            polynomial = [0] * rng.randint(1, 2) + polynomial                  # roots at zero
+        yield polynomial
+
+
+def _proportional(a, b):
+    a, b = [Fraction(v) for v in a], [Fraction(v) for v in b]
+    return len(a) == len(b) and all(x * b[-1] == y * a[-1] for x, y in zip(a, b))
+
+
+def test_integer_remainder_sequences_equal_the_fraction_sequences():
+    for polynomial in _integer_polynomials(5, 150):
+        p = roots._trim([Fraction(v) for v in polynomial])
+        if len(p) < 2:
+            continue
+        assert roots._sturm(p) == _reference_sturm(p)                   # identical rows, not merely the same counts
+        assert roots._sturm(tuple(polynomial)) == roots._sturm(p)       # integers and Fractions alike
+        assert _proportional(roots._square_free(p), _reference_square_free(p))
+
+
+def _reference_classes(poly):
+    """Yun's decomposition with Fraction remainders (0.4.5)."""
+    classes = []
+    a = tuple(Fraction(v) for v in poly)
+    zero = (Fraction(0),)
+    while len(a) > 1:
+        g, b = a, roots._derivative(a)
+        while b != zero and b != (0,):
+            g, b = b, roots._division(g, b)[1]
+        classes.append(roots._division(a, g)[0] if len(g) > 1 else a)
+        a = g
+    return classes
+
+
+def test_yun_classes_and_common_divisors_equal_the_fraction_versions():
+    from anygeometry.quadric_algebra import _classes, _poly_gcd
+    cases = list(_integer_polynomials(8, 120))
+    for polynomial in cases:
+        new, old = _classes(polynomial), _reference_classes(polynomial)
+        assert len(new) == len(old) and all(_proportional(x, y) for x, y in zip(new, old))
+    for first, second in zip(cases, cases[1:]):
+        divisor = _poly_gcd([first, second, [0]])
+        reference = tuple(Fraction(v) for v in first)
+        other = tuple(Fraction(v) for v in second)
+        while any(other):
+            reference, other = other, roots._division(reference, other)[1]
+        assert _proportional(divisor, reference)
+    assert _poly_gcd([[0], [0, 0]]) is None
+
+
+def test_quadric_chart_roots_agree_with_the_fraction_pipeline():
+    from anygeometry.quadric_algebra import _chart_roots, _classes
+    from anygeometry.analytic_roots import _integer_value, _variations
+    tolerance = 4 * np.finfo(float).eps
+    for polynomial in _integer_polynomials(13, 80):
+        if len(polynomial) < 2:
+            continue
+        expected = []
+        classes = _reference_classes(polynomial)
+        sequences = [_reference_sturm(cls) for cls in classes]
+        for root in _reference_isolation(polynomial, tolerance=tolerance, interval=(-1, 1)):
+            multiplicity = 1
+            for k, (cls, sequence) in enumerate(zip(classes[1:], sequences[1:]), start=2):
+                if root.lower == root.upper:
+                    hit = _integer_value(cls, root.lower) == 0
+                else:
+                    hit = _variations(sequence, root.lower) - _variations(sequence, root.upper) >= 1
+                if hit:
+                    multiplicity = k
+            expected.append((root.witness, multiplicity))
+        assert _chart_roots(polynomial) == expected
 
 
 def test_scoped_root_memo_returns_identical_results_and_replays_cancellation():

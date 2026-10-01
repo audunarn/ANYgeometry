@@ -27,7 +27,7 @@ from math import gcd
 
 import numpy as np
 
-from .analytic_roots import (_derivative, _division, _integer_value, _sturm, _variations,
+from .analytic_roots import (_derivative, _exact_quotient, _integer_gcd, _integer_row, _integer_value, _sturm, _variations,
                              isolate_real_roots)
 from .errors import GeometryError
 from .extrusions import EllipseDirectrix
@@ -577,13 +577,10 @@ def resultant_hp(A2, B2, C2, A3, B3, C3):
 def _classes(poly):
     """Yun decomposition: ``classes[k-1]`` has exactly the roots of multiplicity >= ``k``."""
     classes = []
-    a = tuple(Fraction(v) for v in poly)
-    zero = (Fraction(0),)
+    a = _integer_row(poly)
     while len(a) > 1:
-        g, b = a, _derivative(a)
-        while b != zero and b != (0,):
-            g, b = b, _division(g, b)[1]
-        classes.append(_division(a, g)[0] if len(g) > 1 else a)
+        g = _integer_gcd(a, _derivative(a))
+        classes.append(_exact_quotient(a, g) if len(g) > 1 else a)
         a = g
     return classes
 
@@ -593,7 +590,7 @@ def _chart_roots(poly):
     if len(poly) < 2:
         return []
     classes = _classes(poly)
-    sequences = [_sturm(cls) for cls in classes]
+    sequences = [None, *(_sturm(cls) for cls in classes[1:])]          # the first class needs no multiplicity test
     tolerance = 4 * np.finfo(float).eps
     out = []
     for root in isolate_real_roots(poly, tolerance=tolerance, interval=(-1, 1)):
@@ -646,23 +643,11 @@ def _poly_gcd(polynomials):
     """Integer-coefficient gcd of ascending polynomials (zero ones divide nothing new); ``None`` if all are zero."""
     current = None
     for poly in polynomials:
-        q = tuple(Fraction(v) for v in poly)
+        q = _trim_ints(list(poly))
         if all(v == 0 for v in q):
             continue
-        q = tuple(_trim_ints(list(q)))
-        if current is None:
-            current = q
-            continue
-        a, b = current, q
-        while any(b):
-            a, b = b, _division(a, b)[1]
-        current = a
-    if current is None:
-        return None
-    scale = 1
-    for value in current:
-        scale = scale * value.denominator // gcd(scale, value.denominator)
-    return [int(v * scale) for v in current]
+        current = _integer_row(q) if current is None else _integer_gcd(current, q)
+    return None if current is None else list(current)
 
 
 # ---------------------------------------------------------------------------
