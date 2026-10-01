@@ -17,7 +17,7 @@ def _member_point(model,member_id,parameter):
     raise GeometryError('joint parameter is outside the member axis')
 
 
-def declare_member_contacts(model,contacts,check):
+def declare_member_contacts(model,contacts,check,*,sheet_target_ids=()):
     """Contacts carry exact parent parameters; topology supplies the station."""
     grouped={}
     for contact,vertex in contacts:
@@ -39,7 +39,10 @@ def declare_member_contacts(model,contacts,check):
         attachments=[]
         # A bend in one continuous axis is topology, not a structural joint.
         if len({member for member,_parameter in parameters}) == 1 and not sheets:
-            continue
+            values=sorted(parameter for _member,parameter in parameters)
+            if (len(values)==1 or max(values)-min(values)<=model.tolerance.parameter
+                    or all(min(abs(value),abs(value-1.))<=model.tolerance.parameter for value in values)):
+                continue
         endpoint=any(parameter in (0.,1.) for _member,parameter in parameters)
         for member,parameter in sorted(parameters):
             residual=float(np.linalg.norm(_member_point(model,member,parameter)-position))
@@ -47,11 +50,17 @@ def declare_member_contacts(model,contacts,check):
                 raise GeometryError('canonical member contact exceeds its qualified tolerance')
             for sheet,face in sorted(selected.items()):
                 uv=model.face_local_uv(face,position)
-                attachments.append(model.ensure_attachment(member,AttachmentKind.MEMBER_THROUGH_FACE,
-                    AttachmentTargetKind.FACE,face,ParameterRange(parameter,parameter),
+                sheet_target=sheet in sheet_target_ids
+                at_endpoint=parameter in (0.,1.)
+                kind=(AttachmentKind.MEMBER_ENDPOINT_ON_SHEET if at_endpoint
+                      else AttachmentKind.MEMBER_CROSS_SHEET) if sheet_target else AttachmentKind.MEMBER_THROUGH_FACE
+                attachments.append(model.ensure_attachment(member,kind,
+                    AttachmentTargetKind.SHEET if sheet_target else AttachmentTargetKind.FACE,
+                    sheet if sheet_target else face,ParameterRange(parameter,parameter),
                     tuple(ParameterRange(float(value),float(value)) for value in uv),
                     sheet_id=sheet,connection_intent=ConnectionIntent.CONNECT,
                     evidence=AttachmentEvidence.EXACT,max_residual=residual,tolerance_used=tolerance,
+                    metadata={'face_sequence':[face]},
                     provenance={'contract':'ANYGEOMETRY_ANALYTIC_MEMBER_JOINT_V1'}))
         members=tuple(sorted({member for member,_ in parameters}))
         if len(members)==2 and endpoint:
@@ -66,7 +75,7 @@ def declare_member_contacts(model,contacts,check):
                     _member_point(model,*source)-_member_point(model,*target))),tolerance_used=tolerance,
                 provenance={'contract':'ANYGEOMETRY_ANALYTIC_MEMBER_JOINT_V1'}))
         uses=tuple(JunctionMemberUse(member,ParameterRange(parameter,parameter)) for member,parameter in sorted(parameters))
-        kind=(JunctionKind.MULTI_WAY if len(members)>2 else
+        kind=(JunctionKind.MULTI_WAY if len(parameters)+len(sheets)>2 else
               JunctionKind.ENDPOINT if all(parameter in (0.,1.) for _member,parameter in parameters)
               else JunctionKind.CROSSING)
         model.ensure_junction(kind,

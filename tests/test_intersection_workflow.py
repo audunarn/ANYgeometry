@@ -1217,6 +1217,7 @@ def test_member_point_certificate_aggregation_is_conservative_and_ordered() -> N
 
 
 def test_same_world_point_distinct_member_visits_remain_separate() -> None:
+    from anygeometry import to_dict
     geometry = GeometryModel()
     left, right, lower, centre, upper_right, upper_left, upper = (
         geometry.add_points(
@@ -1259,10 +1260,20 @@ def test_same_world_point_distinct_member_visits_remain_separate() -> None:
     assert [
         component.first_parameter[0] for component in swapped.components
     ] == pytest.approx(visits)
-    for result in (forward, swapped):
-        plan = plan_imprint(geometry, result, policy=ConnectionIntent.CONNECT)
-        assert plan.operation is ImprintOperation.NO_TOPOLOGY
-        assert plan.result.kind is IntersectionKind.UNSUPPORTED
+    before = to_dict(geometry)
+    plans = [plan_imprint(geometry, result, policy=ConnectionIntent.CONNECT)
+             for result in (forward, swapped)]
+    assert to_dict(geometry) == before
+    assert all(plan.operation is ImprintOperation.MEMBER_CONNECTION and plan.batch_plan is not None
+               for plan in plans)
+    application = apply_imprint(geometry, plans[0], policy=ConnectionIntent.CONNECT)
+    assert len([item for item in application.relations if item.kind == 'junction']) == 1
+    junction = next(iter(geometry.junctions.values()))
+    assert junction.kind is JunctionKind.MULTI_WAY
+    assert junction.member_ids == (first_member,second_member)
+    assert [use.member_range.start for use in junction.member_uses
+            if use.member_id == second_member] == pytest.approx(visits)
+    assert geometry.validate_topology() == ()
 
 
 def test_distinct_member_crossings_are_applied_atomically() -> None:

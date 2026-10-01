@@ -58,6 +58,46 @@ def test_member_endpoint_on_interior_axis_retains_qualified_attachment():
     assert model.validate_topology()==()
 
 
+@pytest.mark.parametrize('third_axis',(False,True))
+def test_repeated_member_visits_retain_distinct_parent_occurrences(third_axis):
+    import numpy as np
+    from anygeometry import from_dict
+    from anygeometry.structural import JunctionKind,Junction,JunctionMemberUse,ParameterRange
+    model=GeometryModel()
+    points=model.add_points(((-1.,-1.,0.),(1.,1.,0.),(-1.,1.,0.),(1.,-1.,0.)))
+    edges=[model.add_line(a,b) for a,b in zip(points,points[1:])]
+    member=model.add_member(edges)
+    selected=[model.handle('member',member)]
+    if third_axis:
+        axis=model.add_member((model.add_line(*model.add_points(((0.,0.,-1.),(0.,0.,1.)))),))
+        selected.append(model.handle('member',axis))
+    before=to_dict(model)
+    plan=plan_intersections(model,tuple(reversed(selected)),policy='connect')
+    assert to_dict(model)==before
+    assert plan==plan_intersections(model,selected,policy='connect')
+    apply_intersections(model,plan,policy='connect')
+    crossings=[joint for joint in model.junctions.values() if any(
+        use.member_id==member and 0.<use.member_range.start<1. for use in joint.member_uses)]
+    assert len(crossings)==1
+    crossing=crossings[0]
+    assert crossing.kind is (JunctionKind.MULTI_WAY if third_axis else JunctionKind.CROSSING)
+    visits=[use.member_range.start for use in crossing.member_uses if use.member_id==member]
+    expected=np.sqrt(2.)/(2*np.sqrt(8.)+2.)
+    np.testing.assert_allclose(visits,(expected,1-expected),rtol=0.,atol=1e-14)
+    assert crossing.member_ids==tuple(item.id for item in selected)
+    center=[vertex.id for vertex in model.vertices.values() if np.linalg.norm(vertex.position)<1e-12]
+    assert len(center)==1 and len(model.edges_using_vertex(center[0]))==(6 if third_axis else 4)
+    assert model.validate_topology()==()
+    assert from_dict(to_dict(model)).junctions[crossing.id]==crossing
+    after=to_dict(model)
+    repeated=plan_intersections(model,selected,policy='connect')
+    assert apply_intersections(model,repeated,policy='connect').reused
+    assert to_dict(model)==after
+    duplicate=JunctionMemberUse(member,ParameterRange.point(visits[0]))
+    with pytest.raises(GeometryError,match='interval can participate only once'):
+        Junction(999,JunctionKind.CROSSING,(duplicate,duplicate))
+
+
 def _plates():
     model = GeometryModel()
     faces = []

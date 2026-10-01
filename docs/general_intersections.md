@@ -60,15 +60,15 @@ semantics. CAD export and CRS reprojection are separate work.
 
 | Configuration or case | Current extension evidence |
 | --- | --- |
-| Windows, Python 3.14 kernel | 1,062 regressions plus three growing original-operand arrangements (1, 8 and 25 cuts) pass |
+| Windows, Python 3.14 kernel | 1,074 regressions pass, including growing original-operand arrangements (1, 8 and 25 cuts), repeated Member visits and analytic planar-area oracles |
 | Windows, Python 3.13 compiled mesher | 147 metric/cache/gradation/frontal/seeding/automatic-route and S3 checks pass; five staged chart-refinement contract checks included |
 | Windows, Python 3.13 FEM lifecycle | 12 intersection and reference-retention regressions pass |
-| Exact installed ANYfem replay, targets 0.5 and 0.25 | Both accepted; source, joints, material, save/load and equivalent regeneration checks pass |
-| Installed tangent cylinders | Accepted; complete axial joint and material checks pass |
-| Parallel/perpendicular cylinder pairs | Source meshing and independent coverage checks pass; updated installed coverage remains pending |
-| Skew finite unequal-radius cylinders | Saved owner-chart refinement passes S3 and independent implicit-curve/material/joint checks; updated installed default-policy application acceptance is running |
+| Exact installed ANYfem replay, targets 0.5 and 0.25 | Both accepted on Windows/Linux/macOS arm64; source, joints, material, save/load and equivalent regeneration checks pass |
+| Installed tangent cylinders | Accepted on those three platforms; complete axial joint and material checks pass |
+| Parallel/perpendicular cylinder pairs | Accepted on those three platforms; independent angular/axial coverage and high-valence checks pass |
+| Skew finite unequal-radius cylinders | Default automatic meshes accepted on those three platforms; independent eliminated cylinder equations, 70-digit residuals, finite-height coverage, shared nodes and material checks pass |
 | Changed radius with unchanged output roles | Kernel owner identity/parameter tests and FEM section/load/support, save/load and undo/redo checks pass |
-| Linux and macOS expanded extension matrix | Not executed for this extension yet |
+| First expanded hosted run | 27/32 jobs pass; Intel kernels and minimum dependencies fail one planar quadrature regression; analytic integration fix passes locally, updated hosted matrix pending |
 
 Installed reports bind wheel hashes, resolved dependencies, package byte checks
 and origins in clean environments outside source checkouts. Candidate package
@@ -95,8 +95,14 @@ and requires accepted default automatic meshes and independent joint/material
 oracles. The Windows/Linux/Apple-silicon jobs do not imply Intel consumer
 acceptance. Setup failures and unavailable artifacts are explicit failures.
 
-Outstanding implementation/acceptance includes generalized automatic skew
-admission, full pair-wrapper routing, bay-count-changing feature regeneration,
+The compact [installed evidence](../reports/general_intersections/installed-qualification-36795873823.json)
+binds these passes to the recorded source commits and artifacts; the overall
+[hosted run](https://github.com/audunarn/ANYgeometry/actions/runs/36795873823)
+failed its five planar-area gates. Updated source is not accepted merely because
+those earlier installed artifacts passed.
+
+Outstanding implementation/acceptance includes remaining pair-policy routing,
+bay-count-changing feature regeneration,
 remaining attachment parameter remaps and the complete growing/concave/holed/
 seam/high-valence matrix. Typed failures and unavailable jobs are not passes.
 

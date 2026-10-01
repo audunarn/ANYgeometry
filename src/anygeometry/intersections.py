@@ -588,7 +588,8 @@ class ImprintPlan:
                     or self.batch_plan.revision != self.revision
                     or not {self.first_parent,self.second_parent} <= set(self.batch_plan.operands)
                     or _policy_name(self.batch_plan.policy.intent) != _policy_name(self.policy)
-                    or operation not in (ImprintOperation.FACE_IMPRINT,ImprintOperation.MEMBER_CONNECTION)):
+                    or operation not in (ImprintOperation.FACE_IMPRINT,ImprintOperation.MEMBER_CONNECTION,
+                                         ImprintOperation.MEMBER_SHEET_RELATION)):
                 raise GeometryError("imprint batch plan does not match its public pair binding")
 
 
@@ -4599,11 +4600,7 @@ def plan_imprint(
                 and np.allclose(original.witnesses,current.witnesses,
                                 rtol=0.,atol=result.tolerance_used)
                 for original,current in zip(result.components,fresh.components)))
-            repeated=any(np.linalg.norm(np.asarray(first.witnesses[0])-second.witnesses[0])
-                         <=result.tolerance_used
-                         for index,first in enumerate(result.components)
-                         for second in result.components[index+1:])
-            if not consistent or repeated:
+            if not consistent:
                 general_points=False
         if general_points:
             from .batch_intersections import plan_intersections
@@ -4666,11 +4663,23 @@ def plan_imprint(
                     *changes,
                 )
     elif "member" in pair and pair & {"face", "sheet"}:
+        material = second_parent if first_parent.kind == "member" else first_parent
+        material_faces = ((material.id,) if material.kind == "face" else tuple(
+            geometry.face_uses[identifier].face_id
+            for identifier in geometry.sheets[material.id].face_use_ids))
+        shared_material = (policy_value == "connect" and result.classified
+                           and bool(result.components)
+                           and result.dimension in (IntersectionDimension.POINT,IntersectionDimension.CURVE)
+                           and all(isinstance(geometry.faces[identifier].surface,(Plane,Cylinder))
+                                   for identifier in material_faces))
+        if shared_material:
+            from .batch_intersections import plan_intersections
+            batch_plan=plan_intersections(geometry,(first_parent,second_parent),policy=normalized_policy)
         classification_limitation = (
             _member_sheet_preflight_supported(
                 geometry, first_parent, second_parent, result
             )
-            if result.classified and result.components
+            if result.classified and result.components and batch_plan is None
             else None
         )
         if classification_limitation is not None:
@@ -6533,6 +6542,29 @@ def apply_imprint(
                 pair_plan_operands(geometry,plan.first_parent,plan.second_parent)):
             raise GeometryError("imprint batch operand binding changed")
         application = apply_intersections(geometry,plan.batch_plan,policy=normalized_policy)
+        if plan.operation is ImprintOperation.MEMBER_SHEET_RELATION:
+            member=plan.first_parent if plan.first_parent.kind=='member' else plan.second_parent
+            material=plan.second_parent if plan.first_parent.kind=='member' else plan.first_parent
+            resolved=geometry.resolve_handle(material).resolved
+            face_ids={item.id for item in resolved if item.kind=='face'}
+            sheets={item.id for item in resolved if item.kind=='sheet'}
+            face_ids.update(geometry.face_uses[use].face_id for sheet in sheets
+                            for use in geometry.sheets[sheet].face_use_ids)
+            sheets.update(sheet for face in face_ids for sheet in _sheet_ids_for_face(geometry,face))
+            attachments={item.id for item in geometry.attachments.values()
+                         if item.source_kind=='member' and item.source_id==member.id and (
+                             item.sheet_id in sheets
+                             or (item.target_kind.value=='face' and item.target_id in face_ids)
+                             or (item.target_kind.value=='edge' and
+                                 set(geometry.faces_using_edge(item.target_id)) & face_ids))}
+            junctions={item.id for item in geometry.junctions.values()
+                       if member.id in item.member_ids and set(item.sheet_ids) & sheets}
+            attachments.update(identifier for junction in junctions
+                               for identifier in geometry.junctions[junction].attachment_ids)
+            relations=tuple(sorted({geometry.handle('attachment',identifier) for identifier in attachments}
+                                   | {geometry.handle('junction',identifier) for identifier in junctions}))
+            return ImprintApplication(plan,plan.result,application.change_set,relations,
+                                      None,application.reused)
         if plan.operation is ImprintOperation.MEMBER_CONNECTION:
             from .structural import ConnectionIntent
             participants={plan.first_parent.id,plan.second_parent.id}

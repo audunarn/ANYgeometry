@@ -23,6 +23,18 @@ ordinary local debugging is an integrated Level A experiment, not acceptance.
 
 ## Current decision and bounded experiment
 
+Latest checkpoint (2026-10-01): rebuilt installed default-policy ANYfem meshes
+pass all six replay/cylinder cases on Windows, Linux and macOS 15 arm64, with
+independent analytic/high-precision joint and material checks. Hosted run
+36795873823 passed 27 of 32 jobs; all four Intel kernel jobs and the Linux
+minimum-dependency job failed the same planar area quadrature regression.
+Analytic planar integration now preserves the original tolerances, and the
+updated full Windows/Python 3.14 kernel passes 1,074 tests. The updated hosted
+matrix is next. Member/material CONNECT wrappers now use the batch engine;
+repeated Member visits retain distinct parent parameters and canonical topology.
+Broader oblique/concave/holed meshing and remaining compatibility limitations
+still need explicit acceptance. Earlier diagnostics below are retained history.
+
 Confirmed exact replay on local source: StructuralPreparationError at face:3 /
 face:52, 'imprint component does not map to one active face descendant'.
 Equivalent reduced replay has a generator from (3.5,2.5,-2) to (3.5,2.5,-1):
@@ -37,10 +49,10 @@ Do not infer acceptance from a successful isolated slice.
 
 ## Stages
 
-1. Exact curves/schema — implemented locally; broader acceptance pending.
-2. Arrangements/batch preparation — local implementation in progress.
-3. Mesher/FEM integration — implemented locally; expanded admission pending.
-4. Qualification/compatibility and installed package gates — in progress.
+1. Exact curves/schema — committed; expanded kernel acceptance being rerun.
+2. Arrangements/batch preparation — committed; wrapper/precision follow-ups tested.
+3. Mesher/FEM integration — isolated review branches pushed; six installed cases pass on three platforms.
+4. Qualification/compatibility — evidence retained; remaining cases and updated matrix in progress.
 
 ## Stage 1 development evidence
 
@@ -566,3 +578,43 @@ finish its already-started native fallback (at most 1,200 seconds total); this
 prospective change concerns a local disposable diagnostic only, not any frozen
 scientific or execution authority. Updated default-route installed acceptance
 remains the deciding experiment.
+
+The explicit-frontal structured application diagnostic exceeded its prospective
+1,200-second local bound while repeating structured/native regularity retries;
+it was interrupted. Retain the complete failed log. No completed application
+rollback or acceptance is claimed for that interrupted process. In contrast,
+the rebuilt installed default-policy candidate selected the native chart recipe
+and passed qualified S3 at 379.90 seconds and hybrid generation at 397.75
+seconds. Source association and independent accepted-mesh checks are still
+pending. Hosted matrix dispatched at geometry commit 11b989ac14b081268a77437126b51e436580f25d:
+https://github.com/audunarn/ANYgeometry/actions/runs/36795873823
+
+The rebuilt default-policy installed skew mesh is ready/ADMITTED: 28,055 nodes,
+56,521 T3s and 730 shared segments, selected native on its first recipe in
+403.31 seconds. Independent eliminated cylinder equations, 70-digit residuals,
+finite-height branch coverage and material areas pass. Source geometry remains
+unchanged. This resolves default skew admission for the recorded artifacts.
+
+Next kernel slice: a continuous Member may visit one junction at distinct parent
+parameters. The old Junction constructor rejects repeated owner IDs even though
+these are distinct occurrences. Distinguish a bend (one parameter) from a
+self-crossing (different parameters), retain unique owner IDs for consumer
+indexing, and reject duplicate identical occurrences. Bounded regressions:
+one bow-tie Member crossing itself and a third axis, exact canonical station,
+occurrence ranges, serialization, insertion order and idempotence. Then route
+qualified Member/material pair CONNECT through the batch engine and retain its
+public attachment/junction result contract. Existing pair regressions decide
+whether compatibility adaptation is required; do not loosen predicates.
+
+Hosted run 36795873823: minimum NumPy/Shapely on Linux and Intel macOS/Python
+3.14 both fail the same finite transverse-ring regression. The native planar
+area tolerance is 3.49e-18; repeated double-precision Gauss quadrature and least-
+squares projection do not stabilize at that tolerance on these configurations.
+Other completed kernel configurations pass. Competing explanations are actual
+material loss versus arithmetic cancellation in planar line/ellipse integration.
+Replace this family's numerical quadrature with its analytic Green integral:
+exact rational affine projection for lines/polynomial Beziers and high-precision
+closed-form elliptic primitives. Keep cylinder quadrature and every tolerance
+unchanged. Verify a circle-cap analytic oracle, affine/skew bases, orientations,
+small sweeps and translated coordinates, then rerun the failing regression and
+full kernel before the changed hosted gates.

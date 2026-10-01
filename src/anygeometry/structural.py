@@ -847,9 +847,9 @@ class Junction:
         if any(not isinstance(value, JunctionMemberUse) for value in member_uses):
             raise GeometryError("junction member uses must be JunctionMemberUse values")
         member_uses = tuple(sorted(member_uses, key=lambda value: value.sort_key))
-        member_ids = tuple(value.member_id for value in member_uses)
-        if len(set(member_ids)) != len(member_ids):
-            raise GeometryError("a member can participate only once in a junction")
+        occurrence_keys = tuple(value.sort_key for value in member_uses)
+        if len(set(occurrence_keys)) != len(occurrence_keys):
+            raise GeometryError("a member interval can participate only once in a junction")
         if not member_uses and kind is not JunctionKind.SHEET_JOINT:
             raise GeometryError("junction requires at least one member")
         sheet_ids = _ids(self.sheet_ids, "sheet ID", sort=True)
@@ -890,7 +890,7 @@ class Junction:
 
     @property
     def member_ids(self) -> tuple[int, ...]:
-        return tuple(value.member_id for value in self.member_uses)
+        return tuple(sorted({value.member_id for value in self.member_uses}))
 
 
 def structural_entity_keys(

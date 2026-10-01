@@ -850,7 +850,8 @@ def _apply_intersections_in_place(model, plan, *, policy):
         if policy.intent is ConnectionIntent.CONNECT:
             from .joint_edges import declare_joint_edge
             from .member_joints import declare_member_contacts, declare_member_boundaries
-            declare_member_contacts(model,member_contacts,check)
+            declare_member_contacts(model,member_contacts,check,
+                                    sheet_target_ids={operand.id for operand in plan.operands if operand.kind=='sheet'})
             declare_member_boundaries(model,(member for axis in plan.axes for member in axis.member_ids),check)
             for edge_id in sorted(joint_ids):
                 declare_joint_edge(model,edge_id,
