@@ -223,6 +223,11 @@ class MaterialDomain:
                             for loop in self.boundaries[1:]))
 
     def area_loop(self, loop, tolerance):
+        if isinstance(self.support,Plane):
+            from .planar_area import planar_loop_area
+            analytic=planar_loop_area(self.support,loop,tolerance)
+            if analytic is not None:
+                return analytic
         previous = None
         for count in (16, 32, 64, 128, 256, 512):
             nodes, weights = np.polynomial.legendre.leggauss(count)
