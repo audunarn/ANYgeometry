@@ -265,7 +265,7 @@ def _segment_batches(seed, batches, size=200):
     for _ in range(batches):
         tolerance = float(rng.choice((1e-10, 1e-9, 1e-8, 1e-6)))
         scale = 10 ** rng.uniform(-3, 2)
-        kind = rng.choice(("random", "touch", "parallel", "tiny"))
+        kind = rng.choice(("random", "touch", "parallel", "tiny", "collinear"))
         a0 = rng.uniform(-scale, scale, (size, 2))
         angle = rng.uniform(0, math.tau, size)
         length = scale * rng.uniform(.01, 1.5, size)
@@ -286,6 +286,16 @@ def _segment_batches(seed, batches, size=200):
             b0 = (a0 + d * rng.uniform(-.5, 1.5, size)[:, None]
                   + normal * (rng.normal(0, 4 * tolerance, size) * rng.choice((0, 1, 1e3), size))[:, None])
             b1 = b0 + second * rng.uniform(.2, 2, size)[:, None]
+        elif kind == "collinear":
+            # End-to-end stretches of one straight edge, separated by gaps around the tolerance: a sampled
+            # straight chart edge, whose segments never touch unless the gap is within the tolerance.
+            gap = tolerance * rng.choice((0., .3, .9, 1.1, 2., 3.9, 4.1, 8., 1e3), size)
+            other = scale * rng.uniform(.01, 1.5, size)
+            sideways = np.column_stack((-direction[:, 1], direction[:, 0])) * (
+                rng.normal(0, .3 * tolerance, size) * rng.choice((0, 1), size))[:, None]
+            before = rng.random(size) < .5                                    # the second stretch precedes the first
+            b0 = np.where(before[:, None], a0 - direction * (gap + other)[:, None], a1 + direction * gap[:, None]) + sideways
+            b1 = b0 + direction * other[:, None]
         else:
             # A segment barely longer than the tolerance: the exact predicate
             # treats near-parallel with a far-away long segment as touching.
@@ -318,6 +328,24 @@ def test_segment_pair_filter_keeps_everything_it_cannot_bound():
     assert GeometryModel._segment_pairs_possible(a, b + 1e6, c, d, 1e-10).all()
     assert GeometryModel._segment_pairs_possible(a, b, c, d, 0.).all()
     assert GeometryModel._segment_pairs_possible(a[:0], b[:0], c[:0], d[:0], 1e-10).shape == (0,)
+
+
+def test_collinear_stretches_of_a_sampled_straight_edge_never_reach_the_exact_predicate(monkeypatch):
+    """A chart edge of constant ``v`` is sampled into many collinear segments; none of those pairs can touch."""
+    polygon = np.vstack(([(x, 0.) for x in np.linspace(0., 1., 60, endpoint=False)], [(1., 0.), (1., 1.), (0., 1.)]))
+    original = GeometryModel._segments_intersect_2d
+    calls = []
+
+    def counted(*arguments):
+        calls.append(1)
+        return original(*arguments)
+
+    monkeypatch.setattr(GeometryModel, "_segments_intersect_2d", staticmethod(counted))
+    assert GeometryModel._polygon_self_intersects(polygon) is False
+    assert len(calls) < 40                                    # all 1710 collinear pairs were rejected by the filter
+    # ... while stretches that overlap or touch within the tolerance still reach it and are found
+    touching = np.vstack((polygon[:30], [(.5, 1e-11)], polygon[30:]))
+    assert GeometryModel._polygon_self_intersects(touching) is True
 
 
 def _exhaustive_self_intersects(polygon, tolerance):

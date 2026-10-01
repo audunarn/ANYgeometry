@@ -4944,12 +4944,14 @@ class GeometryModel:
         """Pairs that :meth:`_segments_intersect_2d` might report as touching.
 
         Rows are segment pairs. The mask is only a filter: a ``False`` entry is
-        a pair the exact predicate certainly rejects, by one of two margins
+        a pair the exact predicate certainly rejects, by one of three margins
         wide enough to absorb floating-point error: well-conditioned
         crossings whose bounding boxes are farther apart than the tolerance
-        allows, and parallel-branch pairs wholly on one side of the first
-        line. Everything else, including degenerate, non-finite and
-        near-parallel pairs, stays ``True`` for the exact predicate.
+        allows, parallel-branch pairs whose bounding boxes are apart (the
+        collinear stretches of one sampled straight edge) and parallel-branch
+        pairs wholly on one side of the first line. Everything else, including
+        degenerate, non-finite and near-parallel pairs, stays ``True`` for the
+        exact predicate.
         """
         keep = np.ones(len(first_start), dtype=bool)
         if not (np.isfinite(tolerance) and tolerance > 0.0) or not len(keep):
@@ -4990,9 +4992,13 @@ class GeometryModel:
             )
             margin = 4.0 * tolerance + 1.0e-11 * extent
             keep &= ~(crossing & (gap > margin))
-            # Parallel branch: both ends of the second segment strictly beyond
-            # the side tolerance of the first line, on the same side.
+            # Parallel branch: the exact predicate touches two such segments
+            # only when they overlap along their direction within the
+            # tolerance, which separated bounding boxes exclude.
             parallel = measurable & (denominator <= 0.98 * tolerance * longest)
+            keep &= ~(parallel & (gap > margin))
+            # Both ends of the second segment strictly beyond the side
+            # tolerance of the first line, on the same side.
             start_side = (
                 (second_start[:, 0] - first_start[:, 0]) * first[:, 1]
                 - (second_start[:, 1] - first_start[:, 1]) * first[:, 0]
