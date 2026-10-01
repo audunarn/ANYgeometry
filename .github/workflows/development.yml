@@ -1,0 +1,292 @@
+name: Development
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: development-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    name: Classify changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      runtime: ${{ steps.plan.outputs.runtime }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.13'
+      - id: plan
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+          base = os.environ['BASE_SHA']
+          if not base or set(base) == {'0'}:
+              paths = ['pyproject.toml']  # unknown base: full development checks
+          else:
+              paths = subprocess.check_output(['git', 'diff', '--name-only', '-z', base, 'HEAD'], text=True).strip().split('\0')
+              paths = [p for p in paths if p]
+          Path('changed-paths.json').write_text(json.dumps(paths), encoding='utf-8')
+          PY
+          python tools/dev_checks.py --paths-file changed-paths.json --ci-reuse --plan --report development-plan.json
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          plan = json.loads(Path('development-plan.json').read_text())
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              print('runtime=' + str(plan['scope'] != 'documentation').lower(), file=out)
+          PY
+          if [ -n "$BASE_SHA" ] && [ "$BASE_SHA" != "0000000000000000000000000000000000000000" ]; then
+            git diff --check "$BASE_SHA" HEAD
+          else
+            git diff --check
+          fi
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: development-plan
+          path: development-plan.json
+          if-no-files-found: error
+
+  kernel:
+    name: Development kernel (${{ matrix.os }}, Python 3.13)
+    needs: plan
+    if: needs.plan.outputs.runtime == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.13'
+          cache: pip
+      - run: python -m pip install -e '.[dev,planar]'
+      - run: python tools/check_licenses.py --check-installed
+      - run: python -m pytest --durations=20 --junitxml=kernel-results.xml
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: development-kernel-${{ matrix.os }}
+          path: kernel-results.xml
+          if-no-files-found: error
+
+  wheel:
+    name: Build and verify wheel
+    needs: plan
+    if: needs.plan.outputs.runtime == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Build distributions
+        id: contract
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,planar]"
+          python tools/check_licenses.py --check-installed
+          python - <<'PY'
+          import re
+          import tomllib
+          from pathlib import Path
+
+          metadata = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+          version = metadata["project"]["version"]
+          init_text = Path("src/anygeometry/__init__.py").read_text(encoding="utf-8")
+          match = re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']', init_text, re.MULTILINE)
+          assert match is not None and match.group(1) == version, (match, version)
+          with open(Path(__import__("os").environ["GITHUB_OUTPUT"]), "a", encoding="utf-8") as output:
+              print(f"version={version}", file=output)
+          PY
+          python -m build
+          python -m twine check dist/*
+      - name: Require one wheel and one source distribution
+        env:
+          PACKAGE_VERSION: ${{ steps.contract.outputs.version }}
+        run: |
+          python - <<'PY'
+          import email
+          import os
+          import tarfile
+          import zipfile
+          from pathlib import Path
+
+          version = os.environ["PACKAGE_VERSION"]
+          wheels = sorted(Path("dist").glob("*.whl"))
+          sdists = sorted(Path("dist").glob("*.tar.gz"))
+          assert len(wheels) == 1, wheels
+          assert len(sdists) == 1, sdists
+          assert wheels[0].name == f"anygeometry-{version}-py3-none-any.whl", wheels[0]
+          assert sdists[0].name == f"anygeometry-{version}.tar.gz", sdists[0]
+
+          with zipfile.ZipFile(wheels[0]) as archive:
+              names = archive.namelist()
+              assert "anygeometry/py.typed" in names
+              metadata_name, = [name for name in names if name.endswith(".dist-info/METADATA")]
+              wheel_metadata = email.message_from_bytes(archive.read(metadata_name))
+              assert wheel_metadata["Name"] == "ANYgeometry"
+              assert wheel_metadata["Version"] == version
+              assert wheel_metadata["License-Expression"] == "MPL-2.0"
+              license_root = metadata_name.rsplit("/", 1)[0] + "/licenses/"
+              expected_licenses = {
+                  license_root + relative
+                  for relative in (
+                      "LICENSE",
+                      "NOTICE",
+                      "THIRD_PARTY_NOTICES.md",
+                      "dependency-licenses.json",
+                      "docs/LICENSE.md",
+                  )
+              }
+              assert expected_licenses <= set(names), (expected_licenses - set(names))
+
+          with tarfile.open(sdists[0], "r:gz") as archive:
+              members = {member.name: member for member in archive.getmembers()}
+              root = f"anygeometry-{version}"
+              assert f"{root}/src/anygeometry/py.typed" in members
+              for relative in (
+                  "LICENSE",
+                  "NOTICE",
+                  "THIRD_PARTY_NOTICES.md",
+                  "dependency-licenses.json",
+                  "docs/LICENSE.md",
+              ):
+                  assert f"{root}/{relative}" in members, relative
+              package_info = archive.extractfile(members[f"{root}/PKG-INFO"])
+              assert package_info is not None
+              sdist_metadata = email.message_from_binary_file(package_info)
+              assert sdist_metadata["Name"] == "ANYgeometry"
+              assert sdist_metadata["Version"] == version
+              assert sdist_metadata["License-Expression"] == "MPL-2.0"
+          PY
+      - name: Retain the single candidate build
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: anygeometry-candidate
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+
+  wheel-smoke:
+    name: Installed wheel (${{ matrix.os }})
+    needs: wheel
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: anygeometry-candidate
+          path: candidate
+      - name: Verify the artifact in isolated base and planar environments
+        run: >-
+          python tools/check_compatibility.py wheel
+          --candidate candidate/*.whl
+          --expected-machine "${{ matrix.os == 'macos-15-intel' && 'x86_64' || matrix.os == 'macos-15' && 'arm64' || '' }}"
+          --output "$RUNNER_TEMP/geometry-wheel-smoke"
+      - name: Preserve complete smoke evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wheel-smoke-${{ matrix.os }}
+          retention-days: 30
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/geometry-wheel-smoke/report.json
+            ${{ runner.temp }}/geometry-wheel-smoke/command-*.log
+            ${{ runner.temp }}/geometry-wheel-smoke/without-planar/*.json
+            ${{ runner.temp }}/geometry-wheel-smoke/with-planar/*.json
+
+  mesher:
+    name: Installed mesher development check
+    needs: wheel
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
+        with:
+          name: anygeometry-candidate
+          path: candidate
+      - run: >-
+          python tools/check_compatibility.py consumers --profile mesher
+          --candidate candidate/*.whl --output "$RUNNER_TEMP/development-mesher"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: development-mesher
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/development-mesher/report.json
+            ${{ runner.temp }}/development-mesher/command-*.log
+            ${{ runner.temp }}/development-mesher/candidate/*.json
+            ${{ runner.temp }}/development-mesher/baseline/*.json
+
+  gate:
+    name: Development gate
+    needs: [plan, kernel, wheel, wheel-smoke, mesher]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require applicable checks
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          needs = json.loads(os.environ['NEEDS'])
+          assert needs['plan']['result'] == 'success', needs
+          runtime = needs['plan']['outputs']['runtime'] == 'true'
+          for name in ('kernel', 'wheel', 'wheel-smoke', 'mesher'):
+              assert needs[name]['result'] == ('success' if runtime else 'skipped'), (name, needs)
+          PY

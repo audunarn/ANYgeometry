@@ -4,6 +4,11 @@ All notable user-visible changes to ANYgeometry are documented here.
 
 ## Unreleased
 
+- Separate automatic development checks from explicitly dispatched full
+  platform/installed-consumer qualification; retain every qualification job and
+  budget. Add conservative local test selection and per-test CI timings. See
+  [testing guidance](docs/testing.md).
+
 ## 0.4.5 — 2026-10-01
 
 General intersections and coordinated meshing (accepted in the documented configurations):

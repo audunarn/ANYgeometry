@@ -353,8 +353,10 @@ from the historical `anymesher.geometry` namespace.
 ## Development
 
 ```powershell
-python -m pip install -e ".[dev]"
-python -m pytest
+python -m pip install -e ".[dev,planar]"
+python tools/dev_checks.py --scope smoke
+python tools/dev_checks.py --plan
+python tools/dev_checks.py --scope full
 python -m build
 python -m twine check dist\*
 ```
@@ -362,6 +364,9 @@ python -m twine check dist\*
 The test suite qualifies persistent identity and history, topology, curves,
 surfaces, generators, operations, serialization, intersections, CLI behavior,
 and import boundaries.
+
+See [testing guidance](docs/testing.md) for conservative focused selection,
+the automatic development gate and explicitly dispatched full qualification.
 
 The strict-kernel design, invariants, benchmark scope, and completed release
 qualification are recorded in
