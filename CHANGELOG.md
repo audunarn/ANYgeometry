@@ -20,6 +20,10 @@ General-intersection development (not yet qualified for generalized meshing):
 - `query_trimmed_surface_charts` exposes bound Plane/Cylinder material domains,
   exact trim definitions, holes and batched owner evaluation. Changed source or
   evidence invalidates previously qualified chart bindings.
+- Member pair CONNECT/IMPRINT plans prepare all occurrences and clipped
+  material intervals through the batch engine. Relation-only policies retain
+  all occurrences without changing topology; reuse requires every matching
+  parent interval. Failed relation creation rolls back exactly.
 - Changed generator output roles can retain existing structural owners and
   authored axis parameters when their topology correspondence is unambiguous.
   Ambiguous role changes remain atomic failures.

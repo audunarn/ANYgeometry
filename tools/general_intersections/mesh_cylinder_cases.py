@@ -4,7 +4,6 @@ import sys
 import cProfile
 import pstats
 import io
-import faulthandler
 from pathlib import Path
 from time import perf_counter
 from anygeometry import to_dict
@@ -46,14 +45,12 @@ def check(phase):
     if profile is not None and perf_counter()-start>180.:
         raise MeshError('bounded cylinder mesh cancelled at '+phase)
 try:
-    # Preserve the exact phase/stack if an installed-platform case stalls;
-    # these diagnostics do not change the fixed subprocess/resource budgets.
-    faulthandler.dump_traceback_later(180., repeat=True)
+    # Phase progress is flushed for resource-bound diagnostics. External stack
+    # sampling avoids CPython 3.13 watchdog/finalization stalls on Windows.
     if profile is not None:profile.enable()
     mesh=project.generate_mesh(.5,strategy='auto',order='linear',automation=MeshAutomationOptions(),
                               mesh_controls=controls,cancellation_check=check)
 finally:
-    faulthandler.cancel_dump_traceback_later()
     if profile is not None:
         profile.disable()
         profile.dump_stats(str(Path(__file__).with_name('skew-frontal.pstats')))

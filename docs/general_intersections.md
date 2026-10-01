@@ -35,6 +35,14 @@ cancelled or exhausted plan raises `GeometryError` without an accepted partial
 topology. `IntersectionBatchPolicy` supplies optional predicate/pair budgets and
 a cancellation callback. Its defaults impose no operand/intersection count cap.
 
+Single-pair Member CONNECT and IMPRINT plans use the same arrangement engine
+for every qualified occurrence and material interval. CONTACT_ONLY and
+KEEP_DISCONNECTED preserve topology and retain all qualified relations.
+REUSE_EXISTING requires compatible relations at every parent interval; a
+same-owner relation at another station is insufficient. Intent tags, unowned
+face attachments and rollback are retained. Legacy relation-only plans remain
+revision-bound; repeat their read-only planning after a successful edit.
+
 The engine arranges original operands before fragmentation. Shared physical
 joints and material decomposition seams retain separate provenance. Source
 lineage, Sheet/Member identity, FaceUse orientation and labels remain owner
@@ -60,7 +68,7 @@ semantics. CAD export and CRS reprojection are separate work.
 
 | Configuration or case | Current extension evidence |
 | --- | --- |
-| Windows, Python 3.14 kernel | 1,077 regressions pass, including growing original-operand arrangements (1, 8 and 25 cuts), repeated Member visits and analytic planar-area oracles |
+| Windows, Python 3.14 kernel | 1,086 regressions pass, including growing original-operand arrangements (1, 8 and 25 cuts), repeated Member visits, all pair intents and analytic planar-area oracles |
 | Windows, Python 3.13 compiled mesher | 147 metric/cache/gradation/frontal/seeding/automatic-route and S3 checks pass; five staged chart-refinement contract checks included |
 | Windows, Python 3.13 FEM lifecycle | 12 intersection and reference-retention regressions pass |
 | Exact installed ANYfem replay, targets 0.5 and 0.25 | Both accepted on Windows/Linux/macOS arm64; source, joints, material, save/load and equivalent regeneration checks pass |
@@ -91,7 +99,7 @@ Changed follow-up sources require fresh evidence. Numerical and mesh-quality
 thresholds remain unchanged.
 
 The generalized installed-consumer CI builds native mesher commit
-`563e907a03d489d0b0edf9bafb435c1e63fadc9f` and FEM commit
+`e93073871937d91d2fab512451bfe972d6e53fe8` and FEM commit
 `fac3c9a073c62485540a8629f8b2a3aeec64b730`, then installs those wheels and the
 single candidate geometry wheel in clean environments outside all checkouts.
 It requires compiled triangulation, checks every candidate package file against
@@ -117,6 +125,16 @@ accepted meshes on Linux before the skew-cylinder case exceeded its unchanged
 run. Kernel, minimum-dependency, wheel, public-consumer and MCP jobs all passed.
 Subsequent repair/compatibility changes require fresh installed evidence.
 
+The next [hosted run](https://github.com/audunarn/ANYgeometry/actions/runs/36814130573)
+passed 30 of 32 jobs. Its [installed evidence](../reports/general_intersections/installed-qualification-36814130573.json)
+records all twelve Apple-silicon meshes; Windows and Linux each accepted four
+before the skew fixture exceeded the unchanged 900-second budget. Retained
+phase evidence identifies repeated historical overlap qualification on prepared
+general domains as substantial work. The next candidate uses one read-only
+geometry-owner batch for this audit, retaining positive-area rejection and
+legacy unsupported-surface qualification. Thirty-one focused mesher checks pass;
+full regression and installed/platform acceptance remain pending.
+
 A conforming diagonal beam in a 2-by-1 plate imposes a 26.565-degree corner.
 The strict mesh API retains its 30-degree gate and rejects this design with
 source unchanged. The application's explicit automatic S3 policy admits it
@@ -124,10 +142,16 @@ under its existing 15-degree floor. Parameter-chart quality must be checked
 after lifting to physical coordinates; favorable chart angles cannot override
 the physical acceptance policy.
 
-Outstanding implementation/acceptance includes remaining pair-policy routing,
-bay-count-changing feature regeneration,
-remaining attachment parameter remaps and the complete growing/concave/holed/
-seam/high-valence matrix. Typed failures and unavailable jobs are not passes.
+The current generator contract preserves downstream references for equivalent
+and unambiguous output-role changes. Changing the generator bay count still
+requires an explicit semantic role remap; it is an atomic refusal rather than
+an inferred reassignment. Non-point face attachments require an exact source
+axis or point/edge target for remapping. Other attachment definitions are
+refused atomically. These cases have no new acceptance claim.
+
+The final follow-up sources still need the complete installed/platform and
+full mesher regression evidence. Typed failures and unavailable jobs are not
+passes.
 
 ## Consumer handoff
 
