@@ -44,6 +44,7 @@ from .surfaces import (
     CoonsSurface,
     Cone,
     Cylinder,
+    ExtrudedSurface,
     Plane,
     RuledSurface,
     Surface,
@@ -882,6 +883,9 @@ class GeometryModel:
                 for parameter in parameters
                 for v in (0.0, 1.0)
             )
+        elif isinstance(support, ExtrudedSurface):
+            lower, upper = support.bounds()
+            add_box(lower, upper)
         elif isinstance(support, RuledSurface):
             add_points(np.vstack((support.first_boundary, support.second_boundary)))
         elif isinstance(support, CoonsSurface):
@@ -6741,6 +6745,8 @@ class GeometryModel:
         evaluable = face.parameterization if face.parameterization is not None else face.surface
         if isinstance(evaluable, (Plane, Cylinder, Cone)):
             return np.clip(self._builtin_local_uv_many(evaluable, values), 0.0, 1.0)
+        if isinstance(evaluable, ExtrudedSurface):
+            return np.clip(evaluable.local_uv_many(values), 0.0, 1.0)
         return self._face_local_uv_rows(face_id, values)
 
     def _face_local_uv_rows(

@@ -57,7 +57,7 @@ from .structural import (
     Orientation,
     validate_structural_topology,
 )
-from .surfaces import CoonsSurface, Cylinder, Plane, RuledSurface
+from .surfaces import CoonsSurface, Cylinder, ExtrudedSurface, Plane, RuledSurface
 from .tolerance import (
     DEFAULT_TOLERANCE_POLICY,
     TolerancePolicy,
@@ -835,7 +835,10 @@ class _StrictAuditState:
             raise GeometryError(f"face {face_id} has no bounded trim")
         bounds = AABB.union_all(boxes)
         surface = face.surface
-        if isinstance(surface, RuledSurface):
+        if isinstance(surface, ExtrudedSurface):
+            lower, upper = surface.bounds()
+            bounds = bounds.union(AABB.from_points(np.vstack((lower, upper))))
+        elif isinstance(surface, RuledSurface):
             # A ruled patch is a convex blend of its two piecewise-linear
             # boundary curves, so their joint AABB contains every interior
             # point.  Include topology bounds as well so an inconsistent

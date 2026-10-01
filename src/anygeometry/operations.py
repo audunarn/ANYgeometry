@@ -17,7 +17,7 @@ from .entities import EntityRef, Face, OrientedEdge
 from .errors import GeometryError
 from .identity import EntityHandle, EntityKey
 from .model import GeometryModel
-from .surfaces import CoonsSurface, Cone, Cylinder, Plane, RuledSurface
+from .surfaces import CoonsSurface, Cone, Cylinder, ExtrudedSurface, Plane, RuledSurface
 from .transforms import AffineLike, coerce_affine_transform
 
 __all__ = [
@@ -908,6 +908,8 @@ def _transform_surface(surface: object, matrix: np.ndarray) -> object:
         first = surface.first_boundary @ linear.T + translation
         second = surface.second_boundary @ linear.T + translation
         return RuledSurface(first, second)
+    if isinstance(surface, ExtrudedSurface):
+        return surface.transformed(matrix)                 # affine maps commute with sweeping a planar profile
     if isinstance(surface, (Cylinder, Cone)):
         singular = np.linalg.svd(linear, compute_uv=False)
         if not np.allclose(singular, singular[0], rtol=1e-10, atol=1e-12):

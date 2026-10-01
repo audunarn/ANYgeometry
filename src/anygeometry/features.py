@@ -24,7 +24,8 @@ import numpy as np
 from .curves import Arc, Spline, Straight
 from .entities import Edge, EntityKind, EntityRef, Face, Vertex
 from .errors import GeometryError
-from .surfaces import CoonsSurface, Cone, Cylinder, Plane, RuledSurface
+from .extrusions import BezierDirectrix
+from .surfaces import CoonsSurface, Cone, Cylinder, ExtrudedSurface, Plane, RuledSurface
 
 if TYPE_CHECKING:
     from .model import GeometryModel
@@ -247,6 +248,16 @@ def _closure_surface(surface: object) -> dict[str, object] | None:
             "first_boundary": surface.first_boundary.tolist(),
             "second_boundary": surface.second_boundary.tolist(),
         }
+    if isinstance(surface, ExtrudedSurface):
+        directrix = surface.directrix
+        if isinstance(directrix, BezierDirectrix):
+            curve = {"kind": "bezier", "controls": [list(point) for point in directrix.controls]}
+        else:
+            curve = {"kind": "ellipse", "center": list(directrix.center), "u_vector": list(directrix.u_vector),
+                     "v_vector": list(directrix.v_vector), "start_angle": directrix.start_angle,
+                     "sweep_angle": directrix.sweep_angle}
+        return {"type": "extruded", "directrix": curve, "vector": list(surface.vector),
+                "u_range": list(surface.u_range), "v_range": list(surface.v_range)}
     raise GeometryError(f"unsupported surface type {type(surface).__name__}")
 
 

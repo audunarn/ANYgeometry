@@ -130,3 +130,102 @@ def test_equal_surfaces_hash_alike_and_different_ones_do_not_compare_equal():
 def test_what_cannot_be_represented_is_refused(make, message):
     with pytest.raises(GeometryError, match=message):
         make()
+
+
+# ---------------------------------------------------------------- inside a model
+
+import json
+
+from anygeometry import GeometryModel, from_dict, to_dict
+from anygeometry.editing import copy_entities, reverse_face
+from anygeometry.operations import transform
+
+
+def _extruded_face(vector=(0., 0., 2.), extra_surface=True):
+    model = GeometryModel()
+    points = model.add_points(CUBIC)
+    edge = model.add_spline(points[0], (points[1], points[2]), points[3])
+    (face,) = model.extrude([edge], vector)
+    surface = ExtrudedSurface(BezierDirectrix(CUBIC), vector)
+    if extra_surface:
+        model.set_face_surface(face, surface)
+    return model, face, surface
+
+
+def test_a_face_can_carry_an_extruded_support_and_validates():
+    model, face, surface = _extruded_face()
+    assert model.validate_topology() == ()
+    assert model.faces[face].surface == surface
+    probe = model.face_point(face, .3, .6)
+    assert np.allclose(probe, surface.evaluate(.3, .6), atol=1e-12)
+
+
+def test_the_document_is_schema_six_and_older_schemas_refuse_the_surface():
+    import hashlib
+    model, face, surface = _extruded_face()
+    document = to_dict(model)
+    assert document["version"] == 6
+    restored = from_dict(json.loads(json.dumps(document)))
+    assert restored.faces[face].surface == surface and to_dict(restored) == document and restored.validate_topology() == ()
+    plain, _face, _surface = _extruded_face(extra_surface=False)
+    assert to_dict(plain)["version"] == 5                               # stock Coons extrusions keep schema 5
+    stale = json.loads(json.dumps(document))
+    stale["version"] = 5
+    body = {k: v for k, v in stale.items() if k != "checksum"}
+    stale["checksum"] = {"algorithm": "sha256", "value": hashlib.sha256(json.dumps(
+        body, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode()).hexdigest()}
+    with pytest.raises(GeometryError, match="require schema 6"):
+        from_dict(stale)
+
+
+@pytest.mark.parametrize("damage", [
+    lambda s: s.pop("vector"),
+    lambda s: s.update(extra=1),
+    lambda s: s["directrix"].update(kind="spiral"),
+    lambda s: s["directrix"].pop("controls"),
+    lambda s: s.update(u_range=[.5, .5]),
+    lambda s: s.update(vector=[1., 0., 0.]),
+])
+def test_malformed_extruded_records_are_refused_whole(damage):
+    import hashlib
+    model, face, _surface = _extruded_face()
+    document = json.loads(json.dumps(to_dict(model)))
+    record = next(f for f in document["faces"] if f["id"] == face)["surface"]
+    damage(record)
+    body = {k: v for k, v in document.items() if k != "checksum"}
+    document["checksum"] = {"algorithm": "sha256", "value": hashlib.sha256(json.dumps(
+        body, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode()).hexdigest()}
+    with pytest.raises(GeometryError):
+        from_dict(document)
+
+
+def test_transforms_reversal_and_copies_keep_the_support_exact():
+    model, face, surface = _extruded_face((.3, .2, 1.))
+    matrix = np.eye(4)
+    matrix[:3, :3] = np.array([[0., -1., 0.], [1., 0., 0.], [0., 0., 2.]])
+    matrix[:3, 3] = (1., 2., 3.)
+    expected = matrix[:3, :3] @ surface.evaluate(.4, .6) + matrix[:3, 3]
+    reverse_face(model, face)
+    assert np.allclose(model.faces[face].surface.evaluate(.6, .6), surface.evaluate(.4, .6), atol=1e-13)   # u runs backwards
+    reverse_face(model, face)
+    transform(model, matrix)
+    assert model.validate_topology() == ()
+    assert np.allclose(model.face_point(face, .4, .6), expected, atol=1e-12)
+    other = GeometryModel()
+    other.insert_model(model)
+    assert other.validate_topology() == () and len(other.faces) == 1
+    assert np.allclose(next(iter(other.faces.values())).surface.evaluate(.4, .6), expected, atol=1e-12)
+
+
+def test_batch_inversion_through_the_model_matches_the_surface():
+    model, face, surface = _extruded_face()
+    uv = np.random.default_rng(3).uniform(.05, .95, (30, 2))
+    points = np.asarray([surface.evaluate(u, v) for u, v in uv])
+    assert np.abs(model.face_local_uv_many(face, points) - uv).max() < 1e-12
+
+
+def test_the_face_bounds_cover_the_whole_support_patch():
+    model, face, surface = _extruded_face()
+    lower, upper = surface.bounds()
+    box = model._entity_bounds(("face", face))
+    assert np.all(np.asarray(box[:3]) <= lower + 1e-12) and np.all(np.asarray(box[3:]) >= upper - 1e-12)

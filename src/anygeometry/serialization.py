@@ -52,7 +52,8 @@ from .structural import (
     Sheet,
     SheetTopologyPolicy,
 )
-from .surfaces import CoonsSurface, Cone, Cylinder, Plane, RuledSurface
+from .extrusions import BezierDirectrix, EllipseDirectrix
+from .surfaces import CoonsSurface, Cone, Cylinder, ExtrudedSurface, Plane, RuledSurface
 from .tolerance import TolerancePolicy
 
 SCHEMA = "anygeometry"
@@ -468,6 +469,16 @@ def _surface(surface: object) -> dict[str, object] | None:
         return {"type": "cone", "origin": surface.origin.tolist(), "axis": surface.axis.tolist(), "radial_direction": surface.radial_direction.tolist(), "radius_start": surface.radius_start, "radius_end": surface.radius_end, "height": surface.height, "start_angle": surface.start_angle, "sweep_angle": surface.sweep_angle}
     if isinstance(surface, RuledSurface):
         return {"type": "ruled", "first_boundary": surface.first_boundary.tolist(), "second_boundary": surface.second_boundary.tolist()}
+    if isinstance(surface, ExtrudedSurface):
+        directrix = surface.directrix
+        if isinstance(directrix, BezierDirectrix):
+            curve = {"kind": "bezier", "controls": [list(point) for point in directrix.controls]}
+        else:
+            curve = {"kind": "ellipse", "center": list(directrix.center), "u_vector": list(directrix.u_vector),
+                     "v_vector": list(directrix.v_vector), "start_angle": directrix.start_angle,
+                     "sweep_angle": directrix.sweep_angle}
+        return {"type": "extruded", "directrix": curve, "vector": list(surface.vector),
+                "u_range": list(surface.u_range), "v_range": list(surface.v_range)}
     raise GeometryError(f"unsupported surface type {type(surface).__name__}")
 
 
@@ -633,7 +644,11 @@ def _serialized_model_state(
         curves.append({"id": edge.id, "start": edge.start, "end": edge.end, "curve": curve})
     id_state = geometry.id_state()
     id_state.update(geometry._next_structural_id)  # noqa: SLF001
-    needs_quadric = any(isinstance(edge.curve, QuadricIntersectionCurve) for edge in geometry.edges.values())
+    needs_quadric = (
+        any(isinstance(edge.curve, QuadricIntersectionCurve) for edge in geometry.edges.values())
+        or any(isinstance(surface, ExtrudedSurface) for face in geometry.faces.values()
+               for surface in (face.surface, face.parameterization))
+    )
     document: dict[str, object] = {
         "schema": SCHEMA,
         "version": _QUADRIC_VERSION if needs_quadric else VERSION,
@@ -904,13 +919,35 @@ def _oriented_loop(value: object) -> tuple[OrientedEdge, ...]:
     return tuple(made)
 
 
-def _decode_surface(value: object, *, strict: bool = False) -> object:
+def _decode_extruded_surface(data: dict, *, schema_version: int) -> ExtrudedSurface:
+    if schema_version < _QUADRIC_VERSION:
+        raise GeometryError("extruded surfaces require schema 6")
+    _exact_fields(data, required={"directrix", "vector", "u_range", "v_range"}, name="extruded surface")
+    curve = dict(_object(data["directrix"], "extruded directrix"))
+    kind = curve.pop("kind", None)
+    if kind == "bezier":
+        _exact_fields(curve, required={"controls"}, name="Bezier directrix")
+        directrix = BezierDirectrix(tuple(tuple(point) for point in _list(curve["controls"], "Bezier controls")))
+    elif kind == "ellipse":
+        _exact_fields(curve, required={"center", "u_vector", "v_vector", "start_angle", "sweep_angle"},
+                      name="ellipse directrix")
+        directrix = EllipseDirectrix(tuple(curve["center"]), tuple(curve["u_vector"]), tuple(curve["v_vector"]),
+                                     curve["start_angle"], curve["sweep_angle"])
+    else:
+        raise GeometryError(f"unsupported directrix kind {kind!r}")
+    return ExtrudedSurface(directrix, tuple(_list(data["vector"], "extrusion vector")),
+                           tuple(_list(data["u_range"], "u_range")), tuple(_list(data["v_range"], "v_range")))
+
+
+def _decode_surface(value: object, *, strict: bool = False, schema_version: int = VERSION) -> object:
     if value is None:
         return None
     if not isinstance(value, Mapping):
         raise GeometryError("surface must be an object")
     data = dict(_object(value, "surface"))
     kind = data.pop("type", None)
+    if kind == "extruded":
+        return _decode_extruded_surface(data, schema_version=schema_version)
     constructors = {
         "coons": CoonsSurface,
         "plane": Plane,
@@ -1479,9 +1516,9 @@ def _decode_geometry_records(
                     _oriented_loop(loop)
                     for loop in _list(item.get("holes", []), "face holes")
                 ),
-                surface=_decode_surface(item.get("surface"), strict=strict),
+                surface=_decode_surface(item.get("surface"), strict=strict, schema_version=schema_version),
                 parameterization=_decode_surface(
-                    item.get("parameterization"), strict=strict
+                    item.get("parameterization"), strict=strict, schema_version=schema_version
                 ),
             ),
         )

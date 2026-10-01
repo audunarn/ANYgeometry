@@ -24,7 +24,7 @@ from .structural import (
     Orientation,
     ParameterRange,
 )
-from .surfaces import CoonsSurface, Cone, Cylinder, Plane, RuledSurface
+from .surfaces import CoonsSurface, Cone, Cylinder, ExtrudedSurface, Plane, RuledSurface
 from .transforms import AffineLike, AffineTransform, coerce_affine_transform
 
 __all__ = [
@@ -1087,6 +1087,8 @@ def _reverse_surface(surface: object) -> object:
             surface.first_boundary[::-1].copy(),
             surface.second_boundary[::-1].copy(),
         )
+    if isinstance(surface, ExtrudedSurface):
+        return ExtrudedSurface(surface.directrix, surface.vector, surface.u_range[::-1], surface.v_range)
     raise GeometryError(f"unsupported surface type {type(surface).__name__}")
 
 
@@ -1109,7 +1111,7 @@ def _reverse_face_attachment_parameters(
     ):
         # Reversed planar/topology-backed four-side faces transpose u and v.
         return second, first
-    if isinstance(surface, (Cylinder, Cone, RuledSurface, CoonsSurface)):
+    if isinstance(surface, (Cylinder, Cone, ExtrudedSurface, RuledSurface, CoonsSurface)):
         if not first.is_point:
             raise GeometryError(
                 "cannot reverse a face with an attachment whose complemented "
