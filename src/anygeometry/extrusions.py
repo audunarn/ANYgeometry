@@ -18,6 +18,7 @@ from .errors import GeometryError
 
 TWO_PI = 2.0 * math.pi
 _PLANAR_RELATIVE = 1e-10          # control points may leave their common plane by this fraction of the extent
+_EPS = float(np.finfo(float).eps)
 
 
 def _vector3(value, name):
@@ -118,20 +119,46 @@ class BezierDirectrix:
 
     _TABLE = 129
 
+    def _inversion_data(self):
+        """The sample table and the power-basis polynomials of the curve and its two derivatives (built once)."""
+        data = self.__dict__.get("_inversion")
+        if data is None:
+            table_t = np.linspace(0.0, 1.0, self._TABLE)
+            table = self.point(table_t)
+            degree = self.degree
+            power = np.array([math.comb(degree, k) * sum((-1) ** (k - i) * math.comb(k, i) * self._array[i]
+                                                          for i in range(k + 1)) for k in range(degree + 1)])
+            first = power[1:] * np.arange(1, degree + 1)[:, None]
+            second = first[1:] * np.arange(1, degree)[:, None]
+            data = (table_t, table, np.einsum("ij,ij->i", table, table), power, first, second)
+            object.__setattr__(self, "_inversion", data)
+        return data
+
+    @staticmethod
+    def _horner(coefficients, t):
+        value = np.broadcast_to(coefficients[-1], t.shape + (3,))
+        for row in coefficients[-2::-1]:
+            value = value * t[:, None] + row
+        return value
+
     def invert(self, points, *, iterations=8):
         """Parameter ``t`` of the curve point nearest each planar point (Newton from a sampled table)."""
         points = np.atleast_2d(np.asarray(points, dtype=float))
-        table_t = np.linspace(0.0, 1.0, self._TABLE)
-        table = self.point(table_t)
-        distance = np.sum((points[:, None, :] - table[None, :, :]) ** 2, axis=2)
-        t = table_t[np.argmin(distance, axis=1)]
+        table_t, table, table_norm, power, first, second = self._inversion_data()
+        # |p - c|^2 = |p|^2 - 2 p.c + |c|^2; the constant |p|^2 does not change the nearest sample
+        t = table_t[np.argmin(table_norm[None, :] - 2.0 * (points @ table.T), axis=1)]
+        done = np.zeros(len(t), dtype=bool)               # a converged point stops moving, whatever else is in the batch
         for _ in range(iterations):
-            offset = self.point(t) - points
-            first, second = self.derivative(t), self.second_derivative(t)
-            numerator = np.sum(offset * first, axis=1)
-            denominator = np.sum(first * first, axis=1) + np.sum(offset * second, axis=1)
+            offset = self._horner(power, t) - points
+            d1, d2 = self._horner(first, t), self._horner(second, t)
+            numerator = np.einsum("ij,ij->i", offset, d1)
+            denominator = np.einsum("ij,ij->i", d1, d1) + np.einsum("ij,ij->i", offset, d2)
             safe = np.where(np.abs(denominator) > 1e-300, denominator, 1.0)
-            t = np.clip(t - numerator / safe, 0.0, 1.0)
+            step = numerator / safe
+            t = np.where(done, t, np.clip(t - step, 0.0, 1.0))
+            done |= np.abs(step) <= 4.0 * _EPS
+            if done.all():
+                break
         return t
 
 
