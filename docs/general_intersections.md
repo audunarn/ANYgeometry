@@ -1,8 +1,12 @@
-# General intersection development contract
+# General intersection contract
 
-This is development on `codex/general-intersections`, not a new release or a
-claim that every planned case is accepted. Existing release ledgers, artifacts
-and specialized cylinder qualification records retain their original scope.
+The geometry implementation is published as 0.4.5. Use the
+[release and consumer handoff](general_intersections_release_handoff.md) for
+exact commits, wheel hashes, current qualification and outstanding consumer
+gates. The development evidence below retains its original source scope;
+it does not establish Qt parity or acceptance of the broader FEM scientific
+gate. Existing release ledgers, artifacts and specialized cylinder
+qualification records retain their original scope.
 The [living implementation record](../reports/general_intersections/task.md)
 contains the reproduction, decisions, failed experiments and current evidence.
 
@@ -85,7 +89,7 @@ resolved dependencies, package byte checks and installed origins.
 
 | Configuration or case | Accepted evidence |
 | --- | --- |
-| Windows, Linux, macOS 15 Apple silicon and macOS 15 Intel; Python 3.11–3.14 | Full geometry kernel matrix passes; local Python 3.14 suite has 1,095 passes |
+| Windows, Linux, macOS 15 Apple silicon and macOS 15 Intel; Python 3.11â€“3.14 | Full geometry kernel matrix passes; local Python 3.14 suite has 1,095 passes |
 | Linux/Python 3.11 minimum dependencies | NumPy 1.26.0 and Shapely 2.0.0 gate passes |
 | Installed universal geometry wheel; Python 3.13 on all four platforms | CLI, schema, typing, serialization, representative operations and optional-Shapely boundaries pass |
 | Installed public and pinned SDK-2 MCP consumers | Established Windows/Linux/Apple-silicon consumer gates pass; all imports remain outside source checkouts |

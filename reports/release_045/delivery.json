@@ -1,0 +1,831 @@
+{
+  "accepted_installed_native_meshes": 48,
+  "ci_candidate_artifacts": [
+    {
+      "bytes": 484021,
+      "filename": "anygeometry-0.4.5-py3-none-any.whl",
+      "sha256": "ad160bd91519ea6bd54a2308a4aa3af4a354b5c393951d9d387eea5c987a6c06"
+    },
+    {
+      "bytes": 722861,
+      "filename": "anygeometry-0.4.5.tar.gz",
+      "sha256": "848e3b555c288b4e7d15dcd2f7237be35af244ed3e36b83cd2ee3f0307e4a5a5"
+    }
+  ],
+  "command_timeout_seconds": 900,
+  "evidence_binding": {
+    "independent_review_sha256": "6fc6604e7d4eaf60ea089e9a2645544a95af4a0f1aa5ce5a568d106b18a083e4",
+    "installed_summary_sha256": "0dcf1337005f176a641fac5f17ca2a4373de289dab995f689afdb7ef24879cce",
+    "qualification_sha256": "10430624572396e2b84bc6d0b48eb527b9b75f154b9d2ab1f547e7c4a6bedfbc"
+  },
+  "fem_ci_disposition": "Unaccepted scientific gate: Linux/Python3.13 has1041passed/130skipped/3capacity-workflow errors under frozen ANYsolver d04199; complete raw log retained. PR10 remains unmerged. This is not acceptance of broader FEM/Qt physics, nor an established pre-change introduction baseline.",
+  "geometry_artifact_source": {
+    "commit": "7ec4d9f5678e35366694d5d5bf9ff9ad95fcbaa8",
+    "tree": "1da354a795027531f0282b19e30f906e8f0eec6b"
+  },
+  "geometry_ledger_tag_commit": "254cdc33ec1ae4b07c57b62791eb461103e7ff90",
+  "geometry_release_ledger_main": "51843d14998993e43ffcfc57a4d2672cda452989",
+  "geometry_version": "0.4.5",
+  "hosted_status": {
+    "fem": {
+      "conclusion": "",
+      "createdAt": "2026-10-01T08:06:51Z",
+      "databaseId": 36834324382,
+      "headSha": "f9a5e53d89d754004b2d8ebd88b833fd9d5f2a7f",
+      "jobs": [
+        {
+          "completedAt": "2026-10-01T08:18:19Z",
+          "conclusion": "success",
+          "databaseId": 110277957317,
+          "name": "build",
+          "startedAt": "2026-10-01T08:17:06Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYfem/actions/runs/36834324382/job/110277957317"
+        },
+        {
+          "completedAt": "2026-10-01T08:52:37Z",
+          "conclusion": "failure",
+          "databaseId": 110277957571,
+          "name": "test (ubuntu-latest, 3.13)",
+          "startedAt": "2026-10-01T08:19:38Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYfem/actions/runs/36834324382/job/110277957571"
+        },
+        {
+          "completedAt": "0001-01-01T00:00:00Z",
+          "conclusion": "",
+          "databaseId": 110277957604,
+          "name": "test (windows-latest, 3.14)",
+          "startedAt": "2026-10-01T08:21:00Z",
+          "status": "in_progress",
+          "url": "https://github.com/audunarn/ANYfem/actions/runs/36834324382/job/110277957604"
+        },
+        {
+          "completedAt": "0001-01-01T00:00:00Z",
+          "conclusion": "",
+          "databaseId": 110277957723,
+          "name": "test (ubuntu-latest, 3.14)",
+          "startedAt": "2026-10-01T08:28:24Z",
+          "status": "in_progress",
+          "url": "https://github.com/audunarn/ANYfem/actions/runs/36834324382/job/110277957723"
+        },
+        {
+          "completedAt": "0001-01-01T00:00:00Z",
+          "conclusion": "",
+          "databaseId": 110277957724,
+          "name": "test (windows-latest, 3.13)",
+          "startedAt": "2026-10-01T08:31:40Z",
+          "status": "in_progress",
+          "url": "https://github.com/audunarn/ANYfem/actions/runs/36834324382/job/110277957724"
+        },
+        {
+          "completedAt": "0001-01-01T00:00:00Z",
+          "conclusion": "",
+          "databaseId": 110277957725,
+          "name": "test (windows-latest, 3.12)",
+          "startedAt": "2026-10-01T08:36:25Z",
+          "status": "in_progress",
+          "url": "https://github.com/audunarn/ANYfem/actions/runs/36834324382/job/110277957725"
+        },
+        {
+          "completedAt": "0001-01-01T00:00:00Z",
+          "conclusion": "",
+          "databaseId": 110277957761,
+          "name": "test (ubuntu-latest, 3.12)",
+          "startedAt": "2026-10-01T08:23:11Z",
+          "status": "in_progress",
+          "url": "https://github.com/audunarn/ANYfem/actions/runs/36834324382/job/110277957761"
+        },
+        {
+          "completedAt": "0001-01-01T00:00:00Z",
+          "conclusion": "",
+          "databaseId": 110277957763,
+          "name": "test (ubuntu-latest, 3.11)",
+          "startedAt": "2026-10-01T08:36:43Z",
+          "status": "in_progress",
+          "url": "https://github.com/audunarn/ANYfem/actions/runs/36834324382/job/110277957763"
+        },
+        {
+          "completedAt": "0001-01-01T00:00:00Z",
+          "conclusion": "",
+          "databaseId": 110277957872,
+          "name": "test (windows-latest, 3.11)",
+          "startedAt": "2026-10-01T08:38:42Z",
+          "status": "in_progress",
+          "url": "https://github.com/audunarn/ANYfem/actions/runs/36834324382/job/110277957872"
+        }
+      ],
+      "status": "in_progress",
+      "updatedAt": "2026-10-01T08:38:42Z",
+      "url": "https://github.com/audunarn/ANYfem/actions/runs/36834324382"
+    },
+    "geometry": {
+      "conclusion": "success",
+      "databaseId": 36834513207,
+      "headSha": "dbd784d81f743c60cdfccae02b93ecd38e22767c",
+      "jobs": [
+        {
+          "completedAt": "2026-10-01T08:19:36Z",
+          "conclusion": "success",
+          "databaseId": 110279017738,
+          "name": "Minimum dependencies (Linux, Python 3.11)",
+          "startedAt": "2026-10-01T08:12:49Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36834513207/job/110279017738"
+        },
+        {
+          "completedAt": "2026-10-01T08:17:04Z",
+          "conclusion": "success",
+          "databaseId": 110279017856,
+          "name": "pytest (windows-latest, Python 3.14)",
+          "startedAt": "2026-10-01T08:11:22Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36834513207/job/110279017856"
+        },
+        {
+          "completedAt": "2026-10-01T08:10:40Z",
+          "conclusion": "success",
+          "databaseId": 110279017902,
+          "name": "Build and verify wheel",
+          "startedAt": "2026-10-01T08:10:18Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36834513207/job/110279017902"
+        },
+        {
+          "completedAt": "2026-10-01T08:18:24Z",
+          "conclusion": "success",
+          "databaseId": 110279018015,
+          "name": "pytest (windows-latest, Python 3.12)",
+          "startedAt": "2026-10-01T08:11:49Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36834513207/job/110279018015"
+        },
+        {
+          "completedAt": "2026-10-01T08:44:20Z",
+          "conclusion": "success",
+          "databaseId": 110279018021,
+          "name": "pytest (planar backend absent)",
+          "startedAt": "2026-10-01T08:43:58Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36834513207/job/110279018021"
+        },
+        {
+          "completedAt": "2026-10-01T08:19:10Z",
+          "conclusion": "success",
+          "databaseId": 110279018038,
+          "name": "pytest (windows-latest, Python 3.11)",
+          "startedAt": "2026-10-01T08:13:57Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36834513207/job/110279018038"
+        },
+        {
+          "completedAt": "2026-10-01T08:13:11Z",
+          "conclusion": "success",
+          "databaseId": 110279018045,
+          "name": "pytest (ubuntu-latest, Python 3.14)",
+          "startedAt": "2026-10-01T08:10:46Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36834513207/job/110279018045"
+        },
+        {
+          "completedAt": "2026-10-01T08:20:43Z",
+          "conclusion": "success",
+          "databaseId": 110279018117,
+          "name": "pytest (macos-15-intel, Python 3.14)",
+          "startedAt": "2026-10-01T08:10:49Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36834513207/job/110279018117"
+        },
+        {
+          "completedAt": "2026-10-01T08:30:13Z",
+          "conclusion": "success",
+          "databaseId": 110279018127,
+          "name": "pytest (ubuntu-latest, Python 3.13)",
+          "startedAt": "2026-10-01T08:24:46Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36834513207/job/110279018127"
+        },
+        {
+          "completedAt": "2026-10-01T08:43:56Z",
+          "conclusion": "success",
+          "databaseId": 110279018137,
+          "name": "pytest (macos-15, Python 3.12)",
+          "startedAt": "2026-10-01T08:40:18Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36834513207/job/110279018137"
+        },
+        {
+          "completedAt": "2026-10-01T08:17:35Z",
+          "conclusion": "success",
+          "databaseId": 110279018141,
+          "name": "pytest (macos-15, Python 3.13)",
+          "startedAt": "2026-10-01T08:14:14Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36834513207/job/110279018141"
+        },
+        {
+          "completedAt": "2026-10-01T08:31:38Z",
+          "conclusion": "success",
+          "databaseId": 110279018156,
+          "name": "pytest (macos-15, Python 3.14)",
+          "startedAt": "2026-10-01T08:28:36Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36834513207/job/110279018156"
+        },
+        {
+          "completedAt": "2026-10-01T08:50:26Z",
+          "conclusion": "success",
+          "databaseId": 110279018167,
+          "name": "pytest (ubuntu-latest, Python 3.12)",
+          "startedAt": "2026-10-01T08:44:55Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36834513207/job/110279018167"
+        },
+        {
+          "completedAt": "2026-10-01T08:43:21Z",
+          "conclusion": "success",
+          "databaseId": 110279018229,
+          "name": "pytest (windows-latest, Python 3.13)",
+          "startedAt": "2026-10-01T08:38:47Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36834513207/job/110279018229"
+        },
+        {
+          "completedAt": "2026-10-01T08:34:44Z",
+          "conclusion": "success",
+          "databaseId": 110279018251,
+          "name": "pytest (macos-15, Python 3.11)",
+          "startedAt": "2026-10-01T08:31:51Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36834513207/job/110279018251"
+        },
+        {
+          "completedAt": "2026-10-01T08:43:59Z",
+          "conclusion": "success",
+          "databaseId": 110279018270,
+          "name": "pytest (macos-15-intel, Python 3.13)",
+          "startedAt": "2026-10-01T08:36:25Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36834513207/job/110279018270"
+        },
+        {
+          "completedAt": "2026-10-01T08:57:51Z",
+          "conclusion": "success",
+          "databaseId": 110279018296,
+          "name": "pytest (macos-15-intel, Python 3.12)",
+          "startedAt": "2026-10-01T08:44:04Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36834513207/job/110279018296"
+        },
+        {
+          "completedAt": "2026-10-01T08:40:57Z",
+          "conclusion": "success",
+          "databaseId": 110279018310,
+          "name": "pytest (macos-15-intel, Python 3.11)",
+          "startedAt": "2026-10-01T08:32:10Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36834513207/job/110279018310"
+        },
+        {
+          "completedAt": "2026-10-01T08:51:06Z",
+          "conclusion": "success",
+          "databaseId": 110279018337,
+          "name": "pytest (ubuntu-latest, Python 3.11)",
+          "startedAt": "2026-10-01T08:46:53Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36834513207/job/110279018337"
+        },
+        {
+          "completedAt": "2026-10-01T08:49:27Z",
+          "conclusion": "success",
+          "databaseId": 110279198825,
+          "name": "Installed public consumers (windows-latest, public)",
+          "startedAt": "2026-10-01T08:48:21Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36834513207/job/110279198825"
+        },
+        {
+          "completedAt": "2026-10-01T08:51:51Z",
+          "conclusion": "success",
+          "databaseId": 110279198829,
+          "name": "Installed public consumers (ubuntu-latest, public)",
+          "startedAt": "2026-10-01T08:51:08Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36834513207/job/110279198829"
+        },
+        {
+          "completedAt": "2026-10-01T09:05:37Z",
+          "conclusion": "success",
+          "databaseId": 110279198856,
+          "name": "General intersections in installed ANYfem (ubuntu-latest)",
+          "startedAt": "2026-10-01T08:52:39Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36834513207/job/110279198856"
+        },
+        {
+          "completedAt": "2026-10-01T08:53:41Z",
+          "conclusion": "success",
+          "databaseId": 110279198862,
+          "name": "Installed MCP consumer (ubuntu-latest)",
+          "startedAt": "2026-10-01T08:53:06Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36834513207/job/110279198862"
+        },
+        {
+          "completedAt": "2026-10-01T08:44:53Z",
+          "conclusion": "success",
+          "databaseId": 110279198891,
+          "name": "Installed public consumers (macos-15, mesher)",
+          "startedAt": "2026-10-01T08:44:30Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36834513207/job/110279198891"
+        },
+        {
+          "completedAt": "2026-10-01T08:59:57Z",
+          "conclusion": "success",
+          "databaseId": 110279198924,
+          "name": "Installed MCP consumer (windows-latest)",
+          "startedAt": "2026-10-01T08:58:52Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36834513207/job/110279198924"
+        },
+        {
+          "completedAt": "2026-10-01T09:12:34Z",
+          "conclusion": "success",
+          "databaseId": 110279198925,
+          "name": "General intersections in installed ANYfem (windows-latest)",
+          "startedAt": "2026-10-01T08:54:31Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36834513207/job/110279198925"
+        },
+        {
+          "completedAt": "2026-10-01T09:00:40Z",
+          "conclusion": "success",
+          "databaseId": 110279198930,
+          "name": "Installed MCP consumer (macos-15)",
+          "startedAt": "2026-10-01T09:00:03Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36834513207/job/110279198930"
+        },
+        {
+          "completedAt": "2026-10-01T08:51:16Z",
+          "conclusion": "success",
+          "databaseId": 110279198937,
+          "name": "Installed wheel (macos-15)",
+          "startedAt": "2026-10-01T08:50:48Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36834513207/job/110279198937"
+        },
+        {
+          "completedAt": "2026-10-01T08:58:37Z",
+          "conclusion": "success",
+          "databaseId": 110279198953,
+          "name": "General intersections in installed ANYfem (macos-15)",
+          "startedAt": "2026-10-01T08:43:28Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36834513207/job/110279198953"
+        },
+        {
+          "completedAt": "2026-10-01T08:47:39Z",
+          "conclusion": "success",
+          "databaseId": 110279198954,
+          "name": "Installed wheel (macos-15-intel)",
+          "startedAt": "2026-10-01T08:46:11Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36834513207/job/110279198954"
+        },
+        {
+          "completedAt": "2026-10-01T08:54:29Z",
+          "conclusion": "success",
+          "databaseId": 110279198975,
+          "name": "Installed wheel (windows-latest)",
+          "startedAt": "2026-10-01T08:53:43Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36834513207/job/110279198975"
+        },
+        {
+          "completedAt": "2026-10-01T09:01:05Z",
+          "conclusion": "success",
+          "databaseId": 110279199074,
+          "name": "Installed wheel (ubuntu-latest)",
+          "startedAt": "2026-10-01T09:00:42Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36834513207/job/110279199074"
+        }
+      ],
+      "status": "completed",
+      "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36834513207"
+    },
+    "mesher": {
+      "conclusion": "",
+      "createdAt": "2026-10-01T08:34:09Z",
+      "databaseId": 36837122005,
+      "headSha": "edfaa28d86251c360ee87de8aa257cd576357cec",
+      "jobs": [
+        {
+          "completedAt": "2026-10-01T08:58:49Z",
+          "conclusion": "success",
+          "databaseId": 110287113438,
+          "name": "Disabled native boundary is absence-only",
+          "startedAt": "2026-10-01T08:58:27Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYmesh/actions/runs/36837122005/job/110287113438"
+        },
+        {
+          "completedAt": "2026-10-01T09:07:38Z",
+          "conclusion": "success",
+          "databaseId": 110287113778,
+          "name": "wheel (macos-latest)",
+          "startedAt": "2026-10-01T09:04:38Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYmesh/actions/runs/36837122005/job/110287113778"
+        },
+        {
+          "completedAt": "2026-10-01T09:04:31Z",
+          "conclusion": "success",
+          "databaseId": 110287113797,
+          "name": "wheel (ubuntu-latest)",
+          "startedAt": "2026-10-01T09:01:06Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYmesh/actions/runs/36837122005/job/110287113797"
+        },
+        {
+          "completedAt": "0001-01-01T00:00:00Z",
+          "conclusion": "",
+          "databaseId": 110287113805,
+          "name": "pytest (ubuntu-latest, 3.12)",
+          "startedAt": "2026-10-01T09:15:20Z",
+          "status": "in_progress",
+          "url": "https://github.com/audunarn/ANYmesh/actions/runs/36837122005/job/110287113805"
+        },
+        {
+          "completedAt": "2026-10-01T09:13:12Z",
+          "conclusion": "success",
+          "databaseId": 110287113811,
+          "name": "Native-v2 bounded evidence contract",
+          "startedAt": "2026-10-01T09:12:37Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYmesh/actions/runs/36837122005/job/110287113811"
+        },
+        {
+          "completedAt": "2026-10-01T08:50:26Z",
+          "conclusion": "success",
+          "databaseId": 110287113827,
+          "name": "gmsh (windows-latest, 3.11)",
+          "startedAt": "2026-10-01T08:49:03Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYmesh/actions/runs/36837122005/job/110287113827"
+        },
+        {
+          "completedAt": "2026-10-01T09:30:05Z",
+          "conclusion": "success",
+          "databaseId": 110287113854,
+          "name": "pytest (macos-latest, 3.12)",
+          "startedAt": "2026-10-01T09:13:08Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYmesh/actions/runs/36837122005/job/110287113854"
+        },
+        {
+          "completedAt": "2026-10-01T09:25:43Z",
+          "conclusion": "success",
+          "databaseId": 110287113884,
+          "name": "pytest (macos-latest, 3.11)",
+          "startedAt": "2026-10-01T09:08:39Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYmesh/actions/runs/36837122005/job/110287113884"
+        },
+        {
+          "completedAt": "0001-01-01T00:00:00Z",
+          "conclusion": "",
+          "databaseId": 110287113922,
+          "name": "pytest (ubuntu-latest, 3.11)",
+          "startedAt": "2026-10-01T09:23:48Z",
+          "status": "in_progress",
+          "url": "https://github.com/audunarn/ANYmesh/actions/runs/36837122005/job/110287113922"
+        },
+        {
+          "completedAt": "0001-01-01T00:00:00Z",
+          "conclusion": "",
+          "databaseId": 110287113926,
+          "name": "pytest (windows-latest, 3.12)",
+          "startedAt": "2026-10-01T09:30:05Z",
+          "status": "in_progress",
+          "url": "https://github.com/audunarn/ANYmesh/actions/runs/36837122005/job/110287113926"
+        },
+        {
+          "completedAt": "2026-10-01T09:31:27Z",
+          "conclusion": "success",
+          "databaseId": 110287113932,
+          "name": "gmsh (ubuntu-latest, 3.12)",
+          "startedAt": "2026-10-01T09:30:37Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYmesh/actions/runs/36837122005/job/110287113932"
+        },
+        {
+          "completedAt": "2026-10-01T09:31:27Z",
+          "conclusion": "success",
+          "databaseId": 110287113942,
+          "name": "pytest (windows-latest, 3.14)",
+          "startedAt": "2026-10-01T09:05:35Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYmesh/actions/runs/36837122005/job/110287113942"
+        },
+        {
+          "completedAt": "2026-10-01T09:25:03Z",
+          "conclusion": "success",
+          "databaseId": 110287113981,
+          "name": "pytest (windows-latest, 3.13)",
+          "startedAt": "2026-10-01T08:55:10Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYmesh/actions/runs/36837122005/job/110287113981"
+        },
+        {
+          "completedAt": "2026-10-01T08:46:50Z",
+          "conclusion": "success",
+          "databaseId": 110287113983,
+          "name": "wheel (windows-latest)",
+          "startedAt": "2026-10-01T08:41:01Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYmesh/actions/runs/36837122005/job/110287113983"
+        },
+        {
+          "completedAt": "0001-01-01T00:00:00Z",
+          "conclusion": "",
+          "databaseId": 110287114021,
+          "name": "pytest (macos-latest, 3.14)",
+          "startedAt": "2026-10-01T08:34:10Z",
+          "status": "queued",
+          "url": "https://github.com/audunarn/ANYmesh/actions/runs/36837122005/job/110287114021"
+        },
+        {
+          "completedAt": "2026-10-01T09:10:03Z",
+          "conclusion": "success",
+          "databaseId": 110287114028,
+          "name": "gmsh (ubuntu-latest, 3.11)",
+          "startedAt": "2026-10-01T09:09:15Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYmesh/actions/runs/36837122005/job/110287114028"
+        },
+        {
+          "completedAt": "2026-10-01T09:20:59Z",
+          "conclusion": "success",
+          "databaseId": 110287114073,
+          "name": "pytest (windows-latest, 3.11)",
+          "startedAt": "2026-10-01T08:51:22Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYmesh/actions/runs/36837122005/job/110287114073"
+        },
+        {
+          "completedAt": "0001-01-01T00:00:00Z",
+          "conclusion": "",
+          "databaseId": 110287114075,
+          "name": "gmsh (windows-latest, 3.12)",
+          "startedAt": "2026-10-01T08:34:10Z",
+          "status": "queued",
+          "url": "https://github.com/audunarn/ANYmesh/actions/runs/36837122005/job/110287114075"
+        },
+        {
+          "completedAt": "0001-01-01T00:00:00Z",
+          "conclusion": "",
+          "databaseId": 110287114096,
+          "name": "pytest (macos-latest, 3.13)",
+          "startedAt": "2026-10-01T09:15:23Z",
+          "status": "in_progress",
+          "url": "https://github.com/audunarn/ANYmesh/actions/runs/36837122005/job/110287114096"
+        },
+        {
+          "completedAt": "0001-01-01T00:00:00Z",
+          "conclusion": "",
+          "databaseId": 110287114113,
+          "name": "pytest (ubuntu-latest, 3.13)",
+          "startedAt": "2026-10-01T08:34:10Z",
+          "status": "queued",
+          "url": "https://github.com/audunarn/ANYmesh/actions/runs/36837122005/job/110287114113"
+        },
+        {
+          "completedAt": "0001-01-01T00:00:00Z",
+          "conclusion": "",
+          "databaseId": 110287114150,
+          "name": "pytest (ubuntu-latest, 3.14)",
+          "startedAt": "2026-10-01T08:34:10Z",
+          "status": "queued",
+          "url": "https://github.com/audunarn/ANYmesh/actions/runs/36837122005/job/110287114150"
+        },
+        {
+          "completedAt": "0001-01-01T00:00:00Z",
+          "conclusion": "",
+          "databaseId": 110298848760,
+          "name": "Installed Linux native wheel full suite",
+          "startedAt": "2026-10-01T09:07:38Z",
+          "status": "queued",
+          "url": "https://github.com/audunarn/ANYmesh/actions/runs/36837122005/job/110298848760"
+        }
+      ],
+      "status": "queued",
+      "updatedAt": "2026-10-01T08:34:09Z",
+      "url": "https://github.com/audunarn/ANYmesh/actions/runs/36837122005"
+    },
+    "publish": {
+      "conclusion": "success",
+      "databaseId": 36842492356,
+      "headSha": "254cdc33ec1ae4b07c57b62791eb461103e7ff90",
+      "jobs": [
+        {
+          "completedAt": "2026-10-01T09:31:51Z",
+          "conclusion": "success",
+          "databaseId": 110304637541,
+          "name": "publish",
+          "startedAt": "2026-10-01T09:31:29Z",
+          "status": "completed",
+          "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36842492356/job/110304637541"
+        }
+      ],
+      "status": "completed",
+      "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36842492356"
+    }
+  },
+  "installed_platform_artifacts": [
+    {
+      "artifacts": {
+        "fem": {
+          "bytes": 571241,
+          "filename": "anyfem-0.4.1-py3-none-any.whl",
+          "sha256": "d126f64be3bd1d6a3a0c2e3877f0607533c70acbbab32cf55434fe8eaf3cf012"
+        },
+        "geometry": {
+          "bytes": 484021,
+          "filename": "anygeometry-0.4.5-py3-none-any.whl",
+          "sha256": "ad160bd91519ea6bd54a2308a4aa3af4a354b5c393951d9d387eea5c987a6c06"
+        },
+        "mesher": {
+          "bytes": 873270,
+          "filename": "anymesher-0.5.1-cp313-cp313-macosx_10_13_universal2.whl",
+          "sha256": "ba91b9fe7c2557eedd64e58f99d706fefa54f87fb97dbad1cf5c3b403af28518"
+        }
+      },
+      "machine": "arm64",
+      "platform": "general-intersections-macos-15",
+      "sources": {
+        "ANYfem": "83f3d6c81e405ca45f5b7edd7cb7c2afd32804c4",
+        "ANYgeometry": "d785dc4f6efa2a555942dfa39ff35415f3adeda9",
+        "ANYmesh": "e21c0fc93662776762430e14450d54ac9192e2e8"
+      },
+      "status": "passed"
+    },
+    {
+      "artifacts": {
+        "fem": {
+          "bytes": 571241,
+          "filename": "anyfem-0.4.1-py3-none-any.whl",
+          "sha256": "15a29e92ad9fe5270d6a5dbddf9ac8429bc08db2412ef4b2de09fcbf928e6f1d"
+        },
+        "geometry": {
+          "bytes": 484021,
+          "filename": "anygeometry-0.4.5-py3-none-any.whl",
+          "sha256": "ad160bd91519ea6bd54a2308a4aa3af4a354b5c393951d9d387eea5c987a6c06"
+        },
+        "mesher": {
+          "bytes": 2431201,
+          "filename": "anymesher-0.5.1-cp313-cp313-linux_x86_64.whl",
+          "sha256": "ce63010f11b1011cee348574315216b0b61994f737b86f0e60801acdb75a7786"
+        }
+      },
+      "machine": "x86_64",
+      "platform": "general-intersections-ubuntu-latest",
+      "sources": {
+        "ANYfem": "83f3d6c81e405ca45f5b7edd7cb7c2afd32804c4",
+        "ANYgeometry": "d785dc4f6efa2a555942dfa39ff35415f3adeda9",
+        "ANYmesh": "e21c0fc93662776762430e14450d54ac9192e2e8"
+      },
+      "status": "passed"
+    },
+    {
+      "artifacts": {
+        "fem": {
+          "bytes": 575134,
+          "filename": "anyfem-0.4.1-py3-none-any.whl",
+          "sha256": "b9487cb8bc0b5538cd23f369716330aad0da193b5a66f0b9d3586b0054ff4fa3"
+        },
+        "geometry": {
+          "bytes": 484021,
+          "filename": "anygeometry-0.4.5-py3-none-any.whl",
+          "sha256": "ad160bd91519ea6bd54a2308a4aa3af4a354b5c393951d9d387eea5c987a6c06"
+        },
+        "mesher": {
+          "bytes": 703745,
+          "filename": "anymesher-0.5.1-cp313-cp313-win_amd64.whl",
+          "sha256": "18857352bf0d1540a70b52b80c6a6c6a893dc510e3c450dc7433ed4845717ca8"
+        }
+      },
+      "machine": "AMD64",
+      "platform": "general-intersections-windows-latest",
+      "sources": {
+        "ANYfem": "83f3d6c81e405ca45f5b7edd7cb7c2afd32804c4",
+        "ANYgeometry": "d785dc4f6efa2a555942dfa39ff35415f3adeda9",
+        "ANYmesh": "e21c0fc93662776762430e14450d54ac9192e2e8"
+      },
+      "status": "passed"
+    }
+  ],
+  "integration_commits": {
+    "ANYfem_main_base": "603f37e1a3f3f0726343b7c93ca1aae1106f84df",
+    "ANYfem_unmerged_integration": "f9a5e53d89d754004b2d8ebd88b833fd9d5f2a7f",
+    "ANYgeometry_main": "7ec4d9f5678e35366694d5d5bf9ff9ad95fcbaa8",
+    "ANYmesh_main": "2f1543bd3e71e19fdc9d6425ca3a677b815b2af1",
+    "ANYmesh_review_integration": "edfaa28d86251c360ee87de8aa257cd576357cec"
+  },
+  "limitations": [
+    "Intel macOS: kernel/wheel only",
+    "Qt parity/scientific acceptance remains ANYfem-owned; full FEM CI has three plane-stress convergence errors",
+    "FEM integration PR10 remains unmerged pending its scientific gate",
+    "No ANYfem or mesher package publication",
+    "Positive-area overlap needs explicit ownership",
+    "Ambiguous feature-role changes/nonexact attachment remaps refuse atomically",
+    "CAD export not activated"
+  ],
+  "mesher_ci_disposition": "Owner matrix is pending; no full hosted mesher-suite acceptance or main merge is inferred. Geometry publication is bound to its completed32-job gate and48 installed native meshes.",
+  "preserved_logs": {
+    "authority-verification.json": {
+      "availability": "retained locally; hosted source run links in this record",
+      "bytes": 985,
+      "sha256": "e1018762d39a2abd875d57f216b1f43fe1220d63b67b2f8f82720c375bac8c60"
+    },
+    "fem-linux-313-failure.log": {
+      "availability": "retained locally; hosted source run links in this record",
+      "bytes": 134918,
+      "sha256": "f3e8c1eaab4199de1207ab9d784b9a40139fea8784c4830b1a9b5849eae21bf0"
+    },
+    "fem-main-603-baseline-failed.log": {
+      "availability": "retained locally; hosted source run links in this record",
+      "bytes": 52035288,
+      "sha256": "504d59a5cd6dbed3d33f7c3cd751352c7651055d7623baa0795001d394b15bca"
+    },
+    "mesher-pin-contract.log": {
+      "availability": "retained locally; hosted source run links in this record",
+      "bytes": 100,
+      "sha256": "d821f20c04a12f9d1bd510aef0cb4b1ab9c00a29682deb7187f6986b6fb8ecfe"
+    },
+    "mesher-windows-311-failure.log": {
+      "availability": "retained locally; hosted source run links in this record",
+      "bytes": 105156,
+      "sha256": "3af0f0bea3baf48d71b88c174478efb71224ef2572bd8cfe36ce3d19df87da18"
+    }
+  },
+  "publication_scope": "ANYgeometry only; no mesher/FEM publication, Qt default switch or Tk removal",
+  "published_artifacts": [
+    {
+      "bytes": 484021,
+      "filename": "anygeometry-0.4.5-py3-none-any.whl",
+      "sha256": "b68066aa44052aeeaf5d3feb8d6bc733ce81bf04752580aebc3c1b7915ce8fad"
+    },
+    {
+      "bytes": 722848,
+      "filename": "anygeometry-0.4.5.tar.gz",
+      "sha256": "3995ff69850d239a8c266874ad6453fb1b6ed3d5c9ff5b75e84a0f0e05384a1c"
+    }
+  ],
+  "pypi": {
+    "artifacts": [
+      {
+        "bytes": 484021,
+        "filename": "anygeometry-0.4.5-py3-none-any.whl",
+        "sha256": "b68066aa44052aeeaf5d3feb8d6bc733ce81bf04752580aebc3c1b7915ce8fad"
+      },
+      {
+        "bytes": 722848,
+        "filename": "anygeometry-0.4.5.tar.gz",
+        "sha256": "3995ff69850d239a8c266874ad6453fb1b6ed3d5c9ff5b75e84a0f0e05384a1c"
+      }
+    ],
+    "distribution": "ANYgeometry",
+    "github_release_url": "https://github.com/audunarn/ANYgeometry/releases/tag/v0.4.5",
+    "index_json_sha256": "b0b952eb44686252e7013aaddededdd1045ad24fae1244475738e9749881299c",
+    "publish_run": "https://github.com/audunarn/ANYgeometry/actions/runs/36842492356",
+    "status": "verified",
+    "upload_times": {
+      "anygeometry-0.4.5-py3-none-any.whl": "2026-10-01T09:31:46.756729Z",
+      "anygeometry-0.4.5.tar.gz": "2026-10-01T09:31:48.278559Z"
+    },
+    "url": "https://pypi.org/project/ANYgeometry/0.4.5/",
+    "version": "0.4.5"
+  },
+  "qualified_consumer_inputs": {
+    "ANYfem": "83f3d6c81e405ca45f5b7edd7cb7c2afd32804c4",
+    "ANYgeometry": "d785dc4f6efa2a555942dfa39ff35415f3adeda9",
+    "ANYmesh": "e21c0fc93662776762430e14450d54ac9192e2e8"
+  },
+  "schema": "anygeometry.general-intersection-delivery-v1",
+  "sector_probe": {
+    "accepted_platforms": [
+      "Windows",
+      "Linux",
+      "macOS Apple silicon"
+    ],
+    "historical_direct_scope_unchanged": true,
+    "material_area": "2*pi",
+    "sectors": 260,
+    "shared_panel_interfaces": 260
+  },
+  "status": "geometry published; consumer owner gates reported separately",
+  "windows_skew_seconds": 632.4844599
+}

@@ -1,0 +1,18 @@
+{
+  "status": "passed",
+  "command": "tools/verify_release_authority.py --ledger docs/release/anygeometry-0.4.5-ledger.json --tag v0.4.5 --protected-ref refs/remotes/origin/main --distribution ANYgeometry --version 0.4.5 --expected-terminal ACCEPTED_ANYGEOMETRY_0_4_5_RELEASE",
+  "exit_code": 0,
+  "verified_at_head": "254cdc33ec1ae4b07c57b62791eb461103e7ff90",
+  "protected_main_at_verification": "51843d14998993e43ffcfc57a4d2672cda452989",
+  "verified_distributions": [
+    {
+      "filename": "anygeometry-0.4.5-py3-none-any.whl",
+      "sha256": "b68066aa44052aeeaf5d3feb8d6bc733ce81bf04752580aebc3c1b7915ce8fad"
+    },
+    {
+      "filename": "anygeometry-0.4.5.tar.gz",
+      "sha256": "3995ff69850d239a8c266874ad6453fb1b6ed3d5c9ff5b75e84a0f0e05384a1c"
+    }
+  ],
+  "retained_initial_failure": "Local strict ledger-byte comparison first refused CRLF working-copy bytes; rewritten to exact committed LF bytes before successful verification. No ledger/tag/artifact replacement."
+}

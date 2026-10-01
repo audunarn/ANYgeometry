@@ -1,0 +1,12 @@
+{
+  "status": "passed",
+  "version": "0.4.5",
+  "origin": "C:\\Users\\AudunArnesenNyhus\\AppData\\Local\\Temp\\anygeometry-045-release-wheel-review-20261001\\with-planar-venv\\Lib\\site-packages\\anygeometry\\__init__.py",
+  "wheel_sha256": "b68066aa44052aeeaf5d3feb8d6bc733ce81bf04752580aebc3c1b7915ce8fad",
+  "batch_read_only_plan": true,
+  "topology_valid": true,
+  "interior_ended_joint": true,
+  "material_area": 20.0,
+  "idempotence": true,
+  "schema_roundtrip": true
+}

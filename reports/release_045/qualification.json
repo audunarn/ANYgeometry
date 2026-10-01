@@ -1,0 +1,96 @@
+{
+  "accepted_terminal": "ACCEPTED_ANYGEOMETRY_0_4_5_RELEASE",
+  "artifact_source": {
+    "commit": "7ec4d9f5678e35366694d5d5bf9ff9ad95fcbaa8",
+    "tree": "1da354a795027531f0282b19e30f906e8f0eec6b"
+  },
+  "publication_authorized": true,
+  "authority": "User explicitly requested merge and normal publication on 2026-10-01",
+  "artifacts": [
+    {
+      "filename": "anygeometry-0.4.5-py3-none-any.whl",
+      "bytes": 484021,
+      "sha256": "b68066aa44052aeeaf5d3feb8d6bc733ce81bf04752580aebc3c1b7915ce8fad"
+    },
+    {
+      "filename": "anygeometry-0.4.5.tar.gz",
+      "bytes": 722848,
+      "sha256": "3995ff69850d239a8c266874ad6453fb1b6ed3d5c9ff5b75e84a0f0e05384a1c"
+    }
+  ],
+  "ci_candidate_artifacts": [
+    {
+      "filename": "anygeometry-0.4.5-py3-none-any.whl",
+      "bytes": 484021,
+      "sha256": "ad160bd91519ea6bd54a2308a4aa3af4a354b5c393951d9d387eea5c987a6c06"
+    },
+    {
+      "filename": "anygeometry-0.4.5.tar.gz",
+      "bytes": 722861,
+      "sha256": "848e3b555c288b4e7d15dcd2f7237be35af244ed3e36b83cd2ee3f0307e4a5a5"
+    }
+  ],
+  "integration_commits": {
+    "ANYgeometry_main": "7ec4d9f5678e35366694d5d5bf9ff9ad95fcbaa8",
+    "ANYmesh_main": "2f1543bd3e71e19fdc9d6425ca3a677b815b2af1",
+    "ANYmesh_review_integration": "edfaa28d86251c360ee87de8aa257cd576357cec",
+    "ANYfem_main_base": "603f37e1a3f3f0726343b7c93ca1aae1106f84df",
+    "ANYfem_unmerged_integration": "f9a5e53d89d754004b2d8ebd88b833fd9d5f2a7f"
+  },
+  "hosted_runs": {
+    "geometry": {
+      "conclusion": "success",
+      "databaseId": 36834513207,
+      "headSha": "dbd784d81f743c60cdfccae02b93ecd38e22767c",
+      "status": "completed",
+      "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36834513207",
+      "passed_jobs": 32,
+      "total_jobs": 32,
+      "failed_jobs": []
+    },
+    "mesher": {
+      "conclusion": "",
+      "createdAt": "2026-10-01T08:34:09Z",
+      "databaseId": 36837122005,
+      "headSha": "edfaa28d86251c360ee87de8aa257cd576357cec",
+      "status": "queued",
+      "updatedAt": "2026-10-01T08:34:09Z",
+      "url": "https://github.com/audunarn/ANYmesh/actions/runs/36837122005",
+      "passed_jobs": 7,
+      "total_jobs": 22,
+      "failed_jobs": []
+    },
+    "fem": {
+      "conclusion": "",
+      "createdAt": "2026-10-01T08:06:51Z",
+      "databaseId": 36834324382,
+      "headSha": "f9a5e53d89d754004b2d8ebd88b833fd9d5f2a7f",
+      "status": "in_progress",
+      "updatedAt": "2026-10-01T08:38:42Z",
+      "url": "https://github.com/audunarn/ANYfem/actions/runs/36834324382",
+      "passed_jobs": 1,
+      "total_jobs": 9,
+      "failed_jobs": [
+        "test (ubuntu-latest, 3.13)"
+      ]
+    }
+  },
+  "installed_evidence": {
+    "path": "reports\\general_intersections\\installed-qualification-36834513207.json",
+    "sha256": "0DCF1337005F176A641FAC5F17CA2A4373DE289DAB995F689AFDB7EF24879CCE",
+    "platform_meshes": 48
+  },
+  "preserved_failure": "../general_intersections/installed-qualification-36825533614.json",
+  "budgets_and_tolerances": "900 seconds per consumer command and scientific tolerances unchanged; user-authorized 15-degree default admission floor, explicit stricter policies and opt-in direct recovery retained",
+  "mesher_ci_disposition": "Owner matrix is pending; no full hosted mesher-suite acceptance or main merge is inferred. Geometry publication is bound to its completed32-job gate and48 installed native meshes.",
+  "fem_ci_disposition": "Unaccepted scientific gate: Linux/Python3.13 has1041passed/130skipped/3capacity-workflow errors under frozen ANYsolver d04199; complete raw log retained. PR10 remains unmerged. This is not acceptance of broader FEM/Qt physics, nor an established pre-change introduction baseline.",
+  "limitations": [
+    "Intel macOS: kernel/wheel only",
+    "Qt parity/scientific acceptance remains ANYfem-owned; full FEM CI has three plane-stress convergence errors",
+    "FEM integration PR10 remains unmerged pending its scientific gate",
+    "No ANYfem or mesher package publication",
+    "Positive-area overlap needs explicit ownership",
+    "Ambiguous feature-role changes/nonexact attachment remaps refuse atomically",
+    "CAD export not activated"
+  ]
+}
