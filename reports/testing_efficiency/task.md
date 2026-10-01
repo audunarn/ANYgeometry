@@ -74,3 +74,16 @@ Missing/failed/skipped evidence, source or packaged-license changes fail closed.
 This changes development orchestration only, not qualification or release gates.
 One new runtime/tooling verification is required for this refinement, then a
 prose-only follow-up verifies the reuse path without repeating the kernels.
+
+## Accepted evidence-reuse implementation
+
+- Head `8b0bc8c96e519b4360722d75f5e8eeacf8b9aaf4`: hosted run
+  36871600107 passed all eight jobs, with 1,111 tests in each full kernel lane.
+- All 16 local selector/reuse safeguards passed in 0.49 seconds.
+- `testing-efficiency-hosted-reuse-refinement.json` SHA-256
+  `6e0d6187e37c042277f492fa105a44b6e541a2993e5c7ab2a3fb4e53a3addfcd`; raw file retained in primary reports.
+- `testing-efficiency-hosted-reuse-refinement.log` SHA-256
+  `019dfac9fbf8a32771664f7e1c6056144eaa88edcd678a4b2c73dccba862ca79`; raw file retained in primary reports.
+- This prose-only completion note is the hosted reuse-path probe.
+  Only its classification and aggregate gate should execute; the saved plan
+  must identify run 36871600107 and the accepted runtime SHA above.
