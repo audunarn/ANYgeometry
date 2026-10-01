@@ -1,0 +1,224 @@
+{
+  "created_utc": "2026-10-01T08:11:24.236559+00:00",
+  "mode": "wheel",
+  "profile": "public",
+  "python": "3.13.9 (tags/v3.13.9:8183fa5, Oct 14 2025, 14:09:13) [MSC v.1944 64 bit (AMD64)]",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "source_commit": null,
+  "workflow_run": null,
+  "candidate": {
+    "filename": "anygeometry-0.4.5-py3-none-any.whl",
+    "bytes": 484021,
+    "sha256": "b68066aa44052aeeaf5d3feb8d6bc733ce81bf04752580aebc3c1b7915ce8fad"
+  },
+  "status": "passed",
+  "runs": {
+    "without-planar": {
+      "status": "passed",
+      "exit_code": 0,
+      "report": "C:\\Users\\AudunArnesenNyhus\\AppData\\Local\\Temp\\anygeometry-045-release-wheel-review-20261001\\without-planar\\probe.json",
+      "cases": [
+        {
+          "name": "environment_before",
+          "status": "passed",
+          "detail": {
+            "origins": {
+              "anygeometry": "C:\\Users\\AudunArnesenNyhus\\AppData\\Local\\Temp\\anygeometry-045-release-wheel-review-20261001\\without-planar-venv\\Lib\\site-packages\\anygeometry\\__init__.py",
+              "numpy": "C:\\Users\\AudunArnesenNyhus\\AppData\\Local\\Temp\\anygeometry-045-release-wheel-review-20261001\\without-planar-venv\\Lib\\site-packages\\numpy\\__init__.py"
+            },
+            "wheel_sha256": "b68066aa44052aeeaf5d3feb8d6bc733ce81bf04752580aebc3c1b7915ce8fad",
+            "verified_files": 70
+          }
+        },
+        {
+          "name": "core",
+          "status": "passed",
+          "detail": null
+        },
+        {
+          "name": "planar",
+          "status": "passed",
+          "detail": null
+        },
+        {
+          "name": "environment_after",
+          "status": "passed",
+          "detail": {
+            "origins": {
+              "anygeometry": "C:\\Users\\AudunArnesenNyhus\\AppData\\Local\\Temp\\anygeometry-045-release-wheel-review-20261001\\without-planar-venv\\Lib\\site-packages\\anygeometry\\__init__.py",
+              "numpy": "C:\\Users\\AudunArnesenNyhus\\AppData\\Local\\Temp\\anygeometry-045-release-wheel-review-20261001\\without-planar-venv\\Lib\\site-packages\\numpy\\__init__.py"
+            },
+            "wheel_sha256": "b68066aa44052aeeaf5d3feb8d6bc733ce81bf04752580aebc3c1b7915ce8fad",
+            "verified_files": 70
+          }
+        }
+      ]
+    },
+    "with-planar": {
+      "status": "passed",
+      "exit_code": 0,
+      "report": "C:\\Users\\AudunArnesenNyhus\\AppData\\Local\\Temp\\anygeometry-045-release-wheel-review-20261001\\with-planar\\probe.json",
+      "cases": [
+        {
+          "name": "environment_before",
+          "status": "passed",
+          "detail": {
+            "origins": {
+              "anygeometry": "C:\\Users\\AudunArnesenNyhus\\AppData\\Local\\Temp\\anygeometry-045-release-wheel-review-20261001\\with-planar-venv\\Lib\\site-packages\\anygeometry\\__init__.py",
+              "numpy": "C:\\Users\\AudunArnesenNyhus\\AppData\\Local\\Temp\\anygeometry-045-release-wheel-review-20261001\\with-planar-venv\\Lib\\site-packages\\numpy\\__init__.py",
+              "shapely": "C:\\Users\\AudunArnesenNyhus\\AppData\\Local\\Temp\\anygeometry-045-release-wheel-review-20261001\\with-planar-venv\\Lib\\site-packages\\shapely\\__init__.py"
+            },
+            "wheel_sha256": "b68066aa44052aeeaf5d3feb8d6bc733ce81bf04752580aebc3c1b7915ce8fad",
+            "verified_files": 70
+          }
+        },
+        {
+          "name": "core",
+          "status": "passed",
+          "detail": null
+        },
+        {
+          "name": "planar",
+          "status": "passed",
+          "detail": null
+        },
+        {
+          "name": "environment_after",
+          "status": "passed",
+          "detail": {
+            "origins": {
+              "anygeometry": "C:\\Users\\AudunArnesenNyhus\\AppData\\Local\\Temp\\anygeometry-045-release-wheel-review-20261001\\with-planar-venv\\Lib\\site-packages\\anygeometry\\__init__.py",
+              "numpy": "C:\\Users\\AudunArnesenNyhus\\AppData\\Local\\Temp\\anygeometry-045-release-wheel-review-20261001\\with-planar-venv\\Lib\\site-packages\\numpy\\__init__.py",
+              "shapely": "C:\\Users\\AudunArnesenNyhus\\AppData\\Local\\Temp\\anygeometry-045-release-wheel-review-20261001\\with-planar-venv\\Lib\\site-packages\\shapely\\__init__.py"
+            },
+            "wheel_sha256": "b68066aa44052aeeaf5d3feb8d6bc733ce81bf04752580aebc3c1b7915ce8fad",
+            "verified_files": 70
+          }
+        }
+      ]
+    }
+  },
+  "commands": [
+    {
+      "args": [
+        "C:\\Python\\Python313\\python.exe",
+        "-I",
+        "-m",
+        "pip",
+        "--isolated",
+        "download",
+        "--only-binary=:all:",
+        "--dest",
+        "C:\\Users\\AudunArnesenNyhus\\AppData\\Local\\Temp\\anygeometry-045-release-wheel-review-20261001\\dependencies",
+        "C:\\Github\\ANYgeometry\\reports\\release_045\\release-bundle\\anygeometry-0.4.5-py3-none-any.whl",
+        "numpy>=1.26",
+        "shapely>=2.0"
+      ],
+      "log": "command-01.log",
+      "exit_code": 0
+    },
+    {
+      "args": [
+        "C:\\Python\\Python313\\python.exe",
+        "-I",
+        "-m",
+        "venv",
+        "--copies",
+        "C:\\Users\\AudunArnesenNyhus\\AppData\\Local\\Temp\\anygeometry-045-release-wheel-review-20261001\\without-planar-venv"
+      ],
+      "log": "command-02.log",
+      "exit_code": 0
+    },
+    {
+      "args": [
+        "C:\\Users\\AudunArnesenNyhus\\AppData\\Local\\Temp\\anygeometry-045-release-wheel-review-20261001\\without-planar-venv\\Scripts\\python.exe",
+        "-I",
+        "-m",
+        "pip",
+        "--isolated",
+        "install",
+        "--no-index",
+        "--report",
+        "C:\\Users\\AudunArnesenNyhus\\AppData\\Local\\Temp\\anygeometry-045-release-wheel-review-20261001\\without-planar\\install.json",
+        "C:\\Github\\ANYgeometry\\reports\\release_045\\release-bundle\\anygeometry-0.4.5-py3-none-any.whl",
+        "C:\\Users\\AudunArnesenNyhus\\AppData\\Local\\Temp\\anygeometry-045-release-wheel-review-20261001\\dependencies\\numpy-2.5.3-cp313-cp313-win_amd64.whl"
+      ],
+      "log": "command-03.log",
+      "exit_code": 0
+    },
+    {
+      "args": [
+        "C:\\Users\\AudunArnesenNyhus\\AppData\\Local\\Temp\\anygeometry-045-release-wheel-review-20261001\\without-planar-venv\\Scripts\\python.exe",
+        "-I",
+        "C:\\Users\\AudunArnesenNyhus\\AppData\\Local\\Temp\\anygeometry-045-release-wheel-review-20261001\\probe.py",
+        "C:\\Users\\AudunArnesenNyhus\\AppData\\Local\\Temp\\anygeometry-045-release-wheel-review-20261001\\without-planar\\config.json"
+      ],
+      "log": "command-04.log",
+      "exit_code": 0
+    },
+    {
+      "args": [
+        "C:\\Python\\Python313\\python.exe",
+        "-I",
+        "-m",
+        "venv",
+        "--copies",
+        "C:\\Users\\AudunArnesenNyhus\\AppData\\Local\\Temp\\anygeometry-045-release-wheel-review-20261001\\with-planar-venv"
+      ],
+      "log": "command-05.log",
+      "exit_code": 0
+    },
+    {
+      "args": [
+        "C:\\Users\\AudunArnesenNyhus\\AppData\\Local\\Temp\\anygeometry-045-release-wheel-review-20261001\\with-planar-venv\\Scripts\\python.exe",
+        "-I",
+        "-m",
+        "pip",
+        "--isolated",
+        "install",
+        "--no-index",
+        "--report",
+        "C:\\Users\\AudunArnesenNyhus\\AppData\\Local\\Temp\\anygeometry-045-release-wheel-review-20261001\\with-planar\\install.json",
+        "C:\\Github\\ANYgeometry\\reports\\release_045\\release-bundle\\anygeometry-0.4.5-py3-none-any.whl",
+        "C:\\Users\\AudunArnesenNyhus\\AppData\\Local\\Temp\\anygeometry-045-release-wheel-review-20261001\\dependencies\\numpy-2.5.3-cp313-cp313-win_amd64.whl",
+        "C:\\Users\\AudunArnesenNyhus\\AppData\\Local\\Temp\\anygeometry-045-release-wheel-review-20261001\\dependencies\\shapely-2.1.2-cp313-cp313-win_amd64.whl"
+      ],
+      "log": "command-06.log",
+      "exit_code": 0
+    },
+    {
+      "args": [
+        "C:\\Users\\AudunArnesenNyhus\\AppData\\Local\\Temp\\anygeometry-045-release-wheel-review-20261001\\with-planar-venv\\Scripts\\python.exe",
+        "-I",
+        "C:\\Users\\AudunArnesenNyhus\\AppData\\Local\\Temp\\anygeometry-045-release-wheel-review-20261001\\probe.py",
+        "C:\\Users\\AudunArnesenNyhus\\AppData\\Local\\Temp\\anygeometry-045-release-wheel-review-20261001\\with-planar\\config.json"
+      ],
+      "log": "command-07.log",
+      "exit_code": 0
+    }
+  ],
+  "probe_sha256": "ead368b1098b9db5bd079233722dffe0f37c3625061865f8865cc5a60c98daef",
+  "resolved_artifacts": [
+    {
+      "filename": "anygeometry-0.4.5-py3-none-any.whl",
+      "bytes": 484021,
+      "sha256": "b68066aa44052aeeaf5d3feb8d6bc733ce81bf04752580aebc3c1b7915ce8fad",
+      "distribution": "anygeometry",
+      "version": "0.4.5"
+    },
+    {
+      "filename": "numpy-2.5.3-cp313-cp313-win_amd64.whl",
+      "bytes": 12560965,
+      "sha256": "71cad2b2a7451ab79d8f5e71b453485b6775963d5cf794179144a7463fe6e8ec",
+      "distribution": "numpy",
+      "version": "2.5.3"
+    },
+    {
+      "filename": "shapely-2.1.2-cp313-cp313-win_amd64.whl",
+      "bytes": 1722151,
+      "sha256": "ca2591bff6645c216695bdf1614fca9c82ea1144d4a7591a466fef64f28f0715",
+      "distribution": "shapely",
+      "version": "2.1.2"
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "conclusion": "success",
+  "databaseId": 36842492356,
+  "headSha": "254cdc33ec1ae4b07c57b62791eb461103e7ff90",
+  "jobs": [
+    {
+      "completedAt": "2026-10-01T09:31:51Z",
+      "conclusion": "success",
+      "databaseId": 110304637541,
+      "name": "publish",
+      "startedAt": "2026-10-01T09:31:29Z",
+      "status": "completed",
+      "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36842492356/job/110304637541"
+    }
+  ],
+  "status": "completed",
+  "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36842492356"
+}

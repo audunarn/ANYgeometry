@@ -1,0 +1,92 @@
+{
+  "conclusion": "",
+  "createdAt": "2026-10-01T08:06:51Z",
+  "databaseId": 36834324382,
+  "headSha": "f9a5e53d89d754004b2d8ebd88b833fd9d5f2a7f",
+  "jobs": [
+    {
+      "completedAt": "2026-10-01T08:18:19Z",
+      "conclusion": "success",
+      "databaseId": 110277957317,
+      "name": "build",
+      "startedAt": "2026-10-01T08:17:06Z",
+      "status": "completed",
+      "url": "https://github.com/audunarn/ANYfem/actions/runs/36834324382/job/110277957317"
+    },
+    {
+      "completedAt": "2026-10-01T08:52:37Z",
+      "conclusion": "failure",
+      "databaseId": 110277957571,
+      "name": "test (ubuntu-latest, 3.13)",
+      "startedAt": "2026-10-01T08:19:38Z",
+      "status": "completed",
+      "url": "https://github.com/audunarn/ANYfem/actions/runs/36834324382/job/110277957571"
+    },
+    {
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "databaseId": 110277957604,
+      "name": "test (windows-latest, 3.14)",
+      "startedAt": "2026-10-01T08:21:00Z",
+      "status": "in_progress",
+      "url": "https://github.com/audunarn/ANYfem/actions/runs/36834324382/job/110277957604"
+    },
+    {
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "databaseId": 110277957723,
+      "name": "test (ubuntu-latest, 3.14)",
+      "startedAt": "2026-10-01T08:28:24Z",
+      "status": "in_progress",
+      "url": "https://github.com/audunarn/ANYfem/actions/runs/36834324382/job/110277957723"
+    },
+    {
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "databaseId": 110277957724,
+      "name": "test (windows-latest, 3.13)",
+      "startedAt": "2026-10-01T08:31:40Z",
+      "status": "in_progress",
+      "url": "https://github.com/audunarn/ANYfem/actions/runs/36834324382/job/110277957724"
+    },
+    {
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "databaseId": 110277957725,
+      "name": "test (windows-latest, 3.12)",
+      "startedAt": "2026-10-01T08:36:25Z",
+      "status": "in_progress",
+      "url": "https://github.com/audunarn/ANYfem/actions/runs/36834324382/job/110277957725"
+    },
+    {
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "databaseId": 110277957761,
+      "name": "test (ubuntu-latest, 3.12)",
+      "startedAt": "2026-10-01T08:23:11Z",
+      "status": "in_progress",
+      "url": "https://github.com/audunarn/ANYfem/actions/runs/36834324382/job/110277957761"
+    },
+    {
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "databaseId": 110277957763,
+      "name": "test (ubuntu-latest, 3.11)",
+      "startedAt": "2026-10-01T08:36:43Z",
+      "status": "in_progress",
+      "url": "https://github.com/audunarn/ANYfem/actions/runs/36834324382/job/110277957763"
+    },
+    {
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "databaseId": 110277957872,
+      "name": "test (windows-latest, 3.11)",
+      "startedAt": "2026-10-01T08:38:42Z",
+      "status": "in_progress",
+      "url": "https://github.com/audunarn/ANYfem/actions/runs/36834324382/job/110277957872"
+    }
+  ],
+  "status": "in_progress",
+  "updatedAt": "2026-10-01T08:38:42Z",
+  "url": "https://github.com/audunarn/ANYfem/actions/runs/36834324382"
+}

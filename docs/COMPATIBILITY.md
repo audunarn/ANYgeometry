@@ -1,14 +1,17 @@
 # Compatibility and verification status
 
-The released baseline is ANYgeometry **0.4.4**, dated **2026-09-28**, with its
-[immutable release ledger](release/anygeometry-0.4.4-ledger.json). That release
-writes geometry schema 4 and reads schemas 1–4.
+The current release is ANYgeometry **0.4.5**, dated **2026-10-01**, with its
+[immutable release ledger](release/anygeometry-0.4.5-ledger.json). It writes
+schema 5 and reads schemas 1–5. Version 0.4.4 retains its schema-4 scope and
+[ledger](release/anygeometry-0.4.4-ledger.json).
 
-The current [general-intersection development](general_intersections.md) writes
-schema 5 and reads schemas 1–4. Its candidate wheels retain the development
-version number; they are distinct from the published 0.4.4 artifact. Automation
-protocol 1 and MPL-2.0 remain unchanged. Expanded capabilities require new
-qualification and separate release authorization.
+The [general-intersection contract](general_intersections.md) passed a new
+32-job source gate and 48 installed native meshes. The exact 0.4.5 release
+wheel was reviewed and tested outside checkouts, and its published PyPI hashes
+match the ledger. Automation protocol 1 and MPL-2.0 remain unchanged. Use the
+[current compatibility table and consumer handoff](general_intersections_release_handoff.md)
+for exact inputs and limits. Consumer versions remain development identities;
+the broader FEM scientific gate and Qt acceptance remain unaccepted.
 
 ## Historical 0.4.3 release evidence
 
@@ -21,7 +24,7 @@ Earlier design plans, candidate hashes and local checkpoints remain historical.
 Their wording must not override the published artifact identity or imply that
 new source changes were included in that artifact.
 
-## Verification matrix
+## Historical maintenance verification matrix
 
 The maintenance implementation at `14e360f5dde8b4125a674df8593a3e4a6d3429bd`
 passed [all 29 hosted jobs](https://github.com/audunarn/ANYgeometry/actions/runs/35708515183)
@@ -58,7 +61,7 @@ before MCP consumer execution (absent secret, then checkout authentication);
 attempt 3 passed on all three platforms using MCP SDK 2.2.0. These setup failures
 remain recorded and were not treated as successful consumer coverage.
 
-## Dependencies and consumers
+## Maintenance dependencies and frozen consumer baselines
 
 | Package | Contract / frozen consumer baseline |
 | --- | --- |

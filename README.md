@@ -256,7 +256,7 @@ geometry and structural closure once rather than cloning unrelated model data.
 
 ## Serialization and CLI
 
-The development head writes deterministic, checksummed geometry schema 5. It preserves model UUID
+ANYgeometry 0.4.5 writes deterministic, checksummed geometry schema 5. It preserves model UUID
 and revision, coordinates/CRS and tolerance policy, allocator high-water
 marks, support surfaces and optional parameterizations, construction/control
 ownership, curves/trims, structural ownership and qualified relationships,
@@ -286,12 +286,14 @@ Consumers that require a qualified handoff must retain or rerun
 JSON and gzip-compressed JSON are supported. Mesh and FEM/project
 serialization remain outside ANYgeometry.
 
-Released ANYgeometry 0.4.4 reads schemas 1–4 and writes schema 4. The development
-head reads schemas 1–5 and writes schema 5; older readers reject schema 5.
+Released ANYgeometry 0.4.5 reads schemas 1–5 and writes schema 5; older
+schema-4-only readers reject schema 5. Version 0.4.4 retains its schema-4 scope.
 Automation protocol 1 is unchanged. Consumers of the new curves must update
 their geometry owner together with the schema reader. Downstream packages should use the public codecs rather
 than parse schema records. Legacy relationship evidence migrates as
-`UNVERIFIED` and never implies exactness or certification.
+`UNVERIFIED` and never implies exactness or certification. See the
+[release and consumer handoff](docs/general_intersections_release_handoff.md)
+for exact artifacts, supported platforms and outstanding consumer gates.
 
 Trusted importers and local script features that have already materialized
 topology through `GeometryModel` operations can bind that exact last-good

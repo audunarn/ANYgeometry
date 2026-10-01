@@ -1,0 +1,25 @@
+{
+  "artifacts": [
+    {
+      "bytes": 484021,
+      "filename": "anygeometry-0.4.5-py3-none-any.whl",
+      "sha256": "b68066aa44052aeeaf5d3feb8d6bc733ce81bf04752580aebc3c1b7915ce8fad"
+    },
+    {
+      "bytes": 722848,
+      "filename": "anygeometry-0.4.5.tar.gz",
+      "sha256": "3995ff69850d239a8c266874ad6453fb1b6ed3d5c9ff5b75e84a0f0e05384a1c"
+    }
+  ],
+  "distribution": "ANYgeometry",
+  "github_release_url": "https://github.com/audunarn/ANYgeometry/releases/tag/v0.4.5",
+  "index_json_sha256": "b0b952eb44686252e7013aaddededdd1045ad24fae1244475738e9749881299c",
+  "publish_run": "https://github.com/audunarn/ANYgeometry/actions/runs/36842492356",
+  "status": "verified",
+  "upload_times": {
+    "anygeometry-0.4.5-py3-none-any.whl": "2026-10-01T09:31:46.756729Z",
+    "anygeometry-0.4.5.tar.gz": "2026-10-01T09:31:48.278559Z"
+  },
+  "url": "https://pypi.org/project/ANYgeometry/0.4.5/",
+  "version": "0.4.5"
+}

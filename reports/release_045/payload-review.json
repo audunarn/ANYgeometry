@@ -1,0 +1,41 @@
+{
+  "schema": "anygeometry.release-payload-review-v1",
+  "status": "passed",
+  "artifacts": [
+    {
+      "filename": "anygeometry-0.4.5-py3-none-any.whl",
+      "bytes": 484021,
+      "sha256": "b68066aa44052aeeaf5d3feb8d6bc733ce81bf04752580aebc3c1b7915ce8fad"
+    },
+    {
+      "filename": "anygeometry-0.4.5.tar.gz",
+      "bytes": 722848,
+      "sha256": "3995ff69850d239a8c266874ad6453fb1b6ed3d5c9ff5b75e84a0f0e05384a1c"
+    }
+  ],
+  "qualified_development_wheel": {
+    "filename": "anygeometry-0.4.4-py3-none-any.whl",
+    "bytes": 484018,
+    "sha256": "2f154358ec2b873db48994d14be1fd4659411a128751407772d60becb667c5f6"
+  },
+  "package_members": 61,
+  "only_runtime_change": "__version__: 0.4.4 to 0.4.5",
+  "sdist_wheel_source_equality": true,
+  "checksum_closed_set": true,
+  "ci_candidate_artifacts": [
+    {
+      "filename": "anygeometry-0.4.5-py3-none-any.whl",
+      "bytes": 484021,
+      "sha256": "ad160bd91519ea6bd54a2308a4aa3af4a354b5c393951d9d387eea5c987a6c06"
+    },
+    {
+      "filename": "anygeometry-0.4.5.tar.gz",
+      "bytes": 722861,
+      "sha256": "848e3b555c288b4e7d15dcd2f7237be35af244ed3e36b83cd2ee3f0307e4a5a5"
+    }
+  ],
+  "ci_release_wheel_members_identical": 71,
+  "ci_release_sdist_members_identical": 180,
+  "scientific_evidence": "../general_intersections/installed-qualification-36829763205.json",
+  "review_scope": "artifact identity/payload; scientific acceptance uses independent analytic oracles in the bound qualification, not checksums"
+}

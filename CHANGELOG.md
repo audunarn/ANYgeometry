@@ -33,8 +33,9 @@ General intersections and coordinated meshing (accepted in the documented config
   Windows, Linux and Apple silicon, including the exact replay at 0.5/0.25 and
   a 260-sector cylinder. The full 32-job platform matrix passes. Direct API
   recovery remains opt-in; default admission uses the qualified 15-degree
-  floor, with caller-supplied stricter policies retained. Publication is separate.
-  See [the contract and exact evidence](docs/general_intersections.md).
+  floor, with caller-supplied stricter policies retained. Published as 0.4.5
+  through the exact-artifact ledger/OIDC gate; consumer packages remain
+  unpublished. See [the release evidence and consumer gates](docs/general_intersections_release_handoff.md).
 
 The previously recorded projection and cylinder-atlas improvements below are
 bit-for-bit identical to 0.4.4 within their recorded scope, including atlas
