@@ -62,3 +62,15 @@ and outstanding gates; do not claim unmeasured runtime savings.
 - Final documentation-only follow-up records these outcomes. Its runtime,
   tests, packaging and workflow inputs must match the accepted runtime head;
   no full-kernel repetition is required for this prose-only addition.
+
+## Prose-follow-up refinement
+
+Run 36870441325 revealed that whole-PR classification repeated all eight jobs
+for a prose-only follow-up. Cancelled this owned duplicate development run;
+pre-cancellation status is preserved in primary reports and is unaccepted.
+Decision: permit reuse only with a complete successful eight-job development run,
+same PR/base and a Git-confirmed prose-only delta to the actual merged checkout.
+Missing/failed/skipped evidence, source or packaged-license changes fail closed.
+This changes development orchestration only, not qualification or release gates.
+One new runtime/tooling verification is required for this refinement, then a
+prose-only follow-up verifies the reuse path without repeating the kernels.

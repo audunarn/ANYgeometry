@@ -17,6 +17,9 @@ jobs:
     name: Classify changes
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
     outputs:
       runtime: ${{ steps.plan.outputs.runtime }}
     steps:
@@ -30,6 +33,8 @@ jobs:
       - id: plan
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           python - <<'PY'
           import json, os, subprocess
@@ -42,7 +47,7 @@ jobs:
               paths = [p for p in paths if p]
           Path('changed-paths.json').write_text(json.dumps(paths), encoding='utf-8')
           PY
-          python tools/dev_checks.py --paths-file changed-paths.json --plan --report development-plan.json
+          python tools/dev_checks.py --paths-file changed-paths.json --ci-reuse --plan --report development-plan.json
           python - <<'PY'
           import json, os
           from pathlib import Path

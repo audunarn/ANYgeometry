@@ -46,6 +46,16 @@ retained. The aggregate **Development gate** fails when an applicable job fails,
 is cancelled or is unexpectedly skipped. Documentation-only changes run change
 classification and whitespace checks, then the aggregate gate.
 
+For a prose-only follow-up inside a runtime PR, CI can reuse a complete successful
+development run. It checks the same PR/base, all eight successful jobs and the Git
+delta from the recorded run head to the actual checkout (including the base merge).
+Any source, test, workflow, packaging or packaged-license change prevents reuse.
+Skipped, failed, missing or inaccessible evidence never qualifies. The lookup is
+bounded to five recent successful runs; no usable evidence means ordinary checks.
+The retained plan identifies the reused run, source SHA and exact prose delta.
+This applies only to development evidence; scientific/release qualification is
+not reused or granted by this mechanism.
+
 There are eight expanded automatic jobs for runtime changes, compared with the
 previous 32. This is a job-count reduction, not a measured wall-clock speedup.
 
