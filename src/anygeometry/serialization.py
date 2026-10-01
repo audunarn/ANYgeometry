@@ -16,7 +16,7 @@ import numpy as np
 
 from .curves import Arc, Spline, Straight
 from .exact_curves import EllipticArc, CylinderIntersectionCurve
-from .quadric_algebra import QuadricSupport, RuledSupport
+from .quadric_algebra import EllipticRuledSupport, QuadricSupport, RuledSupport
 from .quadric_curves import QuadricIntersectionCurve
 from .entities import Edge, EntityRef, Face, OrientedEdge, Vertex
 from .errors import GeometryError
@@ -1378,17 +1378,26 @@ def _migrate_legacy_structural(geometry: GeometryModel, source_version: int) -> 
 
 _RULED_FIELDS = {"kind", "origin", "axis", "radial_direction", "radius", "slope"}
 _QUADRIC_FIELDS = {"kind", "origin", "axis", "radius", "slope", "matrix", "linear", "constant"}
+_ELLIPTIC_QUADRIC_FIELDS = _QUADRIC_FIELDS | {"u_vector", "v_vector"}
 _QUADRIC_CURVE_FIELDS = {"first", "second", "start_angle", "sweep_angle", "branch", "parameterization", "transform"}
 
 
 def _quadric_curve_record(curve):
     first, second = curve.first, curve.second
+    if isinstance(first, EllipticRuledSupport):
+        first_record = {"kind": "elliptic", "origin": first.origin, "u_vector": first.u_vector,
+                        "v_vector": first.v_vector, "axis": first.axis}
+    else:
+        first_record = {"kind": "cone" if first.is_cone else "cylinder", "origin": first.origin, "axis": first.axis,
+                        "radial_direction": first.radial_direction, "radius": first.radius, "slope": first.slope}
+    second_record = {"kind": second.kind, "origin": second.origin, "axis": second.axis, "radius": second.radius,
+                     "slope": second.slope, "matrix": second.matrix, "linear": second.linear,
+                     "constant": second.constant}
+    if second.kind == "elliptic":
+        second_record.update(u_vector=second.u_vector, v_vector=second.v_vector)
     return {"type": "quadric_intersection",
-            "first": {"kind": "cone" if first.is_cone else "cylinder", "origin": first.origin, "axis": first.axis,
-                      "radial_direction": first.radial_direction, "radius": first.radius, "slope": first.slope},
-            "second": {"kind": second.kind, "origin": second.origin, "axis": second.axis, "radius": second.radius,
-                       "slope": second.slope, "matrix": second.matrix, "linear": second.linear,
-                       "constant": second.constant},
+            "first": first_record,
+            "second": second_record,
             **{name: getattr(curve, name) for name in
                ("start_angle", "sweep_angle", "branch", "parameterization", "transform")}}
 
@@ -1396,13 +1405,19 @@ def _quadric_curve_record(curve):
 def _decode_quadric_curve(data):
     _exact_fields(data, required={"type", *_QUADRIC_CURVE_FIELDS}, name="quadric intersection curve")
     first, second = _object(data["first"], "quadric first support"), _object(data["second"], "quadric second support")
-    _exact_fields(first, required=_RULED_FIELDS, name="quadric first support")
-    _exact_fields(second, required=_QUADRIC_FIELDS, name="quadric second support")
-    if first["kind"] not in ("cylinder", "cone") or (first["kind"] == "cone") != (float(first["slope"]) != 0.0):
-        raise GeometryError("quadric first support kind disagrees with its slope")
-    ruled = RuledSupport(first["origin"], first["axis"], first["radial_direction"], first["radius"], first["slope"])
+    _exact_fields(second, required=_ELLIPTIC_QUADRIC_FIELDS if second.get("kind") == "elliptic" else _QUADRIC_FIELDS,
+                  name="quadric second support")
+    if first.get("kind") == "elliptic":
+        _exact_fields(first, required={"kind", "origin", "u_vector", "v_vector", "axis"}, name="quadric first support")
+        ruled = EllipticRuledSupport(first["origin"], first["u_vector"], first["v_vector"], first["axis"])
+    else:
+        _exact_fields(first, required=_RULED_FIELDS, name="quadric first support")
+        if first["kind"] not in ("cylinder", "cone") or (first["kind"] == "cone") != (float(first["slope"]) != 0.0):
+            raise GeometryError("quadric first support kind disagrees with its slope")
+        ruled = RuledSupport(first["origin"], first["axis"], first["radial_direction"], first["radius"], first["slope"])
     support = QuadricSupport(second["kind"], second["origin"], second["axis"], second["radius"], second["slope"],
-                             tuple(second["matrix"]), tuple(second["linear"]), second["constant"])
+                             tuple(second["matrix"]), tuple(second["linear"]), second["constant"],
+                             tuple(second.get("u_vector", ())), tuple(second.get("v_vector", ())))
     return QuadricIntersectionCurve(ruled, support, data["start_angle"], data["sweep_angle"], data["branch"],
                                     data["parameterization"], data["transform"])
 

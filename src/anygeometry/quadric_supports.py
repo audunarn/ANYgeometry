@@ -21,9 +21,10 @@ import numpy as np
 from .analytic_supports import SupportIntersection
 from .errors import GeometryError
 from .exact_curves import EllipticArc
-from .quadric_algebra import QuadricSupport, RuledSupport, TWO_PI, circle_angles, get_plan
+from .extrusions import EllipseDirectrix
+from .quadric_algebra import QuadricSupport, RuledSupport, TWO_PI, circle_angles, get_plan, ruled_support
 from .quadric_curves import IDENTITY, QuadricIntersectionCurve
-from .surfaces import Cone, Cylinder, Plane
+from .surfaces import Cone, Cylinder, ExtrudedSurface, Plane
 
 _EPS = float(np.finfo(float).eps)
 
@@ -33,21 +34,49 @@ def _poll(check, message="quadric support intersection cancelled"):
         raise GeometryError(message)
 
 
+def _angle_range(surface):
+    """``(start, sweep)`` of the ruled support's angle parameter over the patch."""
+    if isinstance(surface, ExtrudedSurface):
+        directrix = surface.directrix
+        t0, t1 = surface.u_range
+        return directrix.start_angle + t0 * directrix.sweep_angle, (t1 - t0) * directrix.sweep_angle
+    return float(surface.start_angle), float(surface.sweep_angle)
+
+
 def _axial_range(surface):
+    if isinstance(surface, ExtrudedSurface):
+        length = float(np.linalg.norm(surface.vector))
+        low, high = sorted(surface.v_range)
+        return low * length, high * length
     height = float(surface.height)
     return min(0.0, height), max(0.0, height)
 
 
 def _max_radius(surface):
+    if isinstance(surface, ExtrudedSurface):
+        return ruled_support(surface).radius
     if isinstance(surface, Cone):
         return max(float(surface.radius_start), float(surface.radius_end))
     return float(surface.radius)
+
+
+def _extruded_slack(surface, tolerance):
+    """Native-chart tolerances ``(angular, axial)`` of a world ``tolerance`` on an extruded patch."""
+    (u0, u1), (v0, v1) = surface.u_range, surface.v_range
+    t = u0 + np.linspace(0.0, 1.0, 17) * (u1 - u0)
+    speed_u = float(np.max(np.linalg.norm(surface.directrix.derivative(t), axis=1))) * abs(u1 - u0)
+    speed_v = float(np.linalg.norm(surface.vector)) * abs(v1 - v0)
+    return tolerance / max(speed_u, tolerance), tolerance / max(speed_v, tolerance)
 
 
 def _inside_patch(surface, point, tolerance):
     """Whether ``point`` (on the support) lies in the surface's native rectangle."""
     if isinstance(surface, Plane):
         return True
+    if isinstance(surface, ExtrudedSurface):
+        u, v = surface.local_uv(point)
+        angular, axial = _extruded_slack(surface, tolerance)
+        return -angular <= u <= 1 + angular and -axial <= v <= 1 + axial
     u, v = surface.local_uv(point)
     angular = tolerance / max(_max_radius(surface) * abs(surface.sweep_angle), tolerance)
     axial = tolerance / max(abs(surface.height), tolerance)
@@ -59,6 +88,10 @@ def _inside_patch_many(surface, points, tolerance):
     points = np.atleast_2d(points)
     if isinstance(surface, Plane):
         return np.ones(len(points), dtype=bool)
+    if isinstance(surface, ExtrudedSurface):
+        uv = surface.local_uv_many(points)
+        angular, axial = _extruded_slack(surface, tolerance)
+        return ((uv[:, 0] >= -angular) & (uv[:, 0] <= 1 + angular) & (uv[:, 1] >= -axial) & (uv[:, 1] <= 1 + axial))
     rel = points - np.asarray(surface.origin)
     axis = np.asarray(surface.axis)
     axial = rel @ axis
@@ -105,6 +138,20 @@ def _branch_points(plan, angles, branch):
 
 def _boundary_planes(surface):
     """Planes carrying a ruled patch's end rings and angular seams (as exact quadric descriptors)."""
+    if isinstance(surface, ExtrudedSurface):
+        normal = tuple(float(x) for x in surface.profile_normal)
+        origin, vector = np.asarray(surface.profile_origin), np.asarray(surface.vector)
+        planes = [QuadricSupport("plane", tuple(origin + s * vector), normal) for s in surface.v_range]
+        directrix = surface.directrix
+        closed = (isinstance(directrix, EllipseDirectrix) and abs(abs(directrix.sweep_angle) - TWO_PI) <= 1e-12
+                  and sorted(surface.u_range) == [0.0, 1.0])
+        if not closed:
+            center = np.asarray(directrix.origin)
+            for t in surface.u_range:                          # the plane through the axis line and the end generator
+                seam = np.cross(np.asarray(directrix.point(float(t))) - center, vector)
+                if float(np.linalg.norm(seam)) > 0.0:
+                    planes.append(QuadricSupport("plane", tuple(center), tuple(float(x) for x in seam)))
+        return planes
     axis = tuple(float(v) for v in surface.axis)
     origin = np.asarray(surface.origin)
     planes = []
@@ -151,9 +198,11 @@ def charts_support(first_surface, second_surface, *, tolerance=1e-10, cancellati
     second patch's ring and seam planes) cut the angular range; each interval is
     kept only if its midpoint lies in both rectangles.
     """
-    first = RuledSupport.from_surface(first_surface)
+    first = ruled_support(first_surface)
     plan = get_plan(first, second_surface)
-    start, sweep = float(first_surface.start_angle), float(first_surface.sweep_angle)
+    if all(h.is_zero() for h in plan.hp):
+        return SupportIntersection(coincident=True)          # every ruling lies on the second support: one surface
+    start, sweep = _angle_range(first_surface)
     lo, hi = sorted((start, start + sweep))
     tol = tolerance / max(1.0, _max_radius(first_surface))
     _poll(cancellation_check)
@@ -166,19 +215,17 @@ def charts_support(first_surface, second_surface, *, tolerance=1e-10, cancellati
         structural.append(start + .5 * sweep)
     z_lo, z_hi = _axial_range(first_surface)
     boundary_slack = max(tolerance, 1e-8)
-    height = float(first_surface.height)
-    first_origin, first_axis = np.asarray(first.origin), np.asarray(first.axis)
     candidate_events = []                       # (angle, kind, reference) crossings of a patch boundary
-    for z in (0.0, height):
+    for z in (z_lo, z_hi):
         candidate_events.extend((a, "height", z) for a in _in_range(plan.bound_roots(z), lo, hi, tol))
-    if isinstance(second_surface, (Cylinder, Cone)):
+    if isinstance(second_surface, (Cylinder, Cone, ExtrudedSurface)):
         for plane in _boundary_planes(second_surface):
             _poll(cancellation_check)
             roots = plan.resultant_roots(plane)
             if roots:
                 candidate_events.extend((a, "plane", plane) for a in _in_range(roots, lo, hi, tol))
     fs = plan.floats()
-    branches = (1,) if plan.linear else (-1, 1)
+    branches = () if plan.linear and plan.hp[1].is_zero() else (1,) if plan.linear else (-1, 1)   # A = B = 0: generators only
     second = plan.second
     curves = []
     for branch in branches:
@@ -187,7 +234,7 @@ def charts_support(first_surface, second_surface, *, tolerance=1e-10, cancellati
             # Keep only genuine crossings of a patch boundary by THIS branch inside the other patch.
             angles = np.array([a for a, _k, _r in candidate_events])
             pts = _branch_points(plan, angles, branch)
-            axial = (pts - first_origin) @ first_axis
+            axial = first.axial(pts)
             in_second = _inside_patch_many(second_surface, pts, boundary_slack)
             in_first = (axial >= z_lo - boundary_slack) & (axial <= z_hi + boundary_slack)
             for index, (angle, kind, reference) in enumerate(candidate_events):
@@ -222,13 +269,14 @@ def charts_support(first_surface, second_surface, *, tolerance=1e-10, cancellati
             right = any(abs(begin + length - f) <= tol for f in fold_angles)
             mode = "both_sine" if left and right else "left_square" if left else "right_square" if right else "linear"
             curve = QuadricIntersectionCurve._make(first, second, begin, length, branch, mode)
-            ends = curve.evaluate(np.array([0., .5, 1.]))
+            with np.errstate(invalid="ignore", divide="ignore", over="ignore"):          # a chart may run to a pole
+                ends = curve.evaluate(np.array([0., .5, 1.]))
             if not np.all(np.isfinite(ends)):
                 continue                                  # a chart that runs to a pole is not a curve of this pair
             if np.ptp(ends, axis=0).max() <= tolerance:
                 continue                                  # the apex branch (s = 0 for every angle) is a point, not a curve
             point = ends[1]
-            axial_mid = float((point - first_origin) @ first_axis)
+            axial_mid = float(first.axial(point))
             if not (z_lo - tolerance <= axial_mid <= z_hi + tolerance):
                 continue
             if not _inside_patch(second_surface, point, tolerance):
@@ -241,7 +289,7 @@ def charts_support(first_surface, second_surface, *, tolerance=1e-10, cancellati
             continue
         s = -b / (2 * a)
         point = _point_at(first, fs, float(angle), s)
-        axial = float((point - np.asarray(first.origin)) @ np.asarray(first.axis))
+        axial = float(first.axial(point))
         if (z_lo - tolerance <= axial <= z_hi + tolerance and _inside_patch(second_surface, point, tolerance)
                 and not any(np.linalg.norm(point - curve.evaluate(t)) <= tolerance for curve in curves for t in (0., 1.))):
             points.append(tuple(point))
@@ -269,7 +317,7 @@ def _generator_segments(first_surface, second_surface, plan, angle, tolerance):
     start = _point_at(first, fs, angle, 0.0)
     direction = _point_at(first, fs, angle, 1.0) - start
     cuts = [z_lo, z_hi]
-    if isinstance(second_surface, (Cylinder, Cone)):
+    if isinstance(second_surface, (Cylinder, Cone, ExtrudedSurface)):
         for plane in _boundary_planes(second_surface):
             normal = np.asarray(plane.axis)
             rate = float(normal @ direction)
@@ -508,17 +556,25 @@ _FIRST_CHOICE = {}
 
 def _prefer_first(a, b):
     """Which of two ruled supports should supply the angle: the one whose branches fold least."""
-    key = (RuledSupport.from_surface(a), QuadricSupport.from_surface(a), RuledSupport.from_surface(b),
-           QuadricSupport.from_surface(b))
+    key = (ruled_support(a), QuadricSupport.from_surface(a), ruled_support(b), QuadricSupport.from_surface(b))
     if key not in _FIRST_CHOICE:
         costs = []
         for first, second in ((a, b), (b, a)):
-            plan = get_plan(RuledSupport.from_surface(first), second)
+            plan = get_plan(ruled_support(first), second)
             costs.append(sum(m for _a, m in plan.discriminant_roots()) + 2 * len(plan.pole_roots()))
         _FIRST_CHOICE[key] = costs[0] <= costs[1]
         if len(_FIRST_CHOICE) > 4096:
             _FIRST_CHOICE.pop(next(iter(_FIRST_CHOICE)))
     return _FIRST_CHOICE[key]
+
+
+def quadric_pair_support(a, b, *, tolerance=1e-10, cancellation_check=None):
+    """Exact support intersection of two ruled quadrics given as Cylinder, Cone or extruded-ellipse patches."""
+    for surface in (a, b):
+        if not isinstance(surface, (Cylinder, Cone, ExtrudedSurface)):
+            raise GeometryError("a quadric pair needs Cylinders, Cones or extruded ellipses")
+    first, second = (a, b) if _prefer_first(a, b) else (b, a)
+    return charts_support(first, second, tolerance=tolerance, cancellation_check=cancellation_check)
 
 
 def cone_support(a, b, *, tolerance=1e-10, cancellation_check=None):

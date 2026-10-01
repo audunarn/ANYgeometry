@@ -20,8 +20,8 @@ from .analytic_supports import SupportIntersection
 from .arrangement_geometry import BezierPath
 from .errors import GeometryError
 from .exact_curves import EllipticArc
-from .extrusions import BezierDirectrix
-from .surfaces import ExtrudedSurface, Plane
+from .extrusions import BezierDirectrix, EllipseDirectrix
+from .surfaces import Cone, Cylinder, ExtrudedSurface, Plane
 
 _EPS = float(np.finfo(float).eps)
 
@@ -226,6 +226,17 @@ def parallel_extruded_support(a, b, *, tolerance=1e-10, cancellation_check=None)
     return SupportIntersection(segments=tuple(segments))
 
 
+def _parallel(a, b):
+    first, second = np.asarray(a.vector, dtype=float), np.asarray(b.vector, dtype=float)
+    return float(np.linalg.norm(np.cross(first, second))) <= 1e-12 * float(np.linalg.norm(first) * np.linalg.norm(second))
+
+
+def _ruled_quadric(surface):
+    """Cylinders, Cones and extruded ellipses are ruled quadrics; an extruded Bezier is not."""
+    return isinstance(surface, (Cylinder, Cone)) or (
+        isinstance(surface, ExtrudedSurface) and isinstance(surface.directrix, EllipseDirectrix))
+
+
 def extruded_pair_support(a, b, *, tolerance=1e-10, cancellation_check=None):
     """Support intersection for a pair that includes an extruded surface."""
     if isinstance(b, ExtrudedSurface) and not isinstance(a, ExtrudedSurface):
@@ -235,5 +246,10 @@ def extruded_pair_support(a, b, *, tolerance=1e-10, cancellation_check=None):
     if isinstance(b, ExtrudedSurface):
         if a.support_key() == b.support_key():
             return SupportIntersection(coincident=True)
-        return parallel_extruded_support(a, b, tolerance=tolerance, cancellation_check=cancellation_check)
-    raise GeometryError("an extruded surface can meet a Plane or another extruded surface; other pairs are unsupported")
+        if _parallel(a, b):
+            return parallel_extruded_support(a, b, tolerance=tolerance, cancellation_check=cancellation_check)
+    if _ruled_quadric(a) and _ruled_quadric(b):
+        from .quadric_supports import quadric_pair_support
+        return quadric_pair_support(a, b, tolerance=tolerance, cancellation_check=cancellation_check)
+    raise GeometryError("this extruded surface pair is unsupported: an extruded Bezier meets a Plane or a parallel "
+                        "extrusion, and a pair of non-parallel surfaces needs elliptic or circular profiles")

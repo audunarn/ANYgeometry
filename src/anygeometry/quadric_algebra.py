@@ -19,7 +19,7 @@ one exact solve.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from fractions import Fraction
 from functools import lru_cache
 import math
@@ -30,7 +30,8 @@ import numpy as np
 from .analytic_roots import (_derivative, _division, _integer_value, _sturm, _variations,
                              isolate_real_roots)
 from .errors import GeometryError
-from .surfaces import Cone, Cylinder, Plane
+from .extrusions import EllipseDirectrix
+from .surfaces import Cone, Cylinder, ExtrudedSurface, Plane
 
 TWO_PI = 2.0 * math.pi
 
@@ -143,6 +144,114 @@ class RuledSupport:
     def axial(self, point):
         return (np.asarray(point, dtype=float) - self.origin) @ np.asarray(self.axis)
 
+    def quadric(self):
+        """The ruled surface itself as a world-space quadric support."""
+        return QuadricSupport("cone" if self.is_cone else "cylinder", self.origin, self.axis, self.radius, self.slope)
+
+
+def _inverse3(rows):
+    """Exact inverse of a 3x3 matrix of Fractions (rows)."""
+    (a, b, c), (d, e, f), (g, h, i) = rows
+    cofactors = ((e * i - f * h, c * h - b * i, b * f - c * e),
+                 (f * g - d * i, a * i - c * g, c * d - a * f),
+                 (d * h - e * g, b * g - a * h, a * e - b * d))
+    determinant = a * cofactors[0][0] + b * cofactors[1][0] + c * cofactors[2][0]
+    if determinant == 0:
+        raise GeometryError("the base ellipse and the ruling direction must be independent")
+    return tuple(tuple(value / determinant for value in row) for row in cofactors)
+
+
+@dataclass(frozen=True, slots=True)
+class EllipticRuledSupport:
+    """An elliptic cylinder: rulings of direction ``axis`` through the base ellipse ``origin + u cos t + v sin t``.
+
+    The counterpart of :class:`RuledSupport` (``slope == 0``) for an oblique or elliptic base. The base lies in
+    the plane through ``origin`` with normal ``u x v``; the ruling parameter ``s`` of a point is its height
+    above that plane measured along ``axis`` (a unit vector), and ``t`` is the ellipse parameter of the
+    point's projection along ``axis`` into that plane.
+    """
+    origin: tuple
+    u_vector: tuple
+    v_vector: tuple
+    axis: tuple
+
+    slope = 0.0
+    is_cone = False
+
+    def __post_init__(self):
+        origin = _vec(self.origin, "support origin")
+        u, v = _vec(self.u_vector, "ellipse u vector"), _vec(self.v_vector, "ellipse v vector")
+        axis = _vec(self.axis, "support axis")
+        length = math.sqrt(sum(c * c for c in axis))
+        if length <= 0.0:
+            raise GeometryError("the ruling direction must be non-zero")
+        if abs(length - 1.0) > 4 * float(np.finfo(float).eps):              # a unit axis stays as it is
+            axis = tuple(c / length for c in axis)
+        normal = _cross(u, v)
+        scale = math.sqrt(sum(c * c for c in normal))
+        if scale <= 0.0 or abs(sum(n * a for n, a in zip(normal, axis))) <= 1e-12 * scale:
+            raise GeometryError("the ruling direction must leave the base plane of the ellipse")
+        object.__setattr__(self, "origin", origin)
+        object.__setattr__(self, "u_vector", u)
+        object.__setattr__(self, "v_vector", v)
+        object.__setattr__(self, "axis", axis)
+
+    @property
+    def radius(self):
+        return max(math.sqrt(sum(c * c for c in self.u_vector)), math.sqrt(sum(c * c for c in self.v_vector)))
+
+    @property
+    def normal(self):
+        value = np.cross(self.u_vector, self.v_vector)
+        return value / np.linalg.norm(value)
+
+    @classmethod
+    def from_surface(cls, surface):
+        directrix = getattr(surface, "directrix", None)
+        if isinstance(surface, ExtrudedSurface) and isinstance(directrix, EllipseDirectrix):
+            return cls(directrix.center, directrix.u_vector, directrix.v_vector, surface.vector)
+        raise GeometryError("an elliptic ruled support is an extruded ellipse")
+
+    def float_rows(self):
+        zero = (0.0, 0.0, 0.0)
+        return (zero, self.u_vector, self.v_vector), (self.axis, zero, zero)
+
+    def exact_rows(self):
+        zero = (Fraction(0),) * 3
+        return (zero, _fraction_vec(self.u_vector), _fraction_vec(self.v_vector)), (_fraction_vec(self.axis), zero, zero), Fraction(0)
+
+    def exact_station(self, axial):
+        return Fraction(axial)
+
+    def axial(self, point):
+        point = np.asarray(point, dtype=float)
+        normal = self.normal
+        return (point - self.origin) @ normal / float(normal @ np.asarray(self.axis))
+
+    def angle_of(self, point):
+        """The ellipse parameter ``t`` in ``(-pi, pi]`` of the projection of ``point`` along the ruling."""
+        point = np.asarray(point, dtype=float)
+        single = point.ndim == 1
+        point = np.atleast_2d(point)
+        rel = point - self.origin
+        in_plane = rel - self.axial(point)[:, None] * np.asarray(self.axis)
+        solution = np.linalg.lstsq(np.column_stack((self.u_vector, self.v_vector)), in_plane.T, rcond=None)[0]
+        angle = np.arctan2(solution[1], solution[0])
+        return angle[0] if single else angle
+
+    def quadric(self):
+        """The implicit elliptic cylinder, exact in the stored doubles (see :class:`QuadricSupport`)."""
+        return QuadricSupport("elliptic", self.origin, self.axis, u_vector=self.u_vector, v_vector=self.v_vector)
+
+
+def ruled_support(surface):
+    """The ruled support of a Cylinder, Cone or extruded ellipse (an already built support passes through)."""
+    if isinstance(surface, (RuledSupport, EllipticRuledSupport)):
+        return surface
+    if isinstance(surface, ExtrudedSurface):
+        return EllipticRuledSupport.from_surface(surface)
+    return RuledSupport.from_surface(surface)
+
 
 @dataclass(frozen=True, slots=True)
 class QuadricSupport:
@@ -150,7 +259,8 @@ class QuadricSupport:
 
     ``kind`` is ``plane`` (``origin``, unit ``axis``=normal), ``cylinder`` (``origin``,
     ``axis``, ``radius``), ``cone`` (``origin``, ``axis``, ``radius`` at ``origin``,
-    ``slope``) or ``general`` (``matrix`` row-major, ``linear``, ``constant``).
+    ``slope``), ``elliptic`` (the cylinder of rulings ``axis`` through the ellipse ``origin + u_vector cos t +
+    v_vector sin t``) or ``general`` (``matrix`` row-major, ``linear``, ``constant``).
     Coefficients are rational functions of the stored doubles.
     """
     kind: str
@@ -161,10 +271,16 @@ class QuadricSupport:
     matrix: tuple = ()
     linear: tuple = ()
     constant: float = 0.0
+    u_vector: tuple = ()
+    v_vector: tuple = ()
 
     def __post_init__(self):
-        if self.kind not in ("plane", "cylinder", "cone", "general"):
-            raise GeometryError("quadric kind must be plane, cylinder, cone or general")
+        if self.kind not in ("plane", "cylinder", "cone", "elliptic", "general"):
+            raise GeometryError("quadric kind must be plane, cylinder, cone, elliptic or general")
+        if self.kind == "elliptic":
+            EllipticRuledSupport(self.origin, self.u_vector, self.v_vector, self.axis)       # validates the three vectors
+            object.__setattr__(self, "u_vector", _vec(self.u_vector, "ellipse u vector"))
+            object.__setattr__(self, "v_vector", _vec(self.v_vector, "ellipse v vector"))
         object.__setattr__(self, "origin", _vec(self.origin, "quadric origin"))
         object.__setattr__(self, "axis", _vec(self.axis, "quadric axis"))
         object.__setattr__(self, "radius", float(self.radius))
@@ -190,7 +306,9 @@ class QuadricSupport:
             if slope == 0.0:
                 return cls("cylinder", tuple(surface.origin), tuple(surface.axis), float(surface.radius_start))
             return cls("cone", tuple(surface.origin), tuple(surface.axis), float(surface.radius_start), slope)
-        raise GeometryError("quadric supports are Plane, Cylinder or Cone")
+        if isinstance(surface, ExtrudedSurface) and isinstance(surface.directrix, EllipseDirectrix):
+            return EllipticRuledSupport.from_surface(surface).quadric()
+        raise GeometryError("quadric supports are Plane, Cylinder, Cone or an extruded ellipse")
 
     @classmethod
     def sphere(cls, center, radius):
@@ -217,10 +335,20 @@ class QuadricSupport:
             m = tuple((zero3,) * 3)
             l_own = tuple(c / 2 for c in a)                                   # Q(w) = a.w
             c_own = Fraction(0)
+        elif self.kind == "elliptic":
+            basis = [[Fraction(self.u_vector[i]), Fraction(self.v_vector[i]), a[i]] for i in range(3)]
+            inverse = _inverse3(basis)                       # row k gives the k-th coordinate (x, y, s) of w = p - origin
+            first, second = inverse[0], inverse[1]
+            m = tuple(tuple(first[i] * first[j] + second[i] * second[j] for j in range(3)) for i in range(3))
+            l_own = zero3                                                     # Q(w) = w.M.w - 1
+            c_own = Fraction(-1)
         else:
             k = Fraction(self.slope) if self.kind == "cone" else Fraction(0)
             r = Fraction(self.radius)
-            m = tuple(tuple(eye[i][j] - (1 + k * k) * a[i] * a[j] for j in range(3)) for i in range(3))
+            # a cylinder's axis is divided by its exact norm: its null direction is the stored axis itself, so rulings
+            # parallel to it (an exactly equal direction) are parallel in the algebra too
+            norm2 = sum(c * c for c in a) if self.kind == "cylinder" else Fraction(1)
+            m = tuple(tuple(eye[i][j] - (1 + k * k) * a[i] * a[j] / norm2 for j in range(3)) for i in range(3))
             l_own = tuple(-r * k * c for c in a)                              # Q(w) = w.M.w - 2 r k a.w - r^2
             c_own = -r * r
         md = tuple(sum(m[i][j] * d[j] for j in range(3)) for i in range(3))
@@ -249,6 +377,9 @@ class QuadricSupport:
         w = x - self.origin
         if self.kind == "plane":
             return w @ np.asarray(self.axis)
+        if self.kind == "elliptic":
+            m = _elliptic_rows(self)
+            return np.einsum("...i,ij,...j->...", w, m, w) - 1.0
         if self.kind == "general":
             m = np.asarray(self.matrix).reshape(3, 3)
             return np.einsum("...i,ij,...j->...", x, m, x) + 2 * x @ np.asarray(self.linear) + self.constant
@@ -263,6 +394,8 @@ class QuadricSupport:
         a = np.asarray(self.axis)
         if self.kind == "plane":
             return np.full(x.shape[:-1], float(np.linalg.norm(a)))
+        if self.kind == "elliptic":
+            return 2 * np.linalg.norm(w @ _elliptic_rows(self), axis=-1)
         if self.kind == "general":
             m = np.asarray(self.matrix).reshape(3, 3)
             return 2 * np.linalg.norm(x @ m + np.asarray(self.linear), axis=-1)
@@ -271,6 +404,13 @@ class QuadricSupport:
         k = self.slope if self.kind == "cone" else 0.0
         radius = self.radius + k * axial
         return 2 * np.linalg.norm(radial - (k * radius)[..., None] * a, axis=-1)
+
+
+@lru_cache(maxsize=256)
+def _elliptic_rows(support):
+    """The matrix ``M`` of ``w.M.w = 1`` for an elliptic quadric, correctly rounded from the exact form."""
+    m, _l, _c = support.exact_relative(support.origin)
+    return np.array([[float(v) for v in row] for row in m])
 
 
 # ---------------------------------------------------------------------------
@@ -611,7 +751,27 @@ class Plan:
 
 @lru_cache(maxsize=512)
 def _cached_plan(first, second):
-    return Plan(first, second)
+    return Plan(first, _aligned(first, second))
+
+
+_PARALLEL_ROUNDING = 64 * float(np.finfo(float).eps)
+
+
+def _aligned(first, second):
+    """``second`` with its rulings made exactly parallel to ``first``'s when they agree up to rounding.
+
+    Two cylinder-like supports whose unit directions differ by a few ulp are parallel in every modelling
+    sense (their axes come from one vector normalized twice), yet exact arithmetic on the stored doubles
+    would find them crossing far outside any patch. Replacing the second direction by the first changes the
+    support by less than ``64 eps`` of its length and lets the plan see the generators they share.
+    """
+    if first.is_cone or second.kind not in ("cylinder", "elliptic"):
+        return second
+    a, b = np.asarray(first.axis, dtype=float), np.asarray(second.axis, dtype=float)
+    size = float(np.linalg.norm(np.cross(a, b))) / float(np.linalg.norm(a) * np.linalg.norm(b))
+    if 0.0 < size <= _PARALLEL_ROUNDING:
+        return replace(second, axis=first.axis)
+    return second
 
 
 def get_plan(first, second):

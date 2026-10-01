@@ -21,7 +21,8 @@ import math
 import numpy as np
 
 from .errors import GeometryError
-from .quadric_algebra import (QuadricSupport, RuledSupport, TWO_PI, circle_angles, get_plan)
+from .quadric_algebra import (EllipticRuledSupport, QuadricSupport, RuledSupport, TWO_PI, circle_angles, get_plan,
+                              ruled_support)
 
 IDENTITY = ((1., 0., 0., 0.), (0., 1., 0., 0.), (0., 0., 1., 0.), (0., 0., 0., 1.))
 MODES = ("linear", "left_square", "right_square", "both_sine")
@@ -77,7 +78,7 @@ class QuadricIntersectionCurve:
     transform: tuple = IDENTITY
 
     def __post_init__(self):
-        first = self.first if isinstance(self.first, RuledSupport) else RuledSupport.from_surface(self.first)
+        first = ruled_support(self.first)
         second = QuadricSupport.from_surface(self.second)
         object.__setattr__(self, "first", first)
         object.__setattr__(self, "second", second)

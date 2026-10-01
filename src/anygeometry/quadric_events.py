@@ -162,8 +162,7 @@ def _curve_quadric_roots(curve, quadric, tolerance, cancellation_check):
 
 def branch_supports(curve):
     """The two quadric supports of a branch curve, in world coordinates."""
-    first = QuadricSupport("cone" if curve.first.is_cone else "cylinder", curve.first.origin, curve.first.axis,
-                           curve.first.radius, curve.first.slope)
+    first = curve.first.quadric()
     second = curve.second
     if curve.transform != ((1., 0., 0., 0.), (0., 1., 0., 0.), (0., 0., 1., 0.), (0., 0., 0., 1.)):
         inverse = np.linalg.inv(np.asarray(curve.transform))
