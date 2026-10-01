@@ -7,6 +7,8 @@ The result records isolating rational intervals as well as float witnesses.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from fractions import Fraction
 import math
@@ -111,6 +113,29 @@ class IsolatedRoot:
         return float((self.lower+self.upper)/2)
 
 
+_ROOT_MEMO = ContextVar("anygeometry_root_memo", default=None)
+_ROOT_MEMO_LIMIT = 1 << 16
+
+
+@contextmanager
+def root_isolation_memo():
+    """Share identical root isolations within one qualified operation.
+
+    Isolation is a pure function of its numeric arguments. Inside this scope a
+    repeated call returns the earlier result and replays the cancellation polls
+    that computing it made, so cancellation behaves as if it were recomputed.
+    The scope ends with the operation; nothing is shared between operations.
+    """
+    if _ROOT_MEMO.get() is not None:
+        yield
+        return
+    token = _ROOT_MEMO.set({})
+    try:
+        yield
+    finally:
+        _ROOT_MEMO.reset(token)
+
+
 def isolate_real_roots(coefficients, *, tolerance=1e-13, cancellation_check=None, interval=None):
     """Isolate every distinct real root; coefficients ascend by power.
 
@@ -119,6 +144,36 @@ def isolate_real_roots(coefficients, *, tolerance=1e-13, cancellation_check=None
     cap. Cancellation raises before a partial result can be returned. An
     explicit closed rational interval selects only roots inside that interval.
     """
+    memo = _ROOT_MEMO.get()
+    if memo is None:
+        return _isolate_real_roots(coefficients, tolerance, cancellation_check, interval)
+    try:
+        key = (tuple(coefficients), tolerance, None if interval is None else tuple(interval))
+        hash(key)
+    except TypeError:
+        return _isolate_real_roots(coefficients, tolerance, cancellation_check, interval)
+    hit = memo.get(key)
+    if hit is not None:
+        result, polls = hit
+        if cancellation_check is not None:
+            for _ in range(polls):
+                if cancellation_check():
+                    raise GeometryError("analytic root isolation cancelled")
+        return result
+    polls = 0
+
+    def counted():
+        nonlocal polls
+        polls += 1
+        return cancellation_check is not None and cancellation_check()
+
+    result = _isolate_real_roots(coefficients, tolerance, counted, interval)
+    if len(memo) < _ROOT_MEMO_LIMIT:
+        memo[key] = (result, polls)
+    return result
+
+
+def _isolate_real_roots(coefficients, tolerance, cancellation_check, interval):
     try:
         p = _trim([Fraction(value) for value in coefficients])
         tolerance = Fraction(tolerance)
@@ -152,20 +207,35 @@ def isolate_real_roots(coefficients, *, tolerance=1e-13, cancellation_check=None
                 remaining=isolate_real_roots(quotient,tolerance=tolerance,interval=(lower,upper),
                                              cancellation_check=cancellation_check)
                 return tuple(sorted((IsolatedRoot(endpoint,endpoint),*remaining),key=lambda item:item.lower))
-    pending = [(lower,upper)]
+    # Sturm variation counts are memoized per point. A node's count is carried
+    # to its children: a split node knows both child counts by additivity, and
+    # a node with exactly one simple root locates it by one sign of the
+    # square-free polynomial. Visited intervals, roots and cancellation polls
+    # are identical to counting both endpoints at every node.
+    variation_cache = {}
+
+    def variations(point):
+        value = variation_cache.get(point)
+        if value is None:
+            value = variation_cache[point] = _variations(sequence, point)
+        return value
+
+    pending = [(lower, upper, None, 0)]
     roots = []
     while pending:
         if cancellation_check is not None and cancellation_check():
             raise GeometryError("analytic root isolation cancelled")
-        lower, upper = pending.pop()
-        count = _variations(sequence, lower)-_variations(sequence, upper)
+        lower, upper, count, lower_sign = pending.pop()
+        if count is None:
+            count = variations(lower)-variations(upper)
         if count == 0:
             continue
         if count == 1 and upper-lower <= tolerance:
             roots.append(IsolatedRoot(lower, upper))
             continue
         middle = (lower+upper)/2
-        if _integer_value(sequence[0],middle) == 0:
+        middle_value = _integer_value(sequence[0], middle)
+        if middle_value == 0:
             # Remove an exact dyadic root and restart on its quotient. This
             # keeps the isolating endpoints away from every remaining root.
             roots.append(IsolatedRoot(middle, middle))
@@ -178,7 +248,16 @@ def isolate_real_roots(coefficients, *, tolerance=1e-13, cancellation_check=None
             # discard those earlier intervals rather than duplicate them.
             return tuple(sorted((IsolatedRoot(middle, middle), *remaining),
                                 key=lambda item: item.lower))
-        pending.extend(((middle, upper), (lower, middle)))
+        middle_sign = 1 if middle_value > 0 else -1
+        if count == 1:
+            if not lower_sign:
+                lower_value = _integer_value(sequence[0], lower)
+                lower_sign = 1 if lower_value > 0 else -1
+            left = int(lower_sign != middle_sign)
+        else:
+            left = variations(lower)-variations(middle)
+        pending.extend(((middle, upper, count-left, middle_sign),
+                        (lower, middle, left, lower_sign)))
     return tuple(sorted(roots, key=lambda item: item.lower))
 
 

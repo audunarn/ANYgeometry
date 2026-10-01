@@ -13,6 +13,7 @@ from uuid import UUID
 
 import numpy as np
 
+from .analytic_roots import root_isolation_memo
 from .analytic_supports import plane_cylinder_support, cylinder_cylinder_support
 from .arrangement_geometry import (LinePath, BezierPath, freeze_edge,
                                    point_parameters, curve_junctions)
@@ -165,9 +166,14 @@ def _synchronize_boundary_events(arrangements, check):
             if len(path.owners)>1:
                 events.extend(point for owner in path.owners for point in by_face.get(owner,()))
             lo,hi=path.curve.bounds()
+            if events:
+                # One vectorized box test; the same elementwise comparisons
+                # as testing each point separately, in the same order.
+                points=np.asarray(events)
+                outside=(np.any(points<lo-arrangement.world_tolerance,axis=1)
+                         | np.any(points>hi+arrangement.world_tolerance,axis=1))
+                events=[events[index] for index in np.flatnonzero(~outside)]
             for point in events:
-                if np.any(point<lo-arrangement.world_tolerance) or np.any(point>hi+arrangement.world_tolerance):
-                    continue
                 check()
                 values.update(point_parameters(path.curve,point,tolerance=arrangement.world_tolerance))
             parameters=_parameters(values,arrangement.world_tolerance,path.curve)
@@ -369,6 +375,11 @@ def _pair_paths(first, second, model, tolerance, check, *, point_contacts=None):
 
 def plan_intersections(model, operands, *, policy):
     """Plan intersections between the complete original operand set, read-only."""
+    with root_isolation_memo():
+        return _plan_intersections(model, operands, policy=policy)
+
+
+def _plan_intersections(model, operands, *, policy):
     from .intersections import _normalize_operand
     policy = _policy(policy)
     if policy.intent not in (ConnectionIntent.CONNECT, ConnectionIntent.IMPRINT, ConnectionIntent.REUSE_EXISTING):
@@ -702,8 +713,39 @@ def _apply_intersections_in_place(model, plan, *, policy):
               for member_id in model.members_using_edge(edge_id)]}
             for identifier in used_vertices}
         canonical = []
+        # Uniform grids over the used vertices (one per tolerance in force) so
+        # a point is compared only with vertices in the 27 neighbouring cells.
+        # Cells are twice the tolerance, so every vertex within tolerance of a
+        # point lies in one of them; the exact predicate below is unchanged.
+        grids = {}
+        def cell(size, position):
+            return tuple(math.floor(float(value)/size) for value in position)
+        def grid_for(size):
+            grid = grids.get(size)
+            if grid is None:
+                grid = {}
+                for identifier in used_vertices:
+                    if identifier in model.vertices:
+                        grid.setdefault(cell(size, model.vertex_position(identifier)), []).append(identifier)
+                grids[size] = grid
+            return grid
+        def nearby(point):
+            size = 2*tolerance
+            if not (math.isfinite(size) and size > 0. and np.all(np.isfinite(point))):
+                return sorted(used_vertices)
+            try:
+                grid = grid_for(size)
+                x, y, z = cell(size, point)
+            except (ValueError, OverflowError):
+                return sorted(used_vertices)
+            found = []
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    for dz in (-1, 0, 1):
+                        found.extend(grid.get((x+dx, y+dy, z+dz), ()))
+            return sorted(identifier for identifier in found if identifier in used_vertices)
         def vertex(point, sources):
-            candidates = [identifier for identifier in sorted(used_vertices) if identifier in model.vertices
+            candidates = [identifier for identifier in nearby(point) if identifier in model.vertices
                           and vertex_sources.get(identifier, set()) & sources
                           and np.linalg.norm(model.vertex_position(identifier)-point) <= tolerance]
             if candidates:
@@ -721,6 +763,8 @@ def _apply_intersections_in_place(model, plan, *, policy):
             identifier = model.add_point(*point)
             canonical.append(identifier); used_vertices.add(identifier)
             vertex_sources[identifier] = set(sources)
+            for size, grid in grids.items():
+                grid.setdefault(cell(size, model.vertex_position(identifier)), []).append(identifier)
             return identifier
 
         def edge(path, face_id):
@@ -879,6 +923,11 @@ def apply_intersections(model, plan, *, policy):
     Failed or cancelled candidates never consume live allocator IDs. This is
     stronger than the normal edit transaction's monotonic allocation rule.
     """
+    with root_isolation_memo():
+        return _apply_intersections(model, plan, policy=policy)
+
+
+def _apply_intersections(model, plan, *, policy):
     if not isinstance(plan, IntersectionPlan):
         raise TypeError("apply_intersections needs an IntersectionPlan")
     effective = _policy(policy)

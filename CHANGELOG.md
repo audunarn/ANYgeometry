@@ -8,6 +8,18 @@ All notable user-visible changes to ANYgeometry are documented here.
   platform/installed-consumer qualification; retain every qualification job and
   budget. Add conservative local test selection and per-test CI timings. See
   [testing guidance](docs/testing.md).
+- Faster general-intersection preparation, with identical plans, applied models
+  and cancellation polls (runtime change; not yet requalified for release).
+  Root isolation reuses Sturm counts across bisection nodes and, inside
+  `plan_intersections`/`apply_intersections` only, shares identical isolations
+  (cancellation polls are replayed). Topology validation filters segment pairs
+  with a conservative vectorized test before the unchanged exact predicate.
+  Applying a plan finds nearby shared vertices through a uniform grid and the
+  boundary-event synchronization tests bounding boxes in one vectorized step.
+  Measured on this machine: 6 cylinders through a plate 9.6 s to 4.6 s, an
+  8 x 8 stiffened panel 2.4 s to 1.5 s.
+  `tests/test_intersection_performance_equivalence.py` keeps the previous
+  algorithms as oracles.
 
 ## 0.4.5 — 2026-10-01
 

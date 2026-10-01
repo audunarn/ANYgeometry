@@ -4929,11 +4929,110 @@ class GeometryModel:
             and -second_slack <= second_parameter <= 1.0 + second_slack
         )
 
+    @staticmethod
+    def _segment_pairs_possible(
+        first_start: np.ndarray,
+        first_end: np.ndarray,
+        second_start: np.ndarray,
+        second_end: np.ndarray,
+        tolerance: float,
+    ) -> np.ndarray:
+        """Pairs that :meth:`_segments_intersect_2d` might report as touching.
+
+        Rows are segment pairs. The mask is only a filter: a ``False`` entry is
+        a pair the exact predicate certainly rejects, by one of two margins
+        wide enough to absorb floating-point error: well-conditioned
+        crossings whose bounding boxes are farther apart than the tolerance
+        allows, and parallel-branch pairs wholly on one side of the first
+        line. Everything else, including degenerate, non-finite and
+        near-parallel pairs, stays ``True`` for the exact predicate.
+        """
+        keep = np.ones(len(first_start), dtype=bool)
+        if not (np.isfinite(tolerance) and tolerance > 0.0) or not len(keep):
+            return keep
+        with np.errstate(all="ignore"):
+            everything = np.vstack((first_start, first_end, second_start, second_end))
+            extent = float(np.max(np.ptp(everything, axis=0)))
+            # Margins below assume coordinate differences carry relative error
+            # of a few ulp; otherwise leave every pair to the exact predicate.
+            if not np.isfinite(extent) or 64.0 * np.finfo(float).eps * extent > 0.01 * tolerance:
+                return keep
+            first = first_end - first_start
+            second = second_end - second_start
+            first_length = np.hypot(first[:, 0], first[:, 1])
+            second_length = np.hypot(second[:, 0], second[:, 1])
+            longest = np.maximum(first_length, second_length)
+            denominator = np.abs(first[:, 0] * second[:, 1] - first[:, 1] * second[:, 0])
+            measurable = (
+                np.isfinite(first_length)
+                & np.isfinite(second_length)
+                & (first_length > 1.02 * tolerance)
+                & (second_length > 1.02 * tolerance)
+            )
+            # Well-conditioned crossing: intersections of the supporting lines
+            # lie within one tolerance of both segments, so the segment boxes
+            # can be at most two tolerances apart (plus rounding).
+            crossing = (
+                measurable
+                & (denominator > 1.02 * tolerance * longest)
+                & (denominator > 1.0e-3 * first_length * second_length)
+            )
+            low_first = np.minimum(first_start, first_end)
+            high_first = np.maximum(first_start, first_end)
+            low_second = np.minimum(second_start, second_end)
+            high_second = np.maximum(second_start, second_end)
+            gap = np.max(
+                np.maximum(low_second - high_first, low_first - high_second), axis=1
+            )
+            margin = 4.0 * tolerance + 1.0e-11 * extent
+            keep &= ~(crossing & (gap > margin))
+            # Parallel branch: both ends of the second segment strictly beyond
+            # the side tolerance of the first line, on the same side.
+            parallel = measurable & (denominator <= 0.98 * tolerance * longest)
+            start_side = (
+                (second_start[:, 0] - first_start[:, 0]) * first[:, 1]
+                - (second_start[:, 1] - first_start[:, 1]) * first[:, 0]
+            )
+            end_side = (
+                (second_end[:, 0] - first_start[:, 0]) * first[:, 1]
+                - (second_end[:, 1] - first_start[:, 1]) * first[:, 0]
+            )
+            side_tolerance = 1.01 * tolerance * first_length
+            keep &= ~(
+                parallel
+                & (
+                    ((start_side > side_tolerance) & (end_side > side_tolerance))
+                    | ((start_side < -side_tolerance) & (end_side < -side_tolerance))
+                )
+            )
+        return keep
+
     @classmethod
     def _polygon_self_intersects(
         cls, polygon: np.ndarray, tolerance: float = 1.0e-10
     ) -> bool:
         count = len(polygon)
+        if count >= 6:
+            first_index, second_index = np.triu_indices(count, k=2)
+            keep = ~((first_index == 0) & (second_index == count - 1))
+            first_index, second_index = first_index[keep], second_index[keep]
+            following = np.roll(polygon, -1, axis=0)
+            possible = cls._segment_pairs_possible(
+                polygon[first_index], following[first_index],
+                polygon[second_index], following[second_index], tolerance,
+            )
+            for first, second in zip(
+                first_index[possible].tolist(), second_index[possible].tolist()
+            ):
+                if cls._segments_intersect_2d(
+                    polygon[first],
+                    following[first],
+                    polygon[second],
+                    following[second],
+                    tolerance,
+                ):
+                    return True
+            return False
         for first in range(count):
             first_next = (first + 1) % count
             for second in range(first + 1, count):
@@ -5243,6 +5342,23 @@ class GeometryModel:
     def _polygons_intersect(
         cls, first: np.ndarray, second: np.ndarray
     ) -> bool:
+        if len(first) * len(second) >= 16:
+            first_index = np.repeat(np.arange(len(first)), len(second))
+            second_index = np.tile(np.arange(len(second)), len(first))
+            first_following = np.roll(first, -1, axis=0)
+            second_following = np.roll(second, -1, axis=0)
+            possible = cls._segment_pairs_possible(
+                first[first_index], first_following[first_index],
+                second[second_index], second_following[second_index], 1.0e-10,
+            )
+            return any(
+                cls._segments_intersect_2d(
+                    first[a], first_following[a], second[b], second_following[b], 1.0e-10
+                )
+                for a, b in zip(
+                    first_index[possible].tolist(), second_index[possible].tolist()
+                )
+            )
         for first_index in range(len(first)):
             for second_index in range(len(second)):
                 if cls._segments_intersect_2d(
