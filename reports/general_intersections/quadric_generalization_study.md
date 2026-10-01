@@ -4,6 +4,14 @@ Study record, 2026-10-01. Base: `main` 9dbf3e4 (0.4.5) plus the unmerged perform
 `claude/perf-hunt-046`. Branch: `claude/quadric-study`. Nothing here changes a released contract,
 and nothing should merge before the testing-regime changes settle.
 
+**Status (later the same day).** The recommendation below was approved and implemented on this branch:
+see [cone supports and quadric intersection branches](../../docs/QUADRIC_INTERSECTIONS.md) and the
+`quadric_algebra`, `quadric_curves`, `quadric_supports` and `quadric_events` modules. The private prototype
+and its fuzz/oracle scripts that this record cites were superseded by the production modules and tests
+(`tests/test_quadric_*.py`, `tests/test_cone_intersections_engine.py`) and removed; they remain in the history
+at `011d161` and `95ea5c1`. The probes that only exercise the public workflow stay in
+`tools/general_intersections/quadric_study/`.
+
 **Question.** A cone meets a cylinder, say with its axis 10 degrees off perpendicular. How can the
 intersection engine become general enough to handle that, and what else would the same change buy?
 
@@ -72,8 +80,8 @@ per loop (eight charts, four folds). The persisted curve should use whichever ha
 ## 3. Prototype and evidence
 
 `src/anygeometry/_quadric_branch.py` (private, not exported, no serialization) and
-`tests/test_quadric_branch_prototype.py`. Reproduction scripts are in
-`tools/general_intersections/quadric_study/`.
+`tests/test_quadric_branch_prototype.py`, both removed after the production implementation replaced them
+(history `011d161`); the claims below were reproduced there with the `qb_*.py` scripts of `95ea5c1`.
 
 | Claim | Evidence |
 | --- | --- |
@@ -139,11 +147,10 @@ curve is expected to match the cylinder analogue (same polynomial degrees) but w
 ## Reproduction
 
 ```
-python -m pytest tests/test_quadric_branch_prototype.py tests/test_cone_material_arrangement.py
-python tools/general_intersections/quadric_study/qb_fuzz2.py tools/general_intersections/quadric_study 202 150 cone:cyl
-python tools/general_intersections/quadric_study/qb_vs_old.py tools/general_intersections/quadric_study
+python -m pytest tests/test_quadric_intersection_curve.py tests/test_quadric_supports.py tests/test_cone_intersections_engine.py
 python tools/general_intersections/quadric_study/curve_repr_cost.py tools/general_intersections/quadric_study 5 1e-9
 ```
-Each script takes the directory containing its siblings as its first argument. Full suite on this
+Each remaining script takes the directory containing its siblings as its first argument; the prototype's
+`qb_*.py` scripts are in `95ea5c1`. Full suite on this
 branch: 10 failures, all in the git-environment release-authority tests that also fail on `main`
 (16 on the earlier run; the set varies with the environment), no new failures.

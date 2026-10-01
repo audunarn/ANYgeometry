@@ -20,6 +20,25 @@ All notable user-visible changes to ANYgeometry are documented here.
   8 x 8 stiffened panel 2.4 s to 1.5 s.
   `tests/test_intersection_performance_equivalence.py` keeps the previous
   algorithms as oracles.
+- Cone x Plane, Cone x Cylinder and Cone x Cone in `plan_intersections` /
+  `apply_intersections` and `query_trimmed_surface_charts`, including a cone
+  meeting a cylinder at any angle (for example 10 degrees off the
+  perpendicular), which is not a conic. New root-exported immutable
+  `QuadricIntersectionCurve` stores one exact branch of the ruling equation over
+  an angular chart (evaluation, first and second derivatives, bounds,
+  projection, splitting and affine copying, regular fold ends); circles,
+  ellipses and coaxial rings stay `EllipticArc`. Cone material areas are exact
+  and rectangular cone children of a cut become exact smaller `Cone` patches.
+  **Geometry documents are written at the lowest schema that can express them:
+  schema 6 only when a document stores a `QuadricIntersectionCurve`**; every
+  other document stays schema 5 (schemas 1-6 are read). See
+  [cone and quadric intersections](docs/QUADRIC_INTERSECTIONS.md).
+- Faster arrangement predicates without changing results beyond rounding: a
+  plane meets an ellipse through the exact half-angle quadratic instead of
+  Sturm isolation of an equivalent quartic, exact curve/quadric roots are
+  remembered, and loop areas stop at their rounding-noise floor. Measured on
+  this machine, planning a 12 x 8 facet cone/cylinder pair 10 degrees off the
+  perpendicular takes 0.8 s against 1.9 s for the equivalent cylinder pair.
 
 ## 0.4.5 — 2026-10-01
 
