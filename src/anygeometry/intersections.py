@@ -552,6 +552,7 @@ class ImprintPlan:
     qualification: IntersectionQualificationPolicy = (
         DEFAULT_INTERSECTION_QUALIFICATION_POLICY
     )
+    batch_plan: object | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.model_id, UUID) or self.model_id.int == 0:
@@ -580,6 +581,16 @@ class ImprintPlan:
         object.__setattr__(self, "operation", operation)
         object.__setattr__(self, "expected_changes", changes)
         object.__setattr__(self, "affected", affected)
+        if self.batch_plan is not None:
+            from .batch_intersections import IntersectionPlan
+            if (not isinstance(self.batch_plan,IntersectionPlan)
+                    or self.batch_plan.model_id != self.model_id
+                    or self.batch_plan.revision != self.revision
+                    or not {self.first_parent,self.second_parent} <= set(self.batch_plan.operands)
+                    or _policy_name(self.batch_plan.policy.intent) != _policy_name(self.policy)
+                    or operation not in (ImprintOperation.FACE_IMPRINT,ImprintOperation.MEMBER_CONNECTION,
+                                         ImprintOperation.MEMBER_SHEET_RELATION)):
+                raise GeometryError("imprint batch plan does not match its public pair binding")
 
 
 @dataclass(frozen=True, slots=True)
@@ -747,6 +758,19 @@ def _merge_vertex(geometry: GeometryModel, old: int, new: int) -> None:
                 curve=curve,
             ),
         )
+    # Preserve structural references to the canonical point before retiring
+    # the duplicate. Replacement lineage propagates groups/tags afterwards.
+    for attachment_id in tuple(geometry._source_attachments.get(('vertex',old),())):
+        attachment=geometry.attachments[attachment_id]
+        geometry._put_structural('attachment',replace(attachment,source_id=new,
+            lineage=tuple(dict.fromkeys((*attachment.lineage,('vertex',old))))))
+    for attachment_id in tuple(geometry._target_attachments.get(('vertex',old),())):
+        attachment=geometry.attachments[attachment_id]
+        geometry._put_structural('attachment',replace(attachment,target_id=new,
+            lineage=tuple(dict.fromkeys((*attachment.lineage,('vertex',old))))))
+    for member_id in tuple(geometry._orientation_members.get(('vertex',old),())):
+        member=geometry.members[member_id]
+        geometry._put_structural('member',replace(member,orientation_reference=('vertex',new)))
     geometry.remove_vertex(old, record=False)
     geometry.record_replacement(EntityRef("vertex", old), (EntityRef("vertex", new),))
 
@@ -4207,6 +4231,14 @@ def query_intersection(
         result = _query_face_face(
             geometry, first_handle, second_handle, qualified_policy
         )
+        if not result.classified:
+            from .material_pair import domains_for_pair, query_exact_pair
+            try:
+                domains_for_pair(geometry, first_handle, second_handle)
+            except GeometryError:
+                pass
+            else:
+                result = query_exact_pair(geometry,first_handle,second_handle)
     elif pair == ("edge", "edge"):
         result = _query_edge_edge(
             geometry, first_handle, second_handle, qualified_policy
@@ -4458,6 +4490,7 @@ def plan_imprint(
     same_parent = first_parent == second_parent
     no_geometric_intersection = result.kind is IntersectionKind.DISJOINT
     pair = {first_parent.kind, second_parent.kind}
+    batch_plan = None
     if same_parent or no_geometric_intersection:
         operation = ImprintOperation.NO_TOPOLOGY
         changes = ()
@@ -4470,6 +4503,7 @@ def plan_imprint(
             policy_value == "connect"
             and result.classified
             and result.dimension in (
+                IntersectionDimension.POINT,
                 IntersectionDimension.CURVE,
                 IntersectionDimension.REGION,
             )
@@ -4478,19 +4512,21 @@ def plan_imprint(
             policy_value == "connect"
             and result.classified
             and result.dimension not in (
+                IntersectionDimension.POINT,
                 IntersectionDimension.CURVE,
                 IntersectionDimension.REGION,
             )
         ):
             result = _unsupported_imprint_result(
                 result,
-                "face-face CONNECT requires a qualified curve or coincident "
+                "face-face CONNECT requires a qualified point, curve or coincident "
                 "region intersection",
             )
         if (
             policy_value == "imprint"
             and result.classified
             and result.dimension not in (
+                IntersectionDimension.POINT,
                 IntersectionDimension.CURVE,
                 IntersectionDimension.REGION,
             )
@@ -4519,7 +4555,19 @@ def plan_imprint(
             or len(reuse_components) == len(result.components) > 0
         )
         if wants_face_imprint and result.classified:
-            limitation = _face_imprint_limitation(geometry, result)
+            from .material_pair import domains_for_pair
+            try:
+                domains_for_pair(geometry, first_parent, second_parent)
+            except GeometryError:
+                general_domains = False
+            else:
+                general_domains = result.dimension in (IntersectionDimension.POINT,IntersectionDimension.CURVE)
+            if general_domains and policy_value in ('connect','imprint'):
+                from .batch_intersections import plan_intersections
+                from .material_pair import pair_plan_operands
+                batch_plan = plan_intersections(geometry,pair_plan_operands(geometry,first_parent,second_parent),
+                                                 policy=normalized_policy)
+            limitation = None if batch_plan is not None else _face_imprint_limitation(geometry, result)
             if limitation is not None:
                 result = _unsupported_imprint_result(result, limitation)
         operation = (
@@ -4539,6 +4587,26 @@ def plan_imprint(
             else ()
         )
     elif pair == {"member"}:
+        general_points=(policy_value in ('connect','imprint') and result.classified
+                        and result.dimension is IntersectionDimension.POINT
+                        and bool(result.components))
+        if general_points and len(result.components)>1:
+            fresh=query_intersection(geometry,first_parent,second_parent)
+            consistent=(len(fresh.components)==len(result.components) and all(
+                np.allclose(original.first_parameter,current.first_parameter,
+                            rtol=0.,atol=geometry.tolerance.parameter)
+                and np.allclose(original.second_parameter,current.second_parameter,
+                                rtol=0.,atol=geometry.tolerance.parameter)
+                and np.allclose(original.witnesses,current.witnesses,
+                                rtol=0.,atol=result.tolerance_used)
+                for original,current in zip(result.components,fresh.components)))
+            if not consistent:
+                general_points=False
+        if general_points:
+            from .batch_intersections import plan_intersections
+            batch_plan=plan_intersections(geometry,(first_parent,second_parent),policy=normalized_policy)
+        general_relations = (policy_value in ('contact_only','keep_disconnected','reuse_existing')
+                             and result.classified and bool(result.components))
         existing_relation = None
         if policy_value != "reject" and result.classified:
             existing_relation = (
@@ -4552,6 +4620,7 @@ def plan_imprint(
                     second_parent.id,
                     normalized_policy,
                     _junction_kind_for_result(result),
+                    result=result,
                 )
             )
         if policy_value == "reuse_existing" and existing_relation is None:
@@ -4563,6 +4632,7 @@ def plan_imprint(
                 and policy_value != "reject"
                 and result.classified
                 and len(result.components) != 1
+                and not general_points and not general_relations
             ):
                 result = _unsupported_imprint_result(
                     result,
@@ -4596,11 +4666,23 @@ def plan_imprint(
                     *changes,
                 )
     elif "member" in pair and pair & {"face", "sheet"}:
+        material = second_parent if first_parent.kind == "member" else first_parent
+        material_faces = ((material.id,) if material.kind == "face" else tuple(
+            geometry.face_uses[identifier].face_id
+            for identifier in geometry.sheets[material.id].face_use_ids))
+        shared_material = (policy_value in ("connect", "imprint") and result.classified
+                           and bool(result.components)
+                           and result.dimension in (IntersectionDimension.POINT,IntersectionDimension.CURVE)
+                           and all(isinstance(geometry.faces[identifier].surface,(Plane,Cylinder))
+                                   for identifier in material_faces))
+        if shared_material:
+            from .batch_intersections import plan_intersections
+            batch_plan=plan_intersections(geometry,(first_parent,second_parent),policy=normalized_policy)
         classification_limitation = (
             _member_sheet_preflight_supported(
                 geometry, first_parent, second_parent, result
             )
-            if result.classified and result.components
+            if result.classified and result.components and batch_plan is None
             else None
         )
         if classification_limitation is not None:
@@ -4668,6 +4750,7 @@ def plan_imprint(
         tuple(changes),
         tuple(sorted(affected)),
         qualified_policy,
+        batch_plan,
     )
     if geometry.revision != revision:
         raise RuntimeError("imprint planning unexpectedly mutated the geometry model")
@@ -4735,6 +4818,36 @@ def _member_component_has_endpoint(component: IntersectionComponent) -> bool:
     return False
 
 
+def _member_component_result(result,component):
+    point=(component.first_parameter is not None and component.second_parameter is not None
+           and component.first_parameter_range is None and component.second_parameter_range is None)
+    return replace(result,components=(component,),
+        dimension=IntersectionDimension.POINT if point else IntersectionDimension.CURVE,
+        kind=(IntersectionKind.TOUCH_POINT if _member_component_has_endpoint(component)
+              else IntersectionKind.CROSS) if point else IntersectionKind.OVERLAP_CURVE)
+
+
+def _member_relation_matches(geometry,junction,first,second,result):
+    from .structural import JunctionKind
+    if len(result.components)!=1:
+        return False
+    if result.dimension is IntersectionDimension.POINT:
+        if junction.kind not in (JunctionKind.ENDPOINT,JunctionKind.CROSSING,JunctionKind.MULTI_WAY):
+            return False
+    elif junction.kind is not JunctionKind.OVERLAP:
+        return False
+    component=result.components[0]
+    tolerance=geometry.tolerance.parameter
+    for member,is_first in ((first,True),(second,False)):
+        expected=_range_from_component(component,first=is_first)
+        if not any(use.member_id==member
+                   and abs(use.member_range.start-expected.start)<=tolerance
+                   and abs(use.member_range.end-expected.end)<=tolerance
+                   for use in junction.member_uses):
+            return False
+    return True
+
+
 def _reuse_existing_member_junction(
     geometry: GeometryModel,
     first_member: int,
@@ -4742,6 +4855,11 @@ def _reuse_existing_member_junction(
     result: IntersectionResult,
 ):
     """Return any compatible pre-existing member relation, regardless intent."""
+
+    if len(result.components)>1:
+        matches=tuple(_reuse_existing_member_junction(geometry,first_member,second_member,
+                      _member_component_result(result,component)) for component in result.components)
+        return matches[0] if all(item is not None for item in matches) else None
 
     from .structural import JunctionKind
 
@@ -4763,7 +4881,8 @@ def _reuse_existing_member_junction(
             for junction_id in sorted(candidate_ids)
             if set(geometry.junctions[junction_id].member_ids)
             == {first_member, second_member}
-            and geometry.junctions[junction_id].kind in compatible
+            and _member_relation_matches(geometry,geometry.junctions[junction_id],
+                                          first_member,second_member,result)
         ),
         None,
     )
@@ -4799,7 +4918,14 @@ def _existing_member_junction(
     second_member: int,
     intent: object,
     kind: object,
+    *, result=None,
 ):
+    if result is not None and len(result.components)>1:
+        matches=tuple(_existing_member_junction(geometry,first_member,second_member,intent,
+                      _junction_kind_for_result(selected),result=selected)
+                      for component in result.components
+                      for selected in (_member_component_result(result,component),))
+        return matches[0] if all(item is not None for item in matches) else None
     intent_value = _policy_name(intent)
     candidate_ids = set(geometry._member_junctions.get(first_member, ()))  # noqa: SLF001
     candidate_ids.intersection_update(
@@ -4809,7 +4935,10 @@ def _existing_member_junction(
         junction = geometry.junctions[junction_id]
         if set(junction.member_ids) != {first_member, second_member}:
             continue
-        if junction.kind != kind:
+        if result is None and junction.kind != kind:
+            continue
+        if result is not None and not _member_relation_matches(geometry,junction,
+                                                    first_member,second_member,result):
             continue
         existing_intent = getattr(junction, "connection_intent", None)
         if existing_intent is None:
@@ -4849,6 +4978,15 @@ def _member_connection_application(
     intent = ConnectionIntent(_policy_name(plan.policy))
     if intent is ConnectionIntent.REJECT:
         raise GeometryError("intersection mutation rejected by policy")
+    if len(revalidated.components)>1:
+        relations=set()
+        reused=True
+        for component in revalidated.components:
+            selected=_member_component_result(revalidated,component)
+            made,was_reused=_member_connection_application(geometry,plan,selected)
+            relations.update(made)
+            reused=reused and was_reused
+        return tuple(sorted(relations)),reused
     if intent is ConnectionIntent.REUSE_EXISTING:
         existing = _reuse_existing_member_junction(
             geometry, first.id, second.id, revalidated
@@ -4860,7 +4998,7 @@ def _member_connection_application(
         return relation_handles(existing), True
     junction_kind = _junction_kind_for_result(revalidated)
     existing = _existing_member_junction(
-        geometry, first.id, second.id, intent, junction_kind
+        geometry, first.id, second.id, intent, junction_kind, result=revalidated
     )
     if existing is not None:
         return relation_handles(existing), True
@@ -6455,6 +6593,66 @@ def apply_imprint(
         raise GeometryError("apply policy does not match the planned policy")
     if geometry.model_id != plan.model_id:
         raise GeometryError("imprint plan belongs to another geometry model")
+    if plan.batch_plan is not None:
+        from .batch_intersections import apply_intersections
+        from .material_pair import pair_plan_operands
+        if geometry.revision == plan.revision and set(plan.batch_plan.operands) != set(
+                pair_plan_operands(geometry,plan.first_parent,plan.second_parent)):
+            raise GeometryError("imprint batch operand binding changed")
+        application = apply_intersections(geometry,plan.batch_plan,policy=normalized_policy)
+        if plan.operation is ImprintOperation.MEMBER_SHEET_RELATION:
+            member=plan.first_parent if plan.first_parent.kind=='member' else plan.second_parent
+            material=plan.second_parent if plan.first_parent.kind=='member' else plan.first_parent
+            resolved=geometry.resolve_handle(material).resolved
+            face_ids={item.id for item in resolved if item.kind=='face'}
+            sheets={item.id for item in resolved if item.kind=='sheet'}
+            face_ids.update(geometry.face_uses[use].face_id for sheet in sheets
+                            for use in geometry.sheets[sheet].face_use_ids)
+            sheets.update(sheet for face in face_ids for sheet in _sheet_ids_for_face(geometry,face))
+            attachments={item.id for item in geometry.attachments.values()
+                         if item.source_kind=='member' and item.source_id==member.id and (
+                             item.sheet_id in sheets
+                             or (item.target_kind.value=='face' and item.target_id in face_ids)
+                             or (item.target_kind.value=='edge' and
+                                 set(geometry.faces_using_edge(item.target_id)) & face_ids))}
+            junctions={item.id for item in geometry.junctions.values()
+                       if member.id in item.member_ids and set(item.sheet_ids) & sheets}
+            attachments.update(identifier for junction in junctions
+                               for identifier in geometry.junctions[junction].attachment_ids)
+            relations=tuple(sorted({geometry.handle('attachment',identifier) for identifier in attachments}
+                                   | {geometry.handle('junction',identifier) for identifier in junctions}))
+            return ImprintApplication(plan,plan.result,application.change_set,relations,
+                                      None,application.reused)
+        if plan.operation is ImprintOperation.MEMBER_CONNECTION:
+            from .structural import ConnectionIntent
+            participants={plan.first_parent.id,plan.second_parent.id}
+            selected=[joint for joint in geometry.junctions.values()
+                if participants<=set(joint.member_ids)
+                and joint.connection_intent is ConnectionIntent(_policy_name(normalized_policy))]
+            relations=tuple(sorted({geometry.handle('junction',joint.id) for joint in selected}
+                | {geometry.handle('attachment',identifier) for joint in selected
+                   for identifier in joint.attachment_ids}))
+            return ImprintApplication(plan,plan.result,application.change_set,relations,
+                                      None,application.reused)
+        def faces(parent):
+            other=plan.second_parent if parent==plan.first_parent else plan.first_parent
+            selected=(parent,*[operand for operand in plan.batch_plan.operands
+                               if operand not in (parent,other)])
+            # Expanded operands belong to the cylinder side, identified by
+            # their original immutable material arrangement supports.
+            support=next((item.support for item in plan.batch_plan.arrangements
+                          if item.face_id==parent.id),
+                         geometry.faces[parent.id].surface if parent.id in geometry.faces else None)
+            if not isinstance(support,Cylinder):
+                selected=(parent,)
+            return tuple(EntityRef('face',item.id) for operand in selected
+                         for item in geometry.resolve_handle(operand).resolved
+                         if item.kind == 'face')
+        edges = tuple(EntityRef('edge',edge.id) for edge in application.joint_edges)
+        face_intersection = (FaceIntersection(edges[0],faces(plan.first_parent),
+                            faces(plan.second_parent),edges) if edges else None)
+        return ImprintApplication(plan,plan.result,application.change_set,(),
+                                  face_intersection,application.reused)
     if geometry.revision != plan.revision:
         reused_application = _reuse_stale_face_plan(geometry, plan)
         if reused_application is not None:

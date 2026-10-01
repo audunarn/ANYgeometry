@@ -244,7 +244,7 @@ def test_schema_1_migrates_once_to_canonical_schema_4_with_bound_identity() -> N
     canonical = to_dict(migrated, include_features=False)
     restored = from_dict(deepcopy(canonical))
 
-    assert canonical["version"] == 4
+    assert canonical["version"] == 5
     assert restored.model_id == migrated.model_id
     assert to_dict(restored, include_features=False) == canonical
     assert set(migrated.faces) == {face_id}
@@ -256,7 +256,7 @@ def test_schema_1_migrates_once_to_canonical_schema_4_with_bound_identity() -> N
     assert not migrated.attachments
     assert canonical["extensions"]["anygeometry:migration"] == {
         "source_version": 1,
-        "target_version": 4,
+        "target_version": 5,
         "inferred": "face ownership only; no members inferred",
     }
 

@@ -11,7 +11,8 @@ from typing import Iterable, List, Sequence, Tuple
 
 import numpy as np
 
-from .curves import Arc, Spline
+from .curves import Arc, Spline, Straight
+from .exact_curves import EXACT_CURVES
 from .entities import EntityRef, Face, OrientedEdge
 from .errors import GeometryError
 from .identity import EntityHandle, EntityKey
@@ -254,7 +255,7 @@ def _sample_oriented_chain(
     points: List[np.ndarray] = []
     for item in chain:
         edge = geometry.edges[item.edge]
-        count = 2 if not isinstance(edge.curve, (Arc, Spline)) else samples
+        count = 2 if isinstance(edge.curve, Straight) else samples
         made = geometry.sample_edge(item.edge, np.linspace(0.0, 1.0, count))
         if not item.forward:
             made = made[::-1]
@@ -812,6 +813,12 @@ def _transform_impl(
             "vertex",
             replace(geometry.vertices[vertex_id], position=made[:3] / made[3]),
         )
+    for edge_id in sorted(affected_edges):
+        edge = geometry.edges[edge_id]
+        if isinstance(edge.curve, EXACT_CURVES):
+            if not {edge.start, edge.end} <= vertex_ids:
+                raise GeometryError("an analytic curve must be transformed with both endpoints")
+            geometry._put_entity("edge", replace(edge, curve=edge.curve.transformed(transform_matrix)))
     # Explicit surfaces are invalidated when their defining topology moves;
     # boundary-backed Coons evaluation remains authoritative and exact for
     # affine transforms of the supported structural patches.

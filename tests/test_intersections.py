@@ -482,21 +482,15 @@ def test_transverse_ring_is_deterministic_and_preserves_argument_order() -> None
     )
 
 
-def test_transverse_ring_preflight_failure_does_not_mutate_geometry() -> None:
+def test_transverse_ring_clips_to_finite_plate_and_retains_material() -> None:
     geometry, plane_face, cylinder_faces = _transverse_shell(
         plane_half_width=0.75
     )
-    document = to_dict(geometry)
-
-    with pytest.raises(GeometryError, match="strictly inside"):
-        intersect_faces(
-            geometry,
-            plane_face,
-            cylinder_faces[0],
-            policy=MutationPolicy.IMPRINT,
-        )
-
-    assert to_dict(geometry) == document
+    result=intersect_faces(geometry,plane_face,cylinder_faces[0],policy=MutationPolicy.IMPRINT)
+    from anygeometry import query_trimmed_surface_charts
+    assert isinstance(result,FaceIntersection)
+    charts=query_trimmed_surface_charts(geometry)
+    assert sum(chart.material_area for chart in charts.charts)==pytest.approx(2.25+4*np.pi,abs=1e-8)
     assert geometry.validate_topology() == ()
 
 
@@ -505,17 +499,17 @@ def test_transverse_ring_rolls_back_if_fragmentation_fails(
 ) -> None:
     geometry, plane_face, cylinder_faces = _transverse_shell()
     document = to_dict(geometry)
-    original_add_arc = geometry.add_arc
+    original_add_arc = GeometryModel.add_arc
     calls = 0
 
-    def interrupted_add_arc(start: int, via: int, end: int) -> int:
+    def interrupted_add_arc(model: GeometryModel, start: int, via: int, end: int) -> int:
         nonlocal calls
         calls += 1
         if calls == 2:
             raise RuntimeError("injected ring failure")
-        return original_add_arc(start, via, end)
+        return original_add_arc(model,start,via,end)
 
-    monkeypatch.setattr(geometry, "add_arc", interrupted_add_arc)
+    monkeypatch.setattr(GeometryModel, "add_arc", interrupted_add_arc)
 
     with pytest.raises(RuntimeError, match="injected ring failure"):
         intersect_faces(
@@ -531,10 +525,7 @@ def test_transverse_ring_rolls_back_if_fragmentation_fails(
         after["id_state"][kind] >= value
         for kind, value in document["id_state"].items()
     )
-    assert any(
-        after["id_state"][kind] > value
-        for kind, value in document["id_state"].items()
-    )
+    assert after["id_state"] == document["id_state"]
     assert geometry.validate_topology() == ()
 
 

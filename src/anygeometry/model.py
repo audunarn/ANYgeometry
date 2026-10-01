@@ -37,6 +37,7 @@ from .curves import (
     straight_tangent,
 )
 from .errors import GeometryError
+from .exact_curves import EXACT_CURVES, analytic_curve_length, project_analytic_curve
 from .entities import Edge, EntityRef, Face, OrientedEdge, Vertex, VertexRole
 from .features import FeatureHistory, FeatureRegistry, RegenerationReport
 from .surfaces import (
@@ -687,6 +688,7 @@ class GeometryModel:
                 revision_before=self.revision,
                 replacement_log_start=len(self._replacements),
                 spatial_index_before=self._spatial_index,
+                allocator_state_before=(dict(self._next_id),dict(self._next_structural_id)),
             )
             self._transaction_journal = journal
         journal.depth += 1
@@ -790,6 +792,9 @@ class GeometryModel:
                         for angle in angles
                     ]
                 )
+            elif isinstance(edge.curve, EXACT_CURVES):
+                lower, upper = edge.curve.bounds()
+                return (*lower, *upper)
             elif isinstance(edge.curve, Spline):
                 # A Bezier curve is contained in the convex hull of its
                 # control polygon, so this bound is analytic and conservative.
@@ -1257,6 +1262,9 @@ class GeometryModel:
                 store[identifier] = original
         self._rebuild_member_incidence()
         del self._replacements[journal.replacement_log_start :]
+        if journal.exact_allocator_rollback and journal.allocator_state_before is not None:
+            self._next_id=dict(journal.allocator_state_before[0])
+            self._next_structural_id=dict(journal.allocator_state_before[1])
         # Restore every cache entry that was invalidated or populated while
         # provisional geometry was live.  The maintained tree is not edited
         # before commit; restoring its original pointer also discards a tree
@@ -1331,6 +1339,14 @@ class GeometryModel:
                             self._arc_frame(edge)
                         except (ValueError, GeometryError) as exc:
                             errors.append(f"arc edge {identifier} is invalid: {exc}")
+                elif isinstance(edge.curve, EXACT_CURVES):
+                    try:
+                        expected = edge.curve.evaluate(np.asarray((0., 1.)))
+                        scale = float(np.linalg.norm(expected[1]-expected[0]))
+                        if np.any(np.linalg.norm(expected-(start, end), axis=1) > self.tolerance.effective_curve_fit_residual(scale)):
+                            errors.append(f"analytic edge {identifier} endpoints disagree with its definition")
+                    except GeometryError as exc:
+                        errors.append(f"analytic edge {identifier} is invalid: {exc}")
                 elif isinstance(edge.curve, Spline):
                     missing = [item for item in edge.curve.control_vertices if item not in self._vertices]
                     if missing:
@@ -1892,6 +1908,7 @@ class GeometryModel:
             raise GeometryError(
                 "topology snapshots cannot be restored inside a transaction or change hook"
             )
+        previous_replacements = dict(self._replacement_history)
         candidate = GeometryModel(model_id=self.model_id, tolerance=self.tolerance)
         candidate._next_id.update(self._next_id)
         candidate._next_structural_id.update(self._next_structural_id)
@@ -2034,6 +2051,11 @@ class GeometryModel:
             added=added,
             removed=removed,
             modified=modified,
+            replacements=tuple(sorted(
+                ((old, descendants) for old, descendants in self._replacement_history.items()
+                 if previous_replacements.get(old) != descendants),
+                key=lambda item: (item[0].kind, item[0].id),
+            )),
             ownership_changes=tuple(sorted(structural_changes["ownership"])),
             member_changes=tuple(sorted(structural_changes["member"])),
             attachment_changes=tuple(sorted(structural_changes["attachment"])),
@@ -2210,7 +2232,7 @@ class GeometryModel:
             finally:
                 self._notifying_hooks = False
 
-    def clone(self, *, include_features: bool = True) -> "GeometryModel":
+    def clone(self, *, include_features: bool = True, preserve_identity: bool = False) -> "GeometryModel":
         """Return a deep, independently mutable geometry copy."""
 
         # Publicly committed models already satisfy the kernel invariants.
@@ -2218,7 +2240,7 @@ class GeometryModel:
         # validation, which dominated feature staging for generated shells.
         # The compatibility snapshot path performs the same detached copies
         # directly and keeps serialization out of in-memory transactions.
-        made = GeometryModel(tolerance=self.tolerance)
+        made = GeometryModel(model_id=self.model_id if preserve_identity else None, tolerance=self.tolerance)
         made._restore_topology_unchecked(self.topology_snapshot())
         made._revision = self._revision
         made._trim_loops_cache.clear()
@@ -3817,6 +3839,9 @@ class GeometryModel:
         for member_id in candidate.member_ids:
             current = set(self._member_junctions.get(member_id, ()))
             candidate_ids = current if candidate_ids is None else candidate_ids & current
+        for sheet_id in candidate.sheet_ids:
+            current = set(self._sheet_junctions.get(sheet_id, ()))
+            candidate_ids = current if candidate_ids is None else candidate_ids & current
         if candidate_ids is None:
             candidate_ids = set()
         for junction_id in sorted(candidate_ids):
@@ -4567,6 +4592,18 @@ class GeometryModel:
         return edge_id
 
     @_transactional
+    def add_curve(self, start: int, end: int, curve: CurveShape) -> int:
+        """Add an analytic curve with topology endpoints matching its definition."""
+        start_point, end_point = self.vertex_position(start), self.vertex_position(end)
+        if not isinstance(curve, EXACT_CURVES):
+            raise GeometryError("add_curve expects an EllipticArc or CylinderIntersectionCurve")
+        expected = curve.evaluate(np.asarray((0., 1.)))
+        scale = float(np.linalg.norm(expected[1]-expected[0]))
+        if np.any(np.linalg.norm(expected-(start_point, end_point), axis=1) > self.tolerance.effective_curve_fit_residual(scale)):
+            raise GeometryError("analytic curve endpoints do not match topology vertices")
+        return self._add_edge(start, end, curve)
+
+    @_transactional
     def add_face(
         self,
         edge_ids: Sequence[int],
@@ -4773,6 +4810,15 @@ class GeometryModel:
                     )
                 except (ValueError, GeometryError) as error:
                     errors.append(f"edge {edge_id} has invalid arc geometry: {error}")
+            if isinstance(edge.curve, EXACT_CURVES) and edge.start in self.vertices and edge.end in self.vertices:
+                try:
+                    expected = edge.curve.evaluate(np.asarray((0., 1.)))
+                    actual = np.asarray((self.vertex_position(edge.start), self.vertex_position(edge.end)))
+                    scale = float(np.linalg.norm(expected[1]-expected[0]))
+                    if np.any(np.linalg.norm(expected-actual, axis=1) > self.tolerance.effective_curve_fit_residual(scale)):
+                        errors.append(f"edge {edge_id} analytic endpoints disagree with topology")
+                except GeometryError as error:
+                    errors.append(f"edge {edge_id} has invalid analytic geometry: {error}")
             if isinstance(edge.curve, Spline):
                 for vertex_id in edge.curve.control_vertices:
                     if vertex_id not in self.vertices:
@@ -5311,6 +5357,10 @@ class GeometryModel:
             elif isinstance(edge.curve, Spline):
                 controls = tuple(translated(vertex) for vertex in edge.curve.control_vertices)
                 top_edge = self.add_spline(start_top, controls, end_top)
+            elif isinstance(edge.curve, EXACT_CURVES):
+                matrix = np.eye(4)
+                matrix[:3, 3] = offset
+                top_edge = self.add_curve(start_top, end_top, edge.curve.transformed(matrix))
             else:
                 top_edge = self.add_line(start_top, end_top)
 
@@ -5487,6 +5537,14 @@ class GeometryModel:
                     tuple(rotated(vertex) for vertex in edge.curve.control_vertices),
                     end_top,
                 )
+            elif isinstance(edge.curve, EXACT_CURVES):
+                matrix = np.eye(4)
+                matrix[:3, :3] = np.column_stack([
+                    _rotate_about_axis(basis, np.zeros(3), direction, step)
+                    for basis in np.eye(3)
+                ])
+                matrix[:3, 3] = origin - matrix[:3, :3] @ origin
+                top_edge = self.add_curve(start_top, end_top, edge.curve.transformed(matrix))
             else:
                 top_edge = self.add_line(start_top, end_top)
 
@@ -5591,6 +5649,9 @@ class GeometryModel:
             self.mark_construction_vertices((first_via, second_via))
             first = self.add_arc(edge.start, first_via, new_vertex)
             second = self.add_arc(new_vertex, second_via, edge.end)
+        elif isinstance(edge.curve, EXACT_CURVES):
+            first = self.add_curve(edge.start, new_vertex, edge.curve.subcurve(0., float(t)))
+            second = self.add_curve(new_vertex, edge.end, edge.curve.subcurve(float(t), 1.))
         elif isinstance(edge.curve, Spline):
             points = self._spline_points(edge)
             left, right = self._split_bezier(points, float(t))
@@ -5633,6 +5694,7 @@ class GeometryModel:
                     axes[0],
                     ParameterRange(original_use.parent_range.start, split_parent),
                     original_use.orientation,
+                    original_use.metadata,
                 ),
                 MemberEdgeUse(
                     use_ids[1],
@@ -5640,6 +5702,7 @@ class GeometryModel:
                     axes[1],
                     ParameterRange(split_parent, original_use.parent_range.end),
                     original_use.orientation,
+                    original_use.metadata,
                 ),
             )
             self._put_structural("member", replace_member_edge_use(member, original_use, children))
@@ -5811,6 +5874,8 @@ class GeometryModel:
             return sample_arc(self._arc_frame(edge), t)
         if isinstance(edge.curve, Spline):
             return sample_spline(self._spline_points(edge), t)
+        if isinstance(edge.curve, EXACT_CURVES):
+            return edge.curve.evaluate(t)
         return sample_straight(start, end, t)
 
     def evaluate_edge_many(
@@ -5848,6 +5913,8 @@ class GeometryModel:
                 -np.sin(angles)[:, None] * frame.e1
                 + np.cos(angles)[:, None] * frame.e2
             )
+        elif isinstance(edge.curve, EXACT_CURVES):
+            tangents = edge.curve.derivative(values)
         elif isinstance(edge.curve, Spline):
             points = self._spline_points(edge)
             derivative = (len(points) - 1) * (points[1:] - points[:-1])
@@ -5875,6 +5942,9 @@ class GeometryModel:
             return cached[1]
         if isinstance(edge.curve, Arc):
             result = self._arc_frame(edge).length
+        elif isinstance(edge.curve, EXACT_CURVES):
+            lo, hi = edge.curve.bounds()
+            result = analytic_curve_length(edge.curve, self.tolerance.effective_curve_fit_residual(float(np.linalg.norm(hi-lo))))
         elif isinstance(edge.curve, Spline):
             samples = sample_spline(
                 self._spline_points(edge), np.linspace(0.0, 1.0, 65)
@@ -6049,6 +6119,12 @@ class GeometryModel:
             return arc_tangent(self._arc_frame(edge), t)
         if isinstance(edge.curve, Spline):
             return spline_tangent(self._spline_points(edge), t)
+        if isinstance(edge.curve, EXACT_CURVES):
+            tangent = edge.curve.derivative(float(t))
+            norm = float(np.linalg.norm(tangent))
+            if norm == 0:
+                raise GeometryError("analytic curve has a degenerate tangent")
+            return tangent/norm
         return straight_tangent(
             self.vertices[edge.start].position, self.vertices[edge.end].position
         )
@@ -6062,6 +6138,9 @@ class GeometryModel:
         target = np.asarray(point, dtype=float)
         if target.shape != (3,) or not np.all(np.isfinite(target)):
             raise GeometryError("point must be a finite 3-vector")
+        if isinstance(edge.curve, EXACT_CURVES):
+            lo, hi = edge.curve.bounds()
+            return project_analytic_curve(edge.curve, target, self.tolerance.effective_length(float(np.linalg.norm(hi-lo))))
         if isinstance(edge.curve, Straight):
             start = self.vertex_position(edge.start)
             vector = self.vertex_position(edge.end) - start

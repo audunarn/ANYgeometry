@@ -388,7 +388,7 @@ def test_feature_history_round_trip_and_v1_migration() -> None:
 
     restored = from_dict(deepcopy(document))
 
-    assert document["version"] == 4
+    assert document["version"] == 5
     assert to_dict(restored) == document
     assert len(restored.features.records) == 3
 
@@ -411,7 +411,7 @@ def test_feature_history_round_trip_and_v1_migration() -> None:
     migrated = from_dict(legacy)
     assert migrated.features.records == []
     assert migrated.features.baseline is not None
-    assert to_dict(migrated)["version"] == 4
+    assert to_dict(migrated)["version"] == 5
 
 
 def test_generator_feature_inserts_stable_local_output_keys() -> None:
@@ -428,6 +428,59 @@ def test_generator_feature_inserts_stable_local_output_keys() -> None:
     assert {"vertex/1", "edge/1", "face/1"} <= set(outputs)
     assert len(geometry.group("deck")) == 1
     assert measure(geometry, geometry.group("deck")[0]).value == pytest.approx(6.0)
+
+
+def test_changed_cylinder_roles_preserve_structural_identity_and_parent_parameters():
+    from anygeometry import query_trimmed_surface_charts
+    geometry=GeometryModel()
+    geometry.features.capture_baseline(geometry)
+    parameters={'radius':1.,'height':4.,'circumferential_segments':12,
+                'longitudinal_spacing':.5,'ring_spacing':1.}
+    feature=geometry.features.append('generator.cylinder',parameters=parameters)
+    assert geometry.regenerate_features().success
+    owners={kind:set(getattr(geometry,kind)) for kind in
+            ('parts','sheets','members','face_uses','member_edge_uses')}
+    original_uses=dict(geometry.member_edge_uses)
+    old_faces=tuple(geometry.faces)
+    geometry.tag(EntityRef('face',old_faces[0]),'authored-cylinder')
+    geometry.features.update(feature.feature_id,parameters={**parameters,'radius':1.01})
+    result=geometry.regenerate_features()
+    assert result.success,result.diagnostic
+    for kind,identifiers in owners.items():
+        assert set(getattr(geometry,kind))==identifiers
+    for identifier,use in original_uses.items():
+        made=geometry.member_edge_uses[identifier]
+        assert made.parent_range==use.parent_range and made.orientation==use.orientation
+        assert made.edge_id!=use.edge_id
+    assert all(len(geometry.resolve_ref(EntityRef('face',face)))==1 for face in old_faces)
+    replacement=geometry.resolve_ref(EntityRef('face',old_faces[0]))[0]
+    assert 'authored-cylinder' in geometry.tags_for(replacement)
+    assert geometry.validate_topology()==()
+    charts=query_trimmed_surface_charts(geometry)
+    assert sum(chart.material_area for chart in charts.charts)==pytest.approx(8*np.pi*1.01)
+    document=to_dict(geometry)
+    assert to_dict(from_dict(document))==document
+
+
+def test_changed_generator_owner_transfer_failure_preserves_live_document(monkeypatch):
+    geometry=GeometryModel()
+    geometry.features.capture_baseline(geometry)
+    parameters={'radius':1.,'height':2.,'circumferential_segments':4}
+    feature=geometry.features.append('generator.cylinder',parameters=parameters)
+    assert geometry.regenerate_features().success
+    geometry.features.update(feature.feature_id,parameters={**parameters,'radius':1.1})
+    before=to_dict(geometry)
+    original=GeometryModel._replace_structural_face_ownership
+    count=0
+    def fail_after_transfer(*args,**options):
+        nonlocal count
+        original(*args,**options)
+        count+=1
+        if count==2:raise GeometryError('injected owner transfer failure')
+    monkeypatch.setattr(GeometryModel,'_replace_structural_face_ownership',fail_after_transfer)
+    result=geometry.regenerate_features()
+    assert not result.success and 'injected owner transfer failure' in result.diagnostic
+    assert count==2 and to_dict(geometry)==before
 
 
 def test_downstream_split_owns_precise_lineage_on_generator_regeneration() -> None:

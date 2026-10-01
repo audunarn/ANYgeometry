@@ -4,9 +4,42 @@ All notable user-visible changes to ANYgeometry are documented here.
 
 ## Unreleased
 
-Faster projection and cylinder-atlas qualification. Every result is
-bit-for-bit identical to 0.4.4, including atlas certificates, work counts,
-cancellation callbacks and budget refusals.
+## 0.4.5 — 2026-10-01
+
+General intersections and coordinated meshing (accepted in the documented configurations):
+
+- Root-exported immutable `EllipticArc` and `CylinderIntersectionCurve`
+  definitions, with evaluation, derivatives, bounds, projection, splitting and
+  affine copying. Analytic support intersections retain exact curves and isolate
+  finite-height, angular seam and branch-transition events.
+- Geometry schema 5 stores the new edge definitions and reads schemas 1–4.
+  Automation remains protocol 1. Readers limited to schema 4 must update before
+  reading documents written by this development head.
+- `plan_intersections` / `apply_intersections` prepare a complete original
+  operand set with revision and content binding, atomic application, shared
+  topology, source lineage and explicit cancellation/resource budgets. Default
+  batch preparation has no operand or intersection count cap.
+- `query_trimmed_surface_charts` exposes bound Plane/Cylinder material domains,
+  exact trim definitions, holes and batched owner evaluation. Changed source or
+  evidence invalidates previously qualified chart bindings.
+- Member pair CONNECT/IMPRINT plans prepare all occurrences and clipped
+  material intervals through the batch engine. Relation-only policies retain
+  all occurrences without changing topology; reuse requires every matching
+  parent interval. Failed relation creation rolls back exactly.
+- Changed generator output roles can retain existing structural owners and
+  authored axis parameters when their topology correspondence is unambiguous.
+  Ambiguous role changes remain atomic failures.
+- Coordinated mesher/FEM integration passes sixteen installed meshes each on
+  Windows, Linux and Apple silicon, including the exact replay at 0.5/0.25 and
+  a 260-sector cylinder. The full 32-job platform matrix passes. Direct API
+  recovery remains opt-in; default admission uses the qualified 15-degree
+  floor, with caller-supplied stricter policies retained. Publication is separate.
+  See [the contract and exact evidence](docs/general_intersections.md).
+
+The previously recorded projection and cylinder-atlas improvements below are
+bit-for-bit identical to 0.4.4 within their recorded scope, including atlas
+certificates, work counts, cancellation callbacks and budget refusals. Those
+records do not qualify the new general-intersection capabilities above.
 
 - Ruled and Coons surfaces evaluate without per-call NumPy scalar clipping.
   `face_local_uv_many` and `face_trim_loops_uv` invert explicit ruled and

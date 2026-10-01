@@ -11,6 +11,7 @@ import numpy as np
 
 from .closure import ModelClosure, extract_model_closure
 from .curves import Arc, Spline
+from .exact_curves import EXACT_CURVES
 from .entities import EntityRef, OrientedEdge
 from .errors import GeometryError
 from .identity import EntityHandle, EntityKey, validate_local_id
@@ -144,6 +145,8 @@ def _insert_selected(
                 for item in edge.curve.control_vertices
             ]
             made = destination.add_spline(start, controls, end)
+        elif isinstance(edge.curve, EXACT_CURVES):
+            made = destination.add_curve(start, end, edge.curve)
         else:
             made = destination.add_line(start, end)
         mapping[EntityRef("edge", edge_id)] = EntityRef("edge", made)
@@ -969,7 +972,9 @@ def reverse_edge(geometry: GeometryModel, edge_id: int) -> EntityRef:
     )
     with geometry.transaction():
         curve = edge.curve
-        if isinstance(curve, Spline):
+        if isinstance(curve, EXACT_CURVES):
+            curve = curve.subcurve(1., 0.)
+        elif isinstance(curve, Spline):
             curve = Spline(tuple(reversed(curve.control_vertices)))
         geometry._put_entity(  # noqa: SLF001
             "edge", replace(edge, start=edge.end, end=edge.start, curve=curve)

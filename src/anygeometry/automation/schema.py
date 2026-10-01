@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 import json
 from typing import Mapping
+from ..serialization import VERSION as GEOMETRY_SCHEMA_VERSION
 
 from .types import (
     AutomationError,
@@ -120,7 +121,7 @@ def tool_catalog() -> tuple[Mapping[str, object], ...]:
 def describe_capabilities() -> Mapping[str, object]:
     return {
         "protocol_version": PROTOCOL_VERSION,
-        "geometry_schema_version": 4,
+        "geometry_schema_version": GEOMETRY_SCHEMA_VERSION,
         "provider_neutral": True,
         "dependency_free": True,
         "entity_aliases": {"point": "vertex", "plate": "sheet"},

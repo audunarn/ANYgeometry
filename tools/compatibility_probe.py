@@ -62,7 +62,7 @@ def core(work, config):
     import anygeometry as ag
     from anygeometry.serialization import VERSION
     from anygeometry.generators import plate
-    assert VERSION == 4
+    assert VERSION in (4, 5)  # Released control is schema 4; development is 5.
     assert Path(ag.__file__).with_name("py.typed").is_file()
     assert subprocess.check_output([sys.executable, "-I", "-m", "anygeometry", "--version"],
                                    cwd=work, text=True).strip() == ag.__version__

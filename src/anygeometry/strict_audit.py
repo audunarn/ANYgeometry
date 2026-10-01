@@ -1062,6 +1062,8 @@ class _StrictAuditState:
                 is NonManifoldPolicy.ALLOW_DECLARED
                 for sheet_id in owning_sheets
             )
+            from .joint_edges import query_joint_edge
+            declared = declared or query_joint_edge(self.model,edge_id).declared
             keys: tuple[SpatialKey, ...] = (
                 ("edge", edge_id),
                 *(("face", face_id) for face_id in sorted(face_ids)),
@@ -3500,6 +3502,12 @@ class _StrictAuditState:
                     },
                 )
             try:
+                if attachment.kind is AttachmentKind.SHEET_ON_JOINT:
+                    from .joint_edges import query_joint_edge
+                    if not query_joint_edge(self.model,attachment.target_id).declared:
+                        raise GeometryError("Sheet joint attachment has no complete current joint coverage")
+                    self.collector.record_classification(classified=True)
+                    continue
                 if attachment.source_kind == "vertex":
                     source_point = self.model.vertex_position(attachment.source_id)
                     if attachment.target_kind is AttachmentTargetKind.FACE:

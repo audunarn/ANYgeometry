@@ -1,0 +1,327 @@
+{
+  "run_id": 36818408300,
+  "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36818408300",
+  "overall_status": "failure",
+  "failed_jobs": [
+    "General intersections in installed ANYfem (macos-15)",
+    "General intersections in installed ANYfem (windows-latest)",
+    "General intersections in installed ANYfem (ubuntu-latest)"
+  ],
+  "installed_general_consumers": [
+    {
+      "platform": "general-intersections-macos-15",
+      "machine": "arm64",
+      "status": "failed",
+      "sources": {
+        "ANYgeometry": "75f25b8e8639f525b2d267e237f10e6b0d5ab166",
+        "ANYmesh": "e93073871937d91d2fab512451bfe972d6e53fe8",
+        "ANYfem": "fac3c9a073c62485540a8629f8b2a3aeec64b730"
+      },
+      "artifacts": {
+        "geometry": {
+          "filename": "anygeometry-0.4.4-py3-none-any.whl",
+          "bytes": 483030,
+          "sha256": "a1bfb5f1211d0769a28c1cf1b9be4287b8c033a38f52c62e3ff647b468a1ddd2"
+        },
+        "mesher": {
+          "filename": "anymesher-0.5.1-cp313-cp313-macosx_10_13_universal2.whl",
+          "bytes": 872677,
+          "sha256": "02d5f5fe386576c3481886f0e5f47a43e35c4c2cbfcf8193ca1946bff4ee67b9"
+        },
+        "fem": {
+          "filename": "anyfem-0.4.1-py3-none-any.whl",
+          "bytes": 570752,
+          "sha256": "2945c08e7480faff63d5396af2c93cb6d0fcf9bcd88c3d96bb1f2e500632a16d"
+        }
+      },
+      "cases": [
+        {
+          "case": "replay",
+          "target_size": 0.25,
+          "nodes": 2021,
+          "triangles": 632,
+          "quads": 1662,
+          "solver_admission": "ADMITTED",
+          "source_unchanged": true,
+          "save_load": true,
+          "lifecycle": {
+            "undo_redo_source_identity": true,
+            "undo_redo_source_content": true,
+            "feature_regeneration": true,
+            "retained_downstream_face_references": 55
+          }
+        },
+        {
+          "case": "replay",
+          "target_size": 0.5,
+          "nodes": 4672,
+          "triangles": 170,
+          "quads": 4607,
+          "solver_admission": "ADMITTED",
+          "source_unchanged": true,
+          "save_load": true,
+          "lifecycle": {
+            "undo_redo_source_identity": true,
+            "undo_redo_source_content": true,
+            "feature_regeneration": true,
+            "retained_downstream_face_references": 55
+          }
+        },
+        {
+          "case": "parallel",
+          "material_areas": [
+            18.849555921538702,
+            16.964600329384858
+          ],
+          "shared_segments": 28,
+          "shared_nodes": 30,
+          "complete_branches": 2,
+          "high_valence_nodes": 0,
+          "nodes": 834,
+          "elements": 816,
+          "oracle": "independent cylinder equations, angular/axial interval coverage and graph incidence"
+        },
+        {
+          "case": "perpendicular",
+          "material_areas": [
+            18.84955592153877,
+            18.84955592153875
+          ],
+          "shared_segments": 88,
+          "shared_nodes": 86,
+          "complete_branches": 2,
+          "high_valence_nodes": 2,
+          "nodes": 778,
+          "elements": 1610,
+          "oracle": "independent cylinder equations, angular/axial interval coverage and graph incidence"
+        }
+      ],
+      "expected_meshes": 12,
+      "unaccepted_meshes": 8,
+      "failed_commands": [
+        {
+          "args": [
+            "/Users/runner/work/_temp/general-intersection-consumers/candidate-environment/bin/python",
+            "-I",
+            "/Users/runner/work/_temp/general-intersection-consumers/run_case.py",
+            "mesh_cylinder_cases.py",
+            "skew"
+          ],
+          "log": "command-10.log",
+          "timed_out": true,
+          "exit_code": null
+        }
+      ]
+    },
+    {
+      "platform": "general-intersections-ubuntu-latest",
+      "machine": "x86_64",
+      "status": "failed",
+      "sources": {
+        "ANYgeometry": "75f25b8e8639f525b2d267e237f10e6b0d5ab166",
+        "ANYmesh": "e93073871937d91d2fab512451bfe972d6e53fe8",
+        "ANYfem": "fac3c9a073c62485540a8629f8b2a3aeec64b730"
+      },
+      "artifacts": {
+        "geometry": {
+          "filename": "anygeometry-0.4.4-py3-none-any.whl",
+          "bytes": 483030,
+          "sha256": "a1bfb5f1211d0769a28c1cf1b9be4287b8c033a38f52c62e3ff647b468a1ddd2"
+        },
+        "mesher": {
+          "filename": "anymesher-0.5.1-cp313-cp313-linux_x86_64.whl",
+          "bytes": 2430615,
+          "sha256": "581981a909363390d0e9aed475377a4ba7e5e8b2856dbc3c6f5df2fbf6dee125"
+        },
+        "fem": {
+          "filename": "anyfem-0.4.1-py3-none-any.whl",
+          "bytes": 570752,
+          "sha256": "cfe46dc1795492d533d118b636ae427648b927ff8f58c2601eba4ab936d14678"
+        }
+      },
+      "cases": [
+        {
+          "case": "replay",
+          "target_size": 0.25,
+          "nodes": 2021,
+          "triangles": 632,
+          "quads": 1662,
+          "solver_admission": "ADMITTED",
+          "source_unchanged": true,
+          "save_load": true,
+          "lifecycle": {
+            "undo_redo_source_identity": true,
+            "undo_redo_source_content": true,
+            "feature_regeneration": true,
+            "retained_downstream_face_references": 55
+          }
+        },
+        {
+          "case": "replay",
+          "target_size": 0.5,
+          "nodes": 4672,
+          "triangles": 170,
+          "quads": 4607,
+          "solver_admission": "ADMITTED",
+          "source_unchanged": true,
+          "save_load": true,
+          "lifecycle": {
+            "undo_redo_source_identity": true,
+            "undo_redo_source_content": true,
+            "feature_regeneration": true,
+            "retained_downstream_face_references": 55
+          }
+        },
+        {
+          "case": "parallel",
+          "material_areas": [
+            18.84955592153871,
+            16.964600329384883
+          ],
+          "shared_segments": 28,
+          "shared_nodes": 30,
+          "complete_branches": 2,
+          "high_valence_nodes": 0,
+          "nodes": 834,
+          "elements": 816,
+          "oracle": "independent cylinder equations, angular/axial interval coverage and graph incidence"
+        },
+        {
+          "case": "perpendicular",
+          "material_areas": [
+            18.849555921538776,
+            18.849555921538744
+          ],
+          "shared_segments": 88,
+          "shared_nodes": 86,
+          "complete_branches": 2,
+          "high_valence_nodes": 2,
+          "nodes": 788,
+          "elements": 1630,
+          "oracle": "independent cylinder equations, angular/axial interval coverage and graph incidence"
+        }
+      ],
+      "expected_meshes": 12,
+      "unaccepted_meshes": 8,
+      "failed_commands": [
+        {
+          "args": [
+            "/home/runner/work/_temp/general-intersection-consumers/candidate-environment/bin/python",
+            "-I",
+            "/home/runner/work/_temp/general-intersection-consumers/run_case.py",
+            "mesh_cylinder_cases.py",
+            "skew"
+          ],
+          "log": "command-10.log",
+          "timed_out": true,
+          "exit_code": null
+        }
+      ]
+    },
+    {
+      "platform": "general-intersections-windows-latest",
+      "machine": "AMD64",
+      "status": "failed",
+      "sources": {
+        "ANYgeometry": "75f25b8e8639f525b2d267e237f10e6b0d5ab166",
+        "ANYmesh": "e93073871937d91d2fab512451bfe972d6e53fe8",
+        "ANYfem": "fac3c9a073c62485540a8629f8b2a3aeec64b730"
+      },
+      "artifacts": {
+        "geometry": {
+          "filename": "anygeometry-0.4.4-py3-none-any.whl",
+          "bytes": 483030,
+          "sha256": "a1bfb5f1211d0769a28c1cf1b9be4287b8c033a38f52c62e3ff647b468a1ddd2"
+        },
+        "mesher": {
+          "filename": "anymesher-0.5.1-cp313-cp313-win_amd64.whl",
+          "bytes": 703132,
+          "sha256": "6b576fe3bf6e89caa4ffcec86cb315c8f592b688a314fff46c200b1726e0a17e"
+        },
+        "fem": {
+          "filename": "anyfem-0.4.1-py3-none-any.whl",
+          "bytes": 574643,
+          "sha256": "517c06da82f75e75cc7fad20a32b2b3ab943caf05c812922b3fc465d96de1198"
+        }
+      },
+      "cases": [
+        {
+          "case": "replay",
+          "target_size": 0.25,
+          "nodes": 2021,
+          "triangles": 632,
+          "quads": 1662,
+          "solver_admission": "ADMITTED",
+          "source_unchanged": true,
+          "save_load": true,
+          "lifecycle": {
+            "undo_redo_source_identity": true,
+            "undo_redo_source_content": true,
+            "feature_regeneration": true,
+            "retained_downstream_face_references": 55
+          }
+        },
+        {
+          "case": "replay",
+          "target_size": 0.5,
+          "nodes": 4672,
+          "triangles": 170,
+          "quads": 4607,
+          "solver_admission": "ADMITTED",
+          "source_unchanged": true,
+          "save_load": true,
+          "lifecycle": {
+            "undo_redo_source_identity": true,
+            "undo_redo_source_content": true,
+            "feature_regeneration": true,
+            "retained_downstream_face_references": 55
+          }
+        },
+        {
+          "case": "parallel",
+          "material_areas": [
+            18.84955592153871,
+            16.964600329384865
+          ],
+          "shared_segments": 28,
+          "shared_nodes": 30,
+          "complete_branches": 2,
+          "high_valence_nodes": 0,
+          "nodes": 834,
+          "elements": 816,
+          "oracle": "independent cylinder equations, angular/axial interval coverage and graph incidence"
+        },
+        {
+          "case": "perpendicular",
+          "material_areas": [
+            18.84955592153877,
+            18.849555921538776
+          ],
+          "shared_segments": 88,
+          "shared_nodes": 86,
+          "complete_branches": 2,
+          "high_valence_nodes": 2,
+          "nodes": 788,
+          "elements": 1630,
+          "oracle": "independent cylinder equations, angular/axial interval coverage and graph incidence"
+        }
+      ],
+      "expected_meshes": 12,
+      "unaccepted_meshes": 8,
+      "failed_commands": [
+        {
+          "args": [
+            "D:\\a\\_temp\\general-intersection-consumers\\candidate-environment\\Scripts\\python.exe",
+            "-I",
+            "D:\\a\\_temp\\general-intersection-consumers\\run_case.py",
+            "mesh_cylinder_cases.py",
+            "skew"
+          ],
+          "log": "command-10.log",
+          "timed_out": true,
+          "exit_code": null
+        }
+      ]
+    }
+  ]
+}

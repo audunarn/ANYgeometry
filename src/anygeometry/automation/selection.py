@@ -16,6 +16,7 @@ from ..errors import GeometryError
 from ..coordinates import world_to_model_points
 from ..identity import ENTITY_KINDS, EntityHandle, ResolutionStatus, validate_entity_kind
 from ..model import GeometryModel
+from ..serialization import VERSION as GEOMETRY_SCHEMA_VERSION
 from ..operations import closest_point
 from .types import (
     PROTOCOL_VERSION,
@@ -398,7 +399,7 @@ def describe_model(model: GeometryModel, header: RequestHeader | Mapping[str, ob
         "request_id": made.request_id,
         "model_id": str(model.model_id),
         "revision": model.revision,
-        "geometry_schema_version": 4,
+        "geometry_schema_version": GEOMETRY_SCHEMA_VERSION,
         "units": model.units,
         "frames": ["model_local", "world"],
         "bounds": None if bounds is None else list(bounds),

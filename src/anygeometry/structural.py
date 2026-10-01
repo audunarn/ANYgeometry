@@ -289,6 +289,7 @@ class AttachmentKind(StrEnum):
     MEMBER_ON_SHEET_INTERSECTION = "member_on_sheet_intersection"
     COINCIDENT_MEMBER_AXES = "coincident_member_axes"
     INTENTIONALLY_DISCONNECTED = "intentionally_disconnected"
+    SHEET_ON_JOINT = "sheet_on_joint"
 
 
 class JunctionKind(StrEnum):
@@ -298,6 +299,7 @@ class JunctionKind(StrEnum):
     CROSSING = "crossing"
     OVERLAP = "overlap"
     MULTI_WAY = "multi_way"
+    SHEET_JOINT = "sheet_joint"
 
 
 @dataclass(frozen=True, slots=True)
@@ -652,6 +654,7 @@ class Attachment:
             AttachmentTargetKind, self.target_kind, "attachment target kind"
         )
         expected_source = {
+            AttachmentKind.SHEET_ON_JOINT: "sheet",
             AttachmentKind.MEMBER_ON_FACE: "member",
             AttachmentKind.MEMBER_ON_BOUNDARY: "member",
             AttachmentKind.MEMBER_THROUGH_FACE: "member",
@@ -712,6 +715,7 @@ class Attachment:
                 f"{expected_parameters} target parameter range(s)"
             )
         expected_target = {
+            AttachmentKind.SHEET_ON_JOINT: AttachmentTargetKind.EDGE,
             AttachmentKind.MEMBER_ON_FACE: AttachmentTargetKind.FACE,
             AttachmentKind.MEMBER_ON_BOUNDARY: AttachmentTargetKind.EDGE,
             AttachmentKind.MEMBER_THROUGH_FACE: AttachmentTargetKind.FACE,
@@ -843,14 +847,16 @@ class Junction:
         if any(not isinstance(value, JunctionMemberUse) for value in member_uses):
             raise GeometryError("junction member uses must be JunctionMemberUse values")
         member_uses = tuple(sorted(member_uses, key=lambda value: value.sort_key))
-        member_ids = tuple(value.member_id for value in member_uses)
-        if len(set(member_ids)) != len(member_ids):
-            raise GeometryError("a member can participate only once in a junction")
-        if not member_uses:
+        occurrence_keys = tuple(value.sort_key for value in member_uses)
+        if len(set(occurrence_keys)) != len(occurrence_keys):
+            raise GeometryError("a member interval can participate only once in a junction")
+        if not member_uses and kind is not JunctionKind.SHEET_JOINT:
             raise GeometryError("junction requires at least one member")
         sheet_ids = _ids(self.sheet_ids, "sheet ID", sort=True)
         attachment_ids = _ids(self.attachment_ids, "attachment ID", sort=True)
         participant_count = len(member_uses) + len(sheet_ids)
+        if kind is JunctionKind.SHEET_JOINT and (member_uses or len(sheet_ids)<2):
+            raise GeometryError("sheet joint requires at least two Sheets and no members")
         if participant_count < 2:
             raise GeometryError("junction requires at least two participants")
         if sheet_ids and not attachment_ids:
@@ -884,7 +890,7 @@ class Junction:
 
     @property
     def member_ids(self) -> tuple[int, ...]:
-        return tuple(value.member_id for value in self.member_uses)
+        return tuple(sorted({value.member_id for value in self.member_uses}))
 
 
 def structural_entity_keys(
@@ -1448,6 +1454,7 @@ def validate_structural_topology(
                     f"junction {junction_id} references missing sheet {sheet_id}"
                 )
         target_sheets: set[int] = set()
+        attachment_ranges: dict[int, list[ParameterRange]] = {}
         for attachment_id in junction.attachment_ids:
             attachment = checked_attachments.get(attachment_id)
             if attachment is None:
@@ -1457,7 +1464,11 @@ def validate_structural_topology(
                 )
                 continue
             assert isinstance(attachment, Attachment)
-            if attachment.member_id is None:
+            if junction.kind is JunctionKind.SHEET_JOINT:
+                if (attachment.kind is not AttachmentKind.SHEET_ON_JOINT
+                        or attachment.source_kind != "sheet" or attachment.source_id not in junction.sheet_ids):
+                    errors.append(f"junction {junction_id} attachment {attachment_id} has no participating Sheet source")
+            elif attachment.member_id is None:
                 errors.append(
                     f"junction {junction_id} attachment {attachment_id} has no member source"
                 )
@@ -1467,19 +1478,7 @@ def validate_structural_topology(
                     f"to non-participating member {attachment.member_id}"
                 )
             else:
-                junction_range = member_ranges[attachment.member_id]
-                if not (
-                    attachment.member_range.contains(
-                        junction_range.start, tolerance=tolerance
-                    )
-                    and attachment.member_range.contains(
-                        junction_range.end, tolerance=tolerance
-                    )
-                ):
-                    errors.append(
-                        f"junction {junction_id} attachment {attachment_id} "
-                        "does not cover its participating member range"
-                    )
+                attachment_ranges.setdefault(attachment.member_id,[]).append(attachment.member_range)
             if attachment.target_kind is AttachmentTargetKind.FACE:
                 sheet_id = face_to_sheet.get(attachment.target_id)
                 if sheet_id is not None:
@@ -1488,6 +1487,22 @@ def validate_structural_topology(
                 target_sheets.add(attachment.target_id)
             elif attachment.target_kind is AttachmentTargetKind.EDGE:
                 target_sheets.update(edge_to_sheets.get(attachment.target_id, ()))
+        for member_id,ranges in attachment_ranges.items():
+            participating=member_ranges[member_id]
+            covered=participating.start
+            reached=False
+            for interval in sorted(ranges,key=lambda value:(value.start,value.end)):
+                if interval.end < covered-tolerance:
+                    continue
+                if interval.start > covered+tolerance:
+                    break
+                covered=max(covered,interval.end)
+                if covered >= participating.end-tolerance:
+                    reached=True
+                    break
+            if not reached:
+                errors.append(f"junction {junction_id} attachment union does not cover "
+                              "its participating member range")
         for sheet_id in junction.sheet_ids:
             if sheet_id not in target_sheets:
                 errors.append(

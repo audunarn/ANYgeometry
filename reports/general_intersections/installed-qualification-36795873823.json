@@ -1,0 +1,377 @@
+{
+  "run_id": 36795873823,
+  "url": "https://github.com/audunarn/ANYgeometry/actions/runs/36795873823",
+  "overall_status": "failed",
+  "failure_scope": "planar quadrature on minimum dependencies and Intel macOS",
+  "installed_general_consumers": [
+    {
+      "platform": "general-intersections-macos-15",
+      "machine": "arm64",
+      "status": "passed",
+      "sources": {
+        "ANYgeometry": "11b989ac14b081268a77437126b51e436580f25d",
+        "ANYmesh": "dda50e4c813834af10bf52bf4451ce55bda83315",
+        "ANYfem": "fa7e666f8cd236c17591ccde67f9b34f20f45f33"
+      },
+      "artifacts": {
+        "geometry": {
+          "filename": "anygeometry-0.4.4-py3-none-any.whl",
+          "bytes": 479557,
+          "sha256": "36d02b76ad9b8fcb1ff1863a8c2f6ca7c1f2816fa7e7cac2aa2841a6b0b9815a"
+        },
+        "mesher": {
+          "filename": "anymesher-0.5.1-cp313-cp313-macosx_10_13_universal2.whl",
+          "bytes": 867198,
+          "sha256": "26ad1042b7c2729331271605848fa0916105197d7bd35de0beef8f35f5eed4d1"
+        },
+        "fem": {
+          "filename": "anyfem-0.4.1-py3-none-any.whl",
+          "bytes": 570752,
+          "sha256": "5f91b01d5a92e6e3881f7b665f1fdf618e48393e0f571d9bccd56c16ae3354dd"
+        }
+      },
+      "cases": [
+        {
+          "case": "replay",
+          "target_size": 0.25,
+          "nodes": 2021,
+          "triangles": 632,
+          "quads": 1662,
+          "solver_admission": "ADMITTED",
+          "source_unchanged": true,
+          "save_load": true,
+          "lifecycle": {
+            "undo_redo_source_identity": true,
+            "undo_redo_source_content": true,
+            "feature_regeneration": true,
+            "retained_downstream_face_references": 55
+          }
+        },
+        {
+          "case": "replay",
+          "target_size": 0.5,
+          "nodes": 4456,
+          "triangles": 8952,
+          "quads": 0,
+          "solver_admission": "ADMITTED",
+          "source_unchanged": true,
+          "save_load": true,
+          "lifecycle": {
+            "undo_redo_source_identity": true,
+            "undo_redo_source_content": true,
+            "feature_regeneration": true,
+            "retained_downstream_face_references": 55
+          }
+        },
+        {
+          "case": "parallel",
+          "material_areas": [
+            18.849555921538702,
+            16.964600329384858
+          ],
+          "shared_segments": 28,
+          "shared_nodes": 30,
+          "complete_branches": 2,
+          "high_valence_nodes": 0,
+          "nodes": 834,
+          "elements": 816,
+          "oracle": "independent cylinder equations, angular/axial interval coverage and graph incidence"
+        },
+        {
+          "case": "perpendicular",
+          "material_areas": [
+            18.84955592153877,
+            18.84955592153875
+          ],
+          "shared_segments": 88,
+          "shared_nodes": 86,
+          "complete_branches": 2,
+          "high_valence_nodes": 2,
+          "nodes": 778,
+          "elements": 1610,
+          "oracle": "independent cylinder equations, angular/axial interval coverage and graph incidence"
+        },
+        {
+          "case": "skew",
+          "material_areas": [
+            18.849555921538794,
+            15.079644737230957
+          ],
+          "shared_segments": 730,
+          "shared_nodes": 731,
+          "complete_branches": 4,
+          "joint_components": 2,
+          "closed_joint_components": 1,
+          "open_joint_components": 1,
+          "high_valence_nodes": 0,
+          "nodes": 28131,
+          "elements": 56673,
+          "oracle": "independent eliminated cylinder equations, 70-digit residuals and finite-height interval coverage"
+        },
+        {
+          "case": "tangent",
+          "material_areas": [
+            18.849555921538773,
+            18.84955592153877
+          ],
+          "shared_segments": 7,
+          "shared_nodes": 8,
+          "complete_branches": 1,
+          "joint_components": 1,
+          "closed_joint_components": 0,
+          "open_joint_components": 1,
+          "high_valence_nodes": 0,
+          "nodes": 248,
+          "elements": 224,
+          "oracle": "independent tangent circle equations, complete axial coverage and graph incidence"
+        }
+      ]
+    },
+    {
+      "platform": "general-intersections-ubuntu-latest",
+      "machine": "x86_64",
+      "status": "passed",
+      "sources": {
+        "ANYgeometry": "11b989ac14b081268a77437126b51e436580f25d",
+        "ANYmesh": "dda50e4c813834af10bf52bf4451ce55bda83315",
+        "ANYfem": "fa7e666f8cd236c17591ccde67f9b34f20f45f33"
+      },
+      "artifacts": {
+        "geometry": {
+          "filename": "anygeometry-0.4.4-py3-none-any.whl",
+          "bytes": 479557,
+          "sha256": "36d02b76ad9b8fcb1ff1863a8c2f6ca7c1f2816fa7e7cac2aa2841a6b0b9815a"
+        },
+        "mesher": {
+          "filename": "anymesher-0.5.1-cp313-cp313-linux_x86_64.whl",
+          "bytes": 2425133,
+          "sha256": "7f3fb13a21135c6601c87077b65993eab724249cb902053f191d30c5cad751ff"
+        },
+        "fem": {
+          "filename": "anyfem-0.4.1-py3-none-any.whl",
+          "bytes": 570752,
+          "sha256": "6796865fbbe219266081c87f18b7b7ad385ceaf96cc131ffca8a967704075220"
+        }
+      },
+      "cases": [
+        {
+          "case": "replay",
+          "target_size": 0.25,
+          "nodes": 2021,
+          "triangles": 632,
+          "quads": 1662,
+          "solver_admission": "ADMITTED",
+          "source_unchanged": true,
+          "save_load": true,
+          "lifecycle": {
+            "undo_redo_source_identity": true,
+            "undo_redo_source_content": true,
+            "feature_regeneration": true,
+            "retained_downstream_face_references": 55
+          }
+        },
+        {
+          "case": "replay",
+          "target_size": 0.5,
+          "nodes": 4456,
+          "triangles": 8952,
+          "quads": 0,
+          "solver_admission": "ADMITTED",
+          "source_unchanged": true,
+          "save_load": true,
+          "lifecycle": {
+            "undo_redo_source_identity": true,
+            "undo_redo_source_content": true,
+            "feature_regeneration": true,
+            "retained_downstream_face_references": 55
+          }
+        },
+        {
+          "case": "parallel",
+          "material_areas": [
+            18.84955592153871,
+            16.964600329384883
+          ],
+          "shared_segments": 28,
+          "shared_nodes": 30,
+          "complete_branches": 2,
+          "high_valence_nodes": 0,
+          "nodes": 834,
+          "elements": 816,
+          "oracle": "independent cylinder equations, angular/axial interval coverage and graph incidence"
+        },
+        {
+          "case": "perpendicular",
+          "material_areas": [
+            18.849555921538776,
+            18.849555921538744
+          ],
+          "shared_segments": 88,
+          "shared_nodes": 86,
+          "complete_branches": 2,
+          "high_valence_nodes": 2,
+          "nodes": 788,
+          "elements": 1630,
+          "oracle": "independent cylinder equations, angular/axial interval coverage and graph incidence"
+        },
+        {
+          "case": "skew",
+          "material_areas": [
+            18.84955592153876,
+            15.07964473723089
+          ],
+          "shared_segments": 730,
+          "shared_nodes": 731,
+          "complete_branches": 4,
+          "joint_components": 2,
+          "closed_joint_components": 1,
+          "open_joint_components": 1,
+          "high_valence_nodes": 0,
+          "nodes": 28099,
+          "elements": 56609,
+          "oracle": "independent eliminated cylinder equations, 70-digit residuals and finite-height interval coverage"
+        },
+        {
+          "case": "tangent",
+          "material_areas": [
+            18.84955592153877,
+            18.84955592153877
+          ],
+          "shared_segments": 7,
+          "shared_nodes": 8,
+          "complete_branches": 1,
+          "joint_components": 1,
+          "closed_joint_components": 0,
+          "open_joint_components": 1,
+          "high_valence_nodes": 0,
+          "nodes": 248,
+          "elements": 224,
+          "oracle": "independent tangent circle equations, complete axial coverage and graph incidence"
+        }
+      ]
+    },
+    {
+      "platform": "general-intersections-windows-latest",
+      "machine": "AMD64",
+      "status": "passed",
+      "sources": {
+        "ANYgeometry": "11b989ac14b081268a77437126b51e436580f25d",
+        "ANYmesh": "dda50e4c813834af10bf52bf4451ce55bda83315",
+        "ANYfem": "fa7e666f8cd236c17591ccde67f9b34f20f45f33"
+      },
+      "artifacts": {
+        "geometry": {
+          "filename": "anygeometry-0.4.4-py3-none-any.whl",
+          "bytes": 479557,
+          "sha256": "36d02b76ad9b8fcb1ff1863a8c2f6ca7c1f2816fa7e7cac2aa2841a6b0b9815a"
+        },
+        "mesher": {
+          "filename": "anymesher-0.5.1-cp313-cp313-win_amd64.whl",
+          "bytes": 697580,
+          "sha256": "2902af597234247e2e8d867f8c050c820cbe3c1650f99c3790736f5e6f3466b6"
+        },
+        "fem": {
+          "filename": "anyfem-0.4.1-py3-none-any.whl",
+          "bytes": 574643,
+          "sha256": "3a72622684cf4a97f14cd554070b56f382317042698cb941f7ad9b9d10d98bf6"
+        }
+      },
+      "cases": [
+        {
+          "case": "replay",
+          "target_size": 0.25,
+          "nodes": 2021,
+          "triangles": 632,
+          "quads": 1662,
+          "solver_admission": "ADMITTED",
+          "source_unchanged": true,
+          "save_load": true,
+          "lifecycle": {
+            "undo_redo_source_identity": true,
+            "undo_redo_source_content": true,
+            "feature_regeneration": true,
+            "retained_downstream_face_references": 55
+          }
+        },
+        {
+          "case": "replay",
+          "target_size": 0.5,
+          "nodes": 4456,
+          "triangles": 8952,
+          "quads": 0,
+          "solver_admission": "ADMITTED",
+          "source_unchanged": true,
+          "save_load": true,
+          "lifecycle": {
+            "undo_redo_source_identity": true,
+            "undo_redo_source_content": true,
+            "feature_regeneration": true,
+            "retained_downstream_face_references": 55
+          }
+        },
+        {
+          "case": "parallel",
+          "material_areas": [
+            18.84955592153871,
+            16.96460032938488
+          ],
+          "shared_segments": 28,
+          "shared_nodes": 30,
+          "complete_branches": 2,
+          "high_valence_nodes": 0,
+          "nodes": 834,
+          "elements": 816,
+          "oracle": "independent cylinder equations, angular/axial interval coverage and graph incidence"
+        },
+        {
+          "case": "perpendicular",
+          "material_areas": [
+            18.84955592153878,
+            18.849555921538737
+          ],
+          "shared_segments": 88,
+          "shared_nodes": 86,
+          "complete_branches": 2,
+          "high_valence_nodes": 2,
+          "nodes": 788,
+          "elements": 1630,
+          "oracle": "independent cylinder equations, angular/axial interval coverage and graph incidence"
+        },
+        {
+          "case": "skew",
+          "material_areas": [
+            18.849555921538695,
+            15.07964473723095
+          ],
+          "shared_segments": 730,
+          "shared_nodes": 731,
+          "complete_branches": 4,
+          "joint_components": 2,
+          "closed_joint_components": 1,
+          "open_joint_components": 1,
+          "high_valence_nodes": 0,
+          "nodes": 28055,
+          "elements": 56521,
+          "oracle": "independent eliminated cylinder equations, 70-digit residuals and finite-height interval coverage"
+        },
+        {
+          "case": "tangent",
+          "material_areas": [
+            18.849555921538766,
+            18.849555921538766
+          ],
+          "shared_segments": 7,
+          "shared_nodes": 8,
+          "complete_branches": 1,
+          "joint_components": 1,
+          "closed_joint_components": 0,
+          "open_joint_components": 1,
+          "high_valence_nodes": 0,
+          "nodes": 248,
+          "elements": 224,
+          "oracle": "independent tangent circle equations, complete axial coverage and graph incidence"
+        }
+      ]
+    }
+  ]
+}

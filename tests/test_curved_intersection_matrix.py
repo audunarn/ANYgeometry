@@ -723,7 +723,7 @@ def test_multi_component_curved_imprint_rolls_back_on_late_failure(
     )
     before_geometry_high_water = dict(geometry._next_id)
     before_structural_high_water = dict(geometry._next_structural_id)
-    original = workflow._fragment_with_edge_chain
+    original = GeometryModel.add_face_from_loop
     calls = 0
 
     def fail_late(*args, **kwargs):
@@ -733,7 +733,7 @@ def test_multi_component_curved_imprint_rolls_back_on_late_failure(
             raise GeometryError("injected late curved-fragment failure")
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(workflow, "_fragment_with_edge_chain", fail_late)
+    monkeypatch.setattr(GeometryModel, "add_face_from_loop", fail_late)
     with pytest.raises(GeometryError, match="injected late"):
         apply_imprint(geometry, plan, policy=ConnectionIntent.CONNECT)
     after = (
@@ -745,17 +745,9 @@ def test_multi_component_curved_imprint_rolls_back_on_late_failure(
         tuple(sorted(geometry.coedges)),
     )
     assert after == before
-    # Rollback restores live state and revision, while allocator high-water
-    # marks deliberately remain monotonic so provisional IDs can never be
-    # rebound to different persistent entities.
-    assert all(
-        geometry._next_id[kind] >= value
-        for kind, value in before_geometry_high_water.items()
-    )
-    assert all(
-        geometry._next_structural_id[kind] >= value
-        for kind, value in before_structural_high_water.items()
-    )
+    # Failed detached candidates never allocate IDs in the editable source.
+    assert geometry._next_id == before_geometry_high_water
+    assert geometry._next_structural_id == before_structural_high_water
     next_vertex = geometry._next_id["vertex"]
     made = geometry.add_point(20.0, 20.0, 20.0)
     assert made == next_vertex

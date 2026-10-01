@@ -318,6 +318,7 @@ class IntersectionComponent:
     second_parameter_path: tuple[ParameterValue, ...] = ()
     boundary_paths: tuple[tuple[Point3, ...], ...] = ()
     curve_traces: tuple[CertifiedCurveTrace, ...] = ()
+    analytic_curve: object | None = None
     first_region: ParameterRegion | None = None
     second_region: ParameterRegion | None = None
     direction: Point3 | None = None
@@ -399,6 +400,12 @@ class IntersectionComponent:
             raise GeometryError("component residual exceeds its certificate")
         object.__setattr__(self, "boundary_paths", boundary_paths)
         object.__setattr__(self, "curve_traces", curve_traces)
+        if self.analytic_curve is not None:
+            from .arrangement_geometry import LinePath, BezierPath
+            from .exact_curves import EllipticArc, CylinderIntersectionCurve
+            if not isinstance(self.analytic_curve, (LinePath, BezierPath, EllipticArc,
+                                                     CylinderIntersectionCurve)):
+                raise GeometryError("component analytic_curve must be an immutable exact curve")
         object.__setattr__(self, "direction", direction)
         object.__setattr__(self, "max_residual", residual)
         object.__setattr__(self, "certificate", certificate)
