@@ -17,7 +17,7 @@ def _member_point(model,member_id,parameter):
     raise GeometryError('joint parameter is outside the member axis')
 
 
-def declare_member_contacts(model,contacts,check,*,sheet_target_ids=()):
+def declare_member_contacts(model,contacts,check,*,sheet_target_ids=(), intent=ConnectionIntent.CONNECT):
     """Contacts carry exact parent parameters; topology supplies the station."""
     grouped={}
     for contact,vertex in contacts:
@@ -38,7 +38,7 @@ def declare_member_contacts(model,contacts,check,*,sheet_target_ids=()):
                 selected.setdefault(model.face_uses[use].sheet_id,face)
         attachments=[]
         # A bend in one continuous axis is topology, not a structural joint.
-        if len({member for member,_parameter in parameters}) == 1 and not sheets:
+        if len({member for member,_parameter in parameters}) == 1 and not faces:
             values=sorted(parameter for _member,parameter in parameters)
             if (len(values)==1 or max(values)-min(values)<=model.tolerance.parameter
                     or all(min(abs(value),abs(value-1.))<=model.tolerance.parameter for value in values)):
@@ -48,7 +48,10 @@ def declare_member_contacts(model,contacts,check,*,sheet_target_ids=()):
             residual=float(np.linalg.norm(_member_point(model,member,parameter)-position))
             if residual>tolerance:
                 raise GeometryError('canonical member contact exceeds its qualified tolerance')
-            for sheet,face in sorted(selected.items()):
+            targets=[(sheet,face) for sheet,face in sorted(selected.items())]
+            targets.extend((None,face) for face in sorted(faces)
+                           if not model._face_structural_uses.get(face))
+            for sheet,face in targets:
                 uv=model.face_local_uv(face,position)
                 sheet_target=sheet in sheet_target_ids
                 at_endpoint=parameter in (0.,1.)
@@ -58,7 +61,7 @@ def declare_member_contacts(model,contacts,check,*,sheet_target_ids=()):
                     AttachmentTargetKind.SHEET if sheet_target else AttachmentTargetKind.FACE,
                     sheet if sheet_target else face,ParameterRange(parameter,parameter),
                     tuple(ParameterRange(float(value),float(value)) for value in uv),
-                    sheet_id=sheet,connection_intent=ConnectionIntent.CONNECT,
+                    sheet_id=sheet,connection_intent=intent,
                     evidence=AttachmentEvidence.EXACT,max_residual=residual,tolerance_used=tolerance,
                     metadata={'face_sequence':[face]},
                     provenance={'contract':'ANYGEOMETRY_ANALYTIC_MEMBER_JOINT_V1'}))
@@ -70,7 +73,7 @@ def declare_member_contacts(model,contacts,check,*,sheet_target_ids=()):
                         if member!=source[0])
             attachments.append(model.ensure_attachment(source[0],AttachmentKind.MEMBER_ENDPOINT_ON_MEMBER,
                 AttachmentTargetKind.MEMBER,target[0],ParameterRange(source[1],source[1]),
-                (ParameterRange(target[1],target[1]),),connection_intent=ConnectionIntent.CONNECT,
+                (ParameterRange(target[1],target[1]),),connection_intent=intent,
                 evidence=AttachmentEvidence.EXACT,max_residual=float(np.linalg.norm(
                     _member_point(model,*source)-_member_point(model,*target))),tolerance_used=tolerance,
                 provenance={'contract':'ANYGEOMETRY_ANALYTIC_MEMBER_JOINT_V1'}))
@@ -78,13 +81,14 @@ def declare_member_contacts(model,contacts,check,*,sheet_target_ids=()):
         kind=(JunctionKind.MULTI_WAY if len(parameters)+len(sheets)>2 else
               JunctionKind.ENDPOINT if all(parameter in (0.,1.) for _member,parameter in parameters)
               else JunctionKind.CROSSING)
-        model.ensure_junction(kind,
-            uses,sheet_ids=tuple(sorted(sheets)),attachment_ids=tuple(attachments),
-            connection_intent=ConnectionIntent.CONNECT,
-            provenance={'contract':'ANYGEOMETRY_ANALYTIC_MEMBER_JOINT_V1'})
+        if len(uses)+len(sheets)>=2:
+            model.ensure_junction(kind,
+                uses,sheet_ids=tuple(sorted(sheets)),attachment_ids=tuple(attachments),
+                connection_intent=intent,
+                provenance={'contract':'ANYGEOMETRY_ANALYTIC_MEMBER_JOINT_V1'})
 
 
-def declare_member_boundaries(model,selected_members,check):
+def declare_member_boundaries(model,selected_members,check,*,intent=ConnectionIntent.CONNECT):
     """Retain each exact parent interval on its canonical shell edge."""
     selected=set(selected_members)
     for use in sorted(model.member_edge_uses.values(),key=lambda item:item.id):
@@ -92,15 +96,16 @@ def declare_member_boundaries(model,selected_members,check):
             continue
         faces=tuple(model.faces_using_edge(use.edge_id))
         sheets=tuple(model.sheets_using_edge(use.edge_id))
-        if not faces or not sheets:
+        if not faces:
             continue
         check()
         tolerance=model.tolerance.effective_length(model.edge_length(use.edge_id))
         attachment=model.ensure_attachment(use.member_id,AttachmentKind.MEMBER_ON_FACE_BOUNDARY,
             AttachmentTargetKind.EDGE,use.edge_id,use.parent_range,(ParameterRange(0.,1.),),
-            connection_intent=ConnectionIntent.CONNECT,evidence=AttachmentEvidence.EXACT,
+            connection_intent=intent,evidence=AttachmentEvidence.EXACT,
             max_residual=0.,tolerance_used=tolerance,
             provenance={'contract':'ANYGEOMETRY_ANALYTIC_MEMBER_JOINT_V1'})
-        model.ensure_junction(JunctionKind.OVERLAP,(JunctionMemberUse(use.member_id,use.parent_range),),
-            sheet_ids=sheets,attachment_ids=(attachment,),connection_intent=ConnectionIntent.CONNECT,
-            provenance={'contract':'ANYGEOMETRY_ANALYTIC_MEMBER_JOINT_V1'})
+        if sheets:
+            model.ensure_junction(JunctionKind.OVERLAP,(JunctionMemberUse(use.member_id,use.parent_range),),
+                sheet_ids=sheets,attachment_ids=(attachment,),connection_intent=intent,
+                provenance={'contract':'ANYGEOMETRY_ANALYTIC_MEMBER_JOINT_V1'})

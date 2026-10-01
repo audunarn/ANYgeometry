@@ -847,12 +847,15 @@ def _apply_intersections_in_place(model, plan, *, policy):
                             source_kind='vertex',source_id=station,connection_intent=ConnectionIntent.CONNECT,
                             evidence=AttachmentEvidence.EXACT,max_residual=residual,tolerance_used=tolerance,
                             provenance={'contract':'ANYGEOMETRY_ANALYTIC_FACE_POINT_JOINT_V1'})
-        if policy.intent is ConnectionIntent.CONNECT:
-            from .joint_edges import declare_joint_edge
+        if policy.intent in (ConnectionIntent.CONNECT, ConnectionIntent.IMPRINT):
             from .member_joints import declare_member_contacts, declare_member_boundaries
             declare_member_contacts(model,member_contacts,check,
-                                    sheet_target_ids={operand.id for operand in plan.operands if operand.kind=='sheet'})
-            declare_member_boundaries(model,(member for axis in plan.axes for member in axis.member_ids),check)
+                                    sheet_target_ids={operand.id for operand in plan.operands if operand.kind=='sheet'},
+                                    intent=policy.intent)
+            declare_member_boundaries(model,(member for axis in plan.axes for member in axis.member_ids),check,
+                                      intent=policy.intent)
+        if policy.intent is ConnectionIntent.CONNECT:
+            from .joint_edges import declare_joint_edge
             for edge_id in sorted(joint_ids):
                 declare_joint_edge(model,edge_id,
                     model.tolerance.effective_length(model.edge_length(edge_id)))
