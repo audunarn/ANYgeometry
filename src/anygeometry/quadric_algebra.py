@@ -30,7 +30,7 @@ import numpy as np
 from .analytic_roots import (_derivative, _exact_quotient, _integer_gcd, _integer_row, _integer_value, _sturm, _variations,
                              isolate_real_roots)
 from .errors import GeometryError
-from .extrusions import EllipseDirectrix
+from .extrusions import BezierDirectrix, EllipseDirectrix
 from .surfaces import Cone, Cylinder, ExtrudedSurface, Plane
 
 TWO_PI = 2.0 * math.pi
@@ -51,6 +51,10 @@ def _vec(value, name):
 
 
 def _cross(a, b):
+    return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+
+
+def _fraction_cross(a, b):
     return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
 
 
@@ -260,7 +264,8 @@ class QuadricSupport:
     ``kind`` is ``plane`` (``origin``, unit ``axis``=normal), ``cylinder`` (``origin``,
     ``axis``, ``radius``), ``cone`` (``origin``, ``axis``, ``radius`` at ``origin``,
     ``slope``), ``elliptic`` (the cylinder of rulings ``axis`` through the ellipse ``origin + u_vector cos t +
-    v_vector sin t``) or ``general`` (``matrix`` row-major, ``linear``, ``constant``).
+    v_vector sin t``), ``parabolic`` (rulings ``axis`` through the quadratic Bezier curve with control points
+    ``origin``, ``u_vector``, ``v_vector``) or ``general`` (``matrix`` row-major, ``linear``, ``constant``).
     Coefficients are rational functions of the stored doubles.
     """
     kind: str
@@ -275,8 +280,22 @@ class QuadricSupport:
     v_vector: tuple = ()
 
     def __post_init__(self):
-        if self.kind not in ("plane", "cylinder", "cone", "elliptic", "general"):
-            raise GeometryError("quadric kind must be plane, cylinder, cone, elliptic or general")
+        if self.kind not in ("plane", "cylinder", "cone", "elliptic", "parabolic", "general"):
+            raise GeometryError("quadric kind must be plane, cylinder, cone, elliptic, parabolic or general")
+        if self.kind == "parabolic":
+            origin, p1, p2 = _vec(self.origin, "parabola start"), _vec(self.u_vector, "parabola control"), _vec(
+                self.v_vector, "parabola end")
+            axis = _vec(self.axis, "parabola ruling")
+            first = tuple(b - a for a, b in zip(origin, p1))
+            second = tuple(c - 2 * b + a for a, b, c in zip(origin, p1, p2))
+            normal = _cross(first, second)
+            scale = math.sqrt(sum(c * c for c in normal))
+            if scale <= 1e-14 * math.sqrt(sum(c * c for c in first)) * math.sqrt(sum(c * c for c in second)):
+                raise GeometryError("the control points of a parabola must not be collinear")
+            if abs(sum(n * a for n, a in zip(normal, axis))) <= 1e-12 * scale * math.sqrt(sum(c * c for c in axis)):
+                raise GeometryError("the ruling direction must leave the plane of the parabola")
+            object.__setattr__(self, "u_vector", p1)
+            object.__setattr__(self, "v_vector", p2)
         if self.kind == "elliptic":
             EllipticRuledSupport(self.origin, self.u_vector, self.v_vector, self.axis)       # validates the three vectors
             object.__setattr__(self, "u_vector", _vec(self.u_vector, "ellipse u vector"))
@@ -308,7 +327,12 @@ class QuadricSupport:
             return cls("cone", tuple(surface.origin), tuple(surface.axis), float(surface.radius_start), slope)
         if isinstance(surface, ExtrudedSurface) and isinstance(surface.directrix, EllipseDirectrix):
             return EllipticRuledSupport.from_surface(surface).quadric()
-        raise GeometryError("quadric supports are Plane, Cylinder, Cone or an extruded ellipse")
+        if (isinstance(surface, ExtrudedSurface) and isinstance(surface.directrix, BezierDirectrix)
+                and surface.directrix.degree == 2):
+            p0, p1, p2 = surface.directrix.controls
+            return cls("parabolic", p0, surface.vector, u_vector=p1, v_vector=p2)
+        raise GeometryError("quadric supports are Plane, Cylinder, Cone, an extruded ellipse or a quadratic Bezier "
+                            "extrusion")
 
     @classmethod
     def sphere(cls, center, radius):
@@ -334,6 +358,27 @@ class QuadricSupport:
         if self.kind == "plane":
             m = tuple((zero3,) * 3)
             l_own = tuple(c / 2 for c in a)                                   # Q(w) = a.w
+            c_own = Fraction(0)
+        elif self.kind == "parabolic":
+            # X(t) = P0 + 2 t e + t^2 f; the coordinates of y = X - P0 projected along the ruling d onto the plane of
+            # (e, f) are (a, b) with y' = a e + b f, and the surface is a^2 = 4 b. Both are linear in y.
+            p0, p1, p2 = (_fraction_vec(v) for v in (self.origin, self.u_vector, self.v_vector))
+            e = tuple(p1[i] - p0[i] for i in range(3))
+            f = tuple(p2[i] - 2 * p1[i] + p0[i] for i in range(3))
+            n = _fraction_cross(e, f)
+            nn = sum(c * c for c in n)
+            nd = sum(n[i] * a[i] for i in range(3))
+            if nn == 0 or nd == 0:
+                raise GeometryError("the parabola and its ruling direction must be independent")
+
+            def functional(g):                         # y -> (P y) . g with P = I - d n^T / (n . d)
+                dg = sum(a[i] * g[i] for i in range(3))
+                return tuple(g[i] - n[i] * dg / nd for i in range(3))
+
+            la = functional(tuple(c / nn for c in _fraction_cross(f, n)))
+            lb = functional(tuple(c / nn for c in _fraction_cross(n, e)))
+            m = tuple(tuple(la[i] * la[j] for j in range(3)) for i in range(3))
+            l_own = tuple(-2 * c for c in lb)                                  # Q(y) = a^2 - 4 b = y.M.y + 2 l.y
             c_own = Fraction(0)
         elif self.kind == "elliptic":
             basis = [[Fraction(self.u_vector[i]), Fraction(self.v_vector[i]), a[i]] for i in range(3)]
@@ -377,9 +422,9 @@ class QuadricSupport:
         w = x - self.origin
         if self.kind == "plane":
             return w @ np.asarray(self.axis)
-        if self.kind == "elliptic":
-            m = _elliptic_rows(self)
-            return np.einsum("...i,ij,...j->...", w, m, w) - 1.0
+        if self.kind in ("elliptic", "parabolic"):
+            m, l, c = _own_form(self)
+            return np.einsum("...i,ij,...j->...", w, m, w) + 2 * w @ l + c
         if self.kind == "general":
             m = np.asarray(self.matrix).reshape(3, 3)
             return np.einsum("...i,ij,...j->...", x, m, x) + 2 * x @ np.asarray(self.linear) + self.constant
@@ -394,8 +439,9 @@ class QuadricSupport:
         a = np.asarray(self.axis)
         if self.kind == "plane":
             return np.full(x.shape[:-1], float(np.linalg.norm(a)))
-        if self.kind == "elliptic":
-            return 2 * np.linalg.norm(w @ _elliptic_rows(self), axis=-1)
+        if self.kind in ("elliptic", "parabolic"):
+            m, l, _c = _own_form(self)
+            return 2 * np.linalg.norm(w @ m + l, axis=-1)
         if self.kind == "general":
             m = np.asarray(self.matrix).reshape(3, 3)
             return 2 * np.linalg.norm(x @ m + np.asarray(self.linear), axis=-1)
@@ -407,10 +453,10 @@ class QuadricSupport:
 
 
 @lru_cache(maxsize=256)
-def _elliptic_rows(support):
-    """The matrix ``M`` of ``w.M.w = 1`` for an elliptic quadric, correctly rounded from the exact form."""
-    m, _l, _c = support.exact_relative(support.origin)
-    return np.array([[float(v) for v in row] for row in m])
+def _own_form(support):
+    """``(M, l, c)`` of ``w.M.w + 2 l.w + c`` in the frame of the support's own origin, correctly rounded."""
+    m, l, c = support.exact_relative(support.origin)
+    return np.array([[float(v) for v in row] for row in m]), np.array([float(v) for v in l]), float(c)
 
 
 # ---------------------------------------------------------------------------
@@ -750,11 +796,11 @@ def _aligned(first, second):
     would find them crossing far outside any patch. Replacing the second direction by the first changes the
     support by less than ``64 eps`` of its length and lets the plan see the generators they share.
     """
-    if first.is_cone or second.kind not in ("cylinder", "elliptic"):
+    if first.is_cone or second.kind not in ("cylinder", "elliptic", "parabolic"):
         return second
     a, b = np.asarray(first.axis, dtype=float), np.asarray(second.axis, dtype=float)
     size = float(np.linalg.norm(np.cross(a, b))) / float(np.linalg.norm(a) * np.linalg.norm(b))
-    if 0.0 < size <= _PARALLEL_ROUNDING:
+    if size <= _PARALLEL_ROUNDING and tuple(second.axis) != tuple(first.axis):     # parallel to rounding, not yet equal
         return replace(second, axis=first.axis)
     return second
 

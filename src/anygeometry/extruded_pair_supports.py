@@ -232,9 +232,10 @@ def _parallel(a, b):
 
 
 def _ruled_quadric(surface):
-    """Cylinders, Cones and extruded ellipses are ruled quadrics; an extruded Bezier is not."""
+    """Cylinders, Cones, extruded ellipses and quadratic Bezier extrusions are quadrics; other Beziers are not."""
     return isinstance(surface, (Cylinder, Cone)) or (
-        isinstance(surface, ExtrudedSurface) and isinstance(surface.directrix, EllipseDirectrix))
+        isinstance(surface, ExtrudedSurface) and (isinstance(surface.directrix, EllipseDirectrix) or (
+            isinstance(surface.directrix, BezierDirectrix) and surface.directrix.degree == 2)))
 
 
 def extruded_pair_support(a, b, *, tolerance=1e-10, cancellation_check=None):
@@ -251,5 +252,6 @@ def extruded_pair_support(a, b, *, tolerance=1e-10, cancellation_check=None):
     if _ruled_quadric(a) and _ruled_quadric(b):
         from .quadric_supports import quadric_pair_support
         return quadric_pair_support(a, b, tolerance=tolerance, cancellation_check=cancellation_check)
-    raise GeometryError("this extruded surface pair is unsupported: an extruded Bezier meets a Plane or a parallel "
-                        "extrusion, and a pair of non-parallel surfaces needs elliptic or circular profiles")
+    raise GeometryError("this extruded surface pair is unsupported: a Bezier extrusion of degree three or more "
+                        "meets a Plane or a parallel extrusion, and a pair of non-parallel surfaces needs "
+                        "elliptic, circular or quadratic profiles")

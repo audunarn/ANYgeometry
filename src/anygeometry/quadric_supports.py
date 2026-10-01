@@ -21,7 +21,7 @@ import numpy as np
 from .analytic_supports import SupportIntersection
 from .errors import GeometryError
 from .exact_curves import EllipticArc
-from .extrusions import EllipseDirectrix
+from .extrusions import BezierDirectrix, EllipseDirectrix
 from .quadric_algebra import QuadricSupport, RuledSupport, TWO_PI, circle_angles, get_plan, ruled_support
 from .quadric_curves import IDENTITY, QuadricIntersectionCurve
 from .surfaces import Cone, Cylinder, ExtrudedSurface, Plane
@@ -69,12 +69,31 @@ def _extruded_slack(surface, tolerance):
     return tolerance / max(speed_u, tolerance), tolerance / max(speed_v, tolerance)
 
 
+def _extruded_uv_many(surface, points):
+    """Chart coordinates of points on an extruded support, the directrix parameter not clipped to the patch.
+
+    A Bezier directrix inverts to the nearest parameter inside ``[0, 1]``, which would hide every point of the
+    parabola beyond the patch's ends; a quadratic one has the closed form ``t = a / 2`` for the coordinate ``a``
+    of the projected point along its first difference.
+    """
+    directrix = surface.directrix
+    if isinstance(directrix, BezierDirectrix) and directrix.degree == 2:
+        points = np.atleast_2d(np.asarray(points, dtype=float))
+        s = surface.extrusion_coordinate(points)
+        p0, p1, p2 = (np.asarray(c) for c in directrix.controls)
+        basis = np.column_stack((p1 - p0, p2 - 2 * p1 + p0))
+        a = (np.linalg.pinv(basis) @ (points - s[:, None] * np.asarray(surface.vector) - p0).T)[0]
+        (u0, u1), (v0, v1) = surface.u_range, surface.v_range
+        return np.column_stack(((a / 2.0 - u0) / (u1 - u0), (s - v0) / (v1 - v0)))
+    return surface.local_uv_many(points)
+
+
 def _inside_patch(surface, point, tolerance):
     """Whether ``point`` (on the support) lies in the surface's native rectangle."""
     if isinstance(surface, Plane):
         return True
     if isinstance(surface, ExtrudedSurface):
-        u, v = surface.local_uv(point)
+        u, v = _extruded_uv_many(surface, point)[0]
         angular, axial = _extruded_slack(surface, tolerance)
         return -angular <= u <= 1 + angular and -axial <= v <= 1 + axial
     u, v = surface.local_uv(point)
@@ -89,7 +108,7 @@ def _inside_patch_many(surface, points, tolerance):
     if isinstance(surface, Plane):
         return np.ones(len(points), dtype=bool)
     if isinstance(surface, ExtrudedSurface):
-        uv = surface.local_uv_many(points)
+        uv = _extruded_uv_many(surface, points)
         angular, axial = _extruded_slack(surface, tolerance)
         return ((uv[:, 0] >= -angular) & (uv[:, 0] <= 1 + angular) & (uv[:, 1] >= -axial) & (uv[:, 1] <= 1 + axial))
     rel = points - np.asarray(surface.origin)
@@ -146,11 +165,13 @@ def _boundary_planes(surface):
         closed = (isinstance(directrix, EllipseDirectrix) and abs(abs(directrix.sweep_angle) - TWO_PI) <= 1e-12
                   and sorted(surface.u_range) == [0.0, 1.0])
         if not closed:
-            center = np.asarray(directrix.origin)
-            for t in surface.u_range:                          # the plane through the axis line and the end generator
-                seam = np.cross(np.asarray(directrix.point(float(t))) - center, vector)
-                if float(np.linalg.norm(seam)) > 0.0:
-                    planes.append(QuadricSupport("plane", tuple(center), tuple(float(x) for x in seam)))
+            # One plane holds both seams: through the two end generators. A conic meets a line in two points at
+            # most, so the plane meets the whole quadric in exactly these generators; a tangent plane would be
+            # degenerate (a rounding error of its normal separates it from the surface altogether).
+            start, end = (np.asarray(directrix.point(float(t))) for t in surface.u_range)
+            seam = np.cross(vector, end - start)
+            if float(np.linalg.norm(seam)) > 0.0:
+                planes.append(QuadricSupport("plane", tuple(float(x) for x in start), tuple(float(x) for x in seam)))
         return planes
     axis = tuple(float(v) for v in surface.axis)
     origin = np.asarray(surface.origin)
@@ -568,12 +589,27 @@ def _prefer_first(a, b):
     return _FIRST_CHOICE[key]
 
 
+def _parabolic(surface):
+    """A quadratic Bezier extrusion: a parabolic cylinder, a quadric without an angular chart of its own."""
+    return (isinstance(surface, ExtrudedSurface) and isinstance(surface.directrix, BezierDirectrix)
+            and surface.directrix.degree == 2)
+
+
 def quadric_pair_support(a, b, *, tolerance=1e-10, cancellation_check=None):
-    """Exact support intersection of two ruled quadrics given as Cylinder, Cone or extruded-ellipse patches."""
+    """Exact support intersection of two ruled quadrics given as Cylinder, Cone, extruded-ellipse or quadratic
+    Bezier extrusion patches (the last only as the second support: its chart is polynomial, not angular)."""
     for surface in (a, b):
-        if not isinstance(surface, (Cylinder, Cone, ExtrudedSurface)):
-            raise GeometryError("a quadric pair needs Cylinders, Cones or extruded ellipses")
-    first, second = (a, b) if _prefer_first(a, b) else (b, a)
+        if not (isinstance(surface, (Cylinder, Cone)) or (isinstance(surface, ExtrudedSurface) and (
+                isinstance(surface.directrix, EllipseDirectrix) or _parabolic(surface)))):
+            raise GeometryError("a quadric pair needs Cylinders, Cones, extruded ellipses or quadratic Bezier "
+                                "extrusions")
+    if _parabolic(a) and _parabolic(b):
+        raise GeometryError("two parabolic extrusions of different directions are unsupported: neither has an "
+                            "angular chart for the exact branch engine")
+    if _parabolic(a) or _parabolic(b):
+        first, second = (b, a) if _parabolic(a) else (a, b)
+    else:
+        first, second = (a, b) if _prefer_first(a, b) else (b, a)
     return charts_support(first, second, tolerance=tolerance, cancellation_check=cancellation_check)
 
 

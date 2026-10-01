@@ -1393,7 +1393,7 @@ def _quadric_curve_record(curve):
     second_record = {"kind": second.kind, "origin": second.origin, "axis": second.axis, "radius": second.radius,
                      "slope": second.slope, "matrix": second.matrix, "linear": second.linear,
                      "constant": second.constant}
-    if second.kind == "elliptic":
+    if second.kind in ("elliptic", "parabolic"):
         second_record.update(u_vector=second.u_vector, v_vector=second.v_vector)
     return {"type": "quadric_intersection",
             "first": first_record,
@@ -1405,8 +1405,8 @@ def _quadric_curve_record(curve):
 def _decode_quadric_curve(data):
     _exact_fields(data, required={"type", *_QUADRIC_CURVE_FIELDS}, name="quadric intersection curve")
     first, second = _object(data["first"], "quadric first support"), _object(data["second"], "quadric second support")
-    _exact_fields(second, required=_ELLIPTIC_QUADRIC_FIELDS if second.get("kind") == "elliptic" else _QUADRIC_FIELDS,
-                  name="quadric second support")
+    _exact_fields(second, required=_ELLIPTIC_QUADRIC_FIELDS if second.get("kind") in ("elliptic", "parabolic")
+                  else _QUADRIC_FIELDS, name="quadric second support")
     if first.get("kind") == "elliptic":
         _exact_fields(first, required={"kind", "origin", "u_vector", "v_vector", "axis"}, name="quadric first support")
         ruled = EllipticRuledSupport(first["origin"], first["u_vector"], first["v_vector"], first["axis"])

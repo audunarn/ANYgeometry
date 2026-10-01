@@ -220,6 +220,10 @@ def test_rulings_parallel_up_to_rounding_meet_in_generators():
             assert tube().evaluate_many(tube().local_uv_many(np.array([start, end])))[0] == pytest.approx(start, abs=1e-12)
             assert 0. <= float(start[2]) < 1e-9 and float(end[2]) == pytest.approx(2., abs=1e-9)   # the tube's two ends
     assert not extruded_pair_support(tube(), Cylinder((4., 0., -1.), axis, (0., 1., 0.), .5, 8.)).segments
+    # a direction whose normalized copy has a float cross product of exactly zero is still not exactly parallel
+    steep = (.3, 0., 2.)
+    result = extruded_pair_support(tube(vector=steep), Cylinder((1.1, 0., -1.), unit(steep), (0., 1., 0.), .5, 8.))
+    assert not result.curves and len(result.segments) == 2
 
 
 def test_shared_generators_are_cut_by_the_patch_of_either_support():
@@ -259,8 +263,8 @@ def test_the_other_pairs_of_extruded_surfaces_keep_their_established_behavior():
     # parallel extrusions still meet in generators through the crossings of their directrices
     parallel = extruded_pair_support(tube(), tube(center=(.8, 0., 0.), a=.6, b=.6))
     assert parallel.segments and not parallel.curves
-    # an extruded Bezier is not a quadric: only planes and parallel extrusions are exact for it
-    bezier = ExtrudedSurface(BezierDirectrix(((0., 0., 0.), (1., 1., 0.), (2., 0., 0.))), (.3, 0., 2.))
+    # a Bezier of degree three or more is not a quadric: only planes and parallel extrusions are exact for it
+    bezier = ExtrudedSurface(BezierDirectrix(((0., 0., 0.), (1., 1., 0.), (2., -1., 0.), (3., 0., 0.))), (.3, 0., 2.))
     with pytest.raises(GeometryError, match="unsupported"):
         extruded_pair_support(bezier, cylinder_x())
     with pytest.raises(GeometryError, match="unsupported"):

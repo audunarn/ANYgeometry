@@ -34,7 +34,7 @@ SCOPES = {
                       "test_quadric_supports.py", "test_cone_intersections_engine.py",
                       "test_extruded_surface.py", "test_extruded_support_recognition.py",
                       "test_extruded_intersections.py", "test_extruded_public_routing.py",
-                      "test_elliptic_quadric_supports.py"],
+                      "test_elliptic_quadric_supports.py", "test_parabolic_quadric_supports.py"],
     "features": ["test_features_editing.py", "test_feature_topology_ownership.py",
                  "test_transform_pattern_api.py", "test_unknown_features.py"],
 }
