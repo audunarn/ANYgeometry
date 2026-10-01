@@ -209,10 +209,12 @@ from .sketch import (
     materialize_sketch,
     solve_sketch,
 )
+from .extrusions import BezierDirectrix, EllipseDirectrix
 from .surfaces import (
     CoonsSurface,
     Cone,
     Cylinder,
+    ExtrudedSurface,
     Plane,
     RuledSurface,
     Surface,
@@ -353,6 +355,9 @@ __all__ = [
     "Resolution",
     "ResolutionStatus",
     "RuledSurface",
+    "ExtrudedSurface",
+    "BezierDirectrix",
+    "EllipseDirectrix",
     "SketchConstraint",
     "SketchDefinition",
     "SketchPlane",

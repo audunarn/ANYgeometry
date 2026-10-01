@@ -9,11 +9,13 @@ from typing import Protocol, Union, runtime_checkable
 import numpy as np
 
 from .errors import GeometryError
+from .extrusions import BezierDirectrix, EllipseDirectrix
 
 __all__ = [
     "CoonsSurface",
     "Cone",
     "Cylinder",
+    "ExtrudedSurface",
     "Plane",
     "RuledSurface",
     "Surface",
@@ -224,6 +226,124 @@ class Cone:
         return delta / self.sweep_angle, axial / self.height
 
 
+@dataclass(frozen=True, eq=False)
+class ExtrudedSurface:
+    """A planar directrix swept along a vector: ``c(t) + s * vector`` over a rectangle of ``(t, s)``.
+
+    The directrix ``c`` is a planar Bezier curve or ellipse (:mod:`anygeometry.extrusions`). The chart is
+    ``(u, v)`` in ``[0, 1]^2`` with ``t = t0 + u (t1 - t0)`` and ``s = s0 + v (s1 - s0)`` for
+    ``u_range = (t0, t1)`` and ``v_range = (s0, s1)``, so every patch cut from one surface shares one
+    directrix and one vector and differs only in its ranges. Because the profile is planar the extrusion
+    coordinate ``s = n . (p - o) / (n . vector)`` is linear in position: its level lines are plane sections
+    (exactly like a Cylinder's rings) and the directrix parameter of a point is that of its projection
+    ``p - s vector``.
+    """
+
+    directrix: object
+    vector: object
+    u_range: tuple = (0.0, 1.0)
+    v_range: tuple = (0.0, 1.0)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.directrix, (BezierDirectrix, EllipseDirectrix)):
+            raise GeometryError("an extruded surface needs a BezierDirectrix or EllipseDirectrix")
+        vector = _vector3(self.vector, "vector")
+        normal = np.asarray(self.directrix.normal)
+        rate = float(normal @ vector)
+        length = float(np.linalg.norm(vector))
+        if length <= 0.0 or abs(rate) <= 1e-12 * length:
+            raise GeometryError("the extrusion vector must leave the profile plane")
+        ranges = []
+        for name, value in (("u_range", self.u_range), ("v_range", self.v_range)):
+            pair = tuple(float(x) for x in value)
+            if len(pair) != 2 or not all(math.isfinite(x) for x in pair) or pair[0] == pair[1]:
+                raise GeometryError(f"{name} must be two distinct finite numbers")
+            ranges.append(pair)
+        object.__setattr__(self, "vector", tuple(float(x) for x in vector))
+        object.__setattr__(self, "u_range", ranges[0])
+        object.__setattr__(self, "v_range", ranges[1])
+        object.__setattr__(self, "_vector", vector)
+        object.__setattr__(self, "_rate", rate)
+
+    # ---------------------------------------------------------------- identity
+
+    def support_key(self):
+        """The surface itself, independent of the patch cut from it."""
+        return (self.directrix._key(), self.vector)
+
+    def _key(self):
+        return (self.support_key(), self.u_range, self.v_range)
+
+    def __eq__(self, other):
+        return isinstance(other, ExtrudedSurface) and self._key() == other._key()
+
+    def __hash__(self):
+        return hash(self._key())
+
+    # ---------------------------------------------------------------- the plane of the profile
+
+    @property
+    def profile_origin(self) -> np.ndarray:
+        return np.asarray(self.directrix.origin)
+
+    @property
+    def profile_normal(self) -> np.ndarray:
+        return np.asarray(self.directrix.normal)
+
+    @property
+    def profile_rate(self) -> float:
+        """``normal . vector``: how fast the extrusion coordinate climbs per unit height above the profile plane."""
+        return self._rate
+
+    def extrusion_coordinate(self, points) -> np.ndarray:
+        """``s`` of every point (exact for points on the surface): linear in position."""
+        points = np.asarray(points, dtype=float)
+        return (points - self.directrix.origin) @ self.directrix.normal / self._rate
+
+    # ---------------------------------------------------------------- evaluation
+
+    def _parameters(self, u, v):
+        u0, u1 = self.u_range
+        v0, v1 = self.v_range
+        return u0 + np.asarray(u, dtype=float) * (u1 - u0), v0 + np.asarray(v, dtype=float) * (v1 - v0)
+
+    def evaluate(self, u: float, v: float) -> np.ndarray:
+        t, s = self._parameters(float(u), float(v))
+        return self.directrix.point(t) + float(s) * self._vector
+
+    def local_uv(self, point: object) -> tuple[float, float]:
+        uv = self.local_uv_many(_vector3(point, "point")[None, :])[0]
+        return float(uv[0]), float(uv[1])
+
+    def local_uv_many(self, points) -> np.ndarray:
+        points = np.atleast_2d(np.asarray(points, dtype=float))
+        s = self.extrusion_coordinate(points)
+        t = self.directrix.invert(points - s[:, None] * self._vector)
+        u0, u1 = self.u_range
+        v0, v1 = self.v_range
+        return np.column_stack(((t - u0) / (u1 - u0), (s - v0) / (v1 - v0)))
+
+    def bounds(self):
+        """A conservative box of the whole (untrimmed) surface patch."""
+        lower, upper = self.directrix.bounds()
+        s0, s1 = self.v_range
+        shift = np.array([s0 * self._vector, s1 * self._vector])
+        return lower + shift.min(axis=0), upper + shift.max(axis=0)
+
+    def transformed(self, matrix) -> "ExtrudedSurface":
+        matrix = np.asarray(matrix, dtype=float)
+        return ExtrudedSurface(self.directrix.transformed(matrix), matrix[:3, :3] @ self._vector,
+                               self.u_range, self.v_range)
+
+    def subpatch(self, u_range, v_range) -> "ExtrudedSurface":
+        """The same surface restricted to ``u_range``/``v_range`` given in this patch's own chart ``[0, 1]``."""
+        (u0, u1), (v0, v1) = self.u_range, self.v_range
+        a, b = (float(x) for x in u_range)
+        c, d = (float(x) for x in v_range)
+        return ExtrudedSurface(self.directrix, self._vector, (u0 + a * (u1 - u0), u0 + b * (u1 - u0)),
+                               (v0 + c * (v1 - v0), v0 + d * (v1 - v0)))
+
+
 @dataclass(frozen=True)
 class RuledSurface:
     """Surface linearly joining two sampled boundary curves."""
@@ -357,7 +477,7 @@ class CoonsSurface:
         return closest_uv(self, point)
 
 
-Surface = Union[Plane, Cylinder, Cone, RuledSurface, CoonsSurface]
+Surface = Union[Plane, Cylinder, Cone, ExtrudedSurface, RuledSurface, CoonsSurface]
 
 
 def _piecewise_boundary_many(
@@ -409,6 +529,9 @@ def _evaluate_surface_many(surface: SurfaceProtocol, uv: np.ndarray) -> np.ndarr
             + radius[:, None] * radial
             + (v * surface.height)[:, None] * surface.axis
         )
+    if isinstance(surface, ExtrudedSurface):
+        t, s = surface._parameters(u, v)
+        return surface.directrix.point(t) + s[:, None] * surface._vector
     if isinstance(surface, RuledSurface):
         first, _first_derivative = _piecewise_boundary_many(
             surface.first_boundary, u
@@ -486,6 +609,13 @@ def _surface_derivatives_many(
         if radial_slope:
             dv = dv + radial_slope * radial
         return du, dv
+    if isinstance(surface, ExtrudedSurface):
+        t, _s = surface._parameters(u, v)
+        (u0, u1), (v0, v1) = surface.u_range, surface.v_range
+        return (
+            (u1 - u0) * surface.directrix.derivative(t),
+            np.repeat(((v1 - v0) * surface._vector)[None, :], len(values), axis=0),
+        )
     if isinstance(surface, RuledSurface):
         first, first_derivative = _piecewise_boundary_many(
             surface.first_boundary, u
