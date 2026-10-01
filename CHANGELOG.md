@@ -4,7 +4,9 @@ All notable user-visible changes to ANYgeometry are documented here.
 
 ## Unreleased
 
-Unpublished general-intersection development (accepted in the documented configurations):
+## 0.4.5 — 2026-10-01
+
+General intersections and coordinated meshing (accepted in the documented configurations):
 
 - Root-exported immutable `EllipticArc` and `CylinderIntersectionCurve`
   definitions, with evaluation, derivatives, bounds, projection, splitting and

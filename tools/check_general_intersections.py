@@ -31,7 +31,7 @@ def main():
         if wheel_metadata(artifacts[name])[0]!=expected:
             parser.error('incorrect '+name+' candidate artifact')
         version=wheel_metadata(artifacts[name])[1]
-        versions={'geometry':'0.4.3' if args.baseline else '0.4.4',
+        versions={'geometry':'0.4.3' if args.baseline else '0.4.5',
                   'mesher':'0.5.0' if args.baseline else '0.5.1','fem':'0.4.1'}
         if version!=versions[name]:
             parser.error('unexpected '+name+' artifact version: '+version)
