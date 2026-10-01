@@ -585,4 +585,6 @@ class CylinderIntersectionCurve:
         return np.nextafter(center-half, -np.inf), np.nextafter(center+half, np.inf)
 
 
-EXACT_CURVES = (EllipticArc, CylinderIntersectionCurve)
+from .quadric_curves import QuadricIntersectionCurve  # noqa: E402 (needs the definitions above only in spirit)
+
+EXACT_CURVES = (EllipticArc, CylinderIntersectionCurve, QuadricIntersectionCurve)

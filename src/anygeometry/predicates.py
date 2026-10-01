@@ -403,8 +403,9 @@ class IntersectionComponent:
         if self.analytic_curve is not None:
             from .arrangement_geometry import LinePath, BezierPath
             from .exact_curves import EllipticArc, CylinderIntersectionCurve
+            from .quadric_curves import QuadricIntersectionCurve
             if not isinstance(self.analytic_curve, (LinePath, BezierPath, EllipticArc,
-                                                     CylinderIntersectionCurve)):
+                                                     CylinderIntersectionCurve, QuadricIntersectionCurve)):
                 raise GeometryError("component analytic_curve must be an immutable exact curve")
         object.__setattr__(self, "direction", direction)
         object.__setattr__(self, "max_residual", residual)

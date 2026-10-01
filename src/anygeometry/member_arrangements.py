@@ -10,10 +10,11 @@ from .analytic_roots import isolate_real_roots, trigonometric_roots
 from .arrangement_geometry import (LinePath, BezierPath, freeze_edge, plane_roots,
                                    point_parameters, curve_junctions)
 from .exact_curves import EllipticArc, CylinderIntersectionCurve
+from .quadric_curves import QuadricIntersectionCurve
 from .errors import GeometryError
 from .material_arrangement import ArrangementPath, ArrangementPoint, _clip
 from .structural import Orientation
-from .surfaces import Plane
+from .surfaces import Cone, Plane
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +39,10 @@ def _support_roots(curve, support, tolerance, check):
     if isinstance(support, Plane):
         return plane_roots(curve, support.normal, float(support.normal @ support.origin),
                            tolerance=tolerance, cancellation_check=lambda: (check() or False))
+    if isinstance(support, Cone) or isinstance(curve, QuadricIntersectionCurve):
+        from .quadric_events import curve_quadric_roots
+        return curve_quadric_roots(curve, support, tolerance=tolerance,
+                                   cancellation_check=lambda: (check() or False))
     if isinstance(curve, CylinderIntersectionCurve):
         from .cylinder_curve_events import cylinder_roots
         return cylinder_roots(curve, support, tolerance=tolerance,
@@ -51,6 +56,16 @@ def _support_roots(curve, support, tolerance, check):
                         float(2*q0 @ qc), float(2*q0 @ qs),
                         float(.5*(qc @ qc-qs @ qs)), float(qc @ qs))
         if sum(abs(value) for value in coefficients) <= implicit_tolerance:
+            return None
+        # A short arc of the support circle is rebuilt from its end points with a centre off by many
+        # ulp, which spoils the full-circle coefficients but not the arc itself: bound the deviation
+        # on the arc's own angular range (sampled, plus the Lipschitz slack between samples).
+        samples = curve.start_angle+curve.sweep_angle*np.linspace(0., 1., 17)
+        deviation = (coefficients[0]+coefficients[1]*np.cos(samples)+coefficients[2]*np.sin(samples)
+                     +coefficients[3]*np.cos(2*samples)+coefficients[4]*np.sin(2*samples))
+        slack = (abs(coefficients[1])+abs(coefficients[2])+2*abs(coefficients[3])+2*abs(coefficients[4])
+                 )*abs(curve.sweep_angle)/32
+        if float(np.max(np.abs(deviation)))+slack <= implicit_tolerance:
             return None
         angles = trigonometric_roots(coefficients, start=curve.start_angle,
             sweep=curve.sweep_angle, tolerance=4*np.finfo(float).eps,

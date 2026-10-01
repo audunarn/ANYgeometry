@@ -261,6 +261,36 @@ def _isolate_real_roots(coefficients, tolerance, cancellation_check, interval):
     return tuple(sorted(roots, key=lambda item: item.lower))
 
 
+def _first_harmonic_angles(c0, c1, c2):
+    """Roots of ``c0 + c1 cos t + c2 sin t`` (exact rationals) as angles: a quadratic in ``x = tan(t/2)``.
+
+    The plane-versus-ellipse constraint and every ring test is of this form, and Sturm isolation of the
+    equivalent quartic costs far more than the exact discriminant of this quadratic.
+    """
+    a, b, c = c0-c1, 2*c2, c0+c1                  # a x^2 + b x + c; a == 0 puts a root at x = infinity (t = pi)
+    if a == 0 and b == 0 and c == 0:
+        raise GeometryError("root isolation needs a nonzero polynomial and positive tolerance")
+    angles = []
+    if a == 0:
+        angles.append(math.pi)
+        if b != 0:
+            angles.append(2*math.atan(float(-c/b)))
+        return angles
+    discriminant = b*b-4*a*c
+    if discriminant < 0:
+        return angles
+    if discriminant == 0:
+        return [2*math.atan(float(-b/(2*a)))]
+    radical = math.sqrt(float(discriminant))
+    q = -.5*(float(b)+math.copysign(radical, float(b)))         # no cancellation between b and the radical
+    roots = [q/float(a)]
+    if q != 0:
+        roots.append(float(c)/q)
+    else:
+        roots.append(0.0)
+    return [2*math.atan(root) for root in sorted(set(roots))]
+
+
 def trigonometric_roots(coefficients, *, start=0.0, sweep=math.tau,
                         tolerance=1e-12, cancellation_check=None):
     """Roots of c0+c1*cos(t)+c2*sin(t)+c3*cos(2t)+c4*sin(2t).
@@ -277,12 +307,15 @@ def trigonometric_roots(coefficients, *, start=0.0, sweep=math.tau,
         raise GeometryError("invalid trigonometric root constraint") from exc
     if not all(math.isfinite(item) for item in (start, sweep, tolerance)) or sweep == 0 or tolerance <= 0:
         raise GeometryError("invalid trigonometric root interval")
-    p = (c0+c1+c3, 2*c2+4*c4, 2*c0-6*c3, 2*c2-4*c4, c0-c1+c3)
-    roots = isolate_real_roots(p, tolerance=tolerance/4,
-                              cancellation_check=cancellation_check)
-    angles = [2*math.atan(root.witness) for root in roots]
-    if p[-1] == 0:
-        angles.append(math.pi)
+    if c3 == 0 and c4 == 0:
+        angles = _first_harmonic_angles(c0, c1, c2)
+    else:
+        p = (c0+c1+c3, 2*c2+4*c4, 2*c0-6*c3, 2*c2-4*c4, c0-c1+c3)
+        roots = isolate_real_roots(p, tolerance=tolerance/4,
+                                  cancellation_check=cancellation_check)
+        angles = [2*math.atan(root.witness) for root in roots]
+        if p[-1] == 0:
+            angles.append(math.pi)
     lower, upper = sorted((start, start+sweep))
     result = []
     for angle in angles:

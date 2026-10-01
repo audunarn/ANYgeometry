@@ -18,7 +18,7 @@ The point-driven shapes are:
 ``Spline``
     A Bezier curve whose control points are persistent topology vertices.
 
-``EllipticArc`` and ``CylinderIntersectionCurve``
+``EllipticArc``, ``CylinderIntersectionCurve`` and ``QuadricIntersectionCurve``
     Exact intersection geometry, transformed together with its endpoints.
 
 A full circle is modelled as two arcs.  That keeps every edge open, so the
@@ -33,11 +33,13 @@ from typing import Tuple, Union
 import numpy as np
 
 from .exact_curves import EllipticArc, CylinderIntersectionCurve
+from .quadric_curves import QuadricIntersectionCurve
 
 __all__ = [
     "Arc",
     "EllipticArc",
     "CylinderIntersectionCurve",
+    "QuadricIntersectionCurve",
     "ArcFrame",
     "CurveShape",
     "DegenerateArcError",
@@ -93,7 +95,7 @@ class Spline:
     control_vertices: Tuple[int, ...]
 
 
-CurveShape = Union[Straight, Arc, Spline, EllipticArc, CylinderIntersectionCurve]
+CurveShape = Union[Straight, Arc, Spline, EllipticArc, CylinderIntersectionCurve, QuadricIntersectionCurve]
 
 
 @dataclass(frozen=True)

@@ -16,6 +16,8 @@ import numpy as np
 
 from .curves import Arc, Spline, Straight
 from .exact_curves import EllipticArc, CylinderIntersectionCurve
+from .quadric_algebra import QuadricSupport, RuledSupport
+from .quadric_curves import QuadricIntersectionCurve
 from .entities import Edge, EntityRef, Face, OrientedEdge, Vertex
 from .errors import GeometryError
 from .features import (
@@ -55,6 +57,10 @@ from .tolerance import TolerancePolicy
 
 SCHEMA = "anygeometry"
 VERSION = 5
+# Documents are written at the lowest version that can express them; only a document
+# holding a quadric branch curve is schema 6, so schema-5 readers keep reading every
+# other document unchanged.
+_QUADRIC_VERSION = 6
 
 _GEOMETRY_KINDS = ("vertex", "edge", "face")
 _STRUCTURAL_KINDS = (
@@ -620,14 +626,17 @@ def _serialized_model_state(
                      "second": _surface(edge.curve.second.surface()),
                      **{name: getattr(edge.curve, name) for name in
                         ("start_angle", "sweep_angle", "branch", "parameterization", "transform")}}
+        elif isinstance(edge.curve, QuadricIntersectionCurve):
+            curve = _quadric_curve_record(edge.curve)
         else:  # pragma: no cover - closed public union
             raise GeometryError(f"unsupported curve type {type(edge.curve).__name__}")
         curves.append({"id": edge.id, "start": edge.start, "end": edge.end, "curve": curve})
     id_state = geometry.id_state()
     id_state.update(geometry._next_structural_id)  # noqa: SLF001
+    needs_quadric = any(isinstance(edge.curve, QuadricIntersectionCurve) for edge in geometry.edges.values())
     document: dict[str, object] = {
         "schema": SCHEMA,
-        "version": VERSION,
+        "version": _QUADRIC_VERSION if needs_quadric else VERSION,
         "model_id": model_id,
         "revision": revision,
         "coordinates": {
@@ -1330,6 +1339,37 @@ def _migrate_legacy_structural(geometry: GeometryModel, source_version: int) -> 
     }
 
 
+_RULED_FIELDS = {"kind", "origin", "axis", "radial_direction", "radius", "slope"}
+_QUADRIC_FIELDS = {"kind", "origin", "axis", "radius", "slope", "matrix", "linear", "constant"}
+_QUADRIC_CURVE_FIELDS = {"first", "second", "start_angle", "sweep_angle", "branch", "parameterization", "transform"}
+
+
+def _quadric_curve_record(curve):
+    first, second = curve.first, curve.second
+    return {"type": "quadric_intersection",
+            "first": {"kind": "cone" if first.is_cone else "cylinder", "origin": first.origin, "axis": first.axis,
+                      "radial_direction": first.radial_direction, "radius": first.radius, "slope": first.slope},
+            "second": {"kind": second.kind, "origin": second.origin, "axis": second.axis, "radius": second.radius,
+                       "slope": second.slope, "matrix": second.matrix, "linear": second.linear,
+                       "constant": second.constant},
+            **{name: getattr(curve, name) for name in
+               ("start_angle", "sweep_angle", "branch", "parameterization", "transform")}}
+
+
+def _decode_quadric_curve(data):
+    _exact_fields(data, required={"type", *_QUADRIC_CURVE_FIELDS}, name="quadric intersection curve")
+    first, second = _object(data["first"], "quadric first support"), _object(data["second"], "quadric second support")
+    _exact_fields(first, required=_RULED_FIELDS, name="quadric first support")
+    _exact_fields(second, required=_QUADRIC_FIELDS, name="quadric second support")
+    if first["kind"] not in ("cylinder", "cone") or (first["kind"] == "cone") != (float(first["slope"]) != 0.0):
+        raise GeometryError("quadric first support kind disagrees with its slope")
+    ruled = RuledSupport(first["origin"], first["axis"], first["radial_direction"], first["radius"], first["slope"])
+    support = QuadricSupport(second["kind"], second["origin"], second["axis"], second["radius"], second["slope"],
+                             tuple(second["matrix"]), tuple(second["linear"]), second["constant"])
+    return QuadricIntersectionCurve(ruled, support, data["start_angle"], data["sweep_angle"], data["branch"],
+                                    data["parameterization"], data["transform"])
+
+
 def _decode_geometry_records(
     document: Mapping[str, object], geometry: GeometryModel, *, schema_version: int
 ) -> None:
@@ -1380,6 +1420,10 @@ def _decode_geometry_records(
                     name="spline curve",
                 )
             curve = Spline(_ids(curve_data["control_vertices"], "spline control vertex"))
+        elif curve_kind == "quadric_intersection":
+            if schema_version < _QUADRIC_VERSION:
+                raise GeometryError("quadric intersection curves require schema 6")
+            curve = _decode_quadric_curve(curve_data)
         elif curve_kind in ("elliptic_arc", "cylinder_intersection"):
             if schema_version < 5:
                 raise GeometryError("analytic intersection curves require schema 5")
@@ -1590,7 +1634,7 @@ def from_dict(document: Mapping[str, Any]) -> GeometryModel:
     if document.get("schema", SCHEMA) != SCHEMA:
         raise GeometryError("not an ANYgeometry document")
     version = _integer(document.get("version", 1), "version")
-    if version not in (1, 2, 3, 4, VERSION):
+    if version not in (1, 2, 3, 4, VERSION, _QUADRIC_VERSION):
         raise GeometryError(f"unsupported ANYgeometry version {version}")
     strict_document = version >= 3
     # Schemas 4 and 5 share identity, tolerance and additive semantic fields.

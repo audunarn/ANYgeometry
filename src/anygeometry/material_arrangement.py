@@ -7,14 +7,18 @@ Topology is returned only after every junction and material cycle is resolved.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import heapq
 import math
 import numpy as np
 
 from .arrangement_geometry import (LinePath, BezierPath, curve_junctions,
                                    plane_roots, point_parameters, freeze_edge)
 from .exact_curves import EllipticArc, CylinderIntersectionCurve
+from .quadric_curves import QuadricIntersectionCurve
 from .errors import GeometryError
 from .surfaces import Cone, Cylinder, Plane
+
+_EPS = float(np.finfo(float).eps)
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +78,54 @@ class MaterialDomain:
             return np.asarray((delta[0]*radius*self.support.sweep_angle, delta[1]*slant))
         return np.asarray((delta[0]*self.support.radius*self.support.sweep_angle,
                            delta[1]*self.support.height))
+
+    def world_area_loop(self, loop, tolerance):
+        """Signed physical area of a closed loop (positive counterclockwise in the chart).
+
+        A Cylinder or Plane has a constant area element, so this is the native area times
+        :attr:`area_jacobian`. A Cone's element ``|sweep|*slant*r(v)`` grows with the
+        radius, so ``-integral(F(v) du)`` with ``F`` the antiderivative of ``r`` is used.
+        """
+        if not isinstance(self.support, Cone):
+            return self.area_loop(loop, tolerance/self.area_jacobian)*self.area_jacobian
+        support = self.support
+        slant = math.hypot(support.height, support.radius_end-support.radius_start)
+        delta_radius = support.radius_end-support.radius_start
+
+        def antiderivative(v):
+            return support.radius_start*v+.5*delta_radius*v*v
+
+        scale = abs(support.sweep_angle)*slant
+
+        def integrand(curve, parameters):
+            world = curve.evaluate(parameters)
+            direction = curve.derivative(parameters)
+            offset = world-support.origin
+            v = offset @ support.axis/support.height                    # the axial fraction, as Cone.local_uv
+            x, y = offset @ support.radial_direction, offset @ support.circumferential_direction
+            dx, dy = direction @ support.radial_direction, direction @ support.circumferential_direction
+            return -scale*antiderivative(v)*(x*dy-y*dx)/(x*x+y*y)/support.sweep_angle
+
+        return _integrate_loop(loop, lambda curve: 0., integrand, tolerance)
+
+    def original_world_area(self, tolerance):
+        """Physical area of the stored face: outer loop minus its holes (never a native-area estimate)."""
+        return (abs(self.world_area_loop(self.boundaries[0], tolerance))
+                - sum(abs(self.world_area_loop(loop, tolerance)) for loop in self.boundaries[1:]))
+
+    def material_world_area(self, arrangement):
+        """Physical area of an arrangement's material cells."""
+        if not isinstance(self.support, Cone):
+            return arrangement.area*self.area_jacobian
+        tolerance = arrangement.native_area_tolerance*self.area_jacobian*.05
+        total = 0.
+        for cell in arrangement.cells:
+            def loop(chain):
+                return tuple(ArrangementPath(arrangement.paths[e].curve if forward
+                                             else arrangement.paths[e].curve.subcurve(1., 0.)) for e, forward in chain)
+            total += abs(self.world_area_loop(loop(cell.outer), tolerance))
+            total -= sum(abs(self.world_area_loop(loop(hole), tolerance)) for hole in cell.holes)
+        return total
 
     def left_probe(self, point, tangent, tolerance):
         normal = np.asarray((-tangent[1], tangent[0]))/np.linalg.norm(tangent)
@@ -146,7 +198,7 @@ class MaterialDomain:
             controls = np.asarray(curve.controls)
             second = (np.zeros(3) if len(controls) <= 2 else BezierPath(tuple(map(tuple,
                 (len(controls)-1)*(len(controls)-2)*np.diff(controls, n=2, axis=0)))).evaluate(parameter))
-        elif isinstance(curve, CylinderIntersectionCurve):
+        elif isinstance(curve, (CylinderIntersectionCurve, QuadricIntersectionCurve)):
             second = curve.second_derivative(parameter)
         else:
             return None
@@ -236,46 +288,114 @@ class MaterialDomain:
             analytic=planar_loop_area(self.support,loop,tolerance)
             if analytic is not None:
                 return analytic
-        previous = None
-        for count in (16, 32, 64, 128, 256, 512):
-            nodes, weights = np.polynomial.legendre.leggauss(count)
-            value = 0.
-            for path in loop:
-                curve = path.curve
-                parameters = .5*(nodes+1)
-                # Evaluate each exact curve in one batch. Scalar repetition
-                # recomputed the same cylinder coefficients at every Gauss
-                # station; batching retains the quadrature and its tolerance.
-                world=curve.evaluate(parameters)
-                direction=curve.derivative(parameters)
-                positions=np.asarray([self.support.local_uv(point) for point in world])
-                if isinstance(self.support,(Cylinder,Cone)):
-                    support=self.support
-                    if abs(abs(support.sweep_angle)-math.tau)<=1e-12:
-                        middle=np.asarray(support.local_uv(curve.evaluate(.5)))
-                        period=math.tau/support.sweep_angle
-                        positions[:,0]+=np.rint((middle[0]-positions[:,0])/period)*period
-                    offset=world-support.origin
-                    x,y=offset @ support.radial_direction,offset @ support.circumferential_direction
-                    dx,dy=direction @ support.radial_direction,direction @ support.circumferential_direction
-                    angular_derivative=(x*dy-y*dx)/(x*x+y*y)/support.sweep_angle
-                    # Green's theorem after integration by parts:
-                    # .5*integral(u dv-v du) = .5*[uv] - integral(v du).
-                    # In the native cylinder chart axial v can approach a
-                    # quadratic branch transition. Its value is well conditioned
-                    # while computing dv divides by a vanishing discriminant.
-                    # Avoid that unnecessary division in the area integral.
-                    first,last=self.uv(curve,0.),self.uv(curve,1.)
-                    value += .5*(last[0]*last[1]-first[0]*first[1])-.5*float(
-                        weights @ (positions[:,1]*angular_derivative))
+        support = self.support
+        if isinstance(support, (Cylinder, Cone)):
+            def integrand(curve, parameters):
+                world = curve.evaluate(parameters)
+                direction = curve.derivative(parameters)
+                offset = world-support.origin
+                if isinstance(support, Cone):
+                    v = offset @ support.axis/support.height              # the axial fraction, as Cone.local_uv
                 else:
-                    derivatives=np.linalg.lstsq(np.column_stack((self.support.u_vector,self.support.v_vector)),
-                                                direction.T,rcond=None)[0].T
-                    value += .25*float(weights @ (positions[:, 0]*derivatives[:, 1]-positions[:, 1]*derivatives[:, 0]))
-            if previous is not None and abs(value-previous) <= tolerance:
-                return value
-            previous = value
+                    v = np.asarray([support.local_uv(point)[1] for point in world])
+                x, y = offset @ support.radial_direction, offset @ support.circumferential_direction
+                dx, dy = direction @ support.radial_direction, direction @ support.circumferential_direction
+                # Green's theorem after integration by parts:
+                # .5*integral(u dv-v du) = .5*[uv] - integral(v du).
+                # In the native cylinder chart axial v can approach a
+                # quadratic branch transition. Its value is well conditioned
+                # while computing dv divides by a vanishing discriminant.
+                # Avoid that unnecessary division in the area integral.
+                return -v*((x*dy-y*dx)/(x*x+y*y)/support.sweep_angle)
+
+            def boundary(curve):
+                first, last = self.uv(curve, 0.), self.uv(curve, 1.)
+                return .5*(last[0]*last[1]-first[0]*first[1])
+        else:
+            def integrand(curve, parameters):
+                world = curve.evaluate(parameters)
+                direction = curve.derivative(parameters)
+                positions = np.asarray([support.local_uv(point) for point in world])
+                derivatives = np.linalg.lstsq(np.column_stack((support.u_vector, support.v_vector)),
+                                              direction.T, rcond=None)[0].T
+                return .5*(positions[:, 0]*derivatives[:, 1]-positions[:, 1]*derivatives[:, 0])
+
+            def boundary(curve):
+                return 0.
+        return _integrate_loop(loop, boundary, integrand, tolerance)
+
+
+def _integrate_loop(loop, boundary, integrand, tolerance):
+    """Green-theorem loop area from Gauss rules of doubling size; adaptive when those do not settle.
+
+    ``integrand(curve, parameters)`` returns the samples of one path's integrand over the
+    unit parameter interval and ``boundary(curve)`` its closed-form boundary term. Two
+    successive rules cannot agree below the rounding noise of their own sums, so that
+    floor bounds the requested tolerance.
+    """
+    previous = None
+    for count in (16, 32, 64, 128, 256, 512):
+        nodes, weights = np.polynomial.legendre.leggauss(count)
+        value = magnitude = 0.
+        for path in loop:
+            samples = integrand(path.curve, .5*(nodes+1))
+            edge = boundary(path.curve)
+            value += edge+.5*float(weights @ samples)                    # [-1, 1] rule on [0, 1]
+            magnitude += abs(edge)+.5*float(weights @ np.abs(samples))
+        if previous is not None and abs(value-previous) <= max(tolerance, 64*_EPS*magnitude):
+            return value
+        previous = value
+    # A branch point just outside a path (a fold of the exact curve) converges slowly
+    # in a global rule; bisection toward it resolves the same integral locally.
+    value = 0.
+    for path in loop:
+        value += boundary(path.curve)+_adaptive_gauss(
+            lambda parameters, curve=path.curve: integrand(curve, parameters), tolerance/len(loop))
+    return value
+
+
+def _adaptive_gauss(function, tolerance):
+    """Integral of ``function`` over ``[0, 1]``: a 24-point Gauss rule, always bisecting the worst interval.
+
+    An interval's error is the disagreement between its own rule and its two halves'.
+    Refinement stops once the total error is below ``tolerance`` or below the noise floor
+    of the evaluation itself (near a fold the exact curves' derivative carries a few
+    hundred ulp of cancellation noise that no refinement removes); if the work budget
+    ends first the integral is refused.
+    """
+    nodes, weights = np.polynomial.legendre.leggauss(24)
+
+    def rule(a, b):
+        samples = function(.5*(a+b)+.5*(b-a)*nodes)
+        return .5*(b-a)*float(weights @ samples), .5*(b-a)*float(weights @ np.abs(samples))
+
+    def refine(a, b, whole):
+        middle = .5*(a+b)
+        left, left_mass = rule(a, middle)
+        right, right_mass = rule(middle, b)
+        return (abs(left+right-whole), a, b, middle, left, right, left_mass+right_mass)
+
+    first = refine(0., 1., rule(0., 1.)[0])
+    heap = [(-first[0], first)]
+    settled = []                                    # intervals too small to refine: their error is accepted
+    for _ in range(400):
+        error = sum(item[0] for _key, item in heap)
+        mass = sum(item[6] for _key, item in heap)+sum(item[6] for item in settled)
+        if error <= max(tolerance, 2.**-40*mass):
+            break
+        _key, item = heapq.heappop(heap)
+        _error, a, b, middle, left, right, _size = item
+        if b-a < 1e-13:
+            settled.append(item)
+            continue
+        for lo, hi, value in ((a, middle, left), (middle, b, right)):
+            child = refine(lo, hi, value)
+            heapq.heappush(heap, (-child[0], child))
+    leaves = [item for _key, item in heap]+settled
+    error = sum(item[0] for item in leaves)
+    if error > max(tolerance, 2.**-36*sum(item[6] for item in leaves)):
         raise GeometryError("material area integral did not resolve to the requested tolerance")
+    return sum(item[4]+item[5] for item in leaves)
 
 
 def _clip(domain, curve, tolerance, check):
@@ -446,7 +566,8 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
                 # predicate returning both interval endpoints, not midpoints.
                 hits = curve_junctions(curve, old, tolerance=tolerance,cancellation_check=lambda:(check() or False))
                 if any(abs(x) <= 1e-12 for x, _ in hits) and any(abs(x-1) <= 1e-12 for x, _ in hits):
-                    if isinstance(curve,CylinderIntersectionCurve) or isinstance(old,CylinderIntersectionCurve):
+                    if isinstance(curve,(CylinderIntersectionCurve,QuadricIntersectionCurve)) or isinstance(
+                            old,(CylinderIntersectionCurve,QuadricIntersectionCurve)):
                         from .batch_intersections import _coincident
                         if _coincident(curve,old,tolerance):
                             duplicate=index; break

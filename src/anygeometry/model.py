@@ -4596,7 +4596,7 @@ class GeometryModel:
         """Add an analytic curve with topology endpoints matching its definition."""
         start_point, end_point = self.vertex_position(start), self.vertex_position(end)
         if not isinstance(curve, EXACT_CURVES):
-            raise GeometryError("add_curve expects an EllipticArc or CylinderIntersectionCurve")
+            raise GeometryError("add_curve expects an EllipticArc, CylinderIntersectionCurve or QuadricIntersectionCurve")
         expected = curve.evaluate(np.asarray((0., 1.)))
         scale = float(np.linalg.norm(expected[1]-expected[0]))
         if np.any(np.linalg.norm(expected-(start_point, end_point), axis=1) > self.tolerance.effective_curve_fit_residual(scale)):

@@ -116,7 +116,7 @@ def query_trimmed_surface_charts(model, operands=None, *, expected_revision=None
             cancellation_check=lambda: (_check(cancellation_check, "trim arrangement") or False))
         charts.append(TrimmedSurfaceChart(model.handle("face",face_id), tuple(
             model.handle("face_use",identifier) for identifier,use in sorted(model.face_uses.items())
-            if use.face_id == face_id), domain, tolerance, arrangement.area*domain.area_jacobian))
+            if use.face_id == face_id), domain, tolerance, domain.material_world_area(arrangement)))
     if model.revision != revision or to_dict(model)["checksum"]["value"] != checksum:
         raise GeometryError("geometry changed during trimmed chart query")
     return TrimmedSurfaceCharts(model.model_id,revision,checksum,tuple(charts))
@@ -157,8 +157,7 @@ def validate_trimmed_surface_charts_binding(model, result, *, expected_revision=
             raise GeometryError("trimmed chart tolerance binding changed")
         area_tolerance=model.tolerance.effective_area(length)
         native_tolerance=area_tolerance/live.area_jacobian
-        area=(abs(live.area_loop(live.boundaries[0],native_tolerance*.05))
-              -sum(abs(live.area_loop(loop,native_tolerance*.05)) for loop in live.boundaries[1:]))*live.area_jacobian
+        area=live.original_world_area(native_tolerance*.05*live.area_jacobian)
         if not np.isfinite(chart.material_area) or abs(area-chart.material_area)>area_tolerance:
             raise GeometryError("trimmed chart material area binding changed")
         for use in chart.face_uses:

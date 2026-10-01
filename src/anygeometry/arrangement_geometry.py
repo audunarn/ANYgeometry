@@ -14,6 +14,7 @@ from .analytic_roots import isolate_real_roots, trigonometric_roots
 from .curves import Arc, Straight, Spline
 from .errors import GeometryError
 from .exact_curves import EXACT_CURVES, EllipticArc, CylinderIntersectionCurve
+from .quadric_curves import QuadricIntersectionCurve
 from .surfaces import Cylinder, Plane
 
 
@@ -134,6 +135,12 @@ def plane_roots(curve, normal, offset, *, tolerance=1e-12, cancellation_check=No
         from .quadric_curve_events import quadric_roots
         return quadric_roots(curve,np.zeros((3,3)),.5*normal,-offset,
                              tolerance=tolerance,cancellation_check=cancellation_check)
+    if isinstance(curve, QuadricIntersectionCurve):
+        from .quadric_algebra import QuadricSupport
+        normal = np.asarray(normal, dtype=float)
+        origin = tuple(float(v) for v in normal*(offset/float(normal @ normal)))
+        return curve.roots_on(QuadricSupport("plane", origin, tuple(float(v) for v in normal)),
+                              tolerance=tolerance, cancellation_check=cancellation_check)
     if isinstance(curve, BezierPath):
         # Bernstein-to-power conversion of the scalar plane constraint.
         values = np.asarray(curve.controls) @ normal-offset
@@ -206,6 +213,8 @@ def _point_parameters(curve, point, *, tolerance=1e-10):
             if np.linalg.norm(curve.evaluate(parameter)-point) <= tolerance:
                 roots.append(parameter)
         return tuple(roots)
+    if isinstance(curve, QuadricIntersectionCurve):
+        return curve.parameters_of(point, tolerance=tolerance)
     if isinstance(curve, BezierPath):
         controls = np.asarray(curve.controls)
         coordinate = int(np.argmax(np.ptp(controls, axis=0)))
@@ -336,12 +345,52 @@ def curve_junctions(first, second, *, tolerance=1e-10,cancellation_check=None):
         candidates.extend((s,t) for s in point_parameters(first,second.evaluate(t),tolerance=tolerance))
     candidates.extend(_curve_junctions(first,second,tolerance=tolerance,
                                       cancellation_check=cancellation_check))
-    return tuple(sorted(dict.fromkeys(candidates)))
+    result = tuple(sorted(dict.fromkeys(candidates)))
+    if isinstance(first, QuadricIntersectionCurve) or isinstance(second, QuadricIntersectionCurve):
+        result = _merge_touching(first, second, result, tolerance)
+    return result
+
+
+_TOUCH = 1e-6
+
+
+def _merge_touching(first, second, junctions, tolerance):
+    """One junction for a tangential contact.
+
+    Where two curves touch, their exact crossings split into a pair as far apart as
+    the square root of the data's rounding, many times the tolerance. Junctions that are
+    close along both curves while the curves coincide between them (within tolerance)
+    are the same contact: keep the one at a curve end, else their mean.
+    """
+    if len(junctions) < 2:
+        return junctions
+    clusters = [[junctions[0]]]
+    for item in junctions[1:]:
+        t, s = item
+        t0, s0 = clusters[-1][-1]
+        if (np.linalg.norm(first.evaluate(t)-first.evaluate(t0)) <= _TOUCH
+                and np.linalg.norm(second.evaluate(s)-second.evaluate(s0)) <= _TOUCH
+                and np.linalg.norm(first.evaluate(.5*(t+t0))-second.evaluate(.5*(s+s0))) <= tolerance):
+            clusters[-1].append(item)
+        else:
+            clusters.append([item])
+    result = []
+    for cluster in clusters:
+        if len(cluster) == 1:
+            result.append(cluster[0])
+            continue
+        ends = [item for item in cluster if item[0] in (0., 1.) or item[1] in (0., 1.)]
+        result.append(ends[0] if ends else (sum(item[0] for item in cluster)/len(cluster),
+                                            sum(item[1] for item in cluster)/len(cluster)))
+    return tuple(result)
 
 
 def _curve_junctions(first, second, *, tolerance=1e-10,cancellation_check=None):
     if cancellation_check is not None and cancellation_check():
         raise GeometryError('curve intersection predicate cancelled')
+    if isinstance(first, QuadricIntersectionCurve) or isinstance(second, QuadricIntersectionCurve):
+        from .quadric_events import quadric_pair_junctions
+        return quadric_pair_junctions(first, second, tolerance=tolerance, cancellation_check=cancellation_check)
     if isinstance(first, LinePath):
         return line_curve_junctions(first, second, tolerance=tolerance,cancellation_check=cancellation_check)
     if isinstance(second, LinePath):

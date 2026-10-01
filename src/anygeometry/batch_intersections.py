@@ -21,6 +21,7 @@ from .entities import EntityRef, OrientedEdge
 from .curves import Straight
 from .errors import GeometryError
 from .exact_curves import EllipticArc, CylinderIntersectionCurve
+from .quadric_curves import QuadricIntersectionCurve
 from .identity import EntityHandle
 from .material_arrangement import (ArrangementPath, ArrangementPoint, ArrangementCell, MaterialDomain,
                                    MaterialArrangement, arrange_material, _clip, _clip_intervals)
@@ -29,7 +30,7 @@ from .member_arrangements import (MemberAxisArrangement, MemberPointContact,
 from .predicates import IntersectionDimension, IntersectionKind, qualified_plane_plane
 from .serialization import to_dict
 from .structural import ConnectionIntent, Orientation
-from .surfaces import Plane, Cylinder
+from .surfaces import Cone, Cylinder, Plane
 from .transactions import ChangeSet
 from .definition_binding import definition_checksum
 
@@ -341,6 +342,12 @@ def _pair_paths(first, second, model, tolerance, check, *, point_contacts=None):
         boxes = (_domain_bounds(first), _domain_bounds(second))
         extent = max(np.linalg.norm(lo-point)+np.linalg.norm(hi-point) for lo, hi in boxes)+1.
         paths = (LinePath(tuple(point-extent*direction), tuple(point+extent*direction)),)
+    elif isinstance(a, Cone) or isinstance(b, Cone):
+        from .quadric_supports import cone_support
+        result = cone_support(a, b, tolerance=tolerance, cancellation_check=lambda: (check() or False))
+        if result.coincident:
+            return _coplanar_traces(first, second, tolerance, check, model)
+        paths = (*result.curves, *(LinePath(start, end) for start, end in result.segments))
     elif isinstance(a, Plane) and isinstance(b, Cylinder):
         result = plane_cylinder_support(a, b, tolerance=tolerance, cancellation_check=lambda: (check() or False))
         paths = (*result.curves, *(LinePath(start, end) for start, end in result.segments))
@@ -510,6 +517,12 @@ def _coincident(first, second, tolerance):
     if isinstance(first, BezierPath) and isinstance(second, BezierPath):
         a, b = np.asarray(first.controls), np.asarray(second.controls)
         return a.shape == b.shape and min(np.max(np.linalg.norm(a-b, axis=1)), np.max(np.linalg.norm(a-b[::-1], axis=1))) <= tolerance
+    if isinstance(first, QuadricIntersectionCurve) or isinstance(second, QuadricIntersectionCurve):
+        from .quadric_events import branch_supports, curve_quadric_roots
+        branch, other = (first, second) if isinstance(first, QuadricIntersectionCurve) else (second, first)
+        return (all(curve_quadric_roots(other, support, tolerance=tolerance) is None
+                    for support in branch_supports(branch))
+                and bool(point_parameters(branch, other.evaluate(.5), tolerance=tolerance)))
     if isinstance(first, CylinderIntersectionCurve) and isinstance(second, CylinderIntersectionCurve):
         from .cylinder_curve_events import cylinder_roots
         return (all(cylinder_roots(first,support,transform=second.transform,tolerance=tolerance) is None
@@ -586,15 +599,16 @@ def _child_support(model, face, outer, holes, tolerance):
     This changes the parameter extent, never the underlying physical surface.
     """
     support=face.surface
-    if holes or not isinstance(support,(Plane,Cylinder)):
+    if holes or not isinstance(support,(Plane,Cylinder,Cone)):
         return outer,support,face.parameterization,None
     points=[model.vertex_position(model.oriented_start_vertex(use)) for use in outer]
-    if isinstance(support,Cylinder):
+    if isinstance(support,(Cylinder,Cone)):
         domain=MaterialDomain(0,support,(tuple(ArrangementPath(freeze_edge(model,use.edge)
                     if use.forward else freeze_edge(model,use.edge).subcurve(1.,0.)) for use in outer),))
         rows=[domain.uv(path.curve,0.) for path in domain.boundaries[0]]
         lower,upper=np.min(rows,axis=0),np.max(rows,axis=0)
-        native_tolerance=tolerance/min(support.radius*abs(support.sweep_angle),support.height)
+        widest=max(support.radius_start,support.radius_end) if isinstance(support,Cone) else support.radius
+        native_tolerance=tolerance/min(widest*abs(support.sweep_angle),support.height)
         rectangular=all((abs(row[0]-lower[0])<=native_tolerance or abs(row[0]-upper[0])<=native_tolerance)
                         or (abs(row[1]-lower[1])<=native_tolerance or abs(row[1]-upper[1])<=native_tolerance)
                         for row in rows)
@@ -615,9 +629,16 @@ def _child_support(model, face, outer, holes, tolerance):
             index=min((i for i,row in enumerate(rows) if abs(row[1]-lower[1])<=native_tolerance),
                       key=lambda i:rows[i][0])
             outer=outer[index:]+outer[:index]
-            support=Cylinder(support.origin+lower[1]*support.height*support.axis,
-                support.axis,support.radial_direction,support.radius,(upper[1]-lower[1])*support.height,
-                support.start_angle+lower[0]*support.sweep_angle,(upper[0]-lower[0])*support.sweep_angle)
+            origin=support.origin+lower[1]*support.height*support.axis
+            height=(upper[1]-lower[1])*support.height
+            start,sweep=support.start_angle+lower[0]*support.sweep_angle,(upper[0]-lower[0])*support.sweep_angle
+            if isinstance(support,Cone):
+                def radius(v):
+                    return (1-v)*support.radius_start+v*support.radius_end
+                support=Cone(origin,support.axis,support.radial_direction,radius(lower[1]),radius(upper[1]),
+                             height,start,sweep)
+            else:
+                support=Cylinder(origin,support.axis,support.radial_direction,support.radius,height,start,sweep)
             return outer,support,None,model._detect_corners(outer)
         return outer,support,None,None
     corners=model._detect_corners(outer) if len(outer)>=4 else ()
