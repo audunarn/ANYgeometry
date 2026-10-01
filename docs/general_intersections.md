@@ -60,7 +60,7 @@ semantics. CAD export and CRS reprojection are separate work.
 
 | Configuration or case | Current extension evidence |
 | --- | --- |
-| Windows, Python 3.14 kernel | 1,074 regressions pass, including growing original-operand arrangements (1, 8 and 25 cuts), repeated Member visits and analytic planar-area oracles |
+| Windows, Python 3.14 kernel | 1,077 regressions pass, including growing original-operand arrangements (1, 8 and 25 cuts), repeated Member visits and analytic planar-area oracles |
 | Windows, Python 3.13 compiled mesher | 147 metric/cache/gradation/frontal/seeding/automatic-route and S3 checks pass; five staged chart-refinement contract checks included |
 | Windows, Python 3.13 FEM lifecycle | 12 intersection and reference-retention regressions pass |
 | Exact installed ANYfem replay, targets 0.5 and 0.25 | Both accepted on Windows/Linux/macOS arm64; source, joints, material, save/load and equivalent regeneration checks pass |
@@ -68,7 +68,10 @@ semantics. CAD export and CRS reprojection are separate work.
 | Parallel/perpendicular cylinder pairs | Accepted on those three platforms; independent angular/axial coverage and high-valence checks pass |
 | Skew finite unequal-radius cylinders | Default automatic meshes accepted on those three platforms; independent eliminated cylinder equations, 70-digit residuals, finite-height coverage, shared nodes and material checks pass |
 | Changed radius with unchanged output roles | Kernel owner identity/parameter tests and FEM section/load/support, save/load and undo/redo checks pass |
-| First expanded hosted run | 27/32 jobs pass; Intel kernels and minimum dependencies fail one planar quadrature regression; analytic integration fix passes locally, updated hosted matrix pending |
+| Expanded hosted matrix at `dedbb6130df37b9a182ebe15661323828d27afd5` | All 32 jobs pass: four-platform kernel matrix, minimum dependencies, wheel smoke and installed public/MCP/general consumers |
+| Oblique closed ellipse and concave two-hole/three-wall/two-beam fixtures | Current local and clean installed default application meshes pass independent material/joint/beam coverage, source/reference non-mutation and save/load; hosted verification of the follow-up fixes is pending |
+| One circular and two elliptic cuts on one plate | Local and clean installed automatic admission, complete closed shared-node loops, all material areas and source/save-load checks pass |
+| Growing default application fixtures | 1, 8 and 25 interior-ended parallel stiffeners pass local and clean installed material and complete shared-node checks; no model-count exception is used |
 
 Installed reports bind wheel hashes, resolved dependencies, package byte checks
 and origins in clean environments outside source checkouts. Candidate package
@@ -80,13 +83,15 @@ automatic recovery API; its comparison uses released application defaults.
 
 Historical matrix results in [compatibility](compatibility.md) apply only to
 their recorded source/artifacts. Windows/Linux/macOS 15 arm64/macOS 15 x86_64
-on Python 3.11–3.14 still require extension-specific evidence. Intel downstream
+on Python 3.11–3.14 passed the extension-specific kernel matrix at the recorded
+commit. Intel downstream
 native-package coverage is not implied by kernel coverage. The Linux/Python
-3.11 minimum-dependency and installed-wheel optional-Shapely gates remain
-required. Numerical and mesh-quality thresholds remain unchanged.
+3.11 minimum-dependency and installed-wheel optional-Shapely gates passed there.
+Changed follow-up sources require fresh evidence. Numerical and mesh-quality
+thresholds remain unchanged.
 
 The generalized installed-consumer CI builds native mesher commit
-`dda50e4c813834af10bf52bf4451ce55bda83315` and FEM commit
+`7b31e705a48e4039fbea8b8c0f71d141dd95312d` and FEM commit
 `fa7e666f8cd236c17591ccde67f9b34f20f45f33`, then installs those wheels and the
 single candidate geometry wheel in clean environments outside all checkouts.
 It requires compiled triangulation, checks every candidate package file against
@@ -98,8 +103,11 @@ acceptance. Setup failures and unavailable artifacts are explicit failures.
 The compact [installed evidence](../reports/general_intersections/installed-qualification-36795873823.json)
 binds these passes to the recorded source commits and artifacts; the overall
 [hosted run](https://github.com/audunarn/ANYgeometry/actions/runs/36795873823)
-failed its five planar-area gates. Updated source is not accepted merely because
-those earlier installed artifacts passed.
+failed its five planar-area gates. The subsequent
+[installed evidence](../reports/general_intersections/installed-qualification-36798593408.json)
+records the six-case consumer passes and hashes for the
+[fully passing run](https://github.com/audunarn/ANYgeometry/actions/runs/36798593408).
+Neither record includes the later material-fixture fixes.
 
 Outstanding implementation/acceptance includes remaining pair-policy routing,
 bay-count-changing feature regeneration,

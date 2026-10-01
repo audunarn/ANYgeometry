@@ -88,3 +88,54 @@ def test_concave_domain_and_explicit_resource_failures():
         arrange_material(domain, (trace,), tolerance=1e-10, cancellation_check=lambda: True)
     with pytest.raises(GeometryError, match='budget'):
         arrange_material(domain, (trace,), tolerance=1e-10, max_predicates=1)
+
+
+def test_sheared_concave_chart_keeps_full_vertical_cut_at_reflex_height():
+    from anygeometry.material_arrangement import _clip
+    _model,domain=_plate(((0,0,0),(6,0,0),(6,2,0),(3,2,0),(3,4,0),(0,4,0)))
+    # A horizontal boundary can have a tiny computed affine-chart slope.
+    cut=LinePath((1.25,-8.223295267641177,0),(1.25,8.523295267641178,0))
+    parts=_clip(domain,cut,1e-8,lambda:None)
+    assert len(parts)==1
+    np.testing.assert_allclose(parts[0].evaluate(0),(1.25,0,0),atol=1e-12)
+    np.testing.assert_allclose(parts[0].evaluate(1),(1.25,4,0),atol=1e-12)
+    for y in (2.,2.-1e-12,2.+1e-12):
+        assert domain.contains(LinePath((1.25,y,0),(1.25,y,0)),0.,1e-8)
+
+
+def test_decomposition_stub_directions_use_physical_orthogonality():
+    _model,domain=_plate(((0,0,0),(6,0,0),(6,2,0),(3,2,0),(3,4,0),(0,4,0)))
+    trace=ArrangementPath(LinePath((.1,.1,0),(2.9,2.9,0)),owners=(1,2))
+    arranged=arrange_material(domain,(trace,),tolerance=1e-10)
+    assert arranged.area*domain.area_jacobian==pytest.approx(18.)
+    authored=np.asarray((1.,0.,0.))
+    for endpoint in (trace.curve.evaluate(0.),trace.curve.evaluate(1.)):
+        incident=[]
+        for path in arranged.paths:
+            if not path.decomposition:continue
+            if any(np.linalg.norm(path.curve.evaluate(t)-endpoint)<1e-9 for t in (0.,1.)):
+                direction=path.curve.derivative(.5);direction/=np.linalg.norm(direction)
+                incident.append(direction)
+        assert incident
+        assert all(abs(np.dot(direction,authored))<1e-12 or
+                   abs(abs(np.dot(direction,authored))-1)<1e-12 for direction in incident)
+
+
+def test_reversed_duplicate_bezier_boundary_is_one_exact_material_edge():
+    from anygeometry import Plane
+    from anygeometry.arrangement_geometry import BezierPath
+    curve = BezierPath(((.5,.5,0),(1.5,1.5,0),(2.5,.5,0)))
+    boundary = (
+        ArrangementPath(LinePath((0,0,0),(3,0,0))),
+        ArrangementPath(LinePath((3,0,0),(3,.5,0))),
+        ArrangementPath(LinePath((3,.5,0),(2.5,.5,0))),
+        ArrangementPath(curve.subcurve(1.,0.)),
+        ArrangementPath(LinePath((.5,.5,0),(0,.5,0))),
+        ArrangementPath(LinePath((0,.5,0),(0,0,0))),
+    )
+    domain = MaterialDomain(1, Plane((0,0,0),(1,0,0),(0,1,0)), (boundary,))
+    arranged = arrange_material(domain,(ArrangementPath(curve,owners=(1,2)),),tolerance=1e-10)
+    # Integral under quadratic y=.5+2t(1-t), x=.5+2t, plus end strips.
+    assert arranged.area == pytest.approx(13/6,abs=1e-12)
+    assert len(arranged.cells) == 1
+    assert sum(isinstance(path.curve,BezierPath) for path in arranged.paths) == 1

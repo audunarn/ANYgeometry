@@ -394,7 +394,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: audunarn/ANYmesh
-          ref: dda50e4c813834af10bf52bf4451ce55bda83315
+          ref: 7b31e705a48e4039fbea8b8c0f71d141dd95312d
           path: .ecosystem/ANYmesh
           persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -422,7 +422,7 @@ jobs:
               commits[owner] = subprocess.check_output(['git','-C','.ecosystem/'+owner,'rev-parse','HEAD'],text=True).strip()
           Path('candidate/source-commits.json').write_text(json.dumps(commits,indent=2))
           PY
-      - name: Require accepted default-policy replay and cylinder joints
+      - name: Require accepted default-policy replay, cylinder joints and material fixtures
         run: >-
           python tools/check_general_intersections.py
           --geometry candidate/anygeometry-*.whl

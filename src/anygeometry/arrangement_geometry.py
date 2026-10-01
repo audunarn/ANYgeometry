@@ -112,8 +112,13 @@ def plane_roots(curve, normal, offset, *, tolerance=1e-12, cancellation_check=No
     if isinstance(curve, LinePath):
         start = float(normal @ curve.start-offset)
         delta = float(normal @ (np.asarray(curve.end)-curve.start))
+        # A line's residual is affine; its endpoint maximum bounds the whole
+        # segment. An affine chart can leave a tiny nonzero dot product on a
+        # horizontal boundary, which must not lose the winding crossing.
+        if max(abs(start),abs(start+delta))<=tolerance:
+            return None
         if delta == 0:
-            return None if abs(start) <= tolerance else ()
+            return ()
         root = -start/delta
         return (min(1., max(0., root)),) if -tolerance <= root <= 1+tolerance else ()
     if isinstance(curve, EllipticArc):

@@ -30,7 +30,7 @@ independent analytic/high-precision joint and material checks. Hosted run
 minimum-dependency job failed the same planar area quadrature regression.
 Analytic planar integration now preserves the original tolerances, and the
 updated full Windows/Python 3.14 kernel passes 1,074 tests. The updated hosted
-matrix is next. Member/material CONNECT wrappers now use the batch engine;
+matrix passed all 32 jobs at run 36798593408. Member/material CONNECT wrappers now use the batch engine;
 repeated Member visits retain distinct parent parameters and canonical topology.
 Broader oblique/concave/holed meshing and remaining compatibility limitations
 still need explicit acceptance. Earlier diagnostics below are retained history.
@@ -618,3 +618,121 @@ closed-form elliptic primitives. Keep cylinder quadrature and every tolerance
 unchanged. Verify a circle-cap analytic oracle, affine/skew bases, orientations,
 small sweeps and translated coordinates, then rerun the failing regression and
 full kernel before the changed hosted gates.
+
+Full updated kernel: 1,074 passed in 175.44 seconds. Member pair compatibility,
+repeated visits and independent planar area oracles pass. Fixes committed at
+689ed5b and dedbb6130df37b9a182ebe15661323828d27afd5. Updated hosted matrix:
+https://github.com/audunarn/ANYgeometry/actions/runs/36798593408
+The earlier run's three installed general-consumer jobs all passed six cases;
+compact hash-bound evidence is installed-qualification-36795873823.json.
+
+Next bounded application slice: one closed oblique plane/cylinder ellipse and
+one concave L plate with two holes, three interior-ended shell stiffeners and
+two crossing assigned beams. Use default automatic linear meshing at 0.5.
+Independent oracles are analytic plane/cylinder equations, exact linear/angular
+interval coverage, developed/planar material area and shared graph incidence.
+Source design, section/load/support references and save/load must remain valid.
+Each disposable case retains the existing 900-second consumer bound; failures
+remain unaccepted. This tests curved chart coverage and multi-owner refinement,
+not another sweep of previously accepted cylinder fixtures.
+
+The first oblique default application fixture fails in owner-chart refinement:
+physical triangles become invalid before publication. Retain that failed run.
+The physical ellipse/sector corners are regular; distinguish an invalid mesh
+arriving from station propagation from degeneration during new staged bisection.
+Capture that face's before-refinement mesh, certified owner and first failed
+triangle rows once, then inspect/reuse the saved input. Do not regenerate the
+whole application for repeated diagnostics or accept malformed topology.
+Hosted run 36798593408 completed all 32 jobs successfully: full four-platform
+kernel matrix, minimum dependencies, four installed-wheel smoke configurations,
+public/MCP and six-case native consumers on Windows/Linux/macOS ARM. Retained
+hash-bound summary: installed-qualification-36798593408.json. Those sources do
+not include the following material-fixture fixes.
+
+Oblique application diagnosis: one interior vertex near a fixed straight
+boundary needed physical quality-driven relocation rather than repeated
+midpoint bisection. Stage bounded owner-evaluated moves, keep every physical
+boundary/shared node exact, and publish only after topology/material checks.
+The final cylindrical repair must visit completed faces even when no earlier
+shared-edge split populated their cache. Default oblique .5 now passes: 875
+nodes/1690 T3, a complete 24-edge closed ellipse, conserved material and
+source/reference/save-load checks. Failed before-repair evidence stays intact.
+
+Concave two-hole/three-wall/two-beam diagnosis found two separate defects.
+Artificial seams inherited a sheared Plane basis and created an irreducible
+11.31-degree wedge. Continue isolated physical stubs and use their physical
+perpendicular instead. A horizontal trim's tiny affine-chart residual was
+mistaken for a sloping line, dropping two complete wall joints at the reflex
+vertex height. Bound a LinePath's plane residual by its endpoints, using the
+existing tolerance, so horizontal winding remains complete. Default concave
+.5 now passes independent areas, all five wall joints, both beam lengths and
+shared material intervals, plus source non-mutation/save-load.
+
+Next bounded verification: add the two physical regressions, run the complete
+kernel and affected mesh/FEM suites, rebuild the coordinated candidate wheels,
+and run all eight default fixtures outside checkouts. Then pin the reviewed
+mesher commit in hosted consumers and rerun the required platform gates.
+No earlier green artifact substitutes for these changed sources.
+
+2026-10-01 follow-up: physical seams use the orthogonal frame derived from
+the authored Plane axis (not continued stub tangents); the latter trial broke
+an unchanged three-plate growth regression and was rejected. Kernel 1076 and
+FEM 45 passed after the orthogonal-frame correction. The latest shared Bézier
+boundary deduplication still needs its full kernel rerun. The full native mesher
+run was stopped at the bounded 15-minute diagnostic window; it is not passing
+evidence. Individual legacy cylinder/cone/ruled and cancellation regressions
+have since passed after compatibility corrections.
+
+Principal remaining native uncertainty: thin-wall candidate selection ignores
+angle violations when explicit quality options are absent, although its own
+reported default target is 30 degrees. Two cells at 29.942 degrees then receive
+a misleading target_met=True. Competing explanations are a physically bad
+triangulation versus selection that rewards aspect/growth before satisfying
+its reported thresholds. Bounded experiment: rank threshold violations before
+already-admissible aspect/growth optimization, replay the unchanged thin-wall
+test and nearby quality regressions. Do not alter thresholds, point budgets or
+protected shared nodes. Published mixed-cell diagnostics must remain truthful.
+
+Clean installed runs retained failures: material-followup reached skew but
+failed sampled trim projection; certified-chart passed skew, oblique, concave
+and growth 1/8/25, then failed the original replay's legacy atlas dispatch.
+The exact owner inverse and external planar-joint discriminator fix these in
+source; fresh artifacts and hosted runs are still required.
+
+The ranking-only trial was rejected. The planar lattice polisher now opts in
+only through the planar consumer path; curved seed/metric optimizers retain
+their original contracts. It preserves every constrained node, tests oriented
+stars and the complete candidate, and refuses any worsened growth or failed
+published mixed-cell policy. The unchanged thin-wall fixture passes its target.
+The three-plate fixture exposed an invalid test assumption: a clean mapped/native
+mix without repair has no native optimizer dictionary on mapped faces. Replace
+that diagnostic-shape assumption with an independent growth check across all
+actual mapped/native cells and cross-owner adjacencies (measured 1.45037, limit1.5).
+
+General open cylindrical components choose the general chart contract before
+qualification based on exterior straight edges. Historical atlas qualification
+functions and refusal tests remain unchanged; public open-component coverage
+now checks complete owner area without invoking either legacy fallback.
+Multiple-cut source acceptance adds one circle and two oblique ellipses on a
+single plate: 718 nodes/1358 cells, three complete closed 12-segment joints,
+areas32 and2pi each, source/reference/save-load checks.
+
+Fresh clean installed qualification at planar-final completed all ten named
+cases (twelve meshes including growth1/8/25). Exact replay .5/.25, four cylinder
+pairs, oblique, concave, growth and three closed cuts all receive automatic
+ADMITTED meshes with independent joint/material/lifecycle checks. Candidate
+geometry wheel SHA380e58eb99f760a4c8c4c11a7a2b33e6a3804bdcacd740029033deba43e79858,
+mesher SHA241202bfb092de7432182adf6f4b66e9a504d5e0bdc712d60ec38e7e037b2097.
+Mesh source7b31e705a48e4039fbea8b8c0f71d141dd95312d. Full mesher regressions
+remain running on that frozen review worktree; one outdated owner-adapter
+injection test has failed and will be revised to check both selected contracts.
+
+An additional broader FEM scene check exposed an impossible preferred30-degree
+corner: a conforming diagonal beam splits a2x1plate at26.565degrees. The actual
+application automatic S3 policy passes without relaxing its thresholds. The
+legacy strict caller rejects (correctly), and parameter-chart fallback had
+previously hidden worse physical angles. Root-only diagnostic patch compares
+affinely lifted physical quality before accepting parameter fallback; review
+source and installed artifacts remain frozen while full regression completes.
+This is a compatibility decision still requiring explicit regression evidence
+and documentation; it is not counted as an existing-regression pass.

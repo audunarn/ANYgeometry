@@ -333,8 +333,8 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
         for curve in _clip(domain, trace.curve, tolerance, check):
             paths.append(replace(trace, curve=curve))
 
-    # Interior-ended traces need material decomposition seams. Extend a native
-    # coordinate line in both directions and clip it exactly to every trim.
+    # Interior-ended traces need material decomposition seams. Their physical
+    # directions must not inherit scale/shear from an affine support chart.
     endpoints = [np.asarray(point.position) for point in points
                  if not any(point_parameters(boundary.curve, point.position, tolerance=tolerance)
                             for boundary in boundaries)]
@@ -360,24 +360,19 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
             if not any(np.linalg.norm(point-old) <= tolerance for old in endpoints):
                 endpoints.append(point)
     if isinstance(domain.support, Plane):
-        inverse = np.linalg.pinv(np.column_stack((domain.support.u_vector, domain.support.v_vector)))
-        lo, hi = [], []
-        for path in boundaries:
-            lower, upper = path.curve.bounds()
-            center, half = .5*(lower+upper)-domain.support.origin, .5*(upper-lower)
-            lo.append(inverse @ center-np.abs(inverse) @ half)
-            hi.append(inverse @ center+np.abs(inverse) @ half)
-        lower, upper = np.min(lo, axis=0), np.max(hi, axis=0)
-        extent = max(float(np.linalg.norm(upper-lower)), 1.)
+        boxes=[path.curve.bounds() for path in boundaries]
+        lower=np.min([box[0] for box in boxes],axis=0)
+        upper=np.max([box[1] for box in boxes],axis=0)
+        extent=max(float(np.linalg.norm(upper-lower)),1.)
+        normal=np.cross(domain.support.u_vector,domain.support.v_vector)
+        normal/=np.linalg.norm(normal)
+        authored=np.asarray(domain.support.u_vector)/np.linalg.norm(domain.support.u_vector)
         for point in sorted(endpoints, key=lambda value: tuple(value)):
-            uv = np.asarray(domain.support.local_uv(point))
-            # Two coordinate directions avoid a seam collinear with a stub.
-            for axis in (0, 1):
-                start, end = uv.copy(), uv.copy()
-                start[axis], end[axis] = lower[axis]-extent, upper[axis]+extent
-                direction = domain.support.u_vector if axis == 0 else domain.support.v_vector
-                seam = LinePath(tuple(point+(start[axis]-uv[axis])*direction),
-                                tuple(point+(end[axis]-uv[axis])*direction))
+            # Preserve the authored first direction and its physical
+            # perpendicular. An affine chart's sheared second direction must
+            # not introduce artificial acute wedges into the material cells.
+            for direction in (authored,np.cross(normal,authored)):
+                seam = LinePath(tuple(point-extent*direction),tuple(point+extent*direction))
                 paths.extend(ArrangementPath(curve, decomposition=True)
                              for curve in _clip(domain, seam, tolerance, check))
     elif endpoints:
@@ -430,6 +425,15 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
                     # the same complete image; no scalar-plane root test is
                     # needed (its nearly-zero normal can amplify roundoff).
                     duplicate = index; break
+                if isinstance(curve,BezierPath) and isinstance(old,BezierPath):
+                    first_controls=np.asarray(curve.controls)
+                    second_controls=np.asarray(old.controls)
+                    if first_controls.shape==second_controls.shape and any(
+                            np.max(np.linalg.norm(first_controls-values,axis=1))<=tolerance
+                            for values in (second_controls,second_controls[::-1])):
+                        # Bernstein weights are nonnegative and sum to one:
+                        # the control-difference hull bounds the whole image.
+                        duplicate=index;break
                 # Candidate coincidence is established by the analytic
                 # predicate returning both interval endpoints, not midpoints.
                 hits = curve_junctions(curve, old, tolerance=tolerance,cancellation_check=lambda:(check() or False))
