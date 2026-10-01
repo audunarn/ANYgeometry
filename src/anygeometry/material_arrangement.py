@@ -14,7 +14,7 @@ from .arrangement_geometry import (LinePath, BezierPath, curve_junctions,
                                    plane_roots, point_parameters, freeze_edge)
 from .exact_curves import EllipticArc, CylinderIntersectionCurve
 from .errors import GeometryError
-from .surfaces import Cylinder, Plane
+from .surfaces import Cone, Cylinder, Plane
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,31 +52,39 @@ class MaterialArrangement:
 @dataclass(frozen=True, slots=True)
 class MaterialDomain:
     face_id: int
-    support: Plane | Cylinder
+    support: Plane | Cylinder | Cone
     boundaries: tuple[tuple[ArrangementPath, ...], ...]
 
     @property
     def area_jacobian(self):
         if isinstance(self.support, Plane):
             return float(np.linalg.norm(np.cross(self.support.u_vector, self.support.v_vector)))
+        if isinstance(self.support, Cone):
+            # Upper bound: the cone's area element grows with its radius.
+            slant = math.hypot(self.support.height, self.support.radius_end-self.support.radius_start)
+            return abs(max(self.support.radius_start, self.support.radius_end)*self.support.sweep_angle*slant)
         return abs(self.support.radius*self.support.sweep_angle*self.support.height)
 
-    def world_delta(self, delta):
+    def world_delta(self, delta, v=0.):
         if isinstance(self.support, Plane):
             return delta[0]*self.support.u_vector+delta[1]*self.support.v_vector
+        if isinstance(self.support, Cone):
+            radius = (1-v)*self.support.radius_start+v*self.support.radius_end
+            slant = math.hypot(self.support.height, self.support.radius_end-self.support.radius_start)
+            return np.asarray((delta[0]*radius*self.support.sweep_angle, delta[1]*slant))
         return np.asarray((delta[0]*self.support.radius*self.support.sweep_angle,
                            delta[1]*self.support.height))
 
     def left_probe(self, point, tangent, tolerance):
         normal = np.asarray((-tangent[1], tangent[0]))/np.linalg.norm(tangent)
-        return point+normal*(16*tolerance/np.linalg.norm(self.world_delta(normal)))
+        return point+normal*(16*tolerance/np.linalg.norm(self.world_delta(normal, float(point[1]))))
 
     @classmethod
     def from_model(cls, model, face_id):
         from .intersections import _qualified_face_plane
         face = model.faces[face_id]
         support = face.surface
-        if not isinstance(support, Cylinder):
+        if not isinstance(support, (Cylinder, Cone)):
             support = _qualified_face_plane(model, face_id)
             if not isinstance(face.surface, Plane):
                 # Prefer the authored boundary frame to arbitrary SVD axes
@@ -108,7 +116,7 @@ class MaterialDomain:
     def uv(self, curve, parameter):
         point = curve.evaluate(parameter)
         uv = np.asarray(self.support.local_uv(point))
-        if isinstance(self.support, Cylinder):
+        if isinstance(self.support, (Cylinder, Cone)):
             # Native seam events split curves before arrangement. Select the
             # endpoint's side using the interior chart, not a display path.
             middle = np.asarray(self.support.local_uv(curve.evaluate(.5)))
@@ -188,7 +196,7 @@ class MaterialDomain:
             roots = sorted(set(min(1., max(0., float(t))) for t in roots))
             for position, t in enumerate(roots):
                 point_uv = self.uv(curve, t)
-                if np.linalg.norm(self.world_delta(point_uv-uv)) <= tolerance:
+                if np.linalg.norm(self.world_delta(point_uv-uv, float(uv[1]))) <= tolerance:
                     return boundary
                 if point_uv[0] <= uv[0] or t >= 1-8*np.finfo(float).eps:
                     continue
@@ -241,7 +249,7 @@ class MaterialDomain:
                 world=curve.evaluate(parameters)
                 direction=curve.derivative(parameters)
                 positions=np.asarray([self.support.local_uv(point) for point in world])
-                if isinstance(self.support,Cylinder):
+                if isinstance(self.support,(Cylinder,Cone)):
                     support=self.support
                     if abs(abs(support.sweep_angle)-math.tau)<=1e-12:
                         middle=np.asarray(support.local_uv(curve.evaluate(.5)))
