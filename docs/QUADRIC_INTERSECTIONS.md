@@ -12,6 +12,7 @@ engine gets one new exact curve family instead of a sampled fit.
 | Cone x Plane | Perpendicular plane or ellipse: `EllipticArc`. Parabola and hyperbola branches: `QuadricIntersectionCurve`. Plane through the apex: the generators it contains as line segments (or the apex as a point contact). Tangent plane: its generator |
 | Cone x Cylinder | Coaxial: circles (`EllipticArc`). Otherwise `QuadricIntersectionCurve` charts, folded or closed, at any angle and offset |
 | Cone x Cone | Coaxial: rings. Same surface (any patch): coincident, boundary traces only. Otherwise `QuadricIntersectionCurve` charts |
+| Elliptic extrusion (an oblique circular tube) or quadratic Bezier extrusion (a spline wall) x Cylinder, Cone or elliptic extrusion | `QuadricIntersectionCurve` charts, with the elliptic and parabolic cylinders as quadric kinds of their own (a parabolic cylinder only as the second support); see [extruded surfaces](EXTRUDED_SURFACES.md) |
 | Beam or other member axis x Cone | Exact line/curve roots on the cone's implicit equation |
 
 `query_intersection(face, face)` still answers cone faces through the established certified (sampled)
@@ -22,10 +23,12 @@ engine, exactly as it does for cylinder faces; the exact results above are the
 
 Root-exported, immutable. One real branch of the ruling equation over an angular chart. The first
 support (a Cylinder or Cone) supplies the angle `t` about its axis and is ruled, `S(t, s) = P(t) + s D(t)`;
-the second is any quadric (Plane, Cylinder, Cone or a general quadric). Substituting the ruling into the
+the second is any quadric (Plane, Cylinder, Cone, an elliptic cylinder or a general quadric). Substituting the ruling into the
 second implicit equation gives `A(t) s^2 + B(t) s + C(t) = 0` with trigonometric coefficients of degree at
 most two, so a branch is `s = (-B +- sqrt(B^2 - 4AC)) / (2A)` (a single rational branch against a plane).
 
+* The first support may also be an elliptic cylinder (`EllipticRuledSupport`: the ellipse `origin + u cos t +
+  v sin t` swept along a unit `axis`); its record names `origin`, `u_vector`, `v_vector` and `axis`.
 * Fields: the two supports, `start_angle`, `sweep_angle`, `branch` (`-1` or `1`), `parameterization` and an
   affine `transform` (an affine image is kept exactly).
 * Charts never contain a fold or a double contact of the discriminant in their interior. A chart end at a
@@ -43,7 +46,9 @@ most two, so a branch is `s = (-B +- sqrt(B^2 - 4AC)) / (2A)` (a single rational
 * All exact work depends on the support pair only and is shared by every facet (`quadric_algebra.Plan`,
   keyed by the two supports without their patches): the homogenized integer polynomials in `x = tan(t/2)`
   for `A`, `B`, `C`, the discriminant and the resultants with patch boundaries, their real roots by Sturm
-  isolation and multiplicities by squarefree decomposition. A cone's apex is an exact rational point, which
+  isolation and multiplicities by squarefree decomposition, all in integer pseudo-remainder sequences
+  (every Sturm row is the primitive integer polynomial of its Fraction counterpart, so isolations are
+  unchanged). A cone's apex is an exact rational point, which
   halves the degree of the resultants.
 * Events that cut a chart: simple folds, double contacts (nodes), poles of the branch, the axial patch
   heights, and the boundary planes of the other patch. Each interval is kept when its midpoint lies in both
@@ -93,8 +98,9 @@ own support is bounded on the arc's angular range rather than over the full circ
 The exact solve is per support pair, so a shell pair costs one plan plus a dictionary lookup per facet pair.
 Exact curve/quadric roots are remembered, lines are solved by their exact discriminant, and a plane meets an
 ellipse (every ring and plane test) through the half-angle quadratic instead of Sturm isolation of an
-equivalent quartic. Measured on this machine (12 x 8 facets, 10 degrees off the perpendicular), planning the
-cone/cylinder pair took 0.8 s against 1.9 s for the equivalent cylinder/cylinder pair, before applying.
+equivalent quartic. Measured on this machine (12 x 8 facets, 10 degrees off the perpendicular; best of three
+runs with the support plans emptied before each), the first plan of the cone/cylinder pair takes 0.6 s against
+1.5 s for the equivalent cylinder/cylinder pair, before applying.
 
 ## Evidence
 

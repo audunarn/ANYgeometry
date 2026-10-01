@@ -40,8 +40,43 @@ All notable user-visible changes to ANYgeometry are documented here.
   plane meets an ellipse through the exact half-angle quadratic instead of
   Sturm isolation of an equivalent quartic, exact curve/quadric roots are
   remembered, and loop areas stop at their rounding-noise floor. Measured on
-  this machine, planning a 12 x 8 facet cone/cylinder pair 10 degrees off the
-  perpendicular takes 0.8 s against 1.9 s for the equivalent cylinder pair.
+  this machine, the first plan of a 12 x 8 facet cone/cylinder pair 10 degrees
+  off the perpendicular takes 0.6 s against 1.5 s for the equivalent cylinder
+  pair (best of three, support plans emptied before each run).
+
+- Extruded polycurve faces in `plan_intersections` / `apply_intersections` and
+  `query_trimmed_surface_charts`: a face made by `GeometryModel.extrude` from a
+  spline or an oblique circular arc is recognised as an exact translational
+  surface. New root-exported `ExtrudedSurface`, `BezierDirectrix` and
+  `EllipseDirectrix`. A plane meets it in an exact Bezier of the same degree
+  (or an ellipse arc, or generators); extrusions of one direction meet in
+  generators; an elliptic extrusion (an oblique circular tube) and a quadratic
+  Bezier extrusion (a spline wall with one control point, a parabolic cylinder)
+  meet cylinders, cones and elliptic extrusions through the quadric branch
+  engine, including rulings parallel up to rounding, exact tangency and
+  coincidence. A Bezier extrusion of degree three or more against a cylinder,
+  a cone or an extrusion of another direction, and two quadratic extrusions of
+  different directions, are refused with a typed error. Children of a split keep their exact
+  support. `query_intersection`, `plan_imprint` and `apply_imprint` keep every
+  established classification and the established boundary-curve CONNECT
+  partition (including its explicit refusals); the exact engine classifies
+  pairs the established query leaves unclassified. Schema 6 is now also
+  written for a document that stores an `ExtrudedSurface`. See
+  [extruded surfaces](docs/EXTRUDED_SURFACES.md).
+- Faster exact root isolation without changing any isolated interval: Sturm
+  rows, the square-free part, Yun classes and polynomial gcds use integer
+  pseudo-remainder sequences instead of Fractions (every row is the same
+  primitive integer polynomial; `tests/test_intersection_performance_equivalence.py`
+  keeps the Fraction versions as oracles). Measured on this machine, the first
+  plan of an oblique tube (4 arcs) through an 8-facet pipe takes 0.65 s against
+  1.07 s, and of a cylinder pair 10 degrees off the perpendicular (12 x 8
+  facets) 1.52 s against 1.71 s.
+- Faster applying and planning for walls of straight chart edges: the
+  conservative segment-pair filter of topology validation also rejects
+  collinear stretches whose bounding boxes are apart, and the Bezier directrix
+  inversion reuses its sample table and evaluates in the power basis. Measured
+  on this machine, a spline wall cut by four plates applies in 0.31 s against
+  0.82 s and plans in 0.36 s against 0.54 s.
 
 ## 0.4.5 — 2026-10-01
 
