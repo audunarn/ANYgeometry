@@ -4,7 +4,7 @@ from .curves import Arc, ArcFrame, CurveShape, DegenerateArcError, Spline, Strai
 from .exact_curves import EllipticArc, CylinderIntersectionCurve
 from .batch_intersections import (
     IntersectionBatchPolicy, IntersectionPlan, IntersectionApplication,
-    plan_intersections, apply_intersections,
+    plan_intersections, apply_intersections, has_current_intersection_preparation, clone_prepared_geometry,
 )
 from .trimmed_charts import (
     TrimmedSurfaceChart, TrimmedSurfaceCharts, query_trimmed_surface_charts,
@@ -250,6 +250,8 @@ __all__ = [
     "IntersectionApplication",
     "plan_intersections",
     "apply_intersections",
+    "has_current_intersection_preparation",
+    "clone_prepared_geometry",
     "TrimmedSurfaceChart",
     "TrimmedSurfaceCharts",
     "query_trimmed_surface_charts",

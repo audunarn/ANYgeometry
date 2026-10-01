@@ -150,10 +150,18 @@ def plan_member_arrangements(model, selected, domains, traces, points, check, *,
                 check_pair()
             for a,b in curve_junctions(first,second,tolerance=tolerance,
                                      cancellation_check=lambda: (check() or False)):
-                split[first_id].add(a); split[second_id].add(b)
-                position = tuple(first.evaluate(a))
                 parameters = (*_member_parameters(model,first_id,a,selected),
                               *_member_parameters(model,second_id,b,selected))
+                first_edge, second_edge = model.edges[first_id], model.edges[second_id]
+                first_vertex = first_edge.start if a == 0. else first_edge.end if a == 1. else None
+                second_vertex = second_edge.start if b == 0. else second_edge.end if b == 1. else None
+                if (first_vertex is not None and first_vertex == second_vertex
+                        and all(value in (0., 1.) for _member, value in parameters)):
+                    # Authored endpoint topology already gives these axes one
+                    # station; preserve the established no-imprint contract.
+                    continue
+                split[first_id].add(a); split[second_id].add(b)
+                position = tuple(first.evaluate(a))
                 contacts.append(MemberPointContact(None,position,tuple(sorted(set(parameters))),
                                                    (first_id,second_id),tolerance))
     axes = tuple(MemberAxisArrangement(edge_id,

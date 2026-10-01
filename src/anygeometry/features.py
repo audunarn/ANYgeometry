@@ -546,7 +546,11 @@ def _transfer_regenerated_structural_owners(working,original,retired,roles,direc
             working._put_structural('sheet',replace(sheet,declared_non_manifold_edges=edges))
     for old in sorted(retired,key=lambda reference:(reference.kind,reference.id)):
         if old.kind=='face' and working._face_structural_uses.get(old.id):
-            working._replace_structural_face_ownership(old.id,(replacement('face',old.id),))
+            # Suppression has an exact empty output role. Retire its FaceUse
+            # through the normal guarded owner operation; attachments still
+            # require an explicit remap and cannot silently disappear.
+            descendants = () if roles.get(old) == () else (replacement('face',old.id),)
+            working._replace_structural_face_ownership(old.id,descendants)
 
 
 def _bind_topology_roles(

@@ -918,14 +918,70 @@ def apply_intersections(model, plan, *, policy):
     if model.revision != plan.revision or to_dict(model)["checksum"]["value"] != plan.source_checksum:
         raise GeometryError("geometry changed before intersection commit")
     before = model.revision
+    original_faces = set(model.faces)
+    covered_faces = {operand.id for operand in plan.operands if operand.kind == "face"}
+    for operand in plan.operands:
+        if operand.kind == "sheet":
+            covered_faces.update(model.face_uses[use].face_id
+                                 for use in model.sheets[operand.id].face_use_ids)
+    complete_material = effective.face_connections and original_faces <= covered_faces
     model.restore_topology(candidate.topology_snapshot())
     result = IntersectionApplication(plan,
         model.last_change_set if model.revision != before else ChangeSet(before, before),
         tuple(model.handle("edge", edge.id) for edge in outcome.joint_edges), model.revision == before)
+    # Bind the exact committed result, including an unchanged/idempotent batch.
+    # Only complete original-face classification certifies material ownership.
+    checksum = to_dict(model)["checksum"]["value"]
     if model.revision != before:
-        # One receipt recognizes a repeat of the exact applied plan. It is
-        # bound to the complete committed checksum and revision; unrelated
-        # edits, undo/load, another plan or a forged plan never reuse it.
         model._intersection_application_receipt = (plan, model.revision,
-            to_dict(model)["checksum"]["value"], tuple(edge.id for edge in result.joint_edges))
+            checksum, tuple(edge.id for edge in result.joint_edges))
+    model._intersection_preparation_receipt = (plan, model.revision, checksum,
+        tuple(sorted(model.faces)) if complete_material else ())
     return result
+
+
+def has_current_intersection_preparation(model, *, face_ids=None):
+    """Whether the owner has a current, complete material-preparation receipt.
+
+    This read-only query certifies a previous complete batch, not arbitrary
+    existing topology. Receipts are local, revision/checksum bound and excluded
+    from documents. Edits, clone/load/undo and partial batches require fresh
+    classification. Invalid requested faces raise GeometryError.
+    """
+    from .intersections import _normalize_operand
+    selected = set(model.faces) if face_ids is None else set()
+    if face_ids is not None:
+        for value in face_ids:
+            operand = _normalize_operand(model, value)
+            if operand.kind != "face":
+                raise GeometryError("preparation binding requires face operands")
+            selected.add(operand.id)
+    receipt = getattr(model, "_intersection_preparation_receipt", None)
+    if receipt is None:
+        return False
+    plan, revision, checksum, coverage = receipt
+    return bool(coverage and selected <= set(coverage)
+                and model.revision == revision
+                and model.model_id == plan.model_id
+                and plan.content_checksum == _plan_content(plan)
+                and to_dict(model)["checksum"]["value"] == checksum)
+
+
+def clone_prepared_geometry(model):
+    """Detach an exact mesh-attempt copy, preserving a valid local owner proof.
+
+    Ordinary unprepared copies retain normal clone behavior. Prepared copies
+    preserve logical document identity and their complete bound receipt only
+    after verifying the source and copy have identical committed checksums.
+    The source stays unchanged; edits to either copy invalidate its binding.
+    """
+    prepared = has_current_intersection_preparation(model)
+    receipt = getattr(model, "_intersection_preparation_receipt", None)
+    made = model.clone(preserve_identity=prepared)
+    if prepared:
+        checksum = receipt[2]
+        if (to_dict(model)["checksum"]["value"] != checksum
+                or to_dict(made)["checksum"]["value"] != checksum):
+            raise GeometryError("prepared geometry changed during detached copying")
+        made._intersection_preparation_receipt = receipt
+    return made
