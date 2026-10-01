@@ -13,10 +13,23 @@ General-intersection development (not yet qualified for generalized meshing):
 - Geometry schema 5 stores the new edge definitions and reads schemas 1–4.
   Automation remains protocol 1. Readers limited to schema 4 must update before
   reading documents written by this development head.
+- `plan_intersections` / `apply_intersections` prepare a complete original
+  operand set with revision and content binding, atomic application, shared
+  topology, source lineage and explicit cancellation/resource budgets. Default
+  batch preparation has no operand or intersection count cap.
+- `query_trimmed_surface_charts` exposes bound Plane/Cylinder material domains,
+  exact trim definitions, holes and batched owner evaluation. Changed source or
+  evidence invalidates previously qualified chart bindings.
+- Changed generator output roles can retain existing structural owners and
+  authored axis parameters when their topology correspondence is unambiguous.
+  Ambiguous role changes remain atomic failures.
+- Mesher/FEM integration and expanded qualification remain in progress. See
+  [the development contract and current evidence](docs/general_intersections.md).
 
-Faster projection and cylinder-atlas qualification below. Every performance result is
-bit-for-bit identical to 0.4.4, including atlas certificates, work counts,
-cancellation callbacks and budget refusals.
+The previously recorded projection and cylinder-atlas improvements below are
+bit-for-bit identical to 0.4.4 within their recorded scope, including atlas
+certificates, work counts, cancellation callbacks and budget refusals. Those
+records do not qualify the new general-intersection capabilities above.
 
 - Ruled and Coons surfaces evaluate without per-call NumPy scalar clipping.
   `face_local_uv_many` and `face_trim_loops_uv` invert explicit ruled and

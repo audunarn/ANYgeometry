@@ -1,10 +1,16 @@
 # Compatibility and verification status
 
-The released baseline is ANYgeometry **0.4.3**, published on **2026-09-16**.
-The maintenance changes under Unreleased do not create a new release. Geometry
-schema 4 (read schemas 1–4), automation protocol 1 and MPL-2.0 remain unchanged.
+The released baseline is ANYgeometry **0.4.4**, dated **2026-09-28**, with its
+[immutable release ledger](release/anygeometry-0.4.4-ledger.json). That release
+writes geometry schema 4 and reads schemas 1–4.
 
-## Released evidence
+The current [general-intersection development](general_intersections.md) writes
+schema 5 and reads schemas 1–4. Its candidate wheels retain the development
+version number; they are distinct from the published 0.4.4 artifact. Automation
+protocol 1 and MPL-2.0 remain unchanged. Expanded capabilities require new
+qualification and separate release authorization.
+
+## Historical 0.4.3 release evidence
 
 - [Immutable release ledger](release/anygeometry-0.4.3-ledger.json).
 - [Published release](https://github.com/audunarn/ANYgeometry/releases/tag/v0.4.3).

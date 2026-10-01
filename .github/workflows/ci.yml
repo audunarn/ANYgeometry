@@ -371,3 +371,86 @@ jobs:
             ${{ runner.temp }}/geometry-mcp/command-*.log
             ${{ runner.temp }}/geometry-mcp/candidate/*.json
             ${{ runner.temp }}/geometry-mcp/baseline/*.json
+
+  general-intersection-consumers:
+    name: General intersections in installed ANYfem (${{ matrix.os }})
+    needs: wheel
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-15]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: audunarn/ANYmesh
+          ref: dda50e4c813834af10bf52bf4451ce55bda83315
+          path: .ecosystem/ANYmesh
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: audunarn/ANYfem
+          ref: fa7e666f8cd236c17591ccde67f9b34f20f45f33
+          path: .ecosystem/ANYfem
+          persist-credentials: false
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: anygeometry-candidate
+          path: candidate
+      - name: Build pinned native mesher and FEM candidates
+        env:
+          ANYMESHER_REQUIRE_NATIVE: '1'
+        run: |
+          python -m pip install build 'setuptools>=77.0.3' wheel
+          python -m build .ecosystem/ANYmesh --wheel --no-isolation --outdir candidate
+          python -m build .ecosystem/ANYfem --wheel --no-isolation --outdir candidate
+          python - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+          commits = {'ANYgeometry': os.environ['GITHUB_SHA']}
+          for owner in ('ANYmesh', 'ANYfem'):
+              commits[owner] = subprocess.check_output(['git','-C','.ecosystem/'+owner,'rev-parse','HEAD'],text=True).strip()
+          Path('candidate/source-commits.json').write_text(json.dumps(commits,indent=2))
+          PY
+      - name: Require accepted default-policy replay and cylinder joints
+        run: >-
+          python tools/check_general_intersections.py
+          --geometry candidate/anygeometry-*.whl
+          --mesher candidate/anymesher-*.whl
+          --fem candidate/anyfem-*.whl
+          --expected-machine "${{ matrix.os == 'macos-15' && 'arm64' || '' }}"
+          --output "$RUNNER_TEMP/general-intersection-consumers"
+      - name: Record unavailable setup explicitly
+        if: always()
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP'])/'general-intersection-consumers'
+          if not (root/'general-intersections-report.json').exists():
+              root.mkdir(exist_ok=True)
+              (root/'general-intersections-report.json').write_text(json.dumps({
+                  'status':'failed','reason':'Candidate checkout/build or consumer setup failed; see job logs.'},indent=2))
+          PY
+      - name: Preserve artifacts, identities and complete acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: general-intersections-${{ matrix.os }}
+          retention-days: 30
+          if-no-files-found: error
+          path: |
+            candidate/*.whl
+            candidate/source-commits.json
+            ${{ runner.temp }}/general-intersection-consumers/*.json
+            ${{ runner.temp }}/general-intersection-consumers/command-*.log
