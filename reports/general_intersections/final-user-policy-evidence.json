@@ -1,0 +1,863 @@
+{
+  "status": "local_accepted",
+  "publication": "unpublished review branches; existing releases unchanged",
+  "sources": {
+    "ANYgeometry": "f7b0a05e9a4a414c6de336431929f2e34969bdea",
+    "ANYmesh": "e21c0fc93662776762430e14450d54ac9192e2e8",
+    "ANYfem": "83f3d6c81e405ca45f5b7edd7cb7c2afd32804c4"
+  },
+  "kernel": {
+    "status": "passed",
+    "exit_code": 0,
+    "completion_evidence": "Previously completed tool session65805; recorded in living task note",
+    "passed": 1095,
+    "skipped": 0,
+    "source": {
+      "ANYgeometry": "f7b0a05e9a4a414c6de336431929f2e34969bdea"
+    },
+    "log": "full-kernel-prepared-copy.log",
+    "log_sha256": "e8942c4c623a039c70b30b5e4cbfa07c6e0321f3fb3738db3520154ba717b7dc"
+  },
+  "mesher": {
+    "status": "passed",
+    "exit_code": 0,
+    "seconds": 891.771806100005,
+    "passed": 1943,
+    "skipped": 66,
+    "source": {
+      "ANYgeometry": "f7b0a05e9a4a414c6de336431929f2e34969bdea",
+      "ANYmesh": "e21c0fc93662776762430e14450d54ac9192e2e8",
+      "ANYfem": "83f3d6c81e405ca45f5b7edd7cb7c2afd32804c4"
+    },
+    "log": "full-mesher-final-user-policy.log",
+    "log_sha256": "94d2f5a80c9a0b37d7293889abef9bf972f5c4deca14e864cedbf03efc3304a2"
+  },
+  "fem": {
+    "status": "passed",
+    "exit_code": 0,
+    "seconds": 1126.0299359000055,
+    "passed": 1044,
+    "skipped": 130,
+    "source": {
+      "ANYgeometry": "f7b0a05e9a4a414c6de336431929f2e34969bdea",
+      "ANYmesh": "e21c0fc93662776762430e14450d54ac9192e2e8",
+      "ANYfem": "83f3d6c81e405ca45f5b7edd7cb7c2afd32804c4"
+    },
+    "log": "full-fem-final-user-policy.log",
+    "log_sha256": "eacb363d6af20c85582444629bd2e90960e2b5b8c16ae683f3ea82004408fcb8"
+  },
+  "kernel_evidence_reuse": "Geometry source remains f7b0a05; original complete kernel run and final hosted matrix retained.",
+  "installed": {
+    "status": "passed",
+    "report_root": "C:\\Users\\AUDUNA~1\\AppData\\Local\\Temp\\anygeometry-general-consumer-20261001-final-user-policy",
+    "artifacts": {
+      "geometry": {
+        "filename": "anygeometry-0.4.4-py3-none-any.whl",
+        "bytes": 488169,
+        "sha256": "87d2cb9d84b2986a89ffb5ecc627ad0a85b6bcb6576b4bce0bd3493aaea8aebb"
+      },
+      "mesher": {
+        "filename": "anymesher-0.5.1-cp313-cp313-win_amd64.whl",
+        "bytes": 701721,
+        "sha256": "51e5b456d5a385157859128a6d270822bd5e0b4dfbdceb341fded6747729e1ff"
+      },
+      "fem": {
+        "filename": "anyfem-0.4.1-py3-none-any.whl",
+        "bytes": 575144,
+        "sha256": "057f13fd3f14800d59dc629a0d5cb782e2b9f209f1b003e665bb8add3ae21af6"
+      }
+    },
+    "checks": [
+      {
+        "case": "parallel",
+        "material_areas": [
+          18.84955592153871,
+          16.96460032938488
+        ],
+        "shared_segments": 28,
+        "shared_nodes": 30,
+        "complete_branches": 2,
+        "high_valence_nodes": 0,
+        "nodes": 834,
+        "elements": 816,
+        "oracle": "independent cylinder equations, angular/axial interval coverage and graph incidence"
+      },
+      {
+        "case": "perpendicular",
+        "material_areas": [
+          18.84955592153878,
+          18.849555921538737
+        ],
+        "shared_segments": 88,
+        "shared_nodes": 86,
+        "complete_branches": 2,
+        "high_valence_nodes": 2,
+        "nodes": 788,
+        "elements": 1630,
+        "oracle": "independent cylinder equations, angular/axial interval coverage and graph incidence"
+      },
+      {
+        "case": "skew",
+        "material_areas": [
+          18.849555921538673,
+          15.07964473723095
+        ],
+        "shared_segments": 730,
+        "shared_nodes": 731,
+        "complete_branches": 4,
+        "joint_components": 2,
+        "closed_joint_components": 1,
+        "open_joint_components": 1,
+        "high_valence_nodes": 0,
+        "nodes": 28053,
+        "elements": 56517,
+        "oracle": "independent eliminated cylinder equations, 70-digit residuals and finite-height interval coverage"
+      },
+      {
+        "case": "tangent",
+        "material_areas": [
+          18.849555921538766,
+          18.849555921538766
+        ],
+        "shared_segments": 7,
+        "shared_nodes": 8,
+        "complete_branches": 1,
+        "joint_components": 1,
+        "closed_joint_components": 0,
+        "open_joint_components": 1,
+        "high_valence_nodes": 0,
+        "nodes": 248,
+        "elements": 224,
+        "oracle": "independent tangent circle equations, complete axial coverage and graph incidence"
+      },
+      {
+        "case": "concave",
+        "target_size": 0.5,
+        "source_unchanged": true,
+        "save_load": true,
+        "nodes": 3477,
+        "elements": 6699,
+        "checks": {
+          "material_areas": [
+            16.75000000000004,
+            1.4500000000000008,
+            5.4999999999999964,
+            3.4500000000000046
+          ],
+          "joints": [
+            {
+              "owners": [
+                0,
+                1
+              ],
+              "shared_segments": 13,
+              "shared_nodes": 14
+            },
+            {
+              "owners": [
+                0,
+                2
+              ],
+              "shared_segments": 59,
+              "shared_nodes": 60
+            },
+            {
+              "owners": [
+                0,
+                3
+              ],
+              "shared_segments": 39,
+              "shared_nodes": 40
+            },
+            {
+              "owners": [
+                1,
+                2
+              ],
+              "shared_segments": 12,
+              "shared_nodes": 13
+            },
+            {
+              "owners": [
+                2,
+                3
+              ],
+              "shared_segments": 12,
+              "shared_nodes": 13
+            }
+          ],
+          "beams": [
+            {
+              "edge": 27,
+              "elements": 64,
+              "length": 6.0,
+              "shared_material_length": 5.999999999999999
+            },
+            {
+              "edge": 28,
+              "elements": 31,
+              "length": 3.9597979746446663,
+              "shared_material_length": 3.2526911934581193
+            }
+          ]
+        },
+        "seconds": 21.934709599998314
+      },
+      {
+        "case": "cylinder-holes-1",
+        "target_size": 0.5,
+        "source_unchanged": true,
+        "save_load": true,
+        "nodes": 48,
+        "elements": 36,
+        "checks": {
+          "material_areas": [
+            3.9584067435231374
+          ],
+          "joints": [],
+          "beams": []
+        },
+        "seconds": 0.22795039997436106
+      },
+      {
+        "case": "cylinder-holes-2",
+        "target_size": 0.5,
+        "source_unchanged": true,
+        "save_load": true,
+        "nodes": 48,
+        "elements": 68,
+        "checks": {
+          "material_areas": [
+            3.958406743523138
+          ],
+          "joints": [],
+          "beams": []
+        },
+        "seconds": 0.8049146000121254
+      },
+      {
+        "case": "cylinder-holes-4",
+        "target_size": 0.5,
+        "source_unchanged": true,
+        "save_load": true,
+        "nodes": 67,
+        "elements": 88,
+        "checks": {
+          "material_areas": [
+            3.95840674352314
+          ],
+          "joints": [],
+          "beams": []
+        },
+        "seconds": 1.541438600019319
+      },
+      {
+        "case": "growing-1",
+        "target_size": 0.5,
+        "source_unchanged": true,
+        "save_load": true,
+        "nodes": 91,
+        "elements": 72,
+        "checks": {
+          "material_areas": [
+            16.0,
+            2.0
+          ],
+          "joints": [
+            {
+              "owners": [
+                0,
+                1
+              ],
+              "shared_segments": 4,
+              "shared_nodes": 5
+            }
+          ],
+          "beams": []
+        },
+        "seconds": 0.1140570999996271
+      },
+      {
+        "case": "growing-25",
+        "target_size": 0.5,
+        "source_unchanged": true,
+        "save_load": true,
+        "nodes": 2448,
+        "elements": 2248,
+        "checks": {
+          "material_areas": [
+            16.00000000000009,
+            1.999999999999999,
+            1.999999999999999,
+            1.999999999999999,
+            1.999999999999999,
+            1.999999999999999,
+            1.999999999999999,
+            1.999999999999999,
+            1.999999999999999,
+            1.999999999999999,
+            1.999999999999999,
+            1.999999999999999,
+            1.999999999999999,
+            1.999999999999999,
+            1.999999999999999,
+            1.999999999999999,
+            1.999999999999999,
+            1.999999999999999,
+            1.999999999999999,
+            1.999999999999999,
+            1.999999999999999,
+            1.999999999999999,
+            1.999999999999999,
+            1.999999999999999,
+            1.999999999999999,
+            1.999999999999999
+          ],
+          "joints": [
+            {
+              "owners": [
+                0,
+                1
+              ],
+              "shared_segments": 11,
+              "shared_nodes": 12
+            },
+            {
+              "owners": [
+                0,
+                2
+              ],
+              "shared_segments": 11,
+              "shared_nodes": 12
+            },
+            {
+              "owners": [
+                0,
+                3
+              ],
+              "shared_segments": 11,
+              "shared_nodes": 12
+            },
+            {
+              "owners": [
+                0,
+                4
+              ],
+              "shared_segments": 11,
+              "shared_nodes": 12
+            },
+            {
+              "owners": [
+                0,
+                5
+              ],
+              "shared_segments": 11,
+              "shared_nodes": 12
+            },
+            {
+              "owners": [
+                0,
+                6
+              ],
+              "shared_segments": 11,
+              "shared_nodes": 12
+            },
+            {
+              "owners": [
+                0,
+                7
+              ],
+              "shared_segments": 11,
+              "shared_nodes": 12
+            },
+            {
+              "owners": [
+                0,
+                8
+              ],
+              "shared_segments": 11,
+              "shared_nodes": 12
+            },
+            {
+              "owners": [
+                0,
+                9
+              ],
+              "shared_segments": 11,
+              "shared_nodes": 12
+            },
+            {
+              "owners": [
+                0,
+                10
+              ],
+              "shared_segments": 11,
+              "shared_nodes": 12
+            },
+            {
+              "owners": [
+                0,
+                11
+              ],
+              "shared_segments": 11,
+              "shared_nodes": 12
+            },
+            {
+              "owners": [
+                0,
+                12
+              ],
+              "shared_segments": 11,
+              "shared_nodes": 12
+            },
+            {
+              "owners": [
+                0,
+                13
+              ],
+              "shared_segments": 11,
+              "shared_nodes": 12
+            },
+            {
+              "owners": [
+                0,
+                14
+              ],
+              "shared_segments": 11,
+              "shared_nodes": 12
+            },
+            {
+              "owners": [
+                0,
+                15
+              ],
+              "shared_segments": 11,
+              "shared_nodes": 12
+            },
+            {
+              "owners": [
+                0,
+                16
+              ],
+              "shared_segments": 11,
+              "shared_nodes": 12
+            },
+            {
+              "owners": [
+                0,
+                17
+              ],
+              "shared_segments": 11,
+              "shared_nodes": 12
+            },
+            {
+              "owners": [
+                0,
+                18
+              ],
+              "shared_segments": 11,
+              "shared_nodes": 12
+            },
+            {
+              "owners": [
+                0,
+                19
+              ],
+              "shared_segments": 11,
+              "shared_nodes": 12
+            },
+            {
+              "owners": [
+                0,
+                20
+              ],
+              "shared_segments": 11,
+              "shared_nodes": 12
+            },
+            {
+              "owners": [
+                0,
+                21
+              ],
+              "shared_segments": 11,
+              "shared_nodes": 12
+            },
+            {
+              "owners": [
+                0,
+                22
+              ],
+              "shared_segments": 11,
+              "shared_nodes": 12
+            },
+            {
+              "owners": [
+                0,
+                23
+              ],
+              "shared_segments": 11,
+              "shared_nodes": 12
+            },
+            {
+              "owners": [
+                0,
+                24
+              ],
+              "shared_segments": 11,
+              "shared_nodes": 12
+            },
+            {
+              "owners": [
+                0,
+                25
+              ],
+              "shared_segments": 11,
+              "shared_nodes": 12
+            }
+          ],
+          "beams": []
+        },
+        "seconds": 3.6342414999962784
+      },
+      {
+        "case": "growing-8",
+        "target_size": 0.5,
+        "source_unchanged": true,
+        "save_load": true,
+        "nodes": 170,
+        "elements": 136,
+        "checks": {
+          "material_areas": [
+            15.999999999999975,
+            2.0,
+            2.0,
+            2.0,
+            2.0,
+            2.0,
+            2.0,
+            2.0,
+            2.0
+          ],
+          "joints": [
+            {
+              "owners": [
+                0,
+                1
+              ],
+              "shared_segments": 4,
+              "shared_nodes": 5
+            },
+            {
+              "owners": [
+                0,
+                2
+              ],
+              "shared_segments": 4,
+              "shared_nodes": 5
+            },
+            {
+              "owners": [
+                0,
+                3
+              ],
+              "shared_segments": 4,
+              "shared_nodes": 5
+            },
+            {
+              "owners": [
+                0,
+                4
+              ],
+              "shared_segments": 4,
+              "shared_nodes": 5
+            },
+            {
+              "owners": [
+                0,
+                5
+              ],
+              "shared_segments": 4,
+              "shared_nodes": 5
+            },
+            {
+              "owners": [
+                0,
+                6
+              ],
+              "shared_segments": 4,
+              "shared_nodes": 5
+            },
+            {
+              "owners": [
+                0,
+                7
+              ],
+              "shared_segments": 4,
+              "shared_nodes": 5
+            },
+            {
+              "owners": [
+                0,
+                8
+              ],
+              "shared_segments": 4,
+              "shared_nodes": 5
+            }
+          ],
+          "beams": []
+        },
+        "seconds": 0.5659698000235949
+      },
+      {
+        "case": "multiple-cuts",
+        "target_size": 0.5,
+        "source_unchanged": true,
+        "save_load": true,
+        "nodes": 718,
+        "elements": 1358,
+        "checks": {
+          "material_areas": [
+            31.99999999999998,
+            6.283185307179607,
+            6.283185307179596,
+            6.283185307179588
+          ],
+          "joints": [
+            {
+              "owners": [
+                0,
+                1
+              ],
+              "shared_segments": 12,
+              "shared_nodes": 12
+            },
+            {
+              "owners": [
+                0,
+                2
+              ],
+              "shared_segments": 12,
+              "shared_nodes": 12
+            },
+            {
+              "owners": [
+                0,
+                3
+              ],
+              "shared_segments": 12,
+              "shared_nodes": 12
+            }
+          ],
+          "beams": []
+        },
+        "seconds": 39.186326000024565
+      },
+      {
+        "case": "oblique",
+        "target_size": 0.5,
+        "source_unchanged": true,
+        "save_load": true,
+        "nodes": 875,
+        "elements": 1690,
+        "checks": {
+          "material_areas": [
+            17.88854381999831,
+            9.424777960769369
+          ],
+          "joints": [
+            {
+              "owners": [
+                0,
+                1
+              ],
+              "shared_segments": 24,
+              "shared_nodes": 24
+            }
+          ],
+          "beams": []
+        },
+        "seconds": 18.306513699993957
+      },
+      {
+        "target_size": 0.25,
+        "nodes": 2021,
+        "quads": 1662,
+        "triangles": 632,
+        "source_unchanged": true,
+        "source_save_load": true,
+        "mesh_codec_roundtrip": true,
+        "checks": {
+          "material_areas": [
+            24.999999999999964,
+            24.999999999999996,
+            25.00000000000001,
+            25.13274122871824
+          ],
+          "joints": [
+            {
+              "owners": [
+                0,
+                1
+              ],
+              "shared_nodes": 21,
+              "shared_segments": 20,
+              "analytic_length": 5.0
+            },
+            {
+              "owners": [
+                0,
+                2
+              ],
+              "shared_nodes": 21,
+              "shared_segments": 20,
+              "analytic_length": 5.0
+            },
+            {
+              "owners": [
+                0,
+                3
+              ],
+              "shared_nodes": 49,
+              "shared_segments": 49,
+              "analytic_length": 6.283185307179587
+            },
+            {
+              "owners": [
+                1,
+                2
+              ],
+              "shared_nodes": 23,
+              "shared_segments": 22,
+              "analytic_length": 5.0
+            },
+            {
+              "owners": [
+                1,
+                3
+              ],
+              "shared_nodes": 34,
+              "shared_segments": 32,
+              "analytic_length": 8.0
+            },
+            {
+              "owners": [
+                2,
+                3
+              ],
+              "shared_nodes": 34,
+              "shared_segments": 32,
+              "analytic_length": 8.0
+            }
+          ]
+        },
+        "lifecycle": {
+          "undo_redo_source_identity": true,
+          "undo_redo_source_content": true,
+          "feature_regeneration": true,
+          "retained_downstream_face_references": 55
+        },
+        "seconds": 11.800382999994326
+      },
+      {
+        "target_size": 0.5,
+        "nodes": 4669,
+        "quads": 4606,
+        "triangles": 166,
+        "source_unchanged": true,
+        "source_save_load": true,
+        "mesh_codec_roundtrip": true,
+        "checks": {
+          "material_areas": [
+            25.00000000000002,
+            24.99999999999987,
+            24.999999999999726,
+            25.13274122871881
+          ],
+          "joints": [
+            {
+              "owners": [
+                0,
+                1
+              ],
+              "shared_nodes": 35,
+              "shared_segments": 34,
+              "analytic_length": 4.999999999999999
+            },
+            {
+              "owners": [
+                0,
+                2
+              ],
+              "shared_nodes": 33,
+              "shared_segments": 32,
+              "analytic_length": 5.0
+            },
+            {
+              "owners": [
+                0,
+                3
+              ],
+              "shared_nodes": 49,
+              "shared_segments": 49,
+              "analytic_length": 6.283185307179589
+            },
+            {
+              "owners": [
+                1,
+                2
+              ],
+              "shared_nodes": 35,
+              "shared_segments": 34,
+              "analytic_length": 4.999999999999999
+            },
+            {
+              "owners": [
+                1,
+                3
+              ],
+              "shared_nodes": 58,
+              "shared_segments": 56,
+              "analytic_length": 8.000000000000002
+            },
+            {
+              "owners": [
+                2,
+                3
+              ],
+              "shared_nodes": 58,
+              "shared_segments": 56,
+              "analytic_length": 8.000000000000002
+            }
+          ]
+        },
+        "lifecycle": {
+          "undo_redo_source_identity": true,
+          "undo_redo_source_content": true,
+          "feature_regeneration": true,
+          "retained_downstream_face_references": 55
+        },
+        "seconds": 28.57320109999273
+      },
+      {
+        "case": "cylinder-capacity",
+        "faces": 260,
+        "target_size": 0.05,
+        "strategy": "native",
+        "point_placement": "frontal_delaunay",
+        "nodes": 9100,
+        "elements": 8840,
+        "source_unchanged": true,
+        "save_load": true,
+        "checks": {
+          "material_area": 6.283185307180396,
+          "shared_panel_boundaries": 260
+        },
+        "seconds": 137.908104800008
+      }
+    ],
+    "report_sha256": "82f3cb086d1a7c7a63bb88bdba83669e7f7612d71563256874f7755f84111952",
+    "capacity_report_root": "C:\\Users\\AUDUNA~1\\AppData\\Local\\Temp\\anygeometry-general-consumer-20261001-capacity-user-policy",
+    "capacity_report_sha256": "b83125b70542778b2adbabd2ed63b55f4e97d1ffe842907e0c654f083eb65de7"
+  },
+  "hosted_run": 36829763205
+}

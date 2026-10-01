@@ -24,3 +24,12 @@ record resolved dependencies and verify package bytes against candidate wheels.
 Positive-area overlap still requires explicit ownership. Ambiguous generator
 output-role changes and attachments without an exact remapping definition
 remain atomic refusals; they cannot produce partially accepted topology.
+
+The [accepted matrix](https://github.com/audunarn/ANYgeometry/actions/runs/36829763205)
+passes all 32 jobs and sixteen installed meshes on each native platform. Its
+[artifact-bound summary](../reports/general_intersections/installed-qualification-36829763205.json)
+and [full local regression evidence](../reports/general_intersections/final-user-policy-evidence.json)
+identify exact coordinated sources, wheels, resolved dependencies and checks.
+The four review stages are linked in the development contract. These records
+support a separate new capability entry; publication and release-ledger changes
+remain separate work.

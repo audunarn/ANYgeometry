@@ -4,7 +4,7 @@ All notable user-visible changes to ANYgeometry are documented here.
 
 ## Unreleased
 
-General-intersection development (not yet qualified for generalized meshing):
+Unpublished general-intersection development (accepted in the documented configurations):
 
 - Root-exported immutable `EllipticArc` and `CylinderIntersectionCurve`
   definitions, with evaluation, derivatives, bounds, projection, splitting and
@@ -27,8 +27,12 @@ General-intersection development (not yet qualified for generalized meshing):
 - Changed generator output roles can retain existing structural owners and
   authored axis parameters when their topology correspondence is unambiguous.
   Ambiguous role changes remain atomic failures.
-- Mesher/FEM integration and expanded qualification remain in progress. See
-  [the development contract and current evidence](docs/general_intersections.md).
+- Coordinated mesher/FEM integration passes sixteen installed meshes each on
+  Windows, Linux and Apple silicon, including the exact replay at 0.5/0.25 and
+  a 260-sector cylinder. The full 32-job platform matrix passes. Direct API
+  recovery remains opt-in; default admission uses the qualified 15-degree
+  floor, with caller-supplied stricter policies retained. Publication is separate.
+  See [the contract and exact evidence](docs/general_intersections.md).
 
 The previously recorded projection and cylinder-atlas improvements below are
 bit-for-bit identical to 0.4.4 within their recorded scope, including atlas

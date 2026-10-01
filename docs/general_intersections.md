@@ -73,144 +73,89 @@ schemas 1–4. Readers supporting only schema 4 must reject new documents clearl
 Coordinate units, transforms and automation protocol 1 retain their established
 semantics. CAD export and CRS reprojection are separate work.
 
-## Current evidence and remaining acceptance
+## Acceptance and compatibility
 
-| Configuration or case | Current extension evidence |
+The [final hosted matrix](https://github.com/audunarn/ANYgeometry/actions/runs/36829763205)
+passes **32 of 32 jobs**. Its [installed evidence](../reports/general_intersections/installed-qualification-36829763205.json)
+binds geometry commit `9e61831b72f01c9beccfce67b8752117bb87e4b8`
+(source unchanged from `f7b0a05e9a4a414c6de336431929f2e34969bdea`),
+mesher `e21c0fc93662776762430e14450d54ac9192e2e8` and
+FEM `83f3d6c81e405ca45f5b7edd7cb7c2afd32804c4` to exact wheel hashes,
+resolved dependencies, package byte checks and installed origins.
+
+| Configuration or case | Accepted evidence |
 | --- | --- |
-| Windows, Python 3.14 kernel | 1,095 regressions pass, including growing original-operand arrangements (1, 8 and 25 cuts), repeated Member visits, all pair intents, bound preparation copies and analytic planar-area oracles |
-| Windows, Python 3.13 compiled mesher | Full frozen suite: 1,940 pass, 66 explicit skips; includes physical charts, cancellation, owner bindings, exact joints and native/quadratic compatibility |
-| Windows, Python 3.13 FEM lifecycle | Full owner-target suite: 1,044 pass, 130 explicit GUI/optional skips; subsequent cylinder-chart selection independently covered by frozen mesher and installed application checks |
-| Exact installed ANYfem replay, targets 0.5 and 0.25 | Both accepted in final Windows candidate; earlier unchanged replay paths accepted on Windows/Linux/macOS arm64; source, joints, material, save/load and equivalent regeneration checks pass |
-| Installed tangent cylinders | Accepted on those three platforms; complete axial joint and material checks pass |
-| Parallel/perpendicular cylinder pairs | Accepted on those three platforms; independent angular/axial coverage and high-valence checks pass |
-| Skew finite unequal-radius cylinders | Default automatic meshes accepted on those three platforms; independent eliminated cylinder equations, 70-digit residuals, finite-height coverage, shared nodes and material checks pass |
-| Changed radius with unchanged output roles | Kernel owner identity/parameter tests and FEM section/load/support, save/load and undo/redo checks pass |
-| Expanded hosted matrix at `dedbb6130df37b9a182ebe15661323828d27afd5` | All 32 jobs pass: four-platform kernel matrix, minimum dependencies, wheel smoke and installed public/MCP/general consumers |
-| Oblique closed ellipse and concave two-hole/three-wall/two-beam fixtures | Current local and clean installed default application meshes pass independent material/joint/beam coverage, source/reference non-mutation and save/load; hosted verification of the follow-up fixes is pending |
-| One circular and two elliptic cuts on one plate | Local and clean installed automatic admission, complete closed shared-node loops, all material areas and source/save-load checks pass |
-| Growing default application fixtures | 1, 8 and 25 interior-ended parallel stiffeners pass local and clean installed material and complete shared-node checks; no model-count exception is used |
+| Windows, Linux, macOS 15 Apple silicon and macOS 15 Intel; Python 3.11�3.14 | Full geometry kernel matrix passes; local Python 3.14 suite has 1,095 passes |
+| Linux/Python 3.11 minimum dependencies | NumPy 1.26.0 and Shapely 2.0.0 gate passes |
+| Installed universal geometry wheel; Python 3.13 on all four platforms | CLI, schema, typing, serialization, representative operations and optional-Shapely boundaries pass |
+| Installed public and pinned SDK-2 MCP consumers | Established Windows/Linux/Apple-silicon consumer gates pass; all imports remain outside source checkouts |
+| Windows/Python 3.13 full compiled mesher suite | 1,943 pass, 66 explicit skips, clean process completion |
+| Windows/Python 3.13 full FEM suite | 1,044 pass, 130 explicit GUI/optional skips, clean process completion |
+| Installed generalized FEM; Windows/Linux/Apple silicon, Python 3.13 | Sixteen accepted meshes per platform, forty-eight total; all expected solver admissions pass |
+| Exact supplied command replay; target sizes 0.5 and 0.25 | Automatic linear policy; cylinder undo/replacement, requested segment/spacing parameters, all six owner-pair joints, material, source identity/content, downstream references, save/load, undo/redo and regeneration pass |
+| Parallel, perpendicular, skew and tangent finite cylinders | Complete shared-node interfaces and analytic material checks; skew fixture checks all four branches with independent eliminated equations, 70-digit residuals and finite-height interval coverage |
+| Oblique ellipse; one circular plus two elliptic cuts on one plate | Closed joint-loop coverage, exact material conservation and source/save-load pass |
+| Concave two-hole plate, three walls and two beams | Complete material intervals, T-junctions, shared node sequences, source preservation and save/load pass |
+| Growing fixtures with 1, 8 and 25 interior-ended cuts | Default automatic meshes pass complete shared-node and material checks without a model-count exception |
+| Cylinder material with 1, 2 and 4 holes | General physical charts pass exact cylinder residuals, independent unrolled material areas and source/save-load checks |
+| 260-sector cylinder beyond historical atlas scope | Frontal native linear mesh, target 0.05: exact area 2pi and all 260 shared panel interfaces pass; kernel-bound dispatch also covers 257 sectors and a boundary beyond historical patch occurrence limits |
 
-Installed reports bind wheel hashes, resolved dependencies, package byte checks
-and origins in clean environments outside source checkouts. Candidate package
-versions remain geometry 0.4.4, mesher 0.5.1 and FEM 0.4.1; filenames/version
-numbers alone do not identify these unpublished artifacts. Released comparison
-uses geometry 0.4.3, mesher 0.5.0 and FEM 0.4.1: the original replay fails in
+The [current local evidence](../reports/general_intersections/final-user-policy-evidence.json)
+records exact source/log hashes and sixteen installed Windows meshes in two
+isolated environments with byte-identical wheels. The already passing capacity
+check is reused rather than repeated. GUI skips and optional-tool skips are
+explicit; they do not establish GUI execution coverage. Intel native consumer
+coverage is not inferred from its kernel or wheel checks.
+
+Candidate versions remain geometry 0.4.4, mesher 0.5.1 and FEM 0.4.1.
+This is coordinated unpublished development: filenames and version numbers
+alone cannot identify the required artifacts. The released comparison uses
+geometry 0.4.3, mesher 0.5.0 and FEM 0.4.1; the original replay fails in
 structural preparation with source unchanged. Mesher 0.5.0 lacks the later
-automatic recovery API; its comparison uses released application defaults.
+recovery API, so that comparison uses its released application defaults.
 
-Historical matrix results in [compatibility](compatibility.md) apply only to
-their recorded source/artifacts. Windows/Linux/macOS 15 arm64/macOS 15 x86_64
-on Python 3.11–3.14 passed the extension-specific kernel matrix at the recorded
-commit. Intel downstream
-native-package coverage is not implied by kernel coverage. The Linux/Python
-3.11 minimum-dependency and installed-wheel optional-Shapely gates passed there.
-Changed follow-up sources require fresh evidence. Numerical and mesh-quality
-thresholds remain unchanged.
-
-The generalized installed-consumer CI builds native mesher commit
-`e21c0fc93662776762430e14450d54ac9192e2e8` and FEM commit
-`83f3d6c81e405ca45f5b7edd7cb7c2afd32804c4`, then installs those wheels and the
-single candidate geometry wheel in clean environments outside all checkouts.
-It requires compiled triangulation, checks every candidate package file against
-the wheel, records import origins, resolved dependencies and artifact hashes,
-and requires accepted default automatic meshes and independent joint/material
-oracles. The Windows/Linux/Apple-silicon jobs do not imply Intel consumer
-acceptance. Setup failures and unavailable artifacts are explicit failures.
-
-The compact [installed evidence](../reports/general_intersections/installed-qualification-36795873823.json)
-binds these passes to the recorded source commits and artifacts; the overall
-[hosted run](https://github.com/audunarn/ANYgeometry/actions/runs/36795873823)
-failed its five planar-area gates. The subsequent
-[installed evidence](../reports/general_intersections/installed-qualification-36798593408.json)
-records the six-case consumer passes and hashes for the
-[fully passing run](https://github.com/audunarn/ANYgeometry/actions/runs/36798593408).
-Neither record includes the later material-fixture fixes.
-
-The expanded [ten-case run](https://github.com/audunarn/ANYgeometry/actions/runs/36809696642)
-passed 31 of 32 jobs. Its [installed evidence](../reports/general_intersections/installed-qualification-36809696642.json)
-records twelve accepted meshes each on Windows and Apple silicon, and four
-accepted meshes on Linux before the skew-cylinder case exceeded its unchanged
-900-second subprocess budget. Linux's remaining cases are unaccepted in that
-run. Kernel, minimum-dependency, wheel, public-consumer and MCP jobs all passed.
-Subsequent repair/compatibility changes require fresh installed evidence.
-
-The next [hosted run](https://github.com/audunarn/ANYgeometry/actions/runs/36814130573)
-passed 30 of 32 jobs. Its [installed evidence](../reports/general_intersections/installed-qualification-36814130573.json)
-records all twelve Apple-silicon meshes; Windows and Linux each accepted four
-before the skew fixture exceeded the unchanged 900-second budget. Retained
-phase evidence identifies repeated historical overlap qualification on prepared
-general domains as substantial work. The next candidate uses one read-only
-geometry-owner batch for this audit, retaining positive-area rejection and
-legacy unsupported-surface qualification. Thirty-one focused mesher checks pass;
-full regression and installed/platform acceptance remain pending.
-
-The subsequent [run](https://github.com/audunarn/ANYgeometry/actions/runs/36818408300)
-passed its 29 kernel/dependency/wheel/public/MCP jobs but all three native jobs
-exceeded the unchanged skew budget. Its [retained evidence](../reports/general_intersections/installed-qualification-36818408300.json)
-records four accepted meshes per platform and eight unaccepted per platform.
-The read-only audit was still arranging prepared descendants after ordinary
-automatic-recovery cloning discarded the local proof. The owner-verified copy
-contract now retains an exact binding; a clean installed Windows skew case is
-ADMITTED in 466 seconds with all independent branch/material/connectivity and
-save/load checks. This is separate from pending complete hosted acceptance.
-
-Published-owner comparison identified the broader FEM compatibility regressions.
-All 78 focused checks now pass: exact empty suppressed-face roles use guarded
-FaceUse retirement, Sheet operands preserve Member/Sheet targets, existing
-shared Member endpoints retain their no-imprint behavior, and native boundary
-stations honor the Member's exact span orientation. Legacy curved authoring
-retains its qualified discretization route. Full follow-up regressions remain
-pending; no scientific acceptance threshold changed.
-
-A conforming diagonal beam in a 2-by-1 plate imposes a 26.565-degree corner.
 Following the user's clarification, default direct calls use the existing
-15-degree admission floor and mesh this design without enabling recovery.
+15-degree admission floor and keep recovery opt-in. A conforming diagonal
+beam in a 2-by-1 plate imposes a 26.565-degree corner and now meshes directly.
 An explicit caller-supplied 30-degree policy still rejects it atomically.
-Automatic recovery remains opt-in; the historical preferred S3 repair target
-remains 30 degrees and is not a default rejection threshold. Parameter-chart quality must be checked
-after lifting to physical coordinates; favorable chart angles cannot override
-the physical acceptance policy.
+The historical preferred S3 repair target remains 30 degrees, without becoming
+a default rejection threshold. Other numerical and quality limits remain
+unchanged. Favorable parameter-chart angles cannot override physical quality.
 
-The current generator contract preserves downstream references for equivalent
-and unambiguous output-role changes. Changing the generator bay count still
-requires an explicit semantic role remap; it is an atomic refusal rather than
-an inferred reassignment. Non-point face attachments require an exact source
-axis or point/edge target for remapping. Other attachment definitions are
-refused atomically. These cases have no new acceptance claim.
+Primary cylinder dispatch selects general material charts for holes and for
+components beyond historical atlas/patch cardinality scope before invoking
+historical qualification. Direct historical APIs retain their fixed evidence
+scope; a failed historical certificate never becomes a general acceptance.
 
-The [prepared-copy run](https://github.com/audunarn/ANYgeometry/actions/runs/36823318546)
-passed all 29 kernel/dependency/wheel/public/MCP jobs. Its
-[retained consumer evidence](../reports/general_intersections/installed-qualification-36823318546.json)
-records seven accepted meshes on each native platform before the concave
-Sheet attachment failed preflight: Sheet targets were checked against the edge
-registry. Both affected FEM regressions pass after owner-kind lookup correction.
+Equivalent and unambiguous feature output-role changes retain structural owners,
+sections, loads, supports and authored parameters. Ambiguous bay-count changes
+require an explicit semantic role remap and remain atomic refusals. Attachments
+without an exact source axis, point or edge remapping definition are also refused
+atomically. These refused inputs have no accepted-coverage claim. Positive-area
+overlaps still require an explicit ownership operation.
 
-A separate standalone-cylinder fixture found admitted chordal interior nodes
-on legacy holed material. Holed cylinders now use general physical charts;
-one, two and four holes pass exact cylinder residuals, independent unrolled
-material areas, source preservation and save/load, with existing quality floors.
-Eighteen mesher native/quadratic compatibility checks pass. Historical direct
-specialized contracts and their qualification limits retain their scope.
+## Retained earlier evidence
 
-The fifteen-mesh [matrix](https://github.com/audunarn/ANYgeometry/actions/runs/36825533614)
-passed 31 of 32 jobs. Linux and Apple silicon accepted all fifteen meshes;
-Windows accepted four before the skew command exceeded its unchanged
-900-second budget after S3 preparation completed at 879 seconds. Its
-[retained evidence](../reports/general_intersections/installed-qualification-36825533614.json)
-keeps that failure explicit. The frozen full mesher suite passed 1,940 checks
-with 66 skips.
-The final local installed candidate accepts all fifteen meshes;
-[compact evidence](../reports/general_intersections/final-local-evidence.json)
-binds exact source commits, wheels, retained log hashes and independent checks.
-The next candidate also removes primary dispatch's inherited atlas FaceUse
-and patch boundary-occurrence caps by selecting general material charts before
-historical qualification. Direct historical owner APIs retain their evidence
-scope. A 260-sector frontal native application mesh is ADMITTED locally with
-9,100 nodes, 8,840 cells and exact material area 2pi. The installed gate now
-requires sixteen meshes, including all 260 canonical panel interfaces.
-Default admission follows the user's 15-degree clarification, with recovery
-remaining opt-in. Fresh full suites and hosted acceptance remain pending.
-Typed failures and unavailable jobs are not passes.
+These records retain their original source/artifact scope and conclusions.
+They do not qualify later changes. Complete logs and artifacts remain attached
+to each hosted run; compact records retain failed and unaccepted configurations.
+
+| Hosted record | Original outcome |
+| --- | --- |
+| [36795873823](../reports/general_intersections/installed-qualification-36795873823.json) | Earlier installed cylinder checks pass; overall matrix fails five planar-area gates |
+| [36798593408](../reports/general_intersections/installed-qualification-36798593408.json) | All 32 jobs pass the earlier six-case consumer scope |
+| [36809696642](../reports/general_intersections/installed-qualification-36809696642.json) | 31/32; Windows and Apple silicon twelve meshes each; Linux four before skew timeout |
+| [36814130573](../reports/general_intersections/installed-qualification-36814130573.json) | 30/32; Apple silicon twelve meshes; Windows/Linux four each before skew timeout |
+| [36818408300](../reports/general_intersections/installed-qualification-36818408300.json) | 29/32; all three native jobs accept four meshes each before skew timeout |
+| [36823318546](../reports/general_intersections/installed-qualification-36823318546.json) | 29/32; seven meshes per platform before incorrect Sheet-target preflight lookup |
+| [36825533614](../reports/general_intersections/installed-qualification-36825533614.json) | 31/32; Linux/Apple silicon fifteen meshes each; Windows four before skew timeout, with S3 preparation complete at 879 seconds |
+
+The local [previous candidate](../reports/general_intersections/final-local-evidence.json)
+passes fifteen meshes and its recorded full suites. The current candidate adds
+capacity/default-policy coverage and passes the final complete matrix, preserving
+the same 900-second per-command budget. Earlier failures remain failures in
+their original evidence. Released 0.4.3/0.4.4 and specialized cylinder records
+in [compatibility](compatibility.md) also retain their historical scope.
 
 ## Consumer handoff
 
@@ -222,7 +167,7 @@ on the same development branches and retain the failed evidence above.
 | Exact curves and schema 5 | [Geometry b2e20bd](https://github.com/audunarn/ANYgeometry/commit/b2e20bd) | Geometry source f7b0a05; schema-5 codecs and analytic curve regressions |
 | Original-operand arrangements, batch preparation and material charts | [Geometry 6557b2c](https://github.com/audunarn/ANYgeometry/commit/6557b2c) | Geometry source f7b0a05; complete content binding, exact prepared copies and rollback |
 | Mesher and FEM integration | [Mesher dda50e4](https://github.com/audunarn/ANYmesh/commit/dda50e4), [FEM fa7e666](https://github.com/audunarn/ANYfem/commit/fa7e666) | Mesher e21c0fc and FEM 83f3d6c; detached preparation, owner targets and physical material charts |
-| Installed qualification and compatibility handoffs | [Geometry 11b989a](https://github.com/audunarn/ANYgeometry/commit/11b989a) | Fifteen-mesh installed gate per native platform; hashes and outcomes in the current evidence |
+| Installed qualification and compatibility handoffs | [Geometry 11b989a](https://github.com/audunarn/ANYgeometry/commit/11b989a) | Sixteen-mesh installed gate per native platform; hashes and outcomes in the current evidence |
 
 The [owner handoff table](general_intersections_owner_handoffs.md) records the
 schema, exact-curve, coordinate and preparation contracts for other consumers.
