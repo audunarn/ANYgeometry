@@ -479,6 +479,16 @@ def hp_roots(hp):
     if hp.is_zero():
         return None
     poly = hp.c
+    result = _finite_circle_roots(poly)
+    deficit = 2 * hp.n + 1 - len(poly)
+    if deficit > 0:
+        result.append((math.pi, deficit))
+    result.sort()
+    return result
+
+
+def _finite_circle_roots(poly):
+    """Roots of the integer polynomial ``poly`` in ``x = tan(t/2)`` as ``[(angle in [0, 2 pi), multiplicity)]``."""
     found = {}
     for x, multiplicity in _chart_roots(poly):
         found[round(x, 15)] = (2 * math.atan(x), multiplicity)
@@ -489,12 +499,30 @@ def hp_roots(hp):
         if abs(y) == 1.0 and round(1.0 / y, 15) in found:
             continue
         found[round(1.0 / y, 15)] = (angle, multiplicity)
-    result = [(angle % TWO_PI, multiplicity) for angle, multiplicity in found.values()]
-    deficit = 2 * hp.n + 1 - len(poly)
-    if deficit > 0:
-        result.append((math.pi, deficit))
-    result.sort()
-    return result
+    return [(angle % TWO_PI, multiplicity) for angle, multiplicity in found.values()]
+
+
+def _poly_gcd(polynomials):
+    """Integer-coefficient gcd of ascending polynomials (zero ones divide nothing new); ``None`` if all are zero."""
+    current = None
+    for poly in polynomials:
+        q = tuple(Fraction(v) for v in poly)
+        if all(v == 0 for v in q):
+            continue
+        q = tuple(_trim_ints(list(q)))
+        if current is None:
+            current = q
+            continue
+        a, b = current, q
+        while any(b):
+            a, b = b, _division(a, b)[1]
+        current = a
+    if current is None:
+        return None
+    scale = 1
+    for value in current:
+        scale = scale * value.denominator // gcd(scale, value.denominator)
+    return [int(v * scale) for v in current]
 
 
 # ---------------------------------------------------------------------------
@@ -504,13 +532,13 @@ def hp_roots(hp):
 class Plan:
     """Everything that depends on a support pair but not on a patch (lazy, shared by all facets)."""
 
-    __slots__ = ("first", "second", "hp", "linear", "_disc", "_poles", "_bound", "_resultant", "_float")
+    __slots__ = ("first", "second", "hp", "linear", "_disc", "_poles", "_bound", "_resultant", "_float", "_common")
 
     def __init__(self, first, second):
         self.first, self.second = first, second
         self.hp = build_hp(first, second)
         self.linear = self.hp[0].is_zero()
-        self._disc = self._poles = None
+        self._disc = self._poles = self._common = None
         self._bound = {}
         self._resultant = {}
         self._float = None
@@ -525,6 +553,24 @@ class Plan:
                 roots = hp_roots(discriminant_hp(*self.hp))
                 self._disc = [] if roots is None else roots
         return self._disc
+
+    def common_roots(self):
+        """Angles where ``A``, ``B`` and ``C`` all vanish: the whole ruling lies on the second support.
+
+        Such a generator is a component of the intersection by itself (a line), and the branches end on it
+        with limits rather than values. ``[(angle, 1)]``, empty when the three are coprime.
+        """
+        if self._common is None:
+            n = max(h.n for h in self.hp)
+            lifted = [h.lift(n).c for h in self.hp]
+            roots = []
+            divisor = _poly_gcd(lifted)
+            if divisor is not None and len(divisor) > 1:
+                roots.extend((angle, 1) for angle, _m in _finite_circle_roots(divisor))
+            if n > 0 and all(len(c) <= 2 * n for c in lifted):
+                roots.append((math.pi, 1))                 # x = infinity: every leading coefficient vanishes
+            self._common = sorted(roots)
+        return self._common
 
     def pole_roots(self):
         """Roots of ``A`` (quadratic) or of ``B`` (linear): angles where a root leaves to infinity."""

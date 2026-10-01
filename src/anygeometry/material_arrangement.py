@@ -16,7 +16,7 @@ from .arrangement_geometry import (LinePath, BezierPath, curve_junctions,
 from .exact_curves import EllipticArc, CylinderIntersectionCurve
 from .quadric_curves import QuadricIntersectionCurve
 from .errors import GeometryError
-from .surfaces import Cone, Cylinder, Plane
+from .surfaces import Cone, Cylinder, Plane, _angle_on_sweep
 
 _EPS = float(np.finfo(float).eps)
 
@@ -51,6 +51,7 @@ class MaterialArrangement:
     world_tolerance: float = 1e-9
     native_area_tolerance: float = 1e-12
     support: object = None
+    orientation: int = 1                # -1 when the stored face loop runs clockwise in the support chart
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,9 +166,25 @@ class MaterialDomain:
             boundaries.append(tuple(paths))
         return cls(face_id, support, tuple(boundaries))
 
+    def at_apex(self, point):
+        """Whether ``point`` is the apex of a Cone support: there the angular chart collapses to a point."""
+        support = self.support
+        if not isinstance(support, Cone):
+            return False
+        offset = np.asarray(point)-support.origin
+        radial = offset-float(offset @ support.axis)*np.asarray(support.axis)
+        return float(np.linalg.norm(radial)) <= 1e-9*max(support.radius_start, support.radius_end)
+
     def uv(self, curve, parameter):
         point = curve.evaluate(parameter)
         uv = np.asarray(self.support.local_uv(point))
+        if self.at_apex(point):
+            # The azimuth of the apex is the direction the curve reaches it along (the limit of the chart).
+            direction = np.asarray(curve.derivative(parameter))*(-1. if parameter >= .5 else 1.)
+            support = self.support
+            angle = math.atan2(float(direction @ support.circumferential_direction),
+                               float(direction @ support.radial_direction))
+            uv[0] = _angle_on_sweep(angle, support.start_angle, support.sweep_angle)/support.sweep_angle
         if isinstance(self.support, (Cylinder, Cone)):
             # Native seam events split curves before arrangement. Select the
             # endpoint's side using the interior chart, not a display path.
@@ -184,23 +201,23 @@ class MaterialDomain:
         point = curve.evaluate(parameter)-self.support.origin
         x, y = float(point @ self.support.radial_direction), float(point @ self.support.circumferential_direction)
         dx, dy = float(derivative @ self.support.radial_direction), float(derivative @ self.support.circumferential_direction)
+        if self.at_apex(point+self.support.origin):
+            # 0/0: the azimuth rate at the apex is (x' y'' - y' x'') / (2 (x'^2 + y'^2)) by l'Hopital.
+            second = _second_derivative(curve, parameter)
+            if second is None or dx*dx+dy*dy == 0:
+                rate = 0.
+            else:
+                ddx, ddy = float(second @ self.support.radial_direction), float(second @ self.support.circumferential_direction)
+                rate = (dx*ddy-dy*ddx)/(2*(dx*dx+dy*dy))
+            return np.asarray((rate/self.support.sweep_angle, float(derivative @ self.support.axis)/self.support.height))
         return np.asarray(((x*dy-y*dx)/(x*x+y*y)/self.support.sweep_angle,
                            float(derivative @ self.support.axis)/self.support.height))
 
     def curvature(self, curve, parameter, forward):
-        if isinstance(curve, LinePath):
-            second = np.zeros(3)
-        elif isinstance(curve, EllipticArc):
-            angle = curve.start_angle+parameter*curve.sweep_angle
-            second = -curve.sweep_angle**2*(math.cos(angle)*np.asarray(curve.u_vector)
-                                             + math.sin(angle)*np.asarray(curve.v_vector))
-        elif isinstance(curve, BezierPath):
-            controls = np.asarray(curve.controls)
-            second = (np.zeros(3) if len(controls) <= 2 else BezierPath(tuple(map(tuple,
-                (len(controls)-1)*(len(controls)-2)*np.diff(controls, n=2, axis=0)))).evaluate(parameter))
-        elif isinstance(curve, (CylinderIntersectionCurve, QuadricIntersectionCurve)):
-            second = curve.second_derivative(parameter)
-        else:
+        if self.at_apex(curve.evaluate(parameter)):
+            return None                  # the chart is singular here; edges at an apex are ordered by azimuth
+        second = _second_derivative(curve, parameter)
+        if second is None:
             return None
         if isinstance(self.support, Plane):
             acceleration = np.linalg.lstsq(np.column_stack((self.support.u_vector, self.support.v_vector)), second, rcond=None)[0]
@@ -396,6 +413,35 @@ def _adaptive_gauss(function, tolerance):
     if error > max(tolerance, 2.**-36*sum(item[6] for item in leaves)):
         raise GeometryError("material area integral did not resolve to the requested tolerance")
     return sum(item[4]+item[5] for item in leaves)
+
+
+def _second_derivative(curve, parameter):
+    """Second derivative of an arrangement curve in world coordinates.
+
+    ``None`` for an unknown family or where the exact curve has no finite second derivative (an end at a
+    cone's apex): the caller then has no curvature to break a tangent tie.
+    """
+    with np.errstate(all="ignore"):
+        second = _second_derivative_raw(curve, parameter)
+    if second is not None and not np.all(np.isfinite(second)):
+        return None
+    return second
+
+
+def _second_derivative_raw(curve, parameter):
+    if isinstance(curve, LinePath):
+        return np.zeros(3)
+    if isinstance(curve, EllipticArc):
+        angle = curve.start_angle+parameter*curve.sweep_angle
+        return -curve.sweep_angle**2*(math.cos(angle)*np.asarray(curve.u_vector)
+                                       + math.sin(angle)*np.asarray(curve.v_vector))
+    if isinstance(curve, BezierPath):
+        controls = np.asarray(curve.controls)
+        return (np.zeros(3) if len(controls) <= 2 else BezierPath(tuple(map(tuple,
+            (len(controls)-1)*(len(controls)-2)*np.diff(controls, n=2, axis=0)))).evaluate(parameter))
+    if isinstance(curve, (CylinderIntersectionCurve, QuadricIntersectionCurve)):
+        return curve.second_derivative(parameter)
+    return None
 
 
 def _clip(domain, curve, tolerance, check):
@@ -598,13 +644,20 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
     outgoing = [[] for _ in vertices]
     for index, ((start, end), path) in enumerate(zip(endpoints_by_edge, edges)):
         for vertex_id, forward in ((start, True), (end, False)):
-            tangent = domain.tangent(path.curve, 0. if forward else 1.)*(1 if forward else -1)
+            end_parameter = 0. if forward else 1.
+            if domain.at_apex(path.curve.evaluate(end_parameter)):
+                # Every edge leaves the collapsed apex edge upward; the plane embedding around it is the
+                # order of the azimuths (counterclockwise in the chart: decreasing u).
+                u = float(domain.uv(path.curve, end_parameter)[0])
+                outgoing[vertex_id].append((.5*math.pi+.25*math.pi*(1-2*u), None, index, forward))
+                continue
+            tangent = domain.tangent(path.curve, end_parameter)*(1 if forward else -1)
             if np.linalg.norm(tangent) == 0:
                 raise GeometryError("arrangement endpoint needs a regular curve chart")
             angle = math.atan2(tangent[1], tangent[0]) % math.tau
             if min(angle, math.tau-angle) < 64*np.finfo(float).eps:
                 angle = 0.
-            curvature = domain.curvature(path.curve, 0. if forward else 1., forward)
+            curvature = domain.curvature(path.curve, end_parameter, forward)
             outgoing[vertex_id].append((angle, curvature, index, forward))
     for values in outgoing:
         values.sort(key=lambda item: item[0])
@@ -674,10 +727,11 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
         holes[owner].append(chain)
     cells = tuple(ArrangementCell(chain, tuple(holes[index]))
                   for index, (chain, _loop, _area) in enumerate(positive))
-    original = abs(domain.area_loop(domain.boundaries[0], native_area_tolerance*.05))-sum(
+    outer_area = domain.area_loop(domain.boundaries[0], native_area_tolerance*.05)
+    original = abs(outer_area)-sum(
         abs(domain.area_loop(loop, native_area_tolerance*.05)) for loop in domain.boundaries[1:])
     retained = sum(item[2] for item in cycles)
     if not cells or abs(original-retained) > native_area_tolerance:
         raise GeometryError("arrangement failed material conservation")
     return MaterialArrangement(domain.face_id, tuple(edges), cells, retained, tolerance,
-                               native_area_tolerance, domain.support)
+                               native_area_tolerance, domain.support, -1 if outer_area < 0 else 1)

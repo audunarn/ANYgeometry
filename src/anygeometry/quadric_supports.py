@@ -222,9 +222,12 @@ def charts_support(first_surface, second_surface, *, tolerance=1e-10, cancellati
             right = any(abs(begin + length - f) <= tol for f in fold_angles)
             mode = "both_sine" if left and right else "left_square" if left else "right_square" if right else "linear"
             curve = QuadricIntersectionCurve._make(first, second, begin, length, branch, mode)
-            point = curve.evaluate(.5)
-            if not np.all(np.isfinite(point)):
+            ends = curve.evaluate(np.array([0., .5, 1.]))
+            if not np.all(np.isfinite(ends)):
                 continue                                  # a chart that runs to a pole is not a curve of this pair
+            if np.ptp(ends, axis=0).max() <= tolerance:
+                continue                                  # the apex branch (s = 0 for every angle) is a point, not a curve
+            point = ends[1]
             axial_mid = float((point - first_origin) @ first_axis)
             if not (z_lo - tolerance <= axial_mid <= z_hi + tolerance):
                 continue
@@ -242,7 +245,69 @@ def charts_support(first_surface, second_surface, *, tolerance=1e-10, cancellati
         if (z_lo - tolerance <= axial <= z_hi + tolerance and _inside_patch(second_surface, point, tolerance)
                 and not any(np.linalg.norm(point - curve.evaluate(t)) <= tolerance for curve in curves for t in (0., 1.))):
             points.append(tuple(point))
-    return SupportIntersection(curves=tuple(curves), points=tuple(points))
+    segments = []
+    for angle in _in_range(plan.common_roots(), lo, hi, tol):
+        for start, end in _generator_segments(first_surface, second_surface, plan, float(angle), tolerance):
+            if not any(np.linalg.norm(np.asarray(start) - np.asarray(a)) <= tolerance
+                       and np.linalg.norm(np.asarray(end) - np.asarray(b)) <= tolerance for a, b in segments):
+                segments.append((start, end))               # the seam of a full turn lists its generator twice
+    for apex in _apex_contacts(first_surface, second_surface, tolerance):
+        if not any(np.linalg.norm(np.asarray(apex) - np.asarray(old)) <= tolerance for old in points):
+            points.append(apex)
+    return SupportIntersection(curves=tuple(curves), segments=tuple(segments), points=tuple(points))
+
+
+def _generator_segments(first_surface, second_surface, plan, angle, tolerance):
+    """The stretches of the first support's generator at ``angle`` that lie in both patches.
+
+    The generator is a component of the intersection by itself when ``A``, ``B`` and ``C`` all vanish at
+    ``angle``: every point of the line satisfies the second support's equation.
+    """
+    fs = plan.floats()
+    first = plan.first
+    z_lo, z_hi = _axial_range(first_surface)
+    start = _point_at(first, fs, angle, 0.0)
+    direction = _point_at(first, fs, angle, 1.0) - start
+    cuts = [z_lo, z_hi]
+    if isinstance(second_surface, (Cylinder, Cone)):
+        for plane in _boundary_planes(second_surface):
+            normal = np.asarray(plane.axis)
+            rate = float(normal @ direction)
+            if abs(rate) > 1e-14:
+                s = float(normal @ (np.asarray(plane.origin) - start)) / rate
+                if z_lo < s < z_hi:
+                    cuts.append(s)
+    cuts = _merge(cuts, 1e-14)
+    stretches = []
+    for lower, upper in zip(cuts, cuts[1:]):
+        if (upper - lower) * float(np.linalg.norm(direction)) <= tolerance:
+            continue
+        middle = start + .5 * (lower + upper) * direction
+        if _inside_patch(first_surface, middle, tolerance) and _inside_patch(second_surface, middle, tolerance):
+            if stretches and abs(stretches[-1][1] - lower) <= 1e-14:
+                stretches[-1][1] = upper
+            else:
+                stretches.append([lower, upper])
+    return [(tuple(start + a * direction), tuple(start + b * direction)) for a, b in stretches]
+
+
+def _apex_contacts(first_surface, second_surface, tolerance):
+    """Apexes of the two supports that lie on the other support, inside both patches.
+
+    A cone's apex is a singular point of the intersection: the branch ``s = 0`` of its rulings meets every
+    other branch there, and when no curve ends at it the apex is an isolated contact.
+    """
+    contacts = []
+    for cone, other in ((first_surface, second_surface), (second_surface, first_surface)):
+        if not isinstance(cone, Cone):
+            continue
+        slope = (float(cone.radius_end) - float(cone.radius_start)) / float(cone.height)
+        apex = np.asarray(cone.origin) - (float(cone.radius_start) / slope) * np.asarray(cone.axis)
+        quadric = QuadricSupport.from_surface(other)
+        scale = float(quadric.gradient_norm(apex)) + tolerance
+        if abs(float(quadric.value(apex))) <= tolerance * scale and _inside_patch(cone, apex, tolerance)                 and _inside_patch(other, apex, tolerance):
+            contacts.append(tuple(float(v) for v in apex))
+    return contacts
 
 
 def _point_at(first, fs, theta, s):

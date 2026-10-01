@@ -18,7 +18,7 @@ import pytest
 from anygeometry import GeometryError
 from anygeometry.exact_curves import EllipticArc
 from anygeometry.generators import cone as cone_shell, cylinder as cylinder_shell
-from anygeometry.quadric_algebra import QuadricSupport, _cached_plan
+from anygeometry.quadric_algebra import QuadricSupport, RuledSupport, _cached_plan, get_plan
 from anygeometry.quadric_curves import QuadricIntersectionCurve
 from anygeometry.quadric_supports import cone_support
 from anygeometry.surfaces import Cone, Cylinder, Plane
@@ -224,6 +224,52 @@ def test_a_parallel_axis_cylinder_crosses_the_cone_in_exact_charts():
     for curve in result.curves:
         points = curve.evaluate(np.linspace(0, 1, 33))
         assert _distance(CONE, points)[0].max() < 1e-12 and _distance(cylinder, points)[0].max() < 1e-12
+
+
+# ---------------------------------------------------------------- apex contacts and common generators
+
+
+def _pointed(apex, axis, radial=(0., 1., 0.), radius=1., height=3.):
+    return Cone(apex, axis, radial, 0., radius, height, 0., math.tau)
+
+
+@pytest.mark.parametrize("axis", ((math.cos(math.radians(10)), 0., math.sin(math.radians(10))), (1., 0., 0.)))
+def test_an_apex_on_the_other_support_leaves_no_degenerate_curve_and_is_a_point_contact(axis):
+    """The branch ``s = 0`` of the rulings is the apex for every angle: a point, never a zero-length curve."""
+    cylinder = Cylinder((0., 0., -3.), (0., 0., 1.), (1., 0., 0.), 2., 6., 0., math.tau)
+    result = cone_support(_pointed((0., 2., 0.), axis), cylinder)
+    assert len(result.curves) == 2 and all(isinstance(c, QuadricIntersectionCurve) for c in result.curves)
+    for curve in result.curves:
+        assert np.ptp(curve.evaluate(np.linspace(0., 1., 9)), axis=0).max() > .5
+        assert _distance(cylinder, curve.evaluate(np.linspace(0., 1., 9)))[0].max() < 1e-12
+    assert any(np.allclose(point, (0., 2., 0.)) for point in result.points)
+
+
+def test_an_apex_on_the_wall_with_nothing_else_is_an_isolated_point():
+    cylinder = Cylinder((0., 0., -3.), (0., 0., 1.), (1., 0., 0.), 2., 6., 0., math.tau)
+    result = cone_support(_pointed((2., 0., 0.), (-1., 0., 0.)), cylinder)
+    assert not result.curves and not result.segments
+    assert len(result.points) == 1 and np.allclose(result.points[0], (2., 0., 0.))
+
+
+def test_cones_sharing_an_apex_meet_along_their_common_generators():
+    a = Cone((0., 0., 0.), (0., 0., 1.), (1., 0., 0.), .5, 1.5, 2., 0., math.tau)             # apex (0, 0, -1), slope 1/2
+    b = Cone((0., 0., -1.), (1., 0., 0.), (0., 1., 0.), 0., 2., 1., 0., math.tau)             # same apex, axis x, slope 2
+    for first, second in ((a, b), (b, a)):
+        result = cone_support(first, second)
+        assert not result.curves
+        assert len(result.segments) == 1                          # the line (1/2, 0, 1) t, clipped to both patches
+        (start, end), = result.segments
+        assert np.allclose(sorted([start, end], key=lambda p: p[2]), [(.5, 0., 0.), (1., 0., 1.)])
+
+
+def test_the_plan_finds_the_generators_that_lie_wholly_on_the_other_support():
+    a = Cone((0., 0., 0.), (0., 0., 1.), (1., 0., 0.), .5, 1.5, 2., 0., math.tau)
+    b = Cone((0., 0., -1.), (1., 0., 0.), (0., 1., 0.), 0., 2., 1., 0., math.tau)
+    angles = [angle for angle, _m in get_plan(RuledSupport.from_surface(a), b).common_roots()]
+    assert angles == pytest.approx([0., math.pi])                 # the two nappes of the common generator line
+    generic = get_plan(RuledSupport.from_surface(CONE), Cylinder((.9, 0., -3.), (0., 0., 1.), (1., 0., 0.), .5, 6., 0., math.tau))
+    assert generic.common_roots() == []
 
 
 # ---------------------------------------------------------------- engine-facing properties

@@ -639,7 +639,7 @@ def _child_support(model, face, outer, holes, tolerance):
                              height,start,sweep)
             else:
                 support=Cylinder(origin,support.axis,support.radial_direction,support.radius,height,start,sweep)
-            return outer,support,None,model._detect_corners(outer)
+            return outer,support,None,model._detect_corners(outer) if len(outer) >= 4 else None
         return outer,support,None,None
     corners=model._detect_corners(outer) if len(outer)>=4 else ()
     if len(corners)==4 and all(isinstance(model.edges[use.edge].curve,Straight) for use in outer):
@@ -829,6 +829,12 @@ def _apply_intersections_in_place(model, plan, *, policy):
             def loop(values):
                 return tuple(OrientedEdge(mapping[index].edge, mapping[index].forward == forward) for index, forward in values)
             loops = [(loop(cell.outer), tuple(loop(hole) for hole in cell.holes)) for cell in arrangement.cells]
+            if arrangement.orientation < 0:
+                # The arrangement walks counterclockwise in the support chart; a face stored clockwise
+                # (a pointed cone's facets are) keeps its sense so its neighbours still agree with it.
+                def reverse(values):
+                    return tuple(OrientedEdge(item.edge, not item.forward) for item in reversed(values))
+                loops = [(reverse(outer), tuple(reverse(hole) for hole in holes)) for outer, holes in loops]
             if len(loops) == 1 and {item.edge for item in loops[0][0]} == {item.edge for item in face.loop} and (
                     {tuple(sorted(item.edge for item in hole)) for hole in loops[0][1]} ==
                     {tuple(sorted(item.edge for item in hole)) for hole in face.holes}):

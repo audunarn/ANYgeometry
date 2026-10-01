@@ -165,7 +165,7 @@ def _insert_selected(
 
         made = destination.add_face_from_loop(
             mapped_loop(face.loop),
-            face.corners,
+            face.corners or None,                  # a neutral arbitrary-loop face has no mapped corners
             surface=deepcopy(face.surface),
         )
         destination._put_entity(  # noqa: SLF001

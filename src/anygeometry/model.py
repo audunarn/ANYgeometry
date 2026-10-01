@@ -5222,6 +5222,10 @@ class GeometryModel:
             try:
                 if isinstance(surface, (Plane, Cylinder, Cone)):
                     support_uv = self._builtin_local_uv_many(surface, combined)
+                    if isinstance(surface, Cone):
+                        support_uv = self._regularize_apex_uv(
+                            surface, support_uv, [len(points) for points in points_3d]
+                        )
                     projected = _evaluate_surface_many(surface, support_uv)
                 else:
                     support_uv = np.asarray(
@@ -6914,6 +6918,26 @@ class GeometryModel:
                 1.0,
             )
         return np.column_stack((u, v)), np.ones(len(targets), dtype=bool)
+
+    @staticmethod
+    def _regularize_apex_uv(surface: Cone, support_uv: np.ndarray, loop_sizes: List[int]) -> np.ndarray:
+        """Give a cone's apex (where the azimuth is undefined) the mean azimuth of its loop neighbours."""
+
+        radius = (1.0 - support_uv[:, 1]) * surface.radius_start + support_uv[:, 1] * surface.radius_end
+        apex = np.abs(radius) <= 1e-12 * max(surface.radius_start, surface.radius_end)
+        if not np.any(apex):
+            return support_uv
+        result = np.array(support_uv, copy=True)
+        start = 0
+        for size in loop_sizes:
+            for offset in range(size):
+                index = start + offset
+                if apex[index]:
+                    before, after = start + (offset - 1) % size, start + (offset + 1) % size
+                    if not apex[before] and not apex[after]:
+                        result[index, 0] = 0.5 * (support_uv[before, 0] + support_uv[after, 0])
+            start += size
+        return result
 
     @staticmethod
     def _builtin_local_uv_many(

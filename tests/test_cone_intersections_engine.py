@@ -77,7 +77,9 @@ def _joint_residual(model):
             surface = model.faces[face_id].surface
             if isinstance(surface, (Cone, Cylinder, Plane)):
                 quadric = QuadricSupport.from_surface(surface)
-                worst = max(worst, float(np.max(np.abs(quadric.value(points)) / quadric.gradient_norm(points))))
+                gradient = quadric.gradient_norm(points)
+                regular = gradient > 1e-9                       # the gradient of a cone vanishes at its apex
+                worst = max(worst, float(np.max(np.abs(quadric.value(points))[regular] / gradient[regular])))
     return worst, joints
 
 
@@ -217,6 +219,74 @@ def test_two_cones_crossing_at_an_angle(tilt_degrees):
     assert joints >= 6 and _edge_kinds(model)["QuadricIntersectionCurve"] >= 6
     assert to_dict(model)["version"] == 6
     assert from_dict(to_dict(model)).validate_topology() == ()
+
+
+# ---------------------------------------------------------------- pointed cones: the apex is a singular point
+
+
+def test_a_pointed_cone_is_a_material_chart_with_exact_area():
+    model = cone(0., 1., 3., circumferential_segments=6)
+    assert _total_area(model) == pytest.approx(math.pi * 1. * math.hypot(3., 1.), rel=1e-13)
+
+
+def test_a_pointed_cone_can_be_inserted_into_another_model():
+    """Triangular facets are neutral arbitrary-loop faces (no mapped corners): copying must accept them."""
+    from anygeometry import GeometryModel
+    target = GeometryModel()
+    target.insert_model(cone(0., 1., 3., circumferential_segments=6))
+    assert len(target.faces) == 6 and target.validate_topology() == ()
+
+
+@pytest.mark.parametrize("tilt_degrees", (0., 30.))
+def test_a_plate_cutting_some_facets_of_a_pointed_cone(tilt_degrees):
+    """Pointed facets run clockwise in the support chart; the cut children must keep their sense."""
+    model = cone(0., 1.5, 3., circumferential_segments=8)
+    faces = sorted(model.faces)
+    t = math.radians(tilt_degrees)
+    normal = np.array([0., math.sin(t), math.cos(t)])
+    faces.append(_plate(model, (.8, 0., 1.5), normal, .4))
+    before = _total_area(model)
+    _run(model, faces)
+    _check_model(model, before)
+    assert len(model.faces) == 14
+
+
+def test_the_tip_of_a_cone_touching_a_plate_is_a_point_contact():
+    model = cone(0., 1., 3., circumferential_segments=6)
+    faces = sorted(model.faces)
+    faces.append(_plate(model, (0., 0., 0.), (0., 0., 1.), 2.))
+    before = _total_area(model)
+    plan = plan_intersections(model, [model.handle("face", f) for f in faces], policy=ConnectionIntent.CONNECT)
+    apply_intersections(model, plan, policy=ConnectionIntent.CONNECT)
+    _check_model(model, before)
+    assert sum(isinstance(face.surface, Cone) for face in model.faces.values()) == 6   # no cone facet is cut
+
+
+@pytest.mark.parametrize("axis_degrees", (0., 10.))
+def test_a_cone_tip_on_a_cylinder_wall(axis_degrees):
+    a = math.radians(axis_degrees)
+    model = cone(0., 1., 3., origin=(0., 2., 0.), axis=(math.cos(a), 0., math.sin(a)), radial_direction=(0., 1., 0.),
+                 circumferential_segments=6)
+    cone_faces = set(model.faces)
+    model.insert_model(cylinder(2., 6., origin=(0., 0., -3.), circumferential_segments=12))
+    faces = sorted(cone_faces) + sorted(set(model.faces) - cone_faces)
+    before = _total_area(model)
+    _run(model, faces)
+    joints = _check_model(model, before)
+    assert joints >= 6 and _edge_kinds(model)["QuadricIntersectionCurve"] >= 6
+    assert from_dict(to_dict(model)).validate_topology() == ()
+
+
+def test_two_pointed_cones_with_a_common_apex_meet_along_common_generators():
+    model = cone(0., 1., 3., circumferential_segments=8)
+    first = set(model.faces)
+    model.insert_model(cone(0., .6, 3., axis=(math.sin(.5), 0., math.cos(.5)), radial_direction=(0., 1., 0.),
+                            circumferential_segments=4))
+    faces = sorted(first) + sorted(set(model.faces) - first)
+    before = _total_area(model)
+    _run(model, faces)
+    _check_model(model, before)
+    assert len(model.faces) > len(faces)                  # the shared generators split facets of both cones
 
 
 def test_a_cone_entering_a_cylinder_sideways_and_coaxial_rings():
