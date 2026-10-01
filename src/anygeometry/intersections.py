@@ -3056,6 +3056,37 @@ def _query_plane_cylinder_faces(
     )
 
 
+# An explicit refusal: a complete boundary curve on a planar support outside the qualified CONNECT domain.
+BOUNDARY_CURVE_REFUSAL = "planar_boundary_curve_material_qualification_unresolved"
+
+
+def _refused_boundary_curve_contact(
+    geometry: GeometryModel, result: IntersectionResult, first: EntityHandle, second: EntityHandle
+) -> bool:
+    """Whether ``result`` is the established refusal of a boundary curve lying in a planar support.
+
+    The refusal is raised for every non-convex planar support, so it only stands for a contact when an edge of
+    the curved face really lies in the support's plane. Any other pair may still go to the exact engine.
+    """
+    if BOUNDARY_CURVE_REFUSAL not in result.diagnostics:
+        return False
+    for plane_handle, curved_handle in ((first, second), (second, first)):
+        try:
+            plane = _qualified_face_plane(geometry, plane_handle.id)
+        except GeometryError:
+            continue
+        face = geometry.faces[curved_handle.id]
+        tolerance = geometry.tolerance.effective_surface_residual(_face_length_scale(geometry, plane_handle.id))
+        if any(
+            all(abs(float((point - plane.origin) @ plane.normal)) <= tolerance
+                for point in _curve_definition_points(geometry, item.edge))
+            for loop in (face.loop, *face.holes)
+            for item in loop
+        ):
+            return True
+    return False
+
+
 def _query_face_face(
     geometry: GeometryModel,
     first: EntityHandle,
@@ -3132,7 +3163,7 @@ def _query_face_face(
                 second,
                 IntersectionKind.UNCLASSIFIED,
                 diagnostics=(
-                    "planar_boundary_curve_material_qualification_unresolved",
+                    BOUNDARY_CURVE_REFUSAL,
                     *boundary.diagnostics,
                 ),
             )
@@ -3167,7 +3198,7 @@ def _query_face_face(
                 second,
                 IntersectionKind.UNCLASSIFIED,
                 diagnostics=(
-                    "planar_boundary_curve_material_qualification_unresolved",
+                    BOUNDARY_CURVE_REFUSAL,
                     *boundary.diagnostics,
                 ),
             )
@@ -4231,7 +4262,9 @@ def query_intersection(
         result = _query_face_face(
             geometry, first_handle, second_handle, qualified_policy
         )
-        if not result.classified:
+        if not result.classified and not _refused_boundary_curve_contact(
+            geometry, result, first_handle, second_handle
+        ):
             from .material_pair import domains_for_pair, query_exact_pair
             try:
                 domains_for_pair(geometry, first_handle, second_handle)
@@ -4555,13 +4588,17 @@ def plan_imprint(
             or len(reuse_components) == len(result.components) > 0
         )
         if wants_face_imprint and result.classified:
-            from .material_pair import domains_for_pair
+            from .material_pair import classified_by_exact_engine, domains_for_pair, recovered_extrusion
             try:
-                domains_for_pair(geometry, first_parent, second_parent)
+                pair_domains = domains_for_pair(geometry, first_parent, second_parent)
             except GeometryError:
                 general_domains = False
             else:
                 general_domains = result.dimension in (IntersectionDimension.POINT,IntersectionDimension.CURVE)
+                if general_domains and any(recovered_extrusion(geometry, domain) for domain in pair_domains):
+                    # A wall recovered from extrude() topology keeps the established imprint planning wherever the
+                    # established query classified the pair; the exact engine plans only what it classified itself.
+                    general_domains = classified_by_exact_engine(result)
             if general_domains and policy_value in ('connect','imprint'):
                 from .batch_intersections import plan_intersections
                 from .material_pair import pair_plan_operands

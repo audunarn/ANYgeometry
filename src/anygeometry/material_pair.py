@@ -6,7 +6,9 @@ from .material_arrangement import MaterialDomain
 from .batch_intersections import _pair_paths, _domain_bounds
 from .predicates import (IntersectionComponent, IntersectionCertificate,
                          IntersectionDimension, IntersectionKind, IntersectionQuality)
-from .surfaces import Plane, Cylinder
+from .surfaces import ExtrudedSurface, Plane, Cylinder
+
+EXACT_PAIR_ALGORITHMS = ('analytic_material_arrangement', 'analytic_material_point_contact')
 
 
 def pair_plan_operands(model, first, second):
@@ -30,6 +32,19 @@ def domains_for_pair(model, first, second):
             MaterialDomain.from_model(model, second.id))
 
 
+def recovered_extrusion(model, domain):
+    """Whether ``domain`` is an extrusion recovered from the face's topology (its stored surface is something else)."""
+    return isinstance(domain.support, ExtrudedSurface) and not isinstance(model.faces[domain.face_id].surface,
+                                                                          ExtrudedSurface)
+
+
+def classified_by_exact_engine(result):
+    """Whether every component of ``result`` carries the exact pair engine's certificate."""
+    return bool(result.components) and all(
+        component.certificate is not None and component.certificate.algorithm in EXACT_PAIR_ALGORITHMS
+        for component in result.components)
+
+
 def query_exact_pair(model, first, second):
     from .intersections import _qualified_result
     a, b = domains_for_pair(model, first, second)
@@ -48,13 +63,13 @@ def query_exact_pair(model, first, second):
         first_parameter_path=tuple(tuple(a.uv(curve,t)) for t in (0.,.5,1.)),
         second_parameter_path=tuple(tuple(b.uv(curve,t)) for t in (0.,.5,1.)),
         analytic_curve=curve,
-        certificate=IntersectionCertificate('analytic_material_arrangement',tolerance,
+        certificate=IntersectionCertificate(EXACT_PAIR_ALGORITHMS[0],tolerance,
                                             complete=True),
         first_subparent=first,second_subparent=second) for curve in curves)
     point_components=tuple(IntersectionComponent((point,),IntersectionQuality.EXACT,
         first_parameter=tuple(a.support.local_uv(point)),second_parameter=tuple(b.support.local_uv(point)),
         first_subparent=first,second_subparent=second,
-        certificate=IntersectionCertificate('analytic_material_point_contact',tolerance,complete=True))
+        certificate=IntersectionCertificate(EXACT_PAIR_ALGORITHMS[1],tolerance,complete=True))
         for point in points)
     return _qualified_result(model,first,second,
         IntersectionKind.CROSS if components else IntersectionKind.TOUCH_POINT if point_components else IntersectionKind.DISJOINT,
