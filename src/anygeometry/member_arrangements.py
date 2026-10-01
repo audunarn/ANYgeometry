@@ -14,7 +14,7 @@ from .quadric_curves import QuadricIntersectionCurve
 from .errors import GeometryError
 from .material_arrangement import ArrangementPath, ArrangementPoint, _clip
 from .structural import Orientation
-from .surfaces import Cone, Plane
+from .surfaces import Cone, ExtrudedSurface, Plane
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +36,12 @@ class MemberPointContact:
 
 
 def _support_roots(curve, support, tolerance, check):
+    if isinstance(support, ExtrudedSurface):
+        # No algebraic implicit form here: a curve is either on the surface (sampled residual) or unsupported.
+        points = np.asarray(curve.evaluate(np.linspace(0., 1., 17)))
+        if float(np.max(np.linalg.norm(support.evaluate_many(support.local_uv_many(points))-points, axis=1))) <= tolerance:
+            return None
+        raise GeometryError("a curve leaving an extruded support (a beam or axis contact) is not supported yet")
     if isinstance(support, Plane):
         return plane_roots(curve, support.normal, float(support.normal @ support.origin),
                            tolerance=tolerance, cancellation_check=lambda: (check() or False))

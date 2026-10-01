@@ -5231,6 +5231,9 @@ class GeometryModel:
                             surface, support_uv, [len(points) for points in points_3d]
                         )
                     projected = _evaluate_surface_many(surface, support_uv)
+                elif isinstance(surface, ExtrudedSurface):
+                    support_uv = surface.local_uv_many(combined)
+                    projected = surface.evaluate_many(support_uv)
                 else:
                     support_uv = np.asarray(
                         [surface.local_uv(point) for point in combined],

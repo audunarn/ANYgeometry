@@ -311,6 +311,11 @@ class ExtrudedSurface:
         t, s = self._parameters(float(u), float(v))
         return self.directrix.point(t) + float(s) * self._vector
 
+    def evaluate_many(self, uv) -> np.ndarray:
+        uv = np.atleast_2d(np.asarray(uv, dtype=float))
+        t, s = self._parameters(uv[:, 0], uv[:, 1])
+        return self.directrix.point(t) + s[:, None] * self._vector
+
     def local_uv(self, point: object) -> tuple[float, float]:
         uv = self.local_uv_many(_vector3(point, "point")[None, :])[0]
         return float(uv[0]), float(uv[1])

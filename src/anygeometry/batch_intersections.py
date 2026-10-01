@@ -30,7 +30,7 @@ from .member_arrangements import (MemberAxisArrangement, MemberPointContact,
 from .predicates import IntersectionDimension, IntersectionKind, qualified_plane_plane
 from .serialization import to_dict
 from .structural import ConnectionIntent, Orientation
-from .surfaces import Cone, Cylinder, Plane
+from .surfaces import Cone, Cylinder, ExtrudedSurface, Plane
 from .transactions import ChangeSet
 from .definition_binding import definition_checksum
 
@@ -342,6 +342,12 @@ def _pair_paths(first, second, model, tolerance, check, *, point_contacts=None):
         boxes = (_domain_bounds(first), _domain_bounds(second))
         extent = max(np.linalg.norm(lo-point)+np.linalg.norm(hi-point) for lo, hi in boxes)+1.
         paths = (LinePath(tuple(point-extent*direction), tuple(point+extent*direction)),)
+    elif isinstance(a, ExtrudedSurface) or isinstance(b, ExtrudedSurface):
+        from .extruded_pair_supports import extruded_pair_support
+        result = extruded_pair_support(a, b, tolerance=tolerance, cancellation_check=lambda: (check() or False))
+        if result.coincident:
+            return _coplanar_traces(first, second, tolerance, check, model)
+        paths = (*result.curves, *(LinePath(start, end) for start, end in result.segments))
     elif isinstance(a, Cone) or isinstance(b, Cone):
         from .quadric_supports import cone_support
         result = cone_support(a, b, tolerance=tolerance, cancellation_check=lambda: (check() or False))
@@ -592,6 +598,34 @@ def _canonicalize_member_edges(model, curves, axes, joint_ids, check):
         joint_ids.add(canonical_id)
 
 
+def _extruded_child_support(model, support, outer, tolerance):
+    """Rebase a rectangular child of an extruded surface onto its own parameter ranges (no new geometry)."""
+    domain=MaterialDomain(0,support,(tuple(ArrangementPath(freeze_edge(model,use.edge)
+                if use.forward else freeze_edge(model,use.edge).subcurve(1.,0.)) for use in outer),))
+    rows=[domain.uv(path.curve,0.) for path in domain.boundaries[0]]
+    lower,upper=np.min(rows,axis=0),np.max(rows,axis=0)
+    (u0,u1),(v0,v1)=support.u_range,support.v_range
+    t=u0+np.linspace(0.,1.,33)*(u1-u0)
+    speed=min(float(np.max(np.linalg.norm(support.directrix.derivative(t),axis=1)))*abs(u1-u0),
+              float(np.linalg.norm(support.vector))*abs(v1-v0))
+    native_tolerance=tolerance/speed
+    rectangular=all((abs(row[0]-lower[0])<=native_tolerance or abs(row[0]-upper[0])<=native_tolerance)
+                    or (abs(row[1]-lower[1])<=native_tolerance or abs(row[1]-upper[1])<=native_tolerance)
+                    for row in rows)
+    for path in domain.boundaries[0]:
+        first,middle,last=domain.uv(path.curve,0.),domain.uv(path.curve,.5),domain.uv(path.curve,1.)
+        if isinstance(path.curve,LinePath):
+            rectangular &= abs(first[0]-last[0]) <= native_tolerance and abs(first[0]-middle[0]) <= native_tolerance
+        else:
+            rectangular &= abs(first[1]-last[1]) <= native_tolerance and abs(first[1]-middle[1]) <= native_tolerance
+    if not rectangular or not np.all(upper-lower>native_tolerance):
+        return outer,support,None,None
+    index=min((i for i,row in enumerate(rows) if abs(row[1]-lower[1])<=native_tolerance),key=lambda i:rows[i][0])
+    outer=outer[index:]+outer[:index]
+    child=support.subpatch((lower[0],upper[0]),(lower[1],upper[1]))
+    return outer,child,None,model._detect_corners(outer) if len(outer) >= 4 else None
+
+
 def _child_support(model, face, outer, holes, tolerance):
     """Rebase a proven rectangular support; general trims stay native charts.
 
@@ -599,8 +633,10 @@ def _child_support(model, face, outer, holes, tolerance):
     This changes the parameter extent, never the underlying physical surface.
     """
     support=face.surface
-    if holes or not isinstance(support,(Plane,Cylinder,Cone)):
+    if holes or not isinstance(support,(Plane,Cylinder,Cone,ExtrudedSurface)):
         return outer,support,face.parameterization,None
+    if isinstance(support,ExtrudedSurface):
+        return _extruded_child_support(model,support,outer,tolerance)
     points=[model.vertex_position(model.oriented_start_vertex(use)) for use in outer]
     if isinstance(support,(Cylinder,Cone)):
         domain=MaterialDomain(0,support,(tuple(ArrangementPath(freeze_edge(model,use.edge)

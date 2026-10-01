@@ -16,7 +16,10 @@ from .arrangement_geometry import (LinePath, BezierPath, curve_junctions,
 from .exact_curves import EllipticArc, CylinderIntersectionCurve
 from .quadric_curves import QuadricIntersectionCurve
 from .errors import GeometryError
-from .surfaces import Cone, Cylinder, Plane, _angle_on_sweep
+from .extruded_chart import area_density, chart_accelerations, chart_rates, density_bound, world_metric
+from .extruded_supports import extruded_support
+from .extrusions import EllipseDirectrix
+from .surfaces import Cone, Cylinder, ExtrudedSurface, Plane, _angle_on_sweep
 
 _EPS = float(np.finfo(float).eps)
 
@@ -57,22 +60,26 @@ class MaterialArrangement:
 @dataclass(frozen=True, slots=True)
 class MaterialDomain:
     face_id: int
-    support: Plane | Cylinder | Cone
+    support: Plane | Cylinder | Cone | ExtrudedSurface
     boundaries: tuple[tuple[ArrangementPath, ...], ...]
 
     @property
     def area_jacobian(self):
         if isinstance(self.support, Plane):
             return float(np.linalg.norm(np.cross(self.support.u_vector, self.support.v_vector)))
+        if isinstance(self.support, ExtrudedSurface):
+            return density_bound(self.support)            # an upper bound: the area element varies along the directrix
         if isinstance(self.support, Cone):
             # Upper bound: the cone's area element grows with its radius.
             slant = math.hypot(self.support.height, self.support.radius_end-self.support.radius_start)
             return abs(max(self.support.radius_start, self.support.radius_end)*self.support.sweep_angle*slant)
         return abs(self.support.radius*self.support.sweep_angle*self.support.height)
 
-    def world_delta(self, delta, v=0.):
+    def world_delta(self, delta, v=0., u=0.):
         if isinstance(self.support, Plane):
             return delta[0]*self.support.u_vector+delta[1]*self.support.v_vector
+        if isinstance(self.support, ExtrudedSurface):
+            return world_metric(self.support, delta, u)   # the two chart directions are not orthogonal: a 3-vector
         if isinstance(self.support, Cone):
             radius = (1-v)*self.support.radius_start+v*self.support.radius_end
             slant = math.hypot(self.support.height, self.support.radius_end-self.support.radius_start)
@@ -87,6 +94,8 @@ class MaterialDomain:
         :attr:`area_jacobian`. A Cone's element ``|sweep|*slant*r(v)`` grows with the
         radius, so ``-integral(F(v) du)`` with ``F`` the antiderivative of ``r`` is used.
         """
+        if isinstance(self.support, ExtrudedSurface):
+            return self._extruded_world_area(loop, tolerance)
         if not isinstance(self.support, Cone):
             return self.area_loop(loop, tolerance/self.area_jacobian)*self.area_jacobian
         support = self.support
@@ -109,6 +118,18 @@ class MaterialDomain:
 
         return _integrate_loop(loop, lambda curve: 0., integrand, tolerance)
 
+    def _extruded_world_area(self, loop, tolerance):
+        """``-integral(v |c'(t) x d| du)``: the area element of an extruded surface depends on ``u`` only."""
+        support = self.support
+
+        def integrand(curve, parameters):
+            world = curve.evaluate(parameters)
+            uv = support.local_uv_many(world)
+            rates = chart_rates(support, world, curve.derivative(parameters))
+            return -uv[:, 1]*area_density(support, uv[:, 0])*rates[:, 0]
+
+        return _integrate_loop(loop, lambda curve: 0., integrand, tolerance)
+
     def original_world_area(self, tolerance):
         """Physical area of the stored face: outer loop minus its holes (never a native-area estimate)."""
         return (abs(self.world_area_loop(self.boundaries[0], tolerance))
@@ -116,7 +137,7 @@ class MaterialDomain:
 
     def material_world_area(self, arrangement):
         """Physical area of an arrangement's material cells."""
-        if not isinstance(self.support, Cone):
+        if not isinstance(self.support, (Cone, ExtrudedSurface)):
             return arrangement.area*self.area_jacobian
         tolerance = arrangement.native_area_tolerance*self.area_jacobian*.05
         total = 0.
@@ -130,14 +151,17 @@ class MaterialDomain:
 
     def left_probe(self, point, tangent, tolerance):
         normal = np.asarray((-tangent[1], tangent[0]))/np.linalg.norm(tangent)
-        return point+normal*(16*tolerance/np.linalg.norm(self.world_delta(normal, float(point[1]))))
+        return point+normal*(16*tolerance/np.linalg.norm(self.world_delta(normal, float(point[1]), float(point[0]))))
 
     @classmethod
     def from_model(cls, model, face_id):
         from .intersections import _qualified_face_plane
         face = model.faces[face_id]
         support = face.surface
-        if not isinstance(support, (Cylinder, Cone)):
+        extruded = None if isinstance(support, (Cylinder, Cone)) else extruded_support(model, face_id)
+        if extruded is not None:
+            support = extruded
+        elif not isinstance(support, (Cylinder, Cone)):
             support = _qualified_face_plane(model, face_id)
             if not isinstance(face.surface, Plane):
                 # Prefer the authored boundary frame to arbitrary SVD axes
@@ -175,7 +199,20 @@ class MaterialDomain:
         radial = offset-float(offset @ support.axis)*np.asarray(support.axis)
         return float(np.linalg.norm(radial)) <= 1e-9*max(support.radius_start, support.radius_end)
 
+    def _extruded_uv(self, curve, parameter):
+        support = self.support
+        uv = np.asarray(support.local_uv(curve.evaluate(parameter)))
+        directrix = support.directrix
+        if isinstance(directrix, EllipseDirectrix) and abs(abs(directrix.sweep_angle)-math.tau) <= 1e-12:
+            # A full-turn profile closes on itself: pick the endpoint's side by the curve's interior chart.
+            middle = support.local_uv(curve.evaluate(.5))[0]
+            period = 1./abs(support.u_range[1]-support.u_range[0])
+            uv[0] += round((middle-uv[0])/period)*period
+        return uv
+
     def uv(self, curve, parameter):
+        if isinstance(self.support, ExtrudedSurface):
+            return self._extruded_uv(curve, parameter)
         point = curve.evaluate(parameter)
         uv = np.asarray(self.support.local_uv(point))
         if self.at_apex(point):
@@ -198,6 +235,8 @@ class MaterialDomain:
         derivative = curve.derivative(parameter)
         if isinstance(self.support, Plane):
             return np.linalg.lstsq(np.column_stack((self.support.u_vector, self.support.v_vector)), derivative, rcond=None)[0]
+        if isinstance(self.support, ExtrudedSurface):
+            return chart_rates(self.support, curve.evaluate(parameter), derivative)[0]
         point = curve.evaluate(parameter)-self.support.origin
         x, y = float(point @ self.support.radial_direction), float(point @ self.support.circumferential_direction)
         dx, dy = float(derivative @ self.support.radial_direction), float(derivative @ self.support.circumferential_direction)
@@ -219,7 +258,9 @@ class MaterialDomain:
         second = _second_derivative(curve, parameter)
         if second is None:
             return None
-        if isinstance(self.support, Plane):
+        if isinstance(self.support, ExtrudedSurface):
+            acceleration = chart_accelerations(self.support, curve.evaluate(parameter), curve.derivative(parameter), second)[0]
+        elif isinstance(self.support, Plane):
             acceleration = np.linalg.lstsq(np.column_stack((self.support.u_vector, self.support.v_vector)), second, rcond=None)[0]
         else:
             point = curve.evaluate(parameter)-self.support.origin
@@ -235,7 +276,13 @@ class MaterialDomain:
         return float(tangent[0]*acceleration[1]-tangent[1]*acceleration[0])/float(np.linalg.norm(tangent))**3
 
     def horizontal_roots(self, curve, value, tolerance):
-        if isinstance(self.support, Plane):
+        if isinstance(self.support, ExtrudedSurface):
+            # The extrusion coordinate is linear in position: a level of v is a plane parallel to the profile.
+            support = self.support
+            normal = support.profile_normal
+            offset = float(normal @ support.profile_origin)+(support.v_range[0]+value*(
+                support.v_range[1]-support.v_range[0]))*support.profile_rate
+        elif isinstance(self.support, Plane):
             inverse = np.linalg.pinv(np.column_stack((self.support.u_vector, self.support.v_vector)))
             normal = inverse[1]
             offset = value+float(normal @ self.support.origin)
@@ -265,7 +312,7 @@ class MaterialDomain:
             roots = sorted(set(min(1., max(0., float(t))) for t in roots))
             for position, t in enumerate(roots):
                 point_uv = self.uv(curve, t)
-                if np.linalg.norm(self.world_delta(point_uv-uv, float(uv[1]))) <= tolerance:
+                if np.linalg.norm(self.world_delta(point_uv-uv, float(uv[1]), float(uv[0]))) <= tolerance:
                     return boundary
                 if point_uv[0] <= uv[0] or t >= 1-8*np.finfo(float).eps:
                     continue
@@ -306,7 +353,15 @@ class MaterialDomain:
             if analytic is not None:
                 return analytic
         support = self.support
-        if isinstance(support, (Cylinder, Cone)):
+        if isinstance(support, ExtrudedSurface):
+            def integrand(curve, parameters):
+                world = curve.evaluate(parameters)
+                return -support.local_uv_many(world)[:, 1]*chart_rates(support, world, curve.derivative(parameters))[:, 0]
+
+            def boundary(curve):
+                first, last = self.uv(curve, 0.), self.uv(curve, 1.)
+                return .5*(last[0]*last[1]-first[0]*first[1])
+        elif isinstance(support, (Cylinder, Cone)):
             def integrand(curve, parameters):
                 world = curve.evaluate(parameters)
                 direction = curve.derivative(parameters)
