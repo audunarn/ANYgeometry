@@ -394,13 +394,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: audunarn/ANYmesh
-          ref: 7b31e705a48e4039fbea8b8c0f71d141dd95312d
+          ref: 563e907a03d489d0b0edf9bafb435c1e63fadc9f
           path: .ecosystem/ANYmesh
           persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: audunarn/ANYfem
-          ref: fa7e666f8cd236c17591ccde67f9b34f20f45f33
+          ref: fac3c9a073c62485540a8629f8b2a3aeec64b730
           path: .ecosystem/ANYfem
           persist-credentials: false
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5

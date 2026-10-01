@@ -91,8 +91,8 @@ Changed follow-up sources require fresh evidence. Numerical and mesh-quality
 thresholds remain unchanged.
 
 The generalized installed-consumer CI builds native mesher commit
-`7b31e705a48e4039fbea8b8c0f71d141dd95312d` and FEM commit
-`fa7e666f8cd236c17591ccde67f9b34f20f45f33`, then installs those wheels and the
+`563e907a03d489d0b0edf9bafb435c1e63fadc9f` and FEM commit
+`fac3c9a073c62485540a8629f8b2a3aeec64b730`, then installs those wheels and the
 single candidate geometry wheel in clean environments outside all checkouts.
 It requires compiled triangulation, checks every candidate package file against
 the wheel, records import origins, resolved dependencies and artifact hashes,
@@ -108,6 +108,21 @@ failed its five planar-area gates. The subsequent
 records the six-case consumer passes and hashes for the
 [fully passing run](https://github.com/audunarn/ANYgeometry/actions/runs/36798593408).
 Neither record includes the later material-fixture fixes.
+
+The expanded [ten-case run](https://github.com/audunarn/ANYgeometry/actions/runs/36809696642)
+passed 31 of 32 jobs. Its [installed evidence](../reports/general_intersections/installed-qualification-36809696642.json)
+records twelve accepted meshes each on Windows and Apple silicon, and four
+accepted meshes on Linux before the skew-cylinder case exceeded its unchanged
+900-second subprocess budget. Linux's remaining cases are unaccepted in that
+run. Kernel, minimum-dependency, wheel, public-consumer and MCP jobs all passed.
+Subsequent repair/compatibility changes require fresh installed evidence.
+
+A conforming diagonal beam in a 2-by-1 plate imposes a 26.565-degree corner.
+The strict mesh API retains its 30-degree gate and rejects this design with
+source unchanged. The application's explicit automatic S3 policy admits it
+under its existing 15-degree floor. Parameter-chart quality must be checked
+after lifting to physical coordinates; favorable chart angles cannot override
+the physical acceptance policy.
 
 Outstanding implementation/acceptance includes remaining pair-policy routing,
 bay-count-changing feature regeneration,

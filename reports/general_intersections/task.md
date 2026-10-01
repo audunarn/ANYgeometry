@@ -736,3 +736,29 @@ affinely lifted physical quality before accepting parameter fallback; review
 source and installed artifacts remain frozen while full regression completes.
 This is a compatibility decision still requiring explicit regression evidence
 and documentation; it is not counted as an existing-regression pass.
+
+Full native suite stopped after its progress stalled at the same buffered57%
+window as the earlier attempt (about19minutes CPU). It remains unaccepted.
+Principal uncertainty is one unexpectedly expensive legacy/native fixture versus
+a native cancellation blockage. Bounded next experiment records each test start
+and call result in the following72-test window, dumps Python stacks after90s,
+and terminates the child at120s. Choose the next action from that exact stack,
+not a larger repeated full run. No registered benchmark gate is being invoked.
+
+The isolated72-test native window passed in21s, including cancellation. The
+remaining771 tests completed:764passed/1skip/6fail; the union with the earlier
+full run identifies7failures rather than a native algorithm failure. Four
+failures are legacyCoons authoring/splitting meshes erroneously sent to the
+Plane/Cylinder batch. Keep their certified existing topology discretization
+without claiming general interiorCoons joints. A disabled-auto-joints caller
+also lost the independent positive-area ownership gate; restore the owner's
+validated complementary-trim exemption and overlap query before preparation.
+Optional pair budgets remainNone by default, not an artificial model cap.
+The packaging failure is isolated-build network unavailability, to be rerun
+with exact installed build dependency wheels in an offline cell.
+
+2026-10-01 follow-up: hosted368096 finished31/32; Linux skew timed out900s during final cylindrical repair after native faces completed~650s. Principal uncertainty is repeated owner-binding work versus repair algorithm growth. Inspect exact repair stacks/profiles and legacy preflight costs before another matrix; do not increase budgets. Bounded legacy profile uses uncaptured stack plus per-test timing. Optional FEM policy clarification remains pending; assume strict API unchanged and test explicit existing application automatic policy.
+
+Bounded repair experiment: reuse exact captured skew pre-S3 source/mesh artifacts45s baseline, then evaluate rejection-only local triangle shape filter. Current repair recomputes full connectivity and scans every shape for each two-triangle trial. Local filter must never accept; all improving candidates and final output retain complete owner/topology/admission checks. Compare completed repair evidence and regression output with original policy/budgets.
+
+Follow-up frozen mesher563e907/FEMfac3c9a: rejection-only S3 patch precheck, truthful physical parameter fallback, legacy curved discretization, explicit optional budgets, disabled-batch owner overlap gate with exact owner fallback for old unresolved bilinear contacts.86 targeted mesher and87 FEM scene/intersection/native/snapshot regressions pass. Captured old skew raw artifact remains rejected identically; bounded diagnostic40.33s→29.34s is not accepted coverage. Full offline mesher regression is running with per-test results and retained uncaptured stacks. Fresh hosted matrix retains900s skew budget and adds periodic stack evidence, rather than increasing resource limits.
