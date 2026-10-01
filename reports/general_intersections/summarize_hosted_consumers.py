@@ -34,7 +34,7 @@ for platform in sorted(run.iterdir()):
         assert case['automation']['status']=='ready' and case['automation']['solver_admission']=='ADMITTED'
         assert case['source_unchanged'] and case['save_load']
         cases.append({key:value for key,value in case.items() if key!='automation'})
-    expected=len(report['cases'])+(2 if 'growing' in report['cases'] else 0)
+    expected=len(report['cases'])+(2 if 'growing' in report['cases'] else 0)+(2 if 'cylinder-holes' in report['cases'] else 0)
     if report['status']=='passed':
         assert len(cases)==expected
     failed_commands=[{'args':item['args'],'log':item['log'],'timed_out':item.get('timed_out',False),

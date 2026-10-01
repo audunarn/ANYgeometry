@@ -8,7 +8,7 @@ import sys
 from time import perf_counter
 
 import numpy as np
-from anygeometry import GeometryModel,to_dict
+from anygeometry import GeometryModel,Cylinder,to_dict
 from anygeometry.entities import OrientedEdge
 from anygeometry.generators import cylinder
 from anygeometry.operations import trim_face
@@ -24,6 +24,28 @@ def plate(model,points):
 
 
 def make_case(name):
+    if name.startswith('cylinder-holes-'):
+        count=int(name.rsplit('-',1)[1])
+        model=GeometryModel()
+        surface=Cylinder((0.,0.,0.),(0.,0.,1.),(1.,0.,0.),1.,3.,0.,math.pi/2)
+        def loop(points):
+            vertices=model.add_points(tuple(surface.evaluate(*point) for point in points))
+            edges=[]
+            for i,(a,b) in enumerate(zip(points,points[1:]+points[:1])):
+                if a[1]==b[1]:
+                    middle=model.add_point(*surface.evaluate((a[0]+b[0])/2,a[1]))
+                    edge=model.add_arc(vertices[i],middle,vertices[(i+1)%4])
+                else:
+                    edge=model.add_line(vertices[i],vertices[(i+1)%4])
+                edges.append(OrientedEdge(edge,True))
+            return tuple(edges)
+        face=model.add_face_from_loop(loop(((0.,0.),(1.,0.),(1.,1.),(0.,1.))),surface=surface)
+        width=.4; height=.4/count
+        starts=tuple((i+.3)/count for i in range(count))
+        trim_face(model,face,tuple(loop(((.3,v),(.3,v+height),(.7,v+height),(.7,v))) for v in starts))
+        model.add_sheet((face,),part_id=model.add_part(name='cylinder'))
+        assert model.validate_topology()==()
+        return Project(name,geometry=model),((face,),),(1.5*math.pi*(1-width*height*count),),()
     if name.startswith('growing-'):
         count=int(name.split('-')[1])
         model=GeometryModel()
@@ -90,7 +112,16 @@ def verify(mesh,name,owners,expected,beams):
         for face in faces:
             for element in mesh.elements_of_face[face]:
                 xyz=np.asarray([mesh.nodes[node] for node in mesh.corners_of(element)])
-                if name=='multiple-cuts' and index:
+                if name.startswith('cylinder-holes-'):
+                    np.testing.assert_allclose(np.linalg.norm(xyz[:,:2],axis=1),1.,rtol=0.,atol=1e-8)
+                    angle=np.unwrap(np.arctan2(xyz[:,1],xyz[:,0]))
+                    area+=abs(np.dot(angle,np.roll(xyz[:,2],-1))-np.dot(xyz[:,2],np.roll(angle,-1)))/2
+                    center=np.mean(xyz,axis=0)
+                    u=math.atan2(center[1],center[0])/(math.pi/2);v=center[2]/3
+                    count=int(name.rsplit('-',1)[1])
+                    assert not any(.3+1e-8<u<.7-1e-8 and start+1e-8<v<start+.4/count-1e-8
+                                   for start in ((i+.3)/count for i in range(count)))
+                elif name=='multiple-cuts' and index:
                     center,axis=(((-2.5,0.,0.),(0.,0.,1.)),
                                  ((0.,0.,0.),(.3,0.,1.)),
                                  ((2.5,0.,0.),(0.,.4,1.)))[index-1]
@@ -233,5 +264,7 @@ def run_case(name):
 
 
 if __name__=='__main__':
-    for name in (('growing-1','growing-8','growing-25') if sys.argv[1]=='growing' else (sys.argv[1],)):
+    cases={'growing':('growing-1','growing-8','growing-25'),
+           'cylinder-holes':('cylinder-holes-1','cylinder-holes-2','cylinder-holes-4')}
+    for name in cases.get(sys.argv[1],(sys.argv[1],)):
         run_case(name)

@@ -12,8 +12,8 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     for name in ('geometry','mesher','fem','output'):
         parser.add_argument('--'+name,required=True,type=Path)
-    parser.add_argument('--cases',nargs='+',choices=('skew','parallel','perpendicular','tangent','replay-050','replay-025','oblique','concave','growing','multiple-cuts'),
-                        default=['replay-050','replay-025','parallel','perpendicular','skew','tangent','oblique','concave','growing','multiple-cuts'])
+    parser.add_argument('--cases',nargs='+',choices=('skew','parallel','perpendicular','tangent','replay-050','replay-025','oblique','concave','growing','multiple-cuts','cylinder-holes'),
+                        default=['replay-050','replay-025','parallel','perpendicular','skew','tangent','oblique','concave','growing','multiple-cuts','cylinder-holes'])
     parser.add_argument('--wheelhouse',type=Path,help='use public dependency wheels without network access')
     parser.add_argument('--expected-machine',default='')
     parser.add_argument('--frontal-diagnostic',action='store_true',help='explicit frontal triangle controls; not default-policy acceptance')
@@ -90,7 +90,7 @@ runpy.run_path(str(root/sys.argv[0]),run_name='__main__')
                 runner.run([python,'-I',root/'run_case.py',
                             'verify_baseline_replay.py' if args.baseline else 'verify_replay.py',
                             '.5' if case=='replay-050' else '.25'])
-            elif case in ('oblique','concave','growing','multiple-cuts'):
+            elif case in ('oblique','concave','growing','multiple-cuts','cylinder-holes'):
                 if args.frontal_diagnostic:parser.error('material cases exercise application automatic defaults')
                 runner.run([python,'-I',root/'run_case.py','mesh_material_cases.py',case])
             else:
