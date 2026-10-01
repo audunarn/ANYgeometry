@@ -9,7 +9,7 @@ SPEC.loader.exec_module(checks)
 
 def test_unclassified_and_shared_changes_require_full_suite():
     for path in ("src/anygeometry/model.py", "tests/conftest.py", "pyproject.toml",
-                 ".github/workflows/development.yml", "tools/new_tool.py"):
+                 ".github/workflows/development.yml", "tools/new_tool.py", "docs/LICENSE.md"):
         assert checks.select(["docs/testing.md", path])["tests"] == ["tests"]
 
 
@@ -36,3 +36,28 @@ def test_failed_test_execution_propagates_and_saves_report(monkeypatch, tmp_path
     report = tmp_path / "report.json"
     assert checks.main(["--report", str(report)]) == 7
     assert json.loads(report.read_text())["exit_code"] == 7
+
+
+def test_git_selection_includes_committed_staged_deleted_and_new_files(monkeypatch, tmp_path):
+    import subprocess
+    def git(*args):
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+    git("init", "-q")
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    old = tests / "test_old.py"
+    old.write_text("# old\n", encoding="utf-8")
+    git("add", ".")
+    git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "base")
+    git("tag", "base")
+    (tmp_path / "README.md").write_text("# committed\n", encoding="utf-8")
+    git("add", ".")
+    git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "change")
+    (tests / "test_staged.py").write_text("", encoding="utf-8")
+    git("add", "tests/test_staged.py")
+    old.unlink()
+    (tests / "test_new.py").write_text("", encoding="utf-8")
+    monkeypatch.setattr(checks, "ROOT", tmp_path)
+    paths = checks.changed_paths("base")
+    assert set(paths) == {"README.md", "tests/test_old.py", "tests/test_staged.py", "tests/test_new.py"}
+    assert checks.select(paths, tmp_path)["scope"] == "full"

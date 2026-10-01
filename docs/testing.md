@@ -25,6 +25,11 @@ Reports record the selection, interpreter, command, duration and exit status;
 pytest retains ordinary output and prints the slowest 20 tests. Save reports
 outside the checkout so they do not become inputs to subsequent selection.
 
+On the measured local Windows/Python 3.13 environment, smoke passed 102 tests
+in 1.21 seconds (2.78 seconds including startup); the full kernel passed 1,099
+in 184.87 seconds. These scopes establish different coverage. Smoke deliberately
+excludes release-authority mutation fixtures, which remain in full kernel CI.
+
 ## Automatic development CI
 
 The **Development** workflow runs on pull requests and updates to main. Runtime

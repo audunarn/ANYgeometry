@@ -1,0 +1,59 @@
+{
+  "evidence_kind": "development; not new scientific or release qualification",
+  "local_kernel": {
+    "passed": 1099,
+    "pytest_seconds": 184.87
+  },
+  "smoke_initial": {
+    "passed": 133,
+    "pytest_seconds": 45.63
+  },
+  "smoke_final": {
+    "passed": 102,
+    "pytest_seconds": 1.21,
+    "process_seconds": 2.780805699992925
+  },
+  "raw_evidence": [
+    {
+      "path": "C:\\Github\\ANYgeometry\\reports\\testing-efficiency-local-kernel.log",
+      "sha256": "9d095136e5079d93e582ec7634184436e6fc7565d25556163d9e4f47a4a374ce"
+    },
+    {
+      "path": "C:\\Github\\ANYgeometry\\reports\\testing-efficiency-local-kernel.xml",
+      "sha256": "a8c32138db5328b39301e507c7a9036b36e4827eb1fba1ceb976e5d61da0463d"
+    },
+    {
+      "path": "C:\\Github\\ANYgeometry\\reports\\testing-efficiency-smoke.log",
+      "sha256": "155bfb117f9001c1e361fef759ca53ce4368323642917d9dfc7fcfe8a6796383"
+    },
+    {
+      "path": "C:\\Github\\ANYgeometry\\reports\\testing-efficiency-smoke.json",
+      "sha256": "532bfeba81cdfdee51debd157d330a31c276576158894dfa1ea112930a74b70d"
+    },
+    {
+      "path": "C:\\Github\\ANYgeometry\\reports\\testing-efficiency-smoke-final.log",
+      "sha256": "ad6d852fa5fdea8bef6518a23d42a6b78407ba88fc932e4d43a6b98cd5596934"
+    },
+    {
+      "path": "C:\\Github\\ANYgeometry\\reports\\testing-efficiency-smoke-final.json",
+      "sha256": "7dae0f116c8ce7029076836a87f3a5211e5d65bb0f29b3c0b903133f22c91266"
+    },
+    {
+      "path": "C:\\Github\\ANYgeometry\\reports\\testing-efficiency-selection.json",
+      "sha256": "ea2231e8c1ad0fa248eff7383deb28f7948848d9a3bb8a9b4be1271661a16c14"
+    },
+    {
+      "path": "C:\\Github\\ANYgeometry\\reports\\testing-efficiency-hosted-first.json",
+      "sha256": "bfc03824993fbc86c57a453474723c3349e369de68702d0ad6087b891f4cfc81"
+    },
+    {
+      "path": "C:\\Github\\ANYgeometry\\reports\\testing-efficiency-hosted-first.log",
+      "sha256": "50a7e909578bf41e7b0b98c3c97baa99507ebfd7b3efd050c9eae3153476e7be"
+    }
+  ],
+  "hosted_initial": {
+    "run": 36867936439,
+    "head": "2a577a474cb3db9647f45c8422c89af3c53e0904",
+    "jobs_passed": 8
+  }
+}

@@ -11,11 +11,17 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 SCOPES = {
     "smoke": ["test_coordinates.py", "test_kernel_identity_structural.py",
-              "test_mesher_model_contract.py", "test_import_boundaries_cli.py"],
+              "test_mesher_model_contract.py",
+              "test_import_boundaries_cli.py::test_public_owner_exports_use_one_geometry_and_reference_type",
+              "test_import_boundaries_cli.py::test_source_import_graph_has_no_forbidden_or_undeclared_dependency",
+              "test_import_boundaries_cli.py::test_fresh_import_does_not_load_consumers_gui_mesh_or_solver",
+              "test_import_boundaries_cli.py::test_cli_writes_and_inspects_example",
+              "test_import_boundaries_cli.py::test_module_main_and_version_work_from_outside_checkout"],
     "coordinates": ["test_coordinates.py", "test_automation_contract.py"],
     "serialization": ["test_serialization.py", "test_serialization_v3.py",
                       "test_serialization_gap_closure.py", "test_exact_intersection_curves.py"],
     "intersections": ["test_intersections.py", "test_intersection_workflow.py",
+                      "test_batch_intersections.py", "test_cylinder_atlas_contract.py",
                       "test_material_arrangement.py", "test_trimmed_charts.py",
                       "test_preparation_binding.py", "test_curved_intersection_matrix.py",
                       "test_exact_intersection_curves.py", "test_cylinder_curve_events.py",
@@ -31,6 +37,8 @@ MODULE_SCOPES = {"src/anygeometry/coordinates.py": "coordinates",
 
 
 def documentation_only(path: str) -> bool:
+    if path == "docs/LICENSE.md":  # packaged license: installation contract
+        return False
     return path.endswith(".md") and (
         "/" not in path or path.startswith(("docs/", "reports/")))
 
@@ -86,7 +94,7 @@ def main(argv: list[str] | None = None) -> int:
         plan = select(paths) if args.scope == "auto" else {
             "scope": args.scope, "tests": ["tests"] if args.scope == "full" else
             ["tests/" + name for name in SCOPES[args.scope]], "reasons": ["Explicit scope"]}
-        if any(not (ROOT / path).exists() for path in plan["tests"]):
+        if any(not (ROOT / path.split("::", 1)[0]).exists() for path in plan["tests"]):
             plan = {"scope": "full", "tests": ["tests"], "reasons": ["Selected test unavailable"]}
         plan.update(changed_paths=paths, evidence="development only", python=sys.version,
                     command=[sys.executable, "-m", "pytest", *plan["tests"], "--durations=20"]
