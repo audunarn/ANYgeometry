@@ -29,6 +29,9 @@ All notable user-visible changes to ANYgeometry are documented here.
   projection, splitting and affine copying, regular fold ends); circles,
   ellipses and coaxial rings stay `EllipticArc`. Cone material areas are exact
   and rectangular cone children of a cut become exact smaller `Cone` patches.
+  Pointed cones, cone tips on planes and walls and cones with a common apex are
+  supported; a face stored clockwise in its chart keeps its sense when split.
+  `insert_model` now copies neutral faces that have no mapped corners.
   **Geometry documents are written at the lowest schema that can express them:
   schema 6 only when a document stores a `QuadricIntersectionCurve`**; every
   other document stays schema 5 (schemas 1-6 are read). See

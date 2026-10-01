@@ -62,6 +62,24 @@ Applying a cut turns each rectangular piece of a cone facet (rings and generator
 Loop areas use Gauss rules of doubling size and stop at the rounding noise of their own sums; when a branch
 point just outside a path makes them converge slowly, bisection toward it resolves the same integral.
 
+## Apexes and shared generators
+
+A cone's apex is a singular point of its angular chart. Pointed cones (a radius of zero, so triangular
+facets) are material charts like any other: the azimuth of an apex endpoint is the limit along the curve
+that reaches it, edges meeting at the apex are ordered by azimuth (the apex is the collapsed edge `v = 0`
+of the chart), and a face stored clockwise in its chart, as pointed facets are, keeps its sense when a cut
+splits it so its neighbours still agree with it.
+
+* An apex that lies on the other support leaves no zero-length curve (the branch `s = 0` of the rulings is
+  the apex for every angle); it is reported as a point contact, unless a curve ends there.
+* Generators that lie wholly on the other support (all of `A`, `B`, `C` vanish at that angle, found by the
+  exact polynomial gcd) are components by themselves: cones sharing an apex meet along their common
+  generators, clipped to both patches and listed once for a full turn's seam.
+* A cone tip touching a plate or a cylinder wall, a plate through the apex (generators or the apex alone) and
+  a tangent plane (its generator) are all handled exactly.
+* Contact of third or higher order between the supports, for example two cones tangent along a generator,
+  is still refused with a typed error.
+
 ## Tangential and degenerate contacts
 
 A trace that touches a facet boundary tangentially splits into a pair of crossings as far apart as the
