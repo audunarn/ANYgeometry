@@ -15,6 +15,9 @@ python tools/dev_checks.py --scope full
 The default compares committed changes against `origin/main`, then includes staged,
 unstaged and untracked files. Fetch the base first; use `--base <ref>` for another
 review base. A missing base is an error, never an empty successful selection.
+Artifact-heavy checkouts can conservatively select the full suite because of
+untracked outputs. Use explicit scopes or a clean worktree for focused feedback;
+the selector does not silently discard unfamiliar inputs.
 Explicit scopes are convenient development probes. They do not claim complete
 coverage of every dependency of a module. Automatic selection currently focuses
 only coordinate/automation and serialization changes, plus changed test files.

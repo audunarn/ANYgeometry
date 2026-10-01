@@ -48,3 +48,17 @@ and outstanding gates; do not claim unmeasured runtime savings.
   in a disposable repository. Five selector tests passed in 0.48 seconds.
   The packaged license always requires runtime checks. The final hosted head is
   tracked in PR11; its runtime checks must pass before delivery acceptance.
+
+## Final runtime acceptance
+
+- Runtime/tooling head `433dfc1bc71a237c0578ffe032aedeaccc923829`: run
+  36869241786 passed 8/8 jobs, including both complete 1,100-test kernels.
+- Observed hosted elapsed time: 404 seconds. This is a development
+  lane result, not full platform/native qualification.
+- Raw evidence `testing-efficiency-hosted-final.json` SHA-256
+  `45a036dd1885ed5e7890509e0ef531c2c2c3e62b653942a8c2d988eb7b5b1cfc` (retained in primary reports).
+- Raw evidence `testing-efficiency-hosted-final.log` SHA-256
+  `3e1e77f89e309e2dc70d51de2e8b881d36a865233538d1aab1c708a95af68b19` (retained in primary reports).
+- Final documentation-only follow-up records these outcomes. Its runtime,
+  tests, packaging and workflow inputs must match the accepted runtime head;
+  no full-kernel repetition is required for this prose-only addition.
