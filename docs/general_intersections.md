@@ -35,6 +35,15 @@ cancelled or exhausted plan raises `GeometryError` without an accepted partial
 topology. `IntersectionBatchPolicy` supplies optional predicate/pair budgets and
 a cancellation callback. Its defaults impose no operand/intersection count cap.
 
+`has_current_intersection_preparation(model)` checks a local owner receipt from
+a complete successful batch. The receipt binds model identity, revision,
+complete checksum, covered faces and immutable plan content; partial batches
+and disabled face classification provide no exemption. It is not serialized.
+`clone_prepared_geometry(model)` carries that proof only across an exact,
+independently mutable mesh-attempt copy after verifying both checksums.
+Ordinary clones, document loading and edits require fresh classification.
+Consumers use these owner APIs to avoid arranging prepared descendants again.
+
 Single-pair Member CONNECT and IMPRINT plans use the same arrangement engine
 for every qualified occurrence and material interval. CONTACT_ONLY and
 KEEP_DISCONNECTED preserve topology and retain all qualified relations.
@@ -68,7 +77,7 @@ semantics. CAD export and CRS reprojection are separate work.
 
 | Configuration or case | Current extension evidence |
 | --- | --- |
-| Windows, Python 3.14 kernel | 1,086 regressions pass, including growing original-operand arrangements (1, 8 and 25 cuts), repeated Member visits, all pair intents and analytic planar-area oracles |
+| Windows, Python 3.14 kernel | 1,095 regressions pass, including growing original-operand arrangements (1, 8 and 25 cuts), repeated Member visits, all pair intents, bound preparation copies and analytic planar-area oracles |
 | Windows, Python 3.13 compiled mesher | 147 metric/cache/gradation/frontal/seeding/automatic-route and S3 checks pass; five staged chart-refinement contract checks included |
 | Windows, Python 3.13 FEM lifecycle | 12 intersection and reference-retention regressions pass |
 | Exact installed ANYfem replay, targets 0.5 and 0.25 | Both accepted on Windows/Linux/macOS arm64; source, joints, material, save/load and equivalent regeneration checks pass |
@@ -99,8 +108,8 @@ Changed follow-up sources require fresh evidence. Numerical and mesh-quality
 thresholds remain unchanged.
 
 The generalized installed-consumer CI builds native mesher commit
-`e93073871937d91d2fab512451bfe972d6e53fe8` and FEM commit
-`fac3c9a073c62485540a8629f8b2a3aeec64b730`, then installs those wheels and the
+`f42ca876fc928d205b1481f8de676ba0a7d7ec7e` and FEM commit
+`df991c2b29c8a7faf0a89692890c6d057cca5000`, then installs those wheels and the
 single candidate geometry wheel in clean environments outside all checkouts.
 It requires compiled triangulation, checks every candidate package file against
 the wheel, records import origins, resolved dependencies and artifact hashes,
@@ -134,6 +143,24 @@ general domains as substantial work. The next candidate uses one read-only
 geometry-owner batch for this audit, retaining positive-area rejection and
 legacy unsupported-surface qualification. Thirty-one focused mesher checks pass;
 full regression and installed/platform acceptance remain pending.
+
+The subsequent [run](https://github.com/audunarn/ANYgeometry/actions/runs/36818408300)
+passed its 29 kernel/dependency/wheel/public/MCP jobs but all three native jobs
+exceeded the unchanged skew budget. Its [retained evidence](../reports/general_intersections/installed-qualification-36818408300.json)
+records four accepted meshes per platform and eight unaccepted per platform.
+The read-only audit was still arranging prepared descendants after ordinary
+automatic-recovery cloning discarded the local proof. The owner-verified copy
+contract now retains an exact binding; a clean installed Windows skew case is
+ADMITTED in 466 seconds with all independent branch/material/connectivity and
+save/load checks. This is separate from pending complete hosted acceptance.
+
+Published-owner comparison identified the broader FEM compatibility regressions.
+All 78 focused checks now pass: exact empty suppressed-face roles use guarded
+FaceUse retirement, Sheet operands preserve Member/Sheet targets, existing
+shared Member endpoints retain their no-imprint behavior, and native boundary
+stations honor the Member's exact span orientation. Legacy curved authoring
+retains its qualified discretization route. Full follow-up regressions remain
+pending; no scientific acceptance threshold changed.
 
 A conforming diagonal beam in a 2-by-1 plate imposes a 26.565-degree corner.
 The strict mesh API retains its 30-degree gate and rejects this design with
