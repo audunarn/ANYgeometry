@@ -85,6 +85,18 @@ def project_analytic_curve(curve, point, tolerance):
     index = int(np.argmin(distances))
     best, parameter, made = float(distances[index]), float(seeds[index]), points[index]
 
+    def result():
+        # Preserve exact branch stations after distance-tolerance subdivision.
+        # A closer feasible point retains the global distance certificate already
+        # established below; polishing cannot replace it with a worse candidate.
+        if isinstance(curve, BezierQuadricCurve):
+            candidate = curve._polish_point(target, parameter)
+            point = curve.evaluate(candidate)
+            residual = float(np.linalg.norm(point-target))
+            if residual < best:
+                return point.copy(), candidate, residual
+        return made.copy(), parameter, best
+
     def bound(a, b):
         lo, hi = curve.bounds(a, b)
         return float(np.linalg.norm(np.maximum(np.maximum(lo-target, target-hi), 0)))
@@ -93,7 +105,7 @@ def project_analytic_curve(curve, point, tolerance):
     while queue:
         distance, a, b = heapq.heappop(queue)
         if best-distance <= tolerance:
-            return made.copy(), parameter, best
+            return result()
         mid = .5*(a+b)
         if mid == a or mid == b:
             raise GeometryError("analytic projection cannot resolve the requested tolerance")
@@ -105,7 +117,7 @@ def project_analytic_curve(curve, point, tolerance):
             lower_bound = bound(start, end)
             if lower_bound < best-tolerance:
                 heapq.heappush(queue, (lower_bound, start, end))
-    return made.copy(), parameter, best
+    return result()
 
 
 def _project_ellipse(curve, target, tolerance):

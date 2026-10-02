@@ -95,6 +95,13 @@ def freeze_edge(model, edge_id):
 
 
 def _angle_parameter(curve, angle):
+    # Root isolation already clips to the stored angular endpoints. Recover
+    # their identities before dividing: on a tiny arc, (start+sweep-start)/sweep
+    # can leave [0, 1] by many ulps even though the angle is exactly the endpoint.
+    if angle == curve.start_angle:
+        return 0.0
+    if angle == curve.start_angle + curve.sweep_angle:
+        return 1.0
     fraction = (angle-curve.start_angle)/curve.sweep_angle
     if -128*np.finfo(float).eps <= fraction <= 1+128*np.finfo(float).eps:
         fraction=min(1.,max(0.,fraction))

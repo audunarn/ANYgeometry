@@ -54,7 +54,8 @@ class BezierQuadricCurve:
 
     ``branch`` selects ``-1`` or ``+1`` of the quadratic root (``+1`` only for a linear branch, where the rulings
     are parallel to an asymptotic direction of the quadric). ``transform`` keeps an exact affine image of the
-    whole definition.
+    whole definition. Endpoint roundoff outside ``[0, 1]`` within the chart tolerance is canonicalized to the
+    directrix boundary, so evaluation and interval bounds share the same domain.
     """
     first: BezierRuledSupport
     second: QuadricSupport
@@ -63,7 +64,8 @@ class BezierQuadricCurve:
     branch: int = 1
     parameterization: str = "linear"
     transform: tuple = IDENTITY
-    _inversions: dict = field(default_factory=dict, init=False, repr=False, compare=False, hash=False)
+    _inversions: dict = field(default_factory=dict, init=False, repr=False, compare=False, hash=False,
+                              metadata={"definition": False})
 
     def __post_init__(self):
         if not isinstance(self.first, BezierRuledSupport):
@@ -77,6 +79,12 @@ class BezierQuadricCurve:
             raise GeometryError("curve chart must be finite with a nonzero extent")
         if min(start, start + sweep) < -_TOLERANCE or max(start, start + sweep) > 1 + _TOLERANCE:
             raise GeometryError("a curve chart lies inside the directrix parameter interval [0, 1]")
+        end = start + sweep
+        if not (0.0 <= start <= 1.0 and 0.0 <= end <= 1.0):
+            start, end = min(1.0, max(0.0, start)), min(1.0, max(0.0, end))
+            sweep = end - start
+            if sweep == 0.0:
+                raise GeometryError("curve chart must have a nonzero extent inside the directrix interval")
         object.__setattr__(self, "start", start)
         object.__setattr__(self, "sweep", sweep)
         if type(self.branch) is not int or self.branch not in (-1, 1):
@@ -129,8 +137,11 @@ class BezierQuadricCurve:
             if plan.floats().discriminant_scalar(float(self.start + .5 * self.sweep)) <= 0:
                 raise GeometryError("intersection branch leaves the real quadric intersection")
         for end, t in ((0, self.start), (1, self.start + self.sweep)):
-            if self._is_fold_end(end) and not any(m == 1 and abs(r - t) <= _TOLERANCE for r, m in roots):
+            simple_fold = any(m == 1 and abs(r - t) <= _TOLERANCE for r, m in roots)
+            if self._is_fold_end(end) and not simple_fold:
                 raise GeometryError("regular endpoint is not a discriminant transition")
+            if simple_fold and not self._is_fold_end(end):
+                raise GeometryError("a simple fold endpoint requires a square or sine parameterization")
 
     # ------------------------------------------------------------------ chart map
 
@@ -390,7 +401,9 @@ class BezierQuadricCurve:
         if self.parameterization == "linear" and not self.plan().linear:
             fs = self.plan().floats()
             anchor = float(self.start if end == 0 else self.start + self.sweep)
-            if math.sqrt(max(fs.discriminant_scalar(anchor), 0.0)) < 1e-7 * math.sqrt(fs.scale):
+            double_contact = any(m == 2 and abs(r - anchor) <= _TOLERANCE
+                                 for r, m in self.plan().discriminant_roots())
+            if double_contact and math.sqrt(max(fs.discriminant_scalar(anchor), 0.0)) < 1e-7 * math.sqrt(fs.scale):
                 _s0, s1, s2 = self._node_jet(end)
                 return s1, s2
         return None

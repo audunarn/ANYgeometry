@@ -14,8 +14,11 @@ def definition_value(value):
     if isinstance(value, np.generic):
         return value.item()
     if is_dataclass(value):
+        # Only explicitly marked implementation caches are outside the definition.
+        # Equality/representation settings do not weaken analytic content binding.
         return {"type":type(value).__qualname__,"fields":{
-            field.name:definition_value(getattr(value,field.name)) for field in fields(value)}}
+            field.name:definition_value(getattr(value,field.name)) for field in fields(value)
+            if field.metadata.get("definition") is not False}}
     if isinstance(value, Mapping):
         return {str(key):definition_value(item) for key,item in value.items()}
     if isinstance(value, (tuple,list)):
