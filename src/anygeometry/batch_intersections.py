@@ -226,6 +226,23 @@ def _domain_bounds(domain):
 
 
 def _coplanar_traces(first, second, tolerance, check, model):
+    from .intersections import _sheet_ids_for_face
+    same_sheet = bool(set(_sheet_ids_for_face(model, first.face_id)) &
+                      set(_sheet_ids_for_face(model, second.face_id)))
+    shared_seams = {path.source_edge: path.curve for loop in first.boundaries for path in loop
+                    if path.decomposition and path.source_edge is not None} if same_sheet else {}
+    shared_seams = {path.source_edge: shared_seams[path.source_edge]
+                    for loop in second.boundaries for path in loop
+                    if path.decomposition and path.source_edge in shared_seams}
+    def physical(curve):
+        # Source edge identity proves shared topology, not just common Sheet
+        # ownership. For affine paths, endpoint containment certifies the
+        # complete interval; other curve families remain conservatively kept.
+        return not (isinstance(curve, LinePath) and any(
+            isinstance(seam, LinePath) and
+            all(point_parameters(seam, point, tolerance=tolerance)
+                for point in (curve.start, curve.end))
+            for seam in shared_seams.values()))
     if isinstance(first.support, Plane) and isinstance(second.support, Plane) and all(
         isinstance(path.curve, LinePath) for domain in (first, second)
         for loop in domain.boundaries for path in loop):
@@ -242,7 +259,8 @@ def _coplanar_traces(first, second, tolerance, check, model):
         if result.dimension is not IntersectionDimension.CURVE:
             return ()
         return tuple(LinePath(component.witnesses[0], component.witnesses[-1])
-                     for component in result.components if len(component.witnesses) >= 2)
+                     for component in result.components if len(component.witnesses) >= 2
+                     and physical(LinePath(component.witnesses[0], component.witnesses[-1])))
     # Partition original material by the other domain's complete boundary.
     # Classify cells in both domains; positive-area ownership stays explicit.
     traces = tuple(ArrangementPath(path.curve, owners=(first.face_id, second.face_id))
@@ -267,7 +285,7 @@ def _coplanar_traces(first, second, tolerance, check, model):
                 if any(point_parameters(boundary.curve, part.evaluate(.5), tolerance=tolerance)
                        for boundary_loop in second.boundaries for boundary in boundary_loop):
                     result.append(part)
-    return tuple(result)
+    return tuple(curve for curve in result if physical(curve))
 
 
 def _rectangular_cylinder(domain, tolerance):
@@ -977,6 +995,14 @@ def _apply_intersections_in_place(model, plan, *, policy):
                 sources.add(("face", contact.face_id))
             member_contacts.append((contact,vertex(np.asarray(contact.position), sources)))
         _canonicalize_member_edges(model, edge_curves, plan.axes, joint_ids, check)
+        # A later physical trace can coincide with a previously artificial
+        # seam. Reconcile after all faces and member edges are canonicalized:
+        # another face's old boundary must not restore the artificial marker.
+        for edge_id in sorted(joint_ids):
+            check()
+            reference = EntityRef("edge", edge_id)
+            if "intersection_decomposition_seam" in model.tags_for(reference):
+                model.untag(reference, "intersection_decomposition_seam")
         # Contacts in the immutable plan use the original axis coordinates.
         # Resolve their retained world stations after every split/canonicalization.
         member_contacts = [(replace(contact, member_parameters=tuple(

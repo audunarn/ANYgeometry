@@ -68,6 +68,56 @@ def test_public_charts_preserve_construction_seams_and_physical_joint_identity()
         validate_trimmed_surface_charts_binding(model,changed)
 
 
+@pytest.mark.parametrize('intent', (ConnectionIntent.CONNECT, ConnectionIntent.IMPRINT))
+def test_later_physical_cut_promotes_a_construction_seam(intent):
+    from anygeometry import EntityRef, from_dict
+    model=GeometryModel()
+    a=model.add_plate(model.add_points(((0,0,0),(4,0,0),(4,4,0),(0,4,0))))
+    b=model.add_plate(model.add_points(((2,1,-1),(2,3,-1),(2,3,1),(2,1,1))))
+    apply_intersections(model,plan_intersections(model,(a,b),policy=intent),policy=intent)
+    seams={edge for edge in model.edges if 'intersection_decomposition_seam'
+           in model.tags_for(EntityRef('edge',edge))}
+    seam=min(seams)
+    record=model.edges[seam]
+    start=np.asarray(model.vertex_position(record.start))
+    end=np.asarray(model.vertex_position(record.end))
+    offset=np.array((0.,0.,1.))
+    model.add_plate(model.add_points((start-offset,end-offset,end+offset,start+offset)))
+    before=to_dict(model)
+    plan=plan_intersections(model,tuple(model.faces),policy=intent)
+    assert to_dict(model)==before
+    result=apply_intersections(model,plan,policy=intent)
+    assert seam in {handle.id for handle in result.joint_edges}
+    assert 'intersection_decomposition_seam' not in model.tags_for(EntityRef('edge',seam))
+    paths=[path for chart in query_trimmed_surface_charts(model).charts
+           for loop in chart.boundaries for path in loop if path.source_edge==seam]
+    assert len(paths)>=3
+    assert all(not path.decomposition for path in paths)
+    assert model.validate_topology()==()
+    assert sum(chart.material_area for chart in query_trimmed_surface_charts(model).charts)==pytest.approx(
+        20+2*np.linalg.norm(end-start))
+    after=to_dict(model)
+    assert apply_intersections(model,plan,policy=intent).reused
+    assert to_dict(model)==after
+    restored=from_dict(after)
+    assert 'intersection_decomposition_seam' not in restored.tags_for(EntityRef('edge',seam))
+
+
+def test_same_sheet_authored_coplanar_boundaries_still_connect():
+    from anygeometry.structural import SheetTopologyPolicy, ConnectivityPolicy
+    model=GeometryModel()
+    faces=[model.add_plate(model.add_points(points)) for points in (
+        ((0,0,0),(1,0,0),(1,1,0),(0,1,0)),
+        ((1,0,0),(2,0,0),(2,1,0),(1,1,0)))]
+    model.add_sheet(faces,policy=SheetTopologyPolicy(connectivity=ConnectivityPolicy.ALLOW_DISCONNECTED))
+    assert not (set(use.edge for use in model.faces[faces[0]].loop) &
+                set(use.edge for use in model.faces[faces[1]].loop))
+    result=apply_intersections(model,plan_intersections(model,faces,policy='connect'),policy='connect')
+    assert len(result.joint_edges)==1
+    assert set(model.faces_using_edge(result.joint_edges[0].id))==set(faces)
+    assert model.validate_topology()==()
+
+
 def test_validated_chart_reuse_still_rejects_changed_evidence_and_direct_edits(monkeypatch):
     from anygeometry.material_arrangement import MaterialDomain
     model=GeometryModel()
