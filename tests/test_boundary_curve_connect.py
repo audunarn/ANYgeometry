@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import numpy as np
+import pytest
+
 from anygeometry import (
     GeometryModel,
     ImprintOperation,
@@ -10,7 +13,9 @@ from anygeometry import (
     apply_imprint,
     plan_imprint,
     query_intersection,
+    query_trimmed_surface_charts,
 )
+from anygeometry.arrangement_geometry import BezierPath
 from anygeometry.serialization import to_dict
 
 
@@ -165,27 +170,61 @@ def test_separate_adjacent_wall_extrusions_share_coincident_boundary() -> None:
     assert geometry._validate_structural() == ()
 
 
-def test_boundary_curve_connect_fails_closed_for_unresolved_nonconvex_or_trim_touching_support() -> None:
+def _material_area(geometry: GeometryModel) -> float:
+    return sum(chart.material_area for chart in query_trimmed_surface_charts(geometry).charts)
+
+
+def test_a_boundary_curve_in_a_non_convex_or_trimmed_support_is_classified_by_the_exact_engine() -> None:
+    """Formerly pinned as UNCLASSIFIED (the CONNECT qualification covers only a convex support that strictly
+    contains the curve). The exact material engine classifies these supports; the qualified case above keeps
+    its established result and partition."""
     cases = (
-        ((0, 0, 0), (3, 0, 0), (1.5, 0.75, 0), (3, 2, 0), (0, 2, 0)),
-        ((0.5, 0.5, 0), (2.5, 0.5, 0), (2.5, 1.5, 0), (0.5, 1.5, 0)),
+        # non-convex: the spline leaves the plate through the upper edge of the notch
+        (((0, 0, 0), (3, 0, 0), (1.5, 0.75, 0), (3, 2, 0), (0, 2, 0)), False, (0.5, 0.5)),
+        # the support's corners are the spline's end points (the curve touches the trim)
+        (((0.5, 0.5, 0), (2.5, 0.5, 0), (2.5, 1.5, 0), (0.5, 1.5, 0)), True, (0.5, 0.5)),
+        # the spline leaves the trim at x = 1
+        (((1, 0, 0), (3, 0, 0), (3, 2, 0), (1, 2, 0)), False, (1.0, 0.875)),
     )
-    for points in cases:
+    for points, whole, start in cases:
         geometry = GeometryModel()
         support = _plate(geometry, points)
         _spline, wall = _spline_wall(geometry)
+        geometry.add_sheet((support,))
+        geometry.add_sheet((wall,))
         before = to_dict(geometry)
         revision = geometry.revision
+        area = _material_area(geometry)
 
         result = query_intersection(
-            geometry,
-            geometry.handle("face", support),
-            geometry.handle("face", wall),
+            geometry, geometry.handle("face", support), geometry.handle("face", wall)
         )
         plan = plan_imprint(geometry, result, policy="connect")
 
-        assert result.kind is IntersectionKind.UNCLASSIFIED
-        assert not result.classified
-        assert plan.operation is ImprintOperation.NO_TOPOLOGY
+        assert result.classified and result.kind is IntersectionKind.CROSS
+        assert result.dimension is IntersectionDimension.CURVE and len(result.components) == 1
+        curve = result.components[0].analytic_curve
+        assert isinstance(curve, BezierPath)
+        samples = curve.evaluate(np.linspace(0.0, 1.0, 33))
+        u = (samples[:, 0] - 0.5) / 2.0                       # the spline is (0.5 + 2u, 0.5 + 2u - 2u^2, 0)
+        assert np.abs(samples[:, 1] - (0.5 + 2.0 * u - 2.0 * u * u)).max() < 1e-12
+        assert np.abs(samples[:, 2]).max() == 0.0
+        assert samples[0, :2] == pytest.approx(start, abs=1e-12)
+        end = samples[-1]
+        if whole:
+            assert end[:2] == pytest.approx((2.5, 0.5), abs=1e-12)
+        elif start == (1.0, 0.875):
+            assert end[:2] == pytest.approx((2.5, 0.5), abs=1e-12)
+        else:                                                  # on the notch's upper edge, between the plate's corners
+            assert 1.5 < end[0] < 2.5
+            assert (end[1] - 0.75) * 1.5 == pytest.approx((end[0] - 1.5) * 1.25, abs=1e-12)
+        assert plan.operation is ImprintOperation.FACE_IMPRINT and plan.batch_plan is not None
         assert geometry.revision == revision
         assert to_dict(geometry) == before
+
+        apply_imprint(geometry, plan, policy="connect")
+
+        assert geometry.validate_topology() == ()
+        assert geometry._validate_structural() == ()
+        assert abs(_material_area(geometry) - area) <= 1e-12 * area
+        assert len(geometry.faces) > 2

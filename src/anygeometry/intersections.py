@@ -3060,31 +3060,26 @@ def _query_plane_cylinder_faces(
 BOUNDARY_CURVE_REFUSAL = "planar_boundary_curve_material_qualification_unresolved"
 
 
-def _refused_boundary_curve_contact(
-    geometry: GeometryModel, result: IntersectionResult, first: EntityHandle, second: EntityHandle
-) -> bool:
-    """Whether ``result`` is the established refusal of a boundary curve lying in a planar support.
+def _exact_extrusion_result(
+    geometry: GeometryModel, first: EntityHandle, second: EntityHandle
+) -> IntersectionResult | None:
+    """The exact engine's classification of a pair that includes an extruded face, else ``None``.
 
-    The refusal is raised for every non-convex planar support, so it only stands for a contact when an edge of
-    the curved face really lies in the support's plane. Any other pair may still go to the exact engine.
+    A face made by ``extrude`` from a spline or an oblique arc is an exact translational surface (stored or
+    recognised from its topology); such a pair is classified by the exact material engine, which returns one
+    exact curve where the certified subdivision returns many sampled pieces. A pair the exact engine cannot
+    classify falls back to the established query.
     """
-    if BOUNDARY_CURVE_REFUSAL not in result.diagnostics:
-        return False
-    for plane_handle, curved_handle in ((first, second), (second, first)):
-        try:
-            plane = _qualified_face_plane(geometry, plane_handle.id)
-        except GeometryError:
-            continue
-        face = geometry.faces[curved_handle.id]
-        tolerance = geometry.tolerance.effective_surface_residual(_face_length_scale(geometry, plane_handle.id))
-        if any(
-            all(abs(float((point - plane.origin) @ plane.normal)) <= tolerance
-                for point in _curve_definition_points(geometry, item.edge))
-            for loop in (face.loop, *face.holes)
-            for item in loop
-        ):
-            return True
-    return False
+    from .extruded_supports import extruded_support
+    from .material_pair import query_exact_pair
+
+    if all(extruded_support(geometry, handle.id) is None for handle in (first, second)):
+        return None
+    try:
+        result = query_exact_pair(geometry, first, second)
+    except GeometryError:
+        return None
+    return result if result.classified else None
 
 
 def _query_face_face(
@@ -3120,6 +3115,7 @@ def _query_face_face(
         )
     first_surface = geometry.faces[first.id].surface
     second_surface = geometry.faces[second.id].surface
+    exact_tried = False
     try:
         first_plane = _qualified_face_plane(geometry, first.id)
     except GeometryError:
@@ -3147,6 +3143,9 @@ def _query_face_face(
             IntersectionKind.CAPABILITY_MISSING,
         ):
             return boundary
+        exact, exact_tried = _exact_extrusion_result(geometry, first, second), True
+        if exact is not None:
+            return exact
         if isinstance(second_surface, (RuledSurface, CoonsSurface)) and any(
             marker in diagnostic
             for diagnostic in boundary.diagnostics
@@ -3182,6 +3181,9 @@ def _query_face_face(
             IntersectionKind.CAPABILITY_MISSING,
         ):
             return boundary
+        exact, exact_tried = _exact_extrusion_result(geometry, first, second), True
+        if exact is not None:
+            return exact
         if isinstance(first_surface, (RuledSurface, CoonsSurface)) and any(
             marker in diagnostic
             for diagnostic in boundary.diagnostics
@@ -3202,6 +3204,10 @@ def _query_face_face(
                     *boundary.diagnostics,
                 ),
             )
+    if not exact_tried:
+        exact = _exact_extrusion_result(geometry, first, second)
+        if exact is not None:
+            return exact
     # Every built-in curved support pair, including Plane/curved pairs, is
     # routed through the shared certified engine used by strict and local
     # audit.  Legacy sampled special cases remain private compatibility
@@ -4262,9 +4268,7 @@ def query_intersection(
         result = _query_face_face(
             geometry, first_handle, second_handle, qualified_policy
         )
-        if not result.classified and not _refused_boundary_curve_contact(
-            geometry, result, first_handle, second_handle
-        ):
+        if not result.classified and BOUNDARY_CURVE_REFUSAL not in result.diagnostics:
             from .material_pair import domains_for_pair, query_exact_pair
             try:
                 domains_for_pair(geometry, first_handle, second_handle)

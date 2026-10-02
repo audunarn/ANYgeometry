@@ -21,6 +21,7 @@ from .entities import EntityRef, OrientedEdge
 from .curves import Straight
 from .errors import GeometryError
 from .exact_curves import EllipticArc, CylinderIntersectionCurve
+from .extruded_supports import extruded_support
 from .quadric_curves import QuadricIntersectionCurve
 from .identity import EntityHandle
 from .material_arrangement import (ArrangementPath, ArrangementPoint, ArrangementCell, MaterialDomain,
@@ -626,6 +627,22 @@ def _extruded_child_support(model, support, outer, tolerance):
     return outer,child,None,model._detect_corners(outer) if len(outer) >= 4 else None
 
 
+def _store_extruded_support(model, face_id, support, check):
+    """Store the exact support of a recovered extrusion whose loop is no longer four edges.
+
+    A contact that splits a boundary edge leaves the face as one cell with a longer loop, which topology
+    recognition cannot recover. The stored support is the same surface in the chart of its own directrix,
+    so attachments are remapped by position exactly as for the children of a split.
+    """
+    from .attachment_remapping import capture_face_attachments, remap_face_attachments
+    face = model.faces[face_id]
+    if (isinstance(support, ExtrudedSurface) and not isinstance(face.surface, ExtrudedSurface)
+            and face.parameterization is None and extruded_support(model, face_id) is None):
+        snapshots = capture_face_attachments(model, face_id, check)
+        model._put_entity('face', replace(face, surface=support, corners=()))
+        remap_face_attachments(model, face, (face_id,), snapshots, check)
+
+
 def _child_support(model, face, outer, holes, tolerance):
     """Rebase a proven rectangular support; general trims stay native charts.
 
@@ -874,6 +891,7 @@ def _apply_intersections_in_place(model, plan, *, policy):
             if len(loops) == 1 and {item.edge for item in loops[0][0]} == {item.edge for item in face.loop} and (
                     {tuple(sorted(item.edge for item in hole)) for hole in loops[0][1]} ==
                     {tuple(sorted(item.edge for item in hole)) for hole in face.holes}):
+                _store_extruded_support(model,face.id,arrangement.support,check)
                 continue
             if len(loops) == 1:
                 # A one-cell, area-conserving arrangement only updates trim
@@ -883,6 +901,7 @@ def _apply_intersections_in_place(model, plan, *, policy):
                 corners=model._detect_corners(outer)
                 model._put_entity('face',replace(face,loop=outer,holes=holes,
                     corners=corners if len(corners)==4 else face.corners))
+                _store_extruded_support(model,face.id,arrangement.support,check)
                 continue
             snapshots = capture_face_attachments(model, face.id,check)
             child_definition = (replace(face,surface=arrangement.support,parameterization=None)
