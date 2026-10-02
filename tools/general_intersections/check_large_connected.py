@@ -29,6 +29,9 @@ def verify(fixture, model, charts):
     if not __debug__:
         raise RuntimeError('acceptance checks require Python without optimization')
     assert model.validate_topology() == ()
+    assert {(h.kind, h.id) for h in fixture.operands} == (
+        {('face', f) for f in fixture.model.faces} |
+        {('member', m) for m in fixture.model.members}), 'unselected authored operand'
     # Batch application may establish sheets for authored, previously unowned faces.
     assert set(fixture.model.sheets) <= set(model.sheets)
     assert set(model.members) == set(fixture.model.members)
@@ -145,6 +148,8 @@ def run(args):
     try:
         fixture = stage('build', lambda: {'strip': connected_strip, 'hub': connected_hub,
                                          'mixed': connected_mixed}[args.family](args.count))
+        report['authored_faces'] = len(fixture.model.faces)
+        report['authored_members'] = len(fixture.model.members)
         original = to_dict(fixture.model)
         model = from_dict(original)
         deadline = time.monotonic()+args.deadline_seconds

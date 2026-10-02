@@ -160,6 +160,12 @@ def connected_mixed(count=10, *, start_bay=0):
                 axis=(1., .2, .1) if i % 3 == 0 else (1., 0., 0.),
                 radial_direction=(0., 1., 0.), circumferential_segments=8)
             panel_area = 2.*math.pi*.7
+        # Revolved generators also author longitudinal Members by default.
+        # This fixture counts bare panels; stiffener Members are exercised by
+        # strip/hub fixtures. Remove those owners explicitly before insertion
+        # so every authored face/member is among the selected operands.
+        for member in tuple(generated.members):
+            generated.remove_member(member)
         model.insert_model(generated)
         panels = sorted(set(model.faces)-before)
         assert len(panels) == 8
@@ -168,4 +174,5 @@ def connected_mixed(count=10, *, start_bay=0):
         fixture.curve_joints.append({'wall': ('face', wall),
             'panels': [('face', f) for f in panels],
             'required_curve': 'QuadricIntersectionCurve' if i % 3 == 1 else 'BezierQuadricCurve'})
+    assert len(model.faces)+len(model.members) == len(fixture.operands) == count
     return fixture

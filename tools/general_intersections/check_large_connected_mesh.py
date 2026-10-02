@@ -7,9 +7,10 @@ import platform
 import sys
 import time
 
+import numpy as np
 import anygeometry
 import anymesher
-from anygeometry import to_dict
+from anygeometry import EntityRef, to_dict
 from anymesher.preparation import prepare_structural_closure
 from anymesher.recovery import generate_automatic_mesh_result, MeshAutomationOptions
 
@@ -42,7 +43,10 @@ def run(args):
         fixture = stage('build', lambda: {'strip': connected_strip, 'hub': connected_hub,
             'mixed': connected_mixed}[args.family](args.count))
         authored = to_dict(fixture.model)
-        prepared, _preparation_report = stage('prepare', lambda: prepare_structural_closure(fixture.model))
+        beam_edges = sorted({fixture.model.member_edge_uses[uid].edge_id
+            for member in fixture.model.members.values() for uid in member.edge_use_ids})
+        prepared, _preparation_report = stage('prepare', lambda: prepare_structural_closure(
+            fixture.model, beam_edges=beam_edges))
         prepared_document = to_dict(prepared)
         result = stage('mesh', lambda: generate_automatic_mesh_result(prepared,
             target_size=args.target_size, strategy='auto', native_backend='python',
@@ -56,6 +60,32 @@ def run(args):
         nodes_by_face = {face: {node for element in elements for node in
             (mesh.quads[element] if element in mesh.quads else mesh.tris[element])}
             for face, elements in mesh.elements_of_face.items()}
+        def owner_nodes(owner):
+            kind, identifier = owner
+            if kind == 'member':
+                return set(mesh.nodes_of_member[identifier])
+            return set().union(*(nodes_by_face.get(ref.id, set())
+                for ref in prepared.resolve_ref(EntityRef(kind, identifier))))
+        for joint in fixture.joints:
+            start, end = np.asarray(joint['start']), np.asarray(joint['end'])
+            direction = end-start
+            length2 = float(direction@direction)
+            sequences = []
+            for owner in joint['owners']:
+                located = []
+                for node in owner_nodes(owner):
+                    point = np.asarray(mesh.nodes[node])
+                    parameter = float((point-start)@direction/length2)
+                    if (-1e-9 <= parameter <= 1.+1e-9 and
+                            np.max(np.abs(point-start-parameter*direction)) <= 1e-9):
+                        located.append((parameter, node))
+                located.sort()
+                assert len(located) >= 2, ('missing intended joint', joint, owner)
+                assert abs(located[0][0]) <= 1e-9 and abs(located[-1][0]-1.) <= 1e-9
+                assert all(b[0]-a[0] > 1e-9 for a,b in zip(located,located[1:])), (
+                    'duplicate coincident joint nodes', joint, owner)
+                sequences.append([node for _,node in located])
+            assert sequences[0] == sequences[1], ('nonconforming intended joint', joint, sequences)
         checked = 0
         for edge in prepared.edges:
             faces, members = prepared.faces_using_edge(edge), prepared.members_using_edge(edge)
@@ -68,7 +98,8 @@ def run(args):
             for member in members:
                 assert sequence <= set(mesh.nodes_of_member[member]), ('missing member joint nodes', edge, member)
             checked += 1
-        report.update(status='passed', shared_edges_checked=checked, nodes=len(mesh.nodes),
+        report.update(status='passed', shared_edges_checked=checked,
+            intended_joints_checked=len(fixture.joints), nodes=len(mesh.nodes),
             quads=len(mesh.quads), tris=len(mesh.tris), beams=len(mesh.beams),
             authored_checksum=authored['checksum'], prepared_checksum=prepared_document['checksum'])
     except Exception as exc:

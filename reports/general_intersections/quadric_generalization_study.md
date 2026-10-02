@@ -89,6 +89,72 @@ ANYmesher has received the results and the request for mixed/quadratic acceptanc
 its subsequent task turn again returned an empty completion. Owner acceptance
 and the short-joint quadratic repair remain outstanding.
 
+### Candidate 364a9f9 and corrected consumer oracles
+
+Runtime commit `364a9f962657db7a65e097d81b6856326cfd56d7` passes the full
+1,697-test kernel suite. Development geometry wheel SHA256:
+`79b05a80b18f8f0f33c40830dde0a3b4972effc3116500e5c5e0bcbfadea4167`.
+A clean disposable environment outside all checkouts has NumPy 2.5.3, Shapely
+2.1.2 and pytest 9.1.1; all 13 copied focused tests pass there. Import origins and
+pip's direct-url artifact hash confirm the candidate remained installed.
+The first installed invocation suffered pytest's unrelated shared-temp cleanup
+permission failure; its log is retained. The accepted invocation uses a dedicated
+temporary directory and an outside-checkout working directory.
+
+Mixed1000-chart-callback passed geometry, including serialization and repeat apply:
+5,746 faces / 14,292 edges / 12,236 vertices; peak working set 430,022,656 bytes.
+However, inventory review found the generator authored 800 extra longitudinal
+Members not included in its 1,000 face operand list. This result is retained as
+an explicitly scoped face-only preparation result, not acceptance of the requested
+exact operand inventory. The corrected mixed builder removes default generated
+Members through public APIs before insertion; strip/hub cover beam stiffeners.
+It asserts total authored faces+members equals the requested count. The verifier
+now rejects any unselected authored operand. Thirteen focused tests and the
+bounded mixed10 driver pass. Mixed1000-exact-operands is the new bounded run.
+
+The portable consumer driver initially omitted the explicit `beam_edges` selection
+required by `prepare_structural_closure`. A stronger oracle comparing every
+authored joint's actual node sequence found the omission. Earlier ready results
+are only limited face/shared-edge evidence and are superseded for full structural
+acceptance. The first handoff labelled the hub failure consumer-owned; a prompt
+correction identified the probe-call defect. No consumer patch was requested for
+that defect. The driver now supplies all authored Member edge uses and checks
+complete intended joint sequences, endpoints and duplicate coincident nodes.
+
+With that correction, installed strip1000 linear PASSES: 4,503 nodes, 3,000 Q4,
+500 beam elements, all 999 intended joints and shared edges conforming. Preparation
+13.13 s, meshing 4.12 s; this is one development run, not a speed comparison.
+Installed strip100 linear and strip10 quadratic also pass. The latter has 117
+nodes, 28 Q8, six beam elements and nine conforming intended joints.
+ANYmesher input `f0cde877d6fd22048d2fa7af1e6af84c5b20d0fd` was archived without
+modifying its checkout; its built wheel SHA256 is
+`a0f9aa2876590788cc4ab8de51e110b7e875c3c6c883f6a91d5ee7bbf54b9eb2`.
+All artifact/consumer reports are under the primary `reports/large-connected`.
+
+Mixed10 linear remains UNACCEPTED: its 120-second recovery budget expired in
+the overlap audit. Source review found a possible receipt-invalidating order:
+ANYmesher applies owner preparation, then restores collinear face corners, which
+changes revision/checksum. A subsequent attempt correctly cannot reuse that
+receipt and mixed supports fall back to pairwise overlap classification. The
+specific modified face is not proven by the retained log. The owner handoff asks
+for certification of the final state, never manual receipt refresh or waived
+auditing. The short-joint mixed quadratic case and full mixed linear meshes remain
+unaccepted. No package publication, default switch or merge acceptance is claimed.
+
+The exact-inventory mixed1000 run PASSES with 1,000 authored faces, zero Members,
+5,746 retained faces, 14,292 edges and 12,236 vertices. Peak working set
+411,590,656 bytes. Measured plan/apply/charts/verification: 120.90 / 66.26 /
+228.09 / 4.98 seconds; serialization also completed within the outer ceiling.
+The corrected installed hub100 linear probe PASSES all 100 intended joint node
+sequences and 5,100 shared topology edges: 15,704 nodes, 15,351 Q4 and 2,550 beams.
+
+A new bounded preparation-only diagnostic confirms the mixed receipt issue:
+owner batch gives a current proof; consumer preparation does not. It changes
+31 faces' corner indices (Plane, Cylinder and ExtrudedSurface), with 70 faces in
+both preparations. Evidence: `mixed10-preparation-binding.json`. No meshing retry
+was used for this diagnosis. Next decision: safe owner-certified corner-only
+editing versus consumer ordering; never mint a receipt from an unchecked model.
+
 ## Continuation, 2026-10-02
 
 PR12 development run 36989128888: Windows and Linux each passed 1,675 tests
