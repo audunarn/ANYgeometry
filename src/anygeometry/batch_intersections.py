@@ -194,6 +194,32 @@ def _synchronize_boundary_events(arrangements, check):
     return tuple(result)
 
 
+def _synchronize_member_events(arrangements, axes, check):
+    """Split member axes at ports introduced while decomposing incident faces."""
+    from .material_arrangement import _parameters
+    by_member = {}
+    values = [set(axis.split_parameters) for axis in axes]
+    for index, axis in enumerate(axes):
+        for member in axis.member_ids:
+            by_member.setdefault(member, []).append(index)
+    for arrangement in arrangements:
+        for path in arrangement.paths:
+            indices = sorted({index for member in path.member_ids
+                              for index in by_member.get(member, ())})
+            if not indices:
+                continue
+            for parameter in (0., 1.):
+                point = path.curve.evaluate(parameter)
+                for index in indices:
+                    check()
+                    axis = axes[index]
+                    values[index].update(point_parameters(
+                        axis.curve, point, tolerance=axis.world_tolerance))
+    return tuple(replace(axis, split_parameters=_parameters(
+        values[index], axis.world_tolerance, axis.curve))
+        for index, axis in enumerate(axes))
+
+
 def _domain_bounds(domain):
     boxes = [path.curve.bounds() for loop in domain.boundaries for path in loop]
     return np.min([box[0] for box in boxes], axis=0), np.max([box[1] for box in boxes], axis=0)
@@ -437,14 +463,15 @@ def _plan_intersections(model, operands, *, policy):
             raise GeometryError("intersection planning cancelled")
         if policy.max_predicates is not None and examined > policy.max_predicates:
             raise GeometryError("intersection planning predicate budget exhausted")
-    lengths = {face_id: float(np.linalg.norm(hi-lo)) for face_id, domain in domains.items()
-               for lo, hi in (_domain_bounds(domain),)}
+    domain_bounds = {face_id: _domain_bounds(domain) for face_id, domain in domains.items()}
+    lengths = {face_id: float(np.linalg.norm(hi-lo))
+               for face_id, (lo, hi) in domain_bounds.items()}
     if policy.face_connections:
         for face_id, corners in boundary_only.items():
             lo1, hi1 = np.min(corners, axis=0), np.max(corners, axis=0)
             for other_id, domain in domains.items():
                 check()
-                lo2, hi2 = _domain_bounds(domain)
+                lo2, hi2 = domain_bounds[other_id]
                 tolerance = model.tolerance.effective_length(max(
                     float(np.linalg.norm(hi1-lo1)), lengths[other_id]))
                 if np.any(hi1 < lo2-tolerance) or np.any(hi2 < lo1-tolerance):
@@ -469,7 +496,7 @@ def _plan_intersections(model, operands, *, policy):
         check()
         first, second = domains[first_id], domains[second_id]
         tolerance = model.tolerance.effective_length(max(lengths[first_id], lengths[second_id]))
-        lo1, hi1 = _domain_bounds(first); lo2, hi2 = _domain_bounds(second)
+        lo1, hi1 = domain_bounds[first_id]; lo2, hi2 = domain_bounds[second_id]
         if np.any(hi1 < lo2-tolerance) or np.any(hi2 < lo1-tolerance):
             continue
         check_pair()
@@ -487,7 +514,7 @@ def _plan_intersections(model, operands, *, policy):
                 points[face_id].append(ArrangementPoint(point))
     axes, contacts = plan_member_arrangements(model, members, domains, traces, points, check,
         include_axis_axis=policy.member_connections, include_axis_face=policy.member_face_connections,
-        check_pair=check_pair)
+        check_pair=check_pair, domain_bounds=domain_bounds)
     arrangements = []
     for face_id, domain in domains.items():
         if not traces[face_id] and not points[face_id]:
@@ -504,6 +531,7 @@ def _plan_intersections(model, operands, *, policy):
     if model.revision != revision or to_dict(model)["checksum"]["value"] != checksum:
         raise GeometryError("geometry changed during intersection planning")
     arrangements=_synchronize_boundary_events(arrangements,check)
+    axes=_synchronize_member_events(arrangements,axes,check)
     plan=IntersectionPlan(model.model_id, revision, checksum, handles, policy,
                           arrangements, axes, contacts,face_contacts=tuple(face_contacts))
     return replace(plan,content_checksum=_plan_content(plan))
@@ -715,6 +743,7 @@ def _apply_intersections_in_place(model, plan, *, policy):
     """Atomically apply a model/revision-bound material arrangement."""
     from .intersections import _merge_vertex
     from .attachment_remapping import capture_face_attachments, remap_face_attachments
+    from .edge_attachment_remapping import split_edge_attachments, _member_parameter
     outer_journal=model._transaction_journal
     def keys():
         return {(kind,identifier) for kind in model._next_id for identifier in model._entity_store(kind)} | {
@@ -743,6 +772,12 @@ def _apply_intersections_in_place(model, plan, *, policy):
             raise GeometryError("intersection application budget exhausted")
     with model.transaction():
         check()
+        contact_ranges = {
+            (member, parameter): next(model.member_edge_uses[use_id].parent_range
+                for use_id in model.members[member].edge_use_ids
+                if model.member_edge_uses[use_id].parent_range.contains(parameter,
+                    tolerance=model.tolerance.parameter))
+            for contact in plan.contacts for member, parameter in contact.member_parameters}
         if policy.intent is ConnectionIntent.CONNECT:
             # Declare physical owners before fragmentation. Creating one
             # owner for each descendant would turn decomposition seams into
@@ -784,7 +819,13 @@ def _apply_intersections_in_place(model, plan, *, policy):
                 unique.append(fraction)
             for fraction in unique:
                 check()
-                _vertex, (_left, right) = model.split_edge(current, (fraction-previous)/(1-previous))
+                # Earlier children can use different regularized charts; invert
+                # the original station on the current exact descendant.
+                current_curve = freeze_edge(model, current)
+                stations = point_parameters(current_curve, original.evaluate(fraction), tolerance=tolerance)
+                if len(stations) != 1:
+                    raise GeometryError("split station has no unique descendant parameter")
+                _vertex, (_left, right) = split_edge_attachments(model, current, stations[0], check)
                 current, previous = right, fraction
 
         edge_curves = {edge_id: freeze_edge(model, edge_id) for edge_id in model.edges}
@@ -936,6 +977,13 @@ def _apply_intersections_in_place(model, plan, *, policy):
                 sources.add(("face", contact.face_id))
             member_contacts.append((contact,vertex(np.asarray(contact.position), sources)))
         _canonicalize_member_edges(model, edge_curves, plan.axes, joint_ids, check)
+        # Contacts in the immutable plan use the original axis coordinates.
+        # Resolve their retained world stations after every split/canonicalization.
+        member_contacts = [(replace(contact, member_parameters=tuple(
+            (member, _member_parameter(model, member, np.asarray(contact.position),
+                contact_ranges[member, parameter], contact.world_tolerance))
+            for member, parameter in contact.member_parameters)), station)
+            for contact, station in member_contacts]
         for contact in plan.face_contacts:
             check()
             tolerance=contact.world_tolerance
@@ -1125,3 +1173,58 @@ def clone_prepared_geometry(model):
             raise GeometryError("prepared geometry changed during detached copying")
         made._intersection_preparation_receipt = receipt
     return made
+
+
+def set_prepared_face_corners(model, updates):
+    """Atomically change corner indices without losing a current material proof.
+
+    Only explicit analytic supports without a separate parameterization qualify:
+    their material is defined by the unchanged support and trim loops, not corner
+    indices. A stale or partial preparation, topology-backed map, nested transaction
+    or any other document change is rejected. This does not refresh application
+    receipts or make old plans applicable after an edit.
+
+    As with batch application, change hooks precede publication of the new
+    receipt. The proof query is fail-closed during hooks and current on return.
+    """
+    if model._transaction_journal is not None:
+        raise GeometryError("prepared corner editing requires no active transaction")
+    if not has_current_intersection_preparation(model):
+        raise GeometryError("prepared corner editing requires a current complete preparation")
+    original = to_dict(model)
+    receipt = model._intersection_preparation_receipt
+    try:
+        requested = {key: tuple(value) for key, value in updates.items()}
+    except (AttributeError, TypeError) as exc:
+        raise GeometryError("prepared corner updates must map face IDs to corner indices") from exc
+    for identifier in requested:
+        if type(identifier) is not int or identifier not in model.faces:
+            raise GeometryError("prepared corner update references an invalid face")
+        face = model.faces[identifier]
+        if any(isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer))
+               for value in requested[identifier]):
+            raise GeometryError("prepared corner indices must be integers")
+        if (type(face.surface) not in (Plane, Cylinder, Cone, ExtrudedSurface)
+                or face.parameterization is not None):
+            raise GeometryError("prepared corner editing requires an explicit corner-independent support")
+    candidate = clone_prepared_geometry(model)
+    with candidate.transaction():
+        for identifier in sorted(requested):
+            candidate.set_face_corners(identifier, requested[identifier])
+    actual = to_dict(candidate)
+    # Compare the entire certified document, not only the edited faces. Even
+    # derived feature/ownership changes must fail this narrow operation closed.
+    expected = dict(original)
+    expected['faces'] = [dict(face, corners=list(candidate.faces[face['id']].corners))
+                         if face['id'] in requested else face for face in original['faces']]
+    expected['revision'], expected['checksum'] = actual['revision'], actual['checksum']
+    if actual != expected:
+        raise GeometryError("prepared corner update changed fields other than corner indices")
+    if to_dict(model) != original:
+        raise GeometryError("geometry changed during prepared corner editing")
+    if actual == original:
+        return
+    model.restore_topology(candidate.topology_snapshot())
+    plan, _revision, _checksum, coverage = receipt
+    model._intersection_preparation_receipt = (
+        plan, model.revision, to_dict(model)['checksum']['value'], coverage)

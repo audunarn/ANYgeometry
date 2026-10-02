@@ -66,6 +66,18 @@ def plane_cylinder_support(plane, cylinder, *, tolerance=1e-10, cancellation_che
     axial = float(cylinder.axis @ normal)
     angle_tolerance = tolerance/max(cylinder.radius, 1.)
     if axial == 0:
+        # A Cylinder's orthonormal frame is part of its support definition.
+        # Expanding a tangent into independently rounded sine/cosine coefficients
+        # can give their exact-rational polynomial zero or two roots instead of
+        # the single generator (depending only on the seam rotation). Preserve
+        # the geometric tangency identity before forming that polynomial.
+        normal_length = float(np.linalg.norm(normal))
+        if abs(center) == cylinder.radius * normal_length:
+            start = cylinder.origin - center / float(normal @ normal) * normal
+            if _inside(cylinder, start, tolerance):
+                end = start + cylinder.height * cylinder.axis
+                return SupportIntersection(segments=((tuple(start), tuple(end)),))
+            return SupportIntersection()
         angles = _linear_events(center, cosine, sine, cylinder, angle_tolerance,
                                 cancellation_check)
         segments = []

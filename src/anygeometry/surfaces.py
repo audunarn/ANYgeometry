@@ -298,7 +298,12 @@ class ExtrudedSurface:
     def extrusion_coordinate(self, points) -> np.ndarray:
         """``s`` of every point (exact for points on the surface): linear in position."""
         points = np.asarray(points, dtype=float)
-        return (points - self.directrix.origin) @ self.directrix.normal / self._rate
+        offset = points - self.directrix.origin
+        normal = self.directrix.normal
+        # BLAS may reduce a single row differently from a batch (including FMA).
+        # Keep the three-term arithmetic identical for every query shape.
+        return ((offset[..., 0] * normal[0] + offset[..., 1] * normal[1])
+                + offset[..., 2] * normal[2]) / self._rate
 
     # ---------------------------------------------------------------- evaluation
 

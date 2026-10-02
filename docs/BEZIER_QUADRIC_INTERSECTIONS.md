@@ -102,13 +102,21 @@ because every shared point is a root of the other curve on it and the point inve
 | Branch of two quadrics, cylinder/cylinder branch | exact roots of the Bezier branch on their supports, then point inversion on theirs |
 | Bezier branch, other quadric | exact roots of one on the other's quadric (both orders agree) |
 | Bezier branch, same wall, quadric and image | charts of one curve: they meet only at chart ends, which the arrangement names itself |
-| Bezier branch, same quadric, another wall | certified subdivision |
+| Bezier branch, same quadric, another parallel wall | rational elimination of both projected directrices, including repeated roots; qualify every pair of branch parameters |
+| Bezier branch, same quadric, other support configuration | certified subdivision |
 
 **Certified subdivision** (`branch_events.subdivision_junctions`) cuts both parameter intervals at the midpoint
 of the longer box until the boxes are smaller than an eighth of the tolerance. Two boxes farther apart than
 the tolerance cannot contain a shared point, so curves that never meet are *proved* disjoint and a crossing
 is bracketed to the tolerance and polished by Newton iteration. A pair that cannot be resolved within a fixed
 budget (a tangential or overlapping contact) is refused with a typed error rather than guessed.
+
+Parallel-wall elimination retains the isolated root intervals through each branch
+chart and its conservative world bounds. Only separated enclosures exclude a
+candidate pair. A returned pair must meet the requested world-space tolerance;
+an unresolved candidate raises a typed error. This includes distinct visits to a
+self-crossing projected directrix. Common projected components retain the
+existing overlap/refusal path. No subdivision budget was increased.
 
 ## Roots and point inversion near a fold
 
@@ -125,18 +133,74 @@ direction, the quadric by its defining data, the chart and the affine image. **S
 document stores one (as for a `QuadricIntersectionCurve` or an `ExtrudedSurface`); a reader below 6 refuses
 the record, and an unknown or missing field refuses the whole document.
 
+Simple-fold endpoints require square/sine charts. Tolerated endpoint roundoff
+outside the directrix domain is canonicalized before evaluation and bounds.
+Point-inversion caches do not participate in analytic plan content binding;
+geometric definitions still do. Reusing an applied plan remains idempotent.
+
+## Subsequent cuts and attachments
+
+Batch preparation explicitly remaps attachments when splitting an earlier joint.
+For a point at original parameter `t`, the owner evaluates `P = C(t)` and finds
+the unique parameter of `P` on the retained child curve. It does not assume the
+child parameter is `(t-a)/(b-a)`: fold-regularized charts can change that map.
+Intervals are partitioned at the split and expressed in the exact child charts.
+Vertex/member stations, sheet relations, attachment lineage, junction attachment
+lists, and owner-held member source/target/junction ranges are retained.
+
+Direct `model.split_edge(edge, t)` still refuses attached targets by default.
+`model.split_edge(edge, t, remap_attachments=True)` selects the explicit atomic
+remap and exact rollback, including identifier state. Ambiguous inversions or
+unqualified source-edge attachment intervals fail closed. Consumers use the
+updated owner attachment records; they must not infer replacement parameters.
+Detached preparation keeps the authored model unchanged.
+
+Trim-boundary projection polishes a Bezier branch candidate only after its global
+distance certificate is established, and accepts the polish only when closer.
+This retains exact shared mesh stations without changing projection tolerances
+or the consumer's shared-station and cell-quality checks.
+
+Portable installed-consumer builders and authored/prepared document export are
+in `tools/general_intersections/consumer_contract_fixtures.py`. They cover an
+oblique cubic wall/pipe with fold-ending branches, a parabolic wall/pipe, tangent
+and nearby secant/separated plate/pipe cases, and a second cut with persistent
+vertex/member attachments. The manifest records expected station coordinates,
+joint identities and checksums. Source commit and wheel identity remain required;
+the development version alone does not identify this contract.
+
+The six exported cases provide these integration expectations (joint counts are
+recorded topology, not independent numerical or meshing acceptance):
+
+| Fixture | Prepared joints | Consumer focus |
+| --- | ---: | --- |
+| `cubic-oblique-pipe` | 19 | Bezier branches, regularized fold ends, trimmed extrusion charts |
+| `parabolic-pipe` | 16 | Quadric branches and trimmed extrusion charts |
+| `plate-pipe-tangent` | 1 | One generator from `(0,0,0)` to `(0,0,2)` |
+| `plate-pipe-secant` | 2 | Offset -1e-6; two analytically specified generators |
+| `plate-pipe-separated` | 0 | Offset +1e-6; no joint |
+| `second-cut-attachments` | 43 | Old joint 84 splits; attachments 25/26 retain their world stations |
+
+Use the manifest's actual joint identifiers and attachment coordinates with its
+matching documents. A fresh builder call creates a new model identity, so its
+document checksum need not match an earlier export. The fixture test verifies
+topology, document round-trip, authored-model non-mutation, analytic generator
+loci/material area, and retained attachment stations. ANYmesher must separately
+verify shared node sequences and its quality/certification gates; ANYfem must
+verify save/reopen, recovery/undo, viewport selection and project references.
+Passing the owner fixtures does not establish those consumer results.
+
 ## Limits
 
 * Two non-parallel Bezier walls of degree three or more are refused (`unsupported`); a quadratic profile is a
   quadric and goes to the angular engine.
-* Two Bezier branches on the same quadric from different walls that touch tangentially or overlap along an
-  arc are refused by the subdivision budget.
+* Parallel-wall isolated tangencies use exact elimination. Overlapping branch
+  components and other unresolved support configurations retain typed refusal.
 * A fold of higher multiplicity (a cusp of the discriminant) is refused.
-* A second operation that splits a joint edge created by an earlier one meets the established attachment
-  policy ("require an explicit parameter remap"), exactly as for every other curve family; a second operation
-  elsewhere on the same wall works on the stored child supports.
-* An exactly tangent plane or cylinder (the line contact of a pipe tangent to a plane face) is a degenerate
-  contact of the established plane/cylinder engine and fails closed there.
+* Source-edge attachment intervals without a qualified source map, or a station
+  with multiple admissible inverse parameters, are refused atomically.
+* Plane/pipe generator tangencies preserve the cylinder support's geometric
+  tangency identity before forming rounded trigonometric coefficients. Nearby
+  secants and separated supports keep their classification and tolerances.
 
 ## Cost
 

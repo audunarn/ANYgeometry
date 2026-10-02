@@ -7,9 +7,10 @@ a root of the other curve on it, and the point inversion on the branch qualifies
 are reached through their planes (see :mod:`anygeometry.arrangement_geometry`) and the branches of quadric
 intersections through their own supports. What is left is a curve that lies on the same quadric - a second wall's
 trace on the same pipe, or a Bezier path drawn on it - and there the shared points are those of the two walls, which
-has no closed form of low degree. They are found by certified box subdivision with the outward-rounded enclosures of
-both curves: a pair of boxes that are farther apart than the tolerance is discarded for good, so disjoint curves are
-proved disjoint, crossings are bracketed down to the tolerance, and a pair that cannot be resolved within a fixed
+has no closed form of low degree. For parallel walls rational polynomial elimination isolates their common
+generators, including tangent roots; both branch charts then qualify every candidate. Other configurations use
+certified box subdivision with outward-rounded enclosures: separated boxes prove curves disjoint,
+crossings are bracketed down to the tolerance, and a pair that cannot be resolved within a fixed
 budget (a tangential or overlapping contact) is refused instead of guessed.
 """
 from __future__ import annotations
@@ -172,10 +173,32 @@ def bezier_quadric_junctions(first, second, *, tolerance=1e-10, cancellation_che
                 for r in reverse:
                     for u in point_parameters(curve, other.evaluate(r), tolerance=tolerance):
                         add(u, r)
-            else:                                          # both walls cut the same quadric: certified subdivision
-                for u, r in subdivision_junctions(curve, other, tolerance=tolerance,
-                                                  cancellation_check=cancellation_check):
-                    add(u, r)
+            else:
+                from .branch_wall_events import parallel_wall_roots, branch_candidates
+                generators = parallel_wall_roots(curve, other, cancellation_check=cancellation_check)
+                if generators is not None:
+                    reverse_generators = parallel_wall_roots(other, curve, cancellation_check=cancellation_check)
+                    if reverse_generators is None:
+                        raise GeometryError("parallel wall elimination has an unresolved common component")
+                    first_candidates = branch_candidates(curve, generators)
+                    second_candidates = branch_candidates(other, reverse_generators)
+                    # A directrix can revisit a projected point. Qualify every
+                    # isolated parameter on both walls, not a nearest-point
+                    # inversion that can silently select only one visit.
+                    for u, (lo, hi) in first_candidates:
+                        for r, (other_lo, other_hi) in second_candidates:
+                            if cancellation_check is not None and cancellation_check():
+                                raise GeometryError("wall intersection predicate cancelled")
+                            if np.any(lo > other_hi + tolerance) or np.any(other_lo > hi + tolerance):
+                                continue
+                            made_u, made_r, residual = _refine(curve, other, u, r, tolerance)
+                            if residual > tolerance:
+                                raise GeometryError("parallel wall junction cannot resolve the requested world tolerance")
+                            add(made_u, made_r)
+                else:                                      # other supports retain certified subdivision
+                    for u, r in subdivision_junctions(curve, other, tolerance=tolerance,
+                                                      cancellation_check=cancellation_check):
+                        add(u, r)
     else:
         raise GeometryError("general analytic curve-pair arrangement predicate is not implemented")
     return tuple(pairs)

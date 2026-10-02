@@ -58,11 +58,17 @@ class BezierPath:
 
     def _split(self, t):
         work = np.asarray(self.controls).copy()
+        origin = work[0].copy()
+        work -= origin
         left, right = [work[0].copy()], [work[-1].copy()]
         for size in range(len(work)-1, 0, -1):
             work[:size] = (1-t)*work[:size]+t*work[1:size+1]
             left.append(work[0].copy()); right.append(work[size-1].copy())
-        return BezierPath(tuple(map(tuple, left))), BezierPath(tuple(map(tuple, right[::-1])))
+        left, right = np.asarray(left)+origin, np.asarray(right[::-1])+origin
+        # Translation back need not recover mixed-magnitude outer endpoints.
+        # They are exact inherited controls, not newly computed split points.
+        left[0], right[-1] = self.controls[0], self.controls[-1]
+        return BezierPath(tuple(map(tuple, left))), BezierPath(tuple(map(tuple, right)))
 
     def subcurve(self, lower, upper):
         if upper < lower:
@@ -95,6 +101,13 @@ def freeze_edge(model, edge_id):
 
 
 def _angle_parameter(curve, angle):
+    # Root isolation already clips to the stored angular endpoints. Recover
+    # their identities before dividing: on a tiny arc, (start+sweep-start)/sweep
+    # can leave [0, 1] by many ulps even though the angle is exactly the endpoint.
+    if angle == curve.start_angle:
+        return 0.0
+    if angle == curve.start_angle + curve.sweep_angle:
+        return 1.0
     fraction = (angle-curve.start_angle)/curve.sweep_angle
     if -128*np.finfo(float).eps <= fraction <= 1+128*np.finfo(float).eps:
         fraction=min(1.,max(0.,fraction))
