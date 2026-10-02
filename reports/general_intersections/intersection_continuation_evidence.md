@@ -4,6 +4,17 @@ Development evidence for candidate `96308444054a7b002e2897cd3bbf46cf78021338`.
 Release artifacts are unchanged. The initial machine-readable snapshot is retained at
 `C:/Github/ANYgeometry/reports/intersection-continuation-evidence-9630844.json`.
 
+Hosted run [36989128888](https://github.com/audunarn/ANYgeometry/actions/runs/36989128888)
+failed one of 1,676 kernel tests on each of Windows and Linux: the existing exact
+scalar/batch inversion assertion on a tilted cubic extrusion. Build, installed
+mesher and Linux/macOS wheel checks passed. Full logs are retained in the primary
+checkout at `reports/pr12-linux-110781019664.log` and
+`reports/pr12-windows-kernel-36989128888.log`; job status is in
+`reports/pr12-development-36989128888-jobs.json`. This candidate is not accepted
+for merge. A follow-up repairs demonstrated BLAS reduction-order dependence;
+84 focused tests pass under the locally reproducing Haswell kernel. That follow-up
+requires its own source identity and hosted evidence.
+
 ```json
 {
   "recorded_at": "2026-10-02T09:21:42.899482+00:00",

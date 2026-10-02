@@ -54,6 +54,19 @@ def test_points_invert_to_their_parameters_exactly(name):
 
 
 @pytest.mark.parametrize("name", SURFACES)
+def test_extrusion_coordinate_is_independent_of_batch_partition(name):
+    surface = SURFACES[name]
+    uv = np.random.default_rng(4).uniform(.02, .98, (120, 2))
+    points = np.asarray([surface.evaluate(u, v) for u, v in uv])
+    scalar = np.asarray([surface.extrusion_coordinate(p) for p in points])
+    assert np.max(np.abs(scalar - uv[:, 1])) < 1e-12
+    assert np.array_equal(surface.extrusion_coordinate(points), scalar)
+    assert np.array_equal(surface.extrusion_coordinate(points[::-1]), scalar[::-1])
+    assert np.array_equal(surface.extrusion_coordinate(points.reshape(8, 15, 3)),
+                          scalar.reshape(8, 15))
+
+
+@pytest.mark.parametrize("name", SURFACES)
 def test_derivatives_match_finite_differences_and_the_normal_is_unit(name):
     surface = SURFACES[name]
     uv = np.random.default_rng(2).uniform(.1, .9, (12, 2))

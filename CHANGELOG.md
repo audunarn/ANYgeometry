@@ -4,6 +4,9 @@ All notable user-visible changes to ANYgeometry are documented here.
 
 ## Unreleased
 
+- Keep extrusion coordinates bitwise consistent between scalar and batch queries
+  across BLAS kernels, preserving the existing inversion accuracy requirements.
+
 - Resolve isolated tangent junctions of parallel Bezier walls on a shared
   quadric through exact projected-directrix elimination. Preserve seam-independent
   plane/pipe generator contacts and valid parameters at small elliptic-arc ends.

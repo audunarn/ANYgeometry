@@ -2,6 +2,27 @@
 
 ## Continuation, 2026-10-02
 
+PR12 development run 36989128888: Windows and Linux each passed 1,675 tests
+and failed the existing bitwise scalar/batch inversion assertion for the tilted
+cubic surface. Wheel build, Linux/macOS installed-wheel and installed-mesher jobs
+passed. Preserve both job logs in the primary reports directory. Diagnostic
+question: does BLAS choose different reduction arithmetic for one versus many
+rows, or does the directrix Newton iteration depend on batch membership? Compare
+extrusion coordinates and projected-directrix inversions separately in the clean
+NumPy 2.5.3 environment; retain the exact-equality assertion and all tolerances.
+Repair only the demonstrated arithmetic path, then run focused inversion tests
+before a new hosted candidate. No blind CI retry.
+
+The Haswell OpenBLAS kernel reproduces the failure locally: four extrusion
+coordinates differ by at most 2.22e-16; directrix inversion of identical inputs
+is bitwise equal. Explicit three-term arithmetic preserves the same formula
+and reduction order for scalar, batch and higher-rank queries. Existing exact
+assertions remain unchanged; new partition/reversal tests exercise the contract.
+The Haswell focused surface, public-routing and intersection suites pass 84 tests
+(`reports/pr12-inversion-Haswell-regressions.log`). Independent source review found
+no shape or contract regression. The failed hosted logs and diagnostic logs are
+retained; the old candidate wheel is not replaced or relabeled.
+
 Human-authorised sequence: (1) repair existing planar-wall/cylinder tangency
 failures, (2) resolve exact tangent junctions between wall branches on one pipe,
 (3) explicitly remap attachments when a subsequent operation splits an older
