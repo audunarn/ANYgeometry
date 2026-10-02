@@ -23,6 +23,23 @@ The Haswell focused surface, public-routing and intersection suites pass 84 test
 no shape or contract regression. The failed hosted logs and diagnostic logs are
 retained; the old candidate wheel is not replaced or relabeled.
 
+Follow-up runtime candidate: `d05cd3a37d884702e043b678808f50d03ed4a27e`.
+Wheel SHA256: `54367f21cd661413c43701ce629f90f09d525a87a82e8ccaf267dc68fc8112b8`.
+A new clean temporary environment passes 59 installed tests (six consumer cases
+and 53 surface tests under Haswell BLAS). All 75 installed package files match
+the wheel. New documents are in primary `reports/consumer-contract-d05cd3a`;
+the immutable evidence snapshot is `reports/intersection-continuation-evidence-d05cd3a.json`.
+Hosted run 36991408474 passes all eight jobs: Windows and Linux each pass 1,684
+kernel tests; build, Linux/macOS installed-wheel and installed-mesher checks pass.
+Full run log and status are retained and hashed in the evidence snapshot. No
+release artifact was changed; full matrix/release qualification is not claimed.
+ANYmesher's bounded seeding experiments did not resolve face 11: they move the
+sub-15-degree cell or fail strict quadratic mapping. Its inspection-only fallback
+is not acceptance. A front/topology correction proposal remains owner work, with
+the original thresholds and consumed probe budgets retained. ANYfem application
+validation remains pending the user's response to the ownership authorization
+question. PR12 remains draft; the new contract is not fully consumer-accepted.
+
 Human-authorised sequence: (1) repair existing planar-wall/cylinder tangency
 failures, (2) resolve exact tangent junctions between wall branches on one pipe,
 (3) explicitly remap attachments when a subsequent operation splits an older

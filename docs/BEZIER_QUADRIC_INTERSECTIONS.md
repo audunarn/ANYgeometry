@@ -168,6 +168,27 @@ vertex/member attachments. The manifest records expected station coordinates,
 joint identities and checksums. Source commit and wheel identity remain required;
 the development version alone does not identify this contract.
 
+The six exported cases provide these integration expectations (joint counts are
+recorded topology, not independent numerical or meshing acceptance):
+
+| Fixture | Prepared joints | Consumer focus |
+| --- | ---: | --- |
+| `cubic-oblique-pipe` | 19 | Bezier branches, regularized fold ends, trimmed extrusion charts |
+| `parabolic-pipe` | 16 | Quadric branches and trimmed extrusion charts |
+| `plate-pipe-tangent` | 1 | One generator from `(0,0,0)` to `(0,0,2)` |
+| `plate-pipe-secant` | 2 | Offset -1e-6; two analytically specified generators |
+| `plate-pipe-separated` | 0 | Offset +1e-6; no joint |
+| `second-cut-attachments` | 43 | Old joint 84 splits; attachments 25/26 retain their world stations |
+
+Use the manifest's actual joint identifiers and attachment coordinates with its
+matching documents. A fresh builder call creates a new model identity, so its
+document checksum need not match an earlier export. The fixture test verifies
+topology, document round-trip, authored-model non-mutation, analytic generator
+loci/material area, and retained attachment stations. ANYmesher must separately
+verify shared node sequences and its quality/certification gates; ANYfem must
+verify save/reopen, recovery/undo, viewport selection and project references.
+Passing the owner fixtures does not establish those consumer results.
+
 ## Limits
 
 * Two non-parallel Bezier walls of degree three or more are refused (`unsupported`); a quadratic profile is a

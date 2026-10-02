@@ -152,3 +152,123 @@ requires its own source identity and hosted evidence.
   "independent_review": "OpenAI read-only findings resolved and reconciled; supplementary Mistral tangency review incomplete, not counted as clean acceptance."
 }
 ```
+
+## Follow-up candidate d05cd3a
+
+The original candidate and failed evidence above remain unchanged. All eight
+development jobs pass for this runtime candidate. This is development evidence,
+not full matrix/release qualification or complete downstream acceptance.
+
+```json
+{
+  "candidate": {
+    "source_commit": "d05cd3a37d884702e043b678808f50d03ed4a27e",
+    "wheel_sha256": "54367f21cd661413c43701ce629f90f09d525a87a82e8ccaf267dc68fc8112b8",
+    "origin": "C:\\Users\\AudunArnesenNyhus\\AppData\\Local\\Temp\\anygeometry-continuation-d05cd3a\\Lib\\site-packages\\anygeometry\\__init__.py",
+    "python": "3.13.9 (tags/v3.13.9:8183fa5, Oct 14 2025, 14:09:13) [MSC v.1944 64 bit (AMD64)]",
+    "verified_package_files": 75,
+    "dependencies": {
+      "anygeometry": "0.4.5",
+      "numpy": "2.5.3",
+      "shapely": "2.1.2",
+      "pytest": "9.1.1"
+    },
+    "blas_core": "Haswell"
+  },
+  "installed_tests": {
+    "tests": "59",
+    "failures": "0",
+    "errors": "0",
+    "skipped": "0",
+    "time": "18.614"
+  },
+  "prior_hosted_failure": 36989128888,
+  "current_hosted_run": 36991408474,
+  "hosted_status": "success",
+  "files": {
+    "pr12-linux-110781019664.log": {
+      "sha256": "e9d0f629285f727db7850f042422a60e30eaa3edad366cffeac1e0fd62f144b1",
+      "bytes": 54834
+    },
+    "pr12-windows-kernel-36989128888.log": {
+      "sha256": "36a9327bc282377b736e30c3a9ac2628e4b8ab50e287f64e38bf0701d80c3bd9",
+      "bytes": 53371
+    },
+    "pr12-development-36989128888-jobs.json": {
+      "sha256": "ecc2f5af224b42f0d2f5cba1fb2ded4227613f1019be6ae6597e56201f791134",
+      "bytes": 14700
+    },
+    "pr12-inversion-Haswell.log": {
+      "sha256": "c5b11ba23dbc3d077804b7cf60f4a38b9512edfd70c8e9eae59dab2acb78e14e",
+      "bytes": 2683
+    },
+    "pr12-inversion-Haswell-diagnostic.log": {
+      "sha256": "f0c2a43860176051b2ea63afccd7b9073a044d20737341633a48686305d00c8b",
+      "bytes": 204
+    },
+    "pr12-inversion-Haswell-regressions.log": {
+      "sha256": "8a36d244f2eadbca402f40c3f069b251e39dc488a8d0f9cd62e15406dfcfa58c",
+      "bytes": 183
+    },
+    "intersection-continuation-installed-d05cd3a.log": {
+      "sha256": "acfa54b86b2daa3669493db2e33b1eae0f8b7885a09aae07ccff037e76791f42",
+      "bytes": 102
+    },
+    "intersection-continuation-installed-d05cd3a.xml": {
+      "sha256": "dec5a2eb8d72312068ef75a6cd904d0992bbca37dd62c18c3616329aadbad04e",
+      "bytes": 8654
+    },
+    "intersection-continuation-installed-identity-d05cd3a.json": {
+      "sha256": "12441c4a5a34c88ea82f22bfc9cb630d9fa184a177082ac3ec1d468de3b469f8",
+      "bytes": 587
+    },
+    "consumer-contract-d05cd3a/manifest.json": {
+      "sha256": "36d2ff43de85f30d6598bb1ed00744ff5004bee40663ff17ecc4944e9bdaa0db",
+      "bytes": 5371
+    },
+    "pr12-development-36991408474-status.json": {
+      "sha256": "05f42263571ff58a5380d29bd9c865008e581a47ba9a196993307d8e8c17bcca",
+      "bytes": 14870
+    },
+    "pr12-development-36991408474.log": {
+      "sha256": "69f6fa6f3ceb7e43b35fb0564348b7de002eafa7c076002458415e5b27662050",
+      "bytes": 534998
+    }
+  },
+  "hosted_jobs": [
+    {
+      "name": "Classify changes",
+      "conclusion": "success"
+    },
+    {
+      "name": "Build and verify wheel",
+      "conclusion": "success"
+    },
+    {
+      "name": "Development kernel (windows-latest, Python 3.13)",
+      "conclusion": "success"
+    },
+    {
+      "name": "Development kernel (ubuntu-latest, Python 3.13)",
+      "conclusion": "success"
+    },
+    {
+      "name": "Installed mesher development check",
+      "conclusion": "success"
+    },
+    {
+      "name": "Installed wheel (macos-15)",
+      "conclusion": "success"
+    },
+    {
+      "name": "Installed wheel (ubuntu-latest)",
+      "conclusion": "success"
+    },
+    {
+      "name": "Development gate",
+      "conclusion": "success"
+    }
+  ],
+  "consumer_acceptance": "Open: ANYmesher face-11 topology/quality repair; ANYfem application checks pending authorization."
+}
+```
