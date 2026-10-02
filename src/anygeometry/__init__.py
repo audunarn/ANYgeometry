@@ -3,6 +3,7 @@
 from .curves import Arc, ArcFrame, CurveShape, DegenerateArcError, Spline, Straight
 from .exact_curves import EllipticArc, CylinderIntersectionCurve
 from .quadric_curves import QuadricIntersectionCurve
+from .branch_curves import BezierQuadricCurve
 from .batch_intersections import (
     IntersectionBatchPolicy, IntersectionPlan, IntersectionApplication,
     plan_intersections, apply_intersections, has_current_intersection_preparation, clone_prepared_geometry,
@@ -264,6 +265,7 @@ __all__ = [
     "query_joint_edge",
     "CylinderIntersectionCurve",
     "QuadricIntersectionCurve",
+    "BezierQuadricCurve",
     "ArcFrame",
     "Attachment",
     "AttachmentEvidence",

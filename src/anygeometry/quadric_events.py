@@ -18,6 +18,7 @@ import numpy as np
 from .analytic_roots import isolate_real_roots, trigonometric_roots
 from .errors import GeometryError
 from .quadric_algebra import QuadricSupport
+from .branch_curves import BezierQuadricCurve
 from .quadric_curves import QuadricIntersectionCurve
 
 _EPS = float(np.finfo(float).eps)
@@ -97,7 +98,7 @@ def curve_quadric_roots(curve, quadric, *, tolerance=1e-10, cancellation_check=N
 def _curve_quadric_roots(curve, quadric, tolerance, cancellation_check):
     from .arrangement_geometry import BezierPath, LinePath
     from .exact_curves import CylinderIntersectionCurve, EllipticArc
-    if isinstance(curve, QuadricIntersectionCurve):
+    if isinstance(curve, (QuadricIntersectionCurve, BezierQuadricCurve)):
         return curve.roots_on(quadric, tolerance=tolerance, cancellation_check=cancellation_check)
     if isinstance(curve, CylinderIntersectionCurve):
         from .quadric_curve_events import quadric_roots
@@ -162,8 +163,11 @@ def _curve_quadric_roots(curve, quadric, tolerance, cancellation_check):
 
 def branch_supports(curve):
     """The two quadric supports of a branch curve, in world coordinates."""
-    first = curve.first.quadric()
-    second = curve.second
+    if isinstance(curve, QuadricIntersectionCurve):
+        first, second = curve.first.quadric(), curve.second
+    else:                                                  # a cylinder/cylinder branch
+        first = QuadricSupport.from_surface(curve.first.surface())
+        second = QuadricSupport.from_surface(curve.second.surface())
     if curve.transform != ((1., 0., 0., 0.), (0., 1., 0., 0.), (0., 0., 1., 0.), (0., 0., 0., 1.)):
         inverse = np.linalg.inv(np.asarray(curve.transform))
         first, second = first.pulled_back(inverse), second.pulled_back(inverse)

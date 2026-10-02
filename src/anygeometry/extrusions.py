@@ -141,6 +141,40 @@ class BezierDirectrix:
             value = value * t[:, None] + row
         return value
 
+    def invert_one(self, point, *, iterations=8):
+        """The parameter ``t`` of the curve point nearest one point: :meth:`invert` for a single query.
+
+        The same Newton iteration from the same table, in plain floats: a batch of one costs a few dozen numpy calls
+        per step, which is most of what the arrangement spends asking where a vertex lies on a branch curve.
+        """
+        data = self.__dict__.get("_inversion_one")
+        if data is None:
+            table_t, table, table_norm, power, first, second = self._inversion_data()
+            data = (table_t, table, table_norm,
+                    *(tuple(tuple(float(row[axis]) for row in rows) for axis in range(3)) for rows in (power, first, second)))
+            object.__setattr__(self, "_inversion_one", data)
+        table_t, table, table_norm, power, first, second = data
+        x, y, z = float(point[0]), float(point[1]), float(point[2])
+        t = float(table_t[int(np.argmin(table_norm - 2.0 * (table @ np.array((x, y, z)))))])
+        target = (x, y, z)
+        for _ in range(iterations):
+            offset, d1, d2 = [], [], []
+            for axis in range(3):
+                for coefficients, out in ((power[axis], offset), (first[axis], d1), (second[axis], d2)):
+                    value = coefficients[-1]
+                    for coefficient in coefficients[-2::-1]:
+                        value = value * t + coefficient
+                    out.append(value)
+                offset[axis] -= target[axis]
+            numerator = offset[0] * d1[0] + offset[1] * d1[1] + offset[2] * d1[2]
+            denominator = (d1[0] * d1[0] + d1[1] * d1[1] + d1[2] * d1[2]
+                           + offset[0] * d2[0] + offset[1] * d2[1] + offset[2] * d2[2])
+            step = numerator / denominator if abs(denominator) > 1e-300 else numerator
+            t = min(1.0, max(0.0, t - step))
+            if abs(step) <= 4.0 * _EPS:
+                break
+        return t
+
     def invert(self, points, *, iterations=8):
         """Parameter ``t`` of the curve point nearest each planar point (Newton from a sampled table)."""
         points = np.atleast_2d(np.asarray(points, dtype=float))

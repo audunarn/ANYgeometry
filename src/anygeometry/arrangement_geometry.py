@@ -14,6 +14,7 @@ from .analytic_roots import isolate_real_roots, trigonometric_roots
 from .curves import Arc, Straight, Spline
 from .errors import GeometryError
 from .exact_curves import EXACT_CURVES, EllipticArc, CylinderIntersectionCurve
+from .branch_curves import BezierQuadricCurve
 from .quadric_curves import QuadricIntersectionCurve
 from .surfaces import Cylinder, Plane
 
@@ -135,7 +136,7 @@ def plane_roots(curve, normal, offset, *, tolerance=1e-12, cancellation_check=No
         from .quadric_curve_events import quadric_roots
         return quadric_roots(curve,np.zeros((3,3)),.5*normal,-offset,
                              tolerance=tolerance,cancellation_check=cancellation_check)
-    if isinstance(curve, QuadricIntersectionCurve):
+    if isinstance(curve, (QuadricIntersectionCurve, BezierQuadricCurve)):
         from .quadric_algebra import QuadricSupport
         normal = np.asarray(normal, dtype=float)
         origin = tuple(float(v) for v in normal*(offset/float(normal @ normal)))
@@ -213,7 +214,7 @@ def _point_parameters(curve, point, *, tolerance=1e-10):
             if np.linalg.norm(curve.evaluate(parameter)-point) <= tolerance:
                 roots.append(parameter)
         return tuple(roots)
-    if isinstance(curve, QuadricIntersectionCurve):
+    if isinstance(curve, (QuadricIntersectionCurve, BezierQuadricCurve)):
         return curve.parameters_of(point, tolerance=tolerance)
     if isinstance(curve, BezierPath):
         controls = np.asarray(curve.controls)
@@ -346,12 +347,13 @@ def curve_junctions(first, second, *, tolerance=1e-10,cancellation_check=None):
     candidates.extend(_curve_junctions(first,second,tolerance=tolerance,
                                       cancellation_check=cancellation_check))
     result = tuple(sorted(dict.fromkeys(candidates)))
-    if isinstance(first, QuadricIntersectionCurve) or isinstance(second, QuadricIntersectionCurve):
+    if isinstance(first, _BRANCHES) or isinstance(second, _BRANCHES):
         result = _merge_touching(first, second, result, tolerance)
     return result
 
 
 _TOUCH = 1e-6
+_BRANCHES = (QuadricIntersectionCurve, BezierQuadricCurve)
 
 
 def _merge_touching(first, second, junctions, tolerance):
@@ -414,4 +416,7 @@ def _curve_junctions(first, second, *, tolerance=1e-10,cancellation_check=None):
         from .bezier_intersections import bezier_branch_junctions
         return tuple((b,a) for a,b in bezier_branch_junctions(second,first,tolerance=tolerance,
                                                            cancellation_check=cancellation_check))
+    if isinstance(first, BezierQuadricCurve) or isinstance(second, BezierQuadricCurve):
+        from .branch_events import bezier_quadric_junctions
+        return bezier_quadric_junctions(first, second, tolerance=tolerance, cancellation_check=cancellation_check)
     raise GeometryError("general analytic curve-pair arrangement predicate is not implemented")

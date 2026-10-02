@@ -190,10 +190,16 @@ def test_rulings_parallel_to_the_extrusion_meet_the_arch_in_generators():
 def test_the_same_surface_is_coincident_and_other_pairs_keep_their_established_behavior():
     assert extruded_pair_support(wall(), wall(v_range=(.5, 1.5))).coincident
     cubic = ExtrudedSurface(BezierDirectrix(((0., 0., 0.), (1., 1., 0.), (2., -1., 0.), (3., 0., 0.))), (0., 0., 2.))
-    with pytest.raises(GeometryError, match="unsupported"):
-        extruded_pair_support(cubic, pipe_x())
-    with pytest.raises(GeometryError, match="unsupported"):
-        extruded_pair_support(wall(), wall(vector=(0., .5, 2.)))                         # two parabolic cylinders
+    assert extruded_pair_support(cubic, pipe_x()).curves                                  # a cubic is the polynomial engine's wall
+    other = wall(vector=(0., .5, 2.))                                                      # two parabolic cylinders: neither has an
+    both = extruded_pair_support(wall(), other)                                            # angle, so the polynomial engine takes one
+    assert both.curves and not both.segments
+    length = lambda result: sum(float(np.linalg.norm(np.diff(c.evaluate(np.linspace(0., 1., 4001)), axis=0), axis=1).sum())
+                                for c in result.curves)
+    assert length(both) == pytest.approx(length(extruded_pair_support(other, wall())), rel=1e-6)        # from either wall
+    with pytest.raises(GeometryError, match="unsupported"):                                # two cubic walls are still refused
+        extruded_pair_support(cubic, ExtrudedSurface(BezierDirectrix(((0., 0., 0.), (1., 1., 0.), (2., -1., 0.), (3., 0., 0.))),
+                                                     (0., .5, 2.)))
     parallel = extruded_pair_support(wall(), wall(controls=((0., .5, 0.), (1., 2.5, 0.), (2., .5, 0.))))
     assert not parallel.curves                                                         # parallel extrusions: generators
 

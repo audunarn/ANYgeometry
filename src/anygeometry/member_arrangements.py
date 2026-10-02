@@ -10,6 +10,7 @@ from .analytic_roots import isolate_real_roots, trigonometric_roots
 from .arrangement_geometry import (LinePath, BezierPath, freeze_edge, plane_roots,
                                    point_parameters, curve_junctions)
 from .exact_curves import EllipticArc, CylinderIntersectionCurve
+from .branch_curves import BezierQuadricCurve
 from .quadric_curves import QuadricIntersectionCurve
 from .errors import GeometryError
 from .material_arrangement import ArrangementPath, ArrangementPoint, _clip
@@ -45,7 +46,7 @@ def _support_roots(curve, support, tolerance, check):
     if isinstance(support, Plane):
         return plane_roots(curve, support.normal, float(support.normal @ support.origin),
                            tolerance=tolerance, cancellation_check=lambda: (check() or False))
-    if isinstance(support, Cone) or isinstance(curve, QuadricIntersectionCurve):
+    if isinstance(support, Cone) or isinstance(curve, (QuadricIntersectionCurve, BezierQuadricCurve)):
         from .quadric_events import curve_quadric_roots
         return curve_quadric_roots(curve, support, tolerance=tolerance,
                                    cancellation_check=lambda: (check() or False))

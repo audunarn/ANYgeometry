@@ -238,6 +238,17 @@ def _ruled_quadric(surface):
             isinstance(surface.directrix, BezierDirectrix) and surface.directrix.degree == 2)))
 
 
+def _parabolic(surface):
+    """A quadratic Bezier extrusion (a parabolic cylinder)."""
+    return isinstance(surface, ExtrudedSurface) and isinstance(surface.directrix, BezierDirectrix)
+
+
+def _bezier_wall(surface):
+    """A Bezier extrusion of degree three or more: not a quadric, so the polynomial-chart engine takes it first."""
+    return (isinstance(surface, ExtrudedSurface) and isinstance(surface.directrix, BezierDirectrix)
+            and surface.directrix.degree >= 3)
+
+
 def extruded_pair_support(a, b, *, tolerance=1e-10, cancellation_check=None):
     """Support intersection for a pair that includes an extruded surface."""
     if isinstance(b, ExtrudedSurface) and not isinstance(a, ExtrudedSurface):
@@ -250,8 +261,15 @@ def extruded_pair_support(a, b, *, tolerance=1e-10, cancellation_check=None):
         if _parallel(a, b):
             return parallel_extruded_support(a, b, tolerance=tolerance, cancellation_check=cancellation_check)
     if _ruled_quadric(a) and _ruled_quadric(b):
+        if _parabolic(a) and _parabolic(b):                 # neither has an angle to supply: the first is the polynomial wall
+            from .branch_supports import bezier_quadric_support
+            return bezier_quadric_support(a, b, tolerance=tolerance, cancellation_check=cancellation_check)
         from .quadric_supports import quadric_pair_support
         return quadric_pair_support(a, b, tolerance=tolerance, cancellation_check=cancellation_check)
+    for wall, other in ((a, b), (b, a)):
+        if _bezier_wall(wall) and _ruled_quadric(other):
+            from .branch_supports import bezier_quadric_support
+            return bezier_quadric_support(wall, other, tolerance=tolerance, cancellation_check=cancellation_check)
     raise GeometryError("this extruded surface pair is unsupported: a Bezier extrusion of degree three or more "
-                        "meets a Plane or a parallel extrusion, and a pair of non-parallel surfaces needs "
-                        "elliptic, circular or quadratic profiles")
+                        "meets a Plane, a cylinder, a cone, a quadric extrusion or a parallel extrusion, and "
+                        "two non-parallel Bezier extrusions of degree three or more are not supported")

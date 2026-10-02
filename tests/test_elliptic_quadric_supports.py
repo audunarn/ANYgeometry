@@ -263,12 +263,14 @@ def test_the_other_pairs_of_extruded_surfaces_keep_their_established_behavior():
     # parallel extrusions still meet in generators through the crossings of their directrices
     parallel = extruded_pair_support(tube(), tube(center=(.8, 0., 0.), a=.6, b=.6))
     assert parallel.segments and not parallel.curves
-    # a Bezier of degree three or more is not a quadric: only planes and parallel extrusions are exact for it
-    bezier = ExtrudedSurface(BezierDirectrix(((0., 0., 0.), (1., 1., 0.), (2., -1., 0.), (3., 0., 0.))), (.3, 0., 2.))
+    # a Bezier of degree three or more is not a quadric: against one it is the polynomial-chart engine's pair, and two
+    # such walls of different directions stay unsupported
+    controls = ((0., 0., 0.), (1., 1., 0.), (2., -1., 0.), (3., 0., 0.))
+    bezier = ExtrudedSurface(BezierDirectrix(controls), (.3, 0., 2.))
+    assert extruded_pair_support(bezier, cylinder_x()).curves
+    assert extruded_pair_support(bezier, tube()).curves
     with pytest.raises(GeometryError, match="unsupported"):
-        extruded_pair_support(bezier, cylinder_x())
-    with pytest.raises(GeometryError, match="unsupported"):
-        extruded_pair_support(bezier, tube())
+        extruded_pair_support(bezier, ExtrudedSurface(BezierDirectrix(controls), (0., .5, 2.)))
 
 
 # ------------------------------------------------------------------------------------------- whole models

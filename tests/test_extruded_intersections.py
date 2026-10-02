@@ -219,11 +219,15 @@ def test_extrusions_of_other_directions_and_overlapping_directrices_are_refused(
     assert extruded_pair_support(a, a.subpatch((.2, .8), (0., 1.))).coincident                 # patches of one surface
 
 
-def test_other_pairs_are_unsupported_not_approximated():
+def test_a_cylinder_along_the_extrusion_meets_a_cubic_wall_in_generators_and_other_pairs_stay_unsupported():
     from anygeometry.surfaces import Cylinder
     a = ExtrudedSurface(BezierDirectrix(CUBIC), (0., 0., 2.))
-    with pytest.raises(GeometryError, match="unsupported"):
-        extruded_pair_support(a, Cylinder((0., 0., 0.), (0., 0., 1.), (1., 0., 0.), 1., 2., 0., math.tau))
+    result = extruded_pair_support(a, Cylinder((0., 0., 0.), (0., 0., 1.), (1., 0., 0.), 1., 2., 0., math.tau))
+    assert result.segments and not result.curves                         # exact: the rulings of the cylinder are the wall's
+    for start, end in result.segments:
+        assert np.allclose(np.asarray(end) - np.asarray(start), (0., 0., 2.))
+    with pytest.raises(GeometryError, match="unsupported"):                  # a cubic is not a quadric
+        extruded_pair_support(a, ExtrudedSurface(BezierDirectrix(CUBIC), (0., .5, 2.)))
 
 
 # ---------------------------------------------------------------- whole models

@@ -31,12 +31,14 @@ connectors. Recognition changes nothing the model stores; the `extrude()` result
 | Extrusion x extrusion, same direction | Generators through the crossings of the two directrices carried into one plane |
 | Elliptic extrusion x Cylinder, Cone or elliptic extrusion, any direction | `QuadricIntersectionCurve` charts; rulings that agree to rounding give the shared generators; exact tangency gives a point; the same surface gives coincidence |
 | Quadratic Bezier extrusion (a spline with one control point) x Cylinder, Cone or elliptic extrusion, any direction | The same, with the parabolic cylinder as the second support |
-| Quadratic x quadratic Bezier extrusion of another direction; Bezier extrusion of degree three or more x Cylinder, Cone or extrusion of another direction | Not supported: a typed `GeometryError`, never an approximation |
+| Bezier extrusion of degree three or more x Cylinder, Cone, elliptic or quadratic extrusion of another direction; two quadratic Bezier extrusions of different directions | `BezierQuadricCurve` charts: exact branches of `A s^2 + B(t) s + C(t) = 0` over the directrix parameter; see [Bezier walls against quadrics](BEZIER_QUADRIC_INTERSECTIONS.md) |
+| Two Bezier extrusions of degree three or more of different directions | Not supported: a typed `GeometryError`, never an approximation |
 
-A quadratic Bezier is a parabola, so its extrusion is a quadric and needs nothing new. A cubic or higher
-profile is not, and its pair with a quadric needs a polynomial-chart counterpart of `QuadricIntersectionCurve`
-(the branch `s = (-B +- sqrt(B^2 - 4AC)) / 2A` has a constant `A` along such a directrix); that is the open step.
-
+A quadratic Bezier is a parabola, so its extrusion is a quadric and needs nothing new against a cylinder, a
+cone or an elliptic extrusion. A cubic or higher profile is not one, and two parabolic cylinders have no
+angle to offer each other; both meet their partner through a polynomial-chart counterpart of
+`QuadricIntersectionCurve` (the branch `s = (-B +- sqrt(B^2 - 4AC)) / 2A` has a constant `A` along a directrix
+of any degree), described in [Bezier walls against quadrics](BEZIER_QUADRIC_INTERSECTIONS.md).
 ## The elliptic cylinder as a quadric
 
 An elliptic extrusion with the unit ruling direction `a` has the exact implicit form `w . M . w = 1` with
@@ -78,8 +80,8 @@ wall used to give about ten). `plan_imprint` and `apply_imprint` then plan and a
 * **Exact where it used to refuse:** a wall edge lying in a non-convex support, a trimmed support or leaving
   the trim used to be an explicit `UNCLASSIFIED` refusal; the exact engine now classifies it (the part of the
   curve inside the support) and the imprint is planned and applied with exact material conservation.
-* **Fallback:** a pair the exact engine cannot classify (for example two cubic walls of different
-  directions) goes to the established certified query, and to its refusal where that refuses too.
+* **Fallback:** a pair the exact engine cannot classify (two cubic walls of different directions) goes to
+  the established certified query, and to its refusal where that refuses too.
 
 `plan_intersections` / `apply_intersections` / `query_trimmed_surface_charts` use the exact engine directly.
 A child of a split keeps its exact support with rebased ranges, so a horizontal cut of a spline wall leaves
@@ -90,8 +92,8 @@ attachments are remapped by position exactly as for the children of a split.
 ## Documents
 
 An `ExtrudedSurface` is a stored support, and an elliptic quadric curve names its supports by their defining
-vectors. **Schema 6 is written when a document stores an `ExtrudedSurface` or a `QuadricIntersectionCurve`**;
-every other document stays schema 5, and a reader below 6 refuses the new records.
+vectors. **Schema 6 is written when a document stores an `ExtrudedSurface`, a `QuadricIntersectionCurve` or a
+`BezierQuadricCurve`**; every other document stays schema 5, and a reader below 6 refuses the new records.
 
 ## Cost
 
@@ -117,6 +119,7 @@ basis (the wall planned in 0.54 s).
 `tests/test_extruded_intersections.py` (charts, plane sections, parallel extrusions and whole models:
 topology, exact area conservation, joint-edge residuals, schema), `tests/test_extruded_public_routing.py`
 (the public workflow), `tests/test_elliptic_quadric_supports.py` (elliptic supports against an independent
-grid oracle, role-swap consistency, degenerate contacts, whole models and the document round trip) and
+grid oracle, role-swap consistency, degenerate contacts, whole models and the document round trip),
 `tests/test_intersection_performance_equivalence.py` (the integer remainder sequences against their
-Fraction oracles).
+Fraction oracles) and, for walls of degree three and more, the `tests/test_branch_*.py` and
+`tests/test_serialization_branch.py` files listed in [Bezier walls against quadrics](BEZIER_QUADRIC_INTERSECTIONS.md).

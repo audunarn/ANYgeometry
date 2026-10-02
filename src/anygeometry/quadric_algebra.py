@@ -433,23 +433,30 @@ class QuadricSupport:
         radius = self.radius + (self.slope * axial if self.kind == "cone" else 0.0)
         return np.einsum("...i,...i->...", radial, radial) - radius * radius
 
-    def gradient_norm(self, points):
+    def gradient(self, points):
+        """The gradient of ``Q`` at ``points`` (shape ``(..., 3)``)."""
         x = np.asarray(points, dtype=float)
         w = x - self.origin
         a = np.asarray(self.axis)
         if self.kind == "plane":
-            return np.full(x.shape[:-1], float(np.linalg.norm(a)))
+            return np.broadcast_to(a, x.shape).copy()
         if self.kind in ("elliptic", "parabolic"):
             m, l, _c = _own_form(self)
-            return 2 * np.linalg.norm(w @ m + l, axis=-1)
+            return 2 * (w @ m + l)
         if self.kind == "general":
             m = np.asarray(self.matrix).reshape(3, 3)
-            return 2 * np.linalg.norm(x @ m + np.asarray(self.linear), axis=-1)
+            return 2 * (x @ m + np.asarray(self.linear))
         axial = w @ a
         radial = w - axial[..., None] * a
         k = self.slope if self.kind == "cone" else 0.0
         radius = self.radius + k * axial
-        return 2 * np.linalg.norm(radial - (k * radius)[..., None] * a, axis=-1)
+        return 2 * (radial - (k * radius)[..., None] * a)
+
+    def gradient_norm(self, points):
+        x = np.asarray(points, dtype=float)
+        if self.kind == "plane":
+            return np.full(x.shape[:-1], float(np.linalg.norm(np.asarray(self.axis))))
+        return np.linalg.norm(self.gradient(x), axis=-1)
 
 
 @lru_cache(maxsize=256)
@@ -631,15 +638,15 @@ def _classes(poly):
     return classes
 
 
-def _chart_roots(poly):
-    """``[(x, multiplicity)]`` for the roots of integer polynomial ``poly`` in ``[-1, 1]``."""
+def _chart_roots(poly, interval=(-1, 1)):
+    """``[(x, multiplicity)]`` for the roots of integer polynomial ``poly`` in the closed ``interval``."""
     if len(poly) < 2:
         return []
     classes = _classes(poly)
     sequences = [None, *(_sturm(cls) for cls in classes[1:])]          # the first class needs no multiplicity test
     tolerance = 4 * np.finfo(float).eps
     out = []
-    for root in isolate_real_roots(poly, tolerance=tolerance, interval=(-1, 1)):
+    for root in isolate_real_roots(poly, tolerance=tolerance, interval=interval):
         multiplicity = 1
         for k, (cls, sequence) in enumerate(zip(classes[1:], sequences[1:]), start=2):
             if root.lower == root.upper:

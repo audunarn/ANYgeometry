@@ -56,7 +56,8 @@ All notable user-visible changes to ANYgeometry are documented here.
   engine, including rulings parallel up to rounding, exact tangency and
   coincidence. A Bezier extrusion of degree three or more against a cylinder,
   a cone or an extrusion of another direction, and two quadratic extrusions of
-  different directions, are refused with a typed error. Children of a split keep their exact
+  different directions, were refused with a typed error (see the next entry for the polynomial charts
+  that take them). Children of a split keep their exact
   support, and so does a face whose boundary edge a contact splits. `query_intersection`
   classifies a pair that includes an extrusion with the exact engine first (one exact curve
   where the certified subdivision returned many sampled pieces) and falls back to the
@@ -68,6 +69,32 @@ All notable user-visible changes to ANYgeometry are documented here.
   planned imprint, topology and material conservation). Schema 6 is now also
   written for a document that stores an `ExtrudedSurface`. See
   [extruded surfaces](docs/EXTRUDED_SURFACES.md).
+- Bezier walls of degree three and more in `plan_intersections` /
+  `apply_intersections` / `query_trimmed_surface_charts` and the public query and
+  imprint workflow: a spline wall made by `GeometryModel.extrude` meets cylinders,
+  cones and elliptic or quadratic extrusions of any other direction, and two
+  quadratic walls of different directions meet each other, through new exact curves.
+  New root-exported immutable `BezierQuadricCurve` stores one exact branch of
+  `A s^2 + B(t) s + C(t) = 0` (a constant `A`) over a chart of the directrix
+  parameter, with the square and sine charts of `QuadricIntersectionCurve` at its
+  folds (evaluation, first and second derivatives, bounds, projection, splitting and
+  affine copying). The branch polynomials are evaluated in the Bernstein basis: in the
+  power basis a degree-seven discriminant is wrong by 8e-10 and a degree-eight one by
+  9e-9, the Bernstein form stays at 3e-14 (`docs/BEZIER_QUADRIC_INTERSECTIONS.md`
+  gives the table), which also takes a quartic wall through whole models. Its junctions
+  with lines, ellipses, Bezier paths, quadric branches and other Bezier branches are
+  exact eliminations, or a certified box subdivision for two walls cutting one pipe
+  (curves that never meet are proved disjoint, crossings are bracketed to the
+  tolerance, a tangential or overlapping contact is refused). Roots and point inversions
+  near a fold are polished in the chart parameter; before, a crossing within 1e-8 of a
+  fold was dropped and a wall piece failed its material-conservation check (a pipe
+  whose axis lies in the wall's base plane). Two non-parallel walls of degree three and
+  more are still refused with a typed error. **Schema 6 is now also written for a
+  document that stores a `BezierQuadricCurve`.** Measured on this machine, a cubic
+  wall cut by one 8-facet pipe plans in 0.99 s and applies in 0.58 s (best of three,
+  plans and memos emptied), against 0.63 s and 0.38 s for the quadratic wall of the
+  angular engine. See
+  [Bezier walls against quadrics](docs/BEZIER_QUADRIC_INTERSECTIONS.md).
 - Faster exact root isolation without changing any isolated interval: Sturm
   rows, the square-free part, Yun classes and polynomial gcds use integer
   pseudo-remainder sequences instead of Fractions (every row is the same

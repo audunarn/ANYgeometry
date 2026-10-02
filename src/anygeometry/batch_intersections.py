@@ -22,6 +22,7 @@ from .curves import Straight
 from .errors import GeometryError
 from .exact_curves import EllipticArc, CylinderIntersectionCurve
 from .extruded_supports import extruded_support
+from .branch_curves import BezierQuadricCurve
 from .quadric_curves import QuadricIntersectionCurve
 from .identity import EntityHandle
 from .material_arrangement import (ArrangementPath, ArrangementPoint, ArrangementCell, MaterialDomain,
@@ -541,6 +542,14 @@ def _coincident(first, second, tolerance):
                 and bool(point_parameters(first,second.evaluate(.5),tolerance=tolerance)))
     if isinstance(first,EllipticArc) and isinstance(second,CylinderIntersectionCurve):
         return _coincident(second,first,tolerance)
+    if isinstance(first, BezierQuadricCurve) or isinstance(second, BezierQuadricCurve):
+        from .branch_events import world_quadric
+        from .quadric_events import curve_quadric_roots
+        branch, other = (first, second) if isinstance(first, BezierQuadricCurve) else (second, first)
+        # the other curve lies on the branch's quadric and on its wall (every sample is a point of the branch)
+        return (curve_quadric_roots(other, world_quadric(branch), tolerance=tolerance) is None
+                and all(point_parameters(branch, other.evaluate(float(t)), tolerance=tolerance)
+                        for t in np.linspace(0., 1., 9)))
     return False
 
 

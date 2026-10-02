@@ -13,6 +13,7 @@ engine gets one new exact curve family instead of a sampled fit.
 | Cone x Cylinder | Coaxial: circles (`EllipticArc`). Otherwise `QuadricIntersectionCurve` charts, folded or closed, at any angle and offset |
 | Cone x Cone | Coaxial: rings. Same surface (any patch): coincident, boundary traces only. Otherwise `QuadricIntersectionCurve` charts |
 | Elliptic extrusion (an oblique circular tube) or quadratic Bezier extrusion (a spline wall) x Cylinder, Cone or elliptic extrusion | `QuadricIntersectionCurve` charts, with the elliptic and parabolic cylinders as quadric kinds of their own (a parabolic cylinder only as the second support); see [extruded surfaces](EXTRUDED_SURFACES.md) |
+| Bezier extrusion of degree three or more (a cubic spline wall) x Cylinder, Cone or quadric extrusion | `BezierQuadricCurve` charts, the polynomial-chart counterpart of `QuadricIntersectionCurve`; see [Bezier walls against quadrics](BEZIER_QUADRIC_INTERSECTIONS.md) |
 | Beam or other member axis x Cone | Exact line/curve roots on the cone's implicit equation |
 
 `query_intersection(face, face)` still answers cone faces through the established certified (sampled)

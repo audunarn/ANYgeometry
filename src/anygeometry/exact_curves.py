@@ -586,5 +586,6 @@ class CylinderIntersectionCurve:
 
 
 from .quadric_curves import QuadricIntersectionCurve  # noqa: E402 (needs the definitions above only in spirit)
+from .branch_curves import BezierQuadricCurve  # noqa: E402
 
-EXACT_CURVES = (EllipticArc, CylinderIntersectionCurve, QuadricIntersectionCurve)
+EXACT_CURVES = (EllipticArc, CylinderIntersectionCurve, QuadricIntersectionCurve, BezierQuadricCurve)

@@ -229,3 +229,17 @@ def test_the_face_bounds_cover_the_whole_support_patch():
     lower, upper = surface.bounds()
     box = model._entity_bounds(("face", face))
     assert np.all(np.asarray(box[:3]) <= lower + 1e-12) and np.all(np.asarray(box[3:]) >= upper - 1e-12)
+
+
+@pytest.mark.parametrize("controls", [((0., 0., 0.), (1., 2., 0.), (2., 0., 0.)),
+                                      ((0., 0., 0.), (1., 2., 0.), (2., -1., 0.), (3., 1., 0.)),
+                                      ((0., 0., 0.), (1., 2., 0.), (2., -1., 0.), (3., 2., 0.), (4., 0., 0.), (5., 1., 0.))])
+def test_a_single_inversion_is_the_batch_inversion_without_the_per_step_numpy_calls(controls):
+    directrix = BezierDirectrix(controls)
+    rng = np.random.default_rng(len(controls))
+    on = directrix.point(rng.uniform(0., 1., 40))
+    off = on + rng.normal(scale=.3, size=on.shape) * np.array([1., 1., 0.])
+    points = np.vstack((on, off, directrix.point(np.array([0., 1.]))))
+    batch = directrix.invert(points)
+    for point, expected in zip(points, batch):
+        assert directrix.invert_one(point) == pytest.approx(expected, abs=1e-13)

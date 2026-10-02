@@ -14,6 +14,7 @@ import numpy as np
 from .arrangement_geometry import (LinePath, BezierPath, curve_junctions,
                                    plane_roots, point_parameters, freeze_edge)
 from .exact_curves import EllipticArc, CylinderIntersectionCurve
+from .branch_curves import BezierQuadricCurve
 from .quadric_curves import QuadricIntersectionCurve
 from .errors import GeometryError
 from .extruded_chart import area_density, chart_accelerations, chart_rates, density_bound, world_metric
@@ -494,7 +495,7 @@ def _second_derivative_raw(curve, parameter):
         controls = np.asarray(curve.controls)
         return (np.zeros(3) if len(controls) <= 2 else BezierPath(tuple(map(tuple,
             (len(controls)-1)*(len(controls)-2)*np.diff(controls, n=2, axis=0)))).evaluate(parameter))
-    if isinstance(curve, (CylinderIntersectionCurve, QuadricIntersectionCurve)):
+    if isinstance(curve, (CylinderIntersectionCurve, QuadricIntersectionCurve, BezierQuadricCurve)):
         return curve.second_derivative(parameter)
     return None
 
@@ -667,8 +668,8 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
                 # predicate returning both interval endpoints, not midpoints.
                 hits = curve_junctions(curve, old, tolerance=tolerance,cancellation_check=lambda:(check() or False))
                 if any(abs(x) <= 1e-12 for x, _ in hits) and any(abs(x-1) <= 1e-12 for x, _ in hits):
-                    if isinstance(curve,(CylinderIntersectionCurve,QuadricIntersectionCurve)) or isinstance(
-                            old,(CylinderIntersectionCurve,QuadricIntersectionCurve)):
+                    if isinstance(curve,(CylinderIntersectionCurve,QuadricIntersectionCurve,BezierQuadricCurve)) or isinstance(
+                            old,(CylinderIntersectionCurve,QuadricIntersectionCurve,BezierQuadricCurve)):
                         from .batch_intersections import _coincident
                         if _coincident(curve,old,tolerance):
                             duplicate=index; break

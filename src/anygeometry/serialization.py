@@ -17,6 +17,8 @@ import numpy as np
 from .curves import Arc, Spline, Straight
 from .exact_curves import EllipticArc, CylinderIntersectionCurve
 from .quadric_algebra import EllipticRuledSupport, QuadricSupport, RuledSupport
+from .branch_algebra import BezierRuledSupport
+from .branch_curves import BezierQuadricCurve
 from .quadric_curves import QuadricIntersectionCurve
 from .entities import Edge, EntityRef, Face, OrientedEdge, Vertex
 from .errors import GeometryError
@@ -639,13 +641,15 @@ def _serialized_model_state(
                         ("start_angle", "sweep_angle", "branch", "parameterization", "transform")}}
         elif isinstance(edge.curve, QuadricIntersectionCurve):
             curve = _quadric_curve_record(edge.curve)
+        elif isinstance(edge.curve, BezierQuadricCurve):
+            curve = _bezier_quadric_curve_record(edge.curve)
         else:  # pragma: no cover - closed public union
             raise GeometryError(f"unsupported curve type {type(edge.curve).__name__}")
         curves.append({"id": edge.id, "start": edge.start, "end": edge.end, "curve": curve})
     id_state = geometry.id_state()
     id_state.update(geometry._next_structural_id)  # noqa: SLF001
     needs_quadric = (
-        any(isinstance(edge.curve, QuadricIntersectionCurve) for edge in geometry.edges.values())
+        any(isinstance(edge.curve, (QuadricIntersectionCurve, BezierQuadricCurve)) for edge in geometry.edges.values())
         or any(isinstance(surface, ExtrudedSurface) for face in geometry.faces.values()
                for surface in (face.surface, face.parameterization))
     )
@@ -1390,23 +1394,59 @@ def _quadric_curve_record(curve):
     else:
         first_record = {"kind": "cone" if first.is_cone else "cylinder", "origin": first.origin, "axis": first.axis,
                         "radial_direction": first.radial_direction, "radius": first.radius, "slope": first.slope}
-    second_record = {"kind": second.kind, "origin": second.origin, "axis": second.axis, "radius": second.radius,
-                     "slope": second.slope, "matrix": second.matrix, "linear": second.linear,
-                     "constant": second.constant}
-    if second.kind in ("elliptic", "parabolic"):
-        second_record.update(u_vector=second.u_vector, v_vector=second.v_vector)
     return {"type": "quadric_intersection",
             "first": first_record,
-            "second": second_record,
+            "second": _quadric_support_record(second),
             **{name: getattr(curve, name) for name in
                ("start_angle", "sweep_angle", "branch", "parameterization", "transform")}}
+
+
+def _quadric_support_record(second):
+    record = {"kind": second.kind, "origin": second.origin, "axis": second.axis, "radius": second.radius,
+              "slope": second.slope, "matrix": second.matrix, "linear": second.linear,
+              "constant": second.constant}
+    if second.kind in ("elliptic", "parabolic"):
+        record.update(u_vector=second.u_vector, v_vector=second.v_vector)
+    return record
+
+
+def _decode_quadric_support(second):
+    _exact_fields(second, required=_ELLIPTIC_QUADRIC_FIELDS if second.get("kind") in ("elliptic", "parabolic")
+                  else _QUADRIC_FIELDS, name="quadric second support")
+    return QuadricSupport(second["kind"], second["origin"], second["axis"], second["radius"], second["slope"],
+                          tuple(second["matrix"]), tuple(second["linear"]), second["constant"],
+                          tuple(second.get("u_vector", ())), tuple(second.get("v_vector", ())))
+
+
+_BEZIER_CURVE_FIELDS = {"first", "second", "start", "sweep", "branch", "parameterization", "transform"}
+
+
+def _bezier_quadric_curve_record(curve):
+    return {"type": "bezier_quadric_intersection",
+            "first": {"kind": "bezier", "controls": [list(point) for point in curve.first.controls],
+                      "direction": list(curve.first.direction)},
+            "second": _quadric_support_record(curve.second),
+            **{name: getattr(curve, name) for name in ("start", "sweep", "branch", "parameterization", "transform")}}
+
+
+def _decode_bezier_quadric_curve(data):
+    _exact_fields(data, required={"type", *_BEZIER_CURVE_FIELDS}, name="Bezier quadric intersection curve")
+    first, second = _object(data["first"], "Bezier first support"), _object(data["second"], "quadric second support")
+    _exact_fields(first, required={"kind", "controls", "direction"}, name="Bezier first support")
+    if first["kind"] != "bezier":
+        raise GeometryError("Bezier quadric first support must be a Bezier ruled support")
+    controls = first["controls"]
+    if not isinstance(controls, (list, tuple)) or any(not isinstance(point, (list, tuple)) for point in controls):
+        raise GeometryError("Bezier controls must be a list of points")
+    ruled = BezierRuledSupport(tuple(tuple(point) for point in controls), tuple(first["direction"]))
+    return BezierQuadricCurve(ruled, _decode_quadric_support(second), data["start"], data["sweep"], data["branch"],
+                              data["parameterization"], data["transform"])
 
 
 def _decode_quadric_curve(data):
     _exact_fields(data, required={"type", *_QUADRIC_CURVE_FIELDS}, name="quadric intersection curve")
     first, second = _object(data["first"], "quadric first support"), _object(data["second"], "quadric second support")
-    _exact_fields(second, required=_ELLIPTIC_QUADRIC_FIELDS if second.get("kind") in ("elliptic", "parabolic")
-                  else _QUADRIC_FIELDS, name="quadric second support")
+    support = _decode_quadric_support(second)
     if first.get("kind") == "elliptic":
         _exact_fields(first, required={"kind", "origin", "u_vector", "v_vector", "axis"}, name="quadric first support")
         ruled = EllipticRuledSupport(first["origin"], first["u_vector"], first["v_vector"], first["axis"])
@@ -1415,9 +1455,6 @@ def _decode_quadric_curve(data):
         if first["kind"] not in ("cylinder", "cone") or (first["kind"] == "cone") != (float(first["slope"]) != 0.0):
             raise GeometryError("quadric first support kind disagrees with its slope")
         ruled = RuledSupport(first["origin"], first["axis"], first["radial_direction"], first["radius"], first["slope"])
-    support = QuadricSupport(second["kind"], second["origin"], second["axis"], second["radius"], second["slope"],
-                             tuple(second["matrix"]), tuple(second["linear"]), second["constant"],
-                             tuple(second.get("u_vector", ())), tuple(second.get("v_vector", ())))
     return QuadricIntersectionCurve(ruled, support, data["start_angle"], data["sweep_angle"], data["branch"],
                                     data["parameterization"], data["transform"])
 
@@ -1476,6 +1513,10 @@ def _decode_geometry_records(
             if schema_version < _QUADRIC_VERSION:
                 raise GeometryError("quadric intersection curves require schema 6")
             curve = _decode_quadric_curve(curve_data)
+        elif curve_kind == "bezier_quadric_intersection":
+            if schema_version < _QUADRIC_VERSION:
+                raise GeometryError("Bezier quadric intersection curves require schema 6")
+            curve = _decode_bezier_quadric_curve(curve_data)
         elif curve_kind in ("elliptic_arc", "cylinder_intersection"):
             if schema_version < 5:
                 raise GeometryError("analytic intersection curves require schema 5")
