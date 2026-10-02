@@ -155,6 +155,30 @@ both preparations. Evidence: `mixed10-preparation-binding.json`. No meshing retr
 was used for this diagnosis. Next decision: safe owner-certified corner-only
 editing versus consumer ordering; never mint a receipt from an unchecked model.
 
+### Corner-only owner certification
+
+Implemented root-exported `set_prepared_face_corners`: requires a valid complete
+receipt, explicit built-in Plane/Cylinder/Cone/ExtrudedSurface support and no
+separate parameterization; stages all updates, compares the entire certified
+document except allowed corner/revision/checksum fields, then commits and issues
+only a preparation receipt. No stale proof or old application plan is refreshed.
+Sixteen binding/corner tests pass, including all four support types, invalid
+two-face rollback, nested-transaction refusal, parameterization refusal and old
+plan rejection. Read review found no material-proof bypass; it noted change hooks
+see no current receipt until postcommit publication, matching existing batch
+application. This fail-closed observer behavior is documented and tested.
+
+ANYmesher worker continues returning empty turns. Under the user's explicit
+implementation authority, integration is isolated in
+`C:/Github/ANYmesh/.worktrees/prepared-corner-binding`, base f0cde877. Only
+preparation.py and a focused binding regression are owned there. Corner updates
+are collected and sent to the owner operation when eligible; older owner builds
+retain ordinary editing and auditing. Main and unrelated work are untouched.
+Twenty-six mesher preparation tests pass, including the actual mixed fixture,
+proof preservation through attempt cloning and re-auditing a later edited model.
+A new bounded mixed10 meshing check is justified by this specific tested fix;
+the previous timeout and all scientific limits remain retained.
+
 ## Continuation, 2026-10-02
 
 PR12 development run 36989128888: Windows and Linux each passed 1,675 tests

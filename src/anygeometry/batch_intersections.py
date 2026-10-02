@@ -1173,3 +1173,58 @@ def clone_prepared_geometry(model):
             raise GeometryError("prepared geometry changed during detached copying")
         made._intersection_preparation_receipt = receipt
     return made
+
+
+def set_prepared_face_corners(model, updates):
+    """Atomically change corner indices without losing a current material proof.
+
+    Only explicit analytic supports without a separate parameterization qualify:
+    their material is defined by the unchanged support and trim loops, not corner
+    indices. A stale or partial preparation, topology-backed map, nested transaction
+    or any other document change is rejected. This does not refresh application
+    receipts or make old plans applicable after an edit.
+
+    As with batch application, change hooks precede publication of the new
+    receipt. The proof query is fail-closed during hooks and current on return.
+    """
+    if model._transaction_journal is not None:
+        raise GeometryError("prepared corner editing requires no active transaction")
+    if not has_current_intersection_preparation(model):
+        raise GeometryError("prepared corner editing requires a current complete preparation")
+    original = to_dict(model)
+    receipt = model._intersection_preparation_receipt
+    try:
+        requested = {key: tuple(value) for key, value in updates.items()}
+    except (AttributeError, TypeError) as exc:
+        raise GeometryError("prepared corner updates must map face IDs to corner indices") from exc
+    for identifier in requested:
+        if type(identifier) is not int or identifier not in model.faces:
+            raise GeometryError("prepared corner update references an invalid face")
+        face = model.faces[identifier]
+        if any(isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer))
+               for value in requested[identifier]):
+            raise GeometryError("prepared corner indices must be integers")
+        if (type(face.surface) not in (Plane, Cylinder, Cone, ExtrudedSurface)
+                or face.parameterization is not None):
+            raise GeometryError("prepared corner editing requires an explicit corner-independent support")
+    candidate = clone_prepared_geometry(model)
+    with candidate.transaction():
+        for identifier in sorted(requested):
+            candidate.set_face_corners(identifier, requested[identifier])
+    actual = to_dict(candidate)
+    # Compare the entire certified document, not only the edited faces. Even
+    # derived feature/ownership changes must fail this narrow operation closed.
+    expected = dict(original)
+    expected['faces'] = [dict(face, corners=list(candidate.faces[face['id']].corners))
+                         if face['id'] in requested else face for face in original['faces']]
+    expected['revision'], expected['checksum'] = actual['revision'], actual['checksum']
+    if actual != expected:
+        raise GeometryError("prepared corner update changed fields other than corner indices")
+    if to_dict(model) != original:
+        raise GeometryError("geometry changed during prepared corner editing")
+    if actual == original:
+        return
+    model.restore_topology(candidate.topology_snapshot())
+    plan, _revision, _checksum, coverage = receipt
+    model._intersection_preparation_receipt = (
+        plan, model.revision, to_dict(model)['checksum']['value'], coverage)

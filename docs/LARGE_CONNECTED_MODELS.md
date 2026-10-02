@@ -67,3 +67,18 @@ integration evidence and must not be labelled clean installed-package checks.
 
 The living capability record, including retained failures and exact evidence
 locations, is `reports/general_intersections/quadric_generalization_study.md`.
+
+## Certified corner finalization
+
+`set_prepared_face_corners(model, {face_id: corner_indices})` lets a consumer
+finalize mapped corner labels without discarding a valid material-preparation
+proof. It requires a current complete receipt, exact built-in Plane, Cylinder,
+Cone or ExtrudedSurface supports, and no separate parameterization on edited
+faces. The owner stages the complete update and checks document equality except
+for the requested corner fields and revision/checksum. Invalid batches leave the
+model unchanged. Existing transactions and stale proofs are rejected.
+
+It preserves only the preparation proof; old plans remain stale. Ordinary edits
+still invalidate proof. As with batch application, change hooks run before the
+new receipt is published and see a fail-closed query; callers query after return.
+This operation does not admit a mesh or relax mapping and element-quality gates.

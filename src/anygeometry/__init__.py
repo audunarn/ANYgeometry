@@ -7,6 +7,7 @@ from .branch_curves import BezierQuadricCurve
 from .batch_intersections import (
     IntersectionBatchPolicy, IntersectionPlan, IntersectionApplication,
     plan_intersections, apply_intersections, has_current_intersection_preparation, clone_prepared_geometry,
+    set_prepared_face_corners,
 )
 from .trimmed_charts import (
     TrimmedSurfaceChart, TrimmedSurfaceCharts, query_trimmed_surface_charts,
@@ -256,6 +257,7 @@ __all__ = [
     "apply_intersections",
     "has_current_intersection_preparation",
     "clone_prepared_geometry",
+    "set_prepared_face_corners",
     "TrimmedSurfaceChart",
     "TrimmedSurfaceCharts",
     "query_trimmed_surface_charts",
