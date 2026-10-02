@@ -4,6 +4,16 @@ All notable user-visible changes to ANYgeometry are documented here.
 
 ## Unreleased
 
+- Resolve isolated tangent junctions of parallel Bezier walls on a shared
+  quadric through exact projected-directrix elimination. Preserve seam-independent
+  plane/pipe generator contacts and valid parameters at small elliptic-arc ends.
+- Explicitly remap attachments, owning-member references and planned contacts
+  when subsequent cuts split existing joints, including regularized child charts.
+  Direct edge splitting opts in with `remap_attachments=True`; ambiguous mappings
+  still fail atomically. Add portable schema-6 consumer fixtures.
+- Validate Bezier branch fold endpoints and domain bounds; keep inversion caches
+  out of analytic plan binding. Polish globally certified branch projections so
+  exact boundary stations survive trim-aware face projection.
 - Separate automatic development checks from explicitly dispatched full
   platform/installed-consumer qualification; retain every qualification job and
   budget. Add conservative local test selection and per-test CI timings. See

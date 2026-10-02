@@ -1,5 +1,114 @@
 # Making intersections more general: cone against cylinder, and beyond
 
+## Continuation, 2026-10-02
+
+Human-authorised sequence: (1) repair existing planar-wall/cylinder tangency
+failures, (2) resolve exact tangent junctions between wall branches on one pipe,
+(3) explicitly remap attachments when a subsequent operation splits an older
+joint edge. Coordinate consumer contracts with the ANYmesher and ANYfem workers;
+geometry owns classification/topology, consumers own discretisation/application.
+
+Restart source: `462ca593cec9bf36106b7baa72efe2587887625d`, confirmed on local and
+GitHub main (the supplied "not pushed" note is stale). Work is isolated in
+`.worktrees/intersection-continuation`, branch `codex/intersection-continuation`.
+Preserve primary checkout edits and all historical evidence. No package release.
+
+Stage-one question: do tangencies fail through out-of-domain curve parameters,
+duplicate/degenerate traces, or face-loop validation of a legitimate contact?
+Use minimal public-model replays and retained tracebacks to discriminate, then
+fix the responsible owner operation. Required checks: analytic contact locus,
+material conservation, shared source ownership, topology, query non-mutation,
+idempotence and exact rollback. Keep numerical tolerances and quality gates.
+Review the newly delivered Bezier arithmetic independently while investigating;
+the reported 1,584-test run is prior evidence, not new qualification authority.
+
+Coordination: ANYmesher received the consumer implementation brief. ANYfem
+implementation delegation was rejected by automatic approval review citing
+earlier ownership revocation; its read-only gap assessment/handoff was accepted.
+Resolve any required ANYfem implementation authority with its owner/user after
+the concrete gap assessment. No changes to ANYfem are authorised by this note.
+
+Stage-one evidence: the stored-angle endpoint of a small elliptic arc normalized
+to `1.0000000000065512`; preserving endpoint identity before division fixes the
+typed-domain failure without widening tolerance. An exact tangent plate/pipe
+returned no joint at seam rotations pi/8 and 0.2 and failed with a degenerate arc
+at 0.7 on base 462ca593. The geometric tangent identity fixes all four tested seam
+orientations. Focused tangent tests: 23 passed; the first combined tangent,
+analytic support, branch model and public-routing run recorded 57 passed and four
+test-authoring AttributeErrors, corrected in the subsequent 23-test run).
+Logs: `reports/tangent-continuation-{baseline-seams,focused,focused-corrected}.log`
+in the primary checkout. The specifically reported loop-self-intersection replay
+has not yet been reproduced; do not claim that failure independently closed.
+
+Independent Bezier review identified two constructor defects: unregularized
+simple-fold endpoints and domain-roundoff bounds. The bounded repair retains the
+existing 1e-12 domain tolerance by canonicalizing only accepted out-of-domain
+endpoints; linear endpoint jets require an actual double root. Its three focused
+test files passed 119 tests. Fold-offset behavior at scene scale remains a
+separate review question, not an accepted regression or a waived criterion.
+
+Consumer delta: ANYmesher main `847d6603288fb82a68f2b9ee9aec09eba48b551d`
+adds schema-6 extrusion routing and ownership assertions. Its harder fixture
+exposed a geometry boundary-projection upper-bound accuracy issue (direct
+face inversion is accurate to 7.11e-16, trim-aware projection stops near 1e-9).
+A bounded projection repair will retain global enclosure certification and the
+consumer's 1e-10 shared-station threshold. The separate 7-degree cell-quality
+failure remains mesher-owned. ANYfem requested four portable fixtures: fold-ended
+cubic/oblique pipe, elliptic/parabolic pipe, tangent/secant/separated contact, and
+subsequent splitting with vertex/member attachments. Deliver exact candidate
+identity and expected topology/coordinates, not only a version number.
+
+Stage-two decision: for supported parallel Bezier walls cutting one quadric,
+eliminate their projected directrices with exact rational polynomials. Their
+common generators contain every possible branch junction, including repeated
+(tangent) roots. Isolate those roots and qualify candidates against both branch
+charts. This addresses the subdivision ambiguity without increasing its budget.
+Non-parallel cubic-wall models and overlapping supports retain their existing
+typed refusal unless separately certified. Test known polynomial contacts,
+nearby secant/separated cases, reversed charts and common affine images before
+whole-model arrangement checks.
+
+Stage-two implementation and review: both projected directrices are eliminated
+with exact rational coefficients. An independent review found a missing second
+visit on a self-crossing directrix and transformed residuals exceeding the
+requested world tolerance. Both are now regression cases. Symmetric root sets
+are paired using conservative enclosures of their isolated parameter intervals;
+every accepted pair is checked in world coordinates. Ambiguity is a typed refusal.
+`test_branch_wall_events.py` plus `test_branch_events.py`: 37 passed, including
+whole-model material conservation, a shared high-valence tangent vertex, document
+round-trip, insertion-order invariance and repeat apply. Repeat apply also exposed
+the inversion cache in the plan checksum; explicit cache metadata now excludes
+only that non-definition field while all geometric fields remain bound.
+
+Stage-three implementation and review: `split_edge(..., remap_attachments=True)`
+and batch preparation recover child parameters from exact world stations. The
+first draft preserved target-edge relations but missed other references to a
+member owning a regularized edge. Independent review reproduced a 3.22e-4
+displacement; the repair snapshots and rebuilds source/member-target attachment
+ranges and JunctionMemberUse ranges, including the no-target-attachment path.
+Reversed uses and repeated splits are tested. Multiple splits in one batch also
+require mapping planned contact stations to current member coordinates; linear
+fraction arithmetic is insufficient. Failed explicit remaps restore identifiers
+as well as topology and document contents. Source-edge interval attachments and
+ambiguous inverse stations remain explicit refusals.
+
+Current focused evidence: 13 edge/analytic attachment-remap tests passed; 23
+portable-fixture/batch tests passed. Six authored/prepared fixture pairs and their
+manifest are saved in primary `reports/consumer-contract-continuation/`; the
+builder is tracked at `tools/general_intersections/consumer_contract_fixtures.py`.
+The full local kernel run is in progress at this checkpoint, recorded separately
+in primary `reports/intersection-continuation-kernel.log` and `.xml`. This is
+development verification, not new full-platform release qualification.
+
+Delivery stages recorded so far: `cd8b702` (tangency, branch validation, projection,
+plan binding), `24f0150` (exact parallel-wall junctions). Stage-three commit and
+installed-wheel identity will be recorded after the source freeze. Independent
+OpenAI review findings and regressions were resolved. The supplementary Mistral
+tangency review read the code but did not complete: its probe environment lacked
+pytest and denied standalone Python before its turn limit. It is not counted as
+a clean independent review. Earlier Bezier arithmetic review evidence remains
+separate; no old release evidence was overwritten.
+
 Study record, 2026-10-01. Base: `main` 9dbf3e4 (0.4.5) plus the unmerged performance branch
 `claude/perf-hunt-046`. Branch: `claude/quadric-study`. Nothing here changes a released contract,
 and nothing should merge before the testing-regime changes settle.

@@ -5740,7 +5740,7 @@ class GeometryModel:
     # ------------------------------------------------------------------
     @_transactional
     def split_edge(
-        self, edge_id: int, t: float = 0.5
+        self, edge_id: int, t: float = 0.5, *, remap_attachments: bool = False
     ) -> Tuple[int, Tuple[int, int]]:
         """Split a line or arc at parameter ``t``, keeping every face valid.
 
@@ -5748,8 +5748,15 @@ class GeometryModel:
         the original edge have it swapped for the pair in traversal order, and
         their corner indices shift to match, so a side that was one edge simply
         becomes a chain of two.  This is the primitive behind imprinting.
+        ``remap_attachments=True`` explicitly maps retained point/interval
+        relations into the exact child charts, atomically; otherwise attached
+        targets retain the historical refusal.
         """
 
+        if remap_attachments:
+            from .edge_attachment_remapping import split_edge_attachments
+            self._transaction_journal.exact_allocator_rollback = True
+            return split_edge_attachments(self, edge_id, float(t))
         edge = self._require_edge(edge_id)
         old_controls = (
             (edge.curve.via_vertex,)

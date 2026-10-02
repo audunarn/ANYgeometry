@@ -715,6 +715,7 @@ def _apply_intersections_in_place(model, plan, *, policy):
     """Atomically apply a model/revision-bound material arrangement."""
     from .intersections import _merge_vertex
     from .attachment_remapping import capture_face_attachments, remap_face_attachments
+    from .edge_attachment_remapping import split_edge_attachments, _member_parameter
     outer_journal=model._transaction_journal
     def keys():
         return {(kind,identifier) for kind in model._next_id for identifier in model._entity_store(kind)} | {
@@ -743,6 +744,12 @@ def _apply_intersections_in_place(model, plan, *, policy):
             raise GeometryError("intersection application budget exhausted")
     with model.transaction():
         check()
+        contact_ranges = {
+            (member, parameter): next(model.member_edge_uses[use_id].parent_range
+                for use_id in model.members[member].edge_use_ids
+                if model.member_edge_uses[use_id].parent_range.contains(parameter,
+                    tolerance=model.tolerance.parameter))
+            for contact in plan.contacts for member, parameter in contact.member_parameters}
         if policy.intent is ConnectionIntent.CONNECT:
             # Declare physical owners before fragmentation. Creating one
             # owner for each descendant would turn decomposition seams into
@@ -784,7 +791,13 @@ def _apply_intersections_in_place(model, plan, *, policy):
                 unique.append(fraction)
             for fraction in unique:
                 check()
-                _vertex, (_left, right) = model.split_edge(current, (fraction-previous)/(1-previous))
+                # Earlier children can use different regularized charts; invert
+                # the original station on the current exact descendant.
+                current_curve = freeze_edge(model, current)
+                stations = point_parameters(current_curve, original.evaluate(fraction), tolerance=tolerance)
+                if len(stations) != 1:
+                    raise GeometryError("split station has no unique descendant parameter")
+                _vertex, (_left, right) = split_edge_attachments(model, current, stations[0], check)
                 current, previous = right, fraction
 
         edge_curves = {edge_id: freeze_edge(model, edge_id) for edge_id in model.edges}
@@ -936,6 +949,13 @@ def _apply_intersections_in_place(model, plan, *, policy):
                 sources.add(("face", contact.face_id))
             member_contacts.append((contact,vertex(np.asarray(contact.position), sources)))
         _canonicalize_member_edges(model, edge_curves, plan.axes, joint_ids, check)
+        # Contacts in the immutable plan use the original axis coordinates.
+        # Resolve their retained world stations after every split/canonicalization.
+        member_contacts = [(replace(contact, member_parameters=tuple(
+            (member, _member_parameter(model, member, np.asarray(contact.position),
+                contact_ranges[member, parameter], contact.world_tolerance))
+            for member, parameter in contact.member_parameters)), station)
+            for contact, station in member_contacts]
         for contact in plan.face_contacts:
             check()
             tolerance=contact.world_tolerance

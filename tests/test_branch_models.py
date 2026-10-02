@@ -282,8 +282,8 @@ def test_a_second_pipe_through_an_already_cut_wall_works_on_the_stored_child_sup
     assert len(branch_edges(model)) > older
 
 
-def test_a_second_pipe_that_splits_an_earlier_joint_is_refused_by_the_established_attachment_policy():
-    """The same refusal as for every curve family: a joint edge that carries attachments is not split silently."""
+def test_a_second_pipe_splits_an_earlier_joint_with_explicit_attachment_remapping():
+    """Batch preparation remaps declared joint attachments into exact descendants."""
     model, faces = spline_wall()
     faces = add_pipe(model, faces, radius=.5, y=.4, z=.5)
     run(model, faces)
@@ -292,8 +292,11 @@ def test_a_second_pipe_that_splits_an_earlier_joint_is_refused_by_the_establishe
     model.insert_model(cylinder(.25, 8., origin=(-2., .6, 1.1), axis=(1., 0., 0.), radial_direction=(0., 1., 0.),
                                 circumferential_segments=8))
     new = sorted(set(model.faces) - before)
-    with pytest.raises(GeometryError, match="attachments .* explicit parameter remap"):
-        run(model, children + new)
+    area = material_area(model)
+    run(model, children + new)
+    assert model.validate_topology() == ()
+    assert material_area(model) == pytest.approx(area, rel=1e-12)
+    assert to_dict(from_dict(to_dict(model))) == to_dict(model)
 
 
 # ----------------------------------------------------------------------------------------------- editing operations
