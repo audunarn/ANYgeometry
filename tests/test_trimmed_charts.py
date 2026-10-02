@@ -42,6 +42,32 @@ def test_fragmented_material_charts_conserve_analytic_area():
     assert sum(chart.material_area for chart in result.charts)==pytest.approx(20)
 
 
+def test_public_charts_preserve_construction_seams_and_physical_joint_identity():
+    from anygeometry import EntityRef
+    model=GeometryModel()
+    a=model.add_plate(model.add_points(((0,0,0),(4,0,0),(4,4,0),(0,4,0))))
+    b=model.add_plate(model.add_points(((2,1,-1),(2,3,-1),(2,3,1),(2,1,1))))
+    apply_intersections(model,plan_intersections(model,(a,b),policy=ConnectionIntent.CONNECT),
+                        policy=ConnectionIntent.CONNECT)
+    before=to_dict(model)
+    result=query_trimmed_surface_charts(model)
+    paths=[path for chart in result.charts for loop in chart.boundaries for path in loop]
+    expected={edge for edge in model.edges if 'intersection_decomposition_seam'
+              in model.tags_for(EntityRef('edge',edge))}
+    assert expected
+    assert {path.source_edge for path in paths if path.decomposition} == expected
+    assert any(not path.decomposition for path in paths)
+    validate_trimmed_surface_charts_binding(model,result)
+    assert to_dict(model)==before
+    chart=next(chart for chart in result.charts if any(path.decomposition
+               for loop in chart.boundaries for path in loop))
+    loops=tuple(tuple(replace(path,decomposition=False) for path in loop) for loop in chart.boundaries)
+    changed=replace(result,charts=tuple(replace(item,domain=replace(item.domain,boundaries=loops))
+                       if item.face==chart.face else item for item in result.charts))
+    with pytest.raises(GeometryError,match='definition binding changed'):
+        validate_trimmed_surface_charts_binding(model,changed)
+
+
 def test_validated_chart_reuse_still_rejects_changed_evidence_and_direct_edits(monkeypatch):
     from anygeometry.material_arrangement import MaterialDomain
     model=GeometryModel()
