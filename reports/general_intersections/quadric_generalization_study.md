@@ -35,7 +35,7 @@ returned no joint at seam rotations pi/8 and 0.2 and failed with a degenerate ar
 at 0.7 on base 462ca593. The geometric tangent identity fixes all four tested seam
 orientations. Focused tangent tests: 23 passed; the first combined tangent,
 analytic support, branch model and public-routing run recorded 57 passed and four
-test-authoring AttributeErrors, corrected in the subsequent 23-test run).
+test-authoring AttributeErrors, corrected in the subsequent 23-test run.
 Logs: `reports/tangent-continuation-{baseline-seams,focused,focused-corrected}.log`
 in the primary checkout. The specifically reported loop-self-intersection replay
 has not yet been reproduced; do not claim that failure independently closed.
@@ -96,18 +96,46 @@ Current focused evidence: 13 edge/analytic attachment-remap tests passed; 23
 portable-fixture/batch tests passed. Six authored/prepared fixture pairs and their
 manifest are saved in primary `reports/consumer-contract-continuation/`; the
 builder is tracked at `tools/general_intersections/consumer_contract_fixtures.py`.
-The full local kernel run is in progress at this checkpoint, recorded separately
-in primary `reports/intersection-continuation-kernel.log` and `.xml`. This is
-development verification, not new full-platform release qualification.
+The full local kernel run passed **1,676 tests, no failures/errors/skips**, in
+407.77 seconds. A fresh Windows/Python 3.13 environment outside all checkouts
+passed all six portable fixtures; all 75 installed package files matched the
+candidate wheel byte-for-byte. The first install failed because the user process
+could not read the sandbox-owned wheel; copying the identical wheel to the
+temporary environment resolved access. Both failed attempts remain recorded.
+Final documents were exported again using that installed wheel at primary
+`reports/consumer-contract-9630844/`. This is development verification, not new
+full-platform release qualification.
 
-Delivery stages recorded so far: `cd8b702` (tangency, branch validation, projection,
-plan binding), `24f0150` (exact parallel-wall junctions). Stage-three commit and
-installed-wheel identity will be recorded after the source freeze. Independent
+Delivery stages: `cd8b702` (tangency, branch validation, projection, plan binding),
+`24f0150` (exact parallel-wall junctions),
+`96308444054a7b002e2897cd3bbf46cf78021338` (attachment remapping and fixtures).
+PR: https://github.com/audunarn/ANYgeometry/pull/12.
+Candidate wheel SHA256:
+`0dcc5c2585abf1e2e26b5844f4c440af7b0ed746fdcc155478424e1586f4846c`.
+The development version is still 0.4.5; this wheel does not replace released
+artifacts. Exact test identities and evidence hashes are recorded in
+`intersection_continuation_evidence.md` beside this note (with the raw JSON
+retained in the primary reports directory). Independent
 OpenAI review findings and regressions were resolved. The supplementary Mistral
 tangency review read the code but did not complete: its probe environment lacked
 pytest and denied standalone Python before its turn limit. It is not counted as
 a clean independent review. Earlier Bezier arithmetic review evidence remains
 separate; no old release evidence was overwritten.
+
+Consumer closure so far: ANYmesher `847d6603288fb82a68f2b9ee9aec09eba48b551d`
+passed 26 focused tests against this exact wheel. Its former eight-sided child
+projection failure is closed: 110 nodes, 19 Q8 and 4 T6 at h=0.75, with certified
+positive mappings. The distinct 11-sided child's 7-degree corner remains
+unaccepted under the existing 15-degree rule and is with the mesher owner.
+Its bounded diagnosis found no authored acute corner (minimum source tangent
+angle 119.22 degrees): a 0.049578 m side at h=0.75 caused excessive mapped seed
+propagation. The automatic fallback returns a mesh but lacks strict high-order
+certification, so remains unaccepted. A bounded mesher correction is authorised.
+ANYfem received the read-only handoff; persistence, viewport and project-reference
+acceptance there remain pending; explicit user authorization was requested for
+that separate worker's validation/fixes after the earlier automatic approval
+rejection. No consumer package release or GUI default
+change is authorised by this continuation.
 
 Study record, 2026-10-01. Base: `main` 9dbf3e4 (0.4.5) plus the unmerged performance branch
 `claude/perf-hunt-046`. Branch: `claude/quadric-study`. Nothing here changes a released contract,
