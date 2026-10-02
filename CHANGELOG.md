@@ -57,10 +57,15 @@ All notable user-visible changes to ANYgeometry are documented here.
   coincidence. A Bezier extrusion of degree three or more against a cylinder,
   a cone or an extrusion of another direction, and two quadratic extrusions of
   different directions, are refused with a typed error. Children of a split keep their exact
-  support. `query_intersection`, `plan_imprint` and `apply_imprint` keep every
-  established classification and the established boundary-curve CONNECT
-  partition (including its explicit refusals); the exact engine classifies
-  pairs the established query leaves unclassified. Schema 6 is now also
+  support, and so does a face whose boundary edge a contact splits. `query_intersection`
+  classifies a pair that includes an extrusion with the exact engine first (one exact curve
+  where the certified subdivision returned many sampled pieces) and falls back to the
+  established query only where the exact engine refuses; a convex support that
+  strictly contains a wall's edge keeps its established CONTAINED result and quadratic
+  CONNECT partition. **A wall edge in a non-convex or trimmed support, formerly an explicit
+  `UNCLASSIFIED` refusal, is now classified exactly** (the pinned fail-closed test of
+  `tests/test_boundary_curve_connect.py` was replaced by checks of the exact curve, the
+  planned imprint, topology and material conservation). Schema 6 is now also
   written for a document that stores an `ExtrudedSurface`. See
   [extruded surfaces](docs/EXTRUDED_SURFACES.md).
 - Faster exact root isolation without changing any isolated interval: Sturm

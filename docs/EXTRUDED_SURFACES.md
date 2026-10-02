@@ -69,19 +69,23 @@ error of its normal separates it from the surface altogether).
 
 ## Faces in the public workflow
 
-`query_intersection`, `plan_imprint` and `apply_imprint` keep their established behaviour wherever it
-classified a pair, so a wall made by `extrude()` imprints exactly as it did before this work:
+`query_intersection` classifies a pair that includes a stored or recovered extrusion with the exact material
+engine: one exact curve where the certified subdivision returned many sampled pieces (a plate across a spline
+wall used to give about ten). `plan_imprint` and `apply_imprint` then plan and apply it through the batch engine.
 
-* the complete-boundary-curve CONNECT partition (a spline wall standing on a convex plate) stays on its
-  established planning, and its explicit refusal for a non-convex or trim-touching support stands whenever
-  an edge of the wall lies in the support's plane;
-* a pair the established certified engine classifies keeps that classification and its imprint planning;
-* a pair it leaves unclassified goes to the exact engine, and imprint planning uses the batch engine for a
-  recovered wall only when the exact engine classified the pair itself.
+* **Kept as it was:** the complete-boundary-curve CONNECT. A convex support that strictly contains a wall's
+  edge keeps its established `CONTAINED` result and its quadratic partition (the pinned public contract).
+* **Exact where it used to refuse:** a wall edge lying in a non-convex support, a trimmed support or leaving
+  the trim used to be an explicit `UNCLASSIFIED` refusal; the exact engine now classifies it (the part of the
+  curve inside the support) and the imprint is planned and applied with exact material conservation.
+* **Fallback:** a pair the exact engine cannot classify (for example two cubic walls of different
+  directions) goes to the established certified query, and to its refusal where that refuses too.
 
 `plan_intersections` / `apply_intersections` / `query_trimmed_surface_charts` use the exact engine directly.
 A child of a split keeps its exact support with rebased ranges, so a horizontal cut of a spline wall leaves
-two exact patches of one surface.
+two exact patches of one surface. A recovered extrusion whose boundary edge is only split by a contact (no
+cut through the face) is no longer four edges, so apply stores its exact support on the face instead; its
+attachments are remapped by position exactly as for the children of a split.
 
 ## Documents
 
