@@ -22,8 +22,10 @@ from .definition_binding import definition_checksum
 
 # Reuse completed qualification only while both immutable evidence and the
 # complete live document retain their content bindings. The cache is external
-# to model state, and holds only the most recently validated collection per
-# live model. Changed results and direct document edits require full validation.
+# to model state. Retain a bounded set of recent collections so alternating
+# component/face queries reuse qualification. This bounds cache memory only;
+# evicted collections are fully validated, never refused. Changed evidence and
+# direct document edits still require full validation.
 _validated_collections = WeakKeyDictionary()
 
 
@@ -135,7 +137,7 @@ def validate_trimmed_surface_charts_binding(model, result, *, expected_revision=
     if result.source_checksum != _serialized_model_state(model)["checksum"]["value"]:
         raise GeometryError("trimmed chart source binding changed")
     signature=(result.source_checksum,definition_checksum(result))
-    if _validated_collections.get(model)==signature:
+    if signature in _validated_collections.get(model,()):
         return
     # A changed evidence collection must receive full source qualification.
     to_dict(model)
@@ -167,7 +169,9 @@ def validate_trimmed_surface_charts_binding(model, result, *, expected_revision=
     _check(cancellation_check,"trimmed surface chart validation complete")
     if model.revision != result.revision or _serialized_model_state(model)["checksum"]["value"] != result.source_checksum:
         raise GeometryError("trimmed chart source binding changed during validation")
-    _validated_collections[model]=signature
+    previous=tuple(item for item in _validated_collections.get(model,())
+                   if item[0]==result.source_checksum and item!=signature)
+    _validated_collections[model]=(*previous[-7:],signature)
 
 
 def _rows(parameters):

@@ -552,3 +552,63 @@ Each remaining script takes the directory containing its siblings as its first a
 `qb_*.py` scripts are in `95ea5c1`. Full suite on this
 branch: 10 failures, all in the git-environment release-authority tests that also fail on `main`
 (16 on the earlier run; the set varies with the environment), no new failures.
+
+### Merge and next diagnostic, 2026-10-02
+
+User authorized merge and continuation. PR12 now reviews 830220b; mesher PR10
+reviews 3c6677a (runtime 7e2fded, CI pins geometry 830220b and adds its focused
+regression). Merge only after applicable existing development checks pass.
+No full-stage or mixed-mesh acceptance is implied.
+
+Next question: does mixed preprocessing spend its time in owner chart
+qualification/serialization, or consumer discretization before the deadline is
+observed? Run one new 20-second instrumented diagnostic with cProfile and a
+90-second external ceiling on the frozen installed 71b394a/7e2fded inputs.
+This is diagnostic only, not renewed 120-second acceptance authority. Retain
+profile and failure. Owner-dominated time leads to a small chart/cache probe;
+consumer-dominated time leads to a bounded owner handoff or focused repair.
+
+Mesher PR10 merged at 8c939066345cc8347f5ddb9feccef7265f9cbc0c and local main
+fast-forwarded with unchanged untracked work. Development smoke run37026541038
+passed (broader owner jobs intentionally skipped by existing development policy);
+raw status/log retained under primary reports/large-connected/mesher-pr10-ci.*.
+No full-platform qualification is inferred.
+
+The new profile20 diagnostic FAILED at its 90-second external limit, during mesh
+stage; preparation took 7.77 seconds under profiling. No final profile was written.
+Preserved mixed10-profile20.json/log and driver; no conclusion about the dominant
+cost is justified. Cancellation latency itself remains a demonstrated problem.
+ANYmesher worker received source-inspection ownership for the cancellation path,
+with no repeat full-mesh authority. Geometry PR12 kernel gates remain pending.
+
+The mesher task returned another empty completion, so no investigation result is
+available. Continue locally with a smaller owner-only diagnostic: prepare mixed10,
+query its cylinder charts, validate the same collection twice, then validate one
+face and the original collection. Measure each call and profile validation only
+under a 60-second external ceiling. This isolates the single-entry chart-cache
+hypothesis without running any mesh or renewing the failed meshing budgets.
+
+Owner-only chart diagnostic completed in about eight seconds. Initial collection
+validation 0.523 s, repeat 0.0156 s, one-face validation 0.102 s, original after
+one-face 0.529 s. This confirms repeated certification from single-entry cache
+eviction, not the full mesh bottleneck. Implemented a separate follow-on change
+retaining eight completed signatures per live model; checksum/evidence matching,
+initial cancellation and full validation before insertion remain unchanged.
+Eviction only repeats validation and never limits supported input counts.
+Five focused chart tests pass, including alternating collections, forged evidence
+rejection twice, direct model edits and cancellation on a cache hit. Candidate
+subsystem measurement: original-after-one 0.0161 s; no full-mesh retry or overall
+speed claim. Read-only independent review requested. This follow-on is NOT in
+the existing PR12 head and will receive its own delivery/checks.
+
+PR12 merged cf2688be58a131ef67dacd07dcd62a6eb508e5d7 after all eight jobs in
+37026355336 passed; Windows and Linux each passed 1,704 kernel tests. Local main
+fast-forwarded, both pre-existing tracked dirty files verified byte-identical
+against premerge backups. Raw CI status/log retained; hashes added to the living
+capability JSON. Mesher merge remains 8c939066345cc8347f5ddb9feccef7265f9cbc0c.
+No package release or broader qualification is inferred.
+
+Independent chart-cache review found no correctness, stale-evidence or
+cancellation regression. Added its suggested eviction and final-cancellation
+regressions: seven chart tests now pass. Follow-on cache change remains separate
+from the merged heads; no mixed-mesh acceptance yet.

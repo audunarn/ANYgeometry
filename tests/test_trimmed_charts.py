@@ -96,3 +96,73 @@ def test_content_fingerprint_cannot_replace_public_topology_qualification():
         validate_trimmed_surface_charts_binding(model,result)
     with pytest.raises(GeometryError,match='invalid topology'):
         to_dict(model)
+
+
+def test_alternating_chart_collections_reuse_only_completed_qualification(monkeypatch):
+    from anygeometry.material_arrangement import MaterialDomain
+    model=GeometryModel()
+    for x in (0.,2.):
+        model.add_plate(model.add_points(((x,0,0),(x+1,0,0),(x+1,1,0),(x,1,0))))
+    both=query_trimmed_surface_charts(model)
+    one=replace(both,charts=both.charts[:1])
+    validate_trimmed_surface_charts_binding(model,both)
+    validate_trimmed_surface_charts_binding(model,one)
+    original=MaterialDomain.original_world_area
+    def unexpected(*args,**kwargs):
+        raise AssertionError('unchanged collection was requalified')
+    monkeypatch.setattr(MaterialDomain,'original_world_area',unexpected)
+    validate_trimmed_surface_charts_binding(model,both)
+    validate_trimmed_surface_charts_binding(model,one)
+    with pytest.raises(GeometryError,match='cancelled'):
+        validate_trimmed_surface_charts_binding(model,both,cancellation_check=lambda _: True)
+    monkeypatch.setattr(MaterialDomain,'original_world_area',original)
+    forged=replace(one,charts=(replace(one.charts[0],material_area=2.),))
+    for _ in range(2):
+        with pytest.raises(GeometryError,match='material area binding changed'):
+            validate_trimmed_surface_charts_binding(model,forged)
+    face=one.charts[0].face.id
+    model._faces[face]=replace(model.faces[face],metadata={'changed':True})
+    for evidence in (one,both):
+        with pytest.raises(GeometryError,match='source binding changed'):
+            validate_trimmed_surface_charts_binding(model,evidence)
+
+
+def test_chart_cache_eviction_requalifies_without_limiting_collections(monkeypatch):
+    from anygeometry.material_arrangement import MaterialDomain
+    model=GeometryModel()
+    for x in range(9):
+        model.add_plate(model.add_points(((2*x,0,0),(2*x+1,0,0),(2*x+1,1,0),(2*x,1,0))))
+    all_charts=query_trimmed_surface_charts(model)
+    collections=[replace(all_charts,charts=(chart,)) for chart in all_charts.charts]
+    calls=[]
+    original=MaterialDomain.original_world_area
+    def measured(*args,**kwargs):
+        calls.append(1)
+        return original(*args,**kwargs)
+    monkeypatch.setattr(MaterialDomain,'original_world_area',measured)
+    for evidence in collections:
+        validate_trimmed_surface_charts_binding(model,evidence)
+    assert len(calls)==9
+    validate_trimmed_surface_charts_binding(model,collections[-1])
+    assert len(calls)==9
+    validate_trimmed_surface_charts_binding(model,collections[0])
+    assert len(calls)==10
+
+
+def test_cancelled_chart_qualification_is_not_cached(monkeypatch):
+    from anygeometry.material_arrangement import MaterialDomain
+    model=GeometryModel()
+    model.add_plate(model.add_points(((0,0,0),(1,0,0),(1,1,0),(0,1,0))))
+    evidence=query_trimmed_surface_charts(model)
+    calls=[]
+    original=MaterialDomain.original_world_area
+    def measured(*args,**kwargs):
+        calls.append(1)
+        return original(*args,**kwargs)
+    monkeypatch.setattr(MaterialDomain,'original_world_area',measured)
+    with pytest.raises(GeometryError,match='cancelled'):
+        validate_trimmed_surface_charts_binding(model,evidence,
+            cancellation_check=lambda phase: phase=='trimmed surface chart validation complete')
+    assert len(calls)==1
+    validate_trimmed_surface_charts_binding(model,evidence)
+    assert len(calls)==2
