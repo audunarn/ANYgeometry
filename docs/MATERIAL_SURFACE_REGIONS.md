@@ -50,6 +50,31 @@ map to the same authored face. Assigning a cross-source cell to a representative
 face is not valid when independently authored preimages differ. Such cases need
 an explicit provenance representation before acceptance.
 
+`query_prepared_face_preimages(model, face_ids=None, expected_revision=None)`
+provides that ancestry proof for a qualified preparation started from a known,
+unfragmented authored snapshot. `PreparedFacePreimages` binds authored model ID,
+revision, checksum and face IDs to the current model identity, checksum, complete
+face coverage and immutable `source_to_current_faces` mapping. Authored IDs may
+be retired; they are not live face handles. Validate external bindings with
+`validate_prepared_face_preimages_binding` before use.
+
+Only explicit owner application replacement deltas compose the mapping.
+Idempotent application, `clone_prepared_geometry` and qualified corner edits
+preserve its original anchor. Arbitrary edits, ordinary clones, loading a
+fragmented document and unknown prior fragmentation cannot renew ancestry.
+An application inside a caller's active transaction does not establish this
+receipt; later reclassification cannot recover a lost authored anchor. The
+query fails closed in these cases and during transaction/change hooks. The
+classification receipt retains its existing meaning independently of ancestry.
+No document schema or serialized lineage changes are introduced.
+
+A consumer of an already prepared model must agree on the returned reference
+namespace separately: ancestry used to admit one authored region does not by
+itself authorize changing input-face IDs in mesh associations. Physical edge
+stations and retained vertices must occur in active connectivity. The initial
+mesher route refuses region source attachments until their consumer semantics
+are qualified; quadratic region meshing is still outside this initial route.
+
 Development evidence is recorded in
 `reports/general_intersections/quadric_generalization_study.md`. Geometry region
 qualification alone is not accepted meshing. The large mixed-model linear and

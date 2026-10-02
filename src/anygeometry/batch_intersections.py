@@ -1123,8 +1123,13 @@ def _apply_intersections(model, plan, *, policy):
                                            outcome.joint_edges,True)
         model._transaction_journal.exact_allocator_rollback=True
         return _apply_intersections_in_place(model,plan,policy=effective)
+    from .prepared_face_preimages import (_capture_application_preimages,
+        _compose_application_preimages, _publish_application_preimages)
+    authored_preimages = _capture_application_preimages(model, allow_seed=effective.face_connections)
     candidate = model.clone(preserve_identity=True)
     outcome = _apply_intersections_in_place(candidate, plan, policy=policy)
+    authored_preimages = _compose_application_preimages(candidate, authored_preimages,
+                                                       outcome.change_set.replacements)
     if effective.intent is ConnectionIntent.REUSE_EXISTING and candidate.revision != plan.revision:
         raise GeometryError("REUSE_EXISTING requires compatible existing topology")
     if effective.cancellation_check is not None and effective.cancellation_check():
@@ -1151,6 +1156,8 @@ def _apply_intersections(model, plan, *, policy):
             checksum, tuple(edge.id for edge in result.joint_edges))
     model._intersection_preparation_receipt = (plan, model.revision, checksum,
         tuple(sorted(model.faces)) if complete_material else ())
+    _publish_application_preimages(model, authored_preimages,
+                                  model._intersection_preparation_receipt[3], checksum)
     return result
 
 
@@ -1198,6 +1205,8 @@ def clone_prepared_geometry(model):
                 or to_dict(made)["checksum"]["value"] != checksum):
             raise GeometryError("prepared geometry changed during detached copying")
         made._intersection_preparation_receipt = receipt
+        from .prepared_face_preimages import _copy_current_preimages
+        _copy_current_preimages(model, made)
     return made
 
 
@@ -1219,6 +1228,11 @@ def set_prepared_face_corners(model, updates):
         raise GeometryError("prepared corner editing requires a current complete preparation")
     original = to_dict(model)
     receipt = model._intersection_preparation_receipt
+    from .prepared_face_preimages import _current_receipt, _publish_application_preimages
+    try:
+        authored_preimages = _current_receipt(model)
+    except GeometryError:
+        authored_preimages = None
     try:
         requested = {key: tuple(value) for key, value in updates.items()}
     except (AttributeError, TypeError) as exc:
@@ -1254,3 +1268,5 @@ def set_prepared_face_corners(model, updates):
     plan, _revision, _checksum, coverage = receipt
     model._intersection_preparation_receipt = (
         plan, model.revision, to_dict(model)['checksum']['value'], coverage)
+    _publish_application_preimages(model, authored_preimages, coverage,
+                                  model._intersection_preparation_receipt[2])

@@ -14,6 +14,10 @@ from .trimmed_charts import (
     validate_trimmed_surface_charts_binding, evaluate_trimmed_surface_chart,
 )
 from .joint_edges import JointEdge, query_joint_edge
+from .prepared_face_preimages import (
+    PreparedFacePreimages, query_prepared_face_preimages,
+    validate_prepared_face_preimages_binding,
+)
 from .material_regions import (
     MaterialSurfaceRegion, MaterialSurfaceRegions, query_material_surface_regions,
     validate_material_surface_regions_binding, evaluate_material_surface_region,
@@ -260,6 +264,9 @@ __all__ = [
     "plan_intersections",
     "apply_intersections",
     "has_current_intersection_preparation",
+    "PreparedFacePreimages",
+    "query_prepared_face_preimages",
+    "validate_prepared_face_preimages_binding",
     "clone_prepared_geometry",
     "set_prepared_face_corners",
     "TrimmedSurfaceChart",
