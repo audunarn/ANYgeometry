@@ -14,6 +14,10 @@ from .trimmed_charts import (
     validate_trimmed_surface_charts_binding, evaluate_trimmed_surface_chart,
 )
 from .joint_edges import JointEdge, query_joint_edge
+from .material_regions import (
+    MaterialSurfaceRegion, MaterialSurfaceRegions, query_material_surface_regions,
+    validate_material_surface_regions_binding, evaluate_material_surface_region,
+)
 from .coordinates import (
     model_to_world_points, world_to_model_points,
     model_to_world_vectors, world_to_model_vectors,
@@ -263,6 +267,11 @@ __all__ = [
     "query_trimmed_surface_charts",
     "validate_trimmed_surface_charts_binding",
     "evaluate_trimmed_surface_chart",
+    "MaterialSurfaceRegion",
+    "MaterialSurfaceRegions",
+    "query_material_surface_regions",
+    "validate_material_surface_regions_binding",
+    "evaluate_material_surface_region",
     "JointEdge",
     "query_joint_edge",
     "CylinderIntersectionCurve",
