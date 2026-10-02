@@ -179,6 +179,50 @@ proof preservation through attempt cloning and re-auditing a later edited model.
 A new bounded mixed10 meshing check is justified by this specific tested fix;
 the previous timeout and all scientific limits remain retained.
 
+### Coordinated corner-binding inputs and remaining blocker
+
+Geometry `71b394a40a78f3a9d836bb18195e495bd58265be`; development wheel SHA256
+`d023349d879a7dd8fe3118d7edcc378f861300533fc350bf69040f54f6cb1225`.
+Mesher `7e2fded699d055b59ebe5b02d52e6e23255aa556`; Windows CPython 3.13 wheel SHA256
+`0a956a0684594f40807d03ccac2c564bdbe2b012d1b032a8fd48ccdc108e1654`.
+The fresh outside-checkout environment `anygeometry-large-71b394a` passes all
+29 copied geometry/binding tests. Both import paths, both pip artifact hashes
+and the loaded compiled mesher extension are retained in installed-71b394a-identity.json.
+The earlier 1,697-test full run binds runtime 364a9f9; do not relabel it a full
+run of the added corner API. New API/consumer-focused checks are separate.
+
+The substantive binding fix moves the mixed10 failure past overlap auditing:
+the Python backend now exhausts 120 seconds in native surface preprocessing.
+Inspection of ANYfem confirms its automatic default uses `native_backend='auto'`;
+the probe's previous forced Python configuration was not that default. Added an
+explicit backend selector, default auto. A fresh installed probe with the compiled
+extension available and auto selected also exhausts the unchanged 120-second
+budget during native surface preprocessing. Preserve both reports/logs. Neither
+is accepted meshing, and no larger mixed mesh or renewed short-joint quadratic
+probe is justified before a further bounded owner repair.
+
+The remaining work is mixed-surface discretization/performance, mixed quadratic
+admission (including the previously blocked short joint), final platform/consumer
+qualification and Git delivery through review. No full-stage completion, release,
+main merge or changed numerical/quality budget is claimed. Existing full-scale
+geometry results remain valid for unchanged preparation/arrangement functions;
+the new corner API adds a separate finalization path. The current planar consumer
+checks use the exact coordinated wheels and the corrected complete-joint oracle.
+
+Final coordinated installed checks, auto backend: strip1000 linear PASSES all
+999 intended joints (4,503 nodes / 3,000 Q4 / 500 beams; prepare 12.55 s, mesh
+3.77 s); hub100 linear PASSES all 100 intended joints (15,704 nodes / 15,351 Q4 /
+2,550 beams; prepare 46.34 s, mesh 51.26 s); strip10 quadratic PASSES all nine
+intended joints (117 nodes / 28 Q8 / six beams). These are individual development
+measurements, not comparative performance claims. Evidence SHA256s and remaining
+work are indexed in `large_connected_capability.json` alongside this record.
+
+Restart: geometry branch `codex/large-connected-models` in intersection-continuation;
+mesher branch `codex/prepared-corner-binding` in its isolated worktree. Neither
+main was changed or pushed. Geometry main remains 462ca593; mesher main f0cde877.
+The next work must diagnose/fix mixed surface preprocessing, not re-run consumed
+120-second probes unchanged. No owned checks remain running after this checkpoint.
+
 ## Continuation, 2026-10-02
 
 PR12 development run 36989128888: Windows and Linux each passed 1,675 tests

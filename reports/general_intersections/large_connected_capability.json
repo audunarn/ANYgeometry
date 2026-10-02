@@ -1,0 +1,152 @@
+{
+  "status": "incomplete",
+  "geometry_runtime_commit": "71b394a40a78f3a9d836bb18195e495bd58265be",
+  "geometry_wheel_sha256": "d023349d879a7dd8fe3118d7edcc378f861300533fc350bf69040f54f6cb1225",
+  "mesher_commit": "7e2fded699d055b59ebe5b02d52e6e23255aa556",
+  "mesher_wheel_sha256": "0a956a0684594f40807d03ccac2c564bdbe2b012d1b032a8fd48ccdc108e1654",
+  "tested_installed_platform": "Windows / CPython 3.13.9 / NumPy 2.5.3 / Shapely 2.1.2",
+  "evidence_scope": "Development. Full kernel1697 binds364a9f9; added corner API has16 focused source tests,29 installed checks; mesher integration26 focused source tests. Large mixed geometry evidence precedes the additive corner API; unchanged arrangement functions are reused by impact analysis. Final consumer reports use the coordinated wheels. No release/platform-matrix acceptance.",
+  "passed": [
+    {
+      "path": "C:\\Github\\ANYgeometry\\reports\\large-connected\\mixed1000-exact-operands.json",
+      "sha256": "31deb230835c1df398fd5661c461da79ae0a7412c22669feed7737dd151c4d70",
+      "status": "passed",
+      "stages": {
+        "build": 19.302047799981665,
+        "plan": 120.90069819998462,
+        "apply": 66.25910859997384,
+        "charts": 228.088458000042,
+        "verify": 4.984604199999012
+      },
+      "authored_faces": 1000,
+      "authored_members": 0,
+      "operands": 1000,
+      "faces": 5746,
+      "edges": 14292,
+      "vertices": 12236,
+      "members": 0,
+      "peak_working_set_bytes": 411590656
+    },
+    {
+      "path": "C:\\Github\\ANYgeometry\\reports\\large-connected\\final-strip1000-linear.json",
+      "sha256": "e5beacf8a6321f3d32fa82cc1718ac8dda54ee5cdf18478f51a651c1ae7446fd",
+      "status": "passed",
+      "stages": {
+        "build": 0.3687074999907054,
+        "prepare": 12.549632299982477,
+        "mesh": 3.772240999969654
+      },
+      "nodes": 4503,
+      "quads": 3000,
+      "tris": 0,
+      "beams": 500,
+      "intended_joints_checked": 999
+    },
+    {
+      "path": "C:\\Github\\ANYgeometry\\reports\\large-connected\\final-hub100-linear.json",
+      "sha256": "1731ca5972bf224c481a3cd69561a1c966448ee4befb1251dfd7512cabf89ad0",
+      "status": "passed",
+      "stages": {
+        "build": 0.0317458999925293,
+        "prepare": 46.34350409999024,
+        "mesh": 51.25558789999923
+      },
+      "nodes": 15704,
+      "quads": 15351,
+      "tris": 0,
+      "beams": 2550,
+      "intended_joints_checked": 100
+    },
+    {
+      "path": "C:\\Github\\ANYgeometry\\reports\\large-connected\\final-strip10-quadratic.json",
+      "sha256": "05ecd6826593ad06dfd72afc3b6463f0e55555722888a948a14b243125bcfec1",
+      "status": "passed",
+      "stages": {
+        "build": 0.0046496999566443264,
+        "prepare": 0.11764220002805814,
+        "mesh": 0.038675200019497424
+      },
+      "nodes": 117,
+      "quads": 28,
+      "tris": 0,
+      "beams": 6,
+      "intended_joints_checked": 9
+    }
+  ],
+  "preserved_failures": [
+    {
+      "path": "C:\\Github\\ANYgeometry\\reports\\large-connected\\mixed1000-first.json",
+      "sha256": "b0ffba9a23acf56f41d968772b4b0d236402819bb93369a8726bd3468cc2c463",
+      "status": "failed",
+      "stages": {
+        "build": 19.013618899974972
+      },
+      "peak_working_set_bytes": 120074240,
+      "error_type": "GeometryError",
+      "error": "intersection material arrangement face:602: arrangement failed material conservation"
+    },
+    {
+      "path": "C:\\Github\\ANYgeometry\\reports\\large-connected\\mixed1000-local-frame.json",
+      "sha256": "317b484984acbdacbf375873a1e70843391de154c185de82bea52e9912d4c3f9",
+      "status": "failed",
+      "stages": {
+        "build": 19.140254099969752
+      },
+      "peak_working_set_bytes": 121950208,
+      "error_type": "GeometryError",
+      "error": "intersection material arrangement face:692: arrangement failed material conservation"
+    },
+    {
+      "path": "C:\\Github\\ANYgeometry\\reports\\large-connected\\mixed1000-analytic-height.json",
+      "sha256": "7cfdba603ac9d95765b982123b60c54acf3062339614875c1a35fceb322f58eb",
+      "status": "failed",
+      "stages": {
+        "build": 18.815905299969018,
+        "plan": 115.4016734000179,
+        "apply": 69.67431169998599
+      },
+      "peak_working_set_bytes": 340672512,
+      "error_type": "TypeError",
+      "error": "run.<locals>.<lambda>() takes 0 positional arguments but 1 was given"
+    },
+    {
+      "path": "C:\\Github\\ANYgeometry\\reports\\large-connected\\mesher-mixed10-linear.json",
+      "sha256": "62888a98c9dd4b0e63d1fcef5027306bae7c03fc3cc4fdb7c0e2dc170ca05fc4",
+      "status": "failed",
+      "stages": {
+        "build": 0.2267911999952048,
+        "prepare": 4.069468900037464
+      },
+      "error_type": "MeshRecoveryIncomplete",
+      "error": "automatic meshing time budget expired during structural preparation overlap narrow phase"
+    },
+    {
+      "path": "C:\\Github\\ANYgeometry\\reports\\large-connected\\mesher-mixed10-linear-binding-fix.json",
+      "sha256": "ac8a576899dee05261c93f49c0ef6c00098e72dd98963916d41d96ace7d4fe2d",
+      "status": "failed",
+      "stages": {
+        "build": 0.23054259998025373,
+        "prepare": 4.719443000038154
+      },
+      "error_type": "MeshRecoveryIncomplete",
+      "error": "automatic meshing time budget expired during native surface preprocessing"
+    },
+    {
+      "path": "C:\\Github\\ANYgeometry\\reports\\large-connected\\installed-mesher-mixed10-auto-binding.json",
+      "sha256": "94c9b648f4620f63075e96f44fd65f45c30722f791c4d7dcd82ef1b0a059e919",
+      "status": "failed",
+      "stages": {
+        "build": 0.2383401000406593,
+        "prepare": 4.738789100025315
+      },
+      "error_type": "MeshRecoveryIncomplete",
+      "error": "automatic meshing time budget expired during native surface preprocessing"
+    }
+  ],
+  "remaining": [
+    "mixed10 automatic linear exceeds120-second recovery budget during native surface preprocessing",
+    "mixed100 and mixed1000 accepted automatic linear meshing",
+    "representative mixed quadratic, fold endings, repeated cuts and historical short-joint acceptance",
+    "final applicable hosted/platform qualification and normal review delivery"
+  ]
+}

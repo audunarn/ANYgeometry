@@ -22,6 +22,7 @@ def run(args):
         raise RuntimeError('consumer checks require Python without optimization')
     report = {'status': 'running', 'family': args.family, 'count': args.count,
               'order': args.order, 'target_size': args.target_size,
+              'native_backend': args.native_backend,
               'geometry_origin': anygeometry.__file__, 'mesher_origin': anymesher.__file__,
               'python': sys.version, 'platform': platform.platform(), 'stages': {}}
     report['probe_sha256'] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
@@ -49,7 +50,7 @@ def run(args):
             fixture.model, beam_edges=beam_edges))
         prepared_document = to_dict(prepared)
         result = stage('mesh', lambda: generate_automatic_mesh_result(prepared,
-            target_size=args.target_size, strategy='auto', native_backend='python',
+            target_size=args.target_size, strategy='auto', native_backend=args.native_backend,
             order=args.order, qualified_s3=True, structural_preparation=False,
             automation=MeshAutomationOptions(max_seconds=args.max_seconds, allow_inspection=False)))
         report['mesh_result'] = result.to_dict()
@@ -115,6 +116,7 @@ if __name__ == '__main__':
     parser.add_argument('--count', type=int, required=True)
     parser.add_argument('--order', choices=('linear', 'quadratic'), default='linear')
     parser.add_argument('--target-size', type=float, default=.5)
+    parser.add_argument('--native-backend', choices=('auto', 'python', 'native'), default='auto')
     parser.add_argument('--max-seconds', type=float, default=120.)
     parser.add_argument('--report', required=True)
     run(parser.parse_args())
