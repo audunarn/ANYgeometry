@@ -194,6 +194,32 @@ def _synchronize_boundary_events(arrangements, check):
     return tuple(result)
 
 
+def _synchronize_member_events(arrangements, axes, check):
+    """Split member axes at ports introduced while decomposing incident faces."""
+    from .material_arrangement import _parameters
+    by_member = {}
+    values = [set(axis.split_parameters) for axis in axes]
+    for index, axis in enumerate(axes):
+        for member in axis.member_ids:
+            by_member.setdefault(member, []).append(index)
+    for arrangement in arrangements:
+        for path in arrangement.paths:
+            indices = sorted({index for member in path.member_ids
+                              for index in by_member.get(member, ())})
+            if not indices:
+                continue
+            for parameter in (0., 1.):
+                point = path.curve.evaluate(parameter)
+                for index in indices:
+                    check()
+                    axis = axes[index]
+                    values[index].update(point_parameters(
+                        axis.curve, point, tolerance=axis.world_tolerance))
+    return tuple(replace(axis, split_parameters=_parameters(
+        values[index], axis.world_tolerance, axis.curve))
+        for index, axis in enumerate(axes))
+
+
 def _domain_bounds(domain):
     boxes = [path.curve.bounds() for loop in domain.boundaries for path in loop]
     return np.min([box[0] for box in boxes], axis=0), np.max([box[1] for box in boxes], axis=0)
@@ -437,14 +463,15 @@ def _plan_intersections(model, operands, *, policy):
             raise GeometryError("intersection planning cancelled")
         if policy.max_predicates is not None and examined > policy.max_predicates:
             raise GeometryError("intersection planning predicate budget exhausted")
-    lengths = {face_id: float(np.linalg.norm(hi-lo)) for face_id, domain in domains.items()
-               for lo, hi in (_domain_bounds(domain),)}
+    domain_bounds = {face_id: _domain_bounds(domain) for face_id, domain in domains.items()}
+    lengths = {face_id: float(np.linalg.norm(hi-lo))
+               for face_id, (lo, hi) in domain_bounds.items()}
     if policy.face_connections:
         for face_id, corners in boundary_only.items():
             lo1, hi1 = np.min(corners, axis=0), np.max(corners, axis=0)
             for other_id, domain in domains.items():
                 check()
-                lo2, hi2 = _domain_bounds(domain)
+                lo2, hi2 = domain_bounds[other_id]
                 tolerance = model.tolerance.effective_length(max(
                     float(np.linalg.norm(hi1-lo1)), lengths[other_id]))
                 if np.any(hi1 < lo2-tolerance) or np.any(hi2 < lo1-tolerance):
@@ -469,7 +496,7 @@ def _plan_intersections(model, operands, *, policy):
         check()
         first, second = domains[first_id], domains[second_id]
         tolerance = model.tolerance.effective_length(max(lengths[first_id], lengths[second_id]))
-        lo1, hi1 = _domain_bounds(first); lo2, hi2 = _domain_bounds(second)
+        lo1, hi1 = domain_bounds[first_id]; lo2, hi2 = domain_bounds[second_id]
         if np.any(hi1 < lo2-tolerance) or np.any(hi2 < lo1-tolerance):
             continue
         check_pair()
@@ -487,7 +514,7 @@ def _plan_intersections(model, operands, *, policy):
                 points[face_id].append(ArrangementPoint(point))
     axes, contacts = plan_member_arrangements(model, members, domains, traces, points, check,
         include_axis_axis=policy.member_connections, include_axis_face=policy.member_face_connections,
-        check_pair=check_pair)
+        check_pair=check_pair, domain_bounds=domain_bounds)
     arrangements = []
     for face_id, domain in domains.items():
         if not traces[face_id] and not points[face_id]:
@@ -504,6 +531,7 @@ def _plan_intersections(model, operands, *, policy):
     if model.revision != revision or to_dict(model)["checksum"]["value"] != checksum:
         raise GeometryError("geometry changed during intersection planning")
     arrangements=_synchronize_boundary_events(arrangements,check)
+    axes=_synchronize_member_events(arrangements,axes,check)
     plan=IntersectionPlan(model.model_id, revision, checksum, handles, policy,
                           arrangements, axes, contacts,face_contacts=tuple(face_contacts))
     return replace(plan,content_checksum=_plan_content(plan))

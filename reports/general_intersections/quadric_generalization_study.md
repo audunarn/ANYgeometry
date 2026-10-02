@@ -1,5 +1,94 @@
 # Making intersections more general: cone against cylinder, and beyond
 
+## Large connected models, 2026-10-02
+
+User approved 10/100/1,000 authored face/member operands and 100 connections on
+one plate, supported families only. Acceptance includes full-scale automatic
+linear meshes and smaller representative quadratic meshes through ANYmesher.
+Base runtime d05cd3a / documentation f5abffd; earlier failed probes and releases
+remain unchanged. Work is isolated on codex/large-connected-models.
+
+First decision: distinguish pair-enumeration/bounds cost from arrangement/apply
+cost using a connected panel strip with alternating beam and shell stiffeners.
+Each tile contributes two authored operands, exact unit material and analytically
+known boundary/interior joints. Start at 10, then 100; only proceed to 1,000 after
+interpreting stage timings. Separate the dense 100-connection hub from distributed
+growth. Keep small fixtures in ordinary tests and large cases in a bounded runner
+with per-stage results, process peak memory, cancellation and retained failures.
+No numerical tolerances, quality criteria or previous budgets are changed.
+
+First results: strip 10/100/1,000 pass, including 999 analytic joint loci at the
+largest size. Profiled 1,000 planning: 53.04 s before versus 25.01 s after per-call
+face-bound caching; topology counts match. These are single development profiles,
+not a controlled speed benchmark. Repeated bounds dominated the original scan;
+after caching, arrangement is the largest component, so defer sweep-and-prune
+until evidence warrants its budget/cancellation complexity. Existing batch and
+performance-equivalence tests: 32 passed. New small contract tests: four passed.
+
+The 100-connection hub passes 2,500 canonical host/shell/member crossing vertices
+and produces 2,651 material faces. Mixed connected bays include floor plates,
+cubic/parabolic walls and eight-panel cylinders/cones. Mixed 100 passes in about
+44 seconds across measured build/plan/apply/chart/verification stages. Proceed
+once to the new mixed-1,000 fixture with an 840-second cancellation deadline and
+900-second owned-process ceiling; this is new development execution, not reuse
+of any historical scientific budget. Export only a fully verified result. Final
+mesh acceptance remains ANYmesher-owned and unconfirmed; its last task turns
+returned empty completions, so no worker acceptance can be inferred.
+
+Mixed-1,000 first run FAILED during planning: face 602 (cubic wall in bay 60,
+world X about 600) failed material conservation. No deadline exhaustion or
+accepted partial output. Preserve mixed1000-first.json/log. Next discriminating
+probe: same isolated bay translated to X=600 versus origin, separating coordinate
+conditioning from neighbor interactions. Fix only the demonstrated owner defect;
+do not widen the conservation tolerance or rerun the large case before a focused
+regression passes. Review also found the mixed fixture needed explicit required
+wall/quadric incidence, not just connectivity through floor: that check was added.
+Python optimization is now rejected so asserts cannot silently disable acceptance.
+The external 900-second ceiling bounds the full large run, including serialization.
+
+### Focused repairs and consumer development evidence
+
+Translating extrusion area integration to its profile frame fixed bay 60, but the
+next bounded mixed-1,000 run failed at bay 69 (face 692). Both failures are retained
+in `reports/large-connected/mixed1000-{first,local-frame}.json` in the primary
+checkout. The second fix integrates exactly constant-height polynomial boundaries
+by their Green antiderivative. Exact rational control-height equality certifies
+this shortcut; tolerances are unchanged. Centered Bezier subdivision preserves
+constant coordinates and explicitly inherits its original outer endpoints.
+Read review identified the mixed-magnitude endpoint issue; a regression now covers it.
+
+The concave plate fixture exposed a separate real topology defect: a decomposition
+port at y=5 split a face boundary but not its coincident member axis. Planning now
+propagates member-labelled arrangement endpoints to every corresponding axis using
+the existing exact parameter query and counted cancellation checks. The formerly
+missing y=2..6 connection passes, as do point attachments at y=4.5 and y=5.
+The fixture uses explicit circular trim arcs: the first `punch_hole` construction
+failed projection on the concave host; that separate authoring limitation is retained
+in `large-connected-concave-first.log`, not claimed fixed.
+
+Checks actually run: 111 affected batch, attachment, material, branch and extrusion
+regressions passed; eight focused cases passed after endpoint preservation; two
+additional boundary-attachment cases passed. A too-strict new ownership oracle
+initially rejected creation of sheets for previously unowned faces; corrected it
+to require preservation of every authored sheet, descendant FaceUse and orientation.
+The failed oracle log is retained. The new mixed-1,000 run has an 840-second
+cancellation deadline and 900-second outer process ceiling. No repeated failed
+run was launched without a focused repair and passing reproducer.
+
+Read-only source integration probes used the existing d05 geometry wheel hash
+`54367f21cd661413c43701ce629f90f09d525a87a82e8ccaf267dc68fc8112b8`
+and ANYmesher source `f0cde877d6fd22048d2fa7af1e6af84c5b20d0fd`.
+Strip 100: ready, 528 nodes / 300 Q4 / 50 beams, area 75, 74 shared edges.
+Strip 1,000: ready, 5,253 nodes / 3,000 Q4 / 500 beams, area 750, 749 shared edges.
+Every multi-owner prepared edge's node sequence belongs to its incident faces and
+members; authored/prepared documents remained unchanged. The latter elapsed
+202.69 seconds including preparation. These are source-integration development
+results, not clean installed-consumer or new-candidate acceptance. Reports and
+probe scripts live under the primary `reports/large-connected` directory.
+ANYmesher has received the results and the request for mixed/quadratic acceptance;
+its subsequent task turn again returned an empty completion. Owner acceptance
+and the short-joint quadratic repair remain outstanding.
+
 ## Continuation, 2026-10-02
 
 PR12 development run 36989128888: Windows and Linux each passed 1,675 tests

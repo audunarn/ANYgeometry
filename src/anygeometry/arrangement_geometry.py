@@ -58,11 +58,17 @@ class BezierPath:
 
     def _split(self, t):
         work = np.asarray(self.controls).copy()
+        origin = work[0].copy()
+        work -= origin
         left, right = [work[0].copy()], [work[-1].copy()]
         for size in range(len(work)-1, 0, -1):
             work[:size] = (1-t)*work[:size]+t*work[1:size+1]
             left.append(work[0].copy()); right.append(work[size-1].copy())
-        return BezierPath(tuple(map(tuple, left))), BezierPath(tuple(map(tuple, right[::-1])))
+        left, right = np.asarray(left)+origin, np.asarray(right[::-1])+origin
+        # Translation back need not recover mixed-magnitude outer endpoints.
+        # They are exact inherited controls, not newly computed split points.
+        left[0], right[-1] = self.controls[0], self.controls[-1]
+        return BezierPath(tuple(map(tuple, left))), BezierPath(tuple(map(tuple, right)))
 
     def subcurve(self, lower, upper):
         if upper < lower:

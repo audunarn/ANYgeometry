@@ -7,6 +7,7 @@ Topology is returned only after every junction and material cycle is resolved.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from fractions import Fraction
 import heapq
 import math
 import numpy as np
@@ -355,13 +356,47 @@ class MaterialDomain:
                 return analytic
         support = self.support
         if isinstance(support, ExtrudedSurface):
+            # Integrate in a common translated frame. Evaluating a Bezier boundary
+            # at a large world origin and then inverting it loses chart precision;
+            # split and unsplit boundaries can consequently disagree in area.
+            matrix = np.eye(4)
+            matrix[:3, 3] = -support.profile_origin
+            support = support.transformed(matrix)
+            local_domain = replace(self, support=support)
+            def translated(curve):
+                if isinstance(curve, LinePath):
+                    return LinePath(tuple(np.asarray(curve.start)+matrix[:3, 3]),
+                                    tuple(np.asarray(curve.end)+matrix[:3, 3]))
+                return curve.transformed(matrix)
+            loop = tuple(replace(path, curve=translated(path.curve)) for path in loop)
+            constant_v = {}
+            for path in loop:
+                curve = path.curve
+                controls = (curve.start, curve.end) if isinstance(curve, LinePath) else (
+                    curve.controls if isinstance(curve, BezierPath) else None)
+                if controls is not None:
+                    s = support.extrusion_coordinate(controls)
+                    normal = tuple(Fraction(float(n)) for n in support.profile_normal)
+                    first = tuple(Fraction(float(c)) for c in controls[0])
+                    exact_height = np.all(s == s[0]) and all(
+                        sum((Fraction(float(c))-a)*n for c, a, n in zip(point, first, normal)) == 0
+                        for point in controls[1:])
+                    if exact_height:
+                        constant_v[id(curve)] = (s[0]-support.v_range[0])/(support.v_range[1]-support.v_range[0])
             def integrand(curve, parameters):
+                if id(curve) in constant_v:
+                    return np.zeros_like(parameters)
                 world = curve.evaluate(parameters)
                 return -support.local_uv_many(world)[:, 1]*chart_rates(support, world, curve.derivative(parameters))[:, 0]
 
             def boundary(curve):
-                first, last = self.uv(curve, 0.), self.uv(curve, 1.)
-                return .5*(last[0]*last[1]-first[0]*first[1])
+                first, last = local_domain.uv(curve, 0.), local_domain.uv(curve, 1.)
+                value = .5*(last[0]*last[1]-first[0]*first[1])
+                if id(curve) in constant_v:
+                    # Polynomial control heights certify constant v; integrate
+                    # -v du by its antiderivative, without recovering noisy rates.
+                    value -= constant_v[id(curve)]*(last[0]-first[0])
+                return value
         elif isinstance(support, (Cylinder, Cone)):
             def integrand(curve, parameters):
                 world = curve.evaluate(parameters)

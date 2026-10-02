@@ -117,7 +117,8 @@ def _member_parameters(model, edge_id, parameter, selected):
 
 
 def plan_member_arrangements(model, selected, domains, traces, points, check, *,
-                             include_axis_axis=True, include_axis_face=True, check_pair=None):
+                             include_axis_axis=True, include_axis_face=True, check_pair=None,
+                             domain_bounds=None):
     """Collect all original axis/axis and axis/material events before editing."""
     edge_ids = sorted({use.edge_id for use in model.member_edge_uses.values() if use.member_id in selected})
     curves = {edge_id: freeze_edge(model, edge_id) for edge_id in edge_ids}
@@ -126,6 +127,12 @@ def plan_member_arrangements(model, selected, domains, traces, points, check, *,
                   for edge_id, (lo, hi) in bounds.items()}
     split = {edge_id: {0., 1.} for edge_id in edge_ids}
     contacts = []
+    if domain_bounds is None:
+        domain_bounds = {}
+        for face_id, domain in domains.items():
+            boxes = [path.curve.bounds() for loop in domain.boundaries for path in loop]
+            domain_bounds[face_id] = (np.min([box[0] for box in boxes], axis=0),
+                                      np.max([box[1] for box in boxes], axis=0))
     for edge_id, curve in curves.items():
         members = tuple(sorted(set(member for member, _value in _member_parameters(model, edge_id, 0., selected))))
         lo1, hi1 = bounds[edge_id]
@@ -133,8 +140,7 @@ def plan_member_arrangements(model, selected, domains, traces, points, check, *,
             if not include_axis_face:
                 break
             check()
-            boxes = [path.curve.bounds() for loop in domain.boundaries for path in loop]
-            lo2, hi2 = np.min([box[0] for box in boxes], axis=0), np.max([box[1] for box in boxes], axis=0)
+            lo2, hi2 = domain_bounds[face_id]
             tolerance = model.tolerance.effective_length(max(np.linalg.norm(hi1-lo1),np.linalg.norm(hi2-lo2)))
             if np.any(hi1 < lo2-tolerance) or np.any(hi2 < lo1-tolerance):
                 continue
