@@ -19,6 +19,9 @@ from .prepared_face_preimages import (
     query_prepared_authored_face_definition,
     validate_prepared_face_preimages_binding,
 )
+from .prepared_model_scope import (
+    PreparedModelScope, query_prepared_model_scope, validate_prepared_model_scope_binding,
+)
 from .edge_subcurve_preimages import (
     PolynomialEdgeDefinition, PolynomialEdgeAncestor, EdgeSubcurvePreimage,
     PreparedEdgeSubcurvePreimages, query_prepared_edge_subcurve_preimages,
@@ -286,6 +289,9 @@ __all__ = [
     "apply_intersections",
     "has_current_intersection_preparation",
     "PreparedFacePreimages",
+    "PreparedModelScope",
+    "query_prepared_model_scope",
+    "validate_prepared_model_scope_binding",
     "AuthoredFaceDefinition",
     "query_prepared_face_preimages",
     "query_prepared_authored_face_definition",

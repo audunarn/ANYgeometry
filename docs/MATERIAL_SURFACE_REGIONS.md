@@ -173,6 +173,27 @@ this record does not establish absence from the original or current model.
 Legacy ID-only receipts refuse this lookup; schema and release version stay
 unchanged.
 
+For complete persisted owner-input visibility, use `query_prepared_model_scope`
+and `validate_prepared_model_scope_binding`. This separate transient receipt
+returns the **whole original model document**, captured before the first owner
+application, and the **whole current model document**, bound to complete current
+preparation. Both include all stored entities, occurrences, metadata, members,
+attachments, neighbours, isolated vertices, groups, tags, features, extensions
+and replacement history. `authored_document` and `current_document` decode fresh
+detached dictionaries; public `from_dict` can read either. Original and current
+parameters retain their respective meanings. Revalidate the receipt before and
+after consumer work. Qualified prepared copying preserves the proof; ordinary
+cloning, reloading, incomplete preparation and legacy per-face-only receipts
+refuse. Same-revision edits and callback edits invalidate the binding.
+
+Absence from a complete document proves absence only from that persisted owner
+document, never from an external FEM project. Visibility is **not** an original
+to current parameter remap, equivalent child-property proof, embedded-constraint
+certificate, whole material/partition certificate or mesh-publication permit.
+Consumers must separately qualify or refuse unsupported child-local properties,
+incoming references, neighbour constraints and isolated-point mapping. No schema
+or package-version change is required.
+
 `query_prepared_authored_boundary_correspondence` proves that the exterior of
 all authenticated descendants tiles each original polynomial root edge exactly
 once in its original direction. Rational intervals, original controls/anchor
