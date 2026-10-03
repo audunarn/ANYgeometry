@@ -23,6 +23,7 @@ from .prepared_model_scope import (
     PreparedModelScope, query_prepared_model_scope, validate_prepared_model_scope_binding,
 )
 from .authored_child_coverage import validate_prepared_authored_face_child_triangles
+from .authored_partition_coverage import validate_prepared_authored_face_partition
 from .edge_subcurve_preimages import (
     PolynomialEdgeDefinition, PolynomialEdgeAncestor, EdgeSubcurvePreimage,
     PreparedEdgeSubcurvePreimages, query_prepared_edge_subcurve_preimages,
@@ -292,6 +293,7 @@ __all__ = [
     "PreparedFacePreimages",
     "PreparedModelScope",
     "validate_prepared_authored_face_child_triangles",
+    "validate_prepared_authored_face_partition",
     "query_prepared_model_scope",
     "validate_prepared_model_scope_binding",
     "AuthoredFaceDefinition",
