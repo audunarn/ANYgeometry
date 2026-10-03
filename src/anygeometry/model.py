@@ -2261,6 +2261,9 @@ class GeometryModel:
         if made._coordinate_transform is not None:
             made._coordinate_transform.flags.writeable = False
         made._crs_metadata = deepcopy(self._crs_metadata)
+        # Extensions participate in the document fingerprint and must survive
+        # detached planning/application copies without sharing mutable payloads.
+        made._serialization_extensions = deepcopy(getattr(self, '_serialization_extensions', {}))
         if include_features:
             made._features._restore_unchecked(self.features.snapshot())  # noqa: SLF001
         return made

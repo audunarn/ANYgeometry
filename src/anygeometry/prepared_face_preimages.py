@@ -41,6 +41,9 @@ class PreparedFacePreimages:
     face_descendants: tuple[tuple[int, tuple[int, ...]], ...]
     coverage: tuple[int, ...]
     authored_face_definitions: tuple[AuthoredFaceDefinition, ...] = ()
+    # Complete prospective persisted owner input, not a meshing certificate.
+    # None denotes legacy ID/per-face-only receipts and must not prove absence.
+    authored_document_json: str | None = None
 
     @property
     def source_to_current_faces(self):
@@ -56,6 +59,8 @@ def _binding_checksum(binding):
 
 
 def _validate_shape(model, binding):
+    if binding.authored_document_json is not None and type(binding.authored_document_json) is not str:
+        raise GeometryError('prepared original model snapshot has invalid content')
     authored = binding.authored_face_ids
     if (not isinstance(authored, tuple) or any(type(face) is not int or face <= 0 for face in authored)
             or tuple(sorted(set(authored))) != authored):
@@ -231,7 +236,8 @@ def _capture_application_preimages(model, *, allow_seed):
     return PreparedFacePreimages(model.model_id, model.revision, checksum, faces,
                                  model.model_id, model.revision, checksum,
                                  tuple((face, (face,)) for face in faces), (),
-                                 _original_face_definitions(document, model.model_id))
+                                 _original_face_definitions(document, model.model_id),
+                                 json.dumps(document, sort_keys=True, separators=(',', ':'), allow_nan=False))
 
 
 def _compose_application_preimages(candidate, previous, changes):
