@@ -22,6 +22,10 @@ from .prepared_face_preimages import (
 from .prepared_model_scope import (
     PreparedModelScope, query_prepared_model_scope, validate_prepared_model_scope_binding,
 )
+from .prepared_vertex_preimages import (
+    PreparedVertexPreimages, query_prepared_vertex_preimages,
+    validate_prepared_vertex_preimages_binding,
+)
 from .authored_child_coverage import validate_prepared_authored_face_child_triangles
 from .authored_partition_coverage import validate_prepared_authored_face_partition
 from .edge_subcurve_preimages import (
@@ -47,6 +51,10 @@ from .authored_surface_evaluation import evaluate_prepared_authored_face
 from .authored_curve_stations import (
     AuthoredCurveStations, query_prepared_authored_curve_stations,
     validate_prepared_authored_curve_station_coordinates,
+)
+from .authored_internal_stations import (
+    AuthoredInternalStations, query_prepared_authored_internal_stations,
+    validate_prepared_authored_internal_station_coordinates,
 )
 from .coordinates import (
     model_to_world_points, world_to_model_points,
@@ -292,6 +300,9 @@ __all__ = [
     "has_current_intersection_preparation",
     "PreparedFacePreimages",
     "PreparedModelScope",
+    "PreparedVertexPreimages",
+    "query_prepared_vertex_preimages",
+    "validate_prepared_vertex_preimages_binding",
     "validate_prepared_authored_face_child_triangles",
     "validate_prepared_authored_face_partition",
     "query_prepared_model_scope",
@@ -327,6 +338,9 @@ __all__ = [
     "validate_prepared_authored_boundary_station_coordinates",
     "evaluate_prepared_authored_face",
     "AuthoredCurveStations",
+    "AuthoredInternalStations",
+    "query_prepared_authored_internal_stations",
+    "validate_prepared_authored_internal_station_coordinates",
     "query_prepared_authored_curve_stations",
     "validate_prepared_authored_curve_station_coordinates",
     "evaluate_material_surface_region",
