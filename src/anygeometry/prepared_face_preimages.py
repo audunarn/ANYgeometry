@@ -4,12 +4,29 @@ This proof is separate from classification and document replacement history.
 Only exact owner application deltas compose its map. It is not serialized.
 """
 from dataclasses import dataclass, replace
+import json
+from numbers import Integral
 from types import MappingProxyType
 from uuid import UUID
 
 from .definition_binding import definition_checksum
 from .errors import GeometryError
 from .serialization import to_dict
+
+
+@dataclass(frozen=True, slots=True)
+class AuthoredFaceDefinition:
+    """Original dependency snapshot, not a material/partition certificate.
+
+    ``definition_json`` is canonical immutable JSON. It contains complete face
+    and edge/vertex definitions, original occurrence records, and scoped group
+    memberships/tags. Parsing it gives detached data, never live model aliases.
+    """
+    face_id: int
+    model_id: UUID
+    revision: int
+    source_checksum: str
+    definition_json: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,6 +40,7 @@ class PreparedFacePreimages:
     source_checksum: str
     face_descendants: tuple[tuple[int, tuple[int, ...]], ...]
     coverage: tuple[int, ...]
+    authored_face_definitions: tuple[AuthoredFaceDefinition, ...] = ()
 
     @property
     def source_to_current_faces(self):
@@ -58,6 +76,15 @@ def _validate_shape(model, binding):
         raise GeometryError('prepared face provenance has missing or conflicting preimages')
     if binding.coverage not in ((), tuple(sorted(model.faces))):
         raise GeometryError('prepared face provenance has invalid coverage')
+    definitions = binding.authored_face_definitions
+    if (not isinstance(definitions, tuple)
+            or any(not isinstance(item, AuthoredFaceDefinition) for item in definitions)
+            or (definitions and tuple(item.face_id for item in definitions) != authored)
+            or any(item.model_id != binding.authored_model_id
+                   or item.revision != binding.authored_revision
+                   or item.source_checksum != binding.authored_checksum
+                   or not isinstance(item.definition_json, str) for item in definitions)):
+        raise GeometryError('prepared authored-face definitions have invalid source binding')
 
 
 def _current_receipt(model):
@@ -115,6 +142,78 @@ def validate_prepared_face_preimages_binding(model, binding):
         raise GeometryError('prepared face provenance definition binding changed')
 
 
+def query_prepared_authored_face_definition(model, authored_face_id, *, expected_revision=None):
+    """Look up an original face snapshot through a current local owner receipt.
+
+    IDs address authored faces, which may no longer exist. Older receipts may
+    retain valid ID ancestry without these prospectively captured definitions;
+    this lookup refuses rather than reconstructing them from current geometry.
+    """
+    if isinstance(authored_face_id, bool) or not isinstance(authored_face_id, Integral) or authored_face_id <= 0:
+        raise GeometryError('authored face definition needs a positive authored face ID')
+    binding = query_prepared_face_preimages(model, expected_revision=expected_revision)
+    if authored_face_id not in binding.authored_face_ids:
+        raise GeometryError('authored face definition ID is not in the original source')
+    result = next((item for item in binding.authored_face_definitions if item.face_id == authored_face_id), None)
+    if result is None:
+        raise GeometryError('original authored face definition is unavailable')
+    return result
+
+
+def _original_face_definitions(document, model_id):
+    """Index ONE serialized source snapshot; never serialize per face."""
+    edges = {item['id']: item for item in document['edges']}
+    vertices = {item['id']: item for item in document['vertices']}
+    structural = document['structural']
+    sheets = {item['id']: item for item in structural['sheets']}
+    parts = {item['id']: item for item in structural['parts']}
+    occurrences = {}
+    for item in structural['face_uses']:
+        occurrences.setdefault(item['face_id'], []).append(item)
+    coedges = {}
+    for item in structural['coedges']:
+        coedges.setdefault(item['face_use_id'], []).append(item)
+    groups = {}
+    for name, references in document['groups'].items():
+        for ref in references:
+            groups.setdefault(tuple(ref), []).append(name)
+    tags = {tuple(item['entity']): item for item in document['tags']}
+    result = []
+    for face in document['faces']:
+        face_id = face['id']
+        edge_ids = sorted({edge for loop in (face['loop'], *face['holes']) for edge, _ in loop})
+        selected_edges = [edges[edge] for edge in edge_ids]
+        vertex_ids = set()
+        for edge in selected_edges:
+            vertex_ids.update((edge['start'], edge['end']))
+            vertex_ids.update(edge['curve'].get('control_vertices', ()))
+            if 'via_vertex' in edge['curve']:
+                vertex_ids.add(edge['curve']['via_vertex'])
+        uses = occurrences.get(face_id, [])
+        selected_coedges = sorted((edge for use in uses for edge in coedges.get(use['id'], ())),
+                                  key=lambda item: item['id'])
+        selected_sheets = [sheets[i] for i in sorted({use['sheet_id'] for use in uses})]
+        selected_parts = [parts[i] for i in sorted({sheet['part_id'] for sheet in selected_sheets})]
+        scoped = {('face', face_id)} | {('edge', i) for i in edge_ids} | {('vertex', i) for i in vertex_ids}
+        for kind, rows in (('face_use', uses), ('coedge', selected_coedges),
+                           ('sheet', selected_sheets), ('part', selected_parts)):
+            scoped.update((kind, item['id']) for item in rows)
+        memberships = {}
+        for ref in sorted(scoped):
+            for name in groups.get(ref, ()):
+                memberships.setdefault(name, []).append(list(ref))
+        payload = dict(face=face, edges=selected_edges,
+                       vertices=[vertices[i] for i in sorted(vertex_ids)],
+                       occurrences=dict(face_uses=uses, coedges=selected_coedges,
+                                        sheets=selected_sheets, parts=selected_parts),
+                       groups=memberships, tags=[tags[ref] for ref in sorted(scoped) if ref in tags],
+                       coordinates=document['coordinates'], tolerance=document['tolerance'])
+        encoded = json.dumps(payload, sort_keys=True, separators=(',', ':'), allow_nan=False)
+        result.append(AuthoredFaceDefinition(face_id, model_id, document['revision'],
+                                            document['checksum']['value'], encoded))
+    return tuple(result)
+
+
 def _capture_application_preimages(model, *, allow_seed):
     """Capture before application; stale provenance never becomes new roots."""
     if hasattr(model, '_prepared_face_preimages_receipt'):
@@ -125,10 +224,12 @@ def _capture_application_preimages(model, *, allow_seed):
     if not allow_seed or any(old.kind == 'face' for old in model.replacement_history()):
         return None
     faces = tuple(sorted(model.faces))
-    checksum = to_dict(model)['checksum']['value']
+    document = to_dict(model)
+    checksum = document['checksum']['value']
     return PreparedFacePreimages(model.model_id, model.revision, checksum, faces,
                                  model.model_id, model.revision, checksum,
-                                 tuple((face, (face,)) for face in faces), ())
+                                 tuple((face, (face,)) for face in faces), (),
+                                 _original_face_definitions(document, model.model_id))
 
 
 def _compose_application_preimages(candidate, previous, changes):

@@ -15,7 +15,8 @@ from .trimmed_charts import (
 )
 from .joint_edges import JointEdge, query_joint_edge
 from .prepared_face_preimages import (
-    PreparedFacePreimages, query_prepared_face_preimages,
+    PreparedFacePreimages, AuthoredFaceDefinition, query_prepared_face_preimages,
+    query_prepared_authored_face_definition,
     validate_prepared_face_preimages_binding,
 )
 from .edge_subcurve_preimages import (
@@ -28,6 +29,15 @@ from .material_regions import (
     validate_material_surface_regions_binding, evaluate_material_surface_region,
 )
 from .material_cell_coverage import validate_material_surface_region_triangles
+from .authored_boundary_correspondence import (
+    AuthoredBoundaryCorrespondence, query_prepared_authored_boundary_correspondence,
+    validate_prepared_authored_boundary_correspondence_binding,
+)
+from .authored_domain_coverage import validate_prepared_authored_face_triangles
+from .authored_boundary_stations import (
+    AuthoredBoundaryStations, query_prepared_authored_boundary_stations,
+    validate_prepared_authored_boundary_station_coordinates,
+)
 from .coordinates import (
     model_to_world_points, world_to_model_points,
     model_to_world_vectors, world_to_model_vectors,
@@ -271,7 +281,9 @@ __all__ = [
     "apply_intersections",
     "has_current_intersection_preparation",
     "PreparedFacePreimages",
+    "AuthoredFaceDefinition",
     "query_prepared_face_preimages",
+    "query_prepared_authored_face_definition",
     "validate_prepared_face_preimages_binding",
     "PolynomialEdgeDefinition",
     "PolynomialEdgeAncestor",
@@ -291,6 +303,13 @@ __all__ = [
     "query_material_surface_regions",
     "validate_material_surface_regions_binding",
     "validate_material_surface_region_triangles",
+    "AuthoredBoundaryCorrespondence",
+    "query_prepared_authored_boundary_correspondence",
+    "validate_prepared_authored_boundary_correspondence_binding",
+    "validate_prepared_authored_face_triangles",
+    "AuthoredBoundaryStations",
+    "query_prepared_authored_boundary_stations",
+    "validate_prepared_authored_boundary_station_coordinates",
     "evaluate_material_surface_region",
     "JointEdge",
     "query_joint_edge",

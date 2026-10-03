@@ -162,3 +162,49 @@ These receipts grant no analytic boundary substitution, subdivision permission,
 whole-cell coverage, element-quality or mesh-publication acceptance. In
 particular, the rounded mixed-model wall remains outside the exact coverage
 query's supported domain until its boundary-domain correspondence is qualified.
+
+## Explicit original-domain development contract
+
+`query_prepared_authored_face_definition` returns the prospectively captured
+original face, all oriented outer/hole loops, support, boundary dependencies,
+and scoped occurrence/group/tag data. Incoming attachments/member references
+and unrelated neighbouring geometry are not fully snapshotted. Absence from
+this record does not establish absence from the original or current model.
+Legacy ID-only receipts refuse this lookup; schema and release version stay
+unchanged.
+
+`query_prepared_authored_boundary_correspondence` proves that the exterior of
+all authenticated descendants tiles each original polynomial root edge exactly
+once in its original direction. Rational intervals, original controls/anchor
+and exact endpoint closure are checked. Every original hole remains explicit.
+Paired internal edges are returned without removing physical joints. This
+boundary-chain proof does not establish an embedded material partition.
+
+`validate_prepared_authored_face_triangles` certifies whole closed triangles in
+the **original authored domain**, including all its holes. It does not certify
+the literal current fragment union. The existing region coverage API retains
+its separate semantics. Plane and supported Bezier extrusion charts use the
+same exact polynomial/winding engine. A four-edge implicit Coons wall can use
+the extrusion chart only when every original top coefficient is exactly the
+bottom coefficient plus one exactly representable translation, both connectors
+close exactly, the original corner layout matches, and profile-plane and
+injectivity proofs succeed. Sampled recognition, alternate parameterizations,
+incompatible charts and unsupported root families refuse.
+
+`query_prepared_authored_boundary_stations` returns immutable rational pairs
+for source parameters, original UV/XYZ, and the current polynomial XYZ.
+`validate_prepared_authored_boundary_station_coordinates` checks supplied
+document-unit coordinates against **both** original and current points within
+the existing current edge tolerance. It never snaps or moves nodes. Consumers
+must bind their own global node IDs, registry entries, retained constraints,
+associations and unchanged coordinates; these owner assertions supply no node
+identity, curve-chord-error or mesh-publication permission.
+
+An explicit authored-root meshing route may consume these contracts while
+preserving every current physical constraint/reference and associating cells
+to the authored root. It must refuse unsupported child-local semantics or
+unqualified adjacent occurrences. Shared station transactions, metric-chart
+routing, curve approximation, final quality gates and installed-artifact
+qualification remain consumer obligations. See the portable builder in
+`examples/authored_boundary_handoff.py`; it rebuilds transient evidence and
+does not produce an accepted mesh.

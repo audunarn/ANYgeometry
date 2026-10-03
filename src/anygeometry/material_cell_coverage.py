@@ -356,6 +356,19 @@ def _orient(a, b, c):
     return (b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0])
 
 
+def _triangle_rows(triangles_uv):
+    """Detach finite real input before any caller callback."""
+    try:
+        if np.iscomplexobj(np.asarray(triangles_uv)):
+            raise GeometryError('material cell coverage requires real finite (n,3,2) triangles')
+        triangles = np.array(triangles_uv, dtype=float, copy=True)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise GeometryError('material cell coverage requires finite (n,3,2) triangles') from error
+    if triangles.ndim != 3 or triangles.shape[1:] != (3, 2) or not np.isfinite(triangles).all():
+        raise GeometryError('material cell coverage requires finite (n,3,2) triangles')
+    return triangles
+
+
 def validate_material_surface_region_triangles(model, result, face, triangles_uv, *, cancellation_check=None):
     """Validate entire closed UV triangles against one bound material region.
 
@@ -372,14 +385,7 @@ def validate_material_surface_region_triangles(model, result, face, triangles_uv
     def check():
         if cancellation_check is not None and cancellation_check('material cell coverage'):
             raise GeometryError('material cell coverage cancelled')
-    try:
-        if np.iscomplexobj(np.asarray(triangles_uv)):
-            raise GeometryError('material cell coverage requires real finite (n,3,2) triangles')
-        triangles = np.array(triangles_uv, dtype=float, copy=True)
-    except (TypeError, ValueError, OverflowError) as error:
-        raise GeometryError('material cell coverage requires finite (n,3,2) triangles') from error
-    if triangles.ndim != 3 or triangles.shape[1:] != (3, 2) or not np.isfinite(triangles).all():
-        raise GeometryError('material cell coverage requires finite (n,3,2) triangles')
+    triangles = _triangle_rows(triangles_uv)
     check()
     validate_material_surface_regions_binding(model, result, cancellation_check=cancellation_check)
     if not isinstance(face, Integral):
@@ -391,8 +397,14 @@ def validate_material_surface_region_triangles(model, result, face, triangles_uv
     selected = [region for region in result.regions if int(face) in {handle.id for handle in region.faces}]
     if len(selected) != 1:
         raise GeometryError('material cell coverage face has no unique bound region')
-    region = selected[0]; domain = region.domain
-    frame = _frame(region.support)
+    _validate_domain_triangles(selected[0].domain, triangles, check)
+    check()
+    validate_material_surface_regions_binding(model, result, cancellation_check=cancellation_check)
+
+
+def _validate_domain_triangles(domain, triangles, check):
+    """Shared exact kernel; caller must separately authenticate domain semantics."""
+    frame = _frame(domain.support)
     loops = _chart_loops(frame, domain, check)
     for values in triangles:
         check()
@@ -446,5 +458,3 @@ def validate_material_surface_region_triangles(model, result, face, triangles_uv
             check()
             if not any(max(pair) < 0 for pair in signs):
                 raise GeometryError('material cell coverage: hole witness is unresolved')
-    check()
-    validate_material_surface_regions_binding(model, result, cancellation_check=cancellation_check)
