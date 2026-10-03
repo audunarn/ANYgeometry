@@ -244,3 +244,19 @@ def test_explicit_sampled_coons_surface_does_not_gain_exact_child_coverage():
     binding=query_prepared_authored_boundary_correspondence(model,face)
     with pytest.raises(GeometryError):
         validate(model,binding,binding.descendants[0],[[[1,.5],[2,.5],[1,1.5]]])
+
+
+def test_reversed_literal_line_keeps_mixed_magnitude_endpoints_exact():
+    from anygeometry.entities import OrientedEdge
+    model=GeometryModel()
+    a,b,c,d=model.add_points(((1e-10,0,0),(1e8,0,0),(1e8,1e8,0),(1e-10,1e8,0)))
+    # Bottom is authored in reverse. Evaluating start+(end-start) at t=1
+    # would round its x=1e-10 endpoint to zero, changing the literal boundary.
+    edges=(model.add_line(b,a),model.add_line(b,c),model.add_line(c,d),model.add_line(d,a))
+    face=model.add_face_from_loop(tuple(OrientedEdge(edge,forward) for edge,forward in
+                                       zip(edges,(False,True,True,True))),(0,1,2,3),
+                                 surface=Plane((0,0,0),(1,0,0),(0,1,0)))
+    apply_intersections(model,plan_intersections(model,(face,),policy='connect'),policy='connect')
+    binding=query_prepared_authored_boundary_correspondence(model,face)
+    validate_prepared_authored_face_triangles(model,binding,[[[2,.5],[3,.5],[2,1.5]]])
+    validate(model,binding,binding.descendants[0],[[[2,.5],[3,.5],[2,1.5]]])

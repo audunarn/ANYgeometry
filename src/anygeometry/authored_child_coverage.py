@@ -8,7 +8,7 @@ from fractions import Fraction as F
 from numbers import Integral
 from copy import deepcopy
 
-from .arrangement_geometry import freeze_edge
+from .arrangement_geometry import BezierPath, LinePath, freeze_edge
 from .authored_boundary_correspondence import validate_prepared_authored_boundary_correspondence_binding
 from .authored_domain_coverage import _original_domain, _coons_extrusion
 from .errors import GeometryError
@@ -89,7 +89,14 @@ def validate_prepared_authored_face_child_triangles(model, correspondence, curre
         for use in loop:
             curve = deepcopy(freeze_edge(model, use.edge))
             if not use.forward:
-                curve = curve.subcurve(1., 0.)
+                # Reverse stored polynomial coefficients, not evaluated float
+                # endpoints: start+(end-start) need not recover the literal end.
+                if type(curve) is LinePath:
+                    curve = LinePath(curve.end, curve.start)
+                elif type(curve) is BezierPath:
+                    curve = BezierPath(curve.controls[::-1])
+                else:
+                    curve = curve.subcurve(1., 0.)
             paths.append(ArrangementPath(curve, use.edge, decomposition=
                 'intersection_decomposition_seam' in model.tags_for(EntityRef('edge', use.edge))))
         boundaries.append(tuple(paths))
