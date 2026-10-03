@@ -226,6 +226,23 @@ def _domain_bounds(domain):
 
 
 def _coplanar_traces(first, second, tolerance, check, model):
+    from .intersections import _sheet_ids_for_face
+    same_sheet = bool(set(_sheet_ids_for_face(model, first.face_id)) &
+                      set(_sheet_ids_for_face(model, second.face_id)))
+    shared_seams = {path.source_edge: path.curve for loop in first.boundaries for path in loop
+                    if path.decomposition and path.source_edge is not None} if same_sheet else {}
+    shared_seams = {path.source_edge: shared_seams[path.source_edge]
+                    for loop in second.boundaries for path in loop
+                    if path.decomposition and path.source_edge in shared_seams}
+    def physical(curve):
+        # Source edge identity proves shared topology, not just common Sheet
+        # ownership. For affine paths, endpoint containment certifies the
+        # complete interval; other curve families remain conservatively kept.
+        return not (isinstance(curve, LinePath) and any(
+            isinstance(seam, LinePath) and
+            all(point_parameters(seam, point, tolerance=tolerance)
+                for point in (curve.start, curve.end))
+            for seam in shared_seams.values()))
     if isinstance(first.support, Plane) and isinstance(second.support, Plane) and all(
         isinstance(path.curve, LinePath) for domain in (first, second)
         for loop in domain.boundaries for path in loop):
@@ -242,7 +259,8 @@ def _coplanar_traces(first, second, tolerance, check, model):
         if result.dimension is not IntersectionDimension.CURVE:
             return ()
         return tuple(LinePath(component.witnesses[0], component.witnesses[-1])
-                     for component in result.components if len(component.witnesses) >= 2)
+                     for component in result.components if len(component.witnesses) >= 2
+                     and physical(LinePath(component.witnesses[0], component.witnesses[-1])))
     # Partition original material by the other domain's complete boundary.
     # Classify cells in both domains; positive-area ownership stays explicit.
     traces = tuple(ArrangementPath(path.curve, owners=(first.face_id, second.face_id))
@@ -267,7 +285,7 @@ def _coplanar_traces(first, second, tolerance, check, model):
                 if any(point_parameters(boundary.curve, part.evaluate(.5), tolerance=tolerance)
                        for boundary_loop in second.boundaries for boundary in boundary_loop):
                     result.append(part)
-    return tuple(result)
+    return tuple(curve for curve in result if physical(curve))
 
 
 def _rectangular_cylinder(domain, tolerance):
@@ -739,7 +757,7 @@ def _child_support(model, face, outer, holes, tolerance):
     return outer,support,None,None
 
 
-def _apply_intersections_in_place(model, plan, *, policy):
+def _apply_intersections_in_place(model, plan, *, policy, _edge_preimage_draft=None):
     """Atomically apply a model/revision-bound material arrangement."""
     from .intersections import _merge_vertex
     from .attachment_remapping import capture_face_attachments, remap_face_attachments
@@ -825,7 +843,26 @@ def _apply_intersections_in_place(model, plan, *, policy):
                 stations = point_parameters(current_curve, original.evaluate(fraction), tolerance=tolerance)
                 if len(stations) != 1:
                     raise GeometryError("split station has no unique descendant parameter")
-                _vertex, (_left, right) = split_edge_attachments(model, current, stations[0], check)
+                parent_definition = None
+                if _edge_preimage_draft is not None:
+                    from .edge_subcurve_preimages import _edge_subcurve_definition
+                    parent_definition = _edge_subcurve_definition(model, current)
+                _vertex, (left, right) = split_edge_attachments(model, current, stations[0], check)
+                if _edge_preimage_draft is not None:
+                    from .edge_subcurve_preimages import (_record_edge_subcurve_split,
+                        _SubcurveEnclosureUnavailable)
+                    try:
+                        _record_edge_subcurve_split(_edge_preimage_draft, current, stations[0],
+                            (left, right), tolerance, model=model,
+                            parent_definition=parent_definition)
+                    except _SubcurveEnclosureUnavailable as exc:
+                        if _edge_preimage_draft.enclosure_failure is not exc:
+                            raise  # Never reinterpret a callback exception.
+                        # Optional approximation proof is absent; geometry keeps
+                        # its established acceptance. Requested proof queries
+                        # must explicitly refuse these unqualified children.
+                        for identifier in (current, left, right):
+                            _edge_preimage_draft.records.pop(identifier, None)
                 current, previous = right, fraction
 
         edge_curves = {edge_id: freeze_edge(model, edge_id) for edge_id in model.edges}
@@ -877,7 +914,16 @@ def _apply_intersections_in_place(model, plan, *, policy):
                 vertex_sources[chosen].update(sources)
                 for duplicate in candidates[1:]:
                     vertex_sources[chosen].update(vertex_sources.get(duplicate, ()))
+                    prior_definitions = {}
+                    if _edge_preimage_draft is not None:
+                        from .edge_subcurve_preimages import _edge_subcurve_definition
+                        prior_definitions = {edge: _edge_subcurve_definition(model, edge)
+                            for edge in model.edges_using_vertex(duplicate)}
                     _merge_vertex(model, duplicate, chosen)
+                    if _edge_preimage_draft is not None:
+                        from .edge_subcurve_preimages import _rebind_edge_subcurve_incidence
+                        _rebind_edge_subcurve_incidence(_edge_preimage_draft,
+                            prior_definitions, model=model)
                     used_vertices.discard(duplicate)
                 return chosen
             for identifier in canonical:
@@ -977,6 +1023,14 @@ def _apply_intersections_in_place(model, plan, *, policy):
                 sources.add(("face", contact.face_id))
             member_contacts.append((contact,vertex(np.asarray(contact.position), sources)))
         _canonicalize_member_edges(model, edge_curves, plan.axes, joint_ids, check)
+        # A later physical trace can coincide with a previously artificial
+        # seam. Reconcile after all faces and member edges are canonicalized:
+        # another face's old boundary must not restore the artificial marker.
+        for edge_id in sorted(joint_ids):
+            check()
+            reference = EntityRef("edge", edge_id)
+            if "intersection_decomposition_seam" in model.tags_for(reference):
+                model.untag(reference, "intersection_decomposition_seam")
         # Contacts in the immutable plan use the original axis coordinates.
         # Resolve their retained world stations after every split/canonicalization.
         member_contacts = [(replace(contact, member_parameters=tuple(
@@ -1097,14 +1151,39 @@ def _apply_intersections(model, plan, *, policy):
                                            outcome.joint_edges,True)
         model._transaction_journal.exact_allocator_rollback=True
         return _apply_intersections_in_place(model,plan,policy=effective)
+    from .prepared_face_preimages import (_capture_application_preimages,
+        _compose_application_preimages, _publish_application_preimages)
+    from .edge_subcurve_preimages import (_capture_edge_subcurve_preimages,
+        _finalize_edge_subcurve_preimages, _publish_edge_subcurve_preimages)
+
+    def provenance_check(*_stage):
+        if effective.cancellation_check is not None and effective.cancellation_check():
+            raise GeometryError("intersection edge provenance cancelled")
+
+    authored_preimages = _capture_application_preimages(model, allow_seed=effective.face_connections)
+    edge_draft = _capture_edge_subcurve_preimages(model, allow_seed=effective.face_connections,
+        cancellation_check=provenance_check)
     candidate = model.clone(preserve_identity=True)
-    outcome = _apply_intersections_in_place(candidate, plan, policy=policy)
+    outcome = _apply_intersections_in_place(candidate, plan, policy=policy,
+        _edge_preimage_draft=edge_draft)
+    authored_preimages = _compose_application_preimages(candidate, authored_preimages,
+                                                       outcome.change_set.replacements)
+    edge_preimages = _finalize_edge_subcurve_preimages(candidate, edge_draft,
+        cancellation_check=provenance_check)
+    sealed_candidate_checksum = (edge_preimages.binding.source_checksum if edge_preimages is not None
+        else authored_preimages.source_checksum if authored_preimages is not None
+        else to_dict(candidate)["checksum"]["value"])
     if effective.intent is ConnectionIntent.REUSE_EXISTING and candidate.revision != plan.revision:
         raise GeometryError("REUSE_EXISTING requires compatible existing topology")
     if effective.cancellation_check is not None and effective.cancellation_check():
         raise GeometryError("intersection application cancelled before commit")
     if model.revision != plan.revision or to_dict(model)["checksum"]["value"] != plan.source_checksum:
         raise GeometryError("geometry changed before intersection commit")
+    # The last policy callback must not alter the detached result after its
+    # topology/provenance proofs. No callback follows this preflight before the
+    # committed snapshot is adopted.
+    if to_dict(candidate)["checksum"]["value"] != sealed_candidate_checksum:
+        raise GeometryError("intersection candidate changed before commit")
     before = model.revision
     original_faces = set(model.faces)
     covered_faces = {operand.id for operand in plan.operands if operand.kind == "face"}
@@ -1125,6 +1204,9 @@ def _apply_intersections(model, plan, *, policy):
             checksum, tuple(edge.id for edge in result.joint_edges))
     model._intersection_preparation_receipt = (plan, model.revision, checksum,
         tuple(sorted(model.faces)) if complete_material else ())
+    _publish_application_preimages(model, authored_preimages,
+                                  model._intersection_preparation_receipt[3], checksum)
+    _publish_edge_subcurve_preimages(model, edge_preimages, checksum)
     return result
 
 
@@ -1137,6 +1219,7 @@ def has_current_intersection_preparation(model, *, face_ids=None):
     classification. Invalid requested faces raise GeometryError.
     """
     from .intersections import _normalize_operand
+    from .serialization import _serialized_model_state
     selected = set(model.faces) if face_ids is None else set()
     if face_ids is not None:
         for value in face_ids:
@@ -1148,11 +1231,19 @@ def has_current_intersection_preparation(model, *, face_ids=None):
     if receipt is None:
         return False
     plan, revision, checksum, coverage = receipt
-    return bool(coverage and selected <= set(coverage)
+    eligible = bool(coverage and selected <= set(coverage)
                 and model.revision == revision
                 and model.model_id == plan.model_id
-                and plan.content_checksum == _plan_content(plan)
-                and to_dict(model)["checksum"]["value"] == checksum)
+                and plan.content_checksum == _plan_content(plan))
+    if not eligible:
+        return False
+    if _serialized_model_state(model)["checksum"]["value"] == checksum:
+        return True
+    # A changed raw state no longer has prior qualification. Preserve the
+    # public invalid-topology error before reporting a valid stale receipt.
+    # Exact unchanged content keeps the fingerprint-only read path above.
+    to_dict(model)
+    return False
 
 
 def clone_prepared_geometry(model):
@@ -1172,6 +1263,10 @@ def clone_prepared_geometry(model):
                 or to_dict(made)["checksum"]["value"] != checksum):
             raise GeometryError("prepared geometry changed during detached copying")
         made._intersection_preparation_receipt = receipt
+        from .prepared_face_preimages import _copy_current_preimages
+        _copy_current_preimages(model, made)
+        from .edge_subcurve_preimages import _copy_current_edge_subcurve_preimages
+        _copy_current_edge_subcurve_preimages(model, made)
     return made
 
 
@@ -1193,6 +1288,14 @@ def set_prepared_face_corners(model, updates):
         raise GeometryError("prepared corner editing requires a current complete preparation")
     original = to_dict(model)
     receipt = model._intersection_preparation_receipt
+    from .prepared_face_preimages import _current_receipt, _publish_application_preimages
+    from .edge_subcurve_preimages import (_capture_edge_subcurve_preimages,
+        _finalize_edge_subcurve_preimages, _publish_edge_subcurve_preimages)
+    edge_draft = _capture_edge_subcurve_preimages(model, allow_seed=False)
+    try:
+        authored_preimages = _current_receipt(model)
+    except GeometryError:
+        authored_preimages = None
     try:
         requested = {key: tuple(value) for key, value in updates.items()}
     except (AttributeError, TypeError) as exc:
@@ -1224,7 +1327,12 @@ def set_prepared_face_corners(model, updates):
         raise GeometryError("geometry changed during prepared corner editing")
     if actual == original:
         return
+    edge_preimages = _finalize_edge_subcurve_preimages(candidate, edge_draft)
     model.restore_topology(candidate.topology_snapshot())
     plan, _revision, _checksum, coverage = receipt
     model._intersection_preparation_receipt = (
         plan, model.revision, to_dict(model)['checksum']['value'], coverage)
+    _publish_application_preimages(model, authored_preimages, coverage,
+                                  model._intersection_preparation_receipt[2])
+    _publish_edge_subcurve_preimages(model, edge_preimages,
+                                   model._intersection_preparation_receipt[2])

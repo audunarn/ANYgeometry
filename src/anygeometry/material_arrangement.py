@@ -158,6 +158,7 @@ class MaterialDomain:
     @classmethod
     def from_model(cls, model, face_id):
         from .intersections import _qualified_face_plane
+        from .entities import EntityRef
         face = model.faces[face_id]
         support = face.surface
         extruded = None if isinstance(support, (Cylinder, Cone)) else extruded_support(model, face_id)
@@ -188,7 +189,9 @@ class MaterialDomain:
                 curve = freeze_edge(model, use.edge)
                 if not use.forward:
                     curve = curve.subcurve(1., 0.)
-                paths.append(ArrangementPath(curve, use.edge))
+                decomposition = "intersection_decomposition_seam" in model.tags_for(
+                    EntityRef("edge", use.edge))
+                paths.append(ArrangementPath(curve, use.edge, decomposition=decomposition))
             boundaries.append(tuple(paths))
         return cls(face_id, support, tuple(boundaries))
 

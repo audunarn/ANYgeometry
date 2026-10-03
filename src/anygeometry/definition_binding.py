@@ -9,27 +9,42 @@ import numpy as np
 
 
 def definition_value(value):
+    # Preserve independent mutable expansions for each public output occurrence.
+    return _definition_value(value, None)
+
+
+def _definition_value(value, memo):
+    cached = memo.get(id(value)) if memo is not None else None
+    if cached is not None:
+        return cached[1]
     if isinstance(value, np.ndarray):
-        return {"array":value.tolist(),"shape":list(value.shape)}
-    if isinstance(value, np.generic):
+        result = {"array":value.tolist(),"shape":list(value.shape)}
+    elif isinstance(value, np.generic):
         return value.item()
-    if is_dataclass(value):
+    elif is_dataclass(value):
         # Only explicitly marked implementation caches are outside the definition.
         # Equality/representation settings do not weaken analytic content binding.
-        return {"type":type(value).__qualname__,"fields":{
-            field.name:definition_value(getattr(value,field.name)) for field in fields(value)
+        result = {"type":type(value).__qualname__,"fields":{
+            field.name:_definition_value(getattr(value,field.name), memo) for field in fields(value)
             if field.metadata.get("definition") is not False}}
-    if isinstance(value, Mapping):
-        return {str(key):definition_value(item) for key,item in value.items()}
-    if isinstance(value, (tuple,list)):
-        return [definition_value(item) for item in value]
-    if isinstance(value, Enum):
+    elif isinstance(value, Mapping):
+        result = {str(key):_definition_value(item, memo) for key,item in value.items()}
+    elif isinstance(value, (tuple,list)):
+        result = [_definition_value(item, memo) for item in value]
+    elif isinstance(value, Enum):
         return value.value
-    if isinstance(value, UUID):
+    elif isinstance(value, UUID):
         return str(value)
-    return value
+    else:
+        return value
+    # Publish only complete expansions, preserving rejection of recursive input.
+    if memo is not None:
+        memo[id(value)] = (value, result)
+    return result
 
 
 def definition_checksum(value):
-    payload=json.dumps(definition_value(value),sort_keys=True,separators=(',',':'),allow_nan=False)
+    # Checksum serialization exposes no mutable output. Reuse only within this
+    # call, retaining inputs to prevent reuse of transient object identities.
+    payload=json.dumps(_definition_value(value, {}),sort_keys=True,separators=(',',':'),allow_nan=False)
     return hashlib.sha256(payload.encode('utf-8')).hexdigest()

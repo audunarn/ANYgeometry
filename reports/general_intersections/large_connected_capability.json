@@ -148,5 +148,20 @@
     "mixed100 and mixed1000 accepted automatic linear meshing",
     "representative mixed quadratic, fold endings, repeated cuts and historical short-joint acceptance",
     "final applicable hosted/platform qualification and normal review delivery"
-  ]
+  ],
+  "merge_delivery": {
+    "geometry": "cf2688be58a131ef67dacd07dcd62a6eb508e5d7",
+    "mesher": "8c939066345cc8347f5ddb9feccef7265f9cbc0c",
+    "geometry_ci": 37026355336,
+    "geometry_kernel_each_platform_passed": 1704,
+    "mesher_ci": 37026541038,
+    "local_mains_updated": true,
+    "release": false,
+    "evidence": {
+      "geometry-pr12-ci.json": "dd02a1f604a513c6157322f92b00e54ac1cec8c95eedbada9501189777a9463a",
+      "geometry-pr12-ci.log": "b3365c83884a3daca26ce386da9ed70ebe7dd29fed0666c2fc1f17bbc789f97a",
+      "mesher-pr10-ci.json": "a08582da96e635fe291ef626c3975089cd2a3e51fe49e6b73d042d22a22ace2a",
+      "mesher-pr10-ci.log": "fc6f51f9c714e9632d46f1092d453041cfcc4921ba9938499503c4cc0b7aa50e"
+    }
+  }
 }
