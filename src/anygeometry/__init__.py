@@ -18,6 +18,11 @@ from .prepared_face_preimages import (
     PreparedFacePreimages, query_prepared_face_preimages,
     validate_prepared_face_preimages_binding,
 )
+from .edge_subcurve_preimages import (
+    PolynomialEdgeDefinition, PolynomialEdgeAncestor, EdgeSubcurvePreimage,
+    PreparedEdgeSubcurvePreimages, query_prepared_edge_subcurve_preimages,
+    validate_prepared_edge_subcurve_preimages_binding,
+)
 from .material_regions import (
     MaterialSurfaceRegion, MaterialSurfaceRegions, query_material_surface_regions,
     validate_material_surface_regions_binding, evaluate_material_surface_region,
@@ -268,6 +273,12 @@ __all__ = [
     "PreparedFacePreimages",
     "query_prepared_face_preimages",
     "validate_prepared_face_preimages_binding",
+    "PolynomialEdgeDefinition",
+    "PolynomialEdgeAncestor",
+    "EdgeSubcurvePreimage",
+    "PreparedEdgeSubcurvePreimages",
+    "query_prepared_edge_subcurve_preimages",
+    "validate_prepared_edge_subcurve_preimages_binding",
     "clone_prepared_geometry",
     "set_prepared_face_corners",
     "TrimmedSurfaceChart",

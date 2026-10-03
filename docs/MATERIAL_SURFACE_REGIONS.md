@@ -129,3 +129,36 @@ refuse. In particular, this query does not yet qualify the failing mixed-model
 Bezier wall. Historical owner membership queries retain their tolerances and
 behavior. Coverage success grants no subdivision permission, curve-error,
 shared-node, element-quality or mesh-publication qualification.
+
+## Prepared polynomial edge ancestry
+
+`query_prepared_edge_subcurve_preimages(model)` returns an immutable,
+owner-bound `PreparedEdgeSubcurvePreimages` receipt after complete batch
+preparation. Records cover tracked Straight and Spline edges. New joints,
+unsupported curves and untracked replacements are explicitly listed in
+`unavailable_edge_ids`; requesting one explicitly refuses. Validate a saved
+receipt with `validate_prepared_edge_subcurve_preimages_binding` before use.
+
+Each record binds an original polynomial edge definition, an exact rational
+interval composed from the actual binary64 split parameters, and the current
+edge definition. Its Bernstein error controls enclose the current approximation
+relative to the original restriction over the entire interval. The squared
+distance bound must fit the existing split tolerance. This does not establish
+an exact algebraic intersection parameter or material containment.
+
+Canonical vertex replacement preserves ancestry only when polynomial controls
+remain exactly equal. A changed approximation loses this optional proof;
+unexpected edits to a tracked edge reject detached preparation. Final callback
+mutation rejects before topology adoption. Idempotent publication may normalize
+only the revision; all other serialized fields must equal the sealed candidate.
+
+Ordinary clone, save/load and edits do not transfer these transient receipts.
+`clone_prepared_geometry` and the qualified corner-only update preserve current
+proof. A later authorized preparation can establish new roots in an
+unfragmented loaded document, but cannot recover historical split parameters
+from replacement IDs or coordinates. No schema change is required.
+
+These receipts grant no analytic boundary substitution, subdivision permission,
+whole-cell coverage, element-quality or mesh-publication acceptance. In
+particular, the rounded mixed-model wall remains outside the exact coverage
+query's supported domain until its boundary-domain correspondence is qualified.

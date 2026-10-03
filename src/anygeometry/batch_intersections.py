@@ -757,7 +757,7 @@ def _child_support(model, face, outer, holes, tolerance):
     return outer,support,None,None
 
 
-def _apply_intersections_in_place(model, plan, *, policy):
+def _apply_intersections_in_place(model, plan, *, policy, _edge_preimage_draft=None):
     """Atomically apply a model/revision-bound material arrangement."""
     from .intersections import _merge_vertex
     from .attachment_remapping import capture_face_attachments, remap_face_attachments
@@ -843,7 +843,26 @@ def _apply_intersections_in_place(model, plan, *, policy):
                 stations = point_parameters(current_curve, original.evaluate(fraction), tolerance=tolerance)
                 if len(stations) != 1:
                     raise GeometryError("split station has no unique descendant parameter")
-                _vertex, (_left, right) = split_edge_attachments(model, current, stations[0], check)
+                parent_definition = None
+                if _edge_preimage_draft is not None:
+                    from .edge_subcurve_preimages import _edge_subcurve_definition
+                    parent_definition = _edge_subcurve_definition(model, current)
+                _vertex, (left, right) = split_edge_attachments(model, current, stations[0], check)
+                if _edge_preimage_draft is not None:
+                    from .edge_subcurve_preimages import (_record_edge_subcurve_split,
+                        _SubcurveEnclosureUnavailable)
+                    try:
+                        _record_edge_subcurve_split(_edge_preimage_draft, current, stations[0],
+                            (left, right), tolerance, model=model,
+                            parent_definition=parent_definition)
+                    except _SubcurveEnclosureUnavailable as exc:
+                        if _edge_preimage_draft.enclosure_failure is not exc:
+                            raise  # Never reinterpret a callback exception.
+                        # Optional approximation proof is absent; geometry keeps
+                        # its established acceptance. Requested proof queries
+                        # must explicitly refuse these unqualified children.
+                        for identifier in (current, left, right):
+                            _edge_preimage_draft.records.pop(identifier, None)
                 current, previous = right, fraction
 
         edge_curves = {edge_id: freeze_edge(model, edge_id) for edge_id in model.edges}
@@ -895,7 +914,16 @@ def _apply_intersections_in_place(model, plan, *, policy):
                 vertex_sources[chosen].update(sources)
                 for duplicate in candidates[1:]:
                     vertex_sources[chosen].update(vertex_sources.get(duplicate, ()))
+                    prior_definitions = {}
+                    if _edge_preimage_draft is not None:
+                        from .edge_subcurve_preimages import _edge_subcurve_definition
+                        prior_definitions = {edge: _edge_subcurve_definition(model, edge)
+                            for edge in model.edges_using_vertex(duplicate)}
                     _merge_vertex(model, duplicate, chosen)
+                    if _edge_preimage_draft is not None:
+                        from .edge_subcurve_preimages import _rebind_edge_subcurve_incidence
+                        _rebind_edge_subcurve_incidence(_edge_preimage_draft,
+                            prior_definitions, model=model)
                     used_vertices.discard(duplicate)
                 return chosen
             for identifier in canonical:
@@ -1125,17 +1153,37 @@ def _apply_intersections(model, plan, *, policy):
         return _apply_intersections_in_place(model,plan,policy=effective)
     from .prepared_face_preimages import (_capture_application_preimages,
         _compose_application_preimages, _publish_application_preimages)
+    from .edge_subcurve_preimages import (_capture_edge_subcurve_preimages,
+        _finalize_edge_subcurve_preimages, _publish_edge_subcurve_preimages)
+
+    def provenance_check(*_stage):
+        if effective.cancellation_check is not None and effective.cancellation_check():
+            raise GeometryError("intersection edge provenance cancelled")
+
     authored_preimages = _capture_application_preimages(model, allow_seed=effective.face_connections)
+    edge_draft = _capture_edge_subcurve_preimages(model, allow_seed=effective.face_connections,
+        cancellation_check=provenance_check)
     candidate = model.clone(preserve_identity=True)
-    outcome = _apply_intersections_in_place(candidate, plan, policy=policy)
+    outcome = _apply_intersections_in_place(candidate, plan, policy=policy,
+        _edge_preimage_draft=edge_draft)
     authored_preimages = _compose_application_preimages(candidate, authored_preimages,
                                                        outcome.change_set.replacements)
+    edge_preimages = _finalize_edge_subcurve_preimages(candidate, edge_draft,
+        cancellation_check=provenance_check)
+    sealed_candidate_checksum = (edge_preimages.binding.source_checksum if edge_preimages is not None
+        else authored_preimages.source_checksum if authored_preimages is not None
+        else to_dict(candidate)["checksum"]["value"])
     if effective.intent is ConnectionIntent.REUSE_EXISTING and candidate.revision != plan.revision:
         raise GeometryError("REUSE_EXISTING requires compatible existing topology")
     if effective.cancellation_check is not None and effective.cancellation_check():
         raise GeometryError("intersection application cancelled before commit")
     if model.revision != plan.revision or to_dict(model)["checksum"]["value"] != plan.source_checksum:
         raise GeometryError("geometry changed before intersection commit")
+    # The last policy callback must not alter the detached result after its
+    # topology/provenance proofs. No callback follows this preflight before the
+    # committed snapshot is adopted.
+    if to_dict(candidate)["checksum"]["value"] != sealed_candidate_checksum:
+        raise GeometryError("intersection candidate changed before commit")
     before = model.revision
     original_faces = set(model.faces)
     covered_faces = {operand.id for operand in plan.operands if operand.kind == "face"}
@@ -1158,6 +1206,7 @@ def _apply_intersections(model, plan, *, policy):
         tuple(sorted(model.faces)) if complete_material else ())
     _publish_application_preimages(model, authored_preimages,
                                   model._intersection_preparation_receipt[3], checksum)
+    _publish_edge_subcurve_preimages(model, edge_preimages, checksum)
     return result
 
 
@@ -1207,6 +1256,8 @@ def clone_prepared_geometry(model):
         made._intersection_preparation_receipt = receipt
         from .prepared_face_preimages import _copy_current_preimages
         _copy_current_preimages(model, made)
+        from .edge_subcurve_preimages import _copy_current_edge_subcurve_preimages
+        _copy_current_edge_subcurve_preimages(model, made)
     return made
 
 
@@ -1229,6 +1280,9 @@ def set_prepared_face_corners(model, updates):
     original = to_dict(model)
     receipt = model._intersection_preparation_receipt
     from .prepared_face_preimages import _current_receipt, _publish_application_preimages
+    from .edge_subcurve_preimages import (_capture_edge_subcurve_preimages,
+        _finalize_edge_subcurve_preimages, _publish_edge_subcurve_preimages)
+    edge_draft = _capture_edge_subcurve_preimages(model, allow_seed=False)
     try:
         authored_preimages = _current_receipt(model)
     except GeometryError:
@@ -1264,9 +1318,12 @@ def set_prepared_face_corners(model, updates):
         raise GeometryError("geometry changed during prepared corner editing")
     if actual == original:
         return
+    edge_preimages = _finalize_edge_subcurve_preimages(candidate, edge_draft)
     model.restore_topology(candidate.topology_snapshot())
     plan, _revision, _checksum, coverage = receipt
     model._intersection_preparation_receipt = (
         plan, model.revision, to_dict(model)['checksum']['value'], coverage)
     _publish_application_preimages(model, authored_preimages, coverage,
                                   model._intersection_preparation_receipt[2])
+    _publish_edge_subcurve_preimages(model, edge_preimages,
+                                   model._intersection_preparation_receipt[2])
