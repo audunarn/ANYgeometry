@@ -45,9 +45,11 @@ the retained source supports; they are not interchangeable with region UVs.
 
 Consumers must retain shared node sequences on physical constraints, pin
 retained stations, preserve authored associations and honor source attachments.
-The current mesher integration is restricted to regions whose source faces all
-map to the same authored face. Assigning a cross-source cell to a representative
-face is not valid when independently authored preimages differ. Such cases need
+The current mesher integration admits unions only when every region source face
+maps to the same face in the mesher's authored input. An already fragmented input
+does not gain this coverage from historical ancestry alone. Assigning a
+cross-source cell to a representative face is not valid when independently
+authored preimages differ. Such cases need
 an explicit provenance representation before acceptance.
 
 `query_prepared_face_preimages(model, face_ids=None, expected_revision=None)`
@@ -75,7 +77,55 @@ stations and retained vertices must occur in active connectivity. The initial
 mesher route refuses region source attachments until their consumer semantics
 are qualified; quadratic region meshing is still outside this initial route.
 
+The proposed ANYfem integration preserves its prepared neighborhood and declares
+an explicit authored-face association basis bound to `PreparedFacePreimages`.
+ANYfem would compose those roots through its pre-preparation source mapping once;
+its existing descendant remapper cannot consume retired root IDs. This proposal
+is not implemented or accepted. Child-local sections, loads and mesh controls
+must retain their scope, or the consumer must decline the union.
+
 Development evidence is recorded in
 `reports/general_intersections/quadric_generalization_study.md`. Geometry region
 qualification alone is not accepted meshing. The large mixed-model linear and
 representative quadratic acceptance gates remain outstanding.
+
+## Boundary refinement development
+
+ANYmesher continuation commits `4a24f70a339be04d2399ea39c12f19460aa3ef35`
+and `0b2351e031fcbfdebc5a8c9feb50fc941c54d09a` retain owner-bound boundary
+station identity and stage detached Plane patches. Identity receipts do not
+permit subdivision. The prototype consumes common owner UV coordinates,
+preserves internal constraints and source nodes, and charges original attempt
+allowances on failure. It neither allocates a shared node nor publishes a mesh.
+
+The rational fixture removes shape violations but retains growth above the
+existing limit. It demonstrates strict progress, not accepted meshing. Curved
+extrusion coverage, source-error qualification, per-face cumulative receipts and
+one atomic transaction across every incident representative remain prerequisites
+for production routing. Historical collinear splitting and current accepted
+meshes retain their contracts. No mixed-model acceptance or new release follows
+from these prototypes.
+
+### Whole-cell coverage query
+
+`validate_material_surface_region_triangles(model, regions, face, triangles_uv)`
+is a read-only coverage query for finite arrays shaped `(n, 3, 2)`. It returns
+`None` only when every closed triangle lies in the selected, revision-bound
+material region. It preserves input arrays and model state and accepts the
+existing `cancellation_check` callback. Unsupported or unresolved proofs raise
+`GeometryError`.
+
+The initial implementation supports Plane charts and Bezier-directrix extrusion
+charts with an exactly planar profile and a certified monotone projection.
+Every boundary must have a coefficient-proved polynomial chart correspondence,
+and each loop must close exactly. Side events, boundary membership and winding
+use rational polynomial arithmetic and certified root intervals. Concave trims
+and wholly enclosed holes are checked; isolated display samples are not a
+coverage certificate.
+
+Algebraic branch trims, periodic supports, tolerance-only support coincidence
+and rounded fragment controls without an exact coefficient identity currently
+refuse. In particular, this query does not yet qualify the failing mixed-model
+Bezier wall. Historical owner membership queries retain their tolerances and
+behavior. Coverage success grants no subdivision permission, curve-error,
+shared-node, element-quality or mesh-publication qualification.
