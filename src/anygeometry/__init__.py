@@ -38,6 +38,11 @@ from .authored_boundary_stations import (
     AuthoredBoundaryStations, query_prepared_authored_boundary_stations,
     validate_prepared_authored_boundary_station_coordinates,
 )
+from .authored_surface_evaluation import evaluate_prepared_authored_face
+from .authored_curve_stations import (
+    AuthoredCurveStations, query_prepared_authored_curve_stations,
+    validate_prepared_authored_curve_station_coordinates,
+)
 from .coordinates import (
     model_to_world_points, world_to_model_points,
     model_to_world_vectors, world_to_model_vectors,
@@ -310,6 +315,10 @@ __all__ = [
     "AuthoredBoundaryStations",
     "query_prepared_authored_boundary_stations",
     "validate_prepared_authored_boundary_station_coordinates",
+    "evaluate_prepared_authored_face",
+    "AuthoredCurveStations",
+    "query_prepared_authored_curve_stations",
+    "validate_prepared_authored_curve_station_coordinates",
     "evaluate_material_surface_region",
     "JointEdge",
     "query_joint_edge",
