@@ -356,12 +356,26 @@ def _orient(a, b, c):
     return (b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0])
 
 
+def _coordinate_fraction(value):
+    """Keep explicit plain Fraction UV; other values retain binary64 meaning."""
+    return value if type(value) is F else F(float(value))
+
+
 def _triangle_rows(triangles_uv):
-    """Detach finite real input before any caller callback."""
+    """Detach finite real input, preserving explicit plain Fraction entries."""
     try:
-        if np.iscomplexobj(np.asarray(triangles_uv)):
+        raw = np.array(triangles_uv, copy=True)
+        if np.iscomplexobj(raw) or (raw.dtype == object and
+                any(isinstance(value, (complex, np.complexfloating)) for value in raw.flat)):
             raise GeometryError('material cell coverage requires real finite (n,3,2) triangles')
-        triangles = np.array(triangles_uv, dtype=float, copy=True)
+        if raw.ndim != 3 or raw.shape[1:] != (3, 2):
+            raise GeometryError('material cell coverage requires finite (n,3,2) triangles')
+        if raw.dtype == object and any(type(value) is F for value in raw.flat):
+            triangles = np.empty(raw.shape, dtype=object)
+            for index,value in enumerate(raw.flat):
+                triangles.flat[index] = _coordinate_fraction(value)
+            return triangles
+        triangles = np.array(raw, dtype=float, copy=True)
     except (TypeError, ValueError, OverflowError) as error:
         raise GeometryError('material cell coverage requires finite (n,3,2) triangles') from error
     if triangles.ndim != 3 or triangles.shape[1:] != (3, 2) or not np.isfinite(triangles).all():
@@ -408,7 +422,7 @@ def _validate_domain_triangles(domain, triangles, check):
     loops = _chart_loops(frame, domain, check)
     for values in triangles:
         check()
-        triangle = tuple(tuple(F(float(x)) for x in row) for row in values)
+        triangle = tuple(tuple(_coordinate_fraction(x) for x in row) for row in values)
         orientation = _orient(*triangle)
         if orientation == 0:
             raise GeometryError('material cell coverage: degenerate triangle')

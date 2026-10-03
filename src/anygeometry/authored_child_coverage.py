@@ -15,7 +15,8 @@ from .errors import GeometryError
 from .entities import EntityRef
 from .identity import EntityHandle
 from .material_arrangement import ArrangementPath, MaterialDomain
-from .material_cell_coverage import _triangle_rows, _validate_domain_triangles, _frame, _dot, _cross
+from .material_cell_coverage import (_triangle_rows, _validate_domain_triangles, _frame, _dot, _cross,
+                                    _coordinate_fraction)
 from .surfaces import CoonsSurface, ExtrudedSurface, Plane
 
 
@@ -45,7 +46,7 @@ def _support_correspondence(original, current, triangles, check=lambda: None):
         for triangle in triangles:
             check()
             for row in triangle:
-                value = start + F(float(row[axis]))*(end-start)
+                value = start + _coordinate_fraction(row[axis])*(end-start)
                 if not lower <= value <= upper:
                     raise GeometryError('authored child coverage: triangle leaves literal support range')
 
