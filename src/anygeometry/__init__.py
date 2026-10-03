@@ -26,6 +26,11 @@ from .prepared_vertex_preimages import (
     PreparedVertexPreimages, query_prepared_vertex_preimages,
     validate_prepared_vertex_preimages_binding,
 )
+from .prepared_sheet_joint_component import (
+    PreparedSheetJointComponent, query_prepared_sheet_joint_component,
+    validate_prepared_sheet_joint_component_binding,
+    validate_prepared_sheet_joint_component_selection,
+)
 from .authored_child_coverage import validate_prepared_authored_face_child_triangles
 from .authored_partition_coverage import validate_prepared_authored_face_partition
 from .edge_subcurve_preimages import (
@@ -303,6 +308,10 @@ __all__ = [
     "PreparedVertexPreimages",
     "query_prepared_vertex_preimages",
     "validate_prepared_vertex_preimages_binding",
+    "PreparedSheetJointComponent",
+    "query_prepared_sheet_joint_component",
+    "validate_prepared_sheet_joint_component_binding",
+    "validate_prepared_sheet_joint_component_selection",
     "validate_prepared_authored_face_child_triangles",
     "validate_prepared_authored_face_partition",
     "query_prepared_model_scope",
