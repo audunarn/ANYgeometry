@@ -178,6 +178,18 @@ def test_an_affine_image_is_exact_and_composes():
 
 
 @pytest.mark.parametrize("name", CASES)
+def test_nonuniform_batched_affine_points_keep_scalar_rounding(name):
+    _first, _second, curves = charts(name)
+    transform = np.array(((.75, -.3, .2, 1.3), (.1, 1.2, -.25, -2.7),
+                          (-.2, .4, 1.1, .8), (0., 0., 0., 1.)))
+    grid = np.random.default_rng(944).uniform(0., 1., (3, 5)).T
+    for curve in curves:
+        for copy in (curve, curve.transformed(transform)):
+            expected = np.array([copy.evaluate(float(t)) for t in grid.flat]).reshape(grid.shape + (3,))
+            assert np.array_equal(copy.evaluate(grid), expected)
+
+
+@pytest.mark.parametrize("name", CASES)
 def test_bounds_enclose_the_curve_tightly_enough_to_prune(name):
     _first, _second, curves = charts(name)
     for curve in curves:

@@ -13,7 +13,7 @@ from fractions import Fraction
 import numpy as np
 import pytest
 
-from anygeometry.branch_algebra import (BezierRuledSupport, build_abc, get_poly_plan, poly_roots)
+from anygeometry.branch_algebra import (BernsteinForm, BezierRuledSupport, build_abc, get_poly_plan, poly_roots)
 from anygeometry.errors import GeometryError
 from anygeometry.extrusions import BezierDirectrix, EllipseDirectrix
 from anygeometry.quadric_algebra import QuadricSupport
@@ -273,6 +273,15 @@ def test_the_end_values_are_the_end_coefficients_and_a_constant_is_a_constant():
         assert form(0.) == float(horner(exact, Fraction(0))) and form(1.) == float(horner(exact, Fraction(1)))
         assert form.many(np.array([0., 1.]))[0] == form(0.) and form.many(np.array([0., 1.]))[1] == form(1.)
     assert fs.abc_scalar(.3, 1)[0] == 0. and fs.at(np.array([.2, .9]), 2)[0].shape == (2,)
+
+
+@pytest.mark.parametrize("count", [1, 4, 5, 65])
+def test_bernstein_batch_shape_and_scalar_dispatch_have_identical_rounding(count):
+    grid = np.random.default_rng(611).uniform(0., 1., (count, 2))[:, :1]
+    for degree in (0, 3, 5, 8, 16):
+        form = BernsteinForm([Fraction((-1) ** i * (i + 1), 7) for i in range(degree + 1)])
+        expected = np.array([form(float(t)) for t in grid.flat]).reshape(grid.shape)
+        assert np.array_equal(form.many(grid), expected)
 
 
 @pytest.mark.parametrize("degree", [3, 5, 7])
