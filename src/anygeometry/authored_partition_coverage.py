@@ -14,7 +14,7 @@ from .authored_domain_coverage import _original_domain
 from .errors import GeometryError
 from .material_arrangement import MaterialDomain
 from .material_cell_coverage import (_triangle_rows, _validate_domain_triangles,
-                                    _frame, _chart_loops, _value, _orient)
+                                    _frame, _chart_loops, _value, _orient, _coordinate_fraction)
 from .surfaces import Plane
 
 
@@ -136,7 +136,7 @@ def validate_prepared_authored_face_partition(model,correspondence,child_triangl
         area=F(0)
         for row in rows[key]:
             check()
-            triangle=tuple(tuple(F(float(v)) for v in p) for p in row)
+            triangle=tuple(tuple(_coordinate_fraction(v) for v in p) for p in row)
             signed=_orient(*triangle)
             if not signed:
                 raise GeometryError('authored partition: degenerate cell')

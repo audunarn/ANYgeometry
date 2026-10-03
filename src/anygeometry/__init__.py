@@ -61,6 +61,10 @@ from .authored_internal_stations import (
     AuthoredInternalStations, query_prepared_authored_internal_stations,
     validate_prepared_authored_internal_station_coordinates,
 )
+from .authored_material_stations import (
+    AuthoredMaterialStations, query_prepared_authored_material_stations,
+    validate_prepared_authored_material_station_coordinates,
+)
 from .coordinates import (
     model_to_world_points, world_to_model_points,
     model_to_world_vectors, world_to_model_vectors,
@@ -350,6 +354,9 @@ __all__ = [
     "AuthoredInternalStations",
     "query_prepared_authored_internal_stations",
     "validate_prepared_authored_internal_station_coordinates",
+    "AuthoredMaterialStations",
+    "query_prepared_authored_material_stations",
+    "validate_prepared_authored_material_station_coordinates",
     "query_prepared_authored_curve_stations",
     "validate_prepared_authored_curve_station_coordinates",
     "evaluate_material_surface_region",
