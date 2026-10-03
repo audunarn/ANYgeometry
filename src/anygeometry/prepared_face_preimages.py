@@ -11,7 +11,7 @@ from uuid import UUID
 
 from .definition_binding import definition_checksum
 from .errors import GeometryError
-from .serialization import to_dict
+from .serialization import to_dict, _serialized_model_state
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,7 +103,9 @@ def _current_receipt(model):
         raise GeometryError('prepared face provenance is stale')
     if checksum != _binding_checksum(binding):
         raise GeometryError('prepared face provenance definition binding changed')
-    if to_dict(model)['checksum']['value'] != binding.source_checksum:
+    # A current local preparation receipt supplies prior qualification; this
+    # complete fingerprint supplies freshness, including same-revision edits.
+    if _serialized_model_state(model)['checksum']['value'] != binding.source_checksum:
         raise GeometryError('prepared face provenance source binding changed')
     _validate_shape(model, binding)
     return binding

@@ -14,7 +14,7 @@ import weakref
 from .arrangement_geometry import LinePath, BezierPath, freeze_edge
 from .definition_binding import definition_checksum
 from .errors import GeometryError
-from .serialization import to_dict, _checksum
+from .serialization import to_dict, _checksum, _serialized_model_state
 
 
 class _SubcurveEnclosureUnavailable(GeometryError):
@@ -181,7 +181,10 @@ def _current(model):
         raise GeometryError('edge subcurve provenance is stale')
     if definition_checksum(binding) != checksum:
         raise GeometryError('edge subcurve provenance definition binding changed')
-    if to_dict(model)['checksum']['value'] != binding.source_checksum:
+    # Preparation already qualified the immutable receipt. Re-fingerprint all
+    # persisted inputs to detect even direct same-revision edits, without
+    # repeating whole-model topology qualification for every station query.
+    if _serialized_model_state(model)['checksum']['value'] != binding.source_checksum:
         raise GeometryError('edge subcurve provenance source binding changed')
     if binding.coverage != tuple(sorted(model.edges)):
         raise GeometryError('edge subcurve provenance coverage changed')

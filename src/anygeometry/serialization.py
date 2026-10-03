@@ -594,6 +594,27 @@ def _serialized_model_state(
     evidence of validity; it only detects changes to existing evidence bindings.
     """
 
+    # Encoding sorted record values would hide a same-revision permutation of
+    # live lookup keys. Freshness must bind the lookup interpretation too.
+    # This cheap linear check is not topology/structural requalification.
+    for name, expected in (
+        ('vertices', Vertex), ('edges', Edge), ('faces', Face),
+        ('parts', Part), ('sheets', Sheet), ('face_uses', FaceUse), ('coedges', Coedge),
+        ('members', Member), ('member_edge_uses', MemberEdgeUse),
+        ('attachments', Attachment), ('junctions', Junction),
+    ):
+        for identifier, record in getattr(geometry, name).items():
+            if (not isinstance(record, expected) or isinstance(identifier, (bool, np.bool_))
+                    or not isinstance(identifier, (int, np.integer))
+                    or identifier != record.id):
+                raise GeometryError(f'model fingerprint {name} key does not match its record ID/type')
+
+    if include_features:
+        # Feature encoding normalizes IDs and unavailable-executor state. Reject
+        # invalid raw definitions before those conversions can hide tampering.
+        # This checks definitions only, without materialization/topology replay.
+        geometry.features.validate()
+
     try:
         model_id = str(UUID(str(geometry.model_id)))
     except (TypeError, ValueError, AttributeError) as error:

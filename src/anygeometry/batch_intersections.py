@@ -1219,6 +1219,7 @@ def has_current_intersection_preparation(model, *, face_ids=None):
     classification. Invalid requested faces raise GeometryError.
     """
     from .intersections import _normalize_operand
+    from .serialization import _serialized_model_state
     selected = set(model.faces) if face_ids is None else set()
     if face_ids is not None:
         for value in face_ids:
@@ -1234,7 +1235,7 @@ def has_current_intersection_preparation(model, *, face_ids=None):
                 and model.revision == revision
                 and model.model_id == plan.model_id
                 and plan.content_checksum == _plan_content(plan)
-                and to_dict(model)["checksum"]["value"] == checksum)
+                and _serialized_model_state(model)["checksum"]["value"] == checksum)
 
 
 def clone_prepared_geometry(model):
