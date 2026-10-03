@@ -359,7 +359,12 @@ class BernsteinForm:
             value = np.full(x.shape, weights[m])
             for j in range(m - 1, -1, -1):
                 value = value * ratio + weights[j]
-            result[mask] = value * (x if high else other) ** m
+            # NumPy's platform-specific array power can round differently from
+            # Python's scalar libm power. Keep the public scalar/batch identity
+            # while retaining the vectorized Horner recurrence.
+            scale = np.fromiter((float(v) ** m for v in (x if high else other)),
+                                dtype=float, count=x.size)
+            result[mask] = value * scale
         return result.reshape(t.shape)
 
     def range(self, lo, hi):

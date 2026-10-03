@@ -165,8 +165,14 @@ class BezierQuadricCurve:
         else:
             left = tau <= .5
             half = .5 * math.pi * tau
-            f = np.where(left, np.sin(half), np.cos(half))
-            fp = np.where(left, .5 * math.pi * np.cos(half), -.5 * math.pi * np.sin(half))
+            # Share scalar libm rounding: SIMD trig implementations need not
+            # return the same final bit as math.sin/cos on every platform.
+            sine = np.fromiter((math.sin(float(x)) for x in half.flat),
+                               dtype=float, count=half.size).reshape(half.shape)
+            cosine = np.fromiter((math.cos(float(x)) for x in half.flat),
+                                 dtype=float, count=half.size).reshape(half.shape)
+            f = np.where(left, sine, cosine)
+            fp = np.where(left, .5 * math.pi * cosine, -.5 * math.pi * sine)
             side = np.where(left, 1.0, -1.0)
             anchor = np.where(left, start, end)
         delta = side * sweep * f * f
@@ -202,8 +208,10 @@ class BezierQuadricCurve:
         return self.transform == IDENTITY
 
     def _apply_transform(self, points):
-        matrix = np.asarray(self.transform)
-        return points @ matrix[:3, :3].T + matrix[:3, 3]
+        # Use the scalar evaluator's ordered sums, independent of BLAS/FMA.
+        m = self.transform
+        return np.stack([m[i][0] * points[..., 0] + m[i][1] * points[..., 1]
+                         + m[i][2] * points[..., 2] + m[i][3] for i in range(3)], axis=-1)
 
     def _difference(self, fs, anchor, u):
         """``h(u) = (Delta(anchor + E u) - Delta(anchor)) / (E u)`` with ``E = side * sweep`` at every chart anchor."""

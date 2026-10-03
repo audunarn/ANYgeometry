@@ -50,6 +50,28 @@ def _support_correspondence(original, current, triangles, check=lambda: None):
                     raise GeometryError('authored child coverage: triangle leaves literal support range')
 
 
+def _literal_child_domain(model, identifier):
+    """Detached literal inputs; caller authenticates before/after capture."""
+    face = deepcopy(model.faces[identifier])
+    boundaries = []
+    for loop in (face.loop, *face.holes):
+        paths = []
+        for use in loop:
+            curve = deepcopy(freeze_edge(model, use.edge))
+            if not use.forward:
+                # Reverse stored coefficients, not evaluated float endpoints.
+                if type(curve) is LinePath:
+                    curve = LinePath(curve.end, curve.start)
+                elif type(curve) is BezierPath:
+                    curve = BezierPath(curve.controls[::-1])
+                else:
+                    curve = curve.subcurve(1., 0.)
+            paths.append(ArrangementPath(curve, use.edge, decomposition=
+                'intersection_decomposition_seam' in model.tags_for(EntityRef('edge', use.edge))))
+        boundaries.append(tuple(paths))
+    return face, MaterialDomain(identifier, face.surface, tuple(boundaries))
+
+
 def validate_prepared_authored_face_child_triangles(model, correspondence, current_face,
                                                     triangles_uv, *, cancellation_check=None):
     """Prove each CLOSED original-UV triangle lies wholly in a named child.
@@ -82,25 +104,7 @@ def validate_prepared_authored_face_child_triangles(model, correspondence, curre
     # ALL literal child inputs before the first cancellation callback. A caller
     # temporarily changing/restoring live topology must not change this proof.
     validate_prepared_authored_boundary_correspondence_binding(model, correspondence)
-    face = deepcopy(model.faces[identifier])
-    boundaries = []
-    for loop in (face.loop, *face.holes):
-        paths = []
-        for use in loop:
-            curve = deepcopy(freeze_edge(model, use.edge))
-            if not use.forward:
-                # Reverse stored polynomial coefficients, not evaluated float
-                # endpoints: start+(end-start) need not recover the literal end.
-                if type(curve) is LinePath:
-                    curve = LinePath(curve.end, curve.start)
-                elif type(curve) is BezierPath:
-                    curve = BezierPath(curve.controls[::-1])
-                else:
-                    curve = curve.subcurve(1., 0.)
-            paths.append(ArrangementPath(curve, use.edge, decomposition=
-                'intersection_decomposition_seam' in model.tags_for(EntityRef('edge', use.edge))))
-        boundaries.append(tuple(paths))
-    current = MaterialDomain(identifier, face.surface, tuple(boundaries))
+    face, current = _literal_child_domain(model, identifier)
     validate_prepared_authored_boundary_correspondence_binding(model, correspondence)
 
     def check():
