@@ -1231,11 +1231,19 @@ def has_current_intersection_preparation(model, *, face_ids=None):
     if receipt is None:
         return False
     plan, revision, checksum, coverage = receipt
-    return bool(coverage and selected <= set(coverage)
+    eligible = bool(coverage and selected <= set(coverage)
                 and model.revision == revision
                 and model.model_id == plan.model_id
-                and plan.content_checksum == _plan_content(plan)
-                and _serialized_model_state(model)["checksum"]["value"] == checksum)
+                and plan.content_checksum == _plan_content(plan))
+    if not eligible:
+        return False
+    if _serialized_model_state(model)["checksum"]["value"] == checksum:
+        return True
+    # A changed raw state no longer has prior qualification. Preserve the
+    # public invalid-topology error before reporting a valid stale receipt.
+    # Exact unchanged content keeps the fingerprint-only read path above.
+    to_dict(model)
+    return False
 
 
 def clone_prepared_geometry(model):

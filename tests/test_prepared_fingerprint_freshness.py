@@ -26,6 +26,20 @@ def test_unchanged_prepared_queries_do_not_repeat_topology_qualification(monkeyp
     query_prepared_authored_boundary_correspondence(model, 1)
 
 
+def test_valid_raw_content_mismatch_requalifies_before_receipt_refusal(monkeypatch):
+    model = prepared()
+    identifier = min(model.faces)
+    model._faces[identifier] = replace(model.faces[identifier], metadata={'raw': 'edit'})
+    calls = []
+    original = model.validate_topology
+    def counted():
+        calls.append(True)
+        return original()
+    monkeypatch.setattr(model, 'validate_topology', counted)
+    assert not has_current_intersection_preparation(model)
+    assert len(calls) == 1
+
+
 @pytest.mark.parametrize('store', ('_vertices', '_edges', '_faces', '_sheets', '_face_uses', '_coedges'))
 def test_same_revision_lookup_permutation_cannot_preserve_preparation_authority(store):
     model = prepared()

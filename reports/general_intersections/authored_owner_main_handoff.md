@@ -50,3 +50,17 @@ Mixed 100/1,000-operand linear and representative quadratic meshing, FEM referen
 closure and final platform qualification remain open. Spent native diagnostic
 budgets are unchanged. This merge does not publish a package or alter release
 tags, artifacts or ledgers.
+
+## Main merge compatibility repair
+
+The first hosted development run, `37123079152`, observed 1,955 passing kernel
+cases and one failure on each of Windows and Linux. The existing raw-state test
+requires invalid same-revision topology to raise the public topology error;
+fingerprint-only receipt lookup had instead returned false. The compatibility
+repair keeps unchanged prepared content on its fingerprint fast path and
+requalifies only checksum-mismatched eligible content before returning false.
+Invalid content therefore retains its prior typed error. Both preparation and
+fingerprint test files pass together (24 cases). Original hosted failures and
+artifacts remain retained; the repaired head requires its own development gate.
+The previously recorded candidate wheel is historical evidence, not the repaired
+source artifact.
