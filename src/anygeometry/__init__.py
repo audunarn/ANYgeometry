@@ -42,7 +42,10 @@ from .material_regions import (
     MaterialSurfaceRegion, MaterialSurfaceRegions, query_material_surface_regions,
     validate_material_surface_regions_binding, evaluate_material_surface_region,
 )
-from .material_cell_coverage import validate_material_surface_region_triangles
+from .material_cell_coverage import (
+    validate_material_surface_region_triangles,
+    validate_material_surface_region_triangles_xyz,
+)
 from .authored_boundary_correspondence import (
     AuthoredBoundaryCorrespondence, query_prepared_authored_boundary_correspondence,
     validate_prepared_authored_boundary_correspondence_binding,
@@ -342,6 +345,7 @@ __all__ = [
     "query_material_surface_regions",
     "validate_material_surface_regions_binding",
     "validate_material_surface_region_triangles",
+    "validate_material_surface_region_triangles_xyz",
     "AuthoredBoundaryCorrespondence",
     "query_prepared_authored_boundary_correspondence",
     "validate_prepared_authored_boundary_correspondence_binding",
