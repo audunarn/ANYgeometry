@@ -39,6 +39,10 @@ class PreparedSheetJointComponent:
     occurrence_mapping_qualified: bool = True
     semantic_mapping_qualified: bool = False
     publication_qualified: bool = False
+    # IDs in the fresh working-model source namespace, not Project IDs.
+    # Only literal unchanged joint relations are qualified; no split remap.
+    preserved_joint_attachment_ids: tuple = ()
+    preserved_joint_junction_ids: tuple = ()
 
     @property
     def source_records(self):
@@ -207,6 +211,51 @@ def _records(document,data,deps,attachments,junctions):
     return json.dumps(result,sort_keys=True,separators=(',',':'),allow_nan=False)
 
 
+def _qualify_preserved_source_joints(source, current, source_attachments,
+                                    source_junctions, attachments, junctions, check):
+    """Prove unchanged source relations against already qualified CURRENT joints.
+
+    Equality of IDs alone cannot prove an unchanged parameter carrier. Retain
+    the entire attachment/junction payload, edge definition and endpoint
+    records. Fragmented/rebound carriers and unsupported relation types refuse.
+    """
+    for key in sorted(source_attachments):
+        check()
+        original = source['attachments'][key]
+        if key not in attachments or original != current['attachments'].get(key):
+            raise GeometryError('prepared Sheet joint component has unqualified original Attachment remapping')
+        edge = original['target_id']
+        old_edge = source['edges'].get(edge)
+        if old_edge is None or old_edge != current['edges'].get(edge):
+            raise GeometryError('prepared Sheet joint component original joint carrier changed')
+        for vertex in (old_edge['start'], old_edge['end']):
+            if (source['vertices'].get(vertex) is None or
+                    source['vertices'][vertex] != current['vertices'].get(vertex)):
+                raise GeometryError('prepared Sheet joint component original joint endpoint changed')
+    for key in sorted(source_junctions):
+        check()
+        if key not in junctions or source['junctions'][key] != current['junctions'].get(key):
+            raise GeometryError('prepared Sheet joint component has unqualified original Junction remapping')
+
+
+def _source_relations(source, deps, near_edges, check):
+    """Include original incoming attachment/junction references to a fixed point."""
+    attachments, junctions = set(), set()
+    while True:
+        before = (len(attachments), len(junctions))
+        for key, row in source['attachments'].items():
+            check()
+            if _touch_attachment(row, deps, near_edges, attachments, junctions):
+                attachments.add(key)
+        for key, row in source['junctions'].items():
+            check()
+            if (set(row['sheet_ids']) & deps['sheets'] or
+                    set(row['attachment_ids']) & attachments):
+                junctions.add(key)
+        if before == (len(attachments), len(junctions)):
+            return attachments, junctions
+
+
 def query_prepared_sheet_joint_component(model,current_joint_edge_id,*,expected_revision=None,
                                          cancellation_check=None):
     """Capture the entire CURRENT declared Plane/Straight Sheet-joint component.
@@ -310,13 +359,11 @@ def query_prepared_sheet_joint_component(model,current_joint_edge_id,*,expected_
     source_near={key for key,row in source['edges'].items() if key in source_deps['edges'] or
                  row['start'] in source_deps['vertices'] or row['end'] in source_deps['vertices']}
     _refuse_members(source,source_deps,source_near)
-    source_attachments={key for key,row in source['attachments'].items()
-                        if _touch_attachment(row,source_deps,source_near)}
-    source_junctions={key for key,row in source['junctions'].items() if set(row['sheet_ids'])&sheets or
-                     set(row['attachment_ids'])&source_attachments}
-    # No source attachment equivalence follows from current classification.
-    if source_attachments or source_junctions:
-        raise GeometryError('prepared Sheet joint component has unqualified original Attachment/Junction remapping')
+    source_attachments,source_junctions=_source_relations(source,source_deps,source_near,check)
+    # Current classification alone does not qualify original relations. Only
+    # literal preservation on the same unchanged carrier is established here.
+    _qualify_preserved_source_joints(source,data,source_attachments,source_junctions,
+                                    attachments,junctions,check)
     original_supports=_plane_geometry(source,authored,check)
     current_supports=_plane_geometry(data,deps['faces'],check)
     for face,support in current_supports.items():
@@ -327,7 +374,9 @@ def query_prepared_sheet_joint_component(model,current_joint_edge_id,*,expected_
         tuple(sorted(junctions)),tuple(sorted(attachments)),tuple(occurrence),
         _records(original,source,source_deps,source_attachments,source_junctions),
         _records(current,data,deps,attachments,junctions),
-        ('raw metadata/group/tag/feature/extension semantics and parameter remapping',))
+        ('raw metadata/group/tag/feature/extension semantics and parameter remapping',),
+        preserved_joint_attachment_ids=tuple(sorted(source_attachments)),
+        preserved_joint_junction_ids=tuple(sorted(source_junctions)))
     check()
     validate_prepared_model_scope_binding(model,scope)
     for edge in result.joint_edge_ids:

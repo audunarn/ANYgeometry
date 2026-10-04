@@ -24,8 +24,20 @@ and current Plane faces with literal Straight boundaries, and full-range EXACT
 original, apart from derived membership. Part name and metadata must match.
 Touching Members, member Junctions, other Attachments, source-less structural
 owners and unproved original Attachment/Junction remapping refuse explicitly.
+Previously authored joint links and declarations are qualified only when their
+full payloads remain identical on the same unchanged edge definition and endpoint
+records. `preserved_joint_attachment_ids` and `preserved_joint_junction_ids`
+identify those literal preserved records in the fresh working-model source
+namespace. They do not map Project IDs or qualify splitting/rebinding, arbitrary
+attachment semantics, property transfer or parameter remapping. Complete Sheet
+closure extraction retains its Sheet junction declarations; a reopened design
+can therefore undergo a new witnessed extraction and preparation without
+reconstructing prior preparation authority or pruning existing joints.
 Nonempty qualified Attachment lineage refuses; otherwise unrelated attachments
-whose lineage alone touches the component also refuse.
+whose lineage alone touches the component also refuse. Original incoming
+attachment/junction references are followed to a fixed point before preserved
+relation qualification; their disappearance from the current snapshot is not
+evidence that the source design had no such dependency.
 
 `occurrence_mapping_qualified=True` has a precise separate meaning: for every
 `(Sheet ID, authored root face ID)` there is exactly one original FaceUse, and
@@ -59,3 +71,8 @@ The portable example prepares two explicit Sheets before a 4×4 plate is cut at
 x=3. Joint edge 25 links both Sheets; all eight current faces and their sibling
 FaceUses are captured. A third joint reached through the plate expands the
 component to three Sheets. No native mesher is invoked.
+`examples/reopened_sheet_joint_component_handoff.py` demonstrates a plain saved
+child design, fresh complete eight-face/two-Sheet extraction and new preparation.
+All eight child roots and occurrences remain distinct, with the existing two
+joint attachments and one declaration retained. General semantic mapping and
+publication flags remain false.
