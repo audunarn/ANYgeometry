@@ -42,6 +42,7 @@ from .material_regions import (
     MaterialSurfaceRegion, MaterialSurfaceRegions, query_material_surface_regions,
     validate_material_surface_regions_binding, evaluate_material_surface_region,
 )
+from .chart_fingerprints import chart_definition_fingerprint
 from .material_cell_coverage import (
     validate_material_surface_region_triangles,
     validate_material_surface_region_triangles_xyz,
@@ -344,6 +345,7 @@ __all__ = [
     "MaterialSurfaceRegions",
     "query_material_surface_regions",
     "validate_material_surface_regions_binding",
+    "chart_definition_fingerprint",
     "validate_material_surface_region_triangles",
     "validate_material_surface_region_triangles_xyz",
     "AuthoredBoundaryCorrespondence",
