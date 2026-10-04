@@ -4,6 +4,10 @@ All notable user-visible changes to ANYgeometry are documented here.
 
 ## Unreleased
 
+- Add public chart-definition fingerprints so consumers can retain the original
+  chart/region content across callbacks. These read-only tokens supplement live
+  owner validation; they do not certify geometry or permit meshing.
+
 - Keep extrusion coordinates bitwise consistent between scalar and batch queries
   across BLAS kernels, preserving the existing inversion accuracy requirements.
 
