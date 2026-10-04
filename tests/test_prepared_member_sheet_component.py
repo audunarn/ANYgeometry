@@ -154,3 +154,131 @@ def test_unusable_receipt_fields_raise_typed_errors(field):
     receipt = query(model, joint)
     with pytest.raises(GeometryError, match='plain immutable'):
         validate(model, replace(receipt, **{field: object()}))
+
+
+def test_source_serialization_cannot_repair_initially_forged_evidence():
+    model, joint = build()
+    valid = query(model, joint)
+    forged = replace(valid, member_relation_json='{}')
+    triggered = []
+    class Repair(dict):
+        def __deepcopy__(self, memo):
+            triggered.append(True)
+            object.__setattr__(forged, 'member_relation_json', valid.member_relation_json)
+            model._serialization_extensions = {}
+            return {}
+    model._serialization_extensions = Repair()
+    with pytest.raises(GeometryError, match='definition binding changed'):
+        validate(model, forged)
+    assert triggered
+
+
+def test_last_source_guard_cannot_change_validated_receipt(monkeypatch):
+    import anygeometry.prepared_member_sheet_component as component
+    model, joint = build()
+    receipt = query(model, joint)
+    real_validate = component.validate_prepared_model_scope_binding
+    scope_calls = []
+    active = []
+    triggered = []
+    class Change(dict):
+        def __deepcopy__(self, memo):
+            if active:
+                triggered.append(True)
+                object.__setattr__(receipt, 'member_relation_json', '{}')
+                model._serialization_extensions = {}
+            return {}
+    def closing_guard(geometry, scope, **kwargs):
+        if scope is receipt.scope:
+            scope_calls.append(True)
+            if len(scope_calls) == 2:
+                active.append(True)
+        return real_validate(geometry, scope, **kwargs)
+    model._serialization_extensions = Change()
+    monkeypatch.setattr(component, 'validate_prepared_model_scope_binding', closing_guard)
+    with pytest.raises(GeometryError, match='definition binding changed'):
+        validate(model, receipt)
+    assert triggered
+
+
+def test_query_last_serialization_cannot_mutate_generated_ancestry(monkeypatch):
+    import anygeometry.prepared_member_sheet_component as component
+    model, joint = build()
+    record = query(model, joint).edge_preimages.records[0]
+    real_validate = component.validate_prepared_model_scope_binding
+    calls = []
+    active = []
+    triggered = []
+    class Change(dict):
+        def __deepcopy__(self, memo):
+            if active:
+                triggered.append(True)
+                object.__setattr__(record, 'interval', ((0, 1), (0, 1)))
+                model._serialization_extensions = {}
+            return {}
+    def final_relation_guard(geometry, scope, **kwargs):
+        calls.append(True)
+        if len(calls) == 2:
+            active.append(True)
+        return real_validate(geometry, scope, **kwargs)
+    model._serialization_extensions = Change()
+    monkeypatch.setattr(component, 'validate_prepared_model_scope_binding', final_relation_guard)
+    with pytest.raises(GeometryError, match='output definition changed'):
+        query(model, joint)
+    assert triggered
+
+
+@pytest.mark.parametrize('field', ['scope', 'joint_edge_id', 'ancestry_record'])
+def test_signature_rejects_behavioral_graph_nodes_before_hooks(field):
+    model, joint = build()
+    receipt = query(model, joint)
+    triggered = []
+    class Behavioral(dict):
+        def items(self):
+            triggered.append(True)
+            return super().items()
+    if field == 'ancestry_record':
+        forged = replace(receipt, edge_preimages=replace(receipt.edge_preimages,
+                          records=(Behavioral(),)))
+    else:
+        forged = replace(receipt, **{field: Behavioral()})
+    with pytest.raises(GeometryError, match='plain immutable owner fields'):
+        validate(model, forged)
+    assert not triggered
+
+
+def test_signature_type_whitelist_does_not_execute_custom_metaclass():
+    model, joint = build()
+    receipt = query(model, joint)
+    triggered = []
+    class Meta(type):
+        def __hash__(cls):
+            triggered.append('hash')
+            return type.__hash__(cls)
+        def __eq__(cls, other):
+            triggered.append('eq')
+            return type.__eq__(cls, other)
+    class Behavioral(dict, metaclass=Meta):
+        pass
+    with pytest.raises(GeometryError, match='plain immutable owner fields'):
+        validate(model, replace(receipt, scope=Behavioral()))
+    assert not triggered
+
+
+def test_cyclic_receipt_graph_raises_typed_error():
+    model, joint = build()
+    receipt = query(model, joint)
+    scope = replace(receipt.scope)
+    object.__setattr__(scope, 'face_preimages', scope)
+    with pytest.raises(GeometryError, match='cyclic receipt fields'):
+        validate(model, replace(receipt, scope=scope))
+
+
+def test_malformed_deep_receipt_raises_typed_error_without_operand_cap():
+    model, joint = build()
+    receipt = query(model, joint)
+    nested = ()
+    for _ in range(2000):
+        nested = (nested,)
+    with pytest.raises(GeometryError, match='invalid receipt nesting'):
+        validate(model, replace(receipt, current_face_ids=nested))

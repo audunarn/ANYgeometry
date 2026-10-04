@@ -406,6 +406,7 @@ def _query_component(model,current_joint_edge_id,*,expected_revision=None,
         ('raw metadata/group/tag/feature/extension semantics and parameter remapping',),
         preserved_joint_attachment_ids=tuple(sorted(source_attachments)),
         preserved_joint_junction_ids=tuple(sorted(source_junctions)))
+    result_signature = None if relations is None else relations.output_signature(result)
     check()
     validate_prepared_model_scope_binding(model,scope)
     for edge in result.joint_edge_ids:
@@ -416,6 +417,8 @@ def _query_component(model,current_joint_edge_id,*,expected_revision=None,
             raise GeometryError('prepared Sheet joint component derived occurrence changed')
     if relations is not None:
         relations.validate_final(model, scope, cancellation_check=None)
+        if relations.output_signature(result) != result_signature:
+            raise GeometryError('prepared member Sheet component output definition changed')
     return result
 
 

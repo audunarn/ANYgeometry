@@ -36,6 +36,13 @@ qualification flags, wrong owners, stale evidence and same-revision callback edi
 refuse. Ordinary load/clone operations cannot reconstruct transient preparation
 authority. Querying does not mutate the model.
 
+Receipt validation accepts only the exact immutable owner definitions and plain
+values. It captures their content before model serialization and verifies it
+after the final binding guard. Copy hooks, behavioral substitutes, cyclic
+definitions and malformed nesting raise `GeometryError`; they cannot repair
+invalid evidence during validation. Generated receipts receive the same closing
+content check.
+
 `bounded_relation_mapping_qualified` is scoped to these relations.
 `semantic_mapping_qualified`, `beam_discretization_qualified`,
 `external_reference_transfer_qualified` and `publication_qualified` remain false.

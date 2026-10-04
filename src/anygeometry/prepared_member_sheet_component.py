@@ -1,18 +1,22 @@
 """Bounded member/point relation proof beside the legacy Sheet-only contract."""
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from fractions import Fraction
 import json
+from uuid import UUID
 
 import numpy as np
 
 from .definition_binding import definition_checksum
 from .edge_subcurve_preimages import (
     PreparedEdgeSubcurvePreimages,
+    EdgeSubcurvePreimage, PolynomialEdgeAncestor, PolynomialEdgeDefinition,
     query_prepared_edge_subcurve_preimages,
     validate_prepared_edge_subcurve_preimages_binding,
 )
 from .errors import GeometryError
 from .prepared_model_scope import validate_prepared_model_scope_binding
+from .prepared_model_scope import PreparedModelScope
+from .prepared_face_preimages import PreparedFacePreimages, AuthoredFaceDefinition
 from .prepared_sheet_joint_component import PreparedSheetJointComponent, _query_component
 
 
@@ -53,6 +57,9 @@ class _Relations:
     source_vertex: int
     payload: str
     edge_preimages: object
+
+    def output_signature(self, result):
+        return _receipt_signature(result)
 
     def part_ids(self, data):
         part = data['members'][self.member]['part_id']
@@ -235,21 +242,64 @@ def query_prepared_member_sheet_joint_component(model, current_joint_edge_id, *,
         relation_factory=qualify, result_factory=receipt)
 
 
+def _receipt_signature(receipt):
+    """Pin supplied content without model serialization or copying hooks."""
+    _require(type(receipt) is PreparedMemberSheetJointComponent, 'needs its distinct owner receipt')
+    _require(all(type(getattr(receipt, name)) is str for name in
+                 ('member_relation_json', 'source_records_json', 'current_records_json')) and
+             type(receipt.edge_preimages) is PreparedEdgeSubcurvePreimages,
+             'needs plain immutable relation and ancestry fields')
+    # Definition fingerprints alone are not a type certificate: a Mapping can
+    # imitate the encoded shape of a dataclass and execute code while traversed.
+    # Reject every non-plain graph node BEFORE computing the signature.
+    allowed = (PreparedMemberSheetJointComponent, PreparedModelScope,
+               PreparedFacePreimages, AuthoredFaceDefinition,
+               PreparedEdgeSubcurvePreimages, EdgeSubcurvePreimage,
+               PolynomialEdgeAncestor, PolynomialEdgeDefinition)
+    active = set()
+    def plain(value):
+        kind = type(value)
+        if any(kind is scalar for scalar in (type(None), bool, int, float, str)):
+            return
+        if kind is UUID:
+            _require(type(object.__getattribute__(value, 'int')) is int,
+                     'needs a plain immutable UUID')
+            return
+        _require(kind is tuple or any(kind is cls for cls in allowed),
+                 'needs plain immutable owner fields')
+        identifier = id(value)
+        _require(identifier not in active, 'has cyclic receipt fields')
+        active.add(identifier)
+        try:
+            if kind is tuple:
+                for item in value:
+                    plain(item)
+            else:
+                for field in fields(kind):
+                    plain(object.__getattribute__(value, field.name))
+        finally:
+            active.remove(identifier)
+    try:
+        plain(receipt)
+    except RecursionError as error:
+        raise GeometryError('prepared member Sheet component invalid receipt nesting') from error
+    try:
+        return definition_checksum(receipt)
+    except (TypeError, ValueError) as error:
+        raise GeometryError('prepared member Sheet component invalid receipt definition') from error
+
+
 def validate_prepared_member_sheet_joint_component_binding(model, receipt, *,
         cancellation_check=None):
     """Rederive bounded relations and all component content; omissions cannot qualify."""
-    _require(type(receipt) is PreparedMemberSheetJointComponent, 'needs its distinct owner receipt')
-    _require(type(receipt.member_relation_json) is str and
-             type(receipt.edge_preimages) is PreparedEdgeSubcurvePreimages,
-             'needs plain immutable relation and ancestry fields')
+    # Even callback-free source serialization can execute user copy hooks.
+    # Pin evidence before owner/model work, and inspect it after the LAST guard.
+    signature = _receipt_signature(receipt)
     validate_prepared_model_scope_binding(model, receipt.scope)
-    try:
-        signature = definition_checksum(receipt)
-    except (TypeError, ValueError) as error:
-        raise GeometryError('prepared member Sheet component invalid receipt definition') from error
     expected = query_prepared_member_sheet_joint_component(model, receipt.joint_edge_id,
         expected_revision=receipt.scope.face_preimages.revision,
         cancellation_check=cancellation_check)
-    _require(definition_checksum(expected) == signature and
-             definition_checksum(receipt) == signature, 'definition binding changed')
+    _require(_receipt_signature(expected) == signature and
+             _receipt_signature(receipt) == signature, 'definition binding changed')
     validate_prepared_model_scope_binding(model, receipt.scope)
+    _require(_receipt_signature(receipt) == signature, 'definition binding changed')
