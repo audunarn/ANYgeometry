@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
@@ -262,6 +264,60 @@ def test_extract_model_closure_does_not_expand_owner_part_siblings() -> None:
     assert len(work.sheets) == len(work.members) == 1
     assert work.validate_topology() == ()
     assert work._validate_structural() == ()  # noqa: SLF001
+
+
+@pytest.mark.parametrize('selection_kind', ('sheet', 'part'))
+def test_reopened_complete_sheet_closure_keeps_joint_and_reapply_adds_no_links(selection_kind) -> None:
+    from anygeometry import (apply_intersections, from_dict, plan_intersections, to_dict,
+                             query_joint_edge)
+    from examples.prepared_sheet_joint_component_handoff import build
+
+    sibling = {}
+    def unrelated_sibling(model, roots, sheets):
+        face = model.add_plate(model.add_points(((20,0,0),(24,0,0),(24,4,0),(20,4,0))))
+        # A context Part must not pull this unrelated sibling Sheet.
+        sibling['face'] = face
+        sibling['sheet'] = model.add_sheet((face,),part_id=model.sheets[sheets[0]].part_id)
+    prepared, _, sheets, edge = build(before_prepare=unrelated_sibling)
+    original = to_dict(prepared)
+    geometry = from_dict(original)
+    assert len(geometry.junctions)==1 and len(geometry.attachments)==2
+    assert query_joint_edge(geometry,edge).declared
+    handles = tuple(geometry.handle(selection_kind, sheet if selection_kind=='sheet'
+                    else geometry.sheets[sheet].part_id) for sheet in sheets)
+    result = extract_model_closure(geometry,handles)
+    work = result.working_model
+    mapped = lambda kind,key: result.source_to_work[geometry.handle(kind,key)].id
+    assert len(work.junctions)==1 and len(work.attachments)==2
+    assert len(work.face_uses)==len(work.faces)==(8 if selection_kind=='sheet' else 9)
+    if selection_kind=='sheet':
+        assert geometry.handle('sheet',sibling['sheet']) not in result.source_to_work
+        assert geometry.handle('face',sibling['face']) not in result.source_to_work
+    joint = next(iter(geometry.junctions.values()))
+    expected_joint = replace(joint,id=mapped('junction',joint.id),
+        sheet_ids=tuple(mapped('sheet',key) for key in joint.sheet_ids),
+        attachment_ids=tuple(mapped('attachment',key) for key in joint.attachment_ids))
+    assert work.junctions[expected_joint.id]==expected_joint
+    for key in joint.attachment_ids:
+        attachment=geometry.attachments[key]
+        expected=replace(attachment,id=mapped('attachment',key),
+            source_id=mapped(attachment.source_kind,attachment.source_id),
+            target_id=mapped(attachment.target_kind.value,attachment.target_id))
+        assert work.attachments[expected.id]==expected
+        assert result.work_to_source[work.handle('attachment',expected.id)]==geometry.handle('attachment',key)
+    working_edge=mapped('edge',edge)
+    assert query_joint_edge(work,working_edge).declared
+    before_attachments=tuple(work.attachments.items())
+    before_junctions=tuple(work.junctions.items())
+    before_faces=set(work.faces)
+    apply_intersections(work,plan_intersections(work,tuple(work.faces),policy='connect'),policy='connect')
+    assert tuple(work.attachments.items())==before_attachments
+    assert tuple(work.junctions.items())==before_junctions
+    assert set(work.faces)==before_faces
+    assert query_joint_edge(work,working_edge).declared
+    assert to_dict(geometry)==original==to_dict(prepared)
+    assert work.validate_topology()==()
+    assert work._validate_structural()==()  # noqa: SLF001
 
 
 def test_extract_model_closure_rejects_wrong_model_and_feature_request() -> None:

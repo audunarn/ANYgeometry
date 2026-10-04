@@ -256,6 +256,9 @@ def extract_model_closure(
                     requested_attachment_ids.update(
                         geometry.attachments_for_sheet(sheet_id)
                     )
+                    requested_junction_ids.update(
+                        geometry._sheet_junctions.get(sheet_id, ())  # noqa: SLF001
+                    )
             for face_use_id in tuple(face_use_ids):
                 use = geometry.face_uses[face_use_id]
                 sheet_ids.add(use.sheet_id)
