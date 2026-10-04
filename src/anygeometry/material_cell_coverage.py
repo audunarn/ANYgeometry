@@ -5,6 +5,7 @@ Unresolved common factors and overlapping root brackets refuse.  This validator
 does not authorize mesh edits or certify discretization/element quality.
 """
 from fractions import Fraction as F
+from copy import deepcopy
 from itertools import combinations
 from numbers import Integral
 import math
@@ -16,6 +17,7 @@ from .arrangement_geometry import LinePath, BezierPath
 from .bezier_intersections import _powers, _resultant
 from .cylinder_curve_events import _add, _scale, _multiply, _trim
 from .errors import GeometryError
+from .definition_binding import definition_checksum
 from .extrusions import BezierDirectrix
 from .material_regions import validate_material_surface_regions_binding
 from .surfaces import Plane, ExtrudedSurface
@@ -414,6 +416,95 @@ def validate_material_surface_region_triangles(model, result, face, triangles_uv
     _validate_domain_triangles(selected[0].domain, triangles, check)
     check()
     validate_material_surface_regions_binding(model, result, cancellation_check=cancellation_check)
+
+
+def validate_material_surface_region_triangles_xyz(model, result, face, triangles_xyz,
+                                                   *, cancellation_check=None):
+    """Certify actual closed XYZ triangles in one bound Plane face's material.
+
+    Inputs have shape (n,3,3), use document units and retain their literal
+    binary64 values (plain Fraction entries retain exact rational values).
+    The owner derives exact rational UV and proves its exact affine lift equals
+    each supplied XYZ corner before applying the whole-cell material proof.
+    No floating projection, tolerance-based support recovery or sampling proves
+    containment. Noncoplanar cells, non-Plane carriers, explicit face
+    parameterizations and regions spanning multiple faces refuse.
+
+    This proves containment, not full coverage, source-reference transfer,
+    connectivity, quality, solver admission or publication. The model and
+    supplied cells are never modified. Unsupported exact trim proofs refuse.
+    """
+    validate_material_surface_regions_binding(model, result)
+    def signature():
+        return (model.model_id, model.revision, result.source.source_checksum,
+                definition_checksum(result))
+
+    entry_binding = signature()
+
+    def validate_binding(*, callbacks=False):
+        if signature() != entry_binding:
+            raise GeometryError('XYZ material cell coverage entry binding changed')
+        validate_material_surface_regions_binding(model, result,
+            cancellation_check=cancellation_check if callbacks else None)
+        if signature() != entry_binding:
+            raise GeometryError('XYZ material cell coverage entry binding changed')
+
+    if not isinstance(face, Integral):
+        if getattr(face, 'model_id', None) != model.model_id or getattr(face, 'kind', None) != 'face':
+            raise GeometryError('XYZ material cell coverage requires a bound face')
+        face = face.id
+    if isinstance(face, (bool, np.bool_)) or not isinstance(face, Integral):
+        raise GeometryError('XYZ material cell coverage requires a bound face')
+    face = int(face)
+    validate_binding()
+    selected = [region for region in result.regions
+                if face in {handle.id for handle in region.faces}]
+    if len(selected) != 1 or len(selected[0].faces) != 1 or face not in model.faces:
+        raise GeometryError('XYZ material cell coverage requires one bound SOURCE face region')
+    current = model.faces[face]
+    if type(current.surface) is not Plane or current.parameterization is not None:
+        raise GeometryError('XYZ material cell coverage requires an implicit Plane face')
+    # Detach owner truth before input coercion or caller callbacks. A temporary
+    # mutation/restoration of the live model must not change the proof's domain.
+    domain = deepcopy(selected[0].domain)
+    if type(domain.support) is not Plane:
+        raise GeometryError('XYZ material cell coverage requires a Plane region')
+    frame = _frame(domain.support)
+    try:
+        raw = np.array(triangles_xyz, copy=True)
+        if (raw.ndim != 3 or raw.shape[1:] != (3, 3) or np.iscomplexobj(raw)
+                or any(isinstance(value, (complex, np.complexfloating)) for value in raw.flat)):
+            raise GeometryError('XYZ material cell coverage requires finite real (n,3,3) triangles')
+        xyz = tuple(tuple(tuple(_coordinate_fraction(value) for value in corner)
+                          for corner in triangle) for triangle in raw)
+        if any(not math.isfinite(float(value)) for triangle in xyz
+               for corner in triangle for value in corner):
+            raise GeometryError('XYZ material cell coverage requires finite real (n,3,3) triangles')
+    except (TypeError, ValueError, OverflowError) as error:
+        raise GeometryError('XYZ material cell coverage requires finite real (n,3,3) triangles') from error
+    validate_binding()
+
+    def check():
+        if cancellation_check is not None and cancellation_check('XYZ material cell coverage'):
+            raise GeometryError('XYZ material cell coverage cancelled')
+
+    check()
+    uv = []
+    for triangle in xyz:
+        corners = []
+        for point in triangle:
+            check()
+            offset = tuple(x-y for x, y in zip(point, frame['origin']))
+            pair = tuple(_dot(offset, row) for row in frame['inverse'])
+            lifted = tuple(origin+u*pair[0]+v*pair[1]
+                           for origin, u, v in zip(frame['origin'], frame['u'], frame['v']))
+            if lifted != point:
+                raise GeometryError('XYZ material cell coverage requires exact Plane support correspondence')
+            corners.append(pair)
+        uv.append(tuple(corners))
+    _validate_domain_triangles(domain, tuple(uv), check)
+    check()
+    validate_binding(callbacks=True)
 
 
 def _validate_domain_triangles(domain, triangles, check):
