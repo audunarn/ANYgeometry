@@ -22,6 +22,10 @@ from .prepared_face_preimages import (
 from .prepared_model_scope import (
     PreparedModelScope, query_prepared_model_scope, validate_prepared_model_scope_binding,
 )
+from .authored_constraint_scope import (
+    PreparedAuthoredConstraintScope, query_prepared_authored_constraint_scope,
+    validate_prepared_authored_constraint_scope_binding,
+)
 from .prepared_vertex_preimages import (
     PreparedVertexPreimages, query_prepared_vertex_preimages,
     validate_prepared_vertex_preimages_binding,
@@ -324,6 +328,9 @@ __all__ = [
     "validate_prepared_authored_face_partition",
     "query_prepared_model_scope",
     "validate_prepared_model_scope_binding",
+    "PreparedAuthoredConstraintScope",
+    "query_prepared_authored_constraint_scope",
+    "validate_prepared_authored_constraint_scope_binding",
     "AuthoredFaceDefinition",
     "query_prepared_face_preimages",
     "query_prepared_authored_face_definition",

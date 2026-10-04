@@ -4,6 +4,10 @@ All notable user-visible changes to ANYgeometry are documented here.
 
 ## Unreleased
 
+- Add a read-only authored-root constraint/reference inventory bound to complete
+  original/current geometry snapshots. It exposes trace incidence, neighbours
+  and typed references without granting parameter remapping or mesh publication.
+
 - Add public chart-definition fingerprints so consumers can retain the original
   chart/region content across callbacks. These read-only tokens supplement live
   owner validation; they do not certify geometry or permit meshing.
