@@ -60,7 +60,7 @@ def test_containment_or_area_alone_cannot_accept_a_partial_or_overlapping_mesh(f
 
 
 @pytest.mark.parametrize('source',['holes','cubic'])
-def test_unqualified_material_families_do_not_gain_area_only_acceptance(source):
+def test_incomplete_or_unqualified_material_does_not_gain_area_only_acceptance(source):
     model,binding=planar(holes=True,fragment=False) if source=='holes' else cubic(cropped=True)
     with pytest.raises(GeometryError):
         validate(model,binding,{key:rectangle(0,0,1,1) for key in binding.descendants})
