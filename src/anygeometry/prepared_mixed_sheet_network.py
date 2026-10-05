@@ -132,16 +132,15 @@ def _require(condition, detail):
 
 
 def _surface_correspondence(source, data, roots, tolerances, check):
-    """Record exact definitions; prove only carrier preservation.
+    """Record exact definitions and explicitly limited carrier verdicts.
 
     Cylinder and Cone carriers must retain every non-restricted serialized
     field exactly; height is a restricted field for Cylinder carriers only,
     so a Cone carrier must retain its serialized height exactly. Plane
-    carriers are proved against the face's certified
-    chart tolerance with recorded residuals; ``exact_fields`` is labeled only
-    when the serialized carrier field dictionaries are literally equal,
-    because zero floating residuals alone do not establish exact serialized
-    fields. Coons/extruded wall transitions are recorded verbatim
+    origin/basis residuals are individually checked against the chart tolerance;
+    they do not bound the whole material against its original Plane.
+    ``exact_fields`` requires literally equal serialized carrier dictionaries.
+    Other Plane definitions and Coons/extruded transitions are recorded verbatim
     without a carrier claim. No row is material coverage evidence.
     """
     rows = []
@@ -184,19 +183,19 @@ def _surface_correspondence(source, data, roots, tolerances, check):
                      and bool(np.isfinite(bound)) and bound >= 0.,
                      'Plane carrier proof is not finite')
             _require(all(value <= bound for value in residual),
-                     'Plane carrier exceeds its certified owner tolerance')
+                     'Plane origin/basis residual exceeds its owner tolerance')
             row['carrier_residuals'] = residual
             row['carrier_tolerance_bound'] = bound
             # Zero floating residuals do NOT establish exact serialized fields:
             # exact_fields is reserved for literally equal carrier field
-            # dictionaries; every other Plane carrier is certified only
-            # against its owner tolerance with recorded residuals.
+            # dictionaries. Basis residuals can add and UV extent can amplify
+            # them, so different definitions receive no carrier-equivalence claim.
             carrier = {key: value for key, value in old_surface.items()
                        if key not in _restricted_surface_fields('plane')}
             current_carrier = {key: value for key, value in new_surface.items()
                                if key not in _restricted_surface_fields('plane')}
             row['carrier_correspondence'] = ('exact_fields' if carrier == current_carrier
-                                             else 'plane_owner_tolerance')
+                                             else 'recorded_only')
         elif old_type == new_type:
             carrier = {key: value for key, value in old_surface.items()
                        if key not in _restricted_surface_fields(old_type)}

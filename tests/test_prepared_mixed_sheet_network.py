@@ -138,7 +138,7 @@ def test_mixed_receipt_qualifies_current_document(mixed_model, mixed_receipt):
     assert sorted(row['face'] for row in rows) == sorted(mixed_model.faces)
     assert all(row['carrier_correspondence'] == 'exact_fields'
                for row in rows if row['source_surface']['type'] == 'cylinder')
-    assert all(row['carrier_correspondence'] in ('exact_fields', 'plane_owner_tolerance')
+    assert all(row['carrier_correspondence'] in ('exact_fields', 'recorded_only')
                for row in rows if row['source_surface']['type'] == 'plane')
     assert all(row['carrier_correspondence'] == 'recorded_only'
                for row in rows if row['source_surface']['type'] == 'coons')
@@ -433,3 +433,21 @@ def test_empty_part_refused():
     _prepare(model)
     with pytest.raises(GeometryError, match='empty or unselected current Parts'):
         query_prepared_mixed_sheet_joint_network(model, _seed_joint_edge(model))
+
+
+def test_plane_basis_residuals_do_not_certify_whole_material_distance():
+    tolerance = 1e-8
+    original = dict(type='plane', origin=[0., 0., 0.],
+                    u_vector=[1., 0., 0.], v_vector=[0., 1., 0.])
+    current = dict(original, origin=[0., 0., tolerance / 2],
+                   u_vector=[1., 0., tolerance / 2],
+                   v_vector=[0., 1., tolerance / 2])
+    source, data, roots = _carrier_documents(original, current)
+    row = _surface_correspondence(source, data, roots, {5: tolerance}, lambda: None)[0]
+    assert all(value <= row['carrier_tolerance_bound'] for value in row['carrier_residuals'])
+    # Current support at UV (1, 1) is farther than tolerance from z=0.
+    assert sum(current[key][2] for key in ('origin', 'u_vector', 'v_vector')) > tolerance
+    assert row['carrier_correspondence'] == 'recorded_only'
+    source, data, roots = _carrier_documents(original, dict(original))
+    assert _surface_correspondence(source, data, roots, {5: tolerance}, lambda: None)[0][
+        'carrier_correspondence'] == 'exact_fields'

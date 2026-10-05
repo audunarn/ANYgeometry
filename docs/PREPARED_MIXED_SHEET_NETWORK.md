@@ -23,17 +23,18 @@ record can pass. The receipt proves CURRENT structural truth only.
 - Complete public trimmed charts, one per current face, including holes and
   seam sides, bound to the live model.
 - Exact recorded original and current surface definitions per current face
-  with a carrier preservation verdict:
+  with an explicitly limited correspondence verdict:
   - `exact_fields` — the serialized carrier field dictionaries are literally
     equal. Restricted parametric fields `start_angle`, `sweep_angle` (and
     `height` for Cylinder carriers only) may narrow on a qualified split; a
     Cone carrier must retain its serialized `height` exactly. Zero floating
     plane residuals alone do NOT establish exact serialized fields.
-  - `plane_owner_tolerance` — Plane carrier is certified against the face's
-    certified chart tolerance with recorded residuals and bound; the
-    serialized fields differ.
-  - `recorded_only` — Coons/extruded wall transitions are recorded verbatim
-    with no carrier claim.
+  - `recorded_only` — differing Plane definitions and Coons/extruded wall
+    transitions are recorded verbatim with no carrier-equivalence claim.
+    The three Plane origin/basis residuals are individually checked against
+    the current chart tolerance. Those diagnostics establish no whole-material
+    distance bound or parameter correspondence: their contributions can add
+    and the chart's UV extent can amplify them.
 - Deterministic, nonmutating queries; typed refusal helpers
   `require_prepared_mixed_sheet_authored_material_coverage` and
   `require_prepared_mixed_sheet_reference_parameter_mapping` always refuse.
