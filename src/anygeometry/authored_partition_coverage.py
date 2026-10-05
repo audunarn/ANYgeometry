@@ -1,7 +1,9 @@
 """Exact completeness of a straight planar authored/current triangle partition.
 
 Containment alone is insufficient. All children, exact areas and disjoint cell
-interiors participate. No discretization, joint conformity or publication permit.
+interiors participate. Straight holes are proved by partition-only exact ear
+clipping plus separating-axis overlap, never by relaxing the shared kernel.
+No discretization, joint conformity or publication permit.
 """
 from collections.abc import Mapping
 from fractions import Fraction as F
@@ -27,29 +29,123 @@ def _segments_meet(a, b, c, d):
             on(a,b,c) or on(a,b,d) or on(c,d,a) or on(c,d,b))
 
 
+def _strictly_inside(polygon, point):
+    """Exact rational even-odd ray test for a simple polygon, boundary excluded.
+
+    The caller has already proved the point is off every polygon edge, so the
+    half-open vertex rule needs no tie handling and stays exact.
+    """
+    x, y = point
+    inside = False
+    for a, b in zip(polygon, (*polygon[1:], polygon[0])):
+        if (a[1] > y) != (b[1] > y) and a[0]+(y-a[1])*(b[0]-a[0])/(b[1]-a[1]) > x:
+            inside = not inside
+    return inside
+
+
 def _simple_area(domain, frame, check):
-    if len(domain.boundaries)!=1 or any(type(p.curve) is not LinePath for p in domain.boundaries[0]):
-        raise GeometryError('authored partition: only one straight outer loop is qualified')
-    loop=_chart_loops(frame,domain,check)[0]
-    points=tuple(tuple(_value(row,F(0)) for row in path) for path in loop)
-    if len(points)<3 or len(set(points))!=len(points):
-        raise GeometryError('authored partition: degenerate or repeated boundary vertex')
-    edges=tuple(zip(points,(*points[1:],points[0])))
-    for i,(a,b) in enumerate(edges):
+    """Exact material area after certifying every simple straight loop.
+
+    Every loop must be a simple nonzero-area straight polygon. Hole boundaries
+    must be disjoint from the outer boundary and from each other (touching
+    refuses), strictly contained in the outer loop, and neither nested in nor
+    overlapping any other hole. Anything else refuses before any area is used.
+    Returns the scalar outer-minus-holes area.
+    """
+    if not domain.boundaries:
+        raise GeometryError('authored partition: one straight outer loop is required')
+    if any(type(path.curve) is not LinePath
+           for loop in domain.boundaries for path in loop):
+        raise GeometryError('authored partition: only straight line-segment boundaries are qualified')
+    polygons = []
+    for loop in _chart_loops(frame, domain, check):
         check()
-        c=edges[(i+1)%len(edges)][1]
-        if _orient(a,b,c)==0 and sum((y-x)*(z-y) for x,y,z in zip(a,b,c))<=0:
-            raise GeometryError('authored partition: boundary backtracks')
-        for j in range(i+1,len(edges)):
+        points = tuple(tuple(_value(row, F(0)) for row in path) for path in loop)
+        if len(points) < 3 or len(set(points)) != len(points):
+            raise GeometryError('authored partition: degenerate or repeated boundary vertex')
+        edges = tuple(zip(points, (*points[1:], points[0])))
+        for i, (a, b) in enumerate(edges):
             check()
-            if j==i+1 or i==0 and j==len(edges)-1:
-                continue
-            if _segments_meet(a,b,*edges[j]):
-                raise GeometryError('authored partition: boundary is not simple')
-    area=abs(sum(a[0]*b[1]-a[1]*b[0] for a,b in edges))/2
+            c = edges[(i+1)%len(edges)][1]
+            if _orient(a,b,c)==0 and sum((y-x)*(z-y) for x,y,z in zip(a,b,c))<=0:
+                raise GeometryError('authored partition: boundary backtracks')
+            for j in range(i+1,len(edges)):
+                check()
+                if j==i+1 or i==0 and j==len(edges)-1:
+                    continue
+                if _segments_meet(a,b,*edges[j]):
+                    raise GeometryError('authored partition: boundary is not simple')
+        area = abs(sum(a[0]*b[1]-a[1]*b[0] for a,b in edges))/2
+        if not area:
+            raise GeometryError('authored partition: boundary has zero area')
+        polygons.append((points, edges, area))
+    outer_points, outer_edges, area = polygons[0]
+    for index, (points, edges, hole) in enumerate(polygons[1:]):
+        check()
+        for a, b in outer_edges:
+            for c, d in edges:
+                check()
+                if _segments_meet(a,b,c,d):
+                    raise GeometryError('authored partition: hole boundary touches or crosses the outer boundary')
+        if any(not _strictly_inside(outer_points, p) for p in points):
+            raise GeometryError('authored partition: hole is not strictly contained in the outer boundary')
+        for previous_points, previous_edges, _ in polygons[1:index+1]:
+            check()
+            if any(_segments_meet(a,b,c,d) for a,b in previous_edges for c,d in edges):
+                raise GeometryError('authored partition: hole boundaries touch or cross each other')
+            if (any(_strictly_inside(previous_points, p) for p in points) or
+                    any(_strictly_inside(points, p) for p in previous_points)):
+                raise GeometryError('authored partition: holes are nested or overlapping')
+        area -= hole
     if not area:
         raise GeometryError('authored partition: boundary has zero area')
     return area
+
+
+def _hole_triangulation(points, area, check):
+    """Exact deterministic ear clipping of one certified simple hole polygon.
+
+    The polygon is normalized to counterclockwise order first. Straight
+    (monotone-collinear) vertices are removed whenever they appear: they can
+    never be ears, and removing them provably preserves the certified simple
+    region. An ear must additionally exclude every other remaining vertex from
+    the closed ear triangle, so no clipped ear can cross a reflex chain. The
+    summed clipped area must equal the certified polygon area exactly.
+    """
+    polygon = list(points)
+    if sum(a[0]*b[1]-a[1]*b[0] for a,b in zip(polygon,(*polygon[1:],polygon[0]))) < 0:
+        polygon.reverse()
+    triangles = []
+    while True:
+        check()
+        count = len(polygon)
+        retained = []
+        for i in range(count):
+            check()
+            if _orient(polygon[i-1],polygon[i],polygon[(i+1)%count]):
+                retained.append(polygon[i])
+        polygon = retained
+        if len(polygon) < 3:
+            raise GeometryError('authored partition: hole triangulation is unresolved')
+        if len(polygon) == 3:
+            triangles.append(tuple(polygon))
+            break
+        for index in range(len(polygon)):
+            check()
+            a, b, c = (polygon[index-1], polygon[index], polygon[(index+1)%len(polygon)])
+            if _orient(a,b,c) <= 0:
+                continue
+            if any(p not in (a,b,c) and _orient(a,b,p) >= 0 and _orient(b,c,p) >= 0
+                   and _orient(c,a,p) >= 0 for p in polygon):
+                continue
+            triangles.append((a,b,c))
+            del polygon[index]
+            break
+        else:
+            raise GeometryError('authored partition: hole triangulation is unresolved')
+    if sum(_orient(*triangle) for triangle in triangles)/2 != area:
+        raise GeometryError('authored partition: hole triangulation area is inexact')
+    return triangles
 
 
 def _positive_overlap(first,second):
@@ -60,6 +156,36 @@ def _positive_overlap(first,second):
             if max(_orient(a,b,p) for p in other)<=0:
                 return False
     return True
+
+
+def _partition_containment(domain, frame, rows, check):
+    """Whole-cell containment for an already certified straight polygon domain.
+
+    The shared kernel proves containment in the closed outer polygon. A
+    certified exact triangulation of each hole then excludes positive-area
+    intersection with its interior. Boundary-only contact remains legitimate.
+    This partition-only route does not change generic curved-trim admission.
+    """
+    outer = MaterialDomain(domain.face_id, domain.support, (domain.boundaries[0],))
+    _validate_domain_triangles(outer, rows, check)
+    if len(domain.boundaries) == 1:
+        return
+    hole_triangles = []
+    for loop in _chart_loops(frame, domain, check)[1:]:
+        check()
+        points = tuple(tuple(_value(row, F(0)) for row in path) for path in loop)
+        area = abs(sum(a[0]*b[1]-a[1]*b[0]
+                       for a, b in zip(points, (*points[1:], points[0]))))/2
+        hole_triangles.extend(_hole_triangulation(points, area, check))
+    for row in rows:
+        check()
+        triangle = tuple(tuple(_coordinate_fraction(value) for value in point) for point in row)
+        if _orient(*triangle) < 0:
+            triangle = triangle[::-1]
+        for hole in hole_triangles:
+            check()
+            if _positive_overlap(triangle, hole):
+                raise GeometryError('authored partition: cell intersects hole interior')
 
 
 def _overlap_candidates(triangles,check):
@@ -86,7 +212,9 @@ def validate_prepared_authored_face_partition(model,correspondence,child_triangl
 
     Mapping keys are every authenticated descendant ID; values are finite real
     (n,3,2) triangles in ORIGINAL UV. Exact coplanar Plane supports with one
-    simple straight outer loop qualify. Holes, curved trims/supports and explicit
+    simple straight outer loop plus finitely many strictly contained, pairwise
+    disjoint simple straight holes qualify; concave loops and either loop
+    orientation are allowed. Curved trims/supports and explicit
     parameterizations refuse. Success returns None and proves closed material
     equality of the supplied cells, every literal child, and the original face.
     It grants no node/constraint conformity, association, quality or publication
@@ -131,8 +259,8 @@ def validate_prepared_authored_face_partition(model,correspondence,child_triangl
         _support_correspondence(original.support,face.surface,rows[key],check)
         literal=MaterialDomain(key,original.support,domain.boundaries)
         child_area=_simple_area(literal,frame,check)
-        _validate_domain_triangles(original,rows[key],check)
-        _validate_domain_triangles(literal,rows[key],check)
+        _partition_containment(original,frame,rows[key],check)
+        _partition_containment(literal,frame,rows[key],check)
         area=F(0)
         for row in rows[key]:
             check()

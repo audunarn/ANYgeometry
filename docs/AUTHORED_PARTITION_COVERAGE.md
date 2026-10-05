@@ -13,22 +13,34 @@ left-side triangles fit their child but leave the right side unmeshed. This API
 requires cells for both children and proves complete coverage separately from
 mere containment.
 
-The initial scope is deliberately narrow: the original and every literal child
-must use exactly coplanar Plane supports and one simple straight outer loop.
-Different affine frames and orientations are allowed. Holes, curved supports or
-trims, explicit parameterizations and unresolved support correspondence refuse.
+The original and every literal child must use exactly coplanar Plane supports,
+one simple straight outer loop and any finite number of simple straight holes.
+Each hole must be strictly inside the outer loop; hole closures must be disjoint
+and cannot touch, cross or nest. Concave loops, different affine frames and
+either stored winding are allowed. Curved supports or trims, explicit
+parameterizations and unresolved support correspondence refuse.
 Existing sampled topology checks do not establish exact regularity for arbitrary
 curved loops. This addition makes no acceptance claim for those families.
 
 The proof checks exact rational closure, distinct/nonzero polygon edges, no
 nonadjacent segment contact/crossing and no adjacent backtracking. Every whole
 closed cell must lie inside both the original material and its assigned literal
-child. The absolute rational cell-area sum must equal each literal child's
-shoelace area; the sum of child areas must equal the original area. All cell
+child. Material area is the absolute outer shoelace area minus the absolute
+hole areas. The absolute rational cell-area sum must equal each literal child's
+material area; the sum of child areas must equal the original area. All cell
 interiors must be disjoint, using exact triangle separating axes with a
 deterministic rational bounding-box sweep. Boundary contacts are allowed.
 
-Simple polygon domains and finite triangle unions are regular closed sets.
+For holes, this partition-only route proves containment in the closed outer
+polygon with the existing kernel, triangulates each certified hole by exact
+deterministic ear clipping, and rejects positive-area cell/hole-triangle overlap
+using exact separating axes. Monotone collinear vertices may be removed without
+changing the hole; the clipped triangle areas must equal the hole area exactly.
+Legitimate contact along a hole boundary therefore passes, while a triangle
+enclosing a hole or crossing it by a nonzero rational sliver refuses. The generic
+curved-trim containment kernel retains its existing unresolved-contact refusals.
+
+These polygonal materials and finite triangle unions are regular closed sets.
 Containment, equal area and disjoint interiors therefore prove complete closed
 material equality of the cells, every literal child and the original domain.
 The common original affine plane chart has a nonzero constant area Jacobian,
@@ -57,3 +69,9 @@ repeat queries, stale/callback mutation, explicit family refusals and cancellati
 An independent rational polygon-clipping oracle checks separating axes and
 candidate completeness; display samples are not the oracle. These are contract
 checks, not accepted large/mixed meshing.
+
+Hole regressions additionally use independently constructed rectangle tilings,
+known rational areas, concave material, fragmentation and reordered cells. They
+check strict hole regularity, filled holes, compensated omissions/overlaps,
+source freshness and cancellation. This extends development capability; it does
+not rewrite historical qualification or publish a new package.
