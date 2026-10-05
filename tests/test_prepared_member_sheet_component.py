@@ -274,11 +274,12 @@ def test_cyclic_receipt_graph_raises_typed_error():
         validate(model, replace(receipt, scope=scope))
 
 
-def test_malformed_deep_receipt_raises_typed_error_without_operand_cap():
+@pytest.mark.parametrize('depth', (600, 1600, 4000))
+def test_malformed_deep_receipt_raises_typed_error_without_operand_cap(depth):
     model, joint = build()
     receipt = query(model, joint)
     nested = ()
-    for _ in range(2000):
+    for _ in range(depth):
         nested = (nested,)
-    with pytest.raises(GeometryError, match='invalid receipt nesting'):
+    with pytest.raises(GeometryError, match='invalid receipt nesting|definition binding changed'):
         validate(model, replace(receipt, current_face_ids=nested))

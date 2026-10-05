@@ -285,6 +285,8 @@ def _receipt_signature(receipt):
         raise GeometryError('prepared member Sheet component invalid receipt nesting') from error
     try:
         return definition_checksum(receipt)
+    except RecursionError as error:
+        raise GeometryError('prepared member Sheet component invalid receipt nesting') from error
     except (TypeError, ValueError) as error:
         raise GeometryError('prepared member Sheet component invalid receipt definition') from error
 
