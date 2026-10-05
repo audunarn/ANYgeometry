@@ -47,6 +47,12 @@ from .prepared_member_sheet_network import (
     PreparedMemberSheetJointNetwork, query_prepared_member_sheet_joint_network,
     validate_prepared_member_sheet_joint_network_binding,
 )
+from .prepared_mixed_sheet_network import (
+    PreparedMixedSheetJointNetwork, query_prepared_mixed_sheet_joint_network,
+    validate_prepared_mixed_sheet_joint_network_binding,
+    require_prepared_mixed_sheet_authored_material_coverage,
+    require_prepared_mixed_sheet_reference_parameter_mapping,
+)
 from .authored_child_coverage import validate_prepared_authored_face_child_triangles
 from .authored_partition_coverage import validate_prepared_authored_face_partition
 from .edge_subcurve_preimages import (
@@ -342,6 +348,11 @@ __all__ = [
     "query_prepared_planar_member_sheet_network",
     "validate_prepared_planar_member_sheet_network_binding",
     "validate_prepared_member_sheet_joint_network_binding",
+    "PreparedMixedSheetJointNetwork",
+    "query_prepared_mixed_sheet_joint_network",
+    "validate_prepared_mixed_sheet_joint_network_binding",
+    "require_prepared_mixed_sheet_authored_material_coverage",
+    "require_prepared_mixed_sheet_reference_parameter_mapping",
     "query_prepared_sheet_joint_component",
     "validate_prepared_sheet_joint_component_binding",
     "validate_prepared_sheet_joint_component_selection",
