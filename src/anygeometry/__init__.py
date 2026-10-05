@@ -39,6 +39,10 @@ from .prepared_member_sheet_component import (
     PreparedMemberSheetJointComponent, query_prepared_member_sheet_joint_component,
     validate_prepared_member_sheet_joint_component_binding,
 )
+from .prepared_member_sheet_network import (
+    PreparedMemberSheetJointNetwork, query_prepared_member_sheet_joint_network,
+    validate_prepared_member_sheet_joint_network_binding,
+)
 from .authored_child_coverage import validate_prepared_authored_face_child_triangles
 from .authored_partition_coverage import validate_prepared_authored_face_partition
 from .edge_subcurve_preimages import (
@@ -328,6 +332,9 @@ __all__ = [
     "PreparedMemberSheetJointComponent",
     "query_prepared_member_sheet_joint_component",
     "validate_prepared_member_sheet_joint_component_binding",
+    "PreparedMemberSheetJointNetwork",
+    "query_prepared_member_sheet_joint_network",
+    "validate_prepared_member_sheet_joint_network_binding",
     "query_prepared_sheet_joint_component",
     "validate_prepared_sheet_joint_component_binding",
     "validate_prepared_sheet_joint_component_selection",
