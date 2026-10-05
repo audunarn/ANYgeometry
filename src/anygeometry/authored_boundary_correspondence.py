@@ -97,7 +97,9 @@ def query_prepared_authored_boundary_correspondence(model, authored_face_id, *,
             for use in loop:
                 incidence.setdefault(use.edge, []).append((face, use.forward))
     exterior, interior = {}, []
-    known = {row.edge_id: row for row in edges.records}
+    candidates = {}
+    for row in (*edges.records, *edges.alias_records):
+        candidates.setdefault(row.edge_id, []).append(row)
     for edge, uses in sorted(incidence.items()):
         _check(cancellation_check)
         if len(uses) == 2 and uses[0][1] != uses[1][1] and uses[0][0] != uses[1][0]:
@@ -105,20 +107,25 @@ def query_prepared_authored_boundary_correspondence(model, authored_face_id, *,
             continue
         if len(uses) != 1:
             raise GeometryError('authored boundary correspondence has ambiguous internal incidence')
-        record = known.get(edge)
-        if record is None:
+        # A unified shared boundary carries one sealed occurrence per
+        # participating authored root; select exactly this root's evidence.
+        matches = []
+        for record in candidates.get(edge, ()):
+            ancestor = record.ancestor
+            root = ancestor.definition.edge_id
+            if (ancestor.model_id != original.model_id or ancestor.revision != original.revision
+                    or ancestor.source_checksum != original.source_checksum or root not in controls):
+                continue
+            definition = original_edges[root]
+            original_controls = tuple(tuple(F(*x) for x in point) for point in ancestor.definition.controls)
+            if (original_controls != controls[root] or ancestor.definition.start != definition['start']
+                    or ancestor.definition.end != definition['end']):
+                raise GeometryError('authored boundary correspondence original polynomial changed')
+            matches.append(record)
+        if not matches:
             raise GeometryError('authored boundary correspondence exterior ancestry is unavailable')
-        ancestor = record.ancestor
-        root = ancestor.definition.edge_id
-        if (ancestor.model_id != original.model_id or ancestor.revision != original.revision
-                or ancestor.source_checksum != original.source_checksum or root not in controls):
-            raise GeometryError('authored boundary correspondence has a different original anchor')
-        definition = original_edges[root]
-        original_controls = tuple(tuple(F(*x) for x in point) for point in ancestor.definition.controls)
-        if (original_controls != controls[root] or ancestor.definition.start != definition['start']
-                or ancestor.definition.end != definition['end']):
-            raise GeometryError('authored boundary correspondence original polynomial changed')
-        exterior.setdefault(root, []).append((record, uses[0][1]))
+        for record in matches:
+            exterior.setdefault(record.ancestor.definition.edge_id, []).append((record, uses[0][1]))
     loops = []
     for loop in original_loops:
         _check(cancellation_check)

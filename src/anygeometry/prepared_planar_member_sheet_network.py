@@ -41,6 +41,7 @@ attachments, original Junctions, orientation references, curved Members and
 non-planar supports. Original material certificates use only owned authored
 Sheet faces, so orphan faces cannot connect a disconnected Member.
 """
+from collections import namedtuple
 from dataclasses import dataclass, fields
 from fractions import Fraction
 import json
@@ -154,9 +155,13 @@ def _qualified_loops(loops, check):
                          'has a nonsimple original boundary loop')
 
 
+def _plane_contains(normal, origin, point):
+    """Exact: point lies in the plane through origin with the given normal."""
+    return _dot(tuple(value-base for value, base in zip(point, origin)), normal) == 0
+
+
 def _on_plane(frame, point):
-    offset = tuple(value-origin for value, origin in zip(point, frame['origin']))
-    return _dot(offset, _cross(frame['u'], frame['v'])) == 0
+    return _plane_contains(_cross(frame['u'], frame['v']), frame['origin'], point)
 
 
 def _chart_uv(frame, point):
@@ -273,22 +278,124 @@ def _on_boundary_xyz(point, xyz_loops):
     return False
 
 
-def _material_membership(controls, charts, check):
+_FaceEntry = namedtuple('_FaceEntry',
+                        ('frame', 'uv_loops', 'xyz_loops', 'normal', 'bounds'))
+
+
+class _FaceBoundsIndex:
+    """Per-call conservative exact bounds over certified face charts.
+
+    The index is derived once per qualification call from the already
+    certified literal Straight charts and is never cached across calls or
+    revisions. It removes a face from a candidate scan only when the face's
+    conservative exact bound proves that the query cannot lie in its closed
+    material; equality and touching configurations always remain
+    candidates, so the exhaustive membership result, interval events,
+    endpoint incident faces, typed refusals and deterministic ordering are
+    unchanged.
+    """
+
+    __slots__ = ('entries', 'planes', 'singular')
+
+    def __init__(self, entries, planes, singular):
+        self.entries = entries
+        self.planes = planes
+        self.singular = singular
+
+    def coplanar_faces(self, segment):
+        """Sorted faces whose exact support plane contains the whole segment.
+
+        Faces sharing one exact support plane are decided together through
+        one representative frame; plane containment is a property of the
+        plane, so the grouped decision equals the per-face decision.
+        """
+        contained = []
+        for face_ids in self.planes.values():
+            entry = self.entries[face_ids[0]]
+            if (_plane_contains(entry.normal, entry.frame['origin'], segment[0]) and
+                    _plane_contains(entry.normal, entry.frame['origin'], segment[1])):
+                contained.extend(face_ids)
+        for face_id in self.singular:
+            entry = self.entries[face_id]
+            if (_plane_contains(entry.normal, entry.frame['origin'], segment[0]) and
+                    _plane_contains(entry.normal, entry.frame['origin'], segment[1])):
+                contained.append(face_id)
+        return sorted(contained)
+
+    def material_candidates(self, segment, coplanar):
+        """Coplanar faces not exactly disjoint from the closed segment."""
+        low = tuple(min(point[axis] for point in segment) for axis in range(3))
+        high = tuple(max(point[axis] for point in segment) for axis in range(3))
+        candidates = []
+        for face_id in coplanar:
+            bounds = self.entries[face_id].bounds
+            if bounds is None or all(bounds[axis][0] <= high[axis] and
+                                     low[axis] <= bounds[axis][1]
+                                     for axis in range(3)):
+                candidates.append(face_id)
+        return candidates
+
+    def bound_contains(self, face_id, point):
+        """Closed conservative containment; touching always retains the face."""
+        bounds = self.entries[face_id].bounds
+        return bounds is None or all(bounds[axis][0] <= point[axis] <= bounds[axis][1]
+                                     for axis in range(3))
+
+
+def _face_bounds_index(charts):
+    """Conservative exact per-call bounds index over certified face charts.
+
+    Every entry caches the exact support-plane normal and a conservative
+    axis-aligned bound of the already certified literal Straight xyz loop
+    vertices. Faces sharing one exact support plane are grouped under a
+    canonical exact plane key so segment coplanarity is decided once per
+    distinct plane. Singular frames stay per face and are never pruned.
+    """
+    entries, planes, singular = {}, {}, []
+    for face_id in sorted(charts):
+        frame, uv_loops, xyz_loops = charts[face_id]
+        normal = _cross(frame['u'], frame['v'])
+        points = [point for loop in xyz_loops for edge in loop for point in edge]
+        bounds = (tuple((min(point[axis] for point in points),
+                         max(point[axis] for point in points)) for axis in range(3))
+                  if points else None)
+        entries[face_id] = _FaceEntry(frame, uv_loops, xyz_loops, normal, bounds)
+        scale = next((value for value in normal if value), None)
+        if scale is None:
+            singular.append(face_id)
+        else:
+            offset = _dot(frame['origin'], normal)
+            planes.setdefault(
+                tuple(value/scale for value in (*normal, offset)), []).append(face_id)
+    return _FaceBoundsIndex(entries, planes, singular)
+
+
+def _material_membership(controls, charts, check, bounds_index=None):
     """Certify one straight carrier segment against the union of materials.
 
     The complete exact boundary-event decomposition makes every open interval
     between consecutive events homogeneous with respect to every coplanar
     face, so one exact rational midpoint classification per interval decides
-    coverage without any sampled acceptance oracle.
+    coverage without any sampled acceptance oracle. The conservative bounds
+    index only removes coplanar faces whose certified literal boundary bounds
+    are exactly disjoint from the closed segment; a removed face can share no
+    point with the segment, so it can contribute no boundary event, no
+    interval material and no endpoint material, and every typed refusal,
+    including the support-plane refusal decided over all faces, is retained.
     """
     segment = tuple(tuple(Fraction(*value) for value in point) for point in controls)
-    coplanar = [(face_id, frame, _chart_uv(frame, segment[0]),
-                 _chart_uv(frame, segment[1]), uv_loops)
-                for face_id, (frame, uv_loops, _) in sorted(charts.items())
-                if _on_plane(frame, segment[0]) and _on_plane(frame, segment[1])]
+    if bounds_index is None:
+        bounds_index = _face_bounds_index(charts)
+    coplanar = bounds_index.coplanar_faces(segment)
     _require(coplanar, 'original Member carrier lies in no original support plane')
+    candidates = []
+    for face_id in bounds_index.material_candidates(segment, coplanar):
+        entry = bounds_index.entries[face_id]
+        candidates.append((face_id, entry.uv_loops, entry.frame,
+                           _chart_uv(entry.frame, segment[0]),
+                           _chart_uv(entry.frame, segment[1])))
     events = {Fraction(0), Fraction(1)}
-    for face_id, frame, a, b, uv_loops in coplanar:
+    for face_id, uv_loops, frame, a, b in candidates:
         check()
         events |= _boundary_events(a, b, uv_loops)
     ordered = sorted(events)
@@ -296,24 +403,45 @@ def _material_membership(controls, charts, check):
     for low, high in zip(ordered, ordered[1:]):
         check()
         middle = (low+high)/2
-        faces = sorted(face_id for face_id, frame, a, b, uv_loops in coplanar
+        faces = sorted(face_id for face_id, uv_loops, frame, a, b in candidates
                        if _point_in_face(((1-middle)*a[0]+middle*b[0],
                                           (1-middle)*a[1]+middle*b[1]), uv_loops))
         _require(faces, 'original Member carrier leaves the original face material')
         intervals.append({'interval': [[low.numerator, low.denominator],
-                                       [high.numerator, high.denominator]],
-                          'material_faces': faces})
+                                      [high.numerator, high.denominator]],
+                         'material_faces': faces})
     endpoints = []
     for point in segment:
-        faces = sorted(face_id for face_id, frame, a, b, uv_loops in coplanar
+        faces = sorted(face_id for face_id, uv_loops, frame, a, b in candidates
                        if _point_in_face(_chart_uv(frame, point), uv_loops))
         if not faces:
-            faces = sorted(face_id for face_id, (_, _, xyz_loops) in charts.items()
-                           if _on_boundary_xyz(point, xyz_loops))
+            faces = sorted(face_id for face_id in bounds_index.entries
+                          if bounds_index.bound_contains(face_id, point) and
+                          _on_boundary_xyz(point,
+                                           bounds_index.entries[face_id].xyz_loops))
         _require(faces, 'original Member carrier endpoint leaves the original face material')
         endpoints.append(faces)
     return {'endpoint_material_faces': endpoints,
             'interior_material_intervals': intervals}
+
+
+def _material_candidate_census(controls, charts):
+    """Deterministic conservative pruning census for one carrier segment.
+
+    The census counts faces, not time: every certified face, every face whose
+    exact support plane contains the whole segment, and the material
+    candidates retained after conservative bound pruning. A later root-owned
+    performance diagnostic can diff these exact counts against instrumented
+    runs; the census itself never times execution and never prunes.
+    """
+    segment = tuple(tuple(Fraction(*value) for value in point) for point in controls)
+    index = _face_bounds_index(charts)
+    coplanar = index.coplanar_faces(segment)
+    candidates = index.material_candidates(segment, coplanar)
+    return {'certified_faces': len(index.entries),
+            'coplanar_faces': len(coplanar),
+            'material_candidates': len(candidates),
+            'conservatively_pruned_faces': len(coplanar)-len(candidates)}
 
 
 def _current_edge_controls(current, edge):
@@ -597,7 +725,7 @@ def _qualify_member_joints(model, scope, source, current, member_relations,
 
 def _qualify_member_point_contacts(model, scope, source, current, member_relations,
                                    record_by_edge, charts, descendants, carriers,
-                                   point_attachments, check):
+                                   point_attachments, check, bounds_index=None):
     """Certify every generated member point contact against live contracts.
 
     Each member_through_face Attachment is re-derived through the qualified
@@ -617,6 +745,8 @@ def _qualify_member_point_contacts(model, scope, source, current, member_relatio
         length = float(sum((b-a)**2 for a,b in zip(*controls)))**0.5
         return Fraction(model.tolerance.effective_length(length))
     current_charts = _planar_face_charts(current, check, current_tolerance)
+    if bounds_index is None:
+        bounds_index = _face_bounds_index(charts)
     actual_inventory, expected_inventory, contact_vertices = set(), set(), {}
     # Contact completeness comes from authored carriers intersecting owned
     # authored materials, independently of the supplied Attachment/Junction graph.
@@ -627,7 +757,7 @@ def _qualify_member_point_contacts(model, scope, source, current, member_relatio
             delta = tuple(b-a for a,b in zip(*controls))
             for root, (frame, loops, _) in charts.items():
                 check()
-                normal = _cross(frame['u'], frame['v'])
+                normal = bounds_index.entries[root].normal
                 denominator = _dot(delta, normal)
                 if denominator == 0:
                     continue
@@ -636,6 +766,8 @@ def _qualify_member_point_contacts(model, scope, source, current, member_relatio
                 if not 0 <= station <= 1:
                     continue
                 point = _point(controls, station)
+                if not bounds_index.bound_contains(root, point):
+                    continue
                 if not _point_in_face(_chart_uv(frame, point), loops):
                     continue
                 candidates = set()
@@ -891,6 +1023,7 @@ def _qualify(model, scope, source, current, cancellation_check):
             raise GeometryError('prepared planar member Sheet network cancelled')
     carriers = {}
     charts = _planar_face_charts(source, check)
+    bounds_index = _face_bounds_index(charts)
     descendants = {child: root for root, children in scope.face_preimages.face_descendants
                    for child in children}
     member_relations = []
@@ -910,7 +1043,8 @@ def _qualify(model, scope, source, current, cancellation_check):
         for root in relation['source_carriers']:
             check()
             records, intervals, original_controls = carriers[root]
-            membership = _material_membership(original_controls, charts, check)
+            membership = _material_membership(original_controls, charts, check,
+                                              bounds_index)
             material_face_roots.update(face
                 for faces in membership['endpoint_material_faces'] for face in faces)
             material_face_roots.update(face
@@ -938,7 +1072,7 @@ def _qualify(model, scope, source, current, cancellation_check):
                                if row['kind'] == 'member_through_face')
     contact_relations, point_junction_ids = _qualify_member_point_contacts(
         model, scope, source, current, member_relations, record_by_edge,
-        charts, descendants, carriers, point_attachments, check)
+        charts, descendants, carriers, point_attachments, check, bounds_index)
     for key, row in current['attachments'].items():
         check()
         if row['kind'] == 'vertex_on_edge':

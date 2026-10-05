@@ -67,6 +67,10 @@ class PreparedEdgeSubcurvePreimages:
     records: tuple[EdgeSubcurvePreimage, ...]
     unavailable_edge_ids: tuple[int, ...]
     coverage: tuple[int, ...]
+    # Additive producer-authenticated occurrences of unified shared boundaries.
+    # Each alias re-seals one participating original boundary's ancestry onto
+    # the canonical current edge; records above stay single-ancestor.
+    alias_records: tuple[EdgeSubcurvePreimage, ...] = ()
 
 
 @dataclass
@@ -78,6 +82,7 @@ class _Draft:
     records: dict
     check: object
     enclosure_failure: object = None
+    aliases: dict = None
 
 
 @dataclass(frozen=True)
@@ -146,7 +151,8 @@ def _elevate(controls, degree):
     return rows
 
 
-def _seal(ancestor, interval, current, tolerance):
+def _residual(ancestor, interval, current):
+    """Exact whole-interval Bernstein residual of one oriented restriction."""
     expected = _restrict_controls(_controls(ancestor.definition), *map(_unpack, interval))
     actual = _controls(current)
     degree = max(len(expected), len(actual))-1
@@ -154,12 +160,56 @@ def _seal(ancestor, interval, current, tolerance):
                         for first, second in zip(_elevate(actual, degree), _elevate(expected, degree)))
     coordinate = tuple(max(abs(row[i]) for row in differences) for i in range(3))
     squared = max(sum(x*x for x in row) for row in differences)
+    return differences, coordinate, squared
+
+
+def _seal(ancestor, interval, current, tolerance):
+    differences, coordinate, squared = _residual(ancestor, interval, current)
     if tolerance is None:
         if squared:
             raise GeometryError('edge subcurve provenance changed without a recorded split')
     elif squared > _unpack(tolerance)**2:
         raise _SubcurveEnclosureUnavailable('edge subcurve rounding enclosure exceeds existing tolerance')
     return EdgeSubcurvePreimage(current.edge_id, ancestor, interval, current,
+        tuple(tuple(_pack(x) for x in row) for row in differences),
+        tuple(_pack(x) for x in coordinate), _pack(squared), tolerance)
+
+
+def _reseal_occurrence(source, current):
+    """Re-seal one recorded occurrence onto a unified edge's exact definition.
+
+    Orientation is fixed by endpoint-ID topology alone, never by residual
+    size: the occurrence's sealed current definition and the canonical edge's
+    current definition must bind the same two distinct endpoint IDs. The same
+    ordered pair preserves the source interval; the swapped pair reverses it;
+    any mismatched or degenerate pair is unauthenticated. Only that one
+    selected interval is certified, by the exact whole-interval Bernstein
+    residual within the occurrence's SAME recorded tolerance. Nothing is
+    inferred from proximity, geometry, samples or replacement metadata.
+    """
+    source_definition = source.current_definition
+    if source_definition.start == source_definition.end or current.start == current.end:
+        return None  # Degenerate endpoint identity cannot orient the interval.
+    pair = (source_definition.start, source_definition.end)
+    lower, upper = map(_unpack, source.interval)
+    if pair == (current.start, current.end):
+        first, second = lower, upper
+    elif pair == (current.end, current.start):
+        first, second = upper, lower
+    else:
+        return None  # Mismatched endpoint identity remains unauthenticated.
+    differences, coordinate, squared = _residual(source.ancestor,
+        (_pack(first), _pack(second)), current)
+    if source.tolerance is None:
+        if squared:
+            return None
+        tolerance = None
+    elif squared > _unpack(source.tolerance)**2:
+        return None  # Out-of-tolerance occurrence remains unauthenticated.
+    else:
+        tolerance = source.tolerance
+    return EdgeSubcurvePreimage(current.edge_id, source.ancestor,
+        (_pack(first), _pack(second)), current,
         tuple(tuple(_pack(x) for x in row) for row in differences),
         tuple(_pack(x) for x in coordinate), _pack(squared), tolerance)
 
@@ -236,12 +286,15 @@ def _capture_edge_subcurve_preimages(model, *, allow_seed=False, cancellation_ch
     revision = model.revision
     checksum = to_dict(model)['checksum']['value']
     _check(cancellation_check)
+    aliases = {}
     if hasattr(model, '_edge_subcurve_preimages_receipt'):
         try:
             binding = query_prepared_edge_subcurve_preimages(model)
         except GeometryError:
             return None
         records = {record.edge_id: record for record in binding.records}
+        for row in binding.alias_records:
+            aliases.setdefault(row.edge_id, []).append(row)
     else:
         if not allow_seed or any(old.kind == 'edge' for old in model.replacement_history()):
             return None
@@ -255,22 +308,89 @@ def _capture_edge_subcurve_preimages(model, *, allow_seed=False, cancellation_ch
     _check(cancellation_check)
     if model.revision != revision or to_dict(model)['checksum']['value'] != checksum:
         raise GeometryError('edge subcurve provenance source changed during capture')
-    return _Draft(weakref.ref(model), model.model_id, revision, checksum, records, cancellation_check)
+    return _Draft(weakref.ref(model), model.model_id, revision, checksum, records,
+        cancellation_check, aliases=aliases)
+
+
+def _drop_edge_subcurve_records(draft, edge_ids):
+    """Remove tracked records and captured occurrences of unqualified edges."""
+    if draft is None:
+        return
+    for value in edge_ids:
+        edge = _identifier(value)
+        draft.records.pop(edge, None)
+        if draft.aliases is not None:
+            draft.aliases.pop(edge, None)
+
+
+def _record_edge_subcurve_unification(draft, canonical, duplicates, *, model):
+    """Capture every authenticated occurrence of a producer-unified boundary.
+
+    The producer calls this at the exact canonical reuse of one current edge
+    for coincident duplicates. The canonical edge's actual current definition
+    must still match its draft record; each duplicate's actual definition must
+    still match the sealed source record it contributes. Each duplicate's
+    sealed ancestry, and every occurrence already captured for the duplicate,
+    re-seals onto the canonical edge's exact current definition as an oriented
+    source interval within the SAME recorded tolerance. A failed seal leaves
+    that occurrence unauthenticated; no ancestry is created here.
+    """
+    if draft is None:
+        return
+    if draft.aliases is None:
+        draft.aliases = {}
+    _check(draft.check)
+    if model.model_id != draft.model_id:
+        raise GeometryError('edge subcurve unification belongs to another model')
+    canonical = _identifier(canonical)
+    current = _edge_subcurve_definition(model, canonical)
+    record = draft.records.get(canonical)
+    if record is not None:
+        if current is None or current != record.current_definition:
+            raise GeometryError('edge subcurve canonical definition changed before unification')
+    if current is None:
+        return
+    for value in duplicates:
+        _check(draft.check)
+        duplicate = _identifier(value)
+        if duplicate == canonical:
+            continue
+        actual = _edge_subcurve_definition(model, duplicate)
+        sources = []
+        other = draft.records.get(duplicate)
+        if other is not None:
+            if actual is not None and actual == other.current_definition:
+                sources.append(other)
+        sources.extend(row for row in draft.aliases.get(duplicate, ())
+                        if actual is not None and actual == row.current_definition)
+        for source in sources:
+            alias = _reseal_occurrence(source, current)
+            if alias is None:
+                continue
+            rows = draft.aliases.setdefault(canonical, [])
+            if not any(row.interval == alias.interval and row.ancestor == alias.ancestor
+                       for row in rows):
+                rows.append(alias)
 
 
 def _record_edge_subcurve_split(draft, edge, parameter, children, tolerance, *, model, parent_definition):
     """Record one successful actual local split, before any later modification."""
     if draft is None:
         return
+    if draft.aliases is None:
+        draft.aliases = {}
     draft.enclosure_failure = None
     _check(draft.check)
     edge = _identifier(edge)
     if model.model_id != draft.model_id:
         raise GeometryError('edge subcurve split belongs to another model')
     record = draft.records.get(edge)
-    if record is None:
+    aliases = tuple(draft.aliases.get(edge, ()))
+    if record is None and not aliases:
         return  # Unknown ancestry cannot become a new root through splitting.
-    if parent_definition != record.current_definition:
+    if record is not None and parent_definition != record.current_definition:
+        raise GeometryError('edge subcurve parent definition changed before split')
+    if any(parent_definition != row.current_definition for row in aliases):
         raise GeometryError('edge subcurve parent definition changed before split')
     ids = tuple(_identifier(value) for value in children)
     if len(ids) != 2 or ids[0] == ids[1] or any(i in draft.records for i in ids) or edge in model.edges:
@@ -286,22 +406,50 @@ def _record_edge_subcurve_split(draft, edge, parameter, children, tolerance, *, 
     if (first is None or second is None or first.start != parent_definition.start
             or second.end != parent_definition.end or first.end != second.start):
         raise GeometryError('edge subcurve split orientation/incidence changed')
-    a, b = map(_unpack, record.interval)
-    middle = a+(b-a)*Fraction(parameter)
-    bound = Fraction(tolerance)
-    if record.tolerance is not None:
-        bound = min(bound, _unpack(record.tolerance))
-    try:
-        entries = tuple(_seal(record.ancestor, tuple(map(_pack, interval)), definition, _pack(bound))
-                        for interval, definition in zip(((a, middle), (middle, b)), definitions))
-    except _SubcurveEnclosureUnavailable as error:
-        draft.enclosure_failure = error
-        raise
+    entries = ()
+    if record is not None:
+        a, b = map(_unpack, record.interval)
+        middle = a+(b-a)*Fraction(parameter)
+        bound = Fraction(tolerance)
+        if record.tolerance is not None:
+            bound = min(bound, _unpack(record.tolerance))
+        try:
+            entries = tuple(_seal(record.ancestor, tuple(map(_pack, interval)), definition, _pack(bound))
+                            for interval, definition in zip(((a, middle), (middle, b)), definitions))
+        except _SubcurveEnclosureUnavailable as error:
+            draft.enclosure_failure = error
+            raise
+    # Captured occurrences compose through the split exactly like the primary
+    # ancestry: the same recorded station maps each oriented source interval.
+    child_aliases = {ids[0]: [], ids[1]: []}
+    for row in aliases:
+        _check(draft.check)
+        c, d = map(_unpack, row.interval)
+        row_middle = c+(d-c)*Fraction(parameter)
+        bound = Fraction(tolerance)
+        if row.tolerance is not None:
+            bound = min(bound, _unpack(row.tolerance))
+        for interval, definition, child in (((c, row_middle), first, ids[0]),
+                                            ((row_middle, d), second, ids[1])):
+            try:
+                child_aliases[child].append(_seal(row.ancestor,
+                    tuple(map(_pack, interval)), definition, _pack(bound)))
+            except _SubcurveEnclosureUnavailable:
+                continue  # Out-of-tolerance occurrence becomes unavailable.
     _check(draft.check)
-    if any(_edge_subcurve_definition(model, entry.edge_id) != entry.current_definition for entry in entries):
+    if any(_edge_subcurve_definition(model, entry.edge_id) != entry.current_definition
+           for entry in entries):
         raise GeometryError('edge subcurve child changed while recording split')
-    del draft.records[edge]
-    draft.records.update((entry.edge_id, entry) for entry in entries)
+    if any(_edge_subcurve_definition(model, row.edge_id) != row.current_definition
+           for rows in child_aliases.values() for row in rows):
+        raise GeometryError('edge subcurve child changed while recording split')
+    if record is not None:
+        del draft.records[edge]
+        draft.records.update((entry.edge_id, entry) for entry in entries)
+    draft.aliases.pop(edge, None)
+    for child, rows in child_aliases.items():
+        if rows:
+            draft.aliases.setdefault(child, []).extend(rows)
 
 
 def _finalize_edge_subcurve_preimages(model, draft, *, cancellation_check=None):
@@ -322,10 +470,27 @@ def _finalize_edge_subcurve_preimages(model, draft, *, cancellation_check=None):
         if _edge_subcurve_definition(model, edge) != record.current_definition:
             raise GeometryError('edge subcurve tracked child changed before finalize')
         records.append(record)
+    aliases = []
+    seen = set()
+    for edge, rows in sorted((draft.aliases or {}).items()):
+        _check(check)
+        if edge not in model.edges:
+            continue
+        current = _edge_subcurve_definition(model, edge)
+        for row in rows:
+            if current is None or row.current_definition != current:
+                raise GeometryError('edge subcurve tracked child changed before finalize')
+            key = (row.edge_id, row.ancestor, row.interval)
+            if key in seen:
+                continue
+            seen.add(key)
+            aliases.append(row)
+    aliases.sort(key=lambda row: (row.edge_id, row.ancestor.definition.edge_id, row.interval))
     coverage = tuple(sorted(model.edges))
     qualified = {record.edge_id for record in records}
     unavailable = tuple(edge for edge in coverage if edge not in qualified)
-    binding = PreparedEdgeSubcurvePreimages(model.model_id, revision, checksum, tuple(records), unavailable, coverage)
+    binding = PreparedEdgeSubcurvePreimages(model.model_id, revision, checksum, tuple(records),
+        unavailable, coverage, tuple(aliases))
     _check(check)
     if model.revision != revision or to_dict(model)['checksum']['value'] != checksum:
         raise GeometryError('edge subcurve candidate changed during finalize')
@@ -364,25 +529,35 @@ def _rebind_edge_subcurve_incidence(draft, prior_definitions, *, model):
     before the owned merge. Retention happens only through _seal with the
     existing ancestor, interval and recorded tolerance, proving the exact
     whole-interval residual stays within that unchanged tolerance. This never
-    creates ancestry, intervals or tolerances.
+    creates ancestry, intervals or tolerances. Captured shared-boundary
+    occurrences of the same edge re-seal under the identical rule.
     """
     if draft is None:
         return
+    if draft.aliases is None:
+        draft.aliases = {}
     _check(draft.check)
     if model.model_id != draft.model_id:
         raise GeometryError('edge subcurve incidence belongs to another model')
     updates = {}
+    alias_updates = {}
     definitions = {}
     for value, prior in prior_definitions.items():
         edge = _identifier(value)
         record = draft.records.get(edge)
-        if record is None:
+        aliases = tuple(draft.aliases.get(edge, ()))
+        if record is None and not aliases:
             continue
-        if prior != record.current_definition:
+        if record is not None and prior != record.current_definition:
+            raise GeometryError('edge subcurve prior definition changed before incidence rebind')
+        if any(prior != row.current_definition for row in aliases):
             raise GeometryError('edge subcurve prior definition changed before incidence rebind')
         current = _edge_subcurve_definition(model, edge) if edge in model.edges else None
         definitions[edge] = current
-        updates[edge] = _retained_incidence(record, prior, current)
+        if record is not None:
+            updates[edge] = _retained_incidence(record, prior, current)
+        alias_updates[edge] = tuple(filter(None,
+            (_retained_incidence(row, prior, current) for row in aliases)))
     _check(draft.check)
     for edge, expected in definitions.items():
         current = _edge_subcurve_definition(model, edge) if edge in model.edges else None
@@ -393,6 +568,11 @@ def _rebind_edge_subcurve_incidence(draft, prior_definitions, *, model):
             draft.records.pop(edge, None)
         else:
             draft.records[edge] = record
+    for edge, rows in alias_updates.items():
+        if rows:
+            draft.aliases[edge] = list(rows)
+        else:
+            draft.aliases.pop(edge, None)
 
 
 def _publish_edge_subcurve_preimages(model, prepared, checksum):

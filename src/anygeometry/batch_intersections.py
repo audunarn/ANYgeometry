@@ -849,8 +849,8 @@ def _apply_intersections_in_place(model, plan, *, policy, _edge_preimage_draft=N
                     parent_definition = _edge_subcurve_definition(model, current)
                 _vertex, (left, right) = split_edge_attachments(model, current, stations[0], check)
                 if _edge_preimage_draft is not None:
-                    from .edge_subcurve_preimages import (_record_edge_subcurve_split,
-                        _SubcurveEnclosureUnavailable)
+                    from .edge_subcurve_preimages import (_drop_edge_subcurve_records,
+                        _record_edge_subcurve_split, _SubcurveEnclosureUnavailable)
                     try:
                         _record_edge_subcurve_split(_edge_preimage_draft, current, stations[0],
                             (left, right), tolerance, model=model,
@@ -860,9 +860,11 @@ def _apply_intersections_in_place(model, plan, *, policy, _edge_preimage_draft=N
                             raise  # Never reinterpret a callback exception.
                         # Optional approximation proof is absent; geometry keeps
                         # its established acceptance. Requested proof queries
-                        # must explicitly refuse these unqualified children.
-                        for identifier in (current, left, right):
-                            _edge_preimage_draft.records.pop(identifier, None)
+                        # must explicitly refuse these unqualified children, and
+                        # the dead parent's captured occurrences are dropped with
+                        # its primary record instead of lingering unsealed.
+                        _drop_edge_subcurve_records(_edge_preimage_draft,
+                            (current, left, right))
                 current, previous = right, fraction
 
         edge_curves = {edge_id: freeze_edge(model, edge_id) for edge_id in model.edges}
@@ -950,6 +952,13 @@ def _apply_intersections_in_place(model, plan, *, policy, _edge_preimage_draft=N
                     candidates.append(edge_id)
             if candidates:
                 edge_id = min(candidates)
+                if _edge_preimage_draft is not None and len(candidates) > 1:
+                    # Canonical shared-edge reuse: capture every participating
+                    # authenticated occurrence before the duplicates orphan.
+                    from .edge_subcurve_preimages import _record_edge_subcurve_unification
+                    _record_edge_subcurve_unification(_edge_preimage_draft, edge_id,
+                        tuple(candidate for candidate in candidates if candidate != edge_id),
+                        model=model)
             elif isinstance(curve, LinePath):
                 edge_id = model.add_line(start, end)
             elif isinstance(curve, BezierPath):
