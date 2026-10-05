@@ -335,12 +335,36 @@ def _finalize_edge_subcurve_preimages(model, draft, *, cancellation_check=None):
     return _Prepared(draft.owner, binding, definition_checksum(binding))
 
 
+def _retained_incidence(record, prior, current):
+    """Retain an incidence rebinding only through an unchanged-tolerance seal.
+
+    Exact rational controls re-seal to the identical certificate. A recorded
+    degree-1 polynomial restriction may otherwise survive only the owner's canonicalizing
+    vertex merge, and only while the exact whole-interval residual stays within
+    the SAME recorded tolerance. Deleted entries, no-tolerance records without
+    exact controls, nonlinear geometry changes and out-of-tolerance
+    residuals all become unavailable; nothing here creates ancestry.
+    """
+    if current is None:
+        return None
+    if current.controls != prior.controls and (record.tolerance is None
+                                               or len(prior.controls) != 2
+                                               or len(current.controls) != 2):
+        return None
+    try:
+        return _seal(record.ancestor, record.interval, current, record.tolerance)
+    except _SubcurveEnclosureUnavailable:
+        return None  # Out-of-tolerance incidence remains unavailable.
+
+
 def _rebind_edge_subcurve_incidence(draft, prior_definitions, *, model):
     """Reseal only an explicit canonicalization's supplied incidence closure.
 
     The caller snapshots exactly the edges using the replaced vertex immediately
-    before the owned merge. Identical rational controls preserve the certificate;
-    changed geometry or deleted entries lose it. This never creates ancestry.
+    before the owned merge. Retention happens only through _seal with the
+    existing ancestor, interval and recorded tolerance, proving the exact
+    whole-interval residual stays within that unchanged tolerance. This never
+    creates ancestry, intervals or tolerances.
     """
     if draft is None:
         return
@@ -358,8 +382,7 @@ def _rebind_edge_subcurve_incidence(draft, prior_definitions, *, model):
             raise GeometryError('edge subcurve prior definition changed before incidence rebind')
         current = _edge_subcurve_definition(model, edge) if edge in model.edges else None
         definitions[edge] = current
-        updates[edge] = (replace(record, current_definition=current)
-                         if current is not None and current.controls == prior.controls else None)
+        updates[edge] = _retained_incidence(record, prior, current)
     _check(draft.check)
     for edge, expected in definitions.items():
         current = _edge_subcurve_definition(model, edge) if edge in model.edges else None

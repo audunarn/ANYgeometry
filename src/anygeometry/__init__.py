@@ -39,6 +39,10 @@ from .prepared_member_sheet_component import (
     PreparedMemberSheetJointComponent, query_prepared_member_sheet_joint_component,
     validate_prepared_member_sheet_joint_component_binding,
 )
+from .prepared_planar_member_sheet_network import (
+    PreparedPlanarMemberSheetNetwork, query_prepared_planar_member_sheet_network,
+    validate_prepared_planar_member_sheet_network_binding,
+)
 from .prepared_member_sheet_network import (
     PreparedMemberSheetJointNetwork, query_prepared_member_sheet_joint_network,
     validate_prepared_member_sheet_joint_network_binding,
@@ -334,6 +338,9 @@ __all__ = [
     "validate_prepared_member_sheet_joint_component_binding",
     "PreparedMemberSheetJointNetwork",
     "query_prepared_member_sheet_joint_network",
+    "PreparedPlanarMemberSheetNetwork",
+    "query_prepared_planar_member_sheet_network",
+    "validate_prepared_planar_member_sheet_network_binding",
     "validate_prepared_member_sheet_joint_network_binding",
     "query_prepared_sheet_joint_component",
     "validate_prepared_sheet_joint_component_binding",

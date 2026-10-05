@@ -323,11 +323,20 @@ def _query_component(model,current_joint_edge_id,*,expected_revision=None,
         expanded=set(sheets)
         for key in sorted(selected):
             check()
-            edge,owners,links=_qualify_joint(data,data['junctions'][key],observed)
+            row=data['junctions'][key]
+            # A relation policy may qualify generated member Junctions itself;
+            # every Sheet joint keeps the unchanged legacy declaration proof.
+            qualifier=(None if relations is None else getattr(relations,'qualify_junction',None))
+            if qualifier is not None and row['kind']!='sheet_joint':
+                owners,links=qualifier(data,row)
+                attachments.update(links);junctions.add(key);expanded.update(owners)
+                continue
+            edge,owners,links=_qualify_joint(data,row,observed)
             joint_edges.add(edge);attachments.update(links);junctions.add(key);expanded.update(owners)
         touching.update(key for key,row in data['attachments'].items()
                         if _touch_attachment(row,deps,near_edges,attachments,junctions))
-        extra = set() if relations is None else set(relations.attachment_ids)
+        extra = set() if relations is None else set(relations.attachment_ids)|\
+            set(getattr(relations,'current_attachment_ids',()))
         if touching-attachments-extra:
             raise GeometryError('prepared Sheet joint component touches unsupported/uncontained Attachments')
         if expanded==sheets:break
@@ -385,12 +394,17 @@ def _query_component(model,current_joint_edge_id,*,expected_revision=None,
     _qualify_preserved_source_joints(source,data,source_attachments,source_junctions,
                                     attachments,junctions,check)
     original_supports=_plane_geometry(source,authored,check)
-    current_supports=_plane_geometry(data,deps['faces'],check)
+    geometry_qualifier = None if relations is None else getattr(relations,'current_plane_geometry',None)
+    current_supports=(_plane_geometry(data,deps['faces'],check) if geometry_qualifier is None
+                      else geometry_qualifier(model,data,deps['faces'],check))
     for face,support in current_supports.items():
         check()
         _support_correspondence(original_supports[roots[face]],support,np.empty((0,3,2)))
     factory = PreparedSheetJointComponent if result_factory is None else result_factory
-    all_attachments = attachments if relations is None else attachments | set(relations.attachment_ids)
+    # Generated current-only relations (for example member-on-Sheet joints) are
+    # recorded with the current document; the original document never carries them.
+    generated = () if relations is None else getattr(relations,'current_attachment_ids',())
+    all_attachments = attachments if relations is None else attachments | set(relations.attachment_ids) | set(generated)
     all_source_attachments = (source_attachments if relations is None else
                               source_attachments | set(relations.attachment_ids))
     original_records = _records(original,source,source_deps,all_source_attachments,source_junctions)

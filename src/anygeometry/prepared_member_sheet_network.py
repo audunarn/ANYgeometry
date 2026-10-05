@@ -6,6 +6,11 @@ of original boundary Members, each over a continuous finite chain of Straight
 boundary carriers with distinct original roots, plus exact vertex-on-edge point
 Attachments, are proved independently against both documents. It grants no
 beam discretization, load transfer or publication authority.
+
+The per-Member chain and exact point relation proofs are factored into
+private policy hooks so the planar interior-stiffener network can reuse the
+same certified station mathematics without weakening this boundary-only
+contract.
 """
 from dataclasses import dataclass, fields
 from fractions import Fraction
@@ -176,27 +181,27 @@ class _NetworkRelations:
         validate_prepared_model_scope_binding(model, scope)
 
 
-def _carrier_ancestry(ancestry_by_root, scope, source, root, carriers):
+def _carrier_ancestry(ancestry_by_root, scope, source, root, carriers, require):
     """Reuse one public ancestry query; cache the per-carrier proof."""
     cached = carriers.get(root)
     if cached is not None:
         return cached
     records = sorted(ancestry_by_root.get(root, ()),
                      key=lambda row: Fraction(*row.interval[0]))
-    _require(len(records) >= 1, 'required source-carrier ancestry is unavailable')
+    require(len(records) >= 1, 'required source-carrier ancestry is unavailable')
     intervals = [(Fraction(*r.interval[0]), Fraction(*r.interval[1])) for r in records]
-    _require(intervals[0][0] == 0 and intervals[-1][1] == 1 and
+    require(intervals[0][0] == 0 and intervals[-1][1] == 1 and
              all(a < b for a, b in intervals) and
              all(first[1] == second[0] for first, second in zip(intervals, intervals[1:])),
              'source carrier ancestry does not tile [0,1]')
     original_controls = tuple(tuple((value.numerator, value.denominator)
         for value in map(lambda x: Fraction(float(x)), source['vertices'][vertex]['position']))
         for vertex in (source['edges'][root]['start'], source['edges'][root]['end']))
-    _require(all(len(point) == 3 for point in original_controls),
+    require(all(len(point) == 3 for point in original_controls),
              'requires three-dimensional original controls')
-    _require(original_controls[0] != original_controls[1],
+    require(original_controls[0] != original_controls[1],
              'requires a nondegenerate source carrier')
-    _require(all(r.ancestor.model_id == scope.face_preimages.authored_model_id
+    require(all(r.ancestor.model_id == scope.face_preimages.authored_model_id
                  and r.ancestor.revision == scope.face_preimages.authored_revision
                  and r.ancestor.source_checksum == scope.face_preimages.authored_checksum
                  and r.ancestor.definition.start == source['edges'][root]['start']
@@ -205,12 +210,217 @@ def _carrier_ancestry(ancestry_by_root, scope, source, root, carriers):
              'requires straight restrictions anchored to the original document')
     for record in records:
         bound = Fraction(*record.squared_distance_bound)
-        _require(bound >= 0 and (bound == 0 if record.tolerance is None else
-                 bound <= Fraction(*record.tolerance)**2),
-                 'ancestry restriction exceeds its unchanged certified tolerance')
+        require(bound >= 0 and (bound == 0 if record.tolerance is None else
+                bound <= Fraction(*record.tolerance)**2),
+                'ancestry restriction exceeds its unchanged certified tolerance')
     cached = (tuple(records), tuple(intervals), original_controls)
     carriers[root] = cached
     return cached
+
+
+def _qualify_member_chain(model, scope, source, current, member, ancestry_by_root,
+                          record_by_edge, carriers, check, require):
+    """Prove one Member's original->current straight chain; refuse partials.
+
+    Global parent spans and orientations, exact native station intervals and
+    affine endpoint residual bounds are certified against the unchanged owner
+    tolerances. The returned relation payload is shared verbatim by every
+    network policy that qualifies this chain.
+    """
+    old_member = source['members'][member]
+    new_member = current['members'][member]
+    require({k: v for k, v in old_member.items() if k != 'edge_use_ids'} ==
+            {k: v for k, v in new_member.items() if k != 'edge_use_ids'},
+            'Member fields changed')
+    part = old_member['part_id']
+    require(part is None or (part in source['parts'] and part in current['parts'] and
+                             source['parts'][part] == current['parts'][part]),
+            'Member Part fields or membership changed')
+    require(len(old_member['edge_use_ids']) >= 1 and
+            set(old_member['edge_use_ids']) <= set(source['member_edge_uses']),
+            'needs fully accounted original MemberEdgeUses')
+    old_uses = [source['member_edge_uses'][key] for key in old_member['edge_use_ids']]
+    require(all(use['member_id'] == member for use in old_uses),
+            'original MemberEdgeUse has a different owner')
+    roots = [use['edge_id'] for use in old_uses]
+    require(len(set(roots)) == len(roots),
+            'repeats an original Member carrier with ambiguous traversal semantics')
+    require(old_member['orientation_reference'] is None,
+            'has unsupported orientation references')
+    spans = []
+    for use in old_uses:
+        require(use['orientation'] in ('forward', 'reversed'),
+                'has unsupported original Member station semantics')
+        pair = tuple(Fraction(float(t)) for t in use['parent_range'])
+        require(len(pair) == 2,
+                'has unsupported original Member station semantics')
+        spans.append(pair)
+    require(spans[0][0] == 0 and spans[-1][1] == 1 and
+             all(a < b for a, b in spans) and
+             all(first[1] == second[0] for first, second in zip(spans, spans[1:])),
+             'original Member use spans do not tile [0,1]')
+    for root in roots:
+        require(root in source['edges'], 'original Member carrier is unavailable')
+        require(all(vertex in source['vertices'] for vertex in
+                    (source['edges'][root]['start'], source['edges'][root]['end'])),
+                'original Member carrier vertex is unavailable')
+        require(source['edges'][root]['curve'] == {'type': 'straight'},
+                'requires a straight original carrier')
+    ancestries = [_carrier_ancestry(ancestry_by_root, scope, source, root, carriers, require)
+                  for root in roots]
+    use_ids = new_member['edge_use_ids']
+    require(len(set(use_ids)) == len(use_ids), 'has duplicate current MemberEdgeUses')
+    require(set(use_ids) <= set(current['member_edge_uses']),
+            'current MemberEdgeUse is unavailable')
+    uses = [current['member_edge_uses'][key] for key in use_ids]
+    # Current uses must form one contiguous run per original use, in the
+    # original chain order, and consume every retained descendant row.
+    root_index = {root: index for index, root in enumerate(roots)}
+    groups = [[] for _ in roots]
+    position = 0
+    for use in uses:
+        record = record_by_edge.get(use['edge_id'])
+        require(record is not None,
+                'current MemberEdgeUse has no retained carrier ancestry')
+        index = root_index.get(record.ancestor.definition.edge_id)
+        require(index is not None,
+                'current MemberEdgeUse descends from another carrier')
+        require(index == position,
+                'current MemberEdgeUses are out of original use order')
+        require(len(groups[index]) < len(ancestries[index][0]),
+                'Member use coverage changed')
+        groups[index].append((use, record))
+        if len(groups[index]) == len(ancestries[index][0]):
+            position += 1
+    require(position == len(roots), 'Member use coverage changed')
+    use_mappings, certificates, current_carriers = [], [], []
+    for old_use, root, (records, intervals, original_controls), group, (p, q) in zip(
+            old_uses, roots, ancestries, groups, spans):
+        reverse = old_use['orientation'] == 'reversed'
+        traversal = list(reversed(records)) if reverse else records
+        require(len(group) == len(traversal), 'Member use coverage changed')
+        parameter_ranges = [tuple(Fraction(float(t)) for t in use['parent_range'])
+                            for use, _ in group]
+        require(all(len(pair)==2 and 0 <= pair[0] < pair[1] <= 1 for pair in parameter_ranges)
+                and parameter_ranges[0][0]==p and parameter_ranges[-1][1]==q
+                and all(first[1]==second[0] for first,second in zip(parameter_ranges,parameter_ranges[1:])),
+                'Member parent ranges do not tile the original use span')
+        scale = q - p
+        group_certificates = []
+        for (use, _), record in zip(group, traversal):
+            a, b = map(lambda value: Fraction(*value), record.interval)
+            require(use['member_id'] == member and use['edge_id'] == record.edge_id and
+                    {k: v for k, v in use.items() if k not in ('id', 'edge_id', 'parent_range')} ==
+                    {k: v for k, v in old_use.items() if k not in ('id', 'edge_id', 'parent_range')},
+                    'Member traversal, orientation or parent station changed')
+            u,v = (Fraction(float(t)) for t in use['parent_range'])
+            native = (1-(v-p)/scale, 1-(u-p)/scale) if reverse else ((u-p)/scale, (v-p)/scale)
+            original = _controls(record.ancestor.definition)
+            current_controls = _controls(record.current_definition)
+            # The error is affine. Its squared norm is convex, so the maximum
+            # of the two exact endpoint residuals bounds the WHOLE interval.
+            parameter_bound = max(_distance_squared(_point(original,t),point)
+                                  for t,point in zip(native,current_controls))
+            tolerance = _carrier_tolerance(model,record)
+            require(parameter_bound <= tolerance**2,
+                    'Member station restriction exceeds unchanged owner tolerance')
+            group_certificates.append({'member_edge_use':use['id'],'edge':record.edge_id,
+                'native_parent_interval':[[t.numerator,t.denominator] for t in native],
+                'ancestry_squared_distance_bound':list(record.squared_distance_bound),
+                'member_station_squared_distance_bound':[parameter_bound.numerator,parameter_bound.denominator],
+                'coordinate_tolerance':[tolerance.numerator,tolerance.denominator]})
+        certificates.extend(group_certificates)
+        current_carriers.extend(record.edge_id for record in records)
+        use_mappings.append({'source_member_use': old_use,
+                             'source_carrier': root,
+                             'source_span':[[p.numerator,p.denominator],[q.numerator,q.denominator]],
+                             'orientation': old_use['orientation'],
+                             'current_member_uses': [use for use, _ in group],
+                             'current_carriers': [record.edge_id for record in records],
+                             'station_certificates': group_certificates})
+    return {'source_member': old_member, 'current_member': new_member,
+            'source_member_uses': old_uses, 'current_member_uses': uses,
+            'source_carrier': roots[0] if len(old_uses) == 1 else None,
+            'source_carriers': list(roots),
+            'source_use_mappings': use_mappings,
+            'current_carriers': current_carriers,
+            'station_certificates': certificates}
+
+
+def _qualify_point_attachments(model, scope, source, current, carriers, parents,
+                               lineage_cache, check, require):
+    """Certify every exact original point relation; refuse other semantics."""
+    points, point_vertices, attachment_relations = [], [], []
+    for attachment in sorted(source['attachments']):
+        check()
+        old = source['attachments'][attachment]
+        if old['kind'] != 'vertex_on_edge':
+            require(old['kind'] == 'sheet_on_joint',
+                    'has unsupported original Attachment semantics')
+            continue
+        points.append(attachment)
+        require(attachment in current['attachments'], 'lost its point Attachment')
+        new = current['attachments'][attachment]
+        require(old['source_kind'] == 'vertex' and old['target_kind'] == 'edge'
+                and old['member_id'] is None and old['evidence'] == 'exact'
+                and len(old['target_parameters']) == 1
+                and len(old['target_parameters'][0]) == 2
+                and old['target_parameters'][0][0] == old['target_parameters'][0][1],
+                'has unsupported point Attachment semantics')
+        root = old['target_id']
+        require(root in carriers, 'point Attachment target is not a member carrier')
+        records, intervals, original_controls = carriers[root]
+        station = Fraction(old['target_parameters'][0][0])
+        require(0 <= station <= 1, 'point Attachment station is outside the carrier')
+        candidates = [(r, a, b) for r, (a, b) in zip(records, intervals)
+                       if r.edge_id == new['target_id']]
+        require(len(candidates) == 1, 'point Attachment has no unique retained carrier')
+        record, a, b = candidates[0]
+        require(len(new['target_parameters'])==1 and
+                len(new['target_parameters'][0])==2 and
+                new['target_parameters'][0][0]==new['target_parameters'][0][1],
+                'point Attachment no longer has one point station')
+        local = Fraction(float(new['target_parameters'][0][0]))
+        require(0 <= local <= 1,'point Attachment current station is outside the carrier')
+        split_path = _split_path(parents,root,record.edge_id,lineage_cache,check)
+        expected_lineage = [list(value) for value in dict.fromkeys(
+            (*map(tuple, old['lineage']), *(('edge',edge) for edge in split_path)))]
+        require(new['lineage'] == expected_lineage and
+                {k: v for k, v in old.items() if k not in ('target_id', 'target_parameters', 'lineage')} ==
+                {k: v for k, v in new.items() if k not in ('target_id', 'target_parameters', 'lineage')},
+                'point Attachment station or retained fields changed')
+        vertex = old['source_id']
+        require(source['vertices'].get(vertex) == current['vertices'].get(vertex)
+                and vertex in source['vertices'], 'point Attachment source vertex changed')
+        # The whole straight-curve restriction is certified above; verify the
+        # persistent source vertex relation with the owner's original tolerance.
+        actual = model.vertex_position(vertex)
+        require(np.asarray(actual).shape == (3,) and np.isfinite(actual).all(),
+                'requires a finite three-dimensional source vertex')
+        tolerance = min(Fraction(float(old['tolerance_used'])),_carrier_tolerance(model,record))
+        expected = tuple((1-station)*Fraction(*a) + station*Fraction(*b)
+                         for a, b in zip(*original_controls))
+        squared_distance = sum((Fraction(float(x))-y)**2 for x, y in zip(actual, expected))
+        require(squared_distance <= tolerance**2,
+                'point Attachment exceeds its unchanged owner tolerance')
+        current_point = _point(_controls(record.current_definition),local)
+        target_bound = _distance_squared(tuple(Fraction(float(x)) for x in actual),current_point)
+        parameter_bound = _distance_squared(expected,current_point)
+        require(target_bound <= tolerance**2 and parameter_bound <= tolerance**2,
+                'point Attachment target or station exceeds unchanged owner tolerance')
+        point_vertices.append(vertex)
+        ancestry_station = (station-a)/(b-a)
+        attachment_relations.append({'source_attachment': old, 'current_attachment': new,
+                                     'source_vertex': source['vertices'][vertex],
+                                     'current_vertex': current['vertices'][vertex],
+                                     'source_carrier': root,
+                                     'point_squared_distance_bound':
+                                         [squared_distance.numerator, squared_distance.denominator],
+                                     'point_target_squared_distance_bound':[target_bound.numerator,target_bound.denominator],
+                                     'point_station_squared_distance_bound':[parameter_bound.numerator,parameter_bound.denominator],
+                                     'ancestry_station':[ancestry_station.numerator,ancestry_station.denominator],
+                                     'coordinate_tolerance':[tolerance.numerator,tolerance.denominator]})
+    return points, point_vertices, attachment_relations
 
 
 def _qualify(model, scope, source, current, cancellation_check):
@@ -244,204 +454,21 @@ def _qualify(model, scope, source, current, cancellation_check):
     source_edges, current_edges, old_use_ids, current_use_ids = [], [], [], []
     for member in members:
         check()
-        old_member = source['members'][member]
-        new_member = current['members'][member]
-        _require({k: v for k, v in old_member.items() if k != 'edge_use_ids'} ==
-                 {k: v for k, v in new_member.items() if k != 'edge_use_ids'},
-                 'Member fields changed')
-        part = old_member['part_id']
-        _require(part is None or (part in source['parts'] and part in current['parts'] and
-                                 source['parts'][part] == current['parts'][part]),
-                 'Member Part fields or membership changed')
-        _require(len(old_member['edge_use_ids']) >= 1 and
-                 set(old_member['edge_use_ids']) <= set(source['member_edge_uses']),
-                 'needs fully accounted original MemberEdgeUses')
-        old_uses = [source['member_edge_uses'][key] for key in old_member['edge_use_ids']]
-        _require(all(use['member_id'] == member for use in old_uses),
-                 'original MemberEdgeUse has a different owner')
-        old_use_ids.extend(old_member['edge_use_ids'])
-        roots = [use['edge_id'] for use in old_uses]
-        _require(len(set(roots)) == len(roots),
-                 'repeats an original Member carrier with ambiguous traversal semantics')
-        _require(old_member['orientation_reference'] is None,
-                 'has unsupported orientation references')
-        spans = []
-        for use in old_uses:
-            _require(use['orientation'] in ('forward', 'reversed'),
-                     'has unsupported original Member station semantics')
-            pair = tuple(Fraction(float(t)) for t in use['parent_range'])
-            _require(len(pair) == 2,
-                     'has unsupported original Member station semantics')
-            spans.append(pair)
-        _require(spans[0][0] == 0 and spans[-1][1] == 1 and
-                 all(a < b for a, b in spans) and
-                 all(first[1] == second[0] for first, second in zip(spans, spans[1:])),
-                 'original Member use spans do not tile [0,1]')
-        for root in roots:
-            _require(root in source['edges'], 'original Member carrier is unavailable')
-            _require(all(vertex in source['vertices'] for vertex in
-                         (source['edges'][root]['start'], source['edges'][root]['end'])),
-                     'original Member carrier vertex is unavailable')
-            _require(source['edges'][root]['curve'] == {'type': 'straight'},
-                     'requires a straight original carrier')
-        ancestries = [_carrier_ancestry(ancestry_by_root, scope, source, root, carriers)
-                      for root in roots]
-        use_ids = new_member['edge_use_ids']
-        _require(len(set(use_ids)) == len(use_ids), 'has duplicate current MemberEdgeUses')
-        _require(set(use_ids) <= set(current['member_edge_uses']),
-                 'current MemberEdgeUse is unavailable')
-        uses = [current['member_edge_uses'][key] for key in use_ids]
-        current_use_ids.extend(use_ids)
-        # Current uses must form one contiguous run per original use, in the
-        # original chain order, and consume every retained descendant row.
-        root_index = {root: index for index, root in enumerate(roots)}
-        groups = [[] for _ in roots]
-        position = 0
-        for use in uses:
-            record = record_by_edge.get(use['edge_id'])
-            _require(record is not None,
-                     'current MemberEdgeUse has no retained carrier ancestry')
-            index = root_index.get(record.ancestor.definition.edge_id)
-            _require(index is not None,
-                     'current MemberEdgeUse descends from another carrier')
-            _require(index == position,
-                     'current MemberEdgeUses are out of original use order')
-            _require(len(groups[index]) < len(ancestries[index][0]),
-                     'Member use coverage changed')
-            groups[index].append((use, record))
-            if len(groups[index]) == len(ancestries[index][0]):
-                position += 1
-        _require(position == len(roots), 'Member use coverage changed')
-        use_mappings, certificates, current_carriers = [], [], []
-        for old_use, root, (records, intervals, original_controls), group, (p, q) in zip(
-                old_uses, roots, ancestries, groups, spans):
-            reverse = old_use['orientation'] == 'reversed'
-            traversal = list(reversed(records)) if reverse else records
-            _require(len(group) == len(traversal), 'Member use coverage changed')
-            parameter_ranges = [tuple(Fraction(float(t)) for t in use['parent_range'])
-                                for use, _ in group]
-            _require(all(len(pair)==2 and 0 <= pair[0] < pair[1] <= 1 for pair in parameter_ranges)
-                     and parameter_ranges[0][0]==p and parameter_ranges[-1][1]==q
-                     and all(first[1]==second[0] for first,second in zip(parameter_ranges,parameter_ranges[1:])),
-                     'Member parent ranges do not tile the original use span')
-            scale = q - p
-            group_certificates = []
-            for (use, _), record in zip(group, traversal):
-                a, b = map(lambda value: Fraction(*value), record.interval)
-                _require(use['member_id'] == member and use['edge_id'] == record.edge_id and
-                         {k: v for k, v in use.items() if k not in ('id', 'edge_id', 'parent_range')} ==
-                         {k: v for k, v in old_use.items() if k not in ('id', 'edge_id', 'parent_range')},
-                         'Member traversal, orientation or parent station changed')
-                u,v = (Fraction(float(t)) for t in use['parent_range'])
-                native = (1-(v-p)/scale, 1-(u-p)/scale) if reverse else ((u-p)/scale, (v-p)/scale)
-                original = _controls(record.ancestor.definition)
-                current_controls = _controls(record.current_definition)
-                # The error is affine. Its squared norm is convex, so the maximum
-                # of the two exact endpoint residuals bounds the WHOLE interval.
-                parameter_bound = max(_distance_squared(_point(original,t),point)
-                                      for t,point in zip(native,current_controls))
-                tolerance = _carrier_tolerance(model,record)
-                _require(parameter_bound <= tolerance**2,
-                         'Member station restriction exceeds unchanged owner tolerance')
-                group_certificates.append({'member_edge_use':use['id'],'edge':record.edge_id,
-                    'native_parent_interval':[[t.numerator,t.denominator] for t in native],
-                    'ancestry_squared_distance_bound':list(record.squared_distance_bound),
-                    'member_station_squared_distance_bound':[parameter_bound.numerator,parameter_bound.denominator],
-                    'coordinate_tolerance':[tolerance.numerator,tolerance.denominator]})
-            certificates.extend(group_certificates)
-            current_carriers.extend(record.edge_id for record in records)
-            use_mappings.append({'source_member_use': old_use,
-                                 'source_carrier': root,
-                                 'source_span':[[p.numerator,p.denominator],[q.numerator,q.denominator]],
-                                 'orientation': old_use['orientation'],
-                                 'current_member_uses': [use for use, _ in group],
-                                 'current_carriers': [record.edge_id for record in records],
-                                 'station_certificates': group_certificates})
-        source_edges.extend(roots)
-        current_edges.extend(use['edge_id'] for use in uses)
-        member_relations.append({'source_member': old_member, 'current_member': new_member,
-                                 'source_member_uses': old_uses, 'current_member_uses': uses,
-                                 'source_carrier': roots[0] if len(old_uses) == 1 else None,
-                                 'source_carriers': list(roots),
-                                 'source_use_mappings': use_mappings,
-                                 'current_carriers': current_carriers,
-                                 'station_certificates':certificates})
+        relation = _qualify_member_chain(model, scope, source, current, member,
+            ancestry_by_root, record_by_edge, carriers, check, _require)
+        old_use_ids.extend(relation['source_member']['edge_use_ids'])
+        current_use_ids.extend(relation['current_member']['edge_use_ids'])
+        source_edges.extend(relation['source_carriers'])
+        current_edges.extend(use['edge_id'] for use in relation['current_member_uses'])
+        member_relations.append(relation)
     _require(len(old_use_ids) == len(set(old_use_ids)) and
              set(old_use_ids) == set(source['member_edge_uses']),
              'has unaccounted original MemberEdgeUses')
     _require(len(current_use_ids) == len(set(current_use_ids)) and
              set(current_use_ids) == set(current['member_edge_uses']),
              'has unaccounted current MemberEdgeUses')
-    points, point_vertices, attachment_relations = [], [], []
-    for attachment in sorted(source['attachments']):
-        check()
-        old = source['attachments'][attachment]
-        if old['kind'] != 'vertex_on_edge':
-            _require(old['kind'] == 'sheet_on_joint',
-                     'has unsupported original Attachment semantics')
-            continue
-        points.append(attachment)
-        _require(attachment in current['attachments'], 'lost its point Attachment')
-        new = current['attachments'][attachment]
-        _require(old['source_kind'] == 'vertex' and old['target_kind'] == 'edge'
-                 and old['member_id'] is None and old['evidence'] == 'exact'
-                 and len(old['target_parameters']) == 1
-                 and len(old['target_parameters'][0]) == 2
-                 and old['target_parameters'][0][0] == old['target_parameters'][0][1],
-                 'has unsupported point Attachment semantics')
-        root = old['target_id']
-        _require(root in carriers, 'point Attachment target is not a member carrier')
-        records, intervals, original_controls = carriers[root]
-        station = Fraction(old['target_parameters'][0][0])
-        _require(0 <= station <= 1, 'point Attachment station is outside the carrier')
-        candidates = [(r, a, b) for r, (a, b) in zip(records, intervals)
-                       if r.edge_id == new['target_id']]
-        _require(len(candidates) == 1, 'point Attachment has no unique retained carrier')
-        record, a, b = candidates[0]
-        _require(len(new['target_parameters'])==1 and
-                 len(new['target_parameters'][0])==2 and
-                 new['target_parameters'][0][0]==new['target_parameters'][0][1],
-                 'point Attachment no longer has one point station')
-        local = Fraction(float(new['target_parameters'][0][0]))
-        _require(0 <= local <= 1,'point Attachment current station is outside the carrier')
-        split_path = _split_path(parents,root,record.edge_id,lineage_cache,check)
-        expected_lineage = [list(value) for value in dict.fromkeys(
-            (*map(tuple, old['lineage']), *(('edge',edge) for edge in split_path)))]
-        _require(new['lineage'] == expected_lineage and
-                 {k: v for k, v in old.items() if k not in ('target_id', 'target_parameters', 'lineage')} ==
-                 {k: v for k, v in new.items() if k not in ('target_id', 'target_parameters', 'lineage')},
-                 'point Attachment station or retained fields changed')
-        vertex = old['source_id']
-        _require(source['vertices'].get(vertex) == current['vertices'].get(vertex)
-                 and vertex in source['vertices'], 'point Attachment source vertex changed')
-        # The whole straight-curve restriction is certified above; verify the
-        # persistent source vertex relation with the owner's original tolerance.
-        actual = model.vertex_position(vertex)
-        _require(np.asarray(actual).shape == (3,) and np.isfinite(actual).all(),
-                 'requires a finite three-dimensional source vertex')
-        tolerance = min(Fraction(float(old['tolerance_used'])),_carrier_tolerance(model,record))
-        expected = tuple((1-station)*Fraction(*a) + station*Fraction(*b)
-                         for a, b in zip(*original_controls))
-        squared_distance = sum((Fraction(float(x))-y)**2 for x, y in zip(actual, expected))
-        _require(squared_distance <= tolerance**2,
-                 'point Attachment exceeds its unchanged owner tolerance')
-        current_point = _point(_controls(record.current_definition),local)
-        target_bound = _distance_squared(tuple(Fraction(float(x)) for x in actual),current_point)
-        parameter_bound = _distance_squared(expected,current_point)
-        _require(target_bound <= tolerance**2 and parameter_bound <= tolerance**2,
-                 'point Attachment target or station exceeds unchanged owner tolerance')
-        point_vertices.append(vertex)
-        ancestry_station = (station-a)/(b-a)
-        attachment_relations.append({'source_attachment': old, 'current_attachment': new,
-                                     'source_vertex': source['vertices'][vertex],
-                                     'current_vertex': current['vertices'][vertex],
-                                     'source_carrier': root,
-                                     'point_squared_distance_bound':
-                                         [squared_distance.numerator, squared_distance.denominator],
-                                     'point_target_squared_distance_bound':[target_bound.numerator,target_bound.denominator],
-                                     'point_station_squared_distance_bound':[parameter_bound.numerator,parameter_bound.denominator],
-                                     'ancestry_station':[ancestry_station.numerator,ancestry_station.denominator],
-                                     'coordinate_tolerance':[tolerance.numerator,tolerance.denominator]})
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+        model, scope, source, current, carriers, parents, lineage_cache, check, _require)
     _require(all(row['kind'] == 'sheet_on_joint'
                  for key, row in current['attachments'].items() if key not in points),
              'has unaccounted current Attachments')
