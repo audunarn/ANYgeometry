@@ -67,10 +67,10 @@ def build_network(operand_count=5, shared=False, extra_points=False, empty_part=
         model.reverse_member(member)
         a,b = (tuple(Fraction(float(c)) for c in model.vertex_position(v))
                for v in (edge.start,edge.end))
-        xyz = tuple(Fraction(1,4)*u+Fraction(3,4)*v for u,v in zip(a,b))
+        xyz = tuple((1-station)*u+station*v for u,v in zip(a,b))
         vertex = model.add_point(*(float(c) for c in xyz))
         model.add_attachment(None,'vertex_on_edge','edge',edge.id,ParameterRange.point(0.),
-            (ParameterRange.point(.75),),source_kind='vertex',source_id=vertex,
+            (ParameterRange.point(float(station)),),source_kind='vertex',source_id=vertex,
             evidence='exact',tolerance_used=1e-9)
     if disconnected:
         face = model.add_plate(model.add_points(((30,30,30),(32,30,30),
@@ -276,6 +276,20 @@ def test_member_parameter_error_cannot_exceed_unchanged_tolerance():
     second['parent_range'][0] = first['parent_range'][1]
     with pytest.raises(GeometryError,match='station restriction exceeds'):
         _qualify(model,scope,source,current,None)
+
+
+@pytest.mark.parametrize('station',(Fraction(1,5),Fraction(2,5),Fraction(3,5),Fraction(4,5)))
+def test_nondyadic_split_endpoint_point_uses_certified_retained_target(station):
+    model,joint,_,_ = build_network(5,central=True,station=station)
+    receipt = query(model,joint)
+    central = max(receipt.relations['members'],key=lambda row:len(row['current_member_uses']))
+    point = next(row for row in receipt.relations['attachments']
+                 if row['source_carrier']==central['source_carrier'])
+    assert 0 <= point['current_attachment']['target_parameters'][0][0] <= 1
+    assert all(Fraction(*point[key]) <= Fraction(*point['coordinate_tolerance'])**2
+               for key in ('point_squared_distance_bound','point_target_squared_distance_bound',
+                           'point_station_squared_distance_bound'))
+    validate(model,receipt)
 
 
 def test_long_replacement_chain_has_no_recursion_count_ceiling():

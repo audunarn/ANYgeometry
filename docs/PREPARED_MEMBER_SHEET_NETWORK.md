@@ -30,6 +30,9 @@ ideal edge parameter is (t-a)/(b-a); reversed member traversal is accounted
 separately. Persisted floating parameters remain unchanged. Exact rational
 residuals check the persisted target point against both the original station
 and the unchanged source vertex. Their bounds are included in the receipt.
+At a rounded split endpoint, the ideal ratio can lie just outside the retained
+child interval. It is diagnostic data; consumers use the unchanged persisted
+current parameter in [0,1] and its certified coordinate residuals.
 Display sampling does not establish this relation.
 
 Ancestry is queried once per call and indexed by original carrier. Cancellation

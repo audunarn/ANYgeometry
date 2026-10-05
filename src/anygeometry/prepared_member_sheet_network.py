@@ -344,7 +344,7 @@ def _qualify(model, scope, source, current, cancellation_check):
         station = Fraction(old['target_parameters'][0][0])
         _require(0 <= station <= 1, 'point Attachment station is outside the carrier')
         candidates = [(r, a, b) for r, (a, b) in zip(records, intervals)
-                       if a <= station <= b and r.edge_id == new['target_id']]
+                       if r.edge_id == new['target_id']]
         _require(len(candidates) == 1, 'point Attachment has no unique retained carrier')
         record, a, b = candidates[0]
         _require(len(new['target_parameters'])==1 and
