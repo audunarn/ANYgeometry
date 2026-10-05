@@ -81,7 +81,21 @@ def query_prepared_authored_boundary_stations(model, correspondence, edge_id, pa
     exterior = {edge for loop in correspondence.exterior_loops for _, _, edges in loop for edge in edges}
     if int(edge_id) not in exterior:
         raise GeometryError('authored boundary stations need a qualified exterior edge')
-    record = next(row for row in correspondence.edge_preimages.records if row.edge_id == edge_id)
+    # A unified shared boundary carries one sealed occurrence per participating
+    # authored root; select this correspondence's own occurrence and interval,
+    # never an arbitrary first primary record.
+    authored = correspondence.authored_definition
+    root_edges = {root for loop in correspondence.exterior_loops for root, _, _ in loop}
+    matches = [row for row in (*correspondence.edge_preimages.records,
+                               *correspondence.edge_preimages.alias_records)
+               if row.edge_id == int(edge_id)
+               and row.ancestor.model_id == authored.model_id
+               and row.ancestor.revision == authored.revision
+               and row.ancestor.source_checksum == authored.source_checksum
+               and row.ancestor.definition.edge_id in root_edges]
+    if len(matches) != 1:
+        raise GeometryError('authored boundary stations need a unique exterior ancestry occurrence')
+    record = matches[0]
     payload = json.loads(correspondence.authored_definition.definition_json)
     domain = _original_domain(correspondence.authored_definition, lambda: _check(cancellation_check))
     frame = _frame(domain.support)
