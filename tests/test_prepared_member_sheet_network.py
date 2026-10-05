@@ -4,7 +4,7 @@ import json
 import pytest
 from fractions import Fraction
 import numpy as np
-from anygeometry import GeometryModel, Plane, plan_intersections, apply_intersections, to_dict
+from anygeometry import GeometryModel, Plane, OrientedEdge, plan_intersections, apply_intersections, to_dict
 from anygeometry.structural import ParameterRange
 from anygeometry import GeometryError, query_trimmed_surface_charts
 from anygeometry import (
@@ -338,3 +338,313 @@ def test_point_target_or_replacement_lineage_forgery_refuses(corruption):
         point['lineage'].append(['edge',999999])
     with pytest.raises(GeometryError,match='target or station|retained fields'):
         _qualify(model,scope,source,current,None)
+
+
+def _edge_between(model, first, second):
+    return next(edge for edge in model.edges.values()
+                if {edge.start, edge.end} == {first, second})
+
+
+def build_chain_network(operand_count=4, central=False, repeated_carrier=False,
+                        station=Fraction(3,4), mixed=False):
+    """Small connected network whose Members are multi-edge boundary chains.
+
+    Each operand plate carries a two-use chain (split side edge plus unsplit
+    bottom edge) and a three-use chain sharing the bottom carrier, with the
+    two-use chain reversed on alternating operands. The base plate carries one
+    two-use boundary chain: split by decomposition seams, or the repeatedly cut bottom
+    boundary edge plus the uncut right edge when ``central`` is set.
+    """
+    if not 3 <= operand_count <= 10:
+        raise ValueError('This disposable fixture covers 3-10 operands only, not a kernel cap.')
+    model = GeometryModel()
+    last = operand_count-2
+    base_points = model.add_points(((-1,-2,0),(last+1,-2,0),(last+1,2,0),(-1,2,0)))
+    base = model.add_plate(base_points)
+    model.set_face_surface(base, Plane((0,0,0),(1,0,0),(0,1,0)))
+    model.add_sheet((base,))
+    half = 2 if central else Fraction(3,2)
+    operands = []
+    for x in range(operand_count-1):
+        corners = model.add_points(((x,-half,-1),(x,half,-1),(x,half,1),(x,-half,1)))
+        if mixed:
+            edges = (model.add_line(corners[1],corners[0]),
+                     model.add_line(corners[1],corners[2]),
+                     model.add_line(corners[2],corners[3]),
+                     model.add_line(corners[3],corners[0]))
+            face = model.add_face(edges)
+        else:
+            face = model.add_plate(corners)
+        model.set_face_surface(face, Plane((x,0,0),(0,1,0),(0,0,1)))
+        model.add_sheet((face,))
+        bottom = _edge_between(model, corners[0], corners[1])
+        right = _edge_between(model, corners[1], corners[2])
+        top = _edge_between(model, corners[2], corners[3])
+        left = _edge_between(model, corners[3], corners[0])
+        two = model.add_member((left.id, bottom.id))
+        three = model.add_member((OrientedEdge(bottom.id,not mixed), right.id, top.id))
+        if x % 2:
+            model.reverse_member(two)
+        operands.append({'two':two,'three':three,'bottom':bottom.id,'right':right.id,
+                         'top':top.id,'left':left.id,'reversed':bool(x%2)})
+    if central:
+        first = _edge_between(model, base_points[0], base_points[1])
+        second = _edge_between(model, base_points[1], base_points[2])
+    else:
+        first = _edge_between(model, base_points[1], base_points[2])
+        second = _edge_between(model, base_points[2], base_points[3])
+    base_member = model.add_member((first.id, second.id))
+    if central:
+        model.reverse_member(base_member)
+    if repeated_carrier:
+        model.add_member((second.id, second.id))
+    points = []
+    for edge, st in ((bottom, Fraction(0)), (left, station), (first, station)):
+        a, b = (tuple(Fraction(float(c)) for c in model.vertex_position(v))
+                for v in (edge.start, edge.end))
+        xyz = tuple((1-st)*u+st*v for u, v in zip(a, b))
+        vertex = model.add_point(*(float(c) for c in xyz))
+        model.add_attachment(None, 'vertex_on_edge', 'edge', edge.id,
+            ParameterRange.point(0.), (ParameterRange.point(float(st)),),
+            source_kind='vertex', source_id=vertex, evidence='exact', tolerance_used=1e-9)
+        points.append({'carrier':edge.id,'station':st,'xyz':tuple(map(float,xyz)),
+                       'vertex':vertex})
+    original = to_dict(model)
+    plan = plan_intersections(model, tuple(model.faces), policy='connect')
+    apply_intersections(model, plan, policy='connect')
+    joint = next(a.target_id for a in model.attachments.values() if a.kind=='sheet_on_joint')
+    return model,joint,original,{'operands':operands,'base':{'member':base_member,
+                                 'first':first.id,'second':second.id},'points':points}
+
+
+def _assert_use_mapping_invariants(row):
+    mappings = row['source_use_mappings']
+    assert len(mappings) == len(row['source_member_uses']) == len(row['source_carriers'])
+    spans = [[Fraction(*value) for value in mapping['source_span']] for mapping in mappings]
+    assert spans[0][0] == 0 and spans[-1][1] == 1
+    assert all(a < b for a, b in spans)
+    assert all(first[1] == second[0] for first, second in zip(spans, spans[1:]))
+    for mapping, use, carrier in zip(mappings, row['source_member_uses'], row['source_carriers']):
+        assert mapping['source_member_use'] == use
+        assert mapping['source_carrier'] == carrier
+        assert mapping['orientation'] == use['orientation']
+        assert Fraction(*mapping['source_span'][0]) == Fraction(float(use['parent_range'][0]))
+        assert Fraction(*mapping['source_span'][1]) == Fraction(float(use['parent_range'][1]))
+        assert mapping['current_member_uses']
+        assert len(mapping['current_member_uses']) == len(mapping['station_certificates'])
+        assert mapping['current_carriers'] == [use2['edge_id']
+            for use2 in mapping['current_member_uses']] or \
+            mapping['current_carriers'] == list(reversed([use2['edge_id']
+            for use2 in mapping['current_member_uses']]))
+    assert row['source_carrier'] == (row['source_carriers'][0]
+                                     if len(mappings) == 1 else None)
+    assert len(row['current_member_uses']) == len(row['station_certificates'])
+    assert all(Fraction(*cert['member_station_squared_distance_bound']) <=
+               Fraction(*cert['coordinate_tolerance'])**2
+               for cert in row['station_certificates'])
+
+
+@pytest.mark.parametrize('count', (3,4))
+def test_multi_use_chains_certify_ordered_mappings_and_spans(count):
+    model,joint,original,expected = build_chain_network(count)
+    before = to_dict(model)
+    receipt = query(model,joint)
+    payload = receipt.relations
+    assert len(payload['members']) == 2*(count-1)+1
+    assert len(payload['attachments']) == 3
+    for row in payload['members']:
+        _assert_use_mapping_invariants(row)
+    for operand in expected['operands']:
+        two = next(row for row in payload['members']
+                   if row['source_member']['id'] == operand['two'])
+        three = next(row for row in payload['members']
+                     if row['source_member']['id'] == operand['three'])
+        assert len(two['source_use_mappings']) == 2
+        assert len(three['source_use_mappings']) == 3
+        # The split side carrier doubles, the unsplit bottom carrier does not.
+        assert len(two['current_member_uses']) == 3
+        assert len(three['current_member_uses']) == 4
+        assert two['source_carrier'] is None and three['source_carrier'] is None
+        assert {operand['bottom'], operand['left']} <= set(two['source_carriers'])
+        assert three['source_carriers'] == [operand['bottom'], operand['right'], operand['top']]
+        assert two['source_carriers'] == ([operand['bottom'], operand['left']]
+                                          if operand['reversed']
+                                          else [operand['left'], operand['bottom']])
+        assert all(mapping['orientation'] == ('reversed' if operand['reversed'] else 'forward')
+                   for mapping in two['source_use_mappings'])
+        shared = (set(two['source_carriers']) & set(three['source_carriers']))
+        assert shared == {operand['bottom']}
+    base = next(row for row in payload['members']
+                if row['source_member']['id'] == expected['base']['member'])
+    assert base['source_carriers'] == [expected['base']['first'], expected['base']['second']]
+    # Side decomposition seams occur at y=+-3/2; the top is partitioned
+    # at every independently constructed perpendicular plate's x coordinate.
+    assert [len(m['current_member_uses']) for m in base['source_use_mappings']] == [3,count]
+    assert len(base['current_member_uses']) == count+3
+    for row, point in zip(payload['attachments'], expected['points']):
+        assert row['source_carrier'] == point['carrier']
+        assert tuple(row['current_vertex']['position']) == point['xyz']
+        assert row['point_squared_distance_bound'] == [0,1]
+    endpoint = next(row for row in payload['attachments'] if row['source_carrier'] in
+                    {operand['bottom'] for operand in expected['operands']})
+    assert endpoint['current_attachment']['target_parameters'] == [[0.,0.]]
+    validate(model,receipt)
+    assert query(model,joint) == receipt
+    assert to_dict(model) == before
+    assert len(original['structural']['members']) == 2*(count-1)+1
+
+
+def test_repeated_cuts_through_reversed_multi_use_base_chain():
+    model,joint,_,expected = build_chain_network(5,central=True)
+    receipt = query(model,joint)
+    base = next(row for row in receipt.relations['members']
+                if row['source_member']['id'] == expected['base']['member'])
+    _assert_use_mapping_invariants(base)
+    assert len(base['source_use_mappings']) == 2
+    assert all(mapping['orientation'] == 'reversed' for mapping in base['source_use_mappings'])
+    # Four operand cuts split the bottom boundary carrier into five retained rows.
+    assert len(base['current_member_uses']) == 6
+    assert base['source_carrier'] is None
+    certificates = base['station_certificates']
+    assert any(Fraction(*row['ancestry_squared_distance_bound']) > 0 for row in certificates)
+    ranges = [row['parent_range'] for row in base['current_member_uses']]
+    assert ranges[0][0]==0 and ranges[-1][1]==1
+    assert all(first[1]==second[0] for first,second in zip(ranges,ranges[1:]))
+    point = next(row for row in receipt.relations['attachments']
+                 if row['source_carrier']==expected['base']['first'])
+    assert len(point['current_attachment']['lineage']) == 4
+    assert 0 <= point['current_attachment']['target_parameters'][0][0] <= 1
+    validate(model,receipt)
+
+
+def test_mixed_native_orientations_use_global_spans_without_sampling(monkeypatch):
+    model,joint,original,expected = build_chain_network(3,mixed=True)
+    monkeypatch.setattr(model,'sample_edge',lambda *a,**kw: pytest.fail('sampling is not an oracle'))
+    receipt = query(model,joint)
+    vertices = {row['id']: row['position'] for row in original['vertices']}
+    edges = {row['id']: row for row in original['edges']}
+    for operand in expected['operands']:
+        row = next(row for row in receipt.relations['members']
+                   if row['source_member']['id']==operand['two'])
+        assert {mapping['orientation'] for mapping in row['source_use_mappings']} == {'forward','reversed'}
+        _assert_use_mapping_invariants(row)
+        for mapping in row['source_use_mappings']:
+            edge = edges[mapping['source_carrier']]
+            a,b = (tuple(Fraction(float(x)) for x in vertices[edge[key]])
+                   for key in ('start','end'))
+            p,q = (Fraction(*span) for span in mapping['source_span'])
+            for use in mapping['current_member_uses']:
+                u,v = (Fraction(float(x)) for x in use['parent_range'])
+                native = ((u-p)/(q-p),(v-p)/(q-p))
+                if mapping['orientation']=='reversed':
+                    native = (1-native[1],1-native[0])
+                child = model.edges[use['edge_id']]
+                for t,vertex in zip(native,(child.start,child.end)):
+                    wanted = tuple((1-t)*x+t*y for x,y in zip(a,b))
+                    actual = tuple(Fraction(float(x)) for x in model.vertex_position(vertex))
+                    # Fixture coordinates are independent rational rectangles.
+                    assert sum((x-y)**2 for x,y in zip(actual,wanted)) <= Fraction(1,10**18)
+    validate(model,receipt)
+
+
+def test_unsplit_use_in_multi_use_chain_retains_original_attachment_lineage():
+    model,joint,_,expected = build_chain_network(3)
+    receipt = query(model,joint)
+    carrier = expected['operands'][-1]['bottom']
+    mappings = [mapping for row in receipt.relations['members']
+                for mapping in row['source_use_mappings']
+                if mapping['source_carrier'] == carrier]
+    assert len(mappings) == 2  # Shared by two independently owned Members.
+    assert all(len(mapping['current_member_uses']) == 1 for mapping in mappings)
+    point = next(row for row in receipt.relations['attachments']
+                 if row['source_carrier']==carrier)
+    assert point['current_attachment']['lineage'] == point['source_attachment']['lineage']
+    assert point['current_attachment']['target_parameters'] == [[0.,0.]]
+    validate(model,receipt)
+
+
+def test_repeated_carrier_within_one_member_refuses_ambiguous_semantics():
+    from anygeometry.prepared_sheet_joint_component import _index
+    from anygeometry.prepared_member_sheet_network import _qualify
+    model,joint,_,_ = build_chain_network(3)
+    before = to_dict(model)
+    scope = query(model,joint).scope
+    source,current = _index(scope.authored_document),_index(scope.current_document)
+    member = next(row for row in source['members'].values() if len(row['edge_use_ids'])==2)
+    first,second = (source['member_edge_uses'][key] for key in member['edge_use_ids'])
+    second['edge_id'] = first['edge_id']
+    with pytest.raises(GeometryError,match='repeats an original Member carrier'):
+        _qualify(model,scope,source,current,None)
+    assert to_dict(model) == before
+
+
+@pytest.mark.parametrize('corruption',('source_span','source_owner','current_tiling',
+                                       'current_order','missing_descendant','current_owner'))
+def test_multi_use_tiling_and_ownership_refuse_typed(corruption):
+    from anygeometry.prepared_sheet_joint_component import _index
+    from anygeometry.prepared_member_sheet_network import _qualify
+    model,joint,_,_ = build_chain_network(4)
+    scope = query(model,joint).scope
+    source,current = _index(scope.authored_document),_index(scope.current_document)
+    member = next(key for key,row in source['members'].items() if len(row['edge_use_ids'])==2)
+    source_use = source['member_edge_uses'][source['members'][member]['edge_use_ids'][0]]
+    current_member = current['members'][member]
+    current_use = current['member_edge_uses'][current_member['edge_use_ids'][0]]
+    if corruption=='source_span':
+        source_use['parent_range'][1] = source_use['parent_range'][1]/2
+    elif corruption=='source_owner':
+        source_use['member_id'] = -1
+    elif corruption=='current_tiling':
+        current_use['parent_range'][1] += .001
+    elif corruption=='current_order':
+        current_member['edge_use_ids'] = list(reversed(current_member['edge_use_ids']))
+    elif corruption=='missing_descendant':
+        current_member['edge_use_ids'].pop()
+    else:
+        current_use['member_id'] = -1
+    pattern = {'source_span':'spans do not tile','source_owner':'owner',
+               'current_tiling':'do not tile the original use span',
+               'current_order':'out of original use order',
+               'missing_descendant':'coverage changed',
+               'current_owner':'traversal, orientation or parent station'}[corruption]
+    with pytest.raises(GeometryError,match=pattern):
+        _qualify(model,scope,source,current,None)
+
+
+def test_multi_use_network_cancelled_and_stale_receipts_refuse():
+    model,joint,_,_ = build_chain_network(3)
+    before = to_dict(model)
+    with pytest.raises(GeometryError,match='cancelled'):
+        query(model,joint,cancellation_check=lambda phase: True)
+    assert to_dict(model) == before
+    receipt = query(model,joint)
+    model.add_point(20,20,20)
+    with pytest.raises(GeometryError):
+        validate(model,receipt)
+
+
+@pytest.mark.parametrize('corruption',('metadata','shared_station'))
+def test_multi_use_descendant_metadata_and_tiling_preserving_station_refuse(corruption):
+    from anygeometry.prepared_sheet_joint_component import _index
+    from anygeometry.prepared_member_sheet_network import _qualify
+    model,joint,_,expected = build_chain_network(3)
+    receipt = query(model,joint)
+    source,current = _index(receipt.scope.authored_document),_index(receipt.scope.current_document)
+    member_id = expected['operands'][1]['two']  # Reversed bottom then left.
+    row = next(row for row in receipt.relations['members']
+               if row['source_member']['id']==member_id)
+    mapping = row['source_use_mappings'][1]
+    assert Fraction(*mapping['source_span'][0]) > 0
+    assert len(mapping['current_member_uses']) == 2
+    first,second = (current['member_edge_uses'][use['id']]
+                    for use in mapping['current_member_uses'])
+    if corruption=='metadata':
+        first['metadata']['forged'] = True
+        message = 'Member traversal, orientation or parent station changed'
+    else:
+        station = first['parent_range'][1]+.001
+        first['parent_range'][1] = second['parent_range'][0] = station
+        assert first['parent_range'][0] < station < second['parent_range'][1]
+        message = 'Member station restriction exceeds unchanged owner tolerance'
+    with pytest.raises(GeometryError,match=message):
+        _qualify(model,receipt.scope,source,current,None)

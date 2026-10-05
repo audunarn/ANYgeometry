@@ -2,9 +2,10 @@
 
 This is the additive large-connected-model owner slice. It generalizes the
 bounded single-member contract without weakening it: arbitrary finite counts
-of original boundary Members and exact vertex-on-edge point Attachments are
-proved independently against both documents. It grants no beam discretization,
-load transfer or publication authority.
+of original boundary Members, each over a continuous finite chain of Straight
+boundary carriers with distinct original roots, plus exact vertex-on-edge point
+Attachments, are proved independently against both documents. It grants no
+beam discretization, load transfer or publication authority.
 """
 from dataclasses import dataclass, fields
 from fractions import Fraction
@@ -227,6 +228,7 @@ def _qualify(model, scope, source, current, cancellation_check):
     ancestry_by_root = {}
     for row in ancestry.records:
         ancestry_by_root.setdefault(row.ancestor.definition.edge_id, []).append(row)
+    record_by_edge = {row.edge_id: row for row in ancestry.records}
     parents = {}
     for row in scope.current_document.get('replacement_history',()):
         if row['old'][0]=='edge':
@@ -251,69 +253,118 @@ def _qualify(model, scope, source, current, cancellation_check):
         _require(part is None or (part in source['parts'] and part in current['parts'] and
                                  source['parts'][part] == current['parts'][part]),
                  'Member Part fields or membership changed')
-        _require(len(old_member['edge_use_ids']) == 1 and
+        _require(len(old_member['edge_use_ids']) >= 1 and
                  set(old_member['edge_use_ids']) <= set(source['member_edge_uses']),
-                 'needs one fully accounted original MemberEdgeUse')
-        old_use = source['member_edge_uses'][old_member['edge_use_ids'][0]]
-        _require(old_use['member_id'] == member, 'original MemberEdgeUse has a different owner')
+                 'needs fully accounted original MemberEdgeUses')
+        old_uses = [source['member_edge_uses'][key] for key in old_member['edge_use_ids']]
+        _require(all(use['member_id'] == member for use in old_uses),
+                 'original MemberEdgeUse has a different owner')
         old_use_ids.extend(old_member['edge_use_ids'])
-        root = old_use['edge_id']
-        _require(root in source['edges'], 'original Member carrier is unavailable')
-        _require(all(vertex in source['vertices'] for vertex in
-                     (source['edges'][root]['start'], source['edges'][root]['end'])),
-                 'original Member carrier vertex is unavailable')
-        _require(old_use['parent_range'] == [0., 1.] and
-                 old_use['orientation'] in ('forward', 'reversed'),
-                 'has unsupported original Member station semantics')
+        roots = [use['edge_id'] for use in old_uses]
+        _require(len(set(roots)) == len(roots),
+                 'repeats an original Member carrier with ambiguous traversal semantics')
         _require(old_member['orientation_reference'] is None,
                  'has unsupported orientation references')
-        _require(source['edges'][root]['curve'] == {'type': 'straight'},
-                 'requires a straight original carrier')
-        records, intervals, original_controls = _carrier_ancestry(
-            ancestry_by_root, scope, source, root, carriers)
+        spans = []
+        for use in old_uses:
+            _require(use['orientation'] in ('forward', 'reversed'),
+                     'has unsupported original Member station semantics')
+            pair = tuple(Fraction(float(t)) for t in use['parent_range'])
+            _require(len(pair) == 2,
+                     'has unsupported original Member station semantics')
+            spans.append(pair)
+        _require(spans[0][0] == 0 and spans[-1][1] == 1 and
+                 all(a < b for a, b in spans) and
+                 all(first[1] == second[0] for first, second in zip(spans, spans[1:])),
+                 'original Member use spans do not tile [0,1]')
+        for root in roots:
+            _require(root in source['edges'], 'original Member carrier is unavailable')
+            _require(all(vertex in source['vertices'] for vertex in
+                         (source['edges'][root]['start'], source['edges'][root]['end'])),
+                     'original Member carrier vertex is unavailable')
+            _require(source['edges'][root]['curve'] == {'type': 'straight'},
+                     'requires a straight original carrier')
+        ancestries = [_carrier_ancestry(ancestry_by_root, scope, source, root, carriers)
+                      for root in roots]
         use_ids = new_member['edge_use_ids']
         _require(len(set(use_ids)) == len(use_ids), 'has duplicate current MemberEdgeUses')
         _require(set(use_ids) <= set(current['member_edge_uses']),
                  'current MemberEdgeUse is unavailable')
         uses = [current['member_edge_uses'][key] for key in use_ids]
         current_use_ids.extend(use_ids)
-        reverse = old_use['orientation'] == 'reversed'
-        traversal = list(reversed(records)) if reverse else records
-        _require(len(uses) == len(traversal), 'Member use coverage changed')
-        parameter_ranges = [tuple(Fraction(float(t)) for t in use['parent_range']) for use in uses]
-        _require(all(len(pair)==2 and 0 <= pair[0] < pair[1] <= 1 for pair in parameter_ranges)
-                 and parameter_ranges[0][0]==0 and parameter_ranges[-1][1]==1
-                 and all(first[1]==second[0] for first,second in zip(parameter_ranges,parameter_ranges[1:])),
-                 'Member parent ranges do not tile [0,1]')
-        certificates = []
-        for use, record in zip(uses, traversal):
-            a, b = map(lambda value: Fraction(*value), record.interval)
-            _require(use['member_id'] == member and use['edge_id'] == record.edge_id and
-                     {k: v for k, v in use.items() if k not in ('id', 'edge_id', 'parent_range')} ==
-                     {k: v for k, v in old_use.items() if k not in ('id', 'edge_id', 'parent_range')},
-                     'Member traversal, orientation or parent station changed')
-            u,v = (Fraction(float(t)) for t in use['parent_range'])
-            native = (1-v,1-u) if reverse else (u,v)
-            original = _controls(record.ancestor.definition)
-            current_controls = _controls(record.current_definition)
-            # The error is affine. Its squared norm is convex, so the maximum
-            # of the two exact endpoint residuals bounds the WHOLE interval.
-            parameter_bound = max(_distance_squared(_point(original,t),point)
-                                  for t,point in zip(native,current_controls))
-            tolerance = _carrier_tolerance(model,record)
-            _require(parameter_bound <= tolerance**2,
-                     'Member station restriction exceeds unchanged owner tolerance')
-            certificates.append({'member_edge_use':use['id'],'edge':record.edge_id,
-                'native_parent_interval':[[t.numerator,t.denominator] for t in native],
-                'ancestry_squared_distance_bound':list(record.squared_distance_bound),
-                'member_station_squared_distance_bound':[parameter_bound.numerator,parameter_bound.denominator],
-                'coordinate_tolerance':[tolerance.numerator,tolerance.denominator]})
-        source_edges.append(root)
+        # Current uses must form one contiguous run per original use, in the
+        # original chain order, and consume every retained descendant row.
+        root_index = {root: index for index, root in enumerate(roots)}
+        groups = [[] for _ in roots]
+        position = 0
+        for use in uses:
+            record = record_by_edge.get(use['edge_id'])
+            _require(record is not None,
+                     'current MemberEdgeUse has no retained carrier ancestry')
+            index = root_index.get(record.ancestor.definition.edge_id)
+            _require(index is not None,
+                     'current MemberEdgeUse descends from another carrier')
+            _require(index == position,
+                     'current MemberEdgeUses are out of original use order')
+            _require(len(groups[index]) < len(ancestries[index][0]),
+                     'Member use coverage changed')
+            groups[index].append((use, record))
+            if len(groups[index]) == len(ancestries[index][0]):
+                position += 1
+        _require(position == len(roots), 'Member use coverage changed')
+        use_mappings, certificates, current_carriers = [], [], []
+        for old_use, root, (records, intervals, original_controls), group, (p, q) in zip(
+                old_uses, roots, ancestries, groups, spans):
+            reverse = old_use['orientation'] == 'reversed'
+            traversal = list(reversed(records)) if reverse else records
+            _require(len(group) == len(traversal), 'Member use coverage changed')
+            parameter_ranges = [tuple(Fraction(float(t)) for t in use['parent_range'])
+                                for use, _ in group]
+            _require(all(len(pair)==2 and 0 <= pair[0] < pair[1] <= 1 for pair in parameter_ranges)
+                     and parameter_ranges[0][0]==p and parameter_ranges[-1][1]==q
+                     and all(first[1]==second[0] for first,second in zip(parameter_ranges,parameter_ranges[1:])),
+                     'Member parent ranges do not tile the original use span')
+            scale = q - p
+            group_certificates = []
+            for (use, _), record in zip(group, traversal):
+                a, b = map(lambda value: Fraction(*value), record.interval)
+                _require(use['member_id'] == member and use['edge_id'] == record.edge_id and
+                         {k: v for k, v in use.items() if k not in ('id', 'edge_id', 'parent_range')} ==
+                         {k: v for k, v in old_use.items() if k not in ('id', 'edge_id', 'parent_range')},
+                         'Member traversal, orientation or parent station changed')
+                u,v = (Fraction(float(t)) for t in use['parent_range'])
+                native = (1-(v-p)/scale, 1-(u-p)/scale) if reverse else ((u-p)/scale, (v-p)/scale)
+                original = _controls(record.ancestor.definition)
+                current_controls = _controls(record.current_definition)
+                # The error is affine. Its squared norm is convex, so the maximum
+                # of the two exact endpoint residuals bounds the WHOLE interval.
+                parameter_bound = max(_distance_squared(_point(original,t),point)
+                                      for t,point in zip(native,current_controls))
+                tolerance = _carrier_tolerance(model,record)
+                _require(parameter_bound <= tolerance**2,
+                         'Member station restriction exceeds unchanged owner tolerance')
+                group_certificates.append({'member_edge_use':use['id'],'edge':record.edge_id,
+                    'native_parent_interval':[[t.numerator,t.denominator] for t in native],
+                    'ancestry_squared_distance_bound':list(record.squared_distance_bound),
+                    'member_station_squared_distance_bound':[parameter_bound.numerator,parameter_bound.denominator],
+                    'coordinate_tolerance':[tolerance.numerator,tolerance.denominator]})
+            certificates.extend(group_certificates)
+            current_carriers.extend(record.edge_id for record in records)
+            use_mappings.append({'source_member_use': old_use,
+                                 'source_carrier': root,
+                                 'source_span':[[p.numerator,p.denominator],[q.numerator,q.denominator]],
+                                 'orientation': old_use['orientation'],
+                                 'current_member_uses': [use for use, _ in group],
+                                 'current_carriers': [record.edge_id for record in records],
+                                 'station_certificates': group_certificates})
+        source_edges.extend(roots)
         current_edges.extend(use['edge_id'] for use in uses)
         member_relations.append({'source_member': old_member, 'current_member': new_member,
-                                 'source_member_uses': [old_use], 'current_member_uses': uses,
-                                 'source_carrier': root,
-                                 'current_carriers': [record.edge_id for record in records],
+                                 'source_member_uses': old_uses, 'current_member_uses': uses,
+                                 'source_carrier': roots[0] if len(old_uses) == 1 else None,
+                                 'source_carriers': list(roots),
+                                 'source_use_mappings': use_mappings,
+                                 'current_carriers': current_carriers,
                                  'station_certificates':certificates})
     _require(len(old_use_ids) == len(set(old_use_ids)) and
              set(old_use_ids) == set(source['member_edge_uses']),
