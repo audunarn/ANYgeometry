@@ -310,6 +310,101 @@ def test_incidence_rebind_cannot_launder_stale_prior_seal():
     assert draft.records==records
 
 
+def straight_fixture():
+    model=GeometryModel()
+    face=model.add_plate(model.add_points(((0,0,-2),(4,0,-2),(4,4,-2),(0,4,-2))))
+    vertices=model.add_points(((0.,0.,0.),(4.,0.,0.)))
+    edge=model.add_line(*vertices)
+    plan=plan_intersections(model,(face,),policy='connect')
+    return model,edge,plan
+
+
+@pytest.mark.parametrize('displacement,retained', [(1e-12,True),(1e-9,True),(1e-6,False)])
+def test_straight_incidence_merge_residual_against_unchanged_tolerance(displacement,retained):
+    from anygeometry.intersections import _merge_vertex
+    model,edge,plan=straight_fixture(); draft=capture(model,allow_seed=True)
+    candidate=model.clone(preserve_identity=True)
+    with candidate.transaction():
+        first,_=split(candidate,draft,edge)
+    record=draft.records[first]
+    with candidate.transaction():
+        old=candidate.edges[first].start
+        position=list(candidate.vertex_position(old)); position[1]+=displacement
+        new=candidate.add_point(*position)
+        prior={i:definition(candidate,i) for i in candidate.edges_using_vertex(old)}
+        _merge_vertex(candidate,old,new)
+        rebind(draft,prior,model=candidate)
+    binding=commit(model,candidate,draft,plan)
+    if not retained:
+        assert first not in draft.records
+        assert first in binding.unavailable_edge_ids
+        with pytest.raises(GeometryError,match='unavailable'):
+            query(model,edge_ids=(first,))
+        return
+    sealed=draft.records[first]
+    assert sealed.ancestor==record.ancestor and sealed.interval==record.interval
+    assert sealed.tolerance==record.tolerance  # never renewed or increased
+    assert F(*sealed.squared_distance_bound)==F(displacement)**2<=F(*record.tolerance)**2
+    assert sealed.current_definition==definition(candidate,first)
+    assert first not in binding.unavailable_edge_ids
+    validate(model,binding)
+
+
+def test_straight_incidence_without_recorded_tolerance_still_requires_exact_controls():
+    from anygeometry.intersections import _merge_vertex
+    model,edge,plan=straight_fixture(); draft=capture(model,allow_seed=True)
+    candidate=model.clone(preserve_identity=True)
+    with candidate.transaction():
+        old=candidate.edges[edge].start
+        position=list(candidate.vertex_position(old)); position[1]+=1e-12
+        new=candidate.add_point(*position)
+        prior={i:definition(candidate,i) for i in candidate.edges_using_vertex(old)}
+        _merge_vertex(candidate,old,new)
+        rebind(draft,prior,model=candidate)
+    assert edge not in draft.records
+    binding=commit(model,candidate,draft,plan)
+    assert edge in binding.unavailable_edge_ids
+    with pytest.raises(GeometryError,match='unavailable'):
+        query(model,edge_ids=(edge,))
+
+
+def test_spline_incidence_change_never_reseals_even_within_tolerance():
+    from anygeometry.intersections import _merge_vertex
+    model,edge,plan=fixture(); draft=capture(model,allow_seed=True)
+    candidate=model.clone(preserve_identity=True)
+    with candidate.transaction():
+        first,_=split(candidate,draft,edge)
+    with candidate.transaction():
+        old=candidate.edges[first].curve.control_vertices[0]
+        position=list(candidate.vertex_position(old)); position[1]+=1e-12
+        new=candidate.add_point(*position)
+        prior={i:definition(candidate,i) for i in candidate.edges_using_vertex(old)}
+        _merge_vertex(candidate,old,new)
+        rebind(draft,prior,model=candidate)
+    assert first not in draft.records
+    binding=commit(model,candidate,draft,plan)
+    assert first in binding.unavailable_edge_ids
+
+
+def test_incidence_rebind_never_synthesizes_missing_lineage():
+    from anygeometry.intersections import _merge_vertex
+    model,edge,plan=straight_fixture(); draft=capture(model,allow_seed=True)
+    candidate=model.clone(preserve_identity=True)
+    with candidate.transaction():
+        first,second=split(candidate,draft,edge)
+    draft.records.pop(second)
+    with candidate.transaction():
+        old=candidate.edges[first].start
+        new=candidate.add_point(*candidate.vertex_position(old))
+        prior={i:definition(candidate,i) for i in candidate.edges_using_vertex(old)}
+        prior[second]=definition(candidate,second)
+        _merge_vertex(candidate,old,new)
+        rebind(draft,prior,model=candidate)
+    assert second not in draft.records
+    binding=commit(model,candidate,draft,plan)
+    assert second in binding.unavailable_edge_ids
+
+
 def test_optional_enclosure_refusal_can_only_remove_not_publish_children():
     model,edge,plan=fixture(); draft=capture(model,allow_seed=True)
     candidate=model.clone(preserve_identity=True)

@@ -35,6 +35,18 @@ from .prepared_sheet_joint_component import (
     validate_prepared_sheet_joint_component_binding,
     validate_prepared_sheet_joint_component_selection,
 )
+from .prepared_member_sheet_component import (
+    PreparedMemberSheetJointComponent, query_prepared_member_sheet_joint_component,
+    validate_prepared_member_sheet_joint_component_binding,
+)
+from .prepared_planar_member_sheet_network import (
+    PreparedPlanarMemberSheetNetwork, query_prepared_planar_member_sheet_network,
+    validate_prepared_planar_member_sheet_network_binding,
+)
+from .prepared_member_sheet_network import (
+    PreparedMemberSheetJointNetwork, query_prepared_member_sheet_joint_network,
+    validate_prepared_member_sheet_joint_network_binding,
+)
 from .authored_child_coverage import validate_prepared_authored_face_child_triangles
 from .authored_partition_coverage import validate_prepared_authored_face_partition
 from .edge_subcurve_preimages import (
@@ -321,6 +333,15 @@ __all__ = [
     "query_prepared_vertex_preimages",
     "validate_prepared_vertex_preimages_binding",
     "PreparedSheetJointComponent",
+    "PreparedMemberSheetJointComponent",
+    "query_prepared_member_sheet_joint_component",
+    "validate_prepared_member_sheet_joint_component_binding",
+    "PreparedMemberSheetJointNetwork",
+    "query_prepared_member_sheet_joint_network",
+    "PreparedPlanarMemberSheetNetwork",
+    "query_prepared_planar_member_sheet_network",
+    "validate_prepared_planar_member_sheet_network_binding",
+    "validate_prepared_member_sheet_joint_network_binding",
     "query_prepared_sheet_joint_component",
     "validate_prepared_sheet_joint_component_binding",
     "validate_prepared_sheet_joint_component_selection",

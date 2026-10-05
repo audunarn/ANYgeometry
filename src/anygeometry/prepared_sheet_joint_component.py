@@ -264,6 +264,13 @@ def query_prepared_sheet_joint_component(model,current_joint_edge_id,*,expected_
     Raw definitions remain visible; arbitrary property/reference semantics are
     not remapped. Batch-created source-less structural owners refuse.
     """
+    return _query_component(model, current_joint_edge_id,
+        expected_revision=expected_revision, cancellation_check=cancellation_check)
+
+
+def _query_component(model,current_joint_edge_id,*,expected_revision=None,
+                     cancellation_check=None, relation_factory=None, result_factory=None):
+    """Shared owner engine; additional relations need a separate qualified policy."""
     scope=query_prepared_model_scope(model)
     identifier=_integer(current_joint_edge_id,'joint edge ID')
     if expected_revision is not None and _integer(expected_revision,'expected revision')!=scope.face_preimages.revision:
@@ -271,6 +278,8 @@ def query_prepared_sheet_joint_component(model,current_joint_edge_id,*,expected_
     validate_prepared_model_scope_binding(model,scope)
     original,current=scope.authored_document,scope.current_document
     source,data=_index(original),_index(current)
+    relations = (None if relation_factory is None else
+                 relation_factory(model, scope, source, data, cancellation_check))
     occurrence_edges={row['edge_id'] for row in data['coedges'].values()}
     incidences={edge:_live_incidence(model,data,edge) for edge in sorted(occurrence_edges)}
     candidates={identifier}|{edge for edge,(literal,_) in incidences.items() if len(literal[2])>=2}|\
@@ -303,7 +312,10 @@ def query_prepared_sheet_joint_component(model,current_joint_edge_id,*,expected_
                 incidence_junctions.update(observed[edge][3])
         near_edges={key for key,row in data['edges'].items()
                     if key in deps['edges'] or row['start'] in deps['vertices'] or row['end'] in deps['vertices']}
-        _refuse_members(data,deps,near_edges)
+        if relations is None:
+            _refuse_members(data,deps,near_edges)
+        else:
+            relations.validate_dependencies(data, deps, original=False)
         touching={key for key,row in data['attachments'].items()
                   if _touch_attachment(row,deps,near_edges,attachments,junctions)}
         selected={key for key,row in data['junctions'].items()
@@ -311,11 +323,21 @@ def query_prepared_sheet_joint_component(model,current_joint_edge_id,*,expected_
         expanded=set(sheets)
         for key in sorted(selected):
             check()
-            edge,owners,links=_qualify_joint(data,data['junctions'][key],observed)
+            row=data['junctions'][key]
+            # A relation policy may qualify generated member Junctions itself;
+            # every Sheet joint keeps the unchanged legacy declaration proof.
+            qualifier=(None if relations is None else getattr(relations,'qualify_junction',None))
+            if qualifier is not None and row['kind']!='sheet_joint':
+                owners,links=qualifier(data,row)
+                attachments.update(links);junctions.add(key);expanded.update(owners)
+                continue
+            edge,owners,links=_qualify_joint(data,row,observed)
             joint_edges.add(edge);attachments.update(links);junctions.add(key);expanded.update(owners)
         touching.update(key for key,row in data['attachments'].items()
                         if _touch_attachment(row,deps,near_edges,attachments,junctions))
-        if touching-attachments:
+        extra = set() if relations is None else set(relations.attachment_ids)|\
+            set(getattr(relations,'current_attachment_ids',()))
+        if touching-attachments-extra:
             raise GeometryError('prepared Sheet joint component touches unsupported/uncontained Attachments')
         if expanded==sheets:break
         sheets=expanded
@@ -358,25 +380,47 @@ def query_prepared_sheet_joint_component(model,current_joint_edge_id,*,expected_
     source_deps=_dependencies(source,sheets)
     source_near={key for key,row in source['edges'].items() if key in source_deps['edges'] or
                  row['start'] in source_deps['vertices'] or row['end'] in source_deps['vertices']}
-    _refuse_members(source,source_deps,source_near)
+    if relations is None:
+        _refuse_members(source,source_deps,source_near)
+    else:
+        relations.validate_dependencies(source, source_deps, original=True)
     source_attachments,source_junctions=_source_relations(source,source_deps,source_near,check)
+    if relations is not None:
+        # These exact point relations were independently qualified by the new
+        # policy. They cannot inherit the legacy unchanged-joint proof.
+        source_attachments -= set(relations.attachment_ids)
     # Current classification alone does not qualify original relations. Only
     # literal preservation on the same unchanged carrier is established here.
     _qualify_preserved_source_joints(source,data,source_attachments,source_junctions,
                                     attachments,junctions,check)
     original_supports=_plane_geometry(source,authored,check)
-    current_supports=_plane_geometry(data,deps['faces'],check)
+    geometry_qualifier = None if relations is None else getattr(relations,'current_plane_geometry',None)
+    current_supports=(_plane_geometry(data,deps['faces'],check) if geometry_qualifier is None
+                      else geometry_qualifier(model,data,deps['faces'],check))
     for face,support in current_supports.items():
         check()
         _support_correspondence(original_supports[roots[face]],support,np.empty((0,3,2)))
-    result=PreparedSheetJointComponent(scope,identifier,tuple(sorted(sheets)),tuple(sorted(parts)),
+    factory = PreparedSheetJointComponent if result_factory is None else result_factory
+    # Generated current-only relations (for example member-on-Sheet joints) are
+    # recorded with the current document; the original document never carries them.
+    generated = () if relations is None else getattr(relations,'current_attachment_ids',())
+    all_attachments = attachments if relations is None else attachments | set(relations.attachment_ids) | set(generated)
+    all_source_attachments = (source_attachments if relations is None else
+                              source_attachments | set(relations.attachment_ids))
+    original_records = _records(original,source,source_deps,all_source_attachments,source_junctions)
+    current_records = _records(current,data,deps,all_attachments,junctions)
+    if relations is not None:
+        original_records = relations.complete_records(original_records, source)
+        current_records = relations.complete_records(current_records, data)
+        parts = parts | relations.part_ids(data)
+    result=factory(scope,identifier,tuple(sorted(sheets)),tuple(sorted(parts)),
         tuple(sorted(authored)),tuple(sorted(deps['faces'])),tuple(sorted(joint_edges)),
-        tuple(sorted(junctions)),tuple(sorted(attachments)),tuple(occurrence),
-        _records(original,source,source_deps,source_attachments,source_junctions),
-        _records(current,data,deps,attachments,junctions),
+        tuple(sorted(junctions)),tuple(sorted(all_attachments)),tuple(occurrence),
+        original_records,current_records,
         ('raw metadata/group/tag/feature/extension semantics and parameter remapping',),
         preserved_joint_attachment_ids=tuple(sorted(source_attachments)),
         preserved_joint_junction_ids=tuple(sorted(source_junctions)))
+    result_signature = None if relations is None else relations.output_signature(result)
     check()
     validate_prepared_model_scope_binding(model,scope)
     for edge in result.joint_edge_ids:
@@ -385,6 +429,10 @@ def query_prepared_sheet_joint_component(model,current_joint_edge_id,*,expected_
     for edge in sorted(inspected):
         if _live_incidence(model,data,edge)!=incidences[edge]:
             raise GeometryError('prepared Sheet joint component derived occurrence changed')
+    if relations is not None:
+        relations.validate_final(model, scope, cancellation_check=None)
+        if relations.output_signature(result) != result_signature:
+            raise GeometryError('prepared member Sheet component output definition changed')
     return result
 
 
