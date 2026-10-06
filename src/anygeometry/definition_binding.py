@@ -14,6 +14,11 @@ def definition_value(value):
 
 
 def _definition_value(value, memo):
+    # Exact primitive types are already their canonical expansion. Avoid
+    # NumPy/dataclass/mapping dispatch for the many scalar control coordinates.
+    # Subclasses (notably str-backed Enum) retain the original dispatch below.
+    if value is None or type(value) in (str, int, float, bool):
+        return value
     cached = memo.get(id(value)) if memo is not None else None
     if cached is not None:
         return cached[1]

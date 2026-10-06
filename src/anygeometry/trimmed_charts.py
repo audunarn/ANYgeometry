@@ -16,7 +16,7 @@ from .errors import GeometryError
 from .identity import EntityHandle
 from .material_arrangement import MaterialDomain, arrange_material
 from .member_arrangements import _support_roots
-from .serialization import to_dict, _serialized_model_state
+from .serialization import to_dict, _serialized_model_state, _qualified_model_state
 from .surfaces import Plane, Cylinder
 from .definition_binding import definition_checksum
 
@@ -60,9 +60,29 @@ class TrimmedSurfaceCharts:
     charts: tuple[TrimmedSurfaceChart, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class TrimmedSurfaceChartQueryResult:
+    """One face's qualified charts or its original GeometryError message."""
+    face: EntityHandle
+    charts: TrimmedSurfaceCharts | None
+    error: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class TrimmedSurfaceChartQueryResults:
+    model_id: UUID
+    revision: int
+    source_checksum: str
+    results: tuple[TrimmedSurfaceChartQueryResult, ...]
+
+
+class _ChartQueryCancelled(GeometryError):
+    pass
+
+
 def _check(callback, phase):
     if callback is not None and callback(phase):
-        raise GeometryError("trimmed surface chart query cancelled")
+        raise _ChartQueryCancelled("trimmed surface chart query cancelled")
 
 
 def _handle(model, handle):
@@ -73,19 +93,7 @@ def _handle(model, handle):
     model.handle(handle.kind,handle.id)
 
 
-def query_trimmed_surface_charts(model, operands=None, *, expected_revision=None,
-                                cancellation_check=None):
-    """Return all selected material charts, including every hole and trim.
-
-    Faces, FaceUses and Sheets are accepted; omitted operands select all faces.
-    Plane charts use their stored affine basis. Cylinder charts use the native
-    angular/axial basis, with the original face boundaries retaining seam sides.
-    There is no face, hole or intersection count limit.
-    """
-    revision = model.revision
-    if expected_revision is not None and expected_revision != revision:
-        raise GeometryError("trimmed surface chart query revision is stale")
-    checksum = to_dict(model)["checksum"]["value"]
+def _selected_faces(model, operands):
     faces = set()
     for operand in (tuple(model.faces) if operands is None else operands):
         handle = model.handle("face", operand) if isinstance(operand, int) else operand
@@ -99,29 +107,87 @@ def query_trimmed_surface_charts(model, operands=None, *, expected_revision=None
                          for identifier in model.sheets[handle.id].face_use_ids)
         else:
             raise GeometryError("trimmed charts require faces, FaceUses or Sheets")
-    charts = []
-    for face_id in sorted(faces):
-        _check(cancellation_check, "trimmed surface chart qualification")
-        domain = MaterialDomain.from_model(model, face_id)
-        boxes = [path.curve.bounds() for loop in domain.boundaries for path in loop]
-        length = float(np.linalg.norm(np.max([box[1] for box in boxes],axis=0)
-                                      - np.min([box[0] for box in boxes],axis=0)))
-        tolerance = model.tolerance.effective_length(length)
-        for loop in domain.boundaries:
-            for path in loop:
-                roots = _support_roots(path.curve, domain.support, tolerance,
-                    lambda: _check(cancellation_check, "trim support predicate"))
-                if roots is not None:
-                    raise GeometryError(f"face {face_id} trim is not contained in its analytic support")
-        arrangement = arrange_material(domain, (), tolerance=tolerance,
-            area_tolerance=model.tolerance.effective_area(length),
-            cancellation_check=lambda: (_check(cancellation_check, "trim arrangement") or False))
-        charts.append(TrimmedSurfaceChart(model.handle("face",face_id), tuple(
-            model.handle("face_use",identifier) for identifier,use in sorted(model.face_uses.items())
-            if use.face_id == face_id), domain, tolerance, domain.material_world_area(arrangement)))
-    if model.revision != revision or to_dict(model)["checksum"]["value"] != checksum:
+    return tuple(sorted(faces))
+
+
+def _qualified_chart(model, face_id, cancellation_check):
+    _check(cancellation_check, "trimmed surface chart qualification")
+    domain = MaterialDomain.from_model(model, face_id)
+    boxes = [path.curve.bounds() for loop in domain.boundaries for path in loop]
+    length = float(np.linalg.norm(np.max([box[1] for box in boxes],axis=0)
+                                  - np.min([box[0] for box in boxes],axis=0)))
+    tolerance = model.tolerance.effective_length(length)
+    for loop in domain.boundaries:
+        for path in loop:
+            roots = _support_roots(path.curve, domain.support, tolerance,
+                lambda: _check(cancellation_check, "trim support predicate"))
+            if roots is not None:
+                raise GeometryError(f"face {face_id} trim is not contained in its analytic support")
+    arrangement = arrange_material(domain, (), tolerance=tolerance,
+        area_tolerance=model.tolerance.effective_area(length),
+        cancellation_check=lambda: (_check(cancellation_check, "trim arrangement") or False))
+    return TrimmedSurfaceChart(model.handle("face",face_id), tuple(
+        model.handle("face_use",identifier) for identifier,use in sorted(model.face_uses.items())
+        if use.face_id == face_id), domain, tolerance, domain.material_world_area(arrangement))
+
+
+def _query_start(model, expected_revision, cancellation_check):
+    revision = model.revision
+    if expected_revision is not None and expected_revision != revision:
+        raise GeometryError("trimmed surface chart query revision is stale")
+    checksum = _qualified_model_state(model)["checksum"]["value"]
+    _check(cancellation_check, "trimmed surface chart query")
+    return revision, checksum
+
+
+def _query_end(model, revision, checksum, cancellation_check):
+    _check(cancellation_check, "trimmed surface chart query complete")
+    if model.revision != revision:
         raise GeometryError("geometry changed during trimmed chart query")
+    _qualified_model_state(model, expected_checksum=checksum,
+                           changed_message="geometry changed during trimmed chart query")
+
+
+def query_trimmed_surface_charts(model, operands=None, *, expected_revision=None,
+                                cancellation_check=None):
+    """Return all selected material charts, including every hole and trim.
+
+    Faces, FaceUses and Sheets are accepted; omitted operands select all faces.
+    Plane charts use their stored affine basis. Cylinder charts use the native
+    angular/axial basis, with the original face boundaries retaining seam sides.
+    There is no face, hole or intersection count limit.
+    """
+    revision, checksum = _query_start(model, expected_revision, cancellation_check)
+    charts = tuple(_qualified_chart(model, face_id, cancellation_check)
+                   for face_id in _selected_faces(model, operands))
+    _query_end(model, revision, checksum, cancellation_check)
     return TrimmedSurfaceCharts(model.model_id,revision,checksum,tuple(charts))
+
+
+def query_trimmed_surface_charts_by_face(model, operands=None, *, expected_revision=None,
+                                        cancellation_check=None):
+    """Batch the same qualifications, retaining one result/error per face.
+
+    Results are sorted by face ID; Sheets and FaceUses expand exactly as in the
+    all-or-error query. Source/selection errors, cancellation and concurrent raw
+    mutation abort the entire query. A successful row is a normal bound
+    ``TrimmedSurfaceCharts`` collection and uses its existing public validator.
+    """
+    revision, checksum = _query_start(model, expected_revision, cancellation_check)
+    results = []
+    for face_id in _selected_faces(model, operands):
+        _check(cancellation_check, "trimmed surface chart qualification")
+        try:
+            chart = _qualified_chart(model, face_id, cancellation_check)
+        except _ChartQueryCancelled:
+            raise
+        except GeometryError as error:
+            results.append(TrimmedSurfaceChartQueryResult(model.handle("face", face_id), None, str(error)))
+        else:
+            results.append(TrimmedSurfaceChartQueryResult(chart.face,
+                TrimmedSurfaceCharts(model.model_id, revision, checksum, (chart,)), None))
+    _query_end(model, revision, checksum, cancellation_check)
+    return TrimmedSurfaceChartQueryResults(model.model_id, revision, checksum, tuple(results))
 
 
 def validate_trimmed_surface_charts_binding(model, result, *, expected_revision=None,
@@ -134,8 +200,8 @@ def validate_trimmed_surface_charts_binding(model, result, *, expected_revision=
     if result.revision != model.revision or (expected_revision is not None
                                             and expected_revision != model.revision):
         raise GeometryError("trimmed chart binding is stale")
-    if result.source_checksum != _serialized_model_state(model)["checksum"]["value"]:
-        raise GeometryError("trimmed chart source binding changed")
+    _qualified_model_state(model, expected_checksum=result.source_checksum,
+                           changed_message="trimmed chart source binding changed")
     signature=(result.source_checksum,definition_checksum(result))
     if signature in _validated_collections.get(model,()):
         return
@@ -167,8 +233,10 @@ def validate_trimmed_surface_charts_binding(model, result, *, expected_revision=
             if model.face_uses[use.id].face_id != chart.face.id:
                 raise GeometryError("trimmed chart FaceUse binding changed")
     _check(cancellation_check,"trimmed surface chart validation complete")
-    if model.revision != result.revision or _serialized_model_state(model)["checksum"]["value"] != result.source_checksum:
+    if model.revision != result.revision:
         raise GeometryError("trimmed chart source binding changed during validation")
+    _qualified_model_state(model, expected_checksum=result.source_checksum,
+                           changed_message="trimmed chart source binding changed during validation")
     previous=tuple(item for item in _validated_collections.get(model,())
                    if item[0]==result.source_checksum and item!=signature)
     _validated_collections[model]=(*previous[-7:],signature)

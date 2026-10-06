@@ -1,0 +1,52 @@
+{
+  "schema": "anygeometry.parallel-handoff-development-acceptance-v1",
+  "branch": "codex/parallel-handoff",
+  "base_commit": "c6dc4261995a1e0c1ac9c19ba8ed96131d24b880",
+  "source_identity": "af217a42209f82ef879d433b239c6ce166ac939a36d189f8b2812db82bce105a",
+  "final_owned_files_sha256": {
+    "src/anygeometry/__init__.py": "66369cbc7cde505d66444a52e9621481ceb66d46f2c40aa208ee7310eaa98e83",
+    "src/anygeometry/component_partition.py": "10ad6b9e9a64639e06f4ea680c9eaaf8d6e968ee80c353d1a9198c9f5277a896",
+    "src/anygeometry/closure.py": "080aef427c2e8f9fbb5410f0b872fb7795b663a0960f332f378c56d12c5b7f23",
+    "src/anygeometry/serialization.py": "9425329a3c0dd7a811a0ec3e0ee0c4d4a1f535a3dd0c9c712259f71bf32a022b",
+    "src/anygeometry/trimmed_charts.py": "f5b684d3afe5cab8603cb50a9528137544a2a022d43b88337443100ed357857e",
+    "src/anygeometry/definition_binding.py": "92c2c4f28f5f60a4389ae4c445974711c3fd76311f82592317a8592ab2ae8360",
+    "src/anygeometry/batch_intersections.py": "cb30b3efc3db345f747c4eb8a99648aa3543bdd514fcdb039b4ec4385b6d9d15",
+    "src/anygeometry/edge_subcurve_preimages.py": "d0da87a4ae8bce291a9110632b0e2bb079ce7c6c97cb5bd29e158e045de22334",
+    "tests/test_parallel_handoff.py": "b5e35fab7cd9f8d3251d9aa6cbec3e93dbbaf4dab405612ef29f72d47e75bcb5",
+    "docs/PARALLEL_COMPONENT_HANDOFF.md": "0efae532e53eea60a6c3d84b791ad5cf1d70eebc52e9638547054e679d525c5c",
+    "tools/run_parallel_handoff_tests.py": "4e39596a7656f82f49356af5919da7cad37633561baea638c5d9961473277d7a"
+  },
+  "measured_source_identity": "5882b340c3fe4e99116cf5fefa9512493410689558be1a32e15c26e29dd206a2",
+  "postmeasurement_changes": [
+    "src/anygeometry/component_partition.py",
+    "tests/test_parallel_handoff.py",
+    "docs/PARALLEL_COMPONENT_HANDOFF.md"
+  ],
+  "timed_definition_reuse": "Only unexecuted partition refusal, its tests and API docs changed; all exercised preparation sources unchanged",
+  "wheel_sha256": "ef30c7d9fc5726e80e6abc4ade40aa2706d8b22a94a5efd67a7ac23e7f75378f",
+  "all_wheel_package_sources_match": true,
+  "installed_origin": "C:\\Users\\AUDUNA~1\\AppData\\Local\\Temp\\anygeometry-parallel-wheel-_7q65qde\\venv\\Lib\\site-packages\\anygeometry\\__init__.py",
+  "spawned_components": 2,
+  "focused_process_wall_seconds": 31.483760099858046,
+  "focused_attempts": 10,
+  "failed_evidence_retained": true,
+  "main_focused_slice": {
+    "tests": 187,
+    "failures": 0
+  },
+  "final_offset_slice": {
+    "tests": 5,
+    "failures": 0
+  },
+  "final_derived_index_callback_slice": {
+    "tests": 2,
+    "failures": 0
+  },
+  "prepared_output_parity": true,
+  "source_review": "independent authorship, same model family, findings resolved",
+  "full_platform_ci": "not run",
+  "mesher_acceptance": "not run",
+  "published": false,
+  "request4": "deferred",
+  "historical_ten_shot_families": "closed, unchanged"
+}

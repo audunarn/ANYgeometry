@@ -144,7 +144,7 @@
     }
   ],
   "remaining": [
-    "mixed10 automatic linear exceeds120-second recovery budget during native surface preprocessing",
+    "mixed10 automatic linear remains unaccepted at b032a8f: analytic face 42 failed physical quality: {'scaled_jacobian': 14, 'aspect_ratio': 10, 'minimum_angle': 20, 'maximum_angle': 7, 'warpage': 0}, growth=4.228425240105225",
     "mixed100 and mixed1000 accepted automatic linear meshing",
     "representative mixed quadratic, fold endings, repeated cuts and historical short-joint acceptance",
     "final applicable hosted/platform qualification and normal review delivery"
@@ -163,5 +163,431 @@
       "mesher-pr10-ci.json": "a08582da96e635fe291ef626c3975089cd2a3e51fe49e6b73d042d22a22ace2a",
       "mesher-pr10-ci.log": "fc6f51f9c714e9632d46f1092d453041cfcc4921ba9938499503c4cc0b7aa50e"
     }
+  },
+  "block_clearance": {
+    "manifest": "C:\\Github\\ANYgeometry\\reports\\large-connected\\block-clearance-b4030e8-checkpoint.json",
+    "sha256": "0e52bda3f5f04e65f2fd724a22e59b80100f3b555962c231942db8bc87138812",
+    "status": "development_checkpoint_mixed_meshing_unaccepted",
+    "geometry_commit": "d4c6ce61caec084758331338e7ac72b8569a1ff8",
+    "mesher_commit": "b4030e8e2b55930d28fe9ffd68cefe130f2e5383",
+    "installed_focused_passed": 32,
+    "published": false
+  },
+  "material_region_clearance": {
+    "geometry_commit": "e47a6b08445a500e6a1d483f49a61f595d5d7708",
+    "wheel_sha256": "0ddbbfd3156d04b49cf39e5a9278ca711ed0a93398b5bb77032b2e1bf328c724",
+    "manifest": "C:\\Github\\ANYgeometry\\reports\\large-connected\\material-region-e47a6b0-checkpoint.json",
+    "sha256": "69753c546de9355296e80cf9e91c6f533c85dac44231044995d8212127334ffe",
+    "status": "geometry_contract_implemented_meshing_integration_pending",
+    "installed_focused_passed": 18,
+    "accepted_mesh": false,
+    "published": false
+  },
+  "material_region_consumer_clearance": {
+    "manifest": "C:\\Github\\ANYgeometry\\reports\\large-connected\\material-region-1904a3c-98b2f35-checkpoint.json",
+    "sha256": "b772bc96f59029fcf618a0f703b5f1af92391ca085eb264359209496f76bf06f",
+    "geometry_commit": "1904a3cbc37a6354e0af44fa250a112bea2b4702",
+    "mesher_commit": "98b2f35ce80c6d96a14afbc48a25cecbf6900aa0",
+    "installed_focused_passed": 63,
+    "status": "development_checkpoint_mixed_meshing_unaccepted",
+    "accepted_mesh": false,
+    "published": false
+  },
+  "owner_gradient_batch_clearance": {
+    "manifest": "C:\\Github\\ANYgeometry\\reports\\large-connected\\material-region-1904a3c-53c475a-checkpoint.json",
+    "sha256": "34c27bdefcc7c29898328ab9457e9ce0f95fb245113cbbcf21ce4e832529cf13",
+    "geometry_commit": "1904a3cbc37a6354e0af44fa250a112bea2b4702",
+    "mesher_commit": "53c475a4a585b55d93be8720c0d15f6bad908b15",
+    "installed_focused_passed": 83,
+    "status": "development_checkpoint_mixed_meshing_unaccepted",
+    "accepted_mesh": false,
+    "published": false
+  },
+  "physical_refinement_clearance": {
+    "manifest": "C:\\Github\\ANYgeometry\\reports\\large-connected\\material-region-1904a3c-c2a8b3c-checkpoint.json",
+    "sha256": "3945dad018c22d4684d3090f42d07576b69c10762bbd75921edce98fc4d21acd",
+    "geometry_commit": "1904a3cbc37a6354e0af44fa250a112bea2b4702",
+    "mesher_commit": "c2a8b3c5654c5638e060b55ff2cacf22fe4cf681",
+    "installed_focused_passed": 126,
+    "status": "development_checkpoint_mixed_meshing_unaccepted",
+    "accepted_mesh": false,
+    "published": false
+  },
+  "candidate_traversal_clearance": {
+    "manifest": "C:\\Github\\ANYgeometry\\reports\\large-connected\\material-region-1904a3c-06d4f5e-checkpoint.json",
+    "sha256": "97c54a32dce61809d7eca4d932a75eaac2fb0bccbb43c3e3e86d89cd7c2211b5",
+    "geometry_commit": "1904a3cbc37a6354e0af44fa250a112bea2b4702",
+    "mesher_commit": "06d4f5edf8c2429778b0fd541301c94d0e30fdc9",
+    "installed_focused_passed": 69,
+    "status": "development_checkpoint_mixed_meshing_unaccepted",
+    "accepted_mesh": false,
+    "published": false
+  },
+  "partial_owner_progress_clearance": {
+    "manifest": "C:\\Github\\ANYgeometry\\reports\\large-connected\\material-region-1904a3c-32482cf-checkpoint.json",
+    "sha256": "10bfafe6773f1c3c1dc902cdd79c8a1ada0b6fc2d1016fa994014a56d338fe89",
+    "geometry_commit": "1904a3cbc37a6354e0af44fa250a112bea2b4702",
+    "mesher_commit": "32482cfcaec42a55db5f2a7ac3809c023f9247d8",
+    "installed_focused_passed": 156,
+    "status": "development_checkpoint_mixed_meshing_unaccepted",
+    "accepted_mesh": false,
+    "published": false
+  },
+  "physical_priority_clearance": {
+    "manifest": "C:\\Github\\ANYgeometry\\reports\\large-connected\\material-region-1904a3c-e8d4b5a-checkpoint.json",
+    "sha256": "441abaf8364c1220efaaeefe468691ee04b41ce649b67847d27a5b4aa8db3668",
+    "geometry_commit": "1904a3cbc37a6354e0af44fa250a112bea2b4702",
+    "mesher_commit": "e8d4b5af7500e5afd3e8c7f6959bd09589908593",
+    "installed_focused_passed": 185,
+    "status": "development_checkpoint_mixed_meshing_unaccepted",
+    "accepted_mesh": false,
+    "published": false
+  },
+  "admissible_trial_clearance": {
+    "manifest": "C:\\Github\\ANYgeometry\\reports\\large-connected\\material-region-1904a3c-8c6e8ad-checkpoint.json",
+    "sha256": "27e2ae28ce00365bb4e49c617330882da01f8ed7c12225a28afbb11b042988c0",
+    "geometry_commit": "1904a3cbc37a6354e0af44fa250a112bea2b4702",
+    "mesher_commit": "8c6e8addedf771e61e282bd6eec7bb5b8349923d",
+    "installed_focused_passed": 212,
+    "status": "development_checkpoint_mixed_meshing_unaccepted",
+    "accepted_mesh": false,
+    "published": false
+  },
+  "physical_flips_clearance": {
+    "manifest": "C:\\Github\\ANYgeometry\\reports\\large-connected\\material-region-1904a3c-74fda82-checkpoint.json",
+    "sha256": "7064141cf322a9017b78991391a6ebf9954c6b5e684c34467b615825e5763433",
+    "geometry_commit": "1904a3cbc37a6354e0af44fa250a112bea2b4702",
+    "mesher_commit": "74fda822dbecac28b3090ee373679ae040c1f27c",
+    "installed_focused_unique_passed": 322,
+    "status": "development_checkpoint_mixed_meshing_unaccepted",
+    "accepted_mesh": false,
+    "published": false
+  },
+  "primary_guard_clearance": {
+    "manifest": "C:\\Github\\ANYgeometry\\reports\\large-connected\\material-region-1904a3c-0ee57f4-checkpoint.json",
+    "sha256": "2a659db395e0e877b956eeb5f3c5d5a7c3f61d5c1bdbda0ee81774a7deb22d3b",
+    "geometry_commit": "1904a3cbc37a6354e0af44fa250a112bea2b4702",
+    "mesher_commit": "0ee57f4e6c672fb399cb27b739ad26a45adf1c30",
+    "installed_focused_passed": 161,
+    "status": "development_checkpoint_mixed_meshing_unaccepted",
+    "accepted_mesh": false,
+    "published": false
+  },
+  "guarded_search_clearance": {
+    "manifest": "C:\\Github\\ANYgeometry\\reports\\large-connected\\material-region-1904a3c-3729231-checkpoint.json",
+    "sha256": "a7e16ffe13d86002435a9a9efe3e8b6011f66710cd964ce068c45681cecdb811",
+    "geometry_commit": "1904a3cbc37a6354e0af44fa250a112bea2b4702",
+    "mesher_commit": "372923136970ca69e92e729643c9294ff680a66d",
+    "installed_focused_passed": 309,
+    "status": "development_checkpoint_mixed_meshing_unaccepted",
+    "accepted_mesh": false,
+    "published": false
+  },
+  "short_edge_clearance": {
+    "manifest": "C:\\Github\\ANYgeometry\\reports\\large-connected\\material-region-1904a3c-a67def3-checkpoint.json",
+    "sha256": "8dd12dc03ba29a4d1cc50d3921199aa7471b9f6a118484eac72718c818a34538",
+    "geometry_commit": "1904a3cbc37a6354e0af44fa250a112bea2b4702",
+    "mesher_commit": "a67def3939b731737b613515bf579652193be2f2",
+    "installed_focused_passed": 415,
+    "status": "development_checkpoint_mixed_meshing_unaccepted",
+    "accepted_mesh": false,
+    "published": false
+  },
+  "owner_xyz_cache_clearance": {
+    "manifest": "C:\\Github\\ANYgeometry\\reports\\large-connected\\material-region-1904a3c-b510a3f-checkpoint.json",
+    "sha256": "ff8a31af379e4c2e46fb119f94a0bc78b7956c23c2a1f235b3a591b6ae48788d",
+    "geometry_commit": "1904a3cbc37a6354e0af44fa250a112bea2b4702",
+    "mesher_commit": "b510a3fed3d675360a8fa2162dc70161f72ede8f",
+    "installed_focused_passed": 464,
+    "status": "development_checkpoint_mixed_meshing_unaccepted",
+    "accepted_mesh": false,
+    "published": false
+  },
+  "metric_encroachment_clearance": {
+    "manifest": "C:\\Github\\ANYgeometry\\reports\\large-connected\\material-region-1904a3c-56bead3-checkpoint.json",
+    "sha256": "d875c829a2b83b8bdd72aa98ec127ba910047045e5e371e78e109f3b490bc51a",
+    "geometry_commit": "1904a3cbc37a6354e0af44fa250a112bea2b4702",
+    "mesher_commit": "56bead35c49a9bc47bbe4f3551cef5aef8696f23",
+    "installed_test_summary": "519 unique passes composed from 464 unchanged passing cases and 55 corrected-fixture cases; 2 inapplicable combinations skipped",
+    "status": "development_checkpoint_mixed_meshing_unaccepted",
+    "accepted_mesh": false,
+    "published": false
+  },
+  "two_flip_cavity_clearance": {
+    "manifest": "C:\\Github\\ANYgeometry\\reports\\large-connected\\material-region-1904a3c-b032a8f-checkpoint.json",
+    "sha256": "f6eda70e5f38436218660165ba49c7ef7e7cae976bcbfaa4595d5da35b769e59",
+    "geometry_commit": "1904a3cbc37a6354e0af44fa250a112bea2b4702",
+    "mesher_commit": "b032a8f4c8179649eb7cbb85f6edd3fe4160f3f8",
+    "installed_test_summary": "583 unique passes composed from 528 unaffected cases and 55 current canonical fixture cases; 2 inapplicable route combinations skipped",
+    "status": "development_checkpoint_mixed_meshing_unaccepted",
+    "accepted_mesh": false,
+    "published": false
+  },
+  "curved_boundary_identity_prerequisite": {
+    "geometry_commit": "1904a3cbc37a6354e0af44fa250a112bea2b4702",
+    "mesher_commit": "4a24f70a339be04d2399ea39c12f19460aa3ef35",
+    "source_focused_passed": 35,
+    "new_receipt_cases": 18,
+    "status": "identity_only_curved_subdivision_unaccepted",
+    "review": "C:/Github/ANYgeometry/reports/large-connected/curved-boundary-receipt-corrected-review-addendum.txt",
+    "checks": "C:/Github/ANYgeometry/reports/large-connected/curved-boundary-receipts-reviewed.log",
+    "wheel_built": false,
+    "accepted_mesh": false,
+    "published": false
+  },
+  "detached_curved_boundary_prototype": {
+    "mesher_commit": "0b2351e031fcbfdebc5a8c9feb50fc941c54d09a",
+    "source_worker_passed": 59,
+    "parent_verified_new_cases": 41,
+    "status": "plane_owner_uv_staging_only",
+    "publication_qualified": false,
+    "prototype_growth": 1.566683212954221,
+    "unchanged_growth_limit": 1.5,
+    "checks": "C:/Github/ANYgeometry/reports/large-connected/curved-boundary-primitive-parent-verification.log",
+    "review": "C:/Github/ANYgeometry/reports/large-connected/curved-boundary-primitive-parent-review.txt",
+    "wheel_built": false,
+    "model_probe_run": false,
+    "accepted_mesh": false,
+    "published": false
+  },
+  "curved_boundary_source_identity_completion": {
+    "mesher_commit": "1fa47882b2339b8fb2a9304f7c251d057630d359",
+    "scope": "source development only; exact registry owner, supported string/UUID mesh identity, current view, post-callback chain sealing",
+    "checks": {
+      "passed": 71,
+      "new_receipt_cases": 30,
+      "detached_patch_cases": 41,
+      "elapsed_seconds": 8.92
+    },
+    "evidence": [
+      {
+        "path": "C:\\Github\\ANYgeometry\\reports\\large-connected\\curved-boundary-registry-identity-corrected-tests.log",
+        "sha256": "73f7cf53cbb2653ec9f3f9bd92d4da1ac6392837d9d8578b8fd7cfb783dc89a3"
+      },
+      {
+        "path": "C:\\Github\\ANYgeometry\\reports\\large-connected\\curved-boundary-registry-identity-review.txt",
+        "sha256": "ff43be3cb1633c9c39b752a065c71d68adf40fb1dc5cc6f0bb06eae821a209fe"
+      }
+    ],
+    "new_wheel": null,
+    "model_probe_executed": false,
+    "accepted_meshing": false,
+    "publication_qualified": false
+  },
+  "exact_polynomial_cell_coverage": {
+    "geometry_commit": "3761fe9f43afb13fc0c93953ac4bc8a559fcaeea",
+    "scope": "Plane and coefficient-proved polynomial Bezier extrusion charts; exact loop closure and rational winding",
+    "checks": {
+      "worker_focused_passed": 28,
+      "parent_affected_passed": 46,
+      "parent_elapsed_seconds": 11.02
+    },
+    "evidence": [
+      {
+        "path": "C:\\Github\\ANYgeometry\\reports\\large-connected\\curved-boundary-owner-coverage-exact-chart-final.log",
+        "sha256": "00dcbe0b7bf07f56b01421d497e3c31f30a67bd5a6e0fa4bfa8d0cfb9a3cd4bf"
+      },
+      {
+        "path": "C:\\Github\\ANYgeometry\\reports\\large-connected\\curved-boundary-owner-exact-chart-parent-tests.log",
+        "sha256": "af55b5200fedca815261415e6a34f6ea61310c17260f09f4a804c325a552b0d6"
+      },
+      {
+        "path": "C:\\Github\\ANYgeometry\\reports\\large-connected\\curved-boundary-owner-exact-chart-independent-review.txt",
+        "sha256": "bb4665b7bd49a8ccd5f65160878f7653bc1fa87f48daef44b988849285bdc4d2"
+      }
+    ],
+    "limits": [
+      "Public branch trims refuse",
+      "Tolerance-only support coincidence refuses",
+      "Rounded fragments without exact coefficient identity refuse",
+      "Coverage grants no subdivision or mesh publication permission"
+    ],
+    "new_wheel": null,
+    "model_probe_executed": false,
+    "accepted_meshing": false,
+    "publication_qualified": false
+  },
+  "polynomial_edge_subcurve_ancestry": {
+    "geometry_commit": "b5bcf718d7fccb539cc5d43c8e6303d9fb47d02b",
+    "checks": {
+      "affected_passed": 50,
+      "affected_seconds": 7.05,
+      "additional_metadata_refusal_passed": 1
+    },
+    "evidence": [
+      {
+        "path": "C:\\Github\\ANYgeometry\\reports\\large-connected\\curved-boundary-edge-preimages-batch-regressions.log",
+        "sha256": "d39e34a41bc376aeb000e44dbf0196bae3938d25c32e60419ca62e48fb284633"
+      },
+      {
+        "path": "C:\\Github\\ANYgeometry\\reports\\large-connected\\curved-boundary-edge-preimages-batch-regressions-corrected.log",
+        "sha256": "0450d36c873409487730c53fcd4ab828e56b146f1303457c5f4a5f0fec3850d2"
+      },
+      {
+        "path": "C:\\Github\\ANYgeometry\\reports\\large-connected\\curved-boundary-edge-preimages-publication-metadata.log",
+        "sha256": "bb33c81836aacef37067083b7616d54c5aadf799a966a2a7faddc1bb7335058b"
+      },
+      {
+        "path": "C:\\Github\\ANYgeometry\\reports\\large-connected\\curved-boundary-edge-preimages-independent-review.txt",
+        "sha256": "8501a894dcd5c3dd3d8065ac9cb22ff2426bcccdae5442fc5c55ddd495c46fc4"
+      },
+      {
+        "path": "C:\\Github\\ANYgeometry\\reports\\large-connected\\curved-boundary-authored-domain-design.txt",
+        "sha256": "b6e5efd7584b46a5a7c6763bedd2d88c958b5fb60f9edfcb82125666abf32f31"
+      }
+    ],
+    "limits": [
+      "Ancestry and rounding enclosure only",
+      "No inferred historical parameters",
+      "No containment, source snapping or publication permission"
+    ],
+    "new_wheel": null,
+    "model_probe_executed": false,
+    "accepted_meshing": false,
+    "publication_qualified": false
+  },
+  "authored_domain_owner_contract": {
+    "geometry_commit": "006198b56a26f00ee372aef18eb86cbc3a11fa44",
+    "geometry_wheel_sha256": "84e9142f466973d103d7c3689c1876cb436be104faef800023e70cc89c314119",
+    "manifest_path": "C:\\Github\\ANYgeometry\\reports\\large-connected-authored-owner-006198b\\manifest.json",
+    "manifest_sha256": "1786e4c803650dcd741aa56e7861cb3854346feb8b408bab870483da2cbe9c4a",
+    "source_passed": 92,
+    "source_seconds": 28.59,
+    "installed_smoke": "passed; system dependencies reused; not clean hosted qualification",
+    "accepted_mesh": false,
+    "publication_qualified": false,
+    "model_probe_executed": false
+  },
+  "prepared_fingerprint_reuse": {
+    "geometry_commit": "d4d914a8b354306079848a76b0c7e12281992b81",
+    "geometry_wheel_sha256": "f07b945f1c33c48855edf1226e899dffd31e142be8a97884c12857e609080644",
+    "manifest_path": "C:/Github/ANYgeometry/reports/large-connected-authored-owner-d4d914a/manifest.json",
+    "manifest_sha256": "2df2465d86371ad2f345921f8c8b6c65e29ad434590bd54f91ec6244e8a00082",
+    "source_passed": 277,
+    "source_seconds": 37.59,
+    "scope": "complete persisted fingerprints plus raw keyed-lookup/feature-definition integrity; prior qualification and final callback/publication guards retained",
+    "tiny_installed_owner_fixture": {
+      "authored_faces": 9,
+      "prepared_faces": 26,
+      "physical_branch_joints": 8,
+      "exterior_edges_checked": 10,
+      "passed_seconds": 4.220045700029004,
+      "deadline_seconds": 10,
+      "authored_source_unchanged": true
+    },
+    "previous_fixture_failure": {
+      "geometry_commit": "006198b56a26f00ee372aef18eb86cbc3a11fa44",
+      "stage": "stations",
+      "cancelled_seconds": 10.073575099988375,
+      "evidence": "C:/Github/ANYgeometry/reports/large-connected-authored-owner-006198b/pipe-owner-result.json"
+    },
+    "installed_smoke": "passed;82 source/wheel/installed files matched; system dependencies reused; not clean hosted qualification",
+    "accepted_mesh": false,
+    "publication_qualified": false,
+    "native_scorer_executed": false
+  },
+  "authored_chart_evaluation_and_internal_stations": {
+    "manifest_sha256": "3a0e8916ddf89faeb9b3a5f644942a0b588def8711fdfa4e3bd5bc77ce36f3be",
+    "geometry_wheel_sha256": "3772c996269a4e0a9b97a517defcc650f35813b38bd34d147b0e833c58fd59dc",
+    "source_run_composition": "73 combined before NumPy delta;32 station after delta;44 unchanged evaluator reused",
+    "tiny_installed_owner_fixture": {
+      "tier": "development-installed-owner-kernel-fixture",
+      "geometry_commit": "0859e6ae09a1811b2c9ae2b26c839a95994121fb",
+      "wheel_sha256": "3772c996269a4e0a9b97a517defcc650f35813b38bd34d147b0e833c58fd59dc",
+      "accepted_mesh": false,
+      "native_scorer_executed": false,
+      "deadline_seconds": 10,
+      "authored_faces": 9,
+      "prepared_faces": 26,
+      "physical_joints": 8,
+      "root": 1,
+      "descendants": [
+        10,
+        11,
+        12,
+        13
+      ],
+      "status": "passed",
+      "internal_edges_checked": 8,
+      "internal_stations_checked": 40,
+      "both_branch_signs_present": true,
+      "elapsed_seconds": 4.157776699983515,
+      "package_origin": "C:\\Users\\AudunArnesenNyhus\\AppData\\Local\\Temp\\anygeometry-authored-charts-0859e6a\\Lib\\site-packages\\anygeometry\\__init__.py",
+      "authored_source_unchanged": true
+    },
+    "station_unique_passed": 32,
+    "limits": [
+      "Original polynomial evaluation is not membership",
+      "Only same-carrier untransformed BezierQuadricCurve internal mapping",
+      "Exact polynomial lift of binary64 carrier coordinates, not algebraic intersection XYZ",
+      "QIC internal stations and public both_sine fixture unqualified",
+      "Consumer routing/atomic transaction/quality/reference integration remains open"
+    ],
+    "native_scorer_executed": false,
+    "installed_smoke": "passed;84 source/wheel/installed files matched; system dependencies reused; not clean hosted qualification",
+    "publication_qualified": false,
+    "geometry_commit": "0859e6ae09a1811b2c9ae2b26c839a95994121fb",
+    "manifest_path": "C:/Github/ANYgeometry/reports/large-connected-authored-charts-0859e6a/manifest.json",
+    "evaluator_unique_passed": 44,
+    "accepted_mesh": false
+  },
+  "authored_double_fold_station_coverage": {
+    "production_sources_unchanged": true,
+    "manifest_sha256": "a1edb69fc62c582104072107c9a980ae545cc421d9ef09ba3dbac277a2b511b5",
+    "manifest_path": "C:/Github/ANYgeometry/reports/large-connected-authored-both-folds/manifest.json",
+    "accepted_mesh": false,
+    "geometry_implementation_commit": "0859e6ae09a1811b2c9ae2b26c839a95994121fb",
+    "native_scorer_executed": false,
+    "geometry_fixture_commit": "4958c416d24bc5892421375b8585feca6e1f9067",
+    "geometry_wheel_sha256": "3772c996269a4e0a9b97a517defcc650f35813b38bd34d147b0e833c58fd59dc",
+    "wheel_rebuilt": false,
+    "installed_owner_fixture": {
+      "tier": "development-installed-owner-kernel-fixture",
+      "geometry_implementation_commit": "0859e6ae09a1811b2c9ae2b26c839a95994121fb",
+      "wheel_sha256": "3772c996269a4e0a9b97a517defcc650f35813b38bd34d147b0e833c58fd59dc",
+      "deadline_seconds": 10,
+      "packaged_files_matched": 84,
+      "accepted_mesh": false,
+      "native_scorer_executed": false,
+      "system_site_dependencies_reused": true,
+      "status": "passed",
+      "authored_faces": 9,
+      "prepared_faces": 12,
+      "both_sine_edges": [
+        37
+      ],
+      "stations_checked": 7,
+      "physical_joints": 3,
+      "authored_source_unchanged": true,
+      "prepared_source_unchanged": true,
+      "elapsed_seconds": 1.2492934000329114,
+      "package_origin": "C:\\Users\\AudunArnesenNyhus\\AppData\\Local\\Temp\\anygeometry-authored-charts-0859e6a\\Lib\\site-packages\\anygeometry\\__init__.py"
+    },
+    "source_passed": 2
+  },
+  "authored_metric_consumer_adapter": {
+    "mesher_wheel_sha256": null,
+    "accepted_mesh": false,
+    "geometry_wheel_sha256": "3772c996269a4e0a9b97a517defcc650f35813b38bd34d147b0e833c58fd59dc",
+    "production_routing_activated": false,
+    "remaining": [
+      "Full constraint/material/reference scope",
+      "Isolated vertex mapping or refusal",
+      "Original work ledgers",
+      "Atomic shared-component Mesh/cache/registry publication",
+      "Existing approximation/quality/high-order gates",
+      "Mixed100/1000 and representative quadratic acceptance",
+      "FEM closure and final platform/installed-consumer qualification"
+    ],
+    "geometry_implementation_commit": "0859e6ae09a1811b2c9ae2b26c839a95994121fb",
+    "mesher_commit": "ea6a10a9d7f50a847b7673e32a7b3371b68824f1",
+    "publication_qualified": false,
+    "source_unique_passed": 26,
+    "manifest_path": "C:/Github/ANYgeometry/reports/large-connected-authored-metric-ea6a10a/manifest.json",
+    "geometry_fixture_commit": "4958c416d24bc5892421375b8585feca6e1f9067",
+    "installed_geometry_files_verified": 84,
+    "composition": "25 final cases3.44s plus1 new fragmented-root case1.80s; not a single26-case run",
+    "native_scorer_executed": false,
+    "manifest_sha256": "2752b711453368e6279343afd17f24185ec5917e2c82e67ad306b97a07c6eab2"
   }
 }

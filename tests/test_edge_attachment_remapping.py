@@ -29,6 +29,9 @@ def test_point_relations_retain_coordinates_and_direct_split_stays_explicit(stat
         model.split_edge(edge, .4)
     assert to_dict(model) == before
     _vertex, children = model.split_edge(edge, .4, remap_attachments=True)
+    assert len(children) == 2
+    assert model.edges[children[0]].end == _vertex
+    assert model.edges[children[1]].start == _vertex
     for identifier in identifiers:
         attachment = model.attachments[identifier]
         assert attachment.target_id == children[0 if station <= .4 else 1]

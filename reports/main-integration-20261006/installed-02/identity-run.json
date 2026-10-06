@@ -1,0 +1,14 @@
+{
+  "command": [
+    "C:\\Users\\AUDUNA~1\\AppData\\Local\\Temp\\anygeometry-parallel-wheel-vsk7e3sd\\venv\\Scripts\\python.exe",
+    "C:\\Users\\AUDUNA~1\\AppData\\Local\\Temp\\anygeometry-parallel-wheel-vsk7e3sd\\verify_identity.py",
+    "C:\\Github\\ANYgeometry\\reports\\main-integration-20261006\\installed-02\\run.json",
+    "C:\\Github\\ANYgeometry\\reports\\main-integration-20261006\\installed-02\\artifact.json"
+  ],
+  "cwd": "C:\\Users\\AUDUNA~1\\AppData\\Local\\Temp\\anygeometry-parallel-wheel-vsk7e3sd",
+  "status": "completed",
+  "exit_code": 0,
+  "process_wall_seconds": 0.31382609996944666,
+  "cumulative_process_seconds": 33.35480300011113,
+  "remaining_seconds": 26.645196999888867
+}

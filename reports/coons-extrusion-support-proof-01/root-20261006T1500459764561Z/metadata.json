@@ -1,0 +1,29 @@
+{
+  "head": "740944fbd9801f264e84a1bcd32ed4b57103e1bb",
+  "source_hashes": {
+    "src/anygeometry/native_support_snapshots.py": "73131774d496f8102fda6f1e990f34807a23417ca9db43d3140a40bbc32bfec7",
+    "tests/test_polynomial_extrusion_support.py": "2aa002714aaa808060b842b7b242fce15d430f06e2d78b93d3f2a178c2618703",
+    "src/anygeometry/polynomial_extrusion_support.py": "80998a2820b9a0ebd49493af26cb841eac5d23be90845266281b523d20a1b978",
+    "src/anygeometry/native_material_reference_scope.py": "e9e03c77e53498396b9411bf7c2b61302f85e427d3842a0bc8c41b14b969a7bc"
+  },
+  "command": [
+    "C:/Users/AudunArnesenNyhus/AppData/Local/Temp/anygeometry-arc-37d7342-20261006/env/Scripts/python.exe",
+    "-X",
+    "utf8",
+    "reports/coons-extrusion-support-proof-01/public-check.py"
+  ],
+  "timeout_seconds": 2.25,
+  "process_wall_seconds": 2.1147721,
+  "cumulative_seconds": 14.718692899999999,
+  "remaining_seconds": 0.2813071000000007,
+  "exit_code": 0,
+  "timed_out": false,
+  "status": "passed",
+  "memory_measurement": "unavailable; not measured",
+  "test_counts": {
+    "tests": "3",
+    "failures": "0",
+    "errors": "0",
+    "skipped": "0"
+  }
+}

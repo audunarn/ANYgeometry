@@ -214,7 +214,7 @@ def test_qualified_clone_requires_identical_current_document():
     with pytest.raises(GeometryError,match='qualified cloning'):copy_receipt(model,clone)
 
 
-def test_unsupported_curve_unavailable_even_before_fragmentation():
+def test_arc_seed_exposes_circle_ancestry_without_parameter_qualification():
     model,edge,_=fixture()
     vertices=model.add_points(((8,0,0),(9,1,0),(10,0,0)))
     arc=model.add_arc(*vertices)
@@ -222,8 +222,11 @@ def test_unsupported_curve_unavailable_even_before_fragmentation():
     draft=capture(model,allow_seed=True); candidate=model.clone(preserve_identity=True)
     split(candidate,draft,edge)
     binding=commit(model,candidate,draft,plan)
-    assert arc in binding.unavailable_edge_ids
-    with pytest.raises(GeometryError,match='unavailable'):query(model,edge_ids=(arc,))
+    assert arc not in binding.unavailable_edge_ids
+    selected = query(model, edge_ids=(arc,))
+    assert len(selected.arc_records) == 1
+    assert selected.arc_records[0].classification == 'exact'
+    assert selected.arc_records[0].parameter_mapping_qualified is False
 
 
 def test_rounding_tolerance_refusal_leaves_draft_unchanged():

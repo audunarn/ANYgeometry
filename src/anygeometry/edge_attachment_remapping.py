@@ -156,7 +156,7 @@ def split_edge_attachments(model, edge_id, parameter, check=lambda: None):
             member_range = ParameterRange(min(values_member), max(values_member))
         identifiers = replacements[attachment.id]
         identifier = attachment.id if not identifiers else model._allocate_structural('attachment')
-        lineage = tuple(dict.fromkeys((*attachment.lineage, ('edge', edge_id))))
+        lineage = tuple(dict.fromkeys((*attachment.lineage, ('attachment',attachment.id), ('edge', edge_id))))
         model._put_structural('attachment', replace(attachment, id=identifier,
             target_id=children[child_index], target_parameters=(ParameterRange(min(values), max(values)),),
             member_range=member_range, lineage=lineage))
@@ -165,5 +165,8 @@ def split_edge_attachments(model, edge_id, parameter, check=lambda: None):
         expanded = tuple(dict.fromkeys(new for old in junction.attachment_ids
                         for new in replacements.get(old, (old,))))
         model._put_structural('junction', replace(junction, attachment_ids=expanded))
+    from .preparation_epochs import _record_attachment_descendants
+    for source,attachment_children in replacements.items():
+        _record_attachment_descendants(model,source,attachment_children)
     _remap_member_ranges(model, member_snapshots, replacements, tolerance, check)
     return vertex, children

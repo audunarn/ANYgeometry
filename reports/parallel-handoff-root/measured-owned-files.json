@@ -1,0 +1,13 @@
+{
+  "src/anygeometry/__init__.py": "66369cbc7cde505d66444a52e9621481ceb66d46f2c40aa208ee7310eaa98e83",
+  "src/anygeometry/component_partition.py": "0433f252d3e9cbb13bdcb42a07bb6b2eaa0b285bcc7a2159778a2d0f42fd2c9c",
+  "src/anygeometry/closure.py": "080aef427c2e8f9fbb5410f0b872fb7795b663a0960f332f378c56d12c5b7f23",
+  "src/anygeometry/serialization.py": "9425329a3c0dd7a811a0ec3e0ee0c4d4a1f535a3dd0c9c712259f71bf32a022b",
+  "src/anygeometry/trimmed_charts.py": "f5b684d3afe5cab8603cb50a9528137544a2a022d43b88337443100ed357857e",
+  "src/anygeometry/definition_binding.py": "92c2c4f28f5f60a4389ae4c445974711c3fd76311f82592317a8592ab2ae8360",
+  "src/anygeometry/batch_intersections.py": "cb30b3efc3db345f747c4eb8a99648aa3543bdd514fcdb039b4ec4385b6d9d15",
+  "src/anygeometry/edge_subcurve_preimages.py": "d0da87a4ae8bce291a9110632b0e2bb079ce7c6c97cb5bd29e158e045de22334",
+  "tests/test_parallel_handoff.py": "e25968f2871aed96756d886d4b828b48c36cc9407111b93725b65b1cae9eef5e",
+  "docs/PARALLEL_COMPONENT_HANDOFF.md": "3e8e07bf7359243b31184f3bc02f1b5e6362e66aa0c4015b74d07bca0e41fe29",
+  "tools/run_parallel_handoff_tests.py": "4e39596a7656f82f49356af5919da7cad37633561baea638c5d9961473277d7a"
+}

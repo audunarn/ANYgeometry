@@ -30,7 +30,7 @@ from .material_arrangement import (ArrangementPath, ArrangementPoint, Arrangemen
 from .member_arrangements import (MemberAxisArrangement, MemberPointContact,
                                   plan_member_arrangements)
 from .predicates import IntersectionDimension, IntersectionKind, qualified_plane_plane
-from .serialization import to_dict
+from .serialization import to_dict, _serialized_model_state, _qualified_model_state
 from .structural import ConnectionIntent, Orientation
 from .surfaces import Cone, Cylinder, ExtrudedSurface, Plane
 from .transactions import ChangeSet
@@ -71,7 +71,7 @@ class FacePointContact:
     world_tolerance: float
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class IntersectionPlan:
     model_id: UUID
     revision: int
@@ -434,8 +434,19 @@ def _pair_paths(first, second, model, tolerance, check, *, point_contacts=None):
 
 def plan_intersections(model, operands, *, policy):
     """Plan intersections between the complete original operand set, read-only."""
+    from .preparation_epochs import _epoch_plan_required,_issue_native_plan
+    from .native_support_snapshots import capture_native_supports
+    native=capture_native_supports(model) if _epoch_plan_required(model) else None
+    if native is not None and any(kind not in ('plane','cylinder') for _,kind,_ in native):
+        raise GeometryError('epoch planning native support binding is unavailable')
     with root_isolation_memo():
-        return _plan_intersections(model, operands, policy=policy)
+        plan=_plan_intersections(model, operands, policy=policy)
+    if native is not None:
+        if (capture_native_supports(model)!=native or model.model_id!=plan.model_id or
+                model.revision!=plan.revision or to_dict(model)['checksum']['value']!=plan.source_checksum):
+            raise GeometryError('geometry or native support changed during epoch planning')
+        _issue_native_plan(plan,native)
+    return plan
 
 
 def _plan_intersections(model, operands, *, policy):
@@ -546,7 +557,7 @@ def _plan_intersections(model, operands, *, policy):
         except GeometryError as exc:
             raise GeometryError(f"intersection material arrangement face:{face_id}: {exc}") from exc
         arrangements.append(_normalise_cells(arrangement))
-    if model.revision != revision or to_dict(model)["checksum"]["value"] != checksum:
+    if model.revision != revision or _qualified_model_state(model)["checksum"]["value"] != checksum:
         raise GeometryError("geometry changed during intersection planning")
     arrangements=_synchronize_boundary_events(arrangements,check)
     axes=_synchronize_member_events(arrangements,axes,check)
@@ -775,7 +786,7 @@ def _apply_intersections_in_place(model, plan, *, policy, _edge_preimage_draft=N
         raise GeometryError("intersection plan belongs to another model")
     if model.revision != plan.revision:
         raise GeometryError("intersection plan is stale")
-    if to_dict(model)["checksum"]["value"] != plan.source_checksum:
+    if _qualified_model_state(model)["checksum"]["value"] != plan.source_checksum:
         raise GeometryError("intersection plan source binding changed")
     tolerances_by_face = {item.face_id: item.world_tolerance for item in plan.arrangements}
     tolerance = model.tolerance.length
@@ -845,8 +856,8 @@ def _apply_intersections_in_place(model, plan, *, policy, _edge_preimage_draft=N
                     raise GeometryError("split station has no unique descendant parameter")
                 parent_definition = None
                 if _edge_preimage_draft is not None:
-                    from .edge_subcurve_preimages import _edge_subcurve_definition
-                    parent_definition = _edge_subcurve_definition(model, current)
+                    from .edge_subcurve_preimages import _edge_ancestry_definition
+                    parent_definition = _edge_ancestry_definition(model, current)
                 _vertex, (left, right) = split_edge_attachments(model, current, stations[0], check)
                 if _edge_preimage_draft is not None:
                     from .edge_subcurve_preimages import (_drop_edge_subcurve_records,
@@ -918,8 +929,8 @@ def _apply_intersections_in_place(model, plan, *, policy, _edge_preimage_draft=N
                     vertex_sources[chosen].update(vertex_sources.get(duplicate, ()))
                     prior_definitions = {}
                     if _edge_preimage_draft is not None:
-                        from .edge_subcurve_preimages import _edge_subcurve_definition
-                        prior_definitions = {edge: _edge_subcurve_definition(model, edge)
+                        from .edge_subcurve_preimages import _edge_ancestry_definition
+                        prior_definitions = {edge: _edge_ancestry_definition(model, edge)
                             for edge in model.edges_using_vertex(duplicate)}
                     _merge_vertex(model, duplicate, chosen)
                     if _edge_preimage_draft is not None:
@@ -1140,14 +1151,46 @@ def _apply_intersections(model, plan, *, policy):
         receipt = getattr(model, "_intersection_application_receipt", None)
         if (receipt is not None and receipt[0] is plan and receipt[1] == model.revision
                 and receipt[2] == to_dict(model)["checksum"]["value"]):
+            from .preparation_epochs import _seals
+            face_receipt=getattr(model,'_prepared_face_preimages_receipt',None)
+            epoch_bound=model in _seals or (face_receipt is not None and
+                getattr(face_receipt[0],'attachment_source_ids',None) is not None)
+            epoch_digest=None
+            if epoch_bound:
+                from .prepared_face_preimages import _current_receipt,_binding_checksum
+                from .native_support_snapshots import capture_native_supports
+                binding=_current_receipt(model)
+                if (binding.attachment_source_ids is None or binding.current_native_supports is None or
+                        any(kind not in ('plane','cylinder') for _,kind,_ in binding.current_native_supports) or
+                        capture_native_supports(model)!=binding.current_native_supports):
+                    raise GeometryError('cached epoch native support binding is unavailable or changed')
+                epoch_digest=_binding_checksum(binding)
             if effective.cancellation_check is not None and effective.cancellation_check():
                 raise GeometryError("intersection application cancelled")
+            # A callback can perform unrelated authoring; refuse the cached
+            # result without rolling back that authoring.
+            if (getattr(model,'_intersection_application_receipt',None) is not receipt or
+                    model.revision!=receipt[1] or _qualified_model_state(model)['checksum']['value']!=receipt[2]):
+                raise GeometryError('geometry changed during intersection reuse')
+            if epoch_bound:
+                binding=_current_receipt(model)
+                if (_binding_checksum(binding)!=epoch_digest or
+                        capture_native_supports(model)!=binding.current_native_supports):
+                    raise GeometryError('native support or epoch source binding changed during cached application')
             return IntersectionApplication(plan, ChangeSet(model.revision, model.revision),
                 tuple(model.handle("edge", identifier) for identifier in receipt[3]), True)
         raise GeometryError("intersection plan is stale")
     if to_dict(model)["checksum"]["value"] != plan.source_checksum:
         raise GeometryError("intersection plan source binding changed")
+    from .preparation_epochs import _epoch_plan_required,_native_plan_supports
+    if _epoch_plan_required(model):
+        from .native_support_snapshots import capture_native_supports
+        if capture_native_supports(model)!=_native_plan_supports(plan):
+            raise GeometryError('epoch intersection plan native support binding changed')
     if model._transaction_journal is not None:
+        from .preparation_epochs import _has_epoch_permit
+        if _has_epoch_permit(model):
+            raise GeometryError('first preparation of a new epoch requires the committed owner path')
         # Join the caller's atomic transaction. Snapshot adoption is forbidden
         # while a journal is active; ordinary owner writes participate in that
         # journal and its complete rollback instead.
@@ -1170,15 +1213,26 @@ def _apply_intersections(model, plan, *, policy):
             raise GeometryError("intersection edge provenance cancelled")
 
     authored_preimages = _capture_application_preimages(model, allow_seed=effective.face_connections)
+    from .native_support_snapshots import capture_native_supports
+    epoch_native_source=capture_native_supports(model) if authored_preimages is not None and authored_preimages.attachment_source_ids is not None else None
     edge_draft = _capture_edge_subcurve_preimages(model, allow_seed=effective.face_connections,
         cancellation_check=provenance_check)
     candidate = model.clone(preserve_identity=True)
-    outcome = _apply_intersections_in_place(candidate, plan, policy=policy,
-        _edge_preimage_draft=edge_draft)
+    from .preparation_epochs import (_begin_attachment_draft, _finish_attachment_draft,
+                                    _discard_attachment_draft, _consume_epoch)
+    _begin_attachment_draft(candidate,authored_preimages)
+    try:
+        outcome = _apply_intersections_in_place(candidate, plan, policy=policy,
+            _edge_preimage_draft=edge_draft)
+        finished_sources=_finish_attachment_draft(candidate)
+        attachment_sources,derived_sources=finished_sources if finished_sources is not None else (None,None)
+    finally:
+        _discard_attachment_draft(candidate)
     authored_preimages = _compose_application_preimages(candidate, authored_preimages,
-                                                       outcome.change_set.replacements)
+        outcome.change_set.replacements,attachment_source_ids=attachment_sources,epoch_derived_attachment_ids=derived_sources)
     edge_preimages = _finalize_edge_subcurve_preimages(candidate, edge_draft,
         cancellation_check=provenance_check)
+    epoch_native_candidate=capture_native_supports(candidate) if epoch_native_source is not None else None
     sealed_candidate_checksum = (edge_preimages.binding.source_checksum if edge_preimages is not None
         else authored_preimages.source_checksum if authored_preimages is not None
         else to_dict(candidate)["checksum"]["value"])
@@ -1186,13 +1240,16 @@ def _apply_intersections(model, plan, *, policy):
         raise GeometryError("REUSE_EXISTING requires compatible existing topology")
     if effective.cancellation_check is not None and effective.cancellation_check():
         raise GeometryError("intersection application cancelled before commit")
-    if model.revision != plan.revision or to_dict(model)["checksum"]["value"] != plan.source_checksum:
+    if model.revision != plan.revision or _qualified_model_state(model)["checksum"]["value"] != plan.source_checksum:
         raise GeometryError("geometry changed before intersection commit")
     # The last policy callback must not alter the detached result after its
     # topology/provenance proofs. No callback follows this preflight before the
     # committed snapshot is adopted.
-    if to_dict(candidate)["checksum"]["value"] != sealed_candidate_checksum:
+    if _qualified_model_state(candidate)["checksum"]["value"] != sealed_candidate_checksum:
         raise GeometryError("intersection candidate changed before commit")
+    if epoch_native_source is not None and (capture_native_supports(model)!=epoch_native_source or
+            capture_native_supports(candidate)!=epoch_native_candidate):
+        raise GeometryError('native geometry changed before epoch commit')
     before = model.revision
     original_faces = set(model.faces)
     covered_faces = {operand.id for operand in plan.operands if operand.kind == "face"}
@@ -1201,22 +1258,64 @@ def _apply_intersections(model, plan, *, policy):
             covered_faces.update(model.face_uses[use].face_id
                                  for use in model.sheets[operand.id].face_use_ids)
     complete_material = effective.face_connections and original_faces <= covered_faces
-    model.restore_topology(candidate.topology_snapshot())
-    result = IntersectionApplication(plan,
-        model.last_change_set if model.revision != before else ChangeSet(before, before),
-        tuple(model.handle("edge", edge.id) for edge in outcome.joint_edges), model.revision == before)
-    # Bind the exact committed result, including an unchanged/idempotent batch.
-    # Only complete original-face classification certifies material ownership.
-    checksum = to_dict(model)["checksum"]["value"]
-    if model.revision != before:
-        model._intersection_application_receipt = (plan, model.revision,
-            checksum, tuple(edge.id for edge in result.joint_edges))
-    model._intersection_preparation_receipt = (plan, model.revision, checksum,
-        tuple(sorted(model.faces)) if complete_material else ())
-    _publish_application_preimages(model, authored_preimages,
-                                  model._intersection_preparation_receipt[3], checksum)
-    _publish_edge_subcurve_preimages(model, edge_preimages, checksum)
-    return result
+    staged_epoch=authored_preimages is not None and authored_preimages.attachment_source_ids is not None
+    if staged_epoch:
+        _publish_application_preimages(candidate,authored_preimages,
+            tuple(sorted(candidate.faces)) if complete_material else (),sealed_candidate_checksum)
+        import weakref
+        if edge_preimages is not None and edge_preimages.owner() is not model:
+            raise GeometryError('epoch edge provenance belongs to another owner')
+        staged_edges=replace(edge_preimages,owner=weakref.ref(candidate)) if edge_preimages is not None else None
+        _publish_edge_subcurve_preimages(candidate,staged_edges,sealed_candidate_checksum)
+        candidate._intersection_preparation_receipt=(plan,candidate.revision,sealed_candidate_checksum,
+            tuple(sorted(candidate.faces)) if complete_material else ())
+    if staged_epoch:
+        from copy import deepcopy
+        saved_state=dict(model.__dict__)
+        # Keep the original store/view and feature-owner objects. Snapshot only
+        # mutable containers changed by adoption, and restore them in place.
+        saved_containers=[(value,deepcopy(value)) for value in saved_state.values()
+                          if type(value) in (dict,list,set)]
+        from .preparation_epochs import _seals
+        saved_seal=_seals.get(model)
+    try:
+        model.restore_topology(candidate.topology_snapshot())
+        result = IntersectionApplication(plan,
+            model.last_change_set if model.revision != before else ChangeSet(before, before),
+            tuple(model.handle("edge", edge.id) for edge in outcome.joint_edges), model.revision == before)
+        # Bind the exact committed result, including an unchanged/idempotent batch.
+        # Only complete original-face classification certifies material ownership.
+        checksum = to_dict(model)["checksum"]["value"]
+        if staged_epoch:
+            from .native_support_snapshots import capture_native_supports
+            if capture_native_supports(model)!=capture_native_supports(candidate):
+                raise GeometryError('native geometry changed during epoch publication')
+        if model.revision != before:
+            model._intersection_application_receipt = (plan, model.revision,
+                checksum, tuple(edge.id for edge in result.joint_edges))
+        model._intersection_preparation_receipt = (plan, model.revision, checksum,
+            tuple(sorted(model.faces)) if complete_material else ())
+        if staged_epoch:
+            _publish_application_preimages(model,authored_preimages,
+                model._intersection_preparation_receipt[3],checksum)
+            _publish_edge_subcurve_preimages(model,edge_preimages,checksum)
+        else:
+            _publish_application_preimages(model, authored_preimages,
+                                          model._intersection_preparation_receipt[3], checksum)
+            _publish_edge_subcurve_preimages(model, edge_preimages, checksum)
+        if authored_preimages is not None and edge_preimages is not None:
+            _consume_epoch(model)
+        return result
+    except BaseException:
+        if staged_epoch:
+            for container,contents in saved_containers:
+                if type(container) is list:container[:]=contents
+                else:container.clear();container.update(contents)
+            model.__dict__.clear();model.__dict__.update(saved_state)
+            if saved_seal is None:_seals.pop(model,None)
+            else:_seals[model]=saved_seal
+        raise
+
 
 
 def has_current_intersection_preparation(model, *, face_ids=None):
@@ -1255,7 +1354,7 @@ def has_current_intersection_preparation(model, *, face_ids=None):
     return False
 
 
-def clone_prepared_geometry(model):
+def clone_prepared_geometry(model, *, new_preparation_epoch=False):
     """Detach an exact mesh-attempt copy, preserving a valid local owner proof.
 
     Ordinary unprepared copies retain normal clone behavior. Prepared copies
@@ -1263,6 +1362,23 @@ def clone_prepared_geometry(model):
     after verifying the source and copy have identical committed checksums.
     The source stays unchanged; edits to either copy invalidate its binding.
     """
+    if type(new_preparation_epoch) is not bool:
+        raise GeometryError('new_preparation_epoch must be a plain boolean')
+    if new_preparation_epoch:
+        if model._transaction_journal is not None:
+            raise GeometryError('a new preparation epoch requires committed source geometry')
+        from .native_support_snapshots import capture_native_supports
+        before=to_dict(model);native=capture_native_supports(model)
+        made=model.clone(preserve_identity=False)
+        copied=to_dict(made)
+        source_payload={k:v for k,v in before.items() if k not in ('model_id','checksum')}
+        clone_payload={k:v for k,v in copied.items() if k not in ('model_id','checksum')}
+        if (made.model_id==model.model_id or source_payload!=clone_payload or
+                capture_native_supports(made)!=native or capture_native_supports(model)!=native or to_dict(model)!=before):
+            raise GeometryError('preparation epoch clone changed source or native geometry')
+        from .preparation_epochs import _issue_epoch
+        _issue_epoch(made)
+        return made
     prepared = has_current_intersection_preparation(model)
     receipt = getattr(model, "_intersection_preparation_receipt", None)
     made = model.clone(preserve_identity=prepared)

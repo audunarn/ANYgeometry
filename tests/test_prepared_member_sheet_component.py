@@ -15,7 +15,7 @@ from anygeometry import (
 from anygeometry.structural import ParameterRange
 
 
-def build(reverse=False, extra=False):
+def build(reverse=False, extra=False, seeded_lineage=False):
     model = GeometryModel()
     for points, plane in (
         (((-1, -1, 0), (1, -1, 0), (1, 1, 0), (-1, 1, 0)),
@@ -33,10 +33,11 @@ def build(reverse=False, extra=False):
     if reverse:
         model.reverse_member(member)
     vertex = model.add_point(*model.sample_edge(edge, np.array([.75]))[0])
+    lineage = (('vertex', vertex), ('edge', edge), ('vertex', vertex)) if seeded_lineage else ()
     for _ in range(2 if extra else 1):
         model.add_attachment(None, 'vertex_on_edge', 'edge', edge, ParameterRange.point(0.),
             (ParameterRange.point(.75),), source_kind='vertex', source_id=vertex,
-            evidence='exact', tolerance_used=1e-9)
+            evidence='exact', tolerance_used=1e-9, lineage=lineage)
     apply_intersections(model, plan_intersections(model, tuple(model.faces), policy='connect'),
                         policy='connect')
     joint = next(a.target_id for a in model.attachments.values() if a.kind == 'sheet_on_joint')
@@ -81,6 +82,46 @@ def test_extra_original_relation_is_explicitly_refused():
     model, joint = build(extra=True)
     with pytest.raises(GeometryError, match='one original point Attachment'):
         query(model, joint)
+
+
+@pytest.mark.parametrize('seeded_lineage', [False, True])
+def test_point_remap_requires_exact_owner_attachment_and_edge_lineage(seeded_lineage):
+    model, joint = build(seeded_lineage=seeded_lineage)
+    before = to_dict(model)
+    receipt = query(model, joint)
+    source = receipt.member_relation['source_attachment']
+    current = receipt.member_relation['current_attachment']
+    if seeded_lineage:
+        expected = [['vertex', source['source_id']], ['edge', source['target_id']],
+                    ['attachment', source['id']]]
+    else:
+        expected = [['attachment', source['id']], ['edge', source['target_id']]]
+    assert current['lineage'] == expected
+    assert current['id'] == source['id']
+    validate(model, receipt)
+    assert to_dict(model) == before
+
+
+@pytest.mark.parametrize('corruption', ['omit', 'wrong_attachment', 'reorder', 'duplicate'])
+def test_point_attachment_provenance_forgery_refuses(corruption):
+    from anygeometry.prepared_member_sheet_component import _qualify
+    from anygeometry.prepared_sheet_joint_component import _index
+    model, joint = build()
+    scope = query(model, joint).scope
+    source, current = _index(scope.authored_document), _index(scope.current_document)
+    point = next(row for row in current['attachments'].values() if row['kind'] == 'vertex_on_edge')
+    if corruption == 'omit':
+        point['lineage'].pop(0)
+    elif corruption == 'wrong_attachment':
+        point['lineage'][0][1] = -1
+    elif corruption == 'reorder':
+        point['lineage'].reverse()
+    else:
+        point['lineage'].append(point['lineage'][0])
+    before = to_dict(model)
+    with pytest.raises(GeometryError, match='point Attachment station or retained fields changed'):
+        _qualify(model, scope, source, current, None)
+    assert to_dict(model) == before
 
 
 @pytest.mark.parametrize('change', ['omit', 'station', 'orientation', 'flag'])

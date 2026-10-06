@@ -1,0 +1,214 @@
+...........F.FF...........................                               [100%]
+================================== FAILURES ===================================
+__________ test_implicit_support_and_eccentric_metadata_fail_closed ___________
+
+    def test_implicit_support_and_eccentric_metadata_fail_closed():
+        model = GeometryModel()
+        face = model.add_face(model.add_polyline(model.add_points(((0,0,0),(1,0,0),(1,1,0),(0,1,0))), close=True))
+        plan = plan_independent_components(model)
+>       assert not plan.certified and not plan.components
+E       AssertionError: assert (not True)
+E        +  where True = ComponentPartition(model_id=UUID('cd54592e-f806-47f6-8597-c7f068c809ad'), revision=3, source_checksum='7f4f2e7205bfa06...tyHandle(model_id=UUID('cd54592e-f806-47f6-8597-c7f068c809ad'), kind='face', id=1),)),), merge_reasons=(), refusals=()).certified
+
+tests\test_parallel_handoff.py:140: AssertionError
+___ test_transport_rejects_incomplete_duplicate_or_tampered_correspondence ____
+
+document = {'source_handles': [['face', 1]], 'source_model_id': '55c144df-52de-46f7-97aa-3c1f93fc5c52', 'source_revision': 2, 'transport_checksum': '2e0f2a1e23e87dfd3e52dcb8dfde583e4637f7f5e92b93089b458eb601e35df8', ...}
+
+    def model_closure_from_dict(document) -> ModelClosure:
+        """Decode a plain closure envelope, verifying complete bidirectional maps.
+    
+        Source provenance is retained as declared identity; the absent original
+        source document cannot be independently requalified by a worker.
+        """
+        from .serialization import from_dict
+        from .definition_binding import definition_checksum
+        from collections.abc import Mapping
+        from copy import deepcopy
+        from numbers import Integral
+        if not isinstance(document, Mapping):
+            raise GeometryError("closure transport must be a mapping")
+        payload = deepcopy(dict(document))
+        signature = payload.pop("transport_checksum", None)
+        if set(payload) != {"working_model", "source_model_id", "source_revision", "source_handles", "work_to_source"}:
+            raise GeometryError("closure transport has unknown or missing fields")
+        if signature != definition_checksum(payload):
+            raise GeometryError("closure transport checksum mismatch")
+        try:
+            source_id = UUID(payload["source_model_id"])
+        except (TypeError, ValueError, AttributeError) as error:
+            raise GeometryError("closure transport source identity is invalid") from error
+        revision = payload["source_revision"]
+        if source_id.int == 0 or isinstance(revision, bool) or not isinstance(revision, Integral) or revision < 0:
+            raise GeometryError("closure transport source revision/identity is invalid")
+        work = from_dict(payload["working_model"])
+        work_to_source = {}
+        try:
+            for kind, work_id, source_local in payload["work_to_source"]:
+                target = work.handle(kind, work_id)
+                source = EntityHandle(source_id, kind, source_local)
+                if target in work_to_source:
+>                   raise GeometryError("closure transport has duplicate working handles")
+E                   anygeometry.errors.GeometryError: closure transport has duplicate working handles
+
+src\anygeometry\closure.py:137: GeometryError
+
+The above exception was the direct cause of the following exception:
+
+    def test_transport_rejects_incomplete_duplicate_or_tampered_correspondence():
+        model = GeometryModel()
+        face = plate(model)
+        closure = extract_model_closure(model, (("face",face),))
+        data = closure.to_transport()
+        changed = deepcopy(data)
+        changed["work_to_source"].pop()
+        with pytest.raises(GeometryError, match="checksum"):
+            model_closure_from_dict(changed)
+        changed["transport_checksum"] = definition_checksum({k:v for k,v in changed.items() if k != "transport_checksum"})
+        with pytest.raises(GeometryError, match="every working"):
+            model_closure_from_dict(changed)
+        changed = deepcopy(data)
+        changed["work_to_source"].append(changed["work_to_source"][0])
+        changed["transport_checksum"] = definition_checksum({k:v for k,v in changed.items() if k != "transport_checksum"})
+        with pytest.raises(GeometryError, match="duplicate"):
+>           model_closure_from_dict(changed)
+
+tests\test_parallel_handoff.py:188: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+document = {'source_handles': [['face', 1]], 'source_model_id': '55c144df-52de-46f7-97aa-3c1f93fc5c52', 'source_revision': 2, 'transport_checksum': '2e0f2a1e23e87dfd3e52dcb8dfde583e4637f7f5e92b93089b458eb601e35df8', ...}
+
+    def model_closure_from_dict(document) -> ModelClosure:
+        """Decode a plain closure envelope, verifying complete bidirectional maps.
+    
+        Source provenance is retained as declared identity; the absent original
+        source document cannot be independently requalified by a worker.
+        """
+        from .serialization import from_dict
+        from .definition_binding import definition_checksum
+        from collections.abc import Mapping
+        from copy import deepcopy
+        from numbers import Integral
+        if not isinstance(document, Mapping):
+            raise GeometryError("closure transport must be a mapping")
+        payload = deepcopy(dict(document))
+        signature = payload.pop("transport_checksum", None)
+        if set(payload) != {"working_model", "source_model_id", "source_revision", "source_handles", "work_to_source"}:
+            raise GeometryError("closure transport has unknown or missing fields")
+        if signature != definition_checksum(payload):
+            raise GeometryError("closure transport checksum mismatch")
+        try:
+            source_id = UUID(payload["source_model_id"])
+        except (TypeError, ValueError, AttributeError) as error:
+            raise GeometryError("closure transport source identity is invalid") from error
+        revision = payload["source_revision"]
+        if source_id.int == 0 or isinstance(revision, bool) or not isinstance(revision, Integral) or revision < 0:
+            raise GeometryError("closure transport source revision/identity is invalid")
+        work = from_dict(payload["working_model"])
+        work_to_source = {}
+        try:
+            for kind, work_id, source_local in payload["work_to_source"]:
+                target = work.handle(kind, work_id)
+                source = EntityHandle(source_id, kind, source_local)
+                if target in work_to_source:
+                    raise GeometryError("closure transport has duplicate working handles")
+                work_to_source[target] = source
+            source_handles = tuple(EntityHandle(source_id, kind, identifier)
+                                   for kind, identifier in payload["source_handles"])
+        except (TypeError, ValueError, KeyError) as error:
+>           raise GeometryError("closure transport identity records are invalid") from error
+E           anygeometry.errors.GeometryError: closure transport identity records are invalid
+
+src\anygeometry\closure.py:142: GeometryError
+
+During handling of the above exception, another exception occurred:
+
+    def test_transport_rejects_incomplete_duplicate_or_tampered_correspondence():
+        model = GeometryModel()
+        face = plate(model)
+        closure = extract_model_closure(model, (("face",face),))
+        data = closure.to_transport()
+        changed = deepcopy(data)
+        changed["work_to_source"].pop()
+        with pytest.raises(GeometryError, match="checksum"):
+            model_closure_from_dict(changed)
+        changed["transport_checksum"] = definition_checksum({k:v for k,v in changed.items() if k != "transport_checksum"})
+        with pytest.raises(GeometryError, match="every working"):
+            model_closure_from_dict(changed)
+        changed = deepcopy(data)
+        changed["work_to_source"].append(changed["work_to_source"][0])
+        changed["transport_checksum"] = definition_checksum({k:v for k,v in changed.items() if k != "transport_checksum"})
+>       with pytest.raises(GeometryError, match="duplicate"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: Regex pattern did not match.
+E         Expected regex: 'duplicate'
+E         Actual message: 'closure transport identity records are invalid'
+
+tests\test_parallel_handoff.py:187: AssertionError
+________ test_chart_batch_parity_individual_errors_and_success_binding ________
+
+    def test_chart_batch_parity_individual_errors_and_success_binding():
+        model = GeometryModel()
+        good = plate(model)
+>       bad = model.add_plate(model.add_points(((10,0,0),(12,0,0),(12,1,1),(10,1,0))))
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_parallel_handoff.py:194: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\model.py:179: in wrapped
+    with self.transaction():
+         ^^^^^^^^^^^^^^^^^^
+src\anygeometry\transactions.py:149: in __exit__
+    self._model._exit_transaction(exc)  # noqa: SLF001
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = GeometryModel(vertices=8, edges=4, faces=1), error = None
+
+    def _exit_transaction(self, error: BaseException | None) -> None:
+        journal = self._transaction_journal
+        if journal is None or journal.depth <= 0:
+            raise RuntimeError("transaction exit without a matching entry")
+        journal.depth -= 1
+        if journal.depth:
+            if error is not None:
+                # The exception continues through the outer context, which
+                # owns rollback.  No nested savepoint is implied.
+                journal.failure = error
+                return
+            return
+        try:
+            failure = error if error is not None else journal.failure
+            if failure is not None:
+                self._rollback_transaction(journal)
+                if error is None:
+                    raise GeometryError(
+                        "transaction cannot commit after a nested edit failed"
+                    ) from failure
+                return
+            try:
+                self._capture_direct_mutations(journal)
+                # Every public edit, including a pure addition, must publish a
+                # valid committed state.  Standalone vertices and edges are
+                # valid neutral geometry; new faces additionally receive the
+                # same changed-closure trim/surface checks as edited faces.
+                validates_commit = bool(journal.entity_before) or bool(
+                    journal.structural_before
+                    or journal.group_changes
+                    or journal.tag_changes
+                    or journal.ownership_changes
+                    or journal.member_changes
+                    or journal.attachment_changes
+                )
+                if validates_commit:
+                    problems = self._validate_incremental(journal)
+                    if problems:
+>                       raise GeometryError("; ".join(problems))
+E                       anygeometry.errors.GeometryError: face 2 boundary is inconsistent with its explicit surface
+
+src\anygeometry\model.py:735: GeometryError
+=========================== short test summary info ===========================
+FAILED tests/test_parallel_handoff.py::test_implicit_support_and_eccentric_metadata_fail_closed
+FAILED tests/test_parallel_handoff.py::test_transport_rejects_incomplete_duplicate_or_tampered_correspondence
+FAILED tests/test_parallel_handoff.py::test_chart_batch_parity_individual_errors_and_success_binding
+3 failed, 39 passed in 0.63s

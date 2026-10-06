@@ -1,0 +1,191 @@
+{
+  "attempts": [
+    {
+      "command": [
+        "C:\\Python\\Python314\\python.exe",
+        "C:\\Github\\ANYgeometry\\.worktrees\\parallel-handoff\\reports\\parallel-handoff-root\\measure.py",
+        "--mode",
+        "measure",
+        "--source",
+        "reports/parallel-handoff-root/baseline-source/src",
+        "--fixture",
+        "reports\\parallel-handoff-root\\fixtures\\grid-16.json",
+        "--size",
+        "16",
+        "--output",
+        "C:\\Github\\ANYgeometry\\.worktrees\\parallel-handoff\\reports\\parallel-handoff-root\\baseline-01\\grid-16-0.json"
+      ],
+      "process_wall_seconds": 2.166227399953641,
+      "status": "completed",
+      "exit_code": 0,
+      "output": "C:\\Github\\ANYgeometry\\.worktrees\\parallel-handoff\\reports\\parallel-handoff-root\\baseline-01\\grid-16-0.json"
+    },
+    {
+      "command": [
+        "C:\\Python\\Python314\\python.exe",
+        "C:\\Github\\ANYgeometry\\.worktrees\\parallel-handoff\\reports\\parallel-handoff-root\\measure.py",
+        "--mode",
+        "measure",
+        "--source",
+        "reports/parallel-handoff-root/baseline-source/src",
+        "--fixture",
+        "reports\\parallel-handoff-root\\fixtures\\grid-16.json",
+        "--size",
+        "16",
+        "--output",
+        "C:\\Github\\ANYgeometry\\.worktrees\\parallel-handoff\\reports\\parallel-handoff-root\\baseline-01\\grid-16-1.json"
+      ],
+      "process_wall_seconds": 2.16303430008702,
+      "status": "completed",
+      "exit_code": 0,
+      "output": "C:\\Github\\ANYgeometry\\.worktrees\\parallel-handoff\\reports\\parallel-handoff-root\\baseline-01\\grid-16-1.json"
+    },
+    {
+      "command": [
+        "C:\\Python\\Python314\\python.exe",
+        "C:\\Github\\ANYgeometry\\.worktrees\\parallel-handoff\\reports\\parallel-handoff-root\\measure.py",
+        "--mode",
+        "measure",
+        "--source",
+        "reports/parallel-handoff-root/baseline-source/src",
+        "--fixture",
+        "reports\\parallel-handoff-root\\fixtures\\grid-16.json",
+        "--size",
+        "16",
+        "--output",
+        "C:\\Github\\ANYgeometry\\.worktrees\\parallel-handoff\\reports\\parallel-handoff-root\\baseline-01\\grid-16-2.json",
+        "--profile"
+      ],
+      "process_wall_seconds": 4.0462908000918105,
+      "status": "completed",
+      "exit_code": 0,
+      "output": "C:\\Github\\ANYgeometry\\.worktrees\\parallel-handoff\\reports\\parallel-handoff-root\\baseline-01\\grid-16-2.json"
+    },
+    {
+      "command": [
+        "C:\\Python\\Python314\\python.exe",
+        "C:\\Github\\ANYgeometry\\.worktrees\\parallel-handoff\\reports\\parallel-handoff-root\\measure.py",
+        "--mode",
+        "measure",
+        "--source",
+        "reports/parallel-handoff-root/baseline-source/src",
+        "--fixture",
+        "reports\\parallel-handoff-root\\fixtures\\grid-32.json",
+        "--size",
+        "32",
+        "--output",
+        "C:\\Github\\ANYgeometry\\.worktrees\\parallel-handoff\\reports\\parallel-handoff-root\\baseline-01\\grid-32-0.json"
+      ],
+      "process_wall_seconds": 7.435668300022371,
+      "status": "completed",
+      "exit_code": 0,
+      "output": "C:\\Github\\ANYgeometry\\.worktrees\\parallel-handoff\\reports\\parallel-handoff-root\\baseline-01\\grid-32-0.json"
+    },
+    {
+      "command": [
+        "C:\\Python\\Python314\\python.exe",
+        "C:\\Github\\ANYgeometry\\.worktrees\\parallel-handoff\\reports\\parallel-handoff-root\\measure.py",
+        "--mode",
+        "measure",
+        "--source",
+        "reports/parallel-handoff-root/baseline-source/src",
+        "--fixture",
+        "reports\\parallel-handoff-root\\fixtures\\grid-32.json",
+        "--size",
+        "32",
+        "--output",
+        "C:\\Github\\ANYgeometry\\.worktrees\\parallel-handoff\\reports\\parallel-handoff-root\\baseline-01\\grid-32-1.json"
+      ],
+      "process_wall_seconds": 7.388686899910681,
+      "status": "completed",
+      "exit_code": 0,
+      "output": "C:\\Github\\ANYgeometry\\.worktrees\\parallel-handoff\\reports\\parallel-handoff-root\\baseline-01\\grid-32-1.json"
+    },
+    {
+      "command": [
+        "C:\\Python\\Python314\\python.exe",
+        "C:\\Github\\ANYgeometry\\.worktrees\\parallel-handoff\\reports\\parallel-handoff-root\\measure.py",
+        "--mode",
+        "measure",
+        "--source",
+        "reports/parallel-handoff-root/baseline-source/src",
+        "--fixture",
+        "reports\\parallel-handoff-root\\fixtures\\grid-32.json",
+        "--size",
+        "32",
+        "--output",
+        "C:\\Github\\ANYgeometry\\.worktrees\\parallel-handoff\\reports\\parallel-handoff-root\\baseline-01\\grid-32-2.json",
+        "--profile"
+      ],
+      "process_wall_seconds": 14.522929199971259,
+      "status": "completed",
+      "exit_code": 0,
+      "output": "C:\\Github\\ANYgeometry\\.worktrees\\parallel-handoff\\reports\\parallel-handoff-root\\baseline-01\\grid-32-2.json"
+    },
+    {
+      "command": [
+        "C:\\Python\\Python314\\python.exe",
+        "C:\\Github\\ANYgeometry\\.worktrees\\parallel-handoff\\reports\\parallel-handoff-root\\measure.py",
+        "--mode",
+        "measure",
+        "--source",
+        "reports/parallel-handoff-root/baseline-source/src",
+        "--fixture",
+        "reports\\parallel-handoff-root\\fixtures\\grid-48.json",
+        "--size",
+        "48",
+        "--output",
+        "C:\\Github\\ANYgeometry\\.worktrees\\parallel-handoff\\reports\\parallel-handoff-root\\baseline-01\\grid-48-0.json"
+      ],
+      "process_wall_seconds": 17.694541500066407,
+      "status": "completed",
+      "exit_code": 0,
+      "output": "C:\\Github\\ANYgeometry\\.worktrees\\parallel-handoff\\reports\\parallel-handoff-root\\baseline-01\\grid-48-0.json"
+    },
+    {
+      "command": [
+        "C:\\Python\\Python314\\python.exe",
+        "C:\\Github\\ANYgeometry\\.worktrees\\parallel-handoff\\reports\\parallel-handoff-root\\measure.py",
+        "--mode",
+        "measure",
+        "--source",
+        "reports/parallel-handoff-root/baseline-source/src",
+        "--fixture",
+        "reports\\parallel-handoff-root\\fixtures\\grid-48.json",
+        "--size",
+        "48",
+        "--output",
+        "C:\\Github\\ANYgeometry\\.worktrees\\parallel-handoff\\reports\\parallel-handoff-root\\baseline-01\\grid-48-1.json"
+      ],
+      "process_wall_seconds": 17.80727410002146,
+      "status": "completed",
+      "exit_code": 0,
+      "output": "C:\\Github\\ANYgeometry\\.worktrees\\parallel-handoff\\reports\\parallel-handoff-root\\baseline-01\\grid-48-1.json"
+    },
+    {
+      "command": [
+        "C:\\Python\\Python314\\python.exe",
+        "C:\\Github\\ANYgeometry\\.worktrees\\parallel-handoff\\reports\\parallel-handoff-root\\measure.py",
+        "--mode",
+        "measure",
+        "--source",
+        "reports/parallel-handoff-root/baseline-source/src",
+        "--fixture",
+        "reports\\parallel-handoff-root\\fixtures\\grid-48.json",
+        "--size",
+        "48",
+        "--output",
+        "C:\\Github\\ANYgeometry\\.worktrees\\parallel-handoff\\reports\\parallel-handoff-root\\baseline-01\\grid-48-2.json",
+        "--profile"
+      ],
+      "process_wall_seconds": 34.07413339999039,
+      "status": "completed",
+      "exit_code": 0,
+      "output": "C:\\Github\\ANYgeometry\\.worktrees\\parallel-handoff\\reports\\parallel-handoff-root\\baseline-01\\grid-48-2.json"
+    }
+  ],
+  "process_seconds": 107.29878590011504,
+  "aggregate_seconds": 107.30505059997085,
+  "limit_seconds": 240.0,
+  "per_process_limit_seconds": 60.0
+}

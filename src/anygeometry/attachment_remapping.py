@@ -111,7 +111,7 @@ def remap_face_attachments(model,old_face,descendants,snapshots,check):
                     candidates.append((face_id,interval,_target_bounds(domain,curve.subcurve(a,b))))
         if not candidates:
             raise GeometryError(f'attachment {attachment.id} lost all material descendants')
-        lineage=tuple(dict.fromkeys((*attachment.lineage,('face',old_face.id))))
+        lineage=tuple(dict.fromkeys((*attachment.lineage,('attachment',attachment.id),('face',old_face.id))))
         identifiers=[]
         for index,(face_id,interval,parameters) in enumerate(candidates):
             changes={'lineage':lineage}
@@ -129,3 +129,5 @@ def remap_face_attachments(model,old_face,descendants,snapshots,check):
             expanded=tuple(dict.fromkeys(identifier for old in junction.attachment_ids
                 for identifier in (identifiers if old==attachment.id else (old,))))
             model._put_structural('junction',replace(junction,attachment_ids=expanded))
+        from .preparation_epochs import _record_attachment_descendants
+        _record_attachment_descendants(model,attachment.id,identifiers)

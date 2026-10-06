@@ -1,0 +1,90 @@
+........................F............................................... [ 77%]
+.....................                                                    [100%]
+================================== FAILURES ===================================
+_________ test_reused_preparation_cannot_accept_callback_raw_mutation _________
+
+    def test_reused_preparation_cannot_accept_callback_raw_mutation():
+        from anygeometry import plan_intersections, apply_intersections, IntersectionBatchPolicy
+        model = GeometryModel()
+        plate(model)
+        model.add_plate(model.add_points(((1,-1,-1),(1,2,-1),(1,2,1),(1,-1,1))))
+        plan = plan_intersections(model, tuple(model.faces), policy="connect")
+        apply_intersections(model, plan, policy="connect")
+        def mutation():
+            vertex = next(iter(model.vertices.values()))
+            vertex.position.flags.writeable = True
+            vertex.position[0] += .01
+            return False
+        with pytest.raises(GeometryError, match="changed during intersection reuse"):
+>           apply_intersections(model, plan, policy=IntersectionBatchPolicy(cancellation_check=mutation))
+
+tests\test_parallel_handoff.py:318: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\batch_intersections.py:1140: in apply_intersections
+    return _apply_intersections(model, plan, policy=policy)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+model = GeometryModel(vertices=16, edges=23, faces=8)
+plan = IntersectionPlan(model_id=UUID('395e4eb8-581d-4007-9943-f08c7a050da2'), revision=4, source_checksum='c79d1b0d4d36f5b1b...(), contacts=(), content_checksum='e2b78631fe82f37d724d11422eb7300dc323e8b655f2fd65d43f6e7000af5859', face_contacts=())
+
+    def _apply_intersections(model, plan, *, policy):
+        if not isinstance(plan, IntersectionPlan):
+            raise TypeError("apply_intersections needs an IntersectionPlan")
+        effective = _policy(policy)
+        _validate_policy(plan,effective)
+        if model.model_id != plan.model_id:
+            raise GeometryError("intersection plan belongs to another model")
+        if model.revision != plan.revision:
+            receipt = getattr(model, "_intersection_application_receipt", None)
+            if (receipt is not None and receipt[0] is plan and receipt[1] == model.revision
+                    and receipt[2] == to_dict(model)["checksum"]["value"]):
+                from .preparation_epochs import _seals
+                face_receipt=getattr(model,'_prepared_face_preimages_receipt',None)
+                epoch_bound=model in _seals or (face_receipt is not None and
+                    getattr(face_receipt[0],'attachment_source_ids',None) is not None)
+                epoch_digest=None
+                if epoch_bound:
+                    from .prepared_face_preimages import _current_receipt,_binding_checksum
+                    from .native_support_snapshots import capture_native_supports
+                    binding=_current_receipt(model)
+                    if (binding.attachment_source_ids is None or binding.current_native_supports is None or
+                            any(kind not in ('plane','cylinder') for _,kind,_ in binding.current_native_supports) or
+                            capture_native_supports(model)!=binding.current_native_supports):
+                        raise GeometryError('cached epoch native support binding is unavailable or changed')
+                    epoch_digest=_binding_checksum(binding)
+                if effective.cancellation_check is not None and effective.cancellation_check():
+                    raise GeometryError("intersection application cancelled")
+                # A callback can perform unrelated authoring; refuse the cached
+                # result without rolling back that authoring.
+                if (getattr(model,'_intersection_application_receipt',None) is not receipt or
+                        model.revision!=receipt[1] or _qualified_model_state(model)['checksum']['value']!=receipt[2]):
+>                   raise GeometryError('geometry changed during cached intersection application')
+E                   anygeometry.errors.GeometryError: geometry changed during cached intersection application
+
+src\anygeometry\batch_intersections.py:1174: GeometryError
+
+During handling of the above exception, another exception occurred:
+
+    def test_reused_preparation_cannot_accept_callback_raw_mutation():
+        from anygeometry import plan_intersections, apply_intersections, IntersectionBatchPolicy
+        model = GeometryModel()
+        plate(model)
+        model.add_plate(model.add_points(((1,-1,-1),(1,2,-1),(1,2,1),(1,-1,1))))
+        plan = plan_intersections(model, tuple(model.faces), policy="connect")
+        apply_intersections(model, plan, policy="connect")
+        def mutation():
+            vertex = next(iter(model.vertices.values()))
+            vertex.position.flags.writeable = True
+            vertex.position[0] += .01
+            return False
+>       with pytest.raises(GeometryError, match="changed during intersection reuse"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: Regex pattern did not match.
+E         Expected regex: 'changed during intersection reuse'
+E         Actual message: 'geometry changed during cached intersection application'
+
+tests\test_parallel_handoff.py:317: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_parallel_handoff.py::test_reused_preparation_cannot_accept_callback_raw_mutation
+1 failed, 92 passed in 8.55s

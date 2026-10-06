@@ -1,0 +1,5 @@
+Processing c:\github\anygeometry\.worktrees\parallel-handoff
+  Preparing metadata (pyproject.toml): started
+  Preparing metadata (pyproject.toml): finished with status 'done'
+Building wheels for collected packages: ANYgeometry
+Failed to build ANYgeometry

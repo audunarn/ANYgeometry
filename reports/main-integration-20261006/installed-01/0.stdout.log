@@ -1,0 +1,9 @@
+Processing c:\github\anygeometry\.worktrees\intersection-continuation
+  Preparing metadata (pyproject.toml): started
+  Preparing metadata (pyproject.toml): finished with status 'done'
+Building wheels for collected packages: ANYgeometry
+  Building wheel for ANYgeometry (pyproject.toml): started
+  Building wheel for ANYgeometry (pyproject.toml): finished with status 'done'
+  Created wheel for ANYgeometry: filename=anygeometry-0.4.5-py3-none-any.whl size=764381 sha256=b88725775059962852d3e264b77b4d9e6a40e4b95c14da8e77d60b35ab1bbcb3
+  Stored in directory: C:\Users\AudunArnesenNyhus\AppData\Local\Temp\pip-ephem-wheel-cache-0m_dt221\wheels\b3\d1\ac\13df621878b47d796243a34419e36e43a8093762a3e07cb736
+Successfully built ANYgeometry

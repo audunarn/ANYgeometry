@@ -3736,6 +3736,8 @@ class GeometryModel:
                 source_id,
             ),
         )
+        from .preparation_epochs import _record_created_attachment
+        _record_created_attachment(self,identifier)
         return identifier
 
     @_transactional

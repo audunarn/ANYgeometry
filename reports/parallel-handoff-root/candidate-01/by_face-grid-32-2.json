@@ -1,0 +1,62 @@
+{
+  "chart_digest": "9b34b586630db9525cb4c07cdd860e1d6d71a561de2dece5305c9bb5af406d94",
+  "chart_query_mode": "by_face",
+  "counts": {
+    "definition_binding.py:definition_checksum": {
+      "calls": 10255,
+      "cumulative_seconds": 1.1853841
+    },
+    "material_arrangement.py:arrange_material": {
+      "calls": 66,
+      "cumulative_seconds": 3.9919345
+    },
+    "model.py:validate_topology": {
+      "calls": 11,
+      "cumulative_seconds": 0.7939632000000001
+    },
+    "serialization.py:_serialized_model_state": {
+      "calls": 19,
+      "cumulative_seconds": 0.3542495
+    },
+    "serialization.py:to_dict": {
+      "calls": 8,
+      "cumulative_seconds": 1.0766585
+    },
+    "structural.py:to_dict": {
+      "calls": 57208,
+      "cumulative_seconds": 0.028617300000000002
+    }
+  },
+  "document_digest": "2585cf6f67156bb000bc0c3626278065f54f30da7287322d4d19655a24c655b2",
+  "fixture_sha256": "a1e862b8ce8fccd71b96112f4e3dae29669f68dea4037886e5125a00fd8446bd",
+  "joint_edges": 800,
+  "machine": "WORK_STABEIST1",
+  "numpy": "2.4.6",
+  "origin": "C:\\Github\\ANYgeometry\\.worktrees\\parallel-handoff\\src\\anygeometry\\__init__.py",
+  "phases": {
+    "application": 5.464800899964757,
+    "planning": 6.545069599989802,
+    "queries": 0.19432819995563477
+  },
+  "pipeline_seconds": 12.204203799949028,
+  "profiled": true,
+  "runtime": "3.14.2 (tags/v3.14.2:df79316, Dec  5 2025, 17:18:21) [MSC v.1944 64 bit (AMD64)]",
+  "schema": "anygeometry.parallel-handoff-measure-v1",
+  "source_identity": "5882b340c3fe4e99116cf5fefa9512493410689558be1a32e15c26e29dd206a2",
+  "source_unchanged": true,
+  "threads": {
+    "MKL_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1"
+  },
+  "topology_counts": {
+    "attachments": 1600,
+    "edges": 1476,
+    "faces": 833,
+    "junctions": 800,
+    "members": 0,
+    "sheets": 33,
+    "vertices": 644
+  },
+  "web_count": 32
+}

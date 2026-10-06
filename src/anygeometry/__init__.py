@@ -64,6 +64,22 @@ from .material_regions import (
     MaterialSurfaceRegion, MaterialSurfaceRegions, query_material_surface_regions,
     validate_material_surface_regions_binding, evaluate_material_surface_region,
 )
+from .native_arc_parameter_maps import (
+    NativeArcParameterMapError, NativeArcParameterMapPolicy, NativeArcFrame, NativeArcParameterMap,
+    PreparedNativeArcParameterMaps, query_prepared_native_arc_parameter_maps,
+    validate_prepared_native_arc_parameter_maps_binding,
+)
+from .native_arc_station_incidence import (
+    NativeArcStationIncidenceError, NativeArcStationIncidencePolicy, NativeArcStation,
+    NativeArcStationIncidence, PreparedNativeArcStationIncidence,
+    query_prepared_native_arc_station_incidence,
+    validate_prepared_native_arc_station_incidence_binding,
+)
+from .native_material_reference_scope import (
+    NativeMaterialScopeRow, PreparedNativeMaterialReferenceScope,
+    query_prepared_native_material_reference_scope,
+    validate_prepared_native_material_reference_scope_binding,
+)
 from .chart_fingerprints import chart_definition_fingerprint
 from .material_cell_coverage import (
     validate_material_surface_region_triangles,
@@ -104,6 +120,15 @@ from .cylinder_charts import (
     validate_cylinder_atlas_binding, evaluate_cylinder_occurrences,
 )
 from .closure import ModelClosure, extract_model_closure
+from .closure import model_closure_to_dict, model_closure_from_dict
+from .component_partition import (
+    IndependentComponent, ComponentMergeReason, ComponentRefusal, ComponentPartition,
+    plan_independent_components, validate_component_partition_binding,
+)
+from .trimmed_charts import (
+    TrimmedSurfaceChartQueryResult, TrimmedSurfaceChartQueryResults,
+    query_trimmed_surface_charts_by_face,
+)
 from .cylinder_patch import (
     CylinderPatchStatus, CylinderPatchErrorCode, CylinderPatchError,
     CylinderPatchPolicy, CylinderPatchCertificate, CylinderPatchOccurrence,
@@ -373,6 +398,24 @@ __all__ = [
     "PreparedEdgeSubcurvePreimages",
     "query_prepared_edge_subcurve_preimages",
     "validate_prepared_edge_subcurve_preimages_binding",
+    "NativeArcParameterMapError",
+    "NativeArcParameterMapPolicy",
+    "NativeArcFrame",
+    "NativeArcParameterMap",
+    "PreparedNativeArcParameterMaps",
+    "query_prepared_native_arc_parameter_maps",
+    "validate_prepared_native_arc_parameter_maps_binding",
+    "NativeArcStationIncidenceError",
+    "NativeArcStationIncidencePolicy",
+    "NativeArcStation",
+    "NativeArcStationIncidence",
+    "PreparedNativeArcStationIncidence",
+    "query_prepared_native_arc_station_incidence",
+    "validate_prepared_native_arc_station_incidence_binding",
+    "NativeMaterialScopeRow",
+    "PreparedNativeMaterialReferenceScope",
+    "query_prepared_native_material_reference_scope",
+    "validate_prepared_native_material_reference_scope_binding",
     "clone_prepared_geometry",
     "set_prepared_face_corners",
     "TrimmedSurfaceChart",
@@ -530,6 +573,17 @@ __all__ = [
     "evaluate_edge_many",
     "evaluate_face_many",
     "extract_model_closure",
+    "model_closure_to_dict",
+    "model_closure_from_dict",
+    "IndependentComponent",
+    "ComponentMergeReason",
+    "ComponentRefusal",
+    "ComponentPartition",
+    "plan_independent_components",
+    "validate_component_partition_binding",
+    "TrimmedSurfaceChartQueryResult",
+    "TrimmedSurfaceChartQueryResults",
+    "query_trimmed_surface_charts_by_face",
     "face_derivatives_many",
     "face_normal_many",
     "fragment_face",

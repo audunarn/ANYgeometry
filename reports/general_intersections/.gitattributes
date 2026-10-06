@@ -1,2 +1,5 @@
 # This installed record is bound by the 0.4.5 release evidence SHA256.
 installed-qualification-36834513207.json -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+# Preserve exact bytes of the existing capability and living evidence records.
+large_connected_capability.json -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+quadric_generalization_study.md -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

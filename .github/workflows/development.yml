@@ -8,6 +8,17 @@ on:
 permissions:
   contents: read
 
+env:
+  OMP_NUM_THREADS: '1'
+  OPENBLAS_NUM_THREADS: '1'
+  MKL_NUM_THREADS: '1'
+  EPOCH_RUNTIME_EVIDENCE: epoch-runtime.json
+  CURVED_RUNTIME_EVIDENCE: curved-runtime.json
+  NATIVE_SCOPE_RUNTIME_EVIDENCE: native-runtime.json
+  NATIVE_ATTACHMENT_RUNTIME_EVIDENCE: attachment-runtime.json
+  NATIVE_ARC_RUNTIME_EVIDENCE: arc-runtime.json
+  NATIVE_ARC_STATION_RUNTIME_EVIDENCE: station-runtime.json
+
 concurrency:
   group: development-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -92,7 +103,9 @@ jobs:
         if: always()
         with:
           name: development-kernel-${{ matrix.os }}
-          path: kernel-results.xml
+          path: |
+            kernel-results.xml
+            *-runtime.json
           if-no-files-found: error
 
   wheel:

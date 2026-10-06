@@ -1,4 +1,4 @@
-# Cylinder Angular Lifts (experimental singleton producer)
+# Cylinder Angular Lifts (experimental singleton and batch producer)
 
 `anygeometry.cylinder_angular_lifts` proves, with exact rational arithmetic
 only, the authenticated angular lift of ONE whole straight boundary ruling of
@@ -6,6 +6,10 @@ ONE active Cylinder face. It is an experimental, singleton-scoped producer:
 each query certifies a single face/edge occurrence, returns one immutable
 `CylinderRulingLift` receipt, and establishes nothing about partitions,
 materials, meshes, references, joints or source-current equivalence.
+
+`anygeometry.cylinder_ruling_batch` extends the same proof to a complete
+finite set of occurrences with ONE reusable batch query and binding
+validator; see "Batch producer" below.
 
 ## What is proved per query
 
@@ -83,9 +87,70 @@ refuse typed; a refusal never returns a partial receipt.
   the accepted cost of this experimental producer and is NOT a large-model
   route; it does not scale to looping thousands of scalar queries and must
   not be used that way.
-- Batch sharing (one document hash shared across many lifts) and whole-face
-  semantics (partitions, materials, meshes, references) remain PENDING and
-  are deliberately not attempted here. No batching architecture exists in
-  this module.
 - Angles are published only as outward enclosures; the exact angle is never
   materialized. Existing public material-partition refusals are unchanged.
+- Whole-face semantics (partitions, materials, meshes, references) remain
+  PENDING and are deliberately not attempted here.
+
+## Batch producer (`anygeometry.cylinder_ruling_batch`)
+
+`query_cylinder_ruling_batch(model, selection, *, expected_revision=None,
+cancellation_check=None, policy=None)` proves a complete finite set of actual
+face/straight-ruling occurrences in ONE shared scope instead of N scalar
+queries, and `validate_cylinder_ruling_batch_binding` authenticates the
+result by complete live batch rederivation. The mathematical scope per
+operand is exactly the scalar scope above; no whole-material,
+source-current, reference, meshing or "1000" acceptance is claimed, and the
+historical `CylinderAtlasPolicy` face-use/occurrence admission semantics are
+untouched (the batch imposes no new face-count cap).
+
+**Shared scope and cost.** All operand inputs are captured detached from the
+live model BEFORE any cancellation callback (one raw frame capture per
+distinct selected face, reused across that face's occurrences), and the
+whole batch hashes the full document at most TWICE: once at entry, once at
+final freshness. Binding validation adds one pre-check hash and then
+rederives ONE complete batch - never per-ruling document hashes.
+
+**One aggregate budget.** All items compile under a single
+`cylinder_charts._Proof`: the recorded `CylinderAtlasPolicy` limits apply to
+the counted arithmetic of every operand and are never reset per edge. The
+proof's memoized enclosures (for example the shared `pi` enclosure and a
+repeated ruling ray) replay their recorded charges on reuse, so cached exact
+work is never laundered out of the accounting; per-item receipts carry the
+CUMULATIVE aggregate counts at that item's completion, and the batch receipt
+carries the final aggregate counts plus the aggregate policy limits.
+
+**Determinism.** The selection is compiled in canonical (face ID, edge ID)
+order regardless of caller order, so the same occurrence set always yields
+the same receipt; a reversed selection yields the identical digest.
+Malformed, empty or duplicate selections refuse typed before any capture.
+Selections and each `(face_id, edge_id)` pair accept only plain finite tuples
+or lists. Iterators, generators and container subclasses refuse before
+consumption. This restricts input representation without a model-count ceiling.
+Binding requires the complete canonical work-counter inventory for the batch
+and each item; missing, extra and duplicate keys refuse as invalid results.
+
+**Callback safety.** During callbacks the guards run only inexpensive
+revision/busy checks - no per-surface rescan at every arithmetic callback
+(which would be quadratic in the operand count). After the FINAL callback
+the guards recheck the CURRENT raw frame pin of EVERY selected surface -
+including the stored circumferential coefficient the document checksum does
+not serialize, so a finally installed replacement object with equal
+serialized fields and a different private circumferential refuses typed -
+and then the full document checksum. Callbacks may temporarily mutate and
+restore content; only the immutable entry evidence is published.
+
+**Whole-batch refusals.** Unsupported operands (curved edges, off-carrier
+rulings, wrong owners, inactive entities, non-Cylinder supports), aggregate
+budget exhaustion (even where every standalone scalar would succeed),
+cancellation, stale revision, busy models and callback-visible changes
+refuse typed with NO partial accepted receipts and NO model mutation.
+
+**Binding.** `validate_cylinder_ruling_batch_binding` pins the caller's
+batch digest BEFORE any callback, rederives the COMPLETE batch live under
+the recorded aggregate policy, and accepts only a fresh batch whose digest
+equals the pinned digest while the caller's receipt stayed unchanged -
+never an object a callback repaired in flight. Because scalar digests bind
+`work_counts`, batch items (cumulative counts, extra batch cancellation
+checks) can never masquerade as standalone scalar receipts, and a standalone
+scalar receipt is not batch item evidence.

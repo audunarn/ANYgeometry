@@ -1,0 +1,36 @@
+{
+  "chart_digest": "9b34b586630db9525cb4c07cdd860e1d6d71a561de2dece5305c9bb5af406d94",
+  "counts": {},
+  "document_digest": "2585cf6f67156bb000bc0c3626278065f54f30da7287322d4d19655a24c655b2",
+  "fixture_sha256": "a1e862b8ce8fccd71b96112f4e3dae29669f68dea4037886e5125a00fd8446bd",
+  "joint_edges": 800,
+  "machine": "WORK_STABEIST1",
+  "numpy": "2.4.6",
+  "origin": "C:\\Github\\ANYgeometry\\.worktrees\\parallel-handoff\\reports\\parallel-handoff-root\\baseline-source\\src\\anygeometry\\__init__.py",
+  "phases": {
+    "application": 2.770010899985209,
+    "planning": 3.65697899996303,
+    "queries": 0.42410950001794845
+  },
+  "pipeline_seconds": 6.851104200002737,
+  "profiled": false,
+  "runtime": "3.14.2 (tags/v3.14.2:df79316, Dec  5 2025, 17:18:21) [MSC v.1944 64 bit (AMD64)]",
+  "schema": "anygeometry.parallel-handoff-measure-v1",
+  "source_identity": "239a6e468702d786d30bce0e5d9dbe2f3430181ee9686560f76e9390568a3585",
+  "source_unchanged": true,
+  "threads": {
+    "MKL_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1"
+  },
+  "topology_counts": {
+    "attachments": 1600,
+    "edges": 1476,
+    "faces": 833,
+    "junctions": 800,
+    "members": 0,
+    "sheets": 33,
+    "vertices": 644
+  },
+  "web_count": 32
+}

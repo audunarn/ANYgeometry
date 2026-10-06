@@ -468,12 +468,14 @@ def _occurrence(face, edge_id):
     return found
 
 
-def _capture_entry(model, face_id, edge_id):
+def _capture_entry(model, face_id, edge_id, frame=None):
     """Detach every proof input from the live model BEFORE any callbacks.
 
     Occurrence, raw frame, frozen LinePath endpoints and edge vertices are
     captured as immutable exact data here, so no later callback mutation -
-    restored or not - can enter the proof as temporary geometry.
+    restored or not - can enter the proof as temporary geometry.  ``frame``
+    lets a batch producer reuse one already-captured raw frame for further
+    occurrences of the SAME face; it is never a caller-supplied value.
     """
     if face_id not in model.faces:
         raise _Refusal("inactive_face")
@@ -486,7 +488,7 @@ def _capture_entry(model, face_id, edge_id):
         raise _Refusal("cylinder_support_required", missing=True)
     if face.parameterization is not None:
         raise _Refusal("explicit_parameterization_refused", missing=True)
-    frame = _capture_frame(surface)
+    frame = _capture_frame(surface) if frame is None else frame
     try:
         path = freeze_edge(model, edge_id)
     except GeometryError as error:
@@ -510,11 +512,16 @@ def _capture_entry(model, face_id, edge_id):
     }
 
 
-def _lift(entry, revision, source, proof):
-    """Compile the proof from immutable entry evidence only."""
-    proof.cancel("cylinder ruling lift: request")
+def _lift(entry, revision, source, proof, prefix="cylinder ruling lift"):
+    """Compile the proof from immutable entry evidence only.
+
+    ``prefix`` names the cancellation phases; the shared batch producer uses
+    its own prefix so per-item work provenance stays distinguishable from a
+    standalone scalar receipt.
+    """
     frame = entry["frame"]
-    proof.cancel("cylinder ruling lift: exact solve")
+    proof.cancel(f"{prefix}: request")
+    proof.cancel(f"{prefix}: exact solve")
     first_radial, v_start = _frame_coordinates(frame, entry["start_point"])
     last_radial, v_end = _frame_coordinates(frame, entry["end_point"])
     if first_radial != last_radial:
@@ -526,7 +533,7 @@ def _lift(entry, revision, source, proof):
         raise _Refusal("degenerate_ruling")
     if not (0 <= v_start <= 1 and 0 <= v_end <= 1):
         raise _Refusal("ruling_outside_axial_extent")
-    proof.cancel("cylinder ruling lift: angle certification")
+    proof.cancel(f"{prefix}: angle certification")
     ray = exact_ray(qx, qy)
     winding, enclosure, support = _certify_support(frame, ray, proof)
     return CylinderRulingLift(

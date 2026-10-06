@@ -1,0 +1,12 @@
+{
+  "executable": "C:\\Python\\Python314\\python.exe",
+  "python_version": "3.14.2 (tags/v3.14.2:df79316, Dec  5 2025, 17:18:21) [MSC v.1944 64 bit (AMD64)]",
+  "source_origin": "C:\\Github\\ANYgeometry\\src\\anygeometry\\__init__.py",
+  "numpy_version": "2.4.6",
+  "pytest_version": "9.0.3",
+  "threads": {
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1"
+  }
+}

@@ -1,0 +1,5 @@
+# Preserve pre-existing proof logs and manifests exactly as recorded.
+* -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+# These scripts are immutable historical inputs, including their final blank line.
+public-check.py -whitespace
+run-public.ps1 -whitespace
