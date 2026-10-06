@@ -357,7 +357,14 @@ def _material(root,children,original,current,source_supports,current_supports,pr
     try:
         if family=='plane':
             frame=compile_frame(family,support)
-            domains=[_planar_loops(original,original_faces[root],frame,check)]
+            curved=any(document['edges'][edge]['curve']['type']!='straight'
+                for document,face in [(original,original_faces[root])]+[(current,current_faces[c]) for c in children]
+                for loop in (face['loop'],*face['holes']) for edge,_ in loop)
+            if curved:
+                from .curved_planar_material import compile_loops,positive_chain_census
+                compile_plane=lambda document,face:compile_loops(document,face,frame,proof)
+            else:compile_plane=lambda document,face:_planar_loops(document,face,frame,check)
+            domains=[compile_plane(original,original_faces[root])]
             for child in children:
                 check()
                 kind,child_support=current_supports[child]
@@ -367,10 +374,14 @@ def _material(root,children,original,current,source_supports,current_supports,pr
                 cf=compile_frame(kind,child_support)
                 if _dot(frame[3],_sub(cf[0],frame[0])) or _dot(frame[3],cf[1]) or _dot(frame[3],cf[2]):
                     raise GeometryError('native child plane is not exactly common support')
-                domains.append(_planar_loops(current,current_faces[child],frame,check))
-            cells=_positive_census(domains,check)
+                domains.append(compile_plane(current,current_faces[child]))
+            if curved:
+                evidence.update(positive_chain_census(domains,proof))
+                cells=None
+            else:cells=_positive_census(domains,check)
             evidence.update(census_cells=cells,chart_coordinates='exact source native Plane UV',
-                all_loops=[[[tuple(map(_pack,p)) for p in loop] for loop in domain] for domain in domains])
+                all_loops=[[[tuple(map(_pack,p.p if curved else p)) for p in loop] for loop in domain] for domain in domains])
+            if curved:evidence['chart_coordinates']='axis-aligned physical Plane coordinates; actual line/circumcircle spans'
         elif family=='cylinder':
             frame=compile_frame(family,support)
             angles={}

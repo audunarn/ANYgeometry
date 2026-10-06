@@ -24,8 +24,13 @@ box sweep supplies segment predicate candidates. The census includes every
 intersection breakpoint, then tests every open slab cell. It proves
 `sum(1_Dchild) = 1_Dsource` away from their boundaries. Material indicators are
 positive outer-minus-holes indicators independent of stored traversal; duplicate
-interior domains with opposite loops add multiplicity and refuse. Curved Plane
-trims remain unqualified.
+interior domains with opposite loops add multiplicity and refuse. An additional
+axis-aligned physical Plane family admits actual Straight/three-point Arc trims
+through certified Jordan loops, strict disjoint holes, positive orientation and
+an exact directed line/circle atomic-span census. Winding linearity proves full
+positive indicator multiplicity; Green area bounds prove orientation only. See
+[NATIVE_CURVED_PLANAR_MATERIAL.md](NATIVE_CURVED_PLANAR_MATERIAL.md) for the exact
+contract and named tilted/conic/refit refusals.
 
 The initial Cylinder family uses an exactly unit axial vector orthogonal to both
 stored radial coefficients, a nonsingular radial frame, positive radius, finite
