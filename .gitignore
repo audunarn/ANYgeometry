@@ -12,3 +12,6 @@ dist/
 
 .venv/
 
+# Local managed checkouts and retained workstation-only evidence.
+/.worktrees/
+/.local-evidence/
