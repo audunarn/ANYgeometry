@@ -31,16 +31,38 @@ under `reports/main-integration-20261006`. These are focused checks, not a full
 platform or consumer qualification campaign. The three previously pending
 Coons/Bezier public guards passed in the clean-main suite.
 
-The authoritative local development wheel is
+The original local integration wheel is
 `reports/main-integration-20261006/installed-02/wheels/anygeometry-0.4.5-py3-none-any.whl`,
 SHA-256 `aa18ac5815dffd2ccb3171a83f78141024930f52ac7689ab8910969ca5e346e5`.
-It was built from the committed package source above; subsequent delivery
-changes touch CI, developer tooling, tests and documentation only. Verification
+It was built from the committed package source above. Verification
 matched all 100 packaged source files against the recorded source manifest.
 Windows/Python 3.14.2 spawned two transported components from outside every
 checkout, importing the owner from the external environment's site-packages.
 The environment deliberately reused system NumPy 2.4.6; effective OpenBLAS
 thread count was one. This is not clean dependency-resolution evidence.
+
+Hosted PR28 run `37537868022` subsequently failed its full kernels: Linux
+2,737 passed/86 failed and Windows 2,733 passed/90 failed. Its candidate wheel
+SHA-256 is `f90aa4b5b1607a8371557cb16bbaa36509c77b907feea4c75757e2cf1946d525`.
+Linux/macOS installed-wheel and the existing installed-mesher smoke checks
+passed. These results do not override the kernel failures.
+
+The return-value shadowing defect in attachment splitting was repaired and
+passed 15 focused regressions. The broader check exposed a second mismatch:
+prepared point-reference scopes expected obsolete edge-only lineage. Their
+source repair now requires the exact owner-issued attachment and ordered edge
+provenance. Independent source review found no remaining defect in that delta;
+its new regressions remain unexecuted locally. Windows checkout now preserves
+the frozen builder's exact pinned LF bytes rather than changing the oracle hash.
+
+The broader attempt retained 32 passes/61 failures, with a timeout and failed
+process-tree termination attempt; it is unaccepted evidence. Cumulative local
+process time is **58.13752980006393 s** of the authorised 60 seconds, leaving
+**1.8624701999360695 s** held. No further local checks are launched. The repaired
+candidate requires fresh hosted verification and a matching artifact; neither
+original wheel above binds its changed package source. Release artifacts remain
+unchanged. Full failed logs and runtime/JUnit receipts are retained under
+`.local-evidence/github-pr28/run-37537868022`, with hashes in the integration record.
 
 CI and the development runner now supply the required evidence paths and child
 thread limits. Kernel jobs retain runtime receipts even after failure.

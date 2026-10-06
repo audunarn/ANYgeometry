@@ -1,0 +1,2 @@
+# The independent oracle binds this builder's exact published LF bytes.
+large_connected_fixtures.py text eol=lf

@@ -42,19 +42,28 @@ start = time.perf_counter()
 with (attempt / "stdout.txt").open("wb") as stdout, (attempt / "stderr.txt").open("wb") as stderr:
     process = subprocess.Popen(command, cwd=ROOT, env=environment, stdout=stdout, stderr=stderr)
     status = "exit"
+    termination = None
     try:
         code = process.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         status = "timeout"
         # pytest cases in this slice launch no subprocesses; retain tree safety
         # if that contract changes in a later invocation.
-        subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], stdout=stderr, stderr=stderr)
+        killed = subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                                stdout=stderr, stderr=stderr)
+        termination = {"tree_kill_exit_code": killed.returncode}
+        if killed.returncode and process.poll() is None:
+            # Use the creation handle for this owned child if Windows denies
+            # taskkill's process lookup; do not target unrelated processes.
+            process.kill()
+            termination["owned_child_handle_kill"] = True
         process.wait()
         code = process.returncode
 elapsed = time.perf_counter() - start
 result = {"command":command,"status":status,"exit_code":code,"process_wall_seconds":elapsed,
           "cumulative_process_wall_seconds":used+elapsed,"budget_remaining_seconds":60-used-elapsed,
           "runtime":runtime,"candidate_sha256":hashes}
+result.update(process_id=process.pid, timeout_seconds=timeout, termination=termination)
 if (attempt / "junit.xml").exists():
     import xml.etree.ElementTree as ET
     suite = ET.parse(attempt / "junit.xml").getroot().find("testsuite")

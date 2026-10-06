@@ -166,7 +166,7 @@ def split_edge_attachments(model, edge_id, parameter, check=lambda: None):
                         for new in replacements.get(old, (old,))))
         model._put_structural('junction', replace(junction, attachment_ids=expanded))
     from .preparation_epochs import _record_attachment_descendants
-    for source,children in replacements.items():
-        _record_attachment_descendants(model,source,children)
+    for source,attachment_children in replacements.items():
+        _record_attachment_descendants(model,source,attachment_children)
     _remap_member_ranges(model, member_snapshots, replacements, tolerance, check)
     return vertex, children

@@ -1,0 +1,2177 @@
+.....FF.FFFFF....FFFFFFFFFFFFFFFFFFFF.F.FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF [ 77%]
+F....................                                                    [100%]
+================================== FAILURES ===================================
+__ test_bounded_member_point_receipt_preserves_occurrence_and_station[False] __
+
+reverse = False
+
+    @pytest.mark.parametrize('reverse', [False, True])
+    def test_bounded_member_point_receipt_preserves_occurrence_and_station(reverse):
+        model, joint = build(reverse)
+        before = to_dict(model)
+>       receipt = query(model, joint)
+                  ^^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_component.py:50: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_component.py:240: in query_prepared_member_sheet_joint_component
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:231: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:183: in _qualify
+    _require(new['target_parameters'] == [[local, local]] and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet component ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet component point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_component.py:29: GeometryError
+__ test_bounded_member_point_receipt_preserves_occurrence_and_station[True] ___
+
+reverse = True
+
+    @pytest.mark.parametrize('reverse', [False, True])
+    def test_bounded_member_point_receipt_preserves_occurrence_and_station(reverse):
+        model, joint = build(reverse)
+        before = to_dict(model)
+>       receipt = query(model, joint)
+                  ^^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_component.py:50: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_component.py:240: in query_prepared_member_sheet_joint_component
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:231: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:183: in _qualify
+    _require(new['target_parameters'] == [[local, local]] and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet component ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet component point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_component.py:29: GeometryError
+___ test_forged_relation_or_qualification_flag_is_not_live_authority[omit] ____
+
+change = 'omit'
+
+    @pytest.mark.parametrize('change', ['omit', 'station', 'orientation', 'flag'])
+    def test_forged_relation_or_qualification_flag_is_not_live_authority(change):
+        model, joint = build()
+>       receipt = query(model, joint)
+                  ^^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_component.py:89: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_component.py:240: in query_prepared_member_sheet_joint_component
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:231: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:183: in _qualify
+    _require(new['target_parameters'] == [[local, local]] and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet component ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet component point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_component.py:29: GeometryError
+__ test_forged_relation_or_qualification_flag_is_not_live_authority[station] __
+
+change = 'station'
+
+    @pytest.mark.parametrize('change', ['omit', 'station', 'orientation', 'flag'])
+    def test_forged_relation_or_qualification_flag_is_not_live_authority(change):
+        model, joint = build()
+>       receipt = query(model, joint)
+                  ^^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_component.py:89: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_component.py:240: in query_prepared_member_sheet_joint_component
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:231: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:183: in _qualify
+    _require(new['target_parameters'] == [[local, local]] and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet component ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet component point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_component.py:29: GeometryError
+_ test_forged_relation_or_qualification_flag_is_not_live_authority[orientation] _
+
+change = 'orientation'
+
+    @pytest.mark.parametrize('change', ['omit', 'station', 'orientation', 'flag'])
+    def test_forged_relation_or_qualification_flag_is_not_live_authority(change):
+        model, joint = build()
+>       receipt = query(model, joint)
+                  ^^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_component.py:89: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_component.py:240: in query_prepared_member_sheet_joint_component
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:231: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:183: in _qualify
+    _require(new['target_parameters'] == [[local, local]] and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet component ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet component point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_component.py:29: GeometryError
+___ test_forged_relation_or_qualification_flag_is_not_live_authority[flag] ____
+
+change = 'flag'
+
+    @pytest.mark.parametrize('change', ['omit', 'station', 'orientation', 'flag'])
+    def test_forged_relation_or_qualification_flag_is_not_live_authority(change):
+        model, joint = build()
+>       receipt = query(model, joint)
+                  ^^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_component.py:89: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_component.py:240: in query_prepared_member_sheet_joint_component
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:231: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:183: in _qualify
+    _require(new['target_parameters'] == [[local, local]] and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet component ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet component point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_component.py:29: GeometryError
+________________ test_wrong_owner_and_stale_model_are_refused _________________
+
+    def test_wrong_owner_and_stale_model_are_refused():
+        model, joint = build()
+>       receipt = query(model, joint)
+                  ^^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_component.py:105: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_component.py:240: in query_prepared_member_sheet_joint_component
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:231: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:183: in _qualify
+    _require(new['target_parameters'] == [[local, local]] and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet component ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet component point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_component.py:29: GeometryError
+____ test_unusable_receipt_fields_raise_typed_errors[member_relation_json] ____
+
+field = 'member_relation_json'
+
+    @pytest.mark.parametrize('field', ['member_relation_json', 'edge_preimages'])
+    def test_unusable_receipt_fields_raise_typed_errors(field):
+        model, joint = build()
+>       receipt = query(model, joint)
+                  ^^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_component.py:154: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_component.py:240: in query_prepared_member_sheet_joint_component
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:231: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:183: in _qualify
+    _require(new['target_parameters'] == [[local, local]] and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet component ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet component point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_component.py:29: GeometryError
+_______ test_unusable_receipt_fields_raise_typed_errors[edge_preimages] _______
+
+field = 'edge_preimages'
+
+    @pytest.mark.parametrize('field', ['member_relation_json', 'edge_preimages'])
+    def test_unusable_receipt_fields_raise_typed_errors(field):
+        model, joint = build()
+>       receipt = query(model, joint)
+                  ^^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_component.py:154: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_component.py:240: in query_prepared_member_sheet_joint_component
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:231: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:183: in _qualify
+    _require(new['target_parameters'] == [[local, local]] and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet component ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet component point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_component.py:29: GeometryError
+______ test_source_serialization_cannot_repair_initially_forged_evidence ______
+
+    def test_source_serialization_cannot_repair_initially_forged_evidence():
+        model, joint = build()
+>       valid = query(model, joint)
+                ^^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_component.py:161: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_component.py:240: in query_prepared_member_sheet_joint_component
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:231: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:183: in _qualify
+    _require(new['target_parameters'] == [[local, local]] and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet component ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet component point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_component.py:29: GeometryError
+___________ test_last_source_guard_cannot_change_validated_receipt ____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x000001FB7CD85260>
+
+    def test_last_source_guard_cannot_change_validated_receipt(monkeypatch):
+        import anygeometry.prepared_member_sheet_component as component
+        model, joint = build()
+>       receipt = query(model, joint)
+                  ^^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_component.py:179: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_component.py:240: in query_prepared_member_sheet_joint_component
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:231: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:183: in _qualify
+    _require(new['target_parameters'] == [[local, local]] and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet component ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet component point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_component.py:29: GeometryError
+_______ test_query_last_serialization_cannot_mutate_generated_ancestry ________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x000001FB0268A550>
+
+    def test_query_last_serialization_cannot_mutate_generated_ancestry(monkeypatch):
+        import anygeometry.prepared_member_sheet_component as component
+        model, joint = build()
+>       record = query(model, joint).edge_preimages.records[0]
+                 ^^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_component.py:207: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_component.py:240: in query_prepared_member_sheet_joint_component
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:231: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:183: in _qualify
+    _require(new['target_parameters'] == [[local, local]] and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet component ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet component point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_component.py:29: GeometryError
+______ test_signature_rejects_behavioral_graph_nodes_before_hooks[scope] ______
+
+field = 'scope'
+
+    @pytest.mark.parametrize('field', ['scope', 'joint_edge_id', 'ancestry_record'])
+    def test_signature_rejects_behavioral_graph_nodes_before_hooks(field):
+        model, joint = build()
+>       receipt = query(model, joint)
+                  ^^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_component.py:234: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_component.py:240: in query_prepared_member_sheet_joint_component
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:231: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:183: in _qualify
+    _require(new['target_parameters'] == [[local, local]] and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet component ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet component point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_component.py:29: GeometryError
+__ test_signature_rejects_behavioral_graph_nodes_before_hooks[joint_edge_id] __
+
+field = 'joint_edge_id'
+
+    @pytest.mark.parametrize('field', ['scope', 'joint_edge_id', 'ancestry_record'])
+    def test_signature_rejects_behavioral_graph_nodes_before_hooks(field):
+        model, joint = build()
+>       receipt = query(model, joint)
+                  ^^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_component.py:234: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_component.py:240: in query_prepared_member_sheet_joint_component
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:231: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:183: in _qualify
+    _require(new['target_parameters'] == [[local, local]] and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet component ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet component point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_component.py:29: GeometryError
+_ test_signature_rejects_behavioral_graph_nodes_before_hooks[ancestry_record] _
+
+field = 'ancestry_record'
+
+    @pytest.mark.parametrize('field', ['scope', 'joint_edge_id', 'ancestry_record'])
+    def test_signature_rejects_behavioral_graph_nodes_before_hooks(field):
+        model, joint = build()
+>       receipt = query(model, joint)
+                  ^^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_component.py:234: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_component.py:240: in query_prepared_member_sheet_joint_component
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:231: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:183: in _qualify
+    _require(new['target_parameters'] == [[local, local]] and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet component ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet component point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_component.py:29: GeometryError
+_______ test_signature_type_whitelist_does_not_execute_custom_metaclass _______
+
+    def test_signature_type_whitelist_does_not_execute_custom_metaclass():
+        model, joint = build()
+>       receipt = query(model, joint)
+                  ^^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_component.py:252: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_component.py:240: in query_prepared_member_sheet_joint_component
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:231: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:183: in _qualify
+    _require(new['target_parameters'] == [[local, local]] and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet component ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet component point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_component.py:29: GeometryError
+________________ test_cyclic_receipt_graph_raises_typed_error _________________
+
+    def test_cyclic_receipt_graph_raises_typed_error():
+        model, joint = build()
+>       receipt = query(model, joint)
+                  ^^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_component.py:270: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_component.py:240: in query_prepared_member_sheet_joint_component
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:231: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:183: in _qualify
+    _require(new['target_parameters'] == [[local, local]] and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet component ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet component point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_component.py:29: GeometryError
+___ test_malformed_deep_receipt_raises_typed_error_without_operand_cap[600] ___
+
+depth = 600
+
+    @pytest.mark.parametrize('depth', (600, 1600, 4000))
+    def test_malformed_deep_receipt_raises_typed_error_without_operand_cap(depth):
+        model, joint = build()
+>       receipt = query(model, joint)
+                  ^^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_component.py:280: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_component.py:240: in query_prepared_member_sheet_joint_component
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:231: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:183: in _qualify
+    _require(new['target_parameters'] == [[local, local]] and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet component ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet component point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_component.py:29: GeometryError
+__ test_malformed_deep_receipt_raises_typed_error_without_operand_cap[1600] ___
+
+depth = 1600
+
+    @pytest.mark.parametrize('depth', (600, 1600, 4000))
+    def test_malformed_deep_receipt_raises_typed_error_without_operand_cap(depth):
+        model, joint = build()
+>       receipt = query(model, joint)
+                  ^^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_component.py:280: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_component.py:240: in query_prepared_member_sheet_joint_component
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:231: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:183: in _qualify
+    _require(new['target_parameters'] == [[local, local]] and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet component ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet component point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_component.py:29: GeometryError
+__ test_malformed_deep_receipt_raises_typed_error_without_operand_cap[4000] ___
+
+depth = 4000
+
+    @pytest.mark.parametrize('depth', (600, 1600, 4000))
+    def test_malformed_deep_receipt_raises_typed_error_without_operand_cap(depth):
+        model, joint = build()
+>       receipt = query(model, joint)
+                  ^^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_component.py:280: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_component.py:240: in query_prepared_member_sheet_joint_component
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:231: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_component.py:183: in _qualify
+    _require(new['target_parameters'] == [[local, local]] and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet component ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet component point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_component.py:29: GeometryError
+_______ test_connected_network_complete_exact_relations_and_material[3] _______
+
+count = 3
+
+    @pytest.mark.parametrize('count', (3,5,10))
+    def test_connected_network_complete_exact_relations_and_material(count):
+        model,joint,original,expected = build_network(count)
+        before = to_dict(model)
+>       receipt = query(model,joint)
+                  ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:91: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+_______ test_connected_network_complete_exact_relations_and_material[5] _______
+
+count = 5
+
+    @pytest.mark.parametrize('count', (3,5,10))
+    def test_connected_network_complete_exact_relations_and_material(count):
+        model,joint,original,expected = build_network(count)
+        before = to_dict(model)
+>       receipt = query(model,joint)
+                  ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:91: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+______ test_connected_network_complete_exact_relations_and_material[10] _______
+
+count = 10
+
+    @pytest.mark.parametrize('count', (3,5,10))
+    def test_connected_network_complete_exact_relations_and_material(count):
+        model,joint,original,expected = build_network(count)
+        before = to_dict(model)
+>       receipt = query(model,joint)
+                  ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:91: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+____ test_shared_original_carrier_and_multiple_points_are_fully_accounted _____
+
+    def test_shared_original_carrier_and_multiple_points_are_fully_accounted():
+        model,joint,_,_ = build_network(3,shared=True,extra_points=True)
+>       receipt = query(model,joint)
+                  ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:118: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+______________ test_whole_network_inventory_retains_empty_parts _______________
+
+    def test_whole_network_inventory_retains_empty_parts():
+        model,joint,original,_ = build_network(3,empty_part=True)
+>       receipt = query(model,joint)
+                  ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:127: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+_______________ test_omitted_network_relation_refuses[members] ________________
+
+field = 'members'
+
+    @pytest.mark.parametrize('field', ('members','attachments'))
+    def test_omitted_network_relation_refuses(field):
+        model,joint,_,_ = build_network(3)
+>       receipt = query(model,joint)
+                  ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:138: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+_____________ test_omitted_network_relation_refuses[attachments] ______________
+
+field = 'attachments'
+
+    @pytest.mark.parametrize('field', ('members','attachments'))
+    def test_omitted_network_relation_refuses(field):
+        model,joint,_,_ = build_network(3)
+>       receipt = query(model,joint)
+                  ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:138: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+_____________________ test_stale_network_receipt_refuses ______________________
+
+    def test_stale_network_receipt_refuses():
+        model,joint,_,_ = build_network(3)
+>       receipt = query(model,joint)
+                  ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:155: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+_______ test_source_serialization_cannot_repair_invalid_network_receipt _______
+
+    def test_source_serialization_cannot_repair_invalid_network_receipt():
+        model,joint,_,_ = build_network(3)
+>       receipt = query(model,joint)
+                  ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:172: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+_______________ test_network_unknown_class_hooks_do_not_execute _______________
+
+    def test_network_unknown_class_hooks_do_not_execute():
+        model,joint,_,_ = build_network(3)
+>       receipt = query(model,joint)
+                  ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:189: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+___________ test_network_point_coordinates_are_not_display_samples ____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x000001FB02726350>
+
+    def test_network_point_coordinates_are_not_display_samples(monkeypatch):
+        model,joint,_,_ = build_network(3)
+        def display_unavailable(*args,**kwargs):
+            raise AssertionError('display samples are not relation proofs')
+        monkeypatch.setattr(model,'sample_edge',display_unavailable)
+>       receipt = query(model,joint)
+                  ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:210: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+_______ test_disconnected_operands_refuse_without_exclusion_or_mutation _______
+
+    def test_disconnected_operands_refuse_without_exclusion_or_mutation():
+        model,joint,_,_ = build_network(3,disconnected=True)
+        before = to_dict(model)
+        with pytest.raises(GeometryError,match='whole document'):
+>           query(model,joint)
+
+tests\test_prepared_member_sheet_network.py:220: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+
+During handling of the above exception, another exception occurred:
+
+    def test_disconnected_operands_refuse_without_exclusion_or_mutation():
+        model,joint,_,_ = build_network(3,disconnected=True)
+        before = to_dict(model)
+>       with pytest.raises(GeometryError,match='whole document'):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: Regex pattern did not match.
+E         Expected regex: 'whole document'
+E         Actual message: 'prepared member Sheet network point Attachment station or retained fields changed'
+
+tests\test_prepared_member_sheet_network.py:219: AssertionError
+_ test_endpoint_attachment_source_identity_and_coordinates_retained[station0] _
+
+station = Fraction(0, 1)
+
+    @pytest.mark.parametrize('station', (Fraction(0),Fraction(1,2),Fraction(1)))
+    def test_endpoint_attachment_source_identity_and_coordinates_retained(station):
+        model,joint,_,expected = build_network(3,station=station)
+>       receipt = query(model,joint)
+                  ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:227: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+_ test_endpoint_attachment_source_identity_and_coordinates_retained[station1] _
+
+station = Fraction(1, 2)
+
+    @pytest.mark.parametrize('station', (Fraction(0),Fraction(1,2),Fraction(1)))
+    def test_endpoint_attachment_source_identity_and_coordinates_retained(station):
+        model,joint,_,expected = build_network(3,station=station)
+>       receipt = query(model,joint)
+                  ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:227: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+_ test_endpoint_attachment_source_identity_and_coordinates_retained[station2] _
+
+station = Fraction(1, 1)
+
+    @pytest.mark.parametrize('station', (Fraction(0),Fraction(1,2),Fraction(1)))
+    def test_endpoint_attachment_source_identity_and_coordinates_retained(station):
+        model,joint,_,expected = build_network(3,station=station)
+>       receipt = query(model,joint)
+                  ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:227: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+_____________ test_many_cuts_through_one_reversed_boundary_member _____________
+
+    def test_many_cuts_through_one_reversed_boundary_member():
+        model,joint,_,_ = build_network(5,central=True)
+>       receipt = query(model,joint)
+                  ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:250: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+________ test_member_parameter_error_cannot_exceed_unchanged_tolerance ________
+
+    def test_member_parameter_error_cannot_exceed_unchanged_tolerance():
+        from anygeometry.prepared_sheet_joint_component import _index
+        from anygeometry.prepared_member_sheet_network import _qualify
+        model,joint,_,_ = build_network(5,central=True)
+>       scope = query(model,joint).scope
+                ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:271: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+_ test_nondyadic_split_endpoint_point_uses_certified_retained_target[station0] _
+
+station = Fraction(1, 5)
+
+    @pytest.mark.parametrize('station',(Fraction(1,5),Fraction(2,5),Fraction(3,5),Fraction(4,5)))
+    def test_nondyadic_split_endpoint_point_uses_certified_retained_target(station):
+        model,joint,_,_ = build_network(5,central=True,station=station)
+>       receipt = query(model,joint)
+                  ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:284: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+_ test_nondyadic_split_endpoint_point_uses_certified_retained_target[station1] _
+
+station = Fraction(2, 5)
+
+    @pytest.mark.parametrize('station',(Fraction(1,5),Fraction(2,5),Fraction(3,5),Fraction(4,5)))
+    def test_nondyadic_split_endpoint_point_uses_certified_retained_target(station):
+        model,joint,_,_ = build_network(5,central=True,station=station)
+>       receipt = query(model,joint)
+                  ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:284: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+_ test_nondyadic_split_endpoint_point_uses_certified_retained_target[station2] _
+
+station = Fraction(3, 5)
+
+    @pytest.mark.parametrize('station',(Fraction(1,5),Fraction(2,5),Fraction(3,5),Fraction(4,5)))
+    def test_nondyadic_split_endpoint_point_uses_certified_retained_target(station):
+        model,joint,_,_ = build_network(5,central=True,station=station)
+>       receipt = query(model,joint)
+                  ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:284: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+_ test_nondyadic_split_endpoint_point_uses_certified_retained_target[station3] _
+
+station = Fraction(4, 5)
+
+    @pytest.mark.parametrize('station',(Fraction(1,5),Fraction(2,5),Fraction(3,5),Fraction(4,5)))
+    def test_nondyadic_split_endpoint_point_uses_certified_retained_target(station):
+        model,joint,_,_ = build_network(5,central=True,station=station)
+>       receipt = query(model,joint)
+                  ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:284: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+_ test_network_proof_refuses_invalid_use_ownership_and_dangling_refs[source_owner] _
+
+corruption = 'source_owner'
+
+    @pytest.mark.parametrize('corruption',('source_owner','missing_current_use','missing_carrier'))
+    def test_network_proof_refuses_invalid_use_ownership_and_dangling_refs(corruption):
+        from anygeometry.prepared_sheet_joint_component import _index
+        from anygeometry.prepared_member_sheet_network import _qualify
+        model,joint,_,_ = build_network(3)
+>       scope = query(model,joint).scope
+                ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:313: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+_ test_network_proof_refuses_invalid_use_ownership_and_dangling_refs[missing_current_use] _
+
+corruption = 'missing_current_use'
+
+    @pytest.mark.parametrize('corruption',('source_owner','missing_current_use','missing_carrier'))
+    def test_network_proof_refuses_invalid_use_ownership_and_dangling_refs(corruption):
+        from anygeometry.prepared_sheet_joint_component import _index
+        from anygeometry.prepared_member_sheet_network import _qualify
+        model,joint,_,_ = build_network(3)
+>       scope = query(model,joint).scope
+                ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:313: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+_ test_network_proof_refuses_invalid_use_ownership_and_dangling_refs[missing_carrier] _
+
+corruption = 'missing_carrier'
+
+    @pytest.mark.parametrize('corruption',('source_owner','missing_current_use','missing_carrier'))
+    def test_network_proof_refuses_invalid_use_ownership_and_dangling_refs(corruption):
+        from anygeometry.prepared_sheet_joint_component import _index
+        from anygeometry.prepared_member_sheet_network import _qualify
+        model,joint,_,_ = build_network(3)
+>       scope = query(model,joint).scope
+                ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:313: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+______ test_point_target_or_replacement_lineage_forgery_refuses[target] _______
+
+corruption = 'target'
+
+    @pytest.mark.parametrize('corruption',('target','lineage'))
+    def test_point_target_or_replacement_lineage_forgery_refuses(corruption):
+        from anygeometry.prepared_sheet_joint_component import _index
+        from anygeometry.prepared_member_sheet_network import _qualify
+        model,joint,_,_ = build_network(5,central=True)
+>       scope = query(model,joint).scope
+                ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:332: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+______ test_point_target_or_replacement_lineage_forgery_refuses[lineage] ______
+
+corruption = 'lineage'
+
+    @pytest.mark.parametrize('corruption',('target','lineage'))
+    def test_point_target_or_replacement_lineage_forgery_refuses(corruption):
+        from anygeometry.prepared_sheet_joint_component import _index
+        from anygeometry.prepared_member_sheet_network import _qualify
+        model,joint,_,_ = build_network(5,central=True)
+>       scope = query(model,joint).scope
+                ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:332: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+_________ test_multi_use_chains_certify_ordered_mappings_and_spans[3] _________
+
+count = 3
+
+    @pytest.mark.parametrize('count', (3,4))
+    def test_multi_use_chains_certify_ordered_mappings_and_spans(count):
+        model,joint,original,expected = build_chain_network(count)
+        before = to_dict(model)
+>       receipt = query(model,joint)
+                  ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:451: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+_________ test_multi_use_chains_certify_ordered_mappings_and_spans[4] _________
+
+count = 4
+
+    @pytest.mark.parametrize('count', (3,4))
+    def test_multi_use_chains_certify_ordered_mappings_and_spans(count):
+        model,joint,original,expected = build_chain_network(count)
+        before = to_dict(model)
+>       receipt = query(model,joint)
+                  ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:451: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+__________ test_repeated_cuts_through_reversed_multi_use_base_chain ___________
+
+    def test_repeated_cuts_through_reversed_multi_use_base_chain():
+        model,joint,_,expected = build_chain_network(5,central=True)
+>       receipt = query(model,joint)
+                  ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:499: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+______ test_mixed_native_orientations_use_global_spans_without_sampling _______
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x000001FB02679F40>
+
+    def test_mixed_native_orientations_use_global_spans_without_sampling(monkeypatch):
+        model,joint,original,expected = build_chain_network(3,mixed=True)
+        monkeypatch.setattr(model,'sample_edge',lambda *a,**kw: pytest.fail('sampling is not an oracle'))
+>       receipt = query(model,joint)
+                  ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:523: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+___ test_unsplit_use_in_multi_use_chain_retains_original_attachment_lineage ___
+
+    def test_unsplit_use_in_multi_use_chain_retains_original_attachment_lineage():
+        model,joint,_,expected = build_chain_network(3)
+>       receipt = query(model,joint)
+                  ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:552: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+_____ test_repeated_carrier_within_one_member_refuses_ambiguous_semantics _____
+
+    def test_repeated_carrier_within_one_member_refuses_ambiguous_semantics():
+        from anygeometry.prepared_sheet_joint_component import _index
+        from anygeometry.prepared_member_sheet_network import _qualify
+        model,joint,_,_ = build_chain_network(3)
+        before = to_dict(model)
+>       scope = query(model,joint).scope
+                ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:571: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+________ test_multi_use_tiling_and_ownership_refuse_typed[source_span] ________
+
+corruption = 'source_span'
+
+    @pytest.mark.parametrize('corruption',('source_span','source_owner','current_tiling',
+                                           'current_order','missing_descendant','current_owner'))
+    def test_multi_use_tiling_and_ownership_refuse_typed(corruption):
+        from anygeometry.prepared_sheet_joint_component import _index
+        from anygeometry.prepared_member_sheet_network import _qualify
+        model,joint,_,_ = build_chain_network(4)
+>       scope = query(model,joint).scope
+                ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:587: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+_______ test_multi_use_tiling_and_ownership_refuse_typed[source_owner] ________
+
+corruption = 'source_owner'
+
+    @pytest.mark.parametrize('corruption',('source_span','source_owner','current_tiling',
+                                           'current_order','missing_descendant','current_owner'))
+    def test_multi_use_tiling_and_ownership_refuse_typed(corruption):
+        from anygeometry.prepared_sheet_joint_component import _index
+        from anygeometry.prepared_member_sheet_network import _qualify
+        model,joint,_,_ = build_chain_network(4)
+>       scope = query(model,joint).scope
+                ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:587: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+______ test_multi_use_tiling_and_ownership_refuse_typed[current_tiling] _______
+
+corruption = 'current_tiling'
+
+    @pytest.mark.parametrize('corruption',('source_span','source_owner','current_tiling',
+                                           'current_order','missing_descendant','current_owner'))
+    def test_multi_use_tiling_and_ownership_refuse_typed(corruption):
+        from anygeometry.prepared_sheet_joint_component import _index
+        from anygeometry.prepared_member_sheet_network import _qualify
+        model,joint,_,_ = build_chain_network(4)
+>       scope = query(model,joint).scope
+                ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:587: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+_______ test_multi_use_tiling_and_ownership_refuse_typed[current_order] _______
+
+corruption = 'current_order'
+
+    @pytest.mark.parametrize('corruption',('source_span','source_owner','current_tiling',
+                                           'current_order','missing_descendant','current_owner'))
+    def test_multi_use_tiling_and_ownership_refuse_typed(corruption):
+        from anygeometry.prepared_sheet_joint_component import _index
+        from anygeometry.prepared_member_sheet_network import _qualify
+        model,joint,_,_ = build_chain_network(4)
+>       scope = query(model,joint).scope
+                ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:587: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+____ test_multi_use_tiling_and_ownership_refuse_typed[missing_descendant] _____
+
+corruption = 'missing_descendant'
+
+    @pytest.mark.parametrize('corruption',('source_span','source_owner','current_tiling',
+                                           'current_order','missing_descendant','current_owner'))
+    def test_multi_use_tiling_and_ownership_refuse_typed(corruption):
+        from anygeometry.prepared_sheet_joint_component import _index
+        from anygeometry.prepared_member_sheet_network import _qualify
+        model,joint,_,_ = build_chain_network(4)
+>       scope = query(model,joint).scope
+                ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:587: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+_______ test_multi_use_tiling_and_ownership_refuse_typed[current_owner] _______
+
+corruption = 'current_owner'
+
+    @pytest.mark.parametrize('corruption',('source_span','source_owner','current_tiling',
+                                           'current_order','missing_descendant','current_owner'))
+    def test_multi_use_tiling_and_ownership_refuse_typed(corruption):
+        from anygeometry.prepared_sheet_joint_component import _index
+        from anygeometry.prepared_member_sheet_network import _qualify
+        model,joint,_,_ = build_chain_network(4)
+>       scope = query(model,joint).scope
+                ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:587: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+_________ test_multi_use_network_cancelled_and_stale_receipts_refuse __________
+
+    def test_multi_use_network_cancelled_and_stale_receipts_refuse():
+        model,joint,_,_ = build_chain_network(3)
+        before = to_dict(model)
+        with pytest.raises(GeometryError,match='cancelled'):
+            query(model,joint,cancellation_check=lambda phase: True)
+        assert to_dict(model) == before
+>       receipt = query(model,joint)
+                  ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:620: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+_ test_multi_use_descendant_metadata_and_tiling_preserving_station_refuse[metadata] _
+
+corruption = 'metadata'
+
+    @pytest.mark.parametrize('corruption',('metadata','shared_station'))
+    def test_multi_use_descendant_metadata_and_tiling_preserving_station_refuse(corruption):
+        from anygeometry.prepared_sheet_joint_component import _index
+        from anygeometry.prepared_member_sheet_network import _qualify
+        model,joint,_,expected = build_chain_network(3)
+>       receipt = query(model,joint)
+                  ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:631: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+_ test_multi_use_descendant_metadata_and_tiling_preserving_station_refuse[shared_station] _
+
+corruption = 'shared_station'
+
+    @pytest.mark.parametrize('corruption',('metadata','shared_station'))
+    def test_multi_use_descendant_metadata_and_tiling_preserving_station_refuse(corruption):
+        from anygeometry.prepared_sheet_joint_component import _index
+        from anygeometry.prepared_member_sheet_network import _qualify
+        model,joint,_,expected = build_chain_network(3)
+>       receipt = query(model,joint)
+                  ^^^^^^^^^^^^^^^^^^
+
+tests\test_prepared_member_sheet_network.py:631: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\prepared_member_sheet_network.py:502: in query_prepared_member_sheet_joint_network
+    return _query_component(model, current_joint_edge_id,
+src\anygeometry\prepared_sheet_joint_component.py:282: in _query_component
+    relation_factory(model, scope, source, data, cancellation_check))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:493: in qualify
+    relation = _qualify(*args)
+               ^^^^^^^^^^^^^^^
+src\anygeometry\prepared_member_sheet_network.py:470: in _qualify
+    points, point_vertices, attachment_relations = _qualify_point_attachments(
+src\anygeometry\prepared_member_sheet_network.py:388: in _qualify_point_attachments
+    require(new['lineage'] == expected_lineage and
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+condition = False
+detail = 'point Attachment station or retained fields changed'
+
+    def _require(condition, detail):
+        if not condition:
+>           raise GeometryError('prepared member Sheet network ' + detail)
+E           anygeometry.errors.GeometryError: prepared member Sheet network point Attachment station or retained fields changed
+
+src\anygeometry\prepared_member_sheet_network.py:42: GeometryError
+=========================== short test summary info ===========================
+FAILED tests/test_prepared_member_sheet_component.py::test_bounded_member_point_receipt_preserves_occurrence_and_station[False]
+FAILED tests/test_prepared_member_sheet_component.py::test_bounded_member_point_receipt_preserves_occurrence_and_station[True]
+FAILED tests/test_prepared_member_sheet_component.py::test_forged_relation_or_qualification_flag_is_not_live_authority[omit]
+FAILED tests/test_prepared_member_sheet_component.py::test_forged_relation_or_qualification_flag_is_not_live_authority[station]
+FAILED tests/test_prepared_member_sheet_component.py::test_forged_relation_or_qualification_flag_is_not_live_authority[orientation]
+FAILED tests/test_prepared_member_sheet_component.py::test_forged_relation_or_qualification_flag_is_not_live_authority[flag]
+FAILED tests/test_prepared_member_sheet_component.py::test_wrong_owner_and_stale_model_are_refused
+FAILED tests/test_prepared_member_sheet_component.py::test_unusable_receipt_fields_raise_typed_errors[member_relation_json]
+FAILED tests/test_prepared_member_sheet_component.py::test_unusable_receipt_fields_raise_typed_errors[edge_preimages]
+FAILED tests/test_prepared_member_sheet_component.py::test_source_serialization_cannot_repair_initially_forged_evidence
+FAILED tests/test_prepared_member_sheet_component.py::test_last_source_guard_cannot_change_validated_receipt
+FAILED tests/test_prepared_member_sheet_component.py::test_query_last_serialization_cannot_mutate_generated_ancestry
+FAILED tests/test_prepared_member_sheet_component.py::test_signature_rejects_behavioral_graph_nodes_before_hooks[scope]
+FAILED tests/test_prepared_member_sheet_component.py::test_signature_rejects_behavioral_graph_nodes_before_hooks[joint_edge_id]
+FAILED tests/test_prepared_member_sheet_component.py::test_signature_rejects_behavioral_graph_nodes_before_hooks[ancestry_record]
+FAILED tests/test_prepared_member_sheet_component.py::test_signature_type_whitelist_does_not_execute_custom_metaclass
+FAILED tests/test_prepared_member_sheet_component.py::test_cyclic_receipt_graph_raises_typed_error
+FAILED tests/test_prepared_member_sheet_component.py::test_malformed_deep_receipt_raises_typed_error_without_operand_cap[600]
+FAILED tests/test_prepared_member_sheet_component.py::test_malformed_deep_receipt_raises_typed_error_without_operand_cap[1600]
+FAILED tests/test_prepared_member_sheet_component.py::test_malformed_deep_receipt_raises_typed_error_without_operand_cap[4000]
+FAILED tests/test_prepared_member_sheet_network.py::test_connected_network_complete_exact_relations_and_material[3]
+FAILED tests/test_prepared_member_sheet_network.py::test_connected_network_complete_exact_relations_and_material[5]
+FAILED tests/test_prepared_member_sheet_network.py::test_connected_network_complete_exact_relations_and_material[10]
+FAILED tests/test_prepared_member_sheet_network.py::test_shared_original_carrier_and_multiple_points_are_fully_accounted
+FAILED tests/test_prepared_member_sheet_network.py::test_whole_network_inventory_retains_empty_parts
+FAILED tests/test_prepared_member_sheet_network.py::test_omitted_network_relation_refuses[members]
+FAILED tests/test_prepared_member_sheet_network.py::test_omitted_network_relation_refuses[attachments]
+FAILED tests/test_prepared_member_sheet_network.py::test_stale_network_receipt_refuses
+FAILED tests/test_prepared_member_sheet_network.py::test_source_serialization_cannot_repair_invalid_network_receipt
+FAILED tests/test_prepared_member_sheet_network.py::test_network_unknown_class_hooks_do_not_execute
+FAILED tests/test_prepared_member_sheet_network.py::test_network_point_coordinates_are_not_display_samples
+FAILED tests/test_prepared_member_sheet_network.py::test_disconnected_operands_refuse_without_exclusion_or_mutation
+FAILED tests/test_prepared_member_sheet_network.py::test_endpoint_attachment_source_identity_and_coordinates_retained[station0]
+FAILED tests/test_prepared_member_sheet_network.py::test_endpoint_attachment_source_identity_and_coordinates_retained[station1]
+FAILED tests/test_prepared_member_sheet_network.py::test_endpoint_attachment_source_identity_and_coordinates_retained[station2]
+FAILED tests/test_prepared_member_sheet_network.py::test_many_cuts_through_one_reversed_boundary_member
+FAILED tests/test_prepared_member_sheet_network.py::test_member_parameter_error_cannot_exceed_unchanged_tolerance
+FAILED tests/test_prepared_member_sheet_network.py::test_nondyadic_split_endpoint_point_uses_certified_retained_target[station0]
+FAILED tests/test_prepared_member_sheet_network.py::test_nondyadic_split_endpoint_point_uses_certified_retained_target[station1]
+FAILED tests/test_prepared_member_sheet_network.py::test_nondyadic_split_endpoint_point_uses_certified_retained_target[station2]
+FAILED tests/test_prepared_member_sheet_network.py::test_nondyadic_split_endpoint_point_uses_certified_retained_target[station3]
+FAILED tests/test_prepared_member_sheet_network.py::test_network_proof_refuses_invalid_use_ownership_and_dangling_refs[source_owner]
+FAILED tests/test_prepared_member_sheet_network.py::test_network_proof_refuses_invalid_use_ownership_and_dangling_refs[missing_current_use]
+FAILED tests/test_prepared_member_sheet_network.py::test_network_proof_refuses_invalid_use_ownership_and_dangling_refs[missing_carrier]
+FAILED tests/test_prepared_member_sheet_network.py::test_point_target_or_replacement_lineage_forgery_refuses[target]
+FAILED tests/test_prepared_member_sheet_network.py::test_point_target_or_replacement_lineage_forgery_refuses[lineage]
+FAILED tests/test_prepared_member_sheet_network.py::test_multi_use_chains_certify_ordered_mappings_and_spans[3]
+FAILED tests/test_prepared_member_sheet_network.py::test_multi_use_chains_certify_ordered_mappings_and_spans[4]
+FAILED tests/test_prepared_member_sheet_network.py::test_repeated_cuts_through_reversed_multi_use_base_chain
+FAILED tests/test_prepared_member_sheet_network.py::test_mixed_native_orientations_use_global_spans_without_sampling
+FAILED tests/test_prepared_member_sheet_network.py::test_unsplit_use_in_multi_use_chain_retains_original_attachment_lineage
+FAILED tests/test_prepared_member_sheet_network.py::test_repeated_carrier_within_one_member_refuses_ambiguous_semantics
+FAILED tests/test_prepared_member_sheet_network.py::test_multi_use_tiling_and_ownership_refuse_typed[source_span]
+FAILED tests/test_prepared_member_sheet_network.py::test_multi_use_tiling_and_ownership_refuse_typed[source_owner]
+FAILED tests/test_prepared_member_sheet_network.py::test_multi_use_tiling_and_ownership_refuse_typed[current_tiling]
+FAILED tests/test_prepared_member_sheet_network.py::test_multi_use_tiling_and_ownership_refuse_typed[current_order]
+FAILED tests/test_prepared_member_sheet_network.py::test_multi_use_tiling_and_ownership_refuse_typed[missing_descendant]
+FAILED tests/test_prepared_member_sheet_network.py::test_multi_use_tiling_and_ownership_refuse_typed[current_owner]
+FAILED tests/test_prepared_member_sheet_network.py::test_multi_use_network_cancelled_and_stale_receipts_refuse
+FAILED tests/test_prepared_member_sheet_network.py::test_multi_use_descendant_metadata_and_tiling_preserving_station_refuse[metadata]
+FAILED tests/test_prepared_member_sheet_network.py::test_multi_use_descendant_metadata_and_tiling_preserving_station_refuse[shared_station]
+61 failed, 32 passed in 18.40s

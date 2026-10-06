@@ -176,8 +176,10 @@ def _qualify(model, scope, source, current, cancellation_check):
     _require(len(candidates) == 1, 'point Attachment has no unique retained carrier')
     record, a, b = candidates[0]
     local = float((station-a)/(b-a))
+    # Match the owner-issued point remap exactly: the retained attachment keeps
+    # its ID and records itself before the split carrier, with stable deduplication.
     expected_lineage = [list(value) for value in dict.fromkeys(
-        (*map(tuple, old['lineage']), ('edge', root)))]
+        (*map(tuple, old['lineage']), ('attachment', attachment), ('edge', root)))]
     if len(records) == 1 and record.edge_id == root:
         expected_lineage = old['lineage']
     _require(new['target_parameters'] == [[local, local]] and

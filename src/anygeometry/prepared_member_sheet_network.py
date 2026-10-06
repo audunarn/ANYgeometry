@@ -383,8 +383,14 @@ def _qualify_point_attachments(model, scope, source, current, carriers, parents,
         local = Fraction(float(new['target_parameters'][0][0]))
         require(0 <= local <= 1,'point Attachment current station is outside the carrier')
         split_path = _split_path(parents,root,record.edge_id,lineage_cache,check)
-        expected_lineage = [list(value) for value in dict.fromkeys(
-            (*map(tuple, old['lineage']), *(('edge',edge) for edge in split_path)))]
+        # Each owner split retains a point attachment's ID and appends that
+        # attachment then the split edge, deduplicating without changing order.
+        # No split means no owner rewrite, including no lineage deduplication.
+        expected_lineage = old['lineage']
+        if split_path:
+            expected_lineage = [list(value) for value in dict.fromkeys(
+                (*map(tuple, old['lineage']), ('attachment', attachment),
+                 *(('edge',edge) for edge in split_path)))]
         require(new['lineage'] == expected_lineage and
                 {k: v for k, v in old.items() if k not in ('target_id', 'target_parameters', 'lineage')} ==
                 {k: v for k, v in new.items() if k not in ('target_id', 'target_parameters', 'lineage')},

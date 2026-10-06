@@ -1937,3 +1937,59 @@ failed trace retained in reports/main-integration-20261006; concise delivery
 contract in docs/COMMON_MAIN_BASE.md. No integrated-main performance claim:
 existing speed measurements bind3ba only. Full platform/consumer acceptance
 and mixed meshing remain outstanding. Release ledger/artifacts unchanged.
+
+### Hosted integration blocker and narrow repair — 2026-10-07
+
+PR28 head7cdb0b4409b9d648e4ba0b28f85cca0d4071de1a run37537868022:
+Linux full kernel2737PASS/86FAIL in1080.21pytest seconds (not process accounting);
+Windows full kernel also failed. Installed mesher and Linux/macOS wheel checks
+passed. Full failed logs/JUnit/runtime evidence retained under
+.local-evidence/github-pr28/run-37537868022. GitHub main remainsc6dc426; merge held.
+
+Common defect: the new attachment-history loop reused `children`, overwriting
+the geometric edge pair with attachment descendant IDs before returning it.
+Direct remapping returned wrong IDs; batch preparation unpacked one attachment
+or treated attachment IDs as edges. Narrow repair renames that loop variable,
+preserving history recording, parameter maps, epoch guards and geometric pair.
+Existing point-coordinate regression now explicitly checks two ordered edges
+meeting at the returned split vertex. Independent source reviewer confirmed
+the cause. Astra performs this two-line coupled integration repair with cached
+Mistral unavailability; no change to tolerances or numerical budgets.
+
+Focused verification uses only remaining24.104576199897565s of the existing
+fresh60s geometry tier; no full local suite or mesher execution authorised.
+Mesher source candidateaac9303e8dbda9bcd48c5e14caddaeae472128d9 closes the earlier
+score/cancellation callback gap in scoped source review. Its44regressions remain
+unexecuted; separate30s unit authority requested, not inferred or transferred.
+
+Shadow repair15PASS2.250543199945241s (check-20261006T222339-e6a99360).
+Windows hosted2733PASS/90FAIL1157.83pytest seconds, full trace retained; five
+additional frozen-builder oracle failures are CRLF checkout bytes. Exact LF
+builder SHA256b14055460e36ef5c16e86357f7206d95b67a928fa2cd059e6a92810f243c1434
+restored; eol=lf rule preserves original oracle identity, no alternate hash
+or acceptance predicate added. Original local CRLF bytes archived.
+
+Further scoped93cases produced32PASS/61FAIL with common retained-point-lineage
+guard mismatch. Attempt timeout fired, taskkill reported Access denied; child
+ended naturally with failing JUnit. Recorded status remains TIMEOUT/unaccepted,
+process-wall19.991562800016254s; no successful termination guarantee claimed.
+Fresh60s cumulative58.13752980006393s; remaining1.8624701999360695s. No further
+checks launched or authority transferred. Failed/partial evidence preserved.
+Source-only worker now reconciles the prepared member/Sheet point guards against
+actual owner lineage under unchanged exact ownership, epochs and refusal gates;
+focused verification needs new authority after a concrete reviewed candidate.
+
+Source-only reconciliation completed: component/network require exact original
+lineage + retained attachment self ID + ordered persisted split-edge path when
+split; no-split retains original lineage including duplicates. Station, fields,
+source vertex, ownership, tolerance, epoch, cancellation and refusal flags remain
+unchanged. Added unexecuted seeded/split/unsplit/provenance adversaries and
+corrected repeated-cut edge-only expectations. Independent source review found
+no defect in this delta; no numerical acceptance inferred. Detailed handoff:
+reports/main-integration-20261006/reference-scope-reconciliation.md.
+
+Required automatic hosted CI will verify changed inputs on PR28; no manual
+qualification dispatch or further local checks. Original local wheelaa18 and
+hosted wheelf90 bind pre-repair source only, not the repaired package. Closed
+mesh families and held reserves remain unchanged. Main is committed clean for
+review; GitHub main stays protected until complete required gates pass.

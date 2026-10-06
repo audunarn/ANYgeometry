@@ -14,7 +14,8 @@ from anygeometry import (
 
 
 def build_network(operand_count=5, shared=False, extra_points=False, empty_part=False,
-                  disconnected=False, station=Fraction(3,4), unsplit=False, central=False):
+                  disconnected=False, station=Fraction(3,4), unsplit=False, central=False,
+                  seeded_lineage=False):
     if not 3 <= operand_count <= 10:
         raise ValueError('This disposable fixture covers 3-10 operands only, not a kernel cap.')
     model = GeometryModel()
@@ -45,9 +46,11 @@ def build_network(operand_count=5, shared=False, extra_points=False, empty_part=
                 for v in (edge.start,edge.end))
         xyz = tuple((1-station)*u+station*v for u,v in zip(a,b))
         vertex = model.add_point(*(float(c) for c in xyz))
+        lineage = (('vertex', vertex), ('edge', edge.id), ('vertex', vertex)) if seeded_lineage else ()
         attachment = model.add_attachment(None, 'vertex_on_edge', 'edge', edge.id,
             ParameterRange.point(0.), (ParameterRange.point(float(station)),),
-            source_kind='vertex',source_id=vertex,evidence='exact',tolerance_used=1e-9)
+            source_kind='vertex',source_id=vertex,evidence='exact',tolerance_used=1e-9,
+            lineage=lineage)
         expected.append({'member':member,'carrier':edge.id,'attachment':attachment,
                          'point':vertex,'xyz':tuple(map(float,xyz)),
                          'station':(station.numerator,station.denominator),'reverse':bool(x%2)})
@@ -235,14 +238,33 @@ def test_endpoint_attachment_source_identity_and_coordinates_retained(station):
     validate(model,receipt)
 
 
-def test_unsplit_carriers_retain_original_attachment_lineage():
-    model,joint,_,_ = build_network(3,unsplit=True)
+@pytest.mark.parametrize('seeded_lineage', [False, True])
+def test_unsplit_carriers_retain_original_attachment_lineage(seeded_lineage):
+    model,joint,_,_ = build_network(3,unsplit=True,seeded_lineage=seeded_lineage)
     receipt = query(model,joint)
     assert all(len(row['current_member_uses'])==1 for row in receipt.relations['members'])
     for row in receipt.relations['attachments']:
         assert row['current_attachment']['lineage'] == row['source_attachment']['lineage']
         assert row['current_attachment']['target_parameters'] == [[.75,.75]]
     validate(model,receipt)
+
+
+@pytest.mark.parametrize('seeded_lineage', [False, True])
+def test_split_point_lineage_matches_owner_order_and_stable_deduplication(seeded_lineage):
+    model,joint,_,_ = build_network(3,seeded_lineage=seeded_lineage)
+    before = to_dict(model)
+    receipt = query(model,joint)
+    for row in receipt.relations['attachments']:
+        source, current = row['source_attachment'], row['current_attachment']
+        if seeded_lineage:
+            expected = [['vertex', source['source_id']], ['edge', source['target_id']],
+                        ['attachment', source['id']]]
+        else:
+            expected = [['attachment', source['id']], ['edge', source['target_id']]]
+        assert current['lineage'] == expected
+        assert current['id'] == source['id']
+    validate(model,receipt)
+    assert to_dict(model) == before
 
 
 def test_many_cuts_through_one_reversed_boundary_member():
@@ -260,7 +282,9 @@ def test_many_cuts_through_one_reversed_boundary_member():
                Fraction(*row['coordinate_tolerance'])**2 for row in certificates)
     point = next(row for row in receipt.relations['attachments']
                  if row['source_carrier']==central['source_carrier'])
-    assert len(point['current_attachment']['lineage']) == 4
+    assert point['current_attachment']['lineage'][0] == ['attachment', point['source_attachment']['id']]
+    assert point['current_attachment']['lineage'][1] == ['edge', point['source_carrier']]
+    assert len(point['current_attachment']['lineage']) == 5
     validate(model,receipt)
 
 
@@ -324,7 +348,8 @@ def test_network_proof_refuses_invalid_use_ownership_and_dangling_refs(corruptio
         _qualify(model,scope,source,current,None)
 
 
-@pytest.mark.parametrize('corruption',('target','lineage'))
+@pytest.mark.parametrize('corruption',('target','lineage','attachment_omitted',
+                                     'attachment_identity','attachment_order','attachment_duplicate'))
 def test_point_target_or_replacement_lineage_forgery_refuses(corruption):
     from anygeometry.prepared_sheet_joint_component import _index
     from anygeometry.prepared_member_sheet_network import _qualify
@@ -334,10 +359,20 @@ def test_point_target_or_replacement_lineage_forgery_refuses(corruption):
     point = next(row for row in current['attachments'].values() if row['kind']=='vertex_on_edge')
     if corruption=='target':
         point['target_parameters'] = [[.5001,.5001]]
-    else:
+    elif corruption=='lineage':
         point['lineage'].append(['edge',999999])
+    elif corruption=='attachment_omitted':
+        point['lineage'].pop(0)
+    elif corruption=='attachment_identity':
+        point['lineage'][0][1] = -1
+    elif corruption=='attachment_order':
+        point['lineage'][0],point['lineage'][1] = point['lineage'][1],point['lineage'][0]
+    else:
+        point['lineage'].append(point['lineage'][0])
+    before = to_dict(model)
     with pytest.raises(GeometryError,match='target or station|retained fields'):
         _qualify(model,scope,source,current,None)
+    assert to_dict(model) == before
 
 
 def _edge_between(model, first, second):
@@ -512,7 +547,9 @@ def test_repeated_cuts_through_reversed_multi_use_base_chain():
     assert all(first[1]==second[0] for first,second in zip(ranges,ranges[1:]))
     point = next(row for row in receipt.relations['attachments']
                  if row['source_carrier']==expected['base']['first'])
-    assert len(point['current_attachment']['lineage']) == 4
+    assert point['current_attachment']['lineage'][0] == ['attachment', point['source_attachment']['id']]
+    assert point['current_attachment']['lineage'][1] == ['edge', point['source_carrier']]
+    assert len(point['current_attachment']['lineage']) == 5
     assert 0 <= point['current_attachment']['target_parameters'][0][0] <= 1
     validate(model,receipt)
 
