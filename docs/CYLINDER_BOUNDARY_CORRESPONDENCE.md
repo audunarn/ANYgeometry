@@ -208,3 +208,63 @@ actual repeated split recording. The bounded source evidence is in
 then 11 affected passes after repair. Failed evidence is retained. This is
 focused development verification, not hosted/installed qualification or
 large-model mesh acceptance.
+
+# Prepared native Arc parameter-map evidence
+
+The additive `query_prepared_native_arc_parameter_maps(model, edge_ids=None,
+expected_revision=None, policy=None, cancellation_check=None)` owner query
+compares authenticated prepared Arc source/current **native captured-frame
+functions** on the complete child interval. This is separate from this
+document's exact rational three-point circumcircle geometric-image evidence.
+Neither circle is silently substituted for the other.
+
+The native function is `C + U*cos(w*t) + V*sin(w*t)`, where `arc_frame` is
+reconstructed from detached stored three-point definitions and its binary
+constants are treated as exact rationals; `U=R*e1` and `V=R*e2` use exact
+rational products, without another floating product rounding. This is a
+mathematical function contract, not a claim that floating `sample_arc`/libm
+evaluation has zero rounding error.
+
+For authenticated interval `(a,b)`, the proposed source map is
+`t=a+(b-a)*s`. With `phase=w*a`, `beta=w*(b-a)`, certified phase rotation forms
+`U*=U*cos(phase)+V*sin(phase)` and `V*=-U*sin(phase)+V*cos(phase)`.
+Each coordinate uses the whole-interval bound
+`|dC|+sup|Uc-U*|+sup|Vc-V*|+(sup|U*|+sup|V*|)*min(2,|wc-beta|)`;
+outward arithmetic certifies a Euclidean residual norm. Signed representations
+`(w,V)` and `(-w,-V)` are identically the same harmonic function. The comparison
+may use this identity for reversed native frames; stored frames and authenticated
+intervals are retained unchanged. Display stations are not an acceptance oracle.
+
+Rows classify as `exact` only for proved structural captured-function identity,
+`bounded` when the whole residual is within the unchanged recorded split
+tolerance, otherwise `refused`. Existing geometric ancestry refusal remains
+refused. A bounded affine proposal is **not** exact parameter preservation.
+Geometric boundary correspondence, native finiteness, whole-material equality,
+reference semantics, external-reference completeness and mesh admission are
+unchanged and remain separately unqualified where they were unqualified.
+
+The default query includes the authenticated Arc inventory and aliases. A
+finite list/tuple of unique positive edge IDs selects complete occurrences for
+those IDs; unavailable requested ancestry refuses. Receipts explicitly retain
+`requested_edge_ids` and `selected_edge_ids`. The validator checks a receipt
+issued to this owner and its pinned source/request/result content; it does not
+assert a separately supplied consumer selection. Receipts are transient and
+do not change persistence schema or version.
+The batch `source_checksum` binds the current prepared document. Each row
+separately retains the authenticated ancestor model ID, revision, source document
+checksum and edge ID; repeated preparation does not replace this original
+ancestral identity with the current document's revision/checksum.
+
+`NativeArcParameterMapPolicy(max_interval_operations=200000)` bounds aggregate
+request work with one shared arithmetic/cache budget, including selected frame
+capture charges. An explicit selection compiles only its relevant frames after
+the complete receipt is detached and authenticated. It imposes no model or
+occurrence count cap and does not change the
+historical cylinder atlas policy. Exhaustion and truthy cancellation produce
+typed non-success without a partial accepted receipt; caller exception identity
+is retained. Input receipt and both frames are detached before callbacks, and
+final state/binding checks are callback-free. Validation rejects changed and
+repaired forged caller receipts using the producer's entry digest. Whole-document
+fingerprint count is constant per batch, independent of selected row count.
+The detached request policy is retained in the issued receipt and protected by
+the same owner digest as selection and result evidence.

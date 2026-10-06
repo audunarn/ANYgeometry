@@ -64,6 +64,11 @@ from .material_regions import (
     MaterialSurfaceRegion, MaterialSurfaceRegions, query_material_surface_regions,
     validate_material_surface_regions_binding, evaluate_material_surface_region,
 )
+from .native_arc_parameter_maps import (
+    NativeArcParameterMapError, NativeArcParameterMapPolicy, NativeArcFrame, NativeArcParameterMap,
+    PreparedNativeArcParameterMaps, query_prepared_native_arc_parameter_maps,
+    validate_prepared_native_arc_parameter_maps_binding,
+)
 from .chart_fingerprints import chart_definition_fingerprint
 from .material_cell_coverage import (
     validate_material_surface_region_triangles,
@@ -373,6 +378,13 @@ __all__ = [
     "PreparedEdgeSubcurvePreimages",
     "query_prepared_edge_subcurve_preimages",
     "validate_prepared_edge_subcurve_preimages_binding",
+    "NativeArcParameterMapError",
+    "NativeArcParameterMapPolicy",
+    "NativeArcFrame",
+    "NativeArcParameterMap",
+    "PreparedNativeArcParameterMaps",
+    "query_prepared_native_arc_parameter_maps",
+    "validate_prepared_native_arc_parameter_maps_binding",
     "clone_prepared_geometry",
     "set_prepared_face_corners",
     "TrimmedSurfaceChart",
