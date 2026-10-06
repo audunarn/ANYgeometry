@@ -30,7 +30,7 @@ from .material_arrangement import (ArrangementPath, ArrangementPoint, Arrangemen
 from .member_arrangements import (MemberAxisArrangement, MemberPointContact,
                                   plan_member_arrangements)
 from .predicates import IntersectionDimension, IntersectionKind, qualified_plane_plane
-from .serialization import to_dict
+from .serialization import to_dict, _serialized_model_state, _qualified_model_state
 from .structural import ConnectionIntent, Orientation
 from .surfaces import Cone, Cylinder, ExtrudedSurface, Plane
 from .transactions import ChangeSet
@@ -557,7 +557,7 @@ def _plan_intersections(model, operands, *, policy):
         except GeometryError as exc:
             raise GeometryError(f"intersection material arrangement face:{face_id}: {exc}") from exc
         arrangements.append(_normalise_cells(arrangement))
-    if model.revision != revision or to_dict(model)["checksum"]["value"] != checksum:
+    if model.revision != revision or _qualified_model_state(model)["checksum"]["value"] != checksum:
         raise GeometryError("geometry changed during intersection planning")
     arrangements=_synchronize_boundary_events(arrangements,check)
     axes=_synchronize_member_events(arrangements,axes,check)
@@ -786,7 +786,7 @@ def _apply_intersections_in_place(model, plan, *, policy, _edge_preimage_draft=N
         raise GeometryError("intersection plan belongs to another model")
     if model.revision != plan.revision:
         raise GeometryError("intersection plan is stale")
-    if to_dict(model)["checksum"]["value"] != plan.source_checksum:
+    if _qualified_model_state(model)["checksum"]["value"] != plan.source_checksum:
         raise GeometryError("intersection plan source binding changed")
     tolerances_by_face = {item.face_id: item.world_tolerance for item in plan.arrangements}
     tolerance = model.tolerance.length
@@ -1170,7 +1170,7 @@ def _apply_intersections(model, plan, *, policy):
             # A callback can perform unrelated authoring; refuse the cached
             # result without rolling back that authoring.
             if (getattr(model,'_intersection_application_receipt',None) is not receipt or
-                    model.revision!=receipt[1] or to_dict(model)['checksum']['value']!=receipt[2]):
+                    model.revision!=receipt[1] or _qualified_model_state(model)['checksum']['value']!=receipt[2]):
                 raise GeometryError('geometry changed during cached intersection application')
             if epoch_bound:
                 binding=_current_receipt(model)
@@ -1240,12 +1240,12 @@ def _apply_intersections(model, plan, *, policy):
         raise GeometryError("REUSE_EXISTING requires compatible existing topology")
     if effective.cancellation_check is not None and effective.cancellation_check():
         raise GeometryError("intersection application cancelled before commit")
-    if model.revision != plan.revision or to_dict(model)["checksum"]["value"] != plan.source_checksum:
+    if model.revision != plan.revision or _qualified_model_state(model)["checksum"]["value"] != plan.source_checksum:
         raise GeometryError("geometry changed before intersection commit")
     # The last policy callback must not alter the detached result after its
     # topology/provenance proofs. No callback follows this preflight before the
     # committed snapshot is adopted.
-    if to_dict(candidate)["checksum"]["value"] != sealed_candidate_checksum:
+    if _qualified_model_state(candidate)["checksum"]["value"] != sealed_candidate_checksum:
         raise GeometryError("intersection candidate changed before commit")
     if epoch_native_source is not None and (capture_native_supports(model)!=epoch_native_source or
             capture_native_supports(candidate)!=epoch_native_candidate):

@@ -25,7 +25,7 @@ from .structural import (
     Sheet,
 )
 
-__all__ = ["ModelClosure", "extract_model_closure"]
+__all__ = ["ModelClosure", "extract_model_closure", "model_closure_to_dict", "model_closure_from_dict"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +46,112 @@ class ModelClosure:
     @property
     def work_to_source_handles(self) -> Mapping[EntityHandle, EntityHandle]:
         return self.work_to_source
+
+    def to_transport(self) -> dict:
+        """Return a detached JSON/pickle-safe document with complete identity maps."""
+        return model_closure_to_dict(self)
+
+    @classmethod
+    def from_transport(cls, document) -> ModelClosure:
+        """Restore a transported closure without a live source model."""
+        return model_closure_from_dict(document)
+
+
+def _closure_keys(model):
+    return tuple(sorted(model.handle(kind, identifier)
+        for kind in model._next_id
+        for identifier in model._entity_store(kind))) + tuple(sorted(
+        model.handle(kind, identifier) for kind in model._next_structural_id
+        for identifier in model._structural_store(kind)))
+
+
+def model_closure_to_dict(closure: ModelClosure) -> dict:
+    """Transport the existing geometry schema and stable local IDs as plain data.
+
+    Every working entity, including structural occurrences, has one source
+    handle. The geometry schema/version and local numbering remain unchanged.
+    Models and mapping proxies themselves are intentionally not pickled.
+    """
+    from .serialization import to_dict
+    from .definition_binding import definition_checksum
+    if not isinstance(closure, ModelClosure):
+        raise TypeError("closure transport requires a ModelClosure")
+    work = closure.working_model
+    if work.model_id == closure.source_model_id:
+        raise GeometryError("closure transport requires distinct source/work identities")
+    if set(closure.work_to_source) != set(_closure_keys(work)):
+        raise GeometryError("closure transport mapping must cover every working entity")
+    if (len(set(closure.work_to_source.values())) != len(closure.work_to_source)
+            or len(closure.source_to_work) != len(closure.work_to_source)):
+        raise GeometryError("closure transport has duplicate source handles")
+    if dict(closure.source_to_work) != {source: target for target, source in closure.work_to_source.items()}:
+        raise GeometryError("closure transport maps are not bijective inverses")
+    def record(handle):
+        return [handle.kind, handle.id]
+    rows = []
+    for target, source in sorted(closure.work_to_source.items()):
+        if (target.model_id != work.model_id or source.model_id != closure.source_model_id
+                or target.kind != source.kind):
+            raise GeometryError("closure transport mapping has an inconsistent identity/kind")
+        rows.append([*record(target), source.id])
+    if any(handle.model_id != closure.source_model_id or handle not in closure.source_to_work
+           for handle in closure.source_handles):
+        raise GeometryError("closure transport source selection is not mapped")
+    if closure.source_handles != tuple(sorted(set(closure.source_handles))):
+        raise GeometryError("closure transport source selection must be unique and sorted")
+    payload = {"working_model": to_dict(work), "source_model_id": str(closure.source_model_id),
+               "source_revision": closure.source_revision,
+               "source_handles": [record(handle) for handle in closure.source_handles],
+               "work_to_source": rows}
+    return {**payload, "transport_checksum": definition_checksum(payload)}
+
+
+def model_closure_from_dict(document) -> ModelClosure:
+    """Decode a plain closure envelope, verifying complete bidirectional maps.
+
+    Source provenance is retained as declared identity; the absent original
+    source document cannot be independently requalified by a worker.
+    """
+    from .serialization import from_dict
+    from .definition_binding import definition_checksum
+    from collections.abc import Mapping
+    from copy import deepcopy
+    from numbers import Integral
+    if not isinstance(document, Mapping):
+        raise GeometryError("closure transport must be a mapping")
+    payload = deepcopy(dict(document))
+    signature = payload.pop("transport_checksum", None)
+    if set(payload) != {"working_model", "source_model_id", "source_revision", "source_handles", "work_to_source"}:
+        raise GeometryError("closure transport has unknown or missing fields")
+    if signature != definition_checksum(payload):
+        raise GeometryError("closure transport checksum mismatch")
+    try:
+        source_id = UUID(payload["source_model_id"])
+    except (TypeError, ValueError, AttributeError) as error:
+        raise GeometryError("closure transport source identity is invalid") from error
+    revision = payload["source_revision"]
+    if source_id.int == 0 or isinstance(revision, bool) or not isinstance(revision, Integral) or revision < 0:
+        raise GeometryError("closure transport source revision/identity is invalid")
+    work = from_dict(payload["working_model"])
+    work_to_source = {}
+    try:
+        for kind, work_id, source_local in payload["work_to_source"]:
+            target = work.handle(kind, work_id)
+            source = EntityHandle(source_id, kind, source_local)
+            if target in work_to_source:
+                raise GeometryError("closure transport has duplicate working handles")
+            work_to_source[target] = source
+        source_handles = tuple(EntityHandle(source_id, kind, identifier)
+                               for kind, identifier in payload["source_handles"])
+    except GeometryError:
+        raise
+    except (TypeError, ValueError, KeyError) as error:
+        raise GeometryError("closure transport identity records are invalid") from error
+    closure = ModelClosure(work, MappingProxyType({source: target for target, source in work_to_source.items()}),
+        MappingProxyType(work_to_source), source_id, int(revision), source_handles)
+    # Reuse the authoritative completeness/kind/inverse checks before exposing it.
+    model_closure_to_dict(closure)
+    return closure
 
 
 def _normalize_handles(
