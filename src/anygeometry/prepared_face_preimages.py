@@ -44,6 +44,10 @@ class PreparedFacePreimages:
     # Complete prospective persisted owner input, not a meshing certificate.
     # None denotes legacy ID/per-face-only receipts and must not prove absence.
     authored_document_json: str | None = None
+    # Prospective actual stored support coefficients, including Cylinder's raw
+    # nonserialized circumferential vector. Legacy evidence cannot invent them.
+    authored_native_supports: tuple | None = None
+    current_native_supports: tuple | None = None
 
     @property
     def source_to_current_faces(self):
@@ -233,11 +237,14 @@ def _capture_application_preimages(model, *, allow_seed):
     faces = tuple(sorted(model.faces))
     document = to_dict(model)
     checksum = document['checksum']['value']
+    from .native_support_snapshots import capture_native_supports
+    native = capture_native_supports(model)
     return PreparedFacePreimages(model.model_id, model.revision, checksum, faces,
                                  model.model_id, model.revision, checksum,
                                  tuple((face, (face,)) for face in faces), (),
                                  _original_face_definitions(document, model.model_id),
-                                 json.dumps(document, sort_keys=True, separators=(',', ':'), allow_nan=False))
+                                 json.dumps(document, sort_keys=True, separators=(',', ':'), allow_nan=False),
+                                 native, native)
 
 
 def _compose_application_preimages(candidate, previous, changes):
@@ -266,8 +273,10 @@ def _compose_application_preimages(candidate, previous, changes):
 
 def _publish_application_preimages(model, binding, coverage, checksum):
     if binding is not None:
+        from .native_support_snapshots import capture_native_supports
         binding = replace(binding, model_id=model.model_id, revision=model.revision,
-                          source_checksum=checksum, coverage=tuple(coverage))
+                          source_checksum=checksum, coverage=tuple(coverage),
+                          current_native_supports=capture_native_supports(model))
         model._prepared_face_preimages_receipt = (binding, _binding_checksum(binding))
 
 
@@ -278,4 +287,8 @@ def _copy_current_preimages(source, target):
         return
     if target.model_id != binding.model_id or to_dict(target)['checksum']['value'] != binding.source_checksum:
         raise GeometryError('prepared face provenance changed during detached copying')
+    from .native_support_snapshots import capture_native_supports
+    # The qualified clone is another actual native map. Preserve original
+    # capture and prospectively bind its current stored coefficients.
+    binding = replace(binding, current_native_supports=capture_native_supports(target))
     target._prepared_face_preimages_receipt = (binding, _binding_checksum(binding))

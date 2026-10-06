@@ -69,6 +69,11 @@ from .native_arc_parameter_maps import (
     PreparedNativeArcParameterMaps, query_prepared_native_arc_parameter_maps,
     validate_prepared_native_arc_parameter_maps_binding,
 )
+from .native_material_reference_scope import (
+    NativeMaterialScopeRow, PreparedNativeMaterialReferenceScope,
+    query_prepared_native_material_reference_scope,
+    validate_prepared_native_material_reference_scope_binding,
+)
 from .chart_fingerprints import chart_definition_fingerprint
 from .material_cell_coverage import (
     validate_material_surface_region_triangles,
@@ -385,6 +390,10 @@ __all__ = [
     "PreparedNativeArcParameterMaps",
     "query_prepared_native_arc_parameter_maps",
     "validate_prepared_native_arc_parameter_maps_binding",
+    "NativeMaterialScopeRow",
+    "PreparedNativeMaterialReferenceScope",
+    "query_prepared_native_material_reference_scope",
+    "validate_prepared_native_material_reference_scope_binding",
     "clone_prepared_geometry",
     "set_prepared_face_corners",
     "TrimmedSurfaceChart",
