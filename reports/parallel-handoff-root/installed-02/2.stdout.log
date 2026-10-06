@@ -1,0 +1,7 @@
+Processing c:\github\anygeometry\.worktrees\parallel-handoff\reports\parallel-handoff-root\installed-02\wheels\anygeometry-0.4.5-py3-none-any.whl
+Installing collected packages: anygeometry
+  Attempting uninstall: anygeometry
+    Found existing installation: ANYgeometry 0.4.3
+    Not uninstalling anygeometry at c:\python\python314\lib\site-packages, outside environment C:\Users\AUDUNA~1\AppData\Local\Temp\anygeometry-parallel-wheel-_7q65qde\venv
+    Can't uninstall 'ANYgeometry'. No files were found to uninstall.
+Successfully installed anygeometry-0.4.5

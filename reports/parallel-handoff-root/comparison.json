@@ -1,0 +1,579 @@
+{
+  "schema": "anygeometry.parallel-preparation-comparison-v1",
+  "rows": [
+    {
+      "web_count": 16,
+      "route": "individual",
+      "baseline_mean_seconds": 1.7546493499539793,
+      "candidate_mean_seconds": 1.5922113500419073,
+      "measured_reduction_percent": 9.257576159950842,
+      "baseline_repeats_seconds": [
+        1.7591664999490604,
+        1.7501321999588981
+      ],
+      "candidate_repeats_seconds": [
+        1.5928817000240088,
+        1.5915410000598058
+      ],
+      "baseline_profile_counts": {
+        "definition_binding.py:definition_checksum": {
+          "calls": 2831,
+          "cumulative_seconds": 0.4912077
+        },
+        "material_arrangement.py:arrange_material": {
+          "calls": 34,
+          "cumulative_seconds": 1.0514454
+        },
+        "model.py:validate_topology": {
+          "calls": 50,
+          "cumulative_seconds": 0.4316009
+        },
+        "serialization.py:_serialized_model_state": {
+          "calls": 49,
+          "cumulative_seconds": 0.1279925
+        },
+        "serialization.py:to_dict": {
+          "calls": 49,
+          "cumulative_seconds": 0.6279716000000001
+        },
+        "structural.py:to_dict": {
+          "calls": 19608,
+          "cumulative_seconds": 0.009043500000000001
+        }
+      },
+      "candidate_profile_counts": {
+        "definition_binding.py:definition_checksum": {
+          "calls": 2831,
+          "cumulative_seconds": 0.3269341
+        },
+        "material_arrangement.py:arrange_material": {
+          "calls": 34,
+          "cumulative_seconds": 1.0318556
+        },
+        "model.py:validate_topology": {
+          "calls": 11,
+          "cumulative_seconds": 0.22849650000000002
+        },
+        "serialization.py:_serialized_model_state": {
+          "calls": 51,
+          "cumulative_seconds": 0.12554890000000002
+        },
+        "serialization.py:to_dict": {
+          "calls": 8,
+          "cumulative_seconds": 0.317367
+        },
+        "structural.py:to_dict": {
+          "calls": 19848,
+          "cumulative_seconds": 0.014698300000000001
+        }
+      },
+      "document_digest": "4f273ef171c92c6574f1bc2112afca37f9f1a330fbe2d18d1b89966eaaa3581c",
+      "chart_digest": "10c052e21c4c71de4b1808743c223140b602808ca7e6ff626fc60edd5beddf97",
+      "fixture_sha256": "ad2f025be85de842944e04b79cbc87e6fb60dff62205a3f4a4ed258fc1cc1d78",
+      "topology_counts": {
+        "attachments": 416,
+        "edges": 420,
+        "faces": 225,
+        "junctions": 208,
+        "members": 0,
+        "sheets": 17,
+        "vertices": 196
+      }
+    },
+    {
+      "web_count": 16,
+      "route": "by_face",
+      "baseline_mean_seconds": 1.7546493499539793,
+      "candidate_mean_seconds": 1.5399164999253117,
+      "measured_reduction_percent": 12.237935176865944,
+      "baseline_repeats_seconds": [
+        1.7591664999490604,
+        1.7501321999588981
+      ],
+      "candidate_repeats_seconds": [
+        1.544497299939394,
+        1.5353356999112293
+      ],
+      "baseline_profile_counts": {
+        "definition_binding.py:definition_checksum": {
+          "calls": 2831,
+          "cumulative_seconds": 0.4912077
+        },
+        "material_arrangement.py:arrange_material": {
+          "calls": 34,
+          "cumulative_seconds": 1.0514454
+        },
+        "model.py:validate_topology": {
+          "calls": 50,
+          "cumulative_seconds": 0.4316009
+        },
+        "serialization.py:_serialized_model_state": {
+          "calls": 49,
+          "cumulative_seconds": 0.1279925
+        },
+        "serialization.py:to_dict": {
+          "calls": 49,
+          "cumulative_seconds": 0.6279716000000001
+        },
+        "structural.py:to_dict": {
+          "calls": 19608,
+          "cumulative_seconds": 0.009043500000000001
+        }
+      },
+      "candidate_profile_counts": {
+        "definition_binding.py:definition_checksum": {
+          "calls": 2831,
+          "cumulative_seconds": 0.327764
+        },
+        "material_arrangement.py:arrange_material": {
+          "calls": 34,
+          "cumulative_seconds": 1.0181413000000001
+        },
+        "model.py:validate_topology": {
+          "calls": 11,
+          "cumulative_seconds": 0.22467740000000003
+        },
+        "serialization.py:_serialized_model_state": {
+          "calls": 19,
+          "cumulative_seconds": 0.09376540000000001
+        },
+        "serialization.py:to_dict": {
+          "calls": 8,
+          "cumulative_seconds": 0.29591690000000004
+        },
+        "structural.py:to_dict": {
+          "calls": 16008,
+          "cumulative_seconds": 0.008227
+        }
+      },
+      "document_digest": "4f273ef171c92c6574f1bc2112afca37f9f1a330fbe2d18d1b89966eaaa3581c",
+      "chart_digest": "10c052e21c4c71de4b1808743c223140b602808ca7e6ff626fc60edd5beddf97",
+      "fixture_sha256": "ad2f025be85de842944e04b79cbc87e6fb60dff62205a3f4a4ed258fc1cc1d78",
+      "topology_counts": {
+        "attachments": 416,
+        "edges": 420,
+        "faces": 225,
+        "junctions": 208,
+        "members": 0,
+        "sheets": 17,
+        "vertices": 196
+      }
+    },
+    {
+      "web_count": 32,
+      "route": "individual",
+      "baseline_mean_seconds": 6.848003049963154,
+      "candidate_mean_seconds": 6.23957390000578,
+      "measured_reduction_percent": 8.884767508400094,
+      "baseline_repeats_seconds": [
+        6.851104200002737,
+        6.8449018999235705
+      ],
+      "candidate_repeats_seconds": [
+        6.167911999975331,
+        6.311235800036229
+      ],
+      "baseline_profile_counts": {
+        "definition_binding.py:definition_checksum": {
+          "calls": 10255,
+          "cumulative_seconds": 1.7561550000000001
+        },
+        "material_arrangement.py:arrange_material": {
+          "calls": 66,
+          "cumulative_seconds": 4.0998374
+        },
+        "model.py:validate_topology": {
+          "calls": 82,
+          "cumulative_seconds": 1.5677109
+        },
+        "serialization.py:_serialized_model_state": {
+          "calls": 81,
+          "cumulative_seconds": 0.4775454
+        },
+        "serialization.py:to_dict": {
+          "calls": 81,
+          "cumulative_seconds": 2.2798931000000002
+        },
+        "structural.py:to_dict": {
+          "calls": 71592,
+          "cumulative_seconds": 0.0331064
+        }
+      },
+      "candidate_profile_counts": {
+        "definition_binding.py:definition_checksum": {
+          "calls": 10255,
+          "cumulative_seconds": 1.1710329000000002
+        },
+        "material_arrangement.py:arrange_material": {
+          "calls": 66,
+          "cumulative_seconds": 3.9469800000000004
+        },
+        "model.py:validate_topology": {
+          "calls": 11,
+          "cumulative_seconds": 0.794703
+        },
+        "serialization.py:_serialized_model_state": {
+          "calls": 83,
+          "cumulative_seconds": 0.4516641
+        },
+        "serialization.py:to_dict": {
+          "calls": 8,
+          "cumulative_seconds": 1.071021
+        },
+        "structural.py:to_dict": {
+          "calls": 72056,
+          "cumulative_seconds": 0.0326248
+        }
+      },
+      "document_digest": "2585cf6f67156bb000bc0c3626278065f54f30da7287322d4d19655a24c655b2",
+      "chart_digest": "9b34b586630db9525cb4c07cdd860e1d6d71a561de2dece5305c9bb5af406d94",
+      "fixture_sha256": "a1e862b8ce8fccd71b96112f4e3dae29669f68dea4037886e5125a00fd8446bd",
+      "topology_counts": {
+        "attachments": 1600,
+        "edges": 1476,
+        "faces": 833,
+        "junctions": 800,
+        "members": 0,
+        "sheets": 33,
+        "vertices": 644
+      }
+    },
+    {
+      "web_count": 32,
+      "route": "by_face",
+      "baseline_mean_seconds": 6.848003049963154,
+      "candidate_mean_seconds": 6.137049449956976,
+      "measured_reduction_percent": 10.381911264043664,
+      "baseline_repeats_seconds": [
+        6.851104200002737,
+        6.8449018999235705
+      ],
+      "candidate_repeats_seconds": [
+        6.164802999934182,
+        6.10929589997977
+      ],
+      "baseline_profile_counts": {
+        "definition_binding.py:definition_checksum": {
+          "calls": 10255,
+          "cumulative_seconds": 1.7561550000000001
+        },
+        "material_arrangement.py:arrange_material": {
+          "calls": 66,
+          "cumulative_seconds": 4.0998374
+        },
+        "model.py:validate_topology": {
+          "calls": 82,
+          "cumulative_seconds": 1.5677109
+        },
+        "serialization.py:_serialized_model_state": {
+          "calls": 81,
+          "cumulative_seconds": 0.4775454
+        },
+        "serialization.py:to_dict": {
+          "calls": 81,
+          "cumulative_seconds": 2.2798931000000002
+        },
+        "structural.py:to_dict": {
+          "calls": 71592,
+          "cumulative_seconds": 0.0331064
+        }
+      },
+      "candidate_profile_counts": {
+        "definition_binding.py:definition_checksum": {
+          "calls": 10255,
+          "cumulative_seconds": 1.1853841
+        },
+        "material_arrangement.py:arrange_material": {
+          "calls": 66,
+          "cumulative_seconds": 3.9919345
+        },
+        "model.py:validate_topology": {
+          "calls": 11,
+          "cumulative_seconds": 0.7939632000000001
+        },
+        "serialization.py:_serialized_model_state": {
+          "calls": 19,
+          "cumulative_seconds": 0.3542495
+        },
+        "serialization.py:to_dict": {
+          "calls": 8,
+          "cumulative_seconds": 1.0766585
+        },
+        "structural.py:to_dict": {
+          "calls": 57208,
+          "cumulative_seconds": 0.028617300000000002
+        }
+      },
+      "document_digest": "2585cf6f67156bb000bc0c3626278065f54f30da7287322d4d19655a24c655b2",
+      "chart_digest": "9b34b586630db9525cb4c07cdd860e1d6d71a561de2dece5305c9bb5af406d94",
+      "fixture_sha256": "a1e862b8ce8fccd71b96112f4e3dae29669f68dea4037886e5125a00fd8446bd",
+      "topology_counts": {
+        "attachments": 1600,
+        "edges": 1476,
+        "faces": 833,
+        "junctions": 800,
+        "members": 0,
+        "sheets": 33,
+        "vertices": 644
+      }
+    },
+    {
+      "web_count": 48,
+      "route": "individual",
+      "baseline_mean_seconds": 16.891989999974612,
+      "candidate_mean_seconds": 15.575414000020828,
+      "measured_reduction_percent": 7.794084651694455,
+      "baseline_repeats_seconds": [
+        16.847228599945083,
+        16.93675140000414
+      ],
+      "candidate_repeats_seconds": [
+        15.5787237000186,
+        15.572104300023057
+      ],
+      "baseline_profile_counts": {
+        "definition_binding.py:definition_checksum": {
+          "calls": 22287,
+          "cumulative_seconds": 3.8747946000000004
+        },
+        "material_arrangement.py:arrange_material": {
+          "calls": 98,
+          "cumulative_seconds": 10.2101687
+        },
+        "model.py:validate_topology": {
+          "calls": 114,
+          "cumulative_seconds": 3.3644471
+        },
+        "serialization.py:_serialized_model_state": {
+          "calls": 113,
+          "cumulative_seconds": 1.0011625
+        },
+        "serialization.py:to_dict": {
+          "calls": 113,
+          "cumulative_seconds": 4.8633692
+        },
+        "structural.py:to_dict": {
+          "calls": 156088,
+          "cumulative_seconds": 0.0836214
+        }
+      },
+      "candidate_profile_counts": {
+        "definition_binding.py:definition_checksum": {
+          "calls": 22287,
+          "cumulative_seconds": 2.9070855
+        },
+        "material_arrangement.py:arrange_material": {
+          "calls": 98,
+          "cumulative_seconds": 10.371097500000001
+        },
+        "model.py:validate_topology": {
+          "calls": 11,
+          "cumulative_seconds": 1.895429
+        },
+        "serialization.py:_serialized_model_state": {
+          "calls": 115,
+          "cumulative_seconds": 1.0574051
+        },
+        "serialization.py:to_dict": {
+          "calls": 8,
+          "cumulative_seconds": 2.7385492
+        },
+        "structural.py:to_dict": {
+          "calls": 156776,
+          "cumulative_seconds": 0.0791558
+        }
+      },
+      "document_digest": "add7c9b4bcd9c5ec283e29080b4cf9efdec79f52cd3dd90bb9127497e696c12e",
+      "chart_digest": "9dd5fa56a5477a5931e7134dadf3127ad7fc0c3d5bbe5ba3e20b68442f072b54",
+      "fixture_sha256": "65ebf0f3cb8687c877b687be1ff41600538e94e6c0a20439871df684a52dd291",
+      "topology_counts": {
+        "attachments": 3552,
+        "edges": 3172,
+        "faces": 1825,
+        "junctions": 1776,
+        "members": 0,
+        "sheets": 49,
+        "vertices": 1348
+      }
+    },
+    {
+      "web_count": 48,
+      "route": "by_face",
+      "baseline_mean_seconds": 16.891989999974612,
+      "candidate_mean_seconds": 15.38330585003132,
+      "measured_reduction_percent": 8.931358294348735,
+      "baseline_repeats_seconds": [
+        16.847228599945083,
+        16.93675140000414
+      ],
+      "candidate_repeats_seconds": [
+        15.34585570008494,
+        15.4207559999777
+      ],
+      "baseline_profile_counts": {
+        "definition_binding.py:definition_checksum": {
+          "calls": 22287,
+          "cumulative_seconds": 3.8747946000000004
+        },
+        "material_arrangement.py:arrange_material": {
+          "calls": 98,
+          "cumulative_seconds": 10.2101687
+        },
+        "model.py:validate_topology": {
+          "calls": 114,
+          "cumulative_seconds": 3.3644471
+        },
+        "serialization.py:_serialized_model_state": {
+          "calls": 113,
+          "cumulative_seconds": 1.0011625
+        },
+        "serialization.py:to_dict": {
+          "calls": 113,
+          "cumulative_seconds": 4.8633692
+        },
+        "structural.py:to_dict": {
+          "calls": 156088,
+          "cumulative_seconds": 0.0836214
+        }
+      },
+      "candidate_profile_counts": {
+        "definition_binding.py:definition_checksum": {
+          "calls": 22287,
+          "cumulative_seconds": 2.6119697
+        },
+        "material_arrangement.py:arrange_material": {
+          "calls": 98,
+          "cumulative_seconds": 9.9771408
+        },
+        "model.py:validate_topology": {
+          "calls": 11,
+          "cumulative_seconds": 1.7408039000000002
+        },
+        "serialization.py:_serialized_model_state": {
+          "calls": 19,
+          "cumulative_seconds": 0.7620388
+        },
+        "serialization.py:to_dict": {
+          "calls": 8,
+          "cumulative_seconds": 2.4067418000000003
+        },
+        "structural.py:to_dict": {
+          "calls": 123752,
+          "cumulative_seconds": 0.0862075
+        }
+      },
+      "document_digest": "add7c9b4bcd9c5ec283e29080b4cf9efdec79f52cd3dd90bb9127497e696c12e",
+      "chart_digest": "9dd5fa56a5477a5931e7134dadf3127ad7fc0c3d5bbe5ba3e20b68442f072b54",
+      "fixture_sha256": "65ebf0f3cb8687c877b687be1ff41600538e94e6c0a20439871df684a52dd291",
+      "topology_counts": {
+        "attachments": 3552,
+        "edges": 3172,
+        "faces": 1825,
+        "junctions": 1776,
+        "members": 0,
+        "sheets": 49,
+        "vertices": 1348
+      }
+    }
+  ],
+  "baseline_commit": "c6dc4261995a1e0c1ac9c19ba8ed96131d24b880",
+  "measured_candidate_source_identity": "5882b340c3fe4e99116cf5fefa9512493410689558be1a32e15c26e29dd206a2",
+  "prepared_outputs_identical": true,
+  "candidate_checks": 18,
+  "baseline_checks": 9,
+  "evidence_sha256": {
+    "baseline-01\\grid-16-0.json": "49aeca241c3eff0ccc8d0b064b8bdfa955d717cf9611809c4d94306a7a3c342f",
+    "baseline-01\\grid-16-0.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "baseline-01\\grid-16-0.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "baseline-01\\grid-16-1.json": "b525c11803796d2d329e39268d055f9a126e9222c4951dbc2cca7e166cb55937",
+    "baseline-01\\grid-16-1.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "baseline-01\\grid-16-1.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "baseline-01\\grid-16-2.json": "889f1a20324f97b5da510942d308b9f62180ee1ae6722ccae4541591130f0877",
+    "baseline-01\\grid-16-2.pstats": "742718d4c37cea5270e51fb2eda9740a27916d0742d727869604d438a296c1c2",
+    "baseline-01\\grid-16-2.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "baseline-01\\grid-16-2.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "baseline-01\\grid-32-0.json": "b542bd100c8e4fb04527955021e25c657c39c62c9c9ab125d59526e4da71eb00",
+    "baseline-01\\grid-32-0.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "baseline-01\\grid-32-0.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "baseline-01\\grid-32-1.json": "410828afd9d0154ae00106da6cd371c652612d25b522105874f2e0808fc01abc",
+    "baseline-01\\grid-32-1.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "baseline-01\\grid-32-1.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "baseline-01\\grid-32-2.json": "e23307fa8cdc2fe4a8723ffc0b3b2b2615d5448b35b1959569786aa99b846131",
+    "baseline-01\\grid-32-2.pstats": "13a1c6783e5f877ae184e25abf0ed76539ab88f1e72ad9152a955b70be92748b",
+    "baseline-01\\grid-32-2.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "baseline-01\\grid-32-2.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "baseline-01\\grid-48-0.json": "558030bc8d5dec319c6c3341c4a6515025ef4fc159a497a99dc48d29e6387c51",
+    "baseline-01\\grid-48-0.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "baseline-01\\grid-48-0.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "baseline-01\\grid-48-1.json": "ea8195bc09676cd1703ea5f9da1a6517cfdf4d16873323b4af6293a8467b97f6",
+    "baseline-01\\grid-48-1.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "baseline-01\\grid-48-1.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "baseline-01\\grid-48-2.json": "07b8ad6414a4776bc3e0fcc7264a5a7eb3aa0e8709d1cf4d4322970d36bcb144",
+    "baseline-01\\grid-48-2.pstats": "2ca3c4a7ea23c90ec6bb35045e1076ff99feae947ee2384b4c2673b02948c876",
+    "baseline-01\\grid-48-2.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "baseline-01\\grid-48-2.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "baseline-01\\run.json": "3a7ef5fd6eebea28fe42f97f11cb0fe9ca9c56f4e0c56d29982c081a1719aa76",
+    "candidate-01\\by_face-grid-16-0.json": "710d529d15825d39d176509ba6b8f5fb75ba66ecd4fe015cfcd643147d1058de",
+    "candidate-01\\by_face-grid-16-0.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate-01\\by_face-grid-16-0.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate-01\\by_face-grid-16-1.json": "0e288623b2cf4d56ed8ff40da4712115e2610398d38bba735f779e90a2bdd759",
+    "candidate-01\\by_face-grid-16-1.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate-01\\by_face-grid-16-1.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate-01\\by_face-grid-16-2.json": "245640b4b2dfa190f4602e17ecaf7b5a0564e9c74aa233af31c5608cee259f7e",
+    "candidate-01\\by_face-grid-16-2.pstats": "fc767b330506b46743c5a5bad87ff46e3307482faee5313a3e6c774ccd99df86",
+    "candidate-01\\by_face-grid-16-2.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate-01\\by_face-grid-16-2.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate-01\\by_face-grid-32-0.json": "a2f613908bc5976c14dd327a9c30ed1dbd28a5a85b66eab17e6118f8f1cbe482",
+    "candidate-01\\by_face-grid-32-0.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate-01\\by_face-grid-32-0.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate-01\\by_face-grid-32-1.json": "aebc443a8c37fd5548606065ebed163b9d2e4e602bc0da02716cc7f88e2f938e",
+    "candidate-01\\by_face-grid-32-1.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate-01\\by_face-grid-32-1.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate-01\\by_face-grid-32-2.json": "0ea4143b44d6b496340c9d51c3f8497b2afe1c536dd7c01badb25357fdc16110",
+    "candidate-01\\by_face-grid-32-2.pstats": "ed01facd214b23cf59fbb7c7f52cec52fc95463b5d0f3958652f58b9fb15a303",
+    "candidate-01\\by_face-grid-32-2.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate-01\\by_face-grid-32-2.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate-01\\by_face-grid-48-0.json": "22f0c29776d20e6838472963954873f04b017766e6c240acec97d686fd62e8b3",
+    "candidate-01\\by_face-grid-48-0.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate-01\\by_face-grid-48-0.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate-01\\by_face-grid-48-1.json": "2ed465e4e2db29d86e76e08a43f9c1251e184e1ab1eb0526c268d0f2149a8496",
+    "candidate-01\\by_face-grid-48-1.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate-01\\by_face-grid-48-1.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate-01\\by_face-grid-48-2.json": "58ad16a966b49f081aee23413c80ac0328143e328da3716d430b4ccd8ac85f38",
+    "candidate-01\\by_face-grid-48-2.pstats": "9dfa3771d958b6ef4608bf90a680265bf18491b0de5eab6de6b48778b8848152",
+    "candidate-01\\by_face-grid-48-2.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate-01\\by_face-grid-48-2.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate-01\\individual-grid-16-0.json": "322cd487f48d671df35787c7a9787d188eaa80f8b8902ac4353870782a8ccb77",
+    "candidate-01\\individual-grid-16-0.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate-01\\individual-grid-16-0.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate-01\\individual-grid-16-1.json": "ea45f0ecf93906cb260110342c9e7a5a3c1bf110e8043c747c3403cf673dec96",
+    "candidate-01\\individual-grid-16-1.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate-01\\individual-grid-16-1.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate-01\\individual-grid-16-2.json": "88008652ba26fbb70db8e1c943ccf7ea66f2497673bc25364d1c5d5ea77b9f0b",
+    "candidate-01\\individual-grid-16-2.pstats": "4c072f273b1abd126df395dd951e39ef25026b9c7ec9f4118d566575423097e0",
+    "candidate-01\\individual-grid-16-2.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate-01\\individual-grid-16-2.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate-01\\individual-grid-32-0.json": "079ff0c9ab54f502dcc4041a4b2471cf9eed8717582d19c4eccd58c70bd5d92f",
+    "candidate-01\\individual-grid-32-0.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate-01\\individual-grid-32-0.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate-01\\individual-grid-32-1.json": "3102fe2fb142204befc3b8288529f9706ed17f09f21cc5928b5bc909eedc1cfd",
+    "candidate-01\\individual-grid-32-1.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate-01\\individual-grid-32-1.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate-01\\individual-grid-32-2.json": "781aaeab5eda597990f62e3c3fcef77e676690c7e6b1b3739bbc05c40d79a0ea",
+    "candidate-01\\individual-grid-32-2.pstats": "5e0304a04d337581d0c94d557f3bbd47cbe2e9b2cee2a53040639cd7c9891822",
+    "candidate-01\\individual-grid-32-2.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate-01\\individual-grid-32-2.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate-01\\individual-grid-48-0.json": "8e843a9a3504a0eca529a2718965586f791c160c617e29d7dbe8ba81d46288a8",
+    "candidate-01\\individual-grid-48-0.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate-01\\individual-grid-48-0.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate-01\\individual-grid-48-1.json": "7da50d28d65cc5c533e79bf3d7f995a993f9556a1027fb198316901db751d9f6",
+    "candidate-01\\individual-grid-48-1.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate-01\\individual-grid-48-1.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate-01\\individual-grid-48-2.json": "416a82ad05f27cc872b35a6c4913cc6d94e09d9af71fe1fac7fbcd2c9b47b81d",
+    "candidate-01\\individual-grid-48-2.pstats": "320acda5ebe15ee1f2c94d1778b04fd40d1d3fbc63ab5f67f2ec65cf9a1fc2d2",
+    "candidate-01\\individual-grid-48-2.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate-01\\individual-grid-48-2.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate-01\\run.json": "23a7abd6218441f4b8fbfe9234aa80e0e40d1af0724aaa4abecd2335bfce10c5"
+  },
+  "scope": "geometry-only queries, planning and application; no mesher, native or scientific mesh acceptance"
+}

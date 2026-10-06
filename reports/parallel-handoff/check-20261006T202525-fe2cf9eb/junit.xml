@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="3" skipped="0" tests="5" time="0.249" timestamp="2026-10-06T22:25:26.249260+02:00" hostname="WORK_STABEIST1"><testcase classname="tests.test_parallel_handoff" name="test_unselected_unknown_physical_extent_refuses_nonempty_selection[member]" time="0.004"><failure message="assert False&#10; +  where False = any(&lt;generator object test_unselected_unknown_physical_extent_refuses_nonempty_selection.&lt;locals&gt;.&lt;genexpr&gt; at 0x000001EE994F2A80&gt;)">kind = 'member'
+
+    @pytest.mark.parametrize("kind", ("member", "member_edge_use", "attachment"))
+    def test_unselected_unknown_physical_extent_refuses_nonempty_selection(kind):
+        model = GeometryModel()
+        face = plate(model)
+        axis = model.add_line(*model.add_points(((100,0,0),(101,0,0))))
+        member = model.add_member((axis,))
+        if kind == "attachment":
+            identifier = model.add_attachment(member, AttachmentKind.MEMBER_ON_BOUNDARY,
+                AttachmentTargetKind.EDGE, axis, ParameterRange(0,1), (ParameterRange(0,1),),
+                metadata={"eccentric_offset": (-100,0,0)})
+        else:
+            identifier = member if kind == "member" else model.members[member].edge_use_ids[0]
+            table = model.members if kind == "member" else model.member_edge_uses
+            with model.transaction():
+                model._put_structural(kind, replace(table[identifier], metadata={"eccentric_offset": (-100,0,0)}))
+        plan = plan_independent_components(model, face_ids=(face,), member_ids=())
+        assert not plan.certified and not plan.components
+        assert any("extent contract" in refusal.reason and
+                   model.handle(kind, identifier) in refusal.entities for refusal in plan.refusals)
+        empty = plan_independent_components(model, face_ids=(), member_ids=())
+        assert empty.certified and not empty.components and not empty.refusals
+&gt;       assert any("support family" in refusal.reason for refusal in plan.refusals)
+E       assert False
+E        +  where False = any(&lt;generator object test_unselected_unknown_physical_extent_refuses_nonempty_selection.&lt;locals&gt;.&lt;genexpr&gt; at 0x000001EE994F2A80&gt;)
+
+tests\test_parallel_handoff.py:164: AssertionError</failure></testcase><testcase classname="tests.test_parallel_handoff" name="test_unselected_unknown_physical_extent_refuses_nonempty_selection[member_edge_use]" time="0.003"><failure message="assert False&#10; +  where False = any(&lt;generator object test_unselected_unknown_physical_extent_refuses_nonempty_selection.&lt;locals&gt;.&lt;genexpr&gt; at 0x000001EE994F2DC0&gt;)">kind = 'member_edge_use'
+
+    @pytest.mark.parametrize("kind", ("member", "member_edge_use", "attachment"))
+    def test_unselected_unknown_physical_extent_refuses_nonempty_selection(kind):
+        model = GeometryModel()
+        face = plate(model)
+        axis = model.add_line(*model.add_points(((100,0,0),(101,0,0))))
+        member = model.add_member((axis,))
+        if kind == "attachment":
+            identifier = model.add_attachment(member, AttachmentKind.MEMBER_ON_BOUNDARY,
+                AttachmentTargetKind.EDGE, axis, ParameterRange(0,1), (ParameterRange(0,1),),
+                metadata={"eccentric_offset": (-100,0,0)})
+        else:
+            identifier = member if kind == "member" else model.members[member].edge_use_ids[0]
+            table = model.members if kind == "member" else model.member_edge_uses
+            with model.transaction():
+                model._put_structural(kind, replace(table[identifier], metadata={"eccentric_offset": (-100,0,0)}))
+        plan = plan_independent_components(model, face_ids=(face,), member_ids=())
+        assert not plan.certified and not plan.components
+        assert any("extent contract" in refusal.reason and
+                   model.handle(kind, identifier) in refusal.entities for refusal in plan.refusals)
+        empty = plan_independent_components(model, face_ids=(), member_ids=())
+        assert empty.certified and not empty.components and not empty.refusals
+&gt;       assert any("support family" in refusal.reason for refusal in plan.refusals)
+E       assert False
+E        +  where False = any(&lt;generator object test_unselected_unknown_physical_extent_refuses_nonempty_selection.&lt;locals&gt;.&lt;genexpr&gt; at 0x000001EE994F2DC0&gt;)
+
+tests\test_parallel_handoff.py:164: AssertionError</failure></testcase><testcase classname="tests.test_parallel_handoff" name="test_unselected_unknown_physical_extent_refuses_nonempty_selection[attachment]" time="0.003"><failure message="assert False&#10; +  where False = any(&lt;generator object test_unselected_unknown_physical_extent_refuses_nonempty_selection.&lt;locals&gt;.&lt;genexpr&gt; at 0x000001EE994F3850&gt;)">kind = 'attachment'
+
+    @pytest.mark.parametrize("kind", ("member", "member_edge_use", "attachment"))
+    def test_unselected_unknown_physical_extent_refuses_nonempty_selection(kind):
+        model = GeometryModel()
+        face = plate(model)
+        axis = model.add_line(*model.add_points(((100,0,0),(101,0,0))))
+        member = model.add_member((axis,))
+        if kind == "attachment":
+            identifier = model.add_attachment(member, AttachmentKind.MEMBER_ON_BOUNDARY,
+                AttachmentTargetKind.EDGE, axis, ParameterRange(0,1), (ParameterRange(0,1),),
+                metadata={"eccentric_offset": (-100,0,0)})
+        else:
+            identifier = member if kind == "member" else model.members[member].edge_use_ids[0]
+            table = model.members if kind == "member" else model.member_edge_uses
+            with model.transaction():
+                model._put_structural(kind, replace(table[identifier], metadata={"eccentric_offset": (-100,0,0)}))
+        plan = plan_independent_components(model, face_ids=(face,), member_ids=())
+        assert not plan.certified and not plan.components
+        assert any("extent contract" in refusal.reason and
+                   model.handle(kind, identifier) in refusal.entities for refusal in plan.refusals)
+        empty = plan_independent_components(model, face_ids=(), member_ids=())
+        assert empty.certified and not empty.components and not empty.refusals
+&gt;       assert any("support family" in refusal.reason for refusal in plan.refusals)
+E       assert False
+E        +  where False = any(&lt;generator object test_unselected_unknown_physical_extent_refuses_nonempty_selection.&lt;locals&gt;.&lt;genexpr&gt; at 0x000001EE994F3850&gt;)
+
+tests\test_parallel_handoff.py:164: AssertionError</failure></testcase><testcase classname="tests.test_parallel_handoff" name="test_implicit_support_and_eccentric_metadata_fail_closed" time="0.002" /><testcase classname="tests.test_parallel_handoff" name="test_partition_raw_mutation_tampered_evidence_and_callback_guards" time="0.004" /></testsuite></testsuites>

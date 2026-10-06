@@ -1,0 +1,67 @@
+{
+  "outside_checkout": "C:\\Users\\AUDUNA~1\\AppData\\Local\\Temp\\anygeometry-parallel-wheel-_7q65qde",
+  "records": [
+    {
+      "command": [
+        "C:\\Python\\Python314\\python.exe",
+        "-m",
+        "pip",
+        "wheel",
+        "--no-cache-dir",
+        "--no-index",
+        "--no-build-isolation",
+        "--no-deps",
+        "--wheel-dir",
+        "C:\\Github\\ANYgeometry\\.worktrees\\parallel-handoff\\reports\\parallel-handoff-root\\installed-02\\wheels",
+        "."
+      ],
+      "cwd": "C:\\Github\\ANYgeometry\\.worktrees\\parallel-handoff",
+      "status": "completed",
+      "exit_code": 0,
+      "process_wall_seconds": 2.323170299991034
+    },
+    {
+      "command": [
+        "C:\\Python\\Python314\\python.exe",
+        "-m",
+        "venv",
+        "--system-site-packages",
+        "--without-pip",
+        "C:\\Users\\AUDUNA~1\\AppData\\Local\\Temp\\anygeometry-parallel-wheel-_7q65qde\\venv"
+      ],
+      "cwd": "C:\\Users\\AUDUNA~1\\AppData\\Local\\Temp\\anygeometry-parallel-wheel-_7q65qde",
+      "status": "completed",
+      "exit_code": 0,
+      "process_wall_seconds": 0.11045460007153451
+    },
+    {
+      "command": [
+        "C:\\Users\\AUDUNA~1\\AppData\\Local\\Temp\\anygeometry-parallel-wheel-_7q65qde\\venv\\Scripts\\python.exe",
+        "-m",
+        "pip",
+        "install",
+        "--no-cache-dir",
+        "--no-index",
+        "--no-deps",
+        "--force-reinstall",
+        "C:\\Github\\ANYgeometry\\.worktrees\\parallel-handoff\\reports\\parallel-handoff-root\\installed-02\\wheels\\anygeometry-0.4.5-py3-none-any.whl"
+      ],
+      "cwd": "C:\\Users\\AUDUNA~1\\AppData\\Local\\Temp\\anygeometry-parallel-wheel-_7q65qde",
+      "status": "completed",
+      "exit_code": 0,
+      "process_wall_seconds": 1.4201666000299156
+    },
+    {
+      "command": [
+        "C:\\Users\\AUDUNA~1\\AppData\\Local\\Temp\\anygeometry-parallel-wheel-_7q65qde\\venv\\Scripts\\python.exe",
+        "C:\\Users\\AUDUNA~1\\AppData\\Local\\Temp\\anygeometry-parallel-wheel-_7q65qde\\installed_spawn.py"
+      ],
+      "cwd": "C:\\Users\\AUDUNA~1\\AppData\\Local\\Temp\\anygeometry-parallel-wheel-_7q65qde",
+      "status": "completed",
+      "exit_code": 0,
+      "process_wall_seconds": 0.9263688999926671
+    }
+  ],
+  "dependency_environment": "venv uses existing system NumPy; candidate owner package is installed locally",
+  "aggregate_process_seconds": 4.780160400085151
+}

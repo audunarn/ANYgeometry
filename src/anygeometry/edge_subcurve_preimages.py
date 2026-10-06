@@ -14,7 +14,7 @@ import weakref
 from .arrangement_geometry import LinePath, BezierPath, freeze_edge
 from .definition_binding import definition_checksum
 from .errors import GeometryError
-from .serialization import to_dict, _checksum, _serialized_model_state
+from .serialization import to_dict, _checksum, _serialized_model_state, _qualified_model_state
 
 
 class _SubcurveEnclosureUnavailable(GeometryError):
@@ -306,7 +306,7 @@ def _capture_edge_subcurve_preimages(model, *, allow_seed=False, cancellation_ch
                 ancestor = PolynomialEdgeAncestor(model.model_id, revision, checksum, definition)
                 records[edge] = _seal(ancestor, ((0, 1), (1, 1)), definition, None)
     _check(cancellation_check)
-    if model.revision != revision or to_dict(model)['checksum']['value'] != checksum:
+    if model.revision != revision or _qualified_model_state(model)['checksum']['value'] != checksum:
         raise GeometryError('edge subcurve provenance source changed during capture')
     return _Draft(weakref.ref(model), model.model_id, revision, checksum, records,
         cancellation_check, aliases=aliases)
@@ -492,10 +492,10 @@ def _finalize_edge_subcurve_preimages(model, draft, *, cancellation_check=None):
     binding = PreparedEdgeSubcurvePreimages(model.model_id, revision, checksum, tuple(records),
         unavailable, coverage, tuple(aliases))
     _check(check)
-    if model.revision != revision or to_dict(model)['checksum']['value'] != checksum:
+    if model.revision != revision or _qualified_model_state(model)['checksum']['value'] != checksum:
         raise GeometryError('edge subcurve candidate changed during finalize')
     owner = draft.owner()
-    if owner is None or owner.revision != draft.source_revision or to_dict(owner)['checksum']['value'] != draft.source_checksum:
+    if owner is None or owner.revision != draft.source_revision or _qualified_model_state(owner)['checksum']['value'] != draft.source_checksum:
         raise GeometryError('edge subcurve source changed during detached preparation')
     return _Prepared(draft.owner, binding, definition_checksum(binding))
 

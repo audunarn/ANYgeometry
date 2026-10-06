@@ -1,0 +1,199 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="3" skipped="0" tests="42" time="0.629" timestamp="2026-10-06T22:04:20.143696+02:00" hostname="WORK_STABEIST1"><testcase classname="tests.test_parallel_handoff" name="test_distant_components_transport_complete_maps_and_stable_ids" time="0.014" /><testcase classname="tests.test_parallel_handoff" name="test_separation_is_per_box_and_refuses_invalid_distance" time="0.003" /><testcase classname="tests.test_parallel_handoff" name="test_shared_vertex_and_sheet_membership_merge_regardless_distance" time="0.004" /><testcase classname="tests.test_parallel_handoff" name="test_declared_distant_attachment_closes_all_intents[connect]" time="0.002" /><testcase classname="tests.test_parallel_handoff" name="test_declared_distant_attachment_closes_all_intents[keep_disconnected]" time="0.002" /><testcase classname="tests.test_parallel_handoff" name="test_declared_distant_attachment_closes_all_intents[contact_only]" time="0.002" /><testcase classname="tests.test_parallel_handoff" name="test_declared_distant_attachment_closes_all_intents[reject]" time="0.002" /><testcase classname="tests.test_parallel_handoff" name="test_declared_distant_attachment_closes_all_intents[reuse_existing]" time="0.002" /><testcase classname="tests.test_parallel_handoff" name="test_declared_distant_attachment_closes_all_intents[imprint]" time="0.002" /><testcase classname="tests.test_parallel_handoff" name="test_undeclared_crossings_and_unselected_bridge_refuse_or_merge" time="0.002" /><testcase classname="tests.test_parallel_handoff" name="test_extruded_curved_control_hull_prevents_false_separation" time="0.100" /><testcase classname="tests.test_parallel_handoff" name="test_implicit_support_and_eccentric_metadata_fail_closed" time="0.002"><failure message="AssertionError: assert (not True)&#10; +  where True = ComponentPartition(model_id=UUID('cd54592e-f806-47f6-8597-c7f068c809ad'), revision=3, source_checksum='7f4f2e7205bfa06...tyHandle(model_id=UUID('cd54592e-f806-47f6-8597-c7f068c809ad'), kind='face', id=1),)),), merge_reasons=(), refusals=()).certified">def test_implicit_support_and_eccentric_metadata_fail_closed():
+        model = GeometryModel()
+        face = model.add_face(model.add_polyline(model.add_points(((0,0,0),(1,0,0),(1,1,0),(0,1,0))), close=True))
+        plan = plan_independent_components(model)
+&gt;       assert not plan.certified and not plan.components
+E       AssertionError: assert (not True)
+E        +  where True = ComponentPartition(model_id=UUID('cd54592e-f806-47f6-8597-c7f068c809ad'), revision=3, source_checksum='7f4f2e7205bfa06...tyHandle(model_id=UUID('cd54592e-f806-47f6-8597-c7f068c809ad'), kind='face', id=1),)),), merge_reasons=(), refusals=()).certified
+
+tests\test_parallel_handoff.py:140: AssertionError</failure></testcase><testcase classname="tests.test_parallel_handoff" name="test_partition_raw_mutation_tampered_evidence_and_callback_guards" time="0.003" /><testcase classname="tests.test_parallel_handoff" name="test_transport_rejects_incomplete_duplicate_or_tampered_correspondence" time="0.004"><failure message="AssertionError: Regex pattern did not match.&#10;  Expected regex: 'duplicate'&#10;  Actual message: 'closure transport identity records are invalid'">document = {'source_handles': [['face', 1]], 'source_model_id': '55c144df-52de-46f7-97aa-3c1f93fc5c52', 'source_revision': 2, 'transport_checksum': '2e0f2a1e23e87dfd3e52dcb8dfde583e4637f7f5e92b93089b458eb601e35df8', ...}
+
+    def model_closure_from_dict(document) -&gt; ModelClosure:
+        """Decode a plain closure envelope, verifying complete bidirectional maps.
+    
+        Source provenance is retained as declared identity; the absent original
+        source document cannot be independently requalified by a worker.
+        """
+        from .serialization import from_dict
+        from .definition_binding import definition_checksum
+        from collections.abc import Mapping
+        from copy import deepcopy
+        from numbers import Integral
+        if not isinstance(document, Mapping):
+            raise GeometryError("closure transport must be a mapping")
+        payload = deepcopy(dict(document))
+        signature = payload.pop("transport_checksum", None)
+        if set(payload) != {"working_model", "source_model_id", "source_revision", "source_handles", "work_to_source"}:
+            raise GeometryError("closure transport has unknown or missing fields")
+        if signature != definition_checksum(payload):
+            raise GeometryError("closure transport checksum mismatch")
+        try:
+            source_id = UUID(payload["source_model_id"])
+        except (TypeError, ValueError, AttributeError) as error:
+            raise GeometryError("closure transport source identity is invalid") from error
+        revision = payload["source_revision"]
+        if source_id.int == 0 or isinstance(revision, bool) or not isinstance(revision, Integral) or revision &lt; 0:
+            raise GeometryError("closure transport source revision/identity is invalid")
+        work = from_dict(payload["working_model"])
+        work_to_source = {}
+        try:
+            for kind, work_id, source_local in payload["work_to_source"]:
+                target = work.handle(kind, work_id)
+                source = EntityHandle(source_id, kind, source_local)
+                if target in work_to_source:
+&gt;                   raise GeometryError("closure transport has duplicate working handles")
+E                   anygeometry.errors.GeometryError: closure transport has duplicate working handles
+
+src\anygeometry\closure.py:137: GeometryError
+
+The above exception was the direct cause of the following exception:
+
+    def test_transport_rejects_incomplete_duplicate_or_tampered_correspondence():
+        model = GeometryModel()
+        face = plate(model)
+        closure = extract_model_closure(model, (("face",face),))
+        data = closure.to_transport()
+        changed = deepcopy(data)
+        changed["work_to_source"].pop()
+        with pytest.raises(GeometryError, match="checksum"):
+            model_closure_from_dict(changed)
+        changed["transport_checksum"] = definition_checksum({k:v for k,v in changed.items() if k != "transport_checksum"})
+        with pytest.raises(GeometryError, match="every working"):
+            model_closure_from_dict(changed)
+        changed = deepcopy(data)
+        changed["work_to_source"].append(changed["work_to_source"][0])
+        changed["transport_checksum"] = definition_checksum({k:v for k,v in changed.items() if k != "transport_checksum"})
+        with pytest.raises(GeometryError, match="duplicate"):
+&gt;           model_closure_from_dict(changed)
+
+tests\test_parallel_handoff.py:188: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+document = {'source_handles': [['face', 1]], 'source_model_id': '55c144df-52de-46f7-97aa-3c1f93fc5c52', 'source_revision': 2, 'transport_checksum': '2e0f2a1e23e87dfd3e52dcb8dfde583e4637f7f5e92b93089b458eb601e35df8', ...}
+
+    def model_closure_from_dict(document) -&gt; ModelClosure:
+        """Decode a plain closure envelope, verifying complete bidirectional maps.
+    
+        Source provenance is retained as declared identity; the absent original
+        source document cannot be independently requalified by a worker.
+        """
+        from .serialization import from_dict
+        from .definition_binding import definition_checksum
+        from collections.abc import Mapping
+        from copy import deepcopy
+        from numbers import Integral
+        if not isinstance(document, Mapping):
+            raise GeometryError("closure transport must be a mapping")
+        payload = deepcopy(dict(document))
+        signature = payload.pop("transport_checksum", None)
+        if set(payload) != {"working_model", "source_model_id", "source_revision", "source_handles", "work_to_source"}:
+            raise GeometryError("closure transport has unknown or missing fields")
+        if signature != definition_checksum(payload):
+            raise GeometryError("closure transport checksum mismatch")
+        try:
+            source_id = UUID(payload["source_model_id"])
+        except (TypeError, ValueError, AttributeError) as error:
+            raise GeometryError("closure transport source identity is invalid") from error
+        revision = payload["source_revision"]
+        if source_id.int == 0 or isinstance(revision, bool) or not isinstance(revision, Integral) or revision &lt; 0:
+            raise GeometryError("closure transport source revision/identity is invalid")
+        work = from_dict(payload["working_model"])
+        work_to_source = {}
+        try:
+            for kind, work_id, source_local in payload["work_to_source"]:
+                target = work.handle(kind, work_id)
+                source = EntityHandle(source_id, kind, source_local)
+                if target in work_to_source:
+                    raise GeometryError("closure transport has duplicate working handles")
+                work_to_source[target] = source
+            source_handles = tuple(EntityHandle(source_id, kind, identifier)
+                                   for kind, identifier in payload["source_handles"])
+        except (TypeError, ValueError, KeyError) as error:
+&gt;           raise GeometryError("closure transport identity records are invalid") from error
+E           anygeometry.errors.GeometryError: closure transport identity records are invalid
+
+src\anygeometry\closure.py:142: GeometryError
+
+During handling of the above exception, another exception occurred:
+
+    def test_transport_rejects_incomplete_duplicate_or_tampered_correspondence():
+        model = GeometryModel()
+        face = plate(model)
+        closure = extract_model_closure(model, (("face",face),))
+        data = closure.to_transport()
+        changed = deepcopy(data)
+        changed["work_to_source"].pop()
+        with pytest.raises(GeometryError, match="checksum"):
+            model_closure_from_dict(changed)
+        changed["transport_checksum"] = definition_checksum({k:v for k,v in changed.items() if k != "transport_checksum"})
+        with pytest.raises(GeometryError, match="every working"):
+            model_closure_from_dict(changed)
+        changed = deepcopy(data)
+        changed["work_to_source"].append(changed["work_to_source"][0])
+        changed["transport_checksum"] = definition_checksum({k:v for k,v in changed.items() if k != "transport_checksum"})
+&gt;       with pytest.raises(GeometryError, match="duplicate"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: Regex pattern did not match.
+E         Expected regex: 'duplicate'
+E         Actual message: 'closure transport identity records are invalid'
+
+tests\test_parallel_handoff.py:187: AssertionError</failure></testcase><testcase classname="tests.test_parallel_handoff" name="test_chart_batch_parity_individual_errors_and_success_binding" time="0.001"><failure message="anygeometry.errors.GeometryError: face 2 boundary is inconsistent with its explicit surface">def test_chart_batch_parity_individual_errors_and_success_binding():
+        model = GeometryModel()
+        good = plate(model)
+&gt;       bad = model.add_plate(model.add_points(((10,0,0),(12,0,0),(12,1,1),(10,1,0))))
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_parallel_handoff.py:194: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\anygeometry\model.py:179: in wrapped
+    with self.transaction():
+         ^^^^^^^^^^^^^^^^^^
+src\anygeometry\transactions.py:149: in __exit__
+    self._model._exit_transaction(exc)  # noqa: SLF001
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = GeometryModel(vertices=8, edges=4, faces=1), error = None
+
+    def _exit_transaction(self, error: BaseException | None) -&gt; None:
+        journal = self._transaction_journal
+        if journal is None or journal.depth &lt;= 0:
+            raise RuntimeError("transaction exit without a matching entry")
+        journal.depth -= 1
+        if journal.depth:
+            if error is not None:
+                # The exception continues through the outer context, which
+                # owns rollback.  No nested savepoint is implied.
+                journal.failure = error
+                return
+            return
+        try:
+            failure = error if error is not None else journal.failure
+            if failure is not None:
+                self._rollback_transaction(journal)
+                if error is None:
+                    raise GeometryError(
+                        "transaction cannot commit after a nested edit failed"
+                    ) from failure
+                return
+            try:
+                self._capture_direct_mutations(journal)
+                # Every public edit, including a pure addition, must publish a
+                # valid committed state.  Standalone vertices and edges are
+                # valid neutral geometry; new faces additionally receive the
+                # same changed-closure trim/surface checks as edited faces.
+                validates_commit = bool(journal.entity_before) or bool(
+                    journal.structural_before
+                    or journal.group_changes
+                    or journal.tag_changes
+                    or journal.ownership_changes
+                    or journal.member_changes
+                    or journal.attachment_changes
+                )
+                if validates_commit:
+                    problems = self._validate_incremental(journal)
+                    if problems:
+&gt;                       raise GeometryError("; ".join(problems))
+E                       anygeometry.errors.GeometryError: face 2 boundary is inconsistent with its explicit surface
+
+src\anygeometry\model.py:735: GeometryError</failure></testcase><testcase classname="tests.test_parallel_handoff" name="test_query_content_qualification_reuse_revalidates_raw_topology" time="0.018" /><testcase classname="tests.test_parallel_handoff" name="test_query_cancel_and_same_revision_callback_mutation_abort[query_trimmed_surface_charts]" time="0.009" /><testcase classname="tests.test_parallel_handoff" name="test_query_cancel_and_same_revision_callback_mutation_abort[query_trimmed_surface_charts_by_face]" time="0.008" /><testcase classname="tests.test_parallel_handoff" name="test_current_geometry_document_preserves_sparse_local_ids" time="0.002" /><testcase classname="tests.test_definition_binding_reuse" name="test_nested_aliased_definitions_match_original_bytes" time="0.001" /><testcase classname="tests.test_definition_binding_reuse" name="test_public_expansions_remain_independent_for_each_expanded_kind[shared0]" time="0.000" /><testcase classname="tests.test_definition_binding_reuse" name="test_public_expansions_remain_independent_for_each_expanded_kind[shared1]" time="0.000" /><testcase classname="tests.test_definition_binding_reuse" name="test_public_expansions_remain_independent_for_each_expanded_kind[shared2]" time="0.000" /><testcase classname="tests.test_definition_binding_reuse" name="test_public_expansions_remain_independent_for_each_expanded_kind[shared3]" time="0.000" /><testcase classname="tests.test_definition_binding_reuse" name="test_public_expansions_remain_independent_for_each_expanded_kind[shared4]" time="0.000" /><testcase classname="tests.test_definition_binding_reuse" name="test_only_checksums_reuse_mapping_traversal_with_a_fresh_memo" time="0.000" /><testcase classname="tests.test_definition_binding_reuse" name="test_array_shape_dtype_and_scalar_contract_match_original[array0]" time="0.000" /><testcase classname="tests.test_definition_binding_reuse" name="test_array_shape_dtype_and_scalar_contract_match_original[array1]" time="0.000" /><testcase classname="tests.test_definition_binding_reuse" name="test_array_shape_dtype_and_scalar_contract_match_original[array2]" time="0.000" /><testcase classname="tests.test_definition_binding_reuse" name="test_array_shape_dtype_and_scalar_contract_match_original[array3]" time="0.000" /><testcase classname="tests.test_definition_binding_reuse" name="test_array_shape_dtype_and_scalar_contract_match_original[array4]" time="0.000" /><testcase classname="tests.test_definition_binding_reuse" name="test_mutations_between_calls_cannot_reuse_previous_content" time="0.000" /><testcase classname="tests.test_definition_binding_reuse" name="test_nonfinite_after_successful_call_is_still_refused[scalar-nan]" time="0.000" /><testcase classname="tests.test_definition_binding_reuse" name="test_nonfinite_after_successful_call_is_still_refused[scalar-inf]" time="0.000" /><testcase classname="tests.test_definition_binding_reuse" name="test_nonfinite_after_successful_call_is_still_refused[scalar--inf]" time="0.000" /><testcase classname="tests.test_definition_binding_reuse" name="test_nonfinite_after_successful_call_is_still_refused[array-nan]" time="0.000" /><testcase classname="tests.test_definition_binding_reuse" name="test_nonfinite_after_successful_call_is_still_refused[array-inf]" time="0.000" /><testcase classname="tests.test_definition_binding_reuse" name="test_nonfinite_after_successful_call_is_still_refused[array--inf]" time="0.000" /><testcase classname="tests.test_definition_binding_reuse" name="test_nonfinite_after_successful_call_is_still_refused[numpy_scalar-nan]" time="0.000" /><testcase classname="tests.test_definition_binding_reuse" name="test_nonfinite_after_successful_call_is_still_refused[numpy_scalar-inf]" time="0.000" /><testcase classname="tests.test_definition_binding_reuse" name="test_nonfinite_after_successful_call_is_still_refused[numpy_scalar--inf]" time="0.000" /><testcase classname="tests.test_definition_binding_reuse" name="test_recursive_input_remains_rejected" time="0.002" /></testsuite></testsuites>

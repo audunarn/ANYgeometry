@@ -1,0 +1,25 @@
+{
+  "outside_checkout": "C:\\Users\\AUDUNA~1\\AppData\\Local\\Temp\\anygeometry-parallel-wheel-92m3v74t",
+  "records": [
+    {
+      "command": [
+        "C:\\Python\\Python314\\python.exe",
+        "-m",
+        "pip",
+        "wheel",
+        "--no-index",
+        "--no-build-isolation",
+        "--no-deps",
+        "--wheel-dir",
+        "C:\\Github\\ANYgeometry\\.worktrees\\parallel-handoff\\reports\\parallel-handoff-root\\installed-01\\wheels",
+        "."
+      ],
+      "cwd": "C:\\Github\\ANYgeometry\\.worktrees\\parallel-handoff",
+      "status": "completed",
+      "exit_code": 1,
+      "process_wall_seconds": 1.448772299918346
+    }
+  ],
+  "dependency_environment": "venv uses existing system NumPy; candidate owner package is installed locally",
+  "aggregate_process_seconds": 1.448772299918346
+}

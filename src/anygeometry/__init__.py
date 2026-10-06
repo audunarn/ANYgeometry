@@ -104,6 +104,15 @@ from .cylinder_charts import (
     validate_cylinder_atlas_binding, evaluate_cylinder_occurrences,
 )
 from .closure import ModelClosure, extract_model_closure
+from .closure import model_closure_to_dict, model_closure_from_dict
+from .component_partition import (
+    IndependentComponent, ComponentMergeReason, ComponentRefusal, ComponentPartition,
+    plan_independent_components, validate_component_partition_binding,
+)
+from .trimmed_charts import (
+    TrimmedSurfaceChartQueryResult, TrimmedSurfaceChartQueryResults,
+    query_trimmed_surface_charts_by_face,
+)
 from .cylinder_patch import (
     CylinderPatchStatus, CylinderPatchErrorCode, CylinderPatchError,
     CylinderPatchPolicy, CylinderPatchCertificate, CylinderPatchOccurrence,
@@ -530,6 +539,17 @@ __all__ = [
     "evaluate_edge_many",
     "evaluate_face_many",
     "extract_model_closure",
+    "model_closure_to_dict",
+    "model_closure_from_dict",
+    "IndependentComponent",
+    "ComponentMergeReason",
+    "ComponentRefusal",
+    "ComponentPartition",
+    "plan_independent_components",
+    "validate_component_partition_binding",
+    "TrimmedSurfaceChartQueryResult",
+    "TrimmedSurfaceChartQueryResults",
+    "query_trimmed_surface_charts_by_face",
     "face_derivatives_many",
     "face_normal_many",
     "fragment_face",

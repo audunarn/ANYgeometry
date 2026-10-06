@@ -1,0 +1,9 @@
+Processing c:\github\anygeometry\.worktrees\parallel-handoff
+  Preparing metadata (pyproject.toml): started
+  Preparing metadata (pyproject.toml): finished with status 'done'
+Building wheels for collected packages: ANYgeometry
+  Building wheel for ANYgeometry (pyproject.toml): started
+  Building wheel for ANYgeometry (pyproject.toml): finished with status 'done'
+  Created wheel for ANYgeometry: filename=anygeometry-0.4.5-py3-none-any.whl size=694954 sha256=ef30c7d9fc5726e80e6abc4ade40aa2706d8b22a94a5efd67a7ac23e7f75378f
+  Stored in directory: C:\Users\AudunArnesenNyhus\AppData\Local\Temp\pip-ephem-wheel-cache-5upz4hhc\wheels\75\42\21\8c9dc131ec61423f12a0d6e554513fd91724b068603acc76fb
+Successfully built ANYgeometry

@@ -11,8 +11,13 @@ from dataclasses import fields
 from pathlib import Path
 from typing import Any, Mapping
 from uuid import UUID
+from weakref import WeakKeyDictionary
 
 import numpy as np
+
+# Qualification is reusable only by complete persisted content, never revision
+# or entity identity. Every lookup freshly encodes content (including raw edits).
+_qualified_documents = WeakKeyDictionary()
 
 from .curves import Arc, Spline, Straight
 from .exact_curves import EllipticArc, CylinderIntersectionCurve
@@ -563,6 +568,14 @@ def to_dict(
     qualification API is available and refuses a non-certifiable report.
     """
 
+    _qualify_document(geometry, include_features=include_features, certified=certified)
+    document = _serialized_model_state(geometry, include_features=include_features)
+    if include_features:
+        _qualified_documents[geometry] = (document["checksum"]["value"], _incidence_binding(geometry))
+    return document
+
+
+def _qualify_document(geometry, *, include_features=True, certified=False):
     if include_features:
         geometry.features.validate_persistence(geometry)
     errors = geometry.validate_topology()
@@ -581,7 +594,49 @@ def to_dict(
         if not certifiable:
             raise GeometryError("certified serialization requires a clean strict audit")
 
-    return _serialized_model_state(geometry, include_features=include_features)
+def _incidence_binding(geometry):
+    """Immutable snapshot of all reverse maps checked by structural validation.
+
+    These derived indexes are intentionally absent from persisted checksums.
+    They still affect qualification and extraction; raw equal-revision edits
+    must invalidate reusable qualification. Keep key/value types as well as
+    content, so malformed replacements cannot normalize into a valid snapshot.
+    """
+    def key(value):
+        return (type(value), tuple(key(item) for item in value)) if isinstance(value, tuple) else (type(value), value)
+    try:
+        return tuple((name, type(getattr(geometry, name)), frozenset(
+            (key(identifier), type(values), frozenset(key(item) for item in values))
+            for identifier, values in getattr(geometry, name).items()))
+            for name in ('_face_structural_uses', '_edge_member_uses', '_edge_coedges',
+                         '_target_attachments', '_source_attachments', '_member_attachments',
+                         '_sheet_attachments', '_member_junctions', '_sheet_junctions',
+                         '_attachment_junctions', '_orientation_members'))
+    except (TypeError, ValueError, AttributeError) as error:
+        raise GeometryError("query reverse incidence binding is malformed") from error
+
+
+def _qualified_model_state(geometry, *, expected_checksum=None,
+                           changed_message="query source binding changed"):
+    """Read-only query snapshot with content-bound topology qualification.
+
+    Complete encoding is mandatory on every call. Neither revision nor frozen
+    record wrappers are sufficient to detect direct array/definition mutation.
+    Public ``to_dict`` continues to validate every serialization request.
+    """
+    document = _serialized_model_state(geometry)
+    checksum = document["checksum"]["value"]
+    if expected_checksum is not None and checksum != expected_checksum:
+        raise GeometryError(changed_message)
+    incidence = _incidence_binding(geometry)
+    signature = (checksum, incidence)
+    if _qualified_documents.get(geometry) != signature:
+        _qualify_document(geometry)
+        if (_serialized_model_state(geometry)["checksum"]["value"] != checksum
+                or _incidence_binding(geometry) != incidence):
+            raise GeometryError("geometry changed during query qualification")
+        _qualified_documents[geometry] = signature
+    return document
 
 
 def _serialized_model_state(
