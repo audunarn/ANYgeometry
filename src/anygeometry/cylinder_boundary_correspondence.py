@@ -49,15 +49,35 @@ undefined exactly on the radial-null line through the authored origin; exact
 plane/line/circle decisions certify that the whole circle avoids that line
 (``exact`` only then).  When the whole circle cannot certify avoidance the
 projected correspondence is refused, with the native definition identity
-retained as separate evidence.  Arc split lineage is absent from the
-polynomial edge-subcurve ancestry; missing authenticated ancestry refuses
-instead of inferring a split from samples.
+retained as separate evidence.
+
+Arc split ancestry is a bounded geometric-subarc-image contract, never a
+source-parameter restriction.  The recorded numeric split parameter and
+composed interval are authenticated provenance only
+(``parameter_mapping_qualified`` is False on every record); no exact
+ancestor source-parameter restriction is claimed from same-circle or
+oriented-wedge evidence.  A split arc root is ``exact`` only when every
+child's three actual points lie EXACTLY on the ancestor's exact circumcircle
+(common plane/circle), each child's own whole-circle finiteness is certified,
+the directed use agrees with the original authored EdgeUse direction, and an
+independently proven COMPLETE GEOMETRIC TILING of the ancestor's directed
+span holds: authenticated shared anchors (exact rational position chaining
+from the ancestor's start to its end), strict directed ordering by exact
+wedge tests (no gap, no overlap) and complete ancestor span.  Numeric
+interval tiling is never a shortcut for geometric equality.  An ``enclosed``
+child (nonzero certified bounds within the recorded split tolerance, plane
+distance included) refuses the root as enclosed-within-tolerance-not-exact;
+a refused child refuses the root with its recorded reason.  Enclosure alone
+does not prove different curves and never grants mesh or material permission.
 
 Orientation.  Exact boundary correspondence is oriented: a straight
 descendant's directed source interval sign combined with its current EdgeUse
-direction must equal the original authored EdgeUse direction, and an unsplit
-arc must keep the authored use direction.  Native parameter identity alone is
-not oriented boundary equality; a reversed traversal refuses.
+direction must equal the original authored EdgeUse direction, an unsplit
+arc must keep the authored use direction, and a split arc child's stored
+direction relative to the ancestor's, combined with its current EdgeUse
+direction, must equal the original authored EdgeUse direction.  Native
+parameter identity alone is not oriented boundary equality; a reversed
+traversal refuses.
 """
 from dataclasses import dataclass
 from fractions import Fraction
@@ -66,9 +86,11 @@ import math
 
 from .definition_binding import definition_checksum
 from .edge_subcurve_preimages import (
+    ArcEdgeAncestor, ArcEdgeDefinition, ArcSubcurvePreimage,
     EdgeSubcurvePreimage, PolynomialEdgeAncestor, PolynomialEdgeDefinition,
     PreparedEdgeSubcurvePreimages, query_prepared_edge_subcurve_preimages,
-    validate_prepared_edge_subcurve_preimages_binding)
+    validate_prepared_edge_subcurve_preimages_binding,
+    _arc_circle, _arc_positions)
 from .curves import Arc
 from .errors import GeometryError
 from .prepared_face_preimages import (
@@ -323,6 +345,141 @@ class ProjectedArcChild:
 
 
 @dataclass(frozen=True, slots=True)
+class ProjectedArcSplitChild:
+    """One authenticated current arc descendant of a split arc root.
+
+    ``interval`` is authenticated NUMERIC PROVENANCE only;
+    ``parameter_mapping_qualified`` is always False and no field claims the
+    child equals the ancestor restricted to that interval.  ``anchor_bounds``
+    holds certified exact-rational (lower, upper) distance intervals from each
+    defining point to the ancestor's exact circumcircle with the plane
+    distance included; ``whole_circle_bound`` is the certified upper bound
+    over the child's whole circumcircle.
+    """
+    edge_id: int
+    use_forward: bool
+    start_vertex: int
+    via_vertex: int
+    end_vertex: int
+    classification: str
+    direction: str
+    anchor_bounds: tuple
+    whole_circle_bound: tuple | None
+    tolerance: tuple | None
+    interval: tuple
+    parameter_mapping_qualified: bool
+
+
+def _directed_wedge(normal, center, first, second, probe):
+    """True iff probe lies STRICTLY inside the directed arc from first to
+    second (counterclockwise around normal), with span in (0, 2*pi).
+
+    Exact rational cross/dot sign logic; the strictly-below-pi, antipodal and
+    strictly-above-pi cases are decided separately, and the endpoints are
+    never strictly inside.  Returns None when first and second coincide."""
+    u = _sub3(first, center)
+    v = _sub3(second, center)
+    w = _sub3(probe, center)
+    if u == v:
+        return None
+    cross_ab = _dot3(_cross3(u, v), normal)
+    if cross_ab > 0:  # directed span strictly below pi
+        return _dot3(_cross3(u, w), normal) > 0 and _dot3(_cross3(v, w), normal) < 0
+    if cross_ab < 0:  # directed span strictly above pi
+        inside_complement = (_dot3(_cross3(v, w), normal) > 0
+                             and _dot3(_cross3(u, w), normal) < 0)
+        return not inside_complement and w != u and w != v
+    # Antipodal anchors: the directed span is exactly pi.
+    return _dot3(_cross3(u, w), normal) > 0
+
+
+def _arc_geometric_tiling(positions, records):
+    """Complete geometric tiling of the ancestor's directed span, or a reason.
+
+    Exact children only, and GEOMETRY only: the children's images are directed
+    subarcs of the ancestor's circumcircle containing their via points,
+    chained through authenticated shared anchors by exact rational position
+    equality from the ancestor's start to its end.  Every child anchor lies
+    on the ancestor's ORIGINAL directed span (closed only at the ancestor's
+    own start/end anchors, strictly inside otherwise), and the chain advances
+    in global monotonic order from the original start: each shared anchor
+    lies strictly inside the directed wedge from that original start to the
+    following end, so each child's selected via-containing arc equals the
+    corresponding consecutive subinterval of that span — no gap, no overlap,
+    no wrap-around past the end (a 450-degree chain on a 90-degree ancestor
+    is rejected).  Numeric intervals are never consulted for geometric
+    equality.
+    """
+    circle = _arc_circle(positions)
+    if circle is None:
+        return 'arc split tiling uncertified: degenerate ancestor'
+    center, _, normal = circle
+    first, via, last = positions
+    if first == last:
+        return 'arc split tiling uncertified: degenerate ancestor span'
+    if _directed_wedge(normal, center, first, last, via):
+        counterclockwise = True
+    elif _directed_wedge(normal, center, last, first, via):
+        counterclockwise = False
+    else:
+        return 'arc split tiling uncertified: degenerate ancestor'
+    def wedge(a, b, probe):
+        if counterclockwise:
+            return _directed_wedge(normal, center, a, b, probe)
+        return _directed_wedge(normal, center, b, a, probe)
+    images = []
+    for record in records:
+        child_first, child_via, child_last = _arc_positions(record.current_definition)
+        if wedge(child_first, child_last, child_via):
+            anchors = (child_first, child_last)
+        elif wedge(child_last, child_first, child_via):
+            anchors = (child_last, child_first)
+        else:
+            return 'arc split tiling uncertified: child via outside a directed subarc'
+        # Root global span containment: every child anchor lies on the
+        # ancestor's ORIGINAL directed span — closed only at the ancestor's
+        # own start/end anchors, strictly inside otherwise.  A chain whose
+        # anchors leave the span (for example a 450-degree wrap on a
+        # 90-degree ancestor) is rejected before any chaining.
+        if anchors[0] != first and not wedge(first, last, anchors[0]):
+            return 'arc split tiling conflict: child anchor outside ancestor span'
+        if anchors[1] != last and not wedge(first, last, anchors[1]):
+            return 'arc split tiling conflict: child anchor outside ancestor span'
+        images.append((anchors, record))
+    by_first = {}
+    for anchors, record in images:
+        by_first.setdefault(anchors[0], []).append((anchors, record))
+    starts = by_first.get(first, [])
+    if not starts:
+        return 'arc split tiling incomplete'
+    if len(starts) > 1:
+        return 'arc split tiling conflict'
+    chain = [starts[0]]
+    used = {starts[0][1].edge_id}
+    while True:
+        anchors, record = chain[-1]
+        if anchors[1] == last:
+            break
+        following = [item for item in by_first.get(anchors[1], [])
+                     if item[1].edge_id not in used]
+        if not following:
+            return 'arc split tiling incomplete'
+        if len(following) > 1:
+            return 'arc split tiling conflict'
+        following = following[0]
+        # Strict GLOBAL advancement from the original start: local wedges
+        # can wrap on a major arc and admit a full extra revolution even
+        # when every anchor lies inside the original span.
+        if not wedge(first, following[0][1], anchors[1]):
+            return 'arc split tiling conflict'
+        used.add(following[1].edge_id)
+        chain.append(following)
+    if len(chain) != len(images):
+        return 'arc split tiling conflict'
+    return None
+
+
+@dataclass(frozen=True, slots=True)
 class ProjectedBoundaryRoot:
     root_edge_id: int
     loop_index: int
@@ -552,10 +709,29 @@ def _detach_edge_preimage_binding(binding):
             tuple(value.squared_distance_bound),
             tuple(value.tolerance) if value.tolerance is not None else None)
 
+    def arc_definition(value):
+        return ArcEdgeDefinition(value.edge_id, value.start, value.via, value.end,
+            tuple(tuple(point) for point in value.positions), value.checksum)
+
+    def arc_record(value):
+        return ArcSubcurvePreimage(value.edge_id,
+            ArcEdgeAncestor(value.ancestor.model_id, value.ancestor.revision,
+                value.ancestor.source_checksum, arc_definition(value.ancestor.definition)),
+            tuple(value.local_split_parameter) if value.local_split_parameter is not None else None,
+            tuple(tuple(bound) for bound in value.interval),
+            arc_definition(value.current_definition),
+            value.classification, value.reason, value.direction,
+            tuple(tuple(pair) for pair in value.anchor_bounds),
+            tuple(value.whole_circle_bound) if value.whole_circle_bound is not None else None,
+            tuple(value.tolerance) if value.tolerance is not None else None,
+            value.parameter_mapping_qualified)
+
     return PreparedEdgeSubcurvePreimages(binding.model_id, binding.revision,
         binding.source_checksum, tuple(record(row) for row in binding.records),
         tuple(binding.unavailable_edge_ids), tuple(binding.coverage),
-        tuple(record(row) for row in binding.alias_records))
+        tuple(record(row) for row in binding.alias_records),
+        tuple(arc_record(row) for row in binding.arc_records),
+        tuple(arc_record(row) for row in binding.arc_alias_records))
 
 
 def query_prepared_cylinder_boundary_correspondence(model, authored_face_id, *,
@@ -641,6 +817,26 @@ def query_prepared_cylinder_boundary_correspondence(model, authored_face_id, *,
             raise GeometryError('cylinder boundary correspondence original polynomial changed')
         ancestry.setdefault(root, []).append(row)
 
+    # Authenticated arc ancestry per arc root of this face only.  The ancestor
+    # definition must match the authored arc definition exactly (vertex ids
+    # and exact rational positions); anything else is a changed original.
+    arc_ancestry = {}
+    for row in (*edge_preimages.arc_records, *edge_preimages.arc_alias_records):
+        _check(cancellation_check)
+        ancestor = row.ancestor
+        root = ancestor.definition.edge_id
+        if root not in arc_definitions:
+            continue
+        if (ancestor.model_id != original.model_id or ancestor.revision != original.revision
+                or ancestor.source_checksum != original.source_checksum):
+            continue
+        start, via, end, positions = arc_definitions[root]
+        if (ancestor.definition.start != start or ancestor.definition.via != via
+                or ancestor.definition.end != end
+                or _arc_positions(ancestor.definition) != positions):
+            raise GeometryError('cylinder boundary correspondence original arc changed')
+        arc_ancestry.setdefault(root, []).append(row)
+
     incidence = {}
     for face in descendants:
         _check(cancellation_check)
@@ -668,7 +864,7 @@ def query_prepared_cylinder_boundary_correspondence(model, authored_face_id, *,
                                         root, loop_index, forward)
             elif curve['type'] == 'arc':
                 record = _arc_root(frame, current_edges, arc_definitions, boundary_uses,
-                                   root, loop_index, forward)
+                                   root, loop_index, forward, arc_ancestry)
             else:
                 record = _root_record(root, loop_index, forward, curve['type'], 'refused',
                     'unsupported family', {'finiteness_certified': None}, ())
@@ -758,36 +954,102 @@ def _straight_root(frame, controls, ancestry, boundary_uses, root, loop_index, f
                         tuple(children))
 
 
-def _arc_root(frame, current_edges, arc_definitions, boundary_uses, root, loop_index, forward):
-    """Unsplit arc root: exact native definition identity plus whole-circle
-    finiteness.  ``exact`` requires BOTH plus directed-use agreement with the
-    original authored EdgeUse; identity without a finiteness certificate
-    refuses the projected correspondence while retaining the native
-    definition identity as separate evidence.  All current inputs come from
-    the detached entry snapshot, never from the live model."""
+def _arc_root(frame, current_edges, arc_definitions, boundary_uses, root, loop_index,
+              forward, arc_ancestry=None):
+    """Arc root: unsplit identity or bounded geometric-subarc-image ancestry.
+
+    Unsplit: exact native definition identity plus whole-circle finiteness.
+    ``exact`` requires BOTH plus directed-use agreement with the original
+    authored EdgeUse; identity without a finiteness certificate refuses the
+    projected correspondence while retaining the native definition identity as
+    separate evidence.
+
+    Split: authenticated arc ancestry records only, never inference from
+    samples.  Each child must lie on the current boundary, its stored
+    direction relative to the ancestor's combined with the current EdgeUse
+    direction must equal the original authored EdgeUse direction, and its own
+    whole-circle finiteness must be certified.  An ``exact`` child
+    (three actual points exactly on the ancestor's exact circumcircle)
+    contributes to the complete GEOMETRIC tiling proof; an ``enclosed``
+    child refuses the root as enclosed-within-tolerance-not-exact; a refused
+    child refuses the root with its recorded reason.  Root ``exact`` requires
+    the complete geometric tiling (authenticated shared anchors, strict
+    directed ordering, complete ancestor span); numeric interval tiling is
+    never a shortcut.  All current inputs come from the detached entry
+    snapshot, never from the live model.
+    """
     start, via, end, positions = arc_definitions[root]
     snapshot = current_edges.get(root)
     identity = root in boundary_uses and snapshot is not None and snapshot[0] == 'arc'
     if identity:
         identity = (snapshot[1] == start and snapshot[2] == via and snapshot[3] == end
                     and snapshot[4] == positions)
-    if not identity:
+    if identity:
+        if boundary_uses[root][1] != forward:
+            return _root_record(root, loop_index, forward, 'arc', 'refused',
+                'descendant orientation reversed', {'finiteness_certified': None,
+                                                    'native_identity_certified': True}, ())
+        child = ProjectedArcChild(root, boundary_uses[root][1], start, via, end)
+        certified, evidence, reason = _arc_finiteness(frame, positions)
+        if not certified:
+            return _root_record(root, loop_index, forward, 'arc', 'refused', reason,
+                {'finiteness_certified': False, 'native_identity_certified': True,
+                 'arc_finiteness': evidence}, (child,))
+        return _root_record(root, loop_index, forward, 'arc', 'exact', None,
+            {'finiteness_certified': True, 'native_identity_certified': True,
+             'arc_finiteness': evidence}, (child,))
+    records = (arc_ancestry or {}).get(root, ())
+    if not records:
         return _root_record(root, loop_index, forward, 'arc', 'refused',
             'arc ancestry unavailable', {'finiteness_certified': None,
                                          'native_identity_certified': False}, ())
-    if boundary_uses[root][1] != forward:
-        return _root_record(root, loop_index, forward, 'arc', 'refused',
-            'descendant orientation reversed', {'finiteness_certified': None,
-                                                'native_identity_certified': True}, ())
-    child = ProjectedArcChild(root, boundary_uses[root][1], start, via, end)
-    certified, evidence, reason = _arc_finiteness(frame, positions)
-    if not certified:
-        return _root_record(root, loop_index, forward, 'arc', 'refused', reason,
-            {'finiteness_certified': False, 'native_identity_certified': True,
-             'arc_finiteness': evidence}, (child,))
+    children = []
+    exact_records = []
+    for record in records:
+        if record.edge_id not in boundary_uses:
+            return _root_record(root, loop_index, forward, 'arc', 'refused',
+                'descendant not on current boundary', {'finiteness_certified': None,
+                    'native_identity_certified': False}, tuple(children))
+        use_forward = boundary_uses[record.edge_id][1]
+        # Oriented boundary equality: the child's stored direction relative to
+        # the ancestor's, combined with the current EdgeUse direction, must
+        # equal the original authored EdgeUse direction.
+        if (use_forward == (record.direction == 'forward')) != forward:
+            return _root_record(root, loop_index, forward, 'arc', 'refused',
+                'descendant orientation reversed', {'finiteness_certified': None,
+                    'native_identity_certified': False}, tuple(children))
+        child = ProjectedArcSplitChild(record.edge_id, use_forward,
+            record.current_definition.start, record.current_definition.via,
+            record.current_definition.end, record.classification, record.direction,
+            record.anchor_bounds, record.whole_circle_bound, record.tolerance,
+            record.interval, record.parameter_mapping_qualified)
+        children.append(child)
+        if record.classification == 'refused':
+            return _root_record(root, loop_index, forward, 'arc', 'refused',
+                record.reason, {'finiteness_certified': None,
+                    'native_identity_certified': False}, tuple(children))
+        if record.classification == 'enclosed':
+            # Enclosure is honest evidence, never exactness and never proof the
+            # curves differ; the root refuses as enclosed-within-tolerance.
+            return _root_record(root, loop_index, forward, 'arc', 'refused',
+                'arc split enclosed within tolerance, not exact',
+                {'finiteness_certified': None, 'native_identity_certified': False},
+                tuple(children))
+        certified, evidence, reason = _arc_finiteness(
+            frame, _arc_positions(record.current_definition))
+        if not certified:
+            return _root_record(root, loop_index, forward, 'arc', 'refused', reason,
+                {'finiteness_certified': False, 'native_identity_certified': False},
+                tuple(children))
+        exact_records.append(record)
+    tiling = _arc_geometric_tiling(positions, exact_records)
+    if tiling is not None:
+        return _root_record(root, loop_index, forward, 'arc', 'refused', tiling,
+            {'finiteness_certified': True, 'native_identity_certified': False},
+            tuple(children))
     return _root_record(root, loop_index, forward, 'arc', 'exact', None,
-        {'finiteness_certified': True, 'native_identity_certified': True,
-         'arc_finiteness': evidence}, (child,))
+        {'finiteness_certified': True, 'native_identity_certified': False},
+        tuple(children))
 
 
 def validate_prepared_cylinder_boundary_correspondence_binding(model, result, *,

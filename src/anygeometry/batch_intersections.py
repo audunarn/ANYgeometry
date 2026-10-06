@@ -845,8 +845,8 @@ def _apply_intersections_in_place(model, plan, *, policy, _edge_preimage_draft=N
                     raise GeometryError("split station has no unique descendant parameter")
                 parent_definition = None
                 if _edge_preimage_draft is not None:
-                    from .edge_subcurve_preimages import _edge_subcurve_definition
-                    parent_definition = _edge_subcurve_definition(model, current)
+                    from .edge_subcurve_preimages import _edge_ancestry_definition
+                    parent_definition = _edge_ancestry_definition(model, current)
                 _vertex, (left, right) = split_edge_attachments(model, current, stations[0], check)
                 if _edge_preimage_draft is not None:
                     from .edge_subcurve_preimages import (_drop_edge_subcurve_records,
@@ -918,8 +918,8 @@ def _apply_intersections_in_place(model, plan, *, policy, _edge_preimage_draft=N
                     vertex_sources[chosen].update(vertex_sources.get(duplicate, ()))
                     prior_definitions = {}
                     if _edge_preimage_draft is not None:
-                        from .edge_subcurve_preimages import _edge_subcurve_definition
-                        prior_definitions = {edge: _edge_subcurve_definition(model, edge)
+                        from .edge_subcurve_preimages import _edge_ancestry_definition
+                        prior_definitions = {edge: _edge_ancestry_definition(model, edge)
                             for edge in model.edges_using_vertex(duplicate)}
                     _merge_vertex(model, duplicate, chosen)
                     if _edge_preimage_draft is not None:

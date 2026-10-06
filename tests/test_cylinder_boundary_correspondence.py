@@ -276,7 +276,7 @@ def test_public_arc_radial_zero_fixture_is_typed_model_refusal():
                                                   1.0, 2.0, math.pi, math.pi))
 
 
-def test_missing_arc_split_ancestry_refuses_instead_of_inferring():
+def test_recorded_arc_split_enclosure_does_not_grant_exact_correspondence():
     from anygeometry.generators.structural import cylinder
     model = cylinder(1.0, 1.0, circumferential_segments=3)
     model.add_plate(model.add_points(((2.0, 0.5, -0.5), (2.0, 0.5, 1.5),
@@ -290,7 +290,9 @@ def test_missing_arc_split_ancestry_refuses_instead_of_inferring():
     assert result.outcome == 'refused'
     arcs = [root for root in result.boundary_roots if root.family == 'arc']
     assert arcs and all(root.outcome == 'refused' for root in arcs)
-    assert all(root.reason == 'arc ancestry unavailable' for root in arcs)
+    assert all(root.reason == 'arc split enclosed within tolerance, not exact' for root in arcs)
+    assert all(root.children and all(not child.parameter_mapping_qualified
+                                    for child in root.children) for root in arcs)
     assert result.unaccounted_boundary_edges
     assert any('incomplete descendant boundary scope' in refusal
                for refusal in result.refusals)

@@ -89,12 +89,17 @@ transcendental bounds and is explicitly not claimed.
 
 Per authored boundary root (loop and holes) and aggregated per face:
 
-- `exact` — whole-curve parameter correspondence proved. For a straight root,
+- `exact` — oriented projected boundary equality with family-specific evidence.
+  For a straight root,
   every authenticated descendant child's native function equals the exact
   restriction of the authored function to a directed source interval, and the
   intervals exactly partition `[0, 1]` (gaps, duplicates, overlaps and
   degenerate spans refuse). For an arc root, unsplit native definition
-  identity AND the exact whole-circle finiteness certificate both hold.
+  identity AND the exact whole-circle finiteness certificate both hold when
+  unsplit. Split arcs instead require exact common-circle definitions,
+  complete directed geometric subarc tiling, global order inside the authored
+  span and finiteness of each child. Split Arc source-parameter correspondence
+  is explicitly unqualified; numeric split intervals are provenance only.
   Exactness is oriented: each straight descendant's directed source interval
   sign combined with its current EdgeUse direction must equal the original
   authored EdgeUse direction, and an unsplit arc must keep the authored use
@@ -122,10 +127,9 @@ Per authored boundary root (loop and holes) and aggregated per face:
 Paired interior incidences between descendants are recorded but not
 compared; the certificate concerns the boundary only. No loop winding,
 closure, partition, material, reference or mesh claim is made: per-curve
-lift evidence is limited to Straight curves, and Arc evidence is the
-identically anchored continuous native identity (same edge and
-start/via/end vertex ids with exactly equal rational positions), never a
-numeric winding.
+lift evidence is limited to Straight curves. Arc evidence is unsplit native
+identity or split geometric-image tiling, never a numeric parameter map or
+a whole-face winding certificate.
 
 ## Authentication
 
@@ -160,25 +164,32 @@ legitimate.
 
 ## Arc split lineage: actionable integration requirement
 
-Arc ancestry is absent from the polynomial `edge_subcurve_preimages` (only
-`LinePath`/`BezierPath` freeze). When an authored arc is split, the current
-children cannot be authenticated and the producer **refuses** rather than
-inferring a split from samples. To make Arc split lineage provable, the
-preparation wrapper that records splits would need an Arc analog of
-`PolynomialEdgeDefinition`/`_seal`: an authenticated analytic ancestor
-(exact rational circumcenter/radius/start-sweep frame plus native parameter
-function identity) recorded at split time with an exact whole-interval
-angular residual. That change belongs to the existing producer owners and is
-outside this module's scope; until it exists, `arc ancestry unavailable` is
-the truthful outcome.
+`edge_subcurve_preimages` now carries `arc_records` and `arc_alias_records`,
+recorded only by the actual detached preparation wrapper. Each immutable
+record binds the original three-point definition, actual current child,
+recorded local split parameter and composed numeric interval. These intervals
+authenticate history, not an exact native parameter restriction.
+
+Record-level `exact` proves common plane/circle membership only. The boundary
+consumer separately proves complete geometric tiling: oriented selected
+subarcs, shared endpoint positions, strict global ordering from the original
+start, complete original span and no unused children. Local neighbour tests
+alone can admit an extra revolution on a major arc and are insufficient.
+
+Rounded refitted circles can instead be `enclosed` within the unchanged
+recorded tolerance, using plane-aware point distances and conservative
+whole-circle bounds. Such roots refuse as `arc split enclosed within
+tolerance, not exact`; enclosure is neither exact equality nor proof of
+nonzero discrepancy. Unknown or lost history still refuses. No Arc record
+qualifies native parameter remapping, complete material or references.
 
 ## Test evidence
 
 `tests/test_cylinder_boundary_correspondence.py` exercises the production
 producer on generated rounded 12-panel definitions (no nominal snapping),
 unsplit exact identity, the actual nonconstant projected Straight
-counterexample, on-seam and seam-crossing lift identity, missing Arc split
-ancestry refusal, unsupported families, reversed (reflected) uses, the
+counterexample, on-seam and seam-crossing lift identity, recorded rounded Arc
+split refusal, unsupported families, reversed (reflected) uses, the
 immutable raw frame, cancellation/mutating callbacks, temporary
 mutation-restored callbacks (unpolluted entry result) and unrestored
 mutations (typed refusal), entry-pinned validator forgery repair and
@@ -188,3 +199,12 @@ revisions and malformed bindings, plus the exact-rational comparison engine
 (discrepancy bounds, tiling, helpers). See
 `reports/cylinder-projected-correspondence-mistral-01/` for run logs and
 JUnit output.
+
+`tests/test_arc_split_preimages.py` adds independent 450/630-degree false
+tiling counterexamples, valid major arcs and reversed storage, overlapping
+square-root interval bounds, plane displacement, small coplanar refits and
+actual repeated split recording. The bounded source evidence is in
+`reports/cylinder-arc-ancestry-mistral-01/`: initial 89 passes/one failure,
+then 11 affected passes after repair. Failed evidence is retained. This is
+focused development verification, not hosted/installed qualification or
+large-model mesh acceptance.
