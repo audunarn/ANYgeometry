@@ -1,3 +1,4 @@
 * -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 check-*/stdout.txt -whitespace
 check-*/junit.xml -whitespace
+delivery-diffcheck*.txt -whitespace

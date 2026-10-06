@@ -1,0 +1,75 @@
+{
+  "state": "focused_geometry_integration_verified; broader_meshing_incomplete",
+  "package_source_commit": "3c876d1539dc454f9c3908dae7a743a14f2908b8",
+  "parallel_commit": "3ba1bf4c2db40605bbabb95c6b2a5104f479769b",
+  "continuation_commit": "740944fbd9801f264e84a1bcd32ed4b57103e1bb",
+  "clean_main_focused_passed": 93,
+  "runner_runtime_focused_passed": 23,
+  "original_failed_attempt_preserved": true,
+  "fresh_authority_seconds": 60,
+  "cumulative_process_wall_seconds": 35.895423800102435,
+  "remaining_process_seconds": 24.104576199897565,
+  "receipts": [
+    {
+      "path": "check-20261006T212648-aafd4c47/result.json",
+      "sha256": "d929aed841d8b1facc84d218cb238dae873135ec38362896e6533942c72c084b",
+      "process_wall_seconds": 10.12959150003735,
+      "exit_code": 1
+    },
+    {
+      "path": "check-20261006T212815-11db1a47/result.json",
+      "sha256": "ae06e32c21a7a4742b9c3c717225eb8b9038069944086ddc492570fa6ebef858",
+      "process_wall_seconds": 2.104968799976632,
+      "exit_code": 0
+    },
+    {
+      "path": "check-20261006T214346-0a1d9288/result.json",
+      "sha256": "54b69c6971d3433a736af0acd540a4cbe40423865dbeb3452efd54666eea0d81",
+      "process_wall_seconds": 10.73368089995347,
+      "exit_code": 0
+    },
+    {
+      "path": "check-20261006T214953-2c2b393c/result.json",
+      "sha256": "d449067beaf59d61529c4231aeb9b42643238c807e08b80a0c2f071619bf952e",
+      "process_wall_seconds": 2.540620799991302,
+      "exit_code": 0
+    },
+    {
+      "path": "installed-01/run.json",
+      "sha256": "82af57649e0b9a22d3d34e8f19d140007da005cde40cf3d882361287ff2add9d",
+      "process_wall_seconds": 4.861700400011614,
+      "exit_code": null
+    },
+    {
+      "path": "installed-01/identity-run.json",
+      "sha256": "cacc79e99375b1a77264d4dc39d0f27dc242e3e03cd294ae03edd0c53050f22d",
+      "process_wall_seconds": 0.3510878999950364,
+      "exit_code": 0
+    },
+    {
+      "path": "installed-02/run.json",
+      "sha256": "b1c8ec6f700693bf30f4df7e3857e6eb4aa011613818c44ed3d414b507b049ed",
+      "process_wall_seconds": 4.859947400167584,
+      "exit_code": null
+    },
+    {
+      "path": "installed-02/identity-run.json",
+      "sha256": "d223fd16b653dca55a4dff5073d7ed0c62c4d742aedbbe71feeff9a144ce380f",
+      "process_wall_seconds": 0.31382609996944666,
+      "exit_code": 0
+    }
+  ],
+  "candidate_wheel_sha256": "aa18ac5815dffd2ccb3171a83f78141024930f52ac7689ab8910969ca5e346e5",
+  "candidate_wheel_path": "installed-02/wheels/anygeometry-0.4.5-py3-none-any.whl",
+  "installed_origin_verified": true,
+  "packaged_sources_verified": 100,
+  "installed_dependency_resolution": "system-site NumPy 2.4.6 reused, not a clean dependency campaign",
+  "independent_source_review": "separate OpenAI reviewer; no different-family independence claim",
+  "performance_claim": "original 3ba candidate only; not transferred to combined package",
+  "hosted_state": "pending normal PR checks",
+  "mixed_meshing_accepted": false,
+  "polynomial_capability": "support_only; material/reference/mesh permission refused",
+  "release_artifacts_unchanged": true,
+  "old_mesh_campaigns": "closed",
+  "held_old_proof_seconds": 0.2813071
+}

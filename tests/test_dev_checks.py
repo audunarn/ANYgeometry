@@ -39,6 +39,25 @@ def test_failed_test_execution_propagates_and_saves_report(monkeypatch, tmp_path
     assert json.loads(report.read_text())["exit_code"] == 7
 
 
+def test_real_child_receives_runtime_settings_and_preserves_caller_evidence(monkeypatch, tmp_path):
+    import json, os, sys
+    run = checks.subprocess.run
+    monkeypatch.setenv('OMP_NUM_THREADS', '16')
+    evidence = str(tmp_path / 'caller-epoch.json')
+    monkeypatch.setenv('EPOCH_RUNTIME_EVIDENCE', evidence)
+    monkeypatch.setattr(checks, 'ROOT', tmp_path)
+    environment = checks.development_environment()
+    child = run([sys.executable, '-c',
+                 'import os,json; print(json.dumps(dict(os.environ)))'],
+                env=environment, capture_output=True, text=True, check=True)
+    actual = json.loads(child.stdout)
+    assert all(actual[name] == '1' for name in
+               ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS'))
+    assert actual['EPOCH_RUNTIME_EVIDENCE'] == evidence
+    assert Path(actual['CURVED_RUNTIME_EVIDENCE']).parent.is_dir()
+    assert os.environ['OMP_NUM_THREADS'] == '16'
+
+
 def test_git_selection_includes_committed_staged_deleted_and_new_files(monkeypatch, tmp_path):
     import subprocess
     def git(*args):

@@ -6,6 +6,17 @@ on:
 permissions:
   contents: read
 
+env:
+  OMP_NUM_THREADS: '1'
+  OPENBLAS_NUM_THREADS: '1'
+  MKL_NUM_THREADS: '1'
+  EPOCH_RUNTIME_EVIDENCE: epoch-runtime.json
+  CURVED_RUNTIME_EVIDENCE: curved-runtime.json
+  NATIVE_SCOPE_RUNTIME_EVIDENCE: native-runtime.json
+  NATIVE_ATTACHMENT_RUNTIME_EVIDENCE: attachment-runtime.json
+  NATIVE_ARC_RUNTIME_EVIDENCE: arc-runtime.json
+  NATIVE_ARC_STATION_RUNTIME_EVIDENCE: station-runtime.json
+
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -48,6 +59,13 @@ jobs:
         run: |
           python -c "import anygeometry; assert anygeometry.__version__ == '0.4.5'"
           python -m anygeometry --version
+      - name: Retain effective runtime evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: kernel-runtime-${{ matrix.os }}-${{ matrix.python-version }}
+          path: '*-runtime.json'
+          if-no-files-found: warn
 
   planar-absence:
     name: pytest (planar backend absent)
@@ -197,6 +215,13 @@ jobs:
           python-version: '3.11'
       - run: python -m pip install -e '.[dev,planar]' 'numpy==1.26.0' 'shapely==2.0.0'
       - run: python -m pytest
+      - name: Retain effective runtime evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: minimum-dependencies-runtime
+          path: '*-runtime.json'
+          if-no-files-found: warn
 
   wheel-smoke:
     name: Installed wheel (${{ matrix.os }})

@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 
@@ -145,6 +146,19 @@ def ci_reuse() -> dict | None:
     return None
 
 
+def development_environment() -> dict[str, str]:
+    """Configure the spawned development checks before numerical imports."""
+    environment = os.environ.copy()
+    for name in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS'):
+        environment[name] = '1'
+    directory = Path(tempfile.mkdtemp(prefix='.pytest_tmp-development-', dir=ROOT))
+    for name in ('EPOCH_RUNTIME_EVIDENCE', 'CURVED_RUNTIME_EVIDENCE',
+                 'NATIVE_SCOPE_RUNTIME_EVIDENCE', 'NATIVE_ATTACHMENT_RUNTIME_EVIDENCE',
+                 'NATIVE_ARC_RUNTIME_EVIDENCE', 'NATIVE_ARC_STATION_RUNTIME_EVIDENCE'):
+        environment.setdefault(name, str(directory / (name.lower() + '.json')))
+    return environment
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--scope", choices=["auto", "full", *SCOPES], default="auto")
@@ -178,7 +192,11 @@ def main(argv: list[str] | None = None) -> int:
             code = 0
         else:
             start = time.monotonic()
-            code = subprocess.run(plan["command"], cwd=ROOT).returncode
+            environment = development_environment() if plan['tests'] else os.environ.copy()
+            plan['runtime_environment'] = {name: value for name, value in environment.items()
+                                           if name.endswith('_RUNTIME_EVIDENCE') or name in
+                                           ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS')}
+            code = subprocess.run(plan["command"], cwd=ROOT, env=environment).returncode
             plan.update(exit_code=code, duration_seconds=time.monotonic() - start)
         if args.report:
             args.report.parent.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,7 @@
+warning: unable to access 'C:\Users\AudunArnesenNyhus/.config/git/ignore': Permission denied
+warning: in the working copy of '.github/workflows/ci.yml', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '.github/workflows/development.yml', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'reports/general_intersections/.gitattributes', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/test_dev_checks.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tools/dev_checks.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tools/run_main_integration_tests.py', LF will be replaced by CRLF the next time Git touches it

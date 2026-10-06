@@ -1912,3 +1912,28 @@ policy and AGENTS guidance committed. Existing capability record bytes retained,
 not rewritten or promoted. Published0.4.5 artifacts/ledgers unchanged. Mesher
 adapter8102116 is locally committed with15focusedPASS; split-repair ebb8b1b has
 24unexecuted source regressions after review repairs and remains UNVERIFIED.
+
+### Common-main focused verification and CI wiring — 2026-10-06
+
+Clean committed package source3c876d1539dc454f9c3908dae7a743a14f2908b8:
+93focusedPASS10.73368089995347s, including three pending Coons/Bezier guards.
+Clean-main wheel build/install/two Windows spawn components4.859947400167584s;
+installed origin/all100packaged source files/effective OpenBLAS1 identity
+0.31382609996944666s PASS. Authoritative development wheel SHA256
+aa18ac5815dffd2ccb3171a83f78141024930f52ac7689ab8910969ca5e346e5;
+installed-02 records supersede the pre-clean-checkout wheel for coordination.
+
+Standard CI lacked the runtime settings/evidence paths required by the preserved
+native-reference tests. Added child thread1 and six evidence paths to CI/dev
+runner, retained all kernel runtime receipts, and tested caller-path preservation
+and parent-environment nonmutation in an actual child. Runner/runtime23PASS
+2.540620799991302s. Independent source review found no functional defect; its
+CI receipt-retention finding was repaired without changing numerical inputs.
+Subsequent edits affect CI/tools/tests/docs only; package bytes remain unchanged.
+
+Fresh60s cumulative35.895423800102435s, remaining24.104576199897565s.
+No additional tests or numerical authority inferred. Full evidence and initial
+failed trace retained in reports/main-integration-20261006; concise delivery
+contract in docs/COMMON_MAIN_BASE.md. No integrated-main performance claim:
+existing speed measurements bind3ba only. Full platform/consumer acceptance
+and mixed meshing remain outstanding. Release ledger/artifacts unchanged.

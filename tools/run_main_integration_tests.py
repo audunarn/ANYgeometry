@@ -24,6 +24,7 @@ attempt.mkdir()
 environment = os.environ.copy()
 environment["PYTHONPATH"] = str(ROOT / "src")
 environment["EPOCH_RUNTIME_EVIDENCE"] = str(attempt / "epoch-runtime.json")
+environment["CURVED_RUNTIME_EVIDENCE"] = str(attempt / "curved-runtime.json")
 environment["NATIVE_SCOPE_RUNTIME_EVIDENCE"] = str(attempt / "native-runtime.json")
 for name in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
     environment[name] = "1"
