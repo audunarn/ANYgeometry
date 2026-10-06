@@ -122,7 +122,7 @@ def _dispositions(original, current):
 
 def _complete_native_reference_inventory(original, current, descendants, selected,
                                          edge_maps, check, source_native=None, current_native=None,
-                                         orientation_relations=None, material_faces=()):
+                                         orientation_relations=None, material_faces=(),request_proof=None,replacement_history=()):
     """Complete native caller inventory, independent of boundary cancellation.
 
     This additive path receives detached documents and one batch's authenticated
@@ -524,7 +524,36 @@ def _complete_native_reference_inventory(original, current, descendants, selecte
             and all(attachment_ok.get(key,False) for key in source['attachment_ids']))
         row.update(geometry_semantic_disposition='qualified_native_owner_semantics' if ok else 'refused_owner_semantics_unresolved',
                    semantic_mapping_qualified=ok,parameter_remapping_qualified=ok)
+    attachment_maps=[];junction_maps=[];untracked_attachments=[]
+    if request_proof is not None:
+        from .native_attachment_maps import map_native_attachment_references, map_native_junction_references
+        attachment_maps,current_sources,untracked_attachments,context=map_native_attachment_references(
+            original,current,descendants,edge_maps,use_maps,member_ok,sheet_ok,source_native,current_native,material_faces,request_proof,
+            {r['id']:r['disposition']=='preserved_owner_payload' for r in ownership if r['kind']=='parts'},replacement_history)
+        by_source={r['source_attachment_id']:r for r in attachment_maps}
+        for row in dispositions:
+            if row['kind']!='attachments':continue
+            source_key=(row['id'] if row['id'] in by_source else current_sources.get(row['id']))
+            if source_key is not None:
+                mapping=by_source[source_key];ok=mapping['classification']!='refused'
+                attachment_ok[row['id']]=ok
+                literal=(before_attachments.get(row['id'])==after_attachments.get(row['id']))
+                label=('qualified_native_owner_semantics' if literal else 'qualified_captured_real_relation') if ok else 'refused_attachment_relation'
+                row.update(geometry_semantic_disposition=label,
+                           semantic_mapping_qualified=ok,parameter_remapping_qualified=ok,
+                           source_attachment_id=source_key)
+        junction_maps=map_native_junction_references(original,current,attachment_maps,member_ok,sheet_ok,context)
+        junction_by_source={r['source_junction_id']:r for r in junction_maps}
+        for row in dispositions:
+            if row['kind']=='junctions' and row['id'] in junction_by_source:
+                mapping=junction_by_source[row['id']];ok=mapping['classification']!='refused'
+                literal=(before_junctions.get(row['id'])==after_junctions.get(row['id']))
+                label=('qualified_native_owner_semantics' if literal else 'qualified_captured_real_relation') if ok else 'refused_junction_relation'
+                row.update(geometry_semantic_disposition=label,
+                           semantic_mapping_qualified=ok,parameter_remapping_qualified=ok)
     inventory = {'original':_document_inventory(original),'current':_document_inventory(current),
+        'attachment_native_maps':attachment_maps,'junction_native_maps':junction_maps,
+        'untracked_attachment_ids':untracked_attachments,
         'record_dispositions':dispositions,'member_native_maps':use_maps,'source_use_coverage':source_coverage,
         'isolated_vertex_dispositions':isolated,'traces':traces,'outside_root_ids':sorted(outside),
         'all_face_use_occurrences':{'original':original['structural']['face_uses'],'current':current['structural']['face_uses']},
@@ -536,7 +565,7 @@ def _complete_native_reference_inventory(original, current, descendants, selecte
         'opaque_semantics_disposition':'unknown_consumer_semantics_retained',
         'external_reference_obligation':'consumer must inventory and adjudicate external references',
         'external_reference_scope_qualified':False}
-    return inventory,tuple(sorted(outside)),(all(r['semantic_mapping_qualified'] for r in dispositions)
+    return inventory,tuple(sorted(outside)),(not untracked_attachments and all(r['semantic_mapping_qualified'] for r in dispositions)
         and all(row['disposition']=='exact_identity' for row in isolated)
         and all(row['disposition']=='preserved_occurrence_orientation' for row in occurrence_maps)
         and all(coedge_coverage.values())

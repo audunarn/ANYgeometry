@@ -85,8 +85,7 @@ Preparation-created `SHEET_ON_JOINT` / `SHEET_JOINT` records can qualify as
 actual Sheet incidence, all full `[0,1]` edge attachments, supported material
 trace, connect intent, exact evidence and owner coverage must hold. Unknown,
 extra, missing or wrong-Sheet records refuse. This proves current derived joint
-incidence; it does not remap original parameters. Original split/remapped
-attachments still require a separate semantic map and presently refuse.
+incidence; it does not remap original parameters. Supported original Plane/Straight split relations now receive separate whole-coordinate and incidence proofs; see [original attachment scope](NATIVE_ATTACHMENT_REFERENCE_SCOPE.md). Unsupported relations explicitly refuse.
 
 `document_material_qualified` and `geometry_native_reference_maps_qualified` are
 separate outcomes. Opaque metadata/groups/tags retain unknown consumer semantics;

@@ -156,7 +156,7 @@ def split_edge_attachments(model, edge_id, parameter, check=lambda: None):
             member_range = ParameterRange(min(values_member), max(values_member))
         identifiers = replacements[attachment.id]
         identifier = attachment.id if not identifiers else model._allocate_structural('attachment')
-        lineage = tuple(dict.fromkeys((*attachment.lineage, ('edge', edge_id))))
+        lineage = tuple(dict.fromkeys((*attachment.lineage, ('attachment',attachment.id), ('edge', edge_id))))
         model._put_structural('attachment', replace(attachment, id=identifier,
             target_id=children[child_index], target_parameters=(ParameterRange(min(values), max(values)),),
             member_range=member_range, lineage=lineage))

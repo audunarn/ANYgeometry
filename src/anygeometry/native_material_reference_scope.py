@@ -96,6 +96,11 @@ def _compile_document(document):
         face_uses=document['structural']['face_uses'],face_uses_by_face=uses)
 
 
+def _replacement_snapshot(model):
+    return tuple(sorted((old.kind,old.id,tuple((child.kind,child.id) for child in children))
+                        for old,children in model.replacement_history().items()))
+
+
 def _segment_candidates(segments,check):
     """Deterministic bounding-box sweep; duplicate geometry is indexed once."""
     boxes=sorted((min(a[0],b[0]),max(a[0],b[0]),min(a[1],b[1]),max(a[1],b[1]),i)
@@ -429,6 +434,7 @@ def query_prepared_native_material_reference_scope(model, authored_face_ids, *,
     if actual!=preimages.current_native_supports:
         raise GeometryError('current actual native support binding changed')
     native_digest=definition_checksum(actual)
+    replacements=_replacement_snapshot(model)
     edge_binding=query_prepared_edge_subcurve_preimages(model)
     edge_digest=definition_checksum(edge_binding)
     edges=deepcopy(edge_binding)
@@ -488,7 +494,8 @@ def query_prepared_native_material_reference_scope(model, authored_face_ids, *,
                 orientation_relations[root,child]=same
         inventory,outside,reference_ok=_complete_native_reference_inventory(original,current,
             preimages.face_descendants,set(selected),edge_maps,proof.charge,source_supports,current_supports,
-            orientation_relations,{child for row in material if row.document_material_qualified for child in row.current_face_ids})
+            orientation_relations,{child for row in material if row.document_material_qualified for child in row.current_face_ids},proof,replacements)
+        inventory['replacement_history_snapshot']=replacements
         inventory['native_edge_maps']=edge_maps
         inventory['material_dispositions']=[(r.authored_face_id,r.classification,r.refusal) for r in material]
         proof.cancel('native material/reference scope final check')
@@ -497,7 +504,8 @@ def query_prepared_native_material_reference_scope(model, authored_face_ids, *,
             raise
         raise GeometryError('native material/reference proof unavailable: '+str(error)) from error
     validate_prepared_model_scope_binding(model,scope)
-    if definition_checksum(scope)!=original_scope_digest or capture_native_supports(model)!=actual:
+    if (definition_checksum(scope)!=original_scope_digest or capture_native_supports(model)!=actual
+            or _replacement_snapshot(model)!=replacements):
         raise GeometryError('native material/reference scope changed during query')
     if definition_checksum(query_prepared_edge_subcurve_preimages(model))!=edge_digest:
         raise GeometryError('native edge ancestry changed during query')
@@ -519,14 +527,19 @@ def validate_prepared_native_material_reference_scope_binding(model,receipt,*,ca
     if _digest(receipt)!=pinned:
         raise GeometryError('native material/reference receipt changed')
     snapshot=deepcopy(receipt)
+    replacements=tuple((kind,key,tuple(tuple(child) for child in children))
+                       for kind,key,children in snapshot.inventory['replacement_history_snapshot'])
     validate_prepared_model_scope_binding(model,snapshot.scope)
     if definition_checksum(capture_native_supports(model))!=snapshot.native_support_digest:
         raise GeometryError('native support binding changed')
     if definition_checksum(query_prepared_edge_subcurve_preimages(model))!=snapshot.edge_ancestry_digest:
         raise GeometryError('native ancestry binding changed')
+    if _replacement_snapshot(model)!=replacements:
+        raise GeometryError('native replacement-history binding changed')
     if cancellation_check is not None and cancellation_check('native material/reference scope binding'):
         raise GeometryError('native material/reference scope cancelled')
     validate_prepared_model_scope_binding(model,snapshot.scope)
     if (_digest(receipt)!=pinned or definition_checksum(capture_native_supports(model))!=snapshot.native_support_digest
-            or definition_checksum(query_prepared_edge_subcurve_preimages(model))!=snapshot.edge_ancestry_digest):
+            or definition_checksum(query_prepared_edge_subcurve_preimages(model))!=snapshot.edge_ancestry_digest
+            or _replacement_snapshot(model)!=replacements):
         raise GeometryError('native material/reference binding changed during validation')
