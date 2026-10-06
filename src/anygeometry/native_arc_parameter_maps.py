@@ -220,6 +220,21 @@ def query_prepared_native_arc_parameter_maps(model, *, edge_ids=None,
     return result
 
 
+def _issued_binding_digest(model, binding):
+    """Owner binding guard: pinned issuance digest of an owner-issued receipt.
+
+    Raises for receipts not issued to this owner (forged or copied) and for
+    receipts whose content changed after issuance.  Owner-internal only.
+    """
+    issued = _issued.get(model, {}).get(id(binding))
+    if issued is None or issued[0]() is not binding:
+        raise NativeArcParameterMapError('native Arc receipt was not issued to this owner')
+    pinned = issued[1]
+    if _digest(binding) != pinned:
+        raise NativeArcParameterMapError('native Arc receipt changed')
+    return pinned
+
+
 def validate_prepared_native_arc_parameter_maps_binding(model, binding, *,
         cancellation_check=None):
     """Validate a producer-issued receipt without re-proving or accepting forgery."""
