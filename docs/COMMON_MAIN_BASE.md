@@ -104,3 +104,15 @@ conversion. Full status, logs, runtime/JUnit receipts, source comparison and a
 `.local-evidence/github-pr28/run-37542063533`. The failed Linux gate remains
 unaccepted; the test-only correction requires the normal hosted PR gates before
 GitHub main is merged. No further local execution authority was consumed.
+
+Final source delivery: PR28 merged at
+`b1e710571bc8c4bb4039ce82377c29ffdb47f248` after run37544536573 passed all eight
+jobs. Windows and Linux each passed all 2,836 kernel tests; installed Linux/macOS
+wheel and released-mesher smoke checks passed. Local main and the continuation
+branch fast-forwarded to the identical reviewed tree. The final development
+wheel SHA-256 is
+`5adbcfdd3a6df9d897160cd1f8217379c8bf157e711182a68ba260f03fa23956`.
+The final source identities, receipt hashes and unchanged limitations are in
+[hosted-closure.md](../reports/main-integration-20261006/hosted-closure.md).
+Earlier failed gates remain retained failures; no release or large-model native
+meshing acceptance is implied. This final record is documentation only.
