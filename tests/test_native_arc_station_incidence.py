@@ -156,9 +156,15 @@ def test_split_map_batch_on_public_prepared_fixture():
     binding = query(model, stations)
     assert binding.stations == tuple(stations)
     assert len(binding.records) == len(stations)
-    assert all(record.classification == 'bounded' for record in binding.records)
-    assert all(record.current_bound <= binding.tolerance for record in binding.records)
-    assert all(record.ancestor_bound is not None and record.ancestor_bound <= binding.tolerance
+    # Exact endpoints may have zero certified residual on either platform.
+    # Keep the API's exact/bounded distinction tied to both independent bounds.
+    assert all(record.classification == (
+        'exact' if record.current_bound == record.ancestor_bound == 0 else 'bounded')
+        for record in binding.records)
+    assert any(record.classification == 'bounded' and record.edge_id not in roots
+        for record in binding.records)
+    assert all(0 <= record.current_bound <= binding.tolerance for record in binding.records)
+    assert all(record.ancestor_bound is not None and 0 <= record.ancestor_bound <= binding.tolerance
         for record in binding.records)
     assert [record.edge_id for record in binding.records] == [s.edge_id for s in stations]
     assert any(record.edge_id not in roots for record in binding.records)

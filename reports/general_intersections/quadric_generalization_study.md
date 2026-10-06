@@ -1993,3 +1993,27 @@ qualification dispatch or further local checks. Original local wheelaa18 and
 hosted wheelf90 bind pre-repair source only, not the repaired package. Closed
 mesh families and held reserves remain unchanged. Main is committed clean for
 review; GitHub main stays protected until complete required gates pass.
+
+### Remaining hosted station oracle — 2026-10-07
+
+PR28 repaired head1ef18de run37542063533 completed: Windows2836PASS,
+Linux2835PASS/1FAIL; five remaining wheel/classification/installed-consumer jobs
+passed, aggregate gate failed. Full logs/JUnit/runtime/status retained under
+.local-evidence/github-pr28/run-37542063533 with67-file evidence-hashes.json.
+Wheelc333af3c5cea5b2534f750eceeb30ee934a6d23d5cf8248d57eae55c0fb963b2
+matches all109 packaged files at1ef after only Windows archive CRLF-to-LF.
+
+Independent source review identifies the sole failure as an over-specific
+all-bounded test expectation. Native station contract is exact iff BOTH current
+and ancestor certified bounds zero, otherwise bounded after each independent
+tolerance gate; H(0)=C+U provides exact endpoints. The cylinder fixture contains
+endpoints and midpoints from floating-derived frames, so no strictly-positive
+bound guarantee exists. No particular exact cylinder record was logged.
+Test-only correction asserts that classification equivalence, nonnegative bounds
+within each unchanged tolerance, and at least one bounded split descendant;
+ancestry/binding/repeated-query/refusal/cancellation assertions remain intact.
+Production source, scientific tolerances and permission flags are unchanged.
+No local checks launched;60s cumulative58.13752980006393s and held1.8624701999360695s
+remain unchanged. Required hosted PR verification will run on the corrected test
+input. Main delivery remains held until all normal gates pass. Closed mesher
+campaigns, published release artifacts and old proof reserve are unchanged.

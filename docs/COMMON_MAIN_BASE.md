@@ -85,3 +85,22 @@ local exclusion inventory under `.local-evidence/main-cleanup-20261006`.
 Preserved dirty source/evidence was integrated explicitly; unrelated work was
 not discarded. GitHub review/CI and the exact final delivery commit are recorded
 in the living [continuation record](../reports/general_intersections/quadric_generalization_study.md).
+
+The repaired-source PR28 run `37542063533` completed with Windows **2,836
+passed**, Linux **2,835 passed/1 failed**, and all five wheel/classification/
+installed-consumer jobs passed. The remaining Linux failure was a test oracle
+requiring every certified station to be `bounded`, although the public contract
+returns `exact` when both independent residual bounds are zero. Independent
+source review confirmed this distinction. The test now checks that exact/bounded
+classification against both bounds, retains each unchanged tolerance and
+requires a bounded split descendant. Production proof code is unchanged.
+
+This run's development wheel SHA-256 is
+`c333af3c5cea5b2534f750eceeb30ee934a6d23d5cf8248d57eae55c0fb963b2`.
+All 109 packaged source files match reviewed commit
+`1ef18deca6bb1c80c07fc273b07cc8890a9737f8`, after only Windows archive CRLF-to-LF
+conversion. Full status, logs, runtime/JUnit receipts, source comparison and a
+67-file evidence hash inventory are retained in
+`.local-evidence/github-pr28/run-37542063533`. The failed Linux gate remains
+unaccepted; the test-only correction requires the normal hosted PR gates before
+GitHub main is merged. No further local execution authority was consumed.
