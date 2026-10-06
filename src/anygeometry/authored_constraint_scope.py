@@ -122,7 +122,7 @@ def _dispositions(original, current):
 
 def _complete_native_reference_inventory(original, current, descendants, selected,
                                          edge_maps, check, source_native=None, current_native=None,
-                                         orientation_relations=None, material_faces=(),request_proof=None,replacement_history=()):
+                                         orientation_relations=None, material_faces=(),request_proof=None,replacement_history=(),attachment_source_ids=None,epoch_derived_attachment_ids=None):
     """Complete native caller inventory, independent of boundary cancellation.
 
     This additive path receives detached documents and one batch's authenticated
@@ -348,6 +348,8 @@ def _complete_native_reference_inventory(original, current, descendants, selecte
         if {a['id'] for a in after_attachments.values() if a['target_kind']=='edge'
             and a['target_id']==edge and a['kind']=='sheet_on_joint'}!={a['id'] for a in attachments}:
             continue
+        if epoch_derived_attachment_ids is not None and not {a['id'] for a in attachments}<=set(epoch_derived_attachment_ids):
+            continue
         derived_attachments.update(a['id'] for a in attachments)
         derived_junctions.add(joint['id'])
     attachment_ok = {}
@@ -529,7 +531,7 @@ def _complete_native_reference_inventory(original, current, descendants, selecte
         from .native_attachment_maps import map_native_attachment_references, map_native_junction_references
         attachment_maps,current_sources,untracked_attachments,context=map_native_attachment_references(
             original,current,descendants,edge_maps,use_maps,member_ok,sheet_ok,source_native,current_native,material_faces,request_proof,
-            {r['id']:r['disposition']=='preserved_owner_payload' for r in ownership if r['kind']=='parts'},replacement_history)
+            {r['id']:r['disposition']=='preserved_owner_payload' for r in ownership if r['kind']=='parts'},replacement_history,attachment_source_ids)
         by_source={r['source_attachment_id']:r for r in attachment_maps}
         for row in dispositions:
             if row['kind']!='attachments':continue

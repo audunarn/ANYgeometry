@@ -494,7 +494,8 @@ def query_prepared_native_material_reference_scope(model, authored_face_ids, *,
                 orientation_relations[root,child]=same
         inventory,outside,reference_ok=_complete_native_reference_inventory(original,current,
             preimages.face_descendants,set(selected),edge_maps,proof.charge,source_supports,current_supports,
-            orientation_relations,{child for row in material if row.document_material_qualified for child in row.current_face_ids},proof,replacements)
+            orientation_relations,{child for row in material if row.document_material_qualified for child in row.current_face_ids},proof,replacements,
+            preimages.attachment_source_ids,preimages.epoch_derived_attachment_ids)
         inventory['replacement_history_snapshot']=replacements
         inventory['native_edge_maps']=edge_maps
         inventory['material_dispositions']=[(r.authored_face_id,r.classification,r.refusal) for r in material]

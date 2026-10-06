@@ -215,7 +215,7 @@ class _Context:
 
 
 def map_native_attachment_references(original,current,descendants,edge_maps,use_maps,member_ok,sheet_ok,
-                                    source_native,current_native,material_faces,proof,part_ok=None,replacement_history=()):
+                                    source_native,current_native,material_faces,proof,part_ok=None,replacement_history=(),attachment_source_ids=None):
     """Return complete source-to-current relations; unsupported rows refuse."""
     context=_Context(original,current,descendants,edge_maps,use_maps,source_native,current_native,material_faces,proof)
     check=proof.charge
@@ -233,9 +233,15 @@ def map_native_attachment_references(original,current,descendants,edge_maps,use_
                     if child not in found:found.add(child);pending.append(child)
             history_cache[root]=found
         return history_cache[root]
+    epoch_sources=dict(attachment_source_ids) if attachment_source_ids is not None else None
     for row in after.values():
-        check();ancestry={key for kind,key in row['lineage'] if kind=='attachment' and key in before}
-        if row['id'] in before:ancestry.add(row['id'])
+        check()
+        if attachment_source_ids is not None:
+            key=epoch_sources.get(row['id']);ancestry={key} if key in before else set()
+            if row['id'] in before and not ancestry:untracked.append(row['id'])
+        else:
+            ancestry={key for kind,key in row['lineage'] if kind=='attachment' and key in before}
+            if row['id'] in before:ancestry.add(row['id'])
         if len(ancestry)==1:grouped[next(iter(ancestry))].append(row)
         elif ancestry:untracked.append(row['id'])
     rows=[];current_sources={}
@@ -498,6 +504,7 @@ def map_native_attachment_references(original,current,descendants,edge_maps,use_
             rows.append(dict(source_attachment_id=source['id'],current_attachment_ids=[c['id'] for c in children],
                 classification='qualified_captured_real_relation',source_model_id=original['model_id'],
                 source_revision=original['revision'],source_checksum=original['checksum']['value'],maps=evidence,
+                source_identity_semantics='authenticated_epoch_map' if attachment_source_ids is not None else 'original_lineage',
                 floating_evaluation_preservation_qualified=False))
         except GeometryError as error:
             if error is proof.callback_error:raise

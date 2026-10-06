@@ -528,7 +528,8 @@ def _capture_edge_subcurve_preimages(model, *, allow_seed=False, cancellation_ch
         for row in binding.arc_alias_records:
             arc_aliases.setdefault(row.edge_id, []).append(row)
     else:
-        if not allow_seed or any(old.kind == 'edge' for old in model.replacement_history()):
+        from .preparation_epochs import _has_epoch_permit
+        if not allow_seed or (not _has_epoch_permit(model) and any(old.kind == 'edge' for old in model.replacement_history())):
             return None
         records = {}
         arc_records = {}
