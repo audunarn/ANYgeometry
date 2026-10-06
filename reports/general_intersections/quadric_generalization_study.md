@@ -2017,3 +2017,20 @@ No local checks launched;60s cumulative58.13752980006393s and held1.862470199936
 remain unchanged. Required hosted PR verification will run on the corrected test
 input. Main delivery remains held until all normal gates pass. Closed mesher
 campaigns, published release artifacts and old proof reserve are unchanged.
+
+### Common-main source delivery complete — 2026-10-07
+
+PR28 exact reviewed5d028a8eb963ebdd39405f7bbbc0c907c3337584 passes all8jobs in
+run37544536573: Linux2836PASS andWindows2836PASS, zero errors/failures/skips;
+classifier/build/installed Linux+Apple-silicon wheel/mesher smoke/aggregate pass.
+MergedGitHub b1e710571bc8c4bb4039ce82377c29ffdb47f248; localmain and preserved
+continuation fast-forward clean. Merge tree3202fa282c963afcab191fc38ed096305be1b443
+exactly equals reviewed head and CI checkoutd7e4d59c1a3d05972ffadddcb0261026dd11a699.
+Wheel5adbcfdd3a6df9d897160cd1f8217379c8bf157e711182a68ba260f03fa23956;
+109package payloads unchanged fromc333. Complete final logs/JUnit/runtime/origins/
+artifact/merge receipts archived with65-file immutable hash inventory; summary
+reports/main-integration-20261006/hosted-closure.md. Earlier failures remain intact.
+Documentation-only closure reuses these unchanged source/test/workflow gates.
+No further local process budget, native shot, release or default switch consumed.
+Large mixed meshing remains incomplete; mesheraac9303 source-reviewed44tests await
+separate unit authority. Closed families and both held reserves remain unchanged.
