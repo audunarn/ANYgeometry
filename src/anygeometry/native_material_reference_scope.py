@@ -20,6 +20,9 @@ from .edge_subcurve_preimages import (query_prepared_edge_subcurve_preimages,
 from .errors import GeometryError
 from .native_arc_parameter_maps import NativeArcParameterMapPolicy, _digest, _frame, _entry
 from .native_support_snapshots import capture_native_supports
+from .polynomial_extrusion_support import (
+    POLYNOMIAL_EXTRUSION_KINDS, prove_polynomial_extrusion_support,
+)
 from .prepared_model_scope import query_prepared_model_scope, validate_prepared_model_scope_binding
 
 
@@ -410,6 +413,22 @@ def _material(root,children,original,current,source_supports,current_supports,pr
                 all_rank_loops=[[[tuple(map(_pack,p)) for p in loop] for loop in domain] for domain in census],
                 rank_coordinates_are_area_units=False)
             evidence['relative_ray_anchor']=tuple(map(_pack,anchor))
+        elif family in POLYNOMIAL_EXTRUSION_KINDS:
+            # This new evidence proves SUPPORT and signed chart correspondence
+            # only. No trim census exists here for a Coons/Bezier wall or its
+            # BQC boundaries. Never promote it to material/reference permission.
+            support_rows=[]
+            for child in children:
+                check()
+                kind,child_support=current_supports[child]
+                evidence['current_native_supports'].append((child,kind,child_support))
+                support_rows.append((child,prove_polynomial_extrusion_support(
+                    family,support,kind,child_support,charge=check)))
+            evidence.update(domain_semantics='trimmed material UNQUALIFIED; stored polynomial support identity only',
+                polynomial_support_correspondence=support_rows,
+                trimmed_partition_qualified=False,geometry_reference_mapping_qualified=False)
+            return NativeMaterialScopeRow(root,children,family,'support_only',False,True,_json(evidence),
+                'polynomial support correspondence does not establish trimmed material partition')
         else:
             raise GeometryError('unsupported native material support')
         return NativeMaterialScopeRow(root,children,family,'exact_document_material',True,True,_json(evidence),None)
@@ -510,6 +529,12 @@ def query_prepared_native_material_reference_scope(model, authored_face_ids, *,
         inventory['replacement_history_snapshot']=replacements
         inventory['native_edge_maps']=edge_maps
         inventory['material_dispositions']=[(r.authored_face_id,r.classification,r.refusal) for r in material]
+        if any(row.family in POLYNOMIAL_EXTRUSION_KINDS for row in material):
+            # Keep the existing orientation/semantic remap predicates closed.
+            # Signed maps are available in support evidence, but may not bypass
+            # missing trimmed material and reference proofs.
+            reference_ok=False
+            inventory['polynomial_support_only_reference_refusal']=True
         proof.cancel('native material/reference scope final check')
     except _Refusal as error:
         if error is proof.callback_error:

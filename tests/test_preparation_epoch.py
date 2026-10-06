@@ -151,6 +151,27 @@ def test_cached_epoch_apply_rechecks_callback_authoring_without_rollback():
     assert epoch.revision>before and added[0] in epoch.vertices
 
 
+@pytest.mark.parametrize('edit', ('lookup', 'receipt'))
+def test_cached_epoch_apply_rechecks_same_revision_callback_state(edit):
+    _,epoch=fresh();plan=plan_intersections(epoch,tuple(epoch.faces),policy='connect')
+    apply_intersections(epoch,plan,policy='connect')
+    revision=epoch.revision;replacement=[]
+    def change():
+        if edit=='lookup':
+            first,second=sorted(epoch.vertices)[:2]
+            epoch._vertices[first],epoch._vertices[second]=epoch._vertices[second],epoch._vertices[first]
+        else:
+            receipt=tuple(list(epoch._intersection_application_receipt))
+            epoch._intersection_application_receipt=receipt
+            replacement.append(receipt)
+        return False
+    with pytest.raises(GeometryError):
+        apply_intersections(epoch,plan,policy=IntersectionBatchPolicy(cancellation_check=change))
+    assert epoch.revision==revision
+    if replacement:
+        assert epoch._intersection_application_receipt is replacement[0]
+
+
 def test_cached_epoch_apply_rejects_unserialized_raw_support_mutation():
     from anygeometry.generators.structural import cylinder
     from anygeometry.surfaces import Cylinder

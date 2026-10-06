@@ -1,0 +1,6 @@
+# Generated immutable attempts are deliberately staged when reconciled.
+check-*/
+installed-*/
+reports/
+src/
+tests/

@@ -1171,7 +1171,7 @@ def _apply_intersections(model, plan, *, policy):
             # result without rolling back that authoring.
             if (getattr(model,'_intersection_application_receipt',None) is not receipt or
                     model.revision!=receipt[1] or _qualified_model_state(model)['checksum']['value']!=receipt[2]):
-                raise GeometryError('geometry changed during cached intersection application')
+                raise GeometryError('geometry changed during intersection reuse')
             if epoch_bound:
                 binding=_current_receipt(model)
                 if (_binding_checksum(binding)!=epoch_digest or

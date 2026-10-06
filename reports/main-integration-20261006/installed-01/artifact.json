@@ -1,0 +1,25 @@
+{
+  "wheel": "C:\\Github\\ANYgeometry\\.worktrees\\intersection-continuation\\reports\\main-integration-20261006\\installed-01\\wheels\\anygeometry-0.4.5-py3-none-any.whl",
+  "sha256": "b88725775059962852d3e264b77b4d9e6a40e4b95c14da8e77d60b35ab1bbcb3",
+  "outside_checkout": "C:\\Users\\AUDUNA~1\\AppData\\Local\\Temp\\anygeometry-parallel-wheel-1edcx8q1",
+  "spawn_results": [
+    {
+      "origin": "C:\\Users\\AUDUNA~1\\AppData\\Local\\Temp\\anygeometry-parallel-wheel-1edcx8q1\\venv\\Lib\\site-packages\\anygeometry\\__init__.py",
+      "numpy": "2.4.6",
+      "mapping_count": 20,
+      "source_model_id": "eea491c3-f2ea-466d-86a7-4e70c48f0e9d",
+      "working_model_id": "2617bf6f-4c9c-4fe5-8cdc-91418cc65857",
+      "faces": 1,
+      "envelope_sha256": "6262078184b3645f104b0c96ab8b7df151ee3108faff09bb2b18d299e0417de6"
+    },
+    {
+      "origin": "C:\\Users\\AUDUNA~1\\AppData\\Local\\Temp\\anygeometry-parallel-wheel-1edcx8q1\\venv\\Lib\\site-packages\\anygeometry\\__init__.py",
+      "numpy": "2.4.6",
+      "mapping_count": 20,
+      "source_model_id": "eea491c3-f2ea-466d-86a7-4e70c48f0e9d",
+      "working_model_id": "3fa52718-44da-42fd-91ce-e5bec8e582bf",
+      "faces": 1,
+      "envelope_sha256": "d301e313b41d2c3d11ec8a257d0f3537bb0f293e48eab7e6c184a0719a89af97"
+    }
+  ]
+}
