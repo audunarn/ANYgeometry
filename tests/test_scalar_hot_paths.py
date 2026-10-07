@@ -107,10 +107,11 @@ def test_cross3_falls_back_to_numpy_cross_for_other_inputs():
         assert _cross3(a, b).dtype == np.cross(a, b).dtype
     # Exceptional behavior is preserved: an unsupported 4-vector raises
     # exactly like numpy.cross.
-    with pytest.raises(ValueError, match='incompatible dimensions'):
+    with pytest.raises(ValueError) as reference:
         np.cross(np.array((1., 0., 0., 0.)), np.array((0., 1., 0., 0.)))
-    with pytest.raises(ValueError, match='incompatible dimensions'):
+    with pytest.raises(ValueError) as actual:
         _cross3(np.array((1., 0., 0., 0.)), np.array((0., 1., 0., 0.)))
+    assert str(actual.value) == str(reference.value)
 
 
 class _PlainFloatSubclass(float):
