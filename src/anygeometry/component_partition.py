@@ -225,6 +225,7 @@ def plan_independent_components(model, *, face_ids=None, member_ids=None,
     def referenced(key):
         return owners.get(key, set())
 
+    expanded_pairs = set()
     def claim(keys, dependency):
         """Register every consumer of a copied dependency, even an orphan one."""
         kind, identifier = dependency
@@ -234,21 +235,32 @@ def plan_independent_components(model, *, face_ids=None, member_ids=None,
         changed = len(bucket) != before
         if kind not in ("vertex", "edge", "face"):
             return changed
+        # Owner buckets predate this closure walk, so already-expanded
+        # (consumer, dependency) pairs are tracked separately. Only fresh
+        # pairs recurse through the face/edge/vertex closure; a repeated
+        # pair would only repeat idempotent set insertions.
+        fresh = []
         for key in keys:
             before = len(root_geometry[key])
             root_geometry[key].add(dependency)
             changed |= len(root_geometry[key]) != before
+            pair = (key, dependency)
+            if pair not in expanded_pairs:
+                expanded_pairs.add(pair)
+                fresh.append(key)
+        if not fresh:
+            return changed
         if kind == "face":
             face = model.faces[identifier]
             for loop in (face.loop, *face.holes):
                 for item in loop:
-                    changed |= claim(keys, ('edge', item.edge))
+                    changed |= claim(fresh, ('edge', item.edge))
         elif kind == "edge":
             edge = model.edges[identifier]
             controls = ((edge.curve.via_vertex,) if isinstance(edge.curve, Arc) else
                         edge.curve.control_vertices if isinstance(edge.curve, Spline) else ())
             for vertex in (edge.start, edge.end, *controls):
-                changed |= claim(keys, ('vertex', vertex))
+                changed |= claim(fresh, ('vertex', vertex))
         return changed
 
     for member_id, member in sorted(model.members.items()):
@@ -320,6 +332,32 @@ def plan_independent_components(model, *, face_ids=None, member_ids=None,
                 # with selected material despite disjoint root-axis boxes.
                 refusals.append(ComponentRefusal("eccentric/offset metadata has no certified extent contract",
                                                  (handle((kind, identifier)),)))
+    # Certified bounds are pure functions of the unmutated model within this
+    # one invocation, so each unique dependency is certified once and reused
+    # for every consumer unit. A cached failure re-raises per consumer so
+    # refusal evidence still names each affected unit.
+    dependency_bounds = {}
+    def certified_dependency_bound(dependency_kind, dependency_id):
+        cache_key = (dependency_kind, dependency_id)
+        if cache_key in dependency_bounds:
+            cached = dependency_bounds[cache_key]
+            if isinstance(cached, BaseException):
+                raise cached
+            return cached
+        try:
+            if dependency_kind == "face":
+                face = model.faces[dependency_id]
+                edges = {item.edge for loop in (face.loop, *face.holes) for item in loop}
+                bound = _certified_face_bound(model, dependency_id, edges)
+            else:
+                if dependency_kind == "edge" and type(model.edges[dependency_id].curve) not in (Straight, Arc, Spline, *EXACT_CURVES):
+                    raise GeometryError("edge curve family has no certified conservative bound")
+                bound = model.bounds(((dependency_kind, dependency_id),))
+        except (GeometryError, TypeError, ValueError) as error:
+            dependency_bounds[cache_key] = error
+            raise
+        dependency_bounds[cache_key] = bound
+        return bound
     boxes = {}
     for key in units:
         check()
@@ -328,14 +366,7 @@ def plan_independent_components(model, *, face_ids=None, member_ids=None,
             dependencies = root_geometry[key]
             enclosures = []
             for dependency_kind, dependency_id in sorted(dependencies):
-                if dependency_kind == "face":
-                    face = model.faces[dependency_id]
-                    edges = {item.edge for loop in (face.loop, *face.holes) for item in loop}
-                    enclosures.append(_certified_face_bound(model, dependency_id, edges))
-                else:
-                    if dependency_kind == "edge" and type(model.edges[dependency_id].curve) not in (Straight, Arc, Spline, *EXACT_CURVES):
-                        raise GeometryError("edge curve family has no certified conservative bound")
-                    enclosures.append(model.bounds(((dependency_kind, dependency_id),)))
+                enclosures.append(certified_dependency_bound(dependency_kind, dependency_id))
             if any(box is None for box in enclosures) or not enclosures:
                 raise GeometryError("missing conservative dependency bound")
             values = np.asarray(enclosures, dtype=float)

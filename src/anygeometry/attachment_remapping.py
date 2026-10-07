@@ -86,13 +86,22 @@ def _target_bounds(domain,curve):
 
 
 def remap_face_attachments(model,old_face,descendants,snapshots,check):
-    for role,attachment,paths in snapshots:
-        candidates=[]
-        for face_id in sorted(descendants):
+    # Descendant material domains and their effective tolerances are fixed
+    # once the geometry modifications are complete, so each descendant face
+    # is analyzed once per invocation. No cache survives this call.
+    descendant_domains={}
+    def descendant_domain(face_id):
+        if face_id not in descendant_domains:
             domain=MaterialDomain.from_model(model,face_id)
             tolerance=model.tolerance.effective_length(max(
                 (np.linalg.norm(hi-lo) for loop in domain.boundaries for path in loop
                  for lo,hi in (path.curve.bounds(),)),default=1.))
+            descendant_domains[face_id]=(domain,tolerance)
+        return descendant_domains[face_id]
+    for role,attachment,paths in snapshots:
+        candidates=[]
+        for face_id in sorted(descendants):
+            domain,tolerance=descendant_domain(face_id)
             for curve,point,source_interval in paths:
                 check()
                 if curve is None:
