@@ -10,6 +10,7 @@ from fractions import Fraction
 import math
 import numpy as np
 
+from ._cross3 import _cross3
 from .analytic_roots import isolate_real_roots, trigonometric_roots
 from .curves import Arc, Straight, Spline
 from .errors import GeometryError
@@ -25,6 +26,32 @@ class LinePath:
     end: tuple
 
     def evaluate(self, parameters):
+        # Scalar fast path: per coordinate start + t*(end-start), the same
+        # float operations in the same order as the vectorized route below.
+        # Only exact float and np.float64 scalars and coordinates are
+        # eligible (production freeze_edge stores exact np.float64 values);
+        # float subclasses and non-scalar parameters fall back to it. A
+        # finite result certifies finite intermediates for overflow and
+        # invalid operations, so any exceptional value (overflow, inf, nan)
+        # also falls back and keeps the vectorized route's behavior,
+        # including its np.errstate exceptions. Underflow yields finite
+        # results, so the fast path is disabled entirely while NumPy
+        # underflow handling is enabled.
+        if type(parameters) is float or type(parameters) is np.float64:
+            start, end = self.start, self.end
+            if (type(start) is tuple and type(end) is tuple
+                    and len(start) == 3 and len(end) == 3
+                    and all(type(value) is float or type(value) is np.float64
+                            for value in start+end)
+                    and np.geterr()['under'] == 'ignore'):
+                t = float(parameters)
+                s0, s1, s2 = map(float, start)
+                e0, e1, e2 = map(float, end)
+                x0 = s0+t*(e0-s0)
+                x1 = s1+t*(e1-s1)
+                x2 = s2+t*(e2-s2)
+                if x0-x0 == 0. and x1-x1 == 0. and x2-x2 == 0.:
+                    return np.array((x0, x1, x2))
         t = np.asarray(parameters, dtype=float)
         return np.asarray(self.start)+t[..., None]*(np.asarray(self.end)-self.start)
 
@@ -218,7 +245,7 @@ def _point_parameters(curve, point, *, tolerance=1e-10):
         original = np.linalg.solve(matrix[:3, :3], point-matrix[:3, 3])
         offset = original-curve.first.origin
         e1 = np.asarray(curve.first.radial_direction)
-        e2 = np.cross(curve.first.axis, e1)
+        e2 = _cross3(curve.first.axis, e1)
         angle = math.atan2(float(offset @ e2), float(offset @ e1))
         lower, upper = sorted((curve.start_angle, curve.start_angle+curve.sweep_angle))
         roots = []
@@ -247,11 +274,11 @@ def line_curve_junctions(line, curve, *, tolerance=1e-10,cancellation_check=None
     # Two independent planes contain the infinite line. Any isolated common
     # point must be a root of at least one non-coincident plane constraint.
     coordinate = np.eye(3)[int(np.argmin(np.abs(direction)))]
-    normal = np.cross(direction, coordinate)
+    normal = _cross3(direction, coordinate)
     normal /= np.linalg.norm(normal)
     first_roots = plane_roots(curve, normal, float(normal @ line.start), tolerance=tolerance,
                               cancellation_check=cancellation_check)
-    other_normal = np.cross(direction, normal)
+    other_normal = _cross3(direction, normal)
     other_normal /= np.linalg.norm(other_normal)
     second_roots = plane_roots(curve, other_normal, float(other_normal @ line.start), tolerance=tolerance,
                                cancellation_check=cancellation_check)
@@ -276,7 +303,7 @@ def ellipse_curve_junctions(ellipse, curve, *, tolerance=1e-10,cancellation_chec
     if isinstance(curve, LinePath):
         return tuple((second, first) for first, second in line_curve_junctions(curve, ellipse, tolerance=tolerance,
                                                                            cancellation_check=cancellation_check))
-    normal = np.cross(ellipse.u_vector, ellipse.v_vector)
+    normal = _cross3(ellipse.u_vector, ellipse.v_vector)
     normal /= np.linalg.norm(normal)
     roots = plane_roots(curve, normal, float(normal @ ellipse.center), tolerance=tolerance,
                         cancellation_check=cancellation_check)

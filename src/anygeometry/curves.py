@@ -32,6 +32,7 @@ from typing import Tuple, Union
 
 import numpy as np
 
+from ._cross3 import _cross3
 from .exact_curves import EllipticArc, CylinderIntersectionCurve
 from .quadric_curves import QuadricIntersectionCurve
 from .branch_curves import BezierQuadricCurve
@@ -144,7 +145,7 @@ def arc_frame(
 
     ab = b - a
     ac = c - a
-    normal = np.cross(ab, ac)
+    normal = _cross3(ab, ac)
     normal_sq = float(normal @ normal)
     scale = float((ab @ ab) * (ac @ ac))
     if scale <= 0.0 or normal_sq <= _COLLINEAR_RTOL * scale:
@@ -154,8 +155,8 @@ def arc_frame(
 
     # Circumcenter of the triangle a, b, c.
     center = a + (
-        float(ab @ ab) * np.cross(ac, normal)
-        + float(ac @ ac) * np.cross(normal, ab)
+        float(ab @ ab) * _cross3(ac, normal)
+        + float(ac @ ac) * _cross3(normal, ab)
     ) / (2.0 * normal_sq)
 
     radial = a - center
@@ -165,7 +166,7 @@ def arc_frame(
 
     unit_normal = normal / np.sqrt(normal_sq)
     e1 = radial / radius
-    e2 = np.cross(unit_normal, e1)
+    e2 = _cross3(unit_normal, e1)
 
     theta_via = _wrapped_angle(b - center, e1, e2)
     theta_end = _wrapped_angle(c - center, e1, e2)

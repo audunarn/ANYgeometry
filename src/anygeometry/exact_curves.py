@@ -14,6 +14,7 @@ import numpy as np
 
 from .errors import GeometryError
 from .surfaces import Cylinder
+from ._cross3 import _cross3
 from .analytic_roots import trigonometric_roots
 
 
@@ -170,7 +171,7 @@ class EllipticArc:
         for name in ("center", "u_vector", "v_vector"):
             object.__setattr__(self, name, _vector(getattr(self, name), name))
         u, v = np.asarray(self.u_vector), np.asarray(self.v_vector)
-        if np.linalg.norm(np.cross(u, v)) == 0:
+        if np.linalg.norm(_cross3(u, v)) == 0:
             raise GeometryError("ellipse basis vectors must be independent")
         start, sweep = _angles(self.start_angle, self.sweep_angle)
         object.__setattr__(self, "start_angle", start)

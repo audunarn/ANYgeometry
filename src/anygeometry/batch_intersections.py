@@ -13,6 +13,7 @@ from uuid import UUID
 
 import numpy as np
 
+from ._cross3 import _cross3
 from .analytic_roots import root_isolation_memo
 from .analytic_supports import plane_cylinder_support, cylinder_cylinder_support
 from .arrangement_geometry import (LinePath, BezierPath, freeze_edge,
@@ -299,13 +300,13 @@ def _rectangular_cylinder(domain, tolerance):
         start, end = domain.uv(curve, 0.), domain.uv(curve, 1.)
         if isinstance(curve, LinePath):
             direction = np.asarray(curve.end)-curve.start
-            if np.linalg.norm(np.cross(direction, support.axis)) > tolerance:
+            if np.linalg.norm(_cross3(direction, support.axis)) > tolerance:
                 return False
             coordinate, varying = 0, 1
         elif isinstance(curve, EllipticArc):
-            normal = np.cross(curve.u_vector, curve.v_vector)
+            normal = _cross3(curve.u_vector, curve.v_vector)
             normal /= np.linalg.norm(normal)
-            if np.linalg.norm(np.cross(normal, support.axis)) > tolerance:
+            if np.linalg.norm(_cross3(normal, support.axis)) > tolerance:
                 return False
             center = np.asarray(curve.center)-support.origin
             radial = center-float(center @ support.axis)*support.axis
@@ -571,7 +572,7 @@ def _coincident(first, second, tolerance):
         return True  # Caller already established both matching endpoints.
     if isinstance(first, EllipticArc) and isinstance(second, EllipticArc):
         inverse = np.linalg.pinv(np.column_stack((first.u_vector, first.v_vector)))
-        normal = np.cross(first.u_vector, first.v_vector)
+        normal = _cross3(first.u_vector, first.v_vector)
         normal /= np.linalg.norm(normal)
         center = np.asarray(second.center)-first.center
         u, v = inverse @ second.u_vector, inverse @ second.v_vector
