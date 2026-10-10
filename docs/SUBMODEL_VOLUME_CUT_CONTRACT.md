@@ -105,12 +105,16 @@ An O-grid on an explicit `Plane` surface works. Both failures are flagged separa
   a planar face lies in the convex hull of its boundary, and on a cylinder a linear function of
   position is linear in the axial coordinate along each generator, so its extremes over the
   face lie on the boundary.
-- **Plan**: selects the faces whose extent reaches the box; refuses surfaces other than planes
-  and cylinders; refuses a planar face with material in a box plane, found by points verified
+- **Plan**: selects the faces whose extent reaches the box; refuses surfaces other than planes,
+  cylinders and planar four-sided (Coons) patches with straight coplanar boundaries (ANYfem's
+  default plate); refuses a planar face with material in a box plane, found by points verified
   strictly inside its material domain (`MaterialDomain`, holes respected; an overlap too small
   to be found there is still refused by the imprint itself); refuses members that reach the
-  box, attachments that target a selected face or one of its edges, and junctions that involve
-  a sheet using a selected face.
+  box unless the caller declares them droppable (`droppable_members`: members that carry no
+  structure, such as those with no beam section; they are left out of the extract and listed in
+  `dropped_members`, and still refuse if they have attachments or junctions), attachments that
+  target a selected face or one of its edges, and junctions that involve a sheet using a
+  selected face.
 - **Apply**: clones the model, adds the six box faces with explicit `Plane` surfaces as
   temporary cutting faces (section 8's first option), and imprints them with
   `plan_intersections`/`apply_intersections` and `ConnectionIntent.IMPRINT` (member
@@ -143,7 +147,7 @@ An O-grid on an explicit `Plane` surface works. Both failures are flagged separa
   imprint split or traced, or a point where the imprint split a source edge: shared by exactly
   two extracted edges descending from the same source edge) and `unresolved` otherwise;
   nothing is dropped.
-- Evidence (`tests/test_volume_cut.py`, 24 cases): a plate through the box (area, lineage, cut
+- Evidence (`tests/test_volume_cut.py`, 27 cases): a plate through the box (area, lineage, cut
   sides, source checksum unchanged), a rotated box, a box past one plate edge, a plate edge
   lying on a box side (not a cut), a T-junction (one shared inside junction edge used by three
   faces, not a cut), an O-grid plate with a hole inside the box and crossing it, a cylinder

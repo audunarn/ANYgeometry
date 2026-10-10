@@ -367,6 +367,7 @@ class VolumeCutPlan:
     volume: BoxVolume
     tolerance: float
     operand_faces: Tuple[int, ...]  # faces whose conservative extent reaches the box
+    dropped_members: Tuple[int, ...] = ()  # droppable members that reach the box (not carried)
 
 
 def _refuse_coincident(model, face_id: int, extent, volume: BoxVolume, tolerance: float) -> None:
@@ -401,8 +402,34 @@ def _refuse_coincident(model, face_id: int, extent, volume: BoxVolume, tolerance
                         )
 
 
-def plan_volume_cut(model, volume: BoxVolume) -> VolumeCutPlan:
-    """Read-only plan: the faces the box reaches, and every refusal that needs no mutation."""
+def _planar_coons(model, face_id: int, surface) -> bool:
+    """A topology-backed Coons patch with straight coplanar boundaries is exactly planar.
+
+    This is the support ANYgeometry's own intersection planning accepts for such a
+    face (``_qualified_face_plane``), so the imprint treats it as the plane it is.
+    """
+
+    from .intersections import _qualified_face_plane
+    from .surfaces import CoonsSurface
+
+    if not isinstance(surface, CoonsSurface):
+        return False
+    try:
+        _qualified_face_plane(model, face_id)
+    except GeometryError:
+        return False
+    return True
+
+
+def plan_volume_cut(model, volume: BoxVolume, *, droppable_members: Iterable[int] = ()) -> VolumeCutPlan:
+    """Read-only plan: the faces the box reaches, and every refusal that needs no mutation.
+
+    ``droppable_members`` names members the caller declares carry no structure of
+    their own (for example members with no beam section assigned).  Such a member
+    that reaches the box is not carried into the extract and is reported in
+    ``dropped_members``; it still refuses if it has attachments or junctions.  Any
+    other member that reaches the box refuses (partitioning is slice S2b).
+    """
 
     if not isinstance(volume, BoxVolume):
         raise VolumeCutError("VOLUME_INVALID", "the volume must be a BoxVolume")
@@ -414,19 +441,33 @@ def plan_volume_cut(model, volume: BoxVolume) -> VolumeCutPlan:
             continue
         surface = getattr(face, "surface", None)
         if surface is not None and not isinstance(surface, (Plane, Cylinder)):
-            raise VolumeCutError("VOLUME_SURFACE_UNSUPPORTED",
-                                 f"face {face_id} near the box is a {type(surface).__name__}; planes and cylinders are supported")
+            if not _planar_coons(model, face_id, surface):
+                raise VolumeCutError("VOLUME_SURFACE_UNSUPPORTED",
+                                     f"face {face_id} near the box is a {type(surface).__name__}; planes, cylinders "
+                                     "and planar four-sided patches are supported")
         if not isinstance(surface, Cylinder):
             _refuse_coincident(model, face_id, extent, volume, tolerance)
         operands.append(face_id)
     operand_set = set(operands)
     operand_edges = {e for f in operands for e in _face_edges(model, f)}
+    droppable = {int(m) for m in droppable_members}
+    unknown = sorted(droppable - set(model.members))
+    if unknown:
+        raise VolumeCutError("VOLUME_INVALID", f"droppable members {unknown} do not exist")
+    dropped: List[int] = []
     for member_id, member in sorted(model.members.items()):
         for use_id in member.edge_use_ids:
             if volume.reaches(_edge_extent(model, model.member_edge_uses[use_id].edge_id, volume), tolerance):
-                raise VolumeCutError("VOLUME_MEMBERS_UNSUPPORTED",
-                                     f"member {member_id} reaches the box; member partitioning is slice S2b")
+                if member_id not in droppable:
+                    raise VolumeCutError("VOLUME_MEMBERS_UNSUPPORTED",
+                                         f"member {member_id} reaches the box; member partitioning is slice S2b")
+                dropped.append(member_id)
+                break
     for attachment_id, attachment in sorted(model.attachments.items()):
+        if attachment.member_id in dropped:
+            raise VolumeCutError("VOLUME_RELATIONS_UNSUPPORTED",
+                                 f"attachment {attachment_id} belongs to member {attachment.member_id}, "
+                                 "which would be dropped (slice S2b)")
         target = (str(getattr(attachment.target_kind, "value", attachment.target_kind)), attachment.target_id)
         if (target[0] == "face" and target[1] in operand_set) or (target[0] == "edge" and target[1] in operand_edges):
             raise VolumeCutError("VOLUME_RELATIONS_UNSUPPORTED",
@@ -434,13 +475,16 @@ def plan_volume_cut(model, volume: BoxVolume) -> VolumeCutPlan:
     operand_sheets = {model.face_uses[use].sheet_id for use in model.face_uses
                       if model.face_uses[use].face_id in operand_set} if hasattr(model, "face_uses") else set()
     for junction_id, junction in sorted(model.junctions.items()):
+        if {use.member_id for use in junction.member_uses} & set(dropped):
+            raise VolumeCutError("VOLUME_RELATIONS_UNSUPPORTED",
+                                 f"junction {junction_id} uses a member that would be dropped (slice S2b)")
         if set(junction.sheet_ids) & operand_sheets:
             raise VolumeCutError("VOLUME_RELATIONS_UNSUPPORTED",
                                  f"junction {junction_id} involves a sheet near the box (slice S2b)")
     if not operands:
         raise VolumeCutError("VOLUME_EMPTY", "no face reaches the box")
     return VolumeCutPlan(model.model_id, model.revision, to_dict(model)["checksum"]["value"], volume, tolerance,
-                         tuple(operands))
+                         tuple(operands), tuple(dropped))
 
 
 # ----------------------------------------------------------------------
@@ -458,6 +502,7 @@ class VolumeCutResult:
     created: Tuple[Tuple[str, int], ...]  # made by the cut: on the box, arc via vertices, split points of source edges
     unresolved: Tuple[Tuple[str, int], ...]  # extracted entities with no source and not made by the cut
     volume: BoxVolume = field(default=None)
+    dropped_members: Tuple[int, ...] = ()  # members the caller declared droppable that reached the box
 
     @property
     def source_faces(self) -> Dict[int, Tuple[int, ...]]:
@@ -711,5 +756,5 @@ def apply_volume_cut(model, plan: VolumeCutPlan) -> VolumeCutResult:
         closure=closure, working_model=work, cutting_faces=tuple(sorted(cutting_ids)),
         classification=classification, cut_edges={k: tuple(v) for k, v in cut_edges.items()},
         original_boundary_edges=tuple(original_boundary), lineage=lineage_final, created=tuple(created),
-        unresolved=tuple(unresolved), volume=volume,
+        unresolved=tuple(unresolved), volume=volume, dropped_members=plan.dropped_members,
     )

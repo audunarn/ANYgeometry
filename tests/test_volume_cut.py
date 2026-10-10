@@ -422,3 +422,46 @@ def test_a_distant_unsupported_face_does_not_block_a_local_cut():
     result = cut(model, BoxVolume((0.3, 0.3, -0.1), (0.7, 0.7, 0.1)))
     assert list(result.source_faces.values()) == [(face,)]
     assert_inside(result)
+
+
+def test_a_planar_coons_plate_cuts_like_a_plane_plate():
+    """A plate made without an explicit surface is a topology-backed Coons patch (ANYfem's default)."""
+
+    model = GeometryModel()
+    ids = [model.add_point(*c) for c in [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)]]
+    face = model.add_face([model.add_line(ids[i], ids[(i + 1) % 4]) for i in range(4)])
+    assert type(model.faces[face].surface).__name__ == "CoonsSurface"
+    result = cut(model, BoxVolume((0.3, 0.3, -0.1), (0.7, 0.7, 0.1)))
+    (piece,) = result.closure.working_model.faces
+    assert area(result.closure.working_model, piece) == pytest.approx(0.16, abs=1e-12)
+    assert result.source_faces == {piece: (face,)} and set(result.cut_edges) == {"x0", "x1", "y0", "y1"}
+    assert_inside(result)
+
+
+def plate_with_member():
+    model = GeometryModel()
+    face = model.add_plate(model.add_points(((0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0))))
+    member = model.add_member((model.add_line(*model.add_points(((0.1, 0.5, 0), (0.9, 0.5, 0)))),))
+    return model, face, member
+
+
+def test_a_declared_droppable_member_is_reported_and_not_carried():
+    model, face, member = plate_with_member()
+    box = BoxVolume((0.3, 0.3, -0.1), (0.7, 0.7, 0.1))
+    with pytest.raises(VolumeCutError, match="VOLUME_MEMBERS_UNSUPPORTED"):
+        plan_volume_cut(model, box)
+    with pytest.raises(VolumeCutError, match="VOLUME_INVALID"):
+        plan_volume_cut(model, box, droppable_members=[99])
+    result = apply_volume_cut(model, plan_volume_cut(model, box, droppable_members=[member]))
+    assert result.dropped_members == (member,) and not result.closure.working_model.members
+    (piece,) = result.closure.working_model.faces
+    assert result.source_faces == {piece: (face,)}
+    assert_inside(result)
+
+
+def test_a_droppable_member_with_an_attachment_still_refuses():
+    model, face, member = plate_with_member()
+    model.add_attachment(member, AttachmentKind.MEMBER_ON_FACE, "face", face, ParameterRange(0, 1),
+                         (ParameterRange(0.1, 0.9), ParameterRange(0.5, 0.5)), evidence="exact", tolerance_used=1e-8)
+    with pytest.raises(VolumeCutError, match="VOLUME_RELATIONS_UNSUPPORTED"):
+        plan_volume_cut(model, BoxVolume((0.3, 0.3, -0.1), (0.7, 0.7, 0.1)), droppable_members=[member])
