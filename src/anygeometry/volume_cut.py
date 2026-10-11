@@ -357,6 +357,29 @@ def _interior_point(model, face_id: int) -> np.ndarray:
     raise VolumeCutError("VOLUME_FACE_DEGENERATE", f"no point could be verified inside face {face_id}")
 
 
+def _require_source_orientation(source, extracted, face_id: int, source_faces: Sequence[int]) -> None:
+    """An extracted face keeps its source face's surface normal.
+
+    The imprint rebuilds a split face's surface, and a plane rebuilt from the loop
+    can face the other way when the source plane opposed its loop.  Consumers read
+    plate-side conventions (beam frames, offsets, normals of a driven trace) from
+    the surface normal, so a flipped face is refused rather than carried.
+    """
+
+    point = _interior_point(extracted, face_id)
+    _projected, uv, _distance = extracted.project_to_face(face_id, point)
+    normal = np.asarray(extracted.face_normal(face_id, *uv), dtype=float)
+    for source_id in source_faces:
+        _projected, source_uv, _distance = source.project_to_face(source_id, point)
+        source_normal = np.asarray(source.face_normal(source_id, *source_uv), dtype=float)
+        if float(normal @ source_normal) < 0.99:
+            raise VolumeCutError(
+                "VOLUME_ORIENTATION",
+                f"extracted face {face_id} faces {np.round(normal, 6).tolist()} where its source face {source_id} "
+                f"faces {np.round(source_normal, 6).tolist()} (the imprint rebuilt its surface the other way)",
+            )
+
+
 # ----------------------------------------------------------------------
 # plan
 # ----------------------------------------------------------------------
@@ -802,6 +825,8 @@ def apply_volume_cut(model, plan: VolumeCutPlan) -> VolumeCutResult:
     missing = sorted(set(extracted.faces) - {i for k, i in lineage_final if k == "face"})
     if missing:
         raise VolumeCutError("VOLUME_LINEAGE", f"extracted faces {missing} have no source face")
+    for face_id in sorted(extracted.faces):
+        _require_source_orientation(model, extracted, face_id, lineage_final[("face", face_id)])
     via_vertices = {edge.curve.via_vertex for edge in extracted.edges.values() if isinstance(edge.curve, Arc)}
     ends: Dict[int, List[Tuple[int, ...]]] = {}
     for edge_id, edge in extracted.edges.items():

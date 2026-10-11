@@ -623,3 +623,28 @@ def test_member_edge_use_metadata_is_carried():
     (piece,) = [m for m in extracted.members if extracted.members[m].name == "A"]
     tags = [dict(extracted.member_edge_uses[u].metadata) for u in extracted.members[piece].edge_use_ids]
     assert tags == [{"region": "first"}, {"region": "second"}]
+
+
+def test_a_face_whose_surface_the_imprint_turns_refuses():
+    """Review S4b round 3: a clockwise loop on an explicit +z plane.
+
+    The imprint rebuilds the split piece's plane from its loop, facing -z; plate-side
+    conventions read from the surface normal would flip in the extract, so the cut refuses.
+    A counter-clockwise loop on the same plane is cut as usual.
+    """
+
+    for points, flipped in (([(0, 0, 0), (0, 1, 0), (1, 1, 0), (1, 0.6, 0), (0.6, 0.6, 0), (0.6, 0, 0)], True),
+                            ([(0, 0, 0), (0.6, 0, 0), (0.6, 0.6, 0), (1, 0.6, 0), (1, 1, 0), (0, 1, 0)], False)):
+        model = GeometryModel()
+        vertices = model.add_points(points)
+        edges = [model.add_line(vertices[i], vertices[(i + 1) % len(vertices)]) for i in range(len(vertices))]
+        face = model.add_face(edges, surface=Plane((0, 0, 0), (1, 0, 0), (0, 1, 0)))
+        assert np.allclose(model.face_normal(face, 0.5, 0.5), (0, 0, 1))
+        box = BoxVolume((-0.1, -0.1, -0.1), (0.4, 1.1, 0.1))
+        if flipped:
+            with pytest.raises(VolumeCutError, match="VOLUME_ORIENTATION"):
+                cut(model, box)
+        else:
+            extracted = cut(model, box).closure.working_model
+            (piece,) = extracted.faces
+            assert np.allclose(extracted.face_normal(piece, 0.5, 0.5), (0, 0, 1))
