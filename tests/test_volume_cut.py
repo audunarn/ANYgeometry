@@ -7,6 +7,7 @@ import pytest
 
 from anygeometry.audit import AuditCode
 from anygeometry.curves import Arc
+from anygeometry.entities import OrientedEdge
 from anygeometry.model import GeometryModel
 from anygeometry.serialization import to_dict
 from anygeometry.structural import AttachmentKind, ParameterRange
@@ -465,3 +466,133 @@ def test_a_droppable_member_with_an_attachment_still_refuses():
                          (ParameterRange(0.1, 0.9), ParameterRange(0.5, 0.5)), evidence="exact", tolerance_used=1e-8)
     with pytest.raises(VolumeCutError, match="VOLUME_RELATIONS_UNSUPPORTED"):
         plan_volume_cut(model, BoxVolume((0.3, 0.3, -0.1), (0.7, 0.7, 0.1)), droppable_members=[member])
+
+
+# ----------------------------------------------------------------------
+# seam members (slice S2b)
+# ----------------------------------------------------------------------
+XS, YS = (0.0, 1.0, 2.0), (0.0, 0.34, 0.68, 1.0)
+
+
+def stiffened_panel(*, u_member=False):
+    """A 2 x 1 deck split into a 2 x 3 grid of faces with stiffeners on the seams.
+
+    Longitudinal stiffener A runs along y = 0.34 over the full length, B along
+    y = 0.68 over the first half only; transverse stiffener C runs along x = 1
+    from y = 1 down to y = 0 (reversed axis edges).  With ``u_member`` a single
+    U-shaped member runs out along y = 0.34, across x = 2 and back along y = 0.68.
+    """
+
+    model = GeometryModel()
+    v = {(i, j): model.add_point(x, y, 0.0) for i, x in enumerate(XS) for j, y in enumerate(YS)}
+    along = {(i, j): model.add_line(v[i, j], v[i + 1, j]) for i in range(2) for j in range(4)}
+    across = {(i, j): model.add_line(v[i, j], v[i, j + 1]) for i in range(3) for j in range(3)}
+    faces = [model.add_face([along[i, j], across[i + 1, j], along[i, j + 1], across[i, j]],
+                            surface=Plane((XS[i], YS[j], 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)))
+             for i in range(2) for j in range(3)]
+    part = model.add_part(name="deck")
+    model.add_sheet(faces, part_id=part)
+    if u_member:
+        return model, {"U": model.add_member([along[0, 1], along[1, 1], across[2, 1], along[1, 2], along[0, 2]],
+                                             part_id=part, name="U")}
+    members = {"A": model.add_member([along[0, 1], along[1, 1]], part_id=part, name="A"),
+               "B": model.add_member([along[0, 2]], part_id=part, name="B"),
+               "C": model.add_member([OrientedEdge(across[1, j], False) for j in (2, 1, 0)], part_id=part, name="C")}
+    return model, members
+
+
+PANEL_BOX = BoxVolume((0.5, 0.2, -0.1), (1.5, 0.8, 0.1))
+
+
+def member_points(model, member_id):
+    points = []
+    for use_id in model.members[member_id].edge_use_ids:
+        use = model.member_edge_uses[use_id]
+        edge = model.edges[use.edge_id]
+        ends = (edge.start, edge.end) if use.orientation.name == "FORWARD" else (edge.end, edge.start)
+        points.append([np.asarray(model.vertex_position(e)) for e in ends])
+    return points
+
+
+def test_seam_members_are_partitioned_at_the_box():
+    model, members = stiffened_panel()
+    before = to_dict(model)["checksum"]["value"]
+    plan = plan_volume_cut(model, PANEL_BOX)
+    assert plan.partitioned_members == tuple(sorted(members.values())) and plan.dropped_members == ()
+    result = apply_volume_cut(model, plan)
+    assert to_dict(model)["checksum"]["value"] == before
+    extracted = result.closure.working_model
+    assert_inside(result)
+    by_name = {extracted.members[m].name: m for m in extracted.members}
+    assert set(by_name) == {"A", "B", "C"}
+    assert {by_name[n]: (members[n],) for n in by_name} == result.source_members
+    spans = {n: result.member_ranges[by_name[n]] for n in by_name}
+    assert spans["A"][0] == members["A"] and spans["A"][1] == pytest.approx((0.25, 0.75))
+    assert spans["B"][0] == members["B"] and spans["B"][1] == pytest.approx((0.5, 1.0))
+    assert spans["C"][0] == members["C"] and spans["C"][1] == pytest.approx((0.2, 0.8))
+    # The axis runs continuously in the source direction between the box sides (or the source end).
+    expected = {"A": ((0.5, 0.34), (1.5, 0.34)), "B": ((0.5, 0.68), (1.0, 0.68)), "C": ((1.0, 0.8), (1.0, 0.2))}
+    face_edges = {u.edge for f in extracted.faces.values() for u in f.loop}
+    for name, member_id in by_name.items():
+        points = member_points(extracted, member_id)
+        for (_a, end), (start, _b) in zip(points, points[1:]):
+            assert np.allclose(end, start)
+        assert np.allclose(points[0][0][:2], expected[name][0]) and np.allclose(points[-1][1][:2], expected[name][1])
+        uses = extracted.members[member_id].edge_use_ids
+        assert {extracted.member_edge_uses[u].edge_id for u in uses} <= face_edges  # still seam members
+        for use_id in uses:  # every use lifts to the source use on its ancestor edge
+            (source_use,) = result.lineage[("member_edge_use", use_id)]
+            assert model.member_edge_uses[source_use].member_id == members[name]
+            assert model.member_edge_uses[source_use].edge_id in result.lineage[("edge",
+                                                                                  extracted.member_edge_uses[use_id].edge_id)]
+    # One part: the members join the rebuilt deck part.
+    assert len(extracted.parts) == 1
+    (part,) = extracted.parts
+    assert set(extracted.parts[part].member_ids) == set(by_name.values())
+    from anygeometry.closure import ModelClosure, _closure_keys
+
+    closure = result.closure
+    assert set(closure.work_to_source) == set(_closure_keys(extracted))
+    assert {h.kind for h in closure.work_to_source} >= {"member", "member_edge_use"}
+    restored = ModelClosure.from_transport(closure.to_transport())
+    assert {(t.kind, t.id): (s.kind, s.id) for t, s in restored.work_to_source.items()} == {
+        (t.kind, t.id): (s.kind, s.id) for t, s in closure.work_to_source.items()}
+    assert assert_audit_provenance(model, result) == 0
+
+
+def test_the_partitioned_cut_is_deterministic():
+    first, second = (apply_volume_cut(m, plan_volume_cut(m, PANEL_BOX)) for m in (stiffened_panel()[0],
+                                                                                    stiffened_panel()[0]))
+    assert first.lineage == second.lineage and first.member_ranges == second.member_ranges
+    assert [(m.name, m.edge_use_ids) for m in first.closure.working_model.members.values()] == [
+        (m.name, m.edge_use_ids) for m in second.closure.working_model.members.values()]
+
+
+def test_a_member_outside_the_box_is_not_carried():
+    model, members = stiffened_panel()
+    result = apply_volume_cut(model, plan_volume_cut(model, BoxVolume((0.5, 0.4, -0.1), (1.5, 0.6, 0.1))))
+    names = {m.name for m in result.closure.working_model.members.values()}
+    assert names == {"C"}
+
+
+def test_a_member_entering_the_box_twice_refuses():
+    model, _members = stiffened_panel(u_member=True)
+    with pytest.raises(VolumeCutError, match="VOLUME_MEMBERS_UNSUPPORTED.*more than once"):
+        apply_volume_cut(model, plan_volume_cut(model, PANEL_BOX))
+
+
+def test_a_partitioned_member_oriented_outside_the_box_refuses():
+    model, members = stiffened_panel()
+    model._put_structural("member", __import__("dataclasses").replace(
+        model.members[members["A"]], orientation_reference=("vertex", 1)))
+    with pytest.raises(VolumeCutError, match="VOLUME_RELATIONS_UNSUPPORTED"):
+        apply_volume_cut(model, plan_volume_cut(model, PANEL_BOX))
+
+
+def test_a_partitioned_member_with_an_attachment_refuses():
+    model, members = stiffened_panel()
+    face = next(iter(model.faces))
+    model.add_attachment(members["B"], AttachmentKind.MEMBER_ON_FACE, "face", face, ParameterRange(0, 1),
+                         (ParameterRange(0, 1), ParameterRange(1, 1)), evidence="exact", tolerance_used=1e-8)
+    with pytest.raises(VolumeCutError, match="VOLUME_RELATIONS_UNSUPPORTED"):
+        plan_volume_cut(model, PANEL_BOX)

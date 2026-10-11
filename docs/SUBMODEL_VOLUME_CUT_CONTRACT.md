@@ -93,7 +93,7 @@ An O-grid on an explicit `Plane` surface works. Both failures are flagged separa
   checksum) and `apply_volume_cut(model, plan) -> VolumeCutResult`. Typed refusals are
   `VolumeCutError.code`: `VOLUME_INVALID`, `VOLUME_EMPTY`, `VOLUME_COINCIDENT`,
   `VOLUME_SURFACE_UNSUPPORTED`, `VOLUME_CURVE_UNSUPPORTED`, `VOLUME_MEMBERS_UNSUPPORTED` and
-  `VOLUME_RELATIONS_UNSUPPORTED` (members, attachments and junctions near the box are slice
+  `VOLUME_RELATIONS_UNSUPPORTED` (seam members are partitioned since S2b, section 10; the rest is slice
   S2b), `VOLUME_STALE_PLAN`, `VOLUME_IMPRINT_FAILED`, `VOLUME_SOURCE_INTERSECTION`,
   `VOLUME_FACE_DEGENERATE`, `VOLUME_LEAK`, `VOLUME_LINEAGE`.
 - **Extents are conservative**, never sampled: exact per box axis for straight edges, circular
@@ -166,3 +166,51 @@ An O-grid on an explicit `Plane` surface works. Both failures are flagged separa
   traces a plane on a cylinder, the new arcs' via vertices are reported `VERTEX_FACE_INTERIOR`
   by the strict audit. The finding is present in the working model straight after
   `apply_intersections`, before extraction; the volume cut does not change it.
+
+## 10. Seam members (slice S2b)
+
+Branch `claude/submodel-s2b`. Members that reach the box are partitioned at it when they are
+**seam members** there; free-standing members still refuse.
+
+- **Plan**: a member reaches the box when the extent of one of its axis edges does. A
+  droppable member is dropped as in S2a. Any other reaching member is listed in
+  `partitioned_members` when every reaching axis edge is an edge of a face the plan selected
+  (a seam member: the imprint splits that edge together with its face). Otherwise the cut
+  refuses with `VOLUME_MEMBERS_UNSUPPORTED`. An attachment or a junction on a dropped or
+  partitioned member refuses with `VOLUME_RELATIONS_UNSUPPORTED`.
+- **Apply**: the imprint has already split and re-ranged the member's edge uses in the working
+  clone. A partitioned member's uses on extracted edges are its inside part:
+  - They must be one contiguous run of the axis. A member entering the box more than once
+    refuses with `VOLUME_MEMBERS_UNSUPPORTED`.
+  - Every use left out must lie outside the box, judged by the midpoint of its edge. Otherwise
+    the cut refuses with `VOLUME_MEMBERS_UNSUPPORTED`.
+  - An orientation reference must itself have been extracted. Otherwise the cut refuses with
+    `VOLUME_RELATIONS_UNSUPPORTED`.
+  - A member that only touches the box is not carried.
+- **The new member** is built in the extract over the run:
+  - It keeps the clone's edge orientations, name and metadata.
+  - It belongs to the rebuilt part of its part, or to a new part with the same name.
+  - The member and each of its edge uses map one to one onto their counterparts in the working
+    clone, so the completed closure stays bijective and transportable.
+  - The new member's own edge-use ranges are re-normalized over its run (arc-length, as
+    `add_member` does).
+  - `member_ranges[new member] = (source member, (start, end))` gives the source member's
+    parameter interval it covers.
+- **Lineage**:
+  - A member maps to its source member.
+  - A member edge use (not in the replacement history) maps to the source use of the same
+    member whose edge is an ancestor of its edge.
+  - `source_members` lists the member entries.
+- Evidence (`tests/test_volume_cut.py`, 6 more cases, 33 in total):
+  - A 2 x 3 face grid with three stiffeners on its seams: one partly outside on both sides; one
+    ending inside the box; one transverse with reversed axis edges. Checked: ranges, axis
+    continuity and end points, that the members stay seam members, use lineage, one part,
+    a complete transportable closure, and audit provenance.
+  - Determinism.
+  - A member outside the box is not carried.
+  - Refusals: a U-shaped member entering twice; an orientation reference outside the box; an
+    attachment on a partitioned member.
+  - ANYfem's `generator.stiffened_panel` with beam groups assigned was also cut with the
+    box (0.5, 0.2, -0.1)-(1.5, 0.8, 0.1). This was a probe, not a test in this repository. It
+    carried the two stiffeners inside the box with ranges (0.25, 0.75) and (0.2, 0.8), and
+    nothing was unresolved.

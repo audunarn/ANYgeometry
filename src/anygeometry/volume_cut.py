@@ -1,7 +1,8 @@
-"""Cut a box volume out of a shell model for submodelling (slice S2a).
+"""Cut a box volume out of a shell model for submodelling (slices S2a and S2b).
 
 Implements ``docs/SUBMODEL_VOLUME_CUT_CONTRACT.md`` for shells on planes and
-cylinders without members, attachments or junctions in or across the volume:
+cylinders without attachments or junctions in or across the volume.  Members on
+face edges (seam members) are partitioned at the box (section 10):
 
 * :func:`plan_volume_cut` is read-only and bound to the model's id, revision and
   checksum; it selects the faces the box reaches (by conservative extents) and
@@ -368,6 +369,7 @@ class VolumeCutPlan:
     tolerance: float
     operand_faces: Tuple[int, ...]  # faces whose conservative extent reaches the box
     dropped_members: Tuple[int, ...] = ()  # droppable members that reach the box (not carried)
+    partitioned_members: Tuple[int, ...] = ()  # seam members that reach the box (carried, cut at the box)
 
 
 def _refuse_coincident(model, face_id: int, extent, volume: BoxVolume, tolerance: float) -> None:
@@ -427,8 +429,14 @@ def plan_volume_cut(model, volume: BoxVolume, *, droppable_members: Iterable[int
     ``droppable_members`` names members the caller declares carry no structure of
     their own (for example members with no beam section assigned).  Such a member
     that reaches the box is not carried into the extract and is reported in
-    ``dropped_members``; it still refuses if it has attachments or junctions.  Any
-    other member that reaches the box refuses (partitioning is slice S2b).
+    ``dropped_members``; it still refuses if it has attachments or junctions.
+
+    Any other member that reaches the box is partitioned at the box (slice S2b) when
+    it is a seam member there: every axis edge that reaches the box is an edge of a
+    face the box reaches, so the imprint splits it with that face and the inside
+    part is extracted with the inside faces.  Such members are reported in
+    ``partitioned_members``.  A free-standing axis edge near the box, and an
+    attachment or junction on a partitioned member, refuse.
     """
 
     if not isinstance(volume, BoxVolume):
@@ -455,19 +463,26 @@ def plan_volume_cut(model, volume: BoxVolume, *, droppable_members: Iterable[int
     if unknown:
         raise VolumeCutError("VOLUME_INVALID", f"droppable members {unknown} do not exist")
     dropped: List[int] = []
+    partitioned: List[int] = []
     for member_id, member in sorted(model.members.items()):
-        for use_id in member.edge_use_ids:
-            if volume.reaches(_edge_extent(model, model.member_edge_uses[use_id].edge_id, volume), tolerance):
-                if member_id not in droppable:
-                    raise VolumeCutError("VOLUME_MEMBERS_UNSUPPORTED",
-                                         f"member {member_id} reaches the box; member partitioning is slice S2b")
-                dropped.append(member_id)
-                break
+        reaching = [model.member_edge_uses[u].edge_id for u in member.edge_use_ids
+                    if volume.reaches(_edge_extent(model, model.member_edge_uses[u].edge_id, volume), tolerance)]
+        if not reaching:
+            continue
+        if member_id in droppable:
+            dropped.append(member_id)
+            continue
+        free = sorted(set(reaching) - operand_edges)
+        if free:
+            raise VolumeCutError("VOLUME_MEMBERS_UNSUPPORTED",
+                                 f"member {member_id} reaches the box along free-standing axis edges {free}; only "
+                                 "members on face edges (seam members) are partitioned")
+        partitioned.append(member_id)
     for attachment_id, attachment in sorted(model.attachments.items()):
-        if attachment.member_id in dropped:
+        if attachment.member_id in dropped or attachment.member_id in partitioned:
             raise VolumeCutError("VOLUME_RELATIONS_UNSUPPORTED",
                                  f"attachment {attachment_id} belongs to member {attachment.member_id}, "
-                                 "which would be dropped (slice S2b)")
+                                 "which reaches the box")
         target = (str(getattr(attachment.target_kind, "value", attachment.target_kind)), attachment.target_id)
         if (target[0] == "face" and target[1] in operand_set) or (target[0] == "edge" and target[1] in operand_edges):
             raise VolumeCutError("VOLUME_RELATIONS_UNSUPPORTED",
@@ -475,16 +490,16 @@ def plan_volume_cut(model, volume: BoxVolume, *, droppable_members: Iterable[int
     operand_sheets = {model.face_uses[use].sheet_id for use in model.face_uses
                       if model.face_uses[use].face_id in operand_set} if hasattr(model, "face_uses") else set()
     for junction_id, junction in sorted(model.junctions.items()):
-        if {use.member_id for use in junction.member_uses} & set(dropped):
+        if {use.member_id for use in junction.member_uses} & (set(dropped) | set(partitioned)):
             raise VolumeCutError("VOLUME_RELATIONS_UNSUPPORTED",
-                                 f"junction {junction_id} uses a member that would be dropped (slice S2b)")
+                                 f"junction {junction_id} uses a member that reaches the box")
         if set(junction.sheet_ids) & operand_sheets:
             raise VolumeCutError("VOLUME_RELATIONS_UNSUPPORTED",
                                  f"junction {junction_id} involves a sheet near the box (slice S2b)")
     if not operands:
         raise VolumeCutError("VOLUME_EMPTY", "no face reaches the box")
     return VolumeCutPlan(model.model_id, model.revision, to_dict(model)["checksum"]["value"], volume, tolerance,
-                         tuple(operands), tuple(dropped))
+                         tuple(operands), tuple(dropped), tuple(partitioned))
 
 
 # ----------------------------------------------------------------------
@@ -503,6 +518,8 @@ class VolumeCutResult:
     unresolved: Tuple[Tuple[str, int], ...]  # extracted entities with no source and not made by the cut
     volume: BoxVolume = field(default=None)
     dropped_members: Tuple[int, ...] = ()  # members the caller declared droppable that reached the box
+    # extracted member -> (source member, the source member's parameter range it covers)
+    member_ranges: Mapping[int, Tuple[int, Tuple[float, float]]] = field(default_factory=dict)
 
     @property
     def source_faces(self) -> Dict[int, Tuple[int, ...]]:
@@ -515,6 +532,10 @@ class VolumeCutResult:
     @property
     def source_vertices(self) -> Dict[int, Tuple[int, ...]]:
         return {i: s for (k, i), s in self.lineage.items() if k == "vertex"}
+
+    @property
+    def source_members(self) -> Dict[int, Tuple[int, ...]]:
+        return {i: s for (k, i), s in self.lineage.items() if k == "member"}
 
 
 def _add_box_faces(model, volume: BoxVolume) -> Dict[str, int]:
@@ -589,6 +610,65 @@ def _rebuild_structure(work, extracted, work_of: Mapping, inside: Set[int]) -> D
     return clone_of
 
 
+def _partition_members(work, extracted, work_of: Mapping, clone_of: Dict, members: Sequence[int],
+                       volume: BoxVolume, tolerance: float) -> Dict[int, Tuple[int, Tuple[float, float]]]:
+    """Carry the inside part of each partitioned working member into the extract.
+
+    The imprint split the seam member's axis edges at the box together with their
+    faces, so the member's edge uses on extracted edges are its inside part.  They
+    must be one contiguous run of the member's axis; a use left out must lie
+    outside the box (by its midpoint), and an orientation reference must have been
+    extracted.  Each new member and member edge use maps one to one onto its
+    working counterpart (added to ``clone_of``).  Returns ``new member ->
+    (working member, covered parameter range)``.
+    """
+
+    from .entities import OrientedEdge
+    from .structural import Orientation
+
+    parts = {work_id: new_id for (kind, new_id), (_k, work_id) in clone_of.items() if kind == "part"}
+    ranges: Dict[int, Tuple[int, Tuple[float, float]]] = {}
+    for member_id in members:
+        if member_id not in work.members:
+            raise VolumeCutError("VOLUME_LINEAGE", f"member {member_id} is missing from the working model")
+        member = work.members[member_id]
+        uses = [work.member_edge_uses[u] for u in member.edge_use_ids]
+        kept = [i for i, use in enumerate(uses) if ("edge", use.edge_id) in work_of]
+        for i, use in enumerate(uses):
+            if i in kept:
+                continue
+            middle = work.sample_edge(use.edge_id, np.array([0.5]))[0]
+            if volume.classify(middle, tolerance) != OUTSIDE:
+                raise VolumeCutError("VOLUME_MEMBERS_UNSUPPORTED",
+                                     f"member {member_id} runs on edge {use.edge_id} inside the box, which no "
+                                     "inside face carries")
+        if not kept:
+            continue  # the member only touches the box
+        if kept != list(range(kept[0], kept[-1] + 1)):
+            raise VolumeCutError("VOLUME_MEMBERS_UNSUPPORTED", f"member {member_id} enters the box more than once")
+        reference = member.orientation_reference
+        if reference is not None:
+            if tuple(reference) not in work_of:
+                raise VolumeCutError("VOLUME_RELATIONS_UNSUPPORTED",
+                                     f"member {member_id} is oriented by {tuple(reference)} outside the box")
+            reference = work_of[tuple(reference)]
+        if member.part_id not in parts:
+            part = work.parts[member.part_id]
+            parts[member.part_id] = extracted.add_part(name=part.name, metadata=dict(part.metadata))
+            clone_of[("part", parts[member.part_id])] = ("part", member.part_id)
+        chain = [uses[i] for i in kept]
+        new_member = extracted.add_member(
+            [OrientedEdge(work_of[("edge", use.edge_id)][1], use.orientation is Orientation.FORWARD) for use in chain],
+            part_id=parts[member.part_id], name=member.name, metadata=dict(member.metadata),
+            orientation_reference=reference)
+        clone_of[("member", new_member)] = ("member", member_id)
+        for new_use, use in zip(extracted.members[new_member].edge_use_ids, chain):
+            clone_of[("member_edge_use", new_use)] = ("member_edge_use", use.id)
+        ranges[new_member] = (member_id, (min(u.parent_range.start for u in chain),
+                                          max(u.parent_range.end for u in chain)))
+    return ranges
+
+
 def apply_volume_cut(model, plan: VolumeCutPlan) -> VolumeCutResult:
     """Cut ``plan.volume`` out of a detached clone of ``model`` and extract the inside."""
 
@@ -659,6 +739,8 @@ def apply_volume_cut(model, plan: VolumeCutPlan) -> VolumeCutResult:
     for face_id in extracted.faces:
         _contained(extracted, face_id, volume, tolerance, "extracted face")
     clone_of = _rebuild_structure(work, extracted, work_of, set(inside))
+    member_ranges = _partition_members(work, extracted, work_of, clone_of, plan.partitioned_members, volume,
+                                       tolerance)
     work_to_source = dict(geometric.work_to_source)
     for (kind, new_id), (work_kind, work_id) in clone_of.items():
         work_to_source[extracted.handle(kind, new_id)] = work.handle(work_kind, work_id)
@@ -676,7 +758,7 @@ def apply_volume_cut(model, plan: VolumeCutPlan) -> VolumeCutResult:
     # same source use and ancestor edge for coedges).
     ancestors: Dict[Tuple[str, int], Set[int]] = {}
     for kind, store in (("face", model.faces), ("edge", model.edges), ("vertex", model.vertices),
-                        ("sheet", model.sheets), ("part", model.parts)):
+                        ("sheet", model.sheets), ("part", model.parts), ("member", model.members)):
         for source_id in store:
             for ref in work.resolve_ref(EntityRef(kind, source_id)):
                 if ref.kind == kind:
@@ -692,6 +774,12 @@ def apply_volume_cut(model, plan: VolumeCutPlan) -> VolumeCutResult:
     for target, (kind, work_id) in work_key.items():
         if kind == "face_use":
             sources = use_sources(work_id)
+        elif kind == "member_edge_use":
+            record = work.member_edge_uses[work_id]
+            members = ancestors.get(("member", record.member_id), set())
+            edges = ancestors.get(("edge", record.edge_id), set())
+            sources = {u for u, source in model.member_edge_uses.items()
+                       if source.member_id in members and source.edge_id in edges}
         elif kind == "coedge":
             record = work.coedges[work_id]
             uses, edges = use_sources(record.face_use_id), ancestors.get(("edge", record.edge_id), set())
@@ -757,4 +845,6 @@ def apply_volume_cut(model, plan: VolumeCutPlan) -> VolumeCutResult:
         classification=classification, cut_edges={k: tuple(v) for k, v in cut_edges.items()},
         original_boundary_edges=tuple(original_boundary), lineage=lineage_final, created=tuple(created),
         unresolved=tuple(unresolved), volume=volume, dropped_members=plan.dropped_members,
+        member_ranges=MappingProxyType({new: (lineage_final[("member", new)][0], span)
+                                        for new, (_work_member, span) in sorted(member_ranges.items())}),
     )
