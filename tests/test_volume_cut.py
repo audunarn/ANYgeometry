@@ -596,3 +596,30 @@ def test_a_partitioned_member_with_an_attachment_refuses():
                          (ParameterRange(0, 1), ParameterRange(1, 1)), evidence="exact", tolerance_used=1e-8)
     with pytest.raises(VolumeCutError, match="VOLUME_RELATIONS_UNSUPPORTED"):
         plan_volume_cut(model, PANEL_BOX)
+
+
+def test_an_attachment_targeting_a_partitioned_member_refuses():
+    """Review S2b round 1: an outside member whose end rests on a partitioned member."""
+
+    model, members = stiffened_panel()
+    post = model.add_member((model.add_line(*model.add_points(((1.8, 0.34, 0.5), (1.8, 0.34, 0.0)))),), name="post")
+    model.add_attachment(post, AttachmentKind.MEMBER_ENDPOINT_ON_MEMBER, "member", members["A"], ParameterRange(1, 1),
+                         (ParameterRange(0.9, 0.9),), evidence="exact", tolerance_used=1e-8)
+    with pytest.raises(VolumeCutError, match="VOLUME_RELATIONS_UNSUPPORTED.*targets member"):
+        plan_volume_cut(model, PANEL_BOX)
+
+
+def test_member_edge_use_metadata_is_carried():
+    """Review S2b round 1: occurrence metadata survives the split and the rebuild."""
+
+    from dataclasses import replace
+
+    model, members = stiffened_panel()
+    first, second = model.members[members["A"]].edge_use_ids
+    for use_id, tag in ((first, "first"), (second, "second")):
+        model._put_structural("member_edge_use", replace(model.member_edge_uses[use_id], metadata={"region": tag}))
+    result = apply_volume_cut(model, plan_volume_cut(model, PANEL_BOX))
+    extracted = result.closure.working_model
+    (piece,) = [m for m in extracted.members if extracted.members[m].name == "A"]
+    tags = [dict(extracted.member_edge_uses[u].metadata) for u in extracted.members[piece].edge_use_ids]
+    assert tags == [{"region": "first"}, {"region": "second"}]

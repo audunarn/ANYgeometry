@@ -30,7 +30,7 @@ The intersection code is used through its public API only.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 from uuid import UUID
@@ -478,17 +478,24 @@ def plan_volume_cut(model, volume: BoxVolume, *, droppable_members: Iterable[int
                                  f"member {member_id} reaches the box along free-standing axis edges {free}; only "
                                  "members on face edges (seam members) are partitioned")
         partitioned.append(member_id)
+    operand_sheets = {model.face_uses[use].sheet_id for use in model.face_uses
+                      if model.face_uses[use].face_id in operand_set} if hasattr(model, "face_uses") else set()
+    operand_vertices = {v for e in operand_edges for v in (model.edges[e].start, model.edges[e].end)}
+    reaching_members = set(dropped) | set(partitioned)
+    near = {"face": operand_set, "edge": operand_edges, "vertex": operand_vertices, "member": reaching_members,
+            "sheet": operand_sheets}
     for attachment_id, attachment in sorted(model.attachments.items()):
-        if attachment.member_id in dropped or attachment.member_id in partitioned:
+        if attachment.member_id in reaching_members:
             raise VolumeCutError("VOLUME_RELATIONS_UNSUPPORTED",
                                  f"attachment {attachment_id} belongs to member {attachment.member_id}, "
                                  "which reaches the box")
-        target = (str(getattr(attachment.target_kind, "value", attachment.target_kind)), attachment.target_id)
-        if (target[0] == "face" and target[1] in operand_set) or (target[0] == "edge" and target[1] in operand_edges):
+        kind = str(getattr(attachment.target_kind, "value", attachment.target_kind))
+        if kind not in near:
             raise VolumeCutError("VOLUME_RELATIONS_UNSUPPORTED",
-                                 f"attachment {attachment_id} targets {target[0]} {target[1]} near the box (slice S2b)")
-    operand_sheets = {model.face_uses[use].sheet_id for use in model.face_uses
-                      if model.face_uses[use].face_id in operand_set} if hasattr(model, "face_uses") else set()
+                                 f"attachment {attachment_id} targets an unknown kind {kind!r}")
+        if attachment.target_id in near[kind]:
+            raise VolumeCutError("VOLUME_RELATIONS_UNSUPPORTED",
+                                 f"attachment {attachment_id} targets {kind} {attachment.target_id} near the box")
     for junction_id, junction in sorted(model.junctions.items()):
         if {use.member_id for use in junction.member_uses} & (set(dropped) | set(partitioned)):
             raise VolumeCutError("VOLUME_RELATIONS_UNSUPPORTED",
@@ -664,6 +671,9 @@ def _partition_members(work, extracted, work_of: Mapping, clone_of: Dict, member
         clone_of[("member", new_member)] = ("member", member_id)
         for new_use, use in zip(extracted.members[new_member].edge_use_ids, chain):
             clone_of[("member_edge_use", new_use)] = ("member_edge_use", use.id)
+            if use.metadata:  # occurrence metadata travels with the use (add_member starts it empty)
+                extracted._put_structural("member_edge_use", replace(extracted.member_edge_uses[new_use],
+                                                                     metadata=dict(use.metadata)))
         ranges[new_member] = (member_id, (min(u.parent_range.start for u in chain),
                                           max(u.parent_range.end for u in chain)))
     return ranges

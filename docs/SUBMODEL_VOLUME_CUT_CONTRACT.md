@@ -177,7 +177,10 @@ Branch `claude/submodel-s2b`. Members that reach the box are partitioned at it w
   `partitioned_members` when every reaching axis edge is an edge of a face the plan selected
   (a seam member: the imprint splits that edge together with its face). Otherwise the cut
   refuses with `VOLUME_MEMBERS_UNSUPPORTED`. An attachment or a junction on a dropped or
-  partitioned member refuses with `VOLUME_RELATIONS_UNSUPPORTED`.
+  partitioned member refuses with `VOLUME_RELATIONS_UNSUPPORTED`, and so does an attachment of
+  any member whose target is near the box: a selected face, one of its edges or vertices, a sheet
+  using a selected face, or a dropped or partitioned member (an outside member resting on a
+  stiffener inside the box would otherwise lose its attachment silently).
 - **Apply**: the imprint has already split and re-ranged the member's edge uses in the working
   clone. A partitioned member's uses on extracted edges are its inside part:
   - They must be one contiguous run of the axis. A member entering the box more than once
@@ -188,7 +191,8 @@ Branch `claude/submodel-s2b`. Members that reach the box are partitioned at it w
     `VOLUME_RELATIONS_UNSUPPORTED`.
   - A member that only touches the box is not carried.
 - **The new member** is built in the extract over the run:
-  - It keeps the clone's edge orientations, name and metadata.
+  - It keeps the clone's edge orientations, name and metadata, and each edge use keeps its
+    working use's metadata (which the imprint carries through the split).
   - It belongs to the rebuilt part of its part, or to a new part with the same name.
   - The member and each of its edge uses map one to one onto their counterparts in the working
     clone, so the completed closure stays bijective and transportable.
@@ -201,7 +205,7 @@ Branch `claude/submodel-s2b`. Members that reach the box are partitioned at it w
   - A member edge use (not in the replacement history) maps to the source use of the same
     member whose edge is an ancestor of its edge.
   - `source_members` lists the member entries.
-- Evidence (`tests/test_volume_cut.py`, 6 more cases, 33 in total):
+- Evidence (`tests/test_volume_cut.py`, 8 more cases, 35 in total):
   - A 2 x 3 face grid with three stiffeners on its seams: one partly outside on both sides; one
     ending inside the box; one transverse with reversed axis edges. Checked: ranges, axis
     continuity and end points, that the members stay seam members, use lineage, one part,
@@ -209,7 +213,9 @@ Branch `claude/submodel-s2b`. Members that reach the box are partitioned at it w
   - Determinism.
   - A member outside the box is not carried.
   - Refusals: a U-shaped member entering twice; an orientation reference outside the box; an
-    attachment on a partitioned member.
+    attachment on a partitioned member; an outside member's attachment targeting a partitioned
+    member (review round 1).
+  - Member edge use metadata survives the split and the rebuild (review round 1).
   - ANYfem's `generator.stiffened_panel` with beam groups assigned was also cut with the
     box (0.5, 0.2, -0.1)-(1.5, 0.8, 0.1). This was a probe, not a test in this repository. It
     carried the two stiffeners inside the box with ranges (0.25, 0.75) and (0.2, 0.8), and
