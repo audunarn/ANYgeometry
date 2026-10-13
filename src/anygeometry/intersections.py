@@ -18,9 +18,9 @@ from .curved_intersections import (
 )
 from .entities import EntityRef, OrientedEdge
 from .errors import GeometryError
-from .exact_predicates import Outcome, canonical_extent, exact, exact_dot, exact_vector
-from .planar_exact import (ExactLine, ExactPlane, clip_line_to_region, plane_plane_line, point_in_region,
-                           region_is_simple, to_float)
+from .exact_predicates import Outcome, canonical_extent, correctly_rounded_sqrt, exact, exact_dot, exact_vector
+from .planar_exact import (ExactLine, ExactPlane, canonical_face_plane, clip_line_to_region, plane_plane_line,
+                           point_in_region, region_is_simple, to_float)
 from .identity import (
     EntityHandle,
     ResolutionStatus,
@@ -110,8 +110,6 @@ def clip_line_to_face(
 
     point = _point(line_point_value, "line_point")
     raw_direction = _point(line_direction, "line_direction")
-    # Degenerate only when exactly zero; hypot does not underflow for tiny directions.
-    direction_length = math.hypot(*(float(value) for value in raw_direction))
     if not any(raw_direction):
         return IntersectionResult(
             IntersectionKind.UNCLASSIFIED,
@@ -119,7 +117,8 @@ def clip_line_to_face(
             second_parent=face_handle,
             tolerance_used=tolerance_used,
         )
-    direction = raw_direction / direction_length
+    # Exact unit direction (correctly rounded; no underflow for subnormal components).
+    direction = np.asarray(_exact_unit(exact_vector(raw_direction)))
     support_result = qualified_line_plane(point, direction, plane).with_context(
         second_parent=face_handle, tolerance_used=tolerance_used
     )
@@ -132,7 +131,15 @@ def clip_line_to_face(
     # the face loops are mapped to exact chart coordinates of the stored
     # vertices, the line is the exact line of the given doubles, and the
     # region tests are exact rational ray parity. Floats are outputs only.
-    exact_plane = ExactPlane.from_plane(plane)
+    try:
+        exact_plane = _exact_face_support(geometry, face_id, plane)
+    except GeometryError:
+        return IntersectionResult(
+            IntersectionKind.UNSUPPORTED,
+            diagnostics=("face_line_clipping_requires_a_planar_support",),
+            second_parent=face_handle,
+            tolerance_used=tolerance_used,
+        )
     region = _exact_face_region(geometry, face, exact_plane)
     if not region_is_simple(region):
         return IntersectionResult(
@@ -142,12 +149,14 @@ def clip_line_to_face(
             tolerance_used=tolerance_used,
         )
     line = ExactLine.from_floats(point, raw_direction)
-    length_exact = exact(direction_length)
+    squared_speed = line.squared_speed()
 
-    def component_for_station(parameter) -> IntersectionComponent:
+    def component_for_station(parameter, *, on_plane=False) -> IntersectionComponent:
         world = line.at(parameter)
+        if on_plane:                                   # coplanar: reported on the support plane, as before
+            world = exact_plane.world(*exact_plane.uv(world))
         uv = to_float(exact_plane.uv(world))
-        distance = float(parameter * length_exact)
+        distance = _physical(parameter, squared_speed)
         return IntersectionComponent(
             (to_float(world),),
             IntersectionQuality.VERIFIED_APPROXIMATE,
@@ -194,7 +203,7 @@ def clip_line_to_face(
         # As before, coplanar witnesses are reported on the support plane
         # (the line itself may lie off it within tolerance).
         worlds = tuple(exact_plane.world(*exact_plane.uv(line.at(end))) for end in (lower, upper))
-        line_parameters = (float(lower * length_exact), float(upper * length_exact))
+        line_parameters = (_physical(lower, squared_speed), _physical(upper, squared_speed))
         line_components.append(
             IntersectionComponent(
                 tuple(to_float(world) for world in worlds),
@@ -217,7 +226,7 @@ def clip_line_to_face(
     if points:
         return IntersectionResult(
             IntersectionKind.TOUCH_POINT,
-            tuple(component_for_station(parameter) for parameter in points),
+            tuple(component_for_station(parameter, on_plane=True) for parameter in points),
             second_parent=face_handle,
             tolerance_used=tolerance_used,
         )
@@ -227,6 +236,47 @@ def clip_line_to_face(
         second_parent=face_handle,
         tolerance_used=tolerance_used,
     )
+
+
+def _exact_face_support(geometry: GeometryModel, face_id: int, plane: Plane) -> "ExactPlane":
+    """The exact plane the exact planar route decides on.
+
+    A stored ``Plane`` is used as stored. An inferred support (no surface or a
+    straight topology-backed Coons patch, already accepted by
+    ``_qualified_face_plane``) is replaced by the canonical exact plane through
+    the stored loop vertices, and its planarity is decided exactly: every
+    vertex within the surface-residual tolerance of that plane (through
+    squares). The SVD plane is never treated as exact. Raises ``GeometryError``
+    when the exact planarity test fails.
+    """
+    face = geometry.faces[face_id]
+    if isinstance(face.surface, Plane):
+        return ExactPlane.from_plane(face.surface)
+    points = [geometry.vertices[geometry.oriented_start_vertex(item)].position for item in face.loop]
+    exact_plane = canonical_face_plane(points)
+    if exact_plane is None:
+        raise GeometryError(f"face {face_id} is not planar")
+    residual = exact(geometry.tolerance.effective_surface_residual(_face_length_scale(geometry, face_id)))
+    scale = exact_dot(exact_plane.normal, exact_plane.normal)
+    for loop in (face.loop,) + face.holes:
+        for item in loop:
+            offset = exact_dot(exact_plane.normal, exact_vector(geometry.vertices[geometry.oriented_start_vertex(item)].position)) - exact_plane.offset()
+            if offset * offset > residual * residual * scale:
+                raise GeometryError(f"face {face_id} is not planar")
+    return exact_plane
+
+
+def _exact_unit(vector) -> tuple:
+    """Correctly rounded unit vector of an exact non-zero vector (no underflow)."""
+    squared = exact_dot(vector, vector)
+    return tuple((1.0 if value > 0 else -1.0) * correctly_rounded_sqrt(value * value / squared) if value else 0.0
+                 for value in vector)
+
+
+def _physical(parameter, squared_speed) -> float:
+    """Correctly rounded signed length ``parameter * |direction|`` from exact values."""
+    magnitude = correctly_rounded_sqrt(parameter * parameter * squared_speed)
+    return -magnitude if parameter < 0 else magnitude
 
 
 def _exact_sub(a, b):
@@ -680,6 +730,20 @@ def _qualified_face_plane(geometry: GeometryModel, face_id: int) -> Plane:
 def _face_length_scale(geometry: GeometryModel, face_id: int) -> float:
     """Translation-invariant characteristic extent for one bounded face."""
 
+    face = geometry.faces[int(face_id)]
+    if all(isinstance(geometry.edges[item.edge].curve, Straight)
+           for loop in (face.loop,) + face.holes for item in loop):
+        # Straight trims: the bounds are exactly the stored vertex coordinates
+        # (no evaluated surface samples), so the tolerance derived from them is
+        # a deterministic function of stored data (robust-predicate R1a, X3).
+        points = [geometry.vertices[geometry.oriented_start_vertex(item)].position
+                  for loop in (face.loop,) + face.holes for item in loop]
+        lower = [min(point[k] for point in points) for k in range(3)]
+        upper = [max(point[k] for point in points) for k in range(3)]
+        extent = canonical_extent(lower, upper)
+        if isinstance(face.surface, Cylinder):
+            extent = max(extent, face.surface.radius, abs(face.surface.height))
+        return max(extent, 1.0)
     bounds = geometry._entity_bounds(("face", int(face_id)))  # noqa: SLF001
     extent = 0.0
     if bounds is not None:
@@ -2529,7 +2593,13 @@ def _query_planar_faces(
     # each face is clipped against it exactly, and every interval comparison
     # with the tolerance is exact. The rounded witness and unit direction of
     # the support predicate only define the reported line parameters.
-    first_exact, second_exact = ExactPlane.from_plane(first_plane), ExactPlane.from_plane(second_plane)
+    try:
+        first_exact = _exact_face_support(geometry, first.id, first_plane)
+        second_exact = _exact_face_support(geometry, second.id, second_plane)
+    except GeometryError as error:
+        return _qualified_result(
+            geometry, first, second, IntersectionKind.UNSUPPORTED, diagnostics=(str(error),), tolerance_used=tolerance,
+        )
     line = plane_plane_line(first_exact, second_exact)
     if line is None:
         return _qualified_result(

@@ -30,6 +30,7 @@ from .exact_predicates import Outcome, exact, exact_cross, exact_dot, exact_vect
 __all__ = [
     "ExactLine",
     "ExactPlane",
+    "canonical_face_plane",
     "clip_line_to_region",
     "plane_plane_line",
     "point_in_region",
@@ -120,6 +121,26 @@ class ExactLine:
         if denominator == 0:
             return None
         return exact_dot(plane.normal, _sub(plane.origin, self.anchor)) / denominator
+
+
+def canonical_face_plane(points: Sequence) -> ExactPlane | None:
+    """The exact plane through stored loop vertices in their authored frame.
+
+    Origin = the first vertex; ``U`` = the first later vertex not equal to it;
+    ``V`` = the last vertex (scanning backwards) whose offset is not exactly
+    parallel to ``U``. ``None`` when every vertex is collinear. A deterministic
+    function of the stored doubles (no SVD, no thresholds).
+    """
+    vertices = [exact_vector(point) for point in points]
+    origin = vertices[0]
+    first = next((_sub(point, origin) for point in vertices[1:] if any(_sub(point, origin))), None)
+    if first is None:
+        return None
+    for point in reversed(vertices[1:]):
+        second = _sub(point, origin)
+        if any(exact_cross(first, second)):
+            return ExactPlane(origin, first, second)
+    return None
 
 
 def plane_plane_line(first: ExactPlane, second: ExactPlane) -> ExactLine | None:
@@ -253,5 +274,13 @@ def region_is_simple(loops: Sequence[Sequence]) -> bool:
                     return False
                 continue
             if _segments_cross(p, q, r, t):
+                return False
+    # Holes lie inside the outer loop and outside every other hole (no nesting).
+    exact_loops = [[tuple(exact(value) for value in vertex) for vertex in loop] for loop in loops]
+    for index, hole in enumerate(exact_loops[1:], start=1):
+        if any(point_in_polygon(vertex, exact_loops[0]) is Outcome.BELOW for vertex in hole):
+            return False
+        for other_index, other in enumerate(exact_loops[1:], start=1):
+            if other_index != index and any(point_in_polygon(vertex, other) is Outcome.ABOVE for vertex in hole):
                 return False
     return True

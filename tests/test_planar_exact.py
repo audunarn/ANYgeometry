@@ -233,3 +233,56 @@ def test_invalid_regions_are_refused():
     assert region_is_simple([SQUARE, HOLE]) and region_is_simple([CONCAVE])
     with pytest.raises(Exception):
         point_in_region((0, 0), [])
+
+
+# ----------------------------------------------------------------------------------- review regressions (R1a round 2)
+
+
+def test_inferred_planar_supports_use_the_exact_vertex_plane():
+    """A topology-backed (inferred) planar face exactly in z = x + y meeting a plate in x = 0
+    along (0, y, y), 0.25 <= y <= 0.75: the SVD support used to answer DISJOINT."""
+    model = GeometryModel()
+    a = model.add_face(model.add_polyline(model.add_points(((0., 0., 0.), (1., 0., 1.), (1., 1., 2.), (0., 1., 1.))),
+                                          close=True))
+    b = model.add_plate(tuple(model.add_points(((0., .25, -.75), (0., .75, -.25), (0., .75, 1.75), (0., .25, 1.25)))))
+    first, second = model.handle("face", a), model.handle("face", b)
+    assert query_intersection(model, first, second).kind is not IntersectionKind.DISJOINT
+    assert query_intersection(model, first, second).kind is query_intersection(model, second, first).kind
+
+
+def test_tolerance_comes_from_stored_vertices_only(monkeypatch):
+    model = GeometryModel()
+    a = model.add_plate(tuple(model.add_points(((0., 0., 0.), (1., 0., 0.), (1., 1., 0.), (0., 1., 0.)))))
+    w = 0.0014142135623730955
+    b = model.add_plate(tuple(model.add_points(((w - 1, .5, -.5), (w, .5, -.5), (w, .5, .5), (w - 1, .5, .5)))))
+    first, second = model.handle("face", a), model.handle("face", b)
+    reference = query_intersection(model, first, second).kind
+    original = Plane.evaluate
+    monkeypatch.setattr(Plane, "evaluate", lambda self, u, v: np.nextafter(original(self, u, v), np.inf))
+    assert query_intersection(model, first, second).kind is reference
+
+
+def test_isolated_coplanar_touches_lie_on_the_support_plane():
+    model = GeometryModel()
+    face = model.add_plate(tuple(model.add_points(((0., 0., 0.), (1., 0., 0.), (1., 1., 0.), (0., 1., 0.)))))
+    result = clip_line_to_face(model, face, (-1., 1., 5e-10), (1., -1., 0.))
+    assert result.kind is IntersectionKind.TOUCH_POINT and result.components[0].witnesses[0][2] == 0.0
+
+
+def test_subnormal_diagonal_directions_report_physical_parameters():
+    model = GeometryModel()
+    face = model.add_plate(tuple(model.add_points(((0., 0., 0.), (1., 0., 0.), (1., 1., 0.), (0., 1., 0.)))))
+    result = clip_line_to_face(model, face, (0., 0., 0.), (5e-324, 5e-324, 0.))
+    interval = result.components[0].first_parameter_range
+    assert result.kind is IntersectionKind.OVERLAP_CURVE
+    assert (interval.start, interval.end) == (0.0, math.sqrt(2))
+    assert result.components[0].direction == (math.sqrt(.5), math.sqrt(.5), 0.0)
+
+
+def test_holes_must_lie_inside_the_outer_loop_and_not_nest():
+    from anygeometry.planar_exact import region_is_simple
+    outer = [(0, 0), (4, 0), (4, 4), (0, 4)]
+    assert not region_is_simple([outer, [(5, 5), (6, 5), (6, 6), (5, 6)]])                         # outside
+    assert not region_is_simple([outer, [(1, 1), (3, 1), (3, 3), (1, 3)],
+                                 [(1.5, 1.5), (2.5, 1.5), (2.5, 2.5), (1.5, 2.5)]])                 # nested
+    assert region_is_simple([outer, [(1, 1), (2, 1), (2, 2), (1, 2)], [(3, 3), (3.5, 3), (3.5, 3.5)]])
