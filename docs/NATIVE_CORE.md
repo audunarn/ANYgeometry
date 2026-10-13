@@ -70,9 +70,14 @@ C-contiguous, aligned, consistent sizes, parameters in the domain); offsets use
 aligned storage and establish the mathematical contract first. For B-spline
 curves (`bspline_curve`): degree 1-15, clamped knots (end multiplicity exactly
 degree + 1, interior multiplicity at most the degree, non-empty spans longer
-than 64 eps of the knot scale and than 2**-968), finite controls, positive
-finite weights scaled by an exact power of two. A non-finite result is refused
-with `ValueError`, never returned.
+than 64 eps of the knot scale and than 2**-968), finite controls with nonzero
+magnitudes in [2**-500, 2**500], positive finite weights with ratio at most 1e6
+(owner decision) scaled by an exact power of two. A non-finite result is refused
+with `ValueError`, never returned. Accuracy contract, tested against exact
+rational evaluation: the k-th derivative is within
+`1e3 * eps * R * C * (degree / h)**k` of the exact value (`C` largest control
+magnitude, `R` weight ratio, `h` shortest span); errors are absolute relative
+to the curve scale.
 
 Open (architecture section 5.4): import-time probes of the effective
 floating-point contraction and rounding mode are not implemented yet; the

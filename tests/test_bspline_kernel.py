@@ -230,7 +230,7 @@ def test_huge_weights_are_scaled_not_overflowed():
     knots = np.array([0, 0, 1, 1.])
     values = backend.bspline_curve(1, knots, [[2.], [2.]], [1e308, 1e308], [.5], 1)
     np.testing.assert_array_equal(values[0], [[2.], [0.]])
-    values = backend.bspline_curve(2, *CIRCLE[1:3], CIRCLE[3] * 1e300, [.125], 0)
+    values = backend.bspline_curve(2, *CIRCLE[1:3], CIRCLE[3] * 1e300, [.125], 0)  # ratio sqrt(2)
     np.testing.assert_allclose(values[0, 0], [HALF, HALF], atol=1e-15)
 
 
@@ -268,9 +268,87 @@ def test_subnormal_weights_and_tiny_coordinates_are_refused_not_rounded_away():
     knots = np.array([0, 0, 1, 1.])
     with pytest.raises(ValueError, match="weight ratio"):
         backend.bspline_curve(1, knots, [[0.25], [1.0]], [1e-323, 1.0], [0.0])
+    with pytest.raises(ValueError, match="weight ratio"):
+        backend.bspline_curve(1, knots, [[0.25], [1.0]], [1.0, 1.000001e6], [0.0])
     with pytest.raises(ValueError, match="control coordinates"):
         backend.bspline_curve(1, knots, [[1e-300], [1.0]], None, [0.0])
     with pytest.raises(ValueError, match="control coordinates"):
         backend.bspline_curve(1, knots, [[1e200], [1.0]], None, [0.0])
     # Inside the range the clamped end point is exact.
-    np.testing.assert_array_equal(backend.bspline_curve(1, knots, [[0.25], [1.0]], [2.0**-200, 1.0], [0.0])[0, 0], [0.25])
+    np.testing.assert_array_equal(backend.bspline_curve(1, knots, [[0.25], [1.0]], [1e-6, 1.0], [0.0])[0, 0], [0.25])
+
+
+# ----------------------------------------------------------------------------------- exact oracle
+
+
+def exact_point_and_derivatives(degree, knots, controls, weights, t):
+    """Exact rational value and first two derivatives (Fractions).
+
+    Independent of the kernels: de Boor on homogeneous Fraction coordinates
+    for the value, and exact hodographs (derivative curves of degree p-1 and
+    p-2 with control differences) for the derivatives, then the quotient rule.
+    """
+    from fractions import Fraction as F
+    U = [F(value) for value in knots]
+    w = [F(1)] * len(controls) if weights is None else [F(value) for value in weights]
+    H = [[F(c) * wi for c in row] + [wi] for row, wi in zip(controls, w)]
+    t = F(t)
+
+    def de_boor(p, U, P, t):
+        n = len(P) - 1
+        if p < 0 or n < 0:
+            return [F(0)] * len(H[0])
+        k = n if t >= U[n + 1] else max(i for i in range(p, n + 1) if U[i] <= t)
+        while k > p and U[k] == U[n + 1]:
+            k -= 1
+        d = [list(P[j + k - p]) for j in range(p + 1)]
+        for r in range(1, p + 1):
+            for j in range(p, r - 1, -1):
+                denominator = U[j + 1 + k - r] - U[j + k - p]
+                alpha = (t - U[j + k - p]) / denominator if denominator else F(0)
+                d[j] = [(1 - alpha) * a + alpha * b for a, b in zip(d[j - 1], d[j])]
+        return d[p]
+
+    def hodograph(p, U, P):
+        Q = []
+        for i in range(len(P) - 1):
+            span = U[i + p + 1] - U[i + 1]
+            Q.append([p * (b - a) / span if span else F(0) for a, b in zip(P[i], P[i + 1])])
+        return p - 1, U[1:-1], Q
+
+    values = [de_boor(degree, U, H, t)]
+    p, V, Q = degree, U, H
+    for _ in range(2):
+        if p == 0:
+            values.append([F(0)] * len(H[0]))
+            continue
+        p, V, Q = hodograph(p, V, Q)
+        values.append(de_boor(p, V, Q, t))
+    a = [row[:-1] for row in values]
+    wd = [row[-1] for row in values]
+    c0 = [x / wd[0] for x in a[0]]
+    c1 = [(x - wd[1] * y) / wd[0] for x, y in zip(a[1], c0)]
+    c2 = [(x - 2 * wd[1] * y - wd[2] * z) / wd[0] for x, y, z in zip(a[2], c1, c0)]
+    return np.array([[float(v) for v in row] for row in (c0, c1, c2)])
+
+
+@pytest.mark.parametrize("seed", range(8))
+def test_kernel_meets_its_accuracy_contract_against_exact_rational_evaluation(seed):
+    rng = np.random.default_rng(1000 + seed)
+    degree = int(rng.integers(1, 6))
+    count = degree + int(rng.integers(1, 6))
+    interior = np.sort(rng.uniform(0, 1, count - degree - 1))
+    knots = np.concatenate((np.zeros(degree + 1), interior, np.ones(degree + 1))) * 10.0 ** rng.uniform(-3, 3)
+    controls = rng.standard_normal((count, 3)) * 10.0 ** rng.uniform(-3, 3)
+    ratio = 10.0 ** rng.uniform(0, 6) if seed % 2 else 1.0
+    weights = None if seed % 2 == 0 else np.exp(rng.uniform(0, np.log(ratio), count))
+    actual_ratio = 1.0 if weights is None else weights.max() / weights.min()
+    spans = np.diff(np.unique(knots))
+    t = rng.uniform(knots[0], knots[-1], 12)
+    values = backend.bspline_curve(degree, knots, controls, weights, t, 2)
+    C = np.max(np.abs(controls))
+    for row, value in zip(values, t):
+        exact = exact_point_and_derivatives(degree, knots, controls, weights, value)
+        for k in range(3):
+            bound = 1e3 * np.finfo(float).eps * actual_ratio * C * (degree / spans.min()) ** k
+            assert np.max(np.abs(row[k] - exact[k])) <= bound, (k, np.max(np.abs(row[k] - exact[k])), bound)

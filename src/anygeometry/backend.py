@@ -57,11 +57,11 @@ bspline_evaluate = _KERNELS.bspline_evaluate
 
 MAX_BSPLINE_DEGREE = 15
 _MIN_SPAN = 2.0 ** -968
+# Owner decision 2026-10-13: weight ratio max/min <= 1e6.
+MAX_WEIGHT_RATIO = 1e6
 # Numerical range of the homogeneous arithmetic: with weights scaled into
-# [2**-201, 1) and nonzero coordinates within [2**-500, 2**500], every weighted
-# control is a normal float, the denominator is at least 2**-201 / (degree + 1),
-# and no term can overflow or vanish by underflow.
-_MIN_WEIGHT = 2.0 ** -201
+# (5e-7, 1) and nonzero coordinates within [2**-500, 2**500], every weighted
+# control is a normal float and the denominator is at least 5e-7 / (degree + 1).
 _MIN_MAGNITUDE = 2.0 ** -500
 _MAX_MAGNITUDE = 2.0 ** 500
 
@@ -102,11 +102,17 @@ def bspline_curve(degree, knots, controls, weights, t, order=0):
 
     Validates the definition once (finite clamped knots per
     :func:`check_clamped_knots`, positive finite weights) and runs the selected
-    kernel. ``weights`` is ``None`` for a polynomial curve; they are scaled by
-    an exact power of two (the curve is unchanged), their ratio is limited to
-    2**200 and nonzero control coordinates to [2**-500, 2**500], so no
-    homogeneous term overflows or underflows. A non-finite result is refused,
-    never returned. Raises ``ValueError`` for invalid input or a
+    kernel. ``weights`` is ``None`` for a polynomial curve; their ratio is
+    limited to 1e6 and they are scaled by an exact power of two (the curve is
+    unchanged); nonzero control coordinates lie in [2**-500, 2**500]. A
+    non-finite result is refused, never returned.
+
+    Accuracy contract (checked against exact rational evaluation in the
+    tests): the k-th derivative is within ``1e3 * eps * R * C * (degree / h)**k``
+    of the exact value, where ``C`` is the largest control coordinate
+    magnitude, ``R`` the weight ratio (1 for polynomial curves) and ``h`` the
+    shortest non-empty knot span. The error is absolute relative to the curve
+    scale: a position far below ``eps * C`` is not resolved. Raises ``ValueError`` for invalid input or a
     parameter outside ``[knots[degree], knots[n]]``.
     """
     degree, order = int(degree), int(order)
@@ -130,9 +136,9 @@ def bspline_curve(degree, knots, controls, weights, t, order=0):
         weights = _aligned(weights)
         if weights.shape != (count,) or not np.all(np.isfinite(weights)) or not np.all(weights > 0):
             raise ValueError("weights must be positive and finite, one per control point")
+        if weights.max() / MAX_WEIGHT_RATIO > weights.min():
+            raise ValueError("B-spline weight ratio max/min must not exceed 1e6")
         weights = _aligned(np.ldexp(weights, -np.frexp(weights.max())[1]))
-        if not np.all(weights >= _MIN_WEIGHT):
-            raise ValueError("B-spline weight ratio max/min must not exceed 2**200")
     if t.ndim != 1 or not np.all((t >= knots[degree]) & (t <= knots[count])):
         raise ValueError("parameter outside the knot domain")
     out = np.empty((len(t), order + 1, controls.shape[1]))
