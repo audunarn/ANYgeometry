@@ -229,3 +229,30 @@ def test_vertex_levels_and_horizontal_runs_agree_with_the_float_route(loop):
                 got = _contains_loop_exact(chart, domain.boundaries[0], (Fraction(u), Fraction(v)), 1e-9,
                                            boundary=boundary)
                 assert got == expected, (u, v, boundary)
+
+
+@pytest.mark.parametrize("boundary", (True, False))
+def test_bezier_stations_on_a_hole_boundary(boundary):
+    """A constant Bezier station on the hole edge: boundary of the hole, so material iff boundary=True."""
+    from anygeometry.arrangement_geometry import BezierPath
+    plane = Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.))
+    outer = [(0., 0., 0.), (5., 0., 0.), (5., 5., 0.), (0., 5., 0.)]
+    hole = [(1., 1., 0.), (1., 2., 0.), (2., 2., 0.), (2., 1., 0.)]
+    domain = world_domain((outer, hole), plane)
+    station = BezierPath(((1., 1.5, 0.), (1., 1.5, 0.), (1., 1.5, 0.)))
+    assert domain.contains(station, .5, TOL, boundary=boundary) is boundary
+    inside_hole = BezierPath(((1.5, 1.5, 0.), (1.5, 1.5, 0.)))
+    assert domain.contains(inside_hole, .5, TOL, boundary=boundary) is False
+
+
+@pytest.mark.parametrize("offset", (-2.**-50, -2.**-52, 0., 2.**-52, 2.**-50))
+def test_endpoint_windows_near_vertex_levels_agree_with_the_float_route(offset):
+    """Query levels within a few eps of a vertex level exercise the 8-eps endpoint windows."""
+    for loop in (STAIRS, ZIGZAG):
+        domain = domain_of((loop,))
+        chart = ExactPlane.from_plane(domain.support)
+        for v in (1. + offset, 2. + offset):
+            for u in (-1., 1., 2.5, 3.5, 5., 7.):
+                expected = float_contains_loop(domain, domain.boundaries[0], (u, v), 1e-9, True)
+                got = _contains_loop_exact(chart, domain.boundaries[0], (Fraction(u), Fraction(v)), 1e-9)
+                assert got == expected, (loop is STAIRS, u, v)
