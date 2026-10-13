@@ -19,6 +19,8 @@ from .exact_curves import EllipticArc, CylinderIntersectionCurve
 from .branch_curves import BezierQuadricCurve
 from .quadric_curves import QuadricIntersectionCurve
 from .errors import GeometryError
+from .exact_predicates import exact_dot, exact_vector
+from .planar_exact import ExactPlane
 from ._cross3 import _gauss_legendre
 from .extruded_chart import area_density, chart_accelerations, chart_rates, density_bound, world_metric
 from .extruded_supports import extruded_support
@@ -304,7 +306,25 @@ class MaterialDomain:
         return tuple(dict.fromkeys(next((t for t in endpoints
             if abs(root-t)<=128*np.finfo(float).eps),root) for root in roots))
 
+    def _exact_planar(self, loops) -> bool:
+        """Whether the exact planar route applies: a Plane support and straight loops only."""
+        return isinstance(self.support, Plane) and all(
+            type(path.curve) is LinePath for loop in loops for path in loop)
+
+    def _exact_station_uv(self, curve, parameter):
+        """Exact chart point of a line/Bezier station, or None (other curves stay on the float route)."""
+        from .exact_predicates import Station
+        position = Station(curve, parameter).exact_position() if type(curve) in (LinePath, BezierPath) else None
+        if position is None:
+            return None
+        return ExactPlane.from_plane(self.support).uv(position)
+
     def contains_loop(self, loop, uv, tolerance, *, boundary=True):
+        if self._exact_planar((loop,)):
+            exact_uv = uv if isinstance(uv, tuple) and all(type(v) is Fraction for v in uv) \
+                else tuple(Fraction(float(v)) for v in uv)
+            return _contains_loop_exact(ExactPlane.from_plane(self.support), loop, exact_uv, tolerance,
+                                        boundary=boundary)
         winding = 0
         for index, path in enumerate(loop):
             curve = path.curve
@@ -348,7 +368,11 @@ class MaterialDomain:
         return winding != 0
 
     def contains(self, curve, parameter, tolerance, *, boundary=True):
-        uv = self.uv(curve, parameter)
+        uv = None
+        if self._exact_planar(self.boundaries):
+            uv = self._exact_station_uv(curve, parameter)          # exact station (robust-predicate R1b)
+        if uv is None:
+            uv = self.uv(curve, parameter)
         return (self.contains_loop(self.boundaries[0], uv, tolerance, boundary=boundary)
                 and not any(self.contains_loop(loop, uv, tolerance, boundary=not boundary)
                             for loop in self.boundaries[1:]))
@@ -885,3 +909,120 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
         raise GeometryError("arrangement failed material conservation")
     return MaterialArrangement(domain.face_id, tuple(edges), cells, retained, tolerance,
                                native_area_tolerance, domain.support, -1 if outer_area < 0 else 1)
+
+
+# ----------------------------------------------------------------------------------- exact planar containment (R1b)
+
+_EPS = Fraction(np.finfo(float).eps)
+
+
+def _within(value: Fraction, bound_squared: Fraction) -> bool:
+    """``|value| <= sqrt(bound_squared)`` exactly."""
+    return value * value <= bound_squared
+
+
+def _exact_horizontal_roots(chart, curve, level, tolerance):
+    """Exact replica of ``MaterialDomain.horizontal_roots`` for a LinePath on a Plane.
+
+    The chart's v-level ``level`` is the world plane ``n . x = level + n . origin``
+    with ``n`` the exact dual row of ``v`` (the pseudo-inverse row ``horizontal_roots``
+    uses). The scalar tolerance ``tolerance * |n|`` is compared through squares.
+    Returns None (coincident), or the sorted roots in [0, 1] with the 128-eps
+    endpoint snapping of the float route.
+    """
+    normal = tuple(value / chart._scale for value in chart._dual_v)
+    offset = level + exact_dot(normal, chart.origin)
+    bound2 = Fraction(tolerance) ** 2 * exact_dot(normal, normal)
+    start_point, end_point = exact_vector(curve.start), exact_vector(curve.end)
+    start = exact_dot(normal, start_point) - offset
+    delta = exact_dot(normal, tuple(b - a for a, b in zip(start_point, end_point)))
+    if _within(start, bound2) and _within(start + delta, bound2):
+        return None
+    if delta == 0:
+        return ()
+    root = -start / delta
+    below = root < 0 and not _within(root, bound2)
+    above = root > 1 and not _within(root - 1, bound2)
+    roots = () if (below or above) else (min(Fraction(1), max(Fraction(0), root)),)
+    endpoints = tuple(t for t, value in ((Fraction(0), start), (Fraction(1), start + delta)) if _within(value, bound2))
+    snapped = []
+    for root in roots:
+        root = next((t for t in endpoints if abs(root - t) <= 128 * _EPS), root)
+        if root not in snapped:
+            snapped.append(root)
+    return tuple(snapped)
+
+
+def _exact_point_on_segment(curve, world, tolerance) -> bool:
+    """Exact replica of ``point_parameters(LinePath, world, tolerance=...)`` being non-empty."""
+    start, end = exact_vector(curve.start), exact_vector(curve.end)
+    tol2 = Fraction(tolerance) ** 2
+    if any(sum((a - b) ** 2 for a, b in zip(end_point, world)) <= tol2 for end_point in (start, end)):
+        return True
+    direction = tuple(b - a for a, b in zip(start, end))
+    length2 = exact_dot(direction, direction)
+    if length2 == 0:
+        raise GeometryError("degenerate arrangement line")
+    parameter = exact_dot(tuple(p - a for p, a in zip(world, start)), direction) / length2
+    tolerance_exact = Fraction(tolerance)
+    if not (-tolerance_exact <= parameter <= 1 + tolerance_exact):
+        return False
+    point = tuple(a + parameter * d for a, d in zip(start, direction))
+    return sum((a - b) ** 2 for a, b in zip(point, world)) <= tol2
+
+
+def _contains_loop_exact(chart, loop, uv, tolerance, *, boundary=True):
+    """Exact replica of ``MaterialDomain.contains_loop`` for straight loops on a Plane.
+
+    The same rules as the float route (horizontal-ray roots, the world-distance
+    boundary test at each crossing, horizontal edges by point membership, the
+    8-eps endpoint windows and the half-open parity bookkeeping), evaluated in
+    exact rational arithmetic on the stored doubles (robust-predicate R1b).
+    """
+    u_query, v_query = uv
+    tol2 = Fraction(tolerance) ** 2
+    window = 8 * _EPS
+
+    def station_uv(curve, t):
+        start, end = exact_vector(curve.start), exact_vector(curve.end)
+        return chart.uv(tuple(a + t * (b - a) for a, b in zip(start, end)))
+
+    def world_distance2(du, dv):
+        vector = tuple(du * a + dv * b for a, b in zip(chart.u_vector, chart.v_vector))
+        return exact_dot(vector, vector)
+
+    winding = 0
+    for index, path in enumerate(loop):
+        curve = path.curve
+        roots = _exact_horizontal_roots(chart, curve, v_query, tolerance)
+        if roots is None:
+            if _exact_point_on_segment(curve, chart.world(u_query, v_query), tolerance):
+                return boundary
+            continue
+        roots = sorted(set(roots))
+        for position, t in enumerate(roots):
+            point_u, point_v = station_uv(curve, t)
+            if world_distance2(point_u - u_query, point_v - v_query) <= tol2:
+                return boundary
+            if point_u <= u_query or t >= 1 - window:
+                continue
+            if t <= window:
+                previous = loop[index - 1].curve
+                previous_roots = _exact_horizontal_roots(chart, previous, v_query, tolerance)
+                for distance in range(2, len(loop) + 1):
+                    if previous_roots is not None:
+                        break
+                    previous = loop[index - distance].curve
+                    previous_roots = _exact_horizontal_roots(chart, previous, v_query, tolerance)
+                previous_lower = max((r for r in (previous_roots or ()) if r < 1 - window), default=Fraction(0))
+                before = station_uv(previous, (previous_lower + 1) / 2)[1] - v_query
+            else:
+                previous_root = roots[position - 1] if position else Fraction(0)
+                before = station_uv(curve, (previous_root + t) / 2)[1] - v_query
+            next_root = roots[position + 1] if position + 1 < len(roots) else Fraction(1)
+            after = station_uv(curve, (t + next_root) / 2)[1] - v_query
+            if before <= 0 < after:
+                winding += 1
+            elif after <= 0 < before:
+                winding -= 1
+    return winding != 0
