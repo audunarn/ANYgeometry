@@ -87,14 +87,31 @@ class Outcome(Enum):
     ABOVE = "above"
 
 
+def _describe(value: Fraction) -> str:
+    """A short, always-representable description of an exact rational."""
+    try:
+        return repr(float(value))
+    except OverflowError:
+        return f"{'-' if value < 0 else ''}~2**{abs(value.numerator).bit_length() - value.denominator.bit_length()}"
+
+
 class DegenerateWithinBound(GeometryError):
-    """A decision whose quantity cannot be separated from its threshold within the canonical bound."""
+    """A decision the canonical procedure cannot make.
+
+    Either its level-``L_MAX`` enclosure ``enclosure`` still contains the
+    threshold (degenerate within the certified bound), or the quantity could
+    not be evaluated at any level (``enclosure`` is ``None``: for example a
+    denominator enclosure that contains zero, or a branch cut).
+    """
 
     def __init__(self, predicate: str, enclosure, threshold, entities=()):
         self.predicate, self.enclosure, self.threshold, self.entities = predicate, enclosure, threshold, tuple(entities)
-        super().__init__(f"{predicate}: degenerate within the certified bound "
-                         f"(enclosure [{float(enclosure.lo)!r}, {float(enclosure.hi)!r}] "
-                         f"against threshold {float(threshold)!r}; entities {self.entities})")
+        if enclosure is None:
+            detail = "not evaluable by the canonical procedure at any level"
+        else:
+            detail = (f"degenerate within the certified bound (enclosure [{_describe(enclosure.lo)}, "
+                      f"{_describe(enclosure.hi)}] at level {L_MAX})")
+        super().__init__(f"{predicate}: {detail} against threshold {_describe(threshold)}; entities {self.entities}")
 
 
 _TRACE: ContextVar[tuple] = ContextVar("anygeometry_exact_predicates_trace", default=())
@@ -187,7 +204,11 @@ class Box:
 
 
 class _BudgetExhausted(Exception):
-    pass
+    """Undecided at this level (budget, zero-straddling denominator, ambiguous quadrant); a finer level may succeed."""
+
+
+class _NotEvaluable(_BudgetExhausted):
+    """Undefined or discontinuous for the enclosed inputs at every level (e.g. the atan2 branch cut)."""
 
 
 class Canonical:
@@ -341,10 +362,13 @@ class Canonical:
         if y.hi < 0:
             return self.sub(self.neg(self.div(self.pi(), 2)), self.atan(self.div(x, y)))
         if x.hi < 0 and y.lo >= 0:
+            # Closed upper side of the cut: atan2(0, x<0) = +pi (exact y = 0 is the real number 0).
             return self.add(self.pi(), self.atan(self.div(y, x)))
-        if x.hi < 0 and y.hi <= 0:
+        if x.hi < 0 and y.hi < 0:
             return self.sub(self.atan(self.div(y, x)), self.pi())
-        raise _BudgetExhausted()          # both coordinates straddle zero: undecided at this level
+        # y straddles or touches zero from below with x < 0 (the branch cut), or the
+        # origin is enclosed: atan2 is discontinuous there; no single interval is valid.
+        raise _NotEvaluable()
 
     def sincos(self, x) -> tuple[Box, Box]:
         """Enclosures of (sin x, cos x)."""
@@ -388,18 +412,23 @@ class Canonical:
 # ----------------------------------------------------------------------------------- T3 decision policy
 
 
-# Upper bounds of the canonical level-L_MAX enclosure width, per predicate kind,
-# as a multiple of 2**-(grid_bits(L_MAX) - _W_SLACK_BITS) times the quantity's
-# magnitude scale (max(1, |inputs|)**degree, supplied by the caller). The slack
-# covers the operation count of each kind; certified_compare verifies at run
-# time that the enclosure it refuses on is within this bound, so a filter that
-# decides outside it can never disagree with the canonical procedure.
+# Filterable predicate kinds and their width bounds. A kind names a fixed
+# expression shape whose canonical level-L_MAX enclosure width is bounded a
+# priori: one canonical function applied to exact stored inputs (sqrt of an
+# exact value; sin/cos of an exact angle; atan/atan2 of exact arguments away
+# from the branch cut; the norm of an exact vector). Each of these performs a
+# bounded number of outward roundings (at most a few hundred series terms and
+# reductions) on quantities of magnitude ``magnitude``, so its width is below
+# 2**_W_SLACK_BITS grid units times max(1, magnitude). Composite or
+# ill-conditioned expressions (e.g. a quotient of near-zero differences) have
+# no such bound and are NOT filterable: certified_compare alone decides them.
+# certified_compare re-checks the bound whenever it refuses a registered kind.
 _W_SLACK_BITS = 40
 _W_FACTORS = {
-    "generic": 1,
+    "sqrt": 1,
     "distance": 1,
-    "angle": 4,
     "trigonometric": 4,
+    "angle": 4,
 }
 
 
@@ -416,7 +445,7 @@ def _compare_rational(value: Fraction, threshold: Fraction) -> Outcome:
     return Outcome.BELOW if value < threshold else Outcome.ABOVE if value > threshold else Outcome.EQUAL
 
 
-def certified_compare(predicate: str, quantity, threshold, *, kind: str = "generic", magnitude: float = 1.0,
+def certified_compare(predicate: str, quantity, threshold, *, kind: str | None = None, magnitude: float = 1.0,
                       on_equal: Outcome | None = None, entities=()) -> Outcome:
     """Compare ``quantity`` with ``threshold`` by the one decision policy (T3).
 
@@ -438,7 +467,11 @@ def certified_compare(predicate: str, quantity, threshold, *, kind: str = "gener
     for level in range(L_MAX + 1):
         try:
             enclosure = quantity(Canonical(level))
+        except _NotEvaluable:
+            enclosure = None
+            break
         except _BudgetExhausted:
+            enclosure = None                    # only the level-L_MAX enclosure is evidence
             continue
         if enclosure.hi < limit:
             _record(predicate, entities, "canonical", level, Outcome.BELOW.value)
@@ -450,16 +483,14 @@ def certified_compare(predicate: str, quantity, threshold, *, kind: str = "gener
             outcome = Outcome.EQUAL if on_equal is None else on_equal
             _record(predicate, entities, "canonical", level, outcome.value)
             return outcome
-    if enclosure is None:
-        enclosure = Box(limit, limit)
-    elif enclosure.width > w_max(kind, magnitude):
-        raise RuntimeError(f"{predicate}: canonical enclosure width {float(enclosure.width)!r} exceeds W_max; "
-                           "the kind or magnitude passed to certified_compare is wrong")
+    if enclosure is not None and kind is not None and enclosure.width > w_max(kind, magnitude):
+        raise RuntimeError(f"{predicate}: canonical enclosure width {_describe(enclosure.width)} exceeds W_max "
+                           f"of kind {kind!r}; the quantity is not of that registered shape")
     _record(predicate, entities, "canonical", L_MAX, "refused")
     raise DegenerateWithinBound(predicate, enclosure, limit, entities)
 
 
-def filter_compare(predicate: str, estimate: float, error_bound: float, threshold, *, kind: str = "generic",
+def filter_compare(predicate: str, estimate: float, error_bound: float, threshold, *, kind: str,
                    magnitude: float = 1.0, entities=()) -> Outcome | None:
     """A fast route's decision, or ``None`` to defer to :func:`certified_compare`.
 
@@ -469,10 +500,11 @@ def filter_compare(predicate: str, estimate: float, error_bound: float, threshol
     contains the exact quantity and is at most ``w_max`` wide) is then
     separated too, so both routes return the same outcome. Closer cases defer.
 
-    Precondition of every filter (part of its predicate kind's contract): the
-    canonical procedure evaluates the quantity at level ``L_MAX`` (no division
-    by an interval containing zero, no ambiguous angle quadrant there).
-    Quantities without that property must not be filtered.
+    ``kind`` must be a registered kind (see ``_W_FACTORS``): the quantity is
+    one canonical function of exact inputs, evaluable at level ``L_MAX``. A
+    composite or ill-conditioned expression has no a-priori width bound and
+    must not be filtered; calling with an unregistered kind raises
+    ``ValueError``.
     """
     gap = exact(estimate) - exact(threshold)
     margin = exact(error_bound) + w_max(kind, magnitude)

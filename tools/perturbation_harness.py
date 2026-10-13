@@ -468,6 +468,9 @@ def mask_numbers(text: str) -> str:
     return _NUMBER.sub("#", text)
 
 
+_VERBATIM_KEYS = {"digest", "topology_digest"}
+
+
 def canonical(outcome) -> str:
     def strip(value):
         if isinstance(value, bool) or value is None or isinstance(value, int):
@@ -477,7 +480,9 @@ def canonical(outcome) -> str:
         if isinstance(value, str):
             return mask_numbers(value)
         if isinstance(value, dict):
-            return {str(key): strip(value[key]) for key in sorted(value, key=str)}
+            # Digests are compared verbatim: masking their digits would hide topology changes.
+            return {str(key): (value[key] if str(key) in _VERBATIM_KEYS else strip(value[key]))
+                    for key in sorted(value, key=str)}
         if isinstance(value, (list, tuple)):
             return [strip(item) for item in value]
         return mask_numbers(str(value))

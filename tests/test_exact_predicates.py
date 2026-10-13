@@ -193,6 +193,9 @@ def test_canonical_decides_or_refuses_and_records_the_trace():
 
 def test_a_refusal_wider_than_w_max_is_a_policy_error():
     with pytest.raises(RuntimeError, match="exceeds W_max"):
+        certified_compare("wide", lambda e: Box(Fraction(-1), Fraction(1)), 0, kind="sqrt")
+    # Without a registered kind there is no width contract: an honest refusal.
+    with pytest.raises(DegenerateWithinBound):
         certified_compare("wide", lambda e: Box(Fraction(-1), Fraction(1)), 0)
 
 
@@ -232,9 +235,12 @@ def test_filters_never_disagree_with_the_canonical_policy():
 
 
 def test_w_max_is_positive_and_scales():
-    assert 0 < w_max("generic") < w_max("angle") and w_max("distance", 1e6) == 1e6 * w_max("distance", 1)
+    assert 0 < w_max("sqrt") < w_max("angle") and w_max("distance", 1e6) == 1e6 * w_max("distance", 1)
+    for unregistered in ("unknown", "generic"):
+        with pytest.raises(ValueError):
+            w_max(unregistered)
     with pytest.raises(ValueError):
-        w_max("unknown")
+        filter_compare("p", 1.0, 0.0, 2.0, kind="generic")
 
 
 # ----------------------------------------------------------------------------------- T0
@@ -300,3 +306,41 @@ def test_canonical_order_is_symmetric():
     first = canonical_order(a, b)
     second = canonical_order(b, a)
     assert first[:2] == second[:2] and first[2] != second[2]
+
+
+# ----------------------------------------------------------------------------------- review regressions (R0)
+
+
+def test_atan2_refuses_at_the_branch_cut_instead_of_choosing_a_side():
+    with pytest.raises(DegenerateWithinBound) as refusal:
+        certified_compare("branch", lambda e: e.atan2(e.box(-1, 0), -1), 0)
+    assert refusal.value.enclosure is None
+    upper = Canonical(0).atan2(Canonical(0).box(0, 1), -1)        # closed upper side: contains +pi
+    assert contains(upper, PI)
+
+
+def test_composite_ill_conditioned_quantities_are_not_filterable_but_still_decided_or_refused():
+    a = Fraction(1) + Fraction(1, 2 ** 160)
+
+    def quotient(e):
+        d = e.sub(e.sqrt(a), 1)
+        return e.div(d, d)
+
+    with pytest.raises(RuntimeError, match="exceeds W_max"):        # mislabelled as a registered kind
+        certified_compare("q", quotient, 1 + Fraction(1, 2 ** 50), kind="sqrt", magnitude=2)
+    with pytest.raises(DegenerateWithinBound):                       # honest: no kind, no filter
+        certified_compare("q", quotient, 1 + Fraction(1, 2 ** 50))
+
+
+def test_exhaustion_at_every_level_reports_no_enclosure():
+    def quantity(e):
+        return e.add(1, e.div(0, e.sub(e.sqrt(1 + Fraction(1, 2 ** 500)), 1)))
+
+    with pytest.raises(DegenerateWithinBound, match="not evaluable") as refusal:
+        certified_compare("exhausted", quantity, 0)
+    assert refusal.value.enclosure is None
+
+
+def test_refusals_of_huge_exact_quantities_stay_typed():
+    with pytest.raises(DegenerateWithinBound, match=r"2\*\*"):
+        certified_compare("big", lambda e: e.sqrt(10 ** 800 + 1), 10 ** 400)

@@ -223,3 +223,9 @@ def test_every_site_target_exists():
             assert site.attribute in site.owner.__dict__, site.name
         else:
             assert callable(getattr(site.owner, site.attribute)), site.name
+
+
+def test_distinct_digests_are_never_masked_equal():
+    from perturbation_harness import compare
+    assert compare({"digest": "0123456789012345"}, {"digest": "9876543210987654"})
+    assert not compare({"digest": "0123456789012345", "note": "x 1.5"}, {"digest": "0123456789012345", "note": "x 2.5"})
