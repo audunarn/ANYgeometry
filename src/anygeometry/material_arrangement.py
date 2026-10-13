@@ -797,18 +797,15 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
     for first in range(len(paths)):
         for second in range(first+1, len(paths)):
             check()
-            lo1, hi1 = paths[first].curve.bounds()
-            lo2, hi2 = paths[second].curve.bounds()
             if first in segments and second in segments:
-                # The float boxes of the rounded pieces only preselect: widened
-                # by their own rounding, an exact junction within tol is kept.
-                margin = tolerance+8*_EPS*float(max(np.max(np.abs(lo1)), np.max(np.abs(hi1)),
-                                                    np.max(np.abs(lo2)), np.max(np.abs(hi2))))
-                if np.any(hi1 < lo2-margin) or np.any(hi2 < lo1-margin):
+                # Main's pair skip (some box gap > tol), decided on the exact boxes.
+                if stations.boxes_separated(segments[first], segments[second], tolerance):
                     continue
                 for a, b in stations.junctions(segments[first], segments[second], tolerance):
                     splits[first].append(a); splits[second].append(b)
                 continue
+            lo1, hi1 = paths[first].curve.bounds()
+            lo2, hi2 = paths[second].curve.bounds()
             if np.any(hi1 < lo2-tolerance) or np.any(hi2 < lo1-tolerance):
                 continue
             for a, b in curve_junctions(paths[first].curve, paths[second].curve, tolerance=tolerance,
@@ -817,15 +814,18 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
                 splits[second].append(Fraction(float(b)) if second in segments else b)
 
     vertices, edges, incidence = [], [], []
-    lookup = stations.ExactVertexLookup(tolerance) if exact else _VertexLookup(vertices, tolerance)
-    def vertex(point):
-        if exact:                                       # exact positions, canonical float vertex
-            point = point if isinstance(point, tuple) else exact_vector(point)
-            index = lookup.find(point)
+    # Straight stations are compared exactly; curved pieces' points keep main's
+    # float rule (their evaluation is their position). Without straight
+    # pieces the lookup is main's.
+    lookup = stations.ExactVertexLookup(tolerance) if segments else _VertexLookup(vertices, tolerance)
+    def vertex(point, station=None):
+        if segments:
+            floats = np.asarray(stations.rounded(station)) if station is not None else point
+            index = lookup.find(station, floats)
             if index is not None:
                 return index
-            lookup.add(point)
-            vertices.append(np.asarray(stations.rounded(point))); incidence.append([])
+            lookup.add(station, floats)
+            vertices.append(floats.copy()); incidence.append([])
             return len(vertices)-1
         index = lookup.find(point)
         if index is not None:
@@ -845,7 +845,7 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
             if segment is not None:
                 piece = stations.sub(segment, a, b)
                 curve = stations.to_line(piece)
-                start, end = vertex(piece[0]), vertex(piece[1])
+                start, end = vertex(None, piece[0]), vertex(None, piece[1])
             else:
                 curve = path.curve.subcurve(a, b)
                 start, end = vertex(curve.evaluate(0.)), vertex(curve.evaluate(1.))

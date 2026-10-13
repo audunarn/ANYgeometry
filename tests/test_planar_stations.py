@@ -86,10 +86,11 @@ def test_merge_parameters_agrees_with_the_float_rule(seed):
         assert all(abs(float(a) - b) <= 1e-15 for a, b in zip(got, expected))
 
 
-@pytest.mark.parametrize("scale", (1., 1e-100, 1e120))
-def test_vertex_lookup_matches_an_exact_scan(scale):
+@pytest.mark.parametrize("scale,relative", ((1., 1e-9), (1e-100, 1e-9), (1e120, 1e-9), (1., 1e-17)))
+def test_vertex_lookup_matches_an_exact_scan(scale, relative):
+    """Exact stations: lowest index within tol, with and without the grid (1e-17: rounding > tol/4 -> scan)."""
     rng = random.Random(7)
-    tol = 1e-9 * scale
+    tol = relative * scale
     lookup, points = st.ExactVertexLookup(tol), []
     for _ in range(400):
         base = rng.choice(points) if points and rng.random() < .5 else tuple(
@@ -97,9 +98,47 @@ def test_vertex_lookup_matches_an_exact_scan(scale):
         offset = rng.choice((0., .5, .999, 1., 1.001, 3.)) * tol
         point = (base[0] + Fraction(offset), base[1], base[2])
         expected = next((i for i, q in enumerate(points) if st.distance2(point, q) <= Fraction(tol) ** 2), None)
-        assert lookup.find(point) == expected
+        floats = np.asarray(st.rounded(point))
+        assert lookup.find(point, floats) == expected
         if expected is None:
-            lookup.add(point); points.append(point)
+            lookup.add(point, floats); points.append(point)
+    assert (lookup.grid is None) is (relative < 1e-15 or not 1e-100 < tol < 1e100)
+
+
+def test_curved_points_keep_the_float_vertex_rule():
+    """Review regression: a curved piece's point is compared by main's float rule, not exactly."""
+    from anygeometry.arrangement_geometry import BezierPath
+    from anygeometry.material_arrangement import _VertexLookup
+    curve = BezierPath(((0., 0., 0.), (0., 2**-60, 0.), (1., 0., 0.)))
+    q = curve.subcurve(.3, 1.).evaluate(0.)
+    tol = 2**-52
+    p = (float(q[0]) - tol, float(q[1]) - tol * 2**-27, 0.)
+    main_vertices = []
+    main = _VertexLookup(main_vertices, tol)
+    main.add(np.asarray(p)); main_vertices.append(np.asarray(p))
+    lookup = st.ExactVertexLookup(tol)
+    lookup.add(tuple(map(Fraction, p)), np.asarray(p))
+    assert lookup.find(None, q) == main.find(q) == 0
+
+
+def test_extension_window_candidates_are_kept():
+    """Review regression: points accepted through the [-tol, 1+tol] parameter window are not filtered."""
+    tol = 1e-9
+    line = LinePath((0., 0., 0.), (1e6, 0., 0.))
+    point = (-.0005, 0., 0.)
+    assert st.point_parameters(st.segment_of(line), tuple(map(Fraction, point)), tol) == (0,)
+    assert point_parameters(line, point, tolerance=tol) == (0.,)
+    other = LinePath((-.0005, 0., 0.), (-.0005, 1., 0.))
+    assert st.junctions(st.segment_of(line), st.segment_of(other), tol) == ((0, 0),)
+    assert curve_junctions(line, other, tolerance=tol) == ((0., 0.),)
+
+
+@pytest.mark.parametrize("gap,separated", ((1e-9, False), (math.nextafter(1e-9, 1.), True), (.0005, True)))
+def test_pair_skip_is_mains_rule_decided_exactly(gap, separated):
+    first = st.segment_of(LinePath((0., 0., 0.), (1., 0., 0.)))
+    second = st.segment_of(LinePath((-gap, 0., 0.), (-gap, 1., 0.)))
+    assert st.boxes_separated(first, second, 1e-9) is separated
+    assert st.boxes_separated(second, first, 1e-9) is separated
 
 
 # --------------------------------------------------------------------------------- arrangement build
@@ -136,13 +175,33 @@ def test_the_build_does_not_depend_on_line_evaluation_rounding(monkeypatch, dire
 
 
 def test_pieces_have_correctly_rounded_exact_ends():
-    plane = Plane((-1., -1., .3), (1., .2, 0.), (-.1, 1., .4))
+    """Every emitted end equals the correct rounding of an exact crossing of two source lines.
+
+    Exactly coplanar data (z = 0), so each crossing is a unique rational point
+    (on a tilted plane the stored lines are skew by rounding)."""
+    plane = Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.))
     domain, traces = crossing_arrangement(plane)
     arrangement = arrange_material(domain, traces, tolerance=1e-9)
     assert len(arrangement.cells) == 7
     sources = [st.segment_of(path.curve) for loop in domain.boundaries for path in loop]
     sources += [st.segment_of(trace.curve) for trace in traces]
+    crossings = {st.rounded(st.at(a_seg, a)) for i, a_seg in enumerate(sources) for b_seg in sources[i + 1:]
+                 for a, _b in st.junctions(a_seg, b_seg, 1e-9)}
     for path in arrangement.paths:
-        for end in (path.curve.start, path.curve.end):
-            # each stored end is the correct rounding of an exact point on a source line
-            assert any(st.point_parameters(source, tuple(map(Fraction, end)), 1e-12) for source in sources)
+        assert path.curve.start in crossings and path.curve.end in crossings
+
+
+def test_rounded_ends_differ_from_the_float_formula_somewhere():
+    """Discrimination: main's ``s + t (e - s)`` ends are not all correctly rounded on this case."""
+    from anygeometry.material_arrangement import _parameters
+    plane = Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.))
+    domain, traces = crossing_arrangement(plane)
+    exact_ends = {path.curve.end for path in arrange_material(domain, traces, tolerance=1e-9).paths}
+    float_ends = set()
+    for trace in traces:
+        for other in traces + domain.boundaries[0]:
+            for a, _b in curve_junctions(trace.curve, other.curve, tolerance=1e-9):
+                float_ends.add(tuple(float(v) for v in trace.curve.evaluate(a)))
+    near = [point for point in float_ends - exact_ends
+            if any(max(abs(a - b) for a, b in zip(point, end)) <= 1e-12 for end in exact_ends)]
+    assert near                                    # the same crossing, rounded differently by main's formula

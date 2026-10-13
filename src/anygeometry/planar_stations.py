@@ -40,13 +40,37 @@ class Segment(tuple):
         return self
 
     def far_from(self, point, tolerance: float) -> bool:
-        """``True`` only when ``point`` is certainly farther than ``tolerance`` from the segment."""
+        """``True`` only when ``point_parameters`` certainly returns nothing for ``point``.
+
+        Accepted points lie within ``tol`` of the segment or of its extension
+        to parameters ``[-tol, 1 + tol]``, i.e. within ``tol + tol |d_k|`` of
+        the box in each coordinate ``k`` (``d`` the segment's span).
+        """
         for value, lo, hi in zip(point, self.lo, self.hi):
             x = float(value)
-            margin = tolerance * (1 + 1e-12) + 4 * _EPS_FLOAT * abs(x) + _TINY
+            margin = tolerance * (1 + 1e-12) * (1 + (hi - lo)) + 4 * _EPS_FLOAT * abs(x) + _TINY
             if x < lo - margin or x > hi + margin:
                 return True
         return False
+
+    def exact_box(self):
+        return (tuple(min(a, b) for a, b in zip(*self)), tuple(max(a, b) for a, b in zip(*self)))
+
+
+def boxes_separated(first: "Segment", second: "Segment", tolerance: float) -> bool:
+    """Exact replica of ``arrange_material``'s pair skip: some coordinate gap of the boxes exceeds ``tol``.
+
+    Main compares the outward-rounded float boxes of the rounded pieces; the
+    exact rule compares the exact boxes. A float test on the widened boxes
+    settles clear separations; the rest is decided exactly.
+    """
+    margin = tolerance * (1 + 1e-12)
+    if any(h1 < l2 - margin or h2 < l1 - margin
+           for l1, h1, l2, h2 in zip(first.lo, first.hi, second.lo, second.hi)):
+        return True                                          # widened boxes already separated
+    (l1, h1), (l2, h2) = first.exact_box(), second.exact_box()
+    bound = Fraction(tolerance)
+    return any(b < c - bound or d < a - bound for a, b, c, d in zip(l1, h1, l2, h2))
 
 
 _EPS_FLOAT = float(np.finfo(float).eps)
@@ -200,55 +224,62 @@ def merge_parameters(values, tolerance: float, segment: Segment | None) -> list:
 
 
 class ExactVertexLookup:
-    """Lowest index ``i`` with ``|point - vertices[i]| <= tolerance`` on exact positions.
+    """Lowest vertex index within ``tolerance`` of a query, as ``_VertexLookup``.
 
-    A float grid (cell ``2 tol``, the neighbouring cells) only preselects
-    candidates when the rounding of a position cannot move it out of them: the
-    coordinates are finite, below ``1e150``, their rounding at most ``tol/4``,
-    and the tolerance moderate; otherwise every vertex is scanned (from then
-    on). The decision is always the exact squared distance.
+    Each vertex keeps its exact station (straight pieces) or ``None`` (curved
+    pieces: their float evaluation is the position, as in main). Two exact
+    stations are compared exactly (squared distance); any comparison involving
+    a curved piece's point keeps main's float rule ``norm(a - b) <= tol`` on
+    the float positions. A float grid (cell ``2 tol``) preselects candidates
+    under ``_VertexLookup``'s conditions plus: the rounding of exact stations is
+    at most ``tol / 4``; otherwise every vertex is scanned from then on.
     """
 
     def __init__(self, tolerance: float):
         self.tolerance, self.tol2 = tolerance, Fraction(tolerance) ** 2
-        self.points: list[tuple] = []
+        self.exact: list = []
+        self.floats: list = []
         self.grid = {} if 1e-100 < tolerance < 1e100 else None
 
-    def _key(self, point):
-        values = rounded(point)
+    def _key(self, values):
+        if np.geterr()["under"] != "ignore":
+            return None
+        values = [float(value) for value in values]
         if not all(math.isfinite(value) and abs(value) < 1e150 for value in values):
             return None
-        # Rounding moves a coordinate by at most |x| eps; a true neighbour
-        # (exact distance <= tol) stays within the +-1 cells while that is
-        # <= tol / 4 (cell 2 tol).
         if max(abs(value) for value in values) * 2.**-52 > .25 * self.tolerance:
             return None
         return tuple(math.floor(value / (2. * self.tolerance)) for value in values)
 
-    def find(self, point):
-        key = self._key(point) if self.grid is not None else None
+    def _near(self, index, exact, floats) -> bool:
+        if exact is not None and self.exact[index] is not None:
+            return distance2(exact, self.exact[index]) <= self.tol2
+        return bool(np.linalg.norm(floats - self.floats[index]) <= self.tolerance)
+
+    def find(self, exact, floats):
+        key = self._key(floats) if self.grid is not None else None
         if key is None:
             self.grid = None
-            return next((index for index, candidate in enumerate(self.points)
-                         if distance2(point, candidate) <= self.tol2), None)
+            return next((index for index in range(len(self.floats)) if self._near(index, exact, floats)), None)
         found = None
         for dx in (-1, 0, 1):
             for dy in (-1, 0, 1):
                 for dz in (-1, 0, 1):
                     for index in self.grid.get((key[0] + dx, key[1] + dy, key[2] + dz), ()):
-                        if (found is None or index < found) and distance2(point, self.points[index]) <= self.tol2:
+                        if (found is None or index < found) and self._near(index, exact, floats):
                             found = index
         return found
 
-    def add(self, point):
+    def add(self, exact, floats):
         if self.grid is not None:
-            key = self._key(point)
+            key = self._key(floats)
             if key is None:
                 self.grid = None
             else:
-                self.grid.setdefault(key, []).append(len(self.points))
-        self.points.append(point)
+                self.grid.setdefault(key, []).append(len(self.floats))
+        self.exact.append(exact)
+        self.floats.append(floats)
 
 
-__all__ = ["ExactVertexLookup", "at", "distance2", "junctions", "merge_parameters", "point_parameters",
+__all__ = ["ExactVertexLookup", "Segment", "at", "boxes_separated", "distance2", "junctions", "merge_parameters", "point_parameters",
            "rounded", "segment_of", "sub", "to_line"]
