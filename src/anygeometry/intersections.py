@@ -18,6 +18,9 @@ from .curved_intersections import (
 )
 from .entities import EntityRef, OrientedEdge
 from .errors import GeometryError
+from .exact_predicates import Outcome, exact, exact_dot, exact_vector
+from .planar_exact import (ExactLine, ExactPlane, clip_line_to_region, plane_plane_line, point_in_region,
+                           to_float)
 from .identity import (
     EntityHandle,
     ResolutionStatus,
@@ -77,7 +80,9 @@ def clip_line_to_face(
         _face_length_scale(geometry, face_id)
     )
     try:
-        from shapely.geometry import LineString, Point, Polygon
+        # Capability gate of planar workflows (the planar extra); the exact
+        # decisions below no longer use the polygon backend.
+        import shapely  # noqa: F401
     except ImportError:  # pragma: no cover - optional dependency
         return IntersectionResult(
             IntersectionKind.CAPABILITY_MISSING,
@@ -105,8 +110,9 @@ def clip_line_to_face(
 
     point = _point(line_point_value, "line_point")
     raw_direction = _point(line_direction, "line_direction")
-    direction_length = float(np.linalg.norm(raw_direction))
-    if direction_length <= 0.0:
+    # Degenerate only when exactly zero; hypot does not underflow for tiny directions.
+    direction_length = math.hypot(*(float(value) for value in raw_direction))
+    if not any(raw_direction):
         return IntersectionResult(
             IntersectionKind.UNCLASSIFIED,
             diagnostics=("degenerate_line_direction",),
@@ -122,127 +128,75 @@ def clip_line_to_face(
     if support_result.kind is IntersectionKind.DISJOINT:
         return support_result
 
-    def loop_uv(loop: Sequence[OrientedEdge]) -> list[tuple[float, float]]:
-        made = []
-        for item in loop:
-            vertex = geometry.oriented_start_vertex(item)
-            made.append(tuple(float(value) for value in plane.local_uv(
-                geometry.vertices[vertex].position
-            )))
-        return made
+    # Every membership decision below is exact (robust-predicate slice R1a):
+    # the face loops are mapped to exact chart coordinates of the stored
+    # vertices, the line is the exact line of the given doubles, and the
+    # region tests are exact rational ray parity. Floats are outputs only.
+    exact_plane = ExactPlane.from_plane(plane)
+    region = _exact_face_region(geometry, face, exact_plane)
+    line = ExactLine.from_floats(point, raw_direction)
 
-    polygon = Polygon(loop_uv(face.loop), [loop_uv(loop) for loop in face.holes])
-    if polygon.is_empty or not polygon.is_valid:
-        return IntersectionResult(
-            IntersectionKind.UNCLASSIFIED,
-            diagnostics=("invalid_planar_face_polygon",),
-            second_parent=face_handle,
-            tolerance_used=tolerance_used,
-        )
-
-    def component_for_point(world: np.ndarray) -> IntersectionComponent:
-        uv = plane.local_uv(world)
-        parameter = float((world - point) @ direction)
+    def component_for_station(parameter) -> IntersectionComponent:
+        world = line.at(parameter)
+        uv = to_float(exact_plane.uv(world))
+        distance = float(parameter) * direction_length
         return IntersectionComponent(
-            (tuple(float(value) for value in world),),
+            (to_float(world),),
             IntersectionQuality.VERIFIED_APPROXIMATE,
-            first_parameter=(parameter,),
+            first_parameter=(distance,),
             second_parameter=uv,
-            first_parameter_path=((parameter,),),
-            second_parameter_path=(tuple(float(value) for value in uv),),
+            first_parameter_path=((distance,),),
+            second_parameter_path=(uv,),
             second_subparent=face_handle,
         )
 
     if support_result.kind is IntersectionKind.CROSS:
-        world = np.asarray(support_result.witnesses[0], dtype=float)
-        uv = plane.local_uv(world)
-        candidate = Point(uv)
-        if not polygon.covers(candidate):
+        parameter = line.plane_parameter(exact_plane)
+        if parameter is None:
+            return IntersectionResult(
+                IntersectionKind.UNCLASSIFIED,
+                diagnostics=("line_exactly_parallel_to_face_support",),
+                second_parent=face_handle,
+                tolerance_used=tolerance_used,
+            )
+        membership = point_in_region(exact_plane.uv(line.at(parameter)), region)
+        if membership is Outcome.BELOW:
             return IntersectionResult(
                 IntersectionKind.DISJOINT,
                 diagnostics=("line_plane_hit_outside_face_material",),
                 second_parent=face_handle,
                 tolerance_used=tolerance_used,
             )
-        kind = (
-            IntersectionKind.TOUCH_POINT
-            if polygon.boundary.covers(candidate)
-            else IntersectionKind.CROSS
-        )
+        kind = IntersectionKind.TOUCH_POINT if membership is Outcome.EQUAL else IntersectionKind.CROSS
         return IntersectionResult(
             kind,
-            (component_for_point(world),),
+            (component_for_station(parameter),),
             second_parent=face_handle,
             tolerance_used=tolerance_used,
         )
 
-    # The line lies in the support plane.  Span it beyond every trim vertex;
-    # polygon intersection then returns all disjoint line strings with holes
-    # already removed.
-    world_vertices = np.asarray(
-        [
-            geometry.vertices[geometry.oriented_start_vertex(item)].position
-            for loop in (face.loop,) + face.holes
-            for item in loop
-        ],
-        dtype=float,
+    # The line lies in the support plane (within tolerance): clip its exact
+    # chart image against the exact region.
+    intervals, points = clip_line_to_region(
+        exact_plane.uv(line.anchor), exact_plane.uv_direction(line.direction), region
     )
-    parameters = (world_vertices - point) @ direction
-    extent = max(float(np.ptp(parameters)), 1.0)
-    lower = float(np.min(parameters) - extent)
-    upper = float(np.max(parameters) + extent)
-    endpoints_uv = [
-        plane.local_uv(point + value * direction)
-        for value in (lower, upper)
-    ]
-    clipped = polygon.intersection(LineString(endpoints_uv))
-
-    line_components: list[IntersectionComponent] = []
-    point_components: list[IntersectionComponent] = []
-
-    def collect(value) -> None:
-        if value.is_empty:
-            return
-        if value.geom_type == "LineString":
-            coordinates = list(value.coords)
-            if len(coordinates) < 2:
-                return
-            worlds = tuple(
-                np.asarray(plane.evaluate(float(uv[0]), float(uv[1])), dtype=float)
-                for uv in (coordinates[0], coordinates[-1])
+    unit_direction = tuple(float(item) for item in direction)
+    line_components = []
+    for lower, upper in intervals:
+        worlds = (line.at(lower), line.at(upper))
+        line_parameters = (float(lower) * direction_length, float(upper) * direction_length)
+        line_components.append(
+            IntersectionComponent(
+                tuple(to_float(world) for world in worlds),
+                IntersectionQuality.VERIFIED_APPROXIMATE,
+                first_parameter_range=IntersectionParameterRange(*line_parameters),
+                first_parameter_path=tuple((value,) for value in line_parameters),
+                second_parameter_path=tuple(to_float(exact_plane.uv(world)) for world in worlds),
+                direction=unit_direction,
+                second_subparent=face_handle,
             )
-            line_parameters = tuple(float((world - point) @ direction) for world in worlds)
-            if line_parameters[1] < line_parameters[0]:
-                worlds = (worlds[1], worlds[0])
-                line_parameters = (line_parameters[1], line_parameters[0])
-            line_components.append(
-                IntersectionComponent(
-                    tuple(tuple(float(item) for item in world) for world in worlds),
-                    IntersectionQuality.VERIFIED_APPROXIMATE,
-                    first_parameter_range=IntersectionParameterRange(*line_parameters),
-                    first_parameter_path=tuple((value,) for value in line_parameters),
-                    second_parameter_path=tuple(
-                        (float(uv[0]), float(uv[1]))
-                        for uv in (coordinates[0], coordinates[-1])
-                    ),
-                    direction=tuple(float(item) for item in direction),
-                    second_subparent=face_handle,
-                )
-            )
-            return
-        if value.geom_type == "Point":
-            uv = tuple(value.coords)[0]
-            world = np.asarray(plane.evaluate(float(uv[0]), float(uv[1])), dtype=float)
-            point_components.append(component_for_point(world))
-            return
-        for child in getattr(value, "geoms", ()):
-            collect(child)
-
-    collect(clipped)
-    if line_components:
-        line_components.sort(
-            key=lambda item: item.first_parameter_range.lower  # type: ignore[union-attr]
         )
+    if line_components:
         return IntersectionResult(
             IntersectionKind.OVERLAP_CURVE,
             tuple(line_components),
@@ -250,11 +204,10 @@ def clip_line_to_face(
             second_parent=face_handle,
             tolerance_used=tolerance_used,
         )
-    if point_components:
-        point_components.sort(key=lambda item: item.first_parameter or ())
+    if points:
         return IntersectionResult(
             IntersectionKind.TOUCH_POINT,
-            tuple(point_components),
+            tuple(component_for_station(parameter) for parameter in points),
             second_parent=face_handle,
             tolerance_used=tolerance_used,
         )
@@ -264,6 +217,41 @@ def clip_line_to_face(
         second_parent=face_handle,
         tolerance_used=tolerance_used,
     )
+
+
+def _exact_sub(a, b):
+    return tuple(x - y for x, y in zip(a, b))
+
+
+def _exact_face_clip(geometry: GeometryModel, face_id: int, exact_plane: "ExactPlane", line: "ExactLine"):
+    """Exact parameter intervals and touch points of ``line`` on a straight-trimmed planar face.
+
+    Returns ``(intervals, points)`` in the line's own parameter, or an
+    ``IntersectionResult`` when the face is outside the exact route (curved
+    trims, missing planar capability), with the diagnostics of
+    ``clip_line_to_face``.
+    """
+    try:
+        import shapely  # noqa: F401  (capability gate of planar workflows)
+    except ImportError:  # pragma: no cover - optional dependency
+        return IntersectionResult(IntersectionKind.CAPABILITY_MISSING, diagnostics=("planar_backend_unavailable",))
+    face = geometry.faces[face_id]
+    for loop in (face.loop,) + face.holes:
+        if any(not isinstance(geometry.edges[item.edge].curve, Straight) for item in loop):
+            return IntersectionResult(
+                IntersectionKind.UNSUPPORTED,
+                diagnostics=("curved_planar_trim_requires_a_qualified_curve_backend",),
+            )
+    region = _exact_face_region(geometry, face, exact_plane)
+    return clip_line_to_region(exact_plane.uv(line.anchor), exact_plane.uv_direction(line.direction), region)
+
+
+def _exact_face_region(geometry: GeometryModel, face, exact_plane: "ExactPlane") -> list:
+    """Exact chart coordinates of the stored vertices of every loop (outer first, then holes)."""
+    return [
+        [exact_plane.uv(geometry.vertices[geometry.oriented_start_vertex(item)].position) for item in loop]
+        for loop in (face.loop,) + face.holes
+    ]
 
 
 def _point(value: Sequence[float], name: str) -> np.ndarray:
@@ -2523,109 +2511,97 @@ def _query_planar_faces(
     support_component = supports.components[0]
     point = np.asarray(support_component.witnesses[0], dtype=float)
     direction = np.asarray(support_component.direction, dtype=float)
-    first_clip = clip_line_to_face(geometry, first.id, point, direction)
-    second_clip = clip_line_to_face(geometry, second.id, point, direction)
-    for result in (first_clip, second_clip):
-        if result.kind in (
-            IntersectionKind.UNCLASSIFIED,
-            IntersectionKind.UNSUPPORTED,
-            IntersectionKind.CAPABILITY_MISSING,
-        ):
+    # Decisions (robust-predicate slice R1a): the support line is the exact
+    # intersection line of the two plane records (generated-curve definition),
+    # each face is clipped against it exactly, and every interval comparison
+    # with the tolerance is exact. The rounded witness and unit direction of
+    # the support predicate only define the reported line parameters.
+    first_exact, second_exact = ExactPlane.from_plane(first_plane), ExactPlane.from_plane(second_plane)
+    line = plane_plane_line(first_exact, second_exact)
+    if line is None:
+        return _qualified_result(
+            geometry, first, second, IntersectionKind.UNCLASSIFIED,
+            diagnostics=("crossing_planes_exactly_parallel",), tolerance_used=tolerance,
+        )
+    clips = []
+    for handle, exact_plane in ((first, first_exact), (second, second_exact)):
+        clip = _exact_face_clip(geometry, handle.id, exact_plane, line)
+        if isinstance(clip, IntersectionResult):
             return _qualified_result(
-                geometry,
-                first,
-                second,
-                result.kind,
-                diagnostics=result.diagnostics,
-                tolerance_used=tolerance,
+                geometry, first, second, clip.kind, diagnostics=clip.diagnostics, tolerance_used=tolerance,
             )
-    first_intervals = tuple(
-        component.first_parameter_range
-        for component in first_clip.components
-        if component.first_parameter_range is not None
-    )
-    second_intervals = tuple(
-        component.first_parameter_range
-        for component in second_clip.components
-        if component.first_parameter_range is not None
-    )
-    first_points = tuple(
-        component.first_parameter[0]
-        for component in first_clip.components
-        if component.first_parameter is not None
-    )
-    second_points = tuple(
-        component.first_parameter[0]
-        for component in second_clip.components
-        if component.first_parameter is not None
-    )
+        clips.append(clip)
+    (first_intervals, first_points), (second_intervals, second_points) = clips
+    speed2 = line.squared_speed()
+    tolerance2 = exact(tolerance) ** 2
+    witness_exact, unit_exact = exact_vector(point), exact_vector(direction)
+    base = exact_dot(_exact_sub(line.anchor, witness_exact), unit_exact)
+    rate = exact_dot(line.direction, unit_exact)
+
+    def reported(parameter) -> float:
+        return float(base + parameter * rate)
+
+    def gap_exceeds(difference) -> bool:
+        """``difference * |direction| > tolerance`` exactly (difference in line parameter units)."""
+        return difference > 0 and difference * difference * speed2 > tolerance2
+
+    def exact_within(difference) -> bool:
+        """``|difference| * |direction| <= tolerance`` exactly."""
+        return difference * difference * speed2 <= tolerance2
+
     intersections: list[IntersectionComponent] = []
     touches: list[IntersectionComponent] = []
+    touch_parameters: list = []
 
-    def append_touch(parameter: float) -> None:
-        witness = point + parameter * direction
-        if any(
-            float(
-                np.linalg.norm(
-                    np.asarray(existing.witnesses[0], dtype=float) - witness
-                )
-            )
-            <= tolerance
-            for existing in touches
-        ):
+    def append_touch(parameter) -> None:
+        if any(exact_within(parameter - existing) for existing in touch_parameters):
             return
+        touch_parameters.append(parameter)
+        witness = line.at(parameter)
         touches.append(
             IntersectionComponent(
-                (tuple(float(item) for item in witness),),
+                (to_float(witness),),
                 IntersectionQuality.VERIFIED_APPROXIMATE,
-                first_parameter=(parameter,),
-                second_parameter=tuple(
-                    float(item) for item in second_plane.local_uv(witness)
-                ),
+                first_parameter=(reported(parameter),),
+                second_parameter=to_float(second_exact.uv(witness)),
                 first_subparent=first,
                 second_subparent=second,
             )
         )
 
-    for first_range in first_intervals:
-        for second_range in second_intervals:
-            lower = max(first_range.lower, second_range.lower)
-            upper = min(first_range.upper, second_range.upper)
-            if upper < lower - tolerance:
+    for first_lower, first_upper in first_intervals:
+        for second_lower, second_upper in second_intervals:
+            lower, upper = max(first_lower, second_lower), min(first_upper, second_upper)
+            if gap_exceeds(lower - upper):
                 continue
-            if upper - lower <= tolerance:
-                append_touch(0.5 * (lower + upper))
+            if not gap_exceeds(upper - lower):
+                append_touch((lower + upper) / 2)
                 continue
-            witnesses = tuple(point + value * direction for value in (lower, upper))
+            ends = (lower, upper) if rate > 0 else (upper, lower)      # increasing reported parameter
+            witnesses = tuple(line.at(end) for end in ends)
+            parameters = tuple(reported(end) for end in ends)
             intersections.append(
                 IntersectionComponent(
-                    tuple(tuple(float(item) for item in witness) for witness in witnesses),
+                    tuple(to_float(witness) for witness in witnesses),
                     IntersectionQuality.VERIFIED_APPROXIMATE,
-                    first_parameter_range=IntersectionParameterRange(lower, upper),
-                    first_parameter_path=((lower,), (upper,)),
-                    second_parameter_path=tuple(
-                        tuple(float(item) for item in second_plane.local_uv(witness))
-                        for witness in witnesses
-                    ),
+                    first_parameter_range=IntersectionParameterRange(*parameters),
+                    first_parameter_path=tuple((value,) for value in parameters),
+                    second_parameter_path=tuple(to_float(second_exact.uv(witness)) for witness in witnesses),
                     direction=tuple(float(item) for item in direction),
                     first_subparent=first,
                     second_subparent=second,
                 )
             )
     for parameter in first_points:
-        if any(
-            interval.lower - tolerance <= parameter <= interval.upper + tolerance
-            for interval in second_intervals
-        ) or any(abs(parameter - other) <= tolerance for other in second_points):
+        if any(not gap_exceeds(lower - parameter) and not gap_exceeds(parameter - upper)
+               for lower, upper in second_intervals) or any(exact_within(parameter - other) for other in second_points):
             append_touch(parameter)
     for parameter in second_points:
-        if any(
-            interval.lower - tolerance <= parameter <= interval.upper + tolerance
-            for interval in first_intervals
-        ):
+        if any(not gap_exceeds(lower - parameter) and not gap_exceeds(parameter - upper)
+               for lower, upper in first_intervals):
             append_touch(parameter)
     if intersections:
-        intersections.sort(key=lambda item: item.first_parameter_range.lower)  # type: ignore[union-attr]
+        intersections.sort(key=lambda item: item.first_parameter_range.lower)  # type: ignore[union-attr]  # coordinate-only: output order of exactly separated intervals
         return _qualified_result(
             geometry,
             first,
@@ -2637,7 +2613,7 @@ def _query_planar_faces(
             tolerance_used=tolerance,
         )
     if touches:
-        touches.sort(key=lambda item: item.witnesses)
+        touches.sort(key=lambda item: item.witnesses)  # coordinate-only: output order of exactly separated touch points
         return _qualified_result(
             geometry,
             first,
