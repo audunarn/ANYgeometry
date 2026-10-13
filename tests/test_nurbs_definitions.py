@@ -337,3 +337,43 @@ def test_pcurve_chart_rule_is_the_documented_sufficient_condition():
     inside_but_polygon_outside = NurbsCurve(2, (0, 0, 0, 1, 1, 1), ((0., 0.), (2., 0.), (0., 0.)))
     with pytest.raises(GeometryError, match="control polygon"):
         CurveOnSurface(surface, inside_but_polygon_outside)
+
+
+# ----------------------------------------------------------------------------------- review regressions (A0 round 2)
+
+
+def test_weight_ratio_is_decided_exactly_at_subnormal_magnitudes():
+    tiny = 2.0 ** -1074
+    with pytest.raises(GeometryError, match="1e6"):
+        NurbsCurve(1, (0, 0, 1, 1), ((0, 0, 0), (1, 0, 0)), (tiny, 1499999 * tiny))
+    NurbsCurve(1, (0, 0, 1, 1), ((0, 0, 0), (1, 0, 0)), (tiny, 1000000 * tiny))     # exactly 1e6 is allowed
+    with pytest.raises(GeometryError, match="1e6"):
+        NurbsSurface(1, 1, (0, 0, 1, 1), (0, 0, 1, 1), (((0., 0., 0.), (0., 1., 0.)), ((1., 0., 0.), (1., 1., 0.))),
+                     ((tiny, tiny), (tiny, 1499999 * tiny)))
+
+
+def test_nonsingular_transforms_are_accepted_exactly():
+    curve = NurbsCurve(1, (0, 0, 1, 1), ((0, 0, 1), (1, 0, 1)))
+    moved = curve.transformed(np.diag((1., 1., 2.0 ** -100, 1.)))
+    np.testing.assert_array_equal(moved.evaluate(0.5), [0.5, 0.0, 2.0 ** -100])
+    with pytest.raises(GeometryError, match="nonsingular"):
+        curve.transformed(np.diag((1., 1., 0., 1.)))
+    with pytest.raises(GeometryError, match="nonsingular"):
+        curve.transformed(((1, 2, 3, 0), (2, 4, 6, 0), (0, 0, 1, 0), (0, 0, 0, 1)))
+
+
+@pytest.mark.parametrize("call", [
+    lambda c: c.evaluate(10 ** 400),
+    lambda c: c.evaluate([[0], [0, 1]]),
+    lambda c: c.evaluate("0.5"),
+    lambda c: c.derivatives(.5, 1.0),
+    lambda c: c.derivatives(.5, True),
+])
+def test_malformed_parameters_raise_typed_errors(call):
+    with pytest.raises(GeometryError):
+        call(circle())
+
+
+def test_zero_dimensional_controls_raise_typed_errors():
+    with pytest.raises(GeometryError, match="sequence"):
+        NurbsCurve(1, (0, 0, 1, 1), np.array(1.0))

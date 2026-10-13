@@ -24,6 +24,7 @@ Validation (typed ``GeometryError``):
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from fractions import Fraction
 import math
 from typing import Sequence
 
@@ -70,9 +71,15 @@ def _degree(value: object, name: str) -> int:
 
 
 def _sequence(values: object, name: str) -> Sequence:
-    if isinstance(values, (str, bytes)) or not isinstance(values, (Sequence, np.ndarray)):
+    if (isinstance(values, (str, bytes)) or not isinstance(values, (Sequence, np.ndarray))
+            or (isinstance(values, np.ndarray) and values.ndim == 0)):
         raise GeometryError(f"{name} must be a sequence")
     return values
+
+
+def _ratio_exceeds(largest: float, smallest: float, limit: float) -> bool:
+    """``largest / smallest > limit`` decided exactly (no rounding at subnormal magnitudes)."""
+    return Fraction(largest) > Fraction(limit) * Fraction(smallest)
 
 
 def _real_tuple(values: object, name: str) -> tuple[float, ...]:
@@ -104,7 +111,7 @@ def _weights(values: object, count: int, name: str) -> tuple[float, ...] | None:
     weights = _real_tuple(values, name)
     if len(weights) != count or min(weights) <= 0.0:
         raise GeometryError(f"{name} must hold one positive weight per control point")
-    if max(weights) / backend.MAX_WEIGHT_RATIO > min(weights):
+    if _ratio_exceeds(max(weights), min(weights), backend.MAX_WEIGHT_RATIO):
         raise GeometryError(f"{name}: weight ratio max/min must not exceed 1e6")
     return weights
 
@@ -121,16 +128,23 @@ def _interval(value: object, lower: float, upper: float, name: str) -> tuple[flo
 def _affine(matrix: object, name: str = "transformation") -> np.ndarray:
     rows = [_real_tuple(row, name) for row in _sequence(matrix, name)]
     values = np.asarray(rows, dtype=float) if len(rows) == 4 and all(len(row) == 4 for row in rows) else np.zeros(0)
-    # Numerically nonsingular: rank 3 by singular values with a relative tolerance
-    # (no determinant underflow; condition numbers near 1/eps are refused).
-    if (values.shape != (4, 4) or not np.array_equal(values[3], (0.0, 0.0, 0.0, 1.0))
-            or np.linalg.matrix_rank(values[:3, :3]) != 3):
-        raise GeometryError(f"{name} must be a finite, nonsingular 4x4 affine matrix")
+    if values.shape != (4, 4) or not np.array_equal(values[3], (0.0, 0.0, 0.0, 1.0)):
+        raise GeometryError(f"{name} must be a finite 4x4 affine matrix")
+    # Nonsingular exactly: the determinant of the stored doubles in rationals
+    # (no underflow and no condition-number threshold).
+    (a, b, c), (d, e, f), (g, h, i) = ([Fraction(float(x)) for x in row[:3]] for row in values[:3])
+    if a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g) == 0:
+        raise GeometryError(f"{name} must be nonsingular")
     return values
 
 
 def _parameters(values: object, name: str = "curve parameters") -> np.ndarray:
-    result = np.asarray(values, dtype=float)
+    if isinstance(values, (str, bytes)):
+        raise GeometryError(f"{name} must be finite and in [0, 1]")
+    try:
+        result = np.asarray(values, dtype=float)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise GeometryError(f"{name} must be finite and in [0, 1]") from error
     if not np.all(np.isfinite(result)) or np.any((result < 0.0) | (result > 1.0)):
         raise GeometryError(f"{name} must be finite and in [0, 1]")
     return result
@@ -211,8 +225,8 @@ class NurbsCurve:
         Raises ``GeometryError`` when a derivative in the knot parameter is not
         representable in float64 (extreme knot spans and coordinates).
         """
-        if isinstance(order, bool) or order not in (0, 1, 2):
-            raise GeometryError("derivative order must be 0, 1 or 2")
+        if type(order) is not int or order not in (0, 1, 2):
+            raise GeometryError("derivative order must be the integer 0, 1 or 2")
         s, scale = self._knot_parameters(parameters)
         values = _call(backend.bspline_curve, self.degree, self.knots, self.controls, self.weights,
                        np.ravel(s), order)
@@ -307,7 +321,7 @@ class NurbsSurface:
             weights = tuple(_weights(_sequence(row, "NURBS surface weight row"), count_v, "NURBS surface weights")
                             for row in self.weights)
             flat = [value for row in weights for value in row]
-            if max(flat) / backend.MAX_WEIGHT_RATIO > min(flat):
+            if _ratio_exceeds(max(flat), min(flat), backend.MAX_WEIGHT_RATIO):
                 raise GeometryError("NURBS surface weights: weight ratio max/min must not exceed 1e6")
         u_range = _interval(self.u_range, knots_u[degree_u], knots_u[count_u], "NURBS surface u_range")
         v_range = _interval(self.v_range, knots_v[degree_v], knots_v[count_v], "NURBS surface v_range")
