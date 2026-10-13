@@ -36,6 +36,7 @@ from .curves import (
     spline_tangent,
     straight_tangent,
 )
+from ._cross3 import _cross3
 from .errors import GeometryError
 from .exact_curves import EXACT_CURVES, analytic_curve_length, project_analytic_curve
 from .entities import Edge, EntityRef, Face, OrientedEdge, Vertex, VertexRole
@@ -6117,7 +6118,7 @@ class GeometryModel:
         minimum = np.minimum(np.minimum(world[0], world[1]), np.minimum(world[2], world[3]))
         maximum = np.maximum(np.maximum(world[0], world[1]), np.maximum(world[2], world[3]))
         extent = float(np.linalg.norm(maximum - minimum))
-        normal_value = np.cross(surface.u_vector, surface.v_vector)
+        normal_value = _cross3(surface.u_vector, surface.v_vector)
         normal_length = float(np.linalg.norm(normal_value))
         if not np.isfinite(normal_length) or normal_length <= 0.0:
             return [f"face {face_id} has invalid surface geometry"]
@@ -6132,7 +6133,7 @@ class GeometryModel:
             ]
 
         first_axis = surface.u_vector / float(np.linalg.norm(surface.u_vector))
-        second_axis = np.cross(normal, first_axis)
+        second_axis = _cross3(normal, first_axis)
         points = tuple(
             (
                 float((point - world[0]) @ first_axis),
@@ -6190,7 +6191,7 @@ class GeometryModel:
 
         combined = np.vstack(points_3d)
         extent = float(np.linalg.norm(np.ptp(combined, axis=0)))
-        normal = np.cross(surface.u_vector, surface.v_vector)
+        normal = _cross3(surface.u_vector, surface.v_vector)
         normal_length = float(np.linalg.norm(normal))
         if not np.isfinite(normal_length) or normal_length <= 0.0:
             return [f"face {face_id} has invalid surface geometry"]
@@ -6202,7 +6203,7 @@ class GeometryModel:
             ]
 
         first_axis = surface.u_vector / float(np.linalg.norm(surface.u_vector))
-        second_axis = np.cross(normal, first_axis)
+        second_axis = _cross3(normal, first_axis)
         polygons = [
             np.column_stack(
                 (
