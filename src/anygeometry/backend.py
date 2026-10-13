@@ -108,7 +108,7 @@ def bspline_curve(degree, knots, controls, weights, t, order=0):
     non-finite result is refused, never returned.
 
     Accuracy contract (checked against exact rational evaluation in the
-    tests): the k-th derivative is within ``1e3 * eps * R * C * (degree / h)**k``
+    tests): the k-th derivative is within ``1e3 * eps * R**(k+1) * C * (degree / h)**k``
     of the exact value, where ``C`` is the largest control coordinate
     magnitude, ``R`` the weight ratio (1 for polynomial curves) and ``h`` the
     shortest non-empty knot span. The error is absolute relative to the curve

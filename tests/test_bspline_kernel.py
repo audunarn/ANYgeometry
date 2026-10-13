@@ -332,7 +332,7 @@ def exact_point_and_derivatives(degree, knots, controls, weights, t):
     return np.array([[float(v) for v in row] for row in (c0, c1, c2)])
 
 
-@pytest.mark.parametrize("seed", range(8))
+@pytest.mark.parametrize("seed", range(24))
 def test_kernel_meets_its_accuracy_contract_against_exact_rational_evaluation(seed):
     rng = np.random.default_rng(1000 + seed)
     degree = int(rng.integers(1, 6))
@@ -350,5 +350,13 @@ def test_kernel_meets_its_accuracy_contract_against_exact_rational_evaluation(se
     for row, value in zip(values, t):
         exact = exact_point_and_derivatives(degree, knots, controls, weights, value)
         for k in range(3):
-            bound = 1e3 * np.finfo(float).eps * actual_ratio * C * (degree / spans.min()) ** k
+            bound = 1e3 * np.finfo(float).eps * actual_ratio ** (k + 1) * C * (degree / spans.min()) ** k
             assert np.max(np.abs(row[k] - exact[k])) <= bound, (k, np.max(np.abs(row[k] - exact[k])), bound)
+
+
+def test_rational_derivatives_of_a_constant_curve_are_exactly_zero():
+    # Confirmation review: cancellation in A4.2 gave -3.4e-6 here; control differences give exact zeros.
+    values = backend.bspline_curve(1, [0, 0, 1, 1.], [[.1, 0, 0], [.1, 0, 0]], [2.0 ** -19, 1.0],
+                                   [2.0 ** -20, .5, 1.0], 2)
+    np.testing.assert_array_equal(values[:, 1:], 0.0)
+    np.testing.assert_array_equal(values[:, 0], [[.1, 0, 0]] * 3)

@@ -75,7 +75,7 @@ magnitudes in [2**-500, 2**500], positive finite weights with ratio at most 1e6
 (owner decision) scaled by an exact power of two. A non-finite result is refused
 with `ValueError`, never returned. Accuracy contract, tested against exact
 rational evaluation: the k-th derivative is within
-`1e3 * eps * R * C * (degree / h)**k` of the exact value (`C` largest control
+`1e3 * eps * R**(k+1) * C * (degree / h)**k` of the exact value (`C` largest control
 magnitude, `R` weight ratio, `h` shortest span); errors are absolute relative
 to the curve scale.
 

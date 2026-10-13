@@ -104,12 +104,22 @@ def bspline_evaluate(degree: int, knots: np.ndarray, controls: np.ndarray, weigh
     if not rational:
         out[...] = values
         return
-    a, w = values[:, :, :-1], values[:, :, -1]
-    result = np.empty_like(a)
-    for k in range(order + 1):                                               # A4.2
-        v = a[:, k, :].copy()
-        for i in range(1, k + 1):
-            v -= math.comb(k, i) * w[:, i, None] * result[:, k - i, :]
+    # Rational, in a local frame anchored at the first active control P_r:
+    # Delta_j = P_j - P_r, E = sum N_j w_j Delta_j / w, C = P_r + E,
+    # D_k = sum N_j^(k) w_j (Delta_j - E), C' = D_1/w, C'' = (D_2 - 2 w' C')/w
+    # (A4.2 rearranged: no cancellation; a constant curve has exact zero derivatives).
+    w = values[:, :, -1]
+    local_weights = weights[index]                                           # (m, p+1)
+    anchor = controls[index[:, 0]]                                           # (m, dim)
+    delta = controls[index] - anchor[:, None, :]                            # (m, p+1, dim)
+    offset = np.einsum("mj,mjd->md", ders[:, 0, :] * local_weights, delta) / w[:, 0, None]
+    result = np.empty(values[:, :, :-1].shape)
+    result[:, 0, :] = anchor + offset
+    differences = delta - offset[:, None, :]
+    for k in range(1, order + 1):
+        v = np.einsum("mj,mjd->md", ders[:, k, :] * local_weights, differences)
+        if k == 2:
+            v = v - 2.0 * w[:, 1, None] * result[:, 1, :]
         result[:, k, :] = v / w[:, 0, None]
     out[...] = result
 

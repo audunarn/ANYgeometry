@@ -117,31 +117,40 @@ inline void evaluate_point(int p, const double* knots, Py_ssize_t count, const d
         }
         return;
     }
-    // Homogeneous derivatives A^(k) (weighted points) and w^(k), then A4.2.
-    double a[kMaxOrder + 1][kMaxDimension], w[kMaxOrder + 1];
+    // Rational curve, evaluated in a local frame anchored at the first active
+    // control point P_r: with Delta_j = P_j - P_r,
+    //   E = sum_j N_j w_j Delta_j / w,  C = P_r + E,
+    //   D_k = sum_j N_j^(k) w_j (Delta_j - E),  C' = D_1 / w,  C'' = (D_2 - 2 w' C') / w.
+    // Algebraically A4.2, but without its cancellation: errors scale with the
+    // local control spread, and a constant curve gives exact zero derivatives.
+    double w[kMaxOrder + 1], offset[kMaxDimension];
+    const double* anchor = controls + first * dim;
     for (int k = 0; k <= order; ++k) {
         double wk = 0.0;
-        for (int d = 0; d < dim; ++d) {
-            a[k][d] = 0.0;
-        }
         for (int j = 0; j <= p; ++j) {
-            const double basis = ders[k * width + j];
-            const double weight = weights[first + j];
-            for (int d = 0; d < dim; ++d) {
-                a[k][d] += basis * (controls[(first + j) * dim + d] * weight);
-            }
-            wk += basis * weight;
+            wk += ders[k * width + j] * weights[first + j];
         }
         w[k] = wk;
     }
-    static const double binomial[kMaxOrder + 1][kMaxOrder + 1] = {{1, 0, 0}, {1, 1, 0}, {1, 2, 1}};
-    for (int k = 0; k <= order; ++k) {
+    for (int d = 0; d < dim; ++d) {
+        double sum = 0.0;
+        for (int j = 0; j <= p; ++j) {
+            sum += ders[j] * (weights[first + j] * (controls[(first + j) * dim + d] - anchor[d]));
+        }
+        offset[d] = sum / w[0];
+        out[d] = anchor[d] + offset[d];
+    }
+    for (int k = 1; k <= order; ++k) {
         for (int d = 0; d < dim; ++d) {
-            double v = a[k][d];
-            for (int i = 1; i <= k; ++i) {
-                v -= binomial[k][i] * w[i] * out[(k - i) * dim + d];
+            double sum = 0.0;
+            for (int j = 0; j <= p; ++j) {
+                sum += ders[k * width + j]
+                       * (weights[first + j] * ((controls[(first + j) * dim + d] - anchor[d]) - offset[d]));
             }
-            out[k * dim + d] = v / w[0];
+            if (k == 2) {
+                sum -= 2.0 * w[1] * out[dim + d];
+            }
+            out[k * dim + d] = sum / w[0];
         }
     }
 }
