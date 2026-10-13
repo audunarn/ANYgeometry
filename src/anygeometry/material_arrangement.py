@@ -1049,9 +1049,12 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
     for values in outgoing:
         if exact and values and all(item[2] in edge_segments for item in values):
             # D2 on planes (robust-predicate R1b step 2c): a vertex whose edges
-            # are all straight is ordered by the exact chart directions (the
-            # cyclic order of main's atan2, without its 64-eps grouping and
-            # snapping); exactly equal directions keep main's tie order.
+            # are all straight is ordered by the exact chart directions of its
+            # stations; exactly equal directions keep main's tie order. Main's
+            # atan2 order of least-squares chart tangents can differ wherever
+            # the projection error exceeds the angular gaps (inside its 64-eps
+            # grouping/snap window, and beyond it on ill-conditioned charts);
+            # the exact order is the true one for the stored data.
             values.sort(key=functools.cmp_to_key(lambda a, b: _compare_outgoing(chart, edge_segments, a, b)))
             continue
         values.sort(key=lambda item: item[0])

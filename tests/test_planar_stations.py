@@ -361,3 +361,86 @@ def test_vertex_order_does_not_depend_on_chart_rounding(monkeypatch, direction):
                         + tuple(original(*a, **k)[1:]))
     nudged = arrange_material(domain, traces, tolerance=1e-9)
     assert nudged.cells == reference.cells and summary(nudged) == summary(reference)
+
+
+def _oracle_order(plane, directions):
+    """Independent exact counterclockwise order: Gram-matrix chart coordinates, then angle classes."""
+    import functools
+    u, v = (tuple(map(Fraction, map(float, vector))) for vector in (plane.u_vector, plane.v_vector))
+    dot = lambda a, b: sum(x * y for x, y in zip(a, b))
+    g11, g12, g22 = dot(u, u), dot(u, v), dot(v, v)
+    det = g11 * g22 - g12 * g12
+
+    def chart(d):
+        r1, r2 = dot(u, d), dot(v, d)
+        return ((g22 * r1 - g12 * r2) / det, (g11 * r2 - g12 * r1) / det)
+
+    def compare(i, j):
+        (a, b), (c, d) = chart(directions[i]), chart(directions[j])
+        half_i, half_j = (0 if y > 0 or (y == 0 and x > 0) else 1 for x, y in ((a, b), (c, d)))
+        if half_i != half_j:
+            return half_i - half_j
+        cross = a * d - b * c
+        return -1 if cross > 0 else 1 if cross < 0 else i - j
+    return sorted(directions, key=functools.cmp_to_key(compare))
+
+
+def _comparator_order(plane, segments, items):
+    import functools
+    from anygeometry.material_arrangement import _compare_outgoing
+    from anygeometry.planar_exact import ExactPlane
+    chart = ExactPlane.from_plane(plane)
+    return [item[2] for item in sorted(items, key=functools.cmp_to_key(
+        lambda a, b: _compare_outgoing(chart, segments, a, b)))]
+
+
+def test_ill_conditioned_chart_order_is_exact_where_mains_angles_are_not():
+    """Review input: main's least-squares angles mis-order two edges 2,424 eps apart; the exact
+    order follows an independent exact oracle."""
+    plane = Plane((0., 0., 0.), (1., 1., 0.), (0., 1e-4, 0.))
+    start = (-1., -1., 0.)
+    ends = {0: (1.0, 1.0000000000000002, 0.), 1: (1.0000000000000004, 1.0000000000000004, 0.), 2: (-2., -1., 0.)}
+    segments = {k: (tuple(map(Fraction, start)), tuple(map(Fraction, e))) for k, e in ends.items()}
+    directions = {k: tuple(b - a for a, b in zip(*segments[k])) for k in ends}
+    expected = _oracle_order(plane, directions)
+    assert _comparator_order(plane, segments, [(None, 0., k, True) for k in ends]) == expected
+    domain = MaterialDomain(1, plane, ())
+    angles = {k: math.atan2(*domain.tangent(LinePath(start, e), 0.)[::-1]) % math.tau for k, e in ends.items()}
+    float_order = sorted(ends, key=lambda k: angles[k])
+    rotations = [expected[i:] + expected[:i] for i in range(len(expected))]
+    assert float_order not in rotations                  # discrimination: main's cyclic order differs
+
+
+@pytest.mark.parametrize("flip", (False, True))
+def test_comparator_follows_the_oracle_for_both_orientations_and_directions(flip):
+    rng = random.Random(11)
+    for _ in range(50):
+        u = (1., rng.uniform(-.5, .5), rng.uniform(-.5, .5))
+        v = (rng.uniform(-.5, .5), 1., rng.uniform(-.5, .5))
+        plane = Plane((0., 0., 0.), u, tuple(-x for x in v) if flip else v)
+        origin = (Fraction(0),) * 3
+        segments, items, directions = {}, [], {}
+        for k in range(6):
+            a, b = rng.uniform(-1, 1), rng.uniform(-1, 1)
+            end = tuple(Fraction(a * x + b * y) for x, y in zip(plane.u_vector, plane.v_vector))
+            forward = rng.random() < .5
+            segments[k] = (origin, end) if forward else (end, origin)
+            items.append((None, 0., k, forward))
+            directions[k] = end
+        assert _comparator_order(plane, segments, items) == _oracle_order(plane, directions)
+
+
+def test_vertices_with_a_curved_edge_keep_mains_order(monkeypatch):
+    """A chord of a circle: both its vertices also carry arcs, so the exact comparator is never used."""
+    from anygeometry.exact_curves import EllipticArc
+    import anygeometry.material_arrangement as module
+    plane = Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.))
+    circle = (ArrangementPath(EllipticArc((0., 0., 0.), (1., 0., 0.), (0., 1., 0.), 0., math.pi)),
+              ArrangementPath(EllipticArc((0., 0., 0.), (1., 0., 0.), (0., 1., 0.), math.pi, math.pi)))
+    chord = ArrangementPath(LinePath((-2., .3, 0.), (2., .3, 0.)), owners=(1, 2))
+
+    def forbidden(*args):
+        raise AssertionError("exact comparator used at a mixed vertex")
+    monkeypatch.setattr(module, "_compare_outgoing", forbidden)
+    arrangement = arrange_material(MaterialDomain(1, plane, (circle,)), (chord,), tolerance=1e-9)
+    assert len(arrangement.cells) == 2
