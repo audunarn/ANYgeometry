@@ -49,6 +49,7 @@ from .runtime_diagnostics import _increment
 __all__ = [
     "Box",
     "Canonical",
+    "CertificationPolicyError",
     "DegenerateWithinBound",
     "L_MAX",
     "Outcome",
@@ -93,6 +94,14 @@ def _describe(value: Fraction) -> str:
         return repr(float(value))
     except OverflowError:
         return f"{'-' if value < 0 else ''}~2**{abs(value.numerator).bit_length() - value.denominator.bit_length()}"
+
+
+class CertificationPolicyError(GeometryError):
+    """A registered predicate kind exceeded its documented width bound (an internal contract violation).
+
+    Raised instead of deciding: the filter/canonical agreement of that kind is
+    no longer guaranteed, so the operation fails closed.
+    """
 
 
 class DegenerateWithinBound(GeometryError):
@@ -306,9 +315,15 @@ class Canonical:
         return result
 
     def norm(self, vector: Sequence) -> Box:
+        boxes = [self.box(value) for value in vector]
+        if all(item.lo == item.hi for item in boxes):
+            # Exact inputs: the sum of squares is exact; round once, in the root
+            # (width at most one grid unit at any magnitude, also near zero).
+            self._charge()
+            return self.sqrt(Box(*(sum((item.lo * item.lo for item in boxes), Fraction(0)),) * 2))
         result = self.box(0)
-        for value in vector:
-            result = self.add(result, self.square(value))
+        for item in boxes:
+            result = self.add(result, self.square(item))
         return self.sqrt(result)
 
     # -- transcendental functions
@@ -484,7 +499,7 @@ def certified_compare(predicate: str, quantity, threshold, *, kind: str | None =
             _record(predicate, entities, "canonical", level, outcome.value)
             return outcome
     if enclosure is not None and kind is not None and enclosure.width > w_max(kind, magnitude):
-        raise RuntimeError(f"{predicate}: canonical enclosure width {_describe(enclosure.width)} exceeds W_max "
+        raise CertificationPolicyError(f"{predicate}: canonical enclosure width {_describe(enclosure.width)} exceeds W_max "
                            f"of kind {kind!r}; the quantity is not of that registered shape")
     _record(predicate, entities, "canonical", L_MAX, "refused")
     raise DegenerateWithinBound(predicate, enclosure, limit, entities)

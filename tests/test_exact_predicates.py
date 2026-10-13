@@ -18,7 +18,7 @@ import pytest
 from anygeometry import GeometryError
 from anygeometry.arrangement_geometry import BezierPath, LinePath
 from anygeometry.exact_predicates import (
-    Box, Canonical, DegenerateWithinBound, L_MAX, Outcome, RootInterval, Station, canonical_order,
+    Box, Canonical, CertificationPolicyError, DegenerateWithinBound, L_MAX, Outcome, RootInterval, Station, canonical_order,
     certified_compare, collect_decisions, exact, exact_cross, exact_dot, exact_squared_distance,
     filter_compare, grid_bits, orientation_2d, point_in_polygon, w_max)
 from anygeometry.runtime_diagnostics import collect_runtime_diagnostics
@@ -192,7 +192,7 @@ def test_canonical_decides_or_refuses_and_records_the_trace():
 
 
 def test_a_refusal_wider_than_w_max_is_a_policy_error():
-    with pytest.raises(RuntimeError, match="exceeds W_max"):
+    with pytest.raises(CertificationPolicyError, match="exceeds W_max"):
         certified_compare("wide", lambda e: Box(Fraction(-1), Fraction(1)), 0, kind="sqrt")
     # Without a registered kind there is no width contract: an honest refusal.
     with pytest.raises(DegenerateWithinBound):
@@ -326,7 +326,7 @@ def test_composite_ill_conditioned_quantities_are_not_filterable_but_still_decid
         d = e.sub(e.sqrt(a), 1)
         return e.div(d, d)
 
-    with pytest.raises(RuntimeError, match="exceeds W_max"):        # mislabelled as a registered kind
+    with pytest.raises(CertificationPolicyError, match="exceeds W_max"):        # mislabelled as a registered kind
         certified_compare("q", quotient, 1 + Fraction(1, 2 ** 50), kind="sqrt", magnitude=2)
     with pytest.raises(DegenerateWithinBound):                       # honest: no kind, no filter
         certified_compare("q", quotient, 1 + Fraction(1, 2 ** 50))
@@ -344,3 +344,20 @@ def test_exhaustion_at_every_level_reports_no_enclosure():
 def test_refusals_of_huge_exact_quantities_stay_typed():
     with pytest.raises(DegenerateWithinBound, match=r"2\*\*"):
         certified_compare("big", lambda e: e.sqrt(10 ** 800 + 1), 10 ** 400)
+
+
+def test_norms_of_exact_vectors_round_once_at_any_scale():
+    for v in (2.0 ** -110, 1e-300, 3.0, 1e150):
+        enclosure = Canonical(L_MAX).norm((v, 0.0, 0.0))
+        assert enclosure.lo <= Fraction(v) <= enclosure.hi
+        assert enclosure.width <= Fraction(1, 1 << grid_bits(L_MAX))
+        # The filter and the canonical procedure agree for the registered distance kind.
+        fast = filter_compare("tiny", v, 0.0, v / 2, kind="distance", magnitude=max(1.0, v))
+        try:
+            slow = certified_compare("tiny", lambda e, v=v: e.norm((v, 0.0, 0.0)), v / 2,
+                                     kind="distance", magnitude=max(1.0, v))
+        except DegenerateWithinBound:
+            slow = None                                  # below the absolute grid: refused
+        assert fast is None or fast is slow              # a filter never decides differently
+        assert slow is (None if v < 1e-60 else Outcome.ABOVE)
+    assert issubclass(CertificationPolicyError, GeometryError)
