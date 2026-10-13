@@ -300,3 +300,64 @@ def test_seams_keep_mains_parameterization():
                                    points=(ArrangementPoint((0., 0., 0.)),))
     assert (len(arrangement.cells), len(arrangement.paths),
             sum(path.decomposition for path in arrangement.paths)) == (4, 12, 4)       # main's answer
+
+
+# --------------------------------------------------------------------------------- vertex order (step 2c, D2)
+
+
+def star_arrangement(plane, angles):
+    """A square cut by straight traces through its centre at the given chart angles."""
+    square = [(-2., -2.), (2., -2.), (2., 2.), (-2., 2.)]
+    boundary = (tuple(ArrangementPath(LinePath(tuple(plane.evaluate(*a)), tuple(plane.evaluate(*b))))
+                      for a, b in zip(square, square[1:] + square[:1])),)
+    traces = tuple(ArrangementPath(LinePath(tuple(plane.evaluate(-3 * math.cos(t), -3 * math.sin(t))),
+                                            tuple(plane.evaluate(3 * math.cos(t), 3 * math.sin(t)))), owners=(1, k))
+                   for k, t in enumerate(angles))
+    return MaterialDomain(1, plane, boundary), traces
+
+
+def test_vertex_order_agrees_with_main_on_generic_stars():
+    from anygeometry.material_arrangement import _compare_outgoing
+    rng = random.Random(5)
+    for _ in range(5):
+        plane = Plane((rng.uniform(-1, 1), rng.uniform(-1, 1), 0.), (1., rng.uniform(-.3, .3), 0.),
+                      (rng.uniform(-.3, .3), 1., rng.uniform(-.3, .3)))
+        angles = sorted(rng.uniform(0, math.pi) for _ in range(4))
+        domain, traces = star_arrangement(plane, angles)
+        arrangement = arrange_material(domain, traces, tolerance=1e-9)
+        assert len(arrangement.cells) == 8                     # 4 lines through one point: 8 sectors
+
+
+def test_nearly_tangent_straight_edges_are_ordered_by_their_exact_directions():
+    """Edges 20 eps apart in angle: main grouped them (64 eps) and ordered by index; the exact
+    comparison gives the counterclockwise order whatever the index order. (Whole arrangements with
+    such slivers still fail at the cell area/probe stage on main and here: step 2d.)"""
+    import functools
+    from anygeometry.material_arrangement import _compare_outgoing
+    from anygeometry.planar_exact import ExactPlane
+    chart = ExactPlane.from_plane(Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.)))
+    eps = np.finfo(float).eps
+    origin = (Fraction(0),) * 3
+    directions = {0: (1., 1., 0.), 1: (1., 1. + 40 * eps, 0.), 2: (-1., 0., 0.), 3: (1., -1e-300, 0.)}
+    segments = {index: (origin, tuple(map(Fraction, d))) for index, d in directions.items()}
+    for permutation in ((0, 1, 2, 3), (1, 0, 3, 2), (3, 2, 1, 0)):
+        items = [(None, 0., index, True) for index in permutation]
+        items.sort(key=functools.cmp_to_key(lambda a, b: _compare_outgoing(chart, segments, a, b)))
+        assert [item[2] for item in items] == [0, 1, 2, 3]
+    # exactly equal directions keep main's tie order (curvature, index, forward)
+    segments[4] = (origin, (Fraction(2), Fraction(2), Fraction(0)))
+    items = sorted([(None, 0., 4, True), (None, 0., 0, True)],
+                   key=functools.cmp_to_key(lambda a, b: _compare_outgoing(chart, segments, a, b)))
+    assert [item[2] for item in items] == [0, 4]
+
+
+@pytest.mark.parametrize("direction", (-math.inf, math.inf))
+def test_vertex_order_does_not_depend_on_chart_rounding(monkeypatch, direction):
+    plane = Plane((-1., -1., .3), (1., .2, 0.), (-.1, 1., .4))
+    domain, traces = star_arrangement(plane, (.3, 1.1, 2.0, 2.9))
+    reference = arrange_material(domain, traces, tolerance=1e-9)
+    original = np.linalg.lstsq
+    monkeypatch.setattr(np.linalg, "lstsq", lambda *a, **k: (np.nextafter(original(*a, **k)[0], direction),)
+                        + tuple(original(*a, **k)[1:]))
+    nudged = arrange_material(domain, traces, tolerance=1e-9)
+    assert nudged.cells == reference.cells and summary(nudged) == summary(reference)

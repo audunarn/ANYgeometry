@@ -170,6 +170,7 @@ INVENTORY: tuple[InventoryEntry, ...] = (
     _e("D1", "material_arrangement", r"MaterialDomain\.contains_loop"),
     _e("D2", "material_arrangement", r"arrange_material", region=(r"outgoing = \[\[\] for _ in vertices\]", r"seen, cycles = set\(\)")),
     _e("D2", "material_arrangement", r"MaterialDomain\.(tangent|curvature)"),
+    _e("D2", "material_arrangement", r"_compare_outgoing|_exact_outgoing_direction"),
     _e("D3", "material_arrangement", r"arrange_material", text=r"area|original|retained"),
     _e("D3", "trimmed_charts", r"validate_trimmed_surface_charts_binding", text=r"area"),
     _e("D4", "material_arrangement", r"MaterialDomain\.from_model"),

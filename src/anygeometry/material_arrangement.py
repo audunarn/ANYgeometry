@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from fractions import Fraction
+import functools
 import heapq
 import itertools
 import math
@@ -737,6 +738,31 @@ def _add_exact_planar_seams(domain, boundaries, paths, segments, points, toleran
                 paths.append(ArrangementPath(stations.to_line(piece), decomposition=True))
 
 
+def _exact_outgoing_direction(chart, edge_segments, item):
+    start, end = edge_segments[item[2]]
+    vector = tuple(b - a for a, b in zip(start, end)) if item[3] else tuple(a - b for a, b in zip(start, end))
+    return chart.uv_direction(vector)
+
+
+def _compare_outgoing(chart, edge_segments, first, second) -> int:
+    """Counterclockwise order of two straight outgoing edges from the chart's +u axis, exactly.
+
+    Directions with ``v > 0`` or (``v == 0`` and ``u > 0``) come first (angles
+    in ``[0, pi)``), then by the sign of the cross product; exactly equal
+    directions fall back to main's tie key ``(curvature, index, forward)``.
+    """
+    (ua, va), (ub, vb) = (_exact_outgoing_direction(chart, edge_segments, item) for item in (first, second))
+    half_a = 0 if va > 0 or (va == 0 and ua > 0) else 1
+    half_b = 0 if vb > 0 or (vb == 0 and ub > 0) else 1
+    if half_a != half_b:
+        return half_a - half_b
+    cross = ua * vb - va * ub
+    if cross != 0:
+        return -1 if cross > 0 else 1
+    key_a, key_b = ((0. if item[1] is None else item[1], item[2:]) for item in (first, second))
+    return (key_a > key_b) - (key_a < key_b)
+
+
 _NEIGHBOUR_OFFSETS = tuple(itertools.product((-1, 0, 1), repeat=3))
 
 
@@ -929,7 +955,7 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
         vertices.append(point.copy()); incidence.append([])
         return len(vertices)-1
 
-    endpoints_by_edge = []
+    endpoints_by_edge, edge_segments = [], {}
     for path_index, (path, parameters) in enumerate(zip(paths, splits)):
         segment = segments.get(path_index)
         if segment is not None:
@@ -996,6 +1022,8 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
                 continue
             index = len(edges)
             edges.append(replace(path, curve=curve))
+            if segment is not None:
+                edge_segments[index] = piece
             endpoints_by_edge.append((start, end))
             incidence[start].append(index); incidence[end].append(index)
 
@@ -1017,7 +1045,15 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
                 angle = 0.
             curvature = domain.curvature(path.curve, end_parameter, forward)
             outgoing[vertex_id].append((angle, curvature, index, forward))
+    chart = ExactPlane.from_plane(domain.support) if exact else None
     for values in outgoing:
+        if exact and values and all(item[2] in edge_segments for item in values):
+            # D2 on planes (robust-predicate R1b step 2c): a vertex whose edges
+            # are all straight is ordered by the exact chart directions (the
+            # cyclic order of main's atan2, without its 64-eps grouping and
+            # snapping); exactly equal directions keep main's tie order.
+            values.sort(key=functools.cmp_to_key(lambda a, b: _compare_outgoing(chart, edge_segments, a, b)))
+            continue
         values.sort(key=lambda item: item[0])
         groups = []
         for value in values:
