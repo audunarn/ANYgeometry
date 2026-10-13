@@ -116,23 +116,66 @@ def test_ray_through_an_arc_vertex_is_decided_exactly(monkeypatch, plane, direct
 
 
 @pytest.mark.parametrize("direction", (None, -math.inf, math.inf))
-def test_arc_tolerance_band_is_independent_of_chart_rounding(monkeypatch, direction):
+@pytest.mark.parametrize("gap,material", ((-1.5, False), (-.5, True), (.5, True), (1.5, True)))
+def test_arc_tolerance_band(monkeypatch, direction, gap, material):
+    """Stations ``gap * tol`` (horizontally) from the hole circle on the line y = 2.6 of the flat chart:
+    main's rule tests the horizontal distance to the ray crossing, so within tol the hole's
+    boundary is not hole (material); beyond tol inside the hole is not material."""
     plane = PLANES[0]
     tolerance = 1e-9
-    outer = square_loop(plane, 0., 4.)
-    hole = ring_loop(plane, (2., 2.), 1., pieces=4, clockwise=True)
-    domain = MaterialDomain(1, plane, (outer, hole))
-    answers = {}
-    for gap in (.5, .99, 1.01, 2.):
-        station = LinePath((3. + gap * tolerance, 2.1, 0.), (3.5, 2.1, 0.))
-        answers[gap] = domain.contains(station, 0., tolerance)
-    original = Plane.local_uv
+    domain = MaterialDomain(1, plane, (square_loop(plane, 0., 4.), ring_loop(plane, (2., 2.), 1., clockwise=True)))
+    crossing = 2. + math.sqrt(1. - .6 ** 2)                    # within 1e-15 of the exact crossing
+    station = LinePath((crossing + gap * tolerance, 2.6, 0.), (3.9, 2.6, 0.))
     if direction is not None:
+        original = Plane.local_uv
         monkeypatch.setattr(Plane, "local_uv", lambda self, point: tuple(
             math.nextafter(float(value), direction) for value in original(self, point)))
-    for gap, answer in answers.items():
-        station = LinePath((3. + gap * tolerance, 2.1, 0.), (3.5, 2.1, 0.))
-        assert domain.contains(station, 0., tolerance) is answer
+    assert domain.contains(station, 0., tolerance) is material
+
+
+# --------------------------------------------------------------------------------- review regressions (R1c round 1)
+
+
+def test_roots_at_huge_start_angles_are_found_by_certified_turns():
+    """An arc starting at 1e18 rad: its root at the start lies eight turns from a float-centred
+    search; main finds it (True)."""
+    s = 1e18
+    c, z = math.cos(s), math.sin(s)
+    plane = PLANES[0]
+    loop = (ArrangementPath(EllipticArc((0., 0., 0.), (c, -z, 0.), (z, c, 0.), s, math.tau)),)
+    domain = MaterialDomain(1, plane, (loop,))
+    chart = ExactPlane.from_plane(plane)
+    expected = float_contains_loop(domain, loop, (1., 0.), 1e-9)
+    assert expected is True
+    assert contains_loop_exact_curved(chart, loop, (Fraction(1), Fraction(0)), 1e-9) is True
+
+
+def test_coincident_arcs_accept_points_near_their_endpoints():
+    """A flat ellipse (U = (0, 1e-10, 0)) lies on the horizontal chart level: main's point rule
+    accepts the query 5e-10 from the first arc's endpoint."""
+    plane = PLANES[0]
+    loop = (ArrangementPath(EllipticArc((0., 0., 0.), (0., 1e-10, 0.), (1., 0., 0.), 0., math.pi)),
+            ArrangementPath(EllipticArc((0., 0., 0.), (0., 1e-10, 0.), (1., 0., 0.), math.pi, math.pi)))
+    domain = MaterialDomain(1, plane, (loop,))
+    chart = ExactPlane.from_plane(plane)
+    uv = (0., 6e-10)
+    assert float_contains_loop(domain, loop, uv, 1e-9) is True
+    assert contains_loop_exact_curved(chart, loop, tuple(map(Fraction, uv)), 1e-9) is True
+
+
+def test_clamped_parameters_are_evaluated_at_their_endpoint():
+    """A root just past the float end angle: main clamps t to 1 and evaluates the endpoint, which
+    is farther than tol (1e-20) from the query."""
+    plane = PLANES[0]
+    start, sweep = .1, 1.
+    arc = EllipticArc((0., 0., 0.), (1., 0., 0.), (0., 1., 0.), start, sweep)
+    chord = LinePath(tuple(arc.evaluate(1.)), tuple(arc.evaluate(0.)))
+    loop = (ArrangementPath(arc), ArrangementPath(chord))
+    domain = MaterialDomain(1, plane, (loop,))
+    chart = ExactPlane.from_plane(plane)
+    h = Fraction(24524208531525427, 40000000000000000)
+    uv = ((1 - h * h) / (1 + h * h), 2 * h / (1 + h * h))
+    assert contains_loop_exact_curved(chart, loop, uv, 1e-20) is False
 
 
 def test_arc_point_rule_agrees_with_point_parameters():

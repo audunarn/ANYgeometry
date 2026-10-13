@@ -26,7 +26,8 @@ import numpy as np
 from .arrangement_geometry import LinePath
 from .errors import GeometryError
 from .exact_curves import EllipticArc
-from .exact_predicates import Outcome, certified_compare, exact, exact_dot, exact_vector
+from .exact_predicates import (L_MAX, _MAX_OPERATIONS, Canonical, DegenerateWithinBound, Outcome, _BudgetExhausted,
+                               certified_compare, exact, exact_dot, exact_vector)
 
 _EPS = Fraction(float(np.finfo(float).eps))
 _TRIG_TOLERANCE = 4 * _EPS                      # main's trigonometric_roots tolerance for arc roots
@@ -49,15 +50,28 @@ class Num:
         return value if isinstance(value, Num) else Num(exact(value))
 
     def box(self, engine):
-        """The canonical enclosure at ``engine``'s level (cached: canonical boxes depend only on
-        the expression and the level, so a cached box is the box the engine would compute)."""
+        """The canonical enclosure at ``engine``'s level.
+
+        Cached per level together with the operation count its evaluation
+        charged; a cache hit charges that count again. The box and the
+        budget accounting (hence any budget refusal) are therefore exactly
+        those of an uncached evaluation -- canonical boxes depend only on the
+        expression and the level. Only completed evaluations are cached.
+        """
         if self.exact is not None:
             return engine.box(self.exact)
         if self._boxes is None:
             self._boxes = {}
-        box = self._boxes.get(engine.level)
-        if box is None:
-            box = self._boxes[engine.level] = self.f(engine)
+        cached = self._boxes.get(engine.level)
+        if cached is not None:
+            box, cost = cached
+            engine.operations += cost
+            if engine.operations > _MAX_OPERATIONS:
+                raise _BudgetExhausted()
+            return box
+        before = engine.operations
+        box = self.f(engine)
+        self._boxes[engine.level] = (box, engine.operations - before)
         return box
 
     def _combine(self, other, exact_op, name):
@@ -226,16 +240,42 @@ def _turned(angle: ArcAngle, turn: int) -> ArcAngle:
     return ArcAngle(angle.theta + 2 * turn * _pi(), angle.x, angle.cs)
 
 
+def _turn_range(lower: Fraction, upper: Fraction, tolerance: Fraction) -> range:
+    """All turns ``k`` with ``lower - tol <= theta + 2 pi k <= upper + tol`` for some ``theta`` in ``[-pi, pi]``.
+
+    From a rational enclosure of ``pi`` (canonical, finest level), widened by
+    one turn each side; each candidate is then tested by certified
+    comparisons. Refuses when the window is not a handful of turns (huge
+    angles, where the enclosure of ``2 pi k`` cannot separate turns).
+    """
+    pi = Canonical(L_MAX).pi()
+    # (bound -+ pi) / (2 pi) is monotone in pi: its extremes over the enclosure are at the ends.
+    first = min((lower - tolerance - value) / (2 * value) for value in (pi.lo, pi.hi))
+    last = max((upper + tolerance + value) / (2 * value) for value in (pi.lo, pi.hi))
+    lo, hi = math.floor(first) - 1, math.ceil(last) + 1
+    if hi - lo > 2 * _TAU_TURNS + 2:
+        raise DegenerateWithinBound(_PREDICATE + ": turn window", None, Fraction(0))
+    return range(lo, hi + 1)
+
+
 def _sweep_roots(curve: EllipticArc, angles, tolerance: Fraction) -> list:
-    """Main's ``trigonometric_roots`` turn window and clamp, then ``_angle_parameter``."""
+    """Main's ``trigonometric_roots`` turn window and clamp, then ``_angle_parameter``.
+
+    A root angle is kept for every turn with ``lower - tol <= angle <= upper + tol``
+    and clamped into ``[lower, upper]`` (``upper`` is the float end angle
+    ``start + sweep``); ``_angle_parameter`` maps the stored end angles to
+    0 and 1, and clamps a fraction within 128 eps outside ``[0, 1]`` (the float
+    end angle can lie past the exact ``start + sweep``) -- the clamped parameter
+    is evaluated at its endpoint, as main evaluates it.
+    """
     start = exact(curve.start_angle)
     end = _end_angle(curve)
     lower, upper = min(start, end), max(start, end)
     sweep = exact(curve.sweep_angle)
     roots = []
-    centre = (float(lower) + float(upper)) / 2
+    turns = _turn_range(lower, upper, tolerance)
     for angle in angles:
-        for turn in range(round(centre / math.tau) - _TAU_TURNS, round(centre / math.tau) + _TAU_TURNS + 1):
+        for turn in turns:
             candidate = _turned(angle, turn)
             if compare(candidate.theta, lower - tolerance) < 0 or compare(candidate.theta, upper + tolerance) > 0:
                 continue
@@ -245,10 +285,20 @@ def _sweep_roots(curve: EllipticArc, angles, tolerance: Fraction) -> list:
                 candidate = ArcAngle(Num(upper))
             if candidate.theta.exact is not None and candidate.theta.exact == start:
                 roots.append(ArcRoot(Num(Fraction(0)), ArcAngle(Num(start))))
-            elif candidate.theta.exact is not None and candidate.theta.exact == end:
+                continue
+            if candidate.theta.exact is not None and candidate.theta.exact == end:
                 roots.append(ArcRoot(Num(Fraction(1)), ArcAngle(Num(end))))
-            else:
-                roots.append(ArcRoot((candidate.theta - start) / sweep, candidate))
+                continue
+            fraction = (candidate.theta - start) / sweep
+            window = 128 * _EPS
+            if compare(fraction, -window) >= 0 and compare(fraction, 1 + window) <= 0:
+                if compare(fraction, 0) < 0:
+                    roots.append(ArcRoot(Num(Fraction(0)), ArcAngle(Num(start))))
+                    continue
+                if compare(fraction, 1) > 0:
+                    roots.append(ArcRoot(Num(Fraction(1)), ArcAngle(Num(end))))
+                    continue
+            roots.append(ArcRoot(fraction, candidate))
     return roots
 
 
@@ -289,7 +339,18 @@ def abs_num(value: Num) -> Num:
 
 
 def arc_point_rule(curve: EllipticArc, point, tolerance: float) -> bool:
-    """Exact replica of ``point_parameters(EllipticArc, point, tolerance=...)`` being non-empty."""
+    """Exact replica of ``point_parameters(EllipticArc, point, tolerance=...)`` being non-empty.
+
+    The public wrapper first accepts an endpoint within ``tol`` (certified
+    distance to the evaluated endpoint), then ``_point_parameters``' ellipse
+    inversion.
+    """
+    query = exact_vector(point)
+    tol2 = Fraction(tolerance) ** 2
+    for t in (Fraction(0), Fraction(1)):
+        delta = tuple(a - Num(b) for a, b in zip(arc_point(curve, angle_at(curve, Num(t))), query))
+        if compare(_dot(delta, delta), tol2) <= 0:
+            return True
     center, u, v = (exact_vector(value) for value in (curve.center, curve.u_vector, curve.v_vector))
     offset = tuple(p - c for p, c in zip(exact_vector(point), center))
     uu, uv, vv = exact_dot(u, u), exact_dot(u, v), exact_dot(v, v)
