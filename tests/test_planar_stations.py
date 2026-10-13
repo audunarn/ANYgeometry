@@ -205,3 +205,24 @@ def test_rounded_ends_differ_from_the_float_formula_somewhere():
     near = [point for point in float_ends - exact_ends
             if any(max(abs(a - b) for a, b in zip(point, end)) <= 1e-12 for end in exact_ends)]
     assert near                                    # the same crossing, rounded differently by main's formula
+
+
+def test_float32_curved_points_switch_to_mains_scan():
+    """Review regression: float32 evaluations are compared by main's scan (norm underflow), not the grid."""
+    from anygeometry.arrangement_geometry import BezierPath
+    from anygeometry.material_arrangement import _VertexLookup
+    curve = BezierPath(tuple(tuple(np.float32(v) for v in xyz)
+                             for xyz in ((0., 0., 0.), (5e-31, 1e-31, 0.), (1e-30, 0., 0.))))
+    p, q = curve.evaluate(0.), curve.evaluate(1.)
+    tol = 1e-35
+    s = np.array((2e-30, 0., 0.))
+    vertices = []
+    main = _VertexLookup(vertices, tol)
+    for point in (s, p):
+        assert main.find(point) is None
+        main.add(point); vertices.append(point)
+    lookup = st.ExactVertexLookup(tol)
+    lookup.add(tuple(map(Fraction, s)), s)
+    assert lookup.find(None, p) is None
+    lookup.add(None, p)
+    assert lookup.find(None, q) == main.find(q) == 1

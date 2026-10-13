@@ -242,7 +242,11 @@ class ExactVertexLookup:
         self.grid = {} if 1e-100 < tolerance < 1e100 else None
 
     def _key(self, values):
-        if np.geterr()["under"] != "ignore":
+        # Main's eligibility (_VertexLookup._key): float64 3-arrays with
+        # underflow ignored; anything else (e.g. float32 curve evaluations,
+        # whose norms can underflow) switches to the scan.
+        if (type(values) is not np.ndarray or values.shape != (3,) or values.dtype != np.float64
+                or np.geterr()["under"] != "ignore"):
             return None
         values = [float(value) for value in values]
         if not all(math.isfinite(value) and abs(value) < 1e150 for value in values):
