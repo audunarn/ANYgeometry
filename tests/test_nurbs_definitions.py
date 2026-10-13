@@ -377,3 +377,14 @@ def test_malformed_parameters_raise_typed_errors(call):
 def test_zero_dimensional_controls_raise_typed_errors():
     with pytest.raises(GeometryError, match="sequence"):
         NurbsCurve(1, (0, 0, 1, 1), np.array(1.0))
+
+
+def test_remaining_public_paths_raise_typed_errors():
+    curve = NurbsCurve(1, (0, 0, 1, 1), ((0, 0, 0), (1, 0, 0)))
+    surface = NurbsSurface(1, 1, (0, 0, 1, 1), (0, 0, 1, 1), (((0, 0, 0), (0, 1, 0)), ((1, 0, 0), (1, 1, 0))))
+    pcurve = NurbsCurve(1, (0, 0, 1, 1), ((0, 0), (1, 1)))
+    for call in (lambda: curve.subcurve(0, 10 ** 400), lambda: curve.bounds(0, 10 ** 400),
+                 lambda: curve.subcurve(0, [[0], [0, 1]]), lambda: surface.evaluate(10 ** 400, .5),
+                 lambda: surface.evaluate([0, 1], .5), lambda: CurveOnSurface(surface, pcurve, None)):
+        with pytest.raises(GeometryError):
+            call()

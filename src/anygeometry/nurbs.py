@@ -150,6 +150,11 @@ def _parameters(values: object, name: str = "curve parameters") -> np.ndarray:
     return result
 
 
+def _pair(first: object, second: object) -> np.ndarray:
+    """Two scalar parameters in [0, 1] as an array; anything else raises GeometryError."""
+    return _parameters(np.array([_real(first, "parameter"), _real(second, "parameter")]))
+
+
 def _call(function, *args):
     try:
         return function(*args)
@@ -246,14 +251,14 @@ class NurbsCurve:
         return self.derivatives(parameters, 2)[..., 2, :]
 
     def subcurve(self, lower, upper) -> "NurbsCurve":
-        s = self._knot_parameters(np.array([lower, upper], dtype=float))[0]
+        s = self._knot_parameters(_pair(lower, upper))[0]
         if s[0] == s[1]:
             raise GeometryError("curve interval must have positive length")
         return replace(self, domain=(float(s[0]), float(s[1])))
 
     def bounds(self, lower=0.0, upper=1.0):
         """Outward-rounded box containing the curve on ``[lower, upper]`` (control hulls of its spans)."""
-        s = np.sort(self._knot_parameters(np.array([lower, upper], dtype=float))[0])
+        s = np.sort(self._knot_parameters(_pair(lower, upper))[0])
         if lower > upper:
             raise GeometryError("curve bound interval is reversed")
         rows = []
@@ -362,7 +367,7 @@ class NurbsSurface:
         return result.reshape(uv.shape[:-1] + (3,))
 
     def evaluate(self, u: float, v: float) -> np.ndarray:
-        return self.evaluate_many(np.array([[u, v]], dtype=float))[0]
+        return self.evaluate_many(_pair(u, v)[None, :])[0]
 
     def transformed(self, matrix) -> "NurbsSurface":
         values = _affine(matrix)
@@ -389,7 +394,7 @@ class CurveOnSurface:
             raise GeometryError("a curve on a surface needs a NurbsSurface support")
         if not isinstance(self.pcurve, NurbsCurve) or self.pcurve.dimension != 2:
             raise GeometryError("a curve on a surface needs a 2D NurbsCurve pcurve")
-        if tuple(self.also_on) != ():
+        if not isinstance(self.also_on, (tuple, list)) or len(self.also_on) != 0:
             raise GeometryError("also_on requires an exact shared-boundary proof (not available yet)")
         # Supported domain, deliberately narrower than "curve inside the chart":
         # the control polygon lies in [0, 1]^2, which with positive weights
