@@ -32,12 +32,12 @@ def domain_of(loops, plane=None):
 
 def float_contains_loop(domain, loop, uv, tolerance, boundary=True):
     """The pre-R1b float route (the body after the exact-route dispatch)."""
-    planar = MaterialDomain._exact_planar
+    planar, curved = MaterialDomain._exact_planar, MaterialDomain._exact_curved_planar
     try:
-        MaterialDomain._exact_planar = lambda self, loops: False
+        MaterialDomain._exact_planar = MaterialDomain._exact_curved_planar = lambda self, loops: False
         return domain.contains_loop(loop, np.asarray(uv, dtype=float), tolerance, boundary=boundary)
     finally:
-        MaterialDomain._exact_planar = planar
+        MaterialDomain._exact_planar, MaterialDomain._exact_curved_planar = planar, curved
 
 
 CONCAVE = [(0., 0.), (4., 0.), (4., 3.), (2., 1.), (0., 3.)]
@@ -110,12 +110,12 @@ def world_domain(loops, plane=TRANSLATED):
 
 
 def float_contains(domain, curve, parameter, tolerance):
-    planar = MaterialDomain._exact_planar
+    planar, curved = MaterialDomain._exact_planar, MaterialDomain._exact_curved_planar
     try:
-        MaterialDomain._exact_planar = lambda self, loops: False
+        MaterialDomain._exact_planar = MaterialDomain._exact_curved_planar = lambda self, loops: False
         return domain.contains(curve, parameter, tolerance)
     finally:
-        MaterialDomain._exact_planar = planar
+        MaterialDomain._exact_planar, MaterialDomain._exact_curved_planar = planar, curved
 
 
 def nudge_charts(monkeypatch, direction):
@@ -169,18 +169,34 @@ def test_curved_queries_keep_the_float_route(monkeypatch, direction):
 
 
 @pytest.mark.parametrize("direction", (None, -math.inf, math.inf))
-def test_mixed_domains_keep_the_float_route(monkeypatch, direction):
+@pytest.mark.parametrize("gap,inside", GAPS)
+def test_line_and_arc_domains_take_the_exact_route(monkeypatch, direction, gap, inside):
+    """A square with a circular hole (R1c): stations at prev(tol), tol, next(tol) from the edge
+    x = 0 get the exact answers, whatever the chart rounding (the float route rejected tol)."""
     from anygeometry.exact_curves import EllipticArc
     outer = world_domain((WORLD_SQUARE,)).boundaries[0]
     hole = (ArrangementPath(EllipticArc((-.5, .5, 0.), (.1, 0., 0.), (0., .1, 0.), 0., math.pi)),
             ArrangementPath(EllipticArc((-.5, .5, 0.), (.1, 0., 0.), (0., .1, 0.), math.pi, math.pi)))
     domain = MaterialDomain(1, TRANSLATED, (outer, hole))
+    probe = LinePath((gap, .5, 0.), (2., .5, 0.))
+    if direction is not None:
+        nudge_charts(monkeypatch, direction)
+    assert domain.contains(probe, 0., TOL) is inside
+
+
+@pytest.mark.parametrize("direction", (None, -math.inf, math.inf))
+def test_other_curved_domains_keep_the_float_route(monkeypatch, direction):
+    from anygeometry.arrangement_geometry import BezierPath
+    outer = list(world_domain((WORLD_SQUARE,)).boundaries[0])
+    outer[2] = ArrangementPath(BezierPath(((0., 1., 0.), (-.5, 1.2, 0.), (-1., 1., 0.))))
+    domain = MaterialDomain(1, TRANSLATED, (tuple(outer),))
     probe = LinePath((TOL, .5, 0.), (2., .5, 0.))
     if direction is not None:
         nudge_charts(monkeypatch, direction)
     assert domain.contains(probe, 0., TOL) is float_contains(domain, probe, 0., TOL)
     float_uv = domain.uv(probe, 0.)
-    assert domain.contains_loop(outer, float_uv, TOL) is float_contains_loop(domain, outer, float_uv, TOL)
+    assert domain.contains_loop(domain.boundaries[0], float_uv, TOL) is float_contains_loop(
+        domain, domain.boundaries[0], float_uv, TOL)
 
 
 def test_float_query_points_keep_the_float_route(monkeypatch):

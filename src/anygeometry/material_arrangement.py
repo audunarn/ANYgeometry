@@ -313,6 +313,11 @@ class MaterialDomain:
         return isinstance(self.support, Plane) and all(
             type(path.curve) is LinePath for loop in loops for path in loop)
 
+    def _exact_curved_planar(self, loops) -> bool:
+        """Whether the exact line-and-arc route applies: a Plane support, lines and elliptic arcs (R1c)."""
+        return isinstance(self.support, Plane) and all(
+            type(path.curve) in (LinePath, EllipticArc) for loop in loops for path in loop)
+
     def _exact_station_uv(self, curve, parameter):
         """Exact chart point of a line/Bezier station, or None (other curves stay on the float route)."""
         from .exact_predicates import Station
@@ -325,10 +330,15 @@ class MaterialDomain:
         # Exact route (robust-predicate R1b): only for an exact (rational) query
         # point on an all-straight Plane domain. A float query point is a
         # rounded chart output, so it keeps the float route unchanged.
-        if (len(uv) == 2 and all(type(v) is Fraction for v in uv)
-                and self._exact_planar(self.boundaries) and self._exact_planar((loop,))):
-            return _contains_loop_exact(ExactPlane.from_plane(self.support), loop, tuple(uv), tolerance,
-                                        boundary=boundary)
+        if len(uv) == 2 and all(type(v) is Fraction for v in uv):
+            if self._exact_planar(self.boundaries) and self._exact_planar((loop,)):
+                return _contains_loop_exact(ExactPlane.from_plane(self.support), loop, tuple(uv), tolerance,
+                                            boundary=boundary)
+            if self._exact_curved_planar(self.boundaries) and self._exact_curved_planar((loop,)):
+                # Lines and elliptic arcs (robust-predicate R1c, E4): certified replica.
+                from .planar_arcs import contains_loop_exact_curved
+                return contains_loop_exact_curved(ExactPlane.from_plane(self.support), loop, tuple(uv),
+                                                  tolerance, boundary=boundary)
         winding = 0
         for index, path in enumerate(loop):
             curve = path.curve
@@ -373,8 +383,8 @@ class MaterialDomain:
 
     def contains(self, curve, parameter, tolerance, *, boundary=True):
         uv = None
-        if self._exact_planar(self.boundaries):
-            uv = self._exact_station_uv(curve, parameter)          # exact station (robust-predicate R1b)
+        if self._exact_planar(self.boundaries) or self._exact_curved_planar(self.boundaries):
+            uv = self._exact_station_uv(curve, parameter)          # exact station (robust-predicate R1b/R1c)
         if uv is None:
             uv = self.uv(curve, parameter)
         return (self.contains_loop(self.boundaries[0], uv, tolerance, boundary=boundary)
