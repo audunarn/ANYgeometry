@@ -1,3 +1,6 @@
 recursive-include tools *.py
 recursive-include docs *.md *.json
 include CHANGELOG.md ECOSYSTEM_GUIDE.md MIGRATION.md
+include setup.py
+include native/_core.cpp
+recursive-include native/include *.hpp

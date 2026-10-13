@@ -1,0 +1,86 @@
+name: Native core wheels
+
+# Builds the optional compiled core (anygeometry._core, C++17, CPython stable
+# ABI) as one cp311-abi3 wheel per platform, proves each wheel on several
+# interpreters outside the source tree, and proves the reported pure-Python
+# fallback of an sdist built without the extension. Manual only; it does not
+# publish anything and is independent of the release workflow (publish.yml).
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  wheels:
+    name: abi3 wheel (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-15, macos-15-intel]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build wheels
+        uses: pypa/cibuildwheel@4726cd35bb13f7bde50cf2761f2499ac7b3aa32c # v4.1.1
+        env:
+          CIBW_BUILD: "cp311-*"
+          CIBW_SKIP: "*-win32 *-manylinux_i686 *-musllinux_i686"
+          CIBW_ARCHS_LINUX: "x86_64"
+          CIBW_ENVIRONMENT: "ANYGEOMETRY_REQUIRE_NATIVE=1"
+          CIBW_TEST_REQUIRES: "numpy>=1.26"
+          CIBW_TEST_COMMAND: "python {project}/tools/native_wheel_smoke.py --require-native"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-wheels-${{ matrix.os }}
+          path: wheelhouse/*.whl
+
+  abi3-interpreters:
+    name: abi3 wheel on Python ${{ matrix.python }} (${{ matrix.os }})
+    needs: wheels
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-15, macos-15-intel]
+        python: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: native-wheels-${{ matrix.os }}
+          path: wheelhouse
+      - name: Install the wheel and run the smoke test outside the tree
+        shell: bash
+        run: |
+          python -m pip install "numpy>=1.26"
+          python -m pip install --no-deps --no-index wheelhouse/*abi3*.whl
+          cd "$RUNNER_TEMP"
+          python "$GITHUB_WORKSPACE/tools/native_wheel_smoke.py" --require-native
+
+  sdist-fallback:
+    name: sdist without the compiled core reports the Python backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Build and install the sdist with the native build disabled
+        shell: bash
+        run: |
+          python -m pip install build "numpy>=1.26"
+          python -m build --sdist
+          ANYGEOMETRY_DISABLE_NATIVE=1 python -m pip install dist/*.tar.gz
+          cd "$RUNNER_TEMP"
+          python "$GITHUB_WORKSPACE/tools/native_wheel_smoke.py" --expect-python

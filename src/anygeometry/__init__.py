@@ -1,5 +1,6 @@
 """Lightweight structural-surface geometry shared by the ANY ecosystem."""
 
+from .backend import backend_info
 from .curves import Arc, ArcFrame, CurveShape, DegenerateArcError, Spline, Straight
 from .exact_curves import EllipticArc, CylinderIntersectionCurve
 from .quadric_curves import QuadricIntersectionCurve
@@ -328,6 +329,7 @@ from .surfaces import (
 )
 
 __all__ = [
+    "backend_info",
     "model_to_world_points",
     "world_to_model_points",
     "model_to_world_vectors",

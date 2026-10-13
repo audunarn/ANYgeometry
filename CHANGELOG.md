@@ -4,6 +4,13 @@ All notable user-visible changes to ANYgeometry are documented here.
 
 ## Unreleased
 
+- Add an optional compiled core (`anygeometry._core`, C++17, CPython stable
+  ABI, one `cp311-abi3` wheel per platform) behind `anygeometry.backend`, with
+  pure-Python references, `ANYGEOMETRY_DISABLE_NATIVE` /
+  `ANYGEOMETRY_REQUIRE_NATIVE` and `anygeometry.backend_info()`. The native
+  build is opt-in (`ANYGEOMETRY_BUILD_NATIVE=1`); default installs are
+  unchanged. See `docs/NATIVE_CORE.md`.
+
 - Add a read-only authored-root constraint/reference inventory bound to complete
   original/current geometry snapshots. It exposes trace incidence, neighbours
   and typed references without granting parameter remapping or mesh publication.

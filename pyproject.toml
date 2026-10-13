@@ -37,6 +37,11 @@ include = ["anygeometry*"]
 [tool.setuptools.package-data]
 anygeometry = ["py.typed"]
 
+# The compiled core is added by build_ext (setup.py), never as package data:
+# keep any in-place development build out of every wheel.
+[tool.setuptools.exclude-package-data]
+anygeometry = ["*.pyd", "*.so"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]

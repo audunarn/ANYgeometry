@@ -15,3 +15,6 @@ dist/
 # Local managed checkouts and retained workstation-only evidence.
 /.worktrees/
 /.local-evidence/
+# In-place development build of the optional compiled core
+src/anygeometry/_core*.pyd
+src/anygeometry/_core*.so
