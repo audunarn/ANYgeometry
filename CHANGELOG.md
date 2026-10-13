@@ -4,6 +4,13 @@ All notable user-visible changes to ANYgeometry are documented here.
 
 ## Unreleased
 
+- Add NURBS definitions (`anygeometry.nurbs`: `NurbsCurve` for 3D curves and 2D
+  pcurves, `NurbsSurface`, `CurveOnSurface`) with validation (degree <= 7,
+  clamped knots, weight ratio <= 1e6, numeric ranges), evaluation and strict
+  records. Their records (`nurbs_curve`, `nurbs_pcurve`, `nurbs_surface`,
+  `curve_on_surface`) are schema 7; readers accept schema 7 and ordinary
+  documents are unchanged. No engine route uses NURBS yet.
+
 - Add an optional compiled core (`anygeometry._core`, C++17, CPython stable
   ABI, one `cp311-abi3` wheel per platform) behind `anygeometry.backend`, with
   pure-Python references, `ANYGEOMETRY_DISABLE_NATIVE` /

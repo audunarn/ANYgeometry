@@ -69,6 +69,36 @@ VERSION = 5
 # holding a quadric branch curve is schema 6, so schema-5 readers keep reading every
 # other document unchanged.
 _QUADRIC_VERSION = 6
+# NURBS definitions (nurbs.py) and their records are schema 7 (owner decision
+# 2026-10-13); schema 6 keeps its meaning. A document's version is the largest
+# requirement of any record it holds, found recursively (required_version).
+_NURBS_VERSION = 7
+_RECORD_VERSIONS = {
+    "extruded": _QUADRIC_VERSION,
+    "quadric_intersection": _QUADRIC_VERSION,
+    "bezier_quadric_intersection": _QUADRIC_VERSION,
+    "nurbs_curve": _NURBS_VERSION,
+    "nurbs_pcurve": _NURBS_VERSION,
+    "nurbs_surface": _NURBS_VERSION,
+    "curve_on_surface": _NURBS_VERSION,
+    "plane_nurbs_intersection": _NURBS_VERSION,
+}
+
+
+def required_version(record: object) -> int:
+    """Lowest schema version that can hold ``record``, including every nested record."""
+    version = VERSION
+    stack = [record]
+    while stack:
+        value = stack.pop()
+        if isinstance(value, Mapping):
+            kind = value.get("type")
+            if isinstance(kind, str):
+                version = max(version, _RECORD_VERSIONS.get(kind, VERSION))
+            stack.extend(value.values())
+        elif isinstance(value, (list, tuple)):
+            stack.extend(value)
+    return version
 
 _GEOMETRY_KINDS = ("vertex", "edge", "face")
 _STRUCTURAL_KINDS = (
@@ -1803,7 +1833,7 @@ def from_dict(document: Mapping[str, Any]) -> GeometryModel:
     if document.get("schema", SCHEMA) != SCHEMA:
         raise GeometryError("not an ANYgeometry document")
     version = _integer(document.get("version", 1), "version")
-    if version not in (1, 2, 3, 4, VERSION, _QUADRIC_VERSION):
+    if version not in (1, 2, 3, 4, VERSION, _QUADRIC_VERSION, _NURBS_VERSION):
         raise GeometryError(f"unsupported ANYgeometry version {version}")
     strict_document = version >= 3
     # Schemas 4 and 5 share identity, tolerance and additive semantic fields.
