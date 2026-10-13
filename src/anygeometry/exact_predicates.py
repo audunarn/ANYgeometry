@@ -447,7 +447,7 @@ _W_FACTORS = {
 }
 
 
-def w_max(kind: str, magnitude: float = 1.0) -> Fraction:
+def w_max(kind: str, magnitude: float) -> Fraction:
     """Documented bound of the canonical level-``L_MAX`` enclosure width for ``kind``."""
     factor = _W_FACTORS.get(kind)
     if factor is None:
@@ -460,7 +460,7 @@ def _compare_rational(value: Fraction, threshold: Fraction) -> Outcome:
     return Outcome.BELOW if value < threshold else Outcome.ABOVE if value > threshold else Outcome.EQUAL
 
 
-def certified_compare(predicate: str, quantity, threshold, *, kind: str | None = None, magnitude: float = 1.0,
+def certified_compare(predicate: str, quantity, threshold, *, kind: str | None = None, magnitude: float | None = None,
                       on_equal: Outcome | None = None, entities=()) -> Outcome:
     """Compare ``quantity`` with ``threshold`` by the one decision policy (T3).
 
@@ -498,6 +498,8 @@ def certified_compare(predicate: str, quantity, threshold, *, kind: str | None =
             outcome = Outcome.EQUAL if on_equal is None else on_equal
             _record(predicate, entities, "canonical", level, outcome.value)
             return outcome
+    if kind is not None and magnitude is None:
+        raise ValueError("a registered kind needs the magnitude of its inputs")
     if enclosure is not None and kind is not None and enclosure.width > w_max(kind, magnitude):
         raise CertificationPolicyError(f"{predicate}: canonical enclosure width {_describe(enclosure.width)} exceeds W_max "
                            f"of kind {kind!r}; the quantity is not of that registered shape")
@@ -506,7 +508,7 @@ def certified_compare(predicate: str, quantity, threshold, *, kind: str | None =
 
 
 def filter_compare(predicate: str, estimate: float, error_bound: float, threshold, *, kind: str,
-                   magnitude: float = 1.0, entities=()) -> Outcome | None:
+                   magnitude: float, entities=()) -> Outcome | None:
     """A fast route's decision, or ``None`` to defer to :func:`certified_compare`.
 
     The fast route claims ``|exact quantity - estimate| <= error_bound``. It
@@ -514,6 +516,11 @@ def filter_compare(predicate: str, estimate: float, error_bound: float, threshol
     ``error_bound + w_max``: the canonical level-``L_MAX`` enclosure (which
     contains the exact quantity and is at most ``w_max`` wide) is then
     separated too, so both routes return the same outcome. Closer cases defer.
+
+    ``magnitude`` is required: the largest absolute input of the function
+    (the angle for sin/cos, the arguments for atan/atan2, the coordinates for
+    a distance, the radicand's scale for sqrt). ``W_max`` scales with it, so a
+    huge angle's argument reduction is covered and such cases defer.
 
     ``kind`` must be a registered kind (see ``_W_FACTORS``): the quantity is
     one canonical function of exact inputs, evaluable at level ``L_MAX``. A

@@ -184,7 +184,7 @@ def test_canonical_decides_or_refuses_and_records_the_trace():
         assert certified_compare("sin", lambda e: e.sin(3.0), 0.0) is Outcome.ABOVE
         with pytest.raises(DegenerateWithinBound) as refusal:
             certified_compare("tie", lambda e: e.sub(e.mul(e.sqrt(2), e.sqrt(2)), 2), 0, kind="distance",
-                              entities=(("edge", 7),))
+                              magnitude=2, entities=(("edge", 7),))
     assert refusal.value.entities == (("edge", 7),) and isinstance(refusal.value, GeometryError)
     assert [(d.predicate, d.route, d.outcome) for d in trace] == [
         ("sqrt2", "canonical", "below"), ("sin", "canonical", "above"), ("tie", "canonical", "refused")]
@@ -193,7 +193,7 @@ def test_canonical_decides_or_refuses_and_records_the_trace():
 
 def test_a_refusal_wider_than_w_max_is_a_policy_error():
     with pytest.raises(CertificationPolicyError, match="exceeds W_max"):
-        certified_compare("wide", lambda e: Box(Fraction(-1), Fraction(1)), 0, kind="sqrt")
+        certified_compare("wide", lambda e: Box(Fraction(-1), Fraction(1)), 0, kind="sqrt", magnitude=1)
     # Without a registered kind there is no width contract: an honest refusal.
     with pytest.raises(DegenerateWithinBound):
         certified_compare("wide", lambda e: Box(Fraction(-1), Fraction(1)), 0)
@@ -235,12 +235,12 @@ def test_filters_never_disagree_with_the_canonical_policy():
 
 
 def test_w_max_is_positive_and_scales():
-    assert 0 < w_max("sqrt") < w_max("angle") and w_max("distance", 1e6) == 1e6 * w_max("distance", 1)
+    assert 0 < w_max("sqrt", 1) < w_max("angle", 1) and w_max("distance", 1e6) == 1e6 * w_max("distance", 1)
     for unregistered in ("unknown", "generic"):
         with pytest.raises(ValueError):
-            w_max(unregistered)
+            w_max(unregistered, 1)
     with pytest.raises(ValueError):
-        filter_compare("p", 1.0, 0.0, 2.0, kind="generic")
+        filter_compare("p", 1.0, 0.0, 2.0, kind="generic", magnitude=1)
 
 
 # ----------------------------------------------------------------------------------- T0
@@ -361,3 +361,15 @@ def test_norms_of_exact_vectors_round_once_at_any_scale():
         assert fast is None or fast is slow              # a filter never decides differently
         assert slow is (None if v < 1e-60 else Outcome.ABOVE)
     assert issubclass(CertificationPolicyError, GeometryError)
+
+
+def test_magnitude_is_required_and_huge_angles_defer():
+    x = 1e50
+    estimate = math.sin(x)
+    threshold = estimate + 1e-12
+    with pytest.raises(TypeError):
+        filter_compare("large", estimate, 4 * math.ulp(estimate), threshold, kind="trigonometric")
+    with pytest.raises(ValueError, match="magnitude"):
+        certified_compare("large", lambda e: e.sin(x), threshold, kind="trigonometric")
+    assert filter_compare("large", estimate, 4 * math.ulp(estimate), threshold, kind="trigonometric",
+                          magnitude=x) is None
