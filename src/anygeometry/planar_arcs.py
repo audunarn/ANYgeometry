@@ -26,7 +26,7 @@ import numpy as np
 from .arrangement_geometry import LinePath
 from .errors import GeometryError
 from .exact_curves import EllipticArc
-from .exact_predicates import (L_MAX, _MAX_OPERATIONS, Canonical, DegenerateWithinBound, Outcome, _BudgetExhausted,
+from .exact_predicates import (L_MAX, Canonical, DegenerateWithinBound, Outcome,
                                certified_compare, exact, exact_dot, exact_vector)
 
 _EPS = Fraction(float(np.finfo(float).eps))
@@ -40,38 +40,30 @@ _TAU_TURNS = 3                                  # turns tried around the sweep (
 class Num:
     """An exact rational or a canonical enclosure ``f(engine) -> Box`` of an exact real."""
 
-    __slots__ = ("exact", "f", "_boxes")
+    __slots__ = ("exact", "f")
 
     def __init__(self, exact_value=None, f=None):
-        self.exact, self.f, self._boxes = exact_value, f, None
+        self.exact, self.f = exact_value, f
 
     @staticmethod
     def of(value) -> "Num":
         return value if isinstance(value, Num) else Num(exact(value))
 
     def box(self, engine):
-        """The canonical enclosure at ``engine``'s level.
+        """The canonical enclosure at ``engine``, memoized on that engine only.
 
-        Cached per level together with the operation count its evaluation
-        charged; a cache hit charges that count again. The box and the
-        budget accounting (hence any budget refusal) are therefore exactly
-        those of an uncached evaluation -- canonical boxes depend only on the
-        expression and the level. Only completed evaluations are cached.
+        Each certified comparison evaluates on fresh engines; within one
+        engine a shared node is evaluated once. The result and the budget
+        accounting of a comparison therefore depend only on its expression
+        (not on earlier comparisons), so refusals are reproducible.
         """
         if self.exact is not None:
             return engine.box(self.exact)
-        if self._boxes is None:
-            self._boxes = {}
-        cached = self._boxes.get(engine.level)
-        if cached is not None:
-            box, cost = cached
-            engine.operations += cost
-            if engine.operations > _MAX_OPERATIONS:
-                raise _BudgetExhausted()
-            return box
-        before = engine.operations
-        box = self.f(engine)
-        self._boxes[engine.level] = (box, engine.operations - before)
+        memo = engine.__dict__.setdefault("_num_memo", {})
+        box = memo.get(id(self))
+        if box is None:
+            box = memo[id(self)] = self.f(engine)
+            engine.__dict__.setdefault("_num_alive", []).append(self)      # keeps ids unique while memoized
         return box
 
     def _combine(self, other, exact_op, name):
@@ -403,10 +395,14 @@ def contains_loop_exact_curved(chart, loop, uv, tolerance: float, *, boundary: b
     def at_parameter(curve, t: Num) -> ArcRoot:
         return ArcRoot(t, None if type(curve) is LinePath else angle_at(curve, t))
 
-    def ordered(roots):
+    def ordered(curve, roots):
+        # main: sorted(set(min(1, max(0, t)))) and evaluation at the clamped parameter, so a clamped
+        # root is evaluated at its endpoint (its angle follows the parameter).
         unique = []
         for root in roots:
-            root = ArcRoot(_clamp(root.t), root.angle)
+            clamped = _clamp(root.t)
+            if clamped is not root.t:
+                root = at_parameter(curve, clamped)
             if not any(other.t.exact is not None and other.t.exact == root.t.exact for other in unique):
                 unique.append(root)
         return sorted(unique, key=functools.cmp_to_key(lambda a, b: compare(a.t, b.t)))
@@ -422,7 +418,7 @@ def contains_loop_exact_curved(chart, loop, uv, tolerance: float, *, boundary: b
             if hit:
                 return boundary
             continue
-        roots = ordered(roots)
+        roots = ordered(curve, roots)
         for position, root in enumerate(roots):
             point_u, point_v = station_uv(curve, root)
             du, dv = point_u - u_query, point_v - v_query
@@ -457,8 +453,9 @@ def contains_loop_exact_curved(chart, loop, uv, tolerance: float, *, boundary: b
 
 
 def _clamp(t: Num) -> Num:
+    """``min(1, max(0, t))``; returns ``t`` itself when no clamping applies."""
     if t.exact is not None:
-        return Num(min(Fraction(1), max(Fraction(0), t.exact)))
+        return t if 0 <= t.exact <= 1 else Num(min(Fraction(1), max(Fraction(0), t.exact)))
     if compare(t, 0) < 0:
         return Num(Fraction(0))
     if compare(t, 1) > 0:

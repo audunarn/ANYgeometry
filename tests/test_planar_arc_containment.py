@@ -191,3 +191,40 @@ def test_arc_point_rule_agrees_with_point_parameters():
                       + np.array(rng.choice(((0., 0., 0.), (1e-3, 0., 0.), (0., 0., 1e-12)))))
         expected = bool(point_parameters(arc, point, tolerance=1e-9))
         assert arc_point_rule(arc, tuple(map(Fraction, point)), 1e-9) is expected
+
+
+def test_a_parameter_clamped_beyond_the_window_is_evaluated_at_its_endpoint():
+    """Review round 2: start 1000 rad, so the float end angle lies ~1e-12 past the exact end and
+    the root parameter ~1 + 1e-13 is only clamped by contains_loop's min(1, ...); main evaluates
+    the endpoint, farther than tol (1e-20) from the query."""
+    plane = PLANES[0]
+    arc = EllipticArc((0., 0., 0.), (1., 0., 0.), (0., 1., 0.), 1000., .1)
+    loop = (ArrangementPath(arc), ArrangementPath(LinePath(tuple(arc.evaluate(1.)), tuple(arc.evaluate(0.)))))
+    chart = ExactPlane.from_plane(plane)
+    h = Fraction(5950449012443316, 10 ** 16)
+    uv = ((1 - h * h) / (1 + h * h), 2 * h / (1 + h * h))
+    assert contains_loop_exact_curved(chart, loop, uv, 1e-20) is False
+
+
+def test_certified_signs_do_not_depend_on_earlier_comparisons():
+    """Review: memoization is per engine, so a comparison's result (or refusal) does not depend on
+    which comparisons ran before."""
+    from anygeometry.exact_predicates import DegenerateWithinBound
+    from anygeometry.planar_arcs import Num, sign
+    shared = Num(f=lambda engine: engine.pi())
+
+    def total(count):
+        nodes = [shared] * count
+        while len(nodes) > 1:
+            nodes = [a + b for a, b in zip(nodes[::2], nodes[1::2])] + ([nodes[-1]] if len(nodes) % 2 else [])
+        return nodes[0] - Num(Fraction(3))
+
+    def outcome(value):
+        try:
+            return sign(value)
+        except DegenerateWithinBound:
+            return "refused"
+    cold = outcome(total(3000))
+    sign(Num(f=lambda engine: engine.pi()) - 3)                  # warm-up comparisons on other engines
+    sign(shared - 3)
+    assert outcome(total(3000)) == cold
