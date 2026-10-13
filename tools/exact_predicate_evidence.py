@@ -30,10 +30,9 @@ from test_exact_predicates import D, _cases, contains, d_atan, d_atan2, d_sin_co
 def oracle_run(count: int, seed: int) -> dict:
     rng = random.Random(seed)
     failures = []
-    engines = (Canonical(0), Canonical(L_MAX))
     for index in range(count):
         x, y = rng.uniform(-50, 50), rng.uniform(-50, 50) or 1.0
-        engine = engines[index % 2]
+        engine = Canonical(0 if index % 2 == 0 else L_MAX)     # one engine per evaluation, as certified_compare
         s, c = engine.sincos(x)
         ds, dc = d_sin_cos(D(x))
         checks = (("sin", contains(s, ds)), ("cos", contains(c, dc)),
