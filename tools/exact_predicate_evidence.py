@@ -23,23 +23,38 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tests"))
 
 from anygeometry.exact_predicates import (  # noqa: E402
-    Canonical, DegenerateWithinBound, L_MAX, certified_compare, filter_compare)
+    _BudgetExhausted, Canonical, DegenerateWithinBound, L_MAX, certified_compare, filter_compare)
 from test_exact_predicates import D, _cases, contains, d_atan, d_atan2, d_sin_cos  # noqa: E402
 
 
 def oracle_run(count: int, seed: int) -> dict:
     rng = random.Random(seed)
-    failures = []
+    failures, deferred = [], 0
     for index in range(count):
         x, y = rng.uniform(-50, 50), rng.uniform(-50, 50) or 1.0
-        engine = Canonical(0 if index % 2 == 0 else L_MAX)     # one engine per evaluation, as certified_compare
-        s, c = engine.sincos(x)
-        ds, dc = d_sin_cos(D(x))
-        checks = (("sin", contains(s, ds)), ("cos", contains(c, dc)),
-                  ("atan", contains(engine.atan(x), d_atan(D(x)))),
-                  ("atan2", contains(engine.atan2(y, x), d_atan2(D(y), D(x)))))
-        failures.extend((name, x, y, engine.level) for name, ok in checks if not ok)
-    return {"inputs": count, "failures": failures[:20], "failure_count": len(failures)}
+        level = 0 if index % 2 == 0 else L_MAX
+        for name, evaluate, reference in (
+                ("sin", lambda e: e.sincos(x)[0], lambda: d_sin_cos(D(x))[0]),
+                ("cos", lambda e: e.sincos(x)[1], lambda: d_sin_cos(D(x))[1]),
+                ("atan", lambda e: e.atan(x), lambda: d_atan(D(x))),
+                ("atan2", lambda e: e.atan2(y, x), lambda: d_atan2(D(y), D(x))),
+                ("sqrt", lambda e: e.sqrt(abs(x)), lambda: _decimal_sqrt(abs(x)))):
+            try:
+                enclosure = evaluate(Canonical(level))       # one engine per evaluation, as certified_compare
+            except _BudgetExhausted:
+                deferred += 1                               # undecided at this level: legitimate, not a failure
+                continue
+            if not contains(enclosure, reference()):
+                failures.append((name, x, y, level))
+    return {"inputs": count, "evaluations": 5 * count, "deferred_at_level": deferred,
+            "failures": failures[:20], "failure_count": len(failures)}
+
+
+def _decimal_sqrt(value):
+    from decimal import localcontext
+    with localcontext() as context:
+        context.prec = 140
+        return D(value).sqrt()
 
 
 def filter_run(count: int, seed: int) -> dict:
