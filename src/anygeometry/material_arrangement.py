@@ -763,6 +763,111 @@ def _compare_outgoing(chart, edge_segments, first, second) -> int:
     return (key_a > key_b) - (key_a < key_b)
 
 
+def _shoelace(points) -> Fraction:
+    return sum((a[0] * b[1] - a[1] * b[0] for a, b in zip(points, points[1:] + points[:1])), Fraction(0)) / 2
+
+
+def _segments_meet(p, q, r, t) -> bool:
+    """Closed 2-D segments ``[p, q]`` and ``[r, t]`` share a point (exact)."""
+    def orient(a, b, c):
+        value = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+        return (value > 0) - (value < 0)
+
+    def on(a, b, c):                                   # c on [a, b], given collinear
+        return min(a[0], b[0]) <= c[0] <= max(a[0], b[0]) and min(a[1], b[1]) <= c[1] <= max(a[1], b[1])
+    o1, o2, o3, o4 = orient(p, q, r), orient(p, q, t), orient(r, t, p), orient(r, t, q)
+    if o1 != o2 and o3 != o4 and 0 not in (o1, o2, o3, o4):
+        return True
+    return ((o1 == 0 and on(p, q, r)) or (o2 == 0 and on(p, q, t))
+            or (o3 == 0 and on(r, t, p)) or (o4 == 0 and on(r, t, q)))
+
+
+def _exact_planar_cells(domain, chains, edges, edge_segments, tolerance, native_area_tolerance, check):
+    """Cells of an all-straight planar arrangement, decided on exact stations (R1b step 2d, D3/D5).
+
+    Main's rules on exact values: a cycle's area is the exact shoelace area of
+    its stations in the plane chart (main: the same rational on rounded piece
+    ends); cycles with ``|area| <= tol^2`` are dropped. The probe is main's
+    (``16 * 2 tol`` along the chart left normal at the first edge's midpoint,
+    physical length from the float metric) and is certified to lie in the
+    interior of the face left of that half-edge: the segment from the midpoint
+    to the probe meets no other edge (exact segment tests in the chart);
+    otherwise the offset is halved (at most 60 times, then refused). Every
+    face lies wholly inside or outside the domain (the domain boundary is part
+    of the arrangement), so material is decided without a tolerance: the
+    probe strictly inside the outer loop and outside every hole (exact). Main
+    tested its uncertified probe with tolerance semantics, which made thin
+    cells (thinner than about 33 tol) depend on which edge started the cycle.
+    Hole ownership (smallest positive container, exact) and conservation
+    follow main's rules with exact areas.
+    """
+    from .exact_predicates import Outcome, point_in_polygon
+    chart = ExactPlane.from_plane(domain.support)
+    edge_uv = [tuple(chart.uv(point) for point in edge_segments[index]) for index in range(len(edges))]
+    boxes_lo = np.array([[min(float(a[k]), float(b[k])) for k in (0, 1)] for a, b in edge_uv]).reshape(-1, 2)
+    boxes_hi = np.array([[max(float(a[k]), float(b[k])) for k in (0, 1)] for a, b in edge_uv]).reshape(-1, 2)
+    magnitude = np.maximum(np.abs(boxes_lo), np.abs(boxes_hi)).max(axis=1, initial=0.)[:, None]
+    boxes_lo, boxes_hi = boxes_lo - (4 * _EPS * magnitude + 1e-300), boxes_hi + (4 * _EPS * magnitude + 1e-300)
+    u_vector, v_vector = np.asarray(domain.support.u_vector, float), np.asarray(domain.support.v_vector, float)
+
+    def polygon(chain):
+        return [edge_uv[e][0] if forward else edge_uv[e][1] for e, forward in chain]
+
+    def certified_probe(chain):
+        e, forward = chain[0]
+        a, b = edge_uv[e] if forward else edge_uv[e][::-1]
+        middle = ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
+        normal = (-(b[1] - a[1]), b[0] - a[0])
+        physical = float(np.linalg.norm(float(normal[0]) * u_vector + float(normal[1]) * v_vector))
+        scale = Fraction(32 * tolerance / physical)
+        for _ in range(61):                                      # 32 tol, halved
+            probe = (middle[0] + scale * normal[0], middle[1] + scale * normal[1])
+            lo = np.array([float(min(middle[k], probe[k])) for k in (0, 1)])
+            hi = np.array([float(max(middle[k], probe[k])) for k in (0, 1)])
+            pad = 4 * _EPS * max(1., float(np.max(np.abs(np.concatenate((lo, hi)))))) + 1e-300
+            near = np.flatnonzero(np.all((boxes_lo <= hi + pad) & (boxes_hi >= lo - pad), axis=1))
+            check()
+            if not any(other != e and _segments_meet(middle, probe, *edge_uv[other]) for other in near):
+                return probe
+            scale /= 2
+        raise GeometryError("cell probe not certified")
+
+    tol4 = Fraction(tolerance) ** 4
+    outer_uv = [chart.uv(stations.segment_of(path.curve)[0]) for path in domain.boundaries[0]]
+    holes_uv = [[chart.uv(stations.segment_of(path.curve)[0]) for path in loop] for loop in domain.boundaries[1:]]
+    cycles = []
+    for chain in chains:
+        area = _shoelace(polygon(chain))
+        if area * area <= tol4:                                  # |area| <= tol^2
+            continue
+        probe = certified_probe(chain)
+        material = (point_in_polygon(probe, outer_uv) is Outcome.ABOVE
+                    and all(point_in_polygon(probe, hole) is Outcome.BELOW for hole in holes_uv))
+        if material:
+            cycles.append((chain, area, probe))
+    positive = [item for item in cycles if item[1] > 0]
+    holes = [[] for _ in positive]
+    for chain, area, probe in cycles:
+        if area >= 0:
+            continue
+        containers = [i for i, (outer, _area, _probe) in enumerate(positive)
+                      if point_in_polygon(probe, polygon(outer)) is Outcome.ABOVE]
+        if not containers:
+            raise GeometryError("arrangement hole has no material owner")
+        owner = min(containers, key=lambda i: positive[i][1])
+        holes[owner].append(chain)
+    cells = tuple(ArrangementCell(chain, tuple(holes[index])) for index, (chain, _area, _probe) in enumerate(positive))
+
+    def boundary_area(loop):
+        return _shoelace([chart.uv(stations.segment_of(path.curve)[0]) for path in loop])
+    outer_area = boundary_area(domain.boundaries[0])
+    original = abs(outer_area) - sum(abs(boundary_area(loop)) for loop in domain.boundaries[1:])
+    retained = sum((item[1] for item in cycles), Fraction(0))
+    if not cells or abs(original - retained) > Fraction(native_area_tolerance):
+        raise GeometryError("arrangement failed material conservation")
+    return cells, float(retained), outer_area
+
+
 _NEIGHBOUR_OFFSETS = tuple(itertools.product((-1, 0, 1), repeat=3))
 
 
@@ -1069,6 +1174,11 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
                 raise GeometryError("tangent junction needs a certified higher-order chart")
             values.extend(sorted(group, key=lambda item: (0. if item[1] is None else item[1], item[2:])))
 
+    # D3/D5 on planes (robust-predicate R1b step 2d): when the domain and every
+    # edge are straight, cell areas, the drop threshold, probes, material and
+    # hole ownership and conservation are decided on the exact stations.
+    exact_cells = (exact and domain._exact_planar(domain.boundaries) and len(edge_segments) == len(edges))
+    exact_chains = []
     seen, cycles = set(), []
     for index in range(len(edges)):
         for forward in (True, False):
@@ -1094,6 +1204,9 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
                 if len(chain) > 2:
                     raise GeometryError("arrangement contains an unresolved bridge")
                 continue
+            if exact_cells:
+                exact_chains.append(tuple(chain))
+                continue
             loop = tuple(ArrangementPath(edges[e].curve if direction else edges[e].curve.subcurve(1., 0.))
                          for e, direction in chain)
             area = domain.area_loop(loop, native_area_tolerance*.05)
@@ -1109,6 +1222,11 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
             if material:
                 cycles.append((tuple(chain), loop, area))
 
+    if exact_cells:
+        cells, retained, outer_area = _exact_planar_cells(domain, exact_chains, edges, edge_segments,
+                                                          tolerance, native_area_tolerance, check)
+        return MaterialArrangement(domain.face_id, tuple(edges), cells, retained, tolerance,
+                                   native_area_tolerance, domain.support, -1 if outer_area < 0 else 1)
     positive = [item for item in cycles if item[2] > 0]
     holes = [[] for _ in positive]
     for chain, loop, area in cycles:

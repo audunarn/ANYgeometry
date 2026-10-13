@@ -175,6 +175,8 @@ INVENTORY: tuple[InventoryEntry, ...] = (
     _e("D3", "trimmed_charts", r"validate_trimmed_surface_charts_binding", text=r"area"),
     _e("D4", "material_arrangement", r"MaterialDomain\.from_model"),
     _e("D5", "material_arrangement", r"MaterialDomain\.left_probe"),
+    _e("D3", "material_arrangement", r"_exact_planar_cells|_shoelace", text=r"area|original|retained"),
+    _e("D5", "material_arrangement", r"_exact_planar_cells|_segments_meet", text=r"probe|meet|containers"),
     _e("D5", "material_arrangement", r"arrange_material", region=(r"middle = domain\.uv\(curve, \.5\)", r"holes\[owner\]\.append")),
     _e("D6", "material_arrangement", r"arrange_material", region=(r"endpoints = \[np\.asarray\(point\.position\)", r"endpoints\.append\(point\)")),
     _e("D7", "material_arrangement", r"arrange_material", region=(r"if endpoints:", r"splits = \[\[0\., 1\.\]")),

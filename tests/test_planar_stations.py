@@ -444,3 +444,65 @@ def test_vertices_with_a_curved_edge_keep_mains_order(monkeypatch):
     monkeypatch.setattr(module, "_compare_outgoing", forbidden)
     arrangement = arrange_material(MaterialDomain(1, plane, (circle,)), (chord,), tolerance=1e-9)
     assert len(arrangement.cells) == 2
+
+
+# --------------------------------------------------------------------------------- cells (step 2d, D3/D5)
+
+
+def _square_loop(points):
+    return tuple(ArrangementPath(LinePath((*a, 0.), (*b, 0.))) for a, b in zip(points, points[1:] + points[:1]))
+
+
+@pytest.mark.parametrize("gap", (1.2, 1.5, 2.5, 10., 40.))
+def test_thin_strips_do_not_depend_on_the_cycle_start(gap):
+    """A trace ``gap * tol`` above the bottom edge: main's uncertified probe (32 tol) crossed out of
+    the domain for some starting vertices (conservation failure) and not for others; the certified
+    probe classifies the strip the same way for every start and direction."""
+    plane = Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.))
+    tol = 1e-6
+    square = [(0., 0.), (4., 0.), (4., 4.), (0., 4.)]
+    for order in range(4):
+        outer = _square_loop(square[order:] + square[:order])
+        for ends in (((-1., gap * tol, 0.), (5., gap * tol, 0.)), ((5., gap * tol, 0.), (-1., gap * tol, 0.))):
+            trace = ArrangementPath(LinePath(*ends), owners=(1, 2))
+            arrangement = arrange_material(MaterialDomain(1, plane, (outer,)), (trace,), tolerance=tol,
+                                           area_tolerance=1e-12)
+            assert len(arrangement.cells) == 2
+
+
+def _island_arrangement(plane):
+    outer = tuple(ArrangementPath(LinePath(tuple(plane.evaluate(*a)), tuple(plane.evaluate(*b))))
+                  for a, b in zip(*(lambda q: (q, q[1:] + q[:1]))([(0., 0.), (4., 0.), (4., 4.), (0., 4.)])))
+    hole = tuple(ArrangementPath(LinePath(tuple(plane.evaluate(*a)), tuple(plane.evaluate(*b))))
+                 for a, b in zip(*(lambda q: (q, q[1:] + q[:1]))([(2.5, 2.5), (2.5, 3.5), (3.5, 3.5), (3.5, 2.5)])))
+    island = [(.5, .5), (1.5, .5), (1.5, 1.5), (.5, 1.5)]
+    traces = tuple(ArrangementPath(LinePath(tuple(plane.evaluate(*a)), tuple(plane.evaluate(*b))), owners=(1, k))
+                   for k, (a, b) in enumerate(zip(island, island[1:] + island[:1])))
+    return MaterialDomain(1, plane, (outer, hole)), traces
+
+
+@pytest.mark.parametrize("plane", (Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.)),
+                                   Plane((-1., -1., .3), (1., .2, 0.), (-.1, 1., .4))))
+def test_islands_and_holes_are_owned_as_on_main(plane):
+    """A trace square (island) inside a domain with a hole: the big cell owns the island's outer
+    cycle and the domain hole as holes, the island is its own cell (main's answer)."""
+    domain, traces = _island_arrangement(plane)
+    arrangement = arrange_material(domain, traces, tolerance=1e-9, area_tolerance=1e-12)
+    assert len(arrangement.cells) == 2
+    assert sorted(len(cell.holes) for cell in arrangement.cells) == [0, 2]     # island outline + domain hole (as main)
+    assert arrangement.area == 15.
+
+
+@pytest.mark.parametrize("direction", (-math.inf, math.inf))
+def test_cells_do_not_depend_on_evaluation_or_chart_rounding(monkeypatch, direction):
+    plane = Plane((-1., -1., .3), (1., .2, 0.), (-.1, 1., .4))
+    domain, traces = _island_arrangement(plane)
+    reference = arrange_material(domain, traces, tolerance=1e-9, area_tolerance=1e-12)
+    line_evaluate, local_uv, lstsq = LinePath.evaluate, Plane.local_uv, np.linalg.lstsq
+    monkeypatch.setattr(LinePath, "evaluate", lambda self, t: np.nextafter(line_evaluate(self, t), direction))
+    monkeypatch.setattr(Plane, "local_uv", lambda self, point: tuple(
+        math.nextafter(float(value), direction) for value in local_uv(self, point)))
+    monkeypatch.setattr(np.linalg, "lstsq", lambda *a, **k: (np.nextafter(lstsq(*a, **k)[0], direction),)
+                        + tuple(lstsq(*a, **k)[1:]))
+    nudged = arrange_material(domain, traces, tolerance=1e-9, area_tolerance=1e-12)
+    assert nudged.cells == reference.cells and nudged.area == reference.area
