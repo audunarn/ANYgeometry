@@ -236,3 +236,20 @@ def test_definition_value_fast_path_leaves_sequence_subclasses_alone():
 
     assert definition_value(L([1, True, "a", None])) == [1, True, "a", None]
     assert definition_value((1.5, 2, None, "x", False)) == [1.5, 2, None, "x", False]
+
+
+def test_definition_value_fast_path_uses_type_identity():
+    from dataclasses import dataclass
+    from anygeometry.definition_binding import definition_checksum, definition_value
+
+    class Meta(type):
+        def __eq__(cls, other):
+            return other is type(None)
+        __hash__ = type.__hash__
+
+    @dataclass(frozen=True)
+    class D(metaclass=Meta):
+        x: int
+
+    assert definition_value([D(1)]) == [{"type": D.__qualname__, "fields": {"x": 1}}]
+    definition_checksum([D(1)])                       # serialisable as on main

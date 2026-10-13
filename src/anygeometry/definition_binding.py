@@ -8,7 +8,10 @@ import json
 import numpy as np
 
 
-_PRIMITIVES = (str, int, float, bool, type(None))
+def _exact_primitive(item):
+    # Exactly the test _definition_value applies before returning an item
+    # unchanged, so the flat fast path expands every item as the recursion does.
+    return item is None or type(item) in (str, int, float, bool)
 
 
 def definition_value(value):
@@ -40,7 +43,7 @@ def _definition_value(value, memo):
     elif isinstance(value, (tuple,list)):
         # Flat runs of exact primitives (control coordinates, knot vectors)
         # are their own expansion: one list copy instead of a call per item.
-        if (type(value) is tuple or type(value) is list) and all(type(item) in _PRIMITIVES for item in value):
+        if (type(value) is tuple or type(value) is list) and all(_exact_primitive(item) for item in value):
             result = list(value)
         else:
             result = [_definition_value(item, memo) for item in value]
