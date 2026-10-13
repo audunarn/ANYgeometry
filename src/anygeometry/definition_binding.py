@@ -40,7 +40,7 @@ def _definition_value(value, memo):
     elif isinstance(value, (tuple,list)):
         # Flat runs of exact primitives (control coordinates, knot vectors)
         # are their own expansion: one list copy instead of a call per item.
-        if all(type(item) in _PRIMITIVES for item in value):
+        if (type(value) is tuple or type(value) is list) and all(type(item) in _PRIMITIVES for item in value):
             result = list(value)
         else:
             result = [_definition_value(item, memo) for item in value]

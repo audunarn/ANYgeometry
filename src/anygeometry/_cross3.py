@@ -26,13 +26,10 @@ _GAUSS_LEGENDRE = {}
 def _gauss_legendre(count):
     """``numpy.polynomial.legendre.leggauss(count)``, computed once per count.
 
-    The returned arrays are read-only; the values are identical to a fresh call.
+    Each call returns fresh copies of the cached rule, so callers own their
+    arrays exactly as with ``leggauss`` and cannot alter the cache.
     """
     rule = _GAUSS_LEGENDRE.get(count)
     if rule is None:
-        nodes, weights = np.polynomial.legendre.leggauss(count)
-        nodes.flags.writeable = False
-        weights.flags.writeable = False
-        rule = _GAUSS_LEGENDRE[count] = (nodes, weights)
-    return rule
-
+        rule = _GAUSS_LEGENDRE[count] = np.polynomial.legendre.leggauss(count)
+    return rule[0].copy(), rule[1].copy()

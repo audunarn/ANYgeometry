@@ -139,12 +139,14 @@ def test_ellipse_scalar_route_matches_the_array_route():
 
 
 @pytest.mark.parametrize("count", [16, 24, 64])
-def test_cached_gauss_legendre_rules_are_identical_and_read_only(count):
+def test_cached_gauss_legendre_rules_are_identical_fresh_copies(count):
     nodes, weights = _gauss_legendre(count)
     fresh = np.polynomial.legendre.leggauss(count)
     assert np.array_equal(nodes, fresh[0]) and np.array_equal(weights, fresh[1])
-    with pytest.raises(ValueError):
-        nodes[0] = 0.
+    nodes[:] = 0.
+    weights[:] = 0.                                   # the caller's copy, not the cache
+    again = _gauss_legendre(count)
+    assert np.array_equal(again[0], fresh[0]) and np.array_equal(again[1], fresh[1])
 
 
 # Second review round: NumPy floating-point error modes and forged shapes.
@@ -223,3 +225,14 @@ def test_vertex_lookup_keeps_float32_norm_behaviour():
         return result
 
     assert run(points, True) == run(points, False)
+
+
+def test_definition_value_fast_path_leaves_sequence_subclasses_alone():
+    from anygeometry.definition_binding import definition_value
+
+    class L(list):
+        def __len__(self):
+            raise RuntimeError("unexpected len")
+
+    assert definition_value(L([1, True, "a", None])) == [1, True, "a", None]
+    assert definition_value((1.5, 2, None, "x", False)) == [1.5, 2, None, "x", False]
