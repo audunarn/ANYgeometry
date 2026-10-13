@@ -286,3 +286,17 @@ def test_ray_dedupe_is_mains_rule_decided_exactly():
         b = ray(tuple(rng.uniform(-1, 1) for _ in range(3)))
         assert _same_ray(a, b) is bool(np.linalg.norm(a[1] - b[1]) <= 64 * eps)
         assert _same_ray(a, a)
+
+
+def test_seams_keep_mains_parameterization():
+    """Review regression: an oblique seam keeps main's length, so the 32-eps parameter merge in
+    clipping sees main's crossing separations (a longer seam merged two crossings and dropped a seam)."""
+    from anygeometry.material_arrangement import ArrangementPoint
+    plane = Plane((0., 0., 0.), (1., 1., 0.), (-1., 1., 0.))
+    uv = [(-6e-15, -5e-11), (6e-15, -5e-11), (6e-15, 5e-11), (-6e-15, 5e-11)]
+    boundary = (tuple(ArrangementPath(LinePath(tuple(plane.evaluate(*a)), tuple(plane.evaluate(*b))))
+                      for a, b in zip(uv, uv[1:] + uv[:1])),)
+    arrangement = arrange_material(MaterialDomain(1, plane, boundary), (), tolerance=1e-18,
+                                   points=(ArrangementPoint((0., 0., 0.)),))
+    assert (len(arrangement.cells), len(arrangement.paths),
+            sum(path.decomposition for path in arrangement.paths)) == (4, 12, 4)       # main's answer

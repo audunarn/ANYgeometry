@@ -718,19 +718,20 @@ def _add_exact_planar_seams(domain, boundaries, paths, segments, points, toleran
     boxes = [path.curve.bounds() for path in boundaries]
     lower = np.min([box[0] for box in boxes], axis=0)
     upper = np.max([box[1] for box in boxes], axis=0)
-    extent = Fraction(max(float(np.linalg.norm(upper-lower)), 1.))   # a length covering the domain
-    u, v = exact_vector(support.u_vector), exact_vector(support.v_vector)
-    normal = (u[1]*v[2]-u[2]*v[1], u[2]*v[0]-u[0]*v[2], u[0]*v[1]-u[1]*v[0])
-    perpendicular = (normal[1]*u[2]-normal[2]*u[1], normal[2]*u[0]-normal[0]*u[2], normal[0]*u[1]-normal[1]*u[0])
-    for station, position in sorted(endpoints, key=lambda item: (tuple(float(value) for value in item[1]),
-                                                                  item[0] or ())):
+    extent = max(float(np.linalg.norm(upper-lower)), 1.)
+    normal = np.cross(support.u_vector, support.v_vector)
+    normal /= np.linalg.norm(normal)
+    authored = np.asarray(support.u_vector)/np.linalg.norm(support.u_vector)
+    # Main's seam: through the end point along the authored direction and its
+    # physical perpendicular, as float unit vectors scaled by ``extent``. The
+    # same parameterization is kept (clipping's 32-eps parameter windows depend
+    # on it); the seam passes exactly through the station.
+    offsets = [exact_vector(extent*direction) for direction in (authored, np.cross(normal, authored))]
+    for station, position in sorted(endpoints, key=lambda item: tuple(item[1])):   # main's (stable) order
         point = station if station is not None else exact_vector(position)
-        # Preserve the authored first direction and its physical perpendicular
-        # (main's rule); the seam passes exactly through the station.
-        for direction in (u, perpendicular):
-            scale = extent / max(abs(value) for value in direction)      # |scale d| >= extent
-            seam = stations.Segment(tuple(p - scale*d for p, d in zip(point, direction)),
-                                    tuple(p + scale*d for p, d in zip(point, direction)))
+        for offset in offsets:
+            seam = stations.Segment(tuple(p - d for p, d in zip(point, offset)),
+                                    tuple(p + d for p, d in zip(point, offset)))
             for piece in _clip_line_exact(domain, stations.to_line(seam), tolerance, check, segment=seam):
                 segments[len(paths)] = piece
                 paths.append(ArrangementPath(stations.to_line(piece), decomposition=True))
