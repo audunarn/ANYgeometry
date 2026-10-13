@@ -320,10 +320,12 @@ class MaterialDomain:
         return ExactPlane.from_plane(self.support).uv(position)
 
     def contains_loop(self, loop, uv, tolerance, *, boundary=True):
-        if self._exact_planar((loop,)):
-            exact_uv = uv if isinstance(uv, tuple) and all(type(v) is Fraction for v in uv) \
-                else tuple(Fraction(float(v)) for v in uv)
-            return _contains_loop_exact(ExactPlane.from_plane(self.support), loop, exact_uv, tolerance,
+        # Exact route (robust-predicate R1b): only for an exact (rational) query
+        # point on an all-straight Plane domain. A float query point is a
+        # rounded chart output, so it keeps the float route unchanged.
+        if (len(uv) == 2 and all(type(v) is Fraction for v in uv)
+                and self._exact_planar(self.boundaries) and self._exact_planar((loop,))):
+            return _contains_loop_exact(ExactPlane.from_plane(self.support), loop, tuple(uv), tolerance,
                                         boundary=boundary)
         winding = 0
         for index, path in enumerate(loop):
@@ -957,12 +959,15 @@ def _exact_point_on_segment(curve, world, tolerance) -> bool:
     """Exact replica of ``point_parameters(LinePath, world, tolerance=...)`` being non-empty."""
     start, end = exact_vector(curve.start), exact_vector(curve.end)
     tol2 = Fraction(tolerance) ** 2
-    if any(sum((a - b) ** 2 for a, b in zip(end_point, world)) <= tol2 for end_point in (start, end)):
-        return True
     direction = tuple(b - a for a, b in zip(start, end))
     length2 = exact_dot(direction, direction)
-    if length2 == 0:
+    # Refused before the endpoint test, on the float route's own condition (its
+    # float squared length, a function of the stored doubles only).
+    float_direction = np.asarray(curve.end, dtype=float) - np.asarray(curve.start, dtype=float)
+    if length2 == 0 or float(float_direction @ float_direction) == 0:
         raise GeometryError("degenerate arrangement line")
+    if any(sum((a - b) ** 2 for a, b in zip(end_point, world)) <= tol2 for end_point in (start, end)):
+        return True
     parameter = exact_dot(tuple(p - a for p, a in zip(world, start)), direction) / length2
     tolerance_exact = Fraction(tolerance)
     if not (-tolerance_exact <= parameter <= 1 + tolerance_exact):
