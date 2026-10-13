@@ -226,3 +226,63 @@ def test_float32_curved_points_switch_to_mains_scan():
     assert lookup.find(None, p) is None
     lookup.add(None, p)
     assert lookup.find(None, q) == main.find(q) == 1
+
+
+# --------------------------------------------------------------------------------- seams (step 2b, D6/D7)
+
+
+def dangling_arrangement(plane):
+    """A square with one trace from the boundary to an interior end: two seams through the end."""
+    square = [(0., 0.), (2., 0.), (2., 2.), (0., 2.)]
+    boundary = (tuple(ArrangementPath(LinePath(tuple(plane.evaluate(*a)), tuple(plane.evaluate(*b))))
+                      for a, b in zip(square, square[1:] + square[:1])),)
+    domain = MaterialDomain(1, plane, boundary)
+    trace = ArrangementPath(LinePath(tuple(plane.evaluate(0., .7)), tuple(plane.evaluate(1.3, 1.1))), owners=(1, 2))
+    return domain, (trace,)
+
+
+@pytest.mark.parametrize("plane", (Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.)),
+                                   Plane((-1., -1., .3), (1., .2, 0.), (-.1, 1., .4))))
+def test_interior_trace_end_gets_two_seams_through_its_station(plane):
+    domain, traces = dangling_arrangement(plane)
+    arrangement = arrange_material(domain, traces, tolerance=1e-9)
+    assert (len(arrangement.cells), len(arrangement.paths)) == (5, 14)       # as main: 4 seam quadrants, one split by the trace
+    end = st.segment_of(traces[0].curve)[1]
+    seams = [path for path in arrangement.paths if path.decomposition]
+    touching = [path for path in seams if end in (tuple(map(Fraction, path.curve.start)),
+                                                  tuple(map(Fraction, path.curve.end)))
+                or st.rounded(end) in (path.curve.start, path.curve.end)]
+    assert len(touching) >= 3                          # the seam pieces meeting at the station
+
+
+@pytest.mark.parametrize("direction", (-math.inf, math.inf))
+def test_seams_do_not_depend_on_evaluation_or_chart_rounding(monkeypatch, direction):
+    plane = Plane((-1., -1., .3), (1., .2, 0.), (-.1, 1., .4))
+    domain, traces = dangling_arrangement(plane)
+    reference = summary(arrange_material(domain, traces, tolerance=1e-9))
+    line_evaluate, local_uv = LinePath.evaluate, Plane.local_uv
+    monkeypatch.setattr(LinePath, "evaluate", lambda self, t: np.nextafter(line_evaluate(self, t), direction))
+    monkeypatch.setattr(Plane, "local_uv", lambda self, point: tuple(
+        math.nextafter(float(value), direction) for value in local_uv(self, point)))
+    assert summary(arrange_material(domain, traces, tolerance=1e-9)) == reference
+
+
+def test_ray_dedupe_is_mains_rule_decided_exactly():
+    from anygeometry.material_arrangement import _same_ray
+    eps = np.finfo(float).eps
+
+    def ray(direction):
+        exact = tuple(map(Fraction, direction))
+        unit = np.asarray(direction) / np.linalg.norm(direction)
+        return exact, unit
+    base = ray((1., 0., 0.))
+    assert _same_ray(base, ray((3., 0., 0.)))
+    assert not _same_ray(base, ray((-1., 0., 0.)))
+    assert _same_ray(base, ray((1., 60 * eps, 0.)))
+    assert not _same_ray(base, ray((1., 68 * eps, 0.)))
+    rng = random.Random(3)
+    for _ in range(500):                               # generic directions: same answer as main's float rule
+        a = ray(tuple(rng.uniform(-1, 1) for _ in range(3)))
+        b = ray(tuple(rng.uniform(-1, 1) for _ in range(3)))
+        assert _same_ray(a, b) is bool(np.linalg.norm(a[1] - b[1]) <= 64 * eps)
+        assert _same_ray(a, a)

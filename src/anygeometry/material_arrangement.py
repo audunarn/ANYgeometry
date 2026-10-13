@@ -597,7 +597,7 @@ def _contains_point_exact(domain, point, tolerance):
             and not any(domain.contains_loop(loop, uv, tolerance, boundary=False) for loop in domain.boundaries[1:]))
 
 
-def _clip_line_exact(domain, curve, tolerance, check):
+def _clip_line_exact(domain, curve, tolerance, check, segment=None):
     """Exact stations of ``_clip`` for a straight curve on a Plane support (R1b step 2a).
 
     The same rule as ``_clip_intervals``: split at every junction with the
@@ -607,7 +607,7 @@ def _clip_line_exact(domain, curve, tolerance, check):
     boundaries keep the float predicate (their parameters enter as exact
     values of the returned doubles).
     """
-    segment = stations.segment_of(curve)
+    segment = stations.segment_of(curve) if segment is None else segment
     parameters = [Fraction(0), Fraction(1)]
     for loop in domain.boundaries:
         for boundary in loop:
@@ -628,6 +628,112 @@ def _clip_line_exact(domain, curve, tolerance, check):
         if inside:
             pieces.append(stations.sub(segment, a, b))
     return pieces
+
+
+def _same_ray(first, second) -> bool:
+    """Main's ray dedupe ``norm(unit_a - unit_b) <= 64 eps``; exactly for two exact directions.
+
+    ``|u_a - u_b|^2 = 2 - 2 cos``, so the test is ``a . b >= k |a| |b|`` with
+    ``k = 1 - (64 eps)^2 / 2``, decided through squares. Otherwise (a curved
+    piece's tangent) main's float rule on the float units.
+    """
+    (exact_a, unit_a), (exact_b, unit_b) = first, second
+    if exact_a is not None and exact_b is not None:
+        dot = exact_dot(exact_a, exact_b)
+        k = 1 - (64 * _EPS_EXACT) ** 2 / 2
+        return dot >= 0 and dot * dot >= k * k * exact_dot(exact_a, exact_a) * exact_dot(exact_b, exact_b)
+    return bool(np.linalg.norm(unit_a - unit_b) <= 64 * _EPS)
+
+
+def _add_exact_planar_seams(domain, boundaries, paths, segments, points, tolerance, check):
+    """Decomposition seams on a Plane support through exact stations (R1b step 2b, D6/D7).
+
+    Main's rules: an interior trace end (on no boundary) with at most one ray
+    gets two seams, along the authored ``u`` direction and its in-plane
+    perpendicular, unless an earlier end lies within ``tol``. Straight pieces
+    decide on their exact stations: boundary membership and incidence through
+    the exact point parameters, rays as exact directions (dedupe through
+    squares), end dedupe by exact distance; a seam is the exact segment through
+    the station with exact rational directions ``u`` and ``(u x v) x u``. Points
+    of curved pieces keep main's float rules.
+    """
+    tol2 = Fraction(tolerance) ** 2
+
+    def on_boundary(exact_point, float_point):
+        for index, boundary in enumerate(boundaries):
+            if exact_point is not None and index in segments:
+                hit = stations.point_parameters(segments[index], exact_point, tolerance)
+            else:
+                hit = point_parameters(boundary.curve, float_point, tolerance=tolerance)
+            if hit:
+                return True
+        return False
+
+    def near(first, second):
+        if first[0] is not None and second[0] is not None:
+            return stations.distance2(first[0], second[0]) <= tol2
+        return bool(np.linalg.norm(first[1] - second[1]) <= tolerance)
+
+    endpoints = []                                    # (exact station or None, float position)
+    for point in points:
+        item = (exact_vector(point.position), np.asarray(point.position))
+        if not on_boundary(*item):
+            endpoints.append(item)
+    traces = range(len(boundaries), len(paths))
+    for index in traces:
+        for t in (0, 1):
+            if index in segments:
+                station = segments[index][t]
+                item = (station, np.asarray(stations.rounded(station)))
+            else:
+                item = (None, paths[index].curve.evaluate(float(t)))
+            if on_boundary(*item):
+                continue
+            rays = []
+            for other in traces:
+                exact_other = item[0] is not None and other in segments
+                parameters = (stations.point_parameters(segments[other], item[0], tolerance) if exact_other
+                              else point_parameters(paths[other].curve, item[1], tolerance=tolerance))
+                for parameter in parameters:
+                    if exact_other:
+                        start, end = segments[other]
+                        direction = tuple(b - a for a, b in zip(start, end))
+                        tangent = np.asarray(stations.rounded(direction))
+                    else:
+                        direction, tangent = None, paths[other].curve.derivative(parameter)
+                    length = np.linalg.norm(tangent)
+                    if length == 0 or (direction is not None and not any(direction)):
+                        raise GeometryError("interior junction needs a regular chart")
+                    unit = tangent/length
+                    for sign in ((-1,) if parameter == 1 else (1,) if parameter == 0 else (-1, 1)):
+                        ray = (None if direction is None else tuple(sign*value for value in direction), sign*unit)
+                        if not any(_same_ray(ray, old) for old in rays):
+                            rays.append(ray)
+            if len(rays) > 1:
+                continue
+            if not any(near(item, old) for old in endpoints):
+                endpoints.append(item)
+
+    support = domain.support
+    boxes = [path.curve.bounds() for path in boundaries]
+    lower = np.min([box[0] for box in boxes], axis=0)
+    upper = np.max([box[1] for box in boxes], axis=0)
+    extent = Fraction(max(float(np.linalg.norm(upper-lower)), 1.))   # a length covering the domain
+    u, v = exact_vector(support.u_vector), exact_vector(support.v_vector)
+    normal = (u[1]*v[2]-u[2]*v[1], u[2]*v[0]-u[0]*v[2], u[0]*v[1]-u[1]*v[0])
+    perpendicular = (normal[1]*u[2]-normal[2]*u[1], normal[2]*u[0]-normal[0]*u[2], normal[0]*u[1]-normal[1]*u[0])
+    for station, position in sorted(endpoints, key=lambda item: (tuple(float(value) for value in item[1]),
+                                                                  item[0] or ())):
+        point = station if station is not None else exact_vector(position)
+        # Preserve the authored first direction and its physical perpendicular
+        # (main's rule); the seam passes exactly through the station.
+        for direction in (u, perpendicular):
+            scale = extent / max(abs(value) for value in direction)      # |scale d| >= extent
+            seam = stations.Segment(tuple(p - scale*d for p, d in zip(point, direction)),
+                                    tuple(p + scale*d for p, d in zip(point, direction)))
+            for piece in _clip_line_exact(domain, stations.to_line(seam), tolerance, check, segment=seam):
+                segments[len(paths)] = piece
+                paths.append(ArrangementPath(stations.to_line(piece), decomposition=True))
 
 
 _NEIGHBOUR_OFFSETS = tuple(itertools.product((-1, 0, 1), repeat=3))
@@ -737,54 +843,42 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
     for trace in traces:
         add_clipped(trace, trace.curve)
 
-    # Interior-ended traces need material decomposition seams. Their physical
-    # directions must not inherit scale/shear from an affine support chart.
-    endpoints = [np.asarray(point.position) for point in points
-                 if not any(point_parameters(boundary.curve, point.position, tolerance=tolerance)
-                            for boundary in boundaries)]
-    for path in paths[len(boundaries):]:
-        for t in (0., 1.):
-            point = path.curve.evaluate(t)
-            if any(point_parameters(boundary.curve, point, tolerance=tolerance) for boundary in boundaries):
-                continue
-            rays = []
-            for other in paths[len(boundaries):]:
-                for parameter in point_parameters(other.curve, point, tolerance=tolerance):
-                    tangent = other.curve.derivative(parameter)
-                    length = np.linalg.norm(tangent)
-                    if length == 0:
-                        raise GeometryError("interior junction needs a regular chart")
-                    tangent = tangent/length
-                    for sign in ((-1,) if parameter == 1 else (1,) if parameter == 0 else (-1, 1)):
-                        ray = sign*tangent
-                        if not any(np.linalg.norm(ray-old) <= 64*np.finfo(float).eps for old in rays):
-                            rays.append(ray)
-            if len(rays) > 1:
-                continue
-            if not any(np.linalg.norm(point-old) <= tolerance for old in endpoints):
-                endpoints.append(point)
-    if isinstance(domain.support, Plane):
-        boxes=[path.curve.bounds() for path in boundaries]
-        lower=np.min([box[0] for box in boxes],axis=0)
-        upper=np.max([box[1] for box in boxes],axis=0)
-        extent=max(float(np.linalg.norm(upper-lower)),1.)
-        normal=np.cross(domain.support.u_vector,domain.support.v_vector)
-        normal/=np.linalg.norm(normal)
-        authored=np.asarray(domain.support.u_vector)/np.linalg.norm(domain.support.u_vector)
-        for point in sorted(endpoints, key=lambda value: tuple(value)):
-            # Preserve the authored first direction and its physical
-            # perpendicular. An affine chart's sheared second direction must
-            # not introduce artificial acute wedges into the material cells.
-            for direction in (authored,np.cross(normal,authored)):
-                seam = LinePath(tuple(point-extent*direction),tuple(point+extent*direction))
-                add_clipped(ArrangementPath(seam, decomposition=True), seam)
-    elif endpoints:
-        support = domain.support
-        for point in sorted(endpoints, key=lambda value: tuple(value)):
-            u, _v = support.local_uv(point)
-            seam = LinePath(tuple(support.evaluate(u, -1)), tuple(support.evaluate(u, 2)))
-            paths.extend(ArrangementPath(curve, decomposition=True)
-                         for curve in _clip(domain, seam, tolerance, check))
+    if exact:
+        _add_exact_planar_seams(domain, boundaries, paths, segments, points, tolerance, check)
+    else:
+        # Interior-ended traces need material decomposition seams. Their physical
+        # directions must not inherit scale/shear from an affine support chart.
+        endpoints = [np.asarray(point.position) for point in points
+                     if not any(point_parameters(boundary.curve, point.position, tolerance=tolerance)
+                                for boundary in boundaries)]
+        for path in paths[len(boundaries):]:
+            for t in (0., 1.):
+                point = path.curve.evaluate(t)
+                if any(point_parameters(boundary.curve, point, tolerance=tolerance) for boundary in boundaries):
+                    continue
+                rays = []
+                for other in paths[len(boundaries):]:
+                    for parameter in point_parameters(other.curve, point, tolerance=tolerance):
+                        tangent = other.curve.derivative(parameter)
+                        length = np.linalg.norm(tangent)
+                        if length == 0:
+                            raise GeometryError("interior junction needs a regular chart")
+                        tangent = tangent/length
+                        for sign in ((-1,) if parameter == 1 else (1,) if parameter == 0 else (-1, 1)):
+                            ray = sign*tangent
+                            if not any(np.linalg.norm(ray-old) <= 64*np.finfo(float).eps for old in rays):
+                                rays.append(ray)
+                if len(rays) > 1:
+                    continue
+                if not any(np.linalg.norm(point-old) <= tolerance for old in endpoints):
+                    endpoints.append(point)
+        if endpoints:
+            support = domain.support
+            for point in sorted(endpoints, key=lambda value: tuple(value)):
+                u, _v = support.local_uv(point)
+                seam = LinePath(tuple(support.evaluate(u, -1)), tuple(support.evaluate(u, 2)))
+                paths.extend(ArrangementPath(curve, decomposition=True)
+                             for curve in _clip(domain, seam, tolerance, check))
 
     splits = [[0., 1.] for _ in paths]
     for index, path in enumerate(paths):

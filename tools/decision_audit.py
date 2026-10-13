@@ -176,7 +176,9 @@ INVENTORY: tuple[InventoryEntry, ...] = (
     _e("D5", "material_arrangement", r"MaterialDomain\.left_probe"),
     _e("D5", "material_arrangement", r"arrange_material", region=(r"middle = domain\.uv\(curve, \.5\)", r"holes\[owner\]\.append")),
     _e("D6", "material_arrangement", r"arrange_material", region=(r"endpoints = \[np\.asarray\(point\.position\)", r"endpoints\.append\(point\)")),
-    _e("D7", "material_arrangement", r"arrange_material", region=(r"if isinstance\(domain\.support, Plane\):", r"splits = \[\[0\., 1\.\]")),
+    _e("D7", "material_arrangement", r"arrange_material", region=(r"if endpoints:", r"splits = \[\[0\., 1\.\]")),
+    _e("D6", "material_arrangement", r"_add_exact_planar_seams|_same_ray"),
+    _e("D7", "material_arrangement", r"_add_exact_planar_seams", text=r"Segment\(|_clip_line_exact"),
     _e("D8", "material_arrangement", r"arrange_material", region=(r"splits = \[\[0\., 1\.\]", r"splits\[first\]\.append\(Fraction")),
     _e("D8", "member_arrangements", r"plan_member_arrangements", text=r"evaluate\(parameter\)"),
     # Group E: support/coincidence certificates, query-route classification.
