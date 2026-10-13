@@ -246,8 +246,10 @@ def test_inferred_planar_supports_use_the_exact_vertex_plane():
                                           close=True))
     b = model.add_plate(tuple(model.add_points(((0., .25, -.75), (0., .75, -.25), (0., .75, 1.75), (0., .25, 1.25)))))
     first, second = model.handle("face", a), model.handle("face", b)
-    assert query_intersection(model, first, second).kind is not IntersectionKind.DISJOINT
-    assert query_intersection(model, first, second).kind is query_intersection(model, second, first).kind
+    forward, reverse = query_intersection(model, first, second), query_intersection(model, second, first)
+    assert forward.kind is reverse.kind is IntersectionKind.CROSS
+    witnesses = sorted(forward.components[0].witnesses)
+    np.testing.assert_allclose(witnesses, [(0., .25, .25), (0., .75, .75)], atol=1e-15)
 
 
 def test_tolerance_comes_from_stored_vertices_only(monkeypatch):
@@ -286,3 +288,29 @@ def test_holes_must_lie_inside_the_outer_loop_and_not_nest():
     assert not region_is_simple([outer, [(1, 1), (3, 1), (3, 3), (1, 3)],
                                  [(1.5, 1.5), (2.5, 1.5), (2.5, 2.5), (1.5, 2.5)]])                 # nested
     assert region_is_simple([outer, [(1, 1), (2, 1), (2, 2), (1, 2)], [(3, 3), (3.5, 3), (3.5, 3.5)]])
+
+
+# ----------------------------------------------------------------------------------- review regressions (R1a round 3)
+
+
+def test_approximately_planar_inferred_faces_keep_mains_fitted_plane_decision():
+    """A warped topology-backed face (z = 5e-9 x y, within the planarity tolerance) is decided on
+    its fitted plane, as main did (DISJOINT); substituting a vertex plane answered CROSS."""
+    model = GeometryModel()
+    a = model.add_face(model.add_polyline(model.add_points(((0., 0., 0.), (1., 0., 0.), (1., 1., 5e-9), (0., 1., 0.))),
+                                          close=True))
+    b = model.add_plate(tuple(model.add_points(((.5, .25, -1.), (.5, .75, -1.), (.5, .75, 5e-10), (.5, .25, 5e-10)))))
+    first, second = model.handle("face", a), model.handle("face", b)
+    assert query_intersection(model, first, second).kind is IntersectionKind.DISJOINT
+    assert query_intersection(model, second, first).kind is IntersectionKind.DISJOINT
+
+
+def test_inferred_faces_report_uv_in_the_fitted_chart():
+    from anygeometry.intersections import _qualified_face_plane
+    model = GeometryModel()
+    face = model.add_face(model.add_polyline(model.add_points(((0., 0., 0.), (1., 0., 1.), (1., 1., 2.), (0., 1., 1.))),
+                                             close=True))
+    result = clip_line_to_face(model, face, (.5, .5, 3.), (0., 0., -1.))
+    assert result.kind is IntersectionKind.CROSS
+    expected = _qualified_face_plane(model, face).local_uv(np.array((.5, .5, 1.)))
+    np.testing.assert_allclose(result.components[0].second_parameter, expected, atol=1e-12)

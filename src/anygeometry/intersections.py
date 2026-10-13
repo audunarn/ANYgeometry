@@ -131,15 +131,7 @@ def clip_line_to_face(
     # the face loops are mapped to exact chart coordinates of the stored
     # vertices, the line is the exact line of the given doubles, and the
     # region tests are exact rational ray parity. Floats are outputs only.
-    try:
-        exact_plane = _exact_face_support(geometry, face_id, plane)
-    except GeometryError:
-        return IntersectionResult(
-            IntersectionKind.UNSUPPORTED,
-            diagnostics=("face_line_clipping_requires_a_planar_support",),
-            second_parent=face_handle,
-            tolerance_used=tolerance_used,
-        )
+    exact_plane, report_plane = _exact_face_support(geometry, face_id, plane)
     region = _exact_face_region(geometry, face, exact_plane)
     if not region_is_simple(region):
         return IntersectionResult(
@@ -154,8 +146,8 @@ def clip_line_to_face(
     def component_for_station(parameter, *, on_plane=False) -> IntersectionComponent:
         world = line.at(parameter)
         if on_plane:                                   # coplanar: reported on the support plane, as before
-            world = exact_plane.world(*exact_plane.uv(world))
-        uv = to_float(exact_plane.uv(world))
+            world = report_plane.world(*report_plane.uv(world))
+        uv = to_float(report_plane.uv(world))
         distance = _physical(parameter, squared_speed)
         return IntersectionComponent(
             (to_float(world),),
@@ -202,7 +194,7 @@ def clip_line_to_face(
     for lower, upper in intervals:
         # As before, coplanar witnesses are reported on the support plane
         # (the line itself may lie off it within tolerance).
-        worlds = tuple(exact_plane.world(*exact_plane.uv(line.at(end))) for end in (lower, upper))
+        worlds = tuple(report_plane.world(*report_plane.uv(line.at(end))) for end in (lower, upper))
         line_parameters = (_physical(lower, squared_speed), _physical(upper, squared_speed))
         line_components.append(
             IntersectionComponent(
@@ -210,7 +202,7 @@ def clip_line_to_face(
                 IntersectionQuality.VERIFIED_APPROXIMATE,
                 first_parameter_range=IntersectionParameterRange(*line_parameters),
                 first_parameter_path=tuple((value,) for value in line_parameters),
-                second_parameter_path=tuple(to_float(exact_plane.uv(world)) for world in worlds),
+                second_parameter_path=tuple(to_float(report_plane.uv(world)) for world in worlds),
                 direction=unit_direction,
                 second_subparent=face_handle,
             )
@@ -238,33 +230,32 @@ def clip_line_to_face(
     )
 
 
-def _exact_face_support(geometry: GeometryModel, face_id: int, plane: Plane) -> "ExactPlane":
-    """The exact plane the exact planar route decides on.
+def _exact_face_support(geometry: GeometryModel, face_id: int, plane: Plane) -> tuple:
+    """``(decision_plane, report_plane)`` for the exact planar route.
 
-    A stored ``Plane`` is used as stored. An inferred support (no surface or a
-    straight topology-backed Coons patch, already accepted by
-    ``_qualified_face_plane``) is replaced by the canonical exact plane through
-    the stored loop vertices, and its planarity is decided exactly: every
-    vertex within the surface-residual tolerance of that plane (through
-    squares). The SVD plane is never treated as exact. Raises ``GeometryError``
-    when the exact planarity test fails.
+    * A stored ``Plane``: decided exactly on it; reported in its chart.
+    * An inferred support (``plane`` = the fitted plane ``_qualified_face_plane``
+      accepted) whose stored loop vertices lie **exactly** on the canonical
+      vertex plane (rational test): decided on that exact plane (certified);
+      reported in the fitted chart, as before.
+    * An inferred support that is only approximately planar: decided exactly on
+      the fitted plane's stored doubles, as main decided on it. The fitted plane
+      comes from an SVD, so this case is outside the certified gate (reported,
+      not refused, to keep main's answers).
     """
     face = geometry.faces[face_id]
     if isinstance(face.surface, Plane):
-        return ExactPlane.from_plane(face.surface)
-    points = [geometry.vertices[geometry.oriented_start_vertex(item)].position for item in face.loop]
-    exact_plane = canonical_face_plane(points)
-    if exact_plane is None:
-        raise GeometryError(f"face {face_id} is not planar")
-    residual = exact(geometry.tolerance.effective_surface_residual(_face_length_scale(geometry, face_id)))
-    scale = exact_dot(exact_plane.normal, exact_plane.normal)
-    for loop in (face.loop,) + face.holes:
-        for item in loop:
-            offset = exact_dot(exact_plane.normal, exact_vector(geometry.vertices[geometry.oriented_start_vertex(item)].position)) - exact_plane.offset()
-            if offset * offset > residual * residual * scale:
-                raise GeometryError(f"face {face_id} is not planar")
-    return exact_plane
-
+        exact_plane = ExactPlane.from_plane(face.surface)
+        return exact_plane, exact_plane
+    fitted = ExactPlane.from_plane(plane)
+    points = [geometry.vertices[geometry.oriented_start_vertex(item)].position
+              for loop in (face.loop,) + face.holes for item in loop]
+    canonical = canonical_face_plane([geometry.vertices[geometry.oriented_start_vertex(item)].position
+                                      for item in face.loop])
+    if canonical is not None and all(
+            exact_dot(canonical.normal, exact_vector(point)) == canonical.offset() for point in points):
+        return canonical, fitted
+    return fitted, fitted
 
 def _exact_unit(vector) -> tuple:
     """Correctly rounded unit vector of an exact non-zero vector (no underflow)."""
@@ -2593,13 +2584,8 @@ def _query_planar_faces(
     # each face is clipped against it exactly, and every interval comparison
     # with the tolerance is exact. The rounded witness and unit direction of
     # the support predicate only define the reported line parameters.
-    try:
-        first_exact = _exact_face_support(geometry, first.id, first_plane)
-        second_exact = _exact_face_support(geometry, second.id, second_plane)
-    except GeometryError as error:
-        return _qualified_result(
-            geometry, first, second, IntersectionKind.UNSUPPORTED, diagnostics=(str(error),), tolerance_used=tolerance,
-        )
+    first_exact, _ = _exact_face_support(geometry, first.id, first_plane)
+    second_exact, second_report = _exact_face_support(geometry, second.id, second_plane)
     line = plane_plane_line(first_exact, second_exact)
     if line is None:
         return _qualified_result(
@@ -2646,7 +2632,7 @@ def _query_planar_faces(
                 (to_float(witness),),
                 IntersectionQuality.VERIFIED_APPROXIMATE,
                 first_parameter=(reported(parameter),),
-                second_parameter=to_float(second_exact.uv(witness)),
+                second_parameter=to_float(second_report.uv(witness)),
                 first_subparent=first,
                 second_subparent=second,
             )
@@ -2669,7 +2655,7 @@ def _query_planar_faces(
                     IntersectionQuality.VERIFIED_APPROXIMATE,
                     first_parameter_range=IntersectionParameterRange(*parameters),
                     first_parameter_path=tuple((value,) for value in parameters),
-                    second_parameter_path=tuple(to_float(second_exact.uv(witness)) for witness in witnesses),
+                    second_parameter_path=tuple(to_float(second_report.uv(witness)) for witness in witnesses),
                     direction=tuple(float(item) for item in direction),
                     first_subparent=first,
                     second_subparent=second,
