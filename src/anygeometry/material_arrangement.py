@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from fractions import Fraction
 import heapq
+import itertools
 import math
 import numpy as np
 
@@ -18,6 +19,7 @@ from .exact_curves import EllipticArc, CylinderIntersectionCurve
 from .branch_curves import BezierQuadricCurve
 from .quadric_curves import QuadricIntersectionCurve
 from .errors import GeometryError
+from ._cross3 import _gauss_legendre
 from .extruded_chart import area_density, chart_accelerations, chart_rates, density_bound, world_metric
 from .extruded_supports import extruded_support
 from .extrusions import EllipseDirectrix
@@ -446,7 +448,7 @@ def _integrate_loop(loop, boundary, integrand, tolerance):
     """
     previous = None
     for count in (16, 32, 64, 128, 256, 512):
-        nodes, weights = np.polynomial.legendre.leggauss(count)
+        nodes, weights = _gauss_legendre(count)
         value = magnitude = 0.
         for path in loop:
             samples = integrand(path.curve, .5*(nodes+1))
@@ -474,7 +476,7 @@ def _adaptive_gauss(function, tolerance):
     hundred ulp of cancellation noise that no refinement removes); if the work budget
     ends first the integral is refused.
     """
-    nodes, weights = np.polynomial.legendre.leggauss(24)
+    nodes, weights = _gauss_legendre(24)
 
     def rule(a, b):
         samples = function(.5*(a+b)+.5*(b-a)*nodes)
@@ -559,6 +561,58 @@ def _clip_intervals(domain,curve,tolerance,check,*,isolated_contacts=None):
             if not any(a<=parameter<=b for a,b in intervals) and domain.contains(curve,parameter,tolerance):
                 isolated_contacts.append(tuple(curve.evaluate(parameter)))
     return intervals
+
+
+_NEIGHBOUR_OFFSETS = tuple(itertools.product((-1, 0, 1), repeat=3))
+
+
+class _VertexLookup:
+    """Lowest index ``i`` with ``norm(point - vertices[i]) <= tolerance``, or None.
+
+    Equivalent to scanning every vertex in order, including NumPy
+    floating-point error handling. Vertices within the tolerance lie in
+    neighbouring cells of a grid with twice that cell size, so only those are
+    tested. The grid is used only where no skipped norm could underflow or
+    overflow (moderate tolerance, finite float64 3-points below 1e150, NumPy underflow
+    ignored); any other input switches the lookup permanently to the scan,
+    which then decides every query exactly as before.
+    """
+
+    def __init__(self, vertices, tolerance):
+        self.vertices, self.tolerance = vertices, tolerance
+        self.grid = {} if 1e-100 < tolerance < 1e100 else None
+
+    def _key(self, point):
+        # Only where skipping far vertices cannot hide a NumPy floating-point
+        # error or warning the scan would raise: underflow ignored (the default)
+        # and coordinates small enough that no squared distance overflows.
+        if (type(point) is not np.ndarray or point.shape != (3,) or point.dtype != np.float64
+                or np.geterr()["under"] != "ignore"):
+            return None
+        values = [float(value) for value in point]
+        if not all(math.isfinite(value) and abs(value) < 1e150 for value in values):
+            return None
+        return tuple(math.floor(value/(2.*self.tolerance)) for value in values)
+
+    def find(self, point):
+        key = self._key(point) if self.grid is not None else None
+        if key is None:
+            self.grid = None
+            for index, candidate in enumerate(self.vertices):
+                if np.linalg.norm(point-candidate) <= self.tolerance:
+                    return index
+            return None
+        found = None
+        for offset in _NEIGHBOUR_OFFSETS:
+            for index in self.grid.get((key[0]+offset[0], key[1]+offset[1], key[2]+offset[2]), ()):
+                if (found is None or index < found) and np.linalg.norm(point-self.vertices[index]) <= self.tolerance:
+                    found = index
+        return found
+
+    def add(self, point):
+        """Register ``point`` as the next vertex (call after a failed ``find``)."""
+        if self.grid is not None:
+            self.grid.setdefault(self._key(point), []).append(len(self.vertices))
 
 
 def _parameters(values, tolerance, curve=None):
@@ -667,10 +721,12 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
                 splits[first].append(a); splits[second].append(b)
 
     vertices, edges, incidence = [], [], []
+    lookup = _VertexLookup(vertices, tolerance)
     def vertex(point):
-        for index, candidate in enumerate(vertices):
-            if np.linalg.norm(point-candidate) <= tolerance:
-                return index
+        index = lookup.find(point)
+        if index is not None:
+            return index
+        lookup.add(point)
         vertices.append(point.copy()); incidence.append([])
         return len(vertices)-1
 

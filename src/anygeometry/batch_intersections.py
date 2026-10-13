@@ -888,6 +888,7 @@ def _apply_intersections_in_place(model, plan, *, policy, _edge_preimage_draft=N
               for member_id in model.members_using_edge(edge_id)]}
             for identifier in used_vertices}
         canonical = []
+        canonical_bounded = [True]
         # Uniform grids over the used vertices (one per tolerance in force) so
         # a point is compared only with vertices in the 27 neighbouring cells.
         # Cells are twice the tolerance, so every vertex within tolerance of a
@@ -920,6 +921,10 @@ def _apply_intersections_in_place(model, plan, *, policy, _edge_preimage_draft=N
                         found.extend(grid.get((x+dx, y+dy, z+dz), ()))
             return sorted(identifier for identifier in found if identifier in used_vertices)
         def vertex(point, sources):
+            grid_exhaustive = (canonical_bounded[0] and 1e-100 < tolerance < 1e100
+                               and type(point) is np.ndarray and point.shape == (3,) and point.dtype == np.float64
+                               and np.geterr()["under"] == "ignore"
+                               and all(math.isfinite(float(value)) and abs(float(value)) < 1e150 for value in point))
             candidates = [identifier for identifier in nearby(point) if identifier in model.vertices
                           and vertex_sources.get(identifier, set()) & sources
                           and np.linalg.norm(model.vertex_position(identifier)-point) <= tolerance]
@@ -941,11 +946,21 @@ def _apply_intersections_in_place(model, plan, *, policy, _edge_preimage_draft=N
                     used_vertices.discard(duplicate)
                 return chosen
             for identifier in canonical:
+                # Canonical vertices still in used_vertices were offered by
+                # nearby() and rejected above, provided its 2*tolerance grid
+                # sees every vertex the norm test can accept (no underflow or
+                # overflow at a moderate tolerance and point scale).
+                if identifier in used_vertices and grid_exhaustive:
+                    continue
                 if identifier in model.vertices and vertex_sources[identifier] & sources and np.linalg.norm(model.vertex_position(identifier)-point) <= tolerance:
                     vertex_sources[identifier].update(sources)
                     return identifier
             identifier = model.add_point(*point)
             canonical.append(identifier); used_vertices.add(identifier)
+            # The canonical skip above is exhaustive only while every stored
+            # canonical vertex is also of moderate size (no overflowing norm).
+            if not all(abs(float(value)) < 1e150 for value in model.vertex_position(identifier)):
+                canonical_bounded[0] = False
             vertex_sources[identifier] = set(sources)
             for size, grid in grids.items():
                 grid.setdefault(cell(size, model.vertex_position(identifier)), []).append(identifier)

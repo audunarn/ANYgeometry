@@ -5,6 +5,8 @@
 bit-identical without numpy's dispatch overhead. Every other input falls back
 to :func:`numpy.cross` unchanged. NumPy itself is never monkeypatched.
 """
+import math
+
 import numpy as np
 
 
@@ -16,3 +18,18 @@ def _cross3(a, b):
         b0, b1, b2 = b[0], b[1], b[2]
         return np.array((a1*b2-a2*b1, a2*b0-a0*b2, a0*b1-a1*b0))
     return np.cross(a, b)
+
+
+_GAUSS_LEGENDRE = {}
+
+
+def _gauss_legendre(count):
+    """``numpy.polynomial.legendre.leggauss(count)``, computed once per count.
+
+    Each call returns fresh copies of the cached rule, so callers own their
+    arrays exactly as with ``leggauss`` and cannot alter the cache.
+    """
+    rule = _GAUSS_LEGENDRE.get(count)
+    if rule is None:
+        rule = _GAUSS_LEGENDRE[count] = np.polynomial.legendre.leggauss(count)
+    return rule[0].copy(), rule[1].copy()
