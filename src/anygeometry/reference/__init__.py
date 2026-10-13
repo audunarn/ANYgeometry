@@ -7,5 +7,6 @@ differential tests call both and compare them (owner decision D1: identical
 classification, coordinates within a stated bound).
 """
 from .analytic_surfaces import plane_evaluate
+from .bspline import bspline_evaluate
 
-__all__ = ["plane_evaluate"]
+__all__ = ["bspline_evaluate", "plane_evaluate"]

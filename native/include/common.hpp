@@ -50,6 +50,8 @@ struct DoubleBuffer {
     }
 
     Py_ssize_t size() const { return view.len / static_cast<Py_ssize_t>(sizeof(double)); }
+    int ndim() const { return view.ndim; }
+    Py_ssize_t extent(int axis) const { return view.shape != nullptr && axis < view.ndim ? view.shape[axis] : 0; }
     const double* data() const { return static_cast<const double*>(view.buf); }
     double* mutable_data() { return static_cast<double*>(view.buf); }
 };

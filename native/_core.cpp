@@ -5,6 +5,9 @@
 // and the differential tests compare them. Kernels take C-contiguous float64
 // buffers and write into caller-allocated outputs; they return None or raise.
 #include "common.hpp"
+#include "bspline.hpp"
+
+#include <cmath>
 
 namespace {
 
@@ -42,6 +45,53 @@ PyObject* plane_evaluate(PyObject*, PyObject* args) {
     Py_RETURN_NONE;
 }
 
+// bspline_evaluate(degree, knots, controls, weights, t, order, out): curve points
+// and derivatives (reference.bspline.bspline_evaluate). ``controls`` is (n, dim)
+// with dim <= 4, ``weights`` is (n,) or empty, ``out`` is (m, order+1, dim).
+PyObject* bspline_evaluate(PyObject*, PyObject* args) {
+    int degree, order;
+    PyObject *knots_object, *controls_object, *weights_object, *t_object, *out_object;
+    if (!PyArg_ParseTuple(args, "iOOOOiO", &degree, &knots_object, &controls_object, &weights_object, &t_object,
+                          &order, &out_object)) {
+        return nullptr;
+    }
+    DoubleBuffer knots, controls, weights, t, out;
+    if (!knots.acquire(knots_object, false, "knots") || !controls.acquire(controls_object, false, "controls")
+            || !weights.acquire(weights_object, false, "weights") || !t.acquire(t_object, false, "t")
+            || !out.acquire(out_object, true, "out")) {
+        return nullptr;
+    }
+    using namespace anygeometry_core;
+    if (degree < 1 || degree > kMaxDegree || order < 0 || order > kMaxOrder || controls.ndim() != 2) {
+        PyErr_SetString(PyExc_ValueError, "bspline_evaluate: unsupported degree, order or control shape");
+        return nullptr;
+    }
+    const Py_ssize_t count = controls.extent(0), dim = controls.extent(1), m = t.size();
+    if (dim < 1 || dim > kMaxDimension || count < degree + 1 || knots.size() != count + degree + 1
+            || (weights.size() != 0 && weights.size() != count) || out.size() != m * (order + 1) * dim) {
+        PyErr_SetString(PyExc_ValueError, "bspline_evaluate: inconsistent buffer sizes");
+        return nullptr;
+    }
+    const double* k = knots.data();
+    const double lower = k[degree], upper = k[count];
+    for (Py_ssize_t i = 0; i < m; ++i) {
+        const double value = t.data()[i];
+        if (!(value >= lower && value <= upper)) {
+            PyErr_SetString(PyExc_ValueError, "bspline_evaluate: parameter outside the knot domain");
+            return nullptr;
+        }
+    }
+    const double* w = weights.size() == 0 ? nullptr : weights.data();
+    double* o = out.mutable_data();
+    const int c = static_cast<int>(count), d = static_cast<int>(dim);
+    Py_BEGIN_ALLOW_THREADS
+    for (Py_ssize_t i = 0; i < m; ++i) {
+        evaluate_point(degree, k, c, controls.data(), d, w, t.data()[i], order, o + i * (order + 1) * dim);
+    }
+    Py_END_ALLOW_THREADS
+    Py_RETURN_NONE;
+}
+
 // build_info() -> dict describing how this module was compiled.
 PyObject* build_info(PyObject*, PyObject*) {
 #if defined(_MSC_VER)
@@ -64,6 +114,7 @@ PyObject* build_info(PyObject*, PyObject*) {
 
 PyMethodDef methods[] = {
     {"plane_evaluate", plane_evaluate, METH_VARARGS, "Evaluate plane points for (n, 2) parameters."},
+    {"bspline_evaluate", bspline_evaluate, METH_VARARGS, "B-spline/NURBS curve points and derivatives."},
     {"build_info", build_info, METH_NOARGS, "How this module was compiled."},
     {nullptr, nullptr, 0, nullptr},
 };
