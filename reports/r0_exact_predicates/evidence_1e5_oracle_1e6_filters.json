@@ -1,0 +1,18 @@
+{
+  "oracle": {
+    "inputs": 100000,
+    "evaluations": 500000,
+    "deferred_at_level": 0,
+    "failures": [],
+    "failure_count": 0
+  },
+  "filters": {
+    "predicates": 1000000,
+    "filter_decided": 614200,
+    "deferred": 385800,
+    "canonical_refused_where_filter_decided": 0,
+    "disagreements": 0,
+    "examples": []
+  },
+  "seconds": 1901.8
+}
