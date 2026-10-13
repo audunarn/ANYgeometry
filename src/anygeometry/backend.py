@@ -57,6 +57,13 @@ bspline_evaluate = _KERNELS.bspline_evaluate
 
 MAX_BSPLINE_DEGREE = 15
 _MIN_SPAN = 2.0 ** -968
+# Numerical range of the homogeneous arithmetic: with weights scaled into
+# [2**-201, 1) and nonzero coordinates within [2**-500, 2**500], every weighted
+# control is a normal float, the denominator is at least 2**-201 / (degree + 1),
+# and no term can overflow or vanish by underflow.
+_MIN_WEIGHT = 2.0 ** -201
+_MIN_MAGNITUDE = 2.0 ** -500
+_MAX_MAGNITUDE = 2.0 ** 500
 
 
 def _aligned(values) -> np.ndarray:
@@ -96,9 +103,10 @@ def bspline_curve(degree, knots, controls, weights, t, order=0):
     Validates the definition once (finite clamped knots per
     :func:`check_clamped_knots`, positive finite weights) and runs the selected
     kernel. ``weights`` is ``None`` for a polynomial curve; they are scaled by
-    an exact power of two (the curve is unchanged) so the homogeneous
-    arithmetic cannot overflow through the weights. A non-finite result is
-    refused, never returned. Raises ``ValueError`` for invalid input or a
+    an exact power of two (the curve is unchanged), their ratio is limited to
+    2**200 and nonzero control coordinates to [2**-500, 2**500], so no
+    homogeneous term overflows or underflows. A non-finite result is refused,
+    never returned. Raises ``ValueError`` for invalid input or a
     parameter outside ``[knots[degree], knots[n]]``.
     """
     degree, order = int(degree), int(order)
@@ -113,6 +121,9 @@ def bspline_curve(degree, knots, controls, weights, t, order=0):
     check_clamped_knots(degree, knots, count)
     if not np.all(np.isfinite(controls)):
         raise ValueError("B-spline controls must be finite")
+    magnitudes = np.abs(controls[controls != 0])
+    if magnitudes.size and (magnitudes.min() < _MIN_MAGNITUDE or magnitudes.max() > _MAX_MAGNITUDE):
+        raise ValueError("B-spline control coordinates must be 0 or within [2**-500, 2**500] in magnitude")
     if weights is None:
         weights = np.empty(0)
     else:
@@ -120,8 +131,8 @@ def bspline_curve(degree, knots, controls, weights, t, order=0):
         if weights.shape != (count,) or not np.all(np.isfinite(weights)) or not np.all(weights > 0):
             raise ValueError("weights must be positive and finite, one per control point")
         weights = _aligned(np.ldexp(weights, -np.frexp(weights.max())[1]))
-        if not np.all(weights > 0):
-            raise ValueError("weight ratio is not representable in float64")
+        if not np.all(weights >= _MIN_WEIGHT):
+            raise ValueError("B-spline weight ratio max/min must not exceed 2**200")
     if t.ndim != 1 or not np.all((t >= knots[degree]) & (t <= knots[count])):
         raise ValueError("parameter outside the knot domain")
     out = np.empty((len(t), order + 1, controls.shape[1]))

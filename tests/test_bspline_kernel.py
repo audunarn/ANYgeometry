@@ -236,9 +236,10 @@ def test_huge_weights_are_scaled_not_overflowed():
 
 def test_non_representable_results_are_refused():
     knots = np.array([0, 0, 1, 1.])
-    # Positions stay in the control hull; a derivative can exceed float64.
+    # Positions stay in the control hull; a derivative over a tiny span can exceed float64.
+    tiny = np.array([0, 0, 1e-290, 1e-290])
     with pytest.raises(ValueError, match="numerical failure"):
-        backend.bspline_curve(1, knots, [[-1.7e308], [1.7e308]], None, [.5], 1)
+        backend.bspline_curve(1, tiny, [[-1e150], [1e150]], None, [5e-291], 1)
 
 
 @needs_native
@@ -261,3 +262,15 @@ def test_maximum_degree_agrees_with_the_reference():
     expected = evaluate(*curve, t, order=2, route="reference")
     scale = np.maximum(1.0, np.max(np.abs(expected), axis=0))
     assert np.max(np.abs(native - expected) / scale) <= 1e-11
+
+
+def test_subnormal_weights_and_tiny_coordinates_are_refused_not_rounded_away():
+    knots = np.array([0, 0, 1, 1.])
+    with pytest.raises(ValueError, match="weight ratio"):
+        backend.bspline_curve(1, knots, [[0.25], [1.0]], [1e-323, 1.0], [0.0])
+    with pytest.raises(ValueError, match="control coordinates"):
+        backend.bspline_curve(1, knots, [[1e-300], [1.0]], None, [0.0])
+    with pytest.raises(ValueError, match="control coordinates"):
+        backend.bspline_curve(1, knots, [[1e200], [1.0]], None, [0.0])
+    # Inside the range the clamped end point is exact.
+    np.testing.assert_array_equal(backend.bspline_curve(1, knots, [[0.25], [1.0]], [2.0**-200, 1.0], [0.0])[0, 0], [0.25])
