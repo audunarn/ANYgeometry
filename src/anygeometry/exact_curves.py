@@ -14,7 +14,7 @@ import numpy as np
 
 from .errors import GeometryError
 from .surfaces import Cylinder
-from ._cross3 import _cross3
+from ._cross3 import _cross3, _gauss_legendre
 from .analytic_roots import trigonometric_roots
 
 
@@ -64,7 +64,7 @@ def analytic_curve_length(curve, tolerance):
     previous = None
     count = 16
     while True:
-        nodes, weights = np.polynomial.legendre.leggauss(count)
+        nodes, weights = _gauss_legendre(count)
         value = .5*float(weights @ np.linalg.norm(curve.derivative(.5*(nodes+1)), axis=-1))
         if previous is not None and abs(value-previous) <= tolerance:
             return value
