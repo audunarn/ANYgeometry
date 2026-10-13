@@ -21,6 +21,7 @@ from .quadric_curves import QuadricIntersectionCurve
 from .errors import GeometryError
 from .exact_predicates import exact_dot, exact_vector
 from .planar_exact import ExactPlane
+from . import planar_stations as stations
 from ._cross3 import _gauss_legendre
 from .extruded_chart import area_density, chart_accelerations, chart_rates, density_bound, world_metric
 from .extruded_supports import extruded_support
@@ -589,6 +590,46 @@ def _clip_intervals(domain,curve,tolerance,check,*,isolated_contacts=None):
     return intervals
 
 
+def _contains_point_exact(domain, point, tolerance):
+    """Material containment of an exact world point on an all-straight Plane domain (R1b)."""
+    uv = ExactPlane.from_plane(domain.support).uv(point)
+    return (domain.contains_loop(domain.boundaries[0], uv, tolerance)
+            and not any(domain.contains_loop(loop, uv, tolerance, boundary=False) for loop in domain.boundaries[1:]))
+
+
+def _clip_line_exact(domain, curve, tolerance, check):
+    """Exact stations of ``_clip`` for a straight curve on a Plane support (R1b step 2a).
+
+    The same rule as ``_clip_intervals``: split at every junction with the
+    domain boundary, merge numerical duplicates, keep the pieces whose
+    midpoint is material. Junctions with straight boundaries and the
+    midpoint test (on all-straight domains) are exact; junctions with curved
+    boundaries keep the float predicate (their parameters enter as exact
+    values of the returned doubles).
+    """
+    segment = stations.segment_of(curve)
+    parameters = [Fraction(0), Fraction(1)]
+    for loop in domain.boundaries:
+        for boundary in loop:
+            check()
+            if type(boundary.curve) is LinePath:
+                parameters.extend(a for a, _b in stations.junctions(
+                    segment, stations.segment_of(boundary.curve), tolerance))
+            else:
+                parameters.extend(Fraction(float(a)) for a, _b in curve_junctions(
+                    curve, boundary.curve, tolerance=tolerance, cancellation_check=lambda: (check() or False)))
+    parameters = stations.merge_parameters(parameters, tolerance, segment)
+    exact_domain = domain._exact_planar(domain.boundaries)
+    pieces = []
+    for a, b in zip(parameters, parameters[1:]):
+        middle = (a + b) / 2
+        inside = (_contains_point_exact(domain, stations.at(segment, middle), tolerance) if exact_domain
+                  else domain.contains(curve, float(middle), tolerance))
+        if inside:
+            pieces.append(stations.sub(segment, a, b))
+    return pieces
+
+
 _NEIGHBOUR_OFFSETS = tuple(itertools.product((-1, 0, 1), repeat=3))
 
 
@@ -677,9 +718,24 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
 
     boundaries = [path for loop in domain.boundaries for path in loop]
     paths = list(boundaries)
+    # Station model (robust-predicate R1b step 2a): on a Plane support every
+    # straight piece keeps its exact end positions (``segments[index]``); its
+    # splits, junctions and vertex identities are decided on them, and its
+    # float LinePath has correctly rounded ends.
+    exact = isinstance(domain.support, Plane)
+    segments = {index: stations.segment_of(path.curve) for index, path in enumerate(paths)
+                if exact and type(path.curve) is LinePath}
+
+    def add_clipped(path, curve):
+        if exact and type(curve) is LinePath:
+            for segment in _clip_line_exact(domain, curve, tolerance, check):
+                segments[len(paths)] = segment
+                paths.append(replace(path, curve=stations.to_line(segment)))
+        else:
+            paths.extend(replace(path, curve=piece) for piece in _clip(domain, curve, tolerance, check))
+
     for trace in traces:
-        for curve in _clip(domain, trace.curve, tolerance, check):
-            paths.append(replace(trace, curve=curve))
+        add_clipped(trace, trace.curve)
 
     # Interior-ended traces need material decomposition seams. Their physical
     # directions must not inherit scale/shear from an affine support chart.
@@ -721,8 +777,7 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
             # not introduce artificial acute wedges into the material cells.
             for direction in (authored,np.cross(normal,authored)):
                 seam = LinePath(tuple(point-extent*direction),tuple(point+extent*direction))
-                paths.extend(ArrangementPath(curve, decomposition=True)
-                             for curve in _clip(domain, seam, tolerance, check))
+                add_clipped(ArrangementPath(seam, decomposition=True), seam)
     elif endpoints:
         support = domain.support
         for point in sorted(endpoints, key=lambda value: tuple(value)):
@@ -734,21 +789,44 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
     splits = [[0., 1.] for _ in paths]
     for index, path in enumerate(paths):
         for point in points:
-            splits[index].extend(point_parameters(path.curve, point.position, tolerance=tolerance))
+            if index in segments:
+                splits[index].extend(stations.point_parameters(
+                    segments[index], exact_vector(point.position), tolerance))
+            else:
+                splits[index].extend(point_parameters(path.curve, point.position, tolerance=tolerance))
     for first in range(len(paths)):
         for second in range(first+1, len(paths)):
             check()
             lo1, hi1 = paths[first].curve.bounds()
             lo2, hi2 = paths[second].curve.bounds()
+            if first in segments and second in segments:
+                # The float boxes of the rounded pieces only preselect: widened
+                # by their own rounding, an exact junction within tol is kept.
+                margin = tolerance+8*_EPS*float(max(np.max(np.abs(lo1)), np.max(np.abs(hi1)),
+                                                    np.max(np.abs(lo2)), np.max(np.abs(hi2))))
+                if np.any(hi1 < lo2-margin) or np.any(hi2 < lo1-margin):
+                    continue
+                for a, b in stations.junctions(segments[first], segments[second], tolerance):
+                    splits[first].append(a); splits[second].append(b)
+                continue
             if np.any(hi1 < lo2-tolerance) or np.any(hi2 < lo1-tolerance):
                 continue
             for a, b in curve_junctions(paths[first].curve, paths[second].curve, tolerance=tolerance,
                                        cancellation_check=lambda:(check() or False)):
-                splits[first].append(a); splits[second].append(b)
+                splits[first].append(Fraction(float(a)) if first in segments else a)
+                splits[second].append(Fraction(float(b)) if second in segments else b)
 
     vertices, edges, incidence = [], [], []
-    lookup = _VertexLookup(vertices, tolerance)
+    lookup = stations.ExactVertexLookup(tolerance) if exact else _VertexLookup(vertices, tolerance)
     def vertex(point):
+        if exact:                                       # exact positions, canonical float vertex
+            point = point if isinstance(point, tuple) else exact_vector(point)
+            index = lookup.find(point)
+            if index is not None:
+                return index
+            lookup.add(point)
+            vertices.append(np.asarray(stations.rounded(point))); incidence.append([])
+            return len(vertices)-1
         index = lookup.find(point)
         if index is not None:
             return index
@@ -757,11 +835,20 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
         return len(vertices)-1
 
     endpoints_by_edge = []
-    for path, parameters in zip(paths, splits):
-        parameters = _parameters(parameters, tolerance, path.curve)
+    for path_index, (path, parameters) in enumerate(zip(paths, splits)):
+        segment = segments.get(path_index)
+        if segment is not None:
+            parameters = stations.merge_parameters(parameters, tolerance, segment)
+        else:
+            parameters = _parameters(parameters, tolerance, path.curve)
         for a, b in zip(parameters, parameters[1:]):
-            curve = path.curve.subcurve(a, b)
-            start, end = vertex(curve.evaluate(0.)), vertex(curve.evaluate(1.))
+            if segment is not None:
+                piece = stations.sub(segment, a, b)
+                curve = stations.to_line(piece)
+                start, end = vertex(piece[0]), vertex(piece[1])
+            else:
+                curve = path.curve.subcurve(a, b)
+                start, end = vertex(curve.evaluate(0.)), vertex(curve.evaluate(1.))
             if start == end:
                 raise GeometryError("unresolved closed or degenerate arrangement edge")
             duplicate = None
@@ -915,7 +1002,7 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
 
 # ----------------------------------------------------------------------------------- exact planar containment (R1b)
 
-_EPS = Fraction(np.finfo(float).eps)
+_EPS_EXACT = Fraction(np.finfo(float).eps)
 
 
 def _within(value: Fraction, bound_squared: Fraction) -> bool:
@@ -949,7 +1036,7 @@ def _exact_horizontal_roots(chart, curve, level, tolerance):
     endpoints = tuple(t for t, value in ((Fraction(0), start), (Fraction(1), start + delta)) if _within(value, bound2))
     snapped = []
     for root in roots:
-        root = next((t for t in endpoints if abs(root - t) <= 128 * _EPS), root)
+        root = next((t for t in endpoints if abs(root - t) <= 128 * _EPS_EXACT), root)
         if root not in snapped:
             snapped.append(root)
     return tuple(snapped)
@@ -986,7 +1073,7 @@ def _contains_loop_exact(chart, loop, uv, tolerance, *, boundary=True):
     """
     u_query, v_query = uv
     tol2 = Fraction(tolerance) ** 2
-    window = 8 * _EPS
+    window = 8 * _EPS_EXACT
 
     def station_uv(curve, t):
         start, end = exact_vector(curve.start), exact_vector(curve.end)
