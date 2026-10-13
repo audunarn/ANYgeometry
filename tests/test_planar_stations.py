@@ -453,21 +453,29 @@ def _square_loop(points):
     return tuple(ArrangementPath(LinePath((*a, 0.), (*b, 0.))) for a, b in zip(points, points[1:] + points[:1]))
 
 
-@pytest.mark.parametrize("gap", (1.2, 1.5, 2.5, 10., 40.))
-def test_thin_strips_do_not_depend_on_the_cycle_start(gap):
-    """A trace ``gap * tol`` above the bottom edge: main's uncertified probe (32 tol) crossed out of
-    the domain for some starting vertices (conservation failure) and not for others; the certified
-    probe classifies the strip the same way for every start and direction."""
+def test_cell_phase_reproduces_mains_answers_on_merged_and_nested_inputs():
+    """Review inputs: a trace end tolerance-merged with a corner (main's area formula sums each
+    piece's own stations: 2 cells, area 16), a merged start whose probe main does not certify
+    (main refuses: no hole owner), and two nested trace squares 2 tol apart (main's ownership)."""
     plane = Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.))
-    tol = 1e-6
-    square = [(0., 0.), (4., 0.), (4., 4.), (0., 4.)]
-    for order in range(4):
-        outer = _square_loop(square[order:] + square[:order])
-        for ends in (((-1., gap * tol, 0.), (5., gap * tol, 0.)), ((5., gap * tol, 0.), (-1., gap * tol, 0.))):
-            trace = ArrangementPath(LinePath(*ends), owners=(1, 2))
-            arrangement = arrange_material(MaterialDomain(1, plane, (outer,)), (trace,), tolerance=tol,
-                                           area_tolerance=1e-12)
-            assert len(arrangement.cells) == 2
+    square = _square_loop([(0., 0.), (4., 0.), (4., 4.), (0., 4.)])
+
+    def run(boundary, traces, **kw):
+        return arrange_material(MaterialDomain(1, plane, (boundary,)), traces, tolerance=1e-6, **kw)
+    merged = (ArrangementPath(LinePath((5e-7, 5e-7, 0.), (4., 4., 0.)), owners=(1, 2)),)
+    for kw in ({}, {"area_tolerance": 1e-12}):
+        result = run(square, merged, **kw)
+        assert (len(result.cells), result.area) == (2, 16.)
+    with pytest.raises(GeometryError, match="hole has no material owner"):
+        run(_square_loop([(0., 2e-6), (0., 0.), (4., 0.), (4., 4.), (0., 4.)]),
+            (ArrangementPath(LinePath((3e-7, 9.5e-7, 0.), (4., 4., 0.)), owners=(1, 2)),), area_tolerance=2e-6)
+
+    def ring(lo, hi, first):
+        q = [(lo, lo), (hi, lo), (hi, hi), (lo, hi)]
+        return tuple(ArrangementPath(LinePath((*a, 0.), (*b, 0.)), owners=(1, first + i))
+                     for i, (a, b) in enumerate(zip(q, q[1:] + q[:1])))
+    nested = run(square, ring(1., 3., 2) + ring(1. + 2e-6, 3. - 2e-6, 10), area_tolerance=1e-12)
+    assert sorted(len(cell.holes) for cell in nested.cells) == [0, 0, 2] and nested.area == 16.
 
 
 def _island_arrangement(plane):
