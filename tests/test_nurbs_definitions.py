@@ -257,3 +257,83 @@ def test_the_released_reader_refuses_schema_7(tmp_path):
                          timeout=120)
     assert run.returncode == 3, run.stdout + run.stderr
     assert "unsupported ANYgeometry version 7" in run.stdout
+
+
+# ----------------------------------------------------------------------------------- review regressions (A0 round 1)
+
+
+def test_bounds_hold_for_tiny_equal_weights():
+    curve = NurbsCurve(2, (0, 0, 0, .5, 1, 1, 1), ((0, 0, 0), (1e-100, 0, 0), (1e-100, 0, 0), (0, 0, 0)),
+                       (1e-300,) * 4)
+    low, high = curve.bounds()
+    point = curve.evaluate(.5)
+    assert np.all(point >= low) and np.all(point <= high)
+
+
+def test_tiny_knot_ranges_are_refused_and_derivatives_scale_per_factor():
+    with pytest.raises(GeometryError, match="knot range"):
+        NurbsCurve(1, (0, 0, 2.0 ** -540, 2.0 ** -540), ((0, 0, 0), (2.0 ** -100, 0, 0)), (1, 2))
+    # Engine-parameter derivatives of a tiny subcurve: x(t) = 2 C t/(1+t) scaled; compare with the
+    # knot-parameter derivatives times the domain length per order.
+    curve = NurbsCurve(1, (0, 0, 1, 1), ((0, 0, 0), (2.0 ** -100, 0, 0)), (1, 2))
+    part = curve.subcurve(0.0, 2.0 ** -200)
+    values = part.derivatives(0.5, 2)
+    exact = curve.derivatives(2.0 ** -201, 2)
+    scale = 2.0 ** -200
+    np.testing.assert_allclose(values[1], exact[1] * scale, rtol=1e-14)
+    np.testing.assert_allclose(values[2], exact[2] * scale * scale, rtol=1e-14)
+
+
+def test_domain_end_maps_exactly():
+    curve = NurbsCurve(1, (-1, -1, .1, .1), ((0, 0, 0), (1, 0, 0)))
+    np.testing.assert_array_equal(curve.evaluate(1.0), [1, 0, 0])
+    np.testing.assert_array_equal(curve.subcurve(0, 1).evaluate([0.0, 1.0]), [[0, 0, 0], [1, 0, 0]])
+    low, high = curve.bounds(1.0, 1.0)
+    assert low[0] <= 1.0 <= high[0]
+
+
+def test_curve_on_surface_refuses_overflow_after_transform():
+    corners = (((1e150, 0., 0.), (1e150, 1., 0.)), ((1e150, 0., 1.), (1e150, 1., 1.)))
+    surface = NurbsSurface(1, 1, (0, 0, 1, 1), (0, 0, 1, 1), corners)
+    pcurve = NurbsCurve(1, (0, 0, 1, 1), ((0., 0.), (1., 1.)))
+    stretched = CurveOnSurface(surface, pcurve, (), ((1e200, 0, 0, 0), (0, 1e200, 0, 0), (0, 0, 1e200, 0), (0, 0, 0, 1)))
+    with pytest.raises(GeometryError, match="not representable"):
+        stretched.evaluate(0.5)
+
+
+@pytest.mark.parametrize("arguments", [
+    dict(controls=(0, 0)),
+    dict(weights=1),
+    dict(weights=(None, (1, 1))),
+])
+def test_malformed_surface_inputs_raise_typed_errors(arguments):
+    values = dict(degree_u=1, degree_v=1, knots_u=(0, 0, 1, 1), knots_v=(0, 0, 1, 1),
+                  controls=(((0., 0., 0.), (0., 1., 0.)), ((1., 0., 0.), (1., 1., 0.))))
+    values.update(arguments)
+    with pytest.raises(GeometryError):
+        NurbsSurface(**values)
+
+
+def test_huge_integer_coordinates_raise_typed_errors():
+    with pytest.raises(GeometryError, match="finite"):
+        NurbsCurve(1, (0, 0, 1, 1), ((10 ** 400, 0, 0), (1, 0, 0)))
+
+
+def test_transform_records_are_numerically_strict_and_rank_based():
+    surface = cylinder_patch()
+    pcurve = NurbsCurve(1, (0, 0, 1, 1), ((0.3, 0.0), (0.3, 1.0)))
+    record = nurbs_record(CurveOnSurface(surface, pcurve))
+    for bad in (True, "1"):
+        damaged = json.loads(json.dumps(record))
+        damaged["transform"][0][0] = bad
+        with pytest.raises(GeometryError, match="real number"):
+            nurbs_from_record(damaged)
+    tiny = ((1e-110, 0, 0, 0), (0, 1e-110, 0, 0), (0, 0, 1e-110, 0), (0, 0, 0, 1))
+    CurveOnSurface(surface, pcurve, (), tiny)     # invertible although its determinant underflows
+
+
+def test_pcurve_chart_rule_is_the_documented_sufficient_condition():
+    surface = cylinder_patch()
+    inside_but_polygon_outside = NurbsCurve(2, (0, 0, 0, 1, 1, 1), ((0., 0.), (2., 0.), (0., 0.)))
+    with pytest.raises(GeometryError, match="control polygon"):
+        CurveOnSurface(surface, inside_but_polygon_outside)

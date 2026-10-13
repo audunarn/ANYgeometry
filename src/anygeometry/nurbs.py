@@ -44,6 +44,7 @@ __all__ = [
 
 MAX_DEGREE = 7
 _KNOT_MAGNITUDE = 2.0 ** 100
+_KNOT_RANGE = 2.0 ** -100
 _IDENTITY = ((1.0, 0.0, 0.0, 0.0), (0.0, 1.0, 0.0, 0.0), (0.0, 0.0, 1.0, 0.0), (0.0, 0.0, 0.0, 1.0))
 
 
@@ -53,7 +54,10 @@ _IDENTITY = ((1.0, 0.0, 0.0, 0.0), (0.0, 1.0, 0.0, 0.0), (0.0, 0.0, 1.0, 0.0), (
 def _real(value: object, name: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float, np.integer, np.floating)):
         raise GeometryError(f"{name} must be a real number")
-    result = float(value)
+    try:
+        result = float(value)
+    except (OverflowError, ValueError) as error:
+        raise GeometryError(f"{name} must be a finite real number") from error
     if not math.isfinite(result):
         raise GeometryError(f"{name} must be finite")
     return result
@@ -65,10 +69,14 @@ def _degree(value: object, name: str) -> int:
     return int(value)
 
 
-def _real_tuple(values: object, name: str) -> tuple[float, ...]:
+def _sequence(values: object, name: str) -> Sequence:
     if isinstance(values, (str, bytes)) or not isinstance(values, (Sequence, np.ndarray)):
-        raise GeometryError(f"{name} must be a sequence of real numbers")
-    return tuple(_real(value, name) for value in values)
+        raise GeometryError(f"{name} must be a sequence")
+    return values
+
+
+def _real_tuple(values: object, name: str) -> tuple[float, ...]:
+    return tuple(_real(value, name) for value in _sequence(values, name))
 
 
 def _knots(degree: int, values: object, count: int, name: str) -> tuple[float, ...]:
@@ -79,6 +87,8 @@ def _knots(degree: int, values: object, count: int, name: str) -> tuple[float, .
         raise GeometryError(f"{name}: {error}") from None
     if max(abs(knots[0]), abs(knots[-1])) > _KNOT_MAGNITUDE:
         raise GeometryError(f"{name}: knot magnitudes must not exceed 2**100")
+    if knots[-1] - knots[0] < _KNOT_RANGE:
+        raise GeometryError(f"{name}: the knot range must be at least 2**-100")
     return knots
 
 
@@ -109,12 +119,12 @@ def _interval(value: object, lower: float, upper: float, name: str) -> tuple[flo
 
 
 def _affine(matrix: object, name: str = "transformation") -> np.ndarray:
-    try:
-        values = np.asarray(matrix, dtype=float)
-    except (TypeError, ValueError) as error:
-        raise GeometryError(f"{name} must be a finite 4x4 affine matrix") from error
-    if (values.shape != (4, 4) or not np.all(np.isfinite(values))
-            or not np.array_equal(values[3], (0.0, 0.0, 0.0, 1.0)) or np.linalg.det(values[:3, :3]) == 0.0):
+    rows = [_real_tuple(row, name) for row in _sequence(matrix, name)]
+    values = np.asarray(rows, dtype=float) if len(rows) == 4 and all(len(row) == 4 for row in rows) else np.zeros(0)
+    # Numerically nonsingular: rank 3 by singular values with a relative tolerance
+    # (no determinant underflow; condition numbers near 1/eps are refused).
+    if (values.shape != (4, 4) or not np.array_equal(values[3], (0.0, 0.0, 0.0, 1.0))
+            or np.linalg.matrix_rank(values[:3, :3]) != 3):
         raise GeometryError(f"{name} must be a finite, nonsingular 4x4 affine matrix")
     return values
 
@@ -131,6 +141,20 @@ def _call(function, *args):
         return function(*args)
     except ValueError as error:
         raise GeometryError(str(error)) from None
+
+
+def _map(t: np.ndarray, start: float, end: float) -> np.ndarray:
+    """Endpoint-exact affine map of [0, 1] onto [start, end] (t = 0 -> start, t = 1 -> end)."""
+    s = (1.0 - t) * start + t * end
+    return np.clip(s, min(start, end), max(start, end))
+
+
+def _scaled_weights(weights) -> np.ndarray | None:
+    """Weights scaled by an exact power of two so the largest lies in [0.5, 1); the curve is unchanged."""
+    if weights is None:
+        return None
+    values = np.asarray(weights, dtype=float)
+    return np.ldexp(values, -np.frexp(values.max())[1])
 
 
 # ----------------------------------------------------------------------------------- curves
@@ -153,9 +177,8 @@ class NurbsCurve:
 
     def __post_init__(self) -> None:
         degree = _degree(self.degree, "NURBS degree")
-        if isinstance(self.controls, (str, bytes)) or not isinstance(self.controls, (Sequence, np.ndarray)):
-            raise GeometryError("NURBS controls must be a sequence of points")
-        controls = tuple(_real_tuple(point, "NURBS control point") for point in self.controls)
+        controls = tuple(_real_tuple(point, "NURBS control point")
+                         for point in _sequence(self.controls, "NURBS controls"))
         dimensions = {len(point) for point in controls}
         if len(controls) < degree + 1 or len(dimensions) != 1 or dimensions.pop() not in (2, 3):
             raise GeometryError("NURBS controls must be at least degree + 1 points of dimension 2 or 3")
@@ -180,14 +203,23 @@ class NurbsCurve:
     def _knot_parameters(self, parameters) -> tuple[np.ndarray, float]:
         t = _parameters(parameters)
         start, end = self.domain
-        return start + t * (end - start), end - start
+        return _map(t, start, end), end - start
 
     def derivatives(self, parameters, order: int = 0) -> np.ndarray:
-        """Point and derivatives with respect to the engine parameter, shape ``(..., order+1, dim)``."""
+        """Point and derivatives with respect to the engine parameter, shape ``(..., order+1, dim)``.
+
+        Raises ``GeometryError`` when a derivative in the knot parameter is not
+        representable in float64 (extreme knot spans and coordinates).
+        """
+        if isinstance(order, bool) or order not in (0, 1, 2):
+            raise GeometryError("derivative order must be 0, 1 or 2")
         s, scale = self._knot_parameters(parameters)
         values = _call(backend.bspline_curve, self.degree, self.knots, self.controls, self.weights,
                        np.ravel(s), order)
-        values = values * (scale ** np.arange(order + 1))[None, :, None]
+        for k in range(1, order + 1):                 # chain rule one factor at a time (no scale**k)
+            values[:, k:, :] *= scale
+        if not np.all(np.isfinite(values)):
+            raise GeometryError("NURBS derivative is not representable in float64")
         return values.reshape(np.shape(s) + (order + 1, self.dimension))
 
     def evaluate(self, parameters) -> np.ndarray:
@@ -212,10 +244,11 @@ class NurbsCurve:
             raise GeometryError("curve bound interval is reversed")
         rows = []
         for t0, t1, controls, _ in _reference.bezier_segments(
-                self.degree, np.asarray(self.knots), np.asarray(self.controls),
-                None if self.weights is None else np.asarray(self.weights)):
+                self.degree, np.asarray(self.knots), np.asarray(self.controls), _scaled_weights(self.weights)):
             if t1 >= s[0] and t0 <= s[1]:
                 rows.append(controls)
+        if not rows or not np.all(np.isfinite(np.concatenate(rows))):
+            raise GeometryError("NURBS bounds are not representable")
         points = np.concatenate(rows)
         # Positive weights keep each span inside the hull of its controls; the
         # decomposition rounds, so widen by its scale before rounding outward.
@@ -255,10 +288,9 @@ class NurbsSurface:
     def __post_init__(self) -> None:
         degree_u = _degree(self.degree_u, "NURBS surface degree_u")
         degree_v = _degree(self.degree_v, "NURBS surface degree_v")
-        if isinstance(self.controls, (str, bytes)) or not isinstance(self.controls, (Sequence, np.ndarray)):
-            raise GeometryError("NURBS surface controls must be a grid of 3D points")
-        controls = tuple(tuple(_real_tuple(point, "NURBS surface control point") for point in row)
-                         for row in self.controls)
+        controls = tuple(tuple(_real_tuple(point, "NURBS surface control point")
+                               for point in _sequence(row, "NURBS surface control row"))
+                         for row in _sequence(self.controls, "NURBS surface controls"))
         count_u = len(controls)
         count_v = len(controls[0]) if controls else 0
         if (count_u < degree_u + 1 or count_v < degree_v + 1 or any(len(row) != count_v for row in controls)
@@ -270,9 +302,10 @@ class NurbsSurface:
         knots_v = _knots(degree_v, self.knots_v, count_v, "NURBS surface knots_v")
         weights = None
         if self.weights is not None:
-            if len(self.weights) != count_u:
+            if len(_sequence(self.weights, "NURBS surface weights")) != count_u:
                 raise GeometryError("NURBS surface weights must match the control grid")
-            weights = tuple(_weights(row, count_v, "NURBS surface weights") for row in self.weights)
+            weights = tuple(_weights(_sequence(row, "NURBS surface weight row"), count_v, "NURBS surface weights")
+                            for row in self.weights)
             flat = [value for row in weights for value in row]
             if max(flat) / backend.MAX_WEIGHT_RATIO > min(flat):
                 raise GeometryError("NURBS surface weights: weight ratio max/min must not exceed 1e6")
@@ -293,8 +326,8 @@ class NurbsSurface:
         if uv.shape[-1:] != (2,):
             raise GeometryError("surface chart points must have shape (..., 2)")
         flat = uv.reshape(-1, 2)
-        u = self.u_range[0] + flat[:, 0] * (self.u_range[1] - self.u_range[0])
-        v = self.v_range[0] + flat[:, 1] * (self.v_range[1] - self.v_range[0])
+        u = _map(flat[:, 0], *self.u_range)
+        v = _map(flat[:, 1], *self.v_range)
         knots_u, knots_v = np.asarray(self.knots_u), np.asarray(self.knots_v)
         count_u, count_v = len(self.controls), len(self.controls[0])
         spans_u = _reference.find_spans(self.degree_u, knots_u, count_u, u)
@@ -303,7 +336,7 @@ class NurbsSurface:
         basis_v = _reference.basis_derivatives(self.degree_v, knots_v, spans_v, v, 0)[:, 0, :]
         points = np.asarray(self.controls)
         weights = np.ones((count_u, count_v)) if self.weights is None else np.asarray(self.weights)
-        weights = np.ldexp(weights, -np.frexp(weights.max())[1])          # exact scaling, curve unchanged
+        weights = _scaled_weights(weights)
         homogeneous = np.concatenate((points * weights[..., None], weights[..., None]), axis=-1)
         rows = spans_u[:, None] - self.degree_u + np.arange(self.degree_u + 1)[None, :]
         cols = spans_v[:, None] - self.degree_v + np.arange(self.degree_v + 1)[None, :]
@@ -344,7 +377,9 @@ class CurveOnSurface:
             raise GeometryError("a curve on a surface needs a 2D NurbsCurve pcurve")
         if tuple(self.also_on) != ():
             raise GeometryError("also_on requires an exact shared-boundary proof (not available yet)")
-        # Positive weights keep the pcurve in the hull of its controls; the chart is [0, 1]^2.
+        # Supported domain, deliberately narrower than "curve inside the chart":
+        # the control polygon lies in [0, 1]^2, which with positive weights
+        # keeps the whole pcurve in the chart.
         if any(not (0.0 <= value <= 1.0) for point in self.pcurve.controls for value in point):
             raise GeometryError("the pcurve control polygon must lie inside the chart [0, 1]^2")
         matrix = _affine(self.transform)
@@ -355,7 +390,11 @@ class CurveOnSurface:
         chart = np.clip(self.pcurve.evaluate(parameters), 0.0, 1.0)
         points = self.support.evaluate_many(chart)
         matrix = np.asarray(self.transform)
-        return points @ matrix[:3, :3].T + matrix[:3, 3]
+        with np.errstate(over="ignore", invalid="ignore"):
+            result = points @ matrix[:3, :3].T + matrix[:3, 3]
+        if not np.all(np.isfinite(result)):
+            raise GeometryError("curve on surface is not representable in float64 after its transform")
+        return result
 
     def subcurve(self, lower, upper) -> "CurveOnSurface":
         return replace(self, pcurve=self.pcurve.subcurve(lower, upper))
