@@ -253,3 +253,25 @@ def test_definition_value_fast_path_uses_type_identity():
 
     assert definition_value([D(1)]) == [{"type": D.__qualname__, "fields": {"x": 1}}]
     definition_checksum([D(1)])                       # serialisable as on main
+
+
+def test_definition_value_fast_path_runs_no_user_equality():
+    from dataclasses import dataclass
+    from anygeometry.definition_binding import definition_value
+
+    class Meta(type):
+        def __eq__(cls, other):
+            if other is str:
+                cls.probes += 1
+                if cls.probes > 1:
+                    raise RuntimeError("duplicate primitive probe")
+            return False
+        __hash__ = type.__hash__
+
+    @dataclass(frozen=True)
+    class D(metaclass=Meta):
+        x: int
+
+    D.probes = 0
+    assert definition_value([D(1)]) == [{"type": D.__qualname__, "fields": {"x": 1}}]
+    assert D.probes == 1                              # exactly as many probes as main

@@ -9,9 +9,12 @@ import numpy as np
 
 
 def _exact_primitive(item):
-    # Exactly the test _definition_value applies before returning an item
-    # unchanged, so the flat fast path expands every item as the recursion does.
-    return item is None or type(item) in (str, int, float, bool)
+    # Identity tests only: no user code (e.g. a metaclass __eq__) runs here.
+    # Every item accepted is one _definition_value returns unchanged (its
+    # ``in`` test matches by identity first); anything else takes the
+    # unchanged per-item recursion, which applies the original test once.
+    kind = type(item)
+    return item is None or kind is str or kind is int or kind is float or kind is bool
 
 
 def definition_value(value):
