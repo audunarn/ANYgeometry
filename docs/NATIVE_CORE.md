@@ -61,3 +61,19 @@ references.
   Linux (manylinux and musllinux x86_64) and macOS (arm64 and x86_64), each
   wheel installed on Python 3.11-3.14, and a pure-Python sdist install. It
   does not publish; the release workflow is unchanged.
+
+## Kernel input contract
+
+Kernels assume validated input and check their own buffers (float64,
+C-contiguous, aligned, consistent sizes, parameters in the domain); offsets use
+`Py_ssize_t`. The validating entry points in `anygeometry.backend` copy to
+aligned storage and establish the mathematical contract first. For B-spline
+curves (`bspline_curve`): degree 1-15, clamped knots (end multiplicity exactly
+degree + 1, interior multiplicity at most the degree, non-empty spans longer
+than 64 eps of the knot scale and than 2**-968), finite controls, positive
+finite weights scaled by an exact power of two. A non-finite result is refused
+with `ValueError`, never returned.
+
+Open (architecture section 5.4): import-time probes of the effective
+floating-point contraction and rounding mode are not implemented yet; the
+compiler flags are set in `setup.py` only.

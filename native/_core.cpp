@@ -83,10 +83,10 @@ PyObject* bspline_evaluate(PyObject*, PyObject* args) {
     }
     const double* w = weights.size() == 0 ? nullptr : weights.data();
     double* o = out.mutable_data();
-    const int c = static_cast<int>(count), d = static_cast<int>(dim);
+    const int d = static_cast<int>(dim);
     Py_BEGIN_ALLOW_THREADS
     for (Py_ssize_t i = 0; i < m; ++i) {
-        evaluate_point(degree, k, c, controls.data(), d, w, t.data()[i], order, o + i * (order + 1) * dim);
+        evaluate_point(degree, k, count, controls.data(), d, w, t.data()[i], order, o + i * (order + 1) * dim);
     }
     Py_END_ALLOW_THREADS
     Py_RETURN_NONE;

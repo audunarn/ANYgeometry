@@ -17,10 +17,10 @@ constexpr int kMaxDimension = 4;
 
 // Index i with knots[i] <= t < knots[i+1]; the end of the domain belongs to the
 // last non-empty span. Same rule as reference.find_spans.
-inline int find_span(int degree, const double* knots, int count, double t) {
-    const int n = count - 1;
+inline Py_ssize_t find_span(int degree, const double* knots, Py_ssize_t count, double t) {
+    const Py_ssize_t n = count - 1;
     if (t >= knots[n + 1]) {
-        int last = n;
+        Py_ssize_t last = n;
         while (last > degree && knots[last] == knots[n + 1]) {
             --last;
         }
@@ -28,12 +28,12 @@ inline int find_span(int degree, const double* knots, int count, double t) {
     }
     // upper_bound over the whole vector, then clip to [degree, n].
     const double* end = knots + n + degree + 2;
-    int span = static_cast<int>(std::upper_bound(knots, end, t) - knots) - 1;
-    return std::min(std::max(span, degree), n);
+    const Py_ssize_t span = (std::upper_bound(knots, end, t) - knots) - 1;
+    return std::min(std::max(span, static_cast<Py_ssize_t>(degree)), n);
 }
 
 // ders[k * (p+1) + j]: k-th derivative of the j-th non-zero basis function (A2.3).
-inline void basis_derivatives(int p, const double* knots, int span, double t, int order, double* ders) {
+inline void basis_derivatives(int p, const double* knots, Py_ssize_t span, double t, int order, double* ders) {
     double ndu[kMaxDegree + 1][kMaxDegree + 1];
     double left[kMaxDegree + 1], right[kMaxDegree + 1];
     ndu[0][0] = 1.0;
@@ -98,12 +98,13 @@ inline void basis_derivatives(int p, const double* knots, int span, double t, in
 
 // Point and derivatives up to ``order`` at one parameter; out[k * dim + d].
 // ``weights`` may be null for a polynomial curve.
-inline void evaluate_point(int p, const double* knots, int count, const double* controls, int dim,
+inline void evaluate_point(int p, const double* knots, Py_ssize_t count, const double* controls, int dim,
                            const double* weights, double t, int order, double* out) {
     double ders[(kMaxOrder + 1) * (kMaxDegree + 1)];
-    const int span = find_span(p, knots, count, t);
+    const Py_ssize_t span = find_span(p, knots, count, t);
     basis_derivatives(p, knots, span, t, order, ders);
-    const int width = p + 1, first = span - p;
+    const int width = p + 1;
+    const Py_ssize_t first = span - p;
     if (weights == nullptr) {
         for (int k = 0; k <= order; ++k) {
             for (int d = 0; d < dim; ++d) {

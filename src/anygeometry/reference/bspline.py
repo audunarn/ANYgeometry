@@ -155,6 +155,8 @@ def bezier_segments(degree: int, knots: np.ndarray, controls: np.ndarray, weight
     k, c, w = knots, np.asarray(controls, dtype=float), None if weights is None else np.asarray(weights, dtype=float)
     for value in distinct:
         multiplicity = int(np.count_nonzero(k == value))
+        if multiplicity > p:
+            raise ValueError("Bezier decomposition requires interior knot multiplicity <= degree")
         if multiplicity < p:
             k, c, w = insert_knot(p, k, c, w, value, p - multiplicity)
     breaks = [k[p], *distinct, k[-p - 1]]

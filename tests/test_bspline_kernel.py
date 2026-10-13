@@ -196,3 +196,68 @@ def test_native_kernel_refuses_bad_buffers_itself():
         core.bspline_evaluate(degree, knots[:-1], controls, weights, np.array([.5]), 0, out)
     with pytest.raises(ValueError, match="unsupported"):
         core.bspline_evaluate(16, knots, controls, weights, np.array([.5]), 0, out)
+
+
+# ----------------------------------------------------------------------------------- review regressions
+
+
+@pytest.mark.parametrize("knots,message", [
+    ([0, 0, 0, 0], "clamped"),                                   # empty domain
+    ([0, 0, 0, 1, 1], r"n \+ degree \+ 1"),                     # wrong length
+    ([0, 0, 0, 1], "clamped"),                                   # end multiplicity degree + 2
+    ([0, 0, 5e-324, 5e-324], "64 eps"),                          # subnormal domain: no representable span
+])
+def test_degenerate_knot_vectors_are_refused(knots, message):
+    with pytest.raises(ValueError, match=message):
+        backend.bspline_curve(1, np.array(knots, float), [[0.], [1.]], None, [0.], 2)
+
+
+def test_a_span_of_a_few_ulps_is_refused():
+    with pytest.raises(ValueError, match="64 eps"):
+        backend.bspline_curve(1, [0, 0, 1, 1 + 1e-15, 2, 2.], [[0.], [1.], [2.], [3.]], None, [.5])
+
+
+def test_interior_multiplicity_above_the_degree_is_refused():
+    knots = np.array([0, 0, .5, .5, 1, 1.])                      # degree 1: a discontinuous joint
+    controls = np.array([[0.], [1.], [10.], [11.]])
+    with pytest.raises(ValueError, match="multiplicity must not exceed the degree"):
+        backend.bspline_curve(1, knots, controls, None, [.75])
+    with pytest.raises(ValueError, match="multiplicity <= degree"):
+        ref.bezier_segments(1, knots, controls, None)
+
+
+def test_huge_weights_are_scaled_not_overflowed():
+    knots = np.array([0, 0, 1, 1.])
+    values = backend.bspline_curve(1, knots, [[2.], [2.]], [1e308, 1e308], [.5], 1)
+    np.testing.assert_array_equal(values[0], [[2.], [0.]])
+    values = backend.bspline_curve(2, *CIRCLE[1:3], CIRCLE[3] * 1e300, [.125], 0)
+    np.testing.assert_allclose(values[0, 0], [HALF, HALF], atol=1e-15)
+
+
+def test_non_representable_results_are_refused():
+    knots = np.array([0, 0, 1, 1.])
+    # Positions stay in the control hull; a derivative can exceed float64.
+    with pytest.raises(ValueError, match="numerical failure"):
+        backend.bspline_curve(1, knots, [[-1.7e308], [1.7e308]], None, [.5], 1)
+
+
+@needs_native
+def test_native_kernel_refuses_unaligned_buffers():
+    raw = np.ndarray((2, 1), dtype="f8", buffer=bytearray(17), offset=1)
+    raw[:] = [[0.], [1.]]
+    out = np.empty((1, 1, 1))
+    with pytest.raises(ValueError, match="aligned"):
+        backend._CORE.bspline_evaluate(1, np.array([0, 0, 1, 1.]), raw, np.empty(0), np.array([.5]), 0, out)
+    # The validating wrapper copies to aligned storage and evaluates.
+    np.testing.assert_array_equal(backend.bspline_curve(1, [0, 0, 1, 1.], raw, None, [.5])[0, 0], [.5])
+
+
+@needs_native
+def test_maximum_degree_agrees_with_the_reference():
+    rng = np.random.default_rng(15)
+    curve = random_curve(rng, 15, 20, dim=4, rational=True)
+    t = np.concatenate((rng.uniform(0, 1, 200), [0., 1.]))
+    native = evaluate(*curve, t, order=2)
+    expected = evaluate(*curve, t, order=2, route="reference")
+    scale = np.maximum(1.0, np.max(np.abs(expected), axis=0))
+    assert np.max(np.abs(native - expected) / scale) <= 1e-11

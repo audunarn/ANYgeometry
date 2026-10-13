@@ -44,6 +44,21 @@ def main() -> None:
     if not np.array_equal(points, expected_points):
         sys.exit("plane_evaluate disagrees with its reference")
 
+    # A rational quadratic full circle: radius exact to rounding, kernel = reference.
+    half = 0.5 ** 0.5
+    knots = np.array([0, 0, 0, .25, .25, .5, .5, .75, .75, 1, 1, 1.])
+    controls = np.array([[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1], [1, 0.]])
+    weights = np.array([1, half, 1, half, 1, half, 1, half, 1.])
+    t = np.linspace(0.0, 1.0, 1001)
+    values = backend.bspline_curve(2, knots, controls, weights, t, 2)
+    if np.max(np.abs(np.linalg.norm(values[:, 0], axis=1) - 1.0)) > 4 * np.finfo(float).eps:
+        sys.exit("bspline_curve circle radius error exceeds 4 eps")
+    expected_values = np.empty_like(values)
+    scaled = np.ldexp(weights, -np.frexp(weights.max())[1])
+    reference.bspline_evaluate(2, knots, controls, scaled, t, 2, expected_values)
+    if np.max(np.abs(values - expected_values)) > 1e-13:
+        sys.exit("bspline_evaluate disagrees with its reference")
+
     model = anygeometry.GeometryModel()
     model.add_plate(model.add_points(((0, 0, 0), (2, 0, 0), (2, 1, 0), (0, 1, 0))))
     model.validate_topology()

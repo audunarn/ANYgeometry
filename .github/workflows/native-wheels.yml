@@ -31,8 +31,14 @@ jobs:
           CIBW_SKIP: "*-win32 *-manylinux_i686 *-musllinux_i686"
           CIBW_ARCHS_LINUX: "x86_64"
           CIBW_ENVIRONMENT: "ANYGEOMETRY_REQUIRE_NATIVE=1"
-          CIBW_TEST_REQUIRES: "numpy>=1.26"
-          CIBW_TEST_COMMAND: "python {project}/tools/native_wheel_smoke.py --require-native"
+          CIBW_TEST_ENVIRONMENT: "ANYGEOMETRY_REQUIRE_NATIVE=1"
+          CIBW_TEST_REQUIRES: "numpy>=1.26 pytest>=8"
+          # The installed wheel, not the checkout: pythonpath is cleared so
+          # the tests import anygeometry from site-packages.
+          CIBW_TEST_COMMAND: >-
+            python {project}/tools/native_wheel_smoke.py --require-native &&
+            python -m pytest -q -p no:cacheprovider -o addopts= -o pythonpath= --rootdir {project}
+            {project}/tests/test_native_backend.py {project}/tests/test_bspline_kernel.py
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: native-wheels-${{ matrix.os }}
@@ -61,10 +67,14 @@ jobs:
       - name: Install the wheel and run the smoke test outside the tree
         shell: bash
         run: |
-          python -m pip install "numpy>=1.26"
-          python -m pip install --no-deps --no-index wheelhouse/*abi3*.whl
+          python -m pip install "numpy>=1.26" "pytest>=8"
+          # By name from the wheelhouse: pip picks the wheel for this platform
+          # (manylinux vs musllinux) and refuses if none is compatible.
+          python -m pip install --no-deps --no-index --find-links wheelhouse anygeometry
           cd "$RUNNER_TEMP"
+          export ANYGEOMETRY_REQUIRE_NATIVE=1
           python "$GITHUB_WORKSPACE/tools/native_wheel_smoke.py" --require-native
+          python -m pytest -q -p no:cacheprovider -o addopts= -o pythonpath= --rootdir "$GITHUB_WORKSPACE"             "$GITHUB_WORKSPACE/tests/test_native_backend.py" "$GITHUB_WORKSPACE/tests/test_bspline_kernel.py"
 
   sdist-fallback:
     name: sdist without the compiled core reports the Python backend

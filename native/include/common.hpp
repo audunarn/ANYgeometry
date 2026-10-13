@@ -18,6 +18,7 @@
 #include <Python.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 
 namespace anygeometry_core {
@@ -44,6 +45,10 @@ struct DoubleBuffer {
                 || !(std::strcmp(view.format, "d") == 0 || std::strcmp(view.format, "<d") == 0
                      || std::strcmp(view.format, "=d") == 0)) {
             PyErr_Format(PyExc_TypeError, "%s must be a float64 buffer", name);
+            return false;
+        }
+        if (reinterpret_cast<std::uintptr_t>(view.buf) % alignof(double) != 0) {
+            PyErr_Format(PyExc_ValueError, "%s must be an aligned float64 buffer", name);
             return false;
         }
         return true;

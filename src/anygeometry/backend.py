@@ -56,38 +56,78 @@ plane_evaluate = _KERNELS.plane_evaluate
 bspline_evaluate = _KERNELS.bspline_evaluate
 
 MAX_BSPLINE_DEGREE = 15
+_MIN_SPAN = 2.0 ** -968
+
+
+def _aligned(values) -> np.ndarray:
+    return np.require(values, dtype=np.float64, requirements=["C", "A"])
+
+
+def check_clamped_knots(degree: int, knots: np.ndarray, count: int) -> None:
+    """Raise ``ValueError`` unless ``knots`` is a clamped knot vector the kernels support.
+
+    End values repeat exactly ``degree + 1`` times, interior values at most
+    ``degree`` times (so every joint keeps at least C0 continuity), knots are
+    finite and non-decreasing, and every non-empty span is longer than
+    ``64 * eps`` times the knot scale and than ``2**-968`` (so basis ratios
+    never involve subnormal differences).
+    """
+    p = degree
+    if knots.shape != (count + p + 1,) or not np.all(np.isfinite(knots)) or np.any(np.diff(knots) < 0):
+        raise ValueError("knots must be finite and non-decreasing with n + degree + 1 values")
+    lower, upper = knots[p], knots[count]
+    if not (np.all(knots[: p + 1] == lower) and np.all(knots[count:] == upper)):
+        raise ValueError("knots must be clamped: each end value repeated degree + 1 times")
+    if not lower < upper or knots[p + 1] == lower or knots[count - 1] == upper:
+        raise ValueError("knots must be clamped with a non-empty domain and end multiplicity degree + 1")
+    interior = knots[p + 1: count]
+    values, multiplicity = np.unique(interior, return_counts=True)
+    if values.size and int(multiplicity.max()) > p:
+        raise ValueError("interior knot multiplicity must not exceed the degree")
+    spans = np.diff(np.concatenate(([lower], values, [upper])))
+    floor = max(64 * np.finfo(float).eps * max(upper - lower, abs(lower), abs(upper)), _MIN_SPAN)
+    if np.any(spans <= floor):
+        raise ValueError("knot spans must be longer than 64 eps times the knot scale (and normal floats)")
 
 
 def bspline_curve(degree, knots, controls, weights, t, order=0):
     """Points and derivatives of a B-spline/NURBS curve, shape ``(m, order+1, dim)``.
 
-    Validates the inputs once and runs the selected kernel. ``weights`` is
-    ``None`` for a polynomial curve. Raises ``ValueError`` for an invalid
-    definition or a parameter outside ``[knots[degree], knots[-degree-1]]``.
+    Validates the definition once (finite clamped knots per
+    :func:`check_clamped_knots`, positive finite weights) and runs the selected
+    kernel. ``weights`` is ``None`` for a polynomial curve; they are scaled by
+    an exact power of two (the curve is unchanged) so the homogeneous
+    arithmetic cannot overflow through the weights. A non-finite result is
+    refused, never returned. Raises ``ValueError`` for invalid input or a
+    parameter outside ``[knots[degree], knots[n]]``.
     """
     degree, order = int(degree), int(order)
-    knots = np.ascontiguousarray(knots, dtype=np.float64)
-    controls = np.ascontiguousarray(controls, dtype=np.float64)
-    t = np.ascontiguousarray(np.atleast_1d(np.asarray(t, dtype=np.float64)))
     if not 1 <= degree <= MAX_BSPLINE_DEGREE or not 0 <= order <= 2:
         raise ValueError("unsupported B-spline degree or derivative order")
+    knots = _aligned(knots)
+    controls = _aligned(controls)
+    t = _aligned(np.atleast_1d(np.asarray(t, dtype=np.float64)))
     if controls.ndim != 2 or not 1 <= controls.shape[1] <= 4 or len(controls) < degree + 1:
         raise ValueError("controls must be (n, dim) with dim <= 4 and n > degree")
     count = len(controls)
-    if knots.shape != (count + degree + 1,) or np.any(np.diff(knots) < 0):
-        raise ValueError("knots must be non-decreasing with n + degree + 1 values")
+    check_clamped_knots(degree, knots, count)
+    if not np.all(np.isfinite(controls)):
+        raise ValueError("B-spline controls must be finite")
     if weights is None:
         weights = np.empty(0)
     else:
-        weights = np.ascontiguousarray(weights, dtype=np.float64)
-        if weights.shape != (count,) or not np.all(weights > 0):
-            raise ValueError("weights must be positive, one per control point")
-    if not (np.all(np.isfinite(knots)) and np.all(np.isfinite(controls)) and np.all(np.isfinite(weights))):
-        raise ValueError("B-spline definition must be finite")
+        weights = _aligned(weights)
+        if weights.shape != (count,) or not np.all(np.isfinite(weights)) or not np.all(weights > 0):
+            raise ValueError("weights must be positive and finite, one per control point")
+        weights = _aligned(np.ldexp(weights, -np.frexp(weights.max())[1]))
+        if not np.all(weights > 0):
+            raise ValueError("weight ratio is not representable in float64")
     if t.ndim != 1 or not np.all((t >= knots[degree]) & (t <= knots[count])):
         raise ValueError("parameter outside the knot domain")
     out = np.empty((len(t), order + 1, controls.shape[1]))
     bspline_evaluate(degree, knots, controls, weights, t, order, out)
+    if not np.all(np.isfinite(out)):
+        raise ValueError("B-spline evaluation is not representable in float64 (numerical failure)")
     return out
 
 
