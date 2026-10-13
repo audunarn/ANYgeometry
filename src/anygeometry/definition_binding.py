@@ -8,6 +8,9 @@ import json
 import numpy as np
 
 
+_PRIMITIVES = (str, int, float, bool, type(None))
+
+
 def definition_value(value):
     # Preserve independent mutable expansions for each public output occurrence.
     return _definition_value(value, None)
@@ -35,7 +38,12 @@ def _definition_value(value, memo):
     elif isinstance(value, Mapping):
         result = {str(key):_definition_value(item, memo) for key,item in value.items()}
     elif isinstance(value, (tuple,list)):
-        result = [_definition_value(item, memo) for item in value]
+        # Flat runs of exact primitives (control coordinates, knot vectors)
+        # are their own expansion: one list copy instead of a call per item.
+        if all(type(item) in _PRIMITIVES for item in value):
+            result = list(value)
+        else:
+            result = [_definition_value(item, memo) for item in value]
     elif isinstance(value, Enum):
         return value.value
     elif isinstance(value, UUID):

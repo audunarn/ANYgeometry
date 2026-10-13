@@ -34,6 +34,9 @@ class _SubcurveEnclosureUnavailable(GeometryError):
 
 
 def _pack(value):
+    if type(value) is float:
+        # Identical to Fraction(value): the reduced ratio, same errors for nan/inf.
+        return value.as_integer_ratio()
     value = Fraction(value)
     return value.numerator, value.denominator
 
