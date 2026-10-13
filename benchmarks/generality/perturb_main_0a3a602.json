@@ -1,0 +1,186 @@
+{
+  "anygeometry": "C:\\Github\\ANYgeometry\\.worktrees\\g0-corpus\\src\\anygeometry\\__init__.py",
+  "trials": 4,
+  "results": {
+    "pipes6": {
+      "reference": "e3075f70e029fb9d",
+      "sites": {
+        "plane.local_uv": {
+          "changed": 0,
+          "outcomes": []
+        },
+        "cylinder.local_uv": {
+          "changed": 0,
+          "outcomes": []
+        },
+        "cone.local_uv": {
+          "changed": 0,
+          "outcomes": []
+        },
+        "ellipse.evaluate": {
+          "changed": 0,
+          "outcomes": []
+        },
+        "line.evaluate": {
+          "changed": 0,
+          "outcomes": []
+        }
+      }
+    },
+    "rings8": {
+      "reference": "930925cb0953487d",
+      "sites": {
+        "plane.local_uv": {
+          "changed": 0,
+          "outcomes": []
+        },
+        "cylinder.local_uv": {
+          "changed": 0,
+          "outcomes": []
+        },
+        "cone.local_uv": {
+          "changed": 0,
+          "outcomes": []
+        },
+        "ellipse.evaluate": {
+          "changed": 0,
+          "outcomes": []
+        },
+        "line.evaluate": {
+          "changed": 0,
+          "outcomes": []
+        }
+      }
+    },
+    "grid16": {
+      "reference": "995f3a7ad98f8115",
+      "sites": {
+        "plane.local_uv": {
+          "changed": 0,
+          "outcomes": []
+        },
+        "cylinder.local_uv": {
+          "changed": 0,
+          "outcomes": []
+        },
+        "cone.local_uv": {
+          "changed": 0,
+          "outcomes": []
+        },
+        "ellipse.evaluate": {
+          "changed": 0,
+          "outcomes": []
+        },
+        "line.evaluate": {
+          "changed": 0,
+          "outcomes": []
+        }
+      }
+    },
+    "grid32": {
+      "reference": "9cbd54abd6615efc",
+      "sites": {
+        "plane.local_uv": {
+          "changed": 0,
+          "outcomes": []
+        },
+        "cylinder.local_uv": {
+          "changed": 0,
+          "outcomes": []
+        },
+        "cone.local_uv": {
+          "changed": 0,
+          "outcomes": []
+        },
+        "ellipse.evaluate": {
+          "changed": 0,
+          "outcomes": []
+        },
+        "line.evaluate": {
+          "changed": 0,
+          "outcomes": []
+        }
+      }
+    },
+    "tilted8": {
+      "reference": "06f08c8db11be1c4",
+      "sites": {
+        "plane.local_uv": {
+          "changed": 0,
+          "outcomes": []
+        },
+        "cylinder.local_uv": {
+          "changed": 0,
+          "outcomes": []
+        },
+        "cone.local_uv": {
+          "changed": 0,
+          "outcomes": []
+        },
+        "ellipse.evaluate": {
+          "changed": 0,
+          "outcomes": []
+        },
+        "line.evaluate": {
+          "changed": 4,
+          "outcomes": [
+            "511f860ece662e90",
+            "6da53c34f5e08a24",
+            "7299d90c193db7ee",
+            "b7a92926e6740f08"
+          ]
+        }
+      }
+    },
+    "cubic_wall_pipe": {
+      "reference": "ef78c738c9d60c38",
+      "sites": {
+        "plane.local_uv": {
+          "changed": 0,
+          "outcomes": []
+        },
+        "cylinder.local_uv": {
+          "changed": 0,
+          "outcomes": []
+        },
+        "cone.local_uv": {
+          "changed": 0,
+          "outcomes": []
+        },
+        "ellipse.evaluate": {
+          "changed": 0,
+          "outcomes": []
+        },
+        "line.evaluate": {
+          "changed": 0,
+          "outcomes": []
+        }
+      }
+    },
+    "cone_pipe": {
+      "reference": "6a4ff411669a5ad2",
+      "sites": {
+        "plane.local_uv": {
+          "changed": 0,
+          "outcomes": []
+        },
+        "cylinder.local_uv": {
+          "changed": 0,
+          "outcomes": []
+        },
+        "cone.local_uv": {
+          "changed": 0,
+          "outcomes": []
+        },
+        "ellipse.evaluate": {
+          "changed": 0,
+          "outcomes": []
+        },
+        "line.evaluate": {
+          "changed": 0,
+          "outcomes": []
+        }
+      }
+    }
+  }
+}
