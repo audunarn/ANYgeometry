@@ -33,6 +33,7 @@ __all__ = [
     "clip_line_to_region",
     "plane_plane_line",
     "point_in_region",
+    "region_is_simple",
     "to_float",
 ]
 
@@ -145,7 +146,13 @@ def _cross2(a, b) -> Fraction:
 
 
 def point_in_region(point, loops: Sequence[Sequence]) -> Outcome:
-    """``ABOVE`` inside, ``EQUAL`` on a boundary, ``BELOW`` outside; ``loops[0]`` outer, the rest holes."""
+    """``ABOVE`` inside, ``EQUAL`` on a boundary, ``BELOW`` outside; ``loops[0]`` outer, the rest holes.
+
+    Prerequisite (checked by callers with :func:`region_is_simple`): simple,
+    non-degenerate loops whose holes lie inside the outer loop.
+    """
+    if not loops:
+        raise GeometryError("a region needs at least its outer loop")
     outer = point_in_polygon(point, loops[0])
     if outer is not Outcome.ABOVE:
         return outer
@@ -162,10 +169,12 @@ def clip_line_to_region(anchor_uv, direction_uv, loops: Sequence[Sequence]):
     """Exact intersection of the chart line ``anchor + s direction`` with a closed region.
 
     ``loops`` are straight-edged chart polygons (exact rational vertices), the
-    first the outer boundary, the rest holes. Returns ``(intervals, points)``:
-    sorted closed parameter intervals ``(s0, s1)`` with ``s0 < s1`` where the
-    line is in the region (including runs along a boundary edge), and sorted
-    isolated parameters where it only touches the region.
+    first the outer boundary, the rest holes (prerequisite: :func:`region_is_simple`).
+    Returns ``(intervals, points)``: sorted closed parameter intervals
+    ``(s0, s1)``, ``s0 < s1``, where the line is in the region (including runs
+    along a boundary edge), split at every boundary point the line passes (as
+    a polygon overlay nodes them), and sorted isolated parameters where it only
+    touches the region.
     """
     a = tuple(exact(value) for value in anchor_uv)
     d = tuple(exact(value) for value in direction_uv)
@@ -191,18 +200,58 @@ def clip_line_to_region(anchor_uv, direction_uv, loops: Sequence[Sequence]):
     def member(s) -> bool:
         return point_in_region((a[0] + s * d[0], a[1] + s * d[1]), loops) is not Outcome.BELOW
 
-    included_gaps = [member((left + right) / 2) for left, right in zip(ordered, ordered[1:])]
-    intervals: list[tuple[Fraction, Fraction]] = []
-    points: list[Fraction] = []
-    start = None
-    for index, s in enumerate(ordered):
-        before = included_gaps[index - 1] if index > 0 else False
-        after = included_gaps[index] if index < len(included_gaps) else False
-        if after and not before:
-            start = s
-        elif before and not after:
-            intervals.append((start, s))
-            start = None
-        elif not before and not after and member(s):
-            points.append(s)
+    # Every event is a boundary point of the line. As the polygon overlay does,
+    # a run of included gaps is split at each event it contains (e.g. where it
+    # passes a reflex vertex of the boundary), so each interval is one gap.
+    intervals: list[tuple[Fraction, Fraction]] = [
+        (left, right) for left, right in zip(ordered, ordered[1:]) if member((left + right) / 2)]
+    covered = {end for interval in intervals for end in interval}
+    points = [s for s in ordered if s not in covered and member(s)]
     return intervals, points
+
+
+def _segments_cross(p, q, r, t) -> bool:
+    """Whether closed segments pq and rt share a point (exact)."""
+    def orientation(a, b, c):
+        value = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+        return (value > 0) - (value < 0)
+
+    def on(a, b, c):
+        return min(a[0], b[0]) <= c[0] <= max(a[0], b[0]) and min(a[1], b[1]) <= c[1] <= max(a[1], b[1])
+
+    o1, o2, o3, o4 = orientation(p, q, r), orientation(p, q, t), orientation(r, t, p), orientation(r, t, q)
+    if o1 != o2 and o3 != o4:
+        return True
+    return ((o1 == 0 and on(p, q, r)) or (o2 == 0 and on(p, q, t))
+            or (o3 == 0 and on(r, t, p)) or (o4 == 0 and on(r, t, q)))
+
+
+def region_is_simple(loops: Sequence[Sequence]) -> bool:
+    """Exact validity of a straight-edged region: every loop has at least three
+    vertices, no two edges meet except consecutive edges of one loop at their
+    shared vertex, and every loop has non-zero exact area."""
+    edges = []
+    for index, loop in enumerate(loops):
+        vertices = [tuple(exact(value) for value in vertex) for vertex in loop]
+        if len(vertices) < 3:
+            return False
+        area = sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(vertices, vertices[1:] + vertices[:1]))
+        if area == 0:
+            return False
+        count = len(vertices)
+        edges.extend((index, k, count, vertices[k], vertices[(k + 1) % count]) for k in range(count))
+    for i, (loop_a, k_a, count_a, p, q) in enumerate(edges):
+        for loop_b, k_b, count_b, r, t in edges[i + 1:]:
+            if loop_a == loop_b and (k_b - k_a) % count_a in (1, count_a - 1):
+                shared = q if (k_b - k_a) % count_a == 1 else p
+                other_a = p if shared is q else q
+                other_b = t if shared is r else r
+                # adjacent edges may only share their common vertex (no overlap, no fold-back)
+                cross = (other_a[0] - shared[0]) * (other_b[1] - shared[1]) - (other_a[1] - shared[1]) * (other_b[0] - shared[0])
+                dot = (other_a[0] - shared[0]) * (other_b[0] - shared[0]) + (other_a[1] - shared[1]) * (other_b[1] - shared[1])
+                if cross == 0 and dot > 0:
+                    return False
+                continue
+            if _segments_cross(p, q, r, t):
+                return False
+    return True

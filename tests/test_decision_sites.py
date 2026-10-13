@@ -209,9 +209,6 @@ def _has(report, file, function, subkind, inventory_id):
 
 
 @pytest.mark.parametrize("file, function, subkind, inventory_id", [
-    # Plane.local_uv feeding shapely covers / boundary.covers (R.0 tangency flip).
-    ("intersections.py", "clip_line_to_face", "library-predicate", "A1"),
-    ("intersections.py", "clip_line_to_face", "library-predicate", "E4"),
     # material_arrangement vertex lookup (C1).
     ("material_arrangement.py", "_VertexLookup.find", "tolerance-compare", "C1"),
     # batch_intersections positive-area overlap probe (section-10 X4).
@@ -226,6 +223,13 @@ def _has(report, file, function, subkind, inventory_id):
 ])
 def test_inventory_anchors_are_detected(report, file, function, subkind, inventory_id):
     assert _has(report, file, function, subkind, inventory_id)
+
+
+def test_certified_planar_query_route_has_no_library_predicates(report):
+    # R1a replaced Plane.local_uv + Shapely covers/boundary.covers (the R.0 tangency flip,
+    # inventory A1/E4) on the planar line-clipping route with exact predicates.
+    assert not any(site["file"].endswith("intersections.py") and site["function"] == "clip_line_to_face"
+                   and site["subkind"] == "library-predicate" for site in report["sites"])
 
 
 def test_report_is_complete_and_reporting_mode_does_not_fail(report, tmp_path_factory):

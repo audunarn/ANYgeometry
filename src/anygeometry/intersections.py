@@ -18,9 +18,9 @@ from .curved_intersections import (
 )
 from .entities import EntityRef, OrientedEdge
 from .errors import GeometryError
-from .exact_predicates import Outcome, exact, exact_dot, exact_vector
+from .exact_predicates import Outcome, canonical_extent, exact, exact_dot, exact_vector
 from .planar_exact import (ExactLine, ExactPlane, clip_line_to_region, plane_plane_line, point_in_region,
-                           to_float)
+                           region_is_simple, to_float)
 from .identity import (
     EntityHandle,
     ResolutionStatus,
@@ -134,12 +134,20 @@ def clip_line_to_face(
     # region tests are exact rational ray parity. Floats are outputs only.
     exact_plane = ExactPlane.from_plane(plane)
     region = _exact_face_region(geometry, face, exact_plane)
+    if not region_is_simple(region):
+        return IntersectionResult(
+            IntersectionKind.UNCLASSIFIED,
+            diagnostics=("invalid_planar_face_polygon",),
+            second_parent=face_handle,
+            tolerance_used=tolerance_used,
+        )
     line = ExactLine.from_floats(point, raw_direction)
+    length_exact = exact(direction_length)
 
     def component_for_station(parameter) -> IntersectionComponent:
         world = line.at(parameter)
         uv = to_float(exact_plane.uv(world))
-        distance = float(parameter) * direction_length
+        distance = float(parameter * length_exact)
         return IntersectionComponent(
             (to_float(world),),
             IntersectionQuality.VERIFIED_APPROXIMATE,
@@ -183,8 +191,10 @@ def clip_line_to_face(
     unit_direction = tuple(float(item) for item in direction)
     line_components = []
     for lower, upper in intervals:
-        worlds = (line.at(lower), line.at(upper))
-        line_parameters = (float(lower) * direction_length, float(upper) * direction_length)
+        # As before, coplanar witnesses are reported on the support plane
+        # (the line itself may lie off it within tolerance).
+        worlds = tuple(exact_plane.world(*exact_plane.uv(line.at(end))) for end in (lower, upper))
+        line_parameters = (float(lower * length_exact), float(upper * length_exact))
         line_components.append(
             IntersectionComponent(
                 tuple(to_float(world) for world in worlds),
@@ -243,6 +253,8 @@ def _exact_face_clip(geometry: GeometryModel, face_id: int, exact_plane: "ExactP
                 diagnostics=("curved_planar_trim_requires_a_qualified_curve_backend",),
             )
     region = _exact_face_region(geometry, face, exact_plane)
+    if not region_is_simple(region):
+        return IntersectionResult(IntersectionKind.UNCLASSIFIED, diagnostics=("invalid_planar_face_polygon",))
     return clip_line_to_region(exact_plane.uv(line.anchor), exact_plane.uv_direction(line.direction), region)
 
 
@@ -671,9 +683,10 @@ def _face_length_scale(geometry: GeometryModel, face_id: int) -> float:
     bounds = geometry._entity_bounds(("face", int(face_id)))  # noqa: SLF001
     extent = 0.0
     if bounds is not None:
-        extent = float(
-            np.linalg.norm(np.asarray(bounds[3:], dtype=float) - bounds[:3])
-        )
+        # Canonical derivation (robust-predicate R1a, inventory X3): exact
+        # differences and squares, correctly rounded root. The tolerance that
+        # follows is a deterministic function of the stored bounds.
+        extent = canonical_extent(bounds[:3], bounds[3:])
     surface = geometry.faces[int(face_id)].surface
     if isinstance(surface, Cylinder):
         extent = max(extent, surface.radius, abs(surface.height))

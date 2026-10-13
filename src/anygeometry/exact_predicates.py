@@ -55,7 +55,9 @@ __all__ = [
     "Outcome",
     "RootInterval",
     "Station",
+    "canonical_extent",
     "canonical_order",
+    "correctly_rounded_sqrt",
     "certified_compare",
     "collect_decisions",
     "exact",
@@ -193,6 +195,31 @@ def exact_cross(a: Sequence, b: Sequence) -> tuple[Fraction, Fraction, Fraction]
 
 def exact_squared_distance(a: Sequence, b: Sequence) -> Fraction:
     return sum(((exact(x) - exact(y)) ** 2 for x, y in zip(a, b, strict=True)), Fraction(0))
+
+
+def correctly_rounded_sqrt(value) -> float:
+    """The double nearest to ``sqrt(value)`` for an exact non-negative rational (ties impossible).
+
+    Integer square root with 64 guard bits and a sticky bit, then CPython's
+    correctly rounded Fraction -> float conversion: a deterministic function of
+    the exact input, independent of libm and of summation order.
+    """
+    value = exact(value)
+    if value < 0:
+        raise GeometryError("square root of a negative quantity")
+    if value == 0:
+        return 0.0
+    shift = max(0, 64 + 53 - (value.numerator.bit_length() - value.denominator.bit_length()) // 2)
+    scaled = value * (1 << (2 * shift))
+    whole = scaled.numerator // scaled.denominator
+    root = math.isqrt(whole)
+    is_exact = root * root == whole and scaled.denominator == 1
+    return float(Fraction(2 * root + (0 if is_exact else 1), 1 << (shift + 1)))
+
+
+def canonical_extent(lower: Sequence, upper: Sequence) -> float:
+    """Correctly rounded length of the box diagonal ``upper - lower`` (exact differences and squares)."""
+    return correctly_rounded_sqrt(sum(((exact(b) - exact(a)) ** 2 for a, b in zip(lower, upper)), Fraction(0)))
 
 
 # ----------------------------------------------------------------------------------- T2 canonical interval procedure

@@ -65,12 +65,14 @@ HOLE = [(1, 1), (1, 2), (2, 2), (2, 1)]
 CONCAVE = [(0, 0), (4, 0), (4, 3), (2, 1), (0, 3)]
 
 
+# Expected values are the polygon overlay's own components (Shapely), which main reported:
+# runs are split at every boundary point they pass (hole vertices, reflex vertices).
 @pytest.mark.parametrize("anchor,direction,intervals,points", [
-    ((-1, 2), (1, 0), [(1, 5)], []),                                  # straight through
+    ((-1, 2), (1, 0), [(1, 2), (2, 3), (3, 5)], []),                 # along the hole's top edge
     ((-1, 1.5), (1, 0), [(1, 2), (3, 5)], []),                       # through the hole
-    ((-1, 0), (1, 0), [(1, 5)], []),                                 # along the bottom edge
-    ((-1, 1), (1, 0), [(1, 5)], []),                                 # along the hole's bottom edge
-    ((-1, 5), (1, -1), [(1, 5)], []),                                # the anti-diagonal (0, 4) -> (4, 0)
+    ((-1, 0), (1, 0), [(1, 5)], []),                                 # along the outer bottom edge
+    ((-1, 1), (1, 0), [(1, 2), (2, 3), (3, 5)], []),                 # along the hole's bottom edge
+    ((-1, 5), (1, -1), [(1, 3), (3, 5)], []),                        # anti-diagonal through the hole corner (2, 2)
     ((3, 5), (1, -1), [], [Fraction(1)]),                            # touches the corner (4, 4) only
     ((-1, -1), (1, 1), [(1, 2), (3, 5)], []),                        # diagonal through the hole corners
 ])
@@ -83,7 +85,7 @@ def test_clipping_square_with_hole(anchor, direction, intervals, points):
 def test_clipping_concave_notch_vertex_touch():
     # The horizontal line y = 1 touches the notch vertex (2, 1) from below the notch: two intervals meet there.
     intervals, points = clip_line_to_region((0, 1), (1, 0), [CONCAVE])
-    assert intervals == [(Fraction(0), Fraction(4))]
+    assert intervals == [(Fraction(0), Fraction(2)), (Fraction(2), Fraction(4))]      # split at the reflex vertex
     intervals, points = clip_line_to_region((0, 3), (1, 0), [CONCAVE])
     assert intervals == [] and points == [Fraction(0), Fraction(4)]
 
@@ -100,9 +102,13 @@ def test_clipping_matches_shapely_on_generic_lines():
         direction = (math.cos(angle), math.sin(angle))
         intervals, points = clip_line_to_region(anchor, direction, [CONCAVE])
         far = [(anchor[0] + t * direction[0], anchor[1] + t * direction[1]) for t in (-20.0, 20.0)]
-        expected = polygon.intersection(LineString(far)).length
-        length = sum(float(b - a) for a, b in intervals) * math.hypot(*map(float, direction))
-        assert length == pytest.approx(expected, rel=1e-12, abs=1e-12)
+        result = polygon.intersection(LineString(far))
+        pieces = [] if result.is_empty else [g for g in getattr(result, "geoms", [result]) if g.geom_type == "LineString"]
+        expected = sorted(tuple(sorted(((x - anchor[0]) * direction[0] + (y - anchor[1]) * direction[1])
+                                       for x, y in (piece.coords[0], piece.coords[-1]))) for piece in pieces)
+        assert len(intervals) == len(expected)                       # same components, not just the same length
+        for (a, b), (c, d) in zip(intervals, expected):
+            assert float(a) == pytest.approx(c, abs=1e-12) and float(b) == pytest.approx(d, abs=1e-12)
 
 
 def test_point_in_region_treats_hole_boundaries_as_boundary():
@@ -179,3 +185,51 @@ def test_planar_queries_do_not_depend_on_plane_chart_rounding(monkeypatch):
     assert query_intersection(model, a, b).kind is reference.kind
     face = int(a.id)
     assert clip_line_to_face(model, face, (-2., -.5, 0.), (1., 0., 0.)).kind is IntersectionKind.OVERLAP_CURVE
+
+
+# ----------------------------------------------------------------------------------- review regressions (R1a round 1)
+
+
+def test_reflex_vertex_split_keeps_main_semantics_for_both_operand_orders():
+    """A vertical face meeting the notch line y = 1 of a concave plate: main reported two
+    components (split at the reflex vertex) and TOUCH_POINT; merging them made it CROSS."""
+    model = GeometryModel()
+    concave = model.add_plate(tuple(model.add_points([(x, y, 0.) for x, y in CONCAVE])))
+    other = model.add_plate(tuple(model.add_points(((2., 1., -7.5e-10), (3., 1., 1.), (2., 1., 2.), (1., 1., 1.)))))
+    a, b = model.handle("face", concave), model.handle("face", other)
+    assert query_intersection(model, a, b).kind is IntersectionKind.TOUCH_POINT
+    assert query_intersection(model, b, a).kind is IntersectionKind.TOUCH_POINT
+
+
+def test_tiny_directions_report_physical_parameters_without_overflow():
+    model = GeometryModel()
+    face = model.add_plate(tuple(model.add_points(((0., 0., 0.), (1., 0., 0.), (1., 1., 0.), (0., 1., 0.)))))
+    result = clip_line_to_face(model, face, (0., .5, 0.), (5e-324, 0., 0.))
+    interval = result.components[0].first_parameter_range
+    assert result.kind is IntersectionKind.OVERLAP_CURVE and (interval.start, interval.end) == (0.0, 1.0)
+
+
+def test_coplanar_witnesses_lie_on_the_support_plane():
+    model = GeometryModel()
+    face = model.add_plate(tuple(model.add_points(((0., 0., 0.), (1., 0., 0.), (1., 1., 0.), (0., 1., 0.)))))
+    result = clip_line_to_face(model, face, (0., .5, 5e-10), (1., 0., 0.))
+    assert result.kind is IntersectionKind.OVERLAP_CURVE
+    assert all(witness[2] == 0.0 for witness in result.components[0].witnesses)
+
+
+def test_face_extent_is_canonical():
+    from anygeometry.exact_predicates import canonical_extent, correctly_rounded_sqrt
+    assert canonical_extent((0, 0, 0), (1, 1, 0)) == math.sqrt(2)          # math.sqrt is correctly rounded
+    rng = random.Random(8)
+    for _ in range(2000):
+        value = Fraction(rng.getrandbits(80), rng.getrandbits(40) + 1)
+        assert correctly_rounded_sqrt(value) == math.sqrt(float(value)) or             abs(Fraction(correctly_rounded_sqrt(value)) ** 2 - value) <= abs(Fraction(math.sqrt(float(value))) ** 2 - value)
+
+
+def test_invalid_regions_are_refused():
+    from anygeometry.planar_exact import region_is_simple
+    assert not region_is_simple([[(0, 0), (2, 2), (0, 2), (2, 0)]])          # bow tie
+    assert not region_is_simple([[(0, 0), (1, 0), (2, 0)]])                   # zero area
+    assert region_is_simple([SQUARE, HOLE]) and region_is_simple([CONCAVE])
+    with pytest.raises(Exception):
+        point_in_region((0, 0), [])
