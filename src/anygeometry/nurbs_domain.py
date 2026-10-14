@@ -23,6 +23,8 @@ from ._cross3 import _gauss_legendre
 from .errors import GeometryError
 from .nurbs import CurveOnSurface, NurbsCurve, NurbsSurface, _scaled_weights
 from .reference import bspline as _reference
+from .exact_levels import level_set
+from fractions import Fraction
 
 _EPS = float(np.finfo(float).eps)
 _IDENTITY = tuple(tuple(1.0 if i == j else 0.0 for j in range(4)) for i in range(4))
@@ -81,183 +83,112 @@ def curvature(domain, curve, parameter, forward) -> float | None:
     return float(first[0] * second[1] - first[1] * second[0]) / length ** 3
 
 
-# ------------------------------------------------------------------ level roots of a pcurve coordinate
-
-
-def _bernstein_split(coefficients: np.ndarray, at: float = 0.5):
-    """De Casteljau split of a Bernstein polynomial on [0, 1] at ``at``."""
-    work = coefficients.astype(float).copy()
-    left, right = [work[0]], [work[-1]]
-    for _ in range(len(work) - 1):
-        work = (1 - at) * work[:-1] + at * work[1:]
-        left.append(work[0])
-        right.append(work[-1])
-    return np.asarray(left), np.asarray(right[::-1])
-
-
-def _bernstein_value(coefficients: np.ndarray, s: float) -> float:
-    work = coefficients.astype(float).copy()
-    for _ in range(len(work) - 1):
-        work = (1 - s) * work[:-1] + s * work[1:]
-    return float(work[0])
-
-
-_ROOT_WORK = 20000
-
-
-def _bernstein_roots(coefficients: np.ndarray, floor: float) -> list[float]:
-    """Roots in [0, 1] of a Bernstein polynomial by subdivision (float route).
-
-    ``floor``: coefficients within it of zero count as zero (rounding of the
-    numerator). An interval whose coefficients all lie within it is on the
-    level: its two ends are reported, it is not subdivided. Intervals stop at
-    width ``1e-12`` (a tangential root: its midpoint), a single sign change with
-    signed ends is bisected. Total work is bounded; beyond it the search refuses.
-    """
-    roots: list[float] = []
-    stack = [(0.0, 1.0, coefficients)]
-    work = 0
-    while stack:
-        work += 1
-        if work > _ROOT_WORK:
-            raise GeometryError("pcurve level roots: subdivision did not resolve (work limit)")
-        a, b, c = stack.pop()
-        if np.all(c > floor) or np.all(c < -floor):
-            continue
-        if np.all(np.abs(c) <= floor):
-            roots.extend((a, b))
-            continue
-        if b - a <= 1e-12:
-            roots.append(0.5 * (a + b))
-            continue
-        signs = np.sign(np.where(np.abs(c) <= floor, 0.0, c))
-        nonzero = signs[signs != 0]
-        if len(nonzero) and np.count_nonzero(np.diff(nonzero)) == 1 and abs(c[0]) > floor and abs(c[-1]) > floor:
-            lo, hi, f_lo = 0.0, 1.0, c[0]
-            for _ in range(80):
-                mid = 0.5 * (lo + hi)
-                f_mid = _bernstein_value(c, mid)
-                if f_mid == 0.0:
-                    lo = hi = mid
-                    break
-                if (f_mid > 0) == (f_lo > 0):
-                    lo, f_lo = mid, f_mid
-                else:
-                    hi = mid
-            roots.append(a + (b - a) * 0.5 * (lo + hi))
-            continue
-        left, right = _bernstein_split(c)
-        middle = 0.5 * (a + b)
-        stack.append((middle, b, right))
-        stack.append((a, middle, left))
-    roots.sort()
-    merged: list[float] = []
-    for root in roots:
-        if not merged or root - merged[-1] > 1e-10:          # a tangential band reports one root
-            merged.append(root)
-    return merged
+# ------------------------------------------------------------------ exact level sets and containment
 
 
 def level_roots(pcurve: NurbsCurve, axis: int, value: float, chart_tolerance: float):
-    """Engine parameters where the pcurve's chart coordinate ``axis`` equals ``value``.
+    """Engine parameters where the pcurve's chart coordinate ``axis`` equals ``value`` (decided exactly).
 
-    ``None`` when the pcurve lies on that level (every control within the
-    tolerance of it), as ``MaterialDomain.horizontal_roots`` reports horizontal
-    curves. Per Bezier span the rational numerator ``sum B_i w_i (c_i - value)``
-    is solved by Bernstein subdivision; endpoints within ``chart_tolerance``
-    are included.
+    ``None`` when the whole pcurve lies on the level, as
+    ``MaterialDomain.horizontal_roots`` reports horizontal curves. A point
+    event (crossing or touch) gives one parameter, a run its two ends (from
+    ``exact_levels.level_set``); curve ends within ``chart_tolerance`` of the
+    level are included, as for the other supports.
     """
-    controls = np.asarray(pcurve.controls, dtype=float)
-    if np.all(np.abs(controls[:, axis] - value) <= chart_tolerance):
+    events = level_set(pcurve, axis, value)
+    if events is None:
         return None
-    start, end = pcurve.domain
-    weights = _scaled_weights(pcurve.weights)
-    found: list[float] = []
-    for s0, s1, span_controls, span_weights in _reference.bezier_segments(
-            pcurve.degree, np.asarray(pcurve.knots), controls, weights):
-        low, high = (min(start, end), max(start, end))
-        if s1 <= low or s0 >= high:
-            continue
-        w = np.ones(len(span_controls)) if span_weights is None else np.asarray(span_weights)
-        numerator = w * (np.asarray(span_controls)[:, axis] - value)
-        floor = 8 * _EPS * float(np.max(np.abs(w * np.asarray(span_controls)[:, axis])) + abs(value) * np.max(w))
-        for r in _bernstein_roots(numerator, floor):
-            s = s0 + (s1 - s0) * r
-            if low <= s <= high:
-                found.append((s - start) / (end - start))
+    found = []
+    for event in events:
+        found.append(float(event.t0))
+        if event.run:
+            found.append(float(event.t1))
     for t in (0.0, 1.0):
         if abs(float(pcurve.evaluate(t)[axis]) - value) <= chart_tolerance:
             found.append(t)
-    found = sorted(min(1.0, max(0.0, t)) for t in found)
-    return tuple(_group_roots(pcurve, axis, value, found)[0])
-
-
-def _group_roots(pcurve: NurbsCurve, axis: int, value: float, found: list[float]):
-    """Merge tangential touches and runs; keep every genuine crossing.
-
-    Two consecutive roots belong together only when the coordinate between
-    them is exactly on the level (a run) or stays on the same strict side as
-    just outside both (a touch the subdivision split into a band). A genuine
-    pair of crossings (the coordinate changes side between them) is kept, however
-    close. Returns ``(roots, runs)``: a touch is one root, a run its two ends.
-    """
-
-    def side(t):
-        difference = float(pcurve.evaluate(min(1.0, max(0.0, t)))[axis]) - value
-        return 0 if difference == 0.0 else (1 if difference > 0 else -1)
-
-    groups: list[list[float]] = []
-    for t in found:
-        if groups:
-            previous = groups[-1][-1]
-            if t - previous <= 128 * _EPS:
-                groups[-1].append(t)
-                continue
-            middle = side(0.5 * (t + previous))
-            reach = max(t - previous, 1e-9)              # probe outside at the pair's own scale
-            outside_left = side(groups[-1][0] - reach) if groups[-1][0] > 0.0 else middle
-            outside_right = side(t + reach) if t < 1.0 else middle
-            if middle == 0 or (middle == outside_left == outside_right and t - previous <= 1e-6):
-                groups[-1].append(t)
-                continue
-        groups.append([t])
-    roots: list[float] = []
-    runs: list[tuple[float, float]] = []
-    for group in groups:
-        ends = [t for t in group if t in (0.0, 1.0)]
-        on_level = group[-1] - group[0] > 1e-6 and side(0.5 * (group[0] + group[-1])) == 0
-        if on_level:
-            roots.extend((group[0], group[-1]))
-            runs.append((group[0], group[-1]))
-        else:
-            roots.append(ends[0] if ends else 0.5 * (group[0] + group[-1]))
-    return roots, runs
-
-
-def level_runs(pcurve: NurbsCurve, axis: int, value: float, chart_tolerance: float) -> list[tuple[float, float]]:
-    """Parameter intervals on which the pcurve runs along the level (exactly, up to rounding of the subdivision)."""
-    roots = level_roots(pcurve, axis, value, chart_tolerance)
-    if roots is None:
-        return [(0.0, 1.0)]
-    return [(a, b) for a, b in zip(roots, roots[1:])
-            if float(pcurve.evaluate(0.5 * (a + b))[axis]) == value]
+    return tuple(sorted(set(min(1.0, max(0.0, t)) for t in found)))
 
 
 def horizontal_roots(domain, curve, value, tolerance):
     return level_roots(pcurve_of(domain, curve), 1, float(value), _chart_tolerance(domain, tolerance))
 
 
-def on_level_run(domain, loop, uv_point, tolerance) -> bool:
-    """Whether ``uv_point`` lies on a part of a boundary pcurve that runs along its ``v`` level."""
+def _sign_of(pcurve: NurbsCurve, axis: int, value: float, t: Fraction) -> int:
+    point = pcurve.exact_point(t)
+    difference = point[axis] - Fraction(value)
+    return 0 if difference == 0 else (1 if difference > 0 else -1)
+
+
+def contains_loop(domain, loop, uv_point, tolerance, *, boundary=True) -> bool:
+    """Ray parity in the chart with the crossings decided exactly (``exact_levels``).
+
+    Along the loop the coordinate ``v - v0`` is followed as a cyclic sequence of
+    non-zero gaps and zero stretches (points, runs, whole curves; stretches
+    meeting at a curve joint are one stretch). A stretch between gaps of
+    different sign is a crossing; it counts when it lies right of the query.
+    A stretch through the query (a point within the tolerance, or a run whose
+    u range contains it) is the boundary.
+    """
+    u0, v0 = float(uv_point[0]), float(uv_point[1])
     chart_tolerance = _chart_tolerance(domain, tolerance)
+
+    def near(u):
+        return float(np.linalg.norm(world_delta(domain, (u - u0, 0.0), v0, u0))) <= tolerance
+
+    items: list = []                 # ("gap", sign) or ("zero", [(pcurve, t0, t1), ...])
     for path in loop:
         pcurve = pcurve_of(domain, path.curve)
-        for a, b in level_runs(pcurve, 1, float(uv_point[1]), chart_tolerance):
-            ends = pcurve.evaluate(np.array([a, b]))[:, 0]
-            low, high = min(ends) - chart_tolerance, max(ends) + chart_tolerance
-            if low <= float(uv_point[0]) <= high:
-                return True
-    return False
+        events = level_set(pcurve, 1, v0)
+        if events is None:
+            items.append(("zero", [(pcurve, Fraction(0), Fraction(1))]))
+            continue
+        cursor = Fraction(0)
+        for event in events:
+            if event.t0 > cursor:
+                items.append(("gap", _sign_of(pcurve, 1, v0, (cursor + event.t0) / 2)))
+            items.append(("zero", [(pcurve, event.t0, event.t1)]))
+            cursor = event.t1
+        if cursor < 1:
+            items.append(("gap", _sign_of(pcurve, 1, v0, (cursor + 1) / 2)))
+    # merge consecutive zero stretches (also across the loop's closing joint)
+    merged: list = []
+    for kind, payload in items:
+        if kind == "zero" and merged and merged[-1][0] == "zero":
+            merged[-1][1].extend(payload)
+        else:
+            merged.append((kind, list(payload) if kind == "zero" else payload))
+    if len(merged) > 1 and merged[0][0] == "zero" and merged[-1][0] == "zero":
+        merged[0][1][:0] = merged.pop()[1]
+    gaps = [index for index, (kind, _payload) in enumerate(merged) if kind == "gap"]
+    if not gaps:
+        return boundary if any(_stretch_contains(part, u0, chart_tolerance, near) for _k, stretch in merged
+                               for part in stretch) else False
+    winding = 0
+    count = len(merged)
+    for index, (kind, stretch) in enumerate(merged):
+        if kind != "zero":
+            continue
+        if any(_stretch_contains(part, u0, chart_tolerance, near) for part in stretch):
+            return boundary
+        before = next(merged[(index - k) % count][1] for k in range(1, count + 1) if merged[(index - k) % count][0] == "gap")
+        after = next(merged[(index + k) % count][1] for k in range(1, count + 1) if merged[(index + k) % count][0] == "gap")
+        if before == after or before == 0 or after == 0:
+            continue                                   # a touch
+        pcurve, t0, _t1 = stretch[0]
+        if float(pcurve.evaluate(float(t0))[0]) > u0:
+            winding += 1 if after > 0 else -1
+    return winding != 0
+
+
+def _stretch_contains(part, u0: float, chart_tolerance: float, near) -> bool:
+    """Whether a zero stretch part passes through the query's u (it lies on the query's v level)."""
+    pcurve, t0, t1 = part
+    if near(float(pcurve.evaluate(float(t0))[0])) or near(float(pcurve.evaluate(float(t1))[0])):
+        return True
+    if t1 == t0:
+        return False
+    events = level_set(pcurve, 0, u0)                  # does u pass u0 inside the run?
+    return events is None or any(t0 <= event.t1 and event.t0 <= t1 for event in events)
 
 
 def on_horizontal(domain, curve, uv_point, tolerance) -> bool:
@@ -329,19 +260,20 @@ def _v_breakpoints(surface: NurbsSurface) -> np.ndarray:
 
 
 def _knot_crossings(surface: NurbsSurface, pcurve: NurbsCurve) -> tuple[float, ...]:
-    """Pcurve parameters where it meets an interior surface knot line (``u`` or ``v``).
+    """Pcurve parameters where it meets an interior surface knot line (``u`` or ``v``), decided exactly.
 
     The world-area integrand has derivative jumps there (the surface's
-    continuity), so the outer Gauss rule is split at them; a pcurve running
-    along a knot line contributes its ends.
+    continuity), so the outer Gauss rule is split at them; a run along a knot
+    line contributes its ends.
     """
     found: list[float] = []
     for axis, breaks in ((0, _u_breakpoints(surface)), (1, _v_breakpoints(surface))):
         for value in breaks:
-            roots = level_roots(pcurve, axis, float(value), 0.0)
-            if roots is None:
+            events = level_set(pcurve, axis, float(value))
+            if events is None:
                 continue
-            found.extend(roots)
+            for event in events:
+                found.extend((float(event.t0), float(event.t1)))
     return tuple(found)
 
 

@@ -261,20 +261,14 @@ class NurbsCurve:
         if not len(rows):
             return
         knots = np.asarray(self.knots, dtype=float)
-        controls = np.asarray(self.controls, dtype=float)
-        weights = _scaled_weights(self.weights)          # power-of-two scaled: no under/overflow in insertion
-        times = p - int(np.count_nonzero(knots == top))
-        if times > 0:
-            knots, controls, weights = _reference.insert_knot(p, knots, controls, weights, top, times)
-        last = int(np.nonzero(knots == top)[0][-1])
-        left_knots = np.concatenate((knots[: last + 1], [top]))
-        left_count = len(left_knots) - p - 1
-        # The reference kernel directly: inserted controls are intermediate data,
-        # not a definition (the coordinate-range validation does not apply).
-        left = np.empty((len(rows), order + 1, self.dimension))
-        _reference.bspline_evaluate(p, left_knots, controls[:left_count],
-                                    np.empty(0) if weights is None else np.asarray(weights[:left_count]),
-                                    np.full(len(rows), top), order, left)
+        # The span ending at ``top`` (inside the domain), evaluated at its end
+        # with the reference kernel's own formulas (A2.3 basis derivatives and
+        # the anchored rational frame); no knot insertion, so no rounding of
+        # intermediate controls (review A1e rounds 2-3).
+        span = int(np.searchsorted(knots, top, side="left")) - 1
+        left = _evaluate_at_span(p, knots, np.asarray(self.controls, dtype=float), _scaled_weights(self.weights),
+                                 span, top, order)
+        left = np.repeat(left[None, :, :], len(rows), axis=0)
         values[rows, 1:, :] = left[:, 1:, :]
 
     def evaluate(self, parameters) -> np.ndarray:
@@ -911,6 +905,31 @@ def nurbs_circular_arc(center, x_axis, y_axis, radius: float, start: float, swee
         knots += [k / segments, k / segments]
     knots += [1.0, 1.0, 1.0]
     return NurbsCurve(2, tuple(knots), tuple(controls), tuple(weights))
+
+
+def _evaluate_at_span(degree: int, knots: np.ndarray, controls: np.ndarray, weights, span: int, t: float,
+                      order: int) -> np.ndarray:
+    """Point and derivatives at ``t`` using the polynomial piece of ``span`` (as ``reference.bspline_evaluate``)."""
+    p = degree
+    ders = _reference.basis_derivatives(p, knots, np.array([span]), np.array([t]), order)[0]   # (order+1, p+1)
+    index = span - p + np.arange(p + 1)
+    local = controls[index]
+    if weights is None:
+        return ders @ local
+    w_local = np.asarray(weights)[index]
+    w = ders @ w_local
+    anchor = local[0]
+    delta = local - anchor
+    offset = (ders[0] * w_local) @ delta / w[0]
+    result = np.empty((order + 1, controls.shape[1]))
+    result[0] = anchor + offset
+    differences = delta - offset
+    for k in range(1, order + 1):
+        value = (ders[k] * w_local) @ differences
+        if k == 2:
+            value = value - 2.0 * w[1] * result[1]
+        result[k] = value / w[0]
+    return result
 
 
 def _inward_spans(degree: int, knots: np.ndarray, count: int, s: np.ndarray, chart_range) -> np.ndarray:

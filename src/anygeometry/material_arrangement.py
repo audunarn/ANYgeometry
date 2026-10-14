@@ -356,9 +356,9 @@ class MaterialDomain:
                 from .planar_arcs import contains_loop_exact_curved
                 return contains_loop_exact_curved(ExactPlane.from_plane(self.support), loop, tuple(uv),
                                                   tolerance, boundary=boundary)
+        if isinstance(self.support, NurbsSurface):        # exact level sets on the pcurves (A1e-lite)
+            return nurbs_domain.contains_loop(self, loop, uv, tolerance, boundary=boundary)
         winding = 0
-        if isinstance(self.support, NurbsSurface) and nurbs_domain.on_level_run(self, loop, uv, tolerance):
-            return boundary                               # on a boundary part running along the ray (A1e-lite)
         for index, path in enumerate(loop):
             curve = path.curve
             roots = self.horizontal_roots(curve, float(uv[1]), tolerance)

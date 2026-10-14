@@ -295,3 +295,51 @@ def test_inward_end_derivatives_at_extreme_weights_and_tiny_coordinates():
     small = NurbsCurve(2, (0., 0., 0., .5, 1., 1., 1.), ((0., a), (1., a), (2., -a * (1 - 2. ** -52)), (3., a)),
                        domain=(0., .5))
     assert np.all(np.isfinite(small.derivatives(1., 2)))
+
+
+# ------------------------------------------------------------------ review A1e round 3 (exact level sets)
+
+
+def unit_support():
+    return NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.),
+                        (((0., 0., 0.), (0., 1., 0.)), ((1., 0., 0.), (1., 1., 0.))))
+
+
+def test_four_close_crossings_keep_containment():
+    surface = unit_support()
+    four = NurbsCurve(1, (0., 0., .4999999, .50000005, .5000003, .50000055, .5000007, 1., 1.),
+                      ((.1, .3), (.2, .3), (.3, .6), (.4, .1), (.5, .6), (.6, .3), (.9, .3)))
+    loop = (ArrangementPath(CurveOnSurface(surface, four)),) + polygon(surface, [(.9, .3), (.9, .05), (.1, .05),
+                                                                                (.1, .3)])[:3]
+    domain = MaterialDomain(0, surface, (loop,))
+    assert domain.contains_loop(loop, np.array([.3, .5]), 1e-9) and domain.contains_loop(loop, np.array([.5, .5]), 1e-9)
+
+
+def test_points_on_a_flat_start_run_are_boundary():
+    surface = unit_support()
+    run = NurbsCurve(1, (0., 0., .1, 1., 1.), ((.1, .9), (.5, .9), (.9, .95)))
+    loop = (ArrangementPath(CurveOnSurface(surface, run)),) + polygon(surface, [(.9, .95), (.9, .98), (.1, .98),
+                                                                               (.1, .9)])[:3]
+    domain = MaterialDomain(0, surface, (loop,))
+    assert domain.contains_loop(loop, np.array([.2, .9]), 1e-9) is True
+    assert domain.contains_loop(loop, np.array([.2, .9]), 1e-9, boundary=False) is False
+    assert domain.contains_loop(loop, np.array([.2, .93]), 1e-9) and not domain.contains_loop(loop, np.array([.2, .85]), 1e-9)
+
+
+def test_a_high_order_touch_is_not_a_run():
+    stretched = NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.),
+                             (((0., 0., 0.), (0., 1e8, 0.)), ((1., 0., 0.), (1., 1e8, 0.))))
+    quartic = NurbsCurve(4, (0.,) * 5 + (1.,) * 5,
+                         ((.1, .5625), (.3, .4375), (.5, .5625), (.7, .4375), (.9, .5625)))
+    loop = (ArrangementPath(CurveOnSurface(stretched, quartic)),
+            ArrangementPath(CurveOnSurface(stretched, NurbsCurve(1, (0., 0., 1., 1.), ((.9, .5625), (.1, .5625))))))
+    domain = MaterialDomain(0, stretched, (loop,))
+    assert domain.contains_loop(loop, np.array([.50008, .5]), 1e-9) is False
+
+
+@pytest.mark.parametrize("domain_range, end", (((0., .5), 1.), ((.5, 0.), 0.)))
+def test_constant_curve_end_derivatives_are_exactly_zero(domain_range, end):
+    curve = NurbsCurve(2, (0., 0., 0., .5, 1., 1., 1.), ((1e16, 1.),) * 4, (1e-300, 3e-301, 7e-301, 9e-301),
+                       domain_range)
+    values = curve.derivatives(end, 2)
+    assert np.all(values[1:] == 0.)
