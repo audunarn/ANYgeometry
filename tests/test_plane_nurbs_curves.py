@@ -156,3 +156,32 @@ def test_split_at_a_point_where_rounding_leaves_the_gap():
     assert np.all(point >= low - 1e-12) and np.all(point <= high + 1e-12)
     model, edge = edge_model(curve)
     model.split_edge(edge, .5)
+
+
+# ------------------------------------------------------------------ review B1-P2 round 2
+
+
+def test_tiny_uniform_weights_do_not_break_the_sign_filter():
+    from anygeometry.nurbs import NurbsSurface
+    w = 2. ** -1070
+    surface = NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.),
+                           tuple(tuple((float(i), float(j), i + 2 * j - .7) for j in range(2)) for i in range(2)),
+                           ((w, w), (w, w)))
+    curve = PlaneNurbsCurve.from_plane(Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.)), surface, 0)
+    point = curve.evaluate(.37)
+    low, high = curve.bounds(.37 - 1e-8, .37 + 1e-8)
+    assert np.all(point >= low) and np.all(point <= high)
+    assert abs(point[1] - .2205) <= 1e-12
+    model, edge = edge_model(curve)
+    model.split_edge(edge, .37)
+
+
+def test_the_slicing_coordinate_is_the_long_one():
+    from anygeometry.nurbs import NurbsSurface
+    e = 2. ** -70
+    surface = NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.),
+                           tuple(tuple((i - .3, float(j), e * j) for j in range(2)) for i in range(2)))
+    curve = PlaneNurbsCurve.from_plane(Plane((0., 0., 0.), (1., 0., -1.), (0., 1., 0.)), surface, 0)
+    assert abs(curve.evaluate(.37)[1] - .37) <= 1e-12
+    model, edge = edge_model(curve)
+    assert abs(model.edge_length(edge) - 1.) <= 1e-12

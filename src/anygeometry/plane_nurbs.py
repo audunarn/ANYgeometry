@@ -157,9 +157,18 @@ def _classify(coefficients) -> str | None:
     if _all_sign(flat):
         return "empty"
     p, q = len(coefficients) - 1, len(coefficients[0]) - 1
-    if q > 0 and _all_sign(coefficients[i][j + 1] - coefficients[i][j] for i in range(p + 1) for j in range(q)):
+    v_differences = [coefficients[i][j + 1] - coefficients[i][j] for i in range(p + 1) for j in range(q)]
+    u_differences = [coefficients[i + 1][j] - coefficients[i][j] for i in range(p) for j in range(q + 1)]
+    regular_v = q > 0 and _all_sign(v_differences)
+    regular_u = p > 0 and _all_sign(u_differences)
+    if regular_v and regular_u:
+        # Both graphs exist: the dependent coordinate is the one with the larger certified
+        # partial derivative (min |difference| * degree), so the slicing range is the long
+        # one (review B1-P2: a 2**-70 slicing range collapsed in floats).
+        return "v" if min(map(abs, v_differences)) * q >= min(map(abs, u_differences)) * p else "u"
+    if regular_v:
         return "v"
-    if p > 0 and _all_sign(coefficients[i + 1][j] - coefficients[i][j] for i in range(p) for j in range(q + 1)):
+    if regular_u:
         return "u"
     return None
 

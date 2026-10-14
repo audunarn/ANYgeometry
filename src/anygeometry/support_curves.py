@@ -39,6 +39,7 @@ from .plane_nurbs import PlaneNurbsNotCertified, plane_nurbs_section
 
 _SECTIONS: dict = {}
 _EPS = float(np.finfo(float).eps)
+_TINY = 2.0 ** -1074
 _X_RESOLUTION = 2.0 ** -44                 # certified bracket width of evaluation (fraction of the box)
 
 
@@ -131,8 +132,13 @@ class PlaneNurbsCurve:
 
     @staticmethod
     def _bernstein_rows(box, s, slicing):
-        """Float Bernstein coefficients in x of G(s, .) for each s (vectorised de Casteljau along s)."""
-        c = np.asarray([[float(value) for value in row] for row in box.coefficients])     # (p+1, q+1), [u][v]
+        """Float Bernstein coefficients in x of G(s, .) for each s (vectorised de Casteljau along s).
+
+        The exact coefficients are scaled by a power of two so the largest has
+        magnitude in [1/2, 1) before rounding (signs unchanged; no underflow of
+        normal-range coefficients; review B1-P2 round 2).
+        """
+        c = _scaled_float_coefficients(box)                 # (p+1, q+1), [u][v]
         if slicing == 1:
             c = c.T                                        # make the first index the slicing coordinate
         low, high = (box.u_range if slicing == 0 else box.v_range)
@@ -174,6 +180,7 @@ class PlaneNurbsCurve:
         rows_abs = self._bernstein_rows(_absolute_box(box), s, arc.slicing)
         p, q = len(box.coefficients) - 1, len(box.coefficients[0]) - 1
         gamma = 8 * (p + q + 4) * _EPS
+        floor = 8 * (p + q + 4) * _TINY                    # absolute rounding of subnormal intermediates
         degree = rows.shape[1] - 1
 
         def value(work_rows, tau):
@@ -184,7 +191,7 @@ class PlaneNurbsCurve:
 
         def float_signs(tau):
             values = value(rows, tau)
-            bound = gamma * value(rows_abs, tau)
+            bound = gamma * value(rows_abs, tau) + floor
             return np.where(values > bound, 1, np.where(values < -bound, -1, 0))
 
         def exact_signs(tau):
@@ -236,6 +243,8 @@ class PlaneNurbsCurve:
             arc_tau = tau[mask]
             s = arc.s0 + arc_tau * (arc.s1 - arc.s0)
             x, no_root = self._solve_x(arc, s)
+            if np.any(no_root):
+                self._check_fallback(arc, s[no_root], arc_tau[no_root])
             # the arc's ends are its roots; a float s outside the exact gap takes the nearest end root
             for end_tau, root, selector in ((0.0, arc.first, arc_tau < .5), (1.0, arc.second, arc_tau >= .5)):
                 use = (arc_tau == end_tau) | (no_root & selector)
@@ -248,6 +257,24 @@ class PlaneNurbsCurve:
             else:
                 u[mask], v[mask] = x, s
         return u, v
+
+    @staticmethod
+    def _fallback_window(arc, root):
+        """The slicing interval within which a float s may stand for ``root``: its s-projection widened by 4 ulp."""
+        if root.axis == arc.slicing:
+            low = high = root.value
+        else:
+            low, high = root.lo, root.hi
+        widen = Fraction(4 * math.ulp(max(abs(float(low)), abs(float(high)), 1.0)))
+        return low - widen, high + widen
+
+    def _check_fallback(self, arc, s_values, taus):
+        """A float s without a root of G(s, .) in the box must lie by its end root (rounding), else refuse."""
+        for s, tau in zip(s_values, taus):
+            root = arc.first if tau < .5 else arc.second
+            low, high = self._fallback_window(arc, root)
+            if not low <= Fraction(float(s)) <= high:
+                raise PlaneNurbsNotCertified("section arc chart is degenerate in floats (no root away from its ends)")
 
     def chart(self, parameters) -> np.ndarray:
         u, v = self._knot_points(parameters)
@@ -352,7 +379,11 @@ class PlaneNurbsCurve:
             x0, x1 = box.u_range
         low_value, high_value = _de_casteljau(column, Fraction(0)), _de_casteljau(column, Fraction(1))
         if low_value != 0 and high_value != 0 and (low_value > 0) == (high_value > 0):
-            return root_rect(arc.first if tau < .5 else arc.second)
+            root = arc.first if tau < .5 else arc.second
+            window = self._fallback_window(arc, root)
+            if not window[0] <= s <= window[1]:
+                raise PlaneNurbsNotCertified("section arc chart is degenerate in floats (no root away from its ends)")
+            return root_rect(root)
         if low_value == 0:
             lo = hi = Fraction(0)
         elif high_value == 0:
@@ -617,3 +648,24 @@ def _absolute_box(box):
         _ABSOLUTE.clear()
     _ABSOLUTE[id(box)] = (box, result)
     return result
+
+
+_SCALED: dict = {}
+
+
+def _scaled_float_coefficients(box) -> np.ndarray:
+    """Float coefficients of the box scaled exactly by a power of two (largest magnitude in [1/2, 1))."""
+    cached = _SCALED.get(id(box))
+    if cached is not None and cached[0] is box:
+        return cached[1]
+    largest = max(abs(value) for row in box.coefficients for value in row)
+    if largest == 0:
+        array = np.zeros((len(box.coefficients), len(box.coefficients[0])))
+    else:
+        shift = largest.numerator.bit_length() - largest.denominator.bit_length()
+        scale = Fraction(2) ** (-shift) if shift >= 0 else Fraction(2) ** (-shift)
+        array = np.asarray([[float(value * scale) for value in row] for row in box.coefficients])
+    if len(_SCALED) >= 512:
+        _SCALED.clear()
+    _SCALED[id(box)] = (box, array)
+    return array
