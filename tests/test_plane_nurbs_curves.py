@@ -291,3 +291,47 @@ def test_shifted_knot_domains_evaluate_exactly():
     assert abs(point[2]) <= 1e-15
     model, edge = edge_model(curve)
     assert model.closest_edge_point(edge, point)[2] <= 1e-15
+
+
+# ------------------------------------------------------------------ review B1-P2 exact round 2
+
+
+def test_steep_surfaces_keep_points_in_the_distance_bound():
+    from anygeometry.exact_curves import project_analytic_curve
+    from anygeometry.nurbs import NurbsSurface
+    controls = tuple(tuple((float(i), h, h) for h in (1e20 * (3 * j - 1 + .1 * i) for j in range(2))) for i in range(2))
+    surface = NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.), controls)
+    curve = PlaneNurbsCurve.from_plane(z_plane(), surface, 0)
+    target = curve.evaluate(.83)
+    assert abs(target[2]) <= 2. ** -50 * 3e20                 # the defined points lie in the plane slab
+    assert curve.distance_lower_bound(0., 1., target) == 0.
+    assert project_analytic_curve(curve, target, 1e-9)[1] <= 1e-9 * 3e20
+
+
+def test_arc_selection_covers_non_monotone_parameter_maps():
+    from anygeometry.nurbs import NurbsSurface
+    knots_u = (0., *np.linspace(0., 1., 514), 1.)
+    controls = tuple(tuple((float(i - 201), float(j), j - .3) for j in range(2)) for i in range(514))
+    surface = NurbsSurface(1, 1, knots_u, (0., 0., 1., 1.), controls)
+    curve = PlaneNurbsCurve.from_plane(z_plane(), surface, 0).subcurve(0.3918128654970759, 0.3918128654970761)
+    lower, upper = .3472, .34740000000000004
+    for t in np.linspace(lower, upper, 41):
+        point = curve.evaluate(t)
+        low, high = curve.bounds(lower, upper)
+        assert np.all(point >= low) and np.all(point <= high)
+        assert curve.distance_lower_bound(lower, upper, point) == 0.
+
+
+def test_shifted_knot_domains_differentiate_exactly():
+    from anygeometry.exact_curves import analytic_curve_length
+    from anygeometry.nurbs import NurbsSurface
+    controls = tuple(tuple((i / 2, float(i == 2), j - .3) for j in range(2)) for i in range(3))
+    shifted = NurbsSurface(2, 1, (1e16,) * 3 + (1e16 + 256,) * 3, (0., 0., 1., 1.), controls)
+    plain = NurbsSurface(2, 1, (0.,) * 3 + (1.,) * 3, (0., 0., 1., 1.), controls)
+    curves = [PlaneNurbsCurve.from_plane(z_plane(), surface, 0) for surface in (shifted, plain)]
+    derivatives = [curve.derivative(.37) for curve in curves]
+    direction = derivatives[1] / derivatives[1][0]
+    assert np.allclose(direction, (1., .74, 0.), atol=1e-12)
+    assert np.allclose(derivatives[0], derivatives[1], rtol=1e-12, atol=1e-15)
+    lengths = [analytic_curve_length(curve, 1e-9) for curve in curves]
+    assert abs(lengths[0] - lengths[1]) <= 1e-8

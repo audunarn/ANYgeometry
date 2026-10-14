@@ -136,72 +136,165 @@ class PlaneNurbsCurve:
             return (root.value, root.value), (root.lo, root.hi)
         return (root.lo, root.hi), (root.value, root.value)
 
+    def _plane_slab(self):
+        """``(m, d, mm, limit_squared, limit)``: plane ``m . X = d``; a defined point ``P`` has
+        ``(m . P - d)**2 <= limit_squared`` (within ``2**-50`` of the surface's magnitude of the
+        plane), and ``limit >= sqrt(limit_squared)`` (rational, for the distance bound)."""
+        key = ("slab", self.plane_record, self.surface)
+        cached = _SECTIONS.get(key)
+        if cached is not None:
+            return cached
+        origin, u_vector, v_vector = ([Fraction(value) for value in vector] for vector in self.plane_record)
+        m = (u_vector[1] * v_vector[2] - u_vector[2] * v_vector[1], u_vector[2] * v_vector[0] - u_vector[0] * v_vector[2],
+             u_vector[0] * v_vector[1] - u_vector[1] * v_vector[0])
+        mm = sum(value * value for value in m)
+        d = sum(a * b for a, b in zip(m, origin))
+        magnitude = max([1.0] + [abs(float(value)) for value in origin]
+                        + [abs(float(value)) for row in self.surface.controls for point in row for value in point])
+        delta = Fraction(magnitude) / 2 ** 50
+        root_up = Fraction(math.sqrt(float(mm))) * (1 + Fraction(1, 2 ** 40))
+        if root_up * root_up < mm:
+            root_up = Fraction(_float_up(float(mm)) + 1)
+        result = (m, d, mm, delta * delta * mm, delta * root_up)
+        if len(_SECTIONS) >= 64:
+            _SECTIONS.clear()
+        _SECTIONS[key] = result
+        return result
+
+    def _world(self, knot_point):
+        """Exact world point of a knot point, and its signed plane value ``m . P - d``."""
+        m, d, _mm, _limit, _l = self._plane_slab()
+        cu, cv = self._exact_chart(knot_point)
+        world = self.surface.exact_point(cu, cv, _surface_net(self.surface))
+        return world, sum(a * b for a, b in zip(m, world)) - d
+
+    @staticmethod
+    def _root_rect(root):
+        if root.axis == 0:
+            return (root.value, root.value), (root.lo, root.hi)
+        return (root.lo, root.hi), (root.value, root.value)
+
+    _MAX_BISECTIONS = 1100
+
+    def _refine(self, rect, line_point, lo, hi, side_lo, side_hi):
+        """Bisect ``[lo, hi]`` on a knot line (``line_point(x)`` the knot point) until the midpoint's
+        world point lies in the plane slab; ``side_lo``/``side_hi`` the end sides (``None`` unknown).
+
+        The point is the midpoint (a deterministic definition); exact zeros end it.
+        Refuses when the slab is not reached (the line's sign change is lost).
+        """
+        _m, _d, _mm, limit, _l = self._plane_slab()
+        for _ in range(self._MAX_BISECTIONS):
+            middle = (lo + hi) / 2
+            point = line_point(middle)
+            world, side = self._world(point)
+            if side * side <= limit:
+                return rect(lo, hi), point, world
+            if side_lo is None or side_hi is None:
+                side_lo, side_hi = self._world(line_point(lo))[1], self._world(line_point(hi))[1]
+                if side_lo == 0:
+                    return rect(lo, lo), line_point(lo), self._world(line_point(lo))[0]
+                if side_hi == 0:
+                    return rect(hi, hi), line_point(hi), self._world(line_point(hi))[0]
+                if (side_lo > 0) == (side_hi > 0):
+                    raise PlaneNurbsNotCertified("section point bracket without a sign change")
+            if side == 0:
+                return rect(middle, middle), point, world
+            if (side > 0) == (side_lo > 0):
+                lo, side_lo = middle, side
+            else:
+                hi, side_hi = middle, side
+        raise PlaneNurbsNotCertified("section point not within the plane slab after bisection")
+
+    def _root_point(self, root):
+        """The defined point at an end root: its isolating interval bisected into the plane slab."""
+        if root.lo == root.hi:
+            rect = self._root_rect(root)
+            point = ((rect[0][0] + rect[0][1]) / 2, (rect[1][0] + rect[1][1]) / 2)
+            return rect, point, self._world(point)[0]
+        if root.axis == 0:
+            return self._refine(lambda lo, hi: ((root.value, root.value), (lo, hi)), lambda x: (root.value, x),
+                                root.lo, root.hi, None, None)
+        return self._refine(lambda lo, hi: ((lo, hi), (root.value, root.value)), lambda x: (x, root.value),
+                            root.lo, root.hi, None, None)
+
     def _exact_point(self, arc, tau: Fraction):
-        """Exact knot rectangle ``((u_lo, u_hi), (v_lo, v_hi))`` and the rational point of the curve at ``tau``.
+        """Exact knot rectangle ``((u_lo, u_hi), (v_lo, v_hi))``, the rational knot point of the curve
+        at ``tau`` and its exact world point.
 
         The definition of the curve's points: ``s = s0 + tau (s1 - s0)`` exactly;
         ``x`` the zero of ``G(s, .)`` in the box, bracketed by exact bisection to
-        ``2**-60`` of the box (its midpoint is the point). At ``tau`` 0 or 1, or
-        where ``s`` lies outside the exact gap (only inside an end root's
+        ``2**-60`` of the box and further until the bracket midpoint's world point
+        lies within ``2**-50`` of the surface magnitude of the plane (review B1-P2
+        exact round 2: steep surfaces); the midpoint is the point. At ``tau`` 0 or
+        1, or where ``s`` lies outside the exact gap (only inside an end root's
         isolating interval, by construction of ``s0``/``s1``), the end root's
-        rectangle and midpoint; anything else refuses.
+        interval bisected likewise; anything else refuses.
         """
         if tau == 0:
-            rect = self._root_rect(arc.first)
-        elif tau == 1:
-            rect = self._root_rect(arc.second)
+            return self._root_point(arc.first)
+        if tau == 1:
+            return self._root_point(arc.second)
+        s = arc.s0 + tau * (arc.s1 - arc.s0)
+        box = arc.box
+        c = box.coefficients
+        if arc.slicing == 0:
+            a, b = box.u_range
+            column = [_de_casteljau([row[j] for row in c], (s - a) / (b - a)) for j in range(len(c[0]))]
+            x0, x1 = box.v_range
         else:
-            s = arc.s0 + tau * (arc.s1 - arc.s0)
-            box = arc.box
-            c = box.coefficients
-            if arc.slicing == 0:
-                a, b = box.u_range
-                column = [_de_casteljau([row[j] for row in c], (s - a) / (b - a)) for j in range(len(c[0]))]
-                x0, x1 = box.v_range
-            else:
-                a, b = box.v_range
-                column = [_de_casteljau(list(row), (s - a) / (b - a)) for row in c]
-                x0, x1 = box.u_range
-            low_value, high_value = _de_casteljau(column, Fraction(0)), _de_casteljau(column, Fraction(1))
-            if low_value != 0 and high_value != 0 and (low_value > 0) == (high_value > 0):
-                root = arc.first if tau < Fraction(1, 2) else arc.second
-                (u_lo, u_hi), (v_lo, v_hi) = self._root_rect(root)
-                low, high = (u_lo, u_hi) if arc.slicing == 0 else (v_lo, v_hi)
-                if not low <= s <= high:
-                    raise PlaneNurbsNotCertified("section point outside its arc's gap and its end root")
-                rect = self._root_rect(root)
-            else:
-                if low_value == 0:
-                    lo = hi = Fraction(0)
-                elif high_value == 0:
-                    lo = hi = Fraction(1)
+            a, b = box.v_range
+            column = [_de_casteljau(list(row), (s - a) / (b - a)) for row in c]
+            x0, x1 = box.u_range
+        low_value, high_value = _de_casteljau(column, Fraction(0)), _de_casteljau(column, Fraction(1))
+        if low_value != 0 and high_value != 0 and (low_value > 0) == (high_value > 0):
+            root = arc.first if tau < Fraction(1, 2) else arc.second
+            (u_lo, u_hi), (v_lo, v_hi) = self._root_rect(root)
+            low, high = (u_lo, u_hi) if arc.slicing == 0 else (v_lo, v_hi)
+            if not low <= s <= high:
+                raise PlaneNurbsNotCertified("section point outside its arc's gap and its end root")
+            return self._root_point(root)
+        if low_value == 0:
+            lo = hi = Fraction(0)
+        elif high_value == 0:
+            lo = hi = Fraction(1)
+        else:
+            lo, hi = Fraction(0), Fraction(1)
+            for _ in range(60):
+                middle = (lo + hi) / 2
+                value = _de_casteljau(column, middle)
+                if value == 0:
+                    lo = hi = middle
+                    break
+                if (value > 0) == (low_value > 0):
+                    lo = middle
                 else:
-                    lo, hi = Fraction(0), Fraction(1)
-                    for _ in range(60):
-                        middle = (lo + hi) / 2
-                        value = _de_casteljau(column, middle)
-                        if value == 0:
-                            lo = hi = middle
-                            break
-                        if (value > 0) == (low_value > 0):
-                            lo = middle
-                        else:
-                            hi = middle
-                x_rect = (x0 + lo * (x1 - x0), x0 + hi * (x1 - x0))
-                rect = ((s, s), x_rect) if arc.slicing == 0 else (x_rect, (s, s))
-        (u_lo, u_hi), (v_lo, v_hi) = rect
-        return rect, ((u_lo + u_hi) / 2, (v_lo + v_hi) / 2)
+                    hi = middle
+
+        def knot(x):
+            value = x0 + x * (x1 - x0)
+            return (s, value) if arc.slicing == 0 else (value, s)
+
+        def rect(lo_x, hi_x):
+            x_rect = (x0 + lo_x * (x1 - x0), x0 + hi_x * (x1 - x0))
+            return ((s, s), x_rect) if arc.slicing == 0 else (x_rect, (s, s))
+
+        if lo == hi:
+            point = knot(lo)
+            return rect(lo, hi), point, self._world(point)[0]
+        # the box polynomial and the plane value have the same sign (positive weights)
+        return self._refine(rect, knot, lo, hi, None, None)
 
     def _exact_points(self, t):
-        """Per parameter: (arc, exact knot point (u, v)) - the definition of the curve's points."""
+        """Per parameter: (arc, exact knot point (u, v), exact world point) - the definition of the curve's points."""
         arcs = self._arcs()
         path_t = self._path_parameter(t).ravel()
         index, tau, _count = self._locate(path_t)
         result = []
         for i in range(len(path_t)):
             arc = arcs[int(index[i])]
-            _rect, point = self._exact_point(arc, Fraction(float(tau[i])))
-            result.append((arc, point))
+            _rect, point, world = self._exact_point(arc, Fraction(float(tau[i])))
+            result.append((arc, point, world))
         return result
 
     def _exact_chart(self, knot_point):
@@ -212,12 +305,12 @@ class PlaneNurbsCurve:
     def _knot_points(self, t):
         """Knot coordinates (floats): the rounded exact points."""
         points = self._exact_points(t)
-        return (np.array([float(point[0]) for _arc, point in points]),
-                np.array([float(point[1]) for _arc, point in points]))
+        return (np.array([float(point[0]) for _arc, point, _world in points]),
+                np.array([float(point[1]) for _arc, point, _world in points]))
 
     def chart(self, parameters) -> np.ndarray:
         result = np.array([[float(value) for value in self._exact_chart(point)]
-                           for _arc, point in self._exact_points(np.atleast_1d(parameters))])
+                           for _arc, point, _world in self._exact_points(np.atleast_1d(parameters))])
         result = np.clip(result, 0.0, 1.0)
         return result if np.ndim(parameters) else result[0]
 
@@ -228,34 +321,31 @@ class PlaneNurbsCurve:
         to knots in floats, which loses precision on shifted knot domains (review
         B1-P2 exact round 1).
         """
-        net = _surface_net(self.surface)
-        points = []
-        for _arc, point in self._exact_points(np.atleast_1d(parameters)):
-            cu, cv = self._exact_chart(point)
-            points.append([float(value) for value in self.surface.exact_point(cu, cv, net)])
+        points = [[float(value) for value in world] for _arc, _point, world in self._exact_points(np.atleast_1d(parameters))]
         result = np.asarray(points)
         return result if np.ndim(parameters) else result[0]
 
     def derivative(self, parameters) -> np.ndarray:
-        """World derivative: ``S_u du + S_v dv`` with the slicing rate exact and ``dx/ds = -G_s / G_x``
-        computed exactly at the exact point (float partials cancelled to 0 on near-vertical arcs)."""
+        """World derivative: ``S_u du + S_v dv`` (knot-coordinate partials, exact at the exact point:
+        float surface derivatives remap to knots in floats, review B1-P2 exact round 2) with the
+        slicing rate exact and ``dx/ds = -G_s / G_x`` exact (float partials cancelled to 0 on
+        near-vertical arcs)."""
         t = np.atleast_1d(np.asarray(parameters, dtype=float))
         count = len(self._arcs())
         points = self._exact_points(t)
-        chart = np.clip(np.array([[float(value) for value in self._exact_chart(point)] for _arc, point in points]),
-                        0.0, 1.0)
-        s_u, s_v = self.surface.derivatives_many(chart)
-        (r0, r1), (q0, q1) = (tuple(map(float, item)) for item in self._chart_ranges())
+        net = _surface_net(self.surface)
         a, b = self.domain
+        rate = Fraction(count) * (Fraction(b) - Fraction(a))
         result = np.empty((len(t), 3))
-        for i, (arc, point) in enumerate(points):
-            ds = float(arc.s1 - arc.s0) * count * (b - a)
+        for i, (arc, point, _world) in enumerate(points):
+            ds = (arc.s1 - arc.s0) * rate
             g_s, g_x = _exact_partials(arc, point)
             if g_x == 0:
                 raise PlaneNurbsNotCertified("section derivative undefined (G_x = 0 in a regular box)")
-            dx = float(-g_s / g_x) * ds
+            dx = -g_s / g_x * ds
             du, dv = (ds, dx) if arc.slicing == 0 else (dx, ds)
-            result[i] = s_u[i] * du / (r1 - r0) + s_v[i] * dv / (q1 - q0)
+            s_u, s_v = _exact_knot_partials(self.surface, net, *point)
+            result[i] = [float(x * du + y * dv) for x, y in zip(s_u, s_v)]
         return result if np.ndim(parameters) else result[0]
 
     def derivatives(self, parameter, order: int = 0) -> np.ndarray:
@@ -299,7 +389,7 @@ class PlaneNurbsCurve:
         arcs = self._arcs()
         path_t = float(self._path_parameter(np.array([float(parameter)]))[0])
         index, tau, _count = self._locate(np.array([path_t]))
-        rect, _point = self._exact_point(arcs[int(index[0])], Fraction(float(tau[0])))
+        rect, _point, _world = self._exact_point(arcs[int(index[0])], Fraction(float(tau[0])))
         return rect
 
     def _chart_box_enclosure(self, s_range, x_range, slicing):
@@ -392,27 +482,28 @@ class PlaneNurbsCurve:
         arcs = self._arcs()
         a, b = sorted(float(value) for value in self._path_parameter(np.array([float(lower), float(upper)])))
         count = len(arcs)
+        # evaluation computes path_t = (1 - t) a + t b (not monotone in floats: a few ulps of 1)
+        # and tau = path_t * count - k; the scaled interval is widened by that before the arcs
+        # are selected (review B1-P2 exact round 2)
+        slack = Fraction(16 * _EPS) * (count + 1)
+        scaled_low, scaled_high = Fraction(a) * count - slack, Fraction(b) * count + slack
         rects = []
         for k, arc in enumerate(arcs):
-            t0, t1 = k / count, (k + 1) / count
-            if t1 < a or t0 > b:
+            if scaled_high < k or scaled_low > k + 1:
                 continue
-            # the arc-local parameter exactly as evaluation computes it (path_t * count - k)
-            tau0 = Fraction(min(1.0, max(0.0, a * count - k)))
-            tau1 = Fraction(min(1.0, max(0.0, b * count - k)))
+            tau0 = min(Fraction(1), max(Fraction(0), scaled_low - k))
+            tau1 = min(Fraction(1), max(Fraction(0), scaled_high - k))
             s_values = sorted((arc.s0 + tau0 * (arc.s1 - arc.s0), arc.s0 + tau1 * (arc.s1 - arc.s0)))
             box_s = (arc.box.u_range if arc.slicing == 0 else arc.box.v_range)
-            # tau is computed in floats from the parameter: a few ulps of slack; the end roots' intervals
-            # (points outside the gap are end roots) are added below
-            slack = Fraction(16 * _EPS) * (count + 1) * abs(arc.s1 - arc.s0)
-            s_low = max(Fraction(box_s[0]), s_values[0] - slack)
-            s_high = min(Fraction(box_s[1]), s_values[1] + slack)
+            # the end roots' intervals (points outside the gap are end roots) are added below
+            s_low = max(Fraction(box_s[0]), s_values[0])
+            s_high = min(Fraction(box_s[1]), s_values[1])
             x_range = self._tight_x(arc, s_low, s_high) if s_high > s_low else None
             box_x = (arc.box.v_range if arc.slicing == 0 else arc.box.u_range)
             if x_range is None:
                 x_range = box_x
             else:
-                # evaluated points are midpoints of 2**-60 brackets of exact roots
+                # defined points are midpoints of (at most) 2**-60 brackets of exact roots
                 widen = Fraction(1, 2 ** 59) * (box_x[1] - box_x[0])
                 x_range = (max(box_x[0], x_range[0] - widen), min(box_x[1], x_range[1] + widen))
             rects.append((arc, (s_low, s_high), x_range))
@@ -430,22 +521,20 @@ class PlaneNurbsCurve:
         """Exact lower bound of the distance from ``target`` to the curve on ``[lower, upper]``.
 
         Per arc: the curve lies in the exact sub-patch hull over its tight chart
-        rectangle and in the plane ``m . x = d``. For orthonormal ``m^``, ``n^``
+        rectangle and in the slab ``|m . x - d| <= limit`` (its defined points are
+        bisection midpoints, ``_exact_point``). For orthonormal ``m^``, ``n^``
         (``n`` in the plane), ``|P - X|^2 >= (m^.(P - X))^2 + (n^.(P - X))^2``;
-        the first term is the distance to the plane, the second is bounded below
-        by the minimum of ``n . P`` over hull ``∩`` plane (an exact two-point
-        linear programme over the hull's control points). A transversal patch
+        the first term is the distance to the slab, the second is bounded below
+        by the minimum of ``n . P`` over hull ``∩`` slab (an exact linear
+        programme over the hull's control points). A transversal patch
         piece meets the plane in a sliver of second-order width, so the bound
         converges quadratically; the box distance is the fallback. Rounded down.
         """
         from .nurbs import _sqrt_down
         x = [Fraction(float(value)) for value in np.asarray(target, dtype=float)]
-        origin, u_vector, v_vector = ([Fraction(value) for value in vector] for vector in self.plane_record)
-        m = (u_vector[1] * v_vector[2] - u_vector[2] * v_vector[1], u_vector[2] * v_vector[0] - u_vector[0] * v_vector[2],
-             u_vector[0] * v_vector[1] - u_vector[1] * v_vector[0])
-        mm = sum(value * value for value in m)
-        d = sum(a * b for a, b in zip(m, origin))
-        normal_term = (sum(a * b for a, b in zip(m, x)) - d) ** 2 / mm
+        m, d, mm, _limit_squared, limit = self._plane_slab()
+        # defined points lie in the slab |m . P - d| <= limit (``_exact_point``), not on the plane
+        normal_term = max(Fraction(0), abs(sum(a * b for a, b in zip(m, x)) - d) - limit) ** 2 / mm
         net = _surface_net(self.surface)
         best = None
         for arc, s_range, x_range in self._arc_rects(lower, upper):
@@ -468,12 +557,14 @@ class PlaneNurbsCurve:
                 if nn > 0:
                     sides = [sum(a * b for a, b in zip(m, point)) - d for point in hull]
                     values = [sum(a * b for a, b in zip(n, point)) for point in hull]
-                    candidates = [values[i] for i in range(len(hull)) if sides[i] == 0]
-                    for i in range(len(hull)):
-                        for j in range(len(hull)):
-                            if sides[i] < 0 < sides[j]:
-                                r = sides[i] / (sides[i] - sides[j])
-                                candidates.append(values[i] + r * (values[j] - values[i]))
+                    # vertices of hull ∩ slab: hull points inside, edges crossing either slab face
+                    candidates = [values[i] for i in range(len(hull)) if -limit <= sides[i] <= limit]
+                    for level in (-limit, limit):
+                        for i in range(len(hull)):
+                            for j in range(len(hull)):
+                                if sides[i] < level < sides[j]:
+                                    r = (level - sides[i]) / (sides[j] - sides[i])
+                                    candidates.append(values[i] + r * (values[j] - values[i]))
                     if candidates:
                         margin = min(candidates) - sum(a * b for a, b in zip(n, x))
                         if margin > 0:
@@ -618,3 +709,40 @@ def _exact_partials(arc, point):
     g_v = Fraction(0) if q == 0 else q * value([[c[i][j + 1] - c[i][j] for j in range(q)] for i in range(p + 1)], a, b) \
         / (v1 - v0)
     return (g_u, g_v) if arc.slicing == 0 else (g_v, g_u)
+
+
+def _exact_knot_partials(surface, net, u, v):
+    """Exact ``(S_u, S_v)`` per knot unit at the knot point ``(u, v)``: the homogeneous derivative
+    nets (``p (Pw_{i+1} - Pw_i) / (U_{i+p+1} - U_{i+1})`` on ``U[1:-1]``) and the quotient rule;
+    spans as ``exact_point`` (the right-sided derivative at a knot)."""
+    from .nurbs import _exact_basis, _exact_span
+    p, q = surface.degree_u, surface.degree_v
+    knots_u, knots_v = [Fraction(k) for k in surface.knots_u], [Fraction(k) for k in surface.knots_v]
+    count_u, count_v = len(net), len(net[0])
+
+    def combine(degree_u, ku, cu, degree_v, kv, cv, entry):
+        span_u, span_v = _exact_span(degree_u, ku, cu, u), _exact_span(degree_v, kv, cv, v)
+        basis_u, basis_v = _exact_basis(degree_u, ku, span_u, u), _exact_basis(degree_v, kv, span_v, v)
+        total = [Fraction(0)] * 4
+        for a, nu in enumerate(basis_u):
+            for b, nv in enumerate(basis_v):
+                if nu and nv:
+                    value = entry(span_u - degree_u + a, span_v - degree_v + b)
+                    total = [x + nu * nv * y for x, y in zip(total, value)]
+        return total
+
+    def difference(i, j, di, dj, degree, knots, index):
+        width = knots[index + degree + 1] - knots[index + 1]
+        if width == 0:
+            return (Fraction(0),) * 4
+        return tuple(degree * (x - y) / width for x, y in zip(net[i + di][j + dj], net[i][j]))
+
+    value = combine(p, knots_u, count_u, q, knots_v, count_v, lambda i, j: net[i][j])
+    zero = [Fraction(0)] * 4
+    d_u = zero if p == 0 else combine(p - 1, knots_u[1:-1], count_u - 1, q, knots_v, count_v,
+                                      lambda i, j: difference(i, j, 1, 0, p, knots_u, i))
+    d_v = zero if q == 0 else combine(p, knots_u, count_u, q - 1, knots_v[1:-1], count_v - 1,
+                                      lambda i, j: difference(i, j, 0, 1, q, knots_v, j))
+    w = value[3]
+    point = [value[k] / w for k in range(3)]
+    return tuple(tuple((d[k] - point[k] * d[3]) / w for k in range(3)) for d in (d_u, d_v))
