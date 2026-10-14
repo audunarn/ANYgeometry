@@ -174,7 +174,7 @@ def _boxes(patch: SubPatch) -> list[Box]:
             leaves.append(Box(patch.index, u_range, v_range, coefficients, kind))
             continue
         if all(c == 0 for row in coefficients for c in row):
-            raise GeometryError("coincident")              # handled by the caller (whole-surface check first)
+            raise PlaneNurbsNotCertified("the surface lies partly in the plane")
         if depth >= MAX_DEPTH or len(leaves) + len(pending) > MAX_BOXES:
             raise PlaneNurbsNotCertified(f"singular box at depth {depth}: u {tuple(map(float, u_range))}, "
                                          f"v {tuple(map(float, v_range))}")
@@ -199,6 +199,7 @@ class Root:
     hi: Fraction
     poly: list                      # square-free restriction in the edge's local parameter (power basis)
     edge: tuple                     # (a, b): the edge's other-coordinate range, local t = (y - a) / (b - a)
+    patch: int = -1                 # the sub-patch whose polynomial ``poly`` restricts
     ident: int = -1
 
     @property
@@ -244,11 +245,28 @@ def _edge_roots(box: Box) -> list[Root]:
         for lo, hi, g in _roots_in_unit(power):
             if len(repeated) > 1 and _count(repeated, lo, hi) > 0:
                 raise PlaneNurbsNotCertified("the section is tangent to a box edge")
-            roots.append(Root(axis, value, a + lo * (b - a), a + hi * (b - a), g, (a, b)))
+            roots.append(Root(axis, value, a + lo * (b - a), a + hi * (b - a), g, (a, b), box.patch))
     return roots
 
 
-def _identify(roots: list[Root]) -> list[Root]:
+def _same_function(root: Root, other: Root, patches) -> bool:
+    """Whether both roots' restrictions are one polynomial function on their common line.
+
+    Within one sub-patch, yes. Across sub-patches only on the shared knot line
+    itself (C0 continuity: both patches restrict to the same polynomial there);
+    a line crossing the knot carries different polynomials on either side
+    (review B1-P1).
+    """
+    if root.patch == other.patch:
+        return True
+    first, second = patches[root.patch], patches[other.patch]
+    ranges = (first.u_range, second.u_range) if root.axis == 0 else (first.v_range, second.v_range)
+    across = (first.v_range, second.v_range) if root.axis == 0 else (first.u_range, second.u_range)
+    shared_knot = root.value in ranges[0] and root.value in ranges[1] and ranges[0] != ranges[1]
+    return shared_knot and across[0] == across[1]
+
+
+def _identify(roots: list[Root], patches) -> list[Root]:
     """Give every root a global id: exact points by equality, isolated roots on one line by an exact count."""
     distinct: list[Root] = []
     for root in roots:
@@ -257,7 +275,11 @@ def _identify(roots: list[Root]) -> list[Root]:
             if root.exact and other.exact:
                 if root.point() == other.point():
                     match = other
-            elif root.axis == other.axis and root.value == other.value:
+            elif root.axis == other.axis and root.value == other.value and _same_function(root, other, patches):
+                # Only within one sub-patch is ``poly`` the same function on both intervals;
+                # across a knot line the spans' polynomials differ (review B1-P1): roots on
+                # either side are distinct unless exactly equal (a root on the knot itself
+                # is found as an exact end root of both spans).
                 if root.lo <= other.hi and other.lo <= root.hi:
                     # same function on this line: the union holds one root iff they are the same
                     lo, hi = min(root.lo, other.lo), max(root.hi, other.hi)
@@ -265,7 +287,7 @@ def _identify(roots: list[Root]) -> list[Root]:
                     poly = root.poly
                     if _count(poly, (lo - a) / (b - a), (hi - a) / (b - a)) == 1:
                         match = other
-            elif root.exact != other.exact:
+            elif root.exact != other.exact and _same_function(root, other, patches):
                 # an exact (corner) point and an isolated root on a line through it
                 exact, isolated = (root, other) if root.exact else (other, root)
                 px = exact.point()
@@ -387,7 +409,7 @@ def plane_nurbs_section(plane, surface: NurbsSurface) -> PlaneNurbsSection:
     boxes = [box for patch in patches for box in _boxes(patch)]
     regular = [box for box in boxes if box.kind != "empty"]
     per_box = [_edge_roots(box) for box in regular]
-    distinct = _identify([root for roots in per_box for root in roots])
+    distinct = _identify([root for roots in per_box for root in roots], patches)
     low_u, high_u = sorted(Fraction(value) for value in surface.u_range)
     low_v, high_v = sorted(Fraction(value) for value in surface.v_range)
 

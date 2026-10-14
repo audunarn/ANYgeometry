@@ -133,3 +133,24 @@ def test_random_wavy_patches_match_the_boundary_sign_count():
         for ends in end_points(section, surface):
             assert on_plane(plane, ends[0], 1e-9) and on_plane(plane, ends[1], 1e-9)
     assert certified >= 25
+
+
+
+def two_span(z_middle):
+    return NurbsSurface(1, 1, (0., 0., .5, 1., 1.), (0., 0., 1., 1.),
+                        tuple(((u, 0., z), (u, 1., z)) for u, z in ((0., 1.), (.5, z_middle), (1., 1.))))
+
+
+def test_roots_either_side_of_a_knot_stay_distinct():
+    """Review B1-P1: two lines just left and right of the knot u = 1/2."""
+    section = plane_nurbs_section(horizontal(0.), two_span(-2. ** -100))
+    assert len(section.paths) == 2
+    touching = plane_nurbs_section(horizontal(0.), two_span(1.))
+    assert len(touching.paths) == 0
+
+
+def test_partial_coincidence_is_a_typed_refusal():
+    with pytest.raises(PlaneNurbsNotCertified, match="partly in the plane"):
+        plane_nurbs_section(horizontal(0.), NurbsSurface(
+            1, 1, (0., 0., .5, 1., 1.), (0., 0., 1., 1.),
+            tuple(((u, 0., z), (u, 1., z)) for u, z in ((0., 0.), (.5, 0.), (1., 1.)))))
