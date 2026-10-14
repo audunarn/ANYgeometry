@@ -192,45 +192,68 @@ class PlaneNurbsCurve:
         (u_lo, u_hi), (v_lo, v_hi) = rect
         return rect, ((u_lo + u_hi) / 2, (v_lo + v_hi) / 2)
 
-    def _knot_points(self, t):
-        """Knot coordinates (floats) of the curve points: the rounded exact points."""
+    def _exact_points(self, t):
+        """Per parameter: (arc, exact knot point (u, v)) - the definition of the curve's points."""
         arcs = self._arcs()
         path_t = self._path_parameter(t).ravel()
         index, tau, _count = self._locate(path_t)
-        u = np.empty(len(path_t))
-        v = np.empty(len(path_t))
+        result = []
         for i in range(len(path_t)):
-            _rect, (pu, pv) = self._exact_point(arcs[int(index[i])], Fraction(float(tau[i])))
-            u[i], v[i] = float(pu), float(pv)
-        return u, v
+            arc = arcs[int(index[i])]
+            _rect, point = self._exact_point(arc, Fraction(float(tau[i])))
+            result.append((arc, point))
+        return result
+
+    def _exact_chart(self, knot_point):
+        (r0, r1), (q0, q1) = self._chart_ranges()
+        u, v = knot_point
+        return (u - r0) / (r1 - r0), (v - q0) / (q1 - q0)
+
+    def _knot_points(self, t):
+        """Knot coordinates (floats): the rounded exact points."""
+        points = self._exact_points(t)
+        return (np.array([float(point[0]) for _arc, point in points]),
+                np.array([float(point[1]) for _arc, point in points]))
 
     def chart(self, parameters) -> np.ndarray:
-        u, v = self._knot_points(parameters)
-        cu, cv = self._knot_to_chart(u, v)
-        result = np.column_stack((np.clip(cu, 0.0, 1.0), np.clip(cv, 0.0, 1.0)))
+        result = np.array([[float(value) for value in self._exact_chart(point)]
+                           for _arc, point in self._exact_points(np.atleast_1d(parameters))])
+        result = np.clip(result, 0.0, 1.0)
         return result if np.ndim(parameters) else result[0]
 
     def evaluate(self, parameters) -> np.ndarray:
-        chart = np.atleast_2d(self.chart(np.atleast_1d(parameters)))
-        points = self.surface.evaluate_many(chart)
-        return points if np.ndim(parameters) else points[0]
+        """The rounded exact world points ``S(q)`` (exact surface evaluation at the exact chart point).
+
+        Exact through the surface too: a float surface evaluation remaps the chart
+        to knots in floats, which loses precision on shifted knot domains (review
+        B1-P2 exact round 1).
+        """
+        net = _surface_net(self.surface)
+        points = []
+        for _arc, point in self._exact_points(np.atleast_1d(parameters)):
+            cu, cv = self._exact_chart(point)
+            points.append([float(value) for value in self.surface.exact_point(cu, cv, net)])
+        result = np.asarray(points)
+        return result if np.ndim(parameters) else result[0]
 
     def derivative(self, parameters) -> np.ndarray:
-        arcs = self._arcs()
+        """World derivative: ``S_u du + S_v dv`` with the slicing rate exact and ``dx/ds = -G_s / G_x``
+        computed exactly at the exact point (float partials cancelled to 0 on near-vertical arcs)."""
         t = np.atleast_1d(np.asarray(parameters, dtype=float))
-        path_t = self._path_parameter(t)
-        index, _tau, count = self._locate(path_t)
-        chart = np.atleast_2d(self.chart(t))
+        count = len(self._arcs())
+        points = self._exact_points(t)
+        chart = np.clip(np.array([[float(value) for value in self._exact_chart(point)] for _arc, point in points]),
+                        0.0, 1.0)
         s_u, s_v = self.surface.derivatives_many(chart)
         (r0, r1), (q0, q1) = (tuple(map(float, item)) for item in self._chart_ranges())
-        u, v = self._knot_points(t)
-        result = np.empty((len(t), 3))
         a, b = self.domain
-        for i in range(len(t)):
-            arc = arcs[index[i]]
+        result = np.empty((len(t), 3))
+        for i, (arc, point) in enumerate(points):
             ds = float(arc.s1 - arc.s0) * count * (b - a)
-            g_s, g_x = self._partials(arc, u[i], v[i])
-            dx = -g_s / g_x * ds if g_x != 0 else 0.0
+            g_s, g_x = _exact_partials(arc, point)
+            if g_x == 0:
+                raise PlaneNurbsNotCertified("section derivative undefined (G_x = 0 in a regular box)")
+            dx = float(-g_s / g_x) * ds
             du, dv = (ds, dx) if arc.slicing == 0 else (dx, ds)
             result[i] = s_u[i] * du / (r1 - r0) + s_v[i] * dv / (q1 - q0)
         return result if np.ndim(parameters) else result[0]
@@ -280,18 +303,25 @@ class PlaneNurbsCurve:
         return rect
 
     def _chart_box_enclosure(self, s_range, x_range, slicing):
-        from .surface_capabilities import capabilities
-        (r0, r1), (q0, q1) = self._chart_ranges()
+        """World box of the exact surface over an exact knot rectangle, widened by the rounding of evaluation.
+
+        Evaluated points are the roundings of exact points (``evaluate``), so the
+        exact sub-patch hull over the knot rectangle (``knot_patch_hull``, no
+        widening of the parameters) plus two ulps of each coordinate's magnitude
+        contains them (review B1-P2 exact round 1: the float-oriented enclosure
+        widened a 1e16-shifted knot domain by its knot ulps).
+        """
+        from .surface_capabilities import Enclosure
         u_range, v_range = (s_range, x_range) if slicing == 0 else (x_range, s_range)
-        chart_u = sorted(((u - r0) / (r1 - r0)) for u in u_range)
-        chart_v = sorted(((v - q0) / (q1 - q0)) for v in v_range)
-        # evaluated chart points are float conversions of exact knot points (a few ulps of the chart)
-        slack = Fraction(8 * _EPS)
-        chart_u = [chart_u[0] - slack, chart_u[1] + slack]
-        chart_v = [chart_v[0] - slack, chart_v[1] + slack]
-        box = ((max(0.0, _float_down(chart_u[0])), min(1.0, _float_up(chart_u[1]))),
-               (max(0.0, _float_down(chart_v[0])), min(1.0, _float_up(chart_v[1]))))
-        return capabilities(self.surface).enclosure(box)
+        hull = self.surface.knot_patch_hull(u_range, v_range, _surface_net(self.surface))
+        lower, upper = [], []
+        for k in range(3):
+            low = _float_down(min(point[k] for point in hull))
+            high = _float_up(max(point[k] for point in hull))
+            margin = 2 * math.ulp(max(abs(low), abs(high), 1e-300))
+            lower.append(low - margin)
+            upper.append(high + margin)
+        return Enclosure(tuple(lower), tuple(upper))
 
     @staticmethod
     def _sub_box(box, slicing, s_low, s_high):
@@ -367,13 +397,14 @@ class PlaneNurbsCurve:
             t0, t1 = k / count, (k + 1) / count
             if t1 < a or t0 > b:
                 continue
-            tau0 = Fraction(max(0.0, (a - t0) * count))
-            tau1 = Fraction(min(1.0, (b - t0) * count))
+            # the arc-local parameter exactly as evaluation computes it (path_t * count - k)
+            tau0 = Fraction(min(1.0, max(0.0, a * count - k)))
+            tau1 = Fraction(min(1.0, max(0.0, b * count - k)))
             s_values = sorted((arc.s0 + tau0 * (arc.s1 - arc.s0), arc.s0 + tau1 * (arc.s1 - arc.s0)))
             box_s = (arc.box.u_range if arc.slicing == 0 else arc.box.v_range)
             # tau is computed in floats from the parameter: a few ulps of slack; the end roots' intervals
             # (points outside the gap are end roots) are added below
-            slack = Fraction(16 * _EPS) * abs(arc.s1 - arc.s0)
+            slack = Fraction(16 * _EPS) * (count + 1) * abs(arc.s1 - arc.s0)
             s_low = max(Fraction(box_s[0]), s_values[0] - slack)
             s_high = min(Fraction(box_s[1]), s_values[1] + slack)
             x_range = self._tight_x(arc, s_low, s_high) if s_high > s_low else None
@@ -452,7 +483,11 @@ class PlaneNurbsCurve:
             best = squared if best is None else min(best, squared)
         if best is None:
             return 0.0
-        return _float_down(_sqrt_down(best))
+        # evaluated points are the roundings of exact points (half an ulp per coordinate):
+        # the bound is lowered by that so it also holds for them (review B1-P2 exact round 1)
+        magnitude = max(abs(float(value)) for value in x) + float(_sqrt_down(best)) + 1.0
+        rounding = 2 * math.sqrt(3.0) * math.ulp(magnitude)
+        return max(0.0, _float_down(_sqrt_down(best)) - rounding)
 
     def bounds(self, lower=0.0, upper=1.0):
         lows, highs = [], []
@@ -565,3 +600,21 @@ def _scaled_float_coefficients(box) -> np.ndarray:
         _SCALED.clear()
     _SCALED[id(box)] = (box, array)
     return array
+
+
+def _exact_partials(arc, point):
+    """Exact (G_s, G_x) of the box polynomial at an exact knot point (Bernstein derivatives)."""
+    box = arc.box
+    c = [list(row) for row in box.coefficients]            # [u][v]
+    (u0, u1), (v0, v1) = box.u_range, box.v_range
+    a, b = (point[0] - u0) / (u1 - u0), (point[1] - v0) / (v1 - v0)
+    p, q = len(c) - 1, len(c[0]) - 1
+
+    def value(rows, s, t):
+        return _de_casteljau([_de_casteljau(list(row), t) for row in rows], s)
+
+    g_u = Fraction(0) if p == 0 else p * value([[c[i + 1][j] - c[i][j] for j in range(q + 1)] for i in range(p)], a, b) \
+        / (u1 - u0)
+    g_v = Fraction(0) if q == 0 else q * value([[c[i][j + 1] - c[i][j] for j in range(q)] for i in range(p + 1)], a, b) \
+        / (v1 - v0)
+    return (g_u, g_v) if arc.slicing == 0 else (g_v, g_u)

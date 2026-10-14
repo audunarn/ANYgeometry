@@ -243,3 +243,51 @@ def test_tiny_uniform_weights_give_the_unit_weight_length():
         model, edge = edge_model(PlaneNurbsCurve.from_plane(z_plane(), surface, 0))
         lengths.append(model.edge_length(edge))
     assert abs(lengths[0] - lengths[1]) <= 1e-12
+
+
+# ------------------------------------------------------------------ review B1-P2 exact round 1
+
+
+def test_distance_bounds_hold_for_evaluated_points_far_from_the_origin():
+    from anygeometry.nurbs import NurbsSurface
+    surface = NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.),
+                           tuple(tuple((1e10, float(i), j - .3) for j in range(2)) for i in range(2)))
+    curve = PlaneNurbsCurve.from_plane(z_plane(), surface, 0)
+    assert curve.distance_lower_bound(0., 1., curve.evaluate(.05)) == 0.
+
+
+def test_bounds_hold_with_many_arcs():
+    from anygeometry.nurbs import NurbsSurface
+    knots_u = np.r_[np.linspace(0., .1, 513), 1.]
+    surface = NurbsSurface(1, 1, (0., *knots_u, 1.), (0., 0., 1., 1.),
+                           tuple(((float(u), 0., -.5), (float(u), 1., .5)) for u in knots_u))
+    curve = PlaneNurbsCurve.from_plane(z_plane(), surface, 0)
+    for t in (.9984307992202729, .5, .0123, .99999):
+        point = curve.evaluate(t)
+        low, high = curve.bounds(t, t)
+        assert np.all(point >= low) and np.all(point <= high)
+
+
+def test_near_vertical_lengths_refuse_rather_than_vanish():
+    from anygeometry.exact_curves import analytic_curve_length
+    from anygeometry.nurbs import NurbsSurface
+    surface = NurbsSurface(2, 1, (0., 0., 0., 1., 1., 1.), (0., 0., 1., 1.),
+                           tuple(tuple((i / 2, float(j), z) for j in range(2)) for i, z in enumerate((1., -2., 4.))))
+    curve = PlaneNurbsCurve.from_plane(Plane((0., 0., .5 * 2. ** -110), (1., 0., 0.), (0., 1., -2. ** -110)),
+                                       surface, 0)
+    try:
+        length = analytic_curve_length(curve, 1e-9)
+    except GeometryError:
+        return
+    assert length > .9                                          # never the silent ~1e-17 of float partials
+
+
+def test_shifted_knot_domains_evaluate_exactly():
+    from anygeometry.nurbs import NurbsSurface
+    surface = NurbsSurface(1, 1, (1e16, 1e16, 1e16 + 256, 1e16 + 256), (0., 0., 1., 1.),
+                           tuple(tuple((float(i), float(j), i + 2 * j - .7) for j in range(2)) for i in range(2)))
+    curve = PlaneNurbsCurve.from_plane(z_plane(), surface, 0)
+    point = curve.evaluate(.37)
+    assert abs(point[2]) <= 1e-15
+    model, edge = edge_model(curve)
+    assert model.closest_edge_point(edge, point)[2] <= 1e-15
