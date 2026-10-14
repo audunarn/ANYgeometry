@@ -701,6 +701,10 @@ class _StrictAuditState:
             bounds = AABB.from_points(
                 self.model.vertex_position(identifier) for identifier in vertex_ids
             )
+        elif type(edge.curve).__name__ in ("CurveOnSurface", "NurbsCurve"):
+            # Exact-hull boxes, outward rounded and widened for float evaluation (A2a, A3b).
+            lower, upper = edge.curve.bounds()
+            bounds = AABB.from_points((lower, upper))
         else:  # pragma: no cover - future curve family, deliberately fail closed
             raise GeometryError(f"unsupported curve type {type(edge.curve).__qualname__}")
         self._edge_bounds[edge_id] = bounds
@@ -835,7 +839,11 @@ class _StrictAuditState:
             raise GeometryError(f"face {face_id} has no bounded trim")
         bounds = AABB.union_all(boxes)
         surface = face.surface
-        if isinstance(surface, ExtrudedSurface):
+        if type(surface).__name__ == "NurbsSurface":
+            # The support's exact sub-patch enclosure of the trims' chart box (A3b).
+            box = self.model.conservative_face_bounds(face_id)
+            bounds = bounds.union(AABB.from_points((box[:3], box[3:])))
+        elif isinstance(surface, ExtrudedSurface):
             lower, upper = surface.bounds()
             bounds = bounds.union(AABB.from_points(np.vstack((lower, upper))))
         elif isinstance(surface, RuledSurface):
@@ -1774,6 +1782,16 @@ class _StrictAuditState:
         pair_length_tolerance = self._edge_pair_length_tolerance(
             first.id, second.id
         )
+        if type(first.curve).__name__ == "CurveOnSurface" and type(second.curve).__name__ == "CurveOnSurface":
+            # Curves on NURBS supports: an exact certificate that they meet at most at
+            # their shared end points (A3b, nurbs_audit); otherwise the general route
+            # below reports the pair as unclassified.
+            from .nurbs_audit import certify_only_shared_ends
+            shared = {first.start, first.end} & {second.start, second.end}
+            if certify_only_shared_ends(first.curve, second.curve) and len(shared) == len(
+                    {(a, b) for a in (0, 1) for b in (0, 1)
+                     if first.curve.exact_point(a) == second.curve.exact_point(b)}):
+                return _PairClassification(True)
         if not isinstance(first.curve, Straight) or not isinstance(second.curve, Straight):
             from .intersections import query_intersection
 
