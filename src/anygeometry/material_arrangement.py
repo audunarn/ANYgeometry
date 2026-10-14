@@ -742,7 +742,7 @@ def _add_exact_planar_seams(domain, boundaries, paths, segments, points, toleran
         point = station if station is not None else exact_vector(position)
         for offset in offsets:
             seam = stations.Segment(tuple(p - d for p, d in zip(point, offset)),
-                                    tuple(p + d for p, d in zip(point, offset)))
+                                    tuple(p + d for p, d in zip(point, offset)), derived=True)
             for piece in _clip_line_exact(domain, stations.to_line(seam), tolerance, check, segment=seam):
                 segments[len(paths)] = piece
                 paths.append(ArrangementPath(stations.to_line(piece), decomposition=True))
@@ -1072,10 +1072,15 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
                     # S4 (T-b/D8 design, slice E1): the one place a split sub-piece is
                     # removed, on the shared vertex identity -- dropped when no longer
                     # than tol, refused when longer (main merged parameters per path).
-                    if stations.distance2(*piece) <= Fraction(tolerance) ** 2:
+                    if piece.length2() <= Fraction(tolerance) ** 2:
                         continue
                     raise GeometryError("arrangement piece longer than the tolerance collapses to one vertex")
                 raise GeometryError("unresolved closed or degenerate arrangement edge")
+            if segment is not None and stations.rounded(piece[0]) == stations.rounded(piece[1]):
+                # A kept edge (two vertices, length > 0) whose correctly rounded stations -- its stored
+                # coordinates -- coincide cannot be persisted: refused, decided on the exact stations'
+                # canonical rounding (not on evaluated or chart-rounded values).
+                raise GeometryError("arrangement edge collapses at its stored coordinates")
             duplicate = None
             for index in incidence[start]:
                 old_start, old_end = endpoints_by_edge[index]

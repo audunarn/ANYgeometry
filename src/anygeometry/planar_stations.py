@@ -42,6 +42,13 @@ class Segment(tuple):
         self.hi = tuple(max(x, y) + e for x, y, e in zip(a, b, slack))
         return self
 
+    def length2(self) -> Fraction:
+        """Exact squared length (cached)."""
+        value = self.__dict__.get("_length2")
+        if value is None:
+            value = self.__dict__["_length2"] = distance2(self[0], self[1])
+        return value
+
     def far_from(self, point, tolerance: float) -> bool:
         """``True`` only when ``point_parameters`` certainly returns nothing for ``point``.
 
@@ -203,7 +210,7 @@ def _line_line(line: Segment, curve: Segment, tolerance: float) -> list:
 def _role_key(segment: Segment) -> tuple:
     """The canonical operand-role key of a derived piece (T7, owner Q-h): exact squared length,
     then the exact station tuples."""
-    return distance2(segment[0], segment[1]), segment[0], segment[1]
+    return segment.length2(), segment[0], segment[1]
 
 
 def junctions(first: Segment, second: Segment, tolerance: float) -> tuple:
@@ -223,9 +230,10 @@ def junctions(first: Segment, second: Segment, tolerance: float) -> tuple:
         candidates.extend((t, s) for s in point_parameters(second, at(first, t), tolerance))
         candidates.extend((s, t) for s in point_parameters(first, at(second, t), tolerance))
     tol2 = Fraction(tolerance) ** 2
-    first_key, second_key = _role_key(first), _role_key(second)
-    if max(first_key[0], second_key[0]) > tol2:
-        if first_key >= second_key:
+    first_length, second_length = first.length2(), second.length2()
+    if max(first_length, second_length) > tol2:
+        if (first_length > second_length
+                or (first_length == second_length and _role_key(first) >= _role_key(second))):
             candidates.extend(_line_line(first, second, tolerance))
         else:
             candidates.extend((a, b) for b, a in _line_line(second, first, tolerance))

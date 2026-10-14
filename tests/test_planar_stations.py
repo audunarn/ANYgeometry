@@ -603,3 +603,46 @@ def test_junctions_are_symmetric_in_their_operands():
             b = planar_line(rng) if rng.random() < .5 else LinePath(tuple(base), tuple(base + np.array((1e-10, 0., 0.))))
         first, second = st.segment_of(a), st.segment_of(b)
         assert st.junctions(first, second, 1e-9) == tuple(sorted((y, x) for x, y in st.junctions(second, first, 1e-9)))
+
+
+
+@pytest.mark.parametrize("direction", (None, -math.inf, math.inf))
+def test_an_edge_collapsing_at_its_stored_coordinates_refuses_on_exact_data(monkeypatch, direction):
+    """Review (E1 round 1): consecutive exact crossings ~5e-19 apart (longer than tol = 1e-30) round to
+    the same stored point; the kept edge cannot be persisted. The refusal is decided on the exact
+    stations' canonical rounding, so it does not depend on evaluation rounding (main refused
+    "unresolved bridge"; listed under Q-e)."""
+    plane = Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.))
+    square = _square_loop([(0., 0.), (2., 0.), (2., 2.), (0., 2.)])
+    traces = tuple(ArrangementPath(LinePath(a, b), owners=(1, k)) for k, (a, b) in enumerate(
+        (((0., 1., 0.), (2., 1., 0.)), ((0., 0., 0.), (2., 2., 0.)), ((0., 1e-18, 0.), (2., 2., 0.)))))
+    if direction is not None:
+        original = LinePath.evaluate
+        monkeypatch.setattr(LinePath, "evaluate", lambda self, t: np.nextafter(original(self, t), direction))
+    with pytest.raises(GeometryError, match="collapses at its stored coordinates"):
+        arrange_material(MaterialDomain(1, plane, (square,)), traces, tolerance=1e-30)
+
+
+def _fan(bottoms_tops, **kw):
+    plane = Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.))
+    square = _square_loop([(0., 0.), (4., 0.), (4., 4.), (0., 4.)])
+    traces = tuple(ArrangementPath(LinePath((a, 0., 0.), (b, 4., 0.)), owners=(1, k))
+                   for k, (a, b) in enumerate(bottoms_tops))
+    return arrange_material(MaterialDomain(1, plane, (square,)), traces, tolerance=1e-6, **kw)
+
+
+def test_fan_with_a_thin_triangle_keeps_it():
+    """Decision change (Q13/Q-e, E1): traces from bottom x = 1e-7 and 1.8e-6 meet at the top point
+    (1, 4), bounding a real thin triangle (area ~3.4e-6 >> tol^2); a third trace from 5e-7 to (2, 4).
+    Main's per-path merge removed the bottom station that separates the triangle: 4 cells, and
+    "failed material conservation" at the default area tolerance. E1: 5 cells, conserving."""
+    for kw in ({"area_tolerance": 1e-3}, {}):
+        assert len(_fan(((1e-7, 1.), (5e-7, 2.), (1.8e-6, 1.)), **kw).cells) == 5
+
+
+def test_fan_keeps_the_edge_between_two_distinct_vertices():
+    """Decision change (Q13/Q-e, E1): bottom stations 0.5e-6, 0.9e-6, 2.1e-6 (tol 1e-6) form two
+    first-fit vertices; the 1.2e-6 sub-piece joining them is an edge (main dropped it on that path
+    while vertex identity kept both vertices): 5 cells and 13 paths (main 12), same area."""
+    result = _fan(((2.1e-6, 1.), (.5e-6, 3.), (.9e-6, 1.)), area_tolerance=1e-3)
+    assert (len(result.cells), len(result.paths)) == (5, 13)
