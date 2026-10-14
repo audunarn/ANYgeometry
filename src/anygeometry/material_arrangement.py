@@ -1343,6 +1343,7 @@ def certify_persisted_cells(support, loops, edge_ends, position, check=lambda: N
                 signature = (_shoelace(polygon(loop)) > 0, sorted(lobe > 0 for lobe in lobes))
                 if signature != want:
                     raise failure("winding or lobes changed")
+    touching_holes = {}
     for outer, holes in loops:
         for loop in (outer, *holes):
             lobes = []
@@ -1366,6 +1367,7 @@ def certify_persisted_cells(support, loops, edge_ends, position, check=lambda: N
                         probe = ((lobe[0][0] + lobe[1][0]) / 2, (lobe[0][1] + lobe[1][1]) / 2)
                         if not any(point_in_polygon(probe, other) is Outcome.ABOVE for other in main_lobes):
                             raise failure("touching lobe outside its loop")
+                        touching_holes.setdefault(id(outer), []).append(lobe)
     areas = [(_shoelace(op), [_shoelace(hp) for hp in hps]) for _o, _h, op, hps in cells]
     if any(a == 0 for outer_area, hole_areas in areas for a in (outer_area, *hole_areas)):
         raise failure("zero-area loop")
@@ -1403,6 +1405,14 @@ def certify_persisted_cells(support, loops, edge_ends, position, check=lambda: N
                 raise failure("hole outside its outer loop")
             if any(point_in_polygon(probe, other) is Outcome.ABOVE
                    for g, other in enumerate(hole_polygons) if g != h):
+                raise failure("hole inside another hole")
+    for outer, holes, _outer_polygon, hole_polygons in cells:
+        # Hole regions of a cell -- its hole loops and the touching-hole lobes of its outer walk --
+        # never lie inside one another (they may share vertices only).
+        regions = list(hole_polygons) + touching_holes.get(id(outer), [])
+        for a, region in enumerate(regions):
+            probe = ((region[0][0] + region[1][0]) / 2, (region[0][1] + region[1][1]) / 2)
+            if any(point_in_polygon(probe, other) is Outcome.ABOVE for b, other in enumerate(regions) if b != a):
                 raise failure("hole inside another hole")
     for j, (outer, holes, _op, _hp) in enumerate(cells):
         for edge in sorted(cell_edges[j]):
