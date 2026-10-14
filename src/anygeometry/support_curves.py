@@ -152,9 +152,8 @@ class PlaneNurbsCurve:
         magnitude = max([1.0] + [abs(float(value)) for value in origin]
                         + [abs(float(value)) for row in self.surface.controls for point in row for value in point])
         delta = Fraction(magnitude) / 2 ** 50
-        root_up = Fraction(math.sqrt(float(mm))) * (1 + Fraction(1, 2 ** 40))
-        if root_up * root_up < mm:
-            root_up = Fraction(_float_up(float(mm)) + 1)
+        # rational upper bound of sqrt(mm): (isqrt(n d) + 1) / d for mm = n / d
+        root_up = Fraction(math.isqrt(mm.numerator * mm.denominator) + 1, mm.denominator)
         result = (m, d, mm, delta * delta * mm, delta * root_up)
         if len(_SECTIONS) >= 64:
             _SECTIONS.clear()
@@ -344,7 +343,7 @@ class PlaneNurbsCurve:
                 raise PlaneNurbsNotCertified("section derivative undefined (G_x = 0 in a regular box)")
             dx = -g_s / g_x * ds
             du, dv = (ds, dx) if arc.slicing == 0 else (dx, ds)
-            s_u, s_v = _exact_knot_partials(self.surface, net, *point)
+            s_u, s_v = _exact_knot_partials(self.surface, net, *point, box=arc.box)
             result[i] = [float(x * du + y * dv) for x, y in zip(s_u, s_v)]
         return result if np.ndim(parameters) else result[0]
 
@@ -536,6 +535,15 @@ class PlaneNurbsCurve:
         # defined points lie in the slab |m . P - d| <= limit (``_exact_point``), not on the plane
         normal_term = max(Fraction(0), abs(sum(a * b for a, b in zip(m, x)) - d) - limit) ** 2 / mm
         net = _surface_net(self.surface)
+        n = nn = None
+        with np.errstate(over="ignore", invalid="ignore"):
+            middle = 0.5 * (float(lower) + float(upper))
+            probe = np.asarray(self.evaluate(middle), dtype=float) - np.asarray(target, dtype=float)
+        if np.all(np.isfinite(probe)) and np.any(probe != 0.0):
+            n = [Fraction(float(value)) for value in probe]
+            along = sum(a * b for a, b in zip(n, m)) / mm
+            n = [a - along * b for a, b in zip(n, m)]                   # exactly in the plane
+            nn = sum(value * value for value in n)
         best = None
         for arc, s_range, x_range in self._arc_rects(lower, upper):
             u_interval, v_interval = (s_range, x_range) if arc.slicing == 0 else (x_range, s_range)
@@ -546,14 +554,7 @@ class PlaneNurbsCurve:
                 gap = max(low - x[k], x[k] - high, Fraction(0))
                 box_squared += gap * gap
             squared = box_squared
-            with np.errstate(over="ignore", invalid="ignore"):
-                middle = 0.5 * (float(lower) + float(upper))
-                probe = np.asarray(self.evaluate(middle), dtype=float) - np.asarray(target, dtype=float)
-            if np.all(np.isfinite(probe)) and np.any(probe != 0.0):
-                n = [Fraction(float(value)) for value in probe]
-                along = sum(a * b for a, b in zip(n, m)) / mm
-                n = [a - along * b for a, b in zip(n, m)]               # exactly in the plane
-                nn = sum(value * value for value in n)
+            if n is not None:
                 if nn > 0:
                     sides = [sum(a * b for a, b in zip(m, point)) - d for point in hull]
                     values = [sum(a * b for a, b in zip(n, point)) for point in hull]
@@ -711,17 +712,26 @@ def _exact_partials(arc, point):
     return (g_u, g_v) if arc.slicing == 0 else (g_v, g_u)
 
 
-def _exact_knot_partials(surface, net, u, v):
+def _exact_knot_partials(surface, net, u, v, box=None):
     """Exact ``(S_u, S_v)`` per knot unit at the knot point ``(u, v)``: the homogeneous derivative
-    nets (``p (Pw_{i+1} - Pw_i) / (U_{i+p+1} - U_{i+1})`` on ``U[1:-1]``) and the quotient rule;
-    spans as ``exact_point`` (the right-sided derivative at a knot)."""
+    nets (``p (Pw_{i+1} - Pw_i) / (U_{i+p+1} - U_{i+1})`` on ``U[1:-1]``) and the quotient rule.
+
+    The polynomial piece is the knot span holding ``box`` (the arc's box, so a point
+    on a knot line is differentiated on the same side as its section polynomial;
+    review B1-P2 exact round 3), else the span ``exact_point`` uses.
+    """
     from .nurbs import _exact_basis, _exact_span
     p, q = surface.degree_u, surface.degree_v
     knots_u, knots_v = [Fraction(k) for k in surface.knots_u], [Fraction(k) for k in surface.knots_v]
     count_u, count_v = len(net), len(net[0])
 
+    if box is None:
+        side_u, side_v = u, v
+    else:
+        side_u, side_v = (sum(box.u_range) / 2, sum(box.v_range) / 2)  # interior of one knot span
+
     def combine(degree_u, ku, cu, degree_v, kv, cv, entry):
-        span_u, span_v = _exact_span(degree_u, ku, cu, u), _exact_span(degree_v, kv, cv, v)
+        span_u, span_v = _exact_span(degree_u, ku, cu, side_u), _exact_span(degree_v, kv, cv, side_v)
         basis_u, basis_v = _exact_basis(degree_u, ku, span_u, u), _exact_basis(degree_v, kv, span_v, v)
         total = [Fraction(0)] * 4
         for a, nu in enumerate(basis_u):

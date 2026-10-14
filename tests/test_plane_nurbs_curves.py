@@ -335,3 +335,27 @@ def test_shifted_knot_domains_differentiate_exactly():
     assert np.allclose(derivatives[0], derivatives[1], rtol=1e-12, atol=1e-15)
     lengths = [analytic_curve_length(curve, 1e-9) for curve in curves]
     assert abs(lengths[0] - lengths[1]) <= 1e-8
+
+
+# ------------------------------------------------------------------ review B1-P2 exact round 3
+
+
+def test_derivatives_at_a_trimmed_knot_end_stay_on_the_arc_side():
+    from anygeometry.nurbs import NurbsSurface
+    x, z = (0., .5, 1.), (-.2, -.4, -.3)
+    controls = tuple(tuple((x[i], float(j), z[i] + j) for j in range(2)) for i in range(3))
+    surface = NurbsSurface(1, 1, (0., 0., .5, 1., 1.), (0., 0., 1., 1.), controls, u_range=(0., .5))
+    curve = PlaneNurbsCurve.from_plane(z_plane(), surface, 0)
+    assert np.allclose(curve.evaluate(1.), (.5, .4, 0.), atol=1e-15)
+    end, inside = curve.derivative(1.), curve.derivative(1. - 1e-9)
+    assert abs(end[2]) <= 1e-15                                 # tangent stays in the section plane
+    assert np.allclose(end, inside, rtol=1e-6)
+
+
+def test_huge_plane_vectors_evaluate():
+    from anygeometry.nurbs import NurbsSurface
+    surface = NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.),
+                           tuple(tuple((float(i), float(j), j - .3) for j in range(2)) for i in range(2)))
+    plane = Plane((0., 0., 0.), (1e100, 0., 0.), (0., 1e100, 0.))
+    curve = PlaneNurbsCurve.from_plane(plane, surface, 0)
+    assert abs(curve.evaluate(.5)[2]) <= 1e-15
