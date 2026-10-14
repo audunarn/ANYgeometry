@@ -185,3 +185,57 @@ def test_nurbs_curve_face_queries_are_not_certified_from_samples():
                           NurbsCurve(1, (0., 0., 1., 1.), ((0., 0., 5.), (1., 0., 5.))))
     separated = query_intersection(model, model.handle("edge", far), model.handle("face", face))
     assert separated.kind is IntersectionKind.DISJOINT                 # the sound bounds test still decides
+
+
+def test_bounds_are_exact_for_rational_insertion_and_float_parameter_maps():
+    """Review A2a round 2 blocking: bounds contain the exact curve and the float-evaluated points."""
+    heavy = NurbsCurve(1, (0., 0., 3., 3.), ((0., 0., 0.), (1e5, 0., 0.)), (1e6, 1.), (2.9999997, 3.))
+    low, high = heavy.bounds()
+    start, end = heavy.exact_point(0), heavy.exact_point(1)
+    assert Fraction(low[0]) <= min(start[0], end[0]) and max(start[0], end[0]) <= Fraction(high[0])
+    narrow = NurbsCurve(1, (1., 1., 1. + 2 ** -44, 1. + 2 ** -44), ((0., 0., 0.), (1., 0., 0.)))
+    low, high = narrow.bounds(.1, .1)
+    assert Fraction(low[0]) <= Fraction(1, 10) <= Fraction(high[0])
+    point = narrow.evaluate(.1)
+    assert low[0] <= point[0] <= high[0]
+    rng = np.random.default_rng(4)
+    for curve in (heavy, narrow, quarter_arc()):
+        for _ in range(40):
+            a, b = np.sort(rng.uniform(0., 1., 2))
+            low, high = curve.bounds(a, b)
+            for value in (Fraction(a), Fraction(b), (Fraction(a) + Fraction(b)) / 2):
+                exact = curve.exact_point(value)
+                assert all(Fraction(lo) <= x <= Fraction(hi) for lo, x, hi in zip(low, exact, high))
+
+
+def test_a_touching_heavy_rational_curve_is_not_disjoint():
+    from anygeometry import IntersectionKind, query_intersection
+    curve = NurbsCurve(1, (0., 0., 3., 3.), ((0., 0., 0.), (1e5, 0., 0.)), (1e6, 1.), (2.9999997, 3.))
+    x0 = float(curve.exact_point(0)[0])
+    model = GeometryModel()
+    corners = [model.add_point(x0, y, z) for y, z in ((-1., -1.), (1., -1.), (1., 1.), (-1., 1.))]
+    face = model.add_face([model.add_line(a, b) for a, b in zip(corners, corners[1:] + corners[:1])])
+    edge = model.add_curve(model.add_point(*map(float, curve.exact_point(0))),
+                           model.add_point(*map(float, curve.exact_point(1))), curve)
+    result = query_intersection(model, model.handle("edge", edge), model.handle("face", face))
+    assert result.kind is not IntersectionKind.DISJOINT
+
+
+def test_distance_lower_bounds_are_sound_and_finite():
+    line = NurbsCurve(1, (0., 0., 1., 1.), ((0., 0., 0.), (1., 0., 0.)), (1., 1.))
+    far = line.distance_lower_bound(0., 1., (1e200, 0., 0.))
+    assert math.isfinite(far) and Fraction(far) <= Fraction(1e200) - 1
+    zero = NurbsCurve(1, (0., 0., 1., 1.), ((0., 0., 0.), (0., 0., 0.)))
+    assert Fraction(zero.distance_lower_bound(0., 1., (1., 1., 0.))) ** 2 <= 2
+    arc = quarter_arc()
+    target = np.array((1. + 6. * math.cos(.4), 2. + 6. * math.sin(.4), 3.))
+    for a, b in ((0., 1.), (.2, .3), (.26, .27)):
+        bound = arc.distance_lower_bound(a, b, target)
+        samples = arc.evaluate(np.linspace(a, b, 201))
+        assert bound <= np.linalg.norm(samples - target, axis=1).min()
+
+
+def test_nearly_parallel_axes_still_give_a_circle():
+    for x_axis, y_axis in (((1., 1., 0.), (1., 1. + 1e-10, 0.)), ((1., 1.), (1., 1. + 1e-10))):
+        arc = nurbs_circular_arc((0.,) * len(x_axis), x_axis, y_axis, 1., 0., math.pi / 2)
+        assert np.abs(np.linalg.norm(arc.evaluate(np.linspace(0., 1., 1001)), axis=1) - 1.).max() <= 1e-15 * 8

@@ -257,77 +257,61 @@ class NurbsCurve:
             raise GeometryError("curve interval must have positive length")
         return replace(self, domain=(float(s[0]), float(s[1])))
 
-    def _active_controls(self, lower=0.0, upper=1.0):
-        """Controls whose hull contains the curve on ``[lower, upper]``, and their rounding margin.
+    def _active_controls(self, lower=0.0, upper=1.0) -> list:
+        """Exact projected controls whose hull contains the curve on ``[lower, upper]``.
 
-        The interval ends are inserted as knots up to multiplicity ``degree``
-        (A5.1), so the hull of the controls of the basis functions active on the
-        interval shrinks with it (positive weights: convex hull property). The
-        float insertion rounds; the per-coordinate ``margin`` (``64 eps`` of the
-        control magnitude) covers it.
+        The chart interval (clipped to [0, 1] like ``_map``) is mapped exactly
+        and widened by the float map's error bound (``_knot_interval``), so it
+        covers both the exact and the float-evaluated parameters. Its ends are
+        inserted exactly (rational A5.1 on the homogeneous controls) up to
+        multiplicity ``degree``; the controls of the basis functions active on
+        it bound the curve there (positive weights: convex hull). No rounding
+        until the caller rounds outward (review A2a round 2).
         """
         if lower > upper:
             raise GeometryError("curve bound interval is reversed")
-        s = np.sort(self._knot_parameters(_pair(lower, upper))[0])
-        p = self.degree
-        knots = np.asarray(self.knots, dtype=float)
-        controls = np.asarray(self.controls, dtype=float)
-        weights = _scaled_weights(self.weights)
-        for value in sorted({float(s[0]), float(s[1])}):
-            if knots[p] < value < knots[-1]:
-                times = p - int(np.count_nonzero(knots == value))
-                if times > 0:
-                    knots, controls, weights = _reference.insert_knot(p, knots, controls, weights, value, times)
-        n = len(controls)
-        index = np.arange(n)
-        if s[0] < s[1]:
-            active = (knots[index] < s[1]) & (knots[index + p + 1] > s[0])
-        else:                                         # a point: the interpolating control after insertion
-            active = np.zeros(n, dtype=bool)
-            if s[0] <= knots[p]:
-                active[0] = True
-            elif s[0] >= knots[-1]:
-                active[-1] = True
-            else:
-                active[int(np.searchsorted(knots, s[0], side="right")) - 1 - p] = True
-        points = controls[active]
-        if not len(points) or not np.all(np.isfinite(points)):
-            raise GeometryError("NURBS bounds are not representable")
-        margin = 64 * np.finfo(float).eps * np.max(np.abs(np.asarray(self.controls)), axis=0)
-        return points, margin
+        low, high = (min(1.0, max(0.0, _real(value, "curve parameter"))) for value in (lower, upper))
+        s0, s1 = _knot_interval(low, high, self.domain)
+        weights = self.weights if self.weights is not None else (1.0,) * len(self.controls)
+        points = []
+        for point, weight in zip(self.controls, weights):
+            w = Fraction(weight)
+            points.append(tuple(Fraction(value) * w for value in point) + (w,))
+        _, refined, active = _exact_refine(self.degree, [Fraction(k) for k in self.knots], points, s0, s1)
+        return [tuple(value / refined[i][-1] for value in refined[i][:-1]) for i in active]
 
     def bounds(self, lower=0.0, upper=1.0):
         """Outward-rounded box containing the curve on ``[lower, upper]`` (see ``_active_controls``)."""
-        points, margin = self._active_controls(lower, upper)
-        return (np.nextafter(points.min(axis=0) - margin, -np.inf),
-                np.nextafter(points.max(axis=0) + margin, np.inf))
+        points = self._active_controls(lower, upper)
+        dimension = self.dimension
+        return (np.array([_float_down(min(point[k] for point in points)) for k in range(dimension)]),
+                np.array([_float_up(max(point[k] for point in points)) for k in range(dimension)]))
 
     def distance_lower_bound(self, lower, upper, target) -> float:
         """A lower bound of the distance from ``target`` to the curve on ``[lower, upper]``.
 
-        The larger of the box distance and a half-space bound of the control
-        hull: for the unit direction ``n`` towards the curve's mid-interval
-        point, every hull point ``x`` has ``n . (x - target) >= min_i n . (P_i - target)``.
-        The hull hugs the curve to second order, so the bound converges
-        quadratically where the box bound converges linearly (projection
-        branch and bound). Rounding: the controls' margin and the dot products'
-        error are subtracted.
+        Exact: the larger of the squared distance to the exact control box and
+        the squared half-space bound ``(min_i n . (P_i - x))^2 / |n|^2`` (when
+        positive) for ``n`` the float direction towards the mid-interval curve
+        point (any non-zero ``n`` is valid: every hull point lies on the far side
+        of the plane). The hull hugs the curve to second order, so the bound
+        converges quadratically (projection branch and bound). Rounded down.
         """
-        points, margin = self._active_controls(lower, upper)
-        target = np.asarray(target, dtype=float)
-        low = np.nextafter(points.min(axis=0) - margin, -np.inf)
-        high = np.nextafter(points.max(axis=0) + margin, np.inf)
-        box = float(np.linalg.norm(np.maximum(np.maximum(low - target, target - high), 0.0)))
-        probe = self.evaluate(.5 * (float(lower) + float(upper))) - target
-        length = float(np.linalg.norm(probe))
-        if not np.isfinite(length) or length == 0.0:
-            return box
-        direction = probe / length
-        offsets = points - target
-        eps = np.finfo(float).eps
-        slack = float(np.linalg.norm(margin)) + 8 * eps * float(np.max(np.abs(offsets)))
-        half_space = (float(np.min(offsets @ direction)) - slack) / (1 + 8 * eps)
-        return max(box, half_space)
+        points = self._active_controls(lower, upper)
+        x = tuple(Fraction(float(value)) for value in np.asarray(target, dtype=float))
+        squared = Fraction(0)
+        for k in range(self.dimension):
+            low, high = min(point[k] for point in points), max(point[k] for point in points)
+            gap = max(low - x[k], x[k] - high, Fraction(0))
+            squared += gap * gap
+        with np.errstate(over="ignore", invalid="ignore"):
+            probe = self.evaluate(.5 * (float(lower) + float(upper))) - np.asarray(target, dtype=float)
+        if np.all(np.isfinite(probe)) and np.any(probe != 0.0):
+            n = tuple(Fraction(float(value)) for value in probe)
+            margin = min(sum(a * (b - c) for a, b, c in zip(n, point, x)) for point in points)
+            if margin > 0:
+                squared = max(squared, margin * margin / sum(a * a for a in n))
+        return _float_down(_sqrt_down(squared))
 
     def breakpoints(self) -> tuple[float, ...]:
         """Engine parameters in (0, 1) of the distinct interior knots inside the domain (span ends)."""
@@ -606,6 +590,8 @@ def nurbs_circular_arc(center, x_axis, y_axis, radius: float, start: float, swee
     if not np.isfinite(y_length) or y_length <= 1e-12 * y_scale:
         raise GeometryError("arc y axis must be non-zero and not parallel to the x axis")
     y_axis = y_axis / y_length
+    y_axis = y_axis - float(y_axis @ x_axis) * x_axis    # second pass: orthogonal to rounding (twice is enough)
+    y_axis = y_axis / float(np.linalg.norm(y_axis))
     segments = max(1, math.ceil(abs(sweep) / (math.pi / 2) - 1e-12))
     delta = sweep / segments
     middle_weight = math.cos(delta / 2)
@@ -630,3 +616,135 @@ def nurbs_circular_arc(center, x_axis, y_axis, radius: float, start: float, swee
         knots += [k / segments, k / segments]
     knots += [1.0, 1.0, 1.0]
     return NurbsCurve(2, tuple(knots), tuple(controls), tuple(weights))
+
+
+# ------------------------------------------------------------- exact rational helpers (A2a/A3a)
+
+
+def _exact_chart(value, chart_range) -> Fraction:
+    """Exact affine image of a chart parameter in [0, 1] on ``chart_range``."""
+    start, end = (Fraction(item) for item in chart_range)
+    return start + Fraction(value) * (end - start)
+
+
+def _knot_interval(low, high, chart_range) -> tuple[Fraction, Fraction]:
+    """Knot interval covering the chart interval [low, high] (either order) under exact and float maps.
+
+    ``_map`` evaluates ``(1 - t) a + t b`` in floats with an absolute error below
+    ``4 u max(|a|, |b|) < 4 ulp(max(|a|, |b|))``; the exact image is widened by that
+    and clipped to the range.
+    """
+    values = [_real(item, "chart box bound") for item in (low, high)]
+    if not all(0.0 <= item <= 1.0 for item in values):
+        raise GeometryError("chart box must lie inside [0, 1]^2")
+    s0, s1 = sorted(_exact_chart(item, chart_range) for item in values)
+    slack = 4 * Fraction(math.ulp(max(abs(chart_range[0]), abs(chart_range[1]))))
+    lower, upper = (Fraction(item) for item in sorted(chart_range))
+    return max(lower, s0 - slack), min(upper, s1 + slack)
+
+
+def _exact_span(p: int, knots: list, count: int, s: Fraction) -> int:
+    """Span as ``reference.find_spans``: ``knots[i] <= s < knots[i+1]``, the domain end in the last non-empty span."""
+    if s >= knots[count]:
+        span = count - 1
+        while span > p and knots[span] == knots[count]:
+            span -= 1
+        return span
+    span = p
+    while span < count - 1 and knots[span + 1] <= s:
+        span += 1
+    return span
+
+
+def _exact_basis(p: int, knots: list, span: int, s: Fraction) -> list:
+    """The non-zero basis values ``N_{span-p..span}(s)`` in exact arithmetic (A2.2)."""
+    values = [Fraction(1)] + [Fraction(0)] * p
+    left, right = [Fraction(0)] * (p + 1), [Fraction(0)] * (p + 1)
+    for j in range(1, p + 1):
+        left[j] = s - knots[span + 1 - j]
+        right[j] = knots[span + j] - s
+        saved = Fraction(0)
+        for r in range(j):
+            temp = values[r] / (right[r + 1] + left[j - r])
+            values[r] = saved + right[r + 1] * temp
+            saved = left[j - r] * temp
+        values[j] = saved
+    return values
+
+
+def _exact_insert(p: int, knots: list, points: list, value: Fraction, times: int) -> tuple[list, list]:
+    """Insert ``value`` (strictly inside the domain) ``times`` times (A5.1); points are exact vectors."""
+    for _ in range(times):
+        k = _exact_span(p, knots, len(points), value)
+        new = points[: k - p + 1]
+        for i in range(k - p + 1, k + 1):
+            alpha = (value - knots[i]) / (knots[i + p] - knots[i])
+            new.append(tuple(alpha * a + (1 - alpha) * b for a, b in zip(points[i], points[i - 1])))
+        new += points[k:]
+        knots = knots[: k + 1] + [value] + knots[k + 1:]
+        points = new
+    return knots, points
+
+
+def _exact_refine(p: int, knots: list, points: list, s0: Fraction, s1: Fraction) -> tuple[list, list, list]:
+    """Insert the interval ends to multiplicity ``p``; return the knots, points and the active indices.
+
+    Active: the basis functions not identically zero on the interval (open
+    interval; for ``s0 == s1`` those not zero at the point, a superset). Their
+    controls bound the curve on the interval whatever the multiplicities.
+    """
+    for value in sorted({s0, s1}):
+        if knots[p] < value < knots[len(points)]:
+            times = p - knots.count(value)
+            if times > 0:
+                knots, points = _exact_insert(p, knots, points, value, times)
+    count = len(points)
+    if s0 < s1:
+        active = [i for i in range(count) if knots[i] < s1 and knots[i + p + 1] > s0]
+    else:
+        active = [i for i in range(count) if knots[i] <= s0 <= knots[i + p + 1]]
+    return knots, points, active
+
+
+def _sqrt_up(value: Fraction) -> Fraction:
+    """An exact rational upper bound of ``sqrt(value)`` (relative excess below ``2**-60``)."""
+    if value == 0:
+        return Fraction(0)
+    shift = max(0, 64 - (value.numerator.bit_length() - value.denominator.bit_length()) // 2)
+    scaled = value * (1 << (2 * shift))
+    whole = scaled.numerator // scaled.denominator
+    root = math.isqrt(whole)
+    exact_root = root * root == whole and scaled.denominator == 1
+    return Fraction(root if exact_root else root + 1, 1 << shift)
+
+
+def _sqrt_down(value: Fraction) -> Fraction:
+    """An exact rational lower bound of ``sqrt(value)`` (relative deficit below ``2**-60``)."""
+    if value == 0:
+        return Fraction(0)
+    shift = max(0, 64 - (value.numerator.bit_length() - value.denominator.bit_length()) // 2)
+    scaled = value * (1 << (2 * shift))
+    return Fraction(math.isqrt(scaled.numerator // scaled.denominator), 1 << shift)
+
+
+_FLOAT_MAX = Fraction(np.finfo(float).max)
+
+
+def _float_down(value: Fraction) -> float:
+    """The largest double <= ``value`` (saturating to ``-inf`` / ``max``)."""
+    if value < -_FLOAT_MAX:
+        return -math.inf
+    if value > _FLOAT_MAX:
+        return float(np.finfo(float).max)
+    rounded = float(value)
+    return math.nextafter(rounded, -math.inf) if Fraction(rounded) > value else rounded
+
+
+def _float_up(value: Fraction) -> float:
+    """The smallest double >= ``value`` (saturating to ``inf`` / ``-max``)."""
+    if value > _FLOAT_MAX:
+        return math.inf
+    if value < -_FLOAT_MAX:
+        return -float(np.finfo(float).max)
+    rounded = float(value)
+    return math.nextafter(rounded, math.inf) if Fraction(rounded) < value else rounded
