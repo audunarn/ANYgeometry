@@ -154,3 +154,13 @@ def test_partial_coincidence_is_a_typed_refusal():
         plane_nurbs_section(horizontal(0.), NurbsSurface(
             1, 1, (0., 0., .5, 1., 1.), (0., 0., 1., 1.),
             tuple(((u, 0., z), (u, 1., z)) for u, z in ((0., 0.), (.5, 0.), (1., 1.)))))
+
+
+
+def test_the_box_budget_is_shared_by_the_pair(monkeypatch):
+    import anygeometry.plane_nurbs as module
+    monkeypatch.setattr(module, "MAX_BOXES", 50)
+    knots = (0.,) + tuple(float(k) for k in range(0, 9)) + (8.,)
+    surface = NurbsSurface(1, 1, knots, knots, tuple(tuple((float(i), float(j), 1.) for j in range(9)) for i in range(9)))
+    with pytest.raises(PlaneNurbsNotCertified, match="budget"):
+        plane_nurbs_section(horizontal(0.), surface)              # 64 empty sub-patches > 50 boxes

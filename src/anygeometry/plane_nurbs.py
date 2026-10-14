@@ -164,18 +164,22 @@ def _classify(coefficients) -> str | None:
     return None
 
 
-def _boxes(patch: SubPatch) -> list[Box]:
+def _boxes(patch: SubPatch, budget: list) -> list[Box]:
+    """Quad-tree leaves of one sub-patch; ``budget`` is the pair's shared box counter ``[examined]``."""
     leaves: list[Box] = []
     pending = [(patch.u_range, patch.v_range, patch.coefficients, 0)]
     while pending:
         u_range, v_range, coefficients, depth = pending.pop()
+        budget[0] += 1
+        if budget[0] > MAX_BOXES:
+            raise PlaneNurbsNotCertified(f"box budget of {MAX_BOXES} exhausted")
         kind = _classify(coefficients)
         if kind is not None:
             leaves.append(Box(patch.index, u_range, v_range, coefficients, kind))
             continue
         if all(c == 0 for row in coefficients for c in row):
             raise PlaneNurbsNotCertified("the surface lies partly in the plane")
-        if depth >= MAX_DEPTH or len(leaves) + len(pending) > MAX_BOXES:
+        if depth >= MAX_DEPTH:
             raise PlaneNurbsNotCertified(f"singular box at depth {depth}: u {tuple(map(float, u_range))}, "
                                          f"v {tuple(map(float, v_range))}")
         um, vm = (u_range[0] + u_range[1]) / 2, (v_range[0] + v_range[1]) / 2
@@ -406,7 +410,8 @@ def plane_nurbs_section(plane, surface: NurbsSurface) -> PlaneNurbsSection:
     patches = _sub_patches(plane, surface)
     if all(c == 0 for patch in patches for row in patch.coefficients for c in row):
         return PlaneNurbsSection(True, (), (), (), tuple(patches))
-    boxes = [box for patch in patches for box in _boxes(patch)]
+    budget = [0]                                       # max_boxes_per_pair: shared by every sub-patch (review B1-P1)
+    boxes = [box for patch in patches for box in _boxes(patch, budget)]
     regular = [box for box in boxes if box.kind != "empty"]
     per_box = [_edge_roots(box) for box in regular]
     distinct = _identify([root for roots in per_box for root in roots], patches)
