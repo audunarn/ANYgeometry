@@ -5431,7 +5431,9 @@ class GeometryModel:
             corners = np.asarray([[float(value) for value in point] for pair in ends[index] for point in pair])
             extent = float(np.linalg.norm(np.ptp(corners, axis=0))) or 1.0
             area = domain.area_loop(loop, 1e-3 * extent * extent * _EPS_AREA)
-            if abs(area) <= self.tolerance.effective_area(extent):
+            # Purely relative to the loop's chart extent: chart units are not model units
+            # (review A3b round 3: a model-unit floor refused a large face on a scaled support).
+            if abs(area) <= 1e-12 * extent * extent:
                 result.append(f"face {face_id} loop {index} has zero area")
         for index in range(1, len(loops)):
             point = ends[index][0][0]                       # exact chart vertex (Fractions)

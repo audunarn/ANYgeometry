@@ -55,11 +55,6 @@ def _strictly_separated(first, second) -> bool:
         min(sum(n * q[k] for k, n in enumerate(normal)) for q in second)
 
 
-def _leaving_tangent(curve, end: int) -> np.ndarray:
-    derivative = np.asarray(curve.derivative(float(end)), dtype=float)
-    return derivative if end == 0 else -derivative
-
-
 def _separated_at(first, second, vertex, normal) -> bool:
     def side(point):
         return sum(n * (p - v) for n, p, v in zip(normal, point, vertex))
@@ -75,24 +70,31 @@ def _separated_at(first, second, vertex, normal) -> bool:
     return True
 
 
-def certify_only_shared_ends(first, second, budget: int = _BUDGET) -> bool | None:
-    """``True`` when the exact curves meet at most at shared end points; ``None`` when not certified."""
-    if _exact_hull(first, 0.0, 1.0) is None or _exact_hull(second, 0.0, 1.0) is None:
-        return None
-    ends_first = {0: first.exact_point(0), 1: first.exact_point(1)}
-    ends_second = {0: second.exact_point(0), 1: second.exact_point(1)}
-    shared = [(a, b) for a in (0, 1) for b in (0, 1) if ends_first[a] == ends_second[b]]
-    normals = {}
-    for a, b in shared:
-        t_a, t_b = _leaving_tangent(first, a), _leaving_tangent(second, b)
+def _certify_pieces(first, first_range, second, second_range, contacts, budget: int) -> bool | None:
+    """Exact certificate: the two curve pieces meet at most at the listed contact points.
+
+    ``first_range``/``second_range`` are parameter intervals of the curves
+    (dyadic, exact); ``contacts`` lists parameter pairs ``(ta, tb)`` at ends of
+    those ranges where the exact points coincide. Any other common point makes
+    the pieces inseparable, so the result is ``None`` (review A3b round 3: only
+    explicitly allowed contacts; no rounded sub-curves).
+    """
+    vertices, normals = [], []
+    for ta, tb in contacts:
+        vertex = first.exact_point(ta)
+        if vertex != second.exact_point(tb):
+            return None
+        t_a = np.asarray(first.derivative(float(ta)), dtype=float) * (1 if ta == first_range[0] else -1)
+        t_b = np.asarray(second.derivative(float(tb)), dtype=float) * (1 if tb == second_range[0] else -1)
         length_a, length_b = float(np.linalg.norm(t_a)), float(np.linalg.norm(t_b))
         if length_a == 0.0 or length_b == 0.0:
             return None
         normal = t_a / length_a - t_b / length_b
         if not np.any(normal):
-            return None                                    # tangent at the shared end: not certified here
-        normals[a, b] = [Fraction(float(value)) for value in normal]
-    queue = [((0.0, 1.0), (0.0, 1.0))]
+            return None                                    # tangent at the contact: not certified here
+        vertices.append(vertex)
+        normals.append([Fraction(float(value)) for value in normal])
+    queue = [(tuple(first_range), tuple(second_range))]
     work = 0
     while queue:
         work += 1
@@ -100,12 +102,12 @@ def certify_only_shared_ends(first, second, budget: int = _BUDGET) -> bool | Non
             return None
         (a0, a1), (b0, b1) = queue.pop()
         hull_first, hull_second = _exact_hull(first, a0, a1), _exact_hull(second, b0, b1)
+        if hull_first is None or hull_second is None:
+            return None
         if _strictly_separated(hull_first, hull_second):
             continue
-        at_vertex = [(a, b) for a, b in shared
-                     if ((a == 0 and a0 == 0.0) or (a == 1 and a1 == 1.0))
-                     and ((b == 0 and b0 == 0.0) or (b == 1 and b1 == 1.0))]
-        if any(_separated_at(hull_first, hull_second, ends_first[a], normals[a, b]) for a, b in at_vertex):
+        if any(ta in (a0, a1) and tb in (b0, b1) and _separated_at(hull_first, hull_second, vertex, normal)
+               for (ta, tb), vertex, normal in zip(contacts, vertices, normals)):
             continue
         if a1 - a0 <= 2. ** -16 and b1 - b0 <= 2. ** -16:
             return None                                    # inseparable at this scale: a crossing or a near-touch
@@ -114,6 +116,12 @@ def certify_only_shared_ends(first, second, budget: int = _BUDGET) -> bool | Non
             for second_piece in ((b0, bm), (bm, b1)):
                 queue.append((first_piece, second_piece))
     return True
+
+
+def certify_only_shared_ends(first, second, budget: int = _BUDGET) -> bool | None:
+    """``True`` when the exact curves meet at most at their coinciding end points; ``None`` when not certified."""
+    contacts = [(float(a), float(b)) for a in (0, 1) for b in (0, 1) if first.exact_point(a) == second.exact_point(b)]
+    return _certify_pieces(first, (0.0, 1.0), second, (0.0, 1.0), contacts, budget)
 
 
 def shared_ends_consistent(first_edge, second_edge) -> bool:
@@ -147,12 +155,15 @@ def _monotone(hull) -> bool:
 
 
 def certify_simple(curve, lower: float = 0.0, upper: float = 1.0, depth: int = 0) -> bool | None:
-    """``True`` when the exact curve piece has no self-intersection (``None``: not certified).
+    """``True`` when the exact curve piece ``[lower, upper]`` has no self-intersection (``None``: not certified).
 
-    A piece with a monotone exact hull is simple; otherwise its halves must be
-    simple and meet only at the split point (``certify_only_shared_ends`` on the
-    two sub-curves, whose shared end is exact).
+    A piece whose ends coincide is refused (an edge piece returning to its
+    start); a piece with a monotone exact hull is simple; otherwise its halves
+    must be simple and meet only at the split point, certified on exact
+    parameter intervals of the original curve (no rounded sub-curves).
     """
+    if curve.exact_point(lower) == curve.exact_point(upper):
+        return None
     hull = _exact_hull(curve, lower, upper)
     if hull is None:
         return None
@@ -164,5 +175,4 @@ def certify_simple(curve, lower: float = 0.0, upper: float = 1.0, depth: int = 0
     if certify_simple(curve, lower, middle, depth + 1) is not True or \
             certify_simple(curve, middle, upper, depth + 1) is not True:
         return None
-    first, second = curve.subcurve(lower, middle), curve.subcurve(middle, upper)
-    return certify_only_shared_ends(first, second)
+    return _certify_pieces(curve, (lower, middle), curve, (middle, upper), [(middle, middle)], _BUDGET)

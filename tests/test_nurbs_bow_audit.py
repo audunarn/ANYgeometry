@@ -243,3 +243,33 @@ def test_polyline_bounds_include_rounded_chord_ends():
     from fractions import Fraction
     overhang = abs(Fraction(float(polyline[0][0])) - pcurve.exact_point(0)[0]) * Fraction(scale)
     assert bound >= float(overhang) > 0
+
+
+# ------------------------------------------------------------------ review A3b round 3
+
+
+def test_an_edge_revisiting_a_point_is_not_simple():
+    from anygeometry import GeometryError
+    from anygeometry.nurbs_audit import certify_simple
+    surface = unit_plane()
+    revisit = NurbsCurve(1, (0., 0., .25, .3125, .375, .4375, .5, 1., 1.),
+                         ((.125, .125), (.5, .25), (.75, .5), (.5, .75), (.25, .5), (.5, .25), (.5, .125)))
+    assert certify_simple(revisit) is None
+    trimmed_line = NurbsCurve(1, (0., 0., 1., 1.), ((.125, .125), (.875, .875)), domain=(.1, .9))
+    assert certify_simple(trimmed_line) is True
+    curves = [CurveOnSurface(surface, revisit), line(surface, (.5, .125), (.5, 0.)), line(surface, (.5, 0.), (.125, 0.)),
+              line(surface, (.125, 0.), (.125, .125))]
+    model = GeometryModel()
+    with pytest.raises(GeometryError, match="not certified simple"):
+        model.add_face(add_edges(model, curves), surface=surface)
+
+
+def test_zero_area_is_relative_to_the_chart():
+    scale = 2. ** 60
+    surface = NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.),
+                           (((0., 0., 0.), (0., scale, 0.)), ((scale, 0., 0.), (scale, scale, 0.))))
+    side = 2. ** -40
+    square = [(.25, .25), (.25 + side, .25), (.25 + side, .25 + side), (.25, .25 + side)]
+    model = GeometryModel()
+    model.add_face(add_edges(model, [line(surface, p, q) for p, q in zip(square, square[1:] + square[:1])]),
+                   surface=surface)
