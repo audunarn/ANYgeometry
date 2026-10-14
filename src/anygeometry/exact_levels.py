@@ -183,17 +183,21 @@ def _roots_in_unit(p: list) -> list[tuple[Fraction, Fraction, list]]:
         for a, b in isolated:
             # Keep the interval off every exact root of the original (they were
             # deflated from g): bisect toward g's own root until none lies in [a, b].
+            # The bisection can land on g's root itself (a dyadic root narrower
+            # than the isolation width): then it is an exact root.
             low_sign = _value(g, a) > 0
+            exact_hit = None
             while any(a <= r <= b for r in exact_roots):
                 middle = (a + b) / 2
                 value = _value(g, middle)
-                if value == 0:                             # cannot happen for a deflated simple root
-                    raise ArithmeticError("isolation met an exact root of the deflated polynomial")
+                if value == 0:
+                    exact_hit = middle
+                    break
                 if (value > 0) == low_sign:
                     a = middle
                 else:
                     b = middle
-            found.append((a, b, base))
+            found.append((exact_hit, exact_hit, base) if exact_hit is not None else (a, b, base))
         break
     return sorted(found, key=lambda item: item[0])
 

@@ -422,3 +422,25 @@ def test_the_tolerance_band_is_decided_exactly():
     domain = MaterialDomain(0, big, (loop,))
     assert domain.contains_loop(loop, np.array([math.nextafter(.5, 1.), .5]), 1e-9) is False
     assert domain.contains_loop(loop, np.array([math.nextafter(.5, 1.), .5]), 2.) is True   # within 2 world units
+
+
+# ------------------------------------------------------------------ review A1e round 6
+
+
+def test_a_dyadic_root_below_the_isolation_width_is_exact():
+    from anygeometry.exact_levels import level_set
+    for e in (2. ** -100, 2. ** -63):
+        curve = NurbsCurve(2, (0., 0., 0., 1., 1., 1.), ((0., e), (.5, 0.), (1., 1.)), (1., .5, 1.))
+        events = level_set(curve, 1, e)
+        assert [(x.lo, x.hi) for x in events][0] == (0, 0) and len(events) == 2
+        assert events[1].lo == events[1].hi and events[1].crossing
+
+
+def test_the_tolerance_band_edges_are_exact():
+    import math
+    big = NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.),
+                       (((0., 0., 0.), (0., 1e16, 0.)), ((1e16, 0., 0.), (1e16, 1e16, 0.))))
+    loop = polygon(big, [(.1, .1), (.5, .1), (.5, .9), (.1, .9)])
+    domain = MaterialDomain(0, big, (loop,))
+    assert domain.contains_loop(loop, np.array([math.nextafter(.5, 1.), .5]), .75) is False      # 1.11 away
+    assert domain.contains_loop(loop, np.array([math.nextafter(.5, 0.), .5]), .4, boundary=False) is True  # .555 inside

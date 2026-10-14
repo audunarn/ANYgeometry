@@ -133,7 +133,8 @@ def contains_loop(domain, loop, uv_point, tolerance, *, boundary=True) -> bool:
     # delta = tolerance / |S_u| at the query; membership in it is decided exactly.
     rate = float(np.linalg.norm(world_delta(domain, (1.0, 0.0), v0, u0)))
     delta = tolerance / rate if rate > 0 else 0.0
-    band = (u0 - delta, u0 + delta) if delta > 0 else (u0, u0)
+    exact_u0, exact_delta = Fraction(u0), Fraction(delta)
+    band = (exact_u0 - exact_delta, exact_u0 + exact_delta)        # exact edges (no rounding of u0 +- delta)
 
     items: list = []                 # ("gap", sign) or ("zero", [part, ...]); part = (pcurve, event | None)
     for path in loop:
