@@ -50,13 +50,11 @@ def test_points_lie_on_both_exact_surfaces():
 def test_exact_enclosures_contain_the_evaluated_points():
     curve = PlaneNurbsCurve.from_plane(OBLIQUE, cylinder(), 0)
     for t in np.linspace(0., 1., 301):
-        slicing, s, x_lo, x_hi = curve.chart_enclosure(t)
+        (u_lo, u_hi), (v_lo, v_hi) = curve.chart_enclosure(t)
         u, v = curve._knot_points(np.array([t]))
-        knot = (u[0], v[0])
-        assert float(s) == knot[slicing]
-        x = Fraction(knot[1 - slicing])
-        width = x_hi - x_lo
-        assert x_lo - 4 * Fraction(2.2e-16) <= x <= x_hi + 4 * Fraction(2.2e-16) and width <= Fraction(1, 2 ** 50)
+        slack = Fraction(2.0 ** -44) * 4                     # the evaluation bracket (fraction of a unit-sized box)
+        assert u_lo - slack <= Fraction(u[0]) <= u_hi + slack and v_lo - slack <= Fraction(v[0]) <= v_hi + slack
+        assert u_hi - u_lo <= Fraction(1, 2 ** 50) and v_hi - v_lo <= Fraction(1, 2 ** 50)
 
 
 def test_length_matches_the_analytic_ellipse():
@@ -120,3 +118,41 @@ def test_a_frame_section_of_the_bow():
     assert np.abs(points[:, 0] - 4.).max() <= 1e-12
     model, edge = edge_model(curve)
     assert model.edge_length(edge) > 0
+
+
+
+# ------------------------------------------------------------------ review B1-P2 round 1
+
+
+def flat(z_rows, v_knots=(0., 0., 1., 1.), v_values=(0., 1.)):
+    from anygeometry.nurbs import NurbsSurface
+    return NurbsSurface(2, len(v_values) - 1, (0., 0., 0., 1., 1., 1.), v_knots,
+                        tuple(tuple((i / 2, v, z(v)) for v in v_values) for i, z in enumerate(z_rows)))
+
+
+def test_evaluation_stays_inside_bounds_on_an_ill_conditioned_section():
+    from anygeometry.nurbs import NurbsSurface
+    a, e = .3, 2. ** -40
+    heights = (a * a, a * a - a, (1 - a) * (1 - a))
+    surface = NurbsSurface(2, 1, (0., 0., 0., 1., 1., 1.), (0., 0., 1., 1.),
+                           tuple(((i / 2, 0., z - e / 2), (i / 2, 1., z + e / 2)) for i, z in enumerate(heights)))
+    plane = Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.))
+    curve = PlaneNurbsCurve.from_plane(plane, surface, 0)
+    for t in (.1, .37, .8):
+        point = curve.evaluate(t)
+        low, high = curve.bounds(t - 1e-8, t + 1e-8)
+        assert np.all(point >= low) and np.all(point <= high)
+        assert curve.distance_lower_bound(t - 1e-8, t + 1e-8, point) <= 1e-15
+
+
+def test_split_at_a_point_where_rounding_leaves_the_gap():
+    from anygeometry.nurbs import NurbsSurface
+    surface = NurbsSurface(2, 1, (0., 0., 0., 1., 1., 1.), (0., 0., .375, 1., 1.),
+                           tuple(tuple((i / 2, v, z + v - .5) for v in (0., .375, 1.)) for i, z in enumerate((0., .5, 2.))))
+    plane = Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.))
+    curve = PlaneNurbsCurve.from_plane(plane, surface, 0)
+    low, high = curve.subcurve(0., .5).end_box(1)
+    point = curve.evaluate(.5)
+    assert np.all(point >= low - 1e-12) and np.all(point <= high + 1e-12)
+    model, edge = edge_model(curve)
+    model.split_edge(edge, .5)
