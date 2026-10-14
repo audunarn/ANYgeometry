@@ -4624,6 +4624,19 @@ class GeometryModel:
             raise GeometryError("add_curve expects an EllipticArc, CylinderIntersectionCurve, QuadricIntersectionCurve, "
                                 "BezierQuadricCurve or NurbsCurve")
         from .nurbs import CurveOnSurface, NurbsCurve
+        from .support_curves import PlaneNurbsCurve
+        if isinstance(curve, PlaneNurbsCurve):
+            # The ends are certified section roots (algebraic): each vertex must lie within
+            # the tolerance of every point of its end root's world enclosure (sound, B1-P2).
+            for vertex, which in ((start_point, 0), (end_point, 1)):
+                low, high = curve.end_box(which)
+                corners = np.array([[low[k] if (index >> k) & 1 == 0 else high[k] for k in range(3)]
+                                    for index in range(8)])
+                scale = float(np.linalg.norm(high - low)) + float(np.linalg.norm(vertex))
+                tolerance = self.tolerance.effective_curve_fit_residual(max(scale, 1.0))
+                if float(np.max(np.linalg.norm(corners - vertex, axis=1))) > tolerance:
+                    raise GeometryError("plane x NURBS curve ends do not match topology vertices")
+            return self._add_edge(start, end, curve)
         if isinstance(curve, (NurbsCurve, CurveOnSurface)):
             # Edge ends are topology and must coincide with the curve's ends: decided exactly on
             # the stored vertices and the exact rational curve ends (architecture 3.4, T1).
@@ -5608,7 +5621,8 @@ class GeometryModel:
         if offset.shape != (3,):
             raise GeometryError("extrusion vector must be a 3 component vector")
         from .nurbs import CurveOnSurface
-        if any(isinstance(self._require_edge(edge_id).curve, CurveOnSurface) for edge_id in edge_ids):
+        from .support_curves import PlaneNurbsCurve
+        if any(isinstance(self._require_edge(edge_id).curve, (CurveOnSurface, PlaneNurbsCurve)) for edge_id in edge_ids):
             raise GeometryError("extruding an edge on a NURBS support is not supported (plan A3b B-S1)")
         if float(np.linalg.norm(offset)) <= 0.0:
             raise GeometryError("extrusion vector must be non-zero")
@@ -5732,7 +5746,9 @@ class GeometryModel:
         edge_origin = {edge_id: edge_id for edge_id in profile}
         vertex_origin: Dict[int, int] = {}
         from .nurbs import CurveOnSurface, NurbsCurve
-        if any(isinstance(self.edges[edge_id].curve, (NurbsCurve, CurveOnSurface)) for edge_id in profile):
+        from .support_curves import PlaneNurbsCurve
+        if any(isinstance(self.edges[edge_id].curve, (NurbsCurve, CurveOnSurface, PlaneNurbsCurve))
+               for edge_id in profile):
             raise GeometryError("revolving a NURBS profile edge is not supported: its swept surface "
                                 "is not representable as a face surface yet")
         for edge_id in profile:

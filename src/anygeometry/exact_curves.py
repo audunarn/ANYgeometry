@@ -633,6 +633,7 @@ from .quadric_curves import QuadricIntersectionCurve  # noqa: E402 (needs the de
 from .branch_curves import BezierQuadricCurve  # noqa: E402
 
 from .nurbs import CurveOnSurface, NurbsCurve  # noqa: E402
+from .support_curves import PlaneNurbsCurve  # noqa: E402
 
 EXACT_CURVES = (EllipticArc, CylinderIntersectionCurve, QuadricIntersectionCurve, BezierQuadricCurve, NurbsCurve,
-                CurveOnSurface)
+                CurveOnSurface, PlaneNurbsCurve)

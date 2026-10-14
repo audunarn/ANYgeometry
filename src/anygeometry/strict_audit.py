@@ -701,7 +701,7 @@ class _StrictAuditState:
             bounds = AABB.from_points(
                 self.model.vertex_position(identifier) for identifier in vertex_ids
             )
-        elif type(edge.curve).__name__ in ("CurveOnSurface", "NurbsCurve"):
+        elif type(edge.curve).__name__ in ("CurveOnSurface", "NurbsCurve", "PlaneNurbsCurve"):
             # Exact-hull boxes, outward rounded and widened for float evaluation (A2a, A3b).
             lower, upper = edge.curve.bounds()
             bounds = AABB.from_points((lower, upper))

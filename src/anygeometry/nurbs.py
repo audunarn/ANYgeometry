@@ -656,6 +656,24 @@ class NurbsSurface:
         sigma2 = bound_u ** 2 + bound_v ** 2
         return lower, upper, sigma2
 
+    def knot_patch_hull(self, u_interval, v_interval, net=None) -> list:
+        """Exact projected controls bounding the exact surface over a knot box (no widening; B1-P2)."""
+        net = self.exact_net() if net is None else net
+        s0, s1 = sorted(Fraction(value) for value in u_interval)
+        t0, t1 = sorted(Fraction(value) for value in v_interval)
+        p, q, count_v = self.degree_u, self.degree_v, len(net[0])
+        rows = [sum(row, ()) for row in net]
+        _knots_u, rows, active_u = _exact_refine(p, [Fraction(k) for k in self.knots_u], rows, s0, s1)
+        columns = [sum((rows[i][4 * j: 4 * j + 4] for i in active_u), ()) for j in range(count_v)]
+        _knots_v, columns, active_v = _exact_refine(q, [Fraction(k) for k in self.knots_v], columns, t0, t1)
+        points = []
+        for j in active_v:
+            column = columns[j]
+            for a in range(len(active_u)):
+                x, y, z, w = column[4 * a: 4 * a + 4]
+                points.append((x / w, y / w, z / w))
+        return points
+
     def iso_curve(self, fixed: str, value: float) -> "NurbsCurve":
         """The curve ``u = value`` (``fixed="u"``, running in v) or ``v = value`` (running in u).
 
