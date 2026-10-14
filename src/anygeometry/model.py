@@ -5541,6 +5541,9 @@ class GeometryModel:
         offset = np.asarray(vector, dtype=float)
         if offset.shape != (3,):
             raise GeometryError("extrusion vector must be a 3 component vector")
+        from .nurbs import CurveOnSurface
+        if any(isinstance(self.edges[edge_id].curve, CurveOnSurface) for edge_id in edge_ids):
+            raise GeometryError("extruding an edge on a NURBS support is not supported (plan A3b B-S1)")
         if float(np.linalg.norm(offset)) <= 0.0:
             raise GeometryError("extrusion vector must be non-zero")
 

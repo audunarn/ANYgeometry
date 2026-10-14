@@ -715,7 +715,7 @@ class CurveOnSurface:
         object.__setattr__(self, "transform", tuple(tuple(map(float, row)) for row in matrix))
 
     def evaluate(self, parameters) -> np.ndarray:
-        chart = np.clip(self.pcurve.evaluate(parameters), 0.0, 1.0)
+        chart = self.chart(parameters)
         points = self.support.evaluate_many(chart)
         matrix = np.asarray(self.transform)
         with np.errstate(over="ignore", invalid="ignore"):
@@ -724,9 +724,36 @@ class CurveOnSurface:
             raise GeometryError("curve on surface is not representable in float64 after its transform")
         return result
 
+    def _iso_fixed(self):
+        """``(axis, value)`` of an iso-line pcurve's constant chart coordinate, else ``None``.
+
+        Degree 1, two controls sharing that coordinate, equal (or no) weights:
+        the exact pcurve has it constant, so its evaluation carries it exactly
+        (a float blend ``(1 - t) c + t c`` can be an ulp off, which a narrow
+        surface knot span amplifies; review A3b B-S1).
+        """
+        pcurve = self.pcurve
+        if pcurve.degree != 1 or len(pcurve.controls) != 2 or (
+                pcurve.weights is not None and pcurve.weights[0] != pcurve.weights[1]):
+            return None
+        (a0, b0), (a1, b1) = pcurve.controls
+        if b0 == b1 and a0 != a1:
+            return 1, b0
+        if a0 == a1 and b0 != b1:
+            return 0, a0
+        return None
+
     def chart(self, parameters) -> np.ndarray:
-        """Chart points ``q(t)`` of the pcurve (clipped to [0, 1]^2 against rounding, as ``evaluate``)."""
-        return np.clip(self.pcurve.evaluate(parameters), 0.0, 1.0)
+        """Chart points ``q(t)`` of the pcurve (clipped to [0, 1]^2 against rounding, as ``evaluate``).
+
+        An iso-line's constant coordinate is set exactly (see ``_iso_fixed``).
+        """
+        values = np.clip(self.pcurve.evaluate(parameters), 0.0, 1.0)
+        fixed = self._iso_fixed()
+        if fixed is not None:
+            values = np.array(values, dtype=float)
+            values[..., fixed[0]] = min(1.0, max(0.0, fixed[1]))
+        return values
 
     def chart_derivative(self, parameters) -> np.ndarray:
         return self.pcurve.derivative(parameters)
@@ -771,7 +798,13 @@ class CurveOnSurface:
         (architecture 3.3: a NURBS-face edge lies on the face's own support).
         """
         composed = _affine(matrix) @ np.asarray(self.transform)
-        return replace(self, support=self.support.transformed(composed), transform=_IDENTITY)
+        try:
+            return replace(self, support=self.support.transformed(composed), transform=_IDENTITY)
+        except GeometryError:
+            # The folded support leaves the NURBS coordinate range (2**500): keep the
+            # map in the transform field as before (such a curve cannot bound a NURBS
+            # face, whose edges need the identity transform).
+            return replace(self, transform=tuple(tuple(map(float, row)) for row in composed))
 
     # ---------------------------------------------------------- model edge interface (A3b)
 
@@ -833,20 +866,33 @@ class CurveOnSurface:
                         chart = c0 + (c1 - c0) * (s - k0) / (k1 - k0)
                         return r0 + chart * (r1 - r0)
 
-                    scale = max(abs(r0), abs(r1), Fraction(1))
-                    slack = 64 * Fraction(_EPS_FLOAT) * scale
+                    # Float chain: s = _map(t, d0, d1) errs by < 4 ulp(max|d|); the basis
+                    # ratio divides by the knot span k1 - k0 (a few eps more); the running
+                    # chart value blends c0, c1; the surface map _map(chart, r0, r1) adds
+                    # 4 ulp(max|r|). Propagated with a factor 2 margin (review A3b B-S1).
+                    eps = Fraction(_EPS_FLOAT)
+                    error_s = 4 * Fraction(math.ulp(float(max(abs(d0), abs(d1)))))
+                    error_ratio = error_s / abs(k1 - k0) + 8 * eps
+                    error_chart = abs(c1 - c0) * error_ratio + 8 * eps * max(abs(c0), abs(c1), Fraction(1))
+                    slack = 2 * (abs(r1 - r0) * error_chart + 4 * Fraction(math.ulp(float(max(abs(r0), abs(r1))))))
                     result = (run_degree, run_knots, points, sigma, slack, (min(r0, r1), max(r0, r1)))
         if len(_ISO_CACHE) >= 256:
             _ISO_CACHE.clear()
         _ISO_CACHE[self] = result
         return result
 
-    def _iso_hull(self, lower, upper):
-        """Exact world hull points of the iso-curve over ``[lower, upper]`` (widened for float evaluation)."""
+    def _iso_hull(self, lower, upper, *, exact: bool = False):
+        """Exact world hull points of the iso-curve over ``[lower, upper]``.
+
+        Widened for the float evaluation chain unless ``exact`` (certificates
+        about the exact curve, ``nurbs_audit``): then the interval is the exact
+        image ``sigma([lower, upper])`` and its end points are hull points.
+        """
         degree, knots, points, sigma, slack, (low_range, high_range) = self._iso_world()
         low, high = (min(1.0, max(0.0, _real(value, "curve parameter"))) for value in (lower, upper))
         s0, s1 = sorted((sigma(low), sigma(high)))
-        s0, s1 = max(low_range, s0 - slack), min(high_range, s1 + slack)
+        if not exact:
+            s0, s1 = max(low_range, s0 - slack), min(high_range, s1 + slack)
         _, refined, active = _exact_refine(degree, list(knots), list(points), s0, s1)
         return [tuple(value / refined[i][-1] for value in refined[i][:-1]) for i in active]
 

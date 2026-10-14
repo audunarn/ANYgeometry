@@ -122,3 +122,41 @@ def test_schema_7_round_trip_and_refusals():
     face = model.add_face([model.add_line(a, b) for a, b in zip(corners, corners[1:] + corners[:1])])
     result = query_intersection(model, model.handle("edge", edge), model.handle("face", face))
     assert not result.classified or result.kind is IntersectionKind.DISJOINT
+
+
+# ------------------------------------------------------------------ review A3b B-S1 round 1
+
+
+def unit_plane():
+    return NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.),
+                        (((0., 0., 0.), (0., 1., 0.)), ((1., 0., 0.), (1., 1., 0.))))
+
+
+def test_iso_bounds_hold_with_a_narrow_surface_knot_span():
+    d = 2. ** -44
+    surface = NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., .3 - d, .3 + d, 1., 1.),
+                           tuple(tuple((float(u), y, 0.) for y in (0., 0., 1., 1.)) for u in (0, 1)))
+    curve = on(surface, (0., .3), (1., .3))
+    low, high = curve.bounds()
+    samples = curve.evaluate(np.linspace(0., 1., 4001))
+    assert np.all(samples >= low) and np.all(samples <= high)
+    model, edge = edge_model(curve)
+    assert model.closest_edge_point(edge, curve.evaluate(.179))[2] == 0.
+
+
+def test_iso_bounds_hold_with_a_narrow_pcurve_knot_span():
+    curve = CurveOnSurface(unit_plane(), NurbsCurve(1, (1., 1., 1. + 2. ** -40, 1. + 2. ** -40), ((0., .5), (1., .5))))
+    for t in np.linspace(0., 1., 401):
+        low, high = curve.bounds(t, t)
+        point = curve.evaluate(t)
+        assert np.all(point >= low) and np.all(point <= high)
+
+
+def test_transform_folding_keeps_huge_transforms_and_extrusion_is_refused():
+    huge = CurveOnSurface(unit_plane(), NurbsCurve(1, (0., 0., 1., 1.), ((0., .5), (1., .5))),
+                          transform=((1e200, 0., 0., 0.), (0., 1e200, 0., 0.), (0., 0., 1e200, 0.), (0., 0., 0., 1.)))
+    moved = huge.transformed(np.eye(4))
+    np.testing.assert_allclose(moved.evaluate(np.linspace(0., 1., 5)), huge.evaluate(np.linspace(0., 1., 5)), rtol=1e-15)
+    model, edge = edge_model(on(support(), (.1, .4), (.8, .4)))
+    with pytest.raises(GeometryError, match="NURBS support"):
+        model.extrude([edge], (0., 0., 1.))
