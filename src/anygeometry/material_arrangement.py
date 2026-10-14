@@ -608,7 +608,7 @@ def _contains_point_exact(domain, point, tolerance):
             and not any(domain.contains_loop(loop, uv, tolerance, boundary=False) for loop in domain.boundaries[1:]))
 
 
-def _clip_line_exact(domain, curve, tolerance, check, segment=None):
+def _clip_line_exact(domain, curve, tolerance, check, segment=None, *, deferred=True):
     """Exact stations of ``_clip`` for a straight curve on a Plane support (R1b step 2a).
 
     The same rule as ``_clip_intervals``: split at every junction with the
@@ -629,7 +629,7 @@ def _clip_line_exact(domain, curve, tolerance, check, segment=None):
             else:
                 parameters.extend(Fraction(float(a)) for a, _b in curve_junctions(
                     curve, boundary.curve, tolerance=tolerance, cancellation_check=lambda: (check() or False)))
-    parameters = stations.merge_parameters(parameters, tolerance, segment)
+    parameters = stations.merge_parameters(parameters, tolerance, segment, deferred=deferred)
     exact_domain = domain._exact_planar(domain.boundaries)
     pieces = []
     for a, b in zip(parameters, parameters[1:]):
@@ -656,7 +656,7 @@ def _same_ray(first, second) -> bool:
     return bool(np.linalg.norm(unit_a - unit_b) <= 64 * _EPS)
 
 
-def _add_exact_planar_seams(domain, boundaries, paths, segments, points, tolerance, check):
+def _add_exact_planar_seams(domain, boundaries, paths, segments, points, tolerance, check, *, deferred=True):
     """Decomposition seams on a Plane support through exact stations (R1b step 2b, D6/D7).
 
     Main's rules: an interior trace end (on no boundary) with at most one ray
@@ -743,7 +743,8 @@ def _add_exact_planar_seams(domain, boundaries, paths, segments, points, toleran
         for offset in offsets:
             seam = stations.Segment(tuple(p - d for p, d in zip(point, offset)),
                                     tuple(p + d for p, d in zip(point, offset)), derived=True)
-            for piece in _clip_line_exact(domain, stations.to_line(seam), tolerance, check, segment=seam):
+            for piece in _clip_line_exact(domain, stations.to_line(seam), tolerance, check, segment=seam,
+                                          deferred=deferred):
                 segments[len(paths)] = piece
                 paths.append(ArrangementPath(stations.to_line(piece), decomposition=True))
 
@@ -953,12 +954,17 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
     # splits, junctions and vertex identities are decided on them, and its
     # float LinePath has correctly rounded ends.
     exact = isinstance(domain.support, Plane)
+    # T-b/D8 slice E1 (deferred removal S2, drop rule S4) applies where the whole arrangement is
+    # straight, so the certified route covers it end to end; arrangements with curved paths keep
+    # main's per-path merge until slice E4.
+    deferred = (exact and domain._exact_planar(domain.boundaries)
+                and all(type(trace.curve) is LinePath for trace in traces))
     segments = {index: stations.segment_of(path.curve) for index, path in enumerate(paths)
                 if exact and type(path.curve) is LinePath}
 
     def add_clipped(path, curve):
         if exact and type(curve) is LinePath:
-            for segment in _clip_line_exact(domain, curve, tolerance, check):
+            for segment in _clip_line_exact(domain, curve, tolerance, check, deferred=deferred):
                 segments[len(paths)] = segment
                 paths.append(replace(path, curve=stations.to_line(segment)))
         else:
@@ -968,7 +974,7 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
         add_clipped(trace, trace.curve)
 
     if exact:
-        _add_exact_planar_seams(domain, boundaries, paths, segments, points, tolerance, check)
+        _add_exact_planar_seams(domain, boundaries, paths, segments, points, tolerance, check, deferred=deferred)
     else:
         # Interior-ended traces need material decomposition seams. Their physical
         # directions must not inherit scale/shear from an affine support chart.
@@ -1026,6 +1032,24 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
             lo2, hi2 = paths[second].curve.bounds()
             if np.any(hi1 < lo2-tolerance) or np.any(hi2 < lo1-tolerance):
                 continue
+            short = next((index for index in (first, second)
+                          if index in segments and segments[index].length2() <= Fraction(tolerance) ** 2), None)
+            if short is not None:
+                # S1c for a straight piece no longer than tol against a curve (deferred removal keeps
+                # such pieces): main's line-curve step refuses short lines; the candidates are the
+                # endpoint tests -- exact on the piece, main's float rule on the curve.
+                other = second if short == first else first
+                pairs = []
+                for t in (Fraction(0), Fraction(1)):
+                    station = segments[short][int(t)]
+                    pairs.extend((t, s) for s in point_parameters(paths[other].curve, stations.rounded(station),
+                                                                   tolerance=tolerance))
+                    end = exact_vector(paths[other].curve.evaluate(float(t)))
+                    pairs.extend((s, float(t)) for s in stations.point_parameters(segments[short], end, tolerance))
+                for a, b in dict.fromkeys(pairs):
+                    splits[short].append(Fraction(a))
+                    splits[other].append(b)
+                continue
             for a, b in curve_junctions(paths[first].curve, paths[second].curve, tolerance=tolerance,
                                        cancellation_check=lambda:(check() or False)):
                 splits[first].append(Fraction(float(a)) if first in segments else a)
@@ -1056,7 +1080,7 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
     for path_index, (path, parameters) in enumerate(zip(paths, splits)):
         segment = segments.get(path_index)
         if segment is not None:
-            parameters = stations.merge_parameters(parameters, tolerance, segment)
+            parameters = stations.merge_parameters(parameters, tolerance, segment, deferred=deferred)
         else:
             parameters = _parameters(parameters, tolerance, path.curve)
         for a, b in zip(parameters, parameters[1:]):
@@ -1068,7 +1092,7 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
                 curve = path.curve.subcurve(a, b)
                 start, end = vertex(curve.evaluate(0.)), vertex(curve.evaluate(1.))
             if start == end:
-                if segment is not None:
+                if segment is not None and deferred:
                     # S4 (T-b/D8 design, slice E1): the one place a split sub-piece is
                     # removed, on the shared vertex identity -- dropped when no longer
                     # than tol, refused when longer (main merged parameters per path).

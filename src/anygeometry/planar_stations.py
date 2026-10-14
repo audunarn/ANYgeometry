@@ -240,16 +240,34 @@ def junctions(first: Segment, second: Segment, tolerance: float) -> tuple:
     return tuple(sorted(dict.fromkeys(candidates)))
 
 
-def merge_parameters(values, tolerance: float, segment: Segment | None) -> list:
-    """The sorted, exactly distinct split parameters of a straight piece (S2, deferred removal).
+def merge_parameters(values, tolerance: float, segment: Segment | None, *, deferred: bool = True) -> list:
+    """The sorted split parameters of a straight piece.
 
-    Main's ``_parameters`` merged parameters closer than 32 eps in parameter
-    space (D8) or bounding a sub-piece no longer than ``tol``; on one path that
-    merged stations which vertex identity kept distinct on another (lost
-    crossings). Nothing is merged here: sub-pieces no longer than ``tol`` are
-    removed once, after global vertex identity (S4 in ``arrange_material``).
+    ``deferred`` (S2, all-straight arrangements): every exactly distinct
+    parameter is kept; sub-pieces no longer than ``tol`` are removed once,
+    after global vertex identity (S4 in ``arrange_material``). Main's
+    ``_parameters`` merged parameters closer than 32 eps in parameter space
+    (D8) or bounding a sub-piece no longer than ``tol``, per path, which can
+    lose crossings that vertex identity keeps.
+
+    Otherwise (arrangements with curved paths, whose cell phase is still
+    main's float route until slice E4) main's merge, replicated exactly.
     """
-    return sorted(dict.fromkeys(Fraction(value) for value in values))
+    if deferred:
+        return sorted(dict.fromkeys(Fraction(value) for value in values))
+    values = sorted(Fraction(value) for value in values)
+    tol2 = Fraction(tolerance) ** 2
+    length2 = None if segment is None else segment.length2()
+    result = []
+    for value in values:
+        duplicate = bool(result and value - result[-1] <= 32 * _EPS)
+        if result and not duplicate and length2 is not None:
+            duplicate = (value - result[-1]) ** 2 * length2 <= tol2
+        if not result or not duplicate:
+            result.append(value)
+        elif value == 1:
+            result[-1] = value
+    return result
 
 
 class ExactVertexLookup:
