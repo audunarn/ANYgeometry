@@ -684,3 +684,50 @@ def test_corner_cuts_within_tolerance():
     assert (len(result.cells), len(result.paths), result.area) == (1, 4, 16.)
     with pytest.raises(GeometryError, match="longer than the tolerance collapses to one vertex"):
         run((0., 8e-7, 0.), (8e-7, 0., 0.))
+
+
+
+def _rect(x0, x1, y0, y1, first):
+    corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+    return [ArrangementPath(LinePath((*a, 0.), (*b, 0.)), owners=(1, first + k))
+            for k, (a, b) in enumerate(zip(corners, corners[1:] + corners[:1]))]
+
+
+def test_subnormal_scale_derived_edges_need_no_float_length():
+    """Review (E1 round 3): a trace 1e-180 inside rectangle B's left edge (tol 1e-200) bounds a real
+    sliver; hole ownership no longer refuses on the derived edge's underflowed float length.
+    Decision change (Q13/Q-e): 4 cells / 15 paths (main 3 / 13 merged the sliver)."""
+    plane = Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.))
+    tol = 1e-200
+    traces = (_rect(-1.5, -1., 32 * tol, .5, 10) + _rect(0., 1., 0., 1., 20)
+              + [ArrangementPath(LinePath((1e-180, 0., 0.), (1e-180, 1., 0.)), owners=(1, 30))])
+    result = arrange_material(MaterialDomain(1, plane, (_square_loop([(-2., -2.), (2., -2.), (2., 2.), (-2., 2.)]),)),
+                              tuple(traces), tolerance=tol, area_tolerance=1e-12)
+    assert (len(result.cells), len(result.paths), result.area) == (4, 15, 16.)
+
+
+def test_subnormal_scale_seam_rays_need_no_float_norm():
+    """Review (E1 round 3): a trace entering the face by 1e-180 (> tol = 1e-200) ends inside; its
+    seam rays are exact directions (no "interior junction needs a regular chart"). On E1's open
+    network the 1e-180 sliver does not conserve at area_tolerance = tol (closure: E2/E3); listed."""
+    plane = Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.))
+    square = _square_loop([(0., 0.), (4., 0.), (4., 4.), (0., 4.)])
+    trace = ArrangementPath(LinePath((-2., 2., 0.), (1e-180, 2., 0.)), owners=(1, 2))
+    with pytest.raises(GeometryError, match="failed material conservation"):
+        arrange_material(MaterialDomain(1, plane, (square,)), (trace,), tolerance=1e-200)
+
+
+def test_short_traces():
+    """Decision changes (Q13/Q-e, E1): a trace shorter than tol inside the face behaves like a point
+    (two seams through its end: 4 cells; main refused "degenerate arrangement line"); a clipped trace
+    shorter than tol is removed but its boundary junction remains a vertex (1 cell, 5 paths; main 4)."""
+    plane = Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.))
+    square = _square_loop([(0., 0.), (4., 0.), (4., 4.), (0., 4.)])
+
+    def run(a, b):
+        return arrange_material(MaterialDomain(1, plane, (square,)),
+                                (ArrangementPath(LinePath(a, b), owners=(1, 2)),), tolerance=1e-6)
+    interior = run((2., 2., 0.), (2.0000005, 2., 0.))
+    assert len(interior.cells) == 4 and len(interior.paths) == 12
+    clipped = run((-2., 2., 0.), (5e-7, 2., 0.))
+    assert (len(clipped.cells), len(clipped.paths), clipped.area) == (1, 5, 16.)

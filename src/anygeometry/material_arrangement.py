@@ -709,13 +709,19 @@ def _add_exact_planar_seams(domain, boundaries, paths, segments, points, toleran
                     if exact_other:
                         start, end = segments[other]
                         direction = tuple(b - a for a, b in zip(start, end))
-                        tangent = np.asarray(stations.rounded(direction))
+                        if not any(direction):
+                            raise GeometryError("interior junction needs a regular chart")
+                        # Exact non-zero direction; its float unit (for comparisons with curved
+                        # pieces only) from the direction scaled to unit max-norm, so no underflow.
+                        largest = max(abs(value) for value in direction)
+                        tangent = np.asarray(stations.rounded(tuple(value / largest for value in direction)))
+                        unit = tangent/np.linalg.norm(tangent)
                     else:
                         direction, tangent = None, paths[other].curve.derivative(parameter)
-                    length = np.linalg.norm(tangent)
-                    if length == 0 or (direction is not None and not any(direction)):
-                        raise GeometryError("interior junction needs a regular chart")
-                    unit = tangent/length
+                        length = np.linalg.norm(tangent)
+                        if length == 0:
+                            raise GeometryError("interior junction needs a regular chart")
+                        unit = tangent/length
                     for sign in ((-1,) if parameter == 1 else (1,) if parameter == 0 else (-1, 1)):
                         ray = (None if direction is None else tuple(sign*value for value in direction), sign*unit)
                         if not any(_same_ray(ray, old) for old in rays):
@@ -1345,9 +1351,11 @@ def _exact_point_on_segment(curve, world, tolerance) -> bool:
     direction = tuple(b - a for a, b in zip(start, end))
     length2 = exact_dot(direction, direction)
     # Refused before the endpoint test, on the float route's own condition (its
-    # float squared length, a function of the stored doubles only).
-    float_direction = np.asarray(curve.end, dtype=float) - np.asarray(curve.start, dtype=float)
-    if length2 == 0 or float(float_direction @ float_direction) == 0:
+    # float squared length, a function of the stored doubles only). A segment of
+    # exact stations (a derived piece, T-b/D8 E1) is refused only when exactly degenerate.
+    derived = any(type(value) is Fraction for value in (*curve.start, *curve.end))
+    float_direction = None if derived else np.asarray(curve.end, dtype=float) - np.asarray(curve.start, dtype=float)
+    if length2 == 0 or (float_direction is not None and float(float_direction @ float_direction) == 0):
         raise GeometryError("degenerate arrangement line")
     if any(sum((a - b) ** 2 for a, b in zip(end_point, world)) <= tol2 for end_point in (start, end)):
         return True
