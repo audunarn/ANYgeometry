@@ -74,6 +74,14 @@ def _sub_patches(plane, surface: NurbsSurface) -> list[SubPatch]:
     if not any(n):
         raise GeometryError("plane parameter vectors must be independent")
     d = sum(x * y for x, y in zip(n, origin))
+    # the sub-patch count is bounded by the box budget before any extraction work (review B1-P3)
+    spans = 1
+    for knots, chart in ((surface.knots_u, surface.u_range), (surface.knots_v, surface.v_range)):
+        low, high = sorted(chart)
+        distinct = sorted(set(knots))
+        spans *= sum(1 for k0, k1 in zip(distinct, distinct[1:]) if k1 > low and k0 < high)
+    if spans > MAX_BOXES:
+        raise PlaneNurbsNotCertified(f"{spans} Bezier sub-patches exceed the box budget of {MAX_BOXES}")
     net = surface.exact_net()
     p, q = surface.degree_u, surface.degree_v
     g = [[n[0] * h[0] + n[1] * h[1] + n[2] * h[2] - d * h[3] for h in row] for row in net]

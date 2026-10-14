@@ -125,3 +125,88 @@ def test_older_schema_readers_refuse(stored):
     _model, _edge, document = stored
     with pytest.raises(GeometryError, match="7"):
         from_dict(resealed(dict(document, version=6)))
+
+
+# ------------------------------------------------------------------ review B1-P3 round 1
+
+
+@pytest.mark.parametrize("edit, message", [
+    (lambda c: c.__setitem__("domain", [10 ** 400, 1.]), "domain"),
+    (lambda c: c["plane"].__setitem__("origin", [10 ** 400, 0., 0.]), "plane"),
+    (lambda c: c.__setitem__("surface", {"type": "curve_on_surface", "support": {}, "pcurve": {},
+                                         "also_on": [], "transform": []}), "nurbs_surface record"),
+])
+def test_malformed_numbers_and_nesting_are_typed_refusals(stored, edit, message):
+    _model, _edge, document = stored
+    with pytest.raises(GeometryError, match=message):
+        from_dict(tampered(document, edit))
+
+
+def test_deeply_nested_surfaces_are_refused_before_decoding(stored):
+    _model, _edge, document = stored
+    nested = {"type": "nurbs_pcurve"}
+    for _ in range(990):
+        nested = {"type": "curve_on_surface", "support": nested, "pcurve": {}, "also_on": [], "transform": []}
+    with pytest.raises(GeometryError, match="nurbs_surface record"):
+        from_dict(tampered(document, lambda c: c.__setitem__("surface", nested)))
+
+
+def test_integer_domains_round_trip_byte_identically():
+    curve = PlaneNurbsCurve(section().plane_record, section().surface, 0, (0, 1))
+    assert curve.domain == (0., 1.) and all(type(value) is float for value in curve.domain)
+    model, _edge = edge_model(curve)
+    document = to_dict(model)
+    assert to_dict(from_dict(document)) == document
+
+
+def test_the_standalone_decoder_checks_its_type():
+    record = plane_nurbs_record(section())
+    with pytest.raises(GeometryError, match="not a plane_nurbs_intersection"):
+        plane_nurbs_from_record(dict(record, type="bogus"))
+
+
+def test_huge_patch_grids_are_refused_before_extraction():
+    import time
+    import numpy as np
+    from anygeometry.nurbs import NurbsSurface
+    from anygeometry.plane_nurbs import PlaneNurbsNotCertified, plane_nurbs_section
+    count = 150
+    knots = (0., *np.linspace(0., 1., count), 1.)
+    controls = tuple(tuple((i / (count - 1), j / (count - 1), j / (count - 1) - .5) for j in range(count))
+                     for i in range(count))
+    surface = NurbsSurface(1, 1, knots, knots, controls)
+    started = time.perf_counter()
+    with pytest.raises(PlaneNurbsNotCertified, match="sub-patches exceed"):
+        plane_nurbs_section(Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.)), surface)
+    assert time.perf_counter() - started < 5.
+
+
+def test_loading_recomputes_on_a_cold_cache(stored):
+    from anygeometry import support_curves
+    model, edge, document = stored
+    support_curves._SECTIONS.clear()
+    assert from_dict(document).edges[edge].curve == model.edges[edge].curve
+    support_curves._SECTIONS.clear()
+    with pytest.raises(GeometryError, match="root 1 differs"):
+        from_dict(tampered(document, lambda c: c["branch"]["roots"][1].__setitem__(2, "1/3")))
+
+
+def test_transformed_curves_round_trip():
+    import numpy as np
+    matrix = np.eye(4)
+    c, s = math.cos(.4), math.sin(.4)
+    matrix[:3, :3] = ((c, -s, 0.), (s, c, 0.), (0., 0., 2.))
+    matrix[:3, 3] = (5., -1., 3.)
+    curve = section().transformed(matrix)
+    model, edge = edge_model(curve)
+    document = to_dict(model)
+    restored = from_dict(document)
+    assert restored.edges[edge].curve == curve and to_dict(restored) == document
+
+
+def test_missing_end_vertices_are_refused(stored):
+    _model, _edge, document = stored
+    document = deepcopy(document)
+    document["edges"][0]["end"] = 99
+    with pytest.raises(GeometryError):
+        from_dict(resealed(document))

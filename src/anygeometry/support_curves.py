@@ -62,6 +62,16 @@ class PlaneNurbsCurve:
     path: int
     domain: tuple = (0.0, 1.0)
 
+    def __post_init__(self):
+        # stored as doubles: the record writes what a reader restores (review B1-P3)
+        try:
+            domain = tuple(float(value) for value in self.domain)
+        except (TypeError, ValueError, OverflowError) as error:
+            raise GeometryError("plane x NURBS curve domain must be two numbers") from error
+        if len(domain) != 2:
+            raise GeometryError("plane x NURBS curve domain must be two numbers")
+        object.__setattr__(self, "domain", domain)
+
     # ---------------------------------------------------------- construction and topology
 
     @classmethod
@@ -827,12 +837,24 @@ def plane_nurbs_from_record(record: object) -> "PlaneNurbsCurve":
     from .nurbs import NurbsSurface, _exact, nurbs_from_record
     from .surfaces import Plane
     _exact(record, _RECORD_FIELDS, "plane_nurbs_intersection")
+    if record["type"] != "plane_nurbs_intersection":
+        raise GeometryError("not a plane_nurbs_intersection record")
     plane_data = record["plane"]
     _exact(plane_data, _PLANE_FIELDS, "plane_nurbs_intersection plane")
     if plane_data["type"] != "plane":
         raise GeometryError("plane_nurbs_intersection plane must be a plane record")
-    plane = Plane(plane_data["origin"], plane_data["u_vector"], plane_data["v_vector"])
-    surface = nurbs_from_record(record["surface"])
+    try:
+        plane = Plane(plane_data["origin"], plane_data["u_vector"], plane_data["v_vector"])
+    except (TypeError, ValueError, OverflowError) as error:
+        raise GeometryError(f"plane_nurbs_intersection plane is invalid: {error}") from error
+    surface_data = record["surface"]
+    # checked before decoding: only a flat nurbs_surface record (no nested records to recurse into)
+    if not isinstance(surface_data, dict) or surface_data.get("type") != "nurbs_surface":
+        raise GeometryError("plane_nurbs_intersection surface must be a nurbs_surface record")
+    try:
+        surface = nurbs_from_record(surface_data)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise GeometryError(f"plane_nurbs_intersection surface is invalid: {error}") from error
     if not isinstance(surface, NurbsSurface):
         raise GeometryError("plane_nurbs_intersection surface must be a nurbs_surface record")
     path = record["path"]
@@ -842,7 +864,10 @@ def plane_nurbs_from_record(record: object) -> "PlaneNurbsCurve":
     if (not isinstance(domain, list) or len(domain) != 2
             or any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in domain)):
         raise GeometryError("plane_nurbs_intersection domain must be two numbers")
-    domain = (float(domain[0]), float(domain[1]))
+    try:
+        domain = (float(domain[0]), float(domain[1]))
+    except OverflowError as error:
+        raise GeometryError("plane_nurbs_intersection domain must be two values in [0, 1]") from error
     if not all(0.0 <= value <= 1.0 for value in domain) or domain[0] == domain[1]:
         raise GeometryError("plane_nurbs_intersection domain must be two distinct values in [0, 1]")
     branch = record["branch"]
