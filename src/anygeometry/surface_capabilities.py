@@ -264,7 +264,7 @@ def _full_turn(surface) -> float | None:
 
 
 _DERIVED: dict = {}
-_LOCK = threading.Lock()
+_LOCK = threading.RLock()                     # re-entrant: a finalizer may run inside the lock (gc)
 
 
 def _forget(key: int, reference) -> None:
