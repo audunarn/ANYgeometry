@@ -4609,8 +4609,8 @@ class GeometryModel:
         if not isinstance(curve, EXACT_CURVES):
             raise GeometryError("add_curve expects an EllipticArc, CylinderIntersectionCurve, QuadricIntersectionCurve, "
                                 "BezierQuadricCurve or NurbsCurve")
-        from .nurbs import NurbsCurve
-        if isinstance(curve, NurbsCurve):
+        from .nurbs import CurveOnSurface, NurbsCurve
+        if isinstance(curve, (NurbsCurve, CurveOnSurface)):
             # Edge ends are topology and must coincide with the curve's ends: decided exactly on
             # the stored vertices and the exact rational curve ends (architecture 3.4, T1).
             if curve.dimension != 3:
@@ -5602,8 +5602,8 @@ class GeometryModel:
         start_vertices = {edge_id: edge_id for edge_id in profile}
         edge_origin = {edge_id: edge_id for edge_id in profile}
         vertex_origin: Dict[int, int] = {}
-        from .nurbs import NurbsCurve
-        if any(isinstance(self.edges[edge_id].curve, NurbsCurve) for edge_id in profile):
+        from .nurbs import CurveOnSurface, NurbsCurve
+        if any(isinstance(self.edges[edge_id].curve, (NurbsCurve, CurveOnSurface)) for edge_id in profile):
             raise GeometryError("revolving a NURBS profile edge is not supported: its swept surface "
                                 "is not representable as a face surface yet")
         for edge_id in profile:

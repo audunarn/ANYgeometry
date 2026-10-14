@@ -335,21 +335,9 @@ class NurbsCurve:
         of the plane). The hull hugs the curve to second order, so the bound
         converges quadratically (projection branch and bound). Rounded down.
         """
-        points = self._active_controls(lower, upper)
-        x = tuple(Fraction(float(value)) for value in np.asarray(target, dtype=float))
-        squared = Fraction(0)
-        for k in range(self.dimension):
-            low, high = min(point[k] for point in points), max(point[k] for point in points)
-            gap = max(low - x[k], x[k] - high, Fraction(0))
-            squared += gap * gap
         with np.errstate(over="ignore", invalid="ignore"):
-            probe = self.evaluate(.5 * (float(lower) + float(upper))) - np.asarray(target, dtype=float)
-        if np.all(np.isfinite(probe)) and np.any(probe != 0.0):
-            n = tuple(Fraction(float(value)) for value in probe)
-            margin = min(sum(a * (b - c) for a, b, c in zip(n, point, x)) for point in points)
-            if margin > 0:
-                squared = max(squared, margin * margin / sum(a * a for a in n))
-        return _float_down(_sqrt_down(squared))
+            probe = self.evaluate(.5 * (float(lower) + float(upper)))
+        return _hull_distance_lower_bound(self._active_controls(lower, upper), target, probe)
 
     def breakpoints(self) -> tuple[float, ...]:
         """Engine parameters in (0, 1) of the distinct interior knots inside the domain (span ends)."""
@@ -776,7 +764,177 @@ class CurveOnSurface:
         return replace(self, pcurve=self.pcurve.subcurve(lower, upper))
 
     def transformed(self, matrix) -> "CurveOnSurface":
-        return replace(self, transform=tuple(map(tuple, _affine(matrix) @ np.asarray(self.transform))))
+        """The curve under an affine map: folded into the support (identity transform kept).
+
+        A face on the same support transforms its surface with the same
+        ``NurbsSurface.transformed``, so edge and face supports stay equal
+        (architecture 3.3: a NURBS-face edge lies on the face's own support).
+        """
+        composed = _affine(matrix) @ np.asarray(self.transform)
+        return replace(self, support=self.support.transformed(composed), transform=_IDENTITY)
+
+    # ---------------------------------------------------------- model edge interface (A3b)
+
+    def _iso_world(self):
+        """The exact world curve of an iso-line pcurve, or ``None``.
+
+        For a degree-1 pcurve with two controls sharing one chart coordinate
+        ``c`` (equal weights), on the identity transform, the curve is the
+        support's iso-curve at ``c``: exact homogeneous controls
+        ``H_k = sum_j N_j(F) H_kj`` (``F`` the surface knot parameter of ``c``)
+        over the running knot vector, and an affine map ``sigma(t)`` of the
+        engine parameter onto it. ``None`` when ``F`` differs from the float
+        chart map's value (the float evaluation would use another iso-curve) or
+        the pcurve is not an iso-line.
+        """
+        cached = _ISO_CACHE.get(self)
+        if cached is not None or self in _ISO_CACHE:
+            return cached
+        result = None
+        pcurve = self.pcurve
+        if (self.transform == _IDENTITY and pcurve.degree == 1 and len(pcurve.controls) == 2
+                and (pcurve.weights is None or pcurve.weights[0] == pcurve.weights[1])):
+            (a0, b0), (a1, b1) = pcurve.controls
+            fixed = 1 if b0 == b1 else 0 if a0 == a1 else None
+            if fixed is not None and (a0, b0) != (a1, b1):
+                surface = self.support
+                running = 1 - fixed
+                chart_value = pcurve.controls[0][fixed]
+                ranges = (surface.u_range, surface.v_range)
+                exact_fixed = _exact_chart(Fraction(chart_value), ranges[fixed])
+                float_fixed = Fraction(float(_map(np.array([chart_value]), *ranges[fixed])[0]))
+                if exact_fixed == float_fixed:
+                    net = surface.exact_net()
+                    if fixed == 0:
+                        degree, knots, count = surface.degree_u, surface.knots_u, len(net)
+                    else:
+                        degree, knots, count = surface.degree_v, surface.knots_v, len(net[0])
+                    exact_knots = [Fraction(k) for k in knots]
+                    span = _exact_span(degree, exact_knots, count, exact_fixed)
+                    basis = _exact_basis(degree, exact_knots, span, exact_fixed)
+                    run_degree = surface.degree_v if fixed == 0 else surface.degree_u
+                    run_knots = [Fraction(k) for k in (surface.knots_v if fixed == 0 else surface.knots_u)]
+                    run_count = len(net[0]) if fixed == 0 else len(net)
+                    points = []
+                    for k in range(run_count):
+                        total = [Fraction(0)] * 4
+                        for offset, value in enumerate(basis):
+                            entry = net[span - degree + offset][k] if fixed == 0 else net[k][span - degree + offset]
+                            total = [x + value * y for x, y in zip(total, entry)]
+                        points.append(tuple(total))
+                    # sigma(t): engine t -> pcurve knot s -> chart running coordinate -> surface knot parameter
+                    k0, k1 = Fraction(pcurve.knots[1]), Fraction(pcurve.knots[2])
+                    d0, d1 = (Fraction(value) for value in pcurve.domain)
+                    c0, c1 = Fraction(pcurve.controls[0][running]), Fraction(pcurve.controls[1][running])
+                    r0, r1 = (Fraction(value) for value in ranges[running])
+
+                    def sigma(engine):
+                        s = d0 + Fraction(engine) * (d1 - d0)
+                        chart = c0 + (c1 - c0) * (s - k0) / (k1 - k0)
+                        return r0 + chart * (r1 - r0)
+
+                    scale = max(abs(r0), abs(r1), Fraction(1))
+                    slack = 64 * Fraction(_EPS_FLOAT) * scale
+                    result = (run_degree, run_knots, points, sigma, slack, (min(r0, r1), max(r0, r1)))
+        if len(_ISO_CACHE) >= 256:
+            _ISO_CACHE.clear()
+        _ISO_CACHE[self] = result
+        return result
+
+    def _iso_hull(self, lower, upper):
+        """Exact world hull points of the iso-curve over ``[lower, upper]`` (widened for float evaluation)."""
+        degree, knots, points, sigma, slack, (low_range, high_range) = self._iso_world()
+        low, high = (min(1.0, max(0.0, _real(value, "curve parameter"))) for value in (lower, upper))
+        s0, s1 = sorted((sigma(low), sigma(high)))
+        s0, s1 = max(low_range, s0 - slack), min(high_range, s1 + slack)
+        _, refined, active = _exact_refine(degree, list(knots), list(points), s0, s1)
+        return [tuple(value / refined[i][-1] for value in refined[i][:-1]) for i in active]
+
+    def _float_margin(self) -> np.ndarray:
+        scale = np.max(np.abs(np.asarray(self.support.controls, dtype=float)), axis=(0, 1))
+        return 16 * (self.support.degree_u + self.support.degree_v + 2) * _EPS_FLOAT * scale
+
+    def distance_lower_bound(self, lower, upper, target) -> float:
+        """A lower bound of the distance from ``target`` to the curve on ``[lower, upper]``.
+
+        Iso-line pcurves: the exact iso-curve hull (box and half-space bounds,
+        second order). Otherwise the distance to ``bounds`` (first order).
+        """
+        if self._iso_world() is not None:
+            with np.errstate(over="ignore", invalid="ignore"):
+                probe = self.evaluate(.5 * (float(lower) + float(upper)))
+            return _hull_distance_lower_bound(self._iso_hull(lower, upper), target, probe)
+        low, high = self.bounds(lower, upper)
+        target = np.asarray(target, dtype=float)
+        gaps = [max(Fraction(float(a)) - Fraction(float(x)), Fraction(float(x)) - Fraction(float(b)), Fraction(0))
+                for a, x, b in zip(low, target, high)]
+        return _float_down(_sqrt_down(sum(gap * gap for gap in gaps)))
+
+    @property
+    def dimension(self) -> int:
+        return 3
+
+    def breakpoints(self) -> tuple[float, ...]:
+        """Engine parameters of pcurve knots and of crossings of the support's knot lines (span ends of the length integral)."""
+        from .nurbs_domain import _knot_crossings
+        values = set(self.pcurve.breakpoints())
+        values.update(t for t in _knot_crossings(self.support, self.pcurve) if 0.0 < t < 1.0)
+        return tuple(sorted(values))
+
+    def exact_point(self, parameter) -> tuple[Fraction, Fraction, Fraction]:
+        """The exact rational point ``M S(q(t))`` at an engine parameter (Fraction or double)."""
+        u, v = self.pcurve.exact_point(parameter)
+        point = self.support.exact_point(min(Fraction(1), max(Fraction(0), u)), min(Fraction(1), max(Fraction(0), v)))
+        if self.transform == _IDENTITY:
+            return point
+        matrix = [[Fraction(value) for value in row] for row in self.transform]
+        return tuple(sum(matrix[i][j] * point[j] for j in range(3)) + matrix[i][3] for i in range(3))
+
+    def bounds(self, lower=0.0, upper=1.0):
+        """Outward box of the curve on ``[lower, upper]``.
+
+        The pcurve's box over the interval (exact hull, widened for its float
+        evaluation) clipped to the chart gives a chart box; the support's
+        enclosure of that box (exact sub-patch hull plus float-evaluation margin,
+        slice A3a) contains the curve; a non-identity transform maps the box
+        exactly and rounds outward.
+        """
+        if self._iso_world() is not None:
+            points = self._iso_hull(lower, upper)
+            margin = self._float_margin()
+            low = np.array([_float_down(min(point[k] for point in points)) for k in range(3)])
+            high = np.array([_float_up(max(point[k] for point in points)) for k in range(3)])
+            with np.errstate(over="ignore"):
+                return np.nextafter(low - margin, -np.inf), np.nextafter(high + margin, np.inf)
+        from .surface_capabilities import capabilities
+        low, high = self.pcurve.bounds(lower, upper)
+        box = tuple((min(1.0, max(0.0, float(low[k]))), min(1.0, max(0.0, float(high[k])))) for k in range(2))
+        enclosure = capabilities(self.support).enclosure(box)
+        lower_box, upper_box = np.asarray(enclosure.lower, dtype=float), np.asarray(enclosure.upper, dtype=float)
+        if self.transform == _IDENTITY:
+            return lower_box, upper_box
+        matrix = [[Fraction(value) for value in row] for row in self.transform]
+        corners = (lower_box, upper_box)
+        out_low, out_high = [], []
+        for i in range(3):
+            terms_low = [matrix[i][3]]
+            terms_high = [matrix[i][3]]
+            for j in range(3):
+                a, b = matrix[i][j] * Fraction(float(corners[0][j])), matrix[i][j] * Fraction(float(corners[1][j]))
+                terms_low.append(min(a, b))
+                terms_high.append(max(a, b))
+            out_low.append(_float_down(sum(terms_low)))
+            out_high.append(_float_up(sum(terms_high)))
+        return np.asarray(out_low), np.asarray(out_high)
+
+    def derivatives(self, parameter, order: int = 0) -> np.ndarray:
+        """Point and world derivatives up to ``order`` (0..2) at a scalar parameter, shape ``(order + 1, 3)``."""
+        rows = [self.evaluate(float(parameter))]
+        if order >= 1:
+            rows.append(self.derivative(float(parameter)))
+        if order >= 2:
+            rows.append(self.second_derivative(float(parameter)))
+        return np.asarray(rows)
 
 
 # ----------------------------------------------------------------------------------- records (schema 7)
@@ -1131,3 +1289,30 @@ def cylinder_to_nurbs(cylinder) -> "NurbsSurface":
     controls = tuple((point, tuple(map(float, np.asarray(point) + lift))) for point in arc.controls)
     weights = tuple((weight, weight) for weight in arc.weights)
     return NurbsSurface(2, 1, arc.knots, (0.0, 0.0, 1.0, 1.0), controls, weights)
+
+
+_EPS_FLOAT = float(np.finfo(float).eps)
+_ISO_CACHE: dict = {}
+
+
+def _hull_distance_lower_bound(points, target, probe_point) -> float:
+    """Exact lower bound of the distance from ``target`` to the hull of ``points``, rounded down.
+
+    The larger of the squared distance to the exact control box and the squared
+    half-space bound ``(min_i n . (P_i - x))^2 / |n|^2`` (when positive) for
+    ``n = probe_point - target`` (any non-zero ``n`` is valid).
+    """
+    x = tuple(Fraction(float(value)) for value in np.asarray(target, dtype=float))
+    dimension = len(x)
+    squared = Fraction(0)
+    for k in range(dimension):
+        low, high = min(point[k] for point in points), max(point[k] for point in points)
+        gap = max(low - x[k], x[k] - high, Fraction(0))
+        squared += gap * gap
+    probe = np.asarray(probe_point, dtype=float) - np.asarray(target, dtype=float)
+    if np.all(np.isfinite(probe)) and np.any(probe != 0.0):
+        n = tuple(Fraction(float(value)) for value in probe)
+        margin = min(sum(a * (b - c) for a, b, c in zip(n, point, x)) for point in points)
+        if margin > 0:
+            squared = max(squared, margin * margin / sum(a * a for a in n))
+    return _float_down(_sqrt_down(squared))

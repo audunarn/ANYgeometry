@@ -1041,8 +1041,8 @@ def qualified_curve_face(
             separation=edge_bounds.distance(face_bounds),
         )
     curve = model.edges[edge.id].curve
-    from .nurbs import NurbsCurve
-    if isinstance(curve, NurbsCurve):
+    from .nurbs import CurveOnSurface, NurbsCurve
+    if isinstance(curve, (NurbsCurve, CurveOnSurface)):
         # The sampled root search below is not complete for arbitrary knot
         # vectors (a spike between samples is missed); NURBS curve x face
         # qualification arrives with the certified plane x NURBS route (A4).

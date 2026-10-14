@@ -107,7 +107,8 @@ def project_analytic_curve(curve, point, tolerance):
             residual = float(np.linalg.norm(point-target))
             if residual < best:
                 return point.copy(), candidate, residual
-        if hull_bound is not None:                    # NURBS: Newton on C'.(C - p), accepted only if closer
+        if hull_bound is not None or type(curve).__name__ == "CurveOnSurface":
+            # NURBS / curves on NURBS: Newton on C'.(C - p), accepted only if closer
             current, point, residual = parameter, made, best
             for _ in range(8):
                 values = curve.derivatives(current, 2)
@@ -631,6 +632,7 @@ class CylinderIntersectionCurve:
 from .quadric_curves import QuadricIntersectionCurve  # noqa: E402 (needs the definitions above only in spirit)
 from .branch_curves import BezierQuadricCurve  # noqa: E402
 
-from .nurbs import NurbsCurve  # noqa: E402
+from .nurbs import CurveOnSurface, NurbsCurve  # noqa: E402
 
-EXACT_CURVES = (EllipticArc, CylinderIntersectionCurve, QuadricIntersectionCurve, BezierQuadricCurve, NurbsCurve)
+EXACT_CURVES = (EllipticArc, CylinderIntersectionCurve, QuadricIntersectionCurve, BezierQuadricCurve, NurbsCurve,
+                CurveOnSurface)

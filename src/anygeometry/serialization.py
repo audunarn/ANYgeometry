@@ -24,7 +24,7 @@ from .exact_curves import EllipticArc, CylinderIntersectionCurve
 from .quadric_algebra import EllipticRuledSupport, QuadricSupport, RuledSupport
 from .branch_algebra import BezierRuledSupport
 from .branch_curves import BezierQuadricCurve
-from .nurbs import NurbsCurve, nurbs_from_record, nurbs_record
+from .nurbs import CurveOnSurface, NurbsCurve, nurbs_from_record, nurbs_record
 from .quadric_curves import QuadricIntersectionCurve
 from .entities import Edge, EntityRef, Face, OrientedEdge, Vertex
 from .errors import GeometryError
@@ -750,8 +750,8 @@ def _serialized_model_state(
             curve = _quadric_curve_record(edge.curve)
         elif isinstance(edge.curve, BezierQuadricCurve):
             curve = _bezier_quadric_curve_record(edge.curve)
-        elif isinstance(edge.curve, NurbsCurve):
-            curve = nurbs_record(edge.curve)               # schema 7 (generality slice A2a)
+        elif isinstance(edge.curve, (NurbsCurve, CurveOnSurface)):
+            curve = nurbs_record(edge.curve)               # schema 7 (generality slices A2a, A3b)
         else:  # pragma: no cover - closed public union
             raise GeometryError(f"unsupported curve type {type(edge.curve).__name__}")
         curves.append({"id": edge.id, "start": edge.start, "end": edge.end, "curve": curve})
@@ -762,7 +762,7 @@ def _serialized_model_state(
         or any(isinstance(surface, ExtrudedSurface) for face in geometry.faces.values()
                for surface in (face.surface, face.parameterization))
     )
-    needs_nurbs = any(isinstance(edge.curve, NurbsCurve) for edge in geometry.edges.values())
+    needs_nurbs = any(isinstance(edge.curve, (NurbsCurve, CurveOnSurface)) for edge in geometry.edges.values())
     document: dict[str, object] = {
         "schema": SCHEMA,
         "version": _NURBS_VERSION if needs_nurbs else _QUADRIC_VERSION if needs_quadric else VERSION,
@@ -1627,7 +1627,7 @@ def _decode_geometry_records(
             if schema_version < _QUADRIC_VERSION:
                 raise GeometryError("Bezier quadric intersection curves require schema 6")
             curve = _decode_bezier_quadric_curve(curve_data)
-        elif curve_kind == "nurbs_curve":
+        elif curve_kind in ("nurbs_curve", "curve_on_surface"):
             if schema_version < _NURBS_VERSION:
                 raise GeometryError("NURBS curves require schema 7")
             curve = nurbs_from_record(curve_data)
