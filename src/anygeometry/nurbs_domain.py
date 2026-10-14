@@ -128,23 +128,26 @@ def contains_loop(domain, loop, uv_point, tolerance, *, boundary=True) -> bool:
     ``event_side`` (the exact sign of ``u - u0`` at the root). A stretch through
     the query (exactly, or within the tolerance in the world) is the boundary.
     """
-    u0, v0 = float(uv_point[0]), float(uv_point[1])
+    # The query is used exactly (doubles or Fractions; review A3b round 2: a rounded
+    # chart vertex can cross a boundary); floats only for the tolerance conversion.
+    exact_u0, exact_v0 = Fraction(uv_point[0]), Fraction(uv_point[1])
+    u0f, v0f = float(exact_u0), float(exact_v0)
     # The world tolerance as a chart band [u0 - delta, u0 + delta] along the ray,
     # delta = tolerance / |S_u| at the query; membership in it is decided exactly.
-    rate = float(np.linalg.norm(world_delta(domain, (1.0, 0.0), v0, u0)))
+    rate = float(np.linalg.norm(world_delta(domain, (1.0, 0.0), v0f, u0f)))
     delta = tolerance / rate if rate > 0 else 0.0
-    exact_u0, exact_delta = Fraction(u0), Fraction(delta)
+    exact_delta = Fraction(delta)
     band = (exact_u0 - exact_delta, exact_u0 + exact_delta)        # exact edges (no rounding of u0 +- delta)
 
     items: list = []                 # ("gap", sign) or ("zero", [part, ...]); part = (pcurve, event | None)
     for path in loop:
         pcurve = pcurve_of(domain, path.curve)
-        events = level_set(pcurve, 1, v0)
+        events = level_set(pcurve, 1, exact_v0)
         if events is None:
             items.append(("zero", [(pcurve, None)]))
             continue
         if not events:
-            items.append(("gap", _exact_sign(pcurve, 1, v0, Fraction(1, 2))))
+            items.append(("gap", _exact_sign(pcurve, 1, exact_v0, Fraction(1, 2))))
             continue
         if events[0].before != 0:
             items.append(("gap", events[0].before))
@@ -168,16 +171,16 @@ def contains_loop(domain, loop, uv_point, tolerance, *, boundary=True) -> bool:
             return event_side(pcurve, event, 0, band[0]) >= 0 and event_side(pcurve, event, 0, band[1]) <= 0
         lo, hi = (Fraction(0), Fraction(1)) if event is None else (event.lo, event.hi)
         # a run meets the band if u crosses a band edge or u0 on it, or lies inside the band
-        if any(has_root_in(pcurve, 0, edge, lo, hi) for edge in (band[0], u0, band[1])):
+        if any(has_root_in(pcurve, 0, edge, lo, hi) for edge in (band[0], exact_u0, band[1])):
             return True
         return _exact_sign(pcurve, 0, band[0], lo) >= 0 and _exact_sign(pcurve, 0, band[1], lo) <= 0
 
     def right_of_query(part) -> bool:
         pcurve, event = part
         if event is not None and not event.run:
-            return event_side(pcurve, event, 0, u0) > 0
+            return event_side(pcurve, event, 0, exact_u0) > 0
         start = Fraction(0) if event is None else event.lo
-        return _exact_sign(pcurve, 0, u0, start) > 0
+        return _exact_sign(pcurve, 0, exact_u0, start) > 0
 
     if not any(kind == "gap" for kind, _payload in merged):
         return boundary if any(through_query(part) for _kind, stretch in merged for part in stretch) else False
@@ -387,7 +390,12 @@ def certified_chart_polyline(surface: NurbsSurface, pcurve: NurbsCurve, toleranc
         hull = pcurve._active_controls(a, b)
         ends = [tuple(Fraction(float(value)) for value in point)
                 for point in np.clip(pcurve.evaluate(np.array([a, b])), 0.0, 1.0)]
-        deviation = max(_exact_segment_distance(point, ends[0], ends[1]) for point in hull)
+        # curve -> chord: the hull's distance to the stored chord; chord -> curve: that
+        # distance plus the stored ends' errors against the exact curve ends (the curve
+        # runs from near one chord end to near the other; review A3b round 2).
+        end_error = max(_exact_segment_distance(pcurve.exact_point(Fraction(t)), stored, stored)
+                        for t, stored in ((a, ends[0]), (b, ends[1])))
+        deviation = max(_exact_segment_distance(point, ends[0], ends[1]) for point in hull) + end_error
         bound = _float_up(factor * deviation)
         if bound <= tolerance:
             accepted.append((a, b, bound))

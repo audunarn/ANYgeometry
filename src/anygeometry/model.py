@@ -202,6 +202,9 @@ class _ReadOnlySetMapping(Mapping):
         return len(self._source)
 
 
+_EPS_AREA = float(np.finfo(float).eps)
+
+
 class GeometryModel:
     """A container of vertices, edges and faces with persistent IDs."""
 
@@ -5389,7 +5392,7 @@ class GeometryModel:
         not vanish. Anything not certified is reported (the face is refused).
         """
         from .material_arrangement import ArrangementPath, MaterialDomain
-        from .nurbs_audit import certify_only_shared_ends
+        from .nurbs_audit import certify_only_shared_ends, certify_simple
         result: List[str] = []
         pcurves = [[self.edges[item.edge].curve.pcurve for item in loop] for loop in loops]
         ends = [[(pcurve.exact_point(0), pcurve.exact_point(1)) for pcurve in loop] for loop in pcurves]
@@ -5399,6 +5402,9 @@ class GeometryModel:
 
         for index, loop in enumerate(pcurves):
             count = len(loop)
+            for i, pcurve in enumerate(loop):
+                if certify_simple(pcurve) is not True:
+                    result.append(f"face {face_id} loop {index} edge {i} is not certified simple")
             for i in range(count):
                 for j in range(i + 1, count):
                     adjacent = j == i + 1 or (i == 0 and j == count - 1)
@@ -5417,14 +5423,18 @@ class GeometryModel:
         if result:
             return result
         domain = MaterialDomain(face_id, surface, tuple(
-            tuple(ArrangementPath(self.edges[item.edge].curve) for item in loop) for loop in loops))
+            tuple(ArrangementPath(self.edges[item.edge].curve if item.forward
+                                  else self.edges[item.edge].curve.subcurve(1.0, 0.0)) for item in loop)
+            for loop in loops))
         tolerance = self.tolerance.length
         for index, loop in enumerate(domain.boundaries):
-            area = domain.area_loop(loop, 1e-14)
-            if abs(area) <= self.tolerance.effective_area(1.0):
+            corners = np.asarray([[float(value) for value in point] for pair in ends[index] for point in pair])
+            extent = float(np.linalg.norm(np.ptp(corners, axis=0))) or 1.0
+            area = domain.area_loop(loop, 1e-3 * extent * extent * _EPS_AREA)
+            if abs(area) <= self.tolerance.effective_area(extent):
                 result.append(f"face {face_id} loop {index} has zero area")
         for index in range(1, len(loops)):
-            point = np.array([float(value) for value in ends[index][0][0]])
+            point = ends[index][0][0]                       # exact chart vertex (Fractions)
             if not domain.contains_loop(domain.boundaries[0], point, tolerance, boundary=False):
                 result.append(f"face {face_id} hole {index} is not strictly inside the outer loop")
             for other in range(1, len(loops)):

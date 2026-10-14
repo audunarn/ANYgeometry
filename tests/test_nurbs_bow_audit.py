@@ -152,3 +152,94 @@ def test_extrude_refuses_unknown_edges_with_a_geometry_error():
     from anygeometry import GeometryError
     with pytest.raises(GeometryError):
         GeometryModel().extrude([999], (0., 0., 1.))
+
+
+# ------------------------------------------------------------------ review A3b round 2
+
+
+def add_edges(model, curves, close=True):
+    vertices = [model.add_point(*map(float, curve.exact_point(0))) for curve in curves]
+    if not close:
+        vertices.append(model.add_point(*map(float, curves[-1].exact_point(1))))
+    return [model.add_curve(vertices[i], vertices[(i + 1) % len(vertices)], curve) for i, curve in enumerate(curves)]
+
+
+def line(surface, a, b, weights=None, domain=None):
+    return CurveOnSurface(surface, NurbsCurve(1, (0., 0., 1., 1.), (a, b), weights, domain))
+
+
+def test_uncertified_curve_pairs_block_without_a_general_fallback():
+    surface = unit_plane()
+    knots = (0., 0.) + tuple(.5 + k * 2. ** -40 for k in range(1, 5)) + (1., 1.)
+    zigzag = CurveOnSurface(surface, NurbsCurve(1, knots, ((1 / 8, 1 / 8), (1 / 2, 1 / 8), (1 / 2, 7 / 8),
+                                                           (5 / 8, 7 / 8), (5 / 8, 1 / 8), (7 / 8, 1 / 8))))
+    # crosses the excursion at x = 1/2; each end vertex lies outside the other edge's box, so only
+    # the edge pair needs a classification (projection on general pcurves is slow: box bounds)
+    diagonal = line(surface, (1 / 8, 1 / 8), (3 / 4, 15 / 16))
+    model = GeometryModel()
+    start = model.add_point(1 / 8, 1 / 8, 0.)
+    model.add_curve(start, model.add_point(7 / 8, 1 / 8, 0.), zigzag)
+    model.add_curve(start, model.add_point(3 / 4, 15 / 16, 0.), diagonal)
+    report = model.strict_audit()
+    assert not report.clean
+    assert any("curve_on_nurbs_pair_not_certified" in str(dict(issue.details).get("reason")) for issue in report.issues)
+
+
+def test_a_hole_outside_a_scaled_arch_is_refused_exactly():
+    scale = 2. ** 60
+    surface = NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.),
+                           (((0., 0., 0.), (0., scale, 0.)), ((scale, 0., 0.), (scale, scale, 0.))))
+    arch = NurbsCurve(2, (0., 0., 0., 1., 1., 1.), ((0., 0.), (.5, 1.), (1., 0.)), (1., 2., 1.))
+    outer = [CurveOnSurface(surface, arch.subcurve(0., .5)), CurveOnSurface(surface, arch.subcurve(.5, 1.)),
+             line(surface, (1., 0.), (0., 0.))]
+    model = GeometryModel()
+    face = model.add_face(add_edges(model, outer), surface=surface)
+    tiny = 2. ** -55
+    q_to_b = line(surface, (.5, tiny), (.5, 1.), (1., 2.), (.5, 1.))
+    b_to_c = line(surface, (.5, 1.), (.75, 1.))
+    c_to_q = line(surface, (0., tiny), (.75, 1.), (1., 2.), (1., .5))
+    hole_edges = add_edges(model, [q_to_b, b_to_c, c_to_q])
+    errors = model._validate_nurbs_trims(face, surface, (model.faces[face].loop, tuple(model._order_loop(hole_edges))))
+    assert any("not strictly inside" in error or "not certified" in error for error in errors)
+
+
+def test_a_self_crossing_trim_edge_is_refused():
+    from anygeometry import GeometryError
+    surface = unit_plane()
+    knots = (0., 0., .125, .25, .375, .5, .625, .75, 1., 1.)
+    loop_edge = CurveOnSurface(surface, NurbsCurve(1, knots, ((.125, .125), (.5, .125), (.5, .375), (.25, .375),
+                                                              (.25, .25), (.625, .25), (.625, .125), (.875, .125))))
+    curves = [loop_edge, line(surface, (.875, .125), (.875, .875)), line(surface, (.875, .875), (.125, .875)),
+              line(surface, (.125, .875), (.125, .125))]
+    model = GeometryModel()
+    with pytest.raises(GeometryError, match="not certified simple"):
+        model.add_face(add_edges(model, curves), surface=surface)
+
+
+def test_backward_edges_and_small_faces_are_accepted():
+    surface = unit_plane()
+    model = GeometryModel()
+    corners = [(.25, .25), (.75, .25), (.75, .75), (.25, .75)]
+    a, b, c, d = (model.add_point(x, y, 0.) for x, y in corners)
+    bottom = model.add_curve(a, b, line(surface, corners[0], corners[1]))
+    right = model.add_curve(c, b, line(surface, corners[2], corners[1]))           # stored backward
+    top = model.add_curve(c, d, line(surface, corners[2], corners[3]))
+    left = model.add_curve(a, d, line(surface, corners[0], corners[3]))            # stored backward
+    model.add_face([bottom, right, top, left], surface=surface)
+    side = 2. ** -24
+    small = [(.25, .25), (.25 + side, .25), (.25 + side, .25 + side), (.25, .25 + side)]
+    model2 = GeometryModel()
+    model2.add_face(add_edges(model2, [line(surface, p, q) for p, q in zip(small, small[1:] + small[:1])]),
+                    surface=surface)
+
+
+def test_polyline_bounds_include_rounded_chord_ends():
+    from anygeometry.nurbs_domain import certified_chart_polyline
+    scale = 2. ** 60
+    surface = NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.),
+                           (((0., 0., 0.), (0., scale, 0.)), ((scale, 0., 0.), (scale, scale, 0.))))
+    pcurve = NurbsCurve(1, (0., 0., 1., 1.), ((0., .5), (1., .5)), (1., 2.), (.5, 1.))
+    polyline, bound = certified_chart_polyline(surface, pcurve, 1e3)
+    from fractions import Fraction
+    overhang = abs(Fraction(float(polyline[0][0])) - pcurve.exact_point(0)[0]) * Fraction(scale)
+    assert bound >= float(overhang) > 0

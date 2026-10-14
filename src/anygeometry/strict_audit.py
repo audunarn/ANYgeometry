@@ -1791,6 +1791,9 @@ class _StrictAuditState:
             # (review A3b B-S4: matching counts let a near-duplicate vertex pass).
             if shared_ends_consistent(first, second) and certify_only_shared_ends(first.curve, second.curve):
                 return _PairClassification(True)
+            # No fallback: the general bounded-curve route can miss crossings (its Newton
+            # steps may leave their box; review A3b round 2), so fail closed.
+            return self.unclassified(first_key, second_key, "curve_on_nurbs_pair_not_certified")
         if not isinstance(first.curve, Straight) or not isinstance(second.curve, Straight):
             from .intersections import query_intersection
 

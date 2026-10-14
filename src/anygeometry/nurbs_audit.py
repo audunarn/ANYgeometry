@@ -29,7 +29,7 @@ import numpy as np
 
 from .nurbs import CurveOnSurface, NurbsCurve
 
-_BUDGET = 20000
+_BUDGET = 4000
 
 
 def _exact_hull(curve, lower: float, upper: float):
@@ -107,8 +107,8 @@ def certify_only_shared_ends(first, second, budget: int = _BUDGET) -> bool | Non
                      and ((b == 0 and b0 == 0.0) or (b == 1 and b1 == 1.0))]
         if any(_separated_at(hull_first, hull_second, ends_first[a], normals[a, b]) for a, b in at_vertex):
             continue
-        if a1 - a0 <= 1e-9 and b1 - b0 <= 1e-9:
-            return None
+        if a1 - a0 <= 2. ** -16 and b1 - b0 <= 2. ** -16:
+            return None                                    # inseparable at this scale: a crossing or a near-touch
         am, bm = 0.5 * (a0 + a1), 0.5 * (b0 + b1)
         for first_piece in ((a0, am), (am, a1)):
             for second_piece in ((b0, bm), (bm, b1)):
@@ -129,3 +129,40 @@ def shared_ends_consistent(first_edge, second_edge) -> bool:
     return (all(first_ids[a] == second_ids[b] for a, b in matches)
             and set(first_ids) & set(second_ids) == {first_ids[a] for a, _b in matches})
 
+
+def _monotone(hull) -> bool:
+    """Whether consecutive hull points advance strictly along one coordinate axis or the chord.
+
+    With positive weights the curve is then monotone in that direction
+    (variation diminishing), hence simple.
+    """
+    dimension = len(hull[0])
+    directions = [tuple(1 if k == axis else 0 for k in range(dimension)) for axis in range(dimension)]
+    directions.append(tuple(b - a for a, b in zip(hull[0], hull[-1])))
+    for direction in directions:
+        steps = [sum(d * (q[k] - p[k]) for k, d in enumerate(direction)) for p, q in zip(hull, hull[1:])]
+        if all(step > 0 for step in steps) or all(step < 0 for step in steps):
+            return True
+    return False
+
+
+def certify_simple(curve, lower: float = 0.0, upper: float = 1.0, depth: int = 0) -> bool | None:
+    """``True`` when the exact curve piece has no self-intersection (``None``: not certified).
+
+    A piece with a monotone exact hull is simple; otherwise its halves must be
+    simple and meet only at the split point (``certify_only_shared_ends`` on the
+    two sub-curves, whose shared end is exact).
+    """
+    hull = _exact_hull(curve, lower, upper)
+    if hull is None:
+        return None
+    if _monotone(hull):
+        return True
+    if depth >= 24:
+        return None
+    middle = 0.5 * (lower + upper)
+    if certify_simple(curve, lower, middle, depth + 1) is not True or \
+            certify_simple(curve, middle, upper, depth + 1) is not True:
+        return None
+    first, second = curve.subcurve(lower, middle), curve.subcurve(middle, upper)
+    return certify_only_shared_ends(first, second)
