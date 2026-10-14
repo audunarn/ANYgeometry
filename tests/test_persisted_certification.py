@@ -84,5 +84,54 @@ def test_a_non_simple_loop_refuses():
     edges = EDGES + [("a", "e")]
     faces = [(loop(edges, ["a", "b", "e", "f"]) + loop(edges, ["a", "b", "e", "f"])[:0]
               + [(len(EDGES), True), (len(EDGES), False)], [])]
-    with pytest.raises(GeometryError, match="not preserved"):
+    with pytest.raises(GeometryError, match="slit in a cell"):
         certify(POINTS, edges, faces)
+
+
+
+def test_overlapping_rectangles_sharing_split_edges_refuse():
+    """Review (E2a round 1): [0,2]x[0,1] and [1,3]x[0,1], boundaries split at x = 1 and x = 2, walks
+    starting at (0,0) and (2,0): their interiors overlap; the shared pieces are used in the same
+    direction by both cells."""
+    points = {"a": (0, 0), "b": (1, 0), "c": (2, 0), "d": (3, 0), "e": (3, 1), "f": (2, 1), "g": (1, 1), "h": (0, 1)}
+    edges = [("a", "b"), ("b", "c"), ("c", "d"), ("d", "e"), ("e", "f"), ("f", "g"), ("g", "h"), ("h", "a"),
+             ("c", "f"), ("b", "g")]
+    faces = [(loop(edges, ["a", "b", "c", "f", "g", "h"]), []), (loop(edges, ["c", "d", "e", "f", "g", "b"]), [])]
+    with pytest.raises(GeometryError, match="overlapping cells|cross or overlap"):
+        certify(points, edges, faces)
+
+
+def test_a_hole_inside_another_hole_refuses():
+    points = {"a": (0, 0), "b": (10, 0), "c": (10, 10), "d": (0, 10),
+              "p": (1, 1), "q": (9, 1), "r": (9, 9), "s": (1, 9),
+              "u": (2, 2), "v": (3, 2), "w": (3, 3), "x": (2, 3)}
+    edges = [("a", "b"), ("b", "c"), ("c", "d"), ("d", "a"), ("p", "q"), ("q", "r"), ("r", "s"), ("s", "p"),
+             ("u", "v"), ("v", "w"), ("w", "x"), ("x", "u")]
+    faces = [(loop(edges, ["a", "b", "c", "d"]), [loop(edges, ["p", "s", "r", "q"]), loop(edges, ["u", "x", "w", "v"])])]
+    with pytest.raises(GeometryError, match="hole inside another hole"):
+        certify(points, edges, faces)
+
+
+def test_a_touching_hole_absorbed_into_the_outer_walk_is_accepted():
+    """E3 walks a hole touching the outer corner into the outer loop (the corner is visited twice);
+    the persisted cell is valid and certifies on its unchanged coordinates."""
+    from anygeometry.arrangement_geometry import LinePath
+    from anygeometry.material_arrangement import ArrangementPath, MaterialDomain, arrange_material
+
+    def ring(points):
+        return tuple(ArrangementPath(LinePath((*a, 0.), (*b, 0.))) for a, b in zip(points, points[1:] + points[:1]))
+    arrangement = arrange_material(MaterialDomain(1, PLANE, (ring([(0., 0.), (4., 0.), (4., 4.), (0., 4.)]),
+                                                             ring([(0., 0.), (1., .5), (.5, 1.)]))),
+                                   (), tolerance=1e-6)
+    assert arrangement.certified and len(arrangement.cells) == 1
+    vertex_ids, positions, ends = {}, {}, {}
+    for index, path in enumerate(arrangement.paths):
+        pair = []
+        for point in (path.curve.start, path.curve.end):
+            key = tuple(point)
+            vertex_ids.setdefault(key, len(vertex_ids))
+            positions[vertex_ids[key]] = key
+            pair.append(vertex_ids[key])
+        ends[index] = tuple(pair)
+    cells = [(list(cell.outer), [list(hole) for hole in cell.holes]) for cell in arrangement.cells]
+    certify_persisted_cells(PLANE, cells, lambda edge: ends[edge], lambda vertex: positions[vertex])

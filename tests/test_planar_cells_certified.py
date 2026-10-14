@@ -103,3 +103,25 @@ def test_plate_crossing_has_the_scale_one_topology_at_any_scale(scale):
     apply_intersections(model, plan_intersections(model, [context["first"], context["second"]], policy="connect"),
                         policy="connect")
     assert (len(model.faces), len(model.edges)) == (8, 23)
+
+
+def test_an_off_support_trace_absorbed_into_the_boundary_refuses():
+    """Review (round 1): boundary at z = 0.75 tol, a coincident bottom-edge trace at z = 1.5 tol
+    (off the support z = 0 by more than tol) -- refused before its stations merge into the boundary."""
+    tol = 1e-6
+    lift = lambda points, z: tuple(ArrangementPath(LinePath((*a, z), (*b, z))) for a, b in zip(points, points[1:] + points[:1]))
+    domain = MaterialDomain(1, PLANE, (lift(SQUARE, .75 * tol),))
+    trace_ = ArrangementPath(LinePath((-1., 0., 1.5 * tol), (5., 0., 1.5 * tol)), owners=(1, 2))
+    with pytest.raises(GeometryError, match="off its support"):
+        arrange_material(domain, (trace_,), tolerance=tol)
+
+
+def test_chart_coincident_stations_are_one_vertex():
+    """Review (round 1, S3): square at z = +0.75 tol and a corner-touching triangular hole at
+    z = -0.75 tol: the contact corners coincide in the chart (1.5 tol apart in the world) and are
+    one vertex, as main's answer for the coplanar fixture (1 cell, area 15.625)."""
+    tol = 1e-6
+    lift = lambda points, z: tuple(ArrangementPath(LinePath((*a, z), (*b, z))) for a, b in zip(points, points[1:] + points[:1]))
+    domain = MaterialDomain(1, PLANE, (lift(SQUARE, .75 * tol), lift([(0., 0.), (1., .5), (.5, 1.)], -.75 * tol)))
+    result = arrange_material(domain, (), tolerance=tol)
+    assert (len(result.cells), result.area) == (1, 15.625)

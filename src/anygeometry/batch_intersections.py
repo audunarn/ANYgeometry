@@ -396,8 +396,8 @@ def _exact_plane_pair_trace(first, second, float_direction, boxes):
     if sum(float(d) * f for d, f in zip(direction, float_direction)) < 0:
         direction = tuple(-value for value in direction)
     anchor = tuple(float(value) for value in line.anchor)
-    reach = max(float(np.linalg.norm(np.asarray(hi) - lo)) + float(np.linalg.norm(np.asarray(lo) - anchor))
-                for lo, hi in boxes)
+    reach = max(math.hypot(*(float(h) - float(l) for h, l in zip(hi, lo)))
+                + math.hypot(*(float(l) - a for l, a in zip(lo, anchor))) for lo, hi in boxes)   # no underflow
     if not (math.isfinite(reach) and reach > 0):
         return None
     largest = max(abs(value) for value in direction)            # |scale * direction| >= reach
@@ -1047,6 +1047,7 @@ def _apply_intersections_in_place(model, plan, *, policy, _edge_preimage_draft=N
                 model.tag(EntityRef("edge", edge_id), "intersection_decomposition_seam")
             return OrientedEdge(edge_id, model.edges[edge_id].start == start)
 
+        certified_cells = []
         for arrangement in plan.arrangements:
             check()
             tolerance = arrangement.world_tolerance
@@ -1056,16 +1057,10 @@ def _apply_intersections_in_place(model, plan, *, policy, _edge_preimage_draft=N
                 return tuple(OrientedEdge(mapping[index].edge, mapping[index].forward == forward) for index, forward in values)
             loops = [(loop(cell.outer), tuple(loop(hole) for hole in cell.holes)) for cell in arrangement.cells]
             if getattr(arrangement, "certified", False):
-                # T-b/D8 E2a (S10): the cells as persisted (stored doubles, reused or merged vertices)
-                # must still form the certified planar subdivision; otherwise the whole candidate is
-                # refused before publication (apply works on a detached candidate).
-                from .material_arrangement import certify_persisted_cells
-                certify_persisted_cells(
-                    arrangement.support,
-                    [([(item.edge, item.forward) for item in outer], [[(item.edge, item.forward) for item in hole]
-                                                                      for hole in holes]) for outer, holes in loops],
-                    lambda edge: (model.edges[edge].start, model.edges[edge].end),
-                    model.vertex_position, check)
+                # T-b/D8 E2a (S10): certified after the whole batch's vertex mapping (below).
+                certified_cells.append((arrangement.support,
+                    [([(item.edge, item.forward) for item in outer],
+                      [[(item.edge, item.forward) for item in hole] for hole in holes]) for outer, holes in loops]))
             if arrangement.orientation < 0:
                 # The arrangement walks counterclockwise in the support chart; a face stored clockwise
                 # (a pointed cone's facets are) keeps its sense so its neighbours still agree with it.
@@ -1184,6 +1179,16 @@ def _apply_intersections_in_place(model, plan, *, policy, _edge_preimage_draft=N
             for edge_id in sorted(joint_ids):
                 declare_joint_edge(model,edge_id,
                     model.tolerance.effective_length(model.edge_length(edge_id)))
+        if certified_cells:
+            # T-b/D8 E2a (S10): every vertex of the batch is mapped now (later arrangements, member and
+            # face contacts can merge vertices of earlier faces); the persisted cells of every
+            # certified arrangement must still form its planar subdivision, else the detached
+            # candidate is refused before publication.
+            from .material_arrangement import certify_persisted_cells
+            for support, cells in certified_cells:
+                certify_persisted_cells(support, cells,
+                                        lambda edge: (model.edges[edge].start, model.edges[edge].end),
+                                        model.vertex_position, check)
         check()
     change_set=model.last_change_set
     reused=model.revision == plan.revision

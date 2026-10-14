@@ -946,9 +946,12 @@ def _close_embedding(domain, vertices, lookup, stored_of, edges, edge_segments, 
     representatives = []
     for index in range(len(vertices)):
         stored = stored_of.get(index, {})
-        if len(stored) > 1:
+        loops_seen = [corner[0] for corner in stored]
+        if len(set(loops_seen)) != len(loops_seen):
+            # two corners of one loop in one cluster would collapse its edge (main: start == end)
             raise GeometryError("two stored face vertices within one tolerance cluster")
-        point = next(iter(stored.values())) if stored else lookup.exact[index]
+        # corners of different loops may touch (touching holes): the earliest loop's corner
+        point = stored[min(stored)] if stored else lookup.exact[index]
         residual = exact_dot(normal, point) - offset
         if residual * residual > bound2:
             raise GeometryError("material domain input off its support")
@@ -1048,6 +1051,13 @@ def _certified_planar_cells(domain, chains, edges, edge_segments, endpoints_by_e
         a, b = (vertex_uv[v] for v in endpoints_by_edge[index])
         return ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
     outer_polygon, outer_uses = loops_uv[0]
+    # S9 (ii): the re-anchored loops deform the stored ones by at most 2 tol x perimeter (owner Q-b).
+    perimeter = sum(math.sqrt(float(stations.segment_of(path.curve).length2()))
+                    for loop in domain.boundaries for path in loop)
+    for (polygon, _uses), loop in zip(loops_uv, domain.boundaries):
+        stored_area = _exact_loop_area(chart, [stations.segment_of(path.curve) for path in loop])
+        if abs(float(abs(_shoelace(polygon)) - abs(stored_area))) > 2 * tolerance * perimeter * (1 + 1e-9) + 1e-300:
+            raise GeometryError("arrangement deformation exceeds the tolerance contract")
     for k, (polygon, uses) in enumerate(loops_uv[1:], start=1):
         for index, _same in uses:
             point = midpoint(index)
@@ -1197,17 +1207,26 @@ def certify_persisted_cells(support, loops, edge_ends, position, check=lambda: N
     """Re-certify the persisted cells of a certified arrangement (T-b/D8 slice E2a, S10).
 
     ``loops`` are the applied cells as ``(outer, holes)`` lists of
-    ``(edge id, forward)``; ``edge_ends(edge)`` gives the model vertex ids of
-    a (straight) edge; ``position(vertex)`` its stored doubles. On the exact
-    chart of the stored coordinates: the edges form a planar embedding (no
-    crossing, T-junction or overlap, no collapsed edge), every loop is
-    simple, outer loops share one non-zero area sign and holes have the
-    opposite one, every hole lies strictly inside its outer loop and no
-    face region overlaps another (component nesting). Raises
-    ``GeometryError("certified embedding not preserved on application")``.
+    ``(edge id, forward)``; ``edge_ends(edge)`` gives the current model vertex
+    ids of a straight edge; ``position(vertex)`` its stored doubles. Called after
+    the whole batch's vertex mapping. On the exact chart of the stored
+    coordinates the cells must form a planar subdivision:
+    * no collapsed edge; the edges form a planar embedding (no crossing,
+      T-junction or overlap);
+    * each oriented edge is used at most once (adjacent cells traverse a
+      shared edge in opposite directions; equal use means overlapping cells);
+    * every loop has non-zero area; outer loops share one sign, holes have
+      the opposite one (loops may touch themselves at a vertex, as E3's walk
+      produces for touching holes);
+    * nesting: the midpoint of every edge of a cell's loops that is not an
+      edge of another cell lies outside that other cell's region (outer loop
+      minus holes); every hole lies inside its own outer loop and outside the
+      cell's other holes.
+    Raises ``GeometryError("certified embedding not preserved on application (...)")``.
     """
     from .exact_predicates import Outcome, point_in_polygon
     chart = ExactPlane.from_plane(support)
+
     def failure(reason):
         return GeometryError(f"certified embedding not preserved on application ({reason})")
     uv = {}
@@ -1217,17 +1236,16 @@ def certify_persisted_cells(support, loops, edge_ends, position, check=lambda: N
             uv[vertex] = chart.uv(exact_vector(position(vertex)))
         return uv[vertex]
 
-    def start_of(item):
-        edge, forward = item
-        a, b = edge_ends(edge)
-        return a if forward else b
-
     edges = sorted({edge for outer, holes in loops for loop in (outer, *holes) for edge, _ in loop})
-    ends = {edge: edge_ends(edge) for edge in edges}
+    try:
+        ends = {edge: tuple(edge_ends(edge)) for edge in edges}
+    except KeyError:
+        raise failure("edge removed") from None
     if any(a == b or point(a) == point(b) for a, b in ends.values()):
-        raise failure('collapsed edge')
+        raise failure("collapsed edge")
+    floats = {edge: np.array([[float(c) for c in point(v)] for v in ends[edge]]) for edge in edges}
     if len(edges) > 1:
-        boxes = np.array([[[float(c) for c in point(v)] for v in ends[edge]] for edge in edges])
+        boxes = np.array([floats[edge] for edge in edges])
         lo, hi = boxes.min(axis=1), boxes.max(axis=1)
         pad = 4 * _EPS * np.maximum(np.abs(lo), np.abs(hi)) + 1e-300
         lo, hi = lo - pad, hi + pad
@@ -1237,46 +1255,83 @@ def certify_persisted_cells(support, loops, edge_ends, position, check=lambda: N
                 second = edges[j]
                 if _edges_conflict(tuple(point(v) for v in ends[first]), tuple(point(v) for v in ends[second]),
                                    ends[first], ends[second]):
-                    raise failure('edges cross or overlap')
+                    raise failure("edges cross or overlap")
+    used = set()
+    for outer, holes in loops:
+        in_cell = set()
+        for loop in (outer, *holes):
+            for edge, forward in loop:
+                if (edge, forward) in used:
+                    raise failure("overlapping cells")
+                if edge in in_cell:
+                    raise failure("slit in a cell")        # one edge both ways in one cell
+                used.add((edge, forward))
+                in_cell.add(edge)
+
+    def start_of(item):
+        edge, forward = item
+        return ends[edge][0 if forward else 1]
 
     def polygon(loop):
-        sequence = [start_of(item) for item in loop]
-        if len(set(sequence)) != len(sequence) or len(sequence) < 3:
-            raise failure('loop not simple')
-        return [point(v) for v in sequence]
+        if len(loop) < 3:
+            raise failure("degenerate loop")
+        return [point(start_of(item)) for item in loop]
 
-    def inner_point(loop, others):
-        """The midpoint of an edge of ``loop`` not lying on any of ``others`` (open edges meet no other loop)."""
-        for edge, _ in loop:
-            if all(edge not in {e for e, _ in other} for other in others):
-                a, b = (point(v) for v in ends[edge])
-                return ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
-        raise failure('no free edge')
-
-    faces = []
+    cells = []
     for outer, holes in loops:
-        faces.append((outer, holes, polygon(outer), [polygon(hole) for hole in holes]))
-    signs = {_shoelace(outer_polygon) > 0 for _o, _h, outer_polygon, _hp in faces}
-    if len(signs) != 1 or any(_shoelace(p) == 0 for _o, _h, op, hps in faces for p in (op, *hps)):
-        raise failure('area signs')
+        outer_polygon = polygon(outer)
+        hole_polygons = [polygon(hole) for hole in holes]
+        cells.append((outer, holes, outer_polygon, hole_polygons))
+    areas = [(_shoelace(op), [_shoelace(hp) for hp in hps]) for _o, _h, op, hps in cells]
+    if any(a == 0 for outer_area, hole_areas in areas for a in (outer_area, *hole_areas)):
+        raise failure("zero-area loop")
+    signs = {outer_area > 0 for outer_area, _ in areas}
+    if len(signs) != 1:
+        raise failure("area signs")
     outer_sign = signs.pop()
-    for outer, holes, outer_polygon, hole_polygons in faces:
-        for hole, hole_polygon in zip(holes, hole_polygons):
-            if (_shoelace(hole_polygon) > 0) == outer_sign:
-                raise failure('hole winding')
-            if point_in_polygon(inner_point(hole, [outer]), outer_polygon) is not Outcome.ABOVE:
-                raise failure('hole outside its outer loop')
-    for i, (outer_i, holes_i, outer_polygon_i, hole_polygons_i) in enumerate(faces):
-        for j, (outer_j, _holes_j, _op, _hp) in enumerate(faces):
-            if i == j:
-                continue
-            outer_edges_j = {edge for edge, _ in outer_j}
-            if any(outer_edges_j == {edge for edge, _ in hole} for hole in holes_i):
-                continue                                   # face j fills a hole of face i exactly
-            probe = inner_point(outer_j, [outer_i, *holes_i])
-            if (point_in_polygon(probe, outer_polygon_i) is Outcome.ABOVE
-                    and not any(point_in_polygon(probe, hole) is Outcome.ABOVE for hole in hole_polygons_i)):
-                raise failure('faces overlap')
+    if any((a > 0) == outer_sign for _, hole_areas in areas for a in hole_areas):
+        raise failure("hole winding")
+
+    def midpoint(edge):
+        a, b = (point(v) for v in ends[edge])
+        return ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
+
+    cell_edges = [{edge for loop in (outer, *holes) for edge, _ in loop} for outer, holes, _op, _hp in cells]
+    cell_boxes = []
+    for _o, _h, outer_polygon, _hp in cells:
+        coordinates = np.array([[float(c) for c in p] for p in outer_polygon])
+        pad = 4 * _EPS * float(np.max(np.abs(coordinates))) + 1e-300
+        cell_boxes.append((coordinates.min(axis=0) - pad, coordinates.max(axis=0) + pad))
+
+    def inside_region(index, probe):
+        _o, _h, outer_polygon, hole_polygons = cells[index]
+        if point_in_polygon(probe, outer_polygon) is not Outcome.ABOVE:
+            return False
+        return not any(point_in_polygon(probe, hole) is not Outcome.BELOW for hole in hole_polygons)
+
+    for k, (outer, holes, outer_polygon, hole_polygons) in enumerate(cells):
+        for h, hole in enumerate(holes):
+            free = [edge for edge, _ in hole if edge not in {e for e, _ in outer}]
+            if not free:
+                raise failure("hole on its outer loop")
+            probe = midpoint(free[0])
+            if point_in_polygon(probe, outer_polygon) is not Outcome.ABOVE:
+                raise failure("hole outside its outer loop")
+            if any(point_in_polygon(probe, other) is Outcome.ABOVE
+                   for g, other in enumerate(hole_polygons) if g != h):
+                raise failure("hole inside another hole")
+    for j, (outer, holes, _op, _hp) in enumerate(cells):
+        for edge in sorted(cell_edges[j]):
+            check()
+            probe = midpoint(edge)
+            fx, fy = float(probe[0]), float(probe[1])
+            for i, (low, high) in enumerate(cell_boxes):
+                if i == j or edge in cell_edges[i]:
+                    continue
+                if not (low[0] <= fx <= high[0] and low[1] <= fy <= high[1]):
+                    continue
+                if inside_region(i, probe):
+                    raise failure("cells overlap")
 
 
 _NEIGHBOUR_OFFSETS = tuple(itertools.product((-1, 0, 1), repeat=3))
@@ -1493,14 +1548,23 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
                 stored_corners.setdefault(segments[previous][1], (corner, segments[first + k][0]))
             first += len(loop)
     stored_of = {}
+    support_chart = ExactPlane.from_plane(domain.support) if deferred else None
+    chart_index = {}
     def vertex(point, station=None):
         if segments:
             floats = np.asarray(stations.rounded(station)) if station is not None else point
-            index = lookup.find(station, floats)
+            # S3: stations with equal exact chart coordinates are one vertex (inputs may lie up to
+            # tol off the support); otherwise main's lowest-index world-distance identity.
+            key = support_chart.uv(station) if (deferred and station is not None) else None
+            index = chart_index.get(key) if key is not None else None
+            if index is None:
+                index = lookup.find(station, floats)
             if index is None:
                 lookup.add(station, floats)
                 vertices.append(floats.copy()); incidence.append([])
                 index = len(vertices)-1
+            if key is not None:
+                chart_index.setdefault(key, index)
             if station is not None and station in stored_corners:
                 corner, position = stored_corners[station]
                 stored_of.setdefault(index, {})[corner] = position
@@ -1512,6 +1576,17 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
         vertices.append(point.copy()); incidence.append([])
         return len(vertices)-1
 
+    if deferred:
+        # S9: every input station (stored and derived path ends, arrangement points) lies on the
+        # support within tol -- checked before identification can absorb a station into a cluster.
+        chart = ExactPlane.from_plane(domain.support)
+        bound2 = Fraction(tolerance) ** 2 * exact_dot(chart.normal, chart.normal)
+        offset = exact_dot(chart.normal, chart.origin)
+        for point in [p for segment in segments.values() for p in segment] + [
+                exact_vector(item.position) for item in points]:
+            residual = exact_dot(chart.normal, point) - offset
+            if residual * residual > bound2:
+                raise GeometryError("material domain input off its support")
     endpoints_by_edge, edge_segments = [], {}
     boundary_uses = []                              # (path index, edge index, same direction)
     for path_index, (path, parameters) in enumerate(zip(paths, splits)):
