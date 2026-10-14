@@ -70,6 +70,9 @@ class PlaneNurbsCurve:
             raise GeometryError("plane x NURBS curve domain must be two numbers") from error
         if len(domain) != 2:
             raise GeometryError("plane x NURBS curve domain must be two numbers")
+        # the loader's rule, so every constructible curve also reloads (review B1-P3 round 2)
+        if not all(0.0 <= value <= 1.0 for value in domain) or domain[0] == domain[1]:
+            raise GeometryError("plane x NURBS curve domain must be two distinct values in [0, 1]")
         object.__setattr__(self, "domain", domain)
 
     # ---------------------------------------------------------- construction and topology

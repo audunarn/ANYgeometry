@@ -210,3 +210,32 @@ def test_missing_end_vertices_are_refused(stored):
     document["edges"][0]["end"] = 99
     with pytest.raises(GeometryError):
         from_dict(resealed(document))
+
+
+# ------------------------------------------------------------------ review B1-P3 round 2
+
+
+def test_domains_outside_the_unit_interval_are_refused_at_construction():
+    curve = section()
+    for domain in ((-1, 2), (.5, .5), (0., float("nan")), (0., float("inf"))):
+        with pytest.raises(GeometryError, match="domain"):
+            PlaneNurbsCurve(curve.plane_record, curve.surface, 0, domain)
+
+
+def test_large_inactive_control_grids_are_refused_before_expansion(monkeypatch):
+    import numpy as np
+    from anygeometry.nurbs import NurbsSurface
+    from anygeometry.plane_nurbs import PlaneNurbsNotCertified, plane_nurbs_section
+    count = 300
+    knots = (0., *np.linspace(0., 1., count), 1.)
+    controls = tuple(tuple((i / (count - 1), j / (count - 1), j / (count - 1) - .5) for j in range(count))
+                     for i in range(count))
+    surface = NurbsSurface(1, 1, knots, knots, controls, u_range=(knots[150], knots[151]),
+                           v_range=(knots[150], knots[151]))
+
+    def expanded(_self):
+        raise AssertionError("the control grid was expanded before the budget check")
+
+    monkeypatch.setattr(NurbsSurface, "exact_net", expanded)
+    with pytest.raises(PlaneNurbsNotCertified, match="extraction budget"):
+        plane_nurbs_section(Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.)), surface)

@@ -82,6 +82,10 @@ def _sub_patches(plane, surface: NurbsSurface) -> list[SubPatch]:
         spans *= sum(1 for k0, k1 in zip(distinct, distinct[1:]) if k1 > low and k0 < high)
     if spans > MAX_BOXES:
         raise PlaneNurbsNotCertified(f"{spans} Bezier sub-patches exceed the box budget of {MAX_BOXES}")
+    # the whole control grid is expanded and refined (also controls outside a narrowed chart range)
+    controls = len(surface.controls) * len(surface.controls[0])
+    if controls > (surface.degree_u + 1) * (surface.degree_v + 1) * MAX_BOXES:
+        raise PlaneNurbsNotCertified(f"{controls} controls exceed the extraction budget of the box budget")
     net = surface.exact_net()
     p, q = surface.degree_u, surface.degree_v
     g = [[n[0] * h[0] + n[1] * h[1] + n[2] * h[2] - d * h[3] for h in row] for row in net]
