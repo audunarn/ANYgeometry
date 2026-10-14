@@ -577,9 +577,13 @@ class PlaneNurbsCurve:
             return 0.0
         # evaluated points are the roundings of exact points (half an ulp per coordinate):
         # the bound is lowered by that so it also holds for them (review B1-P2 exact round 1)
-        magnitude = max(abs(float(value)) for value in x) + float(_sqrt_down(best)) + 1.0
-        rounding = 2 * math.sqrt(3.0) * math.ulp(magnitude)
-        return max(0.0, _float_down(_sqrt_down(best)) - rounding)
+        # capped at 2**1000 (still a lower bound) so huge exact distances convert to floats; the
+        # rounding uses ulp(a + b + c) <= 2 (ulp a + ulp b + ulp c) without forming the float sum
+        root = min(_sqrt_down(best), Fraction(2) ** 1000)
+        low = _float_down(root)
+        largest = max(abs(float(value)) for value in x)
+        rounding = 4 * math.sqrt(3.0) * (math.ulp(largest) + math.ulp(low) + math.ulp(1.0))
+        return max(0.0, low - rounding)
 
     def bounds(self, lower=0.0, upper=1.0):
         lows, highs = [], []

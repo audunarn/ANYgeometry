@@ -359,3 +359,12 @@ def test_huge_plane_vectors_evaluate():
     plane = Plane((0., 0., 0.), (1e100, 0., 0.), (0., 1e100, 0.))
     curve = PlaneNurbsCurve.from_plane(plane, surface, 0)
     assert abs(curve.evaluate(.5)[2]) <= 1e-15
+
+
+def test_distance_bounds_to_targets_near_the_float_limit():
+    from anygeometry.nurbs import NurbsSurface
+    surface = NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.),
+                           tuple(tuple((float(i), float(j), j - .3) for j in range(2)) for i in range(2)))
+    curve = PlaneNurbsCurve.from_plane(z_plane(), surface, 0)
+    bound = curve.distance_lower_bound(0., 1., (1.7e308, 1.7e308, 1.7e308))
+    assert 1e300 <= bound <= 1.7e308 * math.sqrt(3.)
