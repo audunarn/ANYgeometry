@@ -646,3 +646,41 @@ def test_fan_keeps_the_edge_between_two_distinct_vertices():
     while vertex identity kept both vertices): 5 cells and 13 paths (main 12), same area."""
     result = _fan(((2.1e-6, 1.), (.5e-6, 3.), (.9e-6, 1.)), area_tolerance=1e-3)
     assert (len(result.cells), len(result.paths)) == (5, 13)
+
+
+
+def test_traces_may_be_an_iterator():
+    """Review (E1 round 2): the arrangement reads the traces once (the E1 gate inspects them)."""
+    plane = Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.))
+    square = _square_loop([(0., 0.), (4., 0.), (4., 4.), (0., 4.)])
+    trace = ArrangementPath(LinePath((2., 0., 0.), (2., 4., 0.)), owners=(1, 2))
+    result = arrange_material(MaterialDomain(1, plane, (square,)), iter((trace,)), tolerance=1e-6)
+    assert (len(result.cells), len(result.paths)) == (2, 7)
+
+
+@pytest.mark.parametrize("gap,tol", ((1e-110, 1e-120), (1e-180, 1e-200)))
+def test_straight_edges_need_no_float_tangent(gap, tol):
+    """Review (E1 round 2): two vertical cuts ``gap`` apart (gap > tol) make a derived boundary edge
+    whose float tangent norm underflows; straight edges take their direction from the exact
+    stations, so the arrangement is built (3 cells) instead of ZeroDivisionError / a chart refusal."""
+    plane = Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.))
+    square = _square_loop([(-1., -1.), (1., -1.), (1., 1.), (-1., 1.)])
+    traces = tuple(ArrangementPath(LinePath((x, -2., 0.), (x, 2., 0.)), owners=(1, k)) for k, x in enumerate((0., gap)))
+    result = arrange_material(MaterialDomain(1, plane, (square,)), traces, tolerance=tol, area_tolerance=1e-12)
+    assert len(result.cells) == 3
+
+
+def test_corner_cuts_within_tolerance():
+    """Decision changes (Q13/Q-e, E1): a cut passing within tol of a corner contracts into the
+    corner vertex (1 cell, main refused "unresolved closed or degenerate arrangement edge"); a cut
+    longer than tol whose ends both identify to the corner refuses with the S4 message."""
+    plane = Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.))
+    square = _square_loop([(0., 0.), (4., 0.), (4., 4.), (0., 4.)])
+
+    def run(a, b):
+        return arrange_material(MaterialDomain(1, plane, (square,)),
+                                (ArrangementPath(LinePath(a, b), owners=(1, 2)),), tolerance=1e-6)
+    result = run((-.001, .0010008, 0.), (.001, -.0009992, 0.))
+    assert (len(result.cells), len(result.paths), result.area) == (1, 4, 16.)
+    with pytest.raises(GeometryError, match="longer than the tolerance collapses to one vertex"):
+        run((0., 8e-7, 0.), (8e-7, 0., 0.))

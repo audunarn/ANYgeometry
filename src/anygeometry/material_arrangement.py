@@ -947,6 +947,7 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
         if max_predicates is not None and examined > max_predicates:
             raise GeometryError("intersection arrangement predicate budget exhausted")
 
+    traces = tuple(traces)                      # read more than once (E1 gate, clipping)
     boundaries = [path for loop in domain.boundaries for path in loop]
     paths = list(boundaries)
     # Station model (robust-predicate R1b step 2a): on a Plane support every
@@ -1161,6 +1162,7 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
             incidence[start].append(index); incidence[end].append(index)
 
     outgoing = [[] for _ in vertices]
+    chart_exact = ExactPlane.from_plane(domain.support) if exact else None
     for index, ((start, end), path) in enumerate(zip(endpoints_by_edge, edges)):
         for vertex_id, forward in ((start, True), (end, False)):
             end_parameter = 0. if forward else 1.
@@ -1169,6 +1171,16 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
                 # order of the azimuths (counterclockwise in the chart: decreasing u).
                 u = float(domain.uv(path.curve, end_parameter)[0])
                 outgoing[vertex_id].append((.5*math.pi+.25*math.pi*(1-2*u), None, index, forward))
+                continue
+            if index in edge_segments:
+                # A straight edge's chart direction is its exact station difference (non-zero: its
+                # vertices are distinct); its float image only serves the float order at vertices
+                # that also carry a curved edge, and a line has zero curvature.
+                du, dv = chart_exact.uv_direction(tuple(b - a for a, b in zip(*edge_segments[index])))
+                angle = math.atan2(float(dv if forward else -dv), float(du if forward else -du)) % math.tau
+                if min(angle, math.tau-angle) < 64*np.finfo(float).eps:
+                    angle = 0.
+                outgoing[vertex_id].append((angle, 0., index, forward))
                 continue
             tangent = domain.tangent(path.curve, end_parameter)*(1 if forward else -1)
             if np.linalg.norm(tangent) == 0:
