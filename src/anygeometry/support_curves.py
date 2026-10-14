@@ -39,8 +39,6 @@ from .plane_nurbs import PlaneNurbsNotCertified, plane_nurbs_section
 
 _SECTIONS: dict = {}
 _EPS = float(np.finfo(float).eps)
-_TINY = 2.0 ** -1074
-_X_RESOLUTION = 2.0 ** -44                 # certified bracket width of evaluation (fraction of the box)
 
 
 def _plane_record(plane) -> tuple:
@@ -51,8 +49,8 @@ def _plane_record(plane) -> tuple:
 class _Arc:
     box: object
     slicing: int                    # 0: s = u, x = v; 1: s = v, x = u (knot coordinates)
-    s0: float
-    s1: float
+    s0: Fraction                    # exact slicing limits: a root's s on a constant-s edge, else the
+    s1: Fraction                    # midpoint of its isolating interval (the arc's ends ARE the roots)
     first: object                   # Root records at the arc's ends
     second: object
 
@@ -97,8 +95,8 @@ class PlaneNurbsCurve:
 
             def s_of(root):
                 if root.axis == slicing:
-                    return float(root.value)
-                return float((root.lo + root.hi) / 2)
+                    return root.value
+                return (root.lo + root.hi) / 2
 
             arcs.append(_Arc(box, slicing, s_of(roots[first]), s_of(roots[second]), roots[first], roots[second]))
         result = tuple(arcs)
@@ -130,151 +128,81 @@ class PlaneNurbsCurve:
 
     # ---------------------------------------------------------- evaluation
 
-    @staticmethod
-    def _bernstein_rows(box, s, slicing):
-        """Float Bernstein coefficients in x of G(s, .) for each s (vectorised de Casteljau along s).
+    # ---------------------------------------------------------- exact evaluation (owner option a)
 
-        The exact coefficients are scaled by a power of two so the largest has
-        magnitude in [1/2, 1) before rounding (signs unchanged; no underflow of
-        normal-range coefficients; review B1-P2 round 2).
+    @staticmethod
+    def _root_rect(root):
+        if root.axis == 0:
+            return (root.value, root.value), (root.lo, root.hi)
+        return (root.lo, root.hi), (root.value, root.value)
+
+    def _exact_point(self, arc, tau: Fraction):
+        """Exact knot rectangle ``((u_lo, u_hi), (v_lo, v_hi))`` and the rational point of the curve at ``tau``.
+
+        The definition of the curve's points: ``s = s0 + tau (s1 - s0)`` exactly;
+        ``x`` the zero of ``G(s, .)`` in the box, bracketed by exact bisection to
+        ``2**-60`` of the box (its midpoint is the point). At ``tau`` 0 or 1, or
+        where ``s`` lies outside the exact gap (only inside an end root's
+        isolating interval, by construction of ``s0``/``s1``), the end root's
+        rectangle and midpoint; anything else refuses.
         """
-        c = _scaled_float_coefficients(box)                 # (p+1, q+1), [u][v]
-        if slicing == 1:
-            c = c.T                                        # make the first index the slicing coordinate
-        low, high = (box.u_range if slicing == 0 else box.v_range)
-        t = (np.asarray(s, dtype=float) - float(low)) / (float(high) - float(low))
-        work = np.repeat(c[None, :, :], len(t), axis=0)
-        for _ in range(work.shape[1] - 1):
-            work = (1 - t)[:, None, None] * work[:, :-1, :] + t[:, None, None] * work[:, 1:, :]
-        return work[:, 0, :]                               # (n, degree_x + 1)
-
-    @staticmethod
-    def _exact_sign(box, slicing, s: float, tau_x: float) -> int:
-        """Exact sign of the box polynomial at the float point (s, local x fraction ``tau_x``)."""
-        c = box.coefficients
-        a, b = (box.u_range if slicing == 0 else box.v_range)
-        ts = (Fraction(s) - a) / (b - a)
-        tx = Fraction(tau_x)
-        if slicing == 0:
-            column = [_de_casteljau([row[j] for row in c], ts) for j in range(len(c[0]))]
+        if tau == 0:
+            rect = self._root_rect(arc.first)
+        elif tau == 1:
+            rect = self._root_rect(arc.second)
         else:
-            column = [_de_casteljau(list(row), ts) for row in c]
-        value = _de_casteljau(column, tx)
-        return 0 if value == 0 else (1 if value > 0 else -1)
-
-    def _solve_x(self, arc, s):
-        """Certified x(s): returns knot x and a mask of points with no root of G(s, .) in the box.
-
-        Bisection whose every sign is certified: the float value of the box
-        polynomial carries the bound ``gamma * M`` (``M`` the same de Casteljau on
-        the absolute coefficients, ``gamma = 8 (p + q + 4) eps`` covering the
-        float coefficients and the two de Casteljau passes); where the bound does
-        not decide, the sign is computed exactly (review B1-P2: unverified float
-        bisection escaped the exact zero set's bounds). The returned x lies in a
-        certified bracket of the exact root of G(s_float, .) (width ``2**-52`` of the
-        box, or where the float bound stops deciding: refinement ends there). Where G(s, .) has one strict sign at both box
-        sides (a float s just outside the arc's exact gap) the mask is set.
-        """
-        box = arc.box
-        rows = self._bernstein_rows(box, s, arc.slicing)
-        rows_abs = self._bernstein_rows(_absolute_box(box), s, arc.slicing)
-        p, q = len(box.coefficients) - 1, len(box.coefficients[0]) - 1
-        gamma = 8 * (p + q + 4) * _EPS
-        floor = 8 * (p + q + 4) * _TINY                    # absolute rounding of subnormal intermediates
-        degree = rows.shape[1] - 1
-
-        def value(work_rows, tau):
-            work = work_rows.copy()
-            for _ in range(degree):
-                work = (1 - tau)[:, None] * work[:, :-1] + tau[:, None] * work[:, 1:]
-            return work[:, 0]
-
-        def float_signs(tau):
-            values = value(rows, tau)
-            bound = gamma * value(rows_abs, tau) + floor
-            return np.where(values > bound, 1, np.where(values < -bound, -1, 0))
-
-        def exact_signs(tau):
-            result = float_signs(tau)
-            for i in np.nonzero(result == 0)[0]:
-                result[i] = self._exact_sign(box, arc.slicing, float(s[i]), float(tau[i]))
-            return result
-
-        n = len(s)
-        low_sign = exact_signs(np.zeros(n))                # the bracket's ends: certified exactly
-        high_sign = exact_signs(np.ones(n))
-        no_root = (low_sign == high_sign) & (low_sign != 0)
-        lo, hi = np.zeros(n), np.ones(n)
-        exact_low = low_sign == 0
-        exact_high = high_sign == 0
-        active = ~(no_root | exact_low | exact_high)
-        for _ in range(52):
-            if not np.any(active):
-                break
-            middle = 0.5 * (lo + hi)
-            middle_sign = float_signs(middle)
-            # where the float bound cannot decide, the sign is computed exactly while the
-            # bracket is wider than 2**-44 of the box; below that the bracket is kept as is
-            for i in np.nonzero(active & (middle_sign == 0))[0]:
-                if hi[i] - lo[i] > _X_RESOLUTION:
-                    middle_sign[i] = self._exact_sign(box, arc.slicing, float(s[i]), float(middle[i]))
-            hit = active & (middle_sign == 0) & (hi - lo > _X_RESOLUTION)
-            active &= ~((middle_sign == 0) & ~hit)
-            lo = np.where(hit, middle, lo)
-            hi = np.where(hit, middle, hi)
-            active &= ~hit
-            towards_high = active & (middle_sign == low_sign)
-            towards_low = active & (middle_sign != 0) & ~towards_high
-            lo = np.where(towards_high, middle, lo)
-            hi = np.where(towards_low, middle, hi)
-        x_fraction = np.where(exact_low, 0.0, np.where(exact_high, 1.0, 0.5 * (lo + hi)))
-        x_low, x_high = (box.v_range if arc.slicing == 0 else box.u_range)
-        return float(x_low) + x_fraction * (float(x_high) - float(x_low)), no_root
+            s = arc.s0 + tau * (arc.s1 - arc.s0)
+            box = arc.box
+            c = box.coefficients
+            if arc.slicing == 0:
+                a, b = box.u_range
+                column = [_de_casteljau([row[j] for row in c], (s - a) / (b - a)) for j in range(len(c[0]))]
+                x0, x1 = box.v_range
+            else:
+                a, b = box.v_range
+                column = [_de_casteljau(list(row), (s - a) / (b - a)) for row in c]
+                x0, x1 = box.u_range
+            low_value, high_value = _de_casteljau(column, Fraction(0)), _de_casteljau(column, Fraction(1))
+            if low_value != 0 and high_value != 0 and (low_value > 0) == (high_value > 0):
+                root = arc.first if tau < Fraction(1, 2) else arc.second
+                (u_lo, u_hi), (v_lo, v_hi) = self._root_rect(root)
+                low, high = (u_lo, u_hi) if arc.slicing == 0 else (v_lo, v_hi)
+                if not low <= s <= high:
+                    raise PlaneNurbsNotCertified("section point outside its arc's gap and its end root")
+                rect = self._root_rect(root)
+            else:
+                if low_value == 0:
+                    lo = hi = Fraction(0)
+                elif high_value == 0:
+                    lo = hi = Fraction(1)
+                else:
+                    lo, hi = Fraction(0), Fraction(1)
+                    for _ in range(60):
+                        middle = (lo + hi) / 2
+                        value = _de_casteljau(column, middle)
+                        if value == 0:
+                            lo = hi = middle
+                            break
+                        if (value > 0) == (low_value > 0):
+                            lo = middle
+                        else:
+                            hi = middle
+                x_rect = (x0 + lo * (x1 - x0), x0 + hi * (x1 - x0))
+                rect = ((s, s), x_rect) if arc.slicing == 0 else (x_rect, (s, s))
+        (u_lo, u_hi), (v_lo, v_hi) = rect
+        return rect, ((u_lo + u_hi) / 2, (v_lo + v_hi) / 2)
 
     def _knot_points(self, t):
+        """Knot coordinates (floats) of the curve points: the rounded exact points."""
         arcs = self._arcs()
         path_t = self._path_parameter(t).ravel()
         index, tau, _count = self._locate(path_t)
         u = np.empty(len(path_t))
         v = np.empty(len(path_t))
-        for k in np.unique(index):
-            mask = index == k
-            arc = arcs[k]
-            arc_tau = tau[mask]
-            s = arc.s0 + arc_tau * (arc.s1 - arc.s0)
-            x, no_root = self._solve_x(arc, s)
-            if np.any(no_root):
-                self._check_fallback(arc, s[no_root], arc_tau[no_root])
-            # the arc's ends are its roots; a float s outside the exact gap takes the nearest end root
-            for end_tau, root, selector in ((0.0, arc.first, arc_tau < .5), (1.0, arc.second, arc_tau >= .5)):
-                use = (arc_tau == end_tau) | (no_root & selector)
-                if np.any(use):
-                    point = tuple(float(value) for value in root.point())
-                    s[use] = point[arc.slicing]
-                    x[use] = point[1 - arc.slicing]
-            if arc.slicing == 0:
-                u[mask], v[mask] = s, x
-            else:
-                u[mask], v[mask] = x, s
+        for i in range(len(path_t)):
+            _rect, (pu, pv) = self._exact_point(arcs[int(index[i])], Fraction(float(tau[i])))
+            u[i], v[i] = float(pu), float(pv)
         return u, v
-
-    @staticmethod
-    def _fallback_window(arc, root):
-        """The slicing interval within which a float s may stand for ``root``: its s-projection widened by 4 ulp."""
-        if root.axis == arc.slicing:
-            low = high = root.value
-        else:
-            low, high = root.lo, root.hi
-        widen = Fraction(4 * math.ulp(max(abs(float(low)), abs(float(high)), 1.0)))
-        return low - widen, high + widen
-
-    def _check_fallback(self, arc, s_values, taus):
-        """A float s without a root of G(s, .) in the box must lie by its end root (rounding), else refuse."""
-        for s, tau in zip(s_values, taus):
-            root = arc.first if tau < .5 else arc.second
-            low, high = self._fallback_window(arc, root)
-            if not low <= Fraction(float(s)) <= high:
-                raise PlaneNurbsNotCertified("section arc chart is degenerate in floats (no root away from its ends)")
 
     def chart(self, parameters) -> np.ndarray:
         u, v = self._knot_points(parameters)
@@ -300,7 +228,7 @@ class PlaneNurbsCurve:
         a, b = self.domain
         for i in range(len(t)):
             arc = arcs[index[i]]
-            ds = (arc.s1 - arc.s0) * count * (b - a)
+            ds = float(arc.s1 - arc.s0) * count * (b - a)
             g_s, g_x = self._partials(arc, u[i], v[i])
             dx = -g_s / g_x * ds if g_x != 0 else 0.0
             du, dv = (ds, dx) if arc.slicing == 0 else (dx, ds)
@@ -327,7 +255,7 @@ class PlaneNurbsCurve:
     @staticmethod
     def _partials(arc, u, v):
         """Float partial derivatives (G_s, G_x) of the box polynomial at knot point (u, v)."""
-        c = np.asarray([[float(value) for value in row] for row in arc.box.coefficients])
+        c = _scaled_float_coefficients(arc.box)            # power-of-two scaled: -G_s / G_x is unchanged
         (u0, u1), (v0, v1) = (tuple(map(float, item)) for item in (arc.box.u_range, arc.box.v_range))
         a, b = (u - u0) / (u1 - u0), (v - v0) / (v1 - v0)
         p, q = c.shape[0] - 1, c.shape[1] - 1
@@ -344,64 +272,12 @@ class PlaneNurbsCurve:
     # ---------------------------------------------------------- certificates and bounds
 
     def chart_enclosure(self, parameter) -> tuple:
-        """Exact knot rectangle ``((u_lo, u_hi), (v_lo, v_hi))`` containing the curve point (Fractions).
-
-        At an arc end, or where the float slicing coordinate falls outside the
-        arc's exact gap (no root of ``G(s, .)`` in the box), the end root's
-        certified rectangle; otherwise ``s`` exact and ``x`` bracketed by exact
-        bisection (a sign change is established first; review B1-P2).
-        """
+        """Exact knot rectangle ``((u_lo, u_hi), (v_lo, v_hi))`` containing the curve point (``_exact_point``)."""
         arcs = self._arcs()
         path_t = float(self._path_parameter(np.array([float(parameter)]))[0])
         index, tau, _count = self._locate(np.array([path_t]))
-        arc = arcs[int(index[0])]
-        tau = float(tau[0])
-
-        def root_rect(root):
-            if root.axis == 0:
-                return (root.value, root.value), (root.lo, root.hi)
-            return (root.lo, root.hi), (root.value, root.value)
-
-        if tau == 0.0:
-            return root_rect(arc.first)
-        if tau == 1.0:
-            return root_rect(arc.second)
-        s = Fraction(float(arc.s0 + tau * (arc.s1 - arc.s0)))
-        box = arc.box
-        c = box.coefficients
-        if arc.slicing == 0:
-            a, b = box.u_range
-            column = [_de_casteljau([row[j] for row in c], (s - a) / (b - a)) for j in range(len(c[0]))]
-            x0, x1 = box.v_range
-        else:
-            a, b = box.v_range
-            column = [_de_casteljau(list(row), (s - a) / (b - a)) for row in c]
-            x0, x1 = box.u_range
-        low_value, high_value = _de_casteljau(column, Fraction(0)), _de_casteljau(column, Fraction(1))
-        if low_value != 0 and high_value != 0 and (low_value > 0) == (high_value > 0):
-            root = arc.first if tau < .5 else arc.second
-            window = self._fallback_window(arc, root)
-            if not window[0] <= s <= window[1]:
-                raise PlaneNurbsNotCertified("section arc chart is degenerate in floats (no root away from its ends)")
-            return root_rect(root)
-        if low_value == 0:
-            lo = hi = Fraction(0)
-        elif high_value == 0:
-            lo = hi = Fraction(1)
-        else:
-            lo, hi = Fraction(0), Fraction(1)
-            for _ in range(60):
-                middle = (lo + hi) / 2
-                value = _de_casteljau(column, middle)
-                if value == 0:
-                    lo = hi = middle
-                    break
-                if (value > 0) == (low_value > 0):
-                    lo = middle
-                else:
-                    hi = middle
-        x_rect = (x0 + lo * (x1 - x0), x0 + hi * (x1 - x0))
-        return ((s, s), x_rect) if arc.slicing == 0 else (x_rect, (s, s))
+        rect, _point = self._exact_point(arcs[int(index[0])], Fraction(float(tau[0])))
+        return rect
 
     def _chart_box_enclosure(self, s_range, x_range, slicing):
         from .surface_capabilities import capabilities
@@ -409,6 +285,10 @@ class PlaneNurbsCurve:
         u_range, v_range = (s_range, x_range) if slicing == 0 else (x_range, s_range)
         chart_u = sorted(((u - r0) / (r1 - r0)) for u in u_range)
         chart_v = sorted(((v - q0) / (q1 - q0)) for v in v_range)
+        # evaluated chart points are float conversions of exact knot points (a few ulps of the chart)
+        slack = Fraction(8 * _EPS)
+        chart_u = [chart_u[0] - slack, chart_u[1] + slack]
+        chart_v = [chart_v[0] - slack, chart_v[1] + slack]
         box = ((max(0.0, _float_down(chart_u[0])), min(1.0, _float_up(chart_u[1]))),
                (max(0.0, _float_down(chart_v[0])), min(1.0, _float_up(chart_v[1]))))
         return capabilities(self.surface).enclosure(box)
@@ -472,6 +352,11 @@ class PlaneNurbsCurve:
         high = extreme(False)
         return x0 + low * (x1 - x0), x0 + high * (x1 - x0)
 
+    def _ordered_root_rect(self, arc, root):
+        """An end root's rectangle as ((s_lo, s_hi), (x_lo, x_hi)) in the arc's slicing order."""
+        (u_lo, u_hi), (v_lo, v_hi) = self._root_rect(root)
+        return ((u_lo, u_hi), (v_lo, v_hi)) if arc.slicing == 0 else ((v_lo, v_hi), (u_lo, u_hi))
+
     def _arc_rects(self, lower, upper):
         """Per overlapping arc: ``(arc, (s_low, s_high), (x_low, x_high))`` exact knot rectangles containing the curve."""
         arcs = self._arcs()
@@ -482,21 +367,32 @@ class PlaneNurbsCurve:
             t0, t1 = k / count, (k + 1) / count
             if t1 < a or t0 > b:
                 continue
-            tau0, tau1 = max(0.0, (a - t0) * count), min(1.0, (b - t0) * count)
+            tau0 = Fraction(max(0.0, (a - t0) * count))
+            tau1 = Fraction(min(1.0, (b - t0) * count))
             s_values = sorted((arc.s0 + tau0 * (arc.s1 - arc.s0), arc.s0 + tau1 * (arc.s1 - arc.s0)))
             box_s = (arc.box.u_range if arc.slicing == 0 else arc.box.v_range)
-            slack = Fraction(4 * _EPS * max(abs(float(box_s[0])), abs(float(box_s[1])), 1.0))
-            s_low = max(Fraction(box_s[0]), Fraction(s_values[0]) - slack)
-            s_high = min(Fraction(box_s[1]), Fraction(s_values[1]) + slack)
+            # tau is computed in floats from the parameter: a few ulps of slack; the end roots' intervals
+            # (points outside the gap are end roots) are added below
+            slack = Fraction(16 * _EPS) * abs(arc.s1 - arc.s0)
+            s_low = max(Fraction(box_s[0]), s_values[0] - slack)
+            s_high = min(Fraction(box_s[1]), s_values[1] + slack)
             x_range = self._tight_x(arc, s_low, s_high) if s_high > s_low else None
             box_x = (arc.box.v_range if arc.slicing == 0 else arc.box.u_range)
             if x_range is None:
                 x_range = box_x
             else:
-                # evaluated points sit within the evaluation bracket of an exact root (2**-44 of the box)
-                widen = Fraction(_X_RESOLUTION) * (box_x[1] - box_x[0])
+                # evaluated points are midpoints of 2**-60 brackets of exact roots
+                widen = Fraction(1, 2 ** 59) * (box_x[1] - box_x[0])
                 x_range = (max(box_x[0], x_range[0] - widen), min(box_x[1], x_range[1] + widen))
             rects.append((arc, (s_low, s_high), x_range))
+            # points that fall back to an end root (s outside the exact gap) sit in its rectangle; that
+            # happens only within the root's isolating width of the arc end (in tau)
+            span = abs(arc.s1 - arc.s0)
+            for root, near in ((arc.first, tau0), (arc.second, 1 - tau1)):
+                (s_lo, s_hi), _x = self._ordered_root_rect(arc, root)
+                window = (s_hi - s_lo) / span + Fraction(16 * _EPS) if span else Fraction(1)
+                if near <= window:
+                    rects.append((arc, *self._ordered_root_rect(arc, root)))
         return rects
 
     def distance_lower_bound(self, lower, upper, target) -> float:

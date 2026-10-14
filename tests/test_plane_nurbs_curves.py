@@ -40,7 +40,7 @@ def ellipse_length(theta0, theta1):
 
 def test_points_lie_on_both_exact_surfaces():
     curve = PlaneNurbsCurve.from_plane(OBLIQUE, cylinder(), 0)
-    points = curve.evaluate(np.linspace(0., 1., 100001))
+    points = curve.evaluate(np.linspace(0., 1., 10001))   # exact evaluation (owner option a): ~0.5 ms per point
     normal = np.cross(OBLIQUE.u_vector, OBLIQUE.v_vector)
     extent = 2 * RADIUS + HEIGHT
     assert np.abs((points - OBLIQUE.origin) @ normal).max() <= 1e-12 * extent
@@ -76,10 +76,10 @@ def test_bounds_distance_bounds_and_projection():
     for _ in range(20):
         a, b = np.sort(rng.uniform(0., 1., 2))
         low, high = curve.bounds(a, b)
-        samples = curve.evaluate(np.linspace(a, b, 401))
+        samples = curve.evaluate(np.linspace(a, b, 101))
         assert np.all(samples >= low) and np.all(samples <= high)
         assert curve.distance_lower_bound(a, b, target) <= np.linalg.norm(samples - target, axis=1).min()
-    dense = curve.evaluate(np.linspace(0., 1., 40001))
+    dense = curve.evaluate(np.linspace(0., 1., 4001))
     for point in ((3., 2., 1.), (0., 0., 1.5), (-1., 3., 2.5)):
         _closest, _parameter, distance = model.closest_edge_point(edge, point)
         reference = np.linalg.norm(dense - np.asarray(point), axis=1).min()
@@ -185,3 +185,61 @@ def test_the_slicing_coordinate_is_the_long_one():
     assert abs(curve.evaluate(.37)[1] - .37) <= 1e-12
     model, edge = edge_model(curve)
     assert abs(model.edge_length(edge) - 1.) <= 1e-12
+
+
+# ------------------------------------------------------------------ review B1-P2 round 3 (exact evaluation)
+
+
+def z_plane():
+    return Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.))
+
+
+def test_wide_knot_ranges_evaluate_exactly():
+    from anygeometry.nurbs import NurbsSurface
+    e = 2. ** -40
+    surface = NurbsSurface(2, 1, (-1., -1., -1., 2., 2., 2.), (0., 0., 1., 1.),
+                           tuple(((i / 2, 0., z - e / 2), (i / 2, 1., z + e / 2)) for i, z in enumerate((1., -1., 0.))))
+    curve = PlaneNurbsCurve.from_plane(z_plane(), surface, 0)
+    point = curve.evaluate(.37)
+    low, high = curve.bounds(.37 - 1e-8, .37 + 1e-8)
+    assert np.all(point >= low) and np.all(point <= high)
+    model, edge = edge_model(curve)
+    model.split_edge(edge, .37)
+
+
+def test_a_nearly_vertical_arc_does_not_collapse_onto_its_ends():
+    from anygeometry.nurbs import NurbsSurface
+    surface = NurbsSurface(2, 1, (0., 0., 0., 1., 1., 1.), (0., 0., 1., 1.),
+                           tuple(tuple((i / 2, float(j), z) for j in range(2)) for i, z in enumerate((1., -2., 4.))))
+    plane = Plane((0., 0., .5 * 2. ** -110), (1., 0., 0.), (0., 1., -2. ** -110))
+    curve = PlaneNurbsCurve.from_plane(plane, surface, 0)
+    point = curve.evaluate(.37)
+    assert .3 < point[1] < .5                                  # not an end (y = 0)
+    (u_lo, u_hi), (v_lo, v_hi) = curve.chart_enclosure(.37)
+    assert v_lo <= Fraction(point[1]) <= v_hi or abs(float(v_lo) - point[1]) <= 1e-15
+
+
+def test_large_weight_ratios_keep_split_vertices_inside_end_boxes():
+    from anygeometry.nurbs import NurbsSurface
+    weights, offset, e = (1., 1e6), 1.3e-8, 2. ** -20
+    surface = NurbsSurface(2, 1, (0., 0., 0., 1., 1., 1.), (0., 0., 1., 1.),
+                           tuple(tuple((i / 2, float(j), (z + e * (j - offset)) / weights[j]) for j in range(2))
+                                 for i, z in enumerate((1., -1., 1.))),
+                           tuple(weights for _ in range(3)))
+    curve = PlaneNurbsCurve.from_plane(z_plane(), surface, 0)
+    point = curve.evaluate(.5)
+    low, high = curve.subcurve(0., .5).end_box(1)
+    assert np.all(point >= low) and np.all(point <= high)
+    model, edge = edge_model(curve)
+    model.split_edge(edge, .5)
+
+
+def test_tiny_uniform_weights_give_the_unit_weight_length():
+    from anygeometry.nurbs import NurbsSurface
+    controls = tuple(tuple((float(i), float(j), i + .3 * j - .2) for j in range(2)) for i in range(2))
+    lengths = []
+    for w in (1., 2. ** -1070):
+        surface = NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.), controls, ((w, w), (w, w)))
+        model, edge = edge_model(PlaneNurbsCurve.from_plane(z_plane(), surface, 0))
+        lengths.append(model.edge_length(edge))
+    assert abs(lengths[0] - lengths[1]) <= 1e-12

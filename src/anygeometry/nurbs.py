@@ -1262,8 +1262,9 @@ def _exact_refine(p: int, knots: list, points: list, s0: Fraction, s1: Fraction)
     """Insert the interval ends to multiplicity ``p``; return the knots, points and the active indices.
 
     Active: the basis functions not identically zero on the interval (open
-    interval; for ``s0 == s1`` those not zero at the point, a superset). Their
-    controls bound the curve on the interval whatever the multiplicities.
+    interval). For ``s0 == s1`` the point is inserted to multiplicity ``p``, so
+    exactly one control interpolates it (the curve point itself, B1-P2: the
+    superset of neighbours made point hulls span whole spans).
     """
     for value in sorted({s0, s1}):
         if knots[p] < value < knots[len(points)]:
@@ -1273,8 +1274,13 @@ def _exact_refine(p: int, knots: list, points: list, s0: Fraction, s1: Fraction)
     count = len(points)
     if s0 < s1:
         active = [i for i in range(count) if knots[i] < s1 and knots[i + p + 1] > s0]
+    elif s0 <= knots[p]:
+        active = [0]
+    elif s0 >= knots[count]:
+        active = [count - 1]
     else:
-        active = [i for i in range(count) if knots[i] <= s0 <= knots[i + p + 1]]
+        last = max(i for i, knot in enumerate(knots) if knot == s0)
+        active = [last - p]
     return knots, points, active
 
 
