@@ -180,14 +180,24 @@ def _sqrt_bounds(value: Fraction) -> tuple[Fraction, Fraction]:
 
 
 def _endpoint(value):
-    """A box end kept exact: Fractions and integers as rationals, floats (incl. +-inf) as doubles."""
-    if type(value) is Fraction:
-        return value
-    if isinstance(value, bool):
-        raise GeometryError("chart box bounds must be numbers")
+    """A box end kept exact, or refused (review A1a rounds 2-3).
+
+    Rationals (``Fraction`` and subclasses) and integers (Python, NumPy; not
+    booleans) become exact ``Fraction``s; real floats (Python, NumPy of any
+    width) become exact ``Fraction``s when finite and stay ``+-inf``/NaN
+    otherwise. Everything else (``Decimal``, strings, complex, booleans) is refused.
+    """
+    if isinstance(value, Fraction):
+        return Fraction(value.numerator, value.denominator)
+    if isinstance(value, (bool, np.bool_)):
+        raise GeometryError("chart box bounds must be real numbers, not booleans")
     if isinstance(value, (int, np.integer)):
         return Fraction(int(value))
-    return float(value)
+    if isinstance(value, (float, np.floating)):
+        if math.isfinite(value):
+            return Fraction(*value.as_integer_ratio())
+        return float(value)
+    raise GeometryError(f"chart box bounds must be real numbers, not {type(value).__name__}")
 
 
 def _box_interval(low, high) -> tuple:
