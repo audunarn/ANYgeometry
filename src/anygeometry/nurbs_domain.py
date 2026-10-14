@@ -189,30 +189,75 @@ def level_roots(pcurve: NurbsCurve, axis: int, value: float, chart_tolerance: fl
         if abs(float(pcurve.evaluate(t)[axis]) - value) <= chart_tolerance:
             found.append(t)
     found = sorted(min(1.0, max(0.0, t)) for t in found)
-    # Group roots between which the coordinate never leaves the level band
-    # (a tangential touch or a run along the level): a group narrower than
-    # 1e-6 is one root (an exact end preferred), a wider one is a run on the
-    # level and reports its two ends.
-    band = max(chart_tolerance, 64 * _EPS)
+    return tuple(_group_roots(pcurve, axis, value, found)[0])
+
+
+def _group_roots(pcurve: NurbsCurve, axis: int, value: float, found: list[float]):
+    """Merge tangential touches and runs; keep every genuine crossing.
+
+    Two consecutive roots belong together only when the coordinate between
+    them is exactly on the level (a run) or stays on the same strict side as
+    just outside both (a touch the subdivision split into a band). A genuine
+    pair of crossings (the coordinate changes side between them) is kept, however
+    close. Returns ``(roots, runs)``: a touch is one root, a run its two ends.
+    """
+
+    def side(t):
+        difference = float(pcurve.evaluate(min(1.0, max(0.0, t)))[axis]) - value
+        return 0 if difference == 0.0 else (1 if difference > 0 else -1)
+
     groups: list[list[float]] = []
     for t in found:
-        if groups and (t - groups[-1][-1] <= 128 * _EPS or abs(
-                float(pcurve.evaluate(0.5 * (t + groups[-1][-1]))[axis]) - value) <= band):
-            groups[-1].append(t)
-        else:
-            groups.append([t])
-    unique: list[float] = []
+        if groups:
+            previous = groups[-1][-1]
+            if t - previous <= 128 * _EPS:
+                groups[-1].append(t)
+                continue
+            middle = side(0.5 * (t + previous))
+            reach = max(t - previous, 1e-9)              # probe outside at the pair's own scale
+            outside_left = side(groups[-1][0] - reach) if groups[-1][0] > 0.0 else middle
+            outside_right = side(t + reach) if t < 1.0 else middle
+            if middle == 0 or (middle == outside_left == outside_right and t - previous <= 1e-6):
+                groups[-1].append(t)
+                continue
+        groups.append([t])
+    roots: list[float] = []
+    runs: list[tuple[float, float]] = []
     for group in groups:
         ends = [t for t in group if t in (0.0, 1.0)]
-        if group[-1] - group[0] <= 1e-6:
-            unique.append(ends[0] if ends else 0.5 * (group[0] + group[-1]))
+        on_level = group[-1] - group[0] > 1e-6 and side(0.5 * (group[0] + group[-1])) == 0
+        if on_level:
+            roots.extend((group[0], group[-1]))
+            runs.append((group[0], group[-1]))
         else:
-            unique.extend((group[0], group[-1]))
-    return tuple(unique)
+            roots.append(ends[0] if ends else 0.5 * (group[0] + group[-1]))
+    return roots, runs
+
+
+def level_runs(pcurve: NurbsCurve, axis: int, value: float, chart_tolerance: float) -> list[tuple[float, float]]:
+    """Parameter intervals on which the pcurve runs along the level (exactly, up to rounding of the subdivision)."""
+    roots = level_roots(pcurve, axis, value, chart_tolerance)
+    if roots is None:
+        return [(0.0, 1.0)]
+    return [(a, b) for a, b in zip(roots, roots[1:])
+            if float(pcurve.evaluate(0.5 * (a + b))[axis]) == value]
 
 
 def horizontal_roots(domain, curve, value, tolerance):
     return level_roots(pcurve_of(domain, curve), 1, float(value), _chart_tolerance(domain, tolerance))
+
+
+def on_level_run(domain, loop, uv_point, tolerance) -> bool:
+    """Whether ``uv_point`` lies on a part of a boundary pcurve that runs along its ``v`` level."""
+    chart_tolerance = _chart_tolerance(domain, tolerance)
+    for path in loop:
+        pcurve = pcurve_of(domain, path.curve)
+        for a, b in level_runs(pcurve, 1, float(uv_point[1]), chart_tolerance):
+            ends = pcurve.evaluate(np.array([a, b]))[:, 0]
+            low, high = min(ends) - chart_tolerance, max(ends) + chart_tolerance
+            if low <= float(uv_point[0]) <= high:
+                return True
+    return False
 
 
 def on_horizontal(domain, curve, uv_point, tolerance) -> bool:

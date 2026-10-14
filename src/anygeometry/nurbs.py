@@ -262,15 +262,19 @@ class NurbsCurve:
             return
         knots = np.asarray(self.knots, dtype=float)
         controls = np.asarray(self.controls, dtype=float)
-        weights = None if self.weights is None else np.asarray(self.weights, dtype=float)
+        weights = _scaled_weights(self.weights)          # power-of-two scaled: no under/overflow in insertion
         times = p - int(np.count_nonzero(knots == top))
         if times > 0:
             knots, controls, weights = _reference.insert_knot(p, knots, controls, weights, top, times)
         last = int(np.nonzero(knots == top)[0][-1])
         left_knots = np.concatenate((knots[: last + 1], [top]))
         left_count = len(left_knots) - p - 1
-        left = _call(backend.bspline_curve, p, tuple(left_knots), tuple(map(tuple, controls[:left_count])),
-                     None if weights is None else tuple(weights[:left_count]), np.full(len(rows), top), order)
+        # The reference kernel directly: inserted controls are intermediate data,
+        # not a definition (the coordinate-range validation does not apply).
+        left = np.empty((len(rows), order + 1, self.dimension))
+        _reference.bspline_evaluate(p, left_knots, controls[:left_count],
+                                    np.empty(0) if weights is None else np.asarray(weights[:left_count]),
+                                    np.full(len(rows), top), order, left)
         values[rows, 1:, :] = left[:, 1:, :]
 
     def evaluate(self, parameters) -> np.ndarray:

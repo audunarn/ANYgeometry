@@ -255,3 +255,43 @@ def test_trimmed_curve_end_derivatives_are_inward():
     on_surface = CurveOnSurface(affine, curve)
     np.testing.assert_allclose(on_surface.derivative(1.), (.3, .1, 0.), atol=1e-15)
     np.testing.assert_allclose(on_surface.second_derivative(1.), (0., 0., 0.), atol=1e-15)
+
+
+# ------------------------------------------------------------------ review A1e round 2
+
+
+def test_close_genuine_crossings_are_kept_and_containment_holds():
+    dip = NurbsCurve(2, (0., 0., 0., 1., 1., 1.), ((.1, .75 - 1e-14), (.5, .25 - 1e-14), (.9, .75 - 1e-14)))
+    roots = nurbs_domain.level_roots(dip, 1, .5, 1e-17)
+    assert len(roots) == 2 and roots[1] - roots[0] < 1e-6
+    lifted = NurbsCurve(2, (0., 0., 0., 1., 1., 1.), ((.1, .75 + 1e-14), (.5, .25 + 1e-14), (.9, .75 + 1e-14)))
+    assert nurbs_domain.level_roots(lifted, 1, .5, 1e-17) == ()
+    stretched = NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.),
+                             (((0., 0., 0.), (0., 1e8, 0.)), ((1., 0., 0.), (1., 1e8, 0.))))
+    chord = NurbsCurve(1, (0., 0., 1., 1.), ((.9, .75 - 1e-14), (.1, .75 - 1e-14)))
+    loop = (ArrangementPath(CurveOnSurface(stretched, dip)), ArrangementPath(CurveOnSurface(stretched, chord)))
+    assert MaterialDomain(0, stretched, (loop,)).contains_loop(loop, np.array([.5, .5]), 1e-9)
+
+
+def test_points_on_a_run_along_the_ray_are_boundary():
+    affine = NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.),
+                          (((0., 0., 0.), (0., 1., 0.)), ((1., 0., 0.), (1., 1., 0.))))
+    run = NurbsCurve(1, (0., 0., .5, 1., 1.), ((.1, .5), (.5, .5), (.9, .9)))
+    loop = (ArrangementPath(CurveOnSurface(affine, run)), segment(affine, (.9, .9), (.1, .9)),
+            segment(affine, (.1, .9), (.1, .5)))
+    domain = MaterialDomain(0, affine, (loop,))
+    assert domain.contains_loop(loop, np.array([.3, .5]), 1e-9, boundary=False) is False
+    assert domain.contains_loop(loop, np.array([.3, .5]), 1e-9) is True
+    assert domain.contains_loop(loop, np.array([.3, .6]), 1e-9) and not domain.contains_loop(loop, np.array([.3, .45]), 1e-9)
+
+
+def test_inward_end_derivatives_at_extreme_weights_and_tiny_coordinates():
+    tiny_weights = NurbsCurve(2, (0., 0., 0., .5, 1., 1., 1.), ((0., 0.), (1e-100, 0.), (2e-100, 0.), (3e-100, 0.)),
+                              (1e-300,) * 4, (0., .5))
+    values = tiny_weights.derivatives(1., 2)
+    np.testing.assert_allclose(values[1], (1e-100, 0.), rtol=1e-12)
+    np.testing.assert_allclose(values[2], (-1e-100, 0.), rtol=1e-12)
+    a = 2. ** -499
+    small = NurbsCurve(2, (0., 0., 0., .5, 1., 1., 1.), ((0., a), (1., a), (2., -a * (1 - 2. ** -52)), (3., a)),
+                       domain=(0., .5))
+    assert np.all(np.isfinite(small.derivatives(1., 2)))
