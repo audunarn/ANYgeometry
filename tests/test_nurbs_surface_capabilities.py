@@ -129,8 +129,11 @@ def test_bilinear_patch_is_exact():
             assert surface.exact_point(u, v) == expected
     enclosure = capabilities(surface).enclosure(((0., 1.), (0., 1.)))
     flat = [point for row in surface.controls for point in row]
-    assert enclosure.lower == tuple(min(p[k] for p in flat) for k in range(3))
-    assert enclosure.upper == tuple(max(p[k] for p in flat) for k in range(3))
+    corner_low = np.array([min(p[k] for p in flat) for k in range(3)])
+    corner_high = np.array([max(p[k] for p in flat) for k in range(3)])
+    margin = 16 * 4 * np.finfo(float).eps * 3. * 2                    # float-evaluation margin (and outward steps)
+    assert np.all(np.asarray(enclosure.lower) <= corner_low) and np.all(np.asarray(enclosure.lower) >= corner_low - margin)
+    assert np.all(np.asarray(enclosure.upper) >= corner_high) and np.all(np.asarray(enclosure.upper) <= corner_high + margin)
 
 
 def test_iso_curves_follow_the_surface():
@@ -204,3 +207,55 @@ def test_transform_and_refusals():
         capability.enclosure(((-.1, .5), (0., 1.)))
     with pytest.raises(GeometryError):
         capability.jacobian_bounds(((0., 1.), (0., 1.5)))
+
+
+def far_patch():
+    return NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.),
+                        tuple(tuple((float(i), float(j), 1e100) for j in range(2)) for i in range(2)),
+                        ((1., 2.), (3., 4.)))
+
+
+def test_derivatives_are_translation_invariant():
+    """Review A3a blocking: a translated patch has the same (here exactly zero z) derivatives."""
+    surface = far_patch()
+    uv = np.random.default_rng(12).uniform(0., 1., (500, 2))
+    s_u, s_v = surface.derivatives_many(uv)
+    assert np.all(s_u[:, 2] == 0.) and np.all(s_v[:, 2] == 0.)
+    near = NurbsSurface(1, 1, surface.knots_u, surface.knots_v,
+                        tuple(tuple((p[0], p[1], 0.) for p in row) for row in surface.controls), surface.weights)
+    n_u, n_v = near.derivatives_many(uv)
+    np.testing.assert_allclose(s_u[:, :2], n_u[:, :2], rtol=1e-14, atol=1e-14)
+    np.testing.assert_allclose(s_v[:, :2], n_v[:, :2], rtol=1e-14, atol=1e-14)
+    bound = capabilities(surface).jacobian_bounds(((0., 1.), (0., 1.))).sigma_max
+    sigma = np.linalg.svd(np.stack((s_u, s_v), axis=2), compute_uv=False)[:, 0]
+    assert np.all(sigma <= bound)
+
+
+def test_enclosures_contain_float_evaluations_of_far_patches():
+    surface = far_patch()
+    capability = capabilities(surface)
+    rng = np.random.default_rng(13)
+    for box in random_boxes(rng, 30):
+        enclosure = capability.enclosure(box)
+        points = capability.evaluate(samples_in(rng, box, 500))
+        assert np.all(points >= np.asarray(enclosure.lower)) and np.all(points <= np.asarray(enclosure.upper))
+
+
+def test_iso_curves_below_the_curve_coordinate_range_are_refused_clearly():
+    tiny = NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.),
+                        tuple(tuple(((2 * i - 1) * 2. ** -500, float(j), 0.) for j in range(2)) for i in range(2)))
+    with pytest.raises(GeometryError, match="coordinate range"):
+        tiny.iso_curve("u", .75)
+    assert tiny.iso_curve("u", 1.).evaluate(.5)[0] == 2. ** -500
+
+
+def test_box_results_are_shared_between_enclosure_and_jacobian():
+    import time
+    capability = capabilities(rational_patch())
+    box = ((.2, .3), (.4, .5))
+    start = time.perf_counter()
+    capability.enclosure(box)
+    first = time.perf_counter() - start
+    start = time.perf_counter()
+    capability.jacobian_bounds(box)
+    assert time.perf_counter() - start <= max(first / 5, 1e-3)

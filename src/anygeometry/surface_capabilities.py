@@ -162,6 +162,22 @@ def _up(value: Fraction) -> float:
     return math.nextafter(rounded, math.inf) if Fraction(rounded) < value else rounded
 
 
+_NETS: dict = {}
+
+
+def _nurbs_net(surface: NurbsSurface):
+    """Exact homogeneous net per NURBS definition (hashable by value; bounded memo)."""
+    with _LOCK:
+        net = _NETS.get(surface)
+    if net is None:
+        net = surface.exact_net()
+        with _LOCK:
+            if len(_NETS) >= 64:
+                _NETS.clear()
+            _NETS[surface] = net
+    return net
+
+
 def _sqrt_bounds(value: Fraction) -> tuple[Fraction, Fraction]:
     """Exact rational bounds ``lower <= sqrt(value) <= upper`` with relative width below ``2**-60``.
 
@@ -283,12 +299,17 @@ def _generic_capabilities(surface, kind: SurfaceKind, *, periodic_u=None, is_exa
 
 def _nurbs_capabilities(surface: NurbsSurface) -> SurfaceCapabilities:
     """NURBS: enclosure and Jacobian bound of a chart box from the exact sub-patch net (A3a)."""
-    net = []                                         # exact homogeneous net, built on first use
+    scale = np.max(np.abs(np.asarray(surface.controls, dtype=float)), axis=(0, 1))
+    margin = 16 * (surface.degree_u + surface.degree_v + 2) * np.finfo(float).eps * scale
+    memo: dict = {}
 
-    def exact_net():
-        if not net:
-            net.append(surface.exact_net())
-        return net[0]
+    def bounds(box):
+        key = tuple(tuple(_endpoint(value) for value in interval) for interval in box)
+        if key not in memo:
+            if len(memo) >= 1024:
+                memo.clear()
+            memo[key] = surface.patch_bounds(box, _nurbs_net(surface))
+        return memo[key]
 
     def evaluate(uv):
         return surface.evaluate_many(_uv_array(uv))
@@ -302,11 +323,15 @@ def _nurbs_capabilities(surface: NurbsSurface) -> SurfaceCapabilities:
         return _nurbs_invert_local(surface, _points_array(points), initial, tolerance)
 
     def enclosure(box):
-        lower, upper, _ = surface.patch_bounds(box, exact_net())
-        return Enclosure(tuple(_down(value) for value in lower), tuple(_up(value) for value in upper))
+        # The exact sub-patch hull, widened by 16 (p + q + 2) eps of the control
+        # magnitude so the engine's float evaluations (which round) lie inside too.
+        lower, upper, _ = bounds(box)
+        with np.errstate(over="ignore"):
+            return Enclosure(tuple(float(np.nextafter(_down(value) - m, -np.inf)) for value, m in zip(lower, margin)),
+                             tuple(float(np.nextafter(_up(value) + m, np.inf)) for value, m in zip(upper, margin)))
 
     def jacobian_bounds(box):
-        _, _, sigma2 = surface.patch_bounds(box, exact_net())
+        _, _, sigma2 = bounds(box)                     # of the exact surface
         return JacobianBounds(_up(_sqrt_bounds(sigma2)[1]), 0.0)
 
     return SurfaceCapabilities(

@@ -455,8 +455,10 @@ class NurbsSurface:
     def derivatives_many(self, uv) -> tuple[np.ndarray, np.ndarray]:
         """First chart derivatives ``(S_u, S_v)`` for chart points of shape ``(n, 2)`` in [0, 1]^2.
 
-        ``S_u = sum N_i' M_j w_ij (P_ij - S) / w`` (and likewise ``S_v``): differences
-        to the point itself, so a constant row gives an exact zero derivative.
+        ``S_u = sum N_i' M_j w_ij (P_ij - S) / w`` (and likewise ``S_v``) in a frame
+        anchored at the first active control: ``P_ij - S = D_ij - E`` with
+        ``D_ij = P_ij - P_anchor`` and ``E = sum N M w D / w``, so a translated
+        surface has the same derivatives and a constant row gives exact zeros.
         """
         uv = _parameters(uv, "surface chart points")
         if uv.ndim != 2 or uv.shape[1] != 2:
@@ -476,8 +478,12 @@ class NurbsSurface:
         local_points = points[rows[:, :, None], cols[:, None, :]]                 # (m, p+1, q+1, 3)
         local_weights = weights[rows[:, :, None], cols[:, None, :]]               # (m, p+1, q+1)
         w = np.einsum("mi,mj,mij->m", basis_u[:, 0], basis_v[:, 0], local_weights)
-        point = np.einsum("mi,mj,mij,mijd->md", basis_u[:, 0], basis_v[:, 0], local_weights, local_points) / w[:, None]
-        differences = local_points - point[:, None, None, :]
+        # Local frame anchored at the first active control (as the curve kernel):
+        # offsets are small differences, so translation adds no rounding.
+        anchor = local_points[:, 0, 0, :]
+        delta = local_points - anchor[:, None, None, :]
+        offset = np.einsum("mi,mj,mij,mijd->md", basis_u[:, 0], basis_v[:, 0], local_weights, delta) / w[:, None]
+        differences = delta - offset[:, None, None, :]
         s_u = np.einsum("mi,mj,mij,mijd->md", basis_u[:, 1], basis_v[:, 0], local_weights, differences) / w[:, None]
         s_v = np.einsum("mi,mj,mij,mijd->md", basis_u[:, 0], basis_v[:, 1], local_weights, differences) / w[:, None]
         s_u *= self.u_range[1] - self.u_range[0]
@@ -603,6 +609,9 @@ class NurbsSurface:
             weights.append(float(total[3]))
             controls.append(tuple(float(x / total[3]) for x in total[:3]))
         rational = self.weights is not None
+        tiny = [value for point in controls for value in point if value != 0.0 and abs(value) < 2.0 ** -500]
+        if tiny:
+            raise GeometryError("iso-curve controls fall below the NURBS coordinate range (nonzero |x| < 2**-500)")
         return NurbsCurve(other[0], other[1], tuple(controls), tuple(weights) if rational else None, other[2])
 
     def transformed(self, matrix) -> "NurbsSurface":
