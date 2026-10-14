@@ -760,3 +760,117 @@ def _exact_knot_partials(surface, net, u, v, box=None):
     w = value[3]
     point = [value[k] / w for k in range(3)]
     return tuple(tuple((d[k] - point[k] * d[3]) / w for k in range(3)) for d in (d_u, d_v))
+
+
+# ---------------------------------------------------------------------- schema-7 record (B1-P3)
+
+PLANE_NURBS_ALGORITHM = "plane_nurbs_exact_v1"
+_RECORD_FIELDS = {"type", "plane", "surface", "path", "domain", "branch"}
+_BRANCH_FIELDS = {"algorithm", "roots", "arcs"}
+_PLANE_FIELDS = {"type", "origin", "u_vector", "v_vector"}
+_RATIONAL_DIGITS = 4096
+
+
+def _rational_text(value: Fraction) -> str:
+    """Canonical exact text of a rational: ``"n"`` or ``"n/d"`` (lowest terms, ``d > 1``)."""
+    value = Fraction(value)
+    return str(value.numerator) if value.denominator == 1 else f"{value.numerator}/{value.denominator}"
+
+
+def _rational_from_text(text: object, name: str) -> Fraction:
+    """Parse a canonical rational text; any other spelling (or a non-string) is refused."""
+    if not isinstance(text, str) or not 0 < len(text) <= _RATIONAL_DIGITS:
+        raise GeometryError(f"{name} must be an exact rational text")
+    head, slash, tail = text.partition("/")
+    numerator_ok = head.lstrip("-").isdigit() and head.isascii() and head.count("-") <= 1
+    denominator_ok = not slash or (tail.isdigit() and tail.isascii())
+    if not numerator_ok or not denominator_ok:
+        raise GeometryError(f"{name} must be an exact rational text")
+    if slash and int(tail) == 0:
+        raise GeometryError(f"{name} has a zero denominator")
+    value = Fraction(int(head), int(tail)) if slash else Fraction(int(head))
+    if _rational_text(value) != text:
+        raise GeometryError(f"{name} is not in canonical form (lowest terms, no leading zeros)")
+    return value
+
+
+def _branch_record(curve: "PlaneNurbsCurve") -> dict:
+    """The certified path: its roots in path order and the arcs between consecutive roots."""
+    arcs = curve._arcs()
+    ordered = [arcs[0].first] + [arc.second for arc in arcs]
+    return {"algorithm": PLANE_NURBS_ALGORITHM,
+            "roots": [[root.axis, *(_rational_text(value) for value in (root.value, root.lo, root.hi))]
+                      for root in ordered],
+            "arcs": [[arc.box.patch, [_rational_text(value) for value in (*arc.box.u_range, *arc.box.v_range)],
+                      arc.slicing] for arc in arcs]}
+
+
+def plane_nurbs_record(curve: "PlaneNurbsCurve") -> dict:
+    """Schema-7 ``plane_nurbs_intersection`` record: the definition (plane, surface, path, domain)
+    and the certified branch (roots and arc boxes as exact rationals), recomputed and compared on load."""
+    from .nurbs import nurbs_record
+    origin, u_vector, v_vector = (list(vector) for vector in curve.plane_record)
+    return {"type": "plane_nurbs_intersection",
+            "plane": {"type": "plane", "origin": origin, "u_vector": u_vector, "v_vector": v_vector},
+            "surface": nurbs_record(curve.surface), "path": curve.path, "domain": list(curve.domain),
+            "branch": _branch_record(curve)}
+
+
+def plane_nurbs_from_record(record: object) -> "PlaneNurbsCurve":
+    """Decode a ``plane_nurbs_intersection`` record and validate it against the recomputed section.
+
+    The section is recomputed exactly from the plane and the surface (P1); the stored
+    algorithm, root count and every root and arc must equal the recomputation, else
+    the record is refused with the first differing index (tampering, or a section
+    algorithm whose curve points would differ from the ones the document was made with).
+    """
+    from .nurbs import NurbsSurface, _exact, nurbs_from_record
+    from .surfaces import Plane
+    _exact(record, _RECORD_FIELDS, "plane_nurbs_intersection")
+    plane_data = record["plane"]
+    _exact(plane_data, _PLANE_FIELDS, "plane_nurbs_intersection plane")
+    if plane_data["type"] != "plane":
+        raise GeometryError("plane_nurbs_intersection plane must be a plane record")
+    plane = Plane(plane_data["origin"], plane_data["u_vector"], plane_data["v_vector"])
+    surface = nurbs_from_record(record["surface"])
+    if not isinstance(surface, NurbsSurface):
+        raise GeometryError("plane_nurbs_intersection surface must be a nurbs_surface record")
+    path = record["path"]
+    if type(path) is not int or path < 0:
+        raise GeometryError("plane_nurbs_intersection path must be a non-negative integer")
+    domain = record["domain"]
+    if (not isinstance(domain, list) or len(domain) != 2
+            or any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in domain)):
+        raise GeometryError("plane_nurbs_intersection domain must be two numbers")
+    domain = (float(domain[0]), float(domain[1]))
+    if not all(0.0 <= value <= 1.0 for value in domain) or domain[0] == domain[1]:
+        raise GeometryError("plane_nurbs_intersection domain must be two distinct values in [0, 1]")
+    branch = record["branch"]
+    _exact(branch, _BRANCH_FIELDS, "plane_nurbs_intersection branch")
+    if branch["algorithm"] != PLANE_NURBS_ALGORITHM:
+        raise GeometryError(f"unsupported plane x NURBS section algorithm {branch['algorithm']!r}")
+    for name in ("roots", "arcs"):
+        if not isinstance(branch[name], list):
+            raise GeometryError(f"plane_nurbs_intersection branch {name} must be a list")
+    for index, root in enumerate(branch["roots"]):
+        if not isinstance(root, list) or len(root) != 4 or type(root[0]) is not int or root[0] not in (0, 1):
+            raise GeometryError(f"plane_nurbs_intersection root {index} must be [axis, value, lo, hi]")
+        for value in root[1:]:
+            _rational_from_text(value, f"plane_nurbs_intersection root {index}")
+    for index, arc in enumerate(branch["arcs"]):
+        if (not isinstance(arc, list) or len(arc) != 3 or not isinstance(arc[1], list) or len(arc[1]) != 4
+                or type(arc[0]) is not int or type(arc[2]) is not int or arc[2] not in (0, 1)):
+            raise GeometryError(f"plane_nurbs_intersection arc {index} must be [patch, [u_lo, u_hi, v_lo, v_hi], slicing]")
+        for value in arc[1]:
+            _rational_from_text(value, f"plane_nurbs_intersection arc {index}")
+    curve = PlaneNurbsCurve(_plane_record(plane), surface, path, domain)
+    expected = _branch_record(curve)                     # recomputed: refusals of the section surface here
+    for name, label in (("roots", "root"), ("arcs", "arc")):
+        stored, computed = branch[name], expected[name]
+        if len(stored) != len(computed):
+            raise GeometryError(f"plane_nurbs_intersection has {len(stored)} {name}, "
+                                f"the recomputed section {len(computed)}")
+        for index, (left, right) in enumerate(zip(stored, computed)):
+            if left != right:
+                raise GeometryError(f"plane_nurbs_intersection {label} {index} differs from the recomputed section")
+    return curve

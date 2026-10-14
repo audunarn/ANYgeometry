@@ -4616,6 +4616,19 @@ class GeometryModel:
         )
         return edge_id
 
+    def _check_plane_nurbs_ends(self, start_point, end_point, curve) -> None:
+        """The ends of a plane x NURBS curve are certified section roots (algebraic): each vertex
+        must lie within the tolerance of every point of its end root's world enclosure (sound,
+        B1-P2; also checked when a document is loaded, B1-P3)."""
+        for vertex, which in ((np.asarray(start_point, dtype=float), 0), (np.asarray(end_point, dtype=float), 1)):
+            low, high = curve.end_box(which)
+            corners = np.array([[low[k] if (index >> k) & 1 == 0 else high[k] for k in range(3)]
+                                for index in range(8)])
+            scale = float(np.linalg.norm(high - low)) + float(np.linalg.norm(vertex))
+            tolerance = self.tolerance.effective_curve_fit_residual(max(scale, 1.0))
+            if float(np.max(np.linalg.norm(corners - vertex, axis=1))) > tolerance:
+                raise GeometryError("plane x NURBS curve ends do not match topology vertices")
+
     @_transactional
     def add_curve(self, start: int, end: int, curve: CurveShape) -> int:
         """Add an analytic curve with topology endpoints matching its definition."""
@@ -4626,16 +4639,7 @@ class GeometryModel:
         from .nurbs import CurveOnSurface, NurbsCurve
         from .support_curves import PlaneNurbsCurve
         if isinstance(curve, PlaneNurbsCurve):
-            # The ends are certified section roots (algebraic): each vertex must lie within
-            # the tolerance of every point of its end root's world enclosure (sound, B1-P2).
-            for vertex, which in ((start_point, 0), (end_point, 1)):
-                low, high = curve.end_box(which)
-                corners = np.array([[low[k] if (index >> k) & 1 == 0 else high[k] for k in range(3)]
-                                    for index in range(8)])
-                scale = float(np.linalg.norm(high - low)) + float(np.linalg.norm(vertex))
-                tolerance = self.tolerance.effective_curve_fit_residual(max(scale, 1.0))
-                if float(np.max(np.linalg.norm(corners - vertex, axis=1))) > tolerance:
-                    raise GeometryError("plane x NURBS curve ends do not match topology vertices")
+            self._check_plane_nurbs_ends(start_point, end_point, curve)
             return self._add_edge(start, end, curve)
         if isinstance(curve, (NurbsCurve, CurveOnSurface)):
             # Edge ends are topology and must coincide with the curve's ends: decided exactly on

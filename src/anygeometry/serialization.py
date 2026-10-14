@@ -25,6 +25,7 @@ from .quadric_algebra import EllipticRuledSupport, QuadricSupport, RuledSupport
 from .branch_algebra import BezierRuledSupport
 from .branch_curves import BezierQuadricCurve
 from .nurbs import CurveOnSurface, NurbsCurve, NurbsSurface, nurbs_from_record, nurbs_record
+from .support_curves import PlaneNurbsCurve, plane_nurbs_from_record, plane_nurbs_record
 from .quadric_curves import QuadricIntersectionCurve
 from .entities import Edge, EntityRef, Face, OrientedEdge, Vertex
 from .errors import GeometryError
@@ -754,6 +755,8 @@ def _serialized_model_state(
             curve = _bezier_quadric_curve_record(edge.curve)
         elif isinstance(edge.curve, (NurbsCurve, CurveOnSurface)):
             curve = nurbs_record(edge.curve)               # schema 7 (generality slices A2a, A3b)
+        elif isinstance(edge.curve, PlaneNurbsCurve):
+            curve = plane_nurbs_record(edge.curve)         # schema 7 (generality slice B1-P3)
         else:  # pragma: no cover - closed public union
             raise GeometryError(f"unsupported curve type {type(edge.curve).__name__}")
         curves.append({"id": edge.id, "start": edge.start, "end": edge.end, "curve": curve})
@@ -764,7 +767,8 @@ def _serialized_model_state(
         or any(isinstance(surface, ExtrudedSurface) for face in geometry.faces.values()
                for surface in (face.surface, face.parameterization))
     )
-    needs_nurbs = (any(isinstance(edge.curve, (NurbsCurve, CurveOnSurface)) for edge in geometry.edges.values())
+    needs_nurbs = (any(isinstance(edge.curve, (NurbsCurve, CurveOnSurface, PlaneNurbsCurve))
+                       for edge in geometry.edges.values())
                    or any(isinstance(surface, NurbsSurface) for face in geometry.faces.values()
                           for surface in (face.surface, face.parameterization)))
     document: dict[str, object] = {
@@ -1639,6 +1643,10 @@ def _decode_geometry_records(
             if schema_version < _NURBS_VERSION:
                 raise GeometryError("NURBS curves require schema 7")
             curve = nurbs_from_record(curve_data)
+        elif curve_kind == "plane_nurbs_intersection":
+            if schema_version < _NURBS_VERSION:
+                raise GeometryError("plane x NURBS section curves require schema 7")
+            curve = plane_nurbs_from_record(dict(curve_data))
         elif curve_kind in ("elliptic_arc", "cylinder_intersection"):
             if schema_version < 5:
                 raise GeometryError("analytic intersection curves require schema 5")
@@ -1664,6 +1672,12 @@ def _decode_geometry_records(
                 curve,
             ),
         )
+        if isinstance(curve, PlaneNurbsCurve):
+            # the ends are algebraic section roots: the stored vertices must match them (B1-P3)
+            ends = [geometry.vertices.get(geometry.edges[identifier].start),
+                    geometry.vertices.get(geometry.edges[identifier].end)]
+            if all(vertex is not None for vertex in ends):
+                geometry._check_plane_nurbs_ends(ends[0].position, ends[1].position, curve)  # noqa: SLF001
 
     for raw in faces:
         item = _object(raw, "face record")
