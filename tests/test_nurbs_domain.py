@@ -371,3 +371,54 @@ def test_containment_decides_ray_side_and_boundary_exactly():
 def test_constant_polynomial_end_derivatives_are_exactly_zero():
     curve = NurbsCurve(2, (0., 0., 0., .3, 1., 1., 1.), ((1e16, 1.),) * 4, domain=(0., .3))
     assert np.all(curve.derivatives(1., 2)[1:] == 0.)
+
+
+# ------------------------------------------------------------------ review A1e round 5
+
+
+def quadratic_pcurve(controls):
+    return NurbsCurve(2, (0., 0., 0., 1., 1., 1.), controls)
+
+
+def test_ray_side_at_a_double_root_of_u_uses_the_original_sign():
+    from anygeometry.exact_levels import event_side, level_set
+    surface = unit_support()
+    curve = quadratic_pcurve(((.75, 0.), (.25, 0.), (.75, 1.)))
+    event = level_set(curve, 1, .125)[0]
+    assert event_side(curve, event, 0, .5) == 1                      # u - .5 = (t - .5)^2 > 0
+    loop = (ArrangementPath(CurveOnSurface(surface, curve)),) + polygon(surface, [(.75, 1.), (1., 1.), (1., 0.),
+                                                                                (.75, 0.)])[:3]
+    assert MaterialDomain(0, surface, (loop,)).contains_loop(loop, np.array([.5, .125]), 1e-12, boundary=False) is False
+
+
+def test_an_end_root_does_not_absorb_a_nearby_crossing():
+    from anygeometry.exact_levels import level_set
+    surface = unit_support()
+    e = 2. ** -100
+    curve = quadratic_pcurve(((0., e / 2), (.5, 0.), (1., 1.)))
+    events = level_set(curve, 1, e / 2)
+    assert len(events) == 2 and events[0].lo == events[0].hi == 0 and events[1].crossing
+    loop = (ArrangementPath(CurveOnSurface(surface, curve)), segment(surface, (1., 1.), (0., 1.)),
+            segment(surface, (0., 1.), (0., e / 2)))
+    assert MaterialDomain(0, surface, (loop,)).contains_loop(loop, np.array([e / 2, e / 2]), 1e-80, boundary=False)
+
+
+def test_crossings_either_side_of_a_non_root_knot_keep_their_signs():
+    from anygeometry.exact_levels import level_set
+    surface = unit_support()
+    e = 2. ** -100
+    curve = NurbsCurve(1, (0., 0., .5, 1., 1.), ((.5, 1.), (0., 0.), (1., 1.)))
+    assert [(x.before, x.after) for x in level_set(curve, 1, e)] == [(1, -1), (-1, 1)]
+    loop = (ArrangementPath(CurveOnSurface(surface, curve)), segment(surface, (1., 1.), (.5, 1.)))
+    assert MaterialDomain(0, surface, (loop,)).contains_loop(loop, np.array([.75 * e, e]), 1e-40)
+
+
+def test_the_tolerance_band_is_decided_exactly():
+    import math
+    big = NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.),
+                       (((0., 0., 0.), (0., 1e16, 0.)), ((1e16, 0., 0.), (1e16, 1e16, 0.))))
+    loop = (ArrangementPath(CurveOnSurface(big, NurbsCurve(1, (0., 0., 1., 1.), ((0., 0.), (1., 1.)), (1., .2)))),
+            segment(big, (1., 1.), (0., 1.)), segment(big, (0., 1.), (0., 0.)))
+    domain = MaterialDomain(0, big, (loop,))
+    assert domain.contains_loop(loop, np.array([math.nextafter(.5, 1.), .5]), 1e-9) is False
+    assert domain.contains_loop(loop, np.array([math.nextafter(.5, 1.), .5]), 2.) is True   # within 2 world units

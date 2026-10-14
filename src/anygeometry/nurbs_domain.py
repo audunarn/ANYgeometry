@@ -129,9 +129,11 @@ def contains_loop(domain, loop, uv_point, tolerance, *, boundary=True) -> bool:
     the query (exactly, or within the tolerance in the world) is the boundary.
     """
     u0, v0 = float(uv_point[0]), float(uv_point[1])
-
-    def near(u):
-        return float(np.linalg.norm(world_delta(domain, (u - u0, 0.0), v0, u0))) <= tolerance
+    # The world tolerance as a chart band [u0 - delta, u0 + delta] along the ray,
+    # delta = tolerance / |S_u| at the query; membership in it is decided exactly.
+    rate = float(np.linalg.norm(world_delta(domain, (1.0, 0.0), v0, u0)))
+    delta = tolerance / rate if rate > 0 else 0.0
+    band = (u0 - delta, u0 + delta) if delta > 0 else (u0, u0)
 
     items: list = []                 # ("gap", sign) or ("zero", [part, ...]); part = (pcurve, event | None)
     for path in loop:
@@ -160,17 +162,14 @@ def contains_loop(domain, loop, uv_point, tolerance, *, boundary=True) -> bool:
 
     def through_query(part) -> bool:
         pcurve, event = part
-        if event is None:
-            lo, hi = Fraction(0), Fraction(1)
-        elif event.run:
-            lo, hi = event.lo, event.hi
-        else:
-            if event_side(pcurve, event, 0, u0) == 0:
-                return True
-            return near(float(pcurve.evaluate(float(event.t0))[0]))
-        if has_root_in(pcurve, 0, u0, lo, hi):
+        if event is not None and not event.run:
+            # u(t*) in [u0 - delta, u0 + delta], exactly
+            return event_side(pcurve, event, 0, band[0]) >= 0 and event_side(pcurve, event, 0, band[1]) <= 0
+        lo, hi = (Fraction(0), Fraction(1)) if event is None else (event.lo, event.hi)
+        # a run meets the band if u crosses a band edge or u0 on it, or lies inside the band
+        if any(has_root_in(pcurve, 0, edge, lo, hi) for edge in (band[0], u0, band[1])):
             return True
-        return near(float(pcurve.evaluate(float(lo))[0])) or near(float(pcurve.evaluate(float(hi))[0]))
+        return _exact_sign(pcurve, 0, band[0], lo) >= 0 and _exact_sign(pcurve, 0, band[1], lo) <= 0
 
     def right_of_query(part) -> bool:
         pcurve, event = part

@@ -179,7 +179,21 @@ def _roots_in_unit(p: list) -> list[tuple[Fraction, Fraction, list]]:
             found.append((exact, exact, base))
             g = _divmod(g, [-exact, Fraction(1)])[0]
             continue
-        found.extend((a, b, base) for a, b in isolated)
+        exact_roots = [lo for lo, hi, _g in found if lo == hi]
+        for a, b in isolated:
+            # Keep the interval off every exact root of the original (they were
+            # deflated from g): bisect toward g's own root until none lies in [a, b].
+            low_sign = _value(g, a) > 0
+            while any(a <= r <= b for r in exact_roots):
+                middle = (a + b) / 2
+                value = _value(g, middle)
+                if value == 0:                             # cannot happen for a deflated simple root
+                    raise ArithmeticError("isolation met an exact root of the deflated polynomial")
+                if (value > 0) == low_sign:
+                    a = middle
+                else:
+                    b = middle
+            found.append((a, b, base))
         break
     return sorted(found, key=lambda item: item[0])
 
@@ -280,60 +294,47 @@ def level_set(curve: NurbsCurve, axis: int, value) -> tuple[LevelEvent, ...] | N
     start, end = (Fraction(item) for item in curve.domain)
     low, high = min(start, end), max(start, end)
 
-    stretches: list[list] = []          # [lo, hi, is_run, exact_end_root, root] in knot parameter
+    # stretches in knot parameter: [lo, hi, is_run, root, ends_are_roots]
+    stretches: list[list] = []
     for span in spans:
         coefficients = _numerator(span, axis, level)
         if all(c == 0 for c in coefficients):
-            stretches.append([span.s0, span.s1, True, None])
+            stretches.append([span.s0, span.s1, True, None, True])
             continue
         if all(c > 0 for c in coefficients) or all(c < 0 for c in coefficients):
             continue                                       # exact hull exclusion: no root on this span
         width = span.s1 - span.s0
         for a, b, g in _roots_in_unit(_bernstein_to_power(coefficients)):
-            stretches.append([span.s0 + width * a, span.s0 + width * b, False, (span, a, b, g)])
-    if not stretches:
-        merged = []
-    else:
-        stretches.sort(key=lambda item: (item[0], item[1]))
-        merged = [stretches[0]]
-        for item in stretches[1:]:
+            stretches.append([span.s0 + width * a, span.s0 + width * b, False, (span, a, b, g), a == b])
+    merged: list[list] = []
+    for item in sorted(stretches, key=lambda entry: (entry[0], entry[1])):
+        if merged:
             last = merged[-1]
-            # Merge a true overlap, or a shared end that is itself a root (a root found
-            # from both spans at a knot, a run meeting a root). Isolating intervals end
-            # at non-roots, so two different roots on either side of a knot stay apart.
-            if item[0] < last[1] or (item[0] == last[1] and _sign_at(spans, axis, level, item[0]) == 0):
+            # Merge a true overlap, or ends that are both roots (a root found from
+            # both spans at a knot, a run meeting a root). Isolating intervals end at
+            # non-roots and never touch exact roots, so distinct roots stay apart.
+            if item[0] < last[1] or (item[0] == last[1] and last[4] and item[4]):
                 last[1] = max(last[1], item[1])
                 last[2] = last[2] or item[2]
-                if last[2]:
-                    last[3] = None
-            else:
-                merged.append(item)
+                last[3] = None if last[2] else last[3]
+                last[4] = last[4] and item[4]
+                continue
+        merged.append(item)
     if len(merged) == 1 and merged[0][2] and merged[0][0] <= low and merged[0][1] >= high:
         return None
 
-    def sign_left_of(lo):
-        """Sign in the root-free gap ending at ``lo``."""
-        index = next(i for i, item in enumerate(merged) if item[0] == lo)
-        previous = merged[index - 1][1] if index else low
-        if previous < lo:
-            return _sign_at(spans, axis, level, (previous + lo) / 2)
-        return _sign_at(spans, axis, level, lo) if index == 0 and lo == low else 0
-
-    def sign_right_of(hi):
-        index = next(i for i, item in enumerate(merged) if item[1] == hi)
-        following = merged[index + 1][0] if index + 1 < len(merged) else high
-        if hi < following:
-            return _sign_at(spans, axis, level, (hi + following) / 2)
-        return _sign_at(spans, axis, level, hi) if index + 1 == len(merged) and hi == high else 0
+    def gap_sign(left: Fraction, right: Fraction, shared_is_root: bool) -> int:
+        """Sign in the root-free gap [left, right] (a non-root shared end when left == right)."""
+        if left < right:
+            return _sign_at(spans, axis, level, (left + right) / 2)
+        return 0 if shared_is_root else _sign_at(spans, axis, level, left)
 
     events = []
-    for lo, hi, is_run, root in merged:
-        before = sign_left_of(lo)
-        after = sign_right_of(hi)
-        if lo <= low and (is_run or lo == hi):
-            before = 0                                     # the event starts at the curve's end
-        if hi >= high and (is_run or lo == hi):
-            after = 0
+    for index, (lo, hi, is_run, root, ends_are_roots) in enumerate(merged):
+        previous = merged[index - 1][1] if index else low
+        following = merged[index + 1][0] if index + 1 < len(merged) else high
+        before = gap_sign(previous, lo, ends_are_roots)
+        after = gap_sign(hi, following, ends_are_roots)
         events.append((lo, hi, before, after, is_run, root))
 
     def engine(s):
@@ -369,7 +370,8 @@ def event_side(curve: NurbsCurve, event: LevelEvent, axis: int, value) -> int:
             a = middle
         else:
             b = middle
-    return _sign(_value(other, a)) if _value(other, a) != 0 else _sign(_value(other, b))
+    # the original numerator (not its square-free part) carries the sign; it has no root in [a, b]
+    return _sign(_value(_bernstein_to_power(_numerator(span, axis, level)), a))
 
 
 def has_root_in(curve: NurbsCurve, axis: int, value, t_lo: Fraction, t_hi: Fraction) -> bool:
