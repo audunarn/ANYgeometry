@@ -915,7 +915,11 @@ def _evaluate_at_span(degree: int, knots: np.ndarray, controls: np.ndarray, weig
     index = span - p + np.arange(p + 1)
     local = controls[index]
     if weights is None:
-        return ders @ local
+        # anchored at the first local control: a constant piece has exact zero derivatives
+        anchor = local[0]
+        result = ders @ (local - anchor)
+        result[0] += anchor
+        return result
     w_local = np.asarray(weights)[index]
     w = ders @ w_local
     anchor = local[0]

@@ -63,3 +63,32 @@ def test_roots_at_knots_and_curve_ends():
     assert summary(level_set(curve, 1, .5)) == [(Fraction(1, 2), Fraction(1, 2), -1, -1)]
     start = NurbsCurve(1, (0., 0., 1., 1.), ((.1, .5), (.9, .8)))
     assert summary(level_set(start, 1, .5)) == [(Fraction(0), Fraction(0), 0, 1)]
+
+
+def test_a_crossing_closer_to_a_curve_end_than_the_refinement_width():
+    line = NurbsCurve(1, (0., 0., 1., 1.), ((0., 0.), (0., 1.)))
+    events = level_set(line, 1, 2. ** -100)
+    assert len(events) == 1 and events[0].crossing and events[0].lo <= Fraction(2) ** -100 <= events[0].hi
+
+
+def test_event_side_is_exact_at_irrational_and_rational_roots():
+    from anygeometry.exact_levels import event_side
+    diagonal = NurbsCurve(1, (0., 0., 1., 1.), ((0., 0.), (1., 1.)), (1., 1.3))
+    event = level_set(diagonal, 1, .5)[0]
+    assert event_side(diagonal, event, 0, .5) == 0
+    import math
+    assert event_side(diagonal, event, 0, math.nextafter(.5, 0.)) == 1
+    assert event_side(diagonal, event, 0, math.nextafter(.5, 1.)) == -1
+    conic = NurbsCurve(2, (0., 0., 0., 1., 1., 1.), ((1., 0.), (1., 1.), (0., 1.)), (1., .5, 1.))
+    event = level_set(conic, 1, .5)[0]
+    assert event.lo < event.hi                                          # an irrational root (isolating interval)
+    x = float(conic.evaluate(float(event.t0))[0])
+    assert event_side(conic, event, 0, x - 1e-12) == 1 and event_side(conic, event, 0, x + 1e-12) == -1
+
+
+def test_two_roots_on_either_side_of_a_knot_stay_separate():
+    curve = NurbsCurve(1, (0., 0., .5, 1., 1.), ((.1, .2), (.5, .2), (.9, .2)))
+    assert level_set(curve, 1, .3) == ()
+    zigzag = NurbsCurve(1, (0., 0., .5, 1., 1.), ((.1, .4), (.5, .6), (.9, .4)))
+    events = level_set(zigzag, 1, .5)
+    assert len(events) == 2 and all(e.crossing for e in events)

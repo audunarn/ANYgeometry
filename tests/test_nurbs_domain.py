@@ -343,3 +343,31 @@ def test_constant_curve_end_derivatives_are_exactly_zero(domain_range, end):
                        domain_range)
     values = curve.derivatives(end, 2)
     assert np.all(values[1:] == 0.)
+
+
+# ------------------------------------------------------------------ review A1e round 4
+
+
+def test_containment_decides_ray_side_and_boundary_exactly():
+    import math
+    big = NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.),
+                       (((0., 0., 0.), (0., 1e16, 0.)), ((1e16, 0., 0.), (1e16, 1e16, 0.))))
+    unit = unit_support()
+
+    def triangle(surface, weight):
+        return (ArrangementPath(CurveOnSurface(surface, NurbsCurve(1, (0., 0., 1., 1.), ((0., 0.), (1., 1.)),
+                                                                   (1., weight)))),
+                segment(surface, (1., 1.), (0., 1.)), segment(surface, (0., 1.), (0., 0.)))
+
+    loop = triangle(big, 1.3)
+    assert MaterialDomain(0, big, (loop,)).contains_loop(loop, np.array([math.nextafter(.5, 0.), .5]), 1e-9)
+    loop = triangle(unit, .2)
+    domain = MaterialDomain(0, unit, (loop,))
+    assert domain.contains_loop(loop, np.array([.5, .5]), 1e-9, boundary=False) is False
+    rectangle = polygon(unit, [(.2, 0.), (.8, 0.), (.8, 1.), (.2, 1.)])
+    assert MaterialDomain(0, unit, (rectangle,)).contains_loop(rectangle, np.array([.5, 2. ** -100]), 1e-40)
+
+
+def test_constant_polynomial_end_derivatives_are_exactly_zero():
+    curve = NurbsCurve(2, (0., 0., 0., .3, 1., 1., 1.), ((1e16, 1.),) * 4, domain=(0., .3))
+    assert np.all(curve.derivatives(1., 2)[1:] == 0.)

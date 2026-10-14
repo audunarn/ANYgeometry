@@ -23,7 +23,7 @@ from ._cross3 import _gauss_legendre
 from .errors import GeometryError
 from .nurbs import CurveOnSurface, NurbsCurve, NurbsSurface, _scaled_weights
 from .reference import bspline as _reference
-from .exact_levels import level_set
+from .exact_levels import event_side, has_root_in, level_set
 from fractions import Fraction
 
 _EPS = float(np.finfo(float).eps)
@@ -113,44 +113,42 @@ def horizontal_roots(domain, curve, value, tolerance):
     return level_roots(pcurve_of(domain, curve), 1, float(value), _chart_tolerance(domain, tolerance))
 
 
-def _sign_of(pcurve: NurbsCurve, axis: int, value: float, t: Fraction) -> int:
-    point = pcurve.exact_point(t)
-    difference = point[axis] - Fraction(value)
+def _exact_sign(pcurve: NurbsCurve, axis: int, value: float, t: Fraction) -> int:
+    difference = pcurve.exact_point(t)[axis] - Fraction(value)
     return 0 if difference == 0 else (1 if difference > 0 else -1)
 
 
 def contains_loop(domain, loop, uv_point, tolerance, *, boundary=True) -> bool:
-    """Ray parity in the chart with the crossings decided exactly (``exact_levels``).
+    """Ray parity in the chart with every decision exact (``exact_levels``).
 
-    Along the loop the coordinate ``v - v0`` is followed as a cyclic sequence of
-    non-zero gaps and zero stretches (points, runs, whole curves; stretches
-    meeting at a curve joint are one stretch). A stretch between gaps of
-    different sign is a crossing; it counts when it lies right of the query.
-    A stretch through the query (a point within the tolerance, or a run whose
-    u range contains it) is the boundary.
+    Along the loop the sign of ``v - v0`` is a cyclic sequence of non-zero gaps
+    and zero stretches (point events, runs, whole curves; stretches meeting at a
+    curve joint are one stretch). A stretch between gaps of different sign is a
+    crossing and counts when it lies right of the query, decided exactly by
+    ``event_side`` (the exact sign of ``u - u0`` at the root). A stretch through
+    the query (exactly, or within the tolerance in the world) is the boundary.
     """
     u0, v0 = float(uv_point[0]), float(uv_point[1])
-    chart_tolerance = _chart_tolerance(domain, tolerance)
 
     def near(u):
         return float(np.linalg.norm(world_delta(domain, (u - u0, 0.0), v0, u0))) <= tolerance
 
-    items: list = []                 # ("gap", sign) or ("zero", [(pcurve, t0, t1), ...])
+    items: list = []                 # ("gap", sign) or ("zero", [part, ...]); part = (pcurve, event | None)
     for path in loop:
         pcurve = pcurve_of(domain, path.curve)
         events = level_set(pcurve, 1, v0)
         if events is None:
-            items.append(("zero", [(pcurve, Fraction(0), Fraction(1))]))
+            items.append(("zero", [(pcurve, None)]))
             continue
-        cursor = Fraction(0)
-        for event in events:
-            if event.t0 > cursor:
-                items.append(("gap", _sign_of(pcurve, 1, v0, (cursor + event.t0) / 2)))
-            items.append(("zero", [(pcurve, event.t0, event.t1)]))
-            cursor = event.t1
-        if cursor < 1:
-            items.append(("gap", _sign_of(pcurve, 1, v0, (cursor + 1) / 2)))
-    # merge consecutive zero stretches (also across the loop's closing joint)
+        if not events:
+            items.append(("gap", _exact_sign(pcurve, 1, v0, Fraction(1, 2))))
+            continue
+        if events[0].before != 0:
+            items.append(("gap", events[0].before))
+        for index, event in enumerate(events):
+            items.append(("zero", [(pcurve, event)]))
+            if event.after != 0:
+                items.append(("gap", event.after))
     merged: list = []
     for kind, payload in items:
         if kind == "zero" and merged and merged[-1][0] == "zero":
@@ -159,36 +157,46 @@ def contains_loop(domain, loop, uv_point, tolerance, *, boundary=True) -> bool:
             merged.append((kind, list(payload) if kind == "zero" else payload))
     if len(merged) > 1 and merged[0][0] == "zero" and merged[-1][0] == "zero":
         merged[0][1][:0] = merged.pop()[1]
-    gaps = [index for index, (kind, _payload) in enumerate(merged) if kind == "gap"]
-    if not gaps:
-        return boundary if any(_stretch_contains(part, u0, chart_tolerance, near) for _k, stretch in merged
-                               for part in stretch) else False
+
+    def through_query(part) -> bool:
+        pcurve, event = part
+        if event is None:
+            lo, hi = Fraction(0), Fraction(1)
+        elif event.run:
+            lo, hi = event.lo, event.hi
+        else:
+            if event_side(pcurve, event, 0, u0) == 0:
+                return True
+            return near(float(pcurve.evaluate(float(event.t0))[0]))
+        if has_root_in(pcurve, 0, u0, lo, hi):
+            return True
+        return near(float(pcurve.evaluate(float(lo))[0])) or near(float(pcurve.evaluate(float(hi))[0]))
+
+    def right_of_query(part) -> bool:
+        pcurve, event = part
+        if event is not None and not event.run:
+            return event_side(pcurve, event, 0, u0) > 0
+        start = Fraction(0) if event is None else event.lo
+        return _exact_sign(pcurve, 0, u0, start) > 0
+
+    if not any(kind == "gap" for kind, _payload in merged):
+        return boundary if any(through_query(part) for _kind, stretch in merged for part in stretch) else False
     winding = 0
     count = len(merged)
     for index, (kind, stretch) in enumerate(merged):
         if kind != "zero":
             continue
-        if any(_stretch_contains(part, u0, chart_tolerance, near) for part in stretch):
+        if any(through_query(part) for part in stretch):
             return boundary
-        before = next(merged[(index - k) % count][1] for k in range(1, count + 1) if merged[(index - k) % count][0] == "gap")
-        after = next(merged[(index + k) % count][1] for k in range(1, count + 1) if merged[(index + k) % count][0] == "gap")
-        if before == after or before == 0 or after == 0:
+        before = next(merged[(index - k) % count][1] for k in range(1, count + 1)
+                      if merged[(index - k) % count][0] == "gap")
+        after = next(merged[(index + k) % count][1] for k in range(1, count + 1)
+                     if merged[(index + k) % count][0] == "gap")
+        if before == after:
             continue                                   # a touch
-        pcurve, t0, _t1 = stretch[0]
-        if float(pcurve.evaluate(float(t0))[0]) > u0:
+        if right_of_query(stretch[0]):
             winding += 1 if after > 0 else -1
     return winding != 0
-
-
-def _stretch_contains(part, u0: float, chart_tolerance: float, near) -> bool:
-    """Whether a zero stretch part passes through the query's u (it lies on the query's v level)."""
-    pcurve, t0, t1 = part
-    if near(float(pcurve.evaluate(float(t0))[0])) or near(float(pcurve.evaluate(float(t1))[0])):
-        return True
-    if t1 == t0:
-        return False
-    events = level_set(pcurve, 0, u0)                  # does u pass u0 inside the run?
-    return events is None or any(t0 <= event.t1 and event.t0 <= t1 for event in events)
 
 
 def on_horizontal(domain, curve, uv_point, tolerance) -> bool:
