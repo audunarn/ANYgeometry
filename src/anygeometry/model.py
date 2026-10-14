@@ -888,6 +888,17 @@ class GeometryModel:
         elif isinstance(support, ExtrudedSurface):
             lower, upper = support.bounds()
             add_box(lower, upper)
+        elif type(support).__name__ == "NurbsSurface":
+            # The chart box of the trim pcurves (their sound boxes, clipped to the
+            # chart), enclosed by the support's exact sub-patch hull (A3a).
+            from .surface_capabilities import capabilities
+            boxes = [self.edges[item.edge].curve.pcurve.bounds() for loop in (face.loop,) + face.holes
+                     for item in loop]
+            low = np.clip(np.min([box[0] for box in boxes], axis=0), 0.0, 1.0)
+            high = np.clip(np.max([box[1] for box in boxes], axis=0), 0.0, 1.0)
+            enclosure = capabilities(support).enclosure(((float(low[0]), float(high[0])),
+                                                         (float(low[1]), float(high[1]))))
+            add_box(enclosure.lower, enclosure.upper)
         elif isinstance(support, RuledSurface):
             add_points(np.vstack((support.first_boundary, support.second_boundary)))
         elif isinstance(support, CoonsSurface):
@@ -4751,6 +4762,29 @@ class GeometryModel:
             surface=surface,
         )
 
+    def _require_nurbs_face_loops(self, surface, loops) -> None:
+        """Architecture 3.3: every edge of a NURBS face is a curve on that support, chained in the chart.
+
+        Each oriented edge's curve is a ``CurveOnSurface`` on this support with
+        the identity transform, and consecutive edges meet at the same exact
+        chart point (pcurve ends compared in exact arithmetic); otherwise the
+        face is refused (4.9: NURBS-face edge without an exact chart curve).
+        """
+        from .nurbs import CurveOnSurface, _IDENTITY
+        for loop in loops:
+            charts = []
+            for oriented in loop:
+                curve = self.edges[oriented.edge].curve
+                if (not isinstance(curve, CurveOnSurface) or curve.support != surface
+                        or curve.transform != _IDENTITY):
+                    raise GeometryError(f"edge {oriented.edge} of a NURBS face is not an exact chart curve "
+                                        "on the face's support")
+                first, last = curve.pcurve.exact_point(0), curve.pcurve.exact_point(1)
+                charts.append((first, last) if oriented.forward else (last, first))
+            for (_start, end), (start, _end) in zip(charts, charts[1:] + charts[:1]):
+                if end != start:
+                    raise GeometryError("the trim loop of a NURBS face is not continuous in the chart")
+
     def _add_face_from_loop(
         self,
         loop: Tuple[OrientedEdge, ...],
@@ -4758,6 +4792,9 @@ class GeometryModel:
         *,
         surface: Surface | None = None,
     ) -> int:
+        from .nurbs import NurbsSurface
+        if isinstance(surface, NurbsSurface):
+            self._require_nurbs_face_loops(surface, (loop,))
         face_id = self._allocate("face")
         self._put_entity(
             "face",
@@ -5228,6 +5265,15 @@ class GeometryModel:
 
         face = self.faces[face_id]
         loops = (face.loop,) + tuple(face.holes)
+        from .nurbs import NurbsSurface
+        if isinstance(face.surface, NurbsSurface):
+            # Chart polygons straight from the pcurves (no world inversion, architecture 4.6).
+            try:
+                self._require_nurbs_face_loops(face.surface, loops)
+            except GeometryError as error:
+                return [f"face {face_id}: {error}"]
+            return self._validate_trim_polygons(face_id, [self._nurbs_chart_loop_points(loop) for loop in loops],
+                                                planar=False)
         if isinstance(face.surface, Plane) and all(
             isinstance(self.edges[item.edge].curve, Straight)
             for loop in loops
@@ -5330,6 +5376,20 @@ class GeometryModel:
         else:
             return [f"face {face_id} is non-planar and has no explicit surface"]
 
+        return self._validate_trim_polygons(face_id, polygons, planar=planar)
+
+    def _nurbs_chart_loop_points(self, loop: Sequence[OrientedEdge]) -> np.ndarray:
+        """Chart samples of a NURBS face loop from its pcurves (17 per edge, as other curved trims)."""
+        points: List[np.ndarray] = []
+        for item in loop:
+            samples = self.edges[item.edge].curve.chart(np.linspace(0.0, 1.0, 17))
+            if not item.forward:
+                samples = samples[::-1]
+            points.extend(samples[:-1])
+        return np.asarray(points, dtype=float)
+
+    def _validate_trim_polygons(self, face_id: int, polygons, *, planar: bool) -> List[str]:
+        """Zero-area, self-intersection and hole checks of trim polygons (planar or chart coordinates)."""
         result: List[str] = []
         for index, polygon in enumerate(polygons):
             following = np.roll(polygon, -1, axis=0)
@@ -5974,6 +6034,9 @@ class GeometryModel:
         """Replace a face support surface through the transaction owner."""
 
         face = self._require_face(face_id)
+        from .nurbs import NurbsSurface
+        if isinstance(surface, NurbsSurface):
+            self._require_nurbs_face_loops(surface, (face.loop, *face.holes))
         self._put_entity("face", replace(face, surface=surface))
 
     set_face_support_surface = set_face_surface

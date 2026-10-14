@@ -24,7 +24,7 @@ from .exact_curves import EllipticArc, CylinderIntersectionCurve
 from .quadric_algebra import EllipticRuledSupport, QuadricSupport, RuledSupport
 from .branch_algebra import BezierRuledSupport
 from .branch_curves import BezierQuadricCurve
-from .nurbs import CurveOnSurface, NurbsCurve, nurbs_from_record, nurbs_record
+from .nurbs import CurveOnSurface, NurbsCurve, NurbsSurface, nurbs_from_record, nurbs_record
 from .quadric_curves import QuadricIntersectionCurve
 from .entities import Edge, EntityRef, Face, OrientedEdge, Vertex
 from .errors import GeometryError
@@ -517,6 +517,8 @@ def _surface(surface: object) -> dict[str, object] | None:
                      "sweep_angle": directrix.sweep_angle}
         return {"type": "extruded", "directrix": curve, "vector": list(surface.vector),
                 "u_range": list(surface.u_range), "v_range": list(surface.v_range)}
+    if isinstance(surface, NurbsSurface):
+        return nurbs_record(surface)                       # schema 7 (generality slice A3b)
     raise GeometryError(f"unsupported surface type {type(surface).__name__}")
 
 
@@ -762,7 +764,9 @@ def _serialized_model_state(
         or any(isinstance(surface, ExtrudedSurface) for face in geometry.faces.values()
                for surface in (face.surface, face.parameterization))
     )
-    needs_nurbs = any(isinstance(edge.curve, (NurbsCurve, CurveOnSurface)) for edge in geometry.edges.values())
+    needs_nurbs = (any(isinstance(edge.curve, (NurbsCurve, CurveOnSurface)) for edge in geometry.edges.values())
+                   or any(isinstance(surface, NurbsSurface) for face in geometry.faces.values()
+                          for surface in (face.surface, face.parameterization)))
     document: dict[str, object] = {
         "schema": SCHEMA,
         "version": _NURBS_VERSION if needs_nurbs else _QUADRIC_VERSION if needs_quadric else VERSION,
@@ -1060,6 +1064,10 @@ def _decode_surface(value: object, *, strict: bool = False, schema_version: int 
         raise GeometryError("surface must be an object")
     data = dict(_object(value, "surface"))
     kind = data.pop("type", None)
+    if kind == "nurbs_surface":
+        if schema_version < _NURBS_VERSION:
+            raise GeometryError("NURBS surfaces require schema 7")
+        return nurbs_from_record(dict(value))
     if kind == "extruded":
         return _decode_extruded_surface(data, schema_version=schema_version)
     constructors = {

@@ -176,10 +176,13 @@ class MaterialDomain:
         from .entities import EntityRef
         face = model.faces[face_id]
         support = face.surface
-        extruded = None if isinstance(support, (Cylinder, Cone)) else extruded_support(model, face_id)
+        if isinstance(support, NurbsSurface):              # the chart of the face's own support (A3b)
+            extruded = None
+        else:
+            extruded = None if isinstance(support, (Cylinder, Cone)) else extruded_support(model, face_id)
         if extruded is not None:
             support = extruded
-        elif not isinstance(support, (Cylinder, Cone)):
+        elif not isinstance(support, (Cylinder, Cone, NurbsSurface)):
             support = _qualified_face_plane(model, face_id)
             if not isinstance(face.surface, Plane):
                 # Prefer the authored boundary frame to arbitrary SVD axes
