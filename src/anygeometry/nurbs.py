@@ -35,6 +35,7 @@ from .errors import GeometryError
 from .reference import bspline as _reference
 
 __all__ = [
+    "cylinder_to_nurbs",
     "nurbs_circular_arc",
     "MAX_DEGREE",
     "NurbsCurve",
@@ -451,6 +452,159 @@ class NurbsSurface:
     def evaluate(self, u: float, v: float) -> np.ndarray:
         return self.evaluate_many(_pair(u, v)[None, :])[0]
 
+    def derivatives_many(self, uv) -> tuple[np.ndarray, np.ndarray]:
+        """First chart derivatives ``(S_u, S_v)`` for chart points of shape ``(n, 2)`` in [0, 1]^2.
+
+        ``S_u = sum N_i' M_j w_ij (P_ij - S) / w`` (and likewise ``S_v``): differences
+        to the point itself, so a constant row gives an exact zero derivative.
+        """
+        uv = _parameters(uv, "surface chart points")
+        if uv.ndim != 2 or uv.shape[1] != 2:
+            raise GeometryError("surface chart points must have shape (n, 2)")
+        u = _map(uv[:, 0], *self.u_range)
+        v = _map(uv[:, 1], *self.v_range)
+        knots_u, knots_v = np.asarray(self.knots_u), np.asarray(self.knots_v)
+        count_u, count_v = len(self.controls), len(self.controls[0])
+        spans_u = _reference.find_spans(self.degree_u, knots_u, count_u, u)
+        spans_v = _reference.find_spans(self.degree_v, knots_v, count_v, v)
+        basis_u = _reference.basis_derivatives(self.degree_u, knots_u, spans_u, u, 1)
+        basis_v = _reference.basis_derivatives(self.degree_v, knots_v, spans_v, v, 1)
+        points = np.asarray(self.controls)
+        weights = _scaled_weights(np.ones((count_u, count_v)) if self.weights is None else np.asarray(self.weights))
+        rows = spans_u[:, None] - self.degree_u + np.arange(self.degree_u + 1)[None, :]
+        cols = spans_v[:, None] - self.degree_v + np.arange(self.degree_v + 1)[None, :]
+        local_points = points[rows[:, :, None], cols[:, None, :]]                 # (m, p+1, q+1, 3)
+        local_weights = weights[rows[:, :, None], cols[:, None, :]]               # (m, p+1, q+1)
+        w = np.einsum("mi,mj,mij->m", basis_u[:, 0], basis_v[:, 0], local_weights)
+        point = np.einsum("mi,mj,mij,mijd->md", basis_u[:, 0], basis_v[:, 0], local_weights, local_points) / w[:, None]
+        differences = local_points - point[:, None, None, :]
+        s_u = np.einsum("mi,mj,mij,mijd->md", basis_u[:, 1], basis_v[:, 0], local_weights, differences) / w[:, None]
+        s_v = np.einsum("mi,mj,mij,mijd->md", basis_u[:, 0], basis_v[:, 1], local_weights, differences) / w[:, None]
+        s_u *= self.u_range[1] - self.u_range[0]
+        s_v *= self.v_range[1] - self.v_range[0]
+        if not (np.all(np.isfinite(s_u)) and np.all(np.isfinite(s_v))):
+            raise GeometryError("NURBS surface derivative is not representable in float64")
+        return s_u, s_v
+
+    def exact_net(self) -> tuple[tuple[tuple[Fraction, ...], ...], ...]:
+        """Homogeneous control net ``(w x, w y, w z, w)`` as exact rationals of the stored doubles."""
+        count_v = len(self.controls[0])
+        weights = self.weights if self.weights is not None else ((1.0,) * count_v,) * len(self.controls)
+        net = []
+        for row, weight_row in zip(self.controls, weights):
+            entries = []
+            for point, weight in zip(row, weight_row):
+                w = Fraction(weight)
+                entries.append(tuple(Fraction(value) * w for value in point) + (w,))
+            net.append(tuple(entries))
+        return tuple(net)
+
+    def exact_point(self, u, v, net=None) -> tuple[Fraction, Fraction, Fraction]:
+        """The exact rational point at the chart point ``(u, v)`` (Fractions or doubles).
+
+        The chart map is the exact affine map of [0, 1] onto the ranges (the
+        engine's float evaluation rounds it; see ``patch_bounds`` for the slack).
+        """
+        net = self.exact_net() if net is None else net
+        s, t = _exact_chart(u, self.u_range), _exact_chart(v, self.v_range)
+        knots_u, knots_v = [Fraction(k) for k in self.knots_u], [Fraction(k) for k in self.knots_v]
+        p, q, count_u, count_v = self.degree_u, self.degree_v, len(net), len(net[0])
+        span_u, span_v = _exact_span(p, knots_u, count_u, s), _exact_span(q, knots_v, count_v, t)
+        basis_u, basis_v = _exact_basis(p, knots_u, span_u, s), _exact_basis(q, knots_v, span_v, t)
+        total = [Fraction(0)] * 4
+        for a, nu in enumerate(basis_u):
+            for b, nv in enumerate(basis_v):
+                entry = net[span_u - p + a][span_v - q + b]
+                factor = nu * nv
+                total = [x + factor * y for x, y in zip(total, entry)]
+        return tuple(value / total[3] for value in total[:3])
+
+    def patch_bounds(self, box, net=None) -> tuple[tuple[Fraction, ...], tuple[Fraction, ...], Fraction]:
+        """Exact box and squared Jacobian bound of the sub-patch over a chart box.
+
+        ``box = ((u0, u1), (v0, v1))`` inside [0, 1]^2 (either order). The knot
+        intervals are the exact chart images widened by ``4 ulp`` of the range
+        ends (the engine's float chart map ``_map`` errs by less than that) and
+        clipped to the ranges, so the result also covers the float-evaluated
+        parameters. The sub-patch net comes from exact knot insertion of the
+        interval ends to multiplicity ``degree`` (A5.1); its projected controls
+        bound the patch (convex hull property, positive weights).
+
+        The squared bound ``sigma2`` of the largest singular value of
+        ``[S_u S_v]`` (chart derivatives) is ``|S_u|^2 + |S_v|^2`` bounded with
+        ``S_u = sum N_i' M_j w_ij (P_ij - S) / w`` summed by parts:
+        ``S_u = p sum_i N_{i,p-1} / (k_{i+p} - k_i) sum_j M_j c_ij / w`` with
+        ``c_ij = w_ij (P_ij - P_{i-1,j}) + (w_ij - w_{i-1,j}) (P_{i-1,j} - S)``, so
+        ``|S_u| <= p |scale| max_i max_j (w_ij |P_ij - P_{i-1,j}| + |w_ij - w_{i-1,j}| D)
+        / (k_{i+p} - k_i) / w_min`` over the degree ``p - 1`` basis functions active on
+        the interval (``D`` the sub-net box diameter bounds ``|P - S|``; the
+        partitions of unity and ``w >= w_min`` do the rest). On a shrinking box the
+        control differences converge to the derivative and the weight
+        differences vanish, so the bound converges to ``|S_u|`` (up to the
+        knot-spacing ratio).
+        """
+        net = self.exact_net() if net is None else net
+        (u0, u1), (v0, v1) = box
+        s0, s1 = _knot_interval(u0, u1, self.u_range)
+        t0, t1 = _knot_interval(v0, v1, self.v_range)
+        p, q, count_v = self.degree_u, self.degree_v, len(net[0])
+        rows = [sum(row, ()) for row in net]                       # each row one flat vector (a u-curve "point")
+        knots_u, rows, active_u = _exact_refine(p, [Fraction(k) for k in self.knots_u], rows, s0, s1)
+        columns = [sum((rows[i][4 * j: 4 * j + 4] for i in active_u), ()) for j in range(count_v)]
+        knots_v, columns, active_v = _exact_refine(q, [Fraction(k) for k in self.knots_v], columns, t0, t1)
+        grid = {}                                                  # (refined u index, refined v index) -> (P, w)
+        for j in active_v:
+            column = columns[j]
+            for a, i in enumerate(active_u):
+                x, y, z, w = column[4 * a: 4 * a + 4]
+                grid[i, j] = ((x / w, y / w, z / w), w)
+        points = [entry[0] for entry in grid.values()]
+        weights = [entry[1] for entry in grid.values()]
+        lower = tuple(min(point[k] for point in points) for k in range(3))
+        upper = tuple(max(point[k] for point in points) for k in range(3))
+        diameter = _sqrt_up(sum(((b - a) ** 2 for a, b in zip(lower, upper)), Fraction(0)))
+        w_min = min(weights)
+        bound_u = _derivative_bound(p, knots_u, s0, s1, self.u_range, active_u, active_v,
+                                    lambda i, j: grid[i, j], diameter) / w_min
+        bound_v = _derivative_bound(q, knots_v, t0, t1, self.v_range, active_v, active_u,
+                                    lambda j, i: grid[i, j], diameter) / w_min
+        sigma2 = bound_u ** 2 + bound_v ** 2
+        return lower, upper, sigma2
+
+    def iso_curve(self, fixed: str, value: float) -> "NurbsCurve":
+        """The curve ``u = value`` (``fixed="u"``, running in v) or ``v = value`` (running in u).
+
+        Computed exactly at the engine's float knot parameter of ``value`` and
+        rounded once (controls and weights to nearest): the curve parameter is the
+        other chart parameter, so ``curve.evaluate(t)`` matches
+        ``surface.evaluate(value, t)`` (or ``(t, value)``) to rounding.
+        """
+        if fixed not in ("u", "v"):
+            raise GeometryError('iso_curve: fixed must be "u" or "v"')
+        chart = _real(value, "iso-curve parameter")
+        if not 0.0 <= chart <= 1.0:
+            raise GeometryError("iso-curve parameter must lie in [0, 1]")
+        net = self.exact_net()
+        if fixed == "v":
+            net = tuple(zip(*net))
+        degree, knots, chart_range = ((self.degree_u, self.knots_u, self.u_range) if fixed == "u"
+                                      else (self.degree_v, self.knots_v, self.v_range))
+        other = (self.degree_v, self.knots_v, self.v_range) if fixed == "u" else (self.degree_u, self.knots_u,
+                                                                                    self.u_range)
+        s = Fraction(float(_map(np.array([chart]), *chart_range)[0]))
+        exact_knots = [Fraction(k) for k in knots]
+        span = _exact_span(degree, exact_knots, len(net), s)
+        basis = _exact_basis(degree, exact_knots, span, s)
+        controls, weights = [], []
+        for j in range(len(net[0])):
+            total = [Fraction(0)] * 4
+            for a, n in enumerate(basis):
+                total = [x + n * y for x, y in zip(total, net[span - degree + a][j])]
+            weights.append(float(total[3]))
+            controls.append(tuple(float(x / total[3]) for x in total[:3]))
+        rational = self.weights is not None
+        return NurbsCurve(other[0], other[1], tuple(controls), tuple(weights) if rational else None, other[2])
+
     def transformed(self, matrix) -> "NurbsSurface":
         values = _affine(matrix)
         points = np.asarray(self.controls) @ values[:3, :3].T + values[:3, 3]
@@ -762,3 +916,51 @@ def _float_up(value: Fraction) -> float:
         return -float(np.finfo(float).max)
     rounded = float(value)
     return math.nextafter(rounded, math.inf) if Fraction(rounded) < value else rounded
+
+
+def _derivative_bound(p: int, knots: list, s0: Fraction, s1: Fraction, chart_range, active: list,
+                      other: list, entry, diameter: Fraction) -> Fraction:
+    """``p |scale| max_i max_j (w_ij |P_ij - P_{i-1,j}| + |w_ij - w_{i-1,j}| D) / (k_{i+p} - k_i)``.
+
+    ``i`` runs over the degree ``p - 1`` basis functions not identically zero on
+    the interval (for ``s0 == s1``: not zero at the point, a superset); both
+    ``i - 1`` and ``i`` are then active degree-``p`` controls. Divide by ``w_min``.
+    """
+    present = set(active)
+    worst = Fraction(0)
+    for i in range(1, len(knots) - p):
+        length = knots[i + p] - knots[i]
+        if length <= 0:
+            continue
+        if s0 < s1:
+            live = knots[i] < s1 and knots[i + p] > s0
+        else:
+            live = knots[i] <= s0 <= knots[i + p]
+        if not live:
+            continue
+        if i not in present or i - 1 not in present:
+            raise GeometryError("NURBS sub-patch derivative bound: inconsistent active controls")
+        for j in other:
+            (point, weight), (previous, previous_weight) = entry(i, j), entry(i - 1, j)
+            step = _sqrt_up(sum(((a - b) ** 2 for a, b in zip(point, previous)), Fraction(0)))
+            term = (weight * step + abs(weight - previous_weight) * diameter) / length
+            worst = max(worst, term)
+    scale = abs(Fraction(chart_range[1]) - Fraction(chart_range[0]))
+    return p * scale * worst
+
+
+def cylinder_to_nurbs(cylinder) -> "NurbsSurface":
+    """The cylinder patch as a rational NURBS surface of degree (2, 1).
+
+    u runs along a ``nurbs_circular_arc`` of the cylinder's start/sweep (at most
+    four <= 90 degree segments), v along the axis over the height. The surface
+    is the same point set to rounding of the controls, but the u chart is the
+    rational arc parameter, not the angle (architecture 3.5: a NURBS copy is a
+    different exact object and is never reclassified as the cylinder).
+    """
+    arc = nurbs_circular_arc(cylinder.origin, cylinder.radial_direction, cylinder.circumferential_direction,
+                             cylinder.radius, cylinder.start_angle, cylinder.sweep_angle)
+    lift = np.asarray(cylinder.axis, dtype=float) * float(cylinder.height)
+    controls = tuple((point, tuple(map(float, np.asarray(point) + lift))) for point in arc.controls)
+    weights = tuple((weight, weight) for weight in arc.weights)
+    return NurbsSurface(2, 1, arc.knots, (0.0, 0.0, 1.0, 1.0), controls, weights)

@@ -8,8 +8,8 @@ bit-identical to what the engine computes today.
 
 Proof objects (``enclosure``, ``jacobian_bounds``) are sound or ``None``;
 ``None`` means a route that needs them refuses (architecture 1.1 rule 4).
-This slice provides them for ``Plane``; the other built-in types gain them
-when a route needs them. ``exact_uv`` (rule 3) is the only inversion a
+``Plane`` (A1a) and ``NurbsSurface`` (A3a) provide them; the other built-in
+types gain them when a route needs them. ``exact_uv`` (rule 3) is the only inversion a
 decision may use and exists for planes only; ``invert_local`` is a local
 inversion for coordinates, never a closest-point guarantee and never a
 decision input (R.1 A6).
@@ -29,6 +29,7 @@ import numpy as np
 
 from .errors import GeometryError
 from .exact_predicates import exact, exact_cross, exact_dot, exact_vector
+from .nurbs import NurbsSurface
 from .surfaces import (Cone, CoonsSurface, Cylinder, ExtrudedSurface, Plane, RuledSurface,
                        _evaluate_surface_many, _surface_derivatives_many)
 
@@ -280,6 +281,70 @@ def _generic_capabilities(surface, kind: SurfaceKind, *, periodic_u=None, is_exa
         transformed=_transformed(surface), is_exact=is_exact)
 
 
+def _nurbs_capabilities(surface: NurbsSurface) -> SurfaceCapabilities:
+    """NURBS: enclosure and Jacobian bound of a chart box from the exact sub-patch net (A3a)."""
+    net = []                                         # exact homogeneous net, built on first use
+
+    def exact_net():
+        if not net:
+            net.append(surface.exact_net())
+        return net[0]
+
+    def evaluate(uv):
+        return surface.evaluate_many(_uv_array(uv))
+
+    def derivatives(uv, order: int = 1):
+        if order != 1:
+            raise ValueError("only first derivatives are provided for NURBS surfaces")
+        return surface.derivatives_many(_uv_array(uv))
+
+    def invert(points, initial=None, tolerance=0.0):
+        return _nurbs_invert_local(surface, _points_array(points), initial, tolerance)
+
+    def enclosure(box):
+        lower, upper, _ = surface.patch_bounds(box, exact_net())
+        return Enclosure(tuple(_down(value) for value in lower), tuple(_up(value) for value in upper))
+
+    def jacobian_bounds(box):
+        _, _, sigma2 = surface.patch_bounds(box, exact_net())
+        return JacobianBounds(_up(_sqrt_bounds(sigma2)[1]), 0.0)
+
+    return SurfaceCapabilities(
+        kind=SurfaceKind.NURBS, definition=surface, support_key=("nurbs", surface.support_key()),
+        domain=((0.0, 1.0), (0.0, 1.0)), periodic_u=None,
+        evaluate=evaluate, derivatives=derivatives, invert_local=invert,
+        exact_uv=None, enclosure=enclosure, jacobian_bounds=jacobian_bounds, implicit=None,
+        transformed=_transformed(surface), is_exact=True)
+
+
+_SEEDS = np.stack(np.meshgrid(np.linspace(0.0, 1.0, 17), np.linspace(0.0, 1.0, 17), indexing="ij"),
+                  axis=-1).reshape(-1, 2)
+
+
+def _nurbs_invert_local(surface, points, initial, tolerance) -> InversionResult:
+    """Clamped Gauss-Newton from the nearest of 17 x 17 chart seeds (or ``initial``); local only."""
+    if not len(points):
+        return InversionResult(np.zeros((0, 2)), np.zeros(0))
+    if initial is None:
+        seeds = surface.evaluate_many(_SEEDS)
+        nearest = np.argmin(((points[:, None, :] - seeds[None, :, :]) ** 2).sum(axis=2), axis=1)
+        uv = _SEEDS[nearest].copy()
+    else:
+        uv = np.clip(_uv_array(initial).copy(), 0.0, 1.0)
+    step_floor = max(float(tolerance), 4 * np.finfo(float).eps)
+    for _ in range(60):
+        residual = surface.evaluate_many(uv) - points
+        s_u, s_v = surface.derivatives_many(uv)
+        jacobian = np.stack((s_u, s_v), axis=2)                           # (n, 3, 2)
+        step = -np.einsum("nij,nj->ni", np.linalg.pinv(jacobian), residual)
+        new = np.clip(uv + step, 0.0, 1.0)
+        moved = np.max(np.abs(new - uv)) if len(uv) else 0.0
+        uv = new
+        if moved <= step_floor:
+            break
+    return InversionResult(uv, np.linalg.norm(surface.evaluate_many(uv) - points, axis=1))
+
+
 def _full_turn(surface) -> float | None:
     return 1.0 if abs(abs(float(surface.sweep_angle)) - math.tau) <= 1e-12 else None
 
@@ -343,6 +408,8 @@ def capabilities(surface) -> SurfaceCapabilities:
         return _generic_capabilities(surface, SurfaceKind.RULED, is_exact=False)
     if isinstance(surface, CoonsSurface):
         return _generic_capabilities(surface, SurfaceKind.COONS, is_exact=False)
+    if isinstance(surface, NurbsSurface):
+        return _nurbs_capabilities(surface)
     raise TypeError(f"no surface capabilities for {type(surface).__name__}")
 
 
