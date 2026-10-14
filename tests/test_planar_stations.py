@@ -708,13 +708,15 @@ def test_subnormal_scale_derived_edges_need_no_float_length():
 
 def test_subnormal_scale_seam_rays_need_no_float_norm():
     """Review (E1 round 3): a trace entering the face by 1e-180 (> tol = 1e-200) ends inside; its
-    seam rays are exact directions (no "interior junction needs a regular chart"). On E1's open
-    network the 1e-180 sliver does not conserve at area_tolerance = tol (closure: E2/E3); listed."""
+    seam rays are exact directions (no "interior junction needs a regular chart"). E1's open network
+    did not conserve the 1e-180 sliver at area_tolerance = tol; the closed embedding (E2/E3) does:
+    two seams through the end (vertical: the 1e-180 sliver; horizontal: along the trace) give 4
+    cells, area 16 (decision change vs main's 1 cell)."""
     plane = Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.))
     square = _square_loop([(0., 0.), (4., 0.), (4., 4.), (0., 4.)])
     trace = ArrangementPath(LinePath((-2., 2., 0.), (1e-180, 2., 0.)), owners=(1, 2))
-    with pytest.raises(GeometryError, match="failed material conservation"):
-        arrange_material(MaterialDomain(1, plane, (square,)), (trace,), tolerance=1e-200)
+    result = arrange_material(MaterialDomain(1, plane, (square,)), (trace,), tolerance=1e-200)
+    assert (len(result.cells), result.area) == (4, 16.)
 
 
 def test_short_traces():
