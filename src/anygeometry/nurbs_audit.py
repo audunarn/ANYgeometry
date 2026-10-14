@@ -27,23 +27,27 @@ from fractions import Fraction
 
 import numpy as np
 
-from .nurbs import CurveOnSurface
+from .nurbs import CurveOnSurface, NurbsCurve
 
 _BUDGET = 20000
 
 
 def _exact_hull(curve, lower: float, upper: float):
+    """Exact hull of a world edge curve's piece: iso-line curves on NURBS supports; 2D pcurves in the chart."""
     if isinstance(curve, CurveOnSurface) and curve._iso_world() is not None:
         return curve._iso_hull(lower, upper, exact=True)
+    if isinstance(curve, NurbsCurve) and curve.dimension == 2:
+        return curve.exact_hull(lower, upper)
     return None
 
 
 def _strictly_separated(first, second) -> bool:
-    for k in range(3):
+    dimension = len(first[0])
+    for k in range(dimension):
         if max(p[k] for p in first) < min(q[k] for q in second) or max(q[k] for q in second) < min(p[k] for p in first):
             return True
-    centre_first = [sum(p[k] for p in first) / len(first) for k in range(3)]
-    centre_second = [sum(q[k] for q in second) / len(second) for k in range(3)]
+    centre_first = [sum(p[k] for p in first) / len(first) for k in range(dimension)]
+    centre_second = [sum(q[k] for q in second) / len(second) for k in range(dimension)]
     normal = [b - a for a, b in zip(centre_first, centre_second)]
     if not any(normal):
         return False
@@ -110,3 +114,18 @@ def certify_only_shared_ends(first, second, budget: int = _BUDGET) -> bool | Non
             for second_piece in ((b0, bm), (bm, b1)):
                 queue.append((first_piece, second_piece))
     return True
+
+
+def shared_ends_consistent(first_edge, second_edge) -> bool:
+    """Whether exact end coincidences of two edge curves are exactly their shared topology vertices.
+
+    Every exact end coincidence must join the same vertex ID, and every shared
+    vertex ID must be an exact end coincidence; only then may
+    ``certify_only_shared_ends`` stand for the topology (review A3b B-S4).
+    """
+    first_ids, second_ids = (first_edge.start, first_edge.end), (second_edge.start, second_edge.end)
+    matches = [(a, b) for a in (0, 1) for b in (0, 1)
+               if first_edge.curve.exact_point(a) == second_edge.curve.exact_point(b)]
+    return (all(first_ids[a] == second_ids[b] for a, b in matches)
+            and set(first_ids) & set(second_ids) == {first_ids[a] for a, _b in matches})
+

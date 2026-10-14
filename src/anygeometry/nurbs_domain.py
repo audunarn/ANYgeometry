@@ -340,6 +340,17 @@ def world_area_loop(domain, loop, tolerance) -> float:
 # ------------------------------------------------------------------ certified trim polylines (A3b B-S3)
 
 
+def _exact_segment_distance(point, a, b) -> Fraction:
+    """Exact upper bound (rational sqrt rounded up) of the distance from ``point`` to the segment ``[a, b]``."""
+    from .nurbs import _sqrt_up
+    direction = [y - x for x, y in zip(a, b)]
+    length2 = sum(value * value for value in direction)
+    offset = [p - x for p, x in zip(point, a)]
+    r = Fraction(0) if length2 == 0 else min(Fraction(1), max(Fraction(0), sum(
+        o * d for o, d in zip(offset, direction)) / length2))
+    return _sqrt_up(sum((o - r * d) ** 2 for o, d in zip(offset, direction)))
+
+
 def _segment_distance(point, a, b) -> float:
     direction = b - a
     length2 = float(direction @ direction)
@@ -351,28 +362,33 @@ def _segment_distance(point, a, b) -> float:
 
 def certified_chart_polyline(surface: NurbsSurface, pcurve: NurbsCurve, tolerance: float,
                              max_pieces: int = 1 << 16) -> tuple[np.ndarray, float]:
-    """Chart polyline of a pcurve whose image deviates from the trim curve by at most the returned bound.
+    """Chart polyline of a pcurve whose surface image deviates from the trim curve by at most the returned bound.
 
-    Each piece's exact control hull (``NurbsCurve._active_controls``, positive
-    weights) lies within ``d`` of its chord, so the pcurve piece does too; the
-    chart deviation in the infinity norm is at most the Euclidean ``d``, and the
-    world deviation of the mapped chord is at most ``sqrt(2) sigma_max d``
-    (architecture 1.4, ``sigma_max`` of the whole patch). Pieces are halved
-    until that is ``<= tolerance``. The float distances carry a relative margin
-    of 1e-12 and the chord ends' rounding (an ulp of the chart) is added.
+    The polyline lives in the chart (``trim_loops_uv_certified``, architecture
+    3.3): the bound is for the *surface image* of each chart chord against the
+    trim curve, not for a straight world segment (a mesher maps chart points
+    through the surface). Each piece's exact control hull
+    (``NurbsCurve._active_controls``, positive weights) lies within ``d`` of its
+    chord, so the pcurve piece does too; the chart deviation in the infinity
+    norm is at most the Euclidean ``d``, and the world deviation of the mapped
+    chord is at most ``sqrt(2) sigma_max d`` (architecture 1.4, ``sigma_max`` of
+    the whole patch). ``d`` is computed exactly (rational distances of the hull
+    points to the chord through the stored float polyline vertices, rounded up)
+    and the product is rounded up. Pieces are halved until it is ``<= tolerance``.
     """
+    from .nurbs import _float_up, _sqrt_up
     from .surface_capabilities import capabilities
     sigma = capabilities(surface).jacobian_bounds(((0.0, 1.0), (0.0, 1.0))).sigma_max
-    factor = math.sqrt(2.0) * sigma * (1 + 1e-12)
-    end_rounding = 2 * _EPS
+    factor = _sqrt_up(Fraction(2)) * Fraction(sigma)
     accepted: list[tuple[float, float, float]] = []
     pending = [(0.0, 1.0)]
     while pending:
         a, b = pending.pop()
-        hull = np.asarray([[float(value) for value in point] for point in pcurve._active_controls(a, b)])
-        ends = np.clip(pcurve.evaluate(np.array([a, b])), 0.0, 1.0)
-        deviation = max(_segment_distance(point, ends[0], ends[1]) for point in hull) + end_rounding
-        bound = factor * deviation
+        hull = pcurve._active_controls(a, b)
+        ends = [tuple(Fraction(float(value)) for value in point)
+                for point in np.clip(pcurve.evaluate(np.array([a, b])), 0.0, 1.0)]
+        deviation = max(_exact_segment_distance(point, ends[0], ends[1]) for point in hull)
+        bound = _float_up(factor * deviation)
         if bound <= tolerance:
             accepted.append((a, b, bound))
             continue

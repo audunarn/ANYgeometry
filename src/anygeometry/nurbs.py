@@ -309,6 +309,21 @@ class NurbsCurve:
         _, refined, active = _exact_refine(self.degree, [Fraction(k) for k in self.knots], points, s0, s1)
         return [tuple(value / refined[i][-1] for value in refined[i][:-1]) for i in active]
 
+    def exact_hull(self, lower, upper) -> list:
+        """Exact projected controls bounding the exact curve on ``[lower, upper]`` (no widening).
+
+        The interval is the exact image of the engine interval in the knot
+        parameter; its ends are inserted exactly to multiplicity ``degree``, so
+        the curve points at both ends are hull points (certificates, A3b).
+        """
+        start, end = (Fraction(value) for value in self.domain)
+        s0, s1 = sorted((start + Fraction(lower) * (end - start), start + Fraction(upper) * (end - start)))
+        weights = self.weights if self.weights is not None else (1.0,) * len(self.controls)
+        points = [tuple(Fraction(value) * Fraction(w) for value in point) + (Fraction(w),)
+                  for point, w in zip(self.controls, weights)]
+        _, refined, active = _exact_refine(self.degree, [Fraction(k) for k in self.knots], points, s0, s1)
+        return [tuple(value / refined[i][-1] for value in refined[i][:-1]) for i in active]
+
     def bounds(self, lower=0.0, upper=1.0):
         """Outward-rounded box containing the curve on ``[lower, upper]`` (see ``_active_controls``).
 

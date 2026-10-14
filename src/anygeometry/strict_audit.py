@@ -1786,11 +1786,10 @@ class _StrictAuditState:
             # Curves on NURBS supports: an exact certificate that they meet at most at
             # their shared end points (A3b, nurbs_audit); otherwise the general route
             # below reports the pair as unclassified.
-            from .nurbs_audit import certify_only_shared_ends
-            shared = {first.start, first.end} & {second.start, second.end}
-            if certify_only_shared_ends(first.curve, second.curve) and len(shared) == len(
-                    {(a, b) for a in (0, 1) for b in (0, 1)
-                     if first.curve.exact_point(a) == second.curve.exact_point(b)}):
+            from .nurbs_audit import certify_only_shared_ends, shared_ends_consistent
+            # The exact end coincidences must be exactly the shared topology vertices
+            # (review A3b B-S4: matching counts let a near-duplicate vertex pass).
+            if shared_ends_consistent(first, second) and certify_only_shared_ends(first.curve, second.curve):
                 return _PairClassification(True)
         if not isinstance(first.curve, Straight) or not isinstance(second.curve, Straight):
             from .intersections import query_intersection

@@ -5272,8 +5272,7 @@ class GeometryModel:
                 self._require_nurbs_face_loops(face.surface, loops)
             except GeometryError as error:
                 return [f"face {face_id}: {error}"]
-            return self._validate_trim_polygons(face_id, [self._nurbs_chart_loop_points(loop) for loop in loops],
-                                                planar=False)
+            return self._validate_nurbs_trims(face_id, face.surface, loops)
         if isinstance(face.surface, Plane) and all(
             isinstance(self.edges[item.edge].curve, Straight)
             for loop in loops
@@ -5377,6 +5376,61 @@ class GeometryModel:
             return [f"face {face_id} is non-planar and has no explicit surface"]
 
         return self._validate_trim_polygons(face_id, polygons, planar=planar)
+
+    def _validate_nurbs_trims(self, face_id: int, surface, loops) -> List[str]:
+        """Exact trim validation of a NURBS face in its chart (review A3b B-S2: sampled checks were wrong both ways).
+
+        Within a loop, adjacent pcurves share exactly their joint and other
+        pairs share nothing, and every pair is certified to meet only at those
+        shared ends (``nurbs_audit``, exact chart hulls); hole pcurves share
+        nothing with the outer loop or other holes; each hole lies strictly
+        inside the outer loop and outside the other holes (exact containment of
+        one of its chart vertices, ``nurbs_domain``). The loop's chart area must
+        not vanish. Anything not certified is reported (the face is refused).
+        """
+        from .material_arrangement import ArrangementPath, MaterialDomain
+        from .nurbs_audit import certify_only_shared_ends
+        result: List[str] = []
+        pcurves = [[self.edges[item.edge].curve.pcurve for item in loop] for loop in loops]
+        ends = [[(pcurve.exact_point(0), pcurve.exact_point(1)) for pcurve in loop] for loop in pcurves]
+
+        def shared(first, second):
+            return {point for point in first if point in second}
+
+        for index, loop in enumerate(pcurves):
+            count = len(loop)
+            for i in range(count):
+                for j in range(i + 1, count):
+                    adjacent = j == i + 1 or (i == 0 and j == count - 1)
+                    common = shared(ends[index][i], ends[index][j])
+                    if (len(common) != 1 if adjacent and count > 2 else bool(common) and not adjacent):
+                        result.append(f"face {face_id} loop {index} self-intersects")
+                        continue
+                    if not certify_only_shared_ends(loop[i], loop[j]):
+                        result.append(f"face {face_id} loop {index} is not certified simple")
+        for first in range(len(pcurves)):
+            for second in range(first + 1, len(pcurves)):
+                for a, pcurve_a in enumerate(pcurves[first]):
+                    for b, pcurve_b in enumerate(pcurves[second]):
+                        if shared(ends[first][a], ends[second][b]) or not certify_only_shared_ends(pcurve_a, pcurve_b):
+                            result.append(f"face {face_id} loops {first} and {second} are not certified disjoint")
+        if result:
+            return result
+        domain = MaterialDomain(face_id, surface, tuple(
+            tuple(ArrangementPath(self.edges[item.edge].curve) for item in loop) for loop in loops))
+        tolerance = self.tolerance.length
+        for index, loop in enumerate(domain.boundaries):
+            area = domain.area_loop(loop, 1e-14)
+            if abs(area) <= self.tolerance.effective_area(1.0):
+                result.append(f"face {face_id} loop {index} has zero area")
+        for index in range(1, len(loops)):
+            point = np.array([float(value) for value in ends[index][0][0]])
+            if not domain.contains_loop(domain.boundaries[0], point, tolerance, boundary=False):
+                result.append(f"face {face_id} hole {index} is not strictly inside the outer loop")
+            for other in range(1, len(loops)):
+                if other != index and domain.contains_loop(domain.boundaries[other], point, tolerance):
+                    result.append(f"face {face_id} holes {index} and {other} overlap")
+        return result
 
     def _nurbs_chart_loop_points(self, loop: Sequence[OrientedEdge]) -> np.ndarray:
         """Chart samples of a NURBS face loop from its pcurves (17 per edge, as other curved trims)."""
@@ -5542,7 +5596,7 @@ class GeometryModel:
         if offset.shape != (3,):
             raise GeometryError("extrusion vector must be a 3 component vector")
         from .nurbs import CurveOnSurface
-        if any(isinstance(self.edges[edge_id].curve, CurveOnSurface) for edge_id in edge_ids):
+        if any(isinstance(self._require_edge(edge_id).curve, CurveOnSurface) for edge_id in edge_ids):
             raise GeometryError("extruding an edge on a NURBS support is not supported (plan A3b B-S1)")
         if float(np.linalg.norm(offset)) <= 0.0:
             raise GeometryError("extrusion vector must be non-zero")
