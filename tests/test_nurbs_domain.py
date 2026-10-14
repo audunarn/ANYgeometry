@@ -200,3 +200,58 @@ def test_world_area_of_an_affine_patch_is_the_scaled_chart_area():
     circle = chart_circle(surface, (.5, .5), .3)
     expected_circle = float(np.linalg.norm(np.cross(a, b))) * math.pi * .09
     assert abs(domain.world_area_loop(circle, 1e-13) - expected_circle) <= 1e-12 * expected_circle
+
+
+# ------------------------------------------------------------------ review A1e round 1
+
+
+def test_level_roots_terminate_on_tangencies_and_runs_along_the_level():
+    tangent = NurbsCurve(2, (0., 0., 0., 1., 1., 1.), ((.1, .75), (.5, .25), (.9, .75)))
+    roots = nurbs_domain.level_roots(tangent, 1, .5, 1e-10)
+    assert len(roots) == 1 and abs(roots[0] - .5) <= 1e-6
+    run = NurbsCurve(1, (0., 0., .5, 1., 1.), ((.1, .5), (.5, .5), (.9, .9)))
+    roots = nurbs_domain.level_roots(run, 1, .5, 1e-10)
+    assert roots[0] == 0. and abs(roots[-1] - .5) <= 1e-9 and len(roots) == 2
+    crossing = NurbsCurve(2, (0., 0., 0., 1., 1., 1.), ((.1, .75), (.5, 0.), (.9, .75)))
+    roots = nurbs_domain.level_roots(crossing, 1, .5, 1e-10)
+    assert len(roots) == 2 and all(abs(crossing.evaluate(t)[1] - .5) <= 1e-12 for t in roots)
+
+
+def test_containment_with_a_ray_tangent_to_a_hole():
+    surface = wavy_patch()
+    outer = polygon(surface, [(0., 0.), (1., 0.), (1., 1.), (0., 1.)])
+    hole = chart_circle(surface, (.5, .5), .2)
+    domain = MaterialDomain(0, surface, (outer, hole))
+    # rays at v = .7 and .3 touch the hole's circle; (.5, .7) is on it (material boundary)
+    for point, expected in (((.1, .7), True), ((.1, .3), True), ((.5, .7), True), ((.5, .69), False),
+                            ((.9, .7), True), ((.5, .31), False)):
+        uv = np.asarray(point)
+        inside = (domain.contains_loop(outer, uv, 1e-9)
+                  and not domain.contains_loop(hole, uv, 1e-9, boundary=False))
+        assert inside == expected, point
+
+
+def test_world_area_splits_at_surface_knot_crossings():
+    heights = (0., .5, 1.)
+    narrow_v = NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., .999999, 1., 1.),
+                            tuple(tuple((float(i), heights[j], 0.) for j in range(3)) for i in range(2)))
+    square = polygon(narrow_v, [(0., 0.), (1., 0.), (1., 1.), (0., 1.)])
+    assert abs(MaterialDomain(0, narrow_v, (square,)).world_area_loop(square, 1e-12) - 1.) <= 1e-12
+    narrow_u = NurbsSurface(1, 1, (0., 0., .999999, 1., 1.), (0., 0., 1., 1.),
+                            tuple(tuple((heights[i], float(j), 0.) for j in range(2)) for i in range(3)))
+    triangle = polygon(narrow_u, [(0., 0.), (1., 1.), (0., 1.)])
+    # x(u) is piecewise linear with a knot at .999999: the image triangle's exact area is .2500005
+    value = MaterialDomain(0, narrow_u, (triangle,)).world_area_loop(triangle, 1e-12)
+    assert abs(value - .2500005) <= 1e-9
+
+
+def test_trimmed_curve_end_derivatives_are_inward():
+    curve = NurbsCurve(1, (0., 0., .5, 1., 1.), ((.1, .1), (.4, .2), (.9, .9)), domain=(0., .5))
+    np.testing.assert_allclose(curve.derivative(1.), (.3, .1), atol=1e-15)
+    reversed_curve = NurbsCurve(1, (0., 0., .5, 1., 1.), ((.1, .1), (.4, .2), (.9, .9)), domain=(.5, 0.))
+    np.testing.assert_allclose(reversed_curve.derivative(0.), (-.3, -.1), atol=1e-15)
+    affine = NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.),
+                          (((0., 0., 0.), (0., 1., 0.)), ((1., 0., 0.), (1., 1., 0.))))
+    on_surface = CurveOnSurface(affine, curve)
+    np.testing.assert_allclose(on_surface.derivative(1.), (.3, .1, 0.), atol=1e-15)
+    np.testing.assert_allclose(on_surface.second_derivative(1.), (0., 0., 0.), atol=1e-15)

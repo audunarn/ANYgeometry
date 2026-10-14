@@ -237,11 +237,41 @@ class NurbsCurve:
         s, scale = self._knot_parameters(parameters)
         values = _call(backend.bspline_curve, self.degree, self.knots, self.controls, self.weights,
                        np.ravel(s), order)
+        if order:
+            self._inward_end_rows(np.ravel(s), values, order)
         for k in range(1, order + 1):                 # chain rule one factor at a time (no scale**k)
             values[:, k:, :] *= scale
         if not np.all(np.isfinite(values)):
             raise GeometryError("NURBS derivative is not representable in float64")
         return values.reshape(np.shape(s) + (order + 1, self.dimension))
+
+    def _inward_end_rows(self, s: np.ndarray, values: np.ndarray, order: int) -> None:
+        """Derivatives at the domain's upper end on an interior knot from the span inside the domain.
+
+        The kernels take the span to the right of a knot; when a trimmed domain
+        ends there, that span is outside it. The left piece is evaluated at its
+        end on the curve truncated there (``s`` inserted to multiplicity
+        ``degree``, then clamped). The point itself is unchanged (C0).
+        """
+        p, count = self.degree, len(self.controls)
+        top = max(self.domain)
+        if not self.knots[p] < top < self.knots[count] or top not in self.knots:
+            return
+        rows = np.nonzero(s == top)[0]
+        if not len(rows):
+            return
+        knots = np.asarray(self.knots, dtype=float)
+        controls = np.asarray(self.controls, dtype=float)
+        weights = None if self.weights is None else np.asarray(self.weights, dtype=float)
+        times = p - int(np.count_nonzero(knots == top))
+        if times > 0:
+            knots, controls, weights = _reference.insert_knot(p, knots, controls, weights, top, times)
+        last = int(np.nonzero(knots == top)[0][-1])
+        left_knots = np.concatenate((knots[: last + 1], [top]))
+        left_count = len(left_knots) - p - 1
+        left = _call(backend.bspline_curve, p, tuple(left_knots), tuple(map(tuple, controls[:left_count])),
+                     None if weights is None else tuple(weights[:left_count]), np.full(len(rows), top), order)
+        values[rows, 1:, :] = left[:, 1:, :]
 
     def evaluate(self, parameters) -> np.ndarray:
         return self.derivatives(parameters, 0)[..., 0, :]

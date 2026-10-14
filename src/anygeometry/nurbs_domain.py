@@ -102,23 +102,34 @@ def _bernstein_value(coefficients: np.ndarray, s: float) -> float:
     return float(work[0])
 
 
+_ROOT_WORK = 20000
+
+
 def _bernstein_roots(coefficients: np.ndarray, floor: float) -> list[float]:
     """Roots in [0, 1] of a Bernstein polynomial by subdivision (float route).
 
     ``floor``: coefficients within it of zero count as zero (rounding of the
-    numerator). Returns sorted parameters; touching roots are reported where the
-    polynomial stays within ``floor`` on a tiny interval.
+    numerator). An interval whose coefficients all lie within it is on the
+    level: its two ends are reported, it is not subdivided. Intervals stop at
+    width ``1e-12`` (a tangential root: its midpoint), a single sign change with
+    signed ends is bisected. Total work is bounded; beyond it the search refuses.
     """
     roots: list[float] = []
     stack = [(0.0, 1.0, coefficients)]
+    work = 0
     while stack:
+        work += 1
+        if work > _ROOT_WORK:
+            raise GeometryError("pcurve level roots: subdivision did not resolve (work limit)")
         a, b, c = stack.pop()
         if np.all(c > floor) or np.all(c < -floor):
             continue
-        if b - a <= 1e-15 or len(stack) > 4000:
+        if np.all(np.abs(c) <= floor):
+            roots.extend((a, b))
+            continue
+        if b - a <= 1e-12:
             roots.append(0.5 * (a + b))
             continue
-        # A single sign change of the control polygon and differing end signs: bisect directly.
         signs = np.sign(np.where(np.abs(c) <= floor, 0.0, c))
         nonzero = signs[signs != 0]
         if len(nonzero) and np.count_nonzero(np.diff(nonzero)) == 1 and abs(c[0]) > floor and abs(c[-1]) > floor:
@@ -142,7 +153,7 @@ def _bernstein_roots(coefficients: np.ndarray, floor: float) -> list[float]:
     roots.sort()
     merged: list[float] = []
     for root in roots:
-        if not merged or root - merged[-1] > 1e-12:
+        if not merged or root - merged[-1] > 1e-10:          # a tangential band reports one root
             merged.append(root)
     return merged
 
@@ -178,12 +189,25 @@ def level_roots(pcurve: NurbsCurve, axis: int, value: float, chart_tolerance: fl
         if abs(float(pcurve.evaluate(t)[axis]) - value) <= chart_tolerance:
             found.append(t)
     found = sorted(min(1.0, max(0.0, t)) for t in found)
-    unique: list[float] = []
+    # Group roots between which the coordinate never leaves the level band
+    # (a tangential touch or a run along the level): a group narrower than
+    # 1e-6 is one root (an exact end preferred), a wider one is a run on the
+    # level and reports its two ends.
+    band = max(chart_tolerance, 64 * _EPS)
+    groups: list[list[float]] = []
     for t in found:
-        if not unique or t - unique[-1] > 128 * _EPS:
-            unique.append(t)
-        elif t in (0.0, 1.0):
-            unique[-1] = t                                     # prefer the exact end
+        if groups and (t - groups[-1][-1] <= 128 * _EPS or abs(
+                float(pcurve.evaluate(0.5 * (t + groups[-1][-1]))[axis]) - value) <= band):
+            groups[-1].append(t)
+        else:
+            groups.append([t])
+    unique: list[float] = []
+    for group in groups:
+        ends = [t for t in group if t in (0.0, 1.0)]
+        if group[-1] - group[0] <= 1e-6:
+            unique.append(ends[0] if ends else 0.5 * (group[0] + group[-1]))
+        else:
+            unique.extend((group[0], group[-1]))
     return tuple(unique)
 
 
@@ -200,10 +224,13 @@ def on_horizontal(domain, curve, uv_point, tolerance) -> bool:
 # ------------------------------------------------------------------ areas
 
 
-def _span_nodes(curve: NurbsCurve, count: int) -> tuple[np.ndarray, np.ndarray]:
-    """Gauss nodes and weights on [0, 1] with ``count`` points per span between breakpoints."""
+def _span_nodes(curve: NurbsCurve, count: int, extra=()) -> tuple[np.ndarray, np.ndarray]:
+    """Gauss nodes and weights on [0, 1] with ``count`` points per piece between breakpoints.
+
+    ``extra``: further breakpoints (where the pcurve crosses surface knot lines).
+    """
     nodes, weights = _gauss_legendre(count)
-    pieces = (0.0, *curve.breakpoints(), 1.0)
+    pieces = sorted({0.0, *curve.breakpoints(), *(t for t in extra if 0.0 < t < 1.0), 1.0})
     all_nodes, all_weights = [], []
     for a, b in zip(pieces, pieces[1:]):
         all_nodes.append(a + (b - a) * 0.5 * (nodes + 1))
@@ -249,6 +276,30 @@ def _u_breakpoints(surface: NurbsSurface) -> np.ndarray:
     return np.asarray([value for value in values if 0.0 < value < 1.0])
 
 
+def _v_breakpoints(surface: NurbsSurface) -> np.ndarray:
+    start, end = surface.v_range
+    low, high = min(start, end), max(start, end)
+    values = sorted({(knot - start) / (end - start) for knot in surface.knots_v if low < knot < high})
+    return np.asarray([value for value in values if 0.0 < value < 1.0])
+
+
+def _knot_crossings(surface: NurbsSurface, pcurve: NurbsCurve) -> tuple[float, ...]:
+    """Pcurve parameters where it meets an interior surface knot line (``u`` or ``v``).
+
+    The world-area integrand has derivative jumps there (the surface's
+    continuity), so the outer Gauss rule is split at them; a pcurve running
+    along a knot line contributes its ends.
+    """
+    found: list[float] = []
+    for axis, breaks in ((0, _u_breakpoints(surface)), (1, _v_breakpoints(surface))):
+        for value in breaks:
+            roots = level_roots(pcurve, axis, float(value), 0.0)
+            if roots is None:
+                continue
+            found.extend(roots)
+    return tuple(found)
+
+
 def _area_density(surface: NurbsSurface, uv_points: np.ndarray) -> np.ndarray:
     s_u, s_v = surface.derivatives_many(uv_points)
     return np.linalg.norm(np.cross(s_u, s_v), axis=1)
@@ -278,11 +329,12 @@ def world_area_estimate(domain, loop, tolerance) -> tuple[float, float]:
     """Signed world area ``oint G(u, v) dv`` and the last change of the doubling (an estimate, not a bound)."""
     surface = domain.support
     pcurves = [pcurve_of(domain, path.curve) for path in loop]
+    crossings = [_knot_crossings(surface, pcurve) for pcurve in pcurves]
 
     def evaluate(count):
         value = magnitude = 0.0
-        for pcurve in pcurves:
-            nodes, weights = _span_nodes(pcurve, count)
+        for pcurve, extra in zip(pcurves, crossings):
+            nodes, weights = _span_nodes(pcurve, count, extra)
             q = np.clip(pcurve.evaluate(nodes), 0.0, 1.0)
             dq = pcurve.derivative(nodes)
             moving = dq[:, 1] != 0.0
