@@ -35,6 +35,7 @@ from .errors import GeometryError
 from .reference import bspline as _reference
 
 __all__ = [
+    "nurbs_circular_arc",
     "MAX_DEGREE",
     "NurbsCurve",
     "NurbsSurface",
@@ -275,6 +276,39 @@ class NurbsCurve:
         return (np.nextafter(points.min(axis=0) - margin, -np.inf),
                 np.nextafter(points.max(axis=0) + margin, np.inf))
 
+    def breakpoints(self) -> tuple[float, ...]:
+        """Engine parameters in (0, 1) of the distinct interior knots inside the domain (span ends)."""
+        start, end = self.domain
+        low, high = min(start, end), max(start, end)
+        values = sorted({(knot - start) / (end - start) for knot in self.knots if low < knot < high})
+        return tuple(value for value in values if 0. < value < 1.)
+
+    def exact_point(self, parameter) -> tuple[Fraction, ...]:
+        """The exact rational point at the engine parameter ``parameter`` (a Fraction or double).
+
+        De Boor in homogeneous form (Piegl & Tiller A4.1) in exact arithmetic on
+        the stored doubles; used for decisions on curve ends (architecture 3.4).
+        """
+        t = Fraction(parameter)
+        start, end = (Fraction(value) for value in self.domain)
+        s = start + t * (end - start)
+        knots = [Fraction(value) for value in self.knots]
+        p, count = self.degree, len(self.controls)
+        span = p
+        while span < count - 1 and knots[span + 1] <= s:
+            span += 1
+        weights = [Fraction(1)] * count if self.weights is None else [Fraction(w) for w in self.weights]
+        points = [[Fraction(c) * weights[i] for c in self.controls[i]] + [weights[i]] for i in range(count)]
+        d = [list(points[span - p + j]) for j in range(p + 1)]
+        for r in range(1, p + 1):
+            for j in range(p, r - 1, -1):
+                i = span - p + j
+                denominator = knots[i + p - r + 1] - knots[i]
+                alpha = Fraction(0) if denominator == 0 else (s - knots[i]) / denominator
+                d[j] = [(1 - alpha) * a + alpha * b for a, b in zip(d[j - 1], d[j])]
+        homogeneous = d[p]
+        return tuple(value / homogeneous[-1] for value in homogeneous[:-1])
+
     def transformed(self, matrix) -> "NurbsCurve":
         if self.dimension != 3:
             raise GeometryError("only 3D NURBS curves have a model transformation")
@@ -483,3 +517,40 @@ def nurbs_from_record(record: object):
             raise GeometryError("curve_on_surface needs a nurbs_surface support and a nurbs_pcurve")
         return CurveOnSurface(support, pcurve, (), record["transform"])
     raise GeometryError(f"unsupported NURBS record type {kind!r}")
+
+
+
+def nurbs_circular_arc(center, x_axis, y_axis, radius: float, start: float, sweep: float) -> NurbsCurve:
+    """A circular arc as a rational quadratic NURBS curve (Piegl & Tiller A7.1).
+
+    ``x_axis``/``y_axis`` are orthonormal directions of the arc's plane; the arc
+    runs from angle ``start`` over ``sweep`` (|sweep| <= 2 pi), split into at most
+    four segments of <= 90 degrees with middle weights ``cos(delta / 2)``. The
+    curve is exact in its stored doubles; it is a different exact object from an
+    ``EllipticArc`` or a ``Cylinder`` (architecture 3.5: never reclassified).
+    """
+    center = np.asarray(_real_tuple(center, "arc centre"))
+    x_axis, y_axis = np.asarray(_real_tuple(x_axis, "arc x axis")), np.asarray(_real_tuple(y_axis, "arc y axis"))
+    radius, start, sweep = _real(radius, "arc radius"), _real(start, "arc start"), _real(sweep, "arc sweep")
+    if radius <= 0 or sweep == 0 or abs(sweep) > 2 * math.pi + 1e-12:
+        raise GeometryError("a NURBS circular arc needs a positive radius and 0 < |sweep| <= 2 pi")
+    segments = max(1, math.ceil(abs(sweep) / (math.pi / 2) - 1e-12))
+    delta = sweep / segments
+    middle_weight = math.cos(delta / 2)
+
+    def at(angle):
+        return center + radius * (math.cos(angle) * x_axis + math.sin(angle) * y_axis)
+
+    controls, weights = [tuple(map(float, at(start)))], [1.0]
+    for k in range(segments):
+        a0, a1 = start + k * delta, start + (k + 1) * delta
+        p0, p2 = at(a0), at(a1)
+        tangent0 = -math.sin(a0) * x_axis + math.cos(a0) * y_axis
+        middle = p0 + radius * math.tan(delta / 2) * tangent0       # tangent intersection
+        controls += [tuple(map(float, middle)), tuple(map(float, p2))]
+        weights += [middle_weight, 1.0]
+    knots = [0.0, 0.0, 0.0]
+    for k in range(1, segments):
+        knots += [k / segments, k / segments]
+    knots += [1.0, 1.0, 1.0]
+    return NurbsCurve(2, tuple(knots), tuple(controls), tuple(weights))

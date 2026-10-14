@@ -14,6 +14,8 @@ metadata; they are not a restriction on neutral face topology.
 from __future__ import annotations
 
 from copy import deepcopy
+from fractions import Fraction
+import math
 from dataclasses import dataclass, fields, is_dataclass, replace
 from functools import wraps
 from types import MappingProxyType
@@ -4605,8 +4607,21 @@ class GeometryModel:
         """Add an analytic curve with topology endpoints matching its definition."""
         start_point, end_point = self.vertex_position(start), self.vertex_position(end)
         if not isinstance(curve, EXACT_CURVES):
-            raise GeometryError("add_curve expects an EllipticArc, CylinderIntersectionCurve, QuadricIntersectionCurve or "
-                                "BezierQuadricCurve")
+            raise GeometryError("add_curve expects an EllipticArc, CylinderIntersectionCurve, QuadricIntersectionCurve, "
+                                "BezierQuadricCurve or NurbsCurve")
+        from .nurbs import NurbsCurve
+        if isinstance(curve, NurbsCurve):
+            # Edge ends are topology and must coincide with the curve's ends: decided exactly on
+            # the stored vertices and the exact rational curve ends (architecture 3.4, T1).
+            if curve.dimension != 3:
+                raise GeometryError("a model edge needs a 3D NURBS curve")
+            ends = (curve.exact_point(0), curve.exact_point(1))
+            scale = math.sqrt(float(sum((b - a) ** 2 for a, b in zip(*ends))))
+            tolerance = Fraction(self.tolerance.effective_curve_fit_residual(scale))
+            for vertex, point in zip((start_point, end_point), ends):
+                if sum((Fraction(float(v)) - c) ** 2 for v, c in zip(vertex, point)) > tolerance * tolerance:
+                    raise GeometryError("NURBS curve ends do not match topology vertices")
+            return self._add_edge(start, end, curve)
         expected = curve.evaluate(np.asarray((0., 1.)))
         scale = float(np.linalg.norm(expected[1]-expected[0]))
         if np.any(np.linalg.norm(expected-(start_point, end_point), axis=1) > self.tolerance.effective_curve_fit_residual(scale)):

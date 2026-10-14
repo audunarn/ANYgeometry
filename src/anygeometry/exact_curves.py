@@ -60,17 +60,28 @@ def _affine(value):
 
 
 def analytic_curve_length(curve, tolerance):
-    """Adaptive Gaussian integration of the analytic derivative."""
-    previous = None
-    count = 16
-    while True:
-        nodes, weights = _gauss_legendre(count)
-        value = .5*float(weights @ np.linalg.norm(curve.derivative(.5*(nodes+1)), axis=-1))
-        if previous is not None and abs(value-previous) <= tolerance:
-            return value
-        if count >= 1024:
-            raise GeometryError("analytic curve length did not converge to the requested tolerance")
-        previous, count = value, count*2
+    """Adaptive Gaussian integration of the analytic derivative.
+
+    Piecewise curves (NURBS) are integrated span by span: Gauss rules converge
+    on each smooth span, not across the derivative's kinks at interior knots.
+    """
+    breaks = getattr(curve, "breakpoints", None)
+    pieces = (0., *breaks(), 1.) if breaks is not None else (0., 1.)
+    share = tolerance / (len(pieces) - 1)
+    total = 0.
+    for a, b in zip(pieces, pieces[1:]):
+        previous = None
+        count = 16
+        while True:
+            nodes, weights = _gauss_legendre(count)
+            value = .5*(b-a)*float(weights @ np.linalg.norm(curve.derivative(a+.5*(b-a)*(nodes+1)), axis=-1))
+            if previous is not None and abs(value-previous) <= share:
+                total += value
+                break
+            if count >= 1024:
+                raise GeometryError("analytic curve length did not converge to the requested tolerance")
+            previous, count = value, count*2
+    return total
 
 
 def project_analytic_curve(curve, point, tolerance):
@@ -601,4 +612,6 @@ class CylinderIntersectionCurve:
 from .quadric_curves import QuadricIntersectionCurve  # noqa: E402 (needs the definitions above only in spirit)
 from .branch_curves import BezierQuadricCurve  # noqa: E402
 
-EXACT_CURVES = (EllipticArc, CylinderIntersectionCurve, QuadricIntersectionCurve, BezierQuadricCurve)
+from .nurbs import NurbsCurve  # noqa: E402
+
+EXACT_CURVES = (EllipticArc, CylinderIntersectionCurve, QuadricIntersectionCurve, BezierQuadricCurve, NurbsCurve)
