@@ -31,8 +31,11 @@ class Segment(tuple):
     lies outside the box widened by ``tol`` is certainly farther than ``tol``.
     """
 
-    def __new__(cls, start, end):
+    def __new__(cls, start, end, derived=False):
         self = super().__new__(cls, (start, end))
+        # A derived piece (a split of a stored line) has exact stations only; main's
+        # float-length refusal applies to stored lines (_check_line).
+        self.derived = derived
         a, b = rounded(start), rounded(end)
         slack = [4 * _EPS_FLOAT * max(abs(x), abs(y)) + _TINY for x, y in zip(a, b)]
         self.lo = tuple(min(x, y) - e for x, y, e in zip(a, b, slack))
@@ -97,7 +100,7 @@ def to_line(segment: Segment) -> LinePath:
 
 
 def sub(segment: Segment, a, b) -> Segment:
-    return Segment(at(segment, a), at(segment, b))
+    return Segment(at(segment, a), at(segment, b), derived=True)
 
 
 def _difference(a, b):
@@ -114,13 +117,17 @@ def _cross(a, b):
 
 
 def _check_line(segment: Segment, curve_floats=None):
-    """``_point_parameters``' refusal: zero float squared length (or exactly degenerate)."""
+    """``_point_parameters``' refusal: an exactly degenerate line, or (stored lines only) a
+    zero float squared length as main computes it on the stored doubles. Derived pieces
+    (exact splits, kept down to any length by deferred removal, S2) are refused only when
+    exactly degenerate: their float rounding is not data."""
     direction = _difference(segment[1], segment[0])
     if exact_dot(direction, direction) == 0:
         raise GeometryError("degenerate arrangement line")
-    floats = np.asarray(rounded(segment[1])) - np.asarray(rounded(segment[0]))
-    if float(floats @ floats) == 0:
-        raise GeometryError("degenerate arrangement line")
+    if not getattr(segment, "derived", False):
+        floats = np.asarray(rounded(segment[1])) - np.asarray(rounded(segment[0]))
+        if float(floats @ floats) == 0:
+            raise GeometryError("degenerate arrangement line")
     return direction
 
 
@@ -131,16 +138,19 @@ def point_parameters(segment: Segment, point, tolerance: float) -> tuple:
         return ()
     tol2 = Fraction(tolerance) ** 2
     tolerance_exact = Fraction(tolerance)
-    endpoints = tuple(t for t in (Fraction(0), Fraction(1)) if distance2(at(segment, t), point) <= tol2)
     direction = _check_line(segment)
     length2 = exact_dot(direction, direction)
+    endpoints = tuple(t for t in (Fraction(0), Fraction(1)) if distance2(at(segment, t), point) <= tol2)
     parameter = exact_dot(_difference(point, segment[0]), direction) / length2
     roots = ()
     if -tolerance_exact <= parameter <= 1 + tolerance_exact and distance2(at(segment, parameter), point) <= tol2:
         roots = (min(Fraction(1), max(Fraction(0), parameter)),)
     values = []
     for value in (*endpoints, *roots):
-        snapped = next((t for t in endpoints if abs(value - t) <= 128 * _EPS), value)
+        # S1a (T-b/D8 design, slice E1): a root snaps to an accepted endpoint when the
+        # sub-piece between them is no longer than ``tol`` (main: within 128 eps in
+        # parameter space, i.e. 128 eps * length, independent of the tolerance).
+        snapped = next((t for t in endpoints if (value - t) ** 2 * length2 <= tol2), value)
         if snapped not in values:
             values.append(snapped)
     return tuple(values)
@@ -190,37 +200,48 @@ def _line_line(line: Segment, curve: Segment, tolerance: float) -> list:
     return result
 
 
+def _role_key(segment: Segment) -> tuple:
+    """The canonical operand-role key of a derived piece (T7, owner Q-h): exact squared length,
+    then the exact station tuples."""
+    return distance2(segment[0], segment[1]), segment[0], segment[1]
+
+
 def junctions(first: Segment, second: Segment, tolerance: float) -> tuple:
-    """Exact replica of ``curve_junctions(LinePath, LinePath)`` (sorted, unique pairs)."""
+    """``curve_junctions(LinePath, LinePath)`` on exact stations, symmetric in its operands.
+
+    Main's candidates: the four endpoint ``point_parameters`` tests and the
+    line-curve junctions of ``line_curve_junctions``. The line role is assigned
+    by the canonical data key (S1b): the segment with the larger exact squared
+    length, ties by exact station tuples -- so ``junctions(a, b)`` is
+    ``junctions(b, a)`` with each pair swapped. A segment no longer than
+    ``tol`` never takes the line role; when both are, the line-curve step is
+    skipped and the endpoint tests decide (S1c), so ``_line_line``'s
+    short-line refusal is unreachable here.
+    """
     candidates = []
     for t in (Fraction(0), Fraction(1)):
         candidates.extend((t, s) for s in point_parameters(second, at(first, t), tolerance))
         candidates.extend((s, t) for s in point_parameters(first, at(second, t), tolerance))
-    candidates.extend(_line_line(first, second, tolerance))
+    tol2 = Fraction(tolerance) ** 2
+    first_key, second_key = _role_key(first), _role_key(second)
+    if max(first_key[0], second_key[0]) > tol2:
+        if first_key >= second_key:
+            candidates.extend(_line_line(first, second, tolerance))
+        else:
+            candidates.extend((a, b) for b, a in _line_line(second, first, tolerance))
     return tuple(sorted(dict.fromkeys(candidates)))
 
 
 def merge_parameters(values, tolerance: float, segment: Segment | None) -> list:
-    """Exact replica of ``material_arrangement._parameters`` for a straight piece.
+    """The sorted, exactly distinct split parameters of a straight piece (S2, deferred removal).
 
-    Numerical duplicates within 32 eps merge; otherwise two parameters merge
-    when the sub-piece between them is no longer than ``tolerance`` (main
-    measured the diagonal of its rounded, outward-widened bounding box; the
-    exact length is that diagonal without rounding).
+    Main's ``_parameters`` merged parameters closer than 32 eps in parameter
+    space (D8) or bounding a sub-piece no longer than ``tol``; on one path that
+    merged stations which vertex identity kept distinct on another (lost
+    crossings). Nothing is merged here: sub-pieces no longer than ``tol`` are
+    removed once, after global vertex identity (S4 in ``arrange_material``).
     """
-    values = sorted(Fraction(value) for value in values)
-    tol2 = Fraction(tolerance) ** 2
-    length2 = None if segment is None else distance2(segment[0], segment[1])
-    result = []
-    for value in values:
-        duplicate = bool(result and value - result[-1] <= 32 * _EPS)
-        if result and not duplicate and length2 is not None:
-            duplicate = (value - result[-1]) ** 2 * length2 <= tol2
-        if not result or not duplicate:
-            result.append(value)
-        elif value == 1:
-            result[-1] = value
-    return result
+    return sorted(dict.fromkeys(Fraction(value) for value in values))
 
 
 class ExactVertexLookup:

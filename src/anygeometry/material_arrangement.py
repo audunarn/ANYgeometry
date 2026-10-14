@@ -1068,6 +1068,13 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
                 curve = path.curve.subcurve(a, b)
                 start, end = vertex(curve.evaluate(0.)), vertex(curve.evaluate(1.))
             if start == end:
+                if segment is not None:
+                    # S4 (T-b/D8 design, slice E1): the one place a split sub-piece is
+                    # removed, on the shared vertex identity -- dropped when no longer
+                    # than tol, refused when longer (main merged parameters per path).
+                    if stations.distance2(*piece) <= Fraction(tolerance) ** 2:
+                        continue
+                    raise GeometryError("arrangement piece longer than the tolerance collapses to one vertex")
                 raise GeometryError("unresolved closed or degenerate arrangement edge")
             duplicate = None
             for index in incidence[start]:
@@ -1279,8 +1286,12 @@ def _exact_horizontal_roots(chart, curve, level, tolerance):
     roots = () if (below or above) else (min(Fraction(1), max(Fraction(0), root)),)
     endpoints = tuple(t for t, value in ((Fraction(0), start), (Fraction(1), start + delta)) if _within(value, bound2))
     snapped = []
+    length2 = exact_dot(tuple(b - a for a, b in zip(start_point, end_point)),
+                        tuple(b - a for a, b in zip(start_point, end_point)))
+    tol2 = Fraction(tolerance) ** 2
     for root in roots:
-        root = next((t for t in endpoints if abs(root - t) <= 128 * _EPS_EXACT), root)
+        # S1a: snap to an accepted endpoint when the sub-piece is no longer than tol.
+        root = next((t for t in endpoints if (root - t) ** 2 * length2 <= tol2), root)
         if root not in snapped:
             snapped.append(root)
     return tuple(snapped)
