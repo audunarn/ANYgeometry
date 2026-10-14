@@ -20,12 +20,15 @@ from dataclasses import dataclass
 from enum import Enum
 from fractions import Fraction
 import math
+import sys
+import threading
 from typing import Callable
 import weakref
 
 import numpy as np
 
-from .exact_predicates import correctly_rounded_sqrt, exact, exact_cross, exact_dot, exact_vector
+from .errors import GeometryError
+from .exact_predicates import exact, exact_cross, exact_dot, exact_vector
 from .surfaces import (Cone, CoonsSurface, Cylinder, ExtrudedSurface, Plane, RuledSurface,
                        _evaluate_surface_many, _surface_derivatives_many)
 
@@ -135,49 +138,115 @@ def _transformed(surface):
     return transformed
 
 
+_FLOAT_MAX = Fraction(sys.float_info.max)
+
+
 def _down(value: Fraction) -> float:
+    """The largest double <= ``value`` (``-inf`` below the float range)."""
+    if value < -_FLOAT_MAX:
+        return -math.inf
+    if value > _FLOAT_MAX:
+        return sys.float_info.max
     rounded = float(value)
     return math.nextafter(rounded, -math.inf) if Fraction(rounded) > value else rounded
 
 
 def _up(value: Fraction) -> float:
+    """The smallest double >= ``value`` (``inf`` above the float range)."""
+    if value > _FLOAT_MAX:
+        return math.inf
+    if value < -_FLOAT_MAX:
+        return -sys.float_info.max
     rounded = float(value)
     return math.nextafter(rounded, math.inf) if Fraction(rounded) < value else rounded
 
 
-def _plane_capabilities(plane: Plane) -> SurfaceCapabilities:
-    from .planar_exact import ExactPlane
-    chart = ExactPlane.from_plane(plane)
+def _sqrt_bounds(value: Fraction) -> tuple[Fraction, Fraction]:
+    """Exact rational bounds ``lower <= sqrt(value) <= upper`` with relative width below ``2**-60``.
+
+    No float intermediate, so any magnitude is fine (review A1a-2).
+    """
+    if value < 0:
+        raise GeometryError("square root of a negative quantity")
+    if value == 0:
+        return Fraction(0), Fraction(0)
+    shift = max(0, 64 - (value.numerator.bit_length() - value.denominator.bit_length()) // 2)
+    scaled = value * (1 << (2 * shift))                          # >= 2**126
+    whole = scaled.numerator // scaled.denominator
+    root = math.isqrt(whole)
+    lower = Fraction(root, 1 << shift)
+    exact_root = root * root == whole and scaled.denominator == 1
+    return lower, lower if exact_root else Fraction(root + 1, 1 << shift)
+
+
+def _box_interval(low, high) -> tuple:
+    """A chart interval in either order; one infinite end allowed, both ends at the same infinity refused."""
+    values = sorted(value if type(value) is Fraction else float(value) for value in (low, high))
+    if any(type(value) is float and math.isnan(value) for value in values):
+        raise GeometryError("chart box bounds must not be NaN")
+    if values[0] == math.inf or values[1] == -math.inf:
+        raise GeometryError("chart box interval must not lie at infinity")
+    return values[0], values[1]
+
+
+def _term(parameter, coefficient: Fraction):
+    """``parameter * coefficient`` with ``0 * inf = 0`` (a zero direction contributes nothing)."""
+    if coefficient == 0:
+        return Fraction(0)
+    if type(parameter) is float and math.isinf(parameter):
+        return math.copysign(math.inf, parameter) * (1 if coefficient > 0 else -1)
+    return exact(parameter) * coefficient
+
+
+def _extended_sum(terms, direction: int) -> float:
+    """Outward-rounded sum of exact terms and same-signed infinities (direction -1: lower, +1: upper)."""
+    infinite = [term for term in terms if type(term) is float]
+    if infinite:
+        return infinite[0]
+    total = sum(terms, Fraction(0))
+    return _down(total) if direction < 0 else _up(total)
+
+
+def _plane_enclosure(chart):
     origin, u_vector, v_vector = chart.origin, chart.u_vector, chart.v_vector
 
-    def exact_uv(point):
-        return chart.uv(point)
-
     def enclosure(box):
-        (u0, u1), (v0, v1) = box
-        corners = [tuple(o + exact(u) * a + exact(v) * b for o, a, b in zip(origin, u_vector, v_vector))
-                   for u in (u0, u1) for v in (v0, v1)]
-        return Enclosure(tuple(_down(min(c[k] for c in corners)) for k in range(3)),
-                         tuple(_up(max(c[k] for c in corners)) for k in range(3)))
+        (u_low, u_high), (v_low, v_high) = (_box_interval(*interval) for interval in box)
+        lower, upper = [], []
+        for o, a, b in zip(origin, u_vector, v_vector):
+            low_terms = [o, _term(u_low if a > 0 else u_high, a), _term(v_low if b > 0 else v_high, b)]
+            high_terms = [o, _term(u_high if a > 0 else u_low, a), _term(v_high if b > 0 else v_low, b)]
+            lower.append(_extended_sum(low_terms, -1))
+            upper.append(_extended_sum(high_terms, +1))
+        return Enclosure(tuple(lower), tuple(upper))
+    return enclosure
 
+
+def _plane_proofs(plane: Plane):
+    """The plane's exact derived data; it holds no reference to the definition (memo can drop it)."""
+    from .planar_exact import ExactPlane
+    chart = ExactPlane.from_plane(plane)
+    u_vector, v_vector = chart.u_vector, chart.v_vector
     # [u v] is constant: its singular values are the square roots of the Gram matrix eigenvalues.
     uu, uv_, vv = exact_dot(u_vector, u_vector), exact_dot(u_vector, v_vector), exact_dot(v_vector, v_vector)
     trace, determinant = uu + vv, uu * vv - uv_ * uv_
-    discriminant = trace * trace - 4 * determinant
-    root_up = Fraction(math.nextafter(correctly_rounded_sqrt(discriminant), math.inf))   # >= sqrt(disc)
+    _, root_up = _sqrt_bounds(trace * trace - 4 * determinant)                         # >= sqrt(disc)
     lambda_max = (trace + root_up) / 2                                                  # upper bound
     lambda_min = max(Fraction(0), (trace - root_up) / 2)                                # lower bound
-    sigma_max = math.nextafter(correctly_rounded_sqrt(lambda_max), math.inf)
-    sigma_min = max(0.0, math.nextafter(correctly_rounded_sqrt(lambda_min), -math.inf))
-    bounds = JacobianBounds(sigma_max, sigma_min)
+    bounds = JacobianBounds(_up(_sqrt_bounds(lambda_max)[1]), max(0.0, _down(_sqrt_bounds(lambda_min)[0])))
     normal = exact_cross(u_vector, v_vector)
-    implicit = ImplicitForm(1, (*normal, -exact_dot(normal, origin)), _up(max(abs(value) for value in normal)))
+    implicit = ImplicitForm(1, (*normal, -exact_dot(normal, chart.origin)), _up(max(abs(value) for value in normal)))
+    return chart, _plane_enclosure(chart), bounds, implicit
+
+
+def _plane_capabilities(plane: Plane) -> SurfaceCapabilities:
+    chart, enclosure, bounds, implicit = _derived(plane, lambda: _plane_proofs(plane))
     return SurfaceCapabilities(
         kind=SurfaceKind.PLANE, definition=plane, support_key=("plane", *map(tuple, (plane.origin, plane.u_vector,
                                                                                      plane.v_vector))),
         domain=((-math.inf, math.inf), (-math.inf, math.inf)), periodic_u=None,
         evaluate=_evaluate(plane), derivatives=_derivatives(plane), invert_local=_invert_local(plane),
-        exact_uv=exact_uv, enclosure=enclosure, jacobian_bounds=lambda box: bounds, implicit=implicit,
+        exact_uv=chart.uv, enclosure=enclosure, jacobian_bounds=lambda box: bounds, implicit=implicit,
         transformed=_transformed(plane), is_exact=True)
 
 
@@ -194,39 +263,66 @@ def _full_turn(surface) -> float | None:
     return 1.0 if abs(abs(float(surface.sweep_angle)) - math.tau) <= 1e-12 else None
 
 
-_CACHE: dict = {}
+_DERIVED: dict = {}
+_LOCK = threading.Lock()
+
+
+def _forget(key: int, reference) -> None:
+    with _LOCK:
+        entry = _DERIVED.get(key)
+        if entry is not None and entry[0] is reference:
+            del _DERIVED[key]
+
+
+def _derived(surface, build):
+    """Derived data of a definition, memoised per definition object (architecture 1.1 rule 6).
+
+    The definitions hold arrays and are not hashable, so the memo is keyed by
+    identity with a weak reference; the value must not reference the
+    definition, so the entry is dropped when the definition is collected
+    (review A1a-1). Thread-safe: concurrent misses may build twice, but every
+    caller gets the first stored value. Definitions that cannot be weakly
+    referenced are not memoised.
+    """
+    key = id(surface)
+    with _LOCK:
+        entry = _DERIVED.get(key)
+        if entry is not None and entry[0]() is surface:
+            return entry[1]
+    value = build()
+    with _LOCK:
+        entry = _DERIVED.get(key)
+        if entry is not None and entry[0]() is surface:
+            return entry[1]
+        try:
+            reference = weakref.ref(surface)
+        except TypeError:
+            return value
+        _DERIVED[key] = (reference, value)
+    weakref.finalize(surface, _forget, key, reference)
+    return value
 
 
 def capabilities(surface) -> SurfaceCapabilities:
-    """The capability record of a built-in surface, memoised per definition object.
+    """The capability record of a built-in surface.
 
-    The surface dataclasses hold arrays (not hashable), so the memo is keyed by
-    object identity and an entry is dropped when its definition is collected.
+    Records are cheap views (callables bound to the definition) built per
+    call; the derived proof data behind them is memoised per definition by
+    ``_derived``, which never keeps a definition alive.
     """
-    cached = _CACHE.get(id(surface))
-    if cached is not None and cached[0]() is surface:
-        return cached[1]
     if isinstance(surface, Plane):
-        result = _plane_capabilities(surface)
-    elif isinstance(surface, Cone):
-        result = _generic_capabilities(surface, SurfaceKind.CONE, periodic_u=_full_turn(surface))
-    elif isinstance(surface, Cylinder):
-        result = _generic_capabilities(surface, SurfaceKind.CYLINDER, periodic_u=_full_turn(surface))
-    elif isinstance(surface, ExtrudedSurface):
-        result = _generic_capabilities(surface, SurfaceKind.EXTRUDED)
-    elif isinstance(surface, RuledSurface):
-        result = _generic_capabilities(surface, SurfaceKind.RULED, is_exact=False)
-    elif isinstance(surface, CoonsSurface):
-        result = _generic_capabilities(surface, SurfaceKind.COONS, is_exact=False)
-    else:
-        raise TypeError(f"no surface capabilities for {type(surface).__name__}")
-    try:
-        key = id(surface)
-        _CACHE[key] = (weakref.ref(surface), result)
-        weakref.finalize(surface, _CACHE.pop, key, None)
-    except TypeError:                                  # not weak-referenceable: no memo
-        pass
-    return result
+        return _plane_capabilities(surface)
+    if isinstance(surface, Cone):
+        return _generic_capabilities(surface, SurfaceKind.CONE, periodic_u=_full_turn(surface))
+    if isinstance(surface, Cylinder):
+        return _generic_capabilities(surface, SurfaceKind.CYLINDER, periodic_u=_full_turn(surface))
+    if isinstance(surface, ExtrudedSurface):
+        return _generic_capabilities(surface, SurfaceKind.EXTRUDED)
+    if isinstance(surface, RuledSurface):
+        return _generic_capabilities(surface, SurfaceKind.RULED, is_exact=False)
+    if isinstance(surface, CoonsSurface):
+        return _generic_capabilities(surface, SurfaceKind.COONS, is_exact=False)
+    raise TypeError(f"no surface capabilities for {type(surface).__name__}")
 
 
 __all__ = ["Enclosure", "ImplicitForm", "InversionResult", "JacobianBounds", "SurfaceCapabilities",
