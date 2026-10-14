@@ -304,12 +304,20 @@ def _nurbs_capabilities(surface: NurbsSurface) -> SurfaceCapabilities:
     memo: dict = {}
 
     def bounds(box):
-        key = tuple(tuple(_endpoint(value) for value in interval) for interval in box)
-        if key not in memo:
+        # Key: the validated, order-free knot intervals (the same checks as
+        # patch_bounds, applied before any lookup); the memo is locked.
+        from .nurbs import _knot_interval
+        (u0, u1), (v0, v1) = box
+        key = (_knot_interval(u0, u1, surface.u_range), _knot_interval(v0, v1, surface.v_range))
+        with _LOCK:
+            cached = memo.get(key)
+        if cached is not None:
+            return cached
+        result = surface.patch_bounds(box, _nurbs_net(surface))
+        with _LOCK:
             if len(memo) >= 1024:
                 memo.clear()
-            memo[key] = surface.patch_bounds(box, _nurbs_net(surface))
-        return memo[key]
+            return memo.setdefault(key, result)
 
     def evaluate(uv):
         return surface.evaluate_many(_uv_array(uv))

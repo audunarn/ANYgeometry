@@ -259,3 +259,32 @@ def test_box_results_are_shared_between_enclosure_and_jacobian():
     start = time.perf_counter()
     capability.jacobian_bounds(box)
     assert time.perf_counter() - start <= max(first / 5, 1e-3)
+
+
+def test_box_memo_is_order_free_validated_and_thread_safe():
+    """Review A3a round 2: reversed boxes share work; validation does not depend on cache history; no races."""
+    import threading
+    capability = capabilities(bilinear_patch())
+    with pytest.raises(GeometryError):
+        capability.enclosure(((Fraction(0), Fraction(1, 2)), (Fraction(0), Fraction(1, 2))))
+    capability.enclosure(((0., .5), (0., .5)))
+    with pytest.raises(GeometryError):
+        capability.enclosure(((Fraction(0), Fraction(1, 2)), (Fraction(0), Fraction(1, 2))))
+    assert capability.enclosure(((.5, 0.), (.5, 0.))) == capability.enclosure(((0., .5), (0., .5)))
+    errors, barrier = [], threading.Barrier(4)
+
+    def worker(offset):
+        barrier.wait()
+        try:
+            for i in range(600):
+                value = ((i * 4 + offset) % 2048) / 2048
+                capability.enclosure(((value, value), (.25, .25)))
+        except Exception as error:                                  # pragma: no cover - the failure being tested
+            errors.append(error)
+
+    threads = [threading.Thread(target=worker, args=(k,)) for k in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert not errors
