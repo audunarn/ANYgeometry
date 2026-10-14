@@ -196,3 +196,51 @@ def test_derived_data_is_memoised_without_keeping_definitions_alive():
     assert all(result is results[0] for result in results)
     with pytest.raises(TypeError):
         capabilities(object())
+
+
+def test_exact_box_ends_and_square_root_bounds():
+    """Review A1a round 2: integer and Fraction ends stay exact; rational square-root brackets."""
+    from anygeometry.surface_capabilities import _sqrt_bounds
+    capability = capabilities(Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.)))
+    n = 2 ** 53 + 1
+    box = capability.enclosure(((n, n), (0, 0)))
+    assert Fraction(box.lower[0]) <= n <= Fraction(box.upper[0]) and box.lower[0] < box.upper[0]
+    huge = capability.enclosure(((10 ** 400, 10 ** 400), (0, 0)))
+    assert huge.lower[0] == np.finfo(float).max and huge.upper[0] == math.inf
+    third = capability.enclosure(((Fraction(1, 3), Fraction(2, 3)), (Fraction(-1, 7), 0)))
+    assert Fraction(third.lower[0]) <= Fraction(1, 3) and Fraction(third.upper[0]) >= Fraction(2, 3)
+    assert Fraction(third.lower[1]) <= Fraction(-1, 7) and third.upper[1] == 0.
+    for value in (Fraction(0), Fraction(1), Fraction(4), Fraction(2), Fraction(1, 3), Fraction(9, 4),
+                  Fraction(1, 10 ** 300), Fraction(10 ** 300), Fraction(2 ** 1100 + 1), Fraction(1, 2 ** 1100 + 3)):
+        lower, upper = _sqrt_bounds(value)
+        assert lower * lower <= value <= upper * upper
+        assert upper - lower <= upper * Fraction(1, 2 ** 60)
+    assert _sqrt_bounds(Fraction(9, 4)) == (Fraction(3, 2), Fraction(3, 2))
+    with pytest.raises(GeometryError):
+        _sqrt_bounds(Fraction(-1))
+
+
+def test_signed_zero_parameters_are_delegated_bit_for_bit():
+    uv = np.array([[0., -0.], [-0., 0.], [-0., -0.], [5e-324, -5e-324]])
+    for kind in list(SurfaceKind)[:6]:
+        surface = surfaces()[kind]
+        assert same_bits(capabilities(surface).evaluate(uv), _evaluate_surface_many(surface, uv))
+
+
+def test_a_finalizer_inside_the_memo_lock_does_not_deadlock():
+    """Review A1a round 2: collection while this thread holds the lock (gc can run inside it)."""
+    import gc
+    import threading
+    from anygeometry import surface_capabilities as module
+
+    def collect_under_lock():
+        with module._LOCK:
+            plane = Plane((0., 0., 1.), (1., 0., 0.), (0., 1., 0.))
+            capabilities(plane)
+            del plane
+            gc.collect()
+
+    worker = threading.Thread(target=collect_under_lock, daemon=True)
+    worker.start()
+    worker.join(timeout=20)
+    assert not worker.is_alive()

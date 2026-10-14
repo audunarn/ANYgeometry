@@ -179,9 +179,20 @@ def _sqrt_bounds(value: Fraction) -> tuple[Fraction, Fraction]:
     return lower, lower if exact_root else Fraction(root + 1, 1 << shift)
 
 
+def _endpoint(value):
+    """A box end kept exact: Fractions and integers as rationals, floats (incl. +-inf) as doubles."""
+    if type(value) is Fraction:
+        return value
+    if isinstance(value, bool):
+        raise GeometryError("chart box bounds must be numbers")
+    if isinstance(value, (int, np.integer)):
+        return Fraction(int(value))
+    return float(value)
+
+
 def _box_interval(low, high) -> tuple:
     """A chart interval in either order; one infinite end allowed, both ends at the same infinity refused."""
-    values = sorted(value if type(value) is Fraction else float(value) for value in (low, high))
+    values = sorted(_endpoint(value) for value in (low, high))
     if any(type(value) is float and math.isnan(value) for value in values):
         raise GeometryError("chart box bounds must not be NaN")
     if values[0] == math.inf or values[1] == -math.inf:
