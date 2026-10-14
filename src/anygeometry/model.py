@@ -5602,6 +5602,10 @@ class GeometryModel:
         start_vertices = {edge_id: edge_id for edge_id in profile}
         edge_origin = {edge_id: edge_id for edge_id in profile}
         vertex_origin: Dict[int, int] = {}
+        from .nurbs import NurbsCurve
+        if any(isinstance(self.edges[edge_id].curve, NurbsCurve) for edge_id in profile):
+            raise GeometryError("revolving a NURBS profile edge is not supported: its swept surface "
+                                "is not representable as a face surface yet")
         for edge_id in profile:
             edge = self.edges[edge_id]
             controls = (

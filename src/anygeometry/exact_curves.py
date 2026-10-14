@@ -107,9 +107,28 @@ def project_analytic_curve(curve, point, tolerance):
             residual = float(np.linalg.norm(point-target))
             if residual < best:
                 return point.copy(), candidate, residual
+        if hull_bound is not None:                    # NURBS: Newton on C'.(C - p), accepted only if closer
+            current, point, residual = parameter, made, best
+            for _ in range(8):
+                values = curve.derivatives(current, 2)
+                offset = values[0]-target
+                slope = float(values[1] @ values[1] + offset @ values[2])
+                if not math.isfinite(slope) or slope <= 0:
+                    break
+                candidate = float(np.clip(current-float(values[1] @ offset)/slope, 0., 1.))
+                candidate_point = curve.evaluate(candidate)
+                candidate_residual = float(np.linalg.norm(candidate_point-target))
+                if not candidate_residual < residual:
+                    break
+                current, point, residual = candidate, candidate_point, candidate_residual
+            return point.copy(), current, residual
         return made.copy(), parameter, best
 
+    hull_bound = getattr(curve, "distance_lower_bound", None)
+
     def bound(a, b):
+        if hull_bound is not None:                    # NURBS: control-hull bound (quadratic convergence)
+            return hull_bound(a, b, target)
         lo, hi = curve.bounds(a, b)
         return float(np.linalg.norm(np.maximum(np.maximum(lo-target, target-hi), 0)))
 

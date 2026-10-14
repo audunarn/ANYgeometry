@@ -257,24 +257,77 @@ class NurbsCurve:
             raise GeometryError("curve interval must have positive length")
         return replace(self, domain=(float(s[0]), float(s[1])))
 
-    def bounds(self, lower=0.0, upper=1.0):
-        """Outward-rounded box containing the curve on ``[lower, upper]`` (control hulls of its spans)."""
-        s = np.sort(self._knot_parameters(_pair(lower, upper))[0])
+    def _active_controls(self, lower=0.0, upper=1.0):
+        """Controls whose hull contains the curve on ``[lower, upper]``, and their rounding margin.
+
+        The interval ends are inserted as knots up to multiplicity ``degree``
+        (A5.1), so the hull of the controls of the basis functions active on the
+        interval shrinks with it (positive weights: convex hull property). The
+        float insertion rounds; the per-coordinate ``margin`` (``64 eps`` of the
+        control magnitude) covers it.
+        """
         if lower > upper:
             raise GeometryError("curve bound interval is reversed")
-        rows = []
-        for t0, t1, controls, _ in _reference.bezier_segments(
-                self.degree, np.asarray(self.knots), np.asarray(self.controls), _scaled_weights(self.weights)):
-            if t1 >= s[0] and t0 <= s[1]:
-                rows.append(controls)
-        if not rows or not np.all(np.isfinite(np.concatenate(rows))):
+        s = np.sort(self._knot_parameters(_pair(lower, upper))[0])
+        p = self.degree
+        knots = np.asarray(self.knots, dtype=float)
+        controls = np.asarray(self.controls, dtype=float)
+        weights = _scaled_weights(self.weights)
+        for value in sorted({float(s[0]), float(s[1])}):
+            if knots[p] < value < knots[-1]:
+                times = p - int(np.count_nonzero(knots == value))
+                if times > 0:
+                    knots, controls, weights = _reference.insert_knot(p, knots, controls, weights, value, times)
+        n = len(controls)
+        index = np.arange(n)
+        if s[0] < s[1]:
+            active = (knots[index] < s[1]) & (knots[index + p + 1] > s[0])
+        else:                                         # a point: the interpolating control after insertion
+            active = np.zeros(n, dtype=bool)
+            if s[0] <= knots[p]:
+                active[0] = True
+            elif s[0] >= knots[-1]:
+                active[-1] = True
+            else:
+                active[int(np.searchsorted(knots, s[0], side="right")) - 1 - p] = True
+        points = controls[active]
+        if not len(points) or not np.all(np.isfinite(points)):
             raise GeometryError("NURBS bounds are not representable")
-        points = np.concatenate(rows)
-        # Positive weights keep each span inside the hull of its controls; the
-        # decomposition rounds, so widen by its scale before rounding outward.
         margin = 64 * np.finfo(float).eps * np.max(np.abs(np.asarray(self.controls)), axis=0)
+        return points, margin
+
+    def bounds(self, lower=0.0, upper=1.0):
+        """Outward-rounded box containing the curve on ``[lower, upper]`` (see ``_active_controls``)."""
+        points, margin = self._active_controls(lower, upper)
         return (np.nextafter(points.min(axis=0) - margin, -np.inf),
                 np.nextafter(points.max(axis=0) + margin, np.inf))
+
+    def distance_lower_bound(self, lower, upper, target) -> float:
+        """A lower bound of the distance from ``target`` to the curve on ``[lower, upper]``.
+
+        The larger of the box distance and a half-space bound of the control
+        hull: for the unit direction ``n`` towards the curve's mid-interval
+        point, every hull point ``x`` has ``n . (x - target) >= min_i n . (P_i - target)``.
+        The hull hugs the curve to second order, so the bound converges
+        quadratically where the box bound converges linearly (projection
+        branch and bound). Rounding: the controls' margin and the dot products'
+        error are subtracted.
+        """
+        points, margin = self._active_controls(lower, upper)
+        target = np.asarray(target, dtype=float)
+        low = np.nextafter(points.min(axis=0) - margin, -np.inf)
+        high = np.nextafter(points.max(axis=0) + margin, np.inf)
+        box = float(np.linalg.norm(np.maximum(np.maximum(low - target, target - high), 0.0)))
+        probe = self.evaluate(.5 * (float(lower) + float(upper))) - target
+        length = float(np.linalg.norm(probe))
+        if not np.isfinite(length) or length == 0.0:
+            return box
+        direction = probe / length
+        offsets = points - target
+        eps = np.finfo(float).eps
+        slack = float(np.linalg.norm(margin)) + 8 * eps * float(np.max(np.abs(offsets)))
+        half_space = (float(np.min(offsets @ direction)) - slack) / (1 + 8 * eps)
+        return max(box, half_space)
 
     def breakpoints(self) -> tuple[float, ...]:
         """Engine parameters in (0, 1) of the distinct interior knots inside the domain (span ends)."""
@@ -290,6 +343,8 @@ class NurbsCurve:
         the stored doubles; used for decisions on curve ends (architecture 3.4).
         """
         t = Fraction(parameter)
+        if not 0 <= t <= 1:
+            raise GeometryError("curve parameter must lie in [0, 1]")
         start, end = (Fraction(value) for value in self.domain)
         s = start + t * (end - start)
         knots = [Fraction(value) for value in self.knots]
@@ -523,31 +578,52 @@ def nurbs_from_record(record: object):
 def nurbs_circular_arc(center, x_axis, y_axis, radius: float, start: float, sweep: float) -> NurbsCurve:
     """A circular arc as a rational quadratic NURBS curve (Piegl & Tiller A7.1).
 
-    ``x_axis``/``y_axis`` are orthonormal directions of the arc's plane; the arc
-    runs from angle ``start`` over ``sweep`` (|sweep| <= 2 pi), split into at most
-    four segments of <= 90 degrees with middle weights ``cos(delta / 2)``. The
-    curve is exact in its stored doubles; it is a different exact object from an
-    ``EllipticArc`` or a ``Cylinder`` (architecture 3.5: never reclassified).
+    The arc lies in the plane of ``x_axis`` and ``y_axis``, which are
+    orthonormalised (``x`` normalised, ``y`` made orthogonal to it and
+    normalised, as ``Cylinder`` treats its radial direction); zero or parallel
+    axes are refused. It runs from angle ``start`` over ``sweep``
+    (``0 < |sweep| <= 2 pi``), split into at most four segments of <= 90 degrees
+    with middle weights ``cos(delta / 2)``. Segment ends are rotations of the
+    start ray by ``k delta`` (libm reduces ``start`` exactly; no rounded sums of
+    large angles). The curve is exact in its stored doubles; it is a different
+    exact object from an ``EllipticArc`` or a ``Cylinder`` (architecture 3.5:
+    never reclassified).
     """
     center = np.asarray(_real_tuple(center, "arc centre"))
     x_axis, y_axis = np.asarray(_real_tuple(x_axis, "arc x axis")), np.asarray(_real_tuple(y_axis, "arc y axis"))
     radius, start, sweep = _real(radius, "arc radius"), _real(start, "arc start"), _real(sweep, "arc sweep")
-    if radius <= 0 or sweep == 0 or abs(sweep) > 2 * math.pi + 1e-12:
+    if radius <= 0 or sweep == 0 or abs(sweep) > 2 * math.pi:
         raise GeometryError("a NURBS circular arc needs a positive radius and 0 < |sweep| <= 2 pi")
+    if center.shape != x_axis.shape or center.shape != y_axis.shape or len(center) not in (2, 3):
+        raise GeometryError("arc centre and axes must be 2D or 3D vectors of one dimension")
+    x_length = float(np.linalg.norm(x_axis))
+    if not np.isfinite(x_length) or x_length == 0.0:
+        raise GeometryError("arc x axis must be a non-zero finite vector")
+    x_axis = x_axis / x_length
+    y_scale = float(np.linalg.norm(y_axis))
+    y_axis = y_axis - float(y_axis @ x_axis) * x_axis
+    y_length = float(np.linalg.norm(y_axis))
+    if not np.isfinite(y_length) or y_length <= 1e-12 * y_scale:
+        raise GeometryError("arc y axis must be non-zero and not parallel to the x axis")
+    y_axis = y_axis / y_length
     segments = max(1, math.ceil(abs(sweep) / (math.pi / 2) - 1e-12))
     delta = sweep / segments
     middle_weight = math.cos(delta / 2)
+    c0, s0 = math.cos(start), math.sin(start)
 
-    def at(angle):
-        return center + radius * (math.cos(angle) * x_axis + math.sin(angle) * y_axis)
+    def ray(offset):                                  # (cos, sin)(start + offset) by rotation
+        c, s = math.cos(offset), math.sin(offset)
+        return c0 * c - s0 * s, s0 * c + c0 * s
 
-    controls, weights = [tuple(map(float, at(start)))], [1.0]
+    def at(direction):
+        return center + radius * (direction[0] * x_axis + direction[1] * y_axis)
+
+    controls, weights = [tuple(map(float, at((c0, s0))))], [1.0]
     for k in range(segments):
-        a0, a1 = start + k * delta, start + (k + 1) * delta
-        p0, p2 = at(a0), at(a1)
-        tangent0 = -math.sin(a0) * x_axis + math.cos(a0) * y_axis
-        middle = p0 + radius * math.tan(delta / 2) * tangent0       # tangent intersection
-        controls += [tuple(map(float, middle)), tuple(map(float, p2))]
+        first, second = ray(k * delta), ray((k + 1) * delta)
+        tangent0 = -first[1] * x_axis + first[0] * y_axis
+        middle = at(first) + radius * math.tan(delta / 2) * tangent0       # tangent intersection
+        controls += [tuple(map(float, middle)), tuple(map(float, at(second)))]
         weights += [middle_weight, 1.0]
     knots = [0.0, 0.0, 0.0]
     for k in range(1, segments):

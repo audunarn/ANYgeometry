@@ -1041,6 +1041,17 @@ def qualified_curve_face(
             separation=edge_bounds.distance(face_bounds),
         )
     curve = model.edges[edge.id].curve
+    from .nurbs import NurbsCurve
+    if isinstance(curve, NurbsCurve):
+        # The sampled root search below is not complete for arbitrary knot
+        # vectors (a spike between samples is missed); NURBS curve x face
+        # qualification arrives with the certified plane x NURBS route (A4).
+        return _result(
+            edge, face, IntersectionKind.UNCLASSIFIED,
+            tolerance=tolerance,
+            algorithm="curve_surface_subdivision",
+            diagnostics=("nurbs_curve_face_not_certified",),
+        )
     count = 65 if isinstance(curve, Straight) else 257
     count = min(count, policy.max_trace_segments + 1)
     exact_on_support = _curve_exactly_on_support(
