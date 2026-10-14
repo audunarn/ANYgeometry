@@ -335,3 +335,52 @@ def world_area_estimate(domain, loop, tolerance) -> tuple[float, float]:
 
 def world_area_loop(domain, loop, tolerance) -> float:
     return world_area_estimate(domain, loop, tolerance)[0]
+
+
+# ------------------------------------------------------------------ certified trim polylines (A3b B-S3)
+
+
+def _segment_distance(point, a, b) -> float:
+    direction = b - a
+    length2 = float(direction @ direction)
+    if length2 == 0.0:
+        return float(np.linalg.norm(point - a))
+    r = min(1.0, max(0.0, float((point - a) @ direction) / length2))
+    return float(np.linalg.norm(point - (a + r * direction)))
+
+
+def certified_chart_polyline(surface: NurbsSurface, pcurve: NurbsCurve, tolerance: float,
+                             max_pieces: int = 1 << 16) -> tuple[np.ndarray, float]:
+    """Chart polyline of a pcurve whose image deviates from the trim curve by at most the returned bound.
+
+    Each piece's exact control hull (``NurbsCurve._active_controls``, positive
+    weights) lies within ``d`` of its chord, so the pcurve piece does too; the
+    chart deviation in the infinity norm is at most the Euclidean ``d``, and the
+    world deviation of the mapped chord is at most ``sqrt(2) sigma_max d``
+    (architecture 1.4, ``sigma_max`` of the whole patch). Pieces are halved
+    until that is ``<= tolerance``. The float distances carry a relative margin
+    of 1e-12 and the chord ends' rounding (an ulp of the chart) is added.
+    """
+    from .surface_capabilities import capabilities
+    sigma = capabilities(surface).jacobian_bounds(((0.0, 1.0), (0.0, 1.0))).sigma_max
+    factor = math.sqrt(2.0) * sigma * (1 + 1e-12)
+    end_rounding = 2 * _EPS
+    accepted: list[tuple[float, float, float]] = []
+    pending = [(0.0, 1.0)]
+    while pending:
+        a, b = pending.pop()
+        hull = np.asarray([[float(value) for value in point] for point in pcurve._active_controls(a, b)])
+        ends = np.clip(pcurve.evaluate(np.array([a, b])), 0.0, 1.0)
+        deviation = max(_segment_distance(point, ends[0], ends[1]) for point in hull) + end_rounding
+        bound = factor * deviation
+        if bound <= tolerance:
+            accepted.append((a, b, bound))
+            continue
+        if len(accepted) + len(pending) >= max_pieces or b - a <= 1e-12:
+            raise GeometryError("certified trim polyline: tolerance not reachable within the piece budget")
+        middle = 0.5 * (a + b)
+        pending.extend(((middle, b), (a, middle)))
+    accepted.sort()
+    parameters = np.array([piece[0] for piece in accepted] + [1.0])
+    return np.clip(pcurve.evaluate(parameters), 0.0, 1.0), max(piece[2] for piece in accepted)
+

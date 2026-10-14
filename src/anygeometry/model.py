@@ -6041,6 +6041,30 @@ class GeometryModel:
 
     set_face_support_surface = set_face_surface
 
+    def trim_loops_uv_certified(self, face_id: int, tolerance: float):
+        """Chart polylines of a NURBS face's trim loops with a certified world chord bound (A3b, architecture 3.3).
+
+        Returns ``(loops, bound)``: one closed chart polyline per loop (outer
+        first, each vertex once, in loop order) and the largest world deviation
+        between a mapped polyline piece and its trim curve; ``bound <= tolerance``.
+        """
+        from .nurbs import NurbsSurface
+        from .nurbs_domain import certified_chart_polyline
+        face = self._require_face(face_id)
+        if not isinstance(face.surface, NurbsSurface):
+            raise GeometryError("certified trim polylines are defined for NURBS faces")
+        if not (math.isfinite(tolerance) and tolerance > 0):
+            raise GeometryError("tolerance must be finite and positive")
+        loops, worst = [], 0.0
+        for loop in (face.loop,) + tuple(face.holes):
+            points = []
+            for item in loop:
+                polyline, bound = certified_chart_polyline(face.surface, self.edges[item.edge].curve.pcurve, tolerance)
+                worst = max(worst, bound)
+                points.extend((polyline if item.forward else polyline[::-1])[:-1])
+            loops.append(np.asarray(points))
+        return tuple(loops), worst
+
     @_transactional
     def set_face_parameterization(
         self, face_id: int, parameterization: Surface | None

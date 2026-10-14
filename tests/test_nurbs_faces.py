@@ -142,3 +142,52 @@ def test_transform_and_round_trip():
     assert model.validate_topology() == ()
     moved_area = MaterialDomain.from_model(model, face).original_world_area(1e-12)
     assert abs(moved_area - area) <= 1e-10 * area
+
+
+# ------------------------------------------------------------------ B-S3 certified trim polylines
+
+
+def curved_face():
+    from anygeometry.nurbs import nurbs_circular_arc
+    surface = wavy_patch()
+    model = GeometryModel()
+    arc = nurbs_circular_arc((.5, .5), (1., 0.), (0., 1.), .3, 0., math.pi)          # upper half circle in the chart
+    chord = NurbsCurve(1, (0., 0., 1., 1.), (arc.controls[-1], arc.controls[0]))     # exact chart chaining
+    curves = [CurveOnSurface(surface, arc.subcurve(0., .5)), CurveOnSurface(surface, arc.subcurve(.5, 1.)),
+              CurveOnSurface(surface, chord)]
+    a, m, b = (model.add_point(*map(float, point)) for point in
+               (curves[0].exact_point(0), curves[0].exact_point(1), curves[1].exact_point(1)))
+    edges = [model.add_curve(a, m, curves[0]), model.add_curve(m, b, curves[1]), model.add_curve(b, a, curves[2])]
+    return model, model.add_face(edges, surface=surface), surface, curves
+
+
+def nearest_on_polyline(points, polyline):
+    """Nearest chart point on a closed polyline for each query point (vectorised over segments)."""
+    a = polyline
+    b = np.roll(polyline, -1, axis=0)
+    direction = b - a
+    length2 = np.maximum(np.einsum("ij,ij->i", direction, direction), 1e-300)
+    result = []
+    for point in points:
+        r = np.clip(np.einsum("ij,ij->i", point - a, direction) / length2, 0., 1.)
+        candidates = a + r[:, None] * direction
+        result.append(candidates[np.argmin(np.linalg.norm(candidates - point, axis=1))])
+    return np.asarray(result)
+
+
+def test_certified_trim_polylines_bound_the_world_deviation():
+    model, face, surface, curves = curved_face()
+    counts = []
+    for tolerance in (1e-2, 1e-3, 1e-4):
+        (loop,), bound = model.trim_loops_uv_certified(face, tolerance)
+        assert bound <= tolerance
+        counts.append(len(loop))
+        t = np.linspace(0., 1., 10000)
+        for curve in curves:
+            charts = curve.chart(t)
+            nearest = nearest_on_polyline(charts[::25], loop)
+            deviation = np.linalg.norm(surface.evaluate_many(charts[::25]) - surface.evaluate_many(nearest), axis=1)
+            assert np.all(deviation <= bound * (1 + 1e-9))
+    assert counts[0] <= counts[1] <= counts[2]
+    with pytest.raises(GeometryError):
+        model.trim_loops_uv_certified(face, 0.)
