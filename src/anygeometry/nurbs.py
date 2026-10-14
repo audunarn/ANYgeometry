@@ -281,11 +281,20 @@ class NurbsCurve:
         return [tuple(value / refined[i][-1] for value in refined[i][:-1]) for i in active]
 
     def bounds(self, lower=0.0, upper=1.0):
-        """Outward-rounded box containing the curve on ``[lower, upper]`` (see ``_active_controls``)."""
+        """Outward-rounded box containing the curve on ``[lower, upper]`` (see ``_active_controls``).
+
+        The exact hull box is widened by ``16 (degree + 1) eps`` of the control
+        magnitude so the engine's float evaluations (which round) also lie inside;
+        ``distance_lower_bound`` uses the unwidened exact hull.
+        """
         points = self._active_controls(lower, upper)
         dimension = self.dimension
-        return (np.array([_float_down(min(point[k] for point in points)) for k in range(dimension)]),
-                np.array([_float_up(max(point[k] for point in points)) for k in range(dimension)]))
+        scale = np.max(np.abs(np.asarray(self.controls)), axis=0)
+        margin = 16 * (self.degree + 1) * np.finfo(float).eps * scale
+        low = np.array([_float_down(min(point[k] for point in points)) for k in range(dimension)])
+        high = np.array([_float_up(max(point[k] for point in points)) for k in range(dimension)])
+        with np.errstate(over="ignore"):
+            return np.nextafter(low - margin, -np.inf), np.nextafter(high + margin, np.inf)
 
     def distance_lower_bound(self, lower, upper, target) -> float:
         """A lower bound of the distance from ``target`` to the curve on ``[lower, upper]``.
@@ -583,15 +592,20 @@ def nurbs_circular_arc(center, x_axis, y_axis, radius: float, start: float, swee
     x_length = float(np.linalg.norm(x_axis))
     if not np.isfinite(x_length) or x_length == 0.0:
         raise GeometryError("arc x axis must be a non-zero finite vector")
+    raw_x, raw_y = x_axis, y_axis
     x_axis = x_axis / x_length
     y_scale = float(np.linalg.norm(y_axis))
-    y_axis = y_axis - float(y_axis @ x_axis) * x_axis
+    # y - x (x.y)/(x.x) in exact rationals on the stored axes, rounded once: the
+    # arc's plane is the input plane to rounding even for nearly parallel axes.
+    exact_x = [Fraction(float(value)) for value in raw_x]
+    exact_y = [Fraction(float(value)) for value in raw_y]
+    xx = sum(a * a for a in exact_x)
+    xy = sum(a * b for a, b in zip(exact_x, exact_y))
+    y_axis = np.array([float(b * xx - a * xy) for a, b in zip(exact_x, exact_y)]) / float(xx)
     y_length = float(np.linalg.norm(y_axis))
     if not np.isfinite(y_length) or y_length <= 1e-12 * y_scale:
         raise GeometryError("arc y axis must be non-zero and not parallel to the x axis")
     y_axis = y_axis / y_length
-    y_axis = y_axis - float(y_axis @ x_axis) * x_axis    # second pass: orthogonal to rounding (twice is enough)
-    y_axis = y_axis / float(np.linalg.norm(y_axis))
     segments = max(1, math.ceil(abs(sweep) / (math.pi / 2) - 1e-12))
     delta = sweep / segments
     middle_weight = math.cos(delta / 2)

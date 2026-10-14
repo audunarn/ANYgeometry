@@ -239,3 +239,22 @@ def test_nearly_parallel_axes_still_give_a_circle():
     for x_axis, y_axis in (((1., 1., 0.), (1., 1. + 1e-10, 0.)), ((1., 1.), (1., 1. + 1e-10))):
         arc = nurbs_circular_arc((0.,) * len(x_axis), x_axis, y_axis, 1., 0., math.pi / 2)
         assert np.abs(np.linalg.norm(arc.evaluate(np.linspace(0., 1., 1001)), axis=1) - 1.).max() <= 1e-15 * 8
+
+
+def test_nearly_parallel_axes_keep_the_input_plane():
+    """Review A2a round 3: the arc lies in the plane of the given axes."""
+    for epsilon in (1e-10, 1e-11):
+        x_axis, y_axis = np.array((1., 2., 3.)), np.array((1. + epsilon, 2., 3.))
+        arc = nurbs_circular_arc((0., 0., 0.), x_axis, y_axis, 1., 0., math.pi / 2)
+        normal = np.array((0., 3., -2.)) / math.sqrt(13.)            # the exact plane of the stored axes
+        points = arc.evaluate(np.linspace(0., 1., 201))
+        assert np.abs(points @ normal).max() <= 1e-14
+        assert np.abs(np.linalg.norm(points, axis=1) - 1.).max() <= 1e-15 * 8
+
+
+def test_bounds_contain_the_float_evaluation():
+    curve = NurbsCurve(2, (0., 0., 0., 1., 1., 1.), ((0., 1e6, 0.), (.5, 1e6, 0.), (1., 1e6, 0.)))
+    t = np.linspace(0., 1., 4001)
+    low, high = curve.bounds()
+    points = curve.evaluate(t)
+    assert np.all(points >= low) and np.all(points <= high)
