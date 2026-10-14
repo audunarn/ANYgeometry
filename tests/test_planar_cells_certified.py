@@ -87,3 +87,19 @@ def test_ownership_ray_through_a_vertex():
 def test_invalid_material_domains_refuse_before_classification(loops, traces):
     with pytest.raises(GeometryError, match="invalid material domain"):
         run([loop(points) for points in loops], [trace(a, b) for a, b in traces])
+
+
+@pytest.mark.parametrize("scale", (1e-100, 1e3, 1e8))
+def test_plate_crossing_has_the_scale_one_topology_at_any_scale(scale):
+    """T-b/D8 E5: the plane x plane trace comes from the exact line of the two plane records with a
+    box-relative extent. Main's absolute extent floor (+1.) made the rounded trace pass through the
+    origin at 1e-100 ("unresolved bridge"); now every scale gives the same shape."""
+    import sys
+    from pathlib import Path
+    from anygeometry import apply_intersections, plan_intersections
+    sys.path.insert(0, str(Path(__file__).parents[1] / "tools"))
+    import adversarial_corpus
+    model, context = adversarial_corpus.scaled_crossing(scale)()
+    apply_intersections(model, plan_intersections(model, [context["first"], context["second"]], policy="connect"),
+                        policy="connect")
+    assert (len(model.faces), len(model.edges)) == (8, 23)

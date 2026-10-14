@@ -374,6 +374,39 @@ def _coincident_cylinder_rectangles(first, second, model, tolerance):
     return tuple(paths)
 
 
+def _exact_plane_pair_trace(first, second, float_direction, boxes):
+    """The plane x plane trace from the exact line of the two plane records (T-b/D8 E5, A7).
+
+    Main built the trace from the rounded witness and direction of
+    ``qualified_plane_plane`` with an absolute extent floor (``+ 1.``), which at
+    small scales (1e-100) made the rounded ends pass through the origin and miss
+    both faces. Here the line is ``planar_exact.plane_plane_line`` (exact
+    rationals of the stored doubles), oriented as main's direction, and the
+    segment covers both domain boxes relative to their size (no absolute floor);
+    its ends are the correct roundings of exact points on the line. ``None`` when
+    the planes are exactly parallel (main's float route decides).
+    """
+    from fractions import Fraction
+    from .planar_exact import ExactPlane, plane_plane_line
+    from .exact_predicates import exact_vector
+    line = plane_plane_line(ExactPlane.from_plane(first), ExactPlane.from_plane(second))
+    if line is None:
+        return None
+    direction = line.direction
+    if sum(float(d) * f for d, f in zip(direction, float_direction)) < 0:
+        direction = tuple(-value for value in direction)
+    anchor = tuple(float(value) for value in line.anchor)
+    reach = max(float(np.linalg.norm(np.asarray(hi) - lo)) + float(np.linalg.norm(np.asarray(lo) - anchor))
+                for lo, hi in boxes)
+    if not (math.isfinite(reach) and reach > 0):
+        return None
+    largest = max(abs(value) for value in direction)            # |scale * direction| >= reach
+    scale = Fraction(2 * reach) / largest
+    start = tuple(a - scale * d for a, d in zip(line.anchor, direction))
+    end = tuple(a + scale * d for a, d in zip(line.anchor, direction))
+    return (LinePath(tuple(float(value) for value in start), tuple(float(value) for value in end)),)
+
+
 def _pair_paths(first, second, model, tolerance, check, *, point_contacts=None):
     a, b = first.support, second.support
     if isinstance(a, Plane) and isinstance(b, Plane):
@@ -387,8 +420,10 @@ def _pair_paths(first, second, model, tolerance, check, *, point_contacts=None):
         component = result.components[0]
         point, direction = np.asarray(component.witnesses[0]), np.asarray(component.direction)
         boxes = (_domain_bounds(first), _domain_bounds(second))
-        extent = max(np.linalg.norm(lo-point)+np.linalg.norm(hi-point) for lo, hi in boxes)+1.
-        paths = (LinePath(tuple(point-extent*direction), tuple(point+extent*direction)),)
+        paths = _exact_plane_pair_trace(a, b, direction, boxes)
+        if paths is None:
+            extent = max(np.linalg.norm(lo-point)+np.linalg.norm(hi-point) for lo, hi in boxes)+1.
+            paths = (LinePath(tuple(point-extent*direction), tuple(point+extent*direction)),)
     elif isinstance(a, ExtrudedSurface) or isinstance(b, ExtrudedSurface):
         from .extruded_pair_supports import extruded_pair_support
         result = extruded_pair_support(a, b, tolerance=tolerance, cancellation_check=lambda: (check() or False))
@@ -765,7 +800,13 @@ def _child_support(model, face, outer, holes, tolerance):
     if len(corners)==4 and all(isinstance(model.edges[use.edge].curve,Straight) for use in outer):
         p0,p1,p2,p3=(points[index] for index in corners)
         if np.linalg.norm(p0+p2-p1-p3)<=tolerance:
-            return outer,Plane(p0,p1-p0,p3-p0),None,corners
+            try:
+                return outer,Plane(p0,p1-p0,p3-p0),None,corners
+            except GeometryError:
+                # The rebased chart is not a valid Plane record (its absolute independence
+                # threshold rejects faces smaller than ~1e-7): the child keeps its parent's
+                # support (T-b/D8 E5; a scale-relative record check is a separate owner item).
+                pass
     return outer,support,None,None
 
 
