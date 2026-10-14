@@ -797,7 +797,8 @@ def _exact_loop_area(chart, pieces) -> Fraction:
     return total / 2
 
 
-def _exact_planar_cells(domain, chains, edges, edge_segments, tolerance, native_area_tolerance, check):
+def _exact_planar_cells(domain, chains, edges, edge_segments, tolerance, native_area_tolerance, check, *,
+                        boundary_uses=None):
     """Main's cell phase on exact stations for an all-straight planar arrangement (R1b step 2d, D3/D5).
 
     An exact replica of main's rules, so that no decision depends on the
@@ -862,10 +863,334 @@ def _exact_planar_cells(domain, chains, edges, edge_segments, tolerance, native_
         return _exact_loop_area(chart, [stations.segment_of(path.curve) for path in loop])
     outer_area = boundary_area(domain.boundaries[0])
     original = abs(outer_area) - sum(abs(boundary_area(loop)) for loop in domain.boundaries[1:])
+    if boundary_uses is not None:
+        # E2 (S9): the cells partition the re-anchored domain, so conservation compares with the
+        # re-anchored loops' exact areas; their deformation from the stored loops is bounded by
+        # 2 tol * perimeter (owner Q-b), refused otherwise.
+        loop_of, first = [], 0
+        for loop in domain.boundaries:
+            loop_of.append(range(first, first + len(loop)))
+            first += len(loop)
+        anchored = []
+        for paths_range in loop_of:
+            pieces = [edge_segments[index] if same else edge_segments[index][::-1]
+                      for path_index, index, same in boundary_uses if path_index in paths_range]
+            anchored.append(_exact_loop_area(chart, pieces) if pieces else Fraction(0))
+        perimeter = sum(math.sqrt(float(stations.segment_of(path.curve).length2()))
+                        for loop in domain.boundaries for path in loop)
+        stored_areas = [outer_area] + [boundary_area(loop) for loop in domain.boundaries[1:]]
+        if any(abs(float(a - b)) > 2 * tolerance * perimeter * (1 + 1e-9) + 1e-300
+               for a, b in zip(anchored, stored_areas)):
+            raise GeometryError("arrangement deformation exceeds the tolerance contract")
+        original = abs(anchored[0]) - sum(abs(value) for value in anchored[1:])
     retained = sum((item[1] for item in cycles), Fraction(0))
     if not cells or abs(original - retained) > Fraction(native_area_tolerance):
         raise GeometryError("arrangement failed material conservation")
     return cells, float(retained), outer_area
+
+def _segments_meet(p, q, r, t) -> bool:
+    """Closed 2-D segments ``[p, q]`` and ``[r, t]`` share a point (exact)."""
+    def orient(a, b, c):
+        value = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+        return (value > 0) - (value < 0)
+
+    def on(a, b, c):                                   # c on [a, b], given collinear
+        return min(a[0], b[0]) <= c[0] <= max(a[0], b[0]) and min(a[1], b[1]) <= c[1] <= max(a[1], b[1])
+    o1, o2, o3, o4 = orient(p, q, r), orient(p, q, t), orient(r, t, p), orient(r, t, q)
+    if o1 != o2 and o3 != o4 and 0 not in (o1, o2, o3, o4):
+        return True
+    return ((o1 == 0 and on(p, q, r)) or (o2 == 0 and on(p, q, t))
+            or (o3 == 0 and on(r, t, p)) or (o4 == 0 and on(r, t, q)))
+
+
+def _edges_conflict(first, second, first_vertices, second_vertices) -> bool:
+    """Whether two re-anchored straight edges (chart points) violate a planar embedding.
+
+    Edges may meet only at shared vertices. Sharing one vertex, they conflict
+    when collinear and pointing the same way (overlap, or one containing the
+    other's far end); sharing none, when their closed segments meet at all
+    (proper crossing, T-junction, collinear overlap).
+    """
+    shared = set(first_vertices) & set(second_vertices)
+    if len(shared) == 2:
+        return True                                    # duplicates are merged before; a second copy conflicts
+    if len(shared) == 1:
+        (vertex,) = shared
+        p = first[first_vertices.index(vertex)]
+        q = first[1 - first_vertices.index(vertex)]
+        r = second[1 - second_vertices.index(vertex)]
+        cross = (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+        dot = (q[0] - p[0]) * (r[0] - p[0]) + (q[1] - p[1]) * (r[1] - p[1])
+        return cross == 0 and dot > 0
+    return _segments_meet(first[0], first[1], second[0], second[1])
+
+
+def _close_embedding(domain, vertices, lookup, stored_of, edges, edge_segments, endpoints_by_edge, check):
+    """Representatives, re-anchoring and the conservative closure check (T-b/D8 slice E2: S5, S6, S9).
+
+    Every vertex gets one exact position: the stored face vertex in its
+    cluster when there is one (owner Q-a), else its first station; two stored
+    vertices in one cluster refuse. Every straight edge becomes the segment
+    between its vertices' positions (stored coordinates = their correct
+    rounding). Distinct vertices must keep distinct exact and stored
+    positions. The re-anchored edges must form a planar embedding: any
+    crossing, T-junction or overlap refuses ("arrangement not closable within
+    tolerance") -- the conservative policy (owner Q-g). Inputs must lie on the
+    support within tol (S9).
+    """
+    chart = ExactPlane.from_plane(domain.support)
+    normal = chart.normal
+    bound2 = Fraction(lookup.tolerance) ** 2 * exact_dot(normal, normal)
+    offset = exact_dot(normal, chart.origin)
+    representatives = []
+    for index in range(len(vertices)):
+        stored = stored_of.get(index, {})
+        if len(stored) > 1:
+            raise GeometryError("two stored face vertices within one tolerance cluster")
+        point = next(iter(stored.values())) if stored else lookup.exact[index]
+        residual = exact_dot(normal, point) - offset
+        if residual * residual > bound2:
+            raise GeometryError("material domain input off its support")
+        representatives.append(point)
+    exact_seen, rounded_seen = {}, {}
+    for index, point in enumerate(representatives):
+        rounded = stations.rounded(point)
+        if point in exact_seen or rounded in rounded_seen:
+            raise GeometryError("arrangement not closable within tolerance")
+        exact_seen[point] = rounded_seen[rounded] = index
+        vertices[index] = np.asarray(rounded)
+    for index, (start, end) in enumerate(endpoints_by_edge):
+        if index in edge_segments:
+            segment = stations.Segment(representatives[start], representatives[end], derived=True)
+            edge_segments[index] = segment
+            edges[index] = replace(edges[index], curve=stations.to_line(segment))
+    uv = [chart.uv(point) for point in representatives]
+    straight = sorted(edge_segments)
+    if len(straight) < 2:
+        return
+    ends = np.array([[[float(c) for c in uv[endpoints_by_edge[index][k]]] for k in (0, 1)] for index in straight])
+    lo, hi = ends.min(axis=1), ends.max(axis=1)
+    pad = 4 * _EPS * np.maximum(np.abs(lo), np.abs(hi)) + 1e-300
+    lo, hi = lo - pad, hi + pad
+    for i, first in enumerate(straight):
+        check()
+        candidates = np.flatnonzero(np.all((lo[i + 1:] <= hi[i]) & (hi[i + 1:] >= lo[i]), axis=1)) + i + 1
+        first_vertices = endpoints_by_edge[first]
+        first_points = (uv[first_vertices[0]], uv[first_vertices[1]])
+        for j in candidates:
+            second = straight[j]
+            second_vertices = endpoints_by_edge[second]
+            if _edges_conflict(first_points, (uv[second_vertices[0]], uv[second_vertices[1]]),
+                               first_vertices, second_vertices):
+                raise GeometryError("arrangement not closable within tolerance")
+
+
+def _shoelace(points) -> Fraction:
+    """Exact signed area of a closed polygon of exact chart points."""
+    return sum((a[0] * b[1] - a[1] * b[0] for a, b in zip(points, points[1:] + points[:1])), Fraction(0)) / 2
+
+
+def _certified_planar_cells(domain, chains, edges, edge_segments, endpoints_by_edge, boundary_uses,
+                            tolerance, native_area_tolerance, check):
+    """Cells of a closed planar embedding, decided combinatorially (T-b/D8 slice E3: S8, S9).
+
+    The embedding is closed and planar (E2), so faces are exact regions:
+    * validity (typed "invalid material domain"): every loop simple on its
+      stored stations and after re-anchoring (no vertex visited twice),
+      non-zero area, no coincident loop occurrences (owner Q-c), and open-edge
+      containment (hole-edge midpoints strictly inside the outer loop and
+      outside other holes; outer-edge midpoints strictly outside every hole);
+    * hole ownership: the open horizontal segment leaving a negative cycle's
+      leftmost vertex toward -U lies in the face on its left; the nearest
+      hit (an edge interior: the half-edge with the vertex on its left; a
+      vertex: the cycle of the wedge containing +U there) names that face;
+    * material by parity over the faces: the unbounded face is not material,
+      crossing an edge flips the state iff its boundary multiplicity is odd;
+    * exact areas, main's |area| <= tol^2 sliver drop (owner Q-d), the exact
+      partition identity and main's conservation check.
+    Main's probe is not used.
+    """
+    from .exact_predicates import Outcome, point_in_polygon
+    from .planar_exact import region_is_simple
+    chart = ExactPlane.from_plane(domain.support)
+    vertex_count = 1 + max(max(pair) for pair in endpoints_by_edge) if endpoints_by_edge else 0
+    vertex_uv = [None] * vertex_count
+    for index, (start, end) in enumerate(endpoints_by_edge):
+        a, b = edge_segments[index]
+        vertex_uv[start], vertex_uv[end] = chart.uv(a), chart.uv(b)
+
+    def invalid():
+        return GeometryError("invalid material domain")
+
+    # -- validity
+    multiplicity = {}
+    for _path, index, _same in boundary_uses:
+        multiplicity[index] = multiplicity.get(index, 0) + 1
+    if any(count > 1 for count in multiplicity.values()):
+        raise invalid()
+    loops_uv, first = [], 0
+    for loop in domain.boundaries:
+        stored = [chart.uv(stations.segment_of(path.curve)[0]) for path in loop]
+        if not region_is_simple([stored]):
+            raise invalid()
+        uses = [(index, same) for path, index, same in boundary_uses if first <= path < first + len(loop)]
+        sequence = [endpoints_by_edge[index][0 if same else 1] for index, same in uses]
+        if len(set(sequence)) != len(sequence) or len(sequence) < 3:
+            raise invalid()
+        polygon = [vertex_uv[v] for v in sequence]
+        if _shoelace(polygon) == 0:
+            raise invalid()
+        loops_uv.append((polygon, uses))
+        first += len(loop)
+
+    def midpoint(index):
+        a, b = (vertex_uv[v] for v in endpoints_by_edge[index])
+        return ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
+    outer_polygon, outer_uses = loops_uv[0]
+    for k, (polygon, uses) in enumerate(loops_uv[1:], start=1):
+        for index, _same in uses:
+            point = midpoint(index)
+            if point_in_polygon(point, outer_polygon) is not Outcome.ABOVE:
+                raise invalid()
+            if any(point_in_polygon(point, other) is not Outcome.BELOW
+                   for j, (other, _uses) in enumerate(loops_uv[1:], start=1) if j != k):
+                raise invalid()
+    for index, _same in outer_uses:
+        point = midpoint(index)
+        if any(point_in_polygon(point, hole) is not Outcome.BELOW for hole, _uses in loops_uv[1:]):
+            raise invalid()
+
+    # -- cycles and the half-edge -> cycle map
+    cycle_of = {}
+    areas, polygons = [], []
+    for c, chain in enumerate(chains):
+        for item in chain:
+            cycle_of[item] = c
+        polygon = [vertex_uv[endpoints_by_edge[e][0 if forward else 1]] for e, forward in chain]
+        polygons.append(polygon)
+        areas.append(_shoelace(polygon))
+
+    outgoing = {}
+    for index, (start, end) in enumerate(endpoints_by_edge):
+        outgoing.setdefault(start, []).append((index, True))
+        outgoing.setdefault(end, []).append((index, False))
+
+    def direction(half):
+        index, forward = half
+        a, b = (vertex_uv[v] for v in endpoints_by_edge[index])
+        return (b[0] - a[0], b[1] - a[1]) if forward else (a[0] - b[0], a[1] - b[1])
+
+    def angle_key(half):
+        du, dv = direction(half)
+        return 0 if dv > 0 or (dv == 0 and du > 0) else 1
+
+    def ccw(first, second):
+        (ua, va), (ub, vb) = direction(first), direction(second)
+        ha, hb = angle_key(first), angle_key(second)
+        if ha != hb:
+            return ha - hb
+        cross = ua * vb - va * ub
+        return -1 if cross > 0 else 1 if cross < 0 else 0
+
+    def wedge_cycle(w):
+        # The face in the wedge at w containing +U: left of the outgoing half-edge pointing exactly
+        # +U if there is one (the wedge above it), else left of the last outgoing half-edge.
+        halves = sorted(outgoing.get(w, ()), key=functools.cmp_to_key(ccw))
+        if not halves:
+            raise GeometryError("arrangement ownership ray met an isolated vertex")
+        du, dv = direction(halves[0])
+        chosen = halves[0] if (dv == 0 and du > 0) else halves[-1]
+        return cycle_of[chosen]
+
+    owner_cache = {}
+
+    def owner(c):
+        """The positive cycle bounding the face on the left of negative cycle ``c`` (None: unbounded)."""
+        if c in owner_cache:
+            return owner_cache[c]
+        chain = chains[c]
+        start_vertices = [endpoints_by_edge[e][0 if forward else 1] for e, forward in chain]
+        v = min(start_vertices, key=lambda w: (vertex_uv[w][0], vertex_uv[w][1]))
+        uv_v, vv = vertex_uv[v], vertex_uv[v][1]
+        best = None                                   # (U of the hit, kind, payload)
+        for w in range(vertex_count):
+            if w == v or vertex_uv[w] is None:
+                continue
+            if vertex_uv[w][1] == vv and vertex_uv[w][0] < uv_v[0] and (best is None or vertex_uv[w][0] > best[0]):
+                best = (vertex_uv[w][0], "vertex", w)
+        for index, (a_id, b_id) in enumerate(endpoints_by_edge):
+            check()
+            if v in (a_id, b_id):
+                continue
+            a, b = vertex_uv[a_id], vertex_uv[b_id]
+            if not (min(a[1], b[1]) < vv < max(a[1], b[1])):
+                continue
+            u = a[0] + (vv - a[1]) * (b[0] - a[0]) / (b[1] - a[1])
+            if u < uv_v[0] and (best is None or u > best[0]):
+                best = (u, "edge", index)
+        if best is None:
+            result = None
+        else:
+            _u, kind, payload = best
+            if kind == "vertex":
+                hit = wedge_cycle(payload)
+            else:
+                a, b = (vertex_uv[x] for x in endpoints_by_edge[payload])
+                left = (b[0] - a[0]) * (uv_v[1] - a[1]) - (b[1] - a[1]) * (uv_v[0] - a[0])
+                hit = cycle_of[(payload, left > 0)]
+            result = hit if areas[hit] > 0 else owner(hit)
+        owner_cache[c] = result
+        return result
+
+    # -- faces and parity
+    face_of_cycle = {c: (c if areas[c] > 0 else owner(c)) for c in range(len(chains))}
+    material = {None: False}
+    pending = [None]
+    neighbours = {}
+    for index in range(len(edges)):
+        f1, f2 = face_of_cycle[cycle_of[(index, True)]], face_of_cycle[cycle_of[(index, False)]]
+        flip = multiplicity.get(index, 0) % 2 == 1
+        if f1 == f2 and flip:
+            raise invalid()
+        neighbours.setdefault(f1, []).append((f2, flip))
+        neighbours.setdefault(f2, []).append((f1, flip))
+    while pending:
+        face = pending.pop()
+        for other, flip in neighbours.get(face, ()):
+            state = material[face] != flip
+            if other in material:
+                if material[other] != state:
+                    raise invalid()
+                continue
+            material[other] = state
+            pending.append(other)
+
+    # -- cells, areas, conservation
+    tol4 = Fraction(tolerance) ** 4
+    positive = [c for c in range(len(chains)) if areas[c] > 0 and material.get(c, False)
+                and areas[c] * areas[c] > tol4]
+    index_of = {c: k for k, c in enumerate(positive)}
+    holes = [[] for _ in positive]
+    retained = sum((areas[c] for c in positive), Fraction(0))
+    for c in range(len(chains)):
+        if areas[c] < 0 and areas[c] * areas[c] > tol4:
+            face = face_of_cycle[c]
+            if face is not None and face in index_of:
+                holes[index_of[face]].append(chains[c])
+                retained += areas[c]
+    cells = tuple(ArrangementCell(chains[c], tuple(holes[index_of[c]])) for c in positive)
+    outer_area = _shoelace(outer_polygon)
+    original = abs(outer_area) - sum(abs(_shoelace(polygon)) for polygon, _uses in loops_uv[1:])
+    partition = sum((areas[c] for c in range(len(chains))
+                     if material.get(face_of_cycle[c], False) and (areas[c] > 0 or face_of_cycle[c] is not None)),
+                    Fraction(0))
+    if partition != original:
+        raise GeometryError("arrangement failed material conservation")
+    stored_outer = _exact_loop_area(chart, [stations.segment_of(path.curve) for path in domain.boundaries[0]])
+    if not cells or abs(original - retained) > Fraction(native_area_tolerance):
+        raise GeometryError("arrangement failed material conservation")
+    return cells, float(retained), stored_outer if stored_outer != 0 else outer_area
+
 
 _NEIGHBOUR_OFFSETS = tuple(itertools.product((-1, 0, 1), repeat=3))
 
@@ -1067,15 +1392,32 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
     # float rule (their evaluation is their position). Without straight
     # pieces the lookup is main's.
     lookup = stations.ExactVertexLookup(tolerance) if segments else _VertexLookup(vertices, tolerance)
+    # E2 (S5): stored face vertices found in each vertex cluster. A loop corner is the end of one
+    # boundary path and the start of the next (frozen curves can differ there by rounding); its
+    # stored position is the start of the next path.
+    stored_corners = {}
+    if deferred:
+        first = 0
+        for loop in domain.boundaries:
+            for k in range(len(loop)):
+                corner = (first, k)
+                stored_corners.setdefault(segments[first + k][0], (corner, segments[first + k][0]))
+                previous = first + (k - 1) % len(loop)
+                stored_corners.setdefault(segments[previous][1], (corner, segments[first + k][0]))
+            first += len(loop)
+    stored_of = {}
     def vertex(point, station=None):
         if segments:
             floats = np.asarray(stations.rounded(station)) if station is not None else point
             index = lookup.find(station, floats)
-            if index is not None:
-                return index
-            lookup.add(station, floats)
-            vertices.append(floats.copy()); incidence.append([])
-            return len(vertices)-1
+            if index is None:
+                lookup.add(station, floats)
+                vertices.append(floats.copy()); incidence.append([])
+                index = len(vertices)-1
+            if station is not None and station in stored_corners:
+                corner, position = stored_corners[station]
+                stored_of.setdefault(index, {})[corner] = position
+            return index
         index = lookup.find(point)
         if index is not None:
             return index
@@ -1084,6 +1426,7 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
         return len(vertices)-1
 
     endpoints_by_edge, edge_segments = [], {}
+    boundary_uses = []                              # (path index, edge index, same direction)
     for path_index, (path, parameters) in enumerate(zip(paths, splits)):
         segment = segments.get(path_index)
         if segment is not None:
@@ -1155,6 +1498,8 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
                                 and np.linalg.norm(curve.evaluate(.5)-old.evaluate(.5)) <= tolerance):
                             duplicate = index; break
             if duplicate is not None:
+                if deferred and path_index < len(boundaries):
+                    boundary_uses.append((path_index, duplicate, endpoints_by_edge[duplicate][0] == start))
                 old = edges[duplicate]
                 edges[duplicate] = ArrangementPath(old.curve, old.source_edge or path.source_edge,
                     tuple(sorted(set((*old.owners, *path.owners)))), old.decomposition and path.decomposition,
@@ -1164,8 +1509,13 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
             edges.append(replace(path, curve=curve))
             if segment is not None:
                 edge_segments[index] = piece
+            if deferred and path_index < len(boundaries):
+                boundary_uses.append((path_index, index, True))
             endpoints_by_edge.append((start, end))
             incidence[start].append(index); incidence[end].append(index)
+
+    if deferred:
+        _close_embedding(domain, vertices, lookup, stored_of, edges, edge_segments, endpoints_by_edge, check)
 
     outgoing = [[] for _ in vertices]
     chart_exact = ExactPlane.from_plane(domain.support) if exact else None
@@ -1268,6 +1618,12 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
             if material:
                 cycles.append((tuple(chain), loop, area))
 
+    if exact_cells and deferred:
+        cells, retained, outer_area = _certified_planar_cells(
+            domain, exact_chains, edges, edge_segments, endpoints_by_edge, boundary_uses,
+            tolerance, native_area_tolerance, check)
+        return MaterialArrangement(domain.face_id, tuple(edges), cells, retained, tolerance,
+                                   native_area_tolerance, domain.support, -1 if outer_area < 0 else 1)
     if exact_cells:
         cells, retained, outer_area = _exact_planar_cells(domain, exact_chains, edges, edge_segments,
                                                           tolerance, native_area_tolerance, check)

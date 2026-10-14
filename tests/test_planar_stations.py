@@ -459,10 +459,11 @@ def _square_loop(points):
     return tuple(ArrangementPath(LinePath((*a, 0.), (*b, 0.))) for a, b in zip(points, points[1:] + points[:1]))
 
 
-def test_cell_phase_reproduces_mains_answers_on_merged_and_nested_inputs():
-    """Review inputs: a trace end tolerance-merged with a corner (main's area formula sums each
-    piece's own stations: 2 cells, area 16), a merged start whose probe main does not certify
-    (main refuses: no hole owner), and two nested trace squares 2 tol apart (main's ownership)."""
+def test_cells_on_merged_and_nested_inputs():
+    """Review inputs: a trace end tolerance-merged with a corner (2 cells, area 16, as main); a merged
+    start main refused ("hole has no material owner") -- on the closed embedding its exact answer is
+    2 cells, area 16 (T-b E3); two nested trace squares 2 tol apart: the inner outline is the hole of
+    the ring and the inner square its own cell, hole counts [0, 1, 1] (main [0, 0, 2])."""
     plane = Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.))
     square = _square_loop([(0., 0.), (4., 0.), (4., 4.), (0., 4.)])
 
@@ -472,18 +473,16 @@ def test_cell_phase_reproduces_mains_answers_on_merged_and_nested_inputs():
     for kw in ({}, {"area_tolerance": 1e-12}):
         result = run(square, merged, **kw)
         assert (len(result.cells), result.area) == (2, 16.)
-    # main refused "hole has no material owner"; with deferred removal (E1) the refusal identity
-    # changes (owner Q-e, listed); the exact answer (2 cells, area 16) is E3's target.
-    with pytest.raises(GeometryError, match="failed material conservation"):
-        run(_square_loop([(0., 2e-6), (0., 0.), (4., 0.), (4., 4.), (0., 4.)]),
-            (ArrangementPath(LinePath((3e-7, 9.5e-7, 0.), (4., 4., 0.)), owners=(1, 2)),), area_tolerance=2e-6)
+    start = run(_square_loop([(0., 2e-6), (0., 0.), (4., 0.), (4., 4.), (0., 4.)]),
+                (ArrangementPath(LinePath((3e-7, 9.5e-7, 0.), (4., 4., 0.)), owners=(1, 2)),), area_tolerance=2e-6)
+    assert (len(start.cells), start.area) == (2, 16.)
 
     def ring(lo, hi, first):
         q = [(lo, lo), (hi, lo), (hi, hi), (lo, hi)]
         return tuple(ArrangementPath(LinePath((*a, 0.), (*b, 0.)), owners=(1, first + i))
                      for i, (a, b) in enumerate(zip(q, q[1:] + q[:1])))
     nested = run(square, ring(1., 3., 2) + ring(1. + 2e-6, 3. - 2e-6, 10), area_tolerance=1e-12)
-    assert sorted(len(cell.holes) for cell in nested.cells) == [0, 0, 2] and nested.area == 16.
+    assert sorted(len(cell.holes) for cell in nested.cells) == [0, 1, 1] and nested.area == 16.
 
 
 def _island_arrangement(plane):
@@ -564,12 +563,11 @@ def test_non_transitive_identity_keeps_mains_first_fit_vertices():
         traces.append(ArrangementPath(LinePath((top + slope, 5., 0.), (bottom - slope, -1., 0.)), owners=(1, k)))
     square = _square_loop([(0., 0.), (4., 0.), (4., 4.), (0., 4.)])
     for order in (tuple(traces), tuple(traces[::-1])):
-        # The network is not closed (T-b): areas from the pieces' own stations miss ~1.8 tol^1, so
-        # conservation at the default area tolerance (= tol) fails here as on main; E2/E3 close it.
-        with pytest.raises(GeometryError, match="failed material conservation"):
-            arrange_material(MaterialDomain(1, plane, (square,)), order, tolerance=tol)
-        result = arrange_material(MaterialDomain(1, plane, (square,)), order, tolerance=tol, area_tolerance=1e-3)
-        assert (len(result.cells), len(result.paths)) == (4, 12)
+        # Main (and E1) failed conservation at the default area tolerance: areas from the pieces'
+        # own stations missed ~1.8 tol^2 on the open network. The closed embedding (E2/E3) conserves.
+        for kw in ({}, {"area_tolerance": 1e-3}):
+            result = arrange_material(MaterialDomain(1, plane, (square,)), order, tolerance=tol, **kw)
+            assert (len(result.cells), len(result.paths)) == (4, 12)
 
 
 def test_short_clipped_piece_with_overlapping_trace_and_seam():
@@ -640,12 +638,14 @@ def test_fan_with_a_thin_triangle_keeps_it():
         assert len(_fan(((1e-7, 1.), (5e-7, 2.), (1.8e-6, 1.)), **kw).cells) == 5
 
 
-def test_fan_keeps_the_edge_between_two_distinct_vertices():
-    """Decision change (Q13/Q-e, E1): bottom stations 0.5e-6, 0.9e-6, 2.1e-6 (tol 1e-6) form two
-    first-fit vertices; the 1.2e-6 sub-piece joining them is an edge (main dropped it on that path
-    while vertex identity kept both vertices): 5 cells and 13 paths (main 12), same area."""
-    result = _fan(((2.1e-6, 1.), (.5e-6, 3.), (.9e-6, 1.)), area_tolerance=1e-3)
-    assert (len(result.cells), len(result.paths)) == (5, 13)
+def test_fan_near_a_corner_is_not_closable_conservatively():
+    """Decision change (Q13/Q-e/Q-g): bottom stations 0.5e-6, 0.9e-6, 2.1e-6 (tol 1e-6) near the
+    corner. Main: 5 cells / 12 paths; E1: 5 / 13 (the sub-piece between the two first-fit vertices
+    kept). With the stored corner as representative (Q-a) re-anchoring creates a crossing."""
+    # E2 (conservative closure, owner Q-g): re-anchoring the two near-corner stations onto the stored
+    # corner makes two edges cross; the arrangement refuses instead of repairing (E2b opt-in).
+    with pytest.raises(GeometryError, match="not closable within tolerance"):
+        _fan(((2.1e-6, 1.), (.5e-6, 3.), (.9e-6, 1.)), area_tolerance=1e-3)
 
 
 
