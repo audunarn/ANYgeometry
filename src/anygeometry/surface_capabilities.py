@@ -189,12 +189,12 @@ def _endpoint(value):
     """
     if isinstance(value, Fraction):
         return Fraction(value.numerator, value.denominator)
-    if isinstance(value, (bool, np.bool_)):
-        raise GeometryError("chart box bounds must be real numbers, not booleans")
+    if isinstance(value, (bool, np.bool_, np.timedelta64, np.datetime64)):
+        raise GeometryError(f"chart box bounds must be real numbers, not {type(value).__name__}")
     if isinstance(value, (int, np.integer)):
         return Fraction(int(value))
     if isinstance(value, (float, np.floating)):
-        if math.isfinite(value):
+        if np.isfinite(value):                       # NumPy's own width (longdouble is not narrowed)
             return Fraction(*value.as_integer_ratio())
         return float(value)
     raise GeometryError(f"chart box bounds must be real numbers, not {type(value).__name__}")

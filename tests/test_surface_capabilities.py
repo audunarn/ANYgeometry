@@ -212,7 +212,8 @@ def test_exact_box_ends_and_square_root_bounds():
     sub = capability.enclosure(((Exact(n), Exact(n)), (np.int64(0), np.float32(0.))))
     assert Fraction(sub.lower[0]) <= n <= Fraction(sub.upper[0])
     from decimal import Decimal
-    for bad in (Decimal("9007199254740993"), "1", np.bool_(True), True, np.complex128(1 + 2j), None):
+    for bad in (Decimal("9007199254740993"), "1", np.bool_(True), True, np.complex128(1 + 2j), None,
+                np.timedelta64(1, "ns"), np.timedelta64(1, "D"), np.timedelta64("NaT")):
         with pytest.raises(GeometryError):
             capability.enclosure(((bad, 1.), (0., 1.)))
     third = capability.enclosure(((Fraction(1, 3), Fraction(2, 3)), (Fraction(-1, 7), 0)))
