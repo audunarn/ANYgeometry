@@ -135,3 +135,49 @@ def test_a_touching_hole_absorbed_into_the_outer_walk_is_accepted():
         ends[index] = tuple(pair)
     cells = [(list(cell.outer), [list(hole) for hole in cell.holes]) for cell in arrangement.cells]
     certify_persisted_cells(PLANE, cells, lambda edge: ends[edge], lambda vertex: positions[vertex])
+
+
+def _touching_hole_arrangement():
+    from anygeometry.arrangement_geometry import LinePath
+    from anygeometry.material_arrangement import ArrangementPath, MaterialDomain, arrange_material
+
+    def ring(points):
+        return tuple(ArrangementPath(LinePath((*a, 0.), (*b, 0.))) for a, b in zip(points, points[1:] + points[:1]))
+    return arrange_material(MaterialDomain(1, PLANE, (ring([(0., 0.), (4., 0.), (4., 4.), (0., 4.)]),
+                                                      ring([(0., 0.), (1., .5), (.5, 1.)]))), (), tolerance=1e-6)
+
+
+def _persisted(arrangement, move=lambda key: key):
+    vertex_ids, positions, ends = {}, {}, {}
+    for index, path in enumerate(arrangement.paths):
+        pair = []
+        for point in (path.curve.start, path.curve.end):
+            key = tuple(point)
+            if key not in vertex_ids:
+                vertex_ids[key] = len(vertex_ids)
+                positions[vertex_ids[key]] = move(key)
+            pair.append(vertex_ids[key])
+        ends[index] = tuple(pair)
+    cells = [(list(cell.outer), [list(hole) for hole in cell.holes]) for cell in arrangement.cells]
+    return cells, (lambda edge: ends[edge]), (lambda vertex: positions[vertex])
+
+
+def test_a_touching_hole_lobe_moved_outside_refuses():
+    """Review (round 2): negate the two non-contact triangle vertices -- the clockwise lobe leaves the
+    square while every sign stays the same."""
+    from anygeometry.material_arrangement import expected_cell_signatures
+    arrangement = _touching_hole_arrangement()
+    move = lambda key: (-key[0], -key[1], key[2]) if key[:2] in ((1., .5), (.5, 1.)) else key
+    cells, ends, position = _persisted(arrangement, move)
+    with pytest.raises(GeometryError, match="lobe outside its loop"):
+        certify_persisted_cells(PLANE, cells, ends, position, expected=expected_cell_signatures(arrangement))
+
+
+def test_a_reflected_face_refuses_against_its_certified_winding():
+    from anygeometry.material_arrangement import expected_cell_signatures
+    arrangement = _touching_hole_arrangement()
+    cells, ends, position = _persisted(arrangement, lambda key: (-key[0], key[1], key[2]))
+    with pytest.raises(GeometryError, match="winding or lobes changed"):
+        certify_persisted_cells(PLANE, cells, ends, position, expected=expected_cell_signatures(arrangement))
+    cells, ends, position = _persisted(arrangement)
+    certify_persisted_cells(PLANE, cells, ends, position, expected=expected_cell_signatures(arrangement))

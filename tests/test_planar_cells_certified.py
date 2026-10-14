@@ -109,3 +109,25 @@ def test_chart_coincident_stations_are_one_vertex():
     domain = MaterialDomain(1, PLANE, (lift(SQUARE, .75 * tol), lift([(0., 0.), (1., .5), (.5, 1.)], -.75 * tol)))
     result = arrange_material(domain, (), tolerance=tol)
     assert (len(result.cells), result.area) == (1, 15.625)
+
+
+@pytest.mark.parametrize("axis", (1., 1e-6))
+def test_deformation_guard_is_independent_of_the_plane_basis_scale(axis):
+    """Review (round 2): a one-ULP corner discrepancy between consecutive boundary paths (re-anchored
+    onto one corner) is accepted with unit and with 1e-6-scaled plane axes."""
+    import math
+    plane = Plane((0., 0., 0.), (axis, 0., 0.), (0., axis, 0.))
+    corner = (4., math.nextafter(4., math.inf))
+    paths = (ArrangementPath(LinePath((0., 0., 0.), (4., 0., 0.))), ArrangementPath(LinePath((4., 0., 0.), (*corner, 0.))),
+             ArrangementPath(LinePath((4., 4., 0.), (0., 4., 0.))), ArrangementPath(LinePath((0., 4., 0.), (0., 0., 0.))))
+    result = arrange_material(MaterialDomain(1, plane, (paths,)), (), tolerance=1e-6)
+    assert len(result.cells) == 1
+
+
+def test_trace_ends_off_the_support_refuse_before_clipping():
+    """Review (round 2): a trace whose ends are 10 tol off the support z = 0, clipped to a piece that
+    lies on it: the input precondition (S9) is checked on the trace as given."""
+    tol = 1e-6
+    with pytest.raises(GeometryError, match="off its support"):
+        arrange_material(MaterialDomain(1, PLANE, (loop(SQUARE),)),
+                         (ArrangementPath(LinePath((-100., 2., -1e-5), (100., 2., 1e-5)), owners=(1, 2)),), tolerance=tol)

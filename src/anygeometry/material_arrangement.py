@@ -1054,9 +1054,12 @@ def _certified_planar_cells(domain, chains, edges, edge_segments, endpoints_by_e
     # S9 (ii): the re-anchored loops deform the stored ones by at most 2 tol x perimeter (owner Q-b).
     perimeter = sum(math.sqrt(float(stations.segment_of(path.curve).length2()))
                     for loop in domain.boundaries for path in loop)
+    bound = Fraction(2 * tolerance * perimeter * (1 + 1e-9))
+    jacobian2 = exact_dot(chart.normal, chart.normal)          # world area = chart area * |u x v|
     for (polygon, _uses), loop in zip(loops_uv, domain.boundaries):
         stored_area = _exact_loop_area(chart, [stations.segment_of(path.curve) for path in loop])
-        if abs(float(abs(_shoelace(polygon)) - abs(stored_area))) > 2 * tolerance * perimeter * (1 + 1e-9) + 1e-300:
+        difference = abs(_shoelace(polygon)) - abs(stored_area)
+        if difference * difference * jacobian2 > bound * bound:
             raise GeometryError("arrangement deformation exceeds the tolerance contract")
     for k, (polygon, uses) in enumerate(loops_uv[1:], start=1):
         for index, _same in uses:
@@ -1203,7 +1206,56 @@ def _certified_planar_cells(domain, chains, edges, edge_segments, endpoints_by_e
     return cells, float(retained), stored_outer if stored_outer != 0 else outer_area
 
 
-def certify_persisted_cells(support, loops, edge_ends, position, check=lambda: None):
+def _check_support(domain, points, tolerance):
+    chart = ExactPlane.from_plane(domain.support)
+    bound2 = Fraction(tolerance) ** 2 * exact_dot(chart.normal, chart.normal)
+    offset = exact_dot(chart.normal, chart.origin)
+    for point in points:
+        residual = exact_dot(chart.normal, point) - offset
+        if residual * residual > bound2:
+            raise GeometryError("material domain input off its support")
+
+
+def loop_lobes(sequence, coordinate):
+    """Split a closed vertex walk into simple lobes at repeated vertices; their signed areas.
+
+    ``sequence`` lists the walk's vertices (any hashable identity), ``coordinate``
+    maps a vertex to exact chart coordinates. A weakly simple walk (E3 absorbs a
+    touching hole into the outer walk) splits into its outer and hole lobes.
+    """
+    stack, lobes = [], []
+    for vertex in list(sequence) + [sequence[0]]:
+        if vertex in stack:
+            start = stack.index(vertex)
+            lobe = stack[start:]
+            if len(lobe) >= 3:
+                lobes.append(_shoelace([coordinate(v) for v in lobe]))
+            del stack[start + 1:]
+        else:
+            stack.append(vertex)
+    return lobes
+
+
+def expected_cell_signatures(arrangement):
+    """Each cell loop's (winding, lobe signs) from the arrangement's own geometry, as walked.
+
+    Compared with the persisted loops recorded before application reverses the
+    loops of a clockwise stored face, so no orientation flip applies here.
+    """
+    chart = ExactPlane.from_plane(arrangement.support)
+
+    def walk(loop):
+        starts = []
+        for index, forward in loop:
+            curve = arrangement.paths[index].curve
+            starts.append(tuple(curve.start) if forward else tuple(curve.end))
+        coordinate = lambda key: chart.uv(exact_vector(key))
+        area = _shoelace([coordinate(key) for key in starts])
+        return (area > 0, sorted(lobe > 0 for lobe in loop_lobes(starts, coordinate)))
+    return [tuple(walk(list(loop)) for loop in (cell.outer, *cell.holes)) for cell in arrangement.cells]
+
+
+def certify_persisted_cells(support, loops, edge_ends, position, check=lambda: None, expected=None):
     """Re-certify the persisted cells of a certified arrangement (T-b/D8 slice E2a, S10).
 
     ``loops`` are the applied cells as ``(outer, holes)`` lists of
@@ -1282,6 +1334,38 @@ def certify_persisted_cells(support, loops, edge_ends, position, check=lambda: N
         outer_polygon = polygon(outer)
         hole_polygons = [polygon(hole) for hole in holes]
         cells.append((outer, holes, outer_polygon, hole_polygons))
+    if expected is not None:
+        # The classification must be the certified one: each loop's winding and its lobes (signs of
+        # the simple lobes of a weakly simple walk) as certified before application.
+        for (outer, holes), wanted in zip(loops, expected):
+            for loop, want in zip((outer, *holes), wanted):
+                lobes = loop_lobes([start_of(item) for item in loop], point)
+                signature = (_shoelace(polygon(loop)) > 0, sorted(lobe > 0 for lobe in lobes))
+                if signature != want:
+                    raise failure("winding or lobes changed")
+    for outer, holes in loops:
+        for loop in (outer, *holes):
+            lobes = []
+            sequence = [start_of(item) for item in loop]
+            stack = []
+            for vertex in sequence + [sequence[0]]:
+                if vertex in stack:
+                    start = stack.index(vertex)
+                    lobe = stack[start:]
+                    if len(lobe) >= 3:
+                        lobes.append([point(v) for v in lobe])
+                    del stack[start + 1:]
+                else:
+                    stack.append(vertex)
+            if len(lobes) > 1:
+                total = _shoelace(polygon(loop)) > 0
+                main_lobes = [lobe for lobe in lobes if (_shoelace(lobe) > 0) == total]
+                for lobe in lobes:
+                    if (_shoelace(lobe) > 0) != total:
+                        # an opposite lobe is a hole touching its loop: inside a same-sense lobe
+                        probe = ((lobe[0][0] + lobe[1][0]) / 2, (lobe[0][1] + lobe[1][1]) / 2)
+                        if not any(point_in_polygon(probe, other) is Outcome.ABOVE for other in main_lobes):
+                            raise failure("touching lobe outside its loop")
     areas = [(_shoelace(op), [_shoelace(hp) for hp in hps]) for _o, _h, op, hps in cells]
     if any(a == 0 for outer_area, hole_areas in areas for a in (outer_area, *hole_areas)):
         raise failure("zero-area loop")
@@ -1444,6 +1528,13 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
         else:
             paths.extend(replace(path, curve=piece) for piece in _clip(domain, curve, tolerance, check))
 
+    if deferred:
+        # S9: every input station -- boundary and trace ends as given, arrangement points -- lies on
+        # the support within tol, checked before clipping or identification can drop or absorb it.
+        _check_support(domain, [point for loop in domain.boundaries for path in loop
+                                for point in stations.segment_of(path.curve)]
+                       + [point for trace in traces for point in stations.segment_of(trace.curve)]
+                       + [exact_vector(item.position) for item in points], tolerance)
     for trace in traces:
         add_clipped(trace, trace.curve)
 
@@ -1577,16 +1668,8 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
         return len(vertices)-1
 
     if deferred:
-        # S9: every input station (stored and derived path ends, arrangement points) lies on the
-        # support within tol -- checked before identification can absorb a station into a cluster.
-        chart = ExactPlane.from_plane(domain.support)
-        bound2 = Fraction(tolerance) ** 2 * exact_dot(chart.normal, chart.normal)
-        offset = exact_dot(chart.normal, chart.origin)
-        for point in [p for segment in segments.values() for p in segment] + [
-                exact_vector(item.position) for item in points]:
-            residual = exact_dot(chart.normal, point) - offset
-            if residual * residual > bound2:
-                raise GeometryError("material domain input off its support")
+        # S9 also for derived stations (seams, clipped pieces) before identification.
+        _check_support(domain, [p for segment in segments.values() for p in segment], tolerance)
     endpoints_by_edge, edge_segments = [], {}
     boundary_uses = []                              # (path index, edge index, same direction)
     for path_index, (path, parameters) in enumerate(zip(paths, splits)):

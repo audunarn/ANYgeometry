@@ -1017,9 +1017,11 @@ def _apply_intersections_in_place(model, plan, *, policy, _edge_preimage_draft=N
             loops = [(loop(cell.outer), tuple(loop(hole) for hole in cell.holes)) for cell in arrangement.cells]
             if getattr(arrangement, "certified", False):
                 # T-b/D8 E2a (S10): certified after the whole batch's vertex mapping (below).
+                from .material_arrangement import expected_cell_signatures
                 certified_cells.append((arrangement.support,
                     [([(item.edge, item.forward) for item in outer],
-                      [[(item.edge, item.forward) for item in hole] for hole in holes]) for outer, holes in loops]))
+                      [[(item.edge, item.forward) for item in hole] for hole in holes]) for outer, holes in loops],
+                    expected_cell_signatures(arrangement)))
             if arrangement.orientation < 0:
                 # The arrangement walks counterclockwise in the support chart; a face stored clockwise
                 # (a pointed cone's facets are) keeps its sense so its neighbours still agree with it.
@@ -1144,10 +1146,10 @@ def _apply_intersections_in_place(model, plan, *, policy, _edge_preimage_draft=N
             # certified arrangement must still form its planar subdivision, else the detached
             # candidate is refused before publication.
             from .material_arrangement import certify_persisted_cells
-            for support, cells in certified_cells:
+            for support, cells, expected in certified_cells:
                 certify_persisted_cells(support, cells,
                                         lambda edge: (model.edges[edge].start, model.edges[edge].end),
-                                        model.vertex_position, check)
+                                        model.vertex_position, check, expected=expected)
         check()
     change_set=model.last_change_set
     reused=model.revision == plan.revision
