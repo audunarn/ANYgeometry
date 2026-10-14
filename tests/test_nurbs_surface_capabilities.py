@@ -288,3 +288,17 @@ def test_box_memo_is_order_free_validated_and_thread_safe():
     for thread in threads:
         thread.join()
     assert not errors
+
+
+@pytest.mark.parametrize("u_range, end", (((0., .5), 1.), ((.5, 0.), 0.)))
+def test_trimmed_chart_end_derivatives_are_inward_and_bounded(u_range, end):
+    """Review A3a round 3: at a chart end on an interior knot, the derivative is the chart's own."""
+    x = (0., 1., 100.)
+    surface = NurbsSurface(1, 1, (0., 0., .5, 1., 1.), (0., 0., 1., 1.),
+                           tuple(tuple((x[i], float(j), 0.) for j in range(2)) for i in range(3)),
+                           u_range=u_range)
+    s_u, _ = surface.derivatives_many(np.array([[end, .5]]))
+    assert abs(abs(s_u[0, 0]) - 1.) <= 1e-15                        # slope 2 per knot unit on [0, .5] x chart length .5 (not 99)
+    capability = capabilities(surface)
+    for box in (((0., 1.), (0., 1.)), ((end, end), (.5, .5))):
+        assert np.linalg.norm(s_u[0]) <= capability.jacobian_bounds(box).sigma_max

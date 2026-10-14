@@ -467,8 +467,8 @@ class NurbsSurface:
         v = _map(uv[:, 1], *self.v_range)
         knots_u, knots_v = np.asarray(self.knots_u), np.asarray(self.knots_v)
         count_u, count_v = len(self.controls), len(self.controls[0])
-        spans_u = _reference.find_spans(self.degree_u, knots_u, count_u, u)
-        spans_v = _reference.find_spans(self.degree_v, knots_v, count_v, v)
+        spans_u = _inward_spans(self.degree_u, knots_u, count_u, u, self.u_range)
+        spans_v = _inward_spans(self.degree_v, knots_v, count_v, v, self.v_range)
         basis_u = _reference.basis_derivatives(self.degree_u, knots_u, spans_u, u, 1)
         basis_v = _reference.basis_derivatives(self.degree_v, knots_v, spans_v, v, 1)
         points = np.asarray(self.controls)
@@ -793,6 +793,23 @@ def nurbs_circular_arc(center, x_axis, y_axis, radius: float, start: float, swee
         knots += [k / segments, k / segments]
     knots += [1.0, 1.0, 1.0]
     return NurbsCurve(2, tuple(knots), tuple(controls), tuple(weights))
+
+
+def _inward_spans(degree: int, knots: np.ndarray, count: int, s: np.ndarray, chart_range) -> np.ndarray:
+    """Knot spans for one-sided derivatives inside the chart.
+
+    ``find_spans`` takes the span to the right of a knot; at the chart's upper
+    end that span lies outside a trimmed chart, so there the span to the left
+    (ending at ``s``) is used: derivatives are the chart's inward one-sided ones,
+    which the Jacobian bounds of chart boxes cover (review A3a round 3).
+    """
+    spans = _reference.find_spans(degree, knots, count, s)
+    top = max(chart_range)
+    at_top = (s == top) & (knots[spans] == s)
+    if np.any(at_top):
+        left = np.searchsorted(knots, s, side="left") - 1
+        spans = np.where(at_top, np.maximum(left, degree), spans)
+    return spans
 
 
 # ------------------------------------------------------------- exact rational helpers (A2a/A3a)
