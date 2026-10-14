@@ -492,6 +492,54 @@ class NurbsSurface:
             raise GeometryError("NURBS surface derivative is not representable in float64")
         return s_u, s_v
 
+    def second_derivatives_many(self, uv) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Second chart derivatives ``(S_uu, S_uv, S_vv)`` for chart points of shape ``(n, 2)``.
+
+        From ``S w = A`` in the frame of the point itself (``D_ij = P_ij - S``,
+        anchored as ``derivatives_many``): ``S_uu = (sum N'' M w D - 2 w_u S_u) / w``,
+        ``S_uv = (sum N' M' w D - w_u S_v - w_v S_u) / w``,
+        ``S_vv = (sum N M'' w D - 2 w_v S_v) / w``; spans as ``derivatives_many``.
+        """
+        uv = _parameters(uv, "surface chart points")
+        if uv.ndim != 2 or uv.shape[1] != 2:
+            raise GeometryError("surface chart points must have shape (n, 2)")
+        u = _map(uv[:, 0], *self.u_range)
+        v = _map(uv[:, 1], *self.v_range)
+        knots_u, knots_v = np.asarray(self.knots_u), np.asarray(self.knots_v)
+        count_u, count_v = len(self.controls), len(self.controls[0])
+        spans_u = _inward_spans(self.degree_u, knots_u, count_u, u, self.u_range)
+        spans_v = _inward_spans(self.degree_v, knots_v, count_v, v, self.v_range)
+        nu = _reference.basis_derivatives(self.degree_u, knots_u, spans_u, u, 2)
+        nv = _reference.basis_derivatives(self.degree_v, knots_v, spans_v, v, 2)
+        points = np.asarray(self.controls)
+        weights = _scaled_weights(np.ones((count_u, count_v)) if self.weights is None else np.asarray(self.weights))
+        rows = spans_u[:, None] - self.degree_u + np.arange(self.degree_u + 1)[None, :]
+        cols = spans_v[:, None] - self.degree_v + np.arange(self.degree_v + 1)[None, :]
+        local_points = points[rows[:, :, None], cols[:, None, :]]
+        local_weights = weights[rows[:, :, None], cols[:, None, :]]
+
+        def weight(a, b):
+            return np.einsum("mi,mj,mij->m", nu[:, a], nv[:, b], local_weights)
+
+        def moment(a, b, vectors):
+            return np.einsum("mi,mj,mij,mijd->md", nu[:, a], nv[:, b], local_weights, vectors)
+
+        w, w_u, w_v = weight(0, 0), weight(1, 0), weight(0, 1)
+        anchor = local_points[:, 0, 0, :]
+        delta = local_points - anchor[:, None, None, :]
+        offset = moment(0, 0, delta) / w[:, None]
+        differences = delta - offset[:, None, None, :]
+        s_u = moment(1, 0, differences) / w[:, None]
+        s_v = moment(0, 1, differences) / w[:, None]
+        s_uu = (moment(2, 0, differences) - 2 * w_u[:, None] * s_u) / w[:, None]
+        s_uv = (moment(1, 1, differences) - w_u[:, None] * s_v - w_v[:, None] * s_u) / w[:, None]
+        s_vv = (moment(0, 2, differences) - 2 * w_v[:, None] * s_v) / w[:, None]
+        scale_u, scale_v = self.u_range[1] - self.u_range[0], self.v_range[1] - self.v_range[0]
+        result = (s_uu * (scale_u * scale_u), s_uv * (scale_u * scale_v), s_vv * (scale_v * scale_v))
+        if not all(np.all(np.isfinite(item)) for item in result):
+            raise GeometryError("NURBS surface second derivative is not representable in float64")
+        return result
+
     def exact_net(self) -> tuple[tuple[tuple[Fraction, ...], ...], ...]:
         """Homogeneous control net ``(w x, w y, w z, w)`` as exact rationals of the stored doubles."""
         count_v = len(self.controls[0])
@@ -659,6 +707,42 @@ class CurveOnSurface:
         if not np.all(np.isfinite(result)):
             raise GeometryError("curve on surface is not representable in float64 after its transform")
         return result
+
+    def chart(self, parameters) -> np.ndarray:
+        """Chart points ``q(t)`` of the pcurve (clipped to [0, 1]^2 against rounding, as ``evaluate``)."""
+        return np.clip(self.pcurve.evaluate(parameters), 0.0, 1.0)
+
+    def chart_derivative(self, parameters) -> np.ndarray:
+        return self.pcurve.derivative(parameters)
+
+    def chart_second_derivative(self, parameters) -> np.ndarray:
+        return self.pcurve.second_derivative(parameters)
+
+    def _world_rates(self, parameters, order: int):
+        t = np.atleast_1d(np.asarray(parameters, dtype=float))
+        chart = self.chart(t).reshape(-1, 2)
+        first = self.chart_derivative(t).reshape(-1, 2)
+        s_u, s_v = self.support.derivatives_many(chart)
+        value = s_u * first[:, :1] + s_v * first[:, 1:]
+        if order == 2:
+            second = self.chart_second_derivative(t).reshape(-1, 2)
+            s_uu, s_uv, s_vv = self.support.second_derivatives_many(chart)
+            value = (s_uu * first[:, :1] ** 2 + 2 * s_uv * first[:, :1] * first[:, 1:] + s_vv * first[:, 1:] ** 2
+                     + s_u * second[:, :1] + s_v * second[:, 1:])
+        matrix = np.asarray(self.transform)
+        with np.errstate(over="ignore", invalid="ignore"):
+            result = value @ matrix[:3, :3].T
+        if not np.all(np.isfinite(result)):
+            raise GeometryError("curve-on-surface derivative is not representable in float64")
+        return result if np.ndim(parameters) else result[0]
+
+    def derivative(self, parameters) -> np.ndarray:
+        """World derivative ``M (S_u q_u' + S_v q_v')`` (chain rule through the support)."""
+        return self._world_rates(parameters, 1)
+
+    def second_derivative(self, parameters) -> np.ndarray:
+        """``M (S_uu q_u'^2 + 2 S_uv q_u' q_v' + S_vv q_v'^2 + S_u q_u'' + S_v q_v'')``."""
+        return self._world_rates(parameters, 2)
 
     def subcurve(self, lower, upper) -> "CurveOnSurface":
         return replace(self, pcurve=self.pcurve.subcurve(lower, upper))

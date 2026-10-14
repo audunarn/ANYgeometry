@@ -28,6 +28,8 @@ from .extruded_chart import area_density, chart_accelerations, chart_rates, dens
 from .extruded_supports import extruded_support
 from .extrusions import EllipseDirectrix
 from .surfaces import Cone, Cylinder, ExtrudedSurface, Plane, _angle_on_sweep
+from .nurbs import NurbsSurface
+from . import nurbs_domain
 
 _EPS = float(np.finfo(float).eps)
 
@@ -69,11 +71,13 @@ class MaterialArrangement:
 @dataclass(frozen=True, slots=True)
 class MaterialDomain:
     face_id: int
-    support: Plane | Cylinder | Cone | ExtrudedSurface
+    support: Plane | Cylinder | Cone | ExtrudedSurface | NurbsSurface
     boundaries: tuple[tuple[ArrangementPath, ...], ...]
 
     @property
     def area_jacobian(self):
+        if isinstance(self.support, NurbsSurface):        # upper bound sigma_max^2 (A1e-lite)
+            return nurbs_domain.area_jacobian(self)
         if isinstance(self.support, Plane):
             return float(np.linalg.norm(np.cross(self.support.u_vector, self.support.v_vector)))
         if isinstance(self.support, ExtrudedSurface):
@@ -85,6 +89,8 @@ class MaterialDomain:
         return abs(self.support.radius*self.support.sweep_angle*self.support.height)
 
     def world_delta(self, delta, v=0., u=0.):
+        if isinstance(self.support, NurbsSurface):
+            return nurbs_domain.world_delta(self, delta, v, u)
         if isinstance(self.support, Plane):
             return delta[0]*self.support.u_vector+delta[1]*self.support.v_vector
         if isinstance(self.support, ExtrudedSurface):
@@ -103,6 +109,8 @@ class MaterialDomain:
         :attr:`area_jacobian`. A Cone's element ``|sweep|*slant*r(v)`` grows with the
         radius, so ``-integral(F(v) du)`` with ``F`` the antiderivative of ``r`` is used.
         """
+        if isinstance(self.support, NurbsSurface):        # oint G dv, G = int J du (A1e-lite)
+            return nurbs_domain.world_area_loop(self, loop, tolerance)
         if isinstance(self.support, ExtrudedSurface):
             return self._extruded_world_area(loop, tolerance)
         if not isinstance(self.support, Cone):
@@ -146,7 +154,7 @@ class MaterialDomain:
 
     def material_world_area(self, arrangement):
         """Physical area of an arrangement's material cells."""
-        if not isinstance(self.support, (Cone, ExtrudedSurface)):
+        if not isinstance(self.support, (Cone, ExtrudedSurface, NurbsSurface)):
             return arrangement.area*self.area_jacobian
         tolerance = arrangement.native_area_tolerance*self.area_jacobian*.05
         total = 0.
@@ -223,6 +231,8 @@ class MaterialDomain:
         return uv
 
     def uv(self, curve, parameter):
+        if isinstance(self.support, NurbsSurface):        # the pcurve's chart point; never an inversion
+            return nurbs_domain.uv(self, curve, parameter)
         if isinstance(self.support, ExtrudedSurface):
             return self._extruded_uv(curve, parameter)
         point = curve.evaluate(parameter)
@@ -244,6 +254,8 @@ class MaterialDomain:
         return uv
 
     def tangent(self, curve, parameter):
+        if isinstance(self.support, NurbsSurface):
+            return nurbs_domain.tangent(self, curve, parameter)
         derivative = curve.derivative(parameter)
         if isinstance(self.support, Plane):
             return np.linalg.lstsq(np.column_stack((self.support.u_vector, self.support.v_vector)), derivative, rcond=None)[0]
@@ -265,6 +277,8 @@ class MaterialDomain:
                            float(derivative @ self.support.axis)/self.support.height))
 
     def curvature(self, curve, parameter, forward):
+        if isinstance(self.support, NurbsSurface):
+            return nurbs_domain.curvature(self, curve, parameter, forward)
         if self.at_apex(curve.evaluate(parameter)):
             return None                  # the chart is singular here; edges at an apex are ordered by azimuth
         second = _second_derivative(curve, parameter)
@@ -288,6 +302,8 @@ class MaterialDomain:
         return float(tangent[0]*acceleration[1]-tangent[1]*acceleration[0])/float(np.linalg.norm(tangent))**3
 
     def horizontal_roots(self, curve, value, tolerance):
+        if isinstance(self.support, NurbsSurface):        # pcurve level roots (float route)
+            return nurbs_domain.horizontal_roots(self, curve, value, tolerance)
         if isinstance(self.support, ExtrudedSurface):
             # The extrusion coordinate is linear in position: a level of v is a plane parallel to the profile.
             support = self.support
@@ -347,6 +363,10 @@ class MaterialDomain:
             if roots is None:
                 # A horizontal curve can contain the query but contributes no
                 # ray crossing. Exact point inversion handles its boundary.
+                if isinstance(self.support, NurbsSurface):
+                    if nurbs_domain.on_horizontal(self, curve, uv, tolerance):
+                        return boundary
+                    continue
                 world = self.support.evaluate(*uv)
                 if point_parameters(curve, world, tolerance=tolerance):
                     return boundary
@@ -393,6 +413,8 @@ class MaterialDomain:
                             for loop in self.boundaries[1:]))
 
     def area_loop(self, loop, tolerance):
+        if isinstance(self.support, NurbsSurface):        # chart area on the pcurves (A1e-lite)
+            return nurbs_domain.area_loop(self, loop, tolerance)
         if isinstance(self.support,Plane):
             from .planar_area import planar_loop_area
             analytic=planar_loop_area(self.support,loop,tolerance)
