@@ -1014,6 +1014,17 @@ def _apply_intersections_in_place(model, plan, *, policy, _edge_preimage_draft=N
             def loop(values):
                 return tuple(OrientedEdge(mapping[index].edge, mapping[index].forward == forward) for index, forward in values)
             loops = [(loop(cell.outer), tuple(loop(hole) for hole in cell.holes)) for cell in arrangement.cells]
+            if getattr(arrangement, "certified", False):
+                # T-b/D8 E2a (S10): the cells as persisted (stored doubles, reused or merged vertices)
+                # must still form the certified planar subdivision; otherwise the whole candidate is
+                # refused before publication (apply works on a detached candidate).
+                from .material_arrangement import certify_persisted_cells
+                certify_persisted_cells(
+                    arrangement.support,
+                    [([(item.edge, item.forward) for item in outer], [[(item.edge, item.forward) for item in hole]
+                                                                      for hole in holes]) for outer, holes in loops],
+                    lambda edge: (model.edges[edge].start, model.edges[edge].end),
+                    model.vertex_position, check)
             if arrangement.orientation < 0:
                 # The arrangement walks counterclockwise in the support chart; a face stored clockwise
                 # (a pointed cone's facets are) keeps its sense so its neighbours still agree with it.

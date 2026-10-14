@@ -63,6 +63,7 @@ class MaterialArrangement:
     native_area_tolerance: float = 1e-12
     support: object = None
     orientation: int = 1                # -1 when the stored face loop runs clockwise in the support chart
+    certified: bool = False             # cells decided on a closed planar embedding (T-b/D8 E2/E3)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1192,6 +1193,92 @@ def _certified_planar_cells(domain, chains, edges, edge_segments, endpoints_by_e
     return cells, float(retained), stored_outer if stored_outer != 0 else outer_area
 
 
+def certify_persisted_cells(support, loops, edge_ends, position, check=lambda: None):
+    """Re-certify the persisted cells of a certified arrangement (T-b/D8 slice E2a, S10).
+
+    ``loops`` are the applied cells as ``(outer, holes)`` lists of
+    ``(edge id, forward)``; ``edge_ends(edge)`` gives the model vertex ids of
+    a (straight) edge; ``position(vertex)`` its stored doubles. On the exact
+    chart of the stored coordinates: the edges form a planar embedding (no
+    crossing, T-junction or overlap, no collapsed edge), every loop is
+    simple, outer loops share one non-zero area sign and holes have the
+    opposite one, every hole lies strictly inside its outer loop and no
+    face region overlaps another (component nesting). Raises
+    ``GeometryError("certified embedding not preserved on application")``.
+    """
+    from .exact_predicates import Outcome, point_in_polygon
+    chart = ExactPlane.from_plane(support)
+    def failure(reason):
+        return GeometryError(f"certified embedding not preserved on application ({reason})")
+    uv = {}
+
+    def point(vertex):
+        if vertex not in uv:
+            uv[vertex] = chart.uv(exact_vector(position(vertex)))
+        return uv[vertex]
+
+    def start_of(item):
+        edge, forward = item
+        a, b = edge_ends(edge)
+        return a if forward else b
+
+    edges = sorted({edge for outer, holes in loops for loop in (outer, *holes) for edge, _ in loop})
+    ends = {edge: edge_ends(edge) for edge in edges}
+    if any(a == b or point(a) == point(b) for a, b in ends.values()):
+        raise failure('collapsed edge')
+    if len(edges) > 1:
+        boxes = np.array([[[float(c) for c in point(v)] for v in ends[edge]] for edge in edges])
+        lo, hi = boxes.min(axis=1), boxes.max(axis=1)
+        pad = 4 * _EPS * np.maximum(np.abs(lo), np.abs(hi)) + 1e-300
+        lo, hi = lo - pad, hi + pad
+        for i, first in enumerate(edges):
+            check()
+            for j in np.flatnonzero(np.all((lo[i + 1:] <= hi[i]) & (hi[i + 1:] >= lo[i]), axis=1)) + i + 1:
+                second = edges[j]
+                if _edges_conflict(tuple(point(v) for v in ends[first]), tuple(point(v) for v in ends[second]),
+                                   ends[first], ends[second]):
+                    raise failure('edges cross or overlap')
+
+    def polygon(loop):
+        sequence = [start_of(item) for item in loop]
+        if len(set(sequence)) != len(sequence) or len(sequence) < 3:
+            raise failure('loop not simple')
+        return [point(v) for v in sequence]
+
+    def inner_point(loop, others):
+        """The midpoint of an edge of ``loop`` not lying on any of ``others`` (open edges meet no other loop)."""
+        for edge, _ in loop:
+            if all(edge not in {e for e, _ in other} for other in others):
+                a, b = (point(v) for v in ends[edge])
+                return ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
+        raise failure('no free edge')
+
+    faces = []
+    for outer, holes in loops:
+        faces.append((outer, holes, polygon(outer), [polygon(hole) for hole in holes]))
+    signs = {_shoelace(outer_polygon) > 0 for _o, _h, outer_polygon, _hp in faces}
+    if len(signs) != 1 or any(_shoelace(p) == 0 for _o, _h, op, hps in faces for p in (op, *hps)):
+        raise failure('area signs')
+    outer_sign = signs.pop()
+    for outer, holes, outer_polygon, hole_polygons in faces:
+        for hole, hole_polygon in zip(holes, hole_polygons):
+            if (_shoelace(hole_polygon) > 0) == outer_sign:
+                raise failure('hole winding')
+            if point_in_polygon(inner_point(hole, [outer]), outer_polygon) is not Outcome.ABOVE:
+                raise failure('hole outside its outer loop')
+    for i, (outer_i, holes_i, outer_polygon_i, hole_polygons_i) in enumerate(faces):
+        for j, (outer_j, _holes_j, _op, _hp) in enumerate(faces):
+            if i == j:
+                continue
+            outer_edges_j = {edge for edge, _ in outer_j}
+            if any(outer_edges_j == {edge for edge, _ in hole} for hole in holes_i):
+                continue                                   # face j fills a hole of face i exactly
+            probe = inner_point(outer_j, [outer_i, *holes_i])
+            if (point_in_polygon(probe, outer_polygon_i) is Outcome.ABOVE
+                    and not any(point_in_polygon(probe, hole) is Outcome.ABOVE for hole in hole_polygons_i)):
+                raise failure('faces overlap')
+
+
 _NEIGHBOUR_OFFSETS = tuple(itertools.product((-1, 0, 1), repeat=3))
 
 
@@ -1623,7 +1710,8 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
             domain, exact_chains, edges, edge_segments, endpoints_by_edge, boundary_uses,
             tolerance, native_area_tolerance, check)
         return MaterialArrangement(domain.face_id, tuple(edges), cells, retained, tolerance,
-                                   native_area_tolerance, domain.support, -1 if outer_area < 0 else 1)
+                                   native_area_tolerance, domain.support, -1 if outer_area < 0 else 1,
+                                   certified=True)
     if exact_cells:
         cells, retained, outer_area = _exact_planar_cells(domain, exact_chains, edges, edge_segments,
                                                           tolerance, native_area_tolerance, check)
