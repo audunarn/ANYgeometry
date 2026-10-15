@@ -260,3 +260,37 @@ def test_records_of_the_previous_section_algorithm_are_refused():
     record["branch"]["algorithm"] = "plane_nurbs_exact_v1"
     with pytest.raises(GeometryError, match="algorithm"):
         plane_nurbs_from_record(record)
+
+
+# ------------------------------------------------------------------ review B1-P4a round 4
+
+
+def test_evaluation_uses_the_exact_parameter_map():
+    # S(u, v) = (u, v, (q + (u - 1/2)^2) v - 3 q / 8), q = 2**-40: y = 3q / (8 (q + (u - 1/2)^2)) is
+    # steep near u = 1/2, so a float parameter map moves the point along the curve far beyond delta
+    q = 2. ** -40
+    rows = tuple(((i / 2, 0., -3 * q / 8), (i / 2, 1., c - 3 * q / 8))
+                 for i, c in enumerate((q + .25, q - .25, q + .25)))
+    curve = PlaneNurbsCurve.from_plane(Z0, bezier(2, rows), 0).subcurve(.1, .9)
+    t = .500001
+    index, tau = curve._exact_locate(t)
+    arc = curve._arcs()[index]
+    s = arc.s0 + tau * (arc.s1 - arc.s0)                              # the exact parameter's u
+    qq = Fraction(q)
+    y = 3 * qq / 8 / (qq + (s - Fraction(1, 2)) ** 2)
+    point = curve.evaluate(t)
+    assert abs(point[0] - float(s)) <= 2. ** -50 and abs(point[1] - float(y)) <= 2. ** -49
+
+
+def test_the_error_bound_ignores_the_plane_origin():
+    small = 2. ** -30
+    c = (1 / 16, 1 / 16 - .5, 1 / 16)
+    rows = tuple(((i / 2, 0., c[i]), (i / 2, 1., c[i] + small)) for i in range(3))
+    far = Plane((2. ** 60, 0., 0.), (1., 0., 0.), (0., 1., 0.))           # still the plane z = 0
+    curve = PlaneNurbsCurve.from_plane(far, bezier(2, rows), 0)
+    _sigma2, _uw, _vw, delta2 = curve._world_bound()
+    assert delta2 == Fraction(1, 2 ** 100)                               # delta = 2**-50 of magnitude 1
+    arc = curve._arcs()[0]
+    s0 = arc.s0
+    v = min(max(-(s0 * s0 - s0 + Fraction(1, 16)) / Fraction(small), Fraction(0)), Fraction(1))
+    assert math.dist(curve.evaluate(0.), (float(s0), float(v), 0.)) <= 2 * 2. ** -50 + 1e-16

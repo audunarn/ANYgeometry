@@ -189,8 +189,9 @@ class PlaneNurbsCurve:
              u_vector[0] * v_vector[1] - u_vector[1] * v_vector[0])
         mm = sum(value * value for value in m)
         d = sum(a * b for a, b in zip(m, origin))
-        magnitude = max([1.0] + [abs(float(value)) for value in origin]
-                        + [abs(float(value)) for row in self.surface.controls for point in row for value in point])
+        # the surface's magnitude only: the plane's origin may sit anywhere along the plane and must
+        # not inflate the error bound (review B1-P4a round 4)
+        magnitude = max([1.0] + [abs(float(value)) for row in self.surface.controls for point in row for value in point])
         delta = Fraction(magnitude) / 2 ** 50
         # rational upper bound of sqrt(mm): (isqrt(n d) + 1) / d for mm = n / d
         root_up = Fraction(math.isqrt(mm.numerator * mm.denominator) + 1, mm.denominator)
@@ -395,15 +396,25 @@ class PlaneNurbsCurve:
         # the box polynomial and the plane value have the same sign (positive weights)
         return self._refine(rect, knot, lo, hi, None, None)
 
+    def _exact_locate(self, parameter):
+        """Arc index and exact local parameter ``tau`` of a curve parameter: the exact affine map
+        ``path = a + t (b - a)``, ``tau = path * count - k`` (the predicates use the same map; a float
+        map moved the point along the curve by far more than the error bound, review B1-P4a round 4)."""
+        count = len(self._arcs())
+        a, b = (Fraction(value) for value in self.domain)
+        t = min(Fraction(1), max(Fraction(0), Fraction(float(parameter))))
+        scaled = (a + t * (b - a)) * count
+        index = min(count - 1, max(0, math.floor(scaled)))
+        return index, min(Fraction(1), max(Fraction(0), scaled - index))
+
     def _exact_points(self, t):
         """Per parameter: (arc, exact knot point (u, v), exact world point) - the definition of the curve's points."""
         arcs = self._arcs()
-        path_t = self._path_parameter(t).ravel()
-        index, tau, _count = self._locate(path_t)
         result = []
-        for i in range(len(path_t)):
-            arc = arcs[int(index[i])]
-            _rect, point, world = self._exact_point(arc, Fraction(float(tau[i])))
+        for value in np.atleast_1d(np.asarray(t, dtype=float)).ravel():
+            index, tau = self._exact_locate(value)
+            arc = arcs[index]
+            _rect, point, world = self._exact_point(arc, tau)
             result.append((arc, point, world))
         return result
 
@@ -496,10 +507,8 @@ class PlaneNurbsCurve:
 
     def chart_enclosure(self, parameter) -> tuple:
         """Exact knot rectangle ``((u_lo, u_hi), (v_lo, v_hi))`` containing the curve point (``_exact_point``)."""
-        arcs = self._arcs()
-        path_t = float(self._path_parameter(np.array([float(parameter)]))[0])
-        index, tau, _count = self._locate(np.array([path_t]))
-        rect, _point, _world = self._exact_point(arcs[int(index[0])], Fraction(float(tau[0])))
+        index, tau = self._exact_locate(parameter)
+        rect, _point, _world = self._exact_point(self._arcs()[index], tau)
         return rect
 
     def _chart_box_enclosure(self, s_range, x_range, slicing):
