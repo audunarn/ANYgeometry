@@ -121,7 +121,7 @@ def test_a_deck_spreading_over_the_unshared_half_is_reported():
     model.add_face([edges[2], model.add_line(m, outside), model.add_line(outside, end),
                     model.add_line(end, origin), model.add_line(origin, a)], surface=DECK)
     report = model.strict_audit()
-    assert not report.clean
+    assert not report.clean and '"plane_nurbs_faces_not_certified"' in reasons(report)
 
 
 # ------------------------------------------------------------------ review B1-P4d round 1

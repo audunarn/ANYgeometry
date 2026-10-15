@@ -754,11 +754,20 @@ def _outside_plane_face(model, face, piece, tolerance, work) -> bool:
     from .branch_predicates import certify_line_section
     from .section_faces import _Frame, _inside
     ends = [np.asarray(point, dtype=float) for point in piece.evaluate(np.array([0.0, 1.0]))]
+    own = (piece.plane_record, piece.surface, piece.path)
+    low, high = sorted(piece.domain)
     for loop in (face.loop,) + tuple(face.holes):
         for item in loop:
             edge = model.edges[item.edge]
             if isinstance(edge.curve, PlaneNurbsCurve):
-                continue                                        # the shared section edges themselves
+                # skipped only when it is another piece of the same section path, disjoint in its domain
+                # (a P1 path is simple): any other section boundary refuses (review B1-P5 round 1)
+                other = edge.curve
+                other_low, other_high = sorted(other.domain)
+                if (other.plane_record, other.surface, other.path) != own or \
+                        min(high, other_high) > max(low, other_low):
+                    return False
+                continue
             if not isinstance(edge.curve, Straight):
                 return False
             start, end = model.vertices[edge.start].position, model.vertices[edge.end].position
@@ -809,7 +818,34 @@ def plane_faces(model, first_id: int, second_id: int, tolerance: float, work: Wo
                         return None
     except PlaneNurbsNotCertified:
         return None
+    # the boundaries reach the other plane only at shared vertices and along shared edges; the faces'
+    # interiors can still cross along the planes' intersection line between such contacts (review B1-P5
+    # round 1: two diamonds sharing two vertices): one face's stretches of that line between consecutive
+    # contacts must be shared edges or certified outside it (ray parity)
+    shared_edges = edges[0] & edges[1]
+    for index, face in enumerate((first, second)):
+        if _line_stretches_outside(model, face, vertices[0] & vertices[1], shared_edges, n1, n2, tolerance):
+            return True
+    return None
+
+
+def _line_stretches_outside(model, face, contact_vertices, shared_edges, n1, n2, tolerance) -> bool:
+    from .section_faces import _Frame, _inside
+    direction = np.asarray([float(v) for v in _cross(n1, n2)])
+    points = sorted(((float(direction @ model.vertices[v].position), v) for v in contact_vertices))
+    spans = {frozenset((model.edges[e].start, model.edges[e].end)) for e in shared_edges}
+    frame = _Frame(face.surface, model.vertices[model.oriented_start_vertex(face.loop[0])].position)
+    for (_s0, v0), (_s1, v1) in zip(points, points[1:]):
+        if frozenset((v0, v1)) in spans:
+            continue                                            # a shared edge
+        middle = .5 * (model.vertices[v0].position + model.vertices[v1].position)
+        if _inside(model, face.loop, middle, frame, tolerance) is not False:
+            return False
     return True
+
+
+def _cross(a, b):
+    return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
 
 
 def _surface_band_clean(surface, chart_box, n, d, tolerance, work, allow_crossing: bool = True) -> bool:

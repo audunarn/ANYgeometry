@@ -587,6 +587,31 @@ def _plane_normal(curve: PlaneNurbsCurve):
     return m
 
 
+def _prefix_within(piece, at_start: bool, p, w, tol) -> bool:
+    """The part of a monotone piece next to its joint end where ``w . (P - p) <= 0`` (where crossings of a
+    segment departing along ``-w`` can lie) is within ``2 tol`` of ``p`` (review B1-P5 round 1: monotone
+    departure alone bounds the crossings to a slab, not to the joint ball). Bisection on enclosures."""
+    wx = [Fraction(float(value)) for value in w]
+    near, far = (0.0, 1.0) if at_start else (1.0, 0.0)
+
+    def corners(a, b):
+        lower, upper = piece.bounds(min(a, b), max(a, b))
+        return [[Fraction(lower[k] if (i >> k) & 1 == 0 else upper[k]) for k in range(3)] for i in range(8)]
+    # at a joint the prefix is tiny (the curve's end sits on p): candidate prefixes of 2**-k of the piece,
+    # each certified (the rest beyond, the prefix inside the joint ball), instead of a full bisection
+    for k in (36, 44, 52):
+        charge_box()
+        cut = near + (far - near) * 2.0 ** -k
+        # the piece is certified monotone in w away from the joint: beyond the cut its offset is at least
+        # the offset at the cut, so the enclosure of that one point decides
+        beyond = min(sum(x * (c - y) for x, c, y in zip(wx, corner, p)) for corner in corners(cut, cut)) > 0
+        if not beyond:
+            continue
+        if all(sum((c - y) ** 2 for c, y in zip(corner, p)) <= 4 * tol * tol for corner in corners(near, cut)):
+            return True
+    return False
+
+
 def _exact_point3(point):
     return [Fraction(float(value)) for value in point]
 
@@ -682,7 +707,9 @@ def certify_line_section(curve: PlaneNurbsCurve, start, end, shared=(), toleranc
                     continue
                 piece = curve.subcurve(float(t_lo), float(t_hi))
                 sign = projection_monotone(piece, w)
-                if sign is not None and (sign if end_value == t_lo else -sign) == 1                         and float(np.dot(w, away_segment)) < 0:
+                if sign is not None and (sign if end_value == t_lo else -sign) == 1 \
+                        and float(np.dot(w, away_segment)) < 0 \
+                        and _prefix_within(piece, end_value == t_lo, p, w, tol):
                     return True
         return False
 

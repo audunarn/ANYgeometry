@@ -114,3 +114,90 @@ def test_a_flipped_face_is_inconsistent():
     with model.transaction():
         model._put_entity("face", replace(deck, loop=flipped, corners=()))
     assert any("inconsistent orientation" in problem for problem in closed_shell(model, faces.values()))
+
+
+# ------------------------------------------------------------------ review B1-P5 round 1
+
+
+def test_plane_faces_crossing_between_shared_vertices_are_reported():
+    from anygeometry import GeometryModel
+    from anygeometry.nurbs import NurbsSurface
+    from anygeometry.support_curves import PlaneNurbsCurve
+    model = GeometryModel()
+    a, b = model.add_point(-1., 0., 0.), model.add_point(1., 0., 0.)
+    top, bottom = model.add_point(0., 1., 0.), model.add_point(0., -1., 0.)
+    strip = NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.),
+                         (((-1., 0., -.5), (-1., 0., .5)), ((0., 1., -.5), (0., 1., .5))))
+    flat = Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.))
+    side = PlaneNurbsCurve.from_plane(flat, strip, 0)
+    if side.evaluate(0.)[1] > .5:
+        side = side.subcurve(1., 0.)
+    model.add_face([model.add_curve(a, top, side), model.add_line(top, b), model.add_line(b, bottom),
+                    model.add_line(bottom, a)], surface=flat)
+    up, down = model.add_point(0., 0., 1.), model.add_point(0., 0., -1.)
+    model.add_face([model.add_line(a, up), model.add_line(up, b), model.add_line(b, down), model.add_line(down, a)],
+                   surface=Plane((0., 0., 0.), (1., 0., 0.), (0., 0., 1.)))
+    assert not model.strict_audit().clean
+
+
+def test_a_crossing_beyond_the_joint_ball_is_not_a_joint():
+    from anygeometry.branch_predicates import certify_line_section
+    from anygeometry.nurbs import NurbsSurface
+    from anygeometry.support_curves import PlaneNurbsCurve
+    # C(t) = (t, 0.01 t - 5e-5, 0) crosses the segment (0,0,0) -> (1,0,0) at x = 0.005 (50 tolerances out)
+    strip = NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.),
+                         (((0., -5e-5, -1.), (0., -5e-5, 1.)), ((1., .01 - 5e-5, -1.), (1., .01 - 5e-5, 1.))))
+    curve = PlaneNurbsCurve.from_plane(Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.)), strip, 0)
+    if curve.evaluate(0.)[0] > .5:
+        curve = curve.subcurve(1., 0.)
+    origin = (0., 0., 0.)
+    assert certify_line_section(curve, origin, (1., 0., 0.), [origin], 1e-4) is not True
+
+
+def test_volume_quadrature_splits_at_knots():
+    from anygeometry import GeometryModel
+    from anygeometry.nurbs import CurveOnSurface, NurbsCurve, NurbsSurface
+    from anygeometry.shell_volume import _nurbs_face_moments
+    # a roof z = 1 + b(u) with a triangular bump of height 1 on [0.499, 0.501]: int z dx dy = 1.001
+    knots_u = (0., 0., .499, .5, .501, 1., 1.)
+    heights = (1., 1., 2., 1., 1.)
+    xs = (0., .499, .5, .501, 1.)
+    roof = NurbsSurface(1, 1, knots_u, (0., 0., 1., 1.),
+                        tuple(((x, 0., z), (x, 1., z)) for x, z in zip(xs, heights)))
+    model = GeometryModel()
+    corners = [(0., 0.), (1., 0.), (1., 1.), (0., 1.)]
+    vertices = [model.add_point(*map(float, roof.exact_point(*c))) for c in corners]
+    edges = [model.add_curve(vertices[i], vertices[(i + 1) % 4],
+                             CurveOnSurface(roof, NurbsCurve(1, (0., 0., 1., 1.), (corners[i], corners[(i + 1) % 4]))))
+             for i in range(4)]
+    face = model.add_face(edges, surface=roof)
+    value = abs(_nurbs_face_moments(model, model.faces[face], 24)[0])
+    assert abs(value - 1.001) <= 1e-12
+
+
+def test_disconnected_shells_are_refused():
+    from anygeometry import GeometryModel
+    from anygeometry.shell_volume import closed_shell
+    model = GeometryModel()
+    faces = []
+    for offset in (0., 4.):
+        p = {(i, j, k): model.add_point(offset + i, j, k) for i in (0, 1) for j in (0, 1) for k in (0, 1)}
+        lines = {}
+
+        def line(u, v):
+            key = frozenset((u, v))
+            if key not in lines:
+                lines[key] = model.add_line(p[u], p[v])
+            return lines[key]
+        quads = [((0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)), ((0, 0, 1), (0, 1, 1), (1, 1, 1), (1, 0, 1)),
+                 ((0, 0, 0), (0, 1, 0), (0, 1, 1), (0, 0, 1)), ((1, 0, 0), (1, 0, 1), (1, 1, 1), (1, 1, 0)),
+                 ((0, 0, 0), (0, 0, 1), (1, 0, 1), (1, 0, 0)), ((0, 1, 0), (1, 1, 0), (1, 1, 1), (0, 1, 1))]
+        for quad in quads:
+            faces.append(model.add_face([line(quad[i], quad[(i + 1) % 4]) for i in range(4)]))
+    assert any("not connected" in problem for problem in closed_shell(model, faces))
+
+
+def test_face_iterators_are_accepted(b1):
+    from anygeometry.shell_volume import enclosed_volume
+    model, faces = b1
+    assert enclosed_volume(model, iter(faces.values()))["volume"] > 0

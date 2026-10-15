@@ -31,7 +31,11 @@ from .support_curves import PlaneNurbsCurve
 
 
 def closed_shell(model, faces) -> list[str]:
-    """Problems that keep the faces from being a closed, consistently oriented shell (empty: closed)."""
+    """Problems that keep the faces from being a closed, consistently oriented shell (empty: closed).
+
+    Also connected through shared edges (review B1-P5 round 1: two components oriented independently
+    would add with opposite signs)."""
+    faces = list(faces)
     uses: dict = {}
     for face_id in faces:
         face = model.faces[face_id]
@@ -45,6 +49,21 @@ def closed_shell(model, faces) -> list[str]:
         elif owners[0][1] == owners[1][1]:
             problems.append(f"edge {edge_id} runs the same way in faces {owners[0][0]} and {owners[1][0]} "
                             "(inconsistent orientation)")
+    if faces:
+        neighbours: dict = {face: set() for face in faces}
+        for owners in uses.values():
+            for first, _f in owners:
+                for second, _s in owners:
+                    if first != second:
+                        neighbours[first].add(second)
+        reached, pending = {faces[0]}, [faces[0]]
+        while pending:
+            for other in neighbours[pending.pop()]:
+                if other not in reached:
+                    reached.add(other)
+                    pending.append(other)
+        if len(reached) != len(set(faces)):
+            problems.append("the shell's faces are not connected through shared edges")
     return problems
 
 
@@ -110,6 +129,9 @@ def _nurbs_face_moments(model, face, order):
     from .nurbs import CurveOnSurface
     surface = face.surface
     nodes, weights = np.polynomial.legendre.leggauss(order)
+    (r0, r1), (q0, q1) = surface.u_range, surface.v_range
+    u_knots = sorted({(k - r0) / (r1 - r0) for k in surface.knots_u})
+    v_knots = sorted({(k - q0) / (q1 - q0) for k in surface.knots_v})
     total = np.zeros(4)
     for loop in (face.loop,) + tuple(face.holes):
         for item in loop:
@@ -125,22 +147,38 @@ def _nurbs_face_moments(model, face, order):
                 chart, rates, ws = np.vstack(chart), np.vstack(rates), np.concatenate(ws)
             elif isinstance(curve, CurveOnSurface) and curve.pcurve.degree == 1 and len(curve.pcurve.controls) == 2:
                 p0, p1 = (np.asarray([float(v) for v in curve.pcurve.exact_point(s)]) for s in (0, 1))
-                t = .5 * (nodes + 1.)
-                chart, rates, ws = p0 + t[:, None] * (p1 - p0), np.tile(p1 - p0, (order, 1)), .5 * weights
+                # pieces between the segment's crossings of knot lines (smooth on each)
+                cuts = {0.0, 1.0}
+                for axis, knots in ((0, u_knots), (1, v_knots)):
+                    if p1[axis] != p0[axis]:
+                        cuts.update(c for c in ((k - p0[axis]) / (p1[axis] - p0[axis]) for k in knots) if 0.0 < c < 1.0)
+                cuts = sorted(cuts)
+                chart, rates, ws = [], [], []
+                for lo, hi in zip(cuts, cuts[1:]):
+                    t = .5 * (hi - lo) * (nodes + 1.) + lo
+                    chart.append(p0 + t[:, None] * (p1 - p0))
+                    rates.append(np.tile(p1 - p0, (order, 1)))
+                    ws.append(.5 * (hi - lo) * weights)
+                chart, rates, ws = np.vstack(chart), np.vstack(rates), np.concatenate(ws)
             else:
                 raise GeometryError(f"edge {item.edge}: only section edges and straight chart segments bound "
                                     "the volume's NURBS faces")
             if not item.forward:
                 rates = -rates
-            # G(u, v) = int_0^u g(s, v) ds by an inner Gauss-Legendre rule at every boundary node
+            # G(u, v) = int_0^u g(s, v) ds by an inner Gauss-Legendre rule at every boundary node, split at
+            # the chart images of the interior u knots (review B1-P5 round 1: a narrow span was missed)
             inner = np.empty((len(chart), 4))
             for k, (u, v) in enumerate(chart):
-                s = .5 * u * (nodes + 1.)
-                uv = np.stack((s, np.full_like(s, v)), axis=1)
-                points = surface.evaluate_many(uv)
-                s_u, s_v = surface.derivatives_many(uv)
-                jacobian_z = s_u[:, 0] * s_v[:, 1] - s_u[:, 1] * s_v[:, 0]
-                inner[k] = (.5 * u * weights) @ (_fields(points) * jacobian_z[:, None])
+                cuts = [0.0] + [c for c in u_knots if 0.0 < c < u] + [u]
+                value = np.zeros(4)
+                for lo, hi in zip(cuts, cuts[1:]):
+                    s = .5 * (hi - lo) * (nodes + 1.) + lo
+                    uv = np.stack((s, np.full_like(s, v)), axis=1)
+                    points = surface.evaluate_many(uv)
+                    s_u, s_v = surface.derivatives_many(uv)
+                    jacobian_z = s_u[:, 0] * s_v[:, 1] - s_u[:, 1] * s_v[:, 0]
+                    value += (.5 * (hi - lo) * weights) @ (_fields(points) * jacobian_z[:, None])
+                inner[k] = value
             total += ws @ (inner * rates[:, 1][:, None])
     return total
 
@@ -162,6 +200,7 @@ def _moments(model, faces, order):
 
 def enclosed_volume(model, faces, order: int = 24) -> dict:
     """``{"volume", "centroid", "estimate"}`` of the region the closed shell ``faces`` encloses."""
+    faces = list(faces)
     problems = closed_shell(model, faces)
     if problems:
         raise GeometryError("not a closed shell: " + "; ".join(problems))
