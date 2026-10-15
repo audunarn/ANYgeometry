@@ -60,6 +60,12 @@ def charge_split() -> None:
     work = CURRENT_WORK.get()
     if work is not None:
         work.subdivisions += 1
+
+
+def depth_limit(default: int) -> int:
+    """``default`` capped by the audit's ``max_subdivision_depth`` when a budget is active."""
+    work = CURRENT_WORK.get()
+    return default if work is None else min(default, int(work.max_depth))
 MAX_BOXES = 20000
 
 
@@ -223,9 +229,10 @@ def _boxes(patch: SubPatch, budget: list) -> list[Box]:
             continue
         if all(c == 0 for row in coefficients for c in row):
             raise PlaneNurbsNotCertified("the surface lies partly in the plane")
-        if depth >= MAX_DEPTH:
+        if depth >= depth_limit(MAX_DEPTH):
             raise PlaneNurbsNotCertified(f"singular box at depth {depth}: u {tuple(map(float, u_range))}, "
                                          f"v {tuple(map(float, v_range))}")
+        charge_split()
         um, vm = (u_range[0] + u_range[1]) / 2, (v_range[0] + v_range[1]) / 2
         left, right = _split_u(coefficients)
         for (ua, ub), half in (((u_range[0], um), left), ((um, u_range[1]), right)):

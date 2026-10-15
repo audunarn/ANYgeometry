@@ -255,3 +255,54 @@ def test_delegated_predicates_follow_the_qualification_budget():
     assert not tight.clean
     loose = model.strict_audit()
     assert loose.clean and loose.metrics.boxes_examined > 0 and loose.metrics.subdivisions > 0
+
+
+# ------------------------------------------------------------------ review B1-P4d round 3 (owner option b)
+
+
+def test_a_valid_perpendicular_joint_is_certified_over_its_departure_spans():
+    from anygeometry import TolerancePolicy
+    # C(u) = (2e-4 (0.01 u + 0.99 u^3), 0.5, 0) and L(t) = (0, 0.5 + 2e-4 t, 0) share their start vertex
+    xs = bernstein([0., 2e-6, 0., 1.98e-4])
+    surface = NurbsSurface(3, 1, (0.,) * 4 + (1.,) * 4, (0., 0., 1., 1.),
+                           tuple(((x, 0., 0.), (x, 1., 0.)) for x in xs))
+    curve = PlaneNurbsCurve.from_plane(Plane((0., .5, 0.), (1., 0., 0.), (0., 0., 1.)), surface, 0)
+    if float(curve.evaluate(0.)[0]) > 1e-6:
+        curve = curve.subcurve(1., 0.)
+    model = GeometryModel(tolerance=TolerancePolicy(length=1e-4))
+    origin = model.add_point(*curve.evaluate(0.))
+    model.add_curve(origin, model.add_point(*curve.evaluate(1.)), curve)
+    model.add_line(origin, model.add_point(0., .5 + 2e-4, 0.))
+    report = model.strict_audit()
+    assert report.clean, reasons(report)
+
+
+def test_delegated_depths_follow_the_qualification_depth():
+    from anygeometry.branch_predicates import projection_monotone
+    from anygeometry.plane_nurbs import PlaneNurbsNotCertified, plane_nurbs_section
+    from anygeometry.section_audit import Work, _charging
+    import pytest
+    # P1: S = (u, v, (u - 1/8)^2 + (v - 1/8)^2) cut at z = 0.09 needs quarter-width leaves (depth 2)
+    b = bernstein([1 / 64, -1 / 4, 1.])
+    xs = bernstein([0., 1., 0.])
+    bowl = NurbsSurface(2, 2, (0., 0., 0., 1., 1., 1.), (0., 0., 0., 1., 1., 1.),
+                        tuple(tuple((xs[i], xs[j], b[i] + b[j]) for j in range(3)) for i in range(3)))
+    with _charging(Work(100, 1)):
+        with pytest.raises(PlaneNurbsNotCertified):
+            plane_nurbs_section(Plane((0., 0., .09), (1., 0., 0.), (0., 1., 0.)), bowl)
+    # P4a: monotone projection needing two refinement levels
+    ys = bernstein([0., .0635, -.25, 1 / 3])
+    xs3 = bernstein([0., 1., 0., 0.])
+    surface = NurbsSurface(3, 1, (0.,) * 4 + (1.,) * 4, (0., 0., 1., 1.),
+                           tuple(((x, y, 0.), (x, y, 1.)) for x, y in zip(xs3, ys)))
+    curve = PlaneNurbsCurve.from_plane(Plane((0., 0., .5), (1., 0., 0.), (0., 1., 0.)), surface, 0)
+    with _charging(Work(100, 1)):
+        assert projection_monotone(curve, (0, 1, 0)) is None
+    assert projection_monotone(curve, (0, 1, 0)) is not None
+
+
+def test_plane_and_nurbs_faces_sharing_section_edges_use_their_exact_intersection():
+    # the documented option-b contract: the B1 bow and deck share the deck edge, exactly their intersection
+    model, bow, deck = bow_and_deck()
+    from anygeometry.section_audit import face_face
+    assert face_face(model, deck, bow, 1e-9) is True

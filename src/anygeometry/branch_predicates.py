@@ -37,7 +37,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 import math
 
-from .plane_nurbs import PlaneNurbsNotCertified, charge_box, charge_split, sub_patches_of
+from .plane_nurbs import PlaneNurbsNotCertified, charge_box, charge_split, depth_limit, sub_patches_of
 from .support_curves import PlaneNurbsCurve, _de_casteljau, _split_at
 
 MAX_DEPTH = 48
@@ -400,6 +400,7 @@ def _engine(curve, n, d, classify, max_depth, patches=None):
     """
     from .nurbs import NurbsSurface
     surface: NurbsSurface = curve.surface
+    max_depth = depth_limit(max_depth)                          # the audit's depth limit, when active
     if patches is None:
         m, d1, _mm, _limit, _l = curve._plane_slab()
         if _proportional(n, d, m, d1):

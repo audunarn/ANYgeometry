@@ -257,6 +257,8 @@ def _sections_simple(model, loops, tolerance, max_level: int = 12):
     loose: set = set()
     boxes: dict = {}                                            # memoised across levels: only new pieces cost
     verdicts: dict = {}
+    from .plane_nurbs import charge_split, depth_limit
+    max_level = depth_limit(max_level)
     for level in range(max_level + 1):
         flat = [(edge, a, b) for edge in edges for a, b in pieces[edge]]
         for key in flat:
@@ -321,6 +323,7 @@ def _sections_simple(model, loops, tolerance, max_level: int = 12):
             middle = .5 * (a + b)
             spans = pieces[edge]
             index = spans.index((a, b))
+            charge_split()
             spans[index:index + 1] = [(a, middle), (middle, b)]
     return sorted({key[0] for key in loose}), pieces
 

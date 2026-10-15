@@ -11,6 +11,12 @@ sides. With ``E`` = the joint-end offsets + ``tolerance |w|``, a point beyond th
 contacts can only lie in the stretches before those planes; a stretch longer than ``E / (|w|
 sin(angular tolerance))`` (a departure flatter than the angular tolerance) refuses.
 
+Exception (owner decision 2026-10-15, option b): a plane face and a NURBS face that share section
+edges are certified on their exact intersection only (it must be exactly their shared section edges);
+the strict tolerance band along the shared edge is not certified yet (review B1-P4d round 3: chart
+transversality does not bound the band in world space). Without shared section edges they must be
+certified farther apart than the tolerance.
+
 Every subdivision counts against ``Work`` (the audit's ``max_boxes_per_pair`` and
 ``max_subdivision_depth``), also inside the delegated P1/P4a/P4b predicates (``CURRENT_WORK``);
 the work is reported back. Each classifier returns ``True`` (certified clean) or ``None``
@@ -245,7 +251,9 @@ def _stretch_box(curve, a, b, at_start, x, w, limit, side, work):
     still be at most ``limit`` (bisection: the rest is certified beyond ``limit``)."""
     lo, hi = (a, b) if at_start else (b, a)                    # lo: the joint end
     near, far = lo, hi
-    for _ in range(min(60, work.max_depth + 20)):
+    for _ in range(work.max_depth):
+        if not work.take():
+            return None
         middle = .5 * (near + far)
         low, high = _offsets(curve.box(min(middle, hi), max(middle, hi)), w, x)
         beyond = (low > limit) if side > 0 else (high < -limit)
@@ -344,6 +352,11 @@ def _curves_clean(first, second, shared, tolerance, angular, work) -> bool:
                             return False
                         boxes[(side, piece)] = curve.box(*piece)
                 if _box_gap2(boxes[(0, pa)], boxes[(1, pb)]) <= tol2:
+                    # pieces near a shared vertex: the departure certificate over the spans from the joint
+                    # through these pieces (review B1-P4d round 3: a piece not touching the joint may still
+                    # lie in its departure stretch)
+                    if any(_span_joint(first, pa, second, pb, v, tolerance, angular, work, joints) for v in shared):
+                        continue
                     if _definitely_close(first.point(.5 * sum(pa)), second.point(.5 * sum(pb)), tolerance):
                         return False                            # a proven near-contact away from the joints
                     loose.update(((0, pa), (1, pb)))
@@ -355,6 +368,17 @@ def _curves_clean(first, second, shared, tolerance, angular, work) -> bool:
             work.subdivisions += 1
             _halve(spans[side], piece)
     return False
+
+
+def _span_joint(first, pa, second, pb, vertex, tolerance, angular, work, memo) -> bool:
+    spans = []
+    for curve, (a, b) in ((first, pa), (second, pb)):
+        t = curve.end_param(vertex)
+        spans.append((t, b) if t == 0.0 else (a, t))
+    key = (tuple(spans[0]), tuple(spans[1]), vertex, "span")
+    if key not in memo:
+        memo[key] = _joint_curves(first, spans[0], second, spans[1], vertex, tolerance, angular, work)
+    return memo[key]
 
 
 def _curve_plane_clean(curve, plane, shared, tolerance, angular, work) -> bool:
@@ -655,10 +679,10 @@ def _paths(plane, surface):
 
 
 def face_face(model, first_id: int, second_id: int, tolerance: float, work: Work | None = None):
-    """A plane face against a NURBS face: every path of their exact section covered by shared section
-    edges, and every surface patch of the NURBS face's chart box either farther than the tolerance from
-    the plane or crossed by the section with the plane distance certified monotone along a chart
-    direction there (a transversal joint band)."""
+    """A plane face against a NURBS face (owner option b): with shared section edges, every path of their
+    exact section must be covered by them (their exact intersection is the shared edges; the tolerance
+    band along them is not certified yet); without, every surface patch of the NURBS face's chart box
+    must be farther than the tolerance from the plane."""
     from .surfaces import Plane
     from .nurbs import NurbsSurface
     from .section_faces import _cross, _exact, _same_plane
@@ -691,14 +715,18 @@ def face_face(model, first_id: int, second_id: int, tolerance: float, work: Work
                     reach = max(reach, high)
                 if reach < 1.0:
                     return None
+            if shared:
+                return True                     # option b: the exact intersection is the shared edges
             n = _cross(_exact(plane.u_vector), _exact(plane.v_vector))
             d = _dot(n, _exact(plane.origin))
-            return True if _surface_band_clean(surface, _face_chart_box(model, second), n, d, tolerance, work) else None
+            # nothing shared: certified farther than the tolerance (no patch may approach the plane)
+            return True if _surface_band_clean(surface, _face_chart_box(model, second), n, d, tolerance, work,
+                                               allow_crossing=False) else None
     except PlaneNurbsNotCertified:
         return None
 
 
-def _surface_band_clean(surface, chart_box, n, d, tolerance, work) -> bool:
+def _surface_band_clean(surface, chart_box, n, d, tolerance, work, allow_crossing: bool = True) -> bool:
     from .branch_predicates import _derivative_ranges, _multiply, _patches, _range, _rect, _subtract
     g_patches = _patches(surface, tuple(n), d)
     w_patches = _patches(surface, (Fraction(0),) * 3, Fraction(-1))
@@ -732,7 +760,7 @@ def _surface_band_clean(surface, chart_box, n, d, tolerance, work) -> bool:
                 total = _subtract(_multiply(dg, _range(ww)), _multiply(_range(g), dw))
                 if total[0] > 0 or total[1] < 0:
                     transversal = True
-            if not (crossed and transversal):
+            if not (allow_crossing and crossed and transversal):
                 decided = False
                 break
         if decided:
