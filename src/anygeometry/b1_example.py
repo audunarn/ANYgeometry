@@ -78,8 +78,12 @@ def build_b1_half_hull(frames=(1.5, 3.5), bottom: float = .5, deck: float = 3.):
     along = {z_key: model.add_line(centre[("aft", z_key)], centre[("fore", z_key)]) for z_key in ("bottom", "deck")}
     up = {x_key: model.add_line(centre[(x_key, "bottom")], centre[(x_key, "deck")]) for x_key in ("aft", "fore")}
 
+    from .entities import OrientedEdge
+    # the bow's loop reversed so that every shared edge runs opposite ways in its two faces (closed_shell)
+    bow_loop = model.order_loop([s_bottom, s_fore, s_deck, s_aft])
+    bow_loop = tuple(OrientedEdge(item.edge, not item.forward) for item in reversed(bow_loop))
     faces = {
-        "bow": model.add_face([s_bottom, s_fore, s_deck, s_aft], surface=surface),
+        "bow": model.add_face_from_loop(bow_loop, surface=surface),
         "deck": model.add_face([s_deck, to_centre[("aft", "deck")], along["deck"], to_centre[("fore", "deck")]],
                                surface=planes["deck"][0]),
         "bottom": model.add_face([s_bottom, to_centre[("fore", "bottom")], along["bottom"],

@@ -41,3 +41,76 @@ def test_a_plane_cutting_through_the_hull_is_reported():
     corners = [model.add_point(x, y, 2.) for x, y in ((2., 1.), (3., 1.), (3., 9.), (2., 9.))]
     model.add_face([model.add_line(corners[i], corners[(i + 1) % 4]) for i in range(4)], surface=level)
     assert not model.strict_audit().clean
+
+
+# ------------------------------------------------------------------ B1-P5c: closed shell, volume, centroid
+
+
+def reference_volume_and_centroid(frames=(1.5, 3.5), bottom=.5, deck=3., order=80):
+    """Independent: z = 4 v; for each Gauss v, the frame limits u_a, u_b by Newton on x(u, v), then
+    int y dx over [u_a, u_b] by Gauss in u (dx = x_u du); moments likewise."""
+    import numpy as np
+    from anygeometry.b1_example import b1_bow_surface
+    surface = b1_bow_surface()
+    nodes, weights = np.polynomial.legendre.leggauss(order)
+
+    def solve_u(target, v, u):
+        for _ in range(60):
+            point = surface.evaluate_many(np.array([[u, v]]))[0]
+            s_u, _s_v = surface.derivatives_many(np.array([[u, v]]))
+            step = (point[0] - target) / s_u[0][0]
+            u -= step
+            if abs(step) < 1e-15:
+                break
+        return u
+    v0, v1 = bottom / 4, deck / 4
+    totals = np.zeros(4)
+    for v, wv in zip(.5 * (v1 - v0) * (nodes + 1) + v0, .5 * (v1 - v0) * weights):
+        ua, ub = solve_u(frames[0], v, .3), solve_u(frames[1], v, .5)
+        u = .5 * (ub - ua) * (nodes + 1) + ua
+        uv = np.stack((u, np.full_like(u, v)), axis=1)
+        points = surface.evaluate_many(uv)
+        s_u, _s_v = surface.derivatives_many(uv)
+        w = .5 * (ub - ua) * weights * s_u[:, 0] * 4 * wv
+        x, y, z = points[:, 0], points[:, 1], points[:, 2]
+        totals += np.array([w @ y, w @ (x * y), w @ (.5 * y * y), w @ (z * y)])
+    return totals[0], totals[1:] / totals[0]
+
+
+def test_the_b1_shell_is_closed_and_consistently_oriented(b1):
+    from anygeometry.shell_volume import closed_shell
+    model, faces = b1
+    assert closed_shell(model, faces.values()) == []
+
+
+def test_volume_and_centroid_match_an_independent_reference(b1):
+    import numpy as np
+    from anygeometry.shell_volume import enclosed_volume
+    model, faces = b1
+    result = enclosed_volume(model, list(faces.values()))
+    volume, centroid = reference_volume_and_centroid()
+    assert abs(result["volume"] - volume) <= 1e-9 * volume
+    assert np.all(np.abs(result["centroid"] - centroid) <= 1e-9 * np.abs(centroid))
+    assert result["estimate"] <= 1e-9 * volume
+
+
+def test_a_shell_missing_a_face_is_refused(b1):
+    from anygeometry import GeometryError
+    from anygeometry.shell_volume import closed_shell, enclosed_volume
+    model, faces = b1
+    partial = [face for name, face in faces.items() if name != "deck"]
+    assert any("bounds 1 faces" in problem for problem in closed_shell(model, partial))
+    with pytest.raises(GeometryError, match="closed shell"):
+        enclosed_volume(model, partial)
+
+
+def test_a_flipped_face_is_inconsistent():
+    from dataclasses import replace
+    from anygeometry.entities import OrientedEdge
+    from anygeometry.shell_volume import closed_shell
+    model, faces = build_b1_half_hull()
+    deck = model.faces[faces["deck"]]
+    flipped = tuple(OrientedEdge(item.edge, not item.forward) for item in reversed(deck.loop))
+    with model.transaction():
+        model._put_entity("face", replace(deck, loop=flipped, corners=()))
+    assert any("inconsistent orientation" in problem for problem in closed_shell(model, faces.values()))
