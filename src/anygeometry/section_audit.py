@@ -627,7 +627,22 @@ def edge_face(model, edge_id: int, face_id: int, tolerance: float, work: Work | 
                 if isinstance(curve, _Section):
                     from .section_faces import _same_plane
                     if _same_plane(face.surface, curve.curve):
-                        return None                             # a section edge lying in the face's plane
+                        # a section edge lying in the face's plane (not on its boundary): outside the face
+                        # (B1-P5b). The face's own section edges must be other pieces of the same section
+                        # path (a P1 path is simple: they meet only at shared domain ends).
+                        own = (curve.curve.plane_record, curve.curve.surface, curve.curve.path)
+                        low, high = sorted(curve.curve.domain)
+                        for loop in (face.loop,) + tuple(face.holes):
+                            for item in loop:
+                                other = model.edges[item.edge].curve
+                                if not isinstance(other, PlaneNurbsCurve):
+                                    continue
+                                if (other.plane_record, other.surface, other.path) != own:
+                                    return None
+                                other_low, other_high = sorted(other.domain)
+                                if min(high, other_high) > max(low, other_low):
+                                    return None
+                        return True if _outside_plane_face(model, face, curve.curve, tolerance, work) else None
                 return True if _curve_plane_clean(curve, face.surface, shared, tolerance, angular, work) else None
             if isinstance(face.surface, NurbsSurface) and isinstance(curve, _Line):
                 return True if _line_face_clean(curve, model, face, shared, tolerance, angular, work) else None
@@ -708,13 +723,18 @@ def face_face(model, first_id: int, second_id: int, tolerance: float, work: Work
             for path in paths:
                 covering = sorted(sorted(curve.domain) for curve in shared
                                   if curve.plane_record == path.plane_record and curve.path == path.path)
-                reach = 0.0
+                uncovered, reach = [], 0.0
                 for low, high in covering:
                     if low > reach:
-                        return None
+                        uncovered.append((reach, low))
                     reach = max(reach, high)
                 if reach < 1.0:
-                    return None
+                    uncovered.append((reach, 1.0))
+                # parts of the section outside the shared edges must lie outside the plane face (B1-P5b:
+                # the plane cuts the whole support, the faces only between their trims)
+                for low, high in uncovered:
+                    if not _outside_plane_face(model, first, path.subcurve(low, high), tolerance, work):
+                        return None
             if shared:
                 return True                     # option b: the exact intersection is the shared edges
             n = _cross(_exact(plane.u_vector), _exact(plane.v_vector))
@@ -724,6 +744,72 @@ def face_face(model, first_id: int, second_id: int, tolerance: float, work: Work
                                                allow_crossing=False) else None
     except PlaneNurbsNotCertified:
         return None
+
+
+def _outside_plane_face(model, face, piece, tolerance, work) -> bool:
+    """A section piece lying in a plane face's plane is outside the face (up to its end points): it meets
+    the face's straight boundary edges only within the tolerance of their end vertices (P4a line
+    certificate, the piece's ends are where it leaves the shared edges), and one interior point is outside
+    the outer loop by ray parity (P4b). Other boundary kinds refuse."""
+    from .branch_predicates import certify_line_section
+    from .section_faces import _Frame, _inside
+    ends = [np.asarray(point, dtype=float) for point in piece.evaluate(np.array([0.0, 1.0]))]
+    for loop in (face.loop,) + tuple(face.holes):
+        for item in loop:
+            edge = model.edges[item.edge]
+            if isinstance(edge.curve, PlaneNurbsCurve):
+                continue                                        # the shared section edges themselves
+            if not isinstance(edge.curve, Straight):
+                return False
+            start, end = model.vertices[edge.start].position, model.vertices[edge.end].position
+            joints = [p for p in (start, end) if any(float(np.linalg.norm(p - q)) <= tolerance for q in ends)]
+            if certify_line_section(piece, start, end, joints, tolerance) is not True:
+                return False
+    frame = _Frame(face.surface, model.vertices[model.oriented_start_vertex(face.loop[0])].position)
+    middle = piece.evaluate(.5)
+    return _inside(model, face.loop, middle, frame, tolerance) is False
+
+
+def plane_faces(model, first_id: int, second_id: int, tolerance: float, work: Work | None = None,
+                angular: float = 1e-10):
+    """Two plane faces (B1-P5b; at least one with section edges): every boundary edge of each face that is
+    not shared with the other is certified against the other's plane (strict contract: departure at shared
+    vertices, else farther than the tolerance). A planar region whose non-shared boundary keeps off the
+    other plane meets it only along the shared edges, so the faces' intersection is their shared edges
+    (option-b reading for face pairs: the band along a shared edge follows from the edges' departure)."""
+    from .section_faces import _same_plane, _cross, _exact
+    from .surfaces import Plane
+    work = work or Work()
+    first, second = model.faces[first_id], model.faces[second_id]
+    if not (isinstance(first.surface, Plane) and isinstance(second.surface, Plane)):
+        return None
+    n1 = _cross(_exact(first.surface.u_vector), _exact(first.surface.v_vector))
+    n2 = _cross(_exact(second.surface.u_vector), _exact(second.surface.v_vector))
+    if not any(_cross(n1, n2)):
+        # parallel planes: separated by more than the tolerance, or coplanar (refused)
+        d1 = _dot(n1, _exact(first.surface.origin))
+        d2 = _dot(n1, _exact(second.surface.origin))
+        gap = abs(d1 - d2)
+        return True if gap * gap > Fraction(float(tolerance)) ** 2 * _dot(n1, n1) else None
+    edges = [{item.edge for loop in (face.loop,) + tuple(face.holes) for item in loop} for face in (first, second)]
+    vertices = [{model.oriented_start_vertex(item) for loop in (face.loop,) + tuple(face.holes) for item in loop}
+                for face in (first, second)]
+    try:
+        with _charging(work):
+            for index, (own, other_face) in enumerate(((first, second), (second, first))):
+                for edge_id in edges[index] - edges[1 - index]:
+                    curve = _curve_of(model, edge_id)
+                    if curve is None:
+                        return None
+                    edge = model.edges[edge_id]
+                    shared = sorted({edge.start, edge.end} & vertices[1 - index])
+                    if isinstance(curve, _Section) and _same_plane(other_face.surface, curve.curve):
+                        return None
+                    if not _curve_plane_clean(curve, other_face.surface, shared, tolerance, angular, work):
+                        return None
+    except PlaneNurbsNotCertified:
+        return None
+    return True
 
 
 def _surface_band_clean(surface, chart_box, n, d, tolerance, work, allow_crossing: bool = True) -> bool:

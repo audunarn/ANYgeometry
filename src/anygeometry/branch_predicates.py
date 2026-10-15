@@ -37,6 +37,8 @@ from dataclasses import dataclass
 from fractions import Fraction
 import math
 
+import numpy as np
+
 from .plane_nurbs import PlaneNurbsNotCertified, charge_box, charge_split, depth_limit, sub_patches_of
 from .support_curves import PlaneNurbsCurve, _de_casteljau, _split_at
 
@@ -585,6 +587,10 @@ def _plane_normal(curve: PlaneNurbsCurve):
     return m
 
 
+def _exact_point3(point):
+    return [Fraction(float(value)) for value in point]
+
+
 def certify_line_section(curve: PlaneNurbsCurve, start, end, shared=(), tolerance: float = 0.0,
                          *, max_depth: int = MAX_DEPTH, coplanar_tolerance: float | None = None):
     """Whether the segment ``start -> end`` (in the curve's plane) and the curve intersect only within
@@ -650,6 +656,36 @@ def certify_line_section(curve: PlaneNurbsCurve, start, end, shared=(), toleranc
                 return False
         return True
 
+    curve_ends = [_exact_point3(curve.evaluate(value)) for value in (0.0, 1.0)]
+
+    def departs(context) -> bool:
+        """A piece at a curve end lying within the tolerance of a shared segment end ``p``, separating from
+        the segment along ``w = unit(away_curve) - unit(away_segment)``: certified monotone in ``w``, moving
+        to ``+w`` while the segment moves to ``-w`` (``w . away_segment < 0``). Intersections then only lie in
+        the prefix where ``w . (P - p)`` is within ``|w| tol`` of the joint: joint contacts (B1-P5b: no
+        tolerance-scale refinement, which the audit's depth limit cannot afford on metre-long curves)."""
+        t_lo, t_hi = context.t_exact()
+        for end_value, end_point in ((Fraction(0), curve_ends[0]), (Fraction(1), curve_ends[1])):
+            if end_value not in (t_lo, t_hi):
+                continue
+            for p, other in ((a, b), (b, a)):
+                if p not in points or sum((x - y) ** 2 for x, y in zip(end_point, p)) > tol * tol:
+                    continue
+                tangent = np.asarray(curve.derivative(float(end_value)), dtype=float)
+                away_curve = tangent if end_value == t_lo else -tangent
+                away_segment = np.asarray([float(y - x) for x, y in zip(p, other)])
+                norms = float(np.linalg.norm(away_curve)), float(np.linalg.norm(away_segment))
+                if not all(norms) or not all(math.isfinite(value) for value in norms):
+                    continue
+                w = away_curve / norms[0] - away_segment / norms[1]
+                if float(np.linalg.norm(w)) <= 1e-12:
+                    continue
+                piece = curve.subcurve(float(t_lo), float(t_hi))
+                sign = projection_monotone(piece, w)
+                if sign is not None and (sign if end_value == t_lo else -sign) == 1                         and float(np.dot(w, away_segment)) < 0:
+                    return True
+        return False
+
     def classify(context: _Context) -> str:
         low, high = context.g2_range()
         if low == high == 0 and context.solid():
@@ -659,6 +695,8 @@ def certify_line_section(curve: PlaneNurbsCurve, start, end, shared=(), toleranc
         lower, upper = context.world()
         box = corners(lower, upper)
         if near_shared(box):
+            return "done"
+        if departs(context):
             return "done"
         lambdas = [sum((c - x) * y for c, x, y in zip(corner, a, e)) / ee for corner in box]
         # beyond an end the nearest segment point is that end: cleared only farther than the

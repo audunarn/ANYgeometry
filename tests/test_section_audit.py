@@ -87,22 +87,41 @@ def test_a_line_piercing_the_bow_is_reported():
     assert not report.clean
 
 
-def test_a_half_shared_deck_edge_is_reported():
-    surface = bow_surface()
+def half_shared(surface):
     build = Builder(surface)
-    model = build.model
     full = deck_edge(surface)
     first, second = full.subcurve(0., .5), full.subcurve(.5, 1.)
     middle = tuple(float(value) for value in first.chart(1.))
     edges = [build.segment((0., 0.), (1., 0.)), build.segment((1., 0.), (1., .75)),
              build.section(first, (1., .75), middle), build.section(second, middle, (0., .75)),
              build.segment((0., .75), (0., 0.))]
-    model.add_face(edges, surface=surface)
+    build.model.add_face(edges, surface=surface)
+    return build, edges, middle
+
+
+def test_a_half_shared_deck_edge_with_the_rest_outside_the_deck_audits_clean():
+    # the deck face covers the first half of the deck edge; the second half lies beyond the deck face's
+    # line from the middle to the centreline: their exact intersection is the shared half (B1-P5b; the
+    # earlier rule refused any uncovered part of the section)
+    build, edges, middle = half_shared(bow_surface())
+    model = build.model
     a, m = build.vertex((1., .75)), build.vertex(middle)
     centre = model.add_point(model.vertices[m].position[0], 0., 3.)
     model.add_face([edges[2], model.add_line(m, centre), model.add_line(centre, a)], surface=DECK)
     report = model.strict_audit()
-    assert not report.clean and '"plane_nurbs_faces_not_certified"' in reasons(report)
+    assert report.clean, reasons(report)
+
+
+def test_a_deck_spreading_over_the_unshared_half_is_reported():
+    # the deck face's boundary bulges out past the hull: the unshared half of the deck edge lies inside it
+    build, edges, middle = half_shared(bow_surface())
+    model = build.model
+    a, m, end = build.vertex((1., .75)), build.vertex(middle), build.vertex((0., .75))
+    outside, origin = model.add_point(0., 9., 3.), model.add_point(0., 0., 3.)
+    model.add_face([edges[2], model.add_line(m, outside), model.add_line(outside, end),
+                    model.add_line(end, origin), model.add_line(origin, a)], surface=DECK)
+    report = model.strict_audit()
+    assert not report.clean
 
 
 # ------------------------------------------------------------------ review B1-P4d round 1

@@ -2670,8 +2670,9 @@ class _StrictAuditState:
             return _PairClassification(True)
 
         face = self.model.faces[face_id]
+        from .section_faces import has_section_edges
         if (type(edge.curve).__name__ in ("PlaneNurbsCurve", "CurveOnSurface")
-                or type(face.surface).__name__ == "NurbsSurface"):
+                or type(face.surface).__name__ == "NurbsSurface" or has_section_edges(self.model, face)):
             # section edges, curves on NURBS supports and NURBS faces: certified (B1-P4d) or refused
             from .section_audit import edge_face
             work = self._section_work()
@@ -2828,7 +2829,7 @@ class _StrictAuditState:
             for loop in (face.loop,) + tuple(face.holes)
             for oriented in loop
         }
-        if relationship == "touch" and shared_vertices:
+        if relationship in ("touch", "crossing") and shared_vertices:
             if all(
                 any(
                     float(
@@ -3117,6 +3118,19 @@ class _StrictAuditState:
         )
         shared_vertices = first_vertices & second_vertices
         kinds = {type(first_face.surface).__name__, type(second_face.surface).__name__}
+        from .section_faces import has_section_edges
+        if kinds == {"Plane"} and (has_section_edges(self.model, first_face)
+                                  or has_section_edges(self.model, second_face)):
+            # plane faces trimmed by section curves (B1-P5b): certified boundary edges, no generic route
+            from .section_audit import plane_faces
+            extent = self._face_pair_extent(first_face.id, second_face.id)
+            work = self._section_work()
+            verdict = plane_faces(self.model, first_face.id, second_face.id, self.tolerance.effective_length(extent),
+                                  work, self.tolerance.angular)
+            self._record_section_work(work)
+            if verdict is True:
+                return _PairClassification(True)
+            return self.unclassified(first_key, second_key, "section_plane_faces_not_certified")
         if kinds == {"Plane", "NurbsSurface"}:
             # plane x NURBS faces: their exact section must be their shared section edges (B1-P4d)
             from .section_audit import face_face
