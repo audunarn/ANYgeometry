@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import math
 import weakref
+from fractions import Fraction
 
 import numpy as np
 
@@ -35,7 +36,8 @@ def waterplane_frame(point, normal=(0., 0., 1.), longitudinal=(1., 0., 0.)) -> F
     e1 = e1 - (e1 @ n) * n
     if not float(np.linalg.norm(e1)) > 1e-12:
         raise GeometryError("the longitudinal direction must not be normal to the waterplane")
-    return Frame(point, e1, np.cross(n, e1))
+    e1 = e1 / np.linalg.norm(e1)
+    return Frame(point, e1, np.cross(n, e1), normal=n)
 
 
 _SHELLS: dict = {}            # id(model) -> (weak reference, revision, faces, order, value)
@@ -79,8 +81,11 @@ def hydrostatics(model, faces, point, normal=(0., 0., 1.), longitudinal=(1., 0.,
     sign, total, centre, extent = _shell(model, faces, order)
     # the same plane with its origin at the foot of the shell's centre (review H1 round 1: a far origin
     # cancelled the central waterplane moments)
-    foot = centre - float((centre - frame.origin) @ frame.normal) * frame.normal
-    frame = Frame(foot, frame.axes[0], frame.axes[1])
+    # the offset exactly from the given point and normal (review H1 round 2: rounding at a far point)
+    offset = sum(Fraction(float(a)) * (Fraction(float(c)) - Fraction(float(p)))
+                 for a, c, p in zip(frame.normal, centre, frame.origin))
+    foot = centre - float(offset) * frame.normal
+    frame = Frame(foot, frame.axes[0], frame.axes[1], normal=frame.normal)
     # clipped moments at two orders
     results = []
     def both(local):

@@ -38,7 +38,7 @@ class Frame:
     """An orthonormal frame: ``origin``, longitudinal ``e1``, transverse ``e2`` and normal ``n``
     (``e1 x e2 = n``); ``local(points)`` gives ``(xi, eta, zeta)``."""
 
-    def __init__(self, origin, e1, e2):
+    def __init__(self, origin, e1, e2, normal=None):
         e1 = np.asarray(e1, dtype=float)
         e2 = np.asarray(e2, dtype=float)
         e1 = e1 / np.linalg.norm(e1)
@@ -48,7 +48,11 @@ class Frame:
             raise GeometryError("a frame needs two independent directions")
         e2 = e2 / norm
         self.origin = np.asarray(origin, dtype=float)
-        self.axes = np.stack((e1, e2, np.cross(e1, e2)))
+        # an explicit unit normal (orthogonal to e1, e2 by construction) is kept as given, so the plane's
+        # offset is computed with the caller's normal (review H1 round 2: a recomputed cross product
+        # moved a plane given by a far point)
+        n = np.cross(e1, e2) if normal is None else np.asarray(normal, dtype=float)
+        self.axes = np.stack((e1, e2, n))
 
     @classmethod
     def world(cls, origin=(0., 0., 0.)) -> "Frame":
@@ -179,14 +183,23 @@ class _NurbsChart:
         return _span_roots(function, self.degrees[axis], [0.0, *self.knots[axis], 1.0], lo, hi)
 
 
-def _waterline_turns(surface, frame, axis) -> list:
+def _waterline_turns(surface, frame, axis, box=None) -> list:
     """The levels of the outer coordinate (``1 - axis``) where the waterline on a NURBS surface turns
     back (``dw/dt = 0`` along a section path of the exact P1 topology), found by sign changes of the
     float chart rate on a dense sample and refined; a closed waterline loop (P1 refuses cycles) and a
-    surface lying in the waterplane refuse (review H1 round 1: an interior wet patch was missed)."""
+    surface lying in the waterplane refuse (review H1 round 1: an interior wet patch was missed).
+    ``box`` (the face's outward chart box, ``((u0, u1), (v0, v1))``) restricts the section to the
+    face's part of the support (review H1 round 2: a loop outside the trimmed face refused)."""
     from .plane_nurbs import PlaneNurbsClosedSection, PlaneNurbsNotCertified, plane_nurbs_section
     from .surfaces import Plane
     plane = Plane(tuple(frame.origin), tuple(frame.axes[0]), tuple(frame.axes[1]))
+    if box is not None:
+        from .nurbs import NurbsSurface
+        (u0, u1), (v0, v1) = box
+        (r0, r1), (q0, q1) = surface.u_range, surface.v_range
+        surface = NurbsSurface(surface.degree_u, surface.degree_v, surface.knots_u, surface.knots_v,
+                               surface.controls, surface.weights, (r0 + u0 * (r1 - r0), r0 + u1 * (r1 - r0)),
+                               (q0 + v0 * (q1 - q0), q0 + v1 * (q1 - q0)))
     try:
         section = plane_nurbs_section(plane, surface)
     except PlaneNurbsClosedSection:
@@ -205,7 +218,35 @@ def _waterline_turns(surface, frame, axis) -> list:
                 return _section_float(curve, t)[1][:, other]
             for turn in _sign_changes(rate, lo, hi, 128):
                 levels.append(float(_section_float(curve, np.array([turn]))[0][0, other]))
+    if box is not None:                                         # sub-chart -> face chart
+        c0, c1 = box[other]
+        levels = [c0 + level * (c1 - c0) for level in levels]
     return sorted(levels)
+
+
+def _chart_box(model, face):
+    """An outward chart box of a NURBS face: section edges by their certified chart bounds, straight
+    chart segments by their ends; clamped to the chart and widened by a little."""
+    from .nurbs import CurveOnSurface
+    lows, highs = [], []
+    for loop in (face.loop,) + tuple(face.holes):
+        for item in loop:
+            curve = model.edges[item.edge].curve
+            if isinstance(curve, PlaneNurbsCurve):
+                low, high = curve.chart_bounds()
+            elif isinstance(curve, CurveOnSurface):
+                ends = np.array([[float(v) for v in curve.pcurve.exact_point(s)] for s in (0, 1)])
+                low, high = ends.min(axis=0), ends.max(axis=0)
+            else:
+                return None
+            lows.append(low)
+            highs.append(high)
+    low, high = np.min(lows, axis=0), np.max(highs, axis=0)
+    pad = 1e-9 + 1e-9 * (high - low)
+    low, high = np.clip(low - pad, 0.0, 1.0), np.clip(high + pad, 0.0, 1.0)
+    if np.any(high <= low):
+        return None
+    return (float(low[0]), float(high[0])), (float(low[1]), float(high[1]))
 
 
 def _chart(face, frame):
@@ -277,15 +318,30 @@ def _section_float(curve, t):
         x = .5 * (lo + hi)
         axis = 1 if arc.slicing == 0 else 0
         scale = (q1 - q0) if axis == 1 else (r1 - r0)
-        for _ in range(5):                                      # Newton inside the bracket
+        # safeguarded Newton keeping the bracket (bisection when a step leaves it); unconverged points
+        # use the exact definition (review H1 round 2: a flat root stopped far from the section)
+        converged = np.zeros(len(rows), dtype=bool)
+        for _ in range(100):
             knot = np.stack((s, x), axis=1) if arc.slicing == 0 else np.stack((x, s), axis=1)
             chart = np.stack(((knot[:, 0] - r0) / (r1 - r0), (knot[:, 1] - q0) / (q1 - q0)), axis=1)
             chart = np.clip(chart, 0.0, 1.0)
             value = surface.evaluate_many(chart) @ m - d
             slope = (surface.derivatives_many(chart)[axis] @ m) / scale
+            same = (value > 0) == (f_lo > 0)
+            moved = value != 0
+            lo, f_lo = np.where(same & moved, x, lo), np.where(same & moved, value, f_lo)
+            hi = np.where(~same & moved, x, hi)
             step = np.divide(value, slope, out=np.zeros_like(value), where=slope != 0)
             candidate = x - step
-            x = np.clip(candidate, np.minimum(lo, hi), np.maximum(lo, hi))
+            low_end, high_end = np.minimum(lo, hi), np.maximum(lo, hi)
+            inside = (slope != 0) & (candidate > low_end) & (candidate < high_end)
+            new = np.where(inside, candidate, .5 * (lo + hi))
+            tiny = 4 * np.finfo(float).eps * np.maximum(1.0, np.abs(x))
+            done = (value == 0) | (np.abs(high_end - low_end) <= tiny) | (inside & (np.abs(step) <= tiny))
+            x = np.where(converged | (value == 0), x, new)
+            converged |= done
+            if converged.all():
+                break
         knot = np.stack((s, x), axis=1) if arc.slicing == 0 else np.stack((x, s), axis=1)
         chart = np.stack(((knot[:, 0] - r0) / (r1 - r0), (knot[:, 1] - q0) / (q1 - q0)), axis=1)
         s_u, s_v = surface.derivatives_many(np.clip(chart, 0.0, 1.0))
@@ -296,7 +352,7 @@ def _section_float(curve, t):
         du, dv = (np.full(len(rows), ds), dx) if arc.slicing == 0 else (dx, np.full(len(rows), ds))
         knots[rows] = knot
         rates_knot[rows] = np.stack((du, dv), axis=1)
-        exact[rows] = bad | (g_x == 0)
+        exact[rows] = bad | (g_x == 0) | ~converged
     chart = np.clip(np.stack(((knots[:, 0] - r0) / (r1 - r0), (knots[:, 1] - q0) / (q1 - q0)), axis=1), 0.0, 1.0)
     chart_rates = np.stack((rates_knot[:, 0] / (r1 - r0), rates_knot[:, 1] / (q1 - q0)), axis=1)
     world = surface.evaluate_many(chart)
@@ -360,15 +416,74 @@ def _edge_map(model, item, chart):
     raise GeometryError(f"edge {item.edge}: only section edges and straight chart segments bound NURBS faces here")
 
 
-def _sign_changes(value, lo, hi, samples: int = 64):
+def _dips(value, t, f):
+    """Brackets ``(a, b)`` of sign changes hidden between samples of the same sign: at an interior
+    sample where ``|f|`` has a local minimum, or at an end where ``|f|`` decreases inwards, the
+    extremum of ``sign f`` nearby is found by golden section; if it has the other sign, the two
+    crossings are bracketed on either side (review H1 round 2: a narrow wet cap between samples)."""
+    count = len(t) - 1
+    candidates = []
+    noise = 64 * np.finfo(float).eps * float(np.max(np.abs(f)))   # rounding: no dip below this level
+    for k in range(count + 1):
+        if f[k] == 0.0:
+            continue
+        sign = 1.0 if f[k] > 0 else -1.0
+        neighbours = [j for j in (k - 1, k + 1) if 0 <= j <= count]
+        if any(f[j] * sign <= 0 for j in neighbours):
+            continue                                            # an ordinary sign change
+        if 0 < k < count:
+            if all(sign * f[k] < sign * f[j] - noise for j in neighbours):
+                candidates.append((t[k - 1], t[k + 1], sign))
+        else:
+            # an end sample below its neighbour that still decreases inwards: a dip right at the end
+            if not sign * f[k] < sign * f[neighbours[0]] - noise:
+                continue
+            inward = t[k] + (1e-6 if k == 0 else -1e-6) * (t[-1] - t[0])
+            if sign * value(np.array([inward]))[0] < sign * f[k] - noise:
+                j = neighbours[0]
+                candidates.append((min(t[k], t[j]), max(t[k], t[j]), sign))
+    brackets = []
+    ratio = (np.sqrt(5.) - 1) / 2
+    for low, high, sign in candidates:
+        a, b = low, high
+        c, d = b - ratio * (b - a), a + ratio * (b - a)
+        fc, fd = sign * value(np.array([c]))[0], sign * value(np.array([d]))[0]
+        for _ in range(60):
+            if min(fc, fd) <= 0:
+                break
+            if fc < fd:
+                b, d, fd = d, c, fc
+                c = b - ratio * (b - a)
+                fc = sign * value(np.array([c]))[0]
+            else:
+                a, c, fc = c, d, fd
+                d = a + ratio * (b - a)
+                fd = sign * value(np.array([d]))[0]
+        middle, fm = (c, fc) if fc < fd else (d, fd)
+        if fm <= 0:
+            brackets.append((low, middle))
+            brackets.append((middle, high))
+    return brackets
+
+
+def _sign_changes(value, lo, hi, samples: int = 64, dips: bool = False):
     """Parameters in ``(lo, hi)`` where the scalar ``value(t)`` changes sign or vanishes at a sample
-    (sampled, refined by bisection; a touch without a sign change between samples is not found)."""
+    (sampled, refined by bisection); with ``dips`` also pairs of crossings hidden between samples
+    of one sign (``_dips``)."""
     t = np.linspace(lo, hi, samples + 1)
     f = value(t)
     found = [float(t[k]) for k in range(1, samples) if f[k] == 0.0]
-    brackets = np.flatnonzero(f[:-1] * f[1:] < 0)
-    if len(brackets):
-        a, b, fa, fb = t[brackets], t[brackets + 1], f[brackets], f[brackets + 1]
+    pairs = [(t[k], t[k + 1]) for k in np.flatnonzero(f[:-1] * f[1:] < 0)]
+    if dips:
+        pairs += _dips(value, t, f)
+    a = np.array([p[0] for p in pairs])
+    b = np.array([p[1] for p in pairs])
+    if len(pairs):
+        fa, fb = value(a), value(b)
+        found += [float(x) for x in a[(fa == 0) & (a > lo)]] + [float(x) for x in b[(fb == 0) & (b < hi)]]
+        keep = fa * fb < 0
+        a, b, fa, fb = a[keep], b[keep], fa[keep], fb[keep]
+    if len(a):
         for step in range(40):                                  # all brackets at once
             # bisection first, then false position kept inside the bracket (superlinear on smooth f)
             secant = a - fa * (b - a) / np.where(fb != fa, fb - fa, 1.0)
@@ -420,14 +535,14 @@ def face_moments(model, face_id: int, frame: Frame, fields=volume_fields, order:
         margin = 1e-9 * max(1.0, w_hi - w_lo)
         levels = chart.roots(other, 0.0, w_lo - margin, w_hi + margin)
         if isinstance(chart, _NurbsChart):
-            turns = [level for level in _waterline_turns(chart.surface, frame, axis)
+            turns = [level for level in _waterline_turns(chart.surface, frame, axis, _chart_box(model, face))
                      if w_lo - margin < level < w_hi + margin]
     for function, cuts in pieces:
         singular = set()
         if clip:
             extra = []
             for lo, hi in zip(cuts, cuts[1:]):
-                extra += _sign_changes(lambda t: frame.zeta(function(t)[2]), lo, hi)
+                extra += _sign_changes(lambda t: frame.zeta(function(t)[2]), lo, hi, dips=True)
                 for level in levels:
                     extra += _sign_changes(lambda t, level=level: function(t)[0][:, other] - level, lo, hi)
                 for level in turns:

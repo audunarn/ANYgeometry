@@ -293,8 +293,9 @@ def test_a_wet_patch_inside_a_nurbs_face_is_not_missed():
     assert closed_shell(model, faces) == []
     try:
         result = hydrostatics(model, faces, (.5, .5, 0.))
-    except GeometryError:
-        return                                                  # refused: acceptable
+    except GeometryError as error:
+        assert "closed waterline" in str(error)                 # refused for this reason only
+        return
     assert result["volume"] == pytest.approx(math.pi * 1e-8 / 2, rel=1e-6)
     assert result["waterplane_area"] == pytest.approx(math.pi * 1e-4, rel=1e-6)
 
@@ -353,3 +354,63 @@ def test_section_points_on_shifted_knots_use_the_exact_definition():
     _chart, _rates, world, rates = _section_float(curve, t)
     assert world == pytest.approx(curve.evaluate(t), abs=1e-12)
     assert rates == pytest.approx(curve.derivative(t), abs=1e-9)
+
+
+# ------------------------------------------------------------------ review H1 round 2
+
+
+def test_a_narrow_wet_cap_at_a_face_boundary_is_found():
+    # bottom z = (x - c)^2 - 0.1, waterplane through (c, 0.1, -0.099999) with normal (0, 1, 1): a narrow
+    # wet cap against y = 0.1 whose boundary crossings fall between samples (review H1 round 2)
+    c = .503
+    model, faces = basin((c * c - .1, c * c - c - .1, (1 - c) ** 2 - .1), (0., 0., 0.))
+    result = hydrostatics(model, faces, (c, .1, -.099999), (0., 1., 1.))
+    # exact: in the plane frame the cap is {y > 0.1, z < -0.099999 - (y - 0.1), z > (x - c)^2 - 0.1}:
+    # with h = 1e-6 and s = y - 0.1, depth h - s - (x - c)^2 over s, x: V = int int (h - s - X^2)_+ ds dX
+    h = 1e-6
+    volume = 8 / 15 * h ** 2.5                                  # int_X (h - X^2)^2 / 2 dX
+    area = 4 / 3 * h ** 1.5 * math.sqrt(2)                      # int_X (h - X^2) dX, in the tilted plane
+    assert result["volume"] == pytest.approx(volume, rel=1e-6)
+    assert result["waterplane_area"] == pytest.approx(area, rel=1e-6)
+
+
+def test_an_oblique_plane_given_by_a_far_point_is_the_same_plane():
+    model, faces, _place = box((1., 1., 1.))
+    normal = (1., -1., 1.)
+    for a in (0., 1e8, 1e12):
+        result = hydrostatics(model, faces, (a + .5, a + .5, .5), normal)
+        assert result["volume"] == pytest.approx(.5, rel=1e-12)
+
+
+def test_a_flat_section_root_is_converged():
+    from anygeometry.face_moments import Frame, _section_float, face_moments, waterplane_fields
+    from anygeometry import GeometryModel, Plane
+    from anygeometry.entities import OrientedEdge
+    from anygeometry.nurbs import NurbsSurface
+    from anygeometry.support_curves import PlaneNurbsCurve
+    # S(u, v) = (u, v, u^7 + 1e-48 u - 1e-42): its section with z = 0 is the line x = 1e-6 (review H1 round 2)
+    z = [(1. if i == 7 else 0.) + 1e-48 * i / 7 - 1e-42 for i in range(8)]
+    surface = NurbsSurface(7, 1, (0.,) * 8 + (1.,) * 8, (0., 0., 1., 1.),
+                           tuple(((i / 7, 0., z[i]), (i / 7, 1., z[i])) for i in range(8)))
+    flat = Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.))
+    curve = PlaneNurbsCurve.from_plane(flat, surface, 0)
+    t = np.linspace(.1, .9, 5)
+    _chart, _rates, world, _w = _section_float(curve, t)
+    assert world[:, 0] == pytest.approx(1e-6, rel=1e-9)
+    model = GeometryModel()
+    start, end = curve.evaluate(0.), curve.evaluate(1.)
+    p0, p1 = model.add_point(*start), model.add_point(*end)
+    q1, q0 = model.add_point(1., end[1], 0.), model.add_point(1., start[1], 0.)
+    section = model.add_curve(p0, p1, curve)
+    lines = [model.add_line(p1, q1), model.add_line(q1, q0), model.add_line(q0, p0)]
+    face = model.add_face_from_loop([OrientedEdge(section, True)] + [OrientedEdge(e, True) for e in lines],
+                                    surface=flat)
+    area = abs(face_moments(model, face, Frame.world(), waterplane_fields)[0])
+    assert area == pytest.approx((1 - 1e-6) * abs(end[1] - start[1]), rel=1e-12)
+
+
+def test_a_waterline_loop_outside_the_trimmed_face_does_not_refuse():
+    # the bottom's support has a closed waterline at z = 0 (around (0.5, 0.52)), outside this footprint
+    model, faces = basin((.25, -.25, .25), (.2703, -.2497, .2303), footprint=(.1, .2, .1, .2))
+    result = hydrostatics(model, faces, (.15, .15, 0.))
+    assert result["volume"] == 0.0 or result["volume"] == pytest.approx(0., abs=1e-15)
