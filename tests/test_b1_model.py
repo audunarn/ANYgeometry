@@ -372,7 +372,7 @@ def test_face_iterators_are_accepted(b1):
     assert enclosed_volume(model, iter(faces.values()))["volume"] > 0
 
 
-def _corner_entry(c_point=(.5, -1., 0.)):
+def _corner_entry(c_point=(.5, -1., 0.), fake_d=None):
     """A deck face in z = 0 and a vertical NURBS face y = -a (a = 5e-10, chart z in [-1, 0]) sharing the
     section A -> B; the NURBS face's other section B -> D also lies in z = 0 and enters the deck where the
     deck edge B -> C crosses y = -a (review B1-P5 round 4 finding 2)."""
@@ -400,8 +400,14 @@ def _corner_entry(c_point=(.5, -1., 0.)):
     model.add_face([shared, onward, segment(vd, vd2, (1., .5), (1., 0.)), segment(vd2, va2, (1., 0.), (0., 0.)),
                     segment(va2, va, (0., 0.), (0., .5))], surface=surface)
     vc, ve, vf = model.add_point(*c_point), model.add_point(1., -2., 0.), model.add_point(-1., -2., 0.)
-    model.add_face([shared, model.add_line(vb, vc), model.add_line(vc, vd), model.add_line(vd, ve),
-                    model.add_line(ve, vf), model.add_line(vf, va)], surface=deck)
+    if fake_d is None:
+        model.add_face([shared, model.add_line(vb, vc), model.add_line(vc, vd), model.add_line(vd, ve),
+                        model.add_line(ve, vf), model.add_line(vf, va)], surface=deck)
+    else:
+        # the deck goes through an unshared vertex near the section's end instead of D
+        vfake = model.add_point(*fake_d)
+        model.add_face([shared, model.add_line(vb, vc), model.add_line(vc, vfake), model.add_line(vfake, ve),
+                        model.add_line(ve, vf), model.add_line(vf, va)], surface=deck)
     return model
 
 
@@ -608,7 +614,8 @@ def test_crossings_that_floats_cannot_separate_are_refused():
     assert not model.strict_audit().clean
 
 
-def test_a_steep_diagonal_section_through_rectangle_corners_is_clean():
+@pytest.mark.parametrize("offset", [.5, .6])
+def test_a_steep_diagonal_section_through_rectangle_corners_is_clean(offset):
     from anygeometry import GeometryModel
     from anygeometry.nurbs import CurveOnSurface, NurbsCurve, NurbsSurface
     from anygeometry.section_audit import face_face
@@ -616,13 +623,14 @@ def test_a_steep_diagonal_section_through_rectangle_corners_is_clean():
     # review P4e round 2: S(u, v) = (u, v, u + v - 0.5) over the deck polygon (0,.5) (.5,0) (1,0) (1,1) (0,1)
     # sharing the diagonal section, which passes through dyadic rectangle corners
     surface = NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.),
-                           (((0., 0., -.5), (0., 1., .5)), ((1., 0., .5), (1., 1., 1.5))))
+                           (((0., 0., -offset), (0., 1., 1 - offset)), ((1., 0., 1 - offset), (1., 1., 2 - offset))))
+    # offset 0.6 (review P4e round 3): the section cuts rectangles through adjacent sides
     deck = Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.))
     section = PlaneNurbsCurve.from_plane(deck, surface, 0)
     if section.evaluate(0.)[0] > section.evaluate(1.)[0]:
         section = section.subcurve(1., 0.)
     model = GeometryModel()
-    va, vb = model.add_point(*section.evaluate(0.)), model.add_point(*section.evaluate(1.))   # (0,.5), (.5,0)
+    va, vb = model.add_point(*section.evaluate(0.)), model.add_point(*section.evaluate(1.))
     shared = model.add_curve(va, vb, section)
 
     def segment(start, end, p, q):
@@ -635,3 +643,12 @@ def test_a_steep_diagonal_section_through_rectangle_corners_is_clean():
     points = [vb] + tail + [va]
     plane = model.add_face([shared] + [model.add_line(p, q) for p, q in zip(points, points[1:])], surface=deck)
     assert face_face(model, plane, nurbs, 1e-9) is True
+    assert model.strict_audit().clean
+
+
+def test_a_nearby_unshared_vertex_grants_no_joint():
+    from anygeometry.section_audit import face_face
+    # review P4e round 3: the deck passes through a vertex 4e-9 from the uncovered section's end (1, -a, 0)
+    # that the NURBS face does not use; the section enters the deck there, ~1 from the shared edge
+    model = _corner_entry(fake_d=(1., -5e-10 + 4e-9, 0.))
+    assert face_face(model, 1, 2, 1e-9) is None

@@ -676,7 +676,11 @@ def edge_face(model, edge_id: int, face_id: int, tolerance: float, work: Work | 
                                 other_low, other_high = sorted(other.domain)
                                 if min(high, other_high) > max(low, other_low):
                                     return None
-                        return True if _outside_plane_face(model, face, curve.curve, tolerance, work) else None
+                        shared_here = {curve.start, curve.end} & {model.oriented_start_vertex(item)
+                                                                 for loop in (face.loop,) + tuple(face.holes)
+                                                                 for item in loop}
+                        return True if _outside_plane_face(model, face, curve.curve, tolerance, work,
+                                                           shared_here) else None
                 return True if _curve_plane_clean(curve, face.surface, shared, tolerance, angular, work) else None
             if isinstance(face.surface, NurbsSurface) and isinstance(curve, _Line):
                 return True if _line_face_clean(curve, model, face, shared, tolerance, angular, work) else None
@@ -750,6 +754,9 @@ def face_face(model, first_id: int, second_id: int, tolerance: float, work: Work
         return None
     edges_first = {item.edge for loop in (first.loop,) + tuple(first.holes) for item in loop}
     edges_second = {item.edge for loop in (second.loop,) + tuple(second.holes) for item in loop}
+    shared_vertices = ({model.oriented_start_vertex(item) for loop in (first.loop,) + tuple(first.holes) for item in loop}
+                       & {model.oriented_start_vertex(item) for loop in (second.loop,) + tuple(second.holes)
+                          for item in loop})
     shared = [model.edges[e].curve for e in edges_first & edges_second
               if isinstance(model.edges[e].curve, PlaneNurbsCurve)
               and model.edges[e].curve.surface == surface and _same_plane(plane, model.edges[e].curve)]
@@ -774,7 +781,7 @@ def face_face(model, first_id: int, second_id: int, tolerance: float, work: Work
                 # the plane cuts the whole support, the faces only between their trims)
                 for low, high in uncovered:
                     if not _outside_plane_face(model, first, path.subcurve(low, high),
-                                               (JOINT_BALL + 1) * tolerance, work):
+                                               (JOINT_BALL + 1) * tolerance, work, shared_vertices, tolerance):
                         return None
             if shared:
                 n = _cross(_exact(plane.u_vector), _exact(plane.v_vector))
@@ -790,7 +797,7 @@ def face_face(model, first_id: int, second_id: int, tolerance: float, work: Work
         return None
 
 
-def _outside_plane_face(model, face, piece, tolerance, work) -> bool:
+def _outside_plane_face(model, face, piece, tolerance, work, shared_vertices=(), joint_tolerance=None) -> bool:
     """A section piece lying in a plane face's plane is outside the face except in the joint balls at its
     ends (contract (a) for face pairs, P4e-2): it comes within the tolerance of the face's straight
     boundary edges only in certified joint departure stretches (P4a line certificate with the joint ball
@@ -802,12 +809,12 @@ def _outside_plane_face(model, face, piece, tolerance, work) -> bool:
     ends = [np.asarray(point, dtype=float) for point in piece.evaluate(np.array([0.0, 1.0]))]
     # the piece as a curve whose ends are the face's vertices it leaves from (if any), for the
     # distance-based pair engine (review P4e round 1: an intersection certificate is not a clearance)
-    face_vertices = {model.oriented_start_vertex(item) for loop in (face.loop,) + tuple(face.holes)
-                     for item in loop}
+    # joints only at vertices the two entities actually share, within the tolerance (review P4e round 3: a
+    # merely nearby vertex of the plane face granted an exemption)
+    reach = float(tolerance if joint_tolerance is None else joint_tolerance)
 
     def end_vertex(point):
-        near = [v for v in face_vertices
-                if float(np.linalg.norm(model.vertices[v].position - point)) <= float(tolerance)]
+        near = [v for v in shared_vertices if float(np.linalg.norm(model.vertices[v].position - point)) <= reach]
         return near[0] if len(near) == 1 else -1 - len(near)
     curve = _Piece(model, piece, end_vertex(ends[0]), end_vertex(ends[1]))
     own = (piece.plane_record, piece.surface, piece.path)
@@ -1079,16 +1086,8 @@ def _descent_band_clean(surface, chart_box, n, d, tolerance, work) -> bool:
                 return False
         return True
 
-    # weak signs (zeros allowed): with G strictly monotone along s, G >= 0 at one end of an s-line and
-    # <= 0 at the other puts the line's zero in the closed interval (review P4e round 2: a section
-    # through rectangle corners never had strict edge signs)
-    def weak_sign(ranges) -> int:
-        nonneg = nonpos = True
-        for index, sub in pieces(ranges):
-            g_low, g_high = _range(restricted(g_patches, index, sub))
-            nonneg, nonpos = nonneg and g_low >= 0, nonpos and g_high <= 0
-        return 1 if nonneg and not nonpos else -1 if nonpos and not nonneg else 0
-
+    # weak edge signs (zeros allowed): with G strictly monotone along s, G >= 0 at one end of an s-line
+    # and <= 0 at the other puts the line's zero in the closed interval (review P4e round 2)
     def edge_signs(ranges, axis, high_end):
         """``(all >= 0, all <= 0)`` of G on the rectangle's edge ``s = s_lo`` or ``s_hi``."""
         line = ranges[axis][1] if high_end else ranges[axis][0]
@@ -1148,26 +1147,22 @@ def _descent_band_clean(surface, chart_box, n, d, tolerance, work) -> bool:
             (low_pos, low_neg), (high_pos, high_neg) = edge_signs(ranges, axis, False), edge_signs(ranges, axis, True)
             if (low_pos and high_neg) or (low_neg and high_pos):
                 return True                                     # crossed inside the rectangle
-            sign = weak_sign(ranges)
-            if not sign:
-                continue
-            towards_high = slope * sign < 0                     # |G| decreases towards +s
+            # extended at both ends along s until every s-line through the rectangle is crossed in the
+            # region (review P4e round 3: a section cutting adjacent sides left mixed-sign rectangles)
             width = ranges[axis][1] - ranges[axis][0]
             extension = width
             for _ in range(48):
                 if not work.take():
                     return False
                 grown = list(ranges)
-                if towards_high:
-                    grown[axis] = (ranges[axis][0], min(limits[axis][1], ranges[axis][1] + extension))
-                else:
-                    grown[axis] = (max(limits[axis][0], ranges[axis][0] - extension), ranges[axis][1])
+                grown[axis] = (max(limits[axis][0], ranges[axis][0] - extension),
+                               min(limits[axis][1], ranges[axis][1] + extension))
                 if monotone(grown, axis) != slope:
                     break
-                far_pos, far_neg = edge_signs(grown, axis, towards_high)
-                if (far_neg if sign > 0 else far_pos):
+                (low_pos, low_neg), (high_pos, high_neg) = edge_signs(grown, axis, False), edge_signs(grown, axis, True)
+                if (low_pos and high_neg) or (low_neg and high_pos):
                     return True                                 # the section is reached in the region
-                if grown[axis] == (limits[axis][0], ranges[axis][1]) or grown[axis] == (ranges[axis][0], limits[axis][1]):
+                if grown[axis] == limits[axis]:
                     break                                       # descent would leave the chart
                 extension *= 2
         return False
