@@ -77,7 +77,10 @@ def _shell(model, faces, order):
 
 
 def hydrostatics(model, faces, point, normal=(0., 0., 1.), longitudinal=(1., 0., 0.), order: int = 24,
-                 rtol: float = 1e-8) -> dict:
+                 rtol: float = 1e-8, shift: float = 0.0) -> dict:
+    """``shift``: the waterplane is moved by ``shift`` along the unit normal from ``point`` (kept exact:
+    ``point + shift n`` in floats rounds away the offset for a point far from the shell, review H1
+    round 5)."""
     raw_normal = tuple(float(value) for value in normal)
     from .shell_volume import closed_shell
     faces = list(faces)
@@ -92,6 +95,7 @@ def hydrostatics(model, faces, point, normal=(0., 0., 1.), longitudinal=(1., 0.,
     # raw_n . X = raw_n . point (review H1 rounds 2-3: a rounded unit normal tilts a plane given far away)
     offset = sum(Fraction(a) * (Fraction(float(c)) - Fraction(float(p)))
                  for a, c, p in zip(raw_normal, centre, point)) / Fraction(float(np.linalg.norm(raw_normal)))
+    offset -= Fraction(float(shift))
     foot = centre - float(offset) * frame.normal
     frame = Frame(foot, frame.axes[0], frame.axes[1], normal=frame.normal)
     # clipped moments at two orders
@@ -183,7 +187,7 @@ def float_at(model, faces, volume: float, normal=(0., 0., 1.), reference=(0., 0.
     zeta = .5 * (low + high) if start is None or not low < start < high else float(start)
 
     def at(z):
-        return hydrostatics(model, faces, reference + z * n, n, longitudinal, order, rtol)
+        return hydrostatics(model, faces, reference, n, longitudinal, order, rtol, shift=z)
     result = at(zeta)
     for _ in range(max_iterations):
         error = result["volume"] - volume
@@ -209,7 +213,7 @@ def hydrostatic_table(model, faces, drafts, reference=(0., 0., 0.), normal=(0., 
     n = n / np.linalg.norm(n)
     rows = []
     for draft in drafts:
-        row = hydrostatics(model, faces, np.asarray(reference, dtype=float) + draft * n, n, **options)
+        row = hydrostatics(model, faces, np.asarray(reference, dtype=float), n, shift=draft, **options)
         row["draft"] = float(draft)
         rows.append(row)
     return rows

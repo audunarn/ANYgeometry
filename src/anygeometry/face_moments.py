@@ -368,6 +368,11 @@ def _chart(face, frame):
     if isinstance(face.surface, Plane):
         return _PlaneChart(face.surface, frame)
     if isinstance(face.surface, NurbsSurface):
+        if _knots_shifted(face.surface):
+            # float surface evaluation remaps the chart to far-shifted knots and moves points (review H1
+            # round 5: a wet interval was classified dry): refused, not approximated
+            raise GeometryError(f"face {face.id}: the NURBS knot domain lies too far from the origin for "
+                                "face moments")
         return _NurbsChart(face.surface, frame)
     raise GeometryError(f"face {face.id}: only plane and NURBS faces have face moments")
 

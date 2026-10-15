@@ -477,3 +477,32 @@ def test_a_longitudinal_direction_near_the_normal_is_refused():
     assert frame.axes @ frame.axes.T == pytest.approx(np.eye(3), abs=1e-15)
     result = hydrostatics(model, faces, (.5, .5, .5), (1., 3., 7.), (1., 3., 6.))
     assert result["buoyancy_centre"] == pytest.approx([10 / 21, 3 / 7, 157 / 588], abs=1e-12)
+
+
+# ------------------------------------------------------------------ review H1 round 5
+
+
+def test_a_nurbs_face_on_far_shifted_knots_is_refused():
+    from anygeometry.errors import GeometryError
+    from anygeometry.nurbs import NurbsSurface
+    # bottom z = (u - .503)^2 - .1 on u-knots [1e16, 1e16 + 256] (review H1 round 5: a wet interval was
+    # classified dry by float evaluation, area 0 for 0.0015)
+    k0, k1, c = 1e16, 1e16 + 256, .503
+    z = (c * c - .1, c * c - c - .1, (1 - c) ** 2 - .1)
+    surface = NurbsSurface(2, 1, (k0, k0, k0, k1, k1, k1), (0., 0., 1., 1.),
+                           tuple(((i / 2, 0., z[i]), (i / 2, 1., z[i])) for i in range(3)))
+    model, faces = basin_on(surface, (.125, .875, .125, .875))
+    with pytest.raises(GeometryError, match="knot domain"):
+        hydrostatics(model, faces, (.5, .5, -.1 + 1e-6))
+
+
+def test_a_far_reference_keeps_the_offset_exact():
+    from anygeometry.hydrostatics import float_at, hydrostatic_table
+    # the unit cube, normal (1, 0, 1), reference 1e12 away on the plane through the origin's diagonal
+    # (review H1 round 5: reference + zeta n rounded the offset by 1e-5)
+    model, faces, _place = box((1., 1., 1.))
+    reference = (1e12, 0., -1e12)
+    found = float_at(model, faces, .5, normal=(1., 0., 1.), reference=reference, start=1 / math.sqrt(2) + 1e-5)
+    assert found["zeta"] == pytest.approx(1 / math.sqrt(2), abs=1e-12)
+    row = hydrostatic_table(model, faces, [1 / math.sqrt(2)], reference=reference, normal=(1., 0., 1.))[0]
+    assert row["volume"] == pytest.approx(.5, rel=1e-12)
