@@ -192,3 +192,9 @@ def test_certified_trim_polylines_refuse_section_edges_with_a_typed_error():
     _surface, build, face = bow_below_deck()
     with pytest.raises(GeometryError, match="section edges"):
         build.model.trim_loops_uv_certified(face, 1e-6)
+
+
+def test_display_trim_loops_of_nurbs_faces_are_chart_samples():
+    _surface, build, face = bow_below_deck()
+    (loop,) = build.model.face_trim_loops_uv(face)
+    assert loop.shape[1] == 2 and abs(loop[:, 1].max() - .75) <= 1e-12 and abs(loop[:, 1].min()) <= 1e-12

@@ -7513,6 +7513,11 @@ class GeometryModel:
     def _compute_face_trim_loops_uv(
         self, face_id: int, face: Face, count: int
     ) -> Tuple[np.ndarray, ...]:
+        from .nurbs import NurbsSurface
+        if isinstance(face.surface, NurbsSurface):
+            # the chart is a NURBS face's uv: chart samples of its trims (pcurves, section curves); the
+            # world-inversion route below has no NURBS local_uv (it raised AttributeError, B1-P4c)
+            return tuple(self._nurbs_chart_loop_points(loop) for loop in (face.loop,) + tuple(face.holes))
         if (
             isinstance(face.surface, CoonsSurface)
             and not face.surface.has_boundaries
