@@ -48,12 +48,19 @@ _PATCHES: dict = {}
 
 @dataclass(frozen=True)
 class SectionRoot:
-    """A curve-parameter interval (outward doubles) and a world enclosure of the curve over it."""
+    """A curve-parameter interval (outward doubles) and a world enclosure of the curve over it.
+
+    ``isolated``: the double interval holds exactly one simple root of h on C* (intervals whose
+    doubles overlap another reported interval are merged and not isolated: outward rounding can
+    put two exact isolating intervals into one double interval, review B1-P4a round 3).
+    ``exact``: the exact parameter interval(s) behind it (Fractions).
+    """
     t_lo: float
     t_hi: float
     lower: tuple
     upper: tuple
-    isolated: bool                  # exactly one simple root of h inside
+    isolated: bool
+    exact: tuple = ()
 
 
 # ------------------------------------------------------------------ exact Bernstein pieces
@@ -425,15 +432,19 @@ class _Context:
     def world(self):
         return self.view.world(self.s_range, self.x_range)
 
-    def t_interval(self):
-        """Outward double interval of the curve parameter for s in [s_from, s_to]."""
+    def t_exact(self):
+        """Exact interval of the curve parameter for s in [s_from, s_to]."""
         arc = self.view.arc
         values = []
         for s in (self.s_from, self.s_to):
             tau = (s - arc.s0) / (arc.s1 - arc.s0)
             path = (self.k + tau) / self.count
             values.append((path - self.a) / (self.b - self.a))
-        low, high = min(values), max(values)
+        return min(values), max(values)
+
+    def t_interval(self):
+        """Outward double interval of the curve parameter for s in [s_from, s_to]."""
+        low, high = self.t_exact()
         return max(0.0, math.nextafter(float(low), -math.inf)), min(1.0, math.nextafter(float(high), math.inf))
 
 
@@ -463,17 +474,30 @@ def section_roots(curve: PlaneNurbsCurve, n, d, *, max_depth: int = MAX_DEPTH,
                     return "split"                              # refine the isolated root
                 t_lo, t_hi = context.t_interval()
                 lower, upper = context.world()
-                found.append(SectionRoot(t_lo, t_hi, lower, upper, True))
+                found.append(SectionRoot(t_lo, t_hi, lower, upper, True, (context.t_exact(),)))
             return "done"
         if 0 in signs and context.depth >= max_depth - 1:
             t_lo, t_hi = context.t_interval()
             lower, upper = context.world()
-            found.append(SectionRoot(t_lo, t_hi, lower, upper, False))
+            found.append(SectionRoot(t_lo, t_hi, lower, upper, False, (context.t_exact(),)))
             return "done"
         return "split"
 
     _engine(curve, n, d, classify, max_depth)
-    return tuple(sorted(found, key=lambda item: (item.t_lo, item.t_hi)))
+    return _merged(sorted(found, key=lambda item: (item.t_lo, item.t_hi)))
+
+
+def _merged(items) -> tuple[SectionRoot, ...]:
+    """Intervals whose doubles overlap are merged (union of parameters and boxes), never isolated."""
+    result: list[SectionRoot] = []
+    for item in items:
+        if result and item.t_lo <= result[-1].t_hi:
+            last = result.pop()
+            item = SectionRoot(last.t_lo, max(last.t_hi, item.t_hi),
+                               tuple(map(min, last.lower, item.lower)), tuple(map(max, last.upper, item.upper)),
+                               False, last.exact + item.exact)
+        result.append(item)
+    return tuple(result)
 
 
 def _plane_normal(curve: PlaneNurbsCurve):
@@ -532,6 +556,9 @@ def certify_line_section(curve: PlaneNurbsCurve, start, end, shared=(), toleranc
                 return False
         return True
 
+    def box_distance_squared(lower, upper, point):
+        return sum(max(Fraction(lo) - p, p - Fraction(hi), Fraction(0)) ** 2 for lo, hi, p in zip(lower, upper, point))
+
     def away_from_shared(lower, upper):
         # every point of the box farther than the tolerance from every shared point
         for point in points:
@@ -552,8 +579,10 @@ def certify_line_section(curve: PlaneNurbsCurve, start, end, shared=(), toleranc
         if near_shared(box):
             return "done"
         lambdas = [sum((c - x) * y for c, x, y in zip(corner, a, e)) / ee for corner in box]
-        if max(lambdas) < 0 or min(lambdas) > 1:
-            return "done"                                       # roots here are off the segment
+        # beyond an end the nearest segment point is that end: cleared only farther than the
+        # tolerance from it (review B1-P4a round 3: a contact 5e-5 past the end was cleared)
+        if (max(lambdas) < 0 and box_distance_squared(lower, upper, a) > tol * tol) or                 (min(lambdas) > 1 and box_distance_squared(lower, upper, b) > tol * tol):
+            return "done"
         signs = (context.sign_from, context.sign_to)
         if 0 not in signs and context.view.monotone(context.s_range, context.x_range):
             if signs[0] == signs[1]:

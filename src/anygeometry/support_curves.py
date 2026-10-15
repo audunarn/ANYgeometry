@@ -117,18 +117,28 @@ class PlaneNurbsCurve:
                 refined[ident] = root
             return refined[ident]
 
-        arcs = []
-        for box_index, first, second in section.paths[self.path].arcs:
-            box = section.boxes[box_index]
-            slicing = 0 if box.kind == "v" else 1
+        chain = [(section.boxes[box_index], 0 if section.boxes[box_index].kind == "v" else 1, root_of(first),
+                  root_of(second)) for box_index, first, second in section.paths[self.path].arcs]
+        # An arc starts at C*(s0), the zero at the rational arc limit s0 (or the root outside the gap):
+        # the root interval is refined until the rectangle holding both the true root and C*(s0) is
+        # within the error bound, for every arc using the root (review B1-P4a round 3).
+        for _ in range(self._MAX_BISECTIONS):
+            loose = {id(root): root for box, slicing, start, finish in chain for root in (start, finish)
+                     if not root.exact and not self._joint_ok(box, slicing, root)}
+            if not loose:
+                break
+            for root in loose.values():
+                root.refine()
+        else:
+            raise PlaneNurbsNotCertified("arc joint not refined to the curve's error bound")
 
-            def s_of(root):
-                if root.axis == slicing:
-                    return root.value
-                return (root.lo + root.hi) / 2
+        def s_of(root, slicing):
+            if root.axis == slicing:
+                return root.value
+            return (root.lo + root.hi) / 2
 
-            start, finish = root_of(first), root_of(second)
-            arcs.append(_Arc(box, slicing, s_of(start), s_of(finish), start, finish))
+        arcs = [_Arc(box, slicing, s_of(start, slicing), s_of(finish, slicing), start, finish)
+                for box, slicing, start, finish in chain]
         result = tuple(arcs)
         if len(_SECTIONS) >= 64:
             _SECTIONS.clear()
@@ -205,6 +215,52 @@ class PlaneNurbsCurve:
                 _SECTIONS.clear()
             _SECTIONS[key] = cached
         return cached
+
+    def _joint_ok(self, box, slicing, root) -> bool:
+        """Whether the rectangle holding the true root and the arc's first point C*(s0) is within the
+        error bound. ``s0`` is the root's value on a constant-s edge (C*(s0) is the root itself), else
+        the midpoint of its interval: then C*(s0) is the box's zero at s0 (bracketed exactly) or, outside
+        the gap, the root."""
+        rect = self._root_rect(root)
+        if root.axis == slicing:
+            return self._rect_ok(rect)
+        s0 = (root.lo + root.hi) / 2
+        c = box.coefficients
+        if slicing == 0:
+            a, b = box.u_range
+            column = [_de_casteljau([row[j] for row in c], (s0 - a) / (b - a)) for j in range(len(c[0]))]
+            x0, x1 = box.v_range
+        else:
+            a, b = box.v_range
+            column = [_de_casteljau(list(row), (s0 - a) / (b - a)) for row in c]
+            x0, x1 = box.u_range
+        low, high = _de_casteljau(column, Fraction(0)), _de_casteljau(column, Fraction(1))
+        if low != 0 and high != 0 and (low > 0) == (high > 0):
+            return self._rect_ok(rect)                         # outside the gap: C*(s0) is the root
+        lo, hi = Fraction(0), Fraction(1)
+        if low == 0:
+            hi = lo
+        elif high == 0:
+            lo = hi
+        else:
+            # bracket C*(s0) until its own rectangle meets the bound (else root refinement cannot help)
+            for _ in range(self._MAX_BISECTIONS):
+                bracket = (x0 + lo * (x1 - x0), x0 + hi * (x1 - x0))
+                if self._rect_ok(((s0, s0), bracket) if slicing == 0 else (bracket, (s0, s0))):
+                    break
+                middle = (lo + hi) / 2
+                value = _de_casteljau(column, middle)
+                if value == 0:
+                    lo = hi = middle
+                    break
+                if (value > 0) == (low > 0):
+                    lo = middle
+                else:
+                    hi = middle
+        x_lo, x_hi = x0 + lo * (x1 - x0), x0 + hi * (x1 - x0)
+        x_range = (min(x_lo, root.value), max(x_hi, root.value))
+        s_range = (root.lo, root.hi)
+        return self._rect_ok((s_range, x_range) if slicing == 0 else (x_range, s_range))
 
     def _rect_ok(self, rect) -> bool:
         """Whether every point of the surface over the knot rectangle lies within ``delta`` of every other
@@ -819,7 +875,9 @@ def _exact_knot_partials(surface, net, u, v, box=None):
 
 # ---------------------------------------------------------------------- schema-7 record (B1-P3)
 
-PLANE_NURBS_ALGORITHM = "plane_nurbs_exact_v1"
+# v2 (review B1-P4a round 3): section roots refined to the curve's world error bound; v1 records
+# (unrefined roots) describe different arc limits and are refused, not migrated
+PLANE_NURBS_ALGORITHM = "plane_nurbs_exact_v2"
 _RECORD_FIELDS = {"type", "plane", "surface", "path", "domain", "branch"}
 _BRANCH_FIELDS = {"algorithm", "roots", "arcs"}
 _PLANE_FIELDS = {"type", "origin", "u_vector", "v_vector"}

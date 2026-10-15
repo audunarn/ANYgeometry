@@ -75,7 +75,7 @@ def test_sub_curves_keep_their_domain():
 def test_records_hold_exact_canonical_rationals():
     record = plane_nurbs_record(section())
     branch = record["branch"]
-    assert branch["algorithm"] == "plane_nurbs_exact_v1"
+    assert branch["algorithm"] == "plane_nurbs_exact_v2"
     assert len(branch["roots"]) == len(branch["arcs"]) + 1
     for root in branch["roots"]:
         assert root[0] in (0, 1) and all(isinstance(value, str) for value in root[1:])

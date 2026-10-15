@@ -213,3 +213,50 @@ def test_points_are_within_the_world_bound_on_stretched_surfaces():
     # on C*: z = 0 means 3 v = u + 1/4, i.e. y = 2**60 (u + 1/4 - 1) = 2**60 (u - 3/4)
     expected_y = big * (end[0] - .75)
     assert abs(end[1] - expected_y) <= 2. ** -50 * 3 * big + abs(expected_y) * 1e-15
+
+
+# ------------------------------------------------------------------ review B1-P4a round 3
+
+
+def test_rounding_never_merges_two_isolated_roots():
+    # S(u, v) = (u, 2 v, 2 v - u^2 - 1/8) cut by z = 0; the plane y - x = -1/8 + 2**-120 meets the
+    # section at u = 1/2 +- 2**-60: two roots closer than a double's resolution of t
+    rows = (((0., 0., -.125), (0., 2., 1.875)), ((.5, 0., -.125), (.5, 2., 1.875)),
+            ((1., 0., -1.125), (1., 2., .875)))
+    curve = PlaneNurbsCurve.from_plane(Z0, bezier(2, rows), 0)
+    roots = section_roots(curve, (-1, 1, 0), -Fraction(1, 8) + Fraction(1, 2 ** 120), max_depth=140, refine=80)
+    assert sum(len(root.exact) for root in roots) == 2
+    for first, second in zip(roots, roots[1:]):
+        assert first.t_hi < second.t_lo                       # reported double intervals are disjoint
+    assert all(len(root.exact) == 1 for root in roots if root.isolated)
+
+
+def test_arc_starts_are_within_the_world_bound():
+    # S(u, v) = (u, v, 2**-30 v + u^2 - u + 1/16): C*(s0) at the rational arc limit can sit far from
+    # the end root in y; the defined end point must still be within delta of it
+    small = 2. ** -30
+    c = (1 / 16, 1 / 16 - .5, 1 / 16)
+    rows = tuple(((i / 2, 0., c[i]), (i / 2, 1., c[i] + small)) for i in range(3))
+    curve = PlaneNurbsCurve.from_plane(Z0, bezier(2, rows), 0)
+    arc = curve._arcs()[0]
+    s0 = arc.s0
+    v = -(s0 * s0 - s0 + Fraction(1, 16)) / Fraction(small)            # the zero of z at u = s0
+    v = min(max(v, Fraction(0)), Fraction(1))
+    delta = 2. ** -50 * 1.0                                             # the surface magnitude is 1
+    end = curve.evaluate(0.)
+    assert math.dist(end, (float(s0), float(v), 0.)) <= 2 * delta + 1e-16
+
+
+def test_contacts_just_beyond_a_segment_end_are_not_cleared(level):
+    # the segment plane x = 1 crosses C* at (1, sqrt 3, 1.5), 5.08e-5 beyond the segment's end
+    assert certify_line_section(level, (1., 0., 1.5), (1., 1.732, 1.5), (), 1e-4) is not True
+
+
+def test_records_of_the_previous_section_algorithm_are_refused():
+    from anygeometry import GeometryError
+    from anygeometry.support_curves import plane_nurbs_from_record, plane_nurbs_record
+    surface = cylinder_to_nurbs(Cylinder((0., 0., 0.), (0., 0., 1.), (1., 0., 0.), 2., 3., 0., math.pi))
+    record = plane_nurbs_record(PlaneNurbsCurve.from_plane(OBLIQUE, surface, 0))
+    record["branch"]["algorithm"] = "plane_nurbs_exact_v1"
+    with pytest.raises(GeometryError, match="algorithm"):
+        plane_nurbs_from_record(record)
