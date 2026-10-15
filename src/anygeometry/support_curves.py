@@ -469,6 +469,37 @@ class PlaneNurbsCurve:
             result[i] = [float(x * du + y * dv) for x, y in zip(s_u, s_v)]
         return result if np.ndim(parameters) else result[0]
 
+    def chart_bounds(self):
+        """Outward double chart box ``(low[2], high[2])`` of the curve (the exact arc rectangles of
+        ``_arc_rects`` mapped to the chart), as ``NurbsCurve.bounds`` gives for a pcurve (B1-P4c)."""
+        (r0, r1), (q0, q1) = self._chart_ranges()
+        us, vs = [], []
+        for arc, s_range, x_range in self._arc_rects(0.0, 1.0):
+            u_range, v_range = (s_range, x_range) if arc.slicing == 0 else (x_range, s_range)
+            us.extend((value - r0) / (r1 - r0) for value in u_range)
+            vs.extend((value - q0) / (q1 - q0) for value in v_range)
+        return (np.array([_float_down(min(us)), _float_down(min(vs))]),
+                np.array([_float_up(max(us)), _float_up(max(vs))]))
+
+    def chart_derivative(self, parameters) -> np.ndarray:
+        """Chart derivative ``d(cu, cv)/dt`` (exact at the exact point, then rounded): the slicing rate
+        and ``dx/ds = -G_s / G_x`` as in ``derivative``, divided by the chart ranges (B1-P4c)."""
+        t = np.atleast_1d(np.asarray(parameters, dtype=float))
+        count = len(self._arcs())
+        (r0, r1), (q0, q1) = self._chart_ranges()
+        a, b = self.domain
+        rate = Fraction(count) * (Fraction(b) - Fraction(a))
+        result = np.empty((len(t), 2))
+        for i, (arc, point, _world) in enumerate(self._exact_points(t)):
+            ds = (arc.s1 - arc.s0) * rate
+            g_s, g_x = _exact_partials(arc, point)
+            if g_x == 0:
+                raise PlaneNurbsNotCertified("section derivative undefined (G_x = 0 in a regular box)")
+            dx = -g_s / g_x * ds
+            du, dv = (ds, dx) if arc.slicing == 0 else (dx, ds)
+            result[i] = (float(du / (r1 - r0)), float(dv / (q1 - q0)))
+        return result if np.ndim(parameters) else result[0]
+
     def derivatives(self, parameter, order: int = 0) -> np.ndarray:
         """Point and derivatives up to ``order`` at a scalar parameter, shape ``(order + 1, 3)``.
 

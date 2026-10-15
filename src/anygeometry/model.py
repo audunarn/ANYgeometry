@@ -895,8 +895,9 @@ class GeometryModel:
             # The chart box of the trim pcurves (their sound boxes, clipped to the
             # chart), enclosed by the support's exact sub-patch hull (A3a).
             from .surface_capabilities import capabilities
-            boxes = [self.edges[item.edge].curve.pcurve.bounds() for loop in (face.loop,) + face.holes
-                     for item in loop]
+            boxes = [curve.chart_bounds() if hasattr(curve, "chart_bounds") else curve.pcurve.bounds()
+                     for curve in (self.edges[item.edge].curve for loop in (face.loop,) + face.holes
+                                   for item in loop)]                 # section edges: B1-P4c
             low = np.clip(np.min([box[0] for box in boxes], axis=0), 0.0, 1.0)
             high = np.clip(np.max([box[1] for box in boxes], axis=0), 0.0, 1.0)
             enclosure = capabilities(support).enclosure(((float(low[0]), float(high[0])),
@@ -4791,7 +4792,17 @@ class GeometryModel:
         face is refused (4.9: NURBS-face edge without an exact chart curve).
         """
         from .nurbs import CurveOnSurface, _IDENTITY
+        from .support_curves import PlaneNurbsCurve
         for loop in loops:
+            if any(isinstance(self.edges[item.edge].curve, PlaneNurbsCurve) for item in loop):
+                # loops with plane x NURBS section edges: the curves must be on this support; their
+                # chart continuity (algebraic section ends) is decided in validation (B1-P4c)
+                for item in loop:
+                    curve = self.edges[item.edge].curve
+                    if isinstance(curve, PlaneNurbsCurve) and curve.surface != surface:
+                        raise GeometryError(f"edge {item.edge} of a NURBS face is a section curve of another "
+                                            "surface")
+                continue
             charts = []
             for oriented in loop:
                 curve = self.edges[oriented.edge].curve
@@ -5288,6 +5299,9 @@ class GeometryModel:
         from .nurbs import NurbsSurface
         if isinstance(face.surface, NurbsSurface):
             # Chart polygons straight from the pcurves (no world inversion, architecture 4.6).
+            from .nurbs_section_faces import has_section_edges as _nurbs_sections, validate_nurbs_section_face
+            if _nurbs_sections(self, face):
+                return validate_nurbs_section_face(self, face_id)        # B1-P4c
             try:
                 self._require_nurbs_face_loops(face.surface, loops)
             except GeometryError as error:

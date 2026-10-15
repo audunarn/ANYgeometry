@@ -391,20 +391,28 @@ def _pieces(curve):
     return result, count, a, b
 
 
-def _engine(curve, n, d, classify, max_depth):
+def _engine(curve, n, d, classify, max_depth, patches=None):
     """Run ``classify(arc_view, s_range, x_range, world, depth, signs)`` over every arc piece of the curve
-    (exact subdivision in s); ``classify`` returns "done", "split" or raises."""
+    (exact subdivision in s); ``classify`` returns "done", "split" or raises.
+
+    ``patches(arc) -> (g2_patch, w_patch)`` replaces the second plane ``n . X = d`` by any per-box
+    polynomial (objects with ``coefficients``, ``u_range``, ``v_range``), e.g. a chart line (B1-P4c).
+    """
     from .nurbs import NurbsSurface
     surface: NurbsSurface = curve.surface
-    m, d1, _mm, _limit, _l = curve._plane_slab()
-    if _proportional(n, d, m, d1):
-        raise PlaneNurbsNotCertified("the second plane is the curve's own plane (coincident)")
-    g2_patches = _patches(surface, n, d)
-    w_patches = _patches(surface, (Fraction(0),) * 3, Fraction(-1))
+    if patches is None:
+        m, d1, _mm, _limit, _l = curve._plane_slab()
+        if _proportional(n, d, m, d1):
+            raise PlaneNurbsNotCertified("the second plane is the curve's own plane (coincident)")
+        g2_patches = _patches(surface, n, d)
+        w_patches = _patches(surface, (Fraction(0),) * 3, Fraction(-1))
+
+        def patches(arc):
+            return g2_patches[arc.box.patch], w_patches[arc.box.patch]
     pieces, count, a, b = _pieces(curve)
     examined = 0
     for k, arc, tau0, tau1, s_a, s_b in pieces:
-        view = _Arc(curve, arc, g2_patches[arc.box.patch], w_patches[arc.box.patch])
+        view = _Arc(curve, arc, *patches(arc))
         # signs at the piece ends: arc-end roots or interior slicing values
         # signs of h at the piece ends on C* itself (the zero at s, or the end root outside the gap):
         # the true root is not C*(s0) when s0 lies inside the gap (review B1-P4a round 2)
