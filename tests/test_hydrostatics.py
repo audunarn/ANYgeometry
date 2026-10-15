@@ -228,3 +228,128 @@ def test_the_b1_hydrostatic_table_is_consistent(b1):
     found = float_at(model, faces, volumes[2], start=1.8)
     assert found["zeta"] == pytest.approx(2.0, abs=1e-9)
     print(f"B1 hydrostatics per waterplane: {per_waterplane:.2f} s")
+
+
+# ------------------------------------------------------------------ review H1 round 1
+
+
+def basin(a, b, footprint=(.1, .9, .1, .9), top=1.):
+    """A closed outward shell: a quadratic NURBS bottom z = A(x) + B(y) over [0, 1]^2 (Bernstein
+    coefficients ``a`` of A and ``b`` of B), vertical sides at the footprint planes (section edges on
+    the bottom) and a flat top at ``top``."""
+    from anygeometry import GeometryModel
+    from anygeometry.b1_example import _parameter
+    from anygeometry.entities import OrientedEdge
+    from anygeometry.nurbs import NurbsSurface
+    from anygeometry.support_curves import PlaneNurbsCurve
+    from anygeometry import Plane
+    grid = (0., .5, 1.)
+    surface = NurbsSurface(2, 2, (0., 0., 0., 1., 1., 1.), (0., 0., 0., 1., 1., 1.),
+                           tuple(tuple((x, y, ai + bj) for y, bj in zip(grid, b)) for x, ai in zip(grid, a)))
+    x0, x1, y0, y1 = footprint
+    planes = {"w": (Plane((x0, 0., 0.), (0., 1., 0.), (0., 0., 1.)), (1, 0, 0), x0),
+              "e": (Plane((x1, 0., 0.), (0., 1., 0.), (0., 0., 1.)), (1, 0, 0), x1),
+              "s": (Plane((0., y0, 0.), (1., 0., 0.), (0., 0., 1.)), (0, 1, 0), y0),
+              "n": (Plane((0., y1, 0.), (1., 0., 0.), (0., 0., 1.)), (0, 1, 0), y1)}
+    curves = {k: PlaneNurbsCurve.from_plane(plane, surface, 0) for k, (plane, _n, _d) in planes.items()}
+    corners = {"sw": ("s", "w"), "se": ("s", "e"), "ne": ("n", "e"), "nw": ("n", "w")}
+    t = {}
+    for name, (first, second) in corners.items():
+        t[(first, name)] = _parameter(curves[first], planes[second][1], planes[second][2])
+        t[(second, name)] = _parameter(curves[second], planes[first][1], planes[first][2])
+    model = GeometryModel()
+    low = {name: model.add_point(*curves[first].evaluate(t[(first, name)])) for name, (first, _s) in corners.items()}
+    xy = {"sw": (x0, y0), "se": (x1, y0), "ne": (x1, y1), "nw": (x0, y1)}
+    high = {name: model.add_point(*xy[name], top) for name in corners}
+
+    def section(key, a_, b_):
+        return model.add_curve(low[a_], low[b_], curves[key].subcurve(t[(key, a_)], t[(key, b_)]))
+    sec = {"s": section("s", "sw", "se"), "e": section("e", "se", "ne"), "n": section("n", "ne", "nw"),
+           "w": section("w", "nw", "sw")}
+    tops = {"s": model.add_line(high["sw"], high["se"]), "e": model.add_line(high["se"], high["ne"]),
+            "n": model.add_line(high["ne"], high["nw"]), "w": model.add_line(high["nw"], high["sw"])}
+    up = {name: model.add_line(low[name], high[name]) for name in corners}
+
+    def o(edge, forward=True):
+        return OrientedEdge(edge, forward)
+    faces = [
+        model.add_face_from_loop([o(sec["w"], False), o(sec["n"], False), o(sec["e"], False), o(sec["s"], False)],
+                                 surface=surface),
+        model.add_face_from_loop([o(tops[k]) for k in "senw"], surface=Plane((0., 0., top), (1., 0., 0.), (0., 1., 0.))),
+        model.add_face_from_loop([o(sec["s"]), o(up["se"]), o(tops["s"], False), o(up["sw"], False)], surface=planes["s"][0]),
+        model.add_face_from_loop([o(sec["e"]), o(up["ne"]), o(tops["e"], False), o(up["se"], False)], surface=planes["e"][0]),
+        model.add_face_from_loop([o(sec["n"]), o(up["nw"]), o(tops["n"], False), o(up["ne"], False)], surface=planes["n"][0]),
+        model.add_face_from_loop([o(sec["w"]), o(up["sw"]), o(tops["w"], False), o(up["nw"], False)], surface=planes["w"][0]),
+    ]
+    return model, faces
+
+
+def test_a_wet_patch_inside_a_nurbs_face_is_not_missed():
+    from anygeometry.errors import GeometryError
+    from anygeometry.shell_volume import closed_shell
+    # bottom z = (x - 0.5)^2 + (y - 0.52)^2 - 1e-4: at z = 0 a wet disk of radius 0.01 inside the bottom
+    # face (review H1 round 1: both orders returned 0); exact V = pi r^4 / 2, A = pi r^2
+    model, faces = basin((.25, -.25, .25), (.2703, -.2497, .2303))
+    assert closed_shell(model, faces) == []
+    try:
+        result = hydrostatics(model, faces, (.5, .5, 0.))
+    except GeometryError:
+        return                                                  # refused: acceptable
+    assert result["volume"] == pytest.approx(math.pi * 1e-8 / 2, rel=1e-6)
+    assert result["waterplane_area"] == pytest.approx(math.pi * 1e-4, rel=1e-6)
+
+
+def test_a_curved_bottom_below_its_vertices_floats():
+    from anygeometry.hydrostatics import float_at
+    # bottom z = (x - 0.5)^2 - 0.1: the vertices at z = 0.06, the surface down to -0.1 (review H1 round 1)
+    model, faces = basin((.15, -.35, .15), (0., 0., 0.))
+    target = hydrostatics(model, faces, (.5, .5, 0.))["volume"]
+    # exact: 0.8 * int_{|x - .5| < sqrt(.1)} (0.1 - (x - .5)^2) dx = 0.8 * (4 / 3) 0.1^(3/2)
+    assert target == pytest.approx(.8 * 4 / 3 * .1 ** 1.5, rel=1e-9)
+    found = float_at(model, faces, target)
+    assert found["zeta"] == pytest.approx(0., abs=1e-9)
+
+
+def test_waterplane_moments_do_not_depend_on_the_point_given_on_the_plane():
+    model, faces, _place = box((1., 1., 1.))
+    near = hydrostatics(model, faces, (.5, .5, .5))
+    far = hydrostatics(model, faces, (1e8, 0., .5))
+    for key in ("volume", "waterplane_area", "i_transverse", "i_longitudinal"):
+        assert far[key] == pytest.approx(near[key], rel=1e-12)
+    assert far["i_longitudinal"] == pytest.approx(1 / 12, rel=1e-12)
+    assert far["flotation_centre"] == pytest.approx([.5, .5, .5], abs=1e-9)
+
+
+def test_the_shell_cache_does_not_alias_clones(monkeypatch):
+    from anygeometry import hydrostatics as module
+    model, faces, _place = box((1., 1., 1.))
+    twin = model.clone(preserve_identity=True)
+    assert twin.model_id == model.model_id and twin.revision == model.revision
+    calls = []
+    original = module.shell_moments
+
+    def counting(*args, **kwargs):
+        calls.append(args[0])
+        return original(*args, **kwargs)
+    monkeypatch.setattr(module, "shell_moments", counting)
+    module._shell(model, faces, 24)
+    module._shell(twin, faces, 24)                              # a different object: recomputed
+    module._shell(model, faces, 24)                             # cached
+    assert [m is model for m in calls] == [True, False]
+    assert calls[1] is twin
+
+
+def test_section_points_on_shifted_knots_use_the_exact_definition():
+    from anygeometry.face_moments import _section_float
+    from anygeometry.nurbs import NurbsSurface
+    from anygeometry.support_curves import PlaneNurbsCurve
+    from anygeometry import Plane
+    # (u, u^2, v - 0.3) on knots shifted to [1e16, 1e16 + 256] (review H1 round 1)
+    k0, k1 = 1e16, 1e16 + 256
+    surface = NurbsSurface(2, 1, (k0, k0, k0, k1, k1, k1), (0., 0., 1., 1.),
+                           (((0., 0., -.3), (0., 0., .7)), ((.5, 0., -.3), (.5, 0., .7)), ((1., 1., -.3), (1., 1., .7))))
+    curve = PlaneNurbsCurve.from_plane(Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.)), surface, 0)
+    t = np.array([.37])
+    _chart, _rates, world, rates = _section_float(curve, t)
+    assert world == pytest.approx(curve.evaluate(t), abs=1e-12)
+    assert rates == pytest.approx(curve.derivative(t), abs=1e-9)

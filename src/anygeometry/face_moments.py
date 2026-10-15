@@ -179,6 +179,35 @@ class _NurbsChart:
         return _span_roots(function, self.degrees[axis], [0.0, *self.knots[axis], 1.0], lo, hi)
 
 
+def _waterline_turns(surface, frame, axis) -> list:
+    """The levels of the outer coordinate (``1 - axis``) where the waterline on a NURBS surface turns
+    back (``dw/dt = 0`` along a section path of the exact P1 topology), found by sign changes of the
+    float chart rate on a dense sample and refined; a closed waterline loop (P1 refuses cycles) and a
+    surface lying in the waterplane refuse (review H1 round 1: an interior wet patch was missed)."""
+    from .plane_nurbs import PlaneNurbsClosedSection, PlaneNurbsNotCertified, plane_nurbs_section
+    from .surfaces import Plane
+    plane = Plane(tuple(frame.origin), tuple(frame.axes[0]), tuple(frame.axes[1]))
+    try:
+        section = plane_nurbs_section(plane, surface)
+    except PlaneNurbsClosedSection:
+        raise GeometryError("a closed waterline inside a NURBS face is not supported yet") from None
+    except PlaneNurbsNotCertified as error:
+        raise GeometryError(f"the waterline on a NURBS face is not certified: {error}") from None
+    if section.coincident:
+        raise GeometryError("a NURBS face lies in the waterplane")
+    other = 1 - axis
+    levels = []
+    for index in range(len(section.paths)):
+        curve = PlaneNurbsCurve.from_plane(plane, surface, index)
+        breaks = sorted({0.0, 1.0, *curve.breakpoints()})
+        for lo, hi in zip(breaks, breaks[1:]):
+            def rate(t, curve=curve):
+                return _section_float(curve, t)[1][:, other]
+            for turn in _sign_changes(rate, lo, hi, 128):
+                levels.append(float(_section_float(curve, np.array([turn]))[0][0, other]))
+    return sorted(levels)
+
+
 def _chart(face, frame):
     from .nurbs import NurbsSurface
     from .surfaces import Plane
@@ -192,6 +221,15 @@ def _chart(face, frame):
 # ------------------------------------------------------------------ boundaries
 
 
+def _knots_shifted(surface) -> bool:
+    """Whether float chart-to-knot maps lose more than about 20 bits on this surface (knot domains far
+    from the origin relative to their width, review H1 round 1): then the exact evaluation is used."""
+    for low, high in (surface.u_range, surface.v_range):
+        if max(abs(low), abs(high)) > 2.0 ** 20 * abs(high - low):
+            return True
+    return False
+
+
 def _section_float(curve, t):
     """Float points of a plane x NURBS section edge for quadrature: ``(chart, chart rates, world, world
     rates)`` at parameters ``t``. The same arcs as the exact definition (slicing coordinate affine in
@@ -199,6 +237,8 @@ def _section_float(curve, t):
     the arc's box, polished by Newton. Points whose box shows no sign change (inside an end root's
     interval) fall back to the exact evaluation."""
     t = np.clip(np.asarray(t, dtype=float), 0.0, 1.0)
+    if _knots_shifted(curve.surface):
+        return (curve.chart(t), curve.chart_derivative(t), curve.evaluate(t), curve.derivative(t))
     arcs = curve._arcs()
     count = len(arcs)
     a, b = (float(value) for value in curve.domain)
@@ -373,28 +413,51 @@ def face_moments(model, face_id: int, frame: Frame, fields=volume_fields, order:
     other = 1 - axis
     # boundary cuts: knots/arcs; clipped also the plane crossings and the base-line levels w*
     nodes_out, rates_out, ws_out = [], [], []
-    levels = []
+    levels, turns = [], []
     if clip:
         sample = np.vstack([function(np.linspace(0., 1., 17))[0] for function, _b in pieces])
         w_lo, w_hi = float(np.min(sample[:, other])), float(np.max(sample[:, other]))
         margin = 1e-9 * max(1.0, w_hi - w_lo)
         levels = chart.roots(other, 0.0, w_lo - margin, w_hi + margin)
+        if isinstance(chart, _NurbsChart):
+            turns = [level for level in _waterline_turns(chart.surface, frame, axis)
+                     if w_lo - margin < level < w_hi + margin]
     for function, cuts in pieces:
+        singular = set()
         if clip:
             extra = []
             for lo, hi in zip(cuts, cuts[1:]):
                 extra += _sign_changes(lambda t: frame.zeta(function(t)[2]), lo, hi)
                 for level in levels:
                     extra += _sign_changes(lambda t, level=level: function(t)[0][:, other] - level, lo, hi)
+                for level in turns:
+                    found = _sign_changes(lambda t, level=level: function(t)[0][:, other] - level, lo, hi)
+                    extra += found
+                    singular.update(found)
             cuts = sorted(set(cuts) | set(extra))
+        pairs = []
         for lo, hi in zip(cuts, cuts[1:]):
             if hi <= lo:
                 continue
-            t = .5 * (hi - lo) * (nodes + 1.) + lo
+            if lo in singular and hi in singular:
+                middle = .5 * (lo + hi)
+                pairs += [(lo, middle, "low"), (middle, hi, "high")]
+            else:
+                pairs.append((lo, hi, "low" if lo in singular else "high" if hi in singular else None))
+        for lo, hi, end in pairs:
+            if end is None:
+                t, wt = .5 * (hi - lo) * (nodes + 1.) + lo, .5 * (hi - lo) * weights
+            else:
+                # G ~ |w - w_turn|^(3/2) at a turning level: t = end + (other - end) tau^2 is smooth in tau
+                tau, wtau = .5 * (nodes + 1.), .5 * weights
+                if end == "low":
+                    t, wt = lo + (hi - lo) * tau * tau, wtau * 2 * tau * (hi - lo)
+                else:
+                    t, wt = hi - (hi - lo) * tau * tau, wtau * 2 * tau * (hi - lo)
             p, r, _w = function(t)
             nodes_out.append(p)
             rates_out.append(r)
-            ws_out.append(.5 * (hi - lo) * weights)
+            ws_out.append(wt)
     points, rates, ws = np.vstack(nodes_out), np.vstack(rates_out), np.concatenate(ws_out)
     # Green: oint G dw with G = int_0^s g dr along the inner coordinate; swapping (u, v) reverses the
     # orientation, so the outer integral changes sign (int int g du dv = -oint G_v du)

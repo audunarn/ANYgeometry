@@ -19,6 +19,7 @@ entirely above the plane displaces nothing (the waterplane quantities are then z
 from __future__ import annotations
 
 import math
+import weakref
 
 import numpy as np
 
@@ -37,17 +38,18 @@ def waterplane_frame(point, normal=(0., 0., 1.), longitudinal=(1., 0., 0.)) -> F
     return Frame(point, e1, np.cross(n, e1))
 
 
-_SHELLS: dict = {}
+_SHELLS: dict = {}            # id(model) -> (weak reference, revision, faces, order, value)
 
 
 def _shell(model, faces, order):
     """``(sign, volume, vertex mean, extent)`` of the whole shell (unclipped, in a world frame at its
     vertex mean): the loops' orientation and the refusal scales. Cached per model revision and faces
     (a stability sweep evaluates many waterplanes of one shell)."""
-    key = (model.model_id, model.revision, tuple(faces), order)
-    cached = _SHELLS.get(key)
-    if cached is not None:
-        return cached
+    # keyed on the model object itself (a weak reference checked on use) and its revision: clones that
+    # share an identity and a revision can differ (review H1 round 1)
+    entry = _SHELLS.get(id(model))
+    if entry is not None and entry[0]() is model and entry[1:4] == (model.revision, tuple(faces), order):
+        return entry[4]
     positions = np.asarray([model.vertices[v].position for v in
                             {model.oriented_start_vertex(item) for face_id in faces
                              for loop in (model.faces[face_id].loop,) + tuple(model.faces[face_id].holes)
@@ -61,8 +63,9 @@ def _shell(model, faces, order):
     extent = max(float(np.max(np.linalg.norm(positions - centre, axis=1))), 1e-300)
     if len(_SHELLS) >= 32:
         _SHELLS.clear()
-    _SHELLS[key] = cached = (sign, total, centre, extent)
-    return cached
+    value = (sign, total, centre, extent)
+    _SHELLS[id(model)] = (weakref.ref(model), model.revision, tuple(faces), order, value)
+    return value
 
 
 def hydrostatics(model, faces, point, normal=(0., 0., 1.), longitudinal=(1., 0., 0.), order: int = 24,
@@ -74,6 +77,10 @@ def hydrostatics(model, faces, point, normal=(0., 0., 1.), longitudinal=(1., 0.,
         raise GeometryError("not a closed shell: " + "; ".join(problems))
     frame = waterplane_frame(point, normal, longitudinal)
     sign, total, centre, extent = _shell(model, faces, order)
+    # the same plane with its origin at the foot of the shell's centre (review H1 round 1: a far origin
+    # cancelled the central waterplane moments)
+    foot = centre - float((centre - frame.origin) @ frame.normal) * frame.normal
+    frame = Frame(foot, frame.axes[0], frame.axes[1])
     # clipped moments at two orders
     results = []
     def both(local):
@@ -125,6 +132,25 @@ def heel_normal(heel: float, trim: float = 0.0) -> np.ndarray:
     return n / np.linalg.norm(n)
 
 
+def _hull_points(model, faces) -> np.ndarray:
+    from .nurbs import NurbsSurface
+    from .support_curves import PlaneNurbsCurve
+    points, surfaces = [], []
+    for face_id in faces:
+        face = model.faces[face_id]
+        if isinstance(face.surface, NurbsSurface):
+            surfaces.append(face.surface)
+        for loop in (face.loop,) + tuple(face.holes):
+            for item in loop:
+                edge = model.edges[item.edge]
+                points += [model.vertices[edge.start].position, model.vertices[edge.end].position]
+                if isinstance(edge.curve, PlaneNurbsCurve):
+                    surfaces.append(edge.curve.surface)
+    for surface in surfaces:
+        points += [point for row in surface.controls for point in row]
+    return np.asarray(points, dtype=float)
+
+
 def float_at(model, faces, volume: float, normal=(0., 0., 1.), reference=(0., 0., 0.),
              longitudinal=(1., 0., 0.), start: float | None = None, order: int = 24, rtol: float = 1e-8,
              tolerance: float = 1e-12, max_iterations: int = 40) -> dict:
@@ -134,10 +160,14 @@ def float_at(model, faces, volume: float, normal=(0., 0., 1.), reference=(0., 0.
     n = np.asarray(normal, dtype=float)
     n = n / np.linalg.norm(n)
     reference = np.asarray(reference, dtype=float)
-    positions = np.asarray([vertex.position for vertex in model.vertices.values()], dtype=float)
-    heights = (positions - reference) @ n
-    low, high = float(np.min(heights)), float(np.max(heights))
-    zeta = .5 * (low + high) if start is None else float(start)
+    faces = list(faces)
+    # a bracket from points that bound the shell: its vertices and the control nets of its NURBS
+    # surfaces (rational, positive weights: the surface lies in the net's convex hull; section edges
+    # lie on such surfaces) (review H1 round 1: vertices alone missed a bottom below them)
+    heights = (_hull_points(model, faces) - reference) @ n
+    span = float(np.max(heights) - np.min(heights)) or 1.0
+    low, high = float(np.min(heights)) - 1e-9 * span, float(np.max(heights)) + 1e-9 * span
+    zeta = .5 * (low + high) if start is None or not low < start < high else float(start)
 
     def at(z):
         return hydrostatics(model, faces, reference + z * n, n, longitudinal, order, rtol)
