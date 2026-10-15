@@ -5,13 +5,15 @@ A ``PlaneNurbsCurve`` is a chain of arcs, each the graph ``x(s)`` of the zero se
 second plane ``n . X = d`` gives ``G2 = n . H - d W`` on the same Bezier sub-patches;
 along an arc ``h(s) = G2(s, x(s)) / W`` is the signed (scaled) distance to that plane.
 
-The predicates are statements about the *mathematical* section curve ``C*`` of each
-arc (review B1-P4a round 1): for a slicing value ``s`` in the arc's exact gap, the exact
-zero of ``G1(s, .)`` in the box; outside the gap (between an arc limit ``s0``/``s1`` and
-the true end root), the true end root. ``C*`` is continuous; P2's defined points (bracket
-midpoints refined into the plane slab) lie within ``2**-60`` of the box and the slab of it,
-far below any model tolerance, and callers compare with a tolerance anyway. Roots are
-therefore roots of ``h`` on ``C*``; ``isolated`` means exactly one simple root on ``C*``.
+The predicates are statements about the *mathematical* section curve ``C*`` of each arc,
+parameterised as P2 parameterises it (reviews B1-P4a rounds 1-2): for ``s`` in
+``[s0, s1]`` (the arc limits), the exact zero of ``G1(s, .)`` in the box where ``s`` lies in
+the exact gap, and the true end root outside it. ``C*`` is continuous in ``s``. P2 certifies
+that its defined points (and its arc joints) lie within ``delta = 2**-50`` of the surface
+magnitude of ``C*`` in world space (``PlaneNurbsCurve._rect_ok``: brackets and end-root
+intervals are refined until ``sigma_max`` times their chart diagonal is at most ``delta``);
+callers compare with model tolerances far above ``delta``. Roots are roots of ``h`` on
+``C*``; ``isolated`` means exactly one simple root of ``h`` on ``C*`` over the interval.
 
 Everything is exact: Bernstein coefficients of ``G1``, ``G2`` and ``W`` over knot
 rectangles (de Casteljau splitting of the sub-patch coefficients), signs of ``G2`` at
@@ -362,10 +364,9 @@ def _engine(curve, n, d, classify, max_depth):
     for k, arc, tau0, tau1, s_a, s_b in pieces:
         view = _Arc(curve, arc, g2_patches[arc.box.patch], w_patches[arc.box.patch])
         # signs at the piece ends: arc-end roots or interior slicing values
-        def end_sign(tau, s, root):
-            return view.root_sign(root) if tau in (0, 1) else view.sign_at(s)
-        sign_a = end_sign(tau0, s_a, arc.first if tau0 == 0 else arc.second)
-        sign_b = end_sign(tau1, s_b, arc.second if tau1 == 1 else arc.first)
+        # signs of h at the piece ends on C* itself (the zero at s, or the end root outside the gap):
+        # the true root is not C*(s0) when s0 lies inside the gap (review B1-P4a round 2)
+        sign_a, sign_b = view.sign_at(s_a), view.sign_at(s_b)
         # depth is measured against the arc: a piece of a short sub-curve starts deep (an undecided
         # tiny piece is then reported or refused at once instead of being split as a full tree)
         span, width = abs(arc.s1 - arc.s0), abs(s_b - s_a)
@@ -483,16 +484,19 @@ def _plane_normal(curve: PlaneNurbsCurve):
 def certify_line_section(curve: PlaneNurbsCurve, start, end, shared=(), tolerance: float = 0.0,
                          *, max_depth: int = MAX_DEPTH):
     """Whether the segment ``start -> end`` (in the curve's plane) and the curve intersect only within
-    ``tolerance`` of the ``shared`` points: ``True``; a certain intersection elsewhere on the segment:
-    ``False``; undecided (a touching contact, an intersection near an unshared segment end): ``None``.
+    ``tolerance`` of the ``shared`` points: ``True``; a point of ``C*`` certified within ``tolerance``
+    of the segment and farther than ``tolerance`` from every shared point (a contact the segment's
+    plane crosses there): ``False``; undecided (touching, near an unshared segment end): ``None``.
 
     Intersections are the roots of ``h`` (signed distance to the plane through the segment, normal
     to the curve's plane) whose points lie on the segment, as the existing line-pair predicates
     decide intersection points (not proximity). A curve piece is cleared when ``G2`` has one sign
     over it (no root), when its world box lies within the tolerance of a shared point, or when the
     box projects outside the segment (``lambda`` outside [0, 1]); a monotone piece with equal end
-    signs has no root. A simple root (monotone piece, opposite end signs) whose box projects
-    strictly inside the segment and is not near a shared point is an intersection. A piece smaller
+    signs has no root. A simple root (monotone piece, opposite end signs) whose box lies entirely
+    within the tolerance of the segment (exact corner distances; the distance to a segment is convex)
+    and farther than the tolerance from every shared point is a contact (review B1-P4a round 2: a
+    projected crossing of a segment parallel to the curve's plane is not one). A piece smaller
     than ``tolerance / 16`` that is still undecided refuses (touching at the tolerance scale).
     """
     a = [Fraction(float(value)) for value in start]
@@ -519,6 +523,14 @@ def certify_line_section(curve: PlaneNurbsCurve, start, end, shared=(), toleranc
     def near_shared(box):
         return any(all(sum((c - p) ** 2 for c, p in zip(corner, point)) <= tol * tol for corner in box)
                    for point in points)
+
+    def within_segment(box):
+        # every corner (hence the whole box: the distance to a segment is convex) within the tolerance
+        for corner in box:
+            lam = min(Fraction(1), max(Fraction(0), sum((c - x) * y for c, x, y in zip(corner, a, e)) / ee))
+            if sum((c - x - lam * y) ** 2 for c, x, y in zip(corner, a, e)) > tol * tol:
+                return False
+        return True
 
     def away_from_shared(lower, upper):
         # every point of the box farther than the tolerance from every shared point
@@ -547,7 +559,7 @@ def certify_line_section(curve: PlaneNurbsCurve, start, end, shared=(), toleranc
             if signs[0] == signs[1]:
                 return "done"                                   # monotone without a sign change: no root
             # (an isolated root not yet separated from the joints or the segment ends: refine)
-            if min(lambdas) > 0 and max(lambdas) < 1 and away_from_shared(lower, upper):
+            if away_from_shared(lower, upper) and within_segment(box):
                 crossing[0] = True                              # a simple root on the segment, off the joints
                 return "done"
         diameter = sum((Fraction(hi) - Fraction(lo)) ** 2 for lo, hi in zip(lower, upper))

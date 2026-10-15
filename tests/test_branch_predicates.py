@@ -179,3 +179,37 @@ def test_crossings_inside_the_joint_tolerance_are_not_offending(level):
 
 def test_segments_off_the_curve_plane_are_undecided(level):
     assert certify_line_section(level, (1., -10., 2.5), (1., 10., 2.5), (), TOL) is None
+
+
+# ------------------------------------------------------------------ review B1-P4a round 2
+
+
+def test_isolation_uses_the_parameterised_curve_at_arc_limits():
+    # S(u, v) = (u, v, v + u^2 - u + 1/16): the arc limit s0 may lie inside the gap; y on C* near the
+    # start is far above 2**-70 except at the true end root, which C* does not reach here
+    rows = tuple(((i / 2, 0., c), (i / 2, 1., c + 1.)) for i, c in enumerate((1 / 16, 1 / 16 - .5, 1 / 16)))
+    curve = PlaneNurbsCurve.from_plane(Z0, bezier(2, rows), 0)
+    roots = section_roots(curve.subcurve(0., 2. ** -80), (0, 1, 0), 2. ** -70)
+    assert not any(root.isolated for root in roots)
+    for root in roots:                                   # anything reported is at the curve's start
+        assert contains(root, curve.evaluate(0.), 1e-12)
+
+
+def test_parallel_offset_segments_are_not_contacts(level):
+    # the segment lies 5e-5 above the curve's plane: with tolerance 1e-4 the curve passes within 5e-5
+    # of it (a contact in tolerance terms, never "only shared points"); with 1e-5 the segment is not
+    # in the curve's plane and the predicate is undecided (a projected crossing proves nothing)
+    result = certify_line_section(level, (1., -10., 1.50005), (1., 10., 1.50005), (), 1e-4)
+    assert result is not True
+    assert certify_line_section(level, (1., -10., 1.50005), (1., 10., 1.50005), (), 1e-5) is None
+
+
+def test_points_are_within_the_world_bound_on_stretched_surfaces():
+    # S(u, v) = (u, 2**60 (3 v - 1), 3 v - u - 1/4): a chart bracket of 2**-60 moves y by ~1
+    big = 2. ** 60
+    rows = (((0., -big, -.25), (0., 2 * big, 2.75)), ((1., -big, -1.25), (1., 2 * big, 1.75)))
+    curve = PlaneNurbsCurve.from_plane(Z0, bezier(1, rows), 0).subcurve(.5, .75)
+    end = curve.evaluate(1.)
+    # on C*: z = 0 means 3 v = u + 1/4, i.e. y = 2**60 (u + 1/4 - 1) = 2**60 (u - 3/4)
+    expected_y = big * (end[0] - .75)
+    assert abs(end[1] - expected_y) <= 2. ** -50 * 3 * big + abs(expected_y) * 1e-15

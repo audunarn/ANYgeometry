@@ -100,7 +100,23 @@ class PlaneNurbsCurve:
         section = plane_nurbs_section(self.plane, self.surface)
         if section.coincident or not 0 <= self.path < len(section.paths):
             raise PlaneNurbsNotCertified("no such section path")
-        roots = section.roots
+        # Root intervals refined (on copies: the section's roots are shared and recorded) until their
+        # world image is within the curve's error bound: the arc limits (interval midpoints) and the
+        # end points then lie within that bound of the true roots (review B1-P4a round 2).
+        refined: dict = {}
+
+        def root_of(ident):
+            if ident not in refined:
+                root = replace(section.roots[ident])
+                for _ in range(self._MAX_BISECTIONS):
+                    if root.exact or self._rect_ok(self._root_rect(root)):
+                        break
+                    root.refine()
+                else:
+                    raise PlaneNurbsNotCertified("section root not refined to the curve's error bound")
+                refined[ident] = root
+            return refined[ident]
+
         arcs = []
         for box_index, first, second in section.paths[self.path].arcs:
             box = section.boxes[box_index]
@@ -111,7 +127,8 @@ class PlaneNurbsCurve:
                     return root.value
                 return (root.lo + root.hi) / 2
 
-            arcs.append(_Arc(box, slicing, s_of(roots[first]), s_of(roots[second]), roots[first], roots[second]))
+            start, finish = root_of(first), root_of(second)
+            arcs.append(_Arc(box, slicing, s_of(start), s_of(finish), start, finish))
         result = tuple(arcs)
         if len(_SECTIONS) >= 64:
             _SECTIONS.clear()
@@ -173,6 +190,29 @@ class PlaneNurbsCurve:
         _SECTIONS[key] = result
         return result
 
+    def _world_bound(self):
+        """``(sigma2, u_width, v_width, delta2)``: the squared Jacobian bound of the whole surface (chart
+        units, exact), the knot widths of the chart ranges and the squared error bound ``delta``
+        (``2**-50`` of the surface magnitude, as the plane slab)."""
+        key = ("bound", self.surface, self.plane_record)
+        cached = _SECTIONS.get(key)
+        if cached is None:
+            _m, _d, mm, limit_squared, _l = self._plane_slab()
+            sigma2 = self.surface.patch_bounds(((0.0, 1.0), (0.0, 1.0)), _surface_net(self.surface))[2]
+            (r0, r1), (q0, q1) = self._chart_ranges()
+            cached = (Fraction(sigma2), abs(r1 - r0), abs(q1 - q0), limit_squared / mm)
+            if len(_SECTIONS) >= 64:
+                _SECTIONS.clear()
+            _SECTIONS[key] = cached
+        return cached
+
+    def _rect_ok(self, rect) -> bool:
+        """Whether every point of the surface over the knot rectangle lies within ``delta`` of every other
+        (``sigma_max`` times the chart diagonal; the curve's world error bound, review B1-P4a round 2)."""
+        sigma2, u_width, v_width, delta2 = self._world_bound()
+        (u_lo, u_hi), (v_lo, v_hi) = rect
+        return sigma2 * (((u_hi - u_lo) / u_width) ** 2 + ((v_hi - v_lo) / v_width) ** 2) <= delta2
+
     def _world(self, knot_point):
         """Exact world point of a knot point, and its signed plane value ``m . P - d``."""
         m, d, _mm, _limit, _l = self._plane_slab()
@@ -193,14 +233,16 @@ class PlaneNurbsCurve:
         world point lies in the plane slab; ``side_lo``/``side_hi`` the end sides (``None`` unknown).
 
         The point is the midpoint (a deterministic definition); exact zeros end it.
-        Refuses when the slab is not reached (the line's sign change is lost).
+        Refuses when the slab is not reached (the line's sign change is lost). The bracket must also
+        be within the curve's world error bound (``_rect_ok``): a slab alone does not bound the
+        displacement along the curve (review B1-P4a round 2).
         """
         _m, _d, _mm, limit, _l = self._plane_slab()
         for _ in range(self._MAX_BISECTIONS):
             middle = (lo + hi) / 2
             point = line_point(middle)
             world, side = self._world(point)
-            if side * side <= limit:
+            if side * side <= limit and self._rect_ok(rect(lo, hi)):
                 return rect(lo, hi), point, world
             if side_lo is None or side_hi is None:
                 side_lo, side_hi = self._world(line_point(lo))[1], self._world(line_point(hi))[1]
