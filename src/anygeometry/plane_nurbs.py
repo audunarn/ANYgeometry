@@ -74,6 +74,11 @@ def _sub_patches(plane, surface: NurbsSurface) -> list[SubPatch]:
     if not any(n):
         raise GeometryError("plane parameter vectors must be independent")
     d = sum(x * y for x, y in zip(n, origin))
+    return sub_patches_of(n, d, surface)
+
+
+def sub_patches_of(n, d, surface: NurbsSurface) -> list[SubPatch]:
+    """Bezier sub-patches of ``G = n . H - d W`` for the exact plane ``n . X = d`` (indices as ``_sub_patches``)."""
     # the sub-patch count is bounded by the box budget before any extraction work (review B1-P3)
     spans = 1
     for knots, chart in ((surface.knots_u, surface.u_range), (surface.knots_v, surface.v_range)):
