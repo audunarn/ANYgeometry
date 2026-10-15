@@ -105,6 +105,10 @@ def _multiply(a, b):
     return min(products), max(products)
 
 
+def _subtract(a, b):
+    return a[0] - b[1], a[1] - b[0]
+
+
 def _patches(surface, n, d):
     key = (surface, tuple(n), d)
     cached = _PATCHES.get(key)
@@ -333,6 +337,37 @@ class _Arc:
         low, high = first[0] - second[1], first[1] - second[0]
         return low > 0 or high < 0
 
+    def projection_sign(self, s_range, x_range):
+        """Sign of ``d/ds (A / W)`` along C* over the rectangle, ``A = G2`` the plane function through the
+        origin (``w . H``): ``+1``/``-1`` when certified, else ``None``.
+
+        ``d/ds`` along C* is ``D = d_s - (G1_s / G1_x) d_x``; ``G1_x D(A/W) W**2 = (A_s G1_x - A_x G1_s) W
+        - A (W_s G1_x - W_x G1_s)``, bounded by interval products of Bernstein ranges; ``G1_x`` has one
+        sign over a regular box's rectangle (else ``None``).
+        """
+        u_range, v_range = self.uv(s_range, x_range)
+        u_width, v_width = u_range[1] - u_range[0], v_range[1] - v_range[0]
+        if u_width == 0 or v_width == 0:
+            return None
+        g1, a, w = (self.over(c, s_range, x_range) for c in (self.g1, self.g2, self.w))
+        (g1_u, g1_v), (a_u, a_v), (w_u, w_v) = (_derivative_ranges(c, u_width, v_width) for c in (g1, a, w))
+        if self.slicing == 0:
+            g1_s, g1_x, a_s, a_x, w_s, w_x = g1_u, g1_v, a_u, a_v, w_u, w_v
+        else:
+            g1_s, g1_x, a_s, a_x, w_s, w_x = g1_v, g1_u, a_v, a_u, w_v, w_u
+        if not (g1_x[0] > 0 or g1_x[1] < 0):
+            return None
+        first = _subtract(_multiply(a_s, g1_x), _multiply(a_x, g1_s))
+        second = _subtract(_multiply(w_s, g1_x), _multiply(w_x, g1_s))
+        total = _subtract(_multiply(first, _range(w)), _multiply(_range(a), second))
+        if total[0] > 0:
+            sign = 1
+        elif total[1] < 0:
+            sign = -1
+        else:
+            return None
+        return sign if g1_x[0] > 0 else -sign
+
     def world(self, s_range, x_range):
         """Outward double enclosure of the surface over the rectangle (lower, upper)."""
         enclosure = self.curve._chart_box_enclosure(s_range, x_range, self.slicing)
@@ -500,13 +535,44 @@ def _merged(items) -> tuple[SectionRoot, ...]:
     return tuple(result)
 
 
+def projection_monotone(curve: PlaneNurbsCurve, w, *, max_depth: int = 40):
+    """``+1``/``-1``: ``w . C*(t)`` is strictly increasing/decreasing in the curve parameter ``t`` over the
+    curve's domain (certified, so C* is injective there); ``None``: not certified.
+
+    Per arc piece the sign of ``d/ds (w . S)`` along C* (``projection_sign``), turned into ``d/dt`` by the
+    arc's slicing direction (``s1 - s0``) and the domain direction (``b - a``); all pieces must agree.
+    """
+    n = tuple(Fraction(value) for value in w)
+    if not any(n):
+        return None
+    found: set = set()
+    a, b = curve.domain
+    direction = 1 if b > a else -1
+
+    def classify(context: _Context) -> str:
+        sign = context.view.projection_sign(context.s_range, context.x_range)
+        if sign is None:
+            return "split"
+        arc = context.view.arc
+        found.add(sign * (1 if arc.s1 > arc.s0 else -1) * direction)
+        if len(found) > 1:
+            raise PlaneNurbsNotCertified("the projection is not monotone")
+        return "done"
+
+    try:
+        _engine(curve, n, Fraction(0), classify, max_depth)
+    except PlaneNurbsNotCertified:
+        return None
+    return found.pop() if len(found) == 1 else None
+
+
 def _plane_normal(curve: PlaneNurbsCurve):
     m, _d, _mm, _limit, _l = curve._plane_slab()
     return m
 
 
 def certify_line_section(curve: PlaneNurbsCurve, start, end, shared=(), tolerance: float = 0.0,
-                         *, max_depth: int = MAX_DEPTH):
+                         *, max_depth: int = MAX_DEPTH, coplanar_tolerance: float | None = None):
     """Whether the segment ``start -> end`` (in the curve's plane) and the curve intersect only within
     ``tolerance`` of the ``shared`` points: ``True``; a point of ``C*`` certified within ``tolerance``
     of the segment and farther than ``tolerance`` from every shared point (a contact the segment's
@@ -535,7 +601,8 @@ def certify_line_section(curve: PlaneNurbsCurve, start, end, shared=(), toleranc
     # precondition: the segment lies in the curve's plane within the tolerance (review B1-P4a round 1:
     # otherwise h's roots are only projected crossings)
     _m, d1, mm, _limit, _l = curve._plane_slab()
-    if any((sum(x * y for x, y in zip(m, end_point)) - d1) ** 2 > tol * tol * mm for end_point in (a, b)):
+    flat = tol if coplanar_tolerance is None else Fraction(float(coplanar_tolerance))
+    if any((sum(x * y for x, y in zip(m, end_point)) - d1) ** 2 > flat * flat * mm for end_point in (a, b)):
         return None
     points = [[Fraction(float(value)) for value in point] for point in shared]
     ee = sum(value * value for value in e)

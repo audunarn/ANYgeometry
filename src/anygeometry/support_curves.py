@@ -617,7 +617,12 @@ class PlaneNurbsCurve:
             # the end roots' intervals (points outside the gap are end roots) are added below
             s_low = max(Fraction(box_s[0]), s_values[0])
             s_high = min(Fraction(box_s[1]), s_values[1])
-            x_range = self._tight_x(arc, s_low, s_high) if s_high > s_low else None
+            # the x resolution follows the s range: a fixed 24 halvings of the box was far wider than a
+            # short piece's curve (review B1-P4b round 2: 1.8e-7 boxes over 2e-12 of parameter)
+            level = 0
+            while level < 40 and (s_high - s_low) * 2 ** (level + 1) <= box_s[1] - box_s[0]:
+                level += 1
+            x_range = self._tight_x(arc, s_low, s_high, depth=24 + level) if s_high > s_low else None
             box_x = (arc.box.v_range if arc.slicing == 0 else arc.box.u_range)
             if x_range is None:
                 x_range = box_x

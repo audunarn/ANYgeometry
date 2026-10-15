@@ -168,3 +168,79 @@ def test_small_holes_and_small_loops_are_judged_at_their_own_scale():
     with model.transaction():
         model._put_entity("face", replace(model.faces[face], holes=(tuple(OrientedEdge(e, True) for e in hole),)))
     assert len(model.faces[face].holes) == 1
+
+
+# ------------------------------------------------------------------ review B1-P4b round 2
+
+
+def extruded(x_power, y_power):
+    """The extrusion over z in [0, 1] of the cubic plan curve with power-basis coefficients (low first)."""
+    from anygeometry.nurbs import NurbsSurface
+    to_bernstein = np.array([[math.comb(j, i) / math.comb(3, i) if j >= i else 0. for j in range(4)]
+                             for i in range(4)])                     # c_j = sum_{i<=j} C(j,i)/C(3,i) a_i
+    xs = np.pad(np.asarray(x_power, dtype=float), (0, 4 - len(x_power))) @ to_bernstein
+    ys = np.pad(np.asarray(y_power, dtype=float), (0, 4 - len(y_power))) @ to_bernstein
+    return NurbsSurface(3, 1, (0.,) * 4 + (1.,) * 4, (0., 0., 1., 1.),
+                        tuple(((float(x), float(y), 0.), (float(x), float(y), 1.)) for x, y in zip(xs, ys)))
+
+
+def poly(*roots_and_scale):
+    *roots, scale = roots_and_scale
+    return list(np.polynomial.polynomial.polyfromroots(roots) * scale)
+
+
+def test_a_self_crossing_inside_one_piece_is_refused():
+    # x = (t-.1)(t-.3)(t-.2), y = (t-.1)(t-.3): crosses itself at t = .1, .3 (inside the first half)
+    curve = PlaneNurbsCurve.from_plane(LEVEL, extruded(poly(.1, .3, .2, 1.), poly(.1, .3, 1.)), 0)
+    model = GeometryModel()
+    start, end = model.add_point(*curve.evaluate(0.)), model.add_point(*curve.evaluate(1.))
+    corner = model.add_point(-1., 2., .5)
+    edges = [model.add_curve(start, end, curve), model.add_line(end, corner), model.add_line(corner, start)]
+    with pytest.raises(GeometryError, match="not certified simple"):
+        model.add_face(edges, surface=LEVEL)
+
+
+def test_an_excursion_before_the_joint_is_refused():
+    # C+-(t) = (+-[t(t-.25) - 1e-11], t(t-.25)(t-.24) - 1e-10 t): they cross near (-.0113, .00055)
+    def section(sign):
+        x = [sign * value for value in (-1e-11, -.25, 1.)]
+        y = [0., .25 * .24 - 1e-10, -.49, 1.]
+        return PlaneNurbsCurve.from_plane(LEVEL, extruded(x, y), 0)
+    plus, minus = section(1.), section(-1.)
+    model = GeometryModel()
+    origin = model.add_point(0., 0., .5)
+    a, b = model.add_point(*plus.evaluate(1.)), model.add_point(*minus.evaluate(1.))
+    edges = [model.add_curve(origin, a, plus), model.add_line(a, b), model.add_curve(b, origin, minus.subcurve(1., 0.))]
+    with pytest.raises(GeometryError, match="not certified simple"):
+        model.add_face(edges, surface=LEVEL)
+
+
+def test_acute_corners_validate():
+    # straight world sections (t, +-2e-7 t): a sliver of width 4e-7 at x = 1
+    def section(sign):
+        return PlaneNurbsCurve.from_plane(LEVEL, extruded([0., 1.], [0., sign * 2e-7]), 0)
+    upper, lower = section(1.), section(-1.)
+    model = GeometryModel()
+    origin = model.add_point(0., 0., .5)
+    a, b = model.add_point(*upper.evaluate(1.)), model.add_point(*lower.evaluate(1.))
+    model.add_face([model.add_curve(origin, a, upper), model.add_line(a, b),
+                    model.add_curve(b, origin, lower.subcurve(1., 0.))], surface=LEVEL)
+
+
+def test_vertices_within_the_surface_residual_validate():
+    curve = level_half()
+    model = GeometryModel()
+    start, end = model.add_point(*curve.evaluate(0.)), model.add_point(*curve.evaluate(1.))
+    mid = model.add_point(0., 0., .5 + 5e-9)
+    model.add_face([model.add_curve(start, end, curve), model.add_line(end, mid), model.add_line(mid, start)],
+                   surface=LEVEL)
+
+
+def test_far_plane_origins_validate():
+    far = Plane((1e17, 1e17, .5), (1., 0., 0.), (0., 1., 0.))
+    curve = PlaneNurbsCurve.from_plane(far, level_half().surface, 0)
+    model = GeometryModel()
+    start, end = model.add_point(*curve.evaluate(0.)), model.add_point(*curve.evaluate(1.))
+    mid = model.add_point(0., 0., .5)
+    model.add_face([model.add_curve(start, end, curve), model.add_line(end, mid), model.add_line(mid, start)],
+                   surface=far)
