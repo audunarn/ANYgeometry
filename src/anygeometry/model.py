@@ -5293,6 +5293,12 @@ class GeometryModel:
             except GeometryError as error:
                 return [f"face {face_id}: {error}"]
             return self._validate_nurbs_trims(face_id, face.surface, loops)
+        from .section_faces import has_section_edges, validate_plane_section_face
+        if has_section_edges(self, face):
+            # plane faces trimmed by plane x NURBS section curves: certified, no sampling (B1-P4b)
+            if not isinstance(face.surface, Plane):
+                return [f"face {face_id} has plane x NURBS section edges but no plane or NURBS support"]
+            return validate_plane_section_face(self, face_id)
         if isinstance(face.surface, Plane) and all(
             isinstance(self.edges[item.edge].curve, Straight)
             for loop in loops
