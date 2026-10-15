@@ -244,3 +244,35 @@ def test_far_plane_origins_validate():
     mid = model.add_point(0., 0., .5)
     model.add_face([model.add_curve(start, end, curve), model.add_line(end, mid), model.add_line(mid, start)],
                    surface=far)
+
+
+# ------------------------------------------------------------------ review B1-P4b round 3
+
+
+def test_faces_far_from_the_origin_validate():
+    # S(u, v) = (1e6 + u, 0, v): the section at z = .5 is the segment (1e6 + t, 0, .5)
+    from anygeometry.nurbs import NurbsSurface
+    surface = NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.),
+                           (((1e6, 0., 0.), (1e6, 0., 1.)), ((1e6 + 1, 0., 0.), (1e6 + 1, 0., 1.))))
+    plane = Plane((0., 0., .5), (1., 0., 0.), (0., 1., 0.))
+    curve = PlaneNurbsCurve.from_plane(plane, surface, 0)
+    model = GeometryModel()
+    start, end = model.add_point(*curve.evaluate(0.)), model.add_point(*curve.evaluate(1.))
+    corner = model.add_point(1e6, 1., .5)
+    model.add_face([model.add_curve(start, end, curve), model.add_line(end, corner), model.add_line(corner, start)],
+                   surface=plane)
+
+
+def test_far_origins_of_oblique_planes_validate():
+    # S(u, v) = (u, -2u, v) cut by x + y + z = 0, the plane given with an origin far along it
+    from anygeometry.nurbs import NurbsSurface
+    surface = NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.),
+                           (((0., 0., 0.), (0., 0., 1.)), ((1., -2., 0.), (1., -2., 1.))))
+    for origin in ((0., 0., 0.), (1e17, -1e17, 0.)):
+        plane = Plane(origin, (1., -1., 0.), (1., 0., -1.))
+        curve = PlaneNurbsCurve.from_plane(plane, surface, 0)
+        model = GeometryModel()
+        start, end = model.add_point(*curve.evaluate(0.)), model.add_point(*curve.evaluate(1.))
+        corner = model.add_point(0., -.5, .5)
+        model.add_face([model.add_curve(start, end, curve), model.add_line(end, corner),
+                        model.add_line(corner, start)], surface=plane)

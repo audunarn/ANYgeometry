@@ -191,7 +191,7 @@ def _joint_ok(model, p, p_start, q, q_start, point, w, tolerance) -> bool:
     n = _exact(w)
     x = _exact(point)
     eps = np.finfo(float).eps
-    sides, offsets = [], []
+    sides, offsets, deltas = [], [], []
     for edge, a, b in (p, q):
         curve = model.edges[edge].curve
         piece = curve.subcurve(a, b)
@@ -199,16 +199,26 @@ def _joint_ok(model, p, p_start, q, q_start, point, w, tolerance) -> bool:
         if sign is None:
             return False
         sides.append(sign if (p_start if (edge, a, b) == p else q_start) else -sign)
-        joint_end = curve.evaluate(a if (p_start if (edge, a, b) == p else q_start) else b)
-        offsets.append(abs(float(np.dot(w, joint_end - point)))
-                       + 8 * eps * float(np.linalg.norm(w)) * (float(np.linalg.norm(joint_end)) + float(np.linalg.norm(point))))
+        joint_t = a if (p_start if (edge, a, b) == p else q_start) else b
+        # the offset of C* at the joint end, bounded exactly over the curve's certified enclosure there
+        # (bounds(t, t) holds C* and the defined point): translation invariant, and tight where the
+        # piece ends at an exact root (review B1-P4b round 3: a floor proportional to the absolute
+        # coordinates refused valid faces far from the origin)
+        deltas.append(math.sqrt(float(curve._world_bound()[3])))
+        lower, upper = curve.bounds(joint_t, joint_t)
+        offsets.append(max(abs(sum(u * (Fraction(float(lower[k] if (index >> k) & 1 == 0 else upper[k])) - v)
+                                   for k, (u, v) in enumerate(zip(n, x))))
+                           for index in range(8)))
     if sides[0] == sides[1]:
         return False
-    e = Fraction(sum(offsets)) * (1 + Fraction(1, 2 ** 40))
+    e = sum(offsets) * (1 + Fraction(1, 2 ** 40))
+    # the joint ball: the tolerance widened by the representation errors of both sides (the curves'
+    # delta and the rounding of the joint point)
+    radius = tolerance + 2 * max(deltas) + 2 * math.sqrt(3.0) * math.ulp(float(np.max(np.abs(point))) or 1e-300)
     for (edge, a, b), at_start, side in ((p, p_start, sides[0]), (q, q_start, sides[1])):
         curve = model.edges[edge].curve
         piece = curve.subcurve(a, b)
-        d = sum(u * v for u, v in zip(n, x)) + side * e * Fraction(float(np.linalg.norm(w)))
+        d = sum(u * v for u, v in zip(n, x)) + side * e
         try:
             roots = section_roots(piece, n, d)
         except PlaneNurbsNotCertified:
@@ -223,7 +233,7 @@ def _joint_ok(model, p, p_start, q, q_start, point, w, tolerance) -> bool:
         lo, hi = a + near[0] * (b - a), a + near[1] * (b - a)
         lower, upper = curve.bounds(min(lo, hi), max(lo, hi))
         corners = np.array([[lower[k] if (index >> k) & 1 == 0 else upper[k] for k in range(3)] for index in range(8)])
-        if float(np.max(np.linalg.norm(corners - point, axis=1))) > tolerance:
+        if float(np.max(np.linalg.norm(corners - point, axis=1))) > radius:
             return False
     return True
 
@@ -416,9 +426,15 @@ def validate_plane_section_face(model, face_id: int) -> list[str]:
                 highs.append(high)
     extent = float(np.linalg.norm(np.max(highs, axis=0) - np.min(lows, axis=0)))
     residual = model.tolerance.effective_surface_residual(extent)
-    plane_origin = np.asarray(plane.origin, dtype=float)
-    if float(np.max(np.abs((vertices - plane_origin) @ frame.normal), initial=0.0)) > residual:
-        return [f"face {face_id} boundary is inconsistent with its explicit surface"]
+    # exact residuals ((n . (V - O))**2 <= r**2 |n|**2 in rationals of the doubles): a far plane origin
+    # cancelled the float residual (review B1-P4b round 3)
+    n_exact = _cross(_exact(plane.u_vector), _exact(plane.v_vector))
+    nn = sum(value * value for value in n_exact)
+    o_exact = _exact(plane.origin)
+    limit = Fraction(float(residual)) ** 2 * nn
+    for vertex in vertices:
+        if sum(a * (b - c) for a, b, c in zip(n_exact, _exact(vertex), o_exact)) ** 2 > limit:
+            return [f"face {face_id} boundary is inconsistent with its explicit surface"]
     tolerance = model.tolerance.effective_length(extent)
     # pairwise trim certificates (adjacent edges share their joint vertex)
     items = [(index, position, item) for index, loop in enumerate(loops) for position, item in enumerate(loop)]
