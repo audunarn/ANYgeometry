@@ -818,30 +818,111 @@ def plane_faces(model, first_id: int, second_id: int, tolerance: float, work: Wo
                         return None
     except PlaneNurbsNotCertified:
         return None
-    # the boundaries reach the other plane only at shared vertices and along shared edges; the faces'
-    # interiors can still cross along the planes' intersection line between such contacts (review B1-P5
-    # round 1: two diamonds sharing two vertices): one face's stretches of that line between consecutive
-    # contacts must be shared edges or certified outside it (ray parity)
-    shared_edges = edges[0] & edges[1]
-    for index, face in enumerate((first, second)):
-        if _line_stretches_outside(model, face, vertices[0] & vertices[1], shared_edges, n1, n2, tolerance):
-            return True
-    return None
-
-
-def _line_stretches_outside(model, face, contact_vertices, shared_edges, n1, n2, tolerance) -> bool:
-    from .section_faces import _Frame, _inside
-    direction = np.asarray([float(v) for v in _cross(n1, n2)])
-    points = sorted(((float(direction @ model.vertices[v].position), v) for v in contact_vertices))
-    spans = {frozenset((model.edges[e].start, model.edges[e].end)) for e in shared_edges}
-    frame = _Frame(face.surface, model.vertices[model.oriented_start_vertex(face.loop[0])].position)
-    for (_s0, v0), (_s1, v1) in zip(points, points[1:]):
-        if frozenset((v0, v1)) in spans:
-            continue                                            # a shared edge
-        middle = .5 * (model.vertices[v0].position + model.vertices[v1].position)
-        if _inside(model, face.loop, middle, frame, tolerance) is not False:
-            return False
+    # the faces' interiors can cross along the planes' intersection line L (review B1-P5 rounds 1-2):
+    # each face's inside stretches of L come from where its boundary actually crosses the other plane
+    # (exact line parameters, isolated section roots); the stretches inside both faces must lie on
+    # shared edges or be no longer than the tolerance (a joint)
+    direction = np.asarray([float(v) for v in _cross(n1, n2)], dtype=float)
+    direction /= float(np.linalg.norm(direction))
+    shared_spans = []
+    for edge_id in edges[0] & edges[1]:
+        edge = model.edges[edge_id]
+        s0, s1 = (float(direction @ model.vertices[v].position) for v in (edge.start, edge.end))
+        shared_spans.append((min(s0, s1) - tolerance, max(s0, s1) + tolerance))
+    insides = []
+    for own, other in ((first, second), (second, first)):
+        stretches = _inside_stretches(model, own, other, direction, tolerance, shared_spans)
+        if stretches is None:
+            return None
+        insides.append(stretches)
+    for lo_a, hi_a in insides[0]:
+        for lo_b, hi_b in insides[1]:
+            lo, hi = max(lo_a, lo_b), min(hi_a, hi_b)
+            if hi - lo <= tolerance:
+                continue
+            if not any(span_lo <= lo and hi <= span_hi for span_lo, span_hi in shared_spans):
+                return None
     return True
+
+
+def _inside_stretches(model, face, other, direction, tolerance, shared_spans=()):
+    """The stretches ``(s0, s1)`` (``s = direction . X``) of the planes' intersection line inside ``face``:
+    the line's crossings with the face's boundary (straight edges: exact parameters; section edges:
+    isolated roots on the other plane; an edge lying on the line contributes its ends), the stretches
+    between consecutive crossings classified by ray parity at their midpoints; ``None`` if undecided.
+    Stretches within ``shared_spans`` (on shared edges, where overlap is allowed) count as inside
+    unclassified: their midpoints lie on the boundary."""
+    from .branch_predicates import section_roots
+    from .section_faces import _Frame, _inside
+    n = _cross(_ex(other.surface.u_vector), _ex(other.surface.v_vector))
+    d = _dot(n, _ex(other.surface.origin))
+    values = []
+    for loop in (face.loop,) + tuple(face.holes):
+        for item in loop:
+            edge = model.edges[item.edge]
+            if isinstance(edge.curve, Straight):
+                a, b = _ex(model.vertices[edge.start].position), _ex(model.vertices[edge.end].position)
+                fa, fb = _dot(n, a) - d, _dot(n, b) - d
+                if fa == 0 and fb == 0:
+                    values += [float(direction @ model.vertices[v].position) for v in (edge.start, edge.end)]
+                elif (fa <= 0 <= fb) or (fb <= 0 <= fa):
+                    r = fa / (fa - fb)
+                    point = [x + r * (y - x) for x, y in zip(a, b)]
+                    values.append(float(direction @ np.asarray([float(v) for v in point])))
+            elif isinstance(edge.curve, PlaneNurbsCurve):
+                try:
+                    roots = section_roots(edge.curve, n, d)
+                except PlaneNurbsNotCertified:
+                    return None
+                for root in roots:
+                    centre = .5 * (np.asarray(root.lower) + np.asarray(root.upper))
+                    if not root.isolated:
+                        # an unresolved root at the edge's end (a corner on the other plane): that vertex
+                        ends = [model.vertices[v].position for v in (edge.start, edge.end)]
+                        corners = np.array([[root.lower[k] if (i >> k) & 1 == 0 else root.upper[k] for k in range(3)]
+                                            for i in range(8)])
+                        near = [end for end in ends if float(np.max(np.linalg.norm(corners - end, axis=1))) <= tolerance]
+                        if not near:
+                            return None
+                        centre = near[0]
+                    values.append(float(direction @ centre))
+            else:
+                return None
+    values = sorted(values)
+    frame = _Frame(face.surface, model.vertices[model.oriented_start_vertex(face.loop[0])].position)
+    # a point of the line at parameter s: on both planes; anchor from any crossing point
+    anchor = _line_anchor(face, other, direction)
+    if anchor is None:
+        return None
+    stretches = []
+    for s0, s1 in zip(values, values[1:]):
+        if s1 - s0 <= tolerance:
+            continue
+        if any(lo <= s0 and s1 <= hi for lo, hi in shared_spans):
+            stretches.append((s0, s1))
+            continue
+        middle = anchor + (.5 * (s0 + s1) - float(direction @ anchor)) * direction
+        inside = _inside(model, face.loop, middle, frame, tolerance)
+        if inside is None:
+            return None
+        if inside:
+            stretches.append((s0, s1))
+    return stretches
+
+
+def _line_anchor(first, second, direction):
+    """A point on both planes (least squares of the two plane equations and ``direction . X = 0``)."""
+    rows, rhs = [], []
+    for face in (first, second):
+        normal = np.cross(face.surface.u_vector, face.surface.v_vector)
+        rows.append(normal)
+        rhs.append(float(normal @ np.asarray(face.surface.origin, dtype=float)))
+    rows.append(direction)
+    rhs.append(0.0)
+    try:
+        return np.linalg.solve(np.asarray(rows, dtype=float), np.asarray(rhs, dtype=float))
+    except np.linalg.LinAlgError:
+        return None
 
 
 def _cross(a, b):

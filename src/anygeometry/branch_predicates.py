@@ -587,28 +587,43 @@ def _plane_normal(curve: PlaneNurbsCurve):
     return m
 
 
+JOINT_BALL = 8      # radius of a certified joint's departure stretch, in tolerances (see _prefix_within)
+
+
 def _prefix_within(piece, at_start: bool, p, w, tol) -> bool:
-    """The part of a monotone piece next to its joint end where ``w . (P - p) <= 0`` (where crossings of a
-    segment departing along ``-w`` can lie) is within ``2 tol`` of ``p`` (review B1-P5 round 1: monotone
-    departure alone bounds the crossings to a slab, not to the joint ball). Bisection on enclosures."""
+    """The part of a monotone piece next to its joint end where ``w . (P - p) <= |w| tol`` (where contacts
+    with a segment departing along ``-w`` can lie) is within ``JOINT_BALL tol`` of ``p`` (review B1-P5
+    round 1: monotone departure alone bounds the contacts to a slab, not to the joint ball).
+
+    The ball is the joint's departure stretch: two branches meeting at an angle ``theta`` stay within
+    ``tol`` of each other over about ``tol / sin(theta / 2)``, so the fixed ball admits departure angles
+    down to about 15 degrees; flatter joints are refused (review B1-P5 round 2)."""
     wx = [Fraction(float(value)) for value in w]
     near, far = (0.0, 1.0) if at_start else (1.0, 0.0)
+    reach = tol * Fraction(float(np.linalg.norm(w))) * (1 + Fraction(1, 2 ** 20))
 
     def corners(a, b):
         lower, upper = piece.bounds(min(a, b), max(a, b))
         return [[Fraction(lower[k] if (i >> k) & 1 == 0 else upper[k]) for k in range(3)] for i in range(8)]
     # at a joint the prefix is tiny (the curve's end sits on p): candidate prefixes of 2**-k of the piece,
     # each certified (the rest beyond, the prefix inside the joint ball), instead of a full bisection
-    for k in (36, 44, 52):
+    # the cut must sit beyond |w| tol in w yet within the ball: candidate chord lengths of 1.2-7 tol
+    # (parameter fractions from the piece's chord; each candidate is certified, failure only refuses)
+    chord = float(np.linalg.norm(np.asarray(piece.evaluate(far)) - np.asarray(piece.evaluate(near))))
+    if not chord > 0:
+        return False
+    for factor in (1.2, 1.6, 2.2, 3.0, 4.0, 5.3, 7.0):
         charge_box()
-        cut = near + (far - near) * 2.0 ** -k
+        cut = near + (far - near) * min(1.0, factor * float(tol) / chord)
         # the piece is certified monotone in w away from the joint: beyond the cut its offset is at least
         # the offset at the cut, so the enclosure of that one point decides
-        beyond = min(sum(x * (c - y) for x, c, y in zip(wx, corner, p)) for corner in corners(cut, cut)) > 0
+        # contacts lie within tol of the segment, whose points have w . (Q - p) <= 0: a contact P has
+        # w . (P - p) <= |w| tol (review B1-P5 round 2: projected crossings of tolerance-coplanar segments)
+        beyond = min(sum(x * (c - y) for x, c, y in zip(wx, corner, p)) for corner in corners(cut, cut)) > reach
         if not beyond:
             continue
-        if all(sum((c - y) ** 2 for c, y in zip(corner, p)) <= 4 * tol * tol for corner in corners(near, cut)):
-            return True
+        ball = JOINT_BALL * tol
+        return all(sum((c - y) ** 2 for c, y in zip(corner, p)) <= ball * ball for corner in corners(near, cut))
     return False
 
 

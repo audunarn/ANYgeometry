@@ -154,6 +154,50 @@ def test_a_crossing_beyond_the_joint_ball_is_not_a_joint():
     assert certify_line_section(curve, origin, (1., 0., 0.), [origin], 1e-4) is not True
 
 
+
+def _section_side(plane, normal, start, end):
+    """The section of ``plane`` through a bilinear strip extruding ``start -> end`` by +-1 along ``normal``."""
+    from anygeometry.nurbs import NurbsSurface
+    from anygeometry.support_curves import PlaneNurbsCurve
+    rows = tuple(tuple(tuple(x + sign * n for x, n in zip(point, normal)) for sign in (-1., 1.))
+                 for point in (start, end))
+    curve = PlaneNurbsCurve.from_plane(plane, NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.), rows), 0)
+    first = curve.evaluate(0.)
+    if sum((a - b) ** 2 for a, b in zip(first, start)) > sum((a - b) ** 2 for a, b in zip(first, end)):
+        curve = curve.subcurve(1., 0.)
+    return curve
+
+
+def test_faces_meeting_beyond_their_only_shared_vertex_are_reported():
+    from anygeometry import GeometryModel
+    # review B1-P5 round 2: triangles in z = 0 and y = 0 whose geometric apexes (0,5e-10,0) and (0,0,5e-10)
+    # share the vertex (0,0,0); their interiors cross along the x-axis over about +-5e-4, with no shared edge
+    model = GeometryModel()
+    apex = model.add_point(0., 0., 0.)
+    flat = Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.))
+    left, right = model.add_point(-1., -1e-6, 0.), model.add_point(1., -1e-6, 0.)
+    model.add_face([model.add_curve(apex, left, _section_side(flat, (0., 0., 1.), (0., 5e-10, 0.), (-1., -1e-6, 0.))),
+                    model.add_line(left, right),
+                    model.add_curve(right, apex, _section_side(flat, (0., 0., 1.), (1., -1e-6, 0.), (0., 5e-10, 0.)))],
+                   surface=flat)
+    upright = Plane((0., 0., 0.), (1., 0., 0.), (0., 0., 1.))
+    left, right = model.add_point(-2., 0., -1e-6), model.add_point(2., 0., -1e-6)
+    model.add_face([model.add_curve(apex, left, _section_side(upright, (0., 1., 0.), (0., 0., 5e-10), (-2., 0., -1e-6))),
+                    model.add_line(left, right),
+                    model.add_curve(right, apex, _section_side(upright, (0., 1., 0.), (2., 0., -1e-6), (0., 0., 5e-10)))],
+                   surface=upright)
+    assert not model.strict_audit().clean
+
+
+def test_a_tolerance_coplanar_segment_does_not_make_a_far_contact_a_joint():
+    from anygeometry.branch_predicates import certify_line_section
+    # review B1-P5 round 2: C(t) = (t, 1e-6 t - 5e-9, 0) against the segment (0,0,5e-5) -> (1,0,9e-5), tol 1e-4:
+    # projected contacts about 0.005 (50 tolerances) from the joint
+    flat = Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.))
+    curve = _section_side(flat, (0., 0., 1.), (0., -5e-9, 0.), (1., 1e-6 - 5e-9, 0.))
+    p = (0., 0., 5e-5)
+    assert certify_line_section(curve, p, (1., 0., 9e-5), [p], 1e-4) is not True
+
 def test_volume_quadrature_splits_at_knots():
     from anygeometry import GeometryModel
     from anygeometry.nurbs import CurveOnSurface, NurbsCurve, NurbsSurface
