@@ -607,6 +607,8 @@ def _joint_line_patch(line, vertex, rect, surface, chart_point, tol, angular, wo
 
 
 # ------------------------------------------------------------------ public classifiers
+# Contract (a) for face pairs too (owner 2026-10-15, P4e): points of two faces closer than the tolerance
+# must lie in the joint band (within JOINT_BALL tolerances of a shared vertex or edge).
 
 
 def edge_edge(model, first_id: int, second_id: int, tolerance: float, work: Work | None = None,
@@ -771,10 +773,13 @@ def face_face(model, first_id: int, second_id: int, tolerance: float, work: Work
 
 
 def _outside_plane_face(model, face, piece, tolerance, work) -> bool:
-    """A section piece lying in a plane face's plane is outside the face (up to its end points): it meets
-    the face's straight boundary edges only within the tolerance of their end vertices (P4a line
-    certificate, the piece's ends are where it leaves the shared edges), and one interior point is outside
-    the outer loop by ray parity (P4b). Other boundary kinds refuse."""
+    """A section piece lying in a plane face's plane is outside the face except in the joint balls at its
+    ends (contract (a) for face pairs, P4e-2): it comes within the tolerance of the face's straight
+    boundary edges only in certified joint departure stretches (P4a line certificate with the joint ball
+    of ``JOINT_BALL`` tolerances; the piece's ends are where it leaves the shared edges), so away from
+    those balls it is wholly inside or outside, and one interior point is outside the outer loop by ray
+    parity (P4b). Other boundary kinds refuse. (A piece entering the face within a corner's ball, e.g. by
+    a sub-tolerance offset of the corner, is a joint contact.)"""
     from .branch_predicates import certify_line_section
     from .section_faces import _Frame, _inside
     ends = [np.asarray(point, dtype=float) for point in piece.evaluate(np.array([0.0, 1.0]))]
@@ -805,11 +810,15 @@ def _outside_plane_face(model, face, piece, tolerance, work) -> bool:
 
 def plane_faces(model, first_id: int, second_id: int, tolerance: float, work: Work | None = None,
                 angular: float = 1e-10):
-    """Two plane faces (B1-P5b; at least one with section edges): every boundary edge of each face that is
-    not shared with the other is certified against the other's plane (strict contract: departure at shared
-    vertices, else farther than the tolerance). A planar region whose non-shared boundary keeps off the
-    other plane meets it only along the shared edges, so the faces' intersection is their shared edges
-    (option-b reading for face pairs: the band along a shared edge follows from the edges' departure)."""
+    """Two plane faces (B1-P5b; at least one with section edges), contract (a) with the joint band (owner
+    2026-10-15, P4e-1). Every boundary edge of each face that is not shared with the other is certified
+    against the other's plane (departure at shared vertices within the joint ball, else farther than the
+    tolerance). Then each face meets the other plane's tolerance slab, away from those joint stretches,
+    exactly in its inside stretches of the planes' line L times the slab's strip (its boundary does not
+    enter the slab there), so the faces' points closer than the tolerance lie where their stretches come
+    within the tolerance of each other. Those places must lie in the joint band: a shared edge's span or a
+    shared vertex's ball (near L), widened by ``JOINT_BALL`` tolerances; along a shared edge the
+    dihedral angle must keep the band within the ball (``sin theta >= 1 / JOINT_BALL``, exact)."""
     from .section_faces import _same_plane, _cross, _exact
     from .surfaces import Plane
     work = work or Work()
@@ -842,45 +851,67 @@ def plane_faces(model, first_id: int, second_id: int, tolerance: float, work: Wo
                         return None
     except PlaneNurbsNotCertified:
         return None
-    # the faces' interiors can cross along the planes' intersection line L (review B1-P5 rounds 1-2):
     # each face's inside stretches of L come from where its boundary actually crosses the other plane
-    # (exact line parameters, isolated section roots); the stretches inside both faces must lie on
-    # shared edges (exact face intersection: only rounding slack, review B1-P5 round 3: spans widened
-    # by the tolerance let the faces overlap past a shared edge's end)
+    # (exact line parameters, certified section roots; uncertain root boxes count as inside)
     direction = np.asarray([float(v) for v in _cross(n1, n2)], dtype=float)
     direction /= float(np.linalg.norm(direction))
     scale = max([1.0] + [float(np.max(np.abs(model.vertices[v].position))) for v in vertices[0] | vertices[1]])
-    slack = 2.0 ** -40 * scale
-    shared_spans = []
-    for edge_id in edges[0] & edges[1]:
+    slack = 2.0 ** -40 * scale                                  # rounding of the s values only
+    tol = float(tolerance)
+    reach = JOINT_BALL * tol
+    shared_edges = edges[0] & edges[1]
+    if shared_edges:
+        # the band along a shared edge: points within the tolerance of the other face lie within
+        # tol / sin(theta) of the edge; within the ball when sin(theta) >= 1 / JOINT_BALL
+        cross = _cross(n1, n2)
+        if _dot(cross, cross) * JOINT_BALL ** 2 < _dot(n1, n1) * _dot(n2, n2):
+            return None
+    anchor = _line_anchor(first, second, direction)
+    if anchor is None:
+        return None
+    joints = []                                                 # (s_lo, s_hi): the joint band along L
+    for edge_id in shared_edges:
         edge = model.edges[edge_id]
         s0, s1 = (float(direction @ model.vertices[v].position) for v in (edge.start, edge.end))
-        shared_spans.append((min(s0, s1) - slack, max(s0, s1) + slack))
+        joints.append((min(s0, s1) - reach, max(s0, s1) + reach))
+    for vertex in vertices[0] & vertices[1]:
+        position = model.vertices[vertex].position
+        offset = (position - anchor) - float((position - anchor) @ direction) * direction
+        if float(np.linalg.norm(offset)) <= reach:              # the vertex's ball reaches L
+            s = float(direction @ position)
+            joints.append((s - reach, s + reach))
     insides = []
     for own, other in ((first, second), (second, first)):
-        stretches = _inside_stretches(model, own, other, direction, tolerance, slack, shared_spans)
+        stretches = _inside_stretches(model, own, other, direction, tolerance, slack,
+                                      joints)
         if stretches is None:
             return None
         insides.append(stretches)
+    merged = []
+    for lo, hi in sorted(joints):
+        if merged and lo <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], hi)
+        else:
+            merged.append([lo, hi])
     for lo_a, hi_a in insides[0]:
         for lo_b, hi_b in insides[1]:
-            lo, hi = max(lo_a, lo_b), min(hi_a, hi_b)
-            if hi - lo <= slack:
-                continue
-            if not any(span_lo <= lo and hi <= span_hi for span_lo, span_hi in shared_spans):
-                return None
+            lo, hi = max(lo_a, lo_b) - tol, min(hi_a, hi_b) + tol
+            if hi < lo:
+                continue                                        # farther apart than the tolerance along L
+            if not any(j_lo <= lo and hi <= j_hi for j_lo, j_hi in merged):
+                return None                                     # contact outside the joint band
     return True
 
 
 def _inside_stretches(model, face, other, direction, tolerance, slack, shared_spans=()):
     """The stretches ``(s0, s1)`` (``s = direction . X``) of the planes' intersection line inside ``face``:
     the line's crossings with the face's boundary (straight edges: exact parameters; section edges:
-    isolated roots on the other plane, or an unresolved root within ``slack`` of the edge's end vertex;
-    an edge lying on the line contributes its ends), the stretches between consecutive crossings
+    certified roots on the other plane, an unresolved root's box as an uncertain stretch taken as
+    inside; an edge lying on the line contributes its ends), the stretches between consecutive crossings
     classified by ray parity at their midpoints; ``None`` if undecided. Stretches no longer than
     ``slack`` (rounding) are dropped.
-    Stretches within ``shared_spans`` (on shared edges, where overlap is allowed) count as inside
-    unclassified: their midpoints lie on the boundary."""
+    Stretches within ``shared_spans`` (the joint band, where contact is allowed) count as inside
+    unclassified: their midpoints may lie within the tolerance of the boundary."""
     from .branch_predicates import section_roots
     from .section_faces import _Frame, _inside
     n = _cross(_ex(other.surface.u_vector), _ex(other.surface.v_vector))
@@ -916,14 +947,14 @@ def _inside_stretches(model, face, other, direction, tolerance, slack, shared_sp
                             values += [float(reach.min()), float(reach.max())]
                             continue
                     else:
-                        # an unresolved root at the edge's end (a corner on the other plane): that vertex
-                        ends = [model.vertices[v].position for v in (edge.start, edge.end)]
-                        corners = np.array([[root.lower[k] if (i >> k) & 1 == 0 else root.upper[k] for k in range(3)]
-                                            for i in range(8)])
-                        near = [end for end in ends if float(np.max(np.linalg.norm(corners - end, axis=1))) <= slack]
-                        if not near:
-                            return None
-                        centre = near[0]
+                        # an unresolved root (e.g. a corner on the other plane): the crossing lies in its
+                        # box; the box's stretch of L is uncertain and taken as inside (P4e-1)
+                        box = np.array([[root.lower[k] if (i >> k) & 1 == 0 else root.upper[k] for k in range(3)]
+                                        for i in range(8)])
+                        reach = box @ direction
+                        uncertain.append((float(reach.min()), float(reach.max())))
+                        values += [float(reach.min()), float(reach.max())]
+                        continue
                     values.append(float(direction @ centre))
             else:
                 return None

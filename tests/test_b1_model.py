@@ -212,21 +212,37 @@ def test_a_flat_crossing_far_from_the_shared_vertex_is_reported_by_the_audit():
     assert not model.strict_audit().clean
 
 
-def test_faces_overlapping_past_the_end_of_their_shared_edge_are_reported():
+def _overlap_past_shared_end(shift=0., low_end=(0., -1., 0.), down_end=(0., 0., -1.)):
+    """Triangles in z = 0 and y = 0 sharing A -> B = (-1,0,0) -> (0,0,0) (shifted along x); their sections
+    from B start at (9e-10,1e-10,0) and (9e-10,0,1e-10), so the interiors overlap past B along the x-axis."""
     from anygeometry import GeometryModel
-    # review B1-P5 round 3: triangles in z = 0 and y = 0 sharing A -> B = (-1,0,0) -> (0,0,0); their sections
-    # from B start at (9e-10,1e-10,0) and (9e-10,0,1e-10), so the interiors overlap past B along the x-axis
     model = GeometryModel()
-    a, b = model.add_point(-1., 0., 0.), model.add_point(0., 0., 0.)
+    a, b = model.add_point(shift - 1., 0., 0.), model.add_point(shift, 0., 0.)
     shared = model.add_line(a, b)
-    flat = Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.))
-    low = model.add_point(0., -1., 0.)
-    model.add_face([shared, model.add_curve(b, low, _section_side(flat, (0., 0., 1.), (9e-10, 1e-10, 0.), (0., -1., 0.))),
+    flat = Plane((shift, 0., 0.), (1., 0., 0.), (0., 1., 0.))
+    low = model.add_point(shift + low_end[0], *low_end[1:])
+    model.add_face([shared, model.add_curve(b, low, _section_side(flat, (0., 0., 1.), (shift + 9e-10, 1e-10, 0.),
+                                                                  (shift + low_end[0], *low_end[1:]))),
                     model.add_line(low, a)], surface=flat)
-    upright = Plane((0., 0., 0.), (1., 0., 0.), (0., 0., 1.))
-    down = model.add_point(0., 0., -1.)
-    model.add_face([shared, model.add_curve(b, down, _section_side(upright, (0., 1., 0.), (9e-10, 0., 1e-10), (0., 0., -1.))),
+    upright = Plane((shift, 0., 0.), (1., 0., 0.), (0., 0., 1.))
+    down = model.add_point(shift + down_end[0], *down_end[1:])
+    model.add_face([shared, model.add_curve(b, down, _section_side(upright, (0., 1., 0.), (shift + 9e-10, 0., 1e-10),
+                                                                   (shift + down_end[0], *down_end[1:]))),
                     model.add_line(down, a)], surface=upright)
+    return model
+
+
+@pytest.mark.parametrize("shift", [0., 1024.])
+def test_faces_overlapping_within_the_joint_band_past_a_shared_end_are_clean(shift):
+    # review B1-P5 rounds 3-4: the overlap (about 9e-10, within the tolerance) past the shared end B lies in
+    # B's joint band; under the owner's contract (a) for face pairs (P4e, 2026-10-15) this is a joint contact
+    assert _overlap_past_shared_end(shift).strict_audit().clean
+
+
+def test_faces_overlapping_beyond_the_joint_band_are_reported():
+    # both sections leave B at a shallow angle: the faces overlap along the x-axis to x ~ 1e-7 (100
+    # tolerances), beyond the joint band
+    model = _overlap_past_shared_end(0., low_end=(1., -1e-3, 0.), down_end=(1., 0., -1e-3))
     assert not model.strict_audit().clean
 
 
@@ -354,3 +370,48 @@ def test_face_iterators_are_accepted(b1):
     from anygeometry.shell_volume import enclosed_volume
     model, faces = b1
     assert enclosed_volume(model, iter(faces.values()))["volume"] > 0
+
+
+def _corner_entry(c_point=(.5, -1., 0.)):
+    """A deck face in z = 0 and a vertical NURBS face y = -a (a = 5e-10, chart z in [-1, 0]) sharing the
+    section A -> B; the NURBS face's other section B -> D also lies in z = 0 and enters the deck where the
+    deck edge B -> C crosses y = -a (review B1-P5 round 4 finding 2)."""
+    from anygeometry import GeometryModel
+    from anygeometry.b1_example import _parameter
+    from anygeometry.nurbs import CurveOnSurface, NurbsCurve, NurbsSurface
+    from anygeometry.support_curves import PlaneNurbsCurve
+    a = 5e-10
+    surface = NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.),
+                           (((-1., -a, -1.), (-1., -a, 1.)), ((1., -a, -1.), (1., -a, 1.))))
+    deck = Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.))
+    section = PlaneNurbsCurve.from_plane(deck, surface, 0)
+    if section.evaluate(0.)[0] > 0:
+        section = section.subcurve(1., 0.)
+    t_b = _parameter(section, (1, 0, 0), 0.)
+    model = GeometryModel()
+    va, vd = model.add_point(*section.evaluate(0.)), model.add_point(*section.evaluate(1.))
+    vb = model.add_point(0., 0., 0.)
+    shared = model.add_curve(va, vb, section.subcurve(0., t_b))
+    onward = model.add_curve(vb, vd, section.subcurve(t_b, 1.))
+    vd2, va2 = model.add_point(1., -a, -1.), model.add_point(-1., -a, -1.)
+
+    def segment(start, end, p, q):
+        return model.add_curve(start, end, CurveOnSurface(surface, NurbsCurve(1, (0., 0., 1., 1.), (p, q))))
+    model.add_face([shared, onward, segment(vd, vd2, (1., .5), (1., 0.)), segment(vd2, va2, (1., 0.), (0., 0.)),
+                    segment(va2, va, (0., 0.), (0., .5))], surface=surface)
+    vc, ve, vf = model.add_point(*c_point), model.add_point(1., -2., 0.), model.add_point(-1., -2., 0.)
+    model.add_face([shared, model.add_line(vb, vc), model.add_line(vc, vd), model.add_line(vd, ve),
+                    model.add_line(ve, vf), model.add_line(vf, va)], surface=deck)
+    return model
+
+
+def test_a_section_entering_a_plane_face_within_the_corner_band_is_clean():
+    # the unshared section enters the deck for 0 < x < a / 2 = 2.5e-10, next to the shared corner B: a joint
+    # contact under contract (a) for face pairs (P4e, owner 2026-10-15)
+    assert _corner_entry().strict_audit().clean
+
+
+def test_a_section_entering_a_plane_face_beyond_the_corner_band_is_reported():
+    # the deck edge B -> C nearly parallel to the section (slope 1e-3): the section runs inside the deck
+    # to x = a / 1e-3 = 5e-7, about 500 tolerances from B
+    assert not _corner_entry((.5, -5e-4, 0.)).strict_audit().clean
