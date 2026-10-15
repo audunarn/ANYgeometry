@@ -442,6 +442,9 @@ def _engine(curve, n, d, classify, max_depth, patches=None):
                 sign_middle = view.sign_at(middle)
                 if sign_middle != 0:
                     break
+            else:
+                # no decided sign (e.g. a piece on a chart line): halve (the last fraction shrank by 3/4)
+                middle, sign_middle = (s_from + s_to) / 2, 0
             stack.append((middle, s_to, sign_middle, sign_to, depth + 1, x_range))
             stack.append((s_from, middle, sign_from, sign_middle, depth + 1, x_range))
 
@@ -613,6 +616,7 @@ def certify_line_section(curve: PlaneNurbsCurve, start, end, shared=(), toleranc
     if any((sum(x * y for x, y in zip(m, end_point)) - d1) ** 2 > flat * flat * mm for end_point in (a, b)):
         return None
     points = [[Fraction(float(value)) for value in point] for point in shared]
+    a_shared, b_shared = a in points, b in points
     ee = sum(value * value for value in e)
     crossing = [False]
 
@@ -656,7 +660,9 @@ def certify_line_section(curve: PlaneNurbsCurve, start, end, shared=(), toleranc
         lambdas = [sum((c - x) * y for c, x, y in zip(corner, a, e)) / ee for corner in box]
         # beyond an end the nearest segment point is that end: cleared only farther than the
         # tolerance from it (review B1-P4a round 3: a contact 5e-5 past the end was cleared)
-        if (max(lambdas) < 0 and box_distance_squared(lower, upper, a) > tol * tol) or                 (min(lambdas) > 1 and box_distance_squared(lower, upper, b) > tol * tol):
+        # beyond an end that is a shared joint, contacts are joint contacts (B1-P4c round 1)
+        if (max(lambdas) < 0 and (a_shared or box_distance_squared(lower, upper, a) > tol * tol)) or \
+                (min(lambdas) > 1 and (b_shared or box_distance_squared(lower, upper, b) > tol * tol)):
             return "done"
         signs = (context.sign_from, context.sign_to)
         if 0 not in signs and context.view.monotone(context.s_range, context.x_range):

@@ -140,3 +140,49 @@ def test_the_trimmed_bow_round_trips():
     document = to_dict(build.model)
     restored = from_dict(document)
     assert to_dict(restored) == document and restored.faces[face].loop == build.model.faces[face].loop
+
+
+# ------------------------------------------------------------------ review B1-P4c round 1
+
+
+def test_a_hole_sharing_the_outer_boundary_is_refused():
+    from dataclasses import replace
+    from anygeometry.entities import OrientedEdge
+    surface = bow_surface()
+    build = Builder(surface)
+    outer = [build.segment((0., 0.), (.4, 0.)), build.segment((.4, 0.), (.6, 0.)), build.segment((.6, 0.), (1., 0.)),
+             build.segment((1., 0.), (1., .75)), build.section(deck_edge(surface), (1., .75), (0., .75)),
+             build.segment((0., .75), (0., 0.))]
+    face = build.model.add_face(outer, surface=surface)
+    model = build.model
+    corners = [(.4, .2), (.4, 0.), (.6, 0.), (.6, .2)]
+    points = [model.add_point(*map(float, surface.exact_point(*c))) for c in corners]       # distinct vertex IDs
+    hole = [model.add_curve(points[i], points[(i + 1) % 4], segment(surface, corners[i], corners[(i + 1) % 4]))
+            for i in range(4)]
+    with pytest.raises(GeometryError, match="intersect"):
+        with model.transaction():
+            model._put_entity("face", replace(model.faces[face], holes=(tuple(OrientedEdge(e, True) for e in hole),)))
+
+
+def test_pcurve_joints_stay_exact_next_to_sections():
+    surface = bow_surface()
+    build = Builder(surface)
+    model = build.model
+    corner = build.vertex((1., 0.))
+    right = model.add_curve(corner, build.vertex((1., .75)), segment(surface, (1., 1e-12), (1., .75)))
+    edges = [build.segment((0., 0.), (1., 0.)), right,
+             build.section(deck_edge(surface), (1., .75), (0., .75)), build.segment((0., .75), (0., 0.))]
+    with pytest.raises(GeometryError, match="not continuous"):
+        model.add_face(edges, surface=surface)
+
+
+def test_a_collinear_segment_continuing_a_section_validates():
+    surface = bow_surface()
+    build = Builder(surface)
+    half = deck_edge(surface).subcurve(0., .5)                       # (1, 3/4) -> (1/2, 3/4)
+    middle = tuple(float(value) for value in half.chart(1.))
+    edges = [build.segment((0., 0.), (1., 0.)), build.segment((1., 0.), (1., .75)),
+             build.section(half, (1., .75), middle), build.segment(middle, (0., .75)),
+             build.segment((0., .75), (0., 0.))]
+    face = build.model.add_face(edges, surface=surface)
+    assert validate_nurbs_section_face(build.model, face) == []

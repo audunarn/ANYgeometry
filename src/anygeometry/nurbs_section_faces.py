@@ -102,6 +102,15 @@ def _rect_gap2(first, second):
     return du * du + dv * dv
 
 
+def _rect_spread2(first, second):
+    """The largest squared distance between a point of one rectangle and a point of the other."""
+    (a0, a1), (b0, b1) = first
+    (c0, c1), (d0, d1) = second
+    du = max(abs(a0 - c1), abs(a1 - c0))
+    dv = max(abs(b0 - d1), abs(b1 - d0))
+    return du * du + dv * dv
+
+
 def _segment_distance2(point, p0, p1):
     e = (p1[0] - p0[0], p1[1] - p0[1])
     ee = e[0] * e[0] + e[1] * e[1]
@@ -128,22 +137,32 @@ def segment_section(curve: PlaneNurbsCurve, p0, p1, shared, tolerance):
     tol2 = Fraction(tolerance) ** 2
     e = (p1[0] - p0[0], p1[1] - p0[1])
     ee = e[0] * e[0] + e[1] * e[1]
+    shared_set = {tuple(p) for p in shared}
     crossing = [False]
 
     def classify(context) -> str:
-        low, high = context.g2_range()
-        if low == high == 0 and context.solid():
-            raise PlaneNurbsNotCertified("a section arc lies on the chart segment's line")
-        if low > 0 or high < 0:
-            return "done"
         rect = _context_rect(chart, context)
         corners = _corners(rect)
         if any(all((x - p[0]) ** 2 + (y - p[1]) ** 2 <= tol2 for x, y in corners) for p in shared):
             return "done"
         lambdas = [((x - p0[0]) * e[0] + (y - p0[1]) * e[1]) / ee for x, y in corners]
-        if (max(lambdas) < 0 and _rect_point_gap2(rect, p0) > tol2) or \
-                (min(lambdas) > 1 and _rect_point_gap2(rect, p1) > tol2):
+        # beyond an end the nearest segment point is that end: cleared when farther than the tolerance
+        # from it, or when that end is a shared joint (its contacts are joint contacts; review B1-P4c
+        # round 1: pieces straddling the joint ball's rim were never resolved)
+        if (max(lambdas) < 0 and (tuple(p0) in shared_set or _rect_point_gap2(rect, p0) > tol2)) or \
+                (min(lambdas) > 1 and (tuple(p1) in shared_set or _rect_point_gap2(rect, p1) > tol2)):
+            return "done"                       # also a piece on the segment's line beyond its ends
+        low, high = context.g2_range()
+        if low > 0 or high < 0:
             return "done"
+        if low == high == 0 and context.solid():
+            # a section piece on the segment's line, not beyond its ends nor at a joint: an overlap
+            # (review B1-P4c round 1: a collinear continuation is cleared above, not refused)
+            if all(_rect_point_gap2(rect, p) > tol2 for p in shared) and \
+                    all(_segment_distance2(corner, p0, p1) <= tol2 for corner in corners):
+                crossing[0] = True
+                return "done"
+            return "split"
         signs = (context.sign_from, context.sign_to)
         if 0 not in signs and context.view.monotone(context.s_range, context.x_range):
             if signs[0] == signs[1]:
@@ -370,11 +389,15 @@ def validate_nurbs_section_face(model, face_id: int) -> list[str]:
     tol2 = tolerance * tolerance
     ends = {(index, position): _ends(model, item, chart)
             for index, loop in enumerate(loops) for position, item in enumerate(loop)}
-    # chart continuity (the joint rule)
+    # chart continuity (the joint rule): exact between two pcurve ends; at a section end every point
+    # of its end-root rectangle within the chart tolerance of the other end (review B1-P4c round 1)
     for index, loop in enumerate(loops):
         for position in range(len(loop)):
             following = (position + 1) % len(loop)
-            if _rect_gap2(ends[(index, position)][1], ends[(index, following)][0]) > tol2:
+            end, start = ends[(index, position)][1], ends[(index, following)][0]
+            exact_pair = not any(isinstance(model.edges[loop[k].edge].curve, PlaneNurbsCurve)
+                                 for k in (position, following))
+            if (end != start) if exact_pair else _rect_spread2(end, start) > tol2:
                 result.append(f"face {face_id} loop {index} is not continuous in the chart at edge "
                               f"{loop[following].edge}")
     if result:
@@ -395,7 +418,9 @@ def validate_nurbs_section_face(model, face_id: int) -> list[str]:
             a, b = model.edges[first.edge], model.edges[second.edge]
             shared_ids = {a.start, a.end} & {b.start, b.end}
             shared = [located[v] for v in shared_ids if v in located]
-            verdict = _pair(model, a, b, chart, shared, shared_ids, tolerance)
+            count = len(loops[la])
+            neighbours = la == lb and (abs(pa - pb) == 1 or abs(pa - pb) == count - 1)
+            verdict = _pair(model, a, b, chart, shared, shared_ids, tolerance, neighbours)
             if verdict is True:
                 continue
             where = f"loop {la}" if la == lb else f"loops {la} and {lb}"
@@ -433,7 +458,7 @@ def validate_nurbs_section_face(model, face_id: int) -> list[str]:
     return result
 
 
-def _pair(model, a, b, chart, shared, shared_ids, tolerance):
+def _pair(model, a, b, chart, shared, shared_ids, tolerance, neighbours=False):
     first_section, second_section = isinstance(a.curve, PlaneNurbsCurve), isinstance(b.curve, PlaneNurbsCurve)
     if not first_section and not second_section:
         p0, p1 = a.curve.pcurve.exact_point(0), a.curve.pcurve.exact_point(1)
@@ -441,6 +466,8 @@ def _pair(model, a, b, chart, shared, shared_ids, tolerance):
         common = {tuple(p) for p in (p0, p1)} & {tuple(q) for q in (q0, q1)}
         if not common:
             return False if _segments_meet(p0, p1, q0, q1) else True
+        if not (neighbours and shared_ids and len(common) == 1):
+            return False                        # contact between non-neighbours (or a repeated segment)
         # neighbours: they may share only their joint (no fold back along one line)
         far_a = [p for p in (p0, p1) if tuple(p) not in common]
         far_b = [q for q in (q0, q1) if tuple(q) not in common]
