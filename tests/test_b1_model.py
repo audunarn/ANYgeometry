@@ -457,25 +457,118 @@ def test_a_steep_wall_on_a_deck_edge_is_clean():
     assert _deck_and_wall(_bernstein([-.1, 1.])).strict_audit().clean            # z = y - 0.1 (45 degrees)
 
 
-def test_a_shallow_wall_on_a_deck_edge_is_reported():
-    # z = 0.05 (y - 0.1): about 2.9 degrees, so points within the tolerance reach ~20 tolerances from the
-    # shared edge, beyond the joint band (P4e-3)
-    assert not _deck_and_wall(_bernstein([-.005, .05])).strict_audit().clean
+def _deck_and_surface(surface, deck_tail):
+    """A NURBS face on ``surface`` above its section with z = 0 (chart v from the section to 1) and a deck
+    polygon in z = 0 sharing that section A -> B, continuing B -> deck_tail... -> A."""
+    from anygeometry import GeometryModel
+    from anygeometry.nurbs import CurveOnSurface, NurbsCurve
+    from anygeometry.support_curves import PlaneNurbsCurve
+    deck = Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.))
+    section = PlaneNurbsCurve.from_plane(deck, surface, 0)
+    if section.evaluate(0.)[0] > section.evaluate(1.)[0]:
+        section = section.subcurve(1., 0.)
+    model = GeometryModel()
+    va, vb = model.add_point(*section.evaluate(0.)), model.add_point(*section.evaluate(1.))
+    shared = model.add_curve(va, vb, section)
+    (ua, wa), (ub, wb) = section.chart(0.), section.chart(1.)
+    corners = [model.add_point(*surface.evaluate(ub, 1.)), model.add_point(*surface.evaluate(ua, 1.))]
+
+    def segment(start, end, p, q_):
+        return model.add_curve(start, end, CurveOnSurface(surface, NurbsCurve(1, (0., 0., 1., 1.), (p, q_))))
+    model.add_face([shared, segment(vb, corners[0], (ub, wb), (ub, 1.)),
+                    segment(corners[0], corners[1], (ub, 1.), (ua, 1.)), segment(corners[1], va, (ua, 1.), (ua, wa))],
+                   surface=surface)
+    points = [vb] + [model.add_point(*p) for p in deck_tail] + [va]
+    model.add_face([shared] + [model.add_line(p, q) for p, q in zip(points, points[1:])], surface=deck)
+    return model
 
 
-def test_a_surface_touching_the_plane_away_from_the_section_fails_the_angle_band():
-    from fractions import Fraction
+def _ruled(heights, y=(0., 1.)):
+    """z = h(y) over x in [-1, 1] (Bernstein coefficients ``heights`` on y in ``y``)."""
     from anygeometry.nurbs import NurbsSurface
-    from anygeometry.section_audit import Work, _angle_band_clean
-    # z = 4 (y - 0.1)(y - 0.6)^2 + 5e-11: crosses z = 0 near y = 0.1 and comes within 5e-11 of it at y = 0.6
-    # without crossing; a model with this wall cannot be built (P1 refuses the near-tangent section), so the
-    # band predicate is checked directly (P4e-3)
-    power = [4 * -.1 * .36 + 5e-11, 4 * (.36 + 2 * .1 * .6), 4 * (-1.2 - .1), 4.]
-    heights = _bernstein(power)
-    surface = NurbsSurface(1, 3, (0., 0., 1., 1.), (0.,) * 4 + (1.,) * 4,
-                           tuple(tuple((x, j / 3, heights[j]) for j in range(4)) for x in (-1., 1.)))
-    plane = (Fraction(0), Fraction(0), Fraction(1))
-    assert not _angle_band_clean(surface, plane, Fraction(0), 1e-9, Work())
-    steep = NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.),
-                         (((-1., 0., -.1), (-1., 1., .9)), ((1., 0., -.1), (1., 1., .9))))
-    assert _angle_band_clean(steep, plane, Fraction(0), 1e-9, Work())
+    q = len(heights) - 1
+    return NurbsSurface(1, q, (0., 0., 1., 1.), (0.,) * (q + 1) + (1.,) * (q + 1),
+                        tuple(tuple((x, y[0] + (y[1] - y[0]) * j / q, heights[j]) for j in range(q + 1))
+                              for x in (-1., 1.)))
+
+
+def test_a_steep_wall_over_the_deck_is_clean():
+    # z = y - 0.1 over the deck y in [0.1, 0.9] (the faces form a 45-degree wedge): band ~1.4 tolerances
+    assert _deck_and_surface(_ruled([-.1, .9]), [(1., .9, 0.), (-1., .9, 0.)]).strict_audit().clean
+
+
+def test_a_shallow_wall_over_the_deck_is_reported():
+    # z = 0.05 (y - 0.1) over the deck y in [0.1, 0.9]: the faces stay within the tolerance of each other
+    # up to ~20 tolerances from the shared edge, beyond the joint band (review P4e round 1: the
+    # opposite-side version did not show this)
+    assert not _deck_and_surface(_ruled([-.005, .045]), [(1., .9, 0.), (-1., .9, 0.)]).strict_audit().clean
+
+
+def test_a_crease_valley_touching_the_deck_is_reported():
+    from anygeometry.nurbs import NurbsSurface
+    # review P4e round 1: a degree-(1,1) surface steep on every patch but with a valley at a knot crease
+    # (y = 0.6) coming within 5e-10 of the deck, 0.5 from the shared edge
+    xs, ys = (-1., 0., 1.), (0., .2, .4, .6, 1.)
+    surface = NurbsSurface(1, 1, (0., 0., .5, 1., 1.), (0., 0., .2, .4, .6, 1., 1.),
+                           tuple(tuple((x, y, h) for y, h in zip(ys, (-.1, .1, .3 + abs(x), 5e-10 + abs(x), .4 + abs(x))))
+                                 for x in xs))
+    model = _deck_and_surface(surface, [(1., .9, 0.), (-1., .9, 0.)])
+    assert not model.strict_audit().clean
+
+
+def test_a_descent_leaving_the_surface_is_not_a_band():
+    from anygeometry import GeometryModel
+    from anygeometry.nurbs import CurveOnSurface, NurbsCurve, NurbsSurface
+    from anygeometry.section_audit import face_face
+    from anygeometry.support_curves import PlaneNurbsCurve
+    # review P4e round 1: S(u, v) = (u, v, v + 0.1 (u - 0.5)); the section leaves the chart at v = 0, and
+    # near u = 0.5 + 9 tol, v ~ 0 the face is within the tolerance of the deck polygon, 9 tol from the section
+    surface = NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.),
+                           (((0., 0., -.05), (0., 1., .95)), ((1., 0., .05), (1., 1., 1.05))))
+    deck = Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.))
+    section = PlaneNurbsCurve.from_plane(deck, surface, 0)
+    if section.evaluate(0.)[0] > section.evaluate(1.)[0]:
+        section = section.subcurve(1., 0.)
+    model = GeometryModel()
+    va, vb = model.add_point(*section.evaluate(0.)), model.add_point(*section.evaluate(1.))
+    shared = model.add_curve(va, vb, section)
+    (ua, wa), (ub, wb) = section.chart(0.), section.chart(1.)
+
+    def segment(start, end, p, q):
+        return model.add_curve(start, end, CurveOnSurface(surface, NurbsCurve(1, (0., 0., 1., 1.), (p, q))))
+    c1, c2, c3 = (model.add_point(*surface.evaluate(*uv)) for uv in ((1., 0.), (1., 1.), (0., 1.)))
+    nurbs = model.add_face([shared, segment(vb, c1, (ub, wb), (1., 0.)), segment(c1, c2, (1., 0.), (1., 1.)),
+                            segment(c2, c3, (1., 1.), (0., 1.)), segment(c3, va, (0., 1.), (ua, wa))], surface=surface)
+    tail = [model.add_point(1., 0., 0.), model.add_point(1., 1., 0.), model.add_point(0., 1., 0.)]
+    points = [vb] + tail + [va]
+    plane = model.add_face([shared] + [model.add_line(p, q) for p, q in zip(points, points[1:])], surface=deck)
+    assert face_face(model, plane, nurbs, 1e-9) is None
+
+
+def test_an_uncovered_section_near_the_plane_face_is_not_cleared():
+    from anygeometry.section_audit import face_face
+    # review P4e round 1: the deck edge B -> C at slope 0.1 runs within ~0.4 tol of the surface 8.5 tol from
+    # B; an intersection certificate accepted the uncovered section, a distance certificate must not
+    assert face_face(_corner_entry((.5, -.05, 0.)), 1, 2, 1e-9) is None
+
+
+def test_a_short_intersection_far_from_the_origin_is_reported():
+    from anygeometry import GeometryModel
+    # review P4e round 1: two faces at z = 65536 sharing vertices A and B = A + (4e-8, 0, 0) whose
+    # interiors meet along AB (20 tolerances from either vertex); a 2**-40 coordinate slack hid it
+    big, gap = 65536., 4e-8
+    model = GeometryModel()
+    a, b = model.add_point(0., 0., big), model.add_point(gap, 0., big)
+    flat = Plane((0., 0., big), (1., 0., 0.), (0., 1., 0.))
+    first = [(-1., 1.), (1., 1.)]
+    second = [(1., -1.), (-1., -1.)]
+    p = [model.add_point(x, y, big) for x, y in first + second]
+    model.add_face([model.add_curve(a, p[0], _section_side(flat, (0., 0., 1.), (0., 0., big), (-1., 1., big))),
+                    model.add_line(p[0], p[1]), model.add_line(p[1], b), model.add_line(b, p[2]),
+                    model.add_line(p[2], p[3]), model.add_line(p[3], a)], surface=flat)
+    upright = Plane((0., 0., big), (1., 0., 0.), (0., 0., 1.))
+    q = [model.add_point(x, 0., big + y) for x, y in first + second]
+    model.add_face([model.add_curve(a, q[0], _section_side(upright, (0., 1., 0.), (0., 0., big), (-1., 0., big + 1.))),
+                    model.add_line(q[0], q[1]), model.add_line(q[1], b), model.add_line(b, q[2]),
+                    model.add_line(q[2], q[3]), model.add_line(q[3], a)], surface=upright)
+    assert not model.strict_audit().clean

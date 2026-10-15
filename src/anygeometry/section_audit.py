@@ -124,6 +124,14 @@ class _Section(_Curve):
         return np.asarray(self.curve.derivative(t), dtype=float)
 
 
+class _Piece(_Section):
+    """A section piece that is not a model edge (an uncovered part of a section path), with the model
+    vertices at its ends (``< 0``: none) for the joint logic."""
+
+    def __init__(self, model, curve, start, end):
+        self.edge_id, self.start, self.end, self.curve, self.model = None, start, end, curve, model
+
+
 class _Line(_Curve):
     def __init__(self, model, edge_id):
         super().__init__(model, edge_id)
@@ -724,12 +732,11 @@ def face_face(model, first_id: int, second_id: int, tolerance: float, work: Work
 
     With shared section edges: (1) every path of their exact section is covered by them, or lies outside
     the plane face with a clearance of the band radius plus the tolerance, ``(JOINT_BALL + 1) tol``,
-    except in joint departure stretches at the shared corners; (2) the band: wherever the surface's
-    support comes within the tolerance of the plane, the angle between them is certified to satisfy
-    ``sin theta >= 1 / JOINT_BALL`` (``_angle_band_clean``). Moving on the surface against the gradient
-    of the plane distance then reaches the exact section within ``JOINT_BALL tol``, so the NURBS face's
-    points within the tolerance of the plane face lie within the band of the shared edges (the section
-    elsewhere being cleared by (1)). Without shared edges every surface patch of the NURBS face's chart
+    except in joint departure stretches at the shared corners; (2) the band (``_descent_band_clean``): every
+    point of the NURBS face within the tolerance of the plane reaches the exact section along a certified
+    monotone chart line within ``JOINT_BALL tol``, so its points within the tolerance of the plane face lie
+    within the band of the shared edges (the section elsewhere being cleared by (1); near a shared corner
+    the clearance's own joint stretches reach JOINT_BALL (JOINT_BALL + 1) tolerances). Without shared edges every surface patch of the NURBS face's chart
     box must be farther than the tolerance from the plane."""
     from .surfaces import Plane
     from .nurbs import NurbsSurface
@@ -772,7 +779,8 @@ def face_face(model, first_id: int, second_id: int, tolerance: float, work: Work
             if shared:
                 n = _cross(_exact(plane.u_vector), _exact(plane.v_vector))
                 d = _dot(n, _exact(plane.origin))
-                return True if _angle_band_clean(surface, n, d, tolerance, work) else None
+                return True if _descent_band_clean(surface, _face_chart_box(model, second), n, d, tolerance,
+                                                   work) else None
             n = _cross(_exact(plane.u_vector), _exact(plane.v_vector))
             d = _dot(n, _exact(plane.origin))
             # nothing shared: certified farther than the tolerance (no patch may approach the plane)
@@ -790,9 +798,18 @@ def _outside_plane_face(model, face, piece, tolerance, work) -> bool:
     those balls it is wholly inside or outside, and one interior point is outside the outer loop by ray
     parity (P4b). Other boundary kinds refuse. (A piece entering the face within a corner's ball, e.g. by
     a sub-tolerance offset of the corner, is a joint contact.)"""
-    from .branch_predicates import certify_line_section
     from .section_faces import _Frame, _inside
     ends = [np.asarray(point, dtype=float) for point in piece.evaluate(np.array([0.0, 1.0]))]
+    # the piece as a curve whose ends are the face's vertices it leaves from (if any), for the
+    # distance-based pair engine (review P4e round 1: an intersection certificate is not a clearance)
+    face_vertices = {model.oriented_start_vertex(item) for loop in (face.loop,) + tuple(face.holes)
+                     for item in loop}
+
+    def end_vertex(point):
+        near = [v for v in face_vertices
+                if float(np.linalg.norm(model.vertices[v].position - point)) <= float(tolerance)]
+        return near[0] if len(near) == 1 else -1 - len(near)
+    curve = _Piece(model, piece, end_vertex(ends[0]), end_vertex(ends[1]))
     own = (piece.plane_record, piece.surface, piece.path)
     low, high = sorted(piece.domain)
     for loop in (face.loop,) + tuple(face.holes):
@@ -809,9 +826,9 @@ def _outside_plane_face(model, face, piece, tolerance, work) -> bool:
                 continue
             if not isinstance(edge.curve, Straight):
                 return False
-            start, end = model.vertices[edge.start].position, model.vertices[edge.end].position
-            joints = [p for p in (start, end) if any(float(np.linalg.norm(p - q)) <= tolerance for q in ends)]
-            if certify_line_section(piece, start, end, joints, tolerance) is not True:
+            line = _Line(model, item.edge)
+            shared = sorted({line.start, line.end} & {curve.start, curve.end})
+            if not _curves_clean(curve, line, shared, tolerance, 1e-10, work):
                 return False
     frame = _Frame(face.surface, model.vertices[model.oriented_start_vertex(face.loop[0])].position)
     middle = piece.evaluate(.5)
@@ -865,8 +882,7 @@ def plane_faces(model, first_id: int, second_id: int, tolerance: float, work: Wo
     # (exact line parameters, certified section roots; uncertain root boxes count as inside)
     direction = np.asarray([float(v) for v in _cross(n1, n2)], dtype=float)
     direction /= float(np.linalg.norm(direction))
-    scale = max([1.0] + [float(np.max(np.abs(model.vertices[v].position))) for v in vertices[0] | vertices[1]])
-    slack = 2.0 ** -40 * scale                                  # rounding of the s values only
+    slack = 0.0                     # no coordinate slack (review P4e round 1: it deleted a 4e-8 intersection)
     tol = float(tolerance)
     reach = JOINT_BALL * tol
     shared_edges = edges[0] & edges[1]
@@ -886,10 +902,10 @@ def plane_faces(model, first_id: int, second_id: int, tolerance: float, work: Wo
         joints.append((min(s0, s1) - reach, max(s0, s1) + reach))
     for vertex in vertices[0] & vertices[1]:
         position = model.vertices[vertex].position
-        offset = (position - anchor) - float((position - anchor) @ direction) * direction
-        if float(np.linalg.norm(offset)) <= reach:              # the vertex's ball reaches L
-            s = float(direction @ position)
-            joints.append((s - reach, s + reach))
+        offset = float(np.linalg.norm((position - anchor) - float((position - anchor) @ direction) * direction))
+        if offset < reach:                                      # the vertex's ball meets L in a chord
+            s, half = float(direction @ position), float(np.sqrt(reach * reach - offset * offset))
+            joints.append((s - half, s + half))
     insides = []
     for own, other in ((first, second), (second, first)):
         stretches = _inside_stretches(model, own, other, direction, tolerance, slack,
@@ -1009,67 +1025,158 @@ def _cross(a, b):
     return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
 
 
-def _angle_band_clean(surface, n, d, tolerance, work) -> bool:
-    """Over the surface's whole support: every sub-rectangle is farther than the tolerance from the plane
-    ``n . X = d``, or the angle between the surface and the plane is certified there with
-    ``sin^2 theta >= 1 / JOINT_BALL^2`` (exact interval bounds of the homogeneous tangents
-    ``T_u = X_u W - X W_u``, ``N = T_u x T_v``: ``JOINT_BALL^2 (n . N)^2 <= (JOINT_BALL^2 - 1) |n|^2 |N|^2``).
-    Subdivision to the work budget; refused otherwise (P4e-3)."""
+def _descent_band_clean(surface, chart_box, n, d, tolerance, work) -> bool:
+    """The band certificate for a NURBS face against the plane ``n . X = d`` (P4e-3, review P4e round 1).
+
+    The face's chart box is cut into knot rectangles. Each is farther than the tolerance from the plane,
+    or, along one chart axis ``s``, the plane distance ``dist = G / (|n| W)`` is certified monotone (the
+    exact interval of ``G_s W - G W_s`` has one strict sign on every Bezier piece, so across knots too:
+    ``dist`` is continuous) and the plane is crossed: the rectangle's two ``s`` edges have strictly
+    opposite signs of ``G``, or the rectangle is extended along ``s`` (towards decreasing ``|G|``, within
+    the surface's chart, else refused) until its far edge has the opposite sign. On that region the
+    world speed bound ``M >= |dS/ds|`` and the slope bound ``m <= |d dist / ds|`` give ``M / m <=
+    JOINT_BALL`` (exact). Then every point of the face within the tolerance of the plane reaches the
+    exact section along its ``s``-line within ``JOINT_BALL`` tolerances, inside that region (no descent
+    through a knot crease or out of the chart). Subdivision to the work budget; refused otherwise."""
     from .branch_predicates import _derivative_ranges, _multiply, _patches, _range, _rect, _subtract
     zero = Fraction(0)
     g_patches = _patches(surface, tuple(n), d)
     w_patches = _patches(surface, (zero,) * 3, Fraction(-1))
     x_patches = [_patches(surface, tuple(Fraction(int(i == k)) for i in range(3)), zero) for k in range(3)]
-    norm_n2 = _dot(n, n)
+    norm_n2, norm_up = _dot(n, n), _norm_up(n)
     tol = Fraction(float(tolerance))
     j2 = Fraction(JOINT_BALL) ** 2
+    limits = [tuple(sorted(Fraction(v) for v in surface.u_range)), tuple(sorted(Fraction(v) for v in surface.v_range))]
 
-    def add(a, b):
-        return a[0] + b[0], a[1] + b[1]
+    def chart_to_knot(axis, value):
+        a, b = (Fraction(v) for v in (surface.u_range if axis == 0 else surface.v_range))
+        return a + Fraction(float(value)) * (b - a)
 
-    def square_low(a):
-        return zero if a[0] <= 0 <= a[1] else min(a[0] * a[0], a[1] * a[1])
+    def pieces(ranges):
+        for index, patch in enumerate(g_patches):
+            sub = []
+            for axis, own in enumerate((patch.u_range, patch.v_range)):
+                low, high = max(ranges[axis][0], own[0]), min(ranges[axis][1], own[1])
+                sub.append((low, high))
+            if sub[0][0] < sub[0][1] and sub[1][0] < sub[1][1]:
+                yield index, sub
 
-    def square_high(a):
-        return max(a[0] * a[0], a[1] * a[1])
-    pending = [(tuple(patch.u_range), tuple(patch.v_range), index, 0) for index, patch in enumerate(g_patches)]
+    def restricted(patches, index, sub):
+        patch = patches[index]
+        return _rect(patch.coefficients, patch.u_range, patch.v_range, sub[0], sub[1])
+
+    def far(ranges) -> bool:
+        for index, sub in pieces(ranges):
+            g_low, g_high = _range(restricted(g_patches, index, sub))
+            w_high = _range(restricted(w_patches, index, sub))[1]
+            if not (g_low > tol * norm_up * w_high or g_high < -tol * norm_up * w_high):
+                return False
+        return True
+
+    def strict_sign(ranges) -> int:
+        signs = set()
+        for index, sub in pieces(ranges):
+            g_low, g_high = _range(restricted(g_patches, index, sub))
+            signs.add(1 if g_low > 0 else -1 if g_high < 0 else 0)
+        return signs.pop() if len(signs) == 1 else 0
+
+    def edge_sign(ranges, axis, high_end) -> int:
+        line = ranges[axis][1] if high_end else ranges[axis][0]
+        signs = set()
+        for index, sub in pieces(ranges):
+            if sub[axis][1 if high_end else 0] != line:
+                continue
+            g = restricted(g_patches, index, sub)
+            if axis == 0:
+                values = list(g[-1] if high_end else g[0])
+            else:
+                values = [row[-1] if high_end else row[0] for row in g]
+            signs.add(1 if all(v > 0 for v in values) else -1 if all(v < 0 for v in values) else 0)
+        return signs.pop() if len(signs) == 1 else 0
+
+    def monotone(ranges, axis):
+        """The strict sign of d dist / ds on the region if certified, with M / m <= JOINT_BALL; else None."""
+        signs, m_low, s2_high, w_low, w_high = set(), None, zero, None, None
+        for index, sub in pieces(ranges):
+            g, ww = restricted(g_patches, index, sub), restricted(w_patches, index, sub)
+            du, dv = sub[0][1] - sub[0][0], sub[1][1] - sub[1][0]
+            g_range, w_range = _range(g), _range(ww)
+            g_s = _derivative_ranges(g, du, dv)[axis]
+            w_s = _derivative_ranges(ww, du, dv)[axis]
+            total = _subtract(_multiply(g_s, w_range), _multiply(g_range, w_s))
+            if total[0] > 0:
+                signs.add(1)
+            elif total[1] < 0:
+                signs.add(-1)
+            else:
+                return None
+            low = min(abs(total[0]), abs(total[1]))
+            m_low = low if m_low is None else min(m_low, low)
+            s2 = zero
+            for k in range(3):
+                xc = restricted(x_patches[k], index, sub)
+                x_s = _derivative_ranges(xc, du, dv)[axis]
+                speed = _subtract(_multiply(x_s, w_range), _multiply(_range(xc), w_s))
+                s2 += max(speed[0] * speed[0], speed[1] * speed[1])
+            s2_high = max(s2_high, s2)
+            w_low = w_range[0] if w_low is None else min(w_low, w_range[0])
+            w_high = w_range[1] if w_high is None else max(w_high, w_range[1])
+        if len(signs) != 1 or not m_low or not w_low or w_low <= 0:
+            return None
+        # M / m = sqrt(s2) |n| w_high^2 / (w_low^2 m_low) <= JOINT_BALL
+        if s2_high * norm_n2 * w_high ** 4 > j2 * w_low ** 4 * m_low * m_low:
+            return None
+        return signs.pop()
+
+    def certified(ranges) -> bool:
+        if far(ranges):
+            return True
+        for axis in (0, 1):
+            slope = monotone(ranges, axis)
+            if slope is None:
+                continue
+            low_sign, high_sign = edge_sign(ranges, axis, False), edge_sign(ranges, axis, True)
+            if low_sign and high_sign and low_sign == -high_sign:
+                return True                                     # crossed inside the rectangle
+            sign = strict_sign(ranges)
+            if not sign:
+                continue
+            towards_high = slope * sign < 0                     # |G| decreases towards +s
+            width = ranges[axis][1] - ranges[axis][0]
+            extension = width
+            for _ in range(48):
+                if not work.take():
+                    return False
+                grown = list(ranges)
+                if towards_high:
+                    grown[axis] = (ranges[axis][0], min(limits[axis][1], ranges[axis][1] + extension))
+                else:
+                    grown[axis] = (max(limits[axis][0], ranges[axis][0] - extension), ranges[axis][1])
+                if monotone(grown, axis) != slope:
+                    break
+                if edge_sign(grown, axis, towards_high) == -sign:
+                    return True                                 # the section is reached in the region
+                if grown[axis] == (limits[axis][0], ranges[axis][1]) or grown[axis] == (ranges[axis][0], limits[axis][1]):
+                    break                                       # descent would leave the chart
+                extension *= 2
+        return False
+
+    box = [tuple(sorted(chart_to_knot(axis, value) for value in chart_box[axis])) for axis in (0, 1)]
+    pending = [(sub, 0) for _index, sub in pieces(box)]
     while pending:
-        u_range, v_range, index, depth = pending.pop()
+        ranges, depth = pending.pop()
         if not work.take():
             return False
-        g_patch, w_patch = g_patches[index], w_patches[index]
-        g = _rect(g_patch.coefficients, g_patch.u_range, g_patch.v_range, u_range, v_range)
-        ww = _rect(w_patch.coefficients, w_patch.u_range, w_patch.v_range, u_range, v_range)
-        g_low, g_high = _range(g)
-        w_range = _range(ww)
-        norm_up = _norm_up(n)
-        if g_low > tol * norm_up * w_range[1] or g_high < -tol * norm_up * w_range[1]:
-            continue                                            # farther than the tolerance
-        du, dv = u_range[1] - u_range[0], v_range[1] - v_range[0]
-        w_u, w_v = _derivative_ranges(ww, du, dv)
-        tangents_u, tangents_v = [], []
-        for k in range(3):
-            xp = x_patches[k][index]
-            xc = _rect(xp.coefficients, xp.u_range, xp.v_range, u_range, v_range)
-            x_range = _range(xc)
-            x_u, x_v = _derivative_ranges(xc, du, dv)
-            tangents_u.append(_subtract(_multiply(x_u, w_range), _multiply(x_range, w_u)))
-            tangents_v.append(_subtract(_multiply(x_v, w_range), _multiply(x_range, w_v)))
-        normal = [_subtract(_multiply(tangents_u[(k + 1) % 3], tangents_v[(k + 2) % 3]),
-                            _multiply(tangents_u[(k + 2) % 3], tangents_v[(k + 1) % 3])) for k in range(3)]
-        dot = (zero, zero)
-        for k in range(3):
-            dot = add(dot, (min(n[k] * normal[k][0], n[k] * normal[k][1]), max(n[k] * normal[k][0], n[k] * normal[k][1])))
-        normal_low = sum(square_low(component) for component in normal)
-        if normal_low > 0 and j2 * square_high(dot) <= (j2 - 1) * norm_n2 * normal_low:
-            continue                                            # steep enough: the band is within the ball
+        if certified(ranges):
+            continue
         if depth >= work.max_depth:
             return False
         work.subdivisions += 1
-        um, vm = (u_range[0] + u_range[1]) / 2, (v_range[0] + v_range[1]) / 2
-        for us in ((u_range[0], um), (um, u_range[1])):
-            for vs in ((v_range[0], vm), (vm, v_range[1])):
-                pending.append((us, vs, index, depth + 1))
+        (u0, u1), (v0, v1) = ranges
+        um, vm = (u0 + u1) / 2, (v0 + v1) / 2
+        for us in ((u0, um), (um, u1)):
+            for vs in ((v0, vm), (vm, v1)):
+                pending.append(([us, vs], depth + 1))
     return True
 
 
