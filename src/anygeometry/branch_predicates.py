@@ -5,6 +5,14 @@ A ``PlaneNurbsCurve`` is a chain of arcs, each the graph ``x(s)`` of the zero se
 second plane ``n . X = d`` gives ``G2 = n . H - d W`` on the same Bezier sub-patches;
 along an arc ``h(s) = G2(s, x(s)) / W`` is the signed (scaled) distance to that plane.
 
+The predicates are statements about the *mathematical* section curve ``C*`` of each
+arc (review B1-P4a round 1): for a slicing value ``s`` in the arc's exact gap, the exact
+zero of ``G1(s, .)`` in the box; outside the gap (between an arc limit ``s0``/``s1`` and
+the true end root), the true end root. ``C*`` is continuous; P2's defined points (bracket
+midpoints refined into the plane slab) lie within ``2**-60`` of the box and the slab of it,
+far below any model tolerance, and callers compare with a tolerance anyway. Roots are
+therefore roots of ``h`` on ``C*``; ``isolated`` means exactly one simple root on ``C*``.
+
 Everything is exact: Bernstein coefficients of ``G1``, ``G2`` and ``W`` over knot
 rectangles (de Casteljau splitting of the sub-patch coefficients), signs of ``G2`` at
 arc points from exact brackets of the ``G1`` root, and monotonicity of ``h`` from the
@@ -31,6 +39,7 @@ from .plane_nurbs import PlaneNurbsNotCertified, sub_patches_of
 from .support_curves import PlaneNurbsCurve, _de_casteljau, _split_at
 
 MAX_DEPTH = 48
+MAX_PIECES = 20000                  # per call: a total work bound (review B1-P4a round 1)
 _SIGN_STEPS = 200
 _PATCHES: dict = {}
 
@@ -101,6 +110,15 @@ def _patches(surface, n, d):
 # ------------------------------------------------------------------ the engine
 
 
+def _proportional(n, d, m, d1) -> bool:
+    """Whether ``n . X = d`` and ``m . X = d1`` are the same plane (exact)."""
+    first = (*n, d)
+    second = (*m, d1)
+    pivot = next(i for i, value in enumerate(second) if value != 0)
+    ratio = Fraction(first[pivot]) / second[pivot]
+    return ratio != 0 and all(Fraction(x) == ratio * y for x, y in zip(first, second))
+
+
 class _Arc:
     """One arc of the curve with the second plane's and the weight's box polynomials."""
 
@@ -112,7 +130,6 @@ class _Arc:
         self.w = _rect(w_patch.coefficients, w_patch.u_range, w_patch.v_range, box.u_range, box.v_range)
         self.slicing = arc.slicing
         self.x_box = box.v_range if arc.slicing == 0 else box.u_range
-        self.ends: dict = {}
 
     def uv(self, s_range, x_range):
         return (s_range, x_range) if self.slicing == 0 else (x_range, s_range)
@@ -146,16 +163,16 @@ class _Arc:
                 hi = middle
         return (x0 + lo * (x1 - x0), x0 + hi * (x1 - x0))
 
-    def rectangle(self, s_lo, s_hi, ends, level=0, parent=None):
-        """A knot rectangle (s, x) containing the arc's points for s in [s_lo, s_hi]; ``ends``: the
-        arc-end roots whose defined points must be included; ``parent``: the x range of the enclosing
-        piece (or ``None``).
+    def rectangle(self, s_lo, s_hi, level=0, parent=None):
+        """A knot rectangle (s, x) containing ``C*`` for s in [s_lo, s_hi]; ``parent``: the x range of the
+        enclosing piece (or ``None``).
 
         Where ``G1_s`` has one sign over the piece (with the parent's x range), ``x(s)`` is monotone
         (``dx/ds = -G1_s / G1_x``, ``G1_x`` of one sign in a regular box): the x range is the hull of
         exact brackets at the two ends, each refined to the piece's s width. Otherwise ``_tight_x``
-        (exact exclusion, ``24 + level`` halvings capped at 40). Defined interior points are bracket
-        midpoints within ``2**-60`` of the box of their root: the range is widened by that.
+        (exact exclusion, ``24 + level`` halvings capped at 40). Where the piece touches an end
+        root's slicing interval, ``C*`` may sit at the true root (outside the gap): the root's
+        bracket, refined to the piece's size, is included.
         """
         x_range = None
         if parent is not None and s_hi > s_lo:
@@ -169,18 +186,19 @@ class _Arc:
                     first, second = self.bracket(s_lo, width), self.bracket(s_hi, width)
                     if first is not None and second is not None:
                         x_range = (min(first[0], second[0]), max(first[1], second[1]))
-        if x_range is None:
-            x_range = self.curve._tight_x(self.arc, s_lo, s_hi, depth=min(24 + level, 40)) if s_hi > s_lo else None
+        if x_range is None and s_hi > s_lo:
+            x_range = self.curve._tight_x(self.arc, s_lo, s_hi, depth=min(24 + level, 40))
+        s_range = (s_lo, s_hi)
+        target = s_hi - s_lo if s_hi > s_lo else (self.x_box[1] - self.x_box[0]) / 2 ** (60 + level)
+        for root in (self.arc.first, self.arc.second):
+            (rs, _rx) = self.curve._ordered_root_rect(self.arc, root)
+            if rs[1] < s_lo or rs[0] > s_hi:
+                continue                                        # C* cannot sit at this root here
+            (bs, bx) = self.root_bracket(root, target)
+            s_range = (min(s_range[0], bs[0]), max(s_range[1], bs[1]))
+            x_range = bx if x_range is None else (min(x_range[0], bx[0]), max(x_range[1], bx[1]))
         if x_range is None:
             x_range = self.x_box
-        else:
-            widen = Fraction(1, 2 ** 59) * (self.x_box[1] - self.x_box[0])
-            x_range = (max(self.x_box[0], x_range[0] - widen), min(self.x_box[1], x_range[1] + widen))
-        s_range = (s_lo, s_hi)
-        for root in ends:                      # the curve's end points are P2's defined root points
-            s, x = self.end_point(root)
-            s_range = (min(s_range[0], s), max(s_range[1], s))
-            x_range = (min(x_range[0], x), max(x_range[1], x))
         return s_range, x_range
 
     def column(self, coefficients, s):
@@ -195,8 +213,16 @@ class _Arc:
         """Sign of G2 at the arc's point with slicing coordinate ``s`` (0: undecided to the budget)."""
         g1, g2 = self.column(self.g1, s), self.column(self.g2, s)
         low, high = _de_casteljau(g1, Fraction(0)), _de_casteljau(g1, Fraction(1))
-        if low == 0 or high == 0 or (low > 0) == (high > 0):
-            return 0                                           # outside the gap: an end root's region
+        if low == 0 or high == 0:
+            value = _de_casteljau(g2, Fraction(0) if low == 0 else Fraction(1))
+            return (value > 0) - (value < 0)
+        if (low > 0) == (high > 0):
+            # outside the gap: C* sits at the end root whose slicing interval holds s
+            for root in (self.arc.first, self.arc.second):
+                (rs, _rx) = self.curve._ordered_root_rect(self.arc, root)
+                if rs[0] <= s <= rs[1]:
+                    return self.root_sign(root)
+            raise PlaneNurbsNotCertified("section point outside its arc's gap and its end roots")
         lo, hi = Fraction(0), Fraction(1)
         for _ in range(_SIGN_STEPS):
             values = _segment(g2, lo, hi)
@@ -238,35 +264,47 @@ class _Arc:
         width = box_hi - box_lo
         return g1, g2, fixed, varying_is_s, (lo - box_lo) / width, (hi - box_lo) / width, box_lo, width
 
-    def end_point(self, root):
-        """The curve's defined point at an arc-end root (P2 ``_root_point``) as an ordered (s, x) point."""
-        key = id(root)
-        if key not in self.ends:
-            _rect, (u, v), _world = self.curve._root_point(root)
-            self.ends[key] = (u, v) if self.slicing == 0 else (v, u)
-        return self.ends[key]
-
-    def root_sign(self, root):
-        """Sign of G2 at an arc-end root (its isolating interval refined by the sign of G1); 0: undecided."""
-        g1, g2, _fixed, varying_is_s, lo, hi, box_lo, width = self._edge(root)
-        s, x = self.end_point(root)
-        p = ((s if varying_is_s else x) - box_lo) / width     # the defined end point on the edge line
-
-        def hull_sign(lo, hi):
-            values = _segment(g2, min(lo, p), max(hi, p))
-            return 1 if all(value > 0 for value in values) else -1 if all(value < 0 for value in values) else 0
-
-        if lo == hi or _de_casteljau(g1, lo) == 0:
-            return hull_sign(lo, lo)
+    def root_bracket(self, root, target):
+        """An ordered (s, x) rectangle containing the true end root, its isolating interval refined
+        (exact bisection by the sign of G1 on the edge) to at most ``target`` in knot units."""
+        g1, _g2, fixed, varying_is_s, lo, hi, box_lo, width = self._edge(root)
         g1_lo = _de_casteljau(g1, lo)
-        for _ in range(_SIGN_STEPS):
-            sign = hull_sign(lo, hi)
-            if sign:
-                return sign
+        steps = 0
+        while lo < hi and g1_lo != 0 and (hi - lo) * width > target and steps < _SIGN_STEPS:
             middle = (lo + hi) / 2
             value = _de_casteljau(g1, middle)
             if value == 0:
-                return hull_sign(middle, middle)
+                lo = hi = middle
+                break
+            if (value > 0) == (g1_lo > 0):
+                lo, g1_lo = middle, value
+            else:
+                hi = middle
+            steps += 1
+        if lo < hi and g1_lo == 0:
+            hi = lo
+        interval = (box_lo + lo * width, box_lo + hi * width)
+        return (interval, (fixed, fixed)) if varying_is_s else ((fixed, fixed), interval)
+
+    def root_sign(self, root):
+        """Sign of G2 at the true end root (its bracket refined by the sign of G1); 0: undecided."""
+        g1, g2, _fixed, _varying, lo, hi, _box_lo, _width = self._edge(root)
+
+        def sign(lo, hi):
+            values = _segment(g2, lo, hi)
+            return 1 if all(value > 0 for value in values) else -1 if all(value < 0 for value in values) else 0
+
+        g1_lo = _de_casteljau(g1, lo)
+        if lo == hi or g1_lo == 0:
+            return sign(lo, lo)
+        for _ in range(_SIGN_STEPS):
+            decided = sign(lo, hi)
+            if decided:
+                return decided
+            middle = (lo + hi) / 2
+            value = _de_casteljau(g1, middle)
+            if value == 0:
+                return sign(middle, middle)
             if (value > 0) == (g1_lo > 0):
                 lo, g1_lo = middle, value
             else:
@@ -314,9 +352,13 @@ def _engine(curve, n, d, classify, max_depth):
     (exact subdivision in s); ``classify`` returns "done", "split" or raises."""
     from .nurbs import NurbsSurface
     surface: NurbsSurface = curve.surface
+    m, d1, _mm, _limit, _l = curve._plane_slab()
+    if _proportional(n, d, m, d1):
+        raise PlaneNurbsNotCertified("the second plane is the curve's own plane (coincident)")
     g2_patches = _patches(surface, n, d)
     w_patches = _patches(surface, (Fraction(0),) * 3, Fraction(-1))
     pieces, count, a, b = _pieces(curve)
+    examined = 0
     for k, arc, tau0, tau1, s_a, s_b in pieces:
         view = _Arc(curve, arc, g2_patches[arc.box.patch], w_patches[arc.box.patch])
         # signs at the piece ends: arc-end roots or interior slicing values
@@ -324,12 +366,20 @@ def _engine(curve, n, d, classify, max_depth):
             return view.root_sign(root) if tau in (0, 1) else view.sign_at(s)
         sign_a = end_sign(tau0, s_a, arc.first if tau0 == 0 else arc.second)
         sign_b = end_sign(tau1, s_b, arc.second if tau1 == 1 else arc.first)
-        stack = [(s_a, s_b, sign_a, sign_b, tau0 == 0, tau1 == 1, 0, None)]
+        # depth is measured against the arc: a piece of a short sub-curve starts deep (an undecided
+        # tiny piece is then reported or refused at once instead of being split as a full tree)
+        span, width = abs(arc.s1 - arc.s0), abs(s_b - s_a)
+        start = 0
+        while start < max_depth - 1 and width * 2 ** (start + 1) <= span:
+            start += 1
+        stack = [(s_a, s_b, sign_a, sign_b, start, None)]
         while stack:
-            s_from, s_to, sign_from, sign_to, from_root, to_root, depth, parent = stack.pop()
+            s_from, s_to, sign_from, sign_to, depth, parent = stack.pop()
+            examined += 1
+            if examined > MAX_PIECES:
+                raise PlaneNurbsNotCertified(f"section predicate budget of {MAX_PIECES} pieces exhausted")
             lo, hi = min(s_from, s_to), max(s_from, s_to)
-            ends = ([arc.first] if from_root else []) + ([arc.second] if to_root else [])
-            s_range, x_range = view.rectangle(lo, hi, ends, depth, parent)
+            s_range, x_range = view.rectangle(lo, hi, depth, parent)
             context = _Context(view, k, count, a, b, s_from, s_to, s_range, x_range, sign_from, sign_to, depth)
             verdict = classify(context)
             if verdict == "done":
@@ -341,8 +391,8 @@ def _engine(curve, n, d, classify, max_depth):
                 sign_middle = view.sign_at(middle)
                 if sign_middle != 0:
                     break
-            stack.append((middle, s_to, sign_middle, sign_to, False, to_root, depth + 1, x_range))
-            stack.append((s_from, middle, sign_from, sign_middle, from_root, False, depth + 1, x_range))
+            stack.append((middle, s_to, sign_middle, sign_to, depth + 1, x_range))
+            stack.append((s_from, middle, sign_from, sign_middle, depth + 1, x_range))
 
 
 @dataclass
@@ -396,6 +446,8 @@ def section_roots(curve: PlaneNurbsCurve, n, d, *, max_depth: int = MAX_DEPTH,
 
     def classify(context: _Context) -> str:
         low, high = context.g2_range()
+        if low == high == 0:
+            raise PlaneNurbsNotCertified("the second plane contains a piece of the curve (coincident)")
         if low > 0 or high < 0:
             return "done"                                      # no root: G2 has one sign over the piece
         signs = (context.sign_from, context.sign_to)
@@ -447,6 +499,11 @@ def certify_line_section(curve: PlaneNurbsCurve, start, end, shared=(), toleranc
         return None
     d = sum(x * y for x, y in zip(n, a))
     tol = Fraction(float(tolerance))
+    # precondition: the segment lies in the curve's plane within the tolerance (review B1-P4a round 1:
+    # otherwise h's roots are only projected crossings)
+    _m, d1, mm, _limit, _l = curve._plane_slab()
+    if any((sum(x * y for x, y in zip(m, end_point)) - d1) ** 2 > tol * tol * mm for end_point in (a, b)):
+        return None
     points = [[Fraction(float(value)) for value in point] for point in shared]
     ee = sum(value * value for value in e)
     crossing = [False]
@@ -458,8 +515,19 @@ def certify_line_section(curve: PlaneNurbsCurve, start, end, shared=(), toleranc
         return any(all(sum((c - p) ** 2 for c, p in zip(corner, point)) <= tol * tol for corner in box)
                    for point in points)
 
+    def away_from_shared(lower, upper):
+        # every point of the box farther than the tolerance from every shared point
+        for point in points:
+            gap = sum(max(Fraction(lo) - p, p - Fraction(hi), Fraction(0)) ** 2
+                      for lo, hi, p in zip(lower, upper, point))
+            if gap <= tol * tol:
+                return False
+        return True
+
     def classify(context: _Context) -> str:
         low, high = context.g2_range()
+        if low == high == 0:
+            raise PlaneNurbsNotCertified("the segment's plane contains a piece of the curve (coincident)")
         if low > 0 or high < 0:
             return "done"                                       # no root of h on this piece
         lower, upper = context.world()
@@ -473,8 +541,9 @@ def certify_line_section(curve: PlaneNurbsCurve, start, end, shared=(), toleranc
         if 0 not in signs and context.view.monotone(context.s_range, context.x_range):
             if signs[0] == signs[1]:
                 return "done"                                   # monotone without a sign change: no root
-            if min(lambdas) > 0 and max(lambdas) < 1:
-                crossing[0] = True                              # a simple root on the segment's interior
+            # (an isolated root not yet separated from the joints or the segment ends: refine)
+            if min(lambdas) > 0 and max(lambdas) < 1 and away_from_shared(lower, upper):
+                crossing[0] = True                              # a simple root on the segment, off the joints
                 return "done"
         diameter = sum((Fraction(hi) - Fraction(lo)) ** 2 for lo, hi in zip(lower, upper))
         if tol > 0 and diameter * 256 <= tol * tol:

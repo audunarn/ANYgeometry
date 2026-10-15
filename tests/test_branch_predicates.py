@@ -6,6 +6,7 @@ form; the B1 bow surface for a doubly curved case (independent float bisection).
 """
 from __future__ import annotations
 
+from fractions import Fraction
 import math
 
 import numpy as np
@@ -118,3 +119,63 @@ def test_line_certificates_never_accept_unproven_contacts(half):
     # a segment ending on the curve's interior without a shared point
     on_curve = half.evaluate(.25)
     assert certify_line_section(half, point(0., 0.), on_curve, (), TOL) is not True
+
+
+# ------------------------------------------------------------------ review B1-P4a round 1
+
+
+Z0 = Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.))
+
+
+def bezier(degree_u, rows):
+    knots_u = (0.,) * (degree_u + 1) + (1.,) * (degree_u + 1)
+    return NurbsSurface(degree_u, 1, knots_u, (0., 0., 1., 1.), rows)
+
+
+def test_clipped_end_regions_keep_their_roots():
+    # S(u, v) = (u, v, v + u^2 - u + 1/32): the section z = 0 starts at the root (u*, 0) on the edge
+    # v = 0, u* = (1 - sqrt(7/8)) / 2 irrational; the arc limit s0 is its interval's midpoint. On a
+    # sub-curve inside [s0, u*] the mathematical curve sits at the root, which lies on y = 0 exactly:
+    # the clipped piece must still contain it (review B1-P4a round 1: it was excluded).
+    rows = tuple(((i / 2, 0., c), (i / 2, 1., c + 1.)) for i, c in enumerate((1 / 32, 1 / 32 - .5, 1 / 32)))
+    curve = PlaneNurbsCurve.from_plane(Z0, bezier(2, rows), 0)
+    arc = curve._arcs()[0]
+    sub = curve.subcurve(2. ** -80, 2. ** -79)
+    s_low = arc.s0 + Fraction(sub.domain[0]) * (arc.s1 - arc.s0)
+    before_root = (1 - 2 * s_low) ** 2 > Fraction(7, 8)                 # s_low < u*, exactly
+    roots = section_roots(sub, (0, 1, 0), 0)
+    if before_root:
+        assert roots and all(contains(root, sub.evaluate(.5), 1e-12) for root in roots)
+    else:
+        assert roots == ()
+
+
+def test_roots_are_roots_of_the_mathematical_curve():
+    # S(u, v) = (u, v, 3 v - u - 1/4): on z = 0, y = 1/3 at x = 3/4 (no defined point has y = 1/3 exactly)
+    rows = (((0., 0., -.25), (0., 1., 2.75)), ((1., 0., -1.25), (1., 1., 1.75)))
+    curve = PlaneNurbsCurve.from_plane(Z0, bezier(1, rows), 0)
+    roots = section_roots(curve, (0, 3, 0), 1)
+    assert len(roots) == 1 and roots[0].isolated and contains(roots[0], (.75, 1 / 3, 0.))
+
+
+def test_the_curve_own_plane_is_refused():
+    from anygeometry.plane_nurbs import PlaneNurbsNotCertified
+    rows = (((0., 0., -.25), (0., 1., 2.75)), ((1., 0., -1.25), (1., 1., 1.75)))
+    curve = PlaneNurbsCurve.from_plane(Z0, bezier(1, rows), 0)
+    with pytest.raises(PlaneNurbsNotCertified, match="coincident"):
+        section_roots(curve, (0, 0, 2), 0)
+
+
+@pytest.fixture(scope="module")
+def level():
+    surface = cylinder_to_nurbs(Cylinder((0., 0., 0.), (0., 0., 1.), (1., 0., 0.), 2., 3., 0., math.pi))
+    return PlaneNurbsCurve.from_plane(Plane((0., 0., 1.5), (1., 0., 0.), (0., 1., 0.)), surface, 0)
+
+
+def test_crossings_inside_the_joint_tolerance_are_not_offending(level):
+    start = (2., 0., 1.5)
+    assert certify_line_section(level, start, (1.99, .4, 1.5), (start,), .11) is not False
+
+
+def test_segments_off_the_curve_plane_are_undecided(level):
+    assert certify_line_section(level, (1., -10., 2.5), (1., 10., 2.5), (), TOL) is None
