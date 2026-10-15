@@ -883,6 +883,12 @@ def plane_faces(model, first_id: int, second_id: int, tolerance: float, work: Wo
     direction = np.asarray([float(v) for v in _cross(n1, n2)], dtype=float)
     direction /= float(np.linalg.norm(direction))
     slack = 0.0                     # no coordinate slack (review P4e round 1: it deleted a 4e-8 intersection)
+    # the stretches' floats must resolve the tolerance: distinct crossings may round to one s value only
+    # when they are closer than a sixteenth of the tolerance (then within a joint ball); farther from the
+    # origin the faces are refused (review P4e round 2: crossings 4e-8 apart merged at 2**40)
+    scale = max([1.0] + [float(np.max(np.abs(model.vertices[v].position))) for v in vertices[0] | vertices[1]])
+    if scale * np.finfo(float).eps > float(tolerance) / 16:
+        return None
     tol = float(tolerance)
     reach = JOINT_BALL * tol
     shared_edges = edges[0] & edges[1]
@@ -1073,16 +1079,20 @@ def _descent_band_clean(surface, chart_box, n, d, tolerance, work) -> bool:
                 return False
         return True
 
-    def strict_sign(ranges) -> int:
-        signs = set()
+    # weak signs (zeros allowed): with G strictly monotone along s, G >= 0 at one end of an s-line and
+    # <= 0 at the other puts the line's zero in the closed interval (review P4e round 2: a section
+    # through rectangle corners never had strict edge signs)
+    def weak_sign(ranges) -> int:
+        nonneg = nonpos = True
         for index, sub in pieces(ranges):
             g_low, g_high = _range(restricted(g_patches, index, sub))
-            signs.add(1 if g_low > 0 else -1 if g_high < 0 else 0)
-        return signs.pop() if len(signs) == 1 else 0
+            nonneg, nonpos = nonneg and g_low >= 0, nonpos and g_high <= 0
+        return 1 if nonneg and not nonpos else -1 if nonpos and not nonneg else 0
 
-    def edge_sign(ranges, axis, high_end) -> int:
+    def edge_signs(ranges, axis, high_end):
+        """``(all >= 0, all <= 0)`` of G on the rectangle's edge ``s = s_lo`` or ``s_hi``."""
         line = ranges[axis][1] if high_end else ranges[axis][0]
-        signs = set()
+        nonneg = nonpos = True
         for index, sub in pieces(ranges):
             if sub[axis][1 if high_end else 0] != line:
                 continue
@@ -1091,8 +1101,8 @@ def _descent_band_clean(surface, chart_box, n, d, tolerance, work) -> bool:
                 values = list(g[-1] if high_end else g[0])
             else:
                 values = [row[-1] if high_end else row[0] for row in g]
-            signs.add(1 if all(v > 0 for v in values) else -1 if all(v < 0 for v in values) else 0)
-        return signs.pop() if len(signs) == 1 else 0
+            nonneg, nonpos = nonneg and all(v >= 0 for v in values), nonpos and all(v <= 0 for v in values)
+        return nonneg, nonpos
 
     def monotone(ranges, axis):
         """The strict sign of d dist / ds on the region if certified, with M / m <= JOINT_BALL; else None."""
@@ -1135,10 +1145,10 @@ def _descent_band_clean(surface, chart_box, n, d, tolerance, work) -> bool:
             slope = monotone(ranges, axis)
             if slope is None:
                 continue
-            low_sign, high_sign = edge_sign(ranges, axis, False), edge_sign(ranges, axis, True)
-            if low_sign and high_sign and low_sign == -high_sign:
+            (low_pos, low_neg), (high_pos, high_neg) = edge_signs(ranges, axis, False), edge_signs(ranges, axis, True)
+            if (low_pos and high_neg) or (low_neg and high_pos):
                 return True                                     # crossed inside the rectangle
-            sign = strict_sign(ranges)
+            sign = weak_sign(ranges)
             if not sign:
                 continue
             towards_high = slope * sign < 0                     # |G| decreases towards +s
@@ -1154,7 +1164,8 @@ def _descent_band_clean(surface, chart_box, n, d, tolerance, work) -> bool:
                     grown[axis] = (max(limits[axis][0], ranges[axis][0] - extension), ranges[axis][1])
                 if monotone(grown, axis) != slope:
                     break
-                if edge_sign(grown, axis, towards_high) == -sign:
+                far_pos, far_neg = edge_signs(grown, axis, towards_high)
+                if (far_neg if sign > 0 else far_pos):
                     return True                                 # the section is reached in the region
                 if grown[axis] == (limits[axis][0], ranges[axis][1]) or grown[axis] == (ranges[axis][0], limits[axis][1]):
                     break                                       # descent would leave the chart

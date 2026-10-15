@@ -572,3 +572,66 @@ def test_a_short_intersection_far_from_the_origin_is_reported():
                     model.add_line(q[0], q[1]), model.add_line(q[1], b), model.add_line(b, q[2]),
                     model.add_line(q[2], q[3]), model.add_line(q[3], a)], surface=upright)
     assert not model.strict_audit().clean
+
+
+def test_crossings_that_floats_cannot_separate_are_refused():
+    from anygeometry import GeometryModel
+    from anygeometry.nurbs import NurbsSurface
+    from anygeometry.support_curves import PlaneNurbsCurve
+    from anygeometry.tolerance import TolerancePolicy
+    # review P4e round 2: at y ~ 2**40 the crossings A and B = A + (4e-8, 0, 0) round to one s value; the
+    # faces meet 20 tolerances from both shared vertices. Floats there cannot resolve the tolerance: refused
+    big, k, gap = 2.0 ** 40, 1 / 64, 4e-8
+    model = GeometryModel(tolerance=TolerancePolicy(relative_length=1e-30))
+    a, b = model.add_point(0., big, 0.), model.add_point(gap, big, 0.)
+    flat = Plane((0., big, 0.), (1., 0., 0.), (0., 1., 0.))
+    ring = [(-1., big + 1.), (1., big + 1.), None, (1., big - 1.), (1., 1.), (1., 0.), (-1., 0.), (-1., 1.), (-1., big - 1.)]
+    ids = [a] + [b if xy is None else model.add_point(xy[0], xy[1], 0.) for xy in ring]
+    surface = NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.),
+                           (((1., 0., -1.), (1., 0., 1.)), ((-1., 0., -1.), (-1., 0., 1.))))
+    section = PlaneNurbsCurve.from_plane(flat, surface, 0)
+    if section.evaluate(0.)[0] < 0:
+        section = section.subcurve(1., 0.)
+    edges = []
+    for p0, p1 in zip(ids, ids[1:] + ids[:1]):
+        q0, q1 = model.vertices[p0].position, model.vertices[p1].position
+        if q0[0] == 1. and q0[1] == 0. and q1[0] == -1. and q1[1] == 0.:
+            edges.append(model.add_curve(p0, p1, section))
+        else:
+            edges.append(model.add_line(p0, p1))
+    model.add_face(edges, surface=flat)
+    tilted = Plane((0., big, 0.), (1., k, 0.), (0., 0., 1.))
+    others = [model.add_point(-1., big - k, 1.), model.add_point(1., big + k, 1.), b,
+              model.add_point(1., big + k, -1.), model.add_point(-1., big - k, -1.)]
+    ids = [a] + others
+    model.add_face([model.add_line(p0, p1) for p0, p1 in zip(ids, ids[1:] + ids[:1])], surface=tilted)
+    assert not model.strict_audit().clean
+
+
+def test_a_steep_diagonal_section_through_rectangle_corners_is_clean():
+    from anygeometry import GeometryModel
+    from anygeometry.nurbs import CurveOnSurface, NurbsCurve, NurbsSurface
+    from anygeometry.section_audit import face_face
+    from anygeometry.support_curves import PlaneNurbsCurve
+    # review P4e round 2: S(u, v) = (u, v, u + v - 0.5) over the deck polygon (0,.5) (.5,0) (1,0) (1,1) (0,1)
+    # sharing the diagonal section, which passes through dyadic rectangle corners
+    surface = NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.),
+                           (((0., 0., -.5), (0., 1., .5)), ((1., 0., .5), (1., 1., 1.5))))
+    deck = Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.))
+    section = PlaneNurbsCurve.from_plane(deck, surface, 0)
+    if section.evaluate(0.)[0] > section.evaluate(1.)[0]:
+        section = section.subcurve(1., 0.)
+    model = GeometryModel()
+    va, vb = model.add_point(*section.evaluate(0.)), model.add_point(*section.evaluate(1.))   # (0,.5), (.5,0)
+    shared = model.add_curve(va, vb, section)
+
+    def segment(start, end, p, q):
+        return model.add_curve(start, end, CurveOnSurface(surface, NurbsCurve(1, (0., 0., 1., 1.), (p, q))))
+    (ua, wa), (ub, wb) = section.chart(0.), section.chart(1.)
+    c1, c2, c3 = (model.add_point(*surface.evaluate(*uv)) for uv in ((1., 0.), (1., 1.), (0., 1.)))
+    nurbs = model.add_face([shared, segment(vb, c1, (ub, wb), (1., 0.)), segment(c1, c2, (1., 0.), (1., 1.)),
+                            segment(c2, c3, (1., 1.), (0., 1.)), segment(c3, va, (0., 1.), (ua, wa))], surface=surface)
+    tail = [model.add_point(1., 0., 0.), model.add_point(1., 1., 0.), model.add_point(0., 1., 0.)]
+    points = [vb] + tail + [va]
+    plane = model.add_face([shared] + [model.add_line(p, q) for p, q in zip(points, points[1:])], surface=deck)
+    assert face_face(model, plane, nurbs, 1e-9) is True
