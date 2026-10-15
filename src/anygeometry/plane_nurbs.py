@@ -43,6 +43,23 @@ from .exact_levels import (_bernstein_to_power, _count, _derivative, _gcd, _root
 from .nurbs import NurbsSurface, _exact_insert
 
 MAX_DEPTH = 12
+# The audit's qualification budget for the certified classification in progress (B1-P4d): an object
+# with ``take() -> bool`` (one box) and a ``subdivisions`` counter, or ``None``. Every certified
+# subdivision below charges it, so delegated predicates respect and report the audit's limits.
+from contextvars import ContextVar
+CURRENT_WORK: ContextVar = ContextVar("anygeometry_section_work", default=None)
+
+
+def charge_box() -> None:
+    work = CURRENT_WORK.get()
+    if work is not None and not work.take():
+        raise PlaneNurbsNotCertified("qualification budget exhausted")
+
+
+def charge_split() -> None:
+    work = CURRENT_WORK.get()
+    if work is not None:
+        work.subdivisions += 1
 MAX_BOXES = 20000
 
 
@@ -197,6 +214,7 @@ def _boxes(patch: SubPatch, budget: list) -> list[Box]:
     while pending:
         u_range, v_range, coefficients, depth = pending.pop()
         budget[0] += 1
+        charge_box()
         if budget[0] > MAX_BOXES:
             raise PlaneNurbsNotCertified(f"box budget of {MAX_BOXES} exhausted")
         kind = _classify(coefficients)

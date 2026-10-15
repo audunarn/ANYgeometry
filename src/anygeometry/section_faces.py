@@ -261,6 +261,8 @@ def _sections_simple(model, loops, tolerance, max_level: int = 12):
         flat = [(edge, a, b) for edge in edges for a, b in pieces[edge]]
         for key in flat:
             if key not in boxes:
+                from .plane_nurbs import charge_box
+                charge_box()
                 boxes[key] = model.edges[key[0]].curve.bounds(key[1], key[2])
         ends: dict = {}                                         # vertex -> pieces touching it at an edge end
         for key in flat:

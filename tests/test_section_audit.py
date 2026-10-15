@@ -175,3 +175,83 @@ def test_section_work_follows_the_qualification_budget_and_is_reported():
     assert not tight.clean
     loose = model.strict_audit()
     assert loose.clean and loose.metrics.boxes_examined > 0
+
+
+# ------------------------------------------------------------------ review B1-P4d round 2 (strict contract, owner option a)
+
+
+def folded_surface():
+    t = np.polynomial.polynomial
+    shift = [-.5, 1.]
+    x = t.polyadd(t.polymul(t.polypow(shift, 2), [9 / 8]), [-1 / 32])
+    y = t.polysub(t.polymul(t.polypow(shift, 3), [33 / 32]), t.polymul(shift, [9 / 128]))
+    xs, ys = bernstein(list(x) + [0.] * (4 - len(x))), bernstein(list(y))
+    return NurbsSurface(3, 1, (0.,) * 4 + (1.,) * 4, (0., 0., 1., 1.),
+                        tuple(((xi, yi, 0.), (xi, yi, 1.)) for xi, yi in zip(xs, ys)))
+
+
+def add_chart_segment(model, surface, start, end):
+    from anygeometry.nurbs import CurveOnSurface, NurbsCurve
+    a = model.add_point(*map(float, surface.exact_point(*start)))
+    b = model.add_point(*map(float, surface.exact_point(*end)))
+    return model.add_curve(a, b, CurveOnSurface(surface, NurbsCurve(1, (0., 0., 1., 1.), (start, end))))
+
+
+def test_a_section_crossing_a_chart_segment_on_a_folded_surface_is_reported():
+    surface = folded_surface()
+    curve = PlaneNurbsCurve.from_plane(Plane((0., 0., .5), (1., 0., 0.), (0., 1., 0.)), surface, 0)
+    model = GeometryModel()
+    piece = curve.subcurve(7 / 32, 9 / 32)
+    model.add_curve(model.add_point(*piece.evaluate(0.)), model.add_point(*piece.evaluate(1.)), piece)
+    add_chart_segment(model, surface, (23 / 32, .5), (25 / 32, .5))
+    assert not model.strict_audit().clean
+
+
+def test_a_chart_segment_within_tolerance_of_a_section_is_reported():
+    from anygeometry import TolerancePolicy
+    # S(u, v) = (u, v, v - 1/2 + u - u^2): z = 0 is v = 1/2 - u + u^2 (lowest 1/4 at u = 1/2)
+    zs = bernstein([0., 1., -1.])
+    surface = NurbsSurface(2, 1, (0., 0., 0., 1., 1., 1.), (0., 0., 1., 1.),
+                           tuple(((bernstein([0., 1., 0.])[i], 0., zs[i] - .5), (bernstein([0., 1., 0.])[i], 1., zs[i] + .5))
+                                 for i in range(3)))
+    curve = PlaneNurbsCurve.from_plane(Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.)), surface, 0)
+    model = GeometryModel(tolerance=TolerancePolicy(length=1e-4))
+    model.add_curve(model.add_point(*curve.evaluate(0.)), model.add_point(*curve.evaluate(1.)), curve)
+    add_chart_segment(model, surface, (0., .25 - 5e-5), (1., .25 - 5e-5))
+    assert not model.strict_audit().clean
+
+
+def test_a_remote_near_contact_of_a_pair_sharing_a_vertex_is_reported():
+    from anygeometry import TolerancePolicy
+    # C(u) = (u, u ((u - 1/2)^2 + 2^-14), 1/2) and the line (u, 0, 1/2) share (0, 0, 1/2); 3e-5 apart at u = 1/2
+    t = np.polynomial.polynomial
+    y = t.polymul([0., 1.], t.polyadd(t.polypow([-.5, 1.], 2), [2. ** -14]))
+    xs, ys = bernstein([0., 1., 0., 0.]), bernstein(list(y))
+    surface = NurbsSurface(3, 1, (0.,) * 4 + (1.,) * 4, (0., 0., 1., 1.),
+                           tuple(((xi, yi, 0.), (xi, yi, 1.)) for xi, yi in zip(xs, ys)))
+    curve = PlaneNurbsCurve.from_plane(Plane((0., 0., .5), (1., 0., 0.), (0., 1., 0.)), surface, 0)
+    if round(float(curve.evaluate(0.)[0])) != 0:
+        curve = curve.subcurve(1., 0.)
+    model = GeometryModel(tolerance=TolerancePolicy(length=1e-4))
+    origin = model.add_point(*curve.evaluate(0.))
+    model.add_curve(origin, model.add_point(*curve.evaluate(1.)), curve)
+    model.add_line(origin, model.add_point(1., 0., .5))
+    assert not model.strict_audit().clean
+
+
+def test_delegated_predicates_follow_the_qualification_budget():
+    # a section edge and a line sharing a vertex: only delegated predicates (P4a engine) decide the pair
+    from anygeometry import Cylinder
+    from anygeometry.nurbs import cylinder_to_nurbs
+    from anygeometry.predicates import IntersectionQualificationPolicy
+    surface = cylinder_to_nurbs(Cylinder((0., 0., 0.), (0., 0., 1.), (1., 0., 0.), 2., 3., 0., math.pi))
+    curve = PlaneNurbsCurve.from_plane(Plane((0., 0., .5), (1., 0., 0.), (0., 1., 0.)), surface, 0)
+    model = GeometryModel()
+    start, end = model.add_point(*curve.evaluate(0.)), model.add_point(*curve.evaluate(1.))
+    model.add_curve(start, end, curve)
+    model.add_line(start, end)
+    tight = model.strict_audit(qualification=IntersectionQualificationPolicy(max_boxes_per_pair=1,
+                                                                             max_subdivision_depth=1))
+    assert not tight.clean
+    loose = model.strict_audit()
+    assert loose.clean and loose.metrics.boxes_examined > 0 and loose.metrics.subdivisions > 0

@@ -37,7 +37,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 import math
 
-from .plane_nurbs import PlaneNurbsNotCertified, sub_patches_of
+from .plane_nurbs import PlaneNurbsNotCertified, charge_box, charge_split, sub_patches_of
 from .support_curves import PlaneNurbsCurve, _de_casteljau, _split_at
 
 MAX_DEPTH = 48
@@ -427,6 +427,7 @@ def _engine(curve, n, d, classify, max_depth, patches=None):
         while stack:
             s_from, s_to, sign_from, sign_to, depth, parent = stack.pop()
             examined += 1
+            charge_box()
             if examined > MAX_PIECES:
                 raise PlaneNurbsNotCertified(f"section predicate budget of {MAX_PIECES} pieces exhausted")
             lo, hi = min(s_from, s_to), max(s_from, s_to)
@@ -445,6 +446,7 @@ def _engine(curve, n, d, classify, max_depth, patches=None):
             else:
                 # no decided sign (e.g. a piece on a chart line): halve (the last fraction shrank by 3/4)
                 middle, sign_middle = (s_from + s_to) / 2, 0
+            charge_split()
             stack.append((middle, s_to, sign_middle, sign_to, depth + 1, x_range))
             stack.append((s_from, middle, sign_from, sign_middle, depth + 1, x_range))
 

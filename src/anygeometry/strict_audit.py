@@ -1802,16 +1802,18 @@ class _StrictAuditState:
         pair_length_tolerance = self._edge_pair_length_tolerance(
             first.id, second.id
         )
-        if "PlaneNurbsCurve" in (type(first.curve).__name__, type(second.curve).__name__):
-            # plane x NURBS section edges: certified (B1-P4d), no generic fallback
+        names = {type(first.curve).__name__, type(second.curve).__name__}
+        if "PlaneNurbsCurve" in names or names == {"CurveOnSurface", "Straight"}:
+            # section edges, and curves on NURBS supports against lines: certified under the strict
+            # tolerance contract (B1-P4d, owner option a), no generic fallback
             from .section_audit import edge_edge
             work = self._section_work()
-            verdict = edge_edge(self.model, first.id, second.id, pair_length_tolerance, work)
+            verdict = edge_edge(self.model, first.id, second.id, pair_length_tolerance, work,
+                                self.tolerance.angular)
             self._record_section_work(work)
             if verdict is True:
                 return _PairClassification(True)
-            return self.unclassified(first_key, second_key, "section_edge_contact" if verdict is False
-                                     else "section_edge_pair_not_certified")
+            return self.unclassified(first_key, second_key, "section_edge_pair_not_certified")
         if type(first.curve).__name__ == "CurveOnSurface" and type(second.curve).__name__ == "CurveOnSurface":
             # Curves on NURBS supports: an exact certificate that they meet at most at
             # their shared end points (A3b, nurbs_audit); otherwise the general route
@@ -2673,12 +2675,11 @@ class _StrictAuditState:
             # section edges, curves on NURBS supports and NURBS faces: certified (B1-P4d) or refused
             from .section_audit import edge_face
             work = self._section_work()
-            verdict = edge_face(self.model, edge_id, face_id, local_length_tolerance, work)
+            verdict = edge_face(self.model, edge_id, face_id, local_length_tolerance, work, self.tolerance.angular)
             self._record_section_work(work)
             if verdict is True:
                 return _PairClassification(True)
-            return self.unclassified(edge_key, face_key, "section_edge_face_contact" if verdict is False
-                                     else "section_edge_face_not_certified")
+            return self.unclassified(edge_key, face_key, "section_edge_face_not_certified")
         plane = _surface_plane(face)
         relationship: str | None = None
         witnesses: tuple[AuditWitness, ...] = ()
