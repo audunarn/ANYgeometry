@@ -415,3 +415,67 @@ def test_a_section_entering_a_plane_face_beyond_the_corner_band_is_reported():
     # the deck edge B -> C nearly parallel to the section (slope 1e-3): the section runs inside the deck
     # to x = a / 1e-3 = 5e-7, about 500 tolerances from B
     assert not _corner_entry((.5, -5e-4, 0.)).strict_audit().clean
+
+
+def _deck_and_wall(heights):
+    """A deck face in z = 0 (y below the section) and a NURBS wall z = h(y) over x in [-1, 1], y in [0, 1]
+    (``heights``: Bernstein coefficients of h), sharing the wall's section with z = 0."""
+    from anygeometry import GeometryModel
+    from anygeometry.nurbs import CurveOnSurface, NurbsCurve, NurbsSurface
+    from anygeometry.support_curves import PlaneNurbsCurve
+    q = len(heights) - 1
+    surface = NurbsSurface(1, q, (0., 0., 1., 1.), (0.,) * (q + 1) + (1.,) * (q + 1),
+                           tuple(tuple((x, j / q, heights[j]) for j in range(q + 1)) for x in (-1., 1.)))
+    deck = Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.))
+    section = PlaneNurbsCurve.from_plane(deck, surface, 0)
+    if section.evaluate(0.)[0] > 0:
+        section = section.subcurve(1., 0.)
+    model = GeometryModel()
+    va, vb = model.add_point(*section.evaluate(0.)), model.add_point(*section.evaluate(1.))
+    shared = model.add_curve(va, vb, section)
+    (ua, wa), (ub, wb) = section.chart(0.), section.chart(1.)
+    corners = [model.add_point(*surface.evaluate(ub, 1.)), model.add_point(*surface.evaluate(ua, 1.))]
+
+    def segment(start, end, p, q_):
+        return model.add_curve(start, end, CurveOnSurface(surface, NurbsCurve(1, (0., 0., 1., 1.), (p, q_))))
+    model.add_face([shared, segment(vb, corners[0], (ub, wb), (ub, 1.)),
+                    segment(corners[0], corners[1], (ub, 1.), (ua, 1.)), segment(corners[1], va, (ua, 1.), (ua, wa))],
+                   surface=surface)
+    low = [model.add_point(1., -1., 0.), model.add_point(-1., -1., 0.)]
+    model.add_face([shared, model.add_line(vb, low[0]), model.add_line(low[0], low[1]), model.add_line(low[1], va)],
+                   surface=deck)
+    return model
+
+
+def _bernstein(power):
+    from math import comb
+    n = len(power) - 1
+    return [sum(comb(j, i) / comb(n, i) * power[i] for i in range(j + 1)) for j in range(n + 1)]
+
+
+def test_a_steep_wall_on_a_deck_edge_is_clean():
+    assert _deck_and_wall(_bernstein([-.1, 1.])).strict_audit().clean            # z = y - 0.1 (45 degrees)
+
+
+def test_a_shallow_wall_on_a_deck_edge_is_reported():
+    # z = 0.05 (y - 0.1): about 2.9 degrees, so points within the tolerance reach ~20 tolerances from the
+    # shared edge, beyond the joint band (P4e-3)
+    assert not _deck_and_wall(_bernstein([-.005, .05])).strict_audit().clean
+
+
+def test_a_surface_touching_the_plane_away_from_the_section_fails_the_angle_band():
+    from fractions import Fraction
+    from anygeometry.nurbs import NurbsSurface
+    from anygeometry.section_audit import Work, _angle_band_clean
+    # z = 4 (y - 0.1)(y - 0.6)^2 + 5e-11: crosses z = 0 near y = 0.1 and comes within 5e-11 of it at y = 0.6
+    # without crossing; a model with this wall cannot be built (P1 refuses the near-tangent section), so the
+    # band predicate is checked directly (P4e-3)
+    power = [4 * -.1 * .36 + 5e-11, 4 * (.36 + 2 * .1 * .6), 4 * (-1.2 - .1), 4.]
+    heights = _bernstein(power)
+    surface = NurbsSurface(1, 3, (0., 0., 1., 1.), (0.,) * 4 + (1.,) * 4,
+                           tuple(tuple((x, j / 3, heights[j]) for j in range(4)) for x in (-1., 1.)))
+    plane = (Fraction(0), Fraction(0), Fraction(1))
+    assert not _angle_band_clean(surface, plane, Fraction(0), 1e-9, Work())
+    steep = NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.),
+                         (((-1., 0., -.1), (-1., 1., .9)), ((1., 0., -.1), (1., 1., .9))))
+    assert _angle_band_clean(steep, plane, Fraction(0), 1e-9, Work())

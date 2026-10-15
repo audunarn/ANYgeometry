@@ -720,10 +720,17 @@ def _paths(plane, surface):
 
 
 def face_face(model, first_id: int, second_id: int, tolerance: float, work: Work | None = None):
-    """A plane face against a NURBS face (owner option b): with shared section edges, every path of their
-    exact section must be covered by them (their exact intersection is the shared edges; the tolerance
-    band along them is not certified yet); without, every surface patch of the NURBS face's chart box
-    must be farther than the tolerance from the plane."""
+    """A plane face against a NURBS face, contract (a) with the joint band (owner 2026-10-15, P4e-3).
+
+    With shared section edges: (1) every path of their exact section is covered by them, or lies outside
+    the plane face with a clearance of the band radius plus the tolerance, ``(JOINT_BALL + 1) tol``,
+    except in joint departure stretches at the shared corners; (2) the band: wherever the surface's
+    support comes within the tolerance of the plane, the angle between them is certified to satisfy
+    ``sin theta >= 1 / JOINT_BALL`` (``_angle_band_clean``). Moving on the surface against the gradient
+    of the plane distance then reaches the exact section within ``JOINT_BALL tol``, so the NURBS face's
+    points within the tolerance of the plane face lie within the band of the shared edges (the section
+    elsewhere being cleared by (1)). Without shared edges every surface patch of the NURBS face's chart
+    box must be farther than the tolerance from the plane."""
     from .surfaces import Plane
     from .nurbs import NurbsSurface
     from .section_faces import _cross, _exact, _same_plane
@@ -759,10 +766,13 @@ def face_face(model, first_id: int, second_id: int, tolerance: float, work: Work
                 # parts of the section outside the shared edges must lie outside the plane face (B1-P5b:
                 # the plane cuts the whole support, the faces only between their trims)
                 for low, high in uncovered:
-                    if not _outside_plane_face(model, first, path.subcurve(low, high), tolerance, work):
+                    if not _outside_plane_face(model, first, path.subcurve(low, high),
+                                               (JOINT_BALL + 1) * tolerance, work):
                         return None
             if shared:
-                return True                     # option b: the exact intersection is the shared edges
+                n = _cross(_exact(plane.u_vector), _exact(plane.v_vector))
+                d = _dot(n, _exact(plane.origin))
+                return True if _angle_band_clean(surface, n, d, tolerance, work) else None
             n = _cross(_exact(plane.u_vector), _exact(plane.v_vector))
             d = _dot(n, _exact(plane.origin))
             # nothing shared: certified farther than the tolerance (no patch may approach the plane)
@@ -997,6 +1007,70 @@ def _line_anchor(first, second, direction):
 
 def _cross(a, b):
     return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+
+
+def _angle_band_clean(surface, n, d, tolerance, work) -> bool:
+    """Over the surface's whole support: every sub-rectangle is farther than the tolerance from the plane
+    ``n . X = d``, or the angle between the surface and the plane is certified there with
+    ``sin^2 theta >= 1 / JOINT_BALL^2`` (exact interval bounds of the homogeneous tangents
+    ``T_u = X_u W - X W_u``, ``N = T_u x T_v``: ``JOINT_BALL^2 (n . N)^2 <= (JOINT_BALL^2 - 1) |n|^2 |N|^2``).
+    Subdivision to the work budget; refused otherwise (P4e-3)."""
+    from .branch_predicates import _derivative_ranges, _multiply, _patches, _range, _rect, _subtract
+    zero = Fraction(0)
+    g_patches = _patches(surface, tuple(n), d)
+    w_patches = _patches(surface, (zero,) * 3, Fraction(-1))
+    x_patches = [_patches(surface, tuple(Fraction(int(i == k)) for i in range(3)), zero) for k in range(3)]
+    norm_n2 = _dot(n, n)
+    tol = Fraction(float(tolerance))
+    j2 = Fraction(JOINT_BALL) ** 2
+
+    def add(a, b):
+        return a[0] + b[0], a[1] + b[1]
+
+    def square_low(a):
+        return zero if a[0] <= 0 <= a[1] else min(a[0] * a[0], a[1] * a[1])
+
+    def square_high(a):
+        return max(a[0] * a[0], a[1] * a[1])
+    pending = [(tuple(patch.u_range), tuple(patch.v_range), index, 0) for index, patch in enumerate(g_patches)]
+    while pending:
+        u_range, v_range, index, depth = pending.pop()
+        if not work.take():
+            return False
+        g_patch, w_patch = g_patches[index], w_patches[index]
+        g = _rect(g_patch.coefficients, g_patch.u_range, g_patch.v_range, u_range, v_range)
+        ww = _rect(w_patch.coefficients, w_patch.u_range, w_patch.v_range, u_range, v_range)
+        g_low, g_high = _range(g)
+        w_range = _range(ww)
+        norm_up = _norm_up(n)
+        if g_low > tol * norm_up * w_range[1] or g_high < -tol * norm_up * w_range[1]:
+            continue                                            # farther than the tolerance
+        du, dv = u_range[1] - u_range[0], v_range[1] - v_range[0]
+        w_u, w_v = _derivative_ranges(ww, du, dv)
+        tangents_u, tangents_v = [], []
+        for k in range(3):
+            xp = x_patches[k][index]
+            xc = _rect(xp.coefficients, xp.u_range, xp.v_range, u_range, v_range)
+            x_range = _range(xc)
+            x_u, x_v = _derivative_ranges(xc, du, dv)
+            tangents_u.append(_subtract(_multiply(x_u, w_range), _multiply(x_range, w_u)))
+            tangents_v.append(_subtract(_multiply(x_v, w_range), _multiply(x_range, w_v)))
+        normal = [_subtract(_multiply(tangents_u[(k + 1) % 3], tangents_v[(k + 2) % 3]),
+                            _multiply(tangents_u[(k + 2) % 3], tangents_v[(k + 1) % 3])) for k in range(3)]
+        dot = (zero, zero)
+        for k in range(3):
+            dot = add(dot, (min(n[k] * normal[k][0], n[k] * normal[k][1]), max(n[k] * normal[k][0], n[k] * normal[k][1])))
+        normal_low = sum(square_low(component) for component in normal)
+        if normal_low > 0 and j2 * square_high(dot) <= (j2 - 1) * norm_n2 * normal_low:
+            continue                                            # steep enough: the band is within the ball
+        if depth >= work.max_depth:
+            return False
+        work.subdivisions += 1
+        um, vm = (u_range[0] + u_range[1]) / 2, (v_range[0] + v_range[1]) / 2
+        for us in ((u_range[0], um), (um, u_range[1])):
+            for vs in ((v_range[0], vm), (vm, v_range[1])):
+                pending.append((us, vs, index, depth + 1))
+    return True
 
 
 def _surface_band_clean(surface, chart_box, n, d, tolerance, work, allow_crossing: bool = True) -> bool:
