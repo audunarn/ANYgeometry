@@ -410,6 +410,11 @@ class _Context:
     sign_to: int
     depth: int
 
+    def solid(self) -> bool:
+        """Positive width in both directions (a degenerate rectangle is a point or an edge line where
+        the curve may collapse to its end root: zero G2 there is a root, not a coincidence)."""
+        return self.s_range[1] > self.s_range[0] and self.x_range[1] > self.x_range[0]
+
     def g2_range(self):
         return _range(self.view.over(self.view.g2, self.s_range, self.x_range))
 
@@ -446,7 +451,7 @@ def section_roots(curve: PlaneNurbsCurve, n, d, *, max_depth: int = MAX_DEPTH,
 
     def classify(context: _Context) -> str:
         low, high = context.g2_range()
-        if low == high == 0:
+        if low == high == 0 and context.solid():
             raise PlaneNurbsNotCertified("the second plane contains a piece of the curve (coincident)")
         if low > 0 or high < 0:
             return "done"                                      # no root: G2 has one sign over the piece
@@ -526,7 +531,7 @@ def certify_line_section(curve: PlaneNurbsCurve, start, end, shared=(), toleranc
 
     def classify(context: _Context) -> str:
         low, high = context.g2_range()
-        if low == high == 0:
+        if low == high == 0 and context.solid():
             raise PlaneNurbsNotCertified("the segment's plane contains a piece of the curve (coincident)")
         if low > 0 or high < 0:
             return "done"                                       # no root of h on this piece
