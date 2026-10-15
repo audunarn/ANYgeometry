@@ -1472,6 +1472,13 @@ class _StrictAuditState:
         }
         if vertex_id in boundary_vertices:
             return _PairClassification(True)
+        if type(face.surface).__name__ == "NurbsSurface":
+            # NURBS faces: exact sub-patch hulls (B1-P4d); undecided -> refused
+            from .section_audit import vertex_face
+            extent = feature_extent(self.face_points(face_id))
+            if vertex_face(self.model, vertex_id, face_id, self.tolerance.effective_length(extent)) is True:
+                return _PairClassification(True)
+            return self.unclassified(vertex_key, face_key, "nurbs_vertex_face_not_certified")
         point = self.model.vertex_position(vertex_id)
         projected, uv, distance = self.project_to_face_support(face_id, point)
         extent = feature_extent(self.face_points(face_id))
@@ -1782,6 +1789,14 @@ class _StrictAuditState:
         pair_length_tolerance = self._edge_pair_length_tolerance(
             first.id, second.id
         )
+        if "PlaneNurbsCurve" in (type(first.curve).__name__, type(second.curve).__name__):
+            # plane x NURBS section edges: certified (B1-P4d), no generic fallback
+            from .section_audit import edge_edge
+            verdict = edge_edge(self.model, first.id, second.id, pair_length_tolerance)
+            if verdict is True:
+                return _PairClassification(True)
+            return self.unclassified(first_key, second_key, "section_edge_contact" if verdict is False
+                                     else "section_edge_pair_not_certified")
         if type(first.curve).__name__ == "CurveOnSurface" and type(second.curve).__name__ == "CurveOnSurface":
             # Curves on NURBS supports: an exact certificate that they meet at most at
             # their shared end points (A3b, nurbs_audit); otherwise the general route
@@ -2638,6 +2653,15 @@ class _StrictAuditState:
             return _PairClassification(True)
 
         face = self.model.faces[face_id]
+        if (type(edge.curve).__name__ in ("PlaneNurbsCurve", "CurveOnSurface")
+                or type(face.surface).__name__ == "NurbsSurface"):
+            # section edges, curves on NURBS supports and NURBS faces: certified (B1-P4d) or refused
+            from .section_audit import edge_face
+            verdict = edge_face(self.model, edge_id, face_id, local_length_tolerance)
+            if verdict is True:
+                return _PairClassification(True)
+            return self.unclassified(edge_key, face_key, "section_edge_face_contact" if verdict is False
+                                     else "section_edge_face_not_certified")
         plane = _surface_plane(face)
         relationship: str | None = None
         witnesses: tuple[AuditWitness, ...] = ()
@@ -3074,6 +3098,15 @@ class _StrictAuditState:
             for oriented in loop
         )
         shared_vertices = first_vertices & second_vertices
+        kinds = {type(first_face.surface).__name__, type(second_face.surface).__name__}
+        if kinds == {"Plane", "NurbsSurface"}:
+            # plane x NURBS faces: their exact section must be their shared section edges (B1-P4d)
+            from .section_audit import face_face
+            extent = self._face_pair_extent(first_face.id, second_face.id)
+            verdict = face_face(self.model, first_face.id, second_face.id, self.tolerance.effective_length(extent))
+            if verdict is True:
+                return _PairClassification(True)
+            return self.unclassified(first_key, second_key, "plane_nurbs_faces_not_certified")
         if not (
             isinstance(first_face.surface, Plane)
             and isinstance(second_face.surface, Plane)
