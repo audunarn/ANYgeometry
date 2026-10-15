@@ -387,6 +387,15 @@ class _StrictAuditState:
         )
         return _PairClassification(False)
 
+    def _section_work(self):
+        """The qualification budget for one certified section classification (B1-P4d)."""
+        from .section_audit import Work
+        return Work(self.qualification.max_boxes_per_pair, self.qualification.max_subdivision_depth)
+
+    def _record_section_work(self, work) -> None:
+        self.collector.record_intersection_work(boxes_examined=work.boxes, subdivisions=work.subdivisions,
+                                                trace_segments=0)
+
     def record_intersection_certificate(self, result) -> None:
         """Expose public narrow-phase work without duplicating its predicates."""
 
@@ -1476,7 +1485,11 @@ class _StrictAuditState:
             # NURBS faces: exact sub-patch hulls (B1-P4d); undecided -> refused
             from .section_audit import vertex_face
             extent = feature_extent(self.face_points(face_id))
-            if vertex_face(self.model, vertex_id, face_id, self.tolerance.effective_length(extent)) is True:
+            work = self._section_work()
+            # the existing vertex x face route's tolerance (review B1-P4d round 1)
+            verdict = vertex_face(self.model, vertex_id, face_id, self.tolerance.effective_surface_residual(extent), work)
+            self._record_section_work(work)
+            if verdict is True:
                 return _PairClassification(True)
             return self.unclassified(vertex_key, face_key, "nurbs_vertex_face_not_certified")
         point = self.model.vertex_position(vertex_id)
@@ -1792,7 +1805,9 @@ class _StrictAuditState:
         if "PlaneNurbsCurve" in (type(first.curve).__name__, type(second.curve).__name__):
             # plane x NURBS section edges: certified (B1-P4d), no generic fallback
             from .section_audit import edge_edge
-            verdict = edge_edge(self.model, first.id, second.id, pair_length_tolerance)
+            work = self._section_work()
+            verdict = edge_edge(self.model, first.id, second.id, pair_length_tolerance, work)
+            self._record_section_work(work)
             if verdict is True:
                 return _PairClassification(True)
             return self.unclassified(first_key, second_key, "section_edge_contact" if verdict is False
@@ -2657,7 +2672,9 @@ class _StrictAuditState:
                 or type(face.surface).__name__ == "NurbsSurface"):
             # section edges, curves on NURBS supports and NURBS faces: certified (B1-P4d) or refused
             from .section_audit import edge_face
-            verdict = edge_face(self.model, edge_id, face_id, local_length_tolerance)
+            work = self._section_work()
+            verdict = edge_face(self.model, edge_id, face_id, local_length_tolerance, work)
+            self._record_section_work(work)
             if verdict is True:
                 return _PairClassification(True)
             return self.unclassified(edge_key, face_key, "section_edge_face_contact" if verdict is False
@@ -3103,7 +3120,9 @@ class _StrictAuditState:
             # plane x NURBS faces: their exact section must be their shared section edges (B1-P4d)
             from .section_audit import face_face
             extent = self._face_pair_extent(first_face.id, second_face.id)
-            verdict = face_face(self.model, first_face.id, second_face.id, self.tolerance.effective_length(extent))
+            work = self._section_work()
+            verdict = face_face(self.model, first_face.id, second_face.id, self.tolerance.effective_length(extent), work)
+            self._record_section_work(work)
             if verdict is True:
                 return _PairClassification(True)
             return self.unclassified(first_key, second_key, "plane_nurbs_faces_not_certified")
