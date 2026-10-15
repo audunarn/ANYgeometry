@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
+
 import pytest
 
 from anygeometry import GeometryError, GeometryModel, Plane
@@ -198,3 +200,69 @@ def test_display_trim_loops_of_nurbs_faces_are_chart_samples():
     _surface, build, face = bow_below_deck()
     (loop,) = build.model.face_trim_loops_uv(face)
     assert loop.shape[1] == 2 and abs(loop[:, 1].max() - .75) <= 1e-12 and abs(loop[:, 1].min()) <= 1e-12
+
+
+# ------------------------------------------------------------------ B1-P5a: corners between two section curves
+
+
+def b1_bow():
+    w = math.cos(math.pi / 4)
+    bottom = [(0., 6., 0.), (5.4, 6., 0.), (5.4, 0., 0.)]
+    deck = [(0., 7.5, 4.), (6., 7.5, 4.), (6., 0., 4.)]
+    return NurbsSurface(2, 1, (0., 0., 0., 1., 1., 1.), (0., 0., 1., 1.),
+                        tuple((b, d) for b, d in zip(bottom, deck)), ((1., 1.), (w, w), (1., 1.)), u_range=(0., .9))
+
+
+def section_parameter(curve, normal, offset):
+    from anygeometry.branch_predicates import section_roots
+    (root,) = section_roots(curve, normal, offset, max_depth=90, refine=80)
+    return .5 * (root.t_lo + root.t_hi)
+
+
+def test_a_bow_piece_bounded_by_four_sections_validates():
+    surface = b1_bow()
+    planes = {"deck": (Plane((0., 0., 3.), (1., 0., 0.), (0., 1., 0.)), (0, 0, 1), 3),
+              "bottom": (Plane((0., 0., .5), (1., 0., 0.), (0., 1., 0.)), (0, 0, 1), .5),
+              "a": (Plane((1.5, 0., 0.), (0., 1., 0.), (0., 0., 1.)), (1, 0, 0), 1.5),
+              "b": (Plane((3.5, 0., 0.), (0., 1., 0.), (0., 0., 1.)), (1, 0, 0), 3.5)}
+    curves = {key: PlaneNurbsCurve.from_plane(plane, surface, 0) for key, (plane, _n, _d) in planes.items()}
+    t = {(c, p): section_parameter(curves[c], planes[p][1], planes[p][2])
+         for c, p in (("deck", "a"), ("deck", "b"), ("bottom", "a"), ("bottom", "b"),
+                      ("a", "deck"), ("a", "bottom"), ("b", "deck"), ("b", "bottom"))}
+    model = GeometryModel()
+    corner = {frozenset(key): model.add_point(*curves[key[0]].evaluate(t[key]))
+              for key in (("deck", "a"), ("deck", "b"), ("bottom", "a"), ("bottom", "b"))}
+
+    def edge(curve, start, end):
+        return model.add_curve(corner[frozenset((curve, start))], corner[frozenset((curve, end))],
+                               curves[curve].subcurve(t[(curve, start)], t[(curve, end)]))
+    face = model.add_face([edge("bottom", "a", "b"), edge("b", "bottom", "deck"), edge("deck", "b", "a"),
+                           edge("a", "deck", "bottom")], surface=surface)
+    assert validate_nurbs_section_face(model, face) == []
+
+
+def test_a_section_crossing_the_deck_edge_again_from_a_shared_corner_is_not_certified():
+    from anygeometry.nurbs_section_faces import _Chart, _pair, _chart_tolerance
+    surface = b1_bow()
+    deck_plane = Plane((0., 0., 3.), (1., 0., 0.), (0., 1., 0.))
+    deck = PlaneNurbsCurve.from_plane(deck_plane, surface, 0)
+    t_a = section_parameter(deck, (1, 0, 0), 1.5)
+    t_b = section_parameter(deck, (1, 0, 0), 3.5)
+    c1, c2 = deck.evaluate(t_a), deck.evaluate(.5 * (t_a + t_b))
+    below = np.asarray(surface.evaluate(.4, .3), dtype=float)
+    slanted = Plane(tuple(c1), tuple(c2 - c1), tuple(below - c1))
+    other = PlaneNurbsCurve.from_plane(slanted, surface, 0)
+    from anygeometry.branch_predicates import section_roots
+    crossings = sorted(.5 * (r.t_lo + r.t_hi) for r in section_roots(other, (0, 0, 1), 3, max_depth=90, refine=80))
+    assert len(crossings) == 2                                  # the slanted section meets the deck at c1 and c2
+    near_c1 = min(crossings, key=lambda t: np.linalg.norm(other.evaluate(t) - c1))
+    beyond = 1.0 if near_c1 == crossings[0] else 0.0            # run from c1 through c2 to the path's end
+    model = GeometryModel()
+    start = model.add_point(*c1)
+    first = model.add_curve(start, model.add_point(*deck.evaluate(t_b)), deck.subcurve(t_a, t_b))
+    piece = other.subcurve(near_c1, beyond)
+    second = model.add_curve(start, model.add_point(*piece.evaluate(1.)), piece)
+    a, b = model.edges[first], model.edges[second]
+    verdict = _pair(model, a, b, _Chart(surface), [], {a.start, a.end} & {b.start, b.end},
+                    _chart_tolerance(surface, 1e-9))
+    assert verdict is not True

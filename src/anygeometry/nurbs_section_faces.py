@@ -485,11 +485,28 @@ def _pair(model, a, b, chart, shared, shared_ids, tolerance, neighbours=False):
                 return True if shared_ids else None             # touching domain ends: a shared vertex
             return True                                         # P1 paths are simple in the chart
         if shared_ids:
-            return None                                         # joints between two section curves: later
+            # two section curves meeting at a corner (B1-P5a): P4b's world piece certificate (non-neighbour
+            # pieces separated, the corner's pieces departing on opposite sides); a surface map is
+            # injective on a NURBS face's chart, so world simplicity gives chart simplicity
+            from .entities import OrientedEdge
+            from .section_faces import _sections_simple
+            world_tolerance = model.tolerance.effective_length(_pair_extent(a, b))
+            loose, _pieces = _sections_simple(model, ((OrientedEdge(a.id, True), OrientedEdge(b.id, True)),),
+                                              world_tolerance)
+            return True if not loose else None
         return True if _sections_apart(a.curve, b.curve, chart, tolerance) else None
     section, segment = (a, b) if first_section else (b, a)
     p0, p1 = segment.curve.pcurve.exact_point(0), segment.curve.pcurve.exact_point(1)
     return segment_section(section.curve, p0, p1, shared, tolerance)
+
+
+def _pair_extent(a, b) -> float:
+    lows, highs = [], []
+    for curve in (a.curve, b.curve):
+        low, high = curve.bounds()
+        lows.append(low)
+        highs.append(high)
+    return float(np.linalg.norm(np.max(highs, axis=0) - np.min(lows, axis=0))) or 1.0
 
 
 def _inside(model, loop, point, chart, tolerance):
