@@ -410,11 +410,15 @@ def test_ill_conditioned_chart_order_is_exact_where_mains_angles_are_not():
     directions = {k: tuple(b - a for a, b in zip(*segments[k])) for k in ends}
     expected = _oracle_order(plane, directions)
     assert _comparator_order(plane, segments, [(None, 0., k, True) for k in ends]) == expected
+    # discrimination (platform-dependent: float atan2 of least-squares tangents): on the development
+    # workstation main's cyclic order differs from the exact one; where a platform's floats happen to
+    # order these edges right, the case does not discriminate there and only the exact order is checked
     domain = MaterialDomain(1, plane, ())
     angles = {k: math.atan2(*domain.tangent(LinePath(start, e), 0.)[::-1]) % math.tau for k, e in ends.items()}
     float_order = sorted(ends, key=lambda k: angles[k])
     rotations = [expected[i:] + expected[:i] for i in range(len(expected))]
-    assert float_order not in rotations                  # discrimination: main's cyclic order differs
+    if float_order in rotations:
+        pytest.skip("this platform's float angles order the edges correctly: no discrimination here")
 
 
 @pytest.mark.parametrize("flip", (False, True))

@@ -83,7 +83,9 @@ jobs:
     needs: plan
     if: needs.plan.outputs.runtime == 'true'
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    # the full suite takes ~35-40 min on the hosted runners since the exact plane x NURBS, P5/P4e audit
+    # and H1 hydrostatics tests (30 min cancelled it at 76 %)
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
