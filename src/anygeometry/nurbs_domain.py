@@ -407,4 +407,3 @@ def certified_chart_polyline(surface: NurbsSurface, pcurve: NurbsCurve, toleranc
     accepted.sort()
     parameters = np.array([piece[0] for piece in accepted] + [1.0])
     return np.clip(pcurve.evaluate(parameters), 0.0, 1.0), max(piece[2] for piece in accepted)
-

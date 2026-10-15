@@ -703,4 +703,3 @@ def canonical_order(first, second) -> tuple[object, object, bool]:
 
     a, b = definition_checksum(first), definition_checksum(second)
     return (first, second, False) if a <= b else (second, first, True)
-
