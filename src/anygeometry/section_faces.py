@@ -61,14 +61,15 @@ def _same_plane(plane, curve: PlaneNurbsCurve) -> bool:
 
 
 class _Frame:
-    """Orthonormal in-plane coordinates (floats) of the face's plane."""
+    """Orthonormal in-plane coordinates (floats) of the face's plane, about a local ``origin``
+    (a loop vertex: far plane origins cancelled the area, review B1-P4b round 1)."""
 
-    def __init__(self, plane):
+    def __init__(self, plane, origin=None):
         normal = np.cross(plane.u_vector, plane.v_vector)
         self.normal = normal / float(np.linalg.norm(normal))
         self.first = np.asarray(plane.u_vector, dtype=float) / float(np.linalg.norm(plane.u_vector))
         self.second = np.cross(self.normal, self.first)
-        self.origin = np.asarray(plane.origin, dtype=float)
+        self.origin = np.asarray(plane.origin if origin is None else origin, dtype=float)
 
     def xy(self, points):
         offset = np.asarray(points, dtype=float) - self.origin
@@ -82,61 +83,68 @@ def _edge_points(model, oriented):
 
 
 def _section_area(curve: PlaneNurbsCurve, frame: _Frame, forward: bool, pieces: int = _PIECES):
-    """``(value, bound)`` of ``1/2 oint (x dy - y dx)`` along a section edge in its loop direction.
+    """``(gauss, chord, bound, magnitude)`` of ``1/2 oint (x dy - y dx)`` along a section edge in its
+    loop direction.
 
-    ``value``: Gauss-Legendre per arc piece (the curve is smooth between breakpoints).
-    ``bound``: rigorous for the region between the curve and its ``_PIECES``-chord polyline,
-    measured against the polyline area: each piece lies in its enclosure ``bounds(t_k, t_k+1)``
-    (as does its chord), so their difference is at most that box's in-plane area; the polyline
-    value comes with it so the caller can use the polyline, and the Gauss value is checked
-    against the polyline within the bound.
+    ``gauss``: Gauss-Legendre per arc piece (the curve is smooth between breakpoints). ``chord``:
+    the ``pieces``-chord polyline. ``bound``: rigorous for ``|curve - chord|``: each piece and its
+    chord lie in the enclosure ``bounds(t_k, t_k+1)``, so the closed curve they form encloses at most
+    that box's in-plane area. ``magnitude``: the sum of the absolute products (rounding scale).
     """
     knots = sorted({0.0, 1.0, *curve.breakpoints()})
     nodes, weights = _GAUSS
-    value = 0.0
+    gauss, magnitude = 0.0, 0.0
     for lo, hi in zip(knots, knots[1:]):
         t = .5 * (hi - lo) * (nodes + 1.) + lo
         points = frame.xy(curve.evaluate(t))
         derivatives = np.stack([(curve.derivative(float(item)) @ frame.first,
                                  curve.derivative(float(item)) @ frame.second) for item in t])
-        integrand = points[:, 0] * derivatives[:, 1] - points[:, 1] * derivatives[:, 0]
-        value += .5 * .5 * (hi - lo) * float(weights @ integrand)
+        first, second = points[:, 0] * derivatives[:, 1], points[:, 1] * derivatives[:, 0]
+        gauss += .25 * (hi - lo) * float(weights @ (first - second))
+        magnitude += .25 * (hi - lo) * float(weights @ (np.abs(first) + np.abs(second)))
     ts = np.linspace(0.0, 1.0, pieces + 1)
     polyline = frame.xy(curve.evaluate(ts))
-    chord = .5 * float(np.sum(polyline[:-1, 0] * polyline[1:, 1] - polyline[1:, 0] * polyline[:-1, 1]))
+    products = (polyline[:-1, 0] * polyline[1:, 1], polyline[1:, 0] * polyline[:-1, 1])
+    chord = .5 * float(np.sum(products[0] - products[1]))
+    magnitude += .5 * float(np.sum(np.abs(products[0]) + np.abs(products[1])))
     bound = 0.0
     for lo, hi in zip(ts, ts[1:]):
         lower, upper = curve.bounds(float(lo), float(hi))
         corners = frame.xy(np.array([[lower[k] if (index >> k) & 1 == 0 else upper[k] for k in range(3)]
                                      for index in range(8)]))
-        width = np.ptp(corners, axis=0)
+        width = np.ptp(corners, axis=0) + 8 * np.finfo(float).eps * float(np.max(np.abs(corners)))
         bound += float(width[0] * width[1])
     if not forward:
-        value, chord = -value, -chord
-    return value, chord, bound
+        gauss, chord = -gauss, -chord
+    return gauss, chord, bound, magnitude
 
 
 def loop_area(model, loop, plane, pieces: int = _PIECES) -> tuple[float, float]:
     """``(area, bound)``: the signed area of a plane-face loop (positive anticlockwise about the
-    plane's ``u x v``) and a bound on its error (section pieces: enclosure areas; floats: a
-    relative allowance)."""
-    frame = _Frame(plane)
-    value, polygon_value, bound = 0.0, 0.0, 0.0
+    plane's ``u x v``) and a rigorous bound of its error.
+
+    In coordinates about the loop's first vertex. ``area`` is the Gauss value; with ``|true -
+    chord| <= B`` (enclosures), ``|true - gauss| <= B + |chord - gauss|`` plus rounding, scaled by
+    the magnitude of the summed products (review B1-P4b round 1).
+    """
+    frame = _Frame(plane, model.vertices[model.oriented_start_vertex(loop[0])].position)
+    value, polygon_value, bound, magnitude = 0.0, 0.0, 0.0, 0.0
     for item in loop:
         curve = model.edges[item.edge].curve
         if isinstance(curve, PlaneNurbsCurve):
-            gauss, chord, piece_bound = _section_area(curve, frame, item.forward, pieces)
+            gauss, chord, piece_bound, piece_magnitude = _section_area(curve, frame, item.forward, pieces)
             value += gauss
             polygon_value += chord
             bound += piece_bound
+            magnitude += piece_magnitude
         else:
             start, end = frame.xy(np.asarray(_edge_points(model, item)))
-            term = .5 * float(start[0] * end[1] - end[0] * start[1])
-            value += term
-            polygon_value += term
-    if abs(value - polygon_value) > bound * (1 + 1e-9) + 1e-12 * (abs(value) + 1):
-        raise GeometryError("plane face loop area quadrature disagrees with its certified polyline bound")
-    return value, bound + 64 * np.finfo(float).eps * (abs(value) + 1)
+            first, second = float(start[0] * end[1]), float(end[0] * start[1])
+            value += .5 * (first - second)
+            polygon_value += .5 * (first - second)
+            magnitude += .5 * (abs(first) + abs(second))
+    eps = np.finfo(float).eps
+    return value, bound * (1 + 16 * eps) + abs(value - polygon_value) + 64 * eps * magnitude
 
 
 def _pair_verdict(model, first, second, tolerance):
@@ -146,23 +154,128 @@ def _pair_verdict(model, first, second, tolerance):
     shared_ids = {a.start, a.end} & {b.start, b.end}
     shared = [model.vertices[vertex].position for vertex in shared_ids]
     if isinstance(a.curve, PlaneNurbsCurve) and isinstance(b.curve, PlaneNurbsCurve):
-        if (a.curve.plane_record, a.curve.surface, a.curve.path) == \
-                (b.curve.plane_record, b.curve.surface, b.curve.path):
-            low_a, high_a = sorted(a.curve.domain)
-            low_b, high_b = sorted(b.curve.domain)
-            if min(high_a, high_b) > max(low_a, low_b):
-                return False                                    # overlapping pieces of one section path
-            if high_a == low_b or high_b == low_a:
-                return True if shared_ids else None            # touching ends must be a shared vertex
-            return True                                         # disjoint pieces of one simple path
-        (la, ua), (lb, ub) = a.curve.bounds(), b.curve.bounds()
-        gap = np.maximum(np.maximum(la - ub, lb - ua), 0.0)
-        return True if float(np.linalg.norm(gap)) > tolerance else None
+        return True                                             # certified by _sections_simple
     if isinstance(a.curve, PlaneNurbsCurve) or isinstance(b.curve, PlaneNurbsCurve):
         curve_edge, line_edge = (a, b) if isinstance(a.curve, PlaneNurbsCurve) else (b, a)
         start, end = (model.vertices[line_edge.start].position, model.vertices[line_edge.end].position)
         return certify_line_section_safe(curve_edge.curve, start, end, shared, tolerance)
     return None
+
+
+def _box_gap(first, second) -> float:
+    (la, ua), (lb, ub) = first, second
+    return float(np.linalg.norm(np.maximum(np.maximum(np.asarray(la) - ub, np.asarray(lb) - ua), 0.0)))
+
+
+def _joint_side(curve, a, b, at_start: bool, point, normal, tolerance):
+    """The side (+1/-1) of the piece ``curve[a, b]`` relative to the plane ``normal . (X - point) = 0``
+    when its only crossing is within ``tolerance`` of ``point`` (the joint at its start or end) and its
+    far end is certainly off the plane; ``None`` otherwise."""
+    from .branch_predicates import section_roots
+    n = _exact(normal)
+    d = sum(x * y for x, y in zip(n, _exact(point)))
+    try:
+        roots = section_roots(curve.subcurve(a, b), n, d)
+    except PlaneNurbsNotCertified:
+        return None
+    if sum(len(root.exact) or 1 for root in roots) > 1:
+        return None                                             # an excursion back across the plane
+    for root in roots:
+        corners = np.array([[root.lower[k] if (index >> k) & 1 == 0 else root.upper[k] for k in range(3)]
+                            for index in range(8)])
+        if float(np.max(np.linalg.norm(corners - point, axis=1))) > tolerance:
+            return None
+    far = curve.evaluate(b if at_start else a)
+    side = float(np.dot(normal, far - point))
+    if abs(side) <= tolerance * float(np.linalg.norm(normal)):
+        return None
+    return 1 if side > 0 else -1
+
+
+def _sections_simple(model, loops, tolerance, max_level: int = 12) -> list[int]:
+    """Section edges whose world simplicity (as a set together, within ``tolerance`` of their joints)
+    is not certified (review B1-P4b round 1: a simple chart path can cross itself in the world).
+
+    The section edges are cut into pieces; pieces that are not neighbours must have enclosures more
+    than the tolerance apart; neighbours (consecutive pieces of an edge, or pieces of two edges at a
+    shared vertex) must lie on opposite sides of the plane through their joint with normal
+    ``unit(away_q) - unit(away_p)`` (each crossing it only at the joint). Undecided pieces are
+    halved up to ``max_level`` times; the remaining ones are reported.
+    """
+    edges = sorted({item.edge for loop in loops for item in loop
+                    if isinstance(model.edges[item.edge].curve, PlaneNurbsCurve)})
+    if not edges:
+        return []
+    pieces = {edge: [(0.0, .5), (.5, 1.0)] for edge in edges}
+    loose: set = set()
+    boxes: dict = {}                                            # memoised across levels: only new pieces cost
+    verdicts: dict = {}
+    for level in range(max_level + 1):
+        flat = [(edge, a, b) for edge in edges for a, b in pieces[edge]]
+        for key in flat:
+            if key not in boxes:
+                boxes[key] = model.edges[key[0]].curve.bounds(key[1], key[2])
+        ends: dict = {}                                         # vertex -> pieces touching it at an edge end
+        for key in flat:
+            edge = model.edges[key[0]]
+            if key[1] == 0.0:
+                ends.setdefault(edge.start, []).append((key, True))
+            if key[2] == 1.0:
+                ends.setdefault(edge.end, []).append((key, False))
+        joints = []                                             # (p, p_at_start, q, q_at_start, point)
+        for edge in edges:
+            curve = model.edges[edge].curve
+            for (a, b), (c, e) in zip(pieces[edge], pieces[edge][1:]):
+                joints.append(((edge, a, b), False, (edge, c, e), True, curve.evaluate(b)))
+        for vertex, touching in ends.items():
+            for i in range(len(touching)):
+                for j in range(i + 1, len(touching)):
+                    (p, p_start), (q, q_start) = touching[i], touching[j]
+                    if p[0] != q[0]:
+                        joints.append((p, p_start, q, q_start, model.vertices[vertex].position))
+        neighbours = {frozenset((p, q)) for p, _ps, q, _qs, _x in joints}
+        loose = set()
+        for i in range(len(flat)):
+            for j in range(i + 1, len(flat)):
+                if frozenset((flat[i], flat[j])) in neighbours:
+                    continue
+                if _box_gap(boxes[flat[i]], boxes[flat[j]]) <= tolerance:
+                    loose.update((flat[i], flat[j]))
+        for p, p_start, q, q_start, point in joints:
+            if p in loose or q in loose:
+                continue                                        # split anyway: decided after the split
+            memo = (p, p_start, q, q_start)
+            if memo in verdicts:
+                if not verdicts[memo]:
+                    loose.update((p, q))
+                continue
+            point = np.asarray(point, dtype=float)
+            directions = []
+            for key, at_start in ((p, p_start), (q, q_start)):
+                curve = model.edges[key[0]].curve
+                tangent = curve.derivative(key[1] if at_start else key[2])
+                away = tangent if at_start else -tangent
+                directions.append(away / float(np.linalg.norm(away)))
+            normal = directions[1] - directions[0]
+            if float(np.linalg.norm(normal)) <= 1e-6:
+                verdicts[memo] = False                          # a cusp or a fold back at the joint
+                loose.update((p, q))
+                continue
+            side_p = _joint_side(model.edges[p[0]].curve, p[1], p[2], p_start, point, normal, tolerance)
+            side_q = _joint_side(model.edges[q[0]].curve, q[1], q[2], q_start, point, normal, tolerance)
+            verdicts[memo] = not (side_p is None or side_q is None or side_p == side_q)
+            if not verdicts[memo]:
+                loose.update((p, q))
+        if not loose:
+            return []
+        if level == max_level:
+            break
+        for edge, a, b in loose:
+            middle = .5 * (a + b)
+            spans = pieces[edge]
+            index = spans.index((a, b))
+            spans[index:index + 1] = [(a, middle), (middle, b)]
+    return sorted({key[0] for key in loose})
 
 
 def certify_line_section_safe(curve, start, end, shared, tolerance):
@@ -171,6 +284,13 @@ def certify_line_section_safe(curve, start, end, shared, tolerance):
         return certify_line_section(curve, start, end, shared, tolerance)
     except PlaneNurbsNotCertified:
         return None
+
+
+def _segment_distance(point, start, end) -> float:
+    direction = np.asarray(end, dtype=float) - start
+    length = float(direction @ direction)
+    lam = 0.0 if length == 0 else min(1.0, max(0.0, float((np.asarray(point) - start) @ direction) / length))
+    return float(np.linalg.norm(np.asarray(point) - (start + lam * direction)))
 
 
 def _crossings(model, loop, point, direction, frame, tolerance):
@@ -244,6 +364,9 @@ def validate_plane_section_face(model, face_id: int) -> list[str]:
                               "may trim a plane face with section edges (B1-P4b)")
     if result:
         return result
+    starts = [model.oriented_start_vertex(item) for loop in loops for item in loop]
+    if len(set(starts)) != len(starts):
+        return [f"face {face_id} loops pass a vertex more than once"]
     frame = _Frame(plane)
     vertices = np.asarray([model.vertices[model.oriented_start_vertex(item)].position
                            for loop in loops for item in loop], dtype=float)
@@ -269,11 +392,20 @@ def validate_plane_section_face(model, face_id: int) -> list[str]:
             if isinstance(a.curve, Straight) and isinstance(b.curve, Straight):
                 count = len(loops[loop_a])
                 adjacent = loop_a == loop_b and (abs(pos_a - pos_b) == 1 or abs(pos_a - pos_b) == count - 1)
-                if adjacent:
-                    continue
                 p, q = frame.xy(np.asarray(_edge_points(model, first)))
                 r, s = frame.xy(np.asarray(_edge_points(model, second)))
-                if model._segments_intersect_2d(p, q, r, s, tolerance):  # noqa: SLF001
+                if adjacent:
+                    # neighbours share one vertex: they overlap when one's far end lies on the other
+                    # (a fold back along the same line, review B1-P4b round 1)
+                    shared_ids = {a.start, a.end} & {b.start, b.end}
+                    far_first = [model.vertices[v].position for v in (a.start, a.end) if v not in shared_ids]
+                    far_second = [model.vertices[v].position for v in (b.start, b.end) if v not in shared_ids]
+                    if any(_segment_distance(frame.xy(x), r, s) <= tolerance for x in far_first) or \
+                            any(_segment_distance(frame.xy(x), p, q) <= tolerance for x in far_second):
+                        verdict = False
+                    else:
+                        continue
+                elif model._segments_intersect_2d(p, q, r, s, tolerance):  # noqa: SLF001
                     verdict = False
                 else:
                     continue
@@ -290,7 +422,19 @@ def validate_plane_section_face(model, face_id: int) -> list[str]:
                 result.append(f"face {face_id} {where}: edges {first.edge} and {second.edge} not certified disjoint")
     if result:
         return result
+    for edge in _sections_simple(model, loops, tolerance):
+        result.append(f"face {face_id} section edge {edge} is not certified simple (it may cross itself "
+                      "or another section edge)")
+    if result:
+        return result
     for index, loop in enumerate(loops):
+        loop_points = frame.xy(np.asarray([model.vertices[model.oriented_start_vertex(item)].position
+                                           for item in loop], dtype=float))
+        loop_extent = float(np.linalg.norm(np.ptp(loop_points, axis=0)))
+        for item in loop:
+            if isinstance(model.edges[item.edge].curve, PlaneNurbsCurve):
+                low, high = model.edges[item.edge].curve.bounds()
+                loop_extent = max(loop_extent, float(np.linalg.norm(np.asarray(high) - low)))
         # the bound shrinks with the pieces (enclosure areas ~ L**2 / pieces): refined while undecided
         for pieces in (_PIECES, 4 * _PIECES, 16 * _PIECES, 64 * _PIECES):
             try:
@@ -298,7 +442,7 @@ def validate_plane_section_face(model, face_id: int) -> list[str]:
             except GeometryError as error:
                 result.append(f"face {face_id} loop {index}: {error}")
                 break
-            if abs(area) > bound + model.tolerance.effective_area(extent):
+            if abs(area) > bound + model.tolerance.effective_area(loop_extent):
                 break
         else:
             result.append(f"face {face_id} loop {index} has zero area")

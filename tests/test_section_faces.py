@@ -97,3 +97,74 @@ def test_the_area_bound_tightens_with_pieces():
     loop = model.faces[face].loop
     coarse, fine = loop_area(model, loop, OBLIQUE)[1], loop_area(model, loop, OBLIQUE, 512)[1]
     assert fine < coarse / 8
+
+
+# ------------------------------------------------------------------ review B1-P4b round 1
+
+LEVEL = Plane((0., 0., .5), (1., 0., 0.), (0., 1., 0.))
+
+
+def test_a_section_that_crosses_itself_is_refused():
+    # the extruded cubic with plan controls (-1,0) (2,2) (-2,2) (1,0) loops through itself at (0, 6/7)
+    from anygeometry.nurbs import NurbsSurface
+    plan = ((-1., 0.), (2., 2.), (-2., 2.), (1., 0.))
+    surface = NurbsSurface(3, 1, (0.,) * 4 + (1.,) * 4, (0., 0., 1., 1.),
+                           tuple(((x, y, 0.), (x, y, 1.)) for x, y in plan))
+    curve = PlaneNurbsCurve.from_plane(LEVEL, surface, 0)
+    model = GeometryModel()
+    start, end = model.add_point(*curve.evaluate(0.)), model.add_point(*curve.evaluate(1.))
+    middle = model.add_point(0., 0., .5)
+    edges = [model.add_curve(start, end, curve), model.add_line(end, middle), model.add_line(middle, start)]
+    with pytest.raises(GeometryError, match="not certified simple"):
+        model.add_face(edges, surface=LEVEL)
+
+
+def level_half():
+    surface = cylinder_to_nurbs(Cylinder((0., 0., 0.), (0., 0., 1.), (1., 0., 0.), 2., 3., 0., math.pi))
+    return PlaneNurbsCurve.from_plane(LEVEL, surface, 0)
+
+
+def test_a_retraced_excursion_is_refused():
+    from anygeometry.entities import OrientedEdge
+    curve = level_half()
+    model = GeometryModel()
+    start, end = model.add_point(*curve.evaluate(0.)), model.add_point(*curve.evaluate(1.))
+    top = model.add_point(*curve.subcurve(0., .5).evaluate(1.))
+    inner = model.add_point(0., 1., .5)
+    first = model.add_curve(start, top, curve.subcurve(0., .5))
+    out, back = model.add_line(top, inner), model.add_line(inner, top)
+    second = model.add_curve(top, end, curve.subcurve(.5, 1.))
+    diameter = model.add_line(end, start)
+    loop = [OrientedEdge(e, True) for e in (first, out, back, second, diameter)]
+    with pytest.raises(GeometryError, match="more than once|self-intersects"):
+        model.add_face_from_loop(loop, surface=LEVEL)
+
+
+def test_areas_use_local_coordinates():
+    far = Plane((1e8, 1e8, .5), (1., 0., 0.), (0., 1., 0.))
+    curve = PlaneNurbsCurve.from_plane(far, level_half().surface, 0)
+    model = GeometryModel()
+    start, end = model.add_point(*curve.evaluate(0.)), model.add_point(*curve.evaluate(1.))
+    mid = model.add_point(0., 0., .5)
+    edges = [model.add_curve(start, end, curve), model.add_line(end, mid), model.add_line(mid, start)]
+    face = model.add_face(edges, surface=far)
+    area, bound = loop_area(model, model.faces[face].loop, far)
+    assert abs(abs(area) - 2 * math.pi) <= 1e-9 and bound < .1 * 2 * math.pi
+
+
+def test_small_holes_and_small_loops_are_judged_at_their_own_scale():
+    curve = level_half()
+    model = GeometryModel()
+    start, end = model.add_point(*curve.evaluate(0.)), model.add_point(*curve.evaluate(1.))
+    mid = model.add_point(0., 0., .5)
+    edges = [model.add_curve(start, end, curve), model.add_line(end, mid), model.add_line(mid, start)]
+    face = model.add_face(edges, surface=LEVEL)
+    from dataclasses import replace
+    from anygeometry.entities import OrientedEdge
+    side = 3e-7
+    corners = [(0., 1.), (side, 1.), (side, 1. + side), (0., 1. + side)]
+    points = [model.add_point(x, y, .5) for x, y in corners]
+    hole = [model.add_line(points[i], points[(i + 1) % 4]) for i in range(4)]
+    with model.transaction():
+        model._put_entity("face", replace(model.faces[face], holes=(tuple(OrientedEdge(e, True) for e in hole),)))
+    assert len(model.faces[face].holes) == 1
