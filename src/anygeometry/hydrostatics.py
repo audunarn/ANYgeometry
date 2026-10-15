@@ -32,12 +32,18 @@ def waterplane_frame(point, normal=(0., 0., 1.), longitudinal=(1., 0., 0.)) -> F
     """The waterplane frame: ``xi`` along ``longitudinal`` projected into the plane, ``zeta`` along ``normal``."""
     n = np.asarray(normal, dtype=float)
     n = n / np.linalg.norm(n)
-    e1 = np.asarray(longitudinal, dtype=float)
-    e1 = e1 - (e1 @ n) * n
-    if not float(np.linalg.norm(e1)) > 1e-12:
-        raise GeometryError("the longitudinal direction must not be normal to the waterplane")
+    given = np.asarray(longitudinal, dtype=float)
+    e1 = given - (given @ n) * n
+    # refuse a longitudinal direction within about 1e-6 rad of the normal: the projection cancels and
+    # its direction is not meaningful (review H1 round 4); then a second projection restores
+    # orthogonality to rounding
+    if not float(np.linalg.norm(e1)) > 1e-6 * float(np.linalg.norm(given)):
+        raise GeometryError("the longitudinal direction is (nearly) normal to the waterplane")
     e1 = e1 / np.linalg.norm(e1)
-    return Frame(point, e1, np.cross(n, e1), normal=n)
+    e1 = e1 - (e1 @ n) * n
+    e1 = e1 / np.linalg.norm(e1)
+    e2 = np.cross(n, e1)
+    return Frame(point, e1, e2 / np.linalg.norm(e2), normal=n)
 
 
 _SHELLS: dict = {}            # id(model) -> (weak reference, revision, faces, order, value)

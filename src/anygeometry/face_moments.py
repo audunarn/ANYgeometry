@@ -84,29 +84,71 @@ def waterplane_fields(local) -> np.ndarray:
 # ------------------------------------------------------------------ charts (in (u, v))
 
 
-def _span_roots(function, degree, cuts, lo, hi):
-    """Roots in ``(lo, hi)`` of a function that is a polynomial of ``degree`` between ``cuts``
-    (interpolated at Chebyshev points per piece, real roots kept)."""
+def _exact_unit_roots(bernstein) -> list:
+    """Roots in ``(0, 1)`` of a polynomial given by exact Bernstein coefficients on ``[0, 1]``: exact
+    isolation (``exact_levels``, Sturm) and exact bisection to ``2**-56``; a polynomial of one strict
+    sign has none (review H1 round 4: float Chebyshev roots of ill-conditioned polynomials were off by
+    1e-7)."""
+    from fractions import Fraction
+    from .exact_levels import _bernstein_to_power, _roots_in_unit, _trim, _value
+    if all(c > 0 for c in bernstein) or all(c < 0 for c in bernstein):
+        return []
+    if all(c == 0 for c in bernstein):
+        return []                                               # identically zero: no isolated root
+    power = _bernstein_to_power(list(bernstein))
+    if len(_trim(power)) == 1:
+        return []
     found = []
-    for a, b in zip(cuts, cuts[1:]):
-        a, b = max(a, lo), min(b, hi)
-        if b <= a:
-            continue
-        if degree == 0:
-            continue
-        k = degree + 1
-        x = np.cos((2 * np.arange(k) + 1) * np.pi / (2 * k))
-        h = function(.5 * (a + b) + .5 * (b - a) * x)
-        scale = float(np.max(np.abs(h)))
-        if not scale > 0:
-            continue
-        coefficients = np.polynomial.chebyshev.chebfit(x, h / scale, degree)
-        for root in np.polynomial.chebyshev.chebroots(coefficients):
-            if abs(root.imag) <= 1e-12 and -1 < root.real < 1:
-                t = .5 * (a + b) + .5 * (b - a) * float(root.real)
-                if lo < t < hi:
-                    found.append(t)
-    return sorted(found)
+    for lo, hi, g in _roots_in_unit(power):
+        if lo == hi:
+            root = lo
+        else:
+            low_sign = _value(g, lo) > 0
+            while hi - lo > Fraction(1, 2 ** 56):
+                middle = (lo + hi) / 2
+                value = _value(g, middle)
+                if value == 0:
+                    lo = hi = middle
+                    break
+                if (value > 0) == low_sign:
+                    lo = middle
+                else:
+                    hi = middle
+            root = (lo + hi) / 2
+        if 0 < root < 1:
+            found.append(root)
+    return found
+
+
+def _casteljau(values, fraction):
+    work = list(values)
+    for _ in range(len(work) - 1):
+        work = [(1 - fraction) * a + fraction * b for a, b in zip(work, work[1:])]
+    return work[0]
+
+
+def _exact_power_on_unit(samples) -> list:
+    """Exact Bernstein coefficients on ``[0, 1]`` of the polynomial of degree ``len(samples) - 1``
+    through the values at ``k / degree`` (Newton interpolation, then power -> Bernstein)."""
+    from fractions import Fraction
+    from math import comb
+    degree = len(samples) - 1
+    xs = [Fraction(k, degree) for k in range(degree + 1)]
+    table = list(samples)
+    coefficients = [table[0]]
+    for level in range(1, degree + 1):
+        table = [(table[i + 1] - table[i]) / (xs[i + level] - xs[i]) for i in range(len(table) - 1)]
+        coefficients.append(table[0])
+    power = [Fraction(0)] * (degree + 1)                    # expand the Newton form
+    basis = [Fraction(1)]
+    for k, c in enumerate(coefficients):
+        for i, b in enumerate(basis):
+            power[i] += c * b
+        basis = [Fraction(0)] + basis
+        for i in range(len(basis) - 1):
+            basis[i] -= xs[k] * basis[i + 1]
+    # power a_i x^i -> Bernstein b_j = sum_{i <= j} C(j, i) / C(n, i) a_i
+    return [sum(Fraction(comb(j, i), comb(degree, i)) * power[i] for i in range(j + 1)) for j in range(degree + 1)]
 
 
 class _PlaneChart:
@@ -157,6 +199,32 @@ class _NurbsChart:
                         for row, wrow in zip(surface.controls, weights))
         self.height = NurbsSurface(surface.degree_u, surface.degree_v, surface.knots_u, surface.knots_v, heights,
                                    None, surface.u_range, surface.v_range)
+        self.frame = frame
+        self._patches = None
+
+    def patches(self):
+        """Exact Bezier sub-patches of ``G = n . (W P) - d W`` for the frame's plane (exact n, d)."""
+        if self._patches is None:
+            from fractions import Fraction
+            from .plane_nurbs import sub_patches_of
+            n = tuple(Fraction(float(x)) for x in self.frame.normal)
+            d = sum(a * Fraction(float(b)) for a, b in zip(n, self.frame.origin))
+            self._patches = sub_patches_of(n, d, self.surface)
+        return self._patches
+
+    def to_knot(self, axis, chart_value):
+        from fractions import Fraction
+        r0, r1 = (Fraction(x) for x in (self.surface.u_range if axis == 0 else self.surface.v_range))
+        return r0 + Fraction(float(chart_value)) * (r1 - r0), r0, r1
+
+    def value_exact(self, knot_u, knot_v):
+        """Exact ``G`` at a knot point (its sub-patch's Bernstein form)."""
+        for patch in self.patches():
+            (u0, u1), (v0, v1) = patch.u_range, patch.v_range
+            if u0 <= knot_u <= u1 and v0 <= knot_v <= v1:
+                column = [_casteljau(row, (knot_v - v0) / (v1 - v0)) for row in patch.coefficients]
+                return _casteljau(column, (knot_u - u0) / (u1 - u0))
+        raise GeometryError("a chart point outside the surface's sub-patches")
 
     def evaluate(self, uv):
         return self.surface.evaluate_many(uv)
@@ -176,11 +244,29 @@ class _NurbsChart:
         return float(np.sum(near * np.abs(rates)) / max(float(np.sum(near)), 1e-300))
 
     def roots(self, axis, fixed, lo, hi):
-        def function(t):
-            uv = np.empty((len(t), 2))
-            uv[:, axis], uv[:, 1 - axis] = t, fixed
-            return self.height.evaluate_many(uv)[:, 0]
-        return _span_roots(function, self.degrees[axis], [0.0, *self.knots[axis], 1.0], lo, hi)
+        """Roots of zeta along the chart line where coordinate ``axis`` runs and the other is ``fixed``:
+        per sub-patch the exact Bernstein restriction, isolated and bisected exactly."""
+        other = 1 - axis
+        level, q0, q1 = self.to_knot(other, fixed)
+        r0, r1 = (self.surface.u_range if axis == 0 else self.surface.v_range)
+        found = set()
+        for patch in self.patches():
+            line = patch.v_range if other == 1 else patch.u_range
+            if not line[0] <= level <= line[1]:
+                continue
+            fraction = (level - line[0]) / (line[1] - line[0])
+            c = patch.coefficients
+            if axis == 0:
+                bernstein = [_casteljau(row, fraction) for row in c]
+                s0, s1 = patch.u_range
+            else:
+                bernstein = [_casteljau([row[j] for row in c], fraction) for j in range(len(c[0]))]
+                s0, s1 = patch.v_range
+            for root in _exact_unit_roots(bernstein):
+                chart = float((s0 + root * (s1 - s0) - r0) / (r1 - r0))
+                if lo < chart < hi:
+                    found.add(chart)
+        return sorted(found)
 
 
 def _waterline_turns(surface, frame, axis, box=None) -> list:
@@ -477,10 +563,26 @@ def _edge_map(model, item, chart, frame):
 
         def raw_events(query):
             if query is None:
-                # zeta W along the segment: a polynomial of degree p + q between the knot-line crossings
-                def height(t):
-                    return chart.height.evaluate_many(p0 + np.asarray(t)[:, None] * (p1 - p0))[:, 0]
-                return _span_roots(height, sum(chart.degrees), sorted({0.0, 1.0, *cuts}), 0.0, 1.0)
+                # zeta W along the segment: a polynomial of degree p + q between its knot-line crossings,
+                # interpolated exactly from exact values (exact sub-patch evaluation), roots exact
+                from fractions import Fraction
+                degree = sum(chart.degrees)
+                e0 = [Fraction(float(x)) for x in p0]
+                e1 = [Fraction(float(x)) for x in p1]
+                found = []
+                pieces = sorted({0.0, 1.0, *cuts})
+                for ta, tb in zip(pieces, pieces[1:]):
+                    ta, tb = Fraction(ta), Fraction(tb)
+                    samples = []
+                    for k in range(degree + 1):
+                        tk = ta + Fraction(k, degree) * (tb - ta)
+                        cu, cv = (a0 + tk * (a1 - a0) for a0, a1 in zip(e0, e1))
+                        ku = chart.to_knot(0, 0.0)[1] + cu * (chart.to_knot(0, 0.0)[2] - chart.to_knot(0, 0.0)[1])
+                        kv = chart.to_knot(1, 0.0)[1] + cv * (chart.to_knot(1, 0.0)[2] - chart.to_knot(1, 0.0)[1])
+                        samples.append(chart.value_exact(ku, kv))
+                    for root in _exact_unit_roots(_exact_power_on_unit(samples)):
+                        found.append(float(ta + root * (tb - ta)))
+                return found
             k, level = query
             return linear(p0[k] - level, p1[k] - level)
         return oriented(raw, cuts, raw_events)
@@ -554,15 +656,10 @@ def _section_level_roots(curve, coordinate: int, level: float) -> list:
             else:                                               # s = v, x = u: per v column
                 values = [_de_casteljau([row[j] for row in c], fraction) for j in range(len(c[0]))]
                 s_range = box.v_range
-            degree = len(values) - 1
-            if degree == 0:
+            if len(values) < 2:
                 continue
-            fl = [float(v) for v in values]
-
-            def poly(t, fl=fl):
-                return np.array([float(_bernstein_float(fl, x)) for x in t])
-            for root in _span_roots(poly, degree, [0.0, 1.0], -1e-12, 1 + 1e-12):
-                s = s_range[0] + Fraction(root) * (s_range[1] - s_range[0])
+            for root in _exact_unit_roots(values):
+                s = s_range[0] + root * (s_range[1] - s_range[0])
                 taus.append((s - s0) / (s1 - s0))
         for tau in taus:
             if 0 <= tau <= 1:
@@ -570,13 +667,6 @@ def _section_level_roots(curve, coordinate: int, level: float) -> list:
                 if 0 < t < 1:
                     found.append(float(t))
     return found
-
-
-def _bernstein_float(coefficients, x):
-    work = list(coefficients)
-    for _ in range(len(work) - 1):
-        work = [(1 - x) * p + x * q for p, q in zip(work, work[1:])]
-    return work[0]
 
 
 def _boundary_pieces(model, face, chart, frame):

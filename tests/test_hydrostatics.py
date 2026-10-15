@@ -246,6 +246,16 @@ def basin(a, b, footprint=(.1, .9, .1, .9), top=1.):
     grid = (0., .5, 1.)
     surface = NurbsSurface(2, 2, (0., 0., 0., 1., 1., 1.), (0., 0., 0., 1., 1., 1.),
                            tuple(tuple((x, y, ai + bj) for y, bj in zip(grid, b)) for x, ai in zip(grid, a)))
+    return basin_on(surface, footprint, top)
+
+
+def basin_on(surface, footprint=(.1, .9, .1, .9), top=1.):
+    """``basin`` with any bottom surface over [0, 1]^2 in x, y (planes x, y = footprint cut it once)."""
+    from anygeometry import GeometryModel
+    from anygeometry.b1_example import _parameter
+    from anygeometry.entities import OrientedEdge
+    from anygeometry.support_curves import PlaneNurbsCurve
+    from anygeometry import Plane
     x0, x1, y0, y1 = footprint
     planes = {"w": (Plane((x0, 0., 0.), (0., 1., 0.), (0., 0., 1.)), (1, 0, 0), x0),
               "e": (Plane((x1, 0., 0.), (0., 1., 0.), (0., 0., 1.)), (1, 0, 0), x1),
@@ -436,3 +446,34 @@ def test_planes_given_far_away_with_any_normal_are_exact(normal, point):
     # the plane through the unit cube's centre given by a point 1e12 away (review H1 round 3: normal (1, 3, 7))
     model, faces, _place = box((1., 1., 1.))
     assert hydrostatics(model, faces, point, normal)["volume"] == pytest.approx(.5, rel=1e-12)
+
+
+# ------------------------------------------------------------------ review H1 round 4
+
+
+def test_an_ill_conditioned_waterline_root_is_exact():
+    from anygeometry.nurbs import NurbsSurface
+    # bottom z = (u - 0.5)^6 (degree 6, Bernstein controls (-1)^i / 64), waterplane z = 2**-42: the
+    # waterline at |u - 0.5| = 2**-7 (review H1 round 4: float roots were off by 1e-7)
+    surface = NurbsSurface(6, 1, (0.,) * 7 + (1.,) * 7, (0., 0., 1., 1.),
+                           tuple(((i / 6, 0., (-1) ** i / 64), (i / 6, 1., (-1) ** i / 64)) for i in range(7)))
+    model, faces = basin_on(surface, (.125, .875, .125, .875))
+    level = 2.0 ** -42
+    result = hydrostatics(model, faces, (.5, .5, level))
+    half = 2.0 ** -7
+    assert result["waterplane_area"] == pytest.approx(2 * half * .75, rel=1e-10)
+    volume = .75 * (2 * half * level - 2 * half ** 7 / 7)
+    assert result["volume"] == pytest.approx(volume, rel=1e-8)
+
+
+def test_a_longitudinal_direction_near_the_normal_is_refused():
+    from anygeometry.errors import GeometryError
+    from anygeometry.hydrostatics import waterplane_frame
+    model, faces, _place = box((1., 1., 1.))
+    with pytest.raises(GeometryError, match="nearly"):
+        hydrostatics(model, faces, (.5, .5, .5), (1., 3., 7.), (1.000000001, 3., 7.))
+    # an oblique but well-conditioned direction: an orthonormal frame and the exact centre of buoyancy
+    frame = waterplane_frame((.5, .5, .5), (1., 3., 7.), (1., 3., 6.))
+    assert frame.axes @ frame.axes.T == pytest.approx(np.eye(3), abs=1e-15)
+    result = hydrostatics(model, faces, (.5, .5, .5), (1., 3., 7.), (1., 3., 6.))
+    assert result["buoyancy_centre"] == pytest.approx([10 / 21, 3 / 7, 157 / 588], abs=1e-12)
