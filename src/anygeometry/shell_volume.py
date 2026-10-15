@@ -204,7 +204,8 @@ def enclosed_volume(model, faces, order: int = 24, rtol: float = 1e-8) -> dict:
     """``{"volume", "centroid", "estimate"}`` of the region the closed shell ``faces`` encloses.
 
     Integrated in a frame centred at the shell's vertices' mean (translated back); refused when the
-    order-doubling difference of the moments exceeds ``rtol`` of their scale (volume times extent^2)."""
+    order-doubling difference exceeds ``rtol`` of the volume (volume) or of volume x extent (first
+    moments; review B1-P5 round 4: one scale of volume x extent^2 accepted a 50 % volume error)."""
     faces = list(faces)
     problems = closed_shell(model, faces)
     if problems:
@@ -220,8 +221,9 @@ def enclosed_volume(model, faces, order: int = 24, rtol: float = 1e-8) -> dict:
     volume = float(fine[0])
     if volume <= 0:
         raise GeometryError("the shell encloses no volume")
-    estimate = float(np.max(np.abs(fine - coarse)))
-    if not estimate <= rtol * volume * max(1.0, extent) ** 2:
+    difference = np.abs(fine - coarse)
+    estimate = float(np.max(difference))
+    if not (difference[0] <= rtol * volume and np.all(difference[1:] <= rtol * volume * extent)):
         raise GeometryError(f"the volume quadrature did not settle (moment difference {estimate:.3g})")
     centroid = fine[1:] / volume + origin
     return {"volume": volume, "centroid": centroid, "estimate": estimate}

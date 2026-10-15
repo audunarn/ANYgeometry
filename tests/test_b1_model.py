@@ -285,6 +285,49 @@ def test_volume_quadrature_splits_at_knots():
     assert abs(value - 1.001) <= 1e-12
 
 
+def test_an_unresolved_volume_quadrature_is_refused():
+    from anygeometry import GeometryModel
+    from anygeometry.entities import OrientedEdge
+    from anygeometry.errors import GeometryError
+    from anygeometry.nurbs import CurveOnSurface, NurbsCurve, NurbsSurface
+    from anygeometry.shell_volume import closed_shell, enclosed_volume
+    # review B1-P5 round 4: the cube [0, L]^3 with a flat rational top S(u, v) = (L u / (e + (1 - e) u), L v, L),
+    # e = 2**-19: both Gauss orders underresolve it (volume 5.04e17 for 1e18) and one moment scale accepted it
+    size, e = 1e6, 2.0 ** -19
+    top = NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.),
+                       (((0., 0., size), (0., size, size)), ((size, 0., size), (size, size, size))),
+                       weights=((e, e), (1., 1.)))
+    model = GeometryModel()
+    p = {(i, j, k): model.add_point(size * i, size * j, size * k) for i in (0, 1) for j in (0, 1) for k in (0, 1)}
+    edges = {}
+    chart = {(0, 0): (0., 0.), (1, 0): (1., 0.), (1, 1): (1., 1.), (0, 1): (0., 1.)}
+    for a, b in (((0, 0), (1, 0)), ((1, 0), (1, 1)), ((1, 1), (0, 1)), ((0, 1), (0, 0))):
+        edges[frozenset(((*a, 1), (*b, 1)))] = model.add_curve(
+            p[(*a, 1)], p[(*b, 1)], CurveOnSurface(top, NurbsCurve(1, (0., 0., 1., 1.), (chart[a], chart[b]))))
+
+    def loop_of(corners):
+        loop = []
+        for i in range(len(corners)):
+            u, v = corners[i], corners[(i + 1) % len(corners)]
+            key = frozenset((u, v))
+            if key not in edges:
+                edges[key] = model.add_line(p[u], p[v])
+            loop.append(OrientedEdge(edges[key], model.edges[edges[key]].start == p[u]))
+        return loop
+    faces = [model.add_face_from_loop(loop_of(((0, 0, 1), (1, 0, 1), (1, 1, 1), (0, 1, 1))), surface=top)]
+    for q in (((0, 0, 0), (0, 1, 0), (1, 1, 0), (1, 0, 0)), ((0, 0, 0), (0, 0, 1), (0, 1, 1), (0, 1, 0)),
+              ((1, 0, 0), (1, 1, 0), (1, 1, 1), (1, 0, 1)), ((0, 0, 0), (1, 0, 0), (1, 0, 1), (0, 0, 1)),
+              ((0, 1, 0), (0, 1, 1), (1, 1, 1), (1, 1, 0))):
+        u, v = ([size * float(b - a) for a, b in zip(q[0], q[k])] for k in (1, 3))
+        faces.append(model.add_face_from_loop(loop_of(q), surface=Plane([size * c for c in q[0]], u, v)))
+    assert closed_shell(model, faces) == []
+    try:
+        result = enclosed_volume(model, faces)
+    except GeometryError:
+        return                                                  # refused: acceptable
+    assert result["volume"] == pytest.approx(size ** 3, rel=1e-8)
+
+
 def test_disconnected_shells_are_refused():
     from anygeometry import GeometryModel
     from anygeometry.shell_volume import closed_shell
