@@ -184,24 +184,28 @@ class _NurbsChart:
 
 
 def _waterline_turns(surface, frame, axis, box=None) -> list:
-    """The levels of the outer coordinate (``1 - axis``) where the waterline on a NURBS surface turns
-    back (``dw/dt = 0`` along a section path of the exact P1 topology), found by sign changes of the
-    float chart rate on a dense sample and refined; a closed waterline loop (P1 refuses cycles) and a
-    surface lying in the waterplane refuse (review H1 round 1: an interior wet patch was missed).
-    ``box`` (the face's outward chart box, ``((u0, u1), (v0, v1))``) restricts the section to the
-    face's part of the support (review H1 round 2: a loop outside the trimmed face refused)."""
-    from .plane_nurbs import PlaneNurbsClosedSection, PlaneNurbsNotCertified, plane_nurbs_section
+    """The levels of the outer coordinate (``1 - axis``) where the waterline on a NURBS surface may turn
+    back (where it is tangent to the inner coordinate's iso-lines: ``G = 0`` and ``G_inner = 0``), from
+    the exact P1 section's boxes refined by exact Bernstein subdivision: a box is dropped once ``G`` or
+    ``G_inner`` has one strict sign on it (no turn there); boxes left at the depth limit give their
+    mid-level (review H1 round 3: the sampled turn search could miss a narrow excursion). A closed
+    waterline loop (P1 refuses cycles) and a surface in the waterplane refuse (review H1 round 1).
+    ``box`` (the face's outward chart box) restricts the section to the face's part of the support
+    (review H1 round 2)."""
+    from .plane_nurbs import (PlaneNurbsClosedSection, PlaneNurbsNotCertified, _all_sign, _split_u, _split_v,
+                              plane_nurbs_section)
     from .surfaces import Plane
     plane = Plane(tuple(frame.origin), tuple(frame.axes[0]), tuple(frame.axes[1]))
+    (r0, r1), (q0, q1) = surface.u_range, surface.v_range
+    sub = surface
     if box is not None:
         from .nurbs import NurbsSurface
         (u0, u1), (v0, v1) = box
-        (r0, r1), (q0, q1) = surface.u_range, surface.v_range
-        surface = NurbsSurface(surface.degree_u, surface.degree_v, surface.knots_u, surface.knots_v,
-                               surface.controls, surface.weights, (r0 + u0 * (r1 - r0), r0 + u1 * (r1 - r0)),
-                               (q0 + v0 * (q1 - q0), q0 + v1 * (q1 - q0)))
+        sub = NurbsSurface(surface.degree_u, surface.degree_v, surface.knots_u, surface.knots_v,
+                           surface.controls, surface.weights, (r0 + u0 * (r1 - r0), r0 + u1 * (r1 - r0)),
+                           (q0 + v0 * (q1 - q0), q0 + v1 * (q1 - q0)))
     try:
-        section = plane_nurbs_section(plane, surface)
+        section = plane_nurbs_section(plane, sub)
     except PlaneNurbsClosedSection:
         raise GeometryError("a closed waterline inside a NURBS face is not supported yet") from None
     except PlaneNurbsNotCertified as error:
@@ -209,19 +213,42 @@ def _waterline_turns(surface, frame, axis, box=None) -> list:
     if section.coincident:
         raise GeometryError("a NURBS face lies in the waterplane")
     other = 1 - axis
-    levels = []
-    for index in range(len(section.paths)):
-        curve = PlaneNurbsCurve.from_plane(plane, surface, index)
-        breaks = sorted({0.0, 1.0, *curve.breakpoints()})
-        for lo, hi in zip(breaks, breaks[1:]):
-            def rate(t, curve=curve):
-                return _section_float(curve, t)[1][:, other]
-            for turn in _sign_changes(rate, lo, hi, 128):
-                levels.append(float(_section_float(curve, np.array([turn]))[0][0, other]))
-    if box is not None:                                         # sub-chart -> face chart
-        c0, c1 = box[other]
-        levels = [c0 + level * (c1 - c0) for level in levels]
-    return sorted(levels)
+    low, width = (r0, r1 - r0) if other == 0 else (q0, q1 - q0)
+    levels, examined = [], 0
+    for leaf in section.boxes:
+        if leaf.kind == "empty":
+            continue
+        pending = [(leaf.u_range, leaf.v_range, leaf.coefficients, 0)]
+        while pending:
+            u_range, v_range, c, depth = pending.pop()
+            examined += 1
+            if examined > 200000:
+                raise GeometryError("the waterline's turning points are not resolved (budget)")
+            if _all_sign([x for row in c for x in row]):
+                continue                                        # no waterline in this box
+            if axis == 0:
+                rates = [c[i + 1][j] - c[i][j] for i in range(len(c) - 1) for j in range(len(c[0]))]
+            else:
+                rates = [c[i][j + 1] - c[i][j] for i in range(len(c)) for j in range(len(c[0]) - 1)]
+            if _all_sign(rates):
+                continue                                        # G_inner has one sign: no turn here
+            if depth >= 40:
+                rng = v_range if other == 1 else u_range
+                levels.append((float((rng[0] + rng[1]) / 2) - low) / width)
+                continue
+            um, vm = (u_range[0] + u_range[1]) / 2, (v_range[0] + v_range[1]) / 2
+            left, right = _split_u(c)
+            for (ua, ub), half in (((u_range[0], um), left), ((um, u_range[1]), right)):
+                lower, upper = _split_v(half)
+                pending.append(((ua, ub), (v_range[0], vm), lower, depth + 1))
+                pending.append(((ua, ub), (vm, v_range[1]), upper, depth + 1))
+    merged = []
+    for level in sorted(levels):
+        if not merged or level - merged[-1][-1] > 1e-9:
+            merged.append([level])
+        else:
+            merged[-1].append(level)
+    return [float(np.mean(group)) for group in merged]
 
 
 def _chart_box(model, face):
@@ -336,7 +363,9 @@ def _section_float(curve, t):
             low_end, high_end = np.minimum(lo, hi), np.maximum(lo, hi)
             inside = (slope != 0) & (candidate > low_end) & (candidate < high_end)
             new = np.where(inside, candidate, .5 * (lo + hi))
-            tiny = 4 * np.finfo(float).eps * np.maximum(1.0, np.abs(x))
+            # relative to the box's own coordinates (review H1 round 3: max(1, |x|) let a 1e-12 knot
+            # domain stop far from the root)
+            tiny = 4 * np.finfo(float).eps * np.maximum(np.abs(x), max(abs(x0), abs(x1)))
             done = (value == 0) | (np.abs(high_end - low_end) <= tiny) | (inside & (np.abs(step) <= tiny))
             x = np.where(converged | (value == 0), x, new)
             converged |= done
@@ -364,20 +393,29 @@ def _section_float(curve, t):
     return chart, chart_rates, world, world_rates
 
 
-def _edge_map(model, item, chart):
-    """``(function, breakpoints)``: ``function(t)`` gives the chart points ``(u, v)``, chart rates and
-    world points along the oriented edge for ``t`` in ``[0, 1]`` (loop direction); breakpoints in t."""
+def _edge_map(model, item, chart, frame):
+    """``(function, breakpoints, events)``: ``function(t)`` gives the chart points ``(u, v)``, chart rates
+    and world points along the oriented edge for ``t`` in ``[0, 1]`` (loop direction); breakpoints in t;
+    ``events(None)`` the edge's crossings of the waterplane and ``events((k, level))`` of the chart line
+    ``coordinate k = level``, exact or certified per edge kind (review H1 round 3: sampled searches
+    missed crossing pairs)."""
     from .nurbs import CurveOnSurface
     edge = model.edges[item.edge]
     curve = edge.curve
     flip = not item.forward
 
-    def oriented(raw, breaks):
+    def oriented(raw, breaks, raw_events):
         def function(t):
             t = np.asarray(t, dtype=float)
             points, rates, world = raw(1.0 - t if flip else t)
             return points, (-rates if flip else rates), world
-        return function, sorted({1.0 - b if flip else b for b in breaks if 0.0 < b < 1.0})
+
+        def events(query):
+            return sorted({1.0 - x if flip else x for x in raw_events(query) if 0.0 < x < 1.0})
+        return function, sorted({1.0 - b if flip else b for b in breaks if 0.0 < b < 1.0}), events
+
+    def linear(f0, f1):
+        return [f0 / (f0 - f1)] if (f0 < 0 < f1 or f1 < 0 < f0) else []
 
     if isinstance(chart, _PlaneChart):
         if isinstance(curve, Straight):
@@ -387,19 +425,43 @@ def _edge_map(model, item, chart):
                 world = a + t[:, None] * (b - a)
                 points, rates = chart.to_chart(world, np.tile(b - a, (len(t), 1)))
                 return points, rates, world
-            return oriented(raw, [])
+
+            def raw_events(query):
+                if query is None:
+                    za, zb = frame.zeta(np.stack((a, b)))
+                    return linear(za, zb)
+                k, level = query
+                ca, cb = chart.to_chart(np.stack((a, b)), np.zeros((2, 3)))[0][:, k]
+                return linear(ca - level, cb - level)
+            return oriented(raw, [], raw_events)
         if isinstance(curve, PlaneNurbsCurve):
             def raw(t):
                 _c, _r, world, rates = _section_float(curve, t)
                 points, chart_rates = chart.to_chart(world, rates)
                 return points, chart_rates, world
-            return oriented(raw, curve.breakpoints())
+
+            def raw_events(query):
+                if query is None:
+                    return _section_plane_roots(curve, frame.normal, _exact_offset(frame.normal, frame.origin))
+                k, level = query
+                # the chart line coordinate k = level is a world line in the face's plane: the plane through
+                # it normal to the face
+                along = chart.v if k == 0 else chart.u
+                through = chart.origin + level * (chart.u if k == 0 else chart.v)
+                normal = np.cross(np.cross(chart.u, chart.v), along)
+                return _section_plane_roots(curve, normal, _exact_offset(normal, through))
+            return oriented(raw, curve.breakpoints(), raw_events)
         raise GeometryError(f"edge {item.edge}: only straight and section edges bound plane faces here")
     if isinstance(curve, PlaneNurbsCurve):
         def raw(t):
             points, rates, world, _w = _section_float(curve, t)
             return points, rates, world
-        return oriented(raw, curve.breakpoints())
+
+        def raw_events(query):
+            if query is None:
+                return _section_plane_roots(curve, frame.normal, _exact_offset(frame.normal, frame.origin))
+            return _section_level_roots(curve, *query)
+        return oriented(raw, curve.breakpoints(), raw_events)
     if isinstance(curve, CurveOnSurface) and curve.pcurve.degree == 1 and len(curve.pcurve.controls) == 2:
         p0, p1 = (np.asarray([float(v) for v in curve.pcurve.exact_point(s)]) for s in (0, 1))
         surface = chart.surface
@@ -412,98 +474,117 @@ def _edge_map(model, item, chart):
         def raw(t):
             points = p0 + t[:, None] * (p1 - p0)
             return points, np.tile(p1 - p0, (len(t), 1)), surface.evaluate_many(points)
-        return oriented(raw, cuts)
+
+        def raw_events(query):
+            if query is None:
+                # zeta W along the segment: a polynomial of degree p + q between the knot-line crossings
+                def height(t):
+                    return chart.height.evaluate_many(p0 + np.asarray(t)[:, None] * (p1 - p0))[:, 0]
+                return _span_roots(height, sum(chart.degrees), sorted({0.0, 1.0, *cuts}), 0.0, 1.0)
+            k, level = query
+            return linear(p0[k] - level, p1[k] - level)
+        return oriented(raw, cuts, raw_events)
     raise GeometryError(f"edge {item.edge}: only section edges and straight chart segments bound NURBS faces here")
 
 
-def _dips(value, t, f):
-    """Brackets ``(a, b)`` of sign changes hidden between samples of the same sign: at an interior
-    sample where ``|f|`` has a local minimum, or at an end where ``|f|`` decreases inwards, the
-    extremum of ``sign f`` nearby is found by golden section; if it has the other sign, the two
-    crossings are bracketed on either side (review H1 round 2: a narrow wet cap between samples)."""
-    count = len(t) - 1
-    candidates = []
-    noise = 64 * np.finfo(float).eps * float(np.max(np.abs(f)))   # rounding: no dip below this level
-    for k in range(count + 1):
-        if f[k] == 0.0:
-            continue
-        sign = 1.0 if f[k] > 0 else -1.0
-        neighbours = [j for j in (k - 1, k + 1) if 0 <= j <= count]
-        if any(f[j] * sign <= 0 for j in neighbours):
-            continue                                            # an ordinary sign change
-        if 0 < k < count:
-            if all(sign * f[k] < sign * f[j] - noise for j in neighbours):
-                candidates.append((t[k - 1], t[k + 1], sign))
+_ROOTS: dict = {}
+
+
+def _section_plane_roots(curve, normal, offset) -> list:
+    """Parameters of a section edge's crossings of the plane ``normal . X = offset`` (exact floats in),
+    by the certified ``section_roots`` (isolated roots refined; others by their interval midpoint). A
+    curve lying in the plane has none; tangencies the certificate cannot resolve refuse."""
+    from .branch_predicates import section_roots
+    from .plane_nurbs import PlaneNurbsNotCertified
+    n = tuple(float(x) for x in normal)
+    key = (curve.plane_record, curve.surface.support_key(), curve.surface.u_range, curve.surface.v_range,
+           curve.path, curve.domain, n, offset)
+    if key in _ROOTS:
+        return _ROOTS[key]
+    try:
+        roots = section_roots(curve, n, offset)
+    except PlaneNurbsNotCertified as error:
+        if "coincident" in str(error):
+            roots = ()
         else:
-            # an end sample below its neighbour that still decreases inwards: a dip right at the end
-            if not sign * f[k] < sign * f[neighbours[0]] - noise:
+            raise GeometryError(f"a section edge's waterplane crossings are not certified: {error}") from None
+    result = [.5 * (root.t_lo + root.t_hi) for root in roots]
+    if len(_ROOTS) >= 512:
+        _ROOTS.clear()
+    _ROOTS[key] = result
+    return result
+
+
+def _exact_offset(normal, point):
+    from fractions import Fraction
+    return sum(Fraction(float(a)) * Fraction(float(b)) for a, b in zip(normal, point))
+
+
+def _section_level_roots(curve, coordinate: int, level: float) -> list:
+    """Parameters where a section edge's chart coordinate ``coordinate`` equals ``level`` (on its own
+    surface's chart): per arc, an affine solve when that coordinate is the arc's slicing coordinate,
+    else the roots of the arc box's Bernstein polynomial ``G(s, level)`` in ``s`` (the box is regular in
+    ``x``, so each root is the arc's point there)."""
+    from fractions import Fraction
+    from .plane_nurbs import _de_casteljau
+    arcs = curve._arcs()
+    count = len(arcs)
+    a, b = (Fraction(x) for x in curve.domain)
+    ranges = (curve.surface.u_range, curve.surface.v_range)
+    r0, r1 = (Fraction(x) for x in ranges[coordinate])
+    target = r0 + Fraction(float(level)) * (r1 - r0)
+    found = []
+    for k, arc in enumerate(arcs):
+        s0, s1 = arc.s0, arc.s1
+        if s1 == s0:
+            continue
+        box = arc.box
+        taus = []
+        if arc.slicing == coordinate:
+            taus.append((target - s0) / (s1 - s0))
+        else:
+            x_range = box.v_range if arc.slicing == 0 else box.u_range
+            if not min(x_range) <= target <= max(x_range):
                 continue
-            inward = t[k] + (1e-6 if k == 0 else -1e-6) * (t[-1] - t[0])
-            if sign * value(np.array([inward]))[0] < sign * f[k] - noise:
-                j = neighbours[0]
-                candidates.append((min(t[k], t[j]), max(t[k], t[j]), sign))
-    brackets = []
-    ratio = (np.sqrt(5.) - 1) / 2
-    for low, high, sign in candidates:
-        a, b = low, high
-        c, d = b - ratio * (b - a), a + ratio * (b - a)
-        fc, fd = sign * value(np.array([c]))[0], sign * value(np.array([d]))[0]
-        for _ in range(60):
-            if min(fc, fd) <= 0:
-                break
-            if fc < fd:
-                b, d, fd = d, c, fc
-                c = b - ratio * (b - a)
-                fc = sign * value(np.array([c]))[0]
-            else:
-                a, c, fc = c, d, fd
-                d = a + ratio * (b - a)
-                fd = sign * value(np.array([d]))[0]
-        middle, fm = (c, fc) if fc < fd else (d, fd)
-        if fm <= 0:
-            brackets.append((low, middle))
-            brackets.append((middle, high))
-    return brackets
+            c = box.coefficients
+            fraction = (target - x_range[0]) / (x_range[1] - x_range[0])
+            if arc.slicing == 0:                                # s = u, x = v: G(u, target) per u row
+                values = [_de_casteljau(list(row), fraction) for row in c]
+                s_range = box.u_range
+            else:                                               # s = v, x = u: per v column
+                values = [_de_casteljau([row[j] for row in c], fraction) for j in range(len(c[0]))]
+                s_range = box.v_range
+            degree = len(values) - 1
+            if degree == 0:
+                continue
+            fl = [float(v) for v in values]
 
-
-def _sign_changes(value, lo, hi, samples: int = 64, dips: bool = False):
-    """Parameters in ``(lo, hi)`` where the scalar ``value(t)`` changes sign or vanishes at a sample
-    (sampled, refined by bisection); with ``dips`` also pairs of crossings hidden between samples
-    of one sign (``_dips``)."""
-    t = np.linspace(lo, hi, samples + 1)
-    f = value(t)
-    found = [float(t[k]) for k in range(1, samples) if f[k] == 0.0]
-    pairs = [(t[k], t[k + 1]) for k in np.flatnonzero(f[:-1] * f[1:] < 0)]
-    if dips:
-        pairs += _dips(value, t, f)
-    a = np.array([p[0] for p in pairs])
-    b = np.array([p[1] for p in pairs])
-    if len(pairs):
-        fa, fb = value(a), value(b)
-        found += [float(x) for x in a[(fa == 0) & (a > lo)]] + [float(x) for x in b[(fb == 0) & (b < hi)]]
-        keep = fa * fb < 0
-        a, b, fa, fb = a[keep], b[keep], fa[keep], fb[keep]
-    if len(a):
-        for step in range(40):                                  # all brackets at once
-            # bisection first, then false position kept inside the bracket (superlinear on smooth f)
-            secant = a - fa * (b - a) / np.where(fb != fa, fb - fa, 1.0)
-            m = .5 * (a + b) if step < 8 else np.clip(secant, np.minimum(a, b), np.maximum(a, b))
-            fm = value(m)
-            left = (fm < 0) == (fa < 0)
-            a, fa, b, fb = (np.where(left, m, a), np.where(left, fm, fa), np.where(left, b, m),
-                            np.where(left, fb, fm))
-            if np.all((fm == 0) | (np.abs(b - a) <= 4 * np.finfo(float).eps * np.maximum(1.0, np.abs(a)))) or                     (step >= 8 and np.all(np.abs(fm) <= 1e-15 * np.maximum(np.abs(f).max(), 1e-300))):
-                break
-        found += [float(x) for x in np.where(np.abs(fa) <= np.abs(fb), a, b)]
+            def poly(t, fl=fl):
+                return np.array([float(_bernstein_float(fl, x)) for x in t])
+            for root in _span_roots(poly, degree, [0.0, 1.0], -1e-12, 1 + 1e-12):
+                s = s_range[0] + Fraction(root) * (s_range[1] - s_range[0])
+                taus.append((s - s0) / (s1 - s0))
+        for tau in taus:
+            if 0 <= tau <= 1:
+                t = ((k + tau) / count - a) / (b - a)
+                if 0 < t < 1:
+                    found.append(float(t))
     return found
 
 
-def _boundary_pieces(model, face, chart):
+def _bernstein_float(coefficients, x):
+    work = list(coefficients)
+    for _ in range(len(work) - 1):
+        work = [(1 - x) * p + x * q for p, q in zip(work, work[1:])]
+    return work[0]
+
+
+def _boundary_pieces(model, face, chart, frame):
     pieces = []
     for loop in (face.loop,) + tuple(face.holes):
         for item in loop:
-            function, breaks = _edge_map(model, item, chart)
-            pieces.append((function, sorted({0.0, 1.0, *breaks})))
+            function, breaks, events = _edge_map(model, item, chart, frame)
+            pieces.append((function, sorted({0.0, 1.0, *breaks}), events))
     return pieces
 
 
@@ -517,11 +598,11 @@ def face_moments(model, face_id: int, frame: Frame, fields=volume_fields, order:
     chart = _chart(face, frame)
     n = frame.normal
     nodes, weights = np.polynomial.legendre.leggauss(order)
-    pieces = _boundary_pieces(model, face, chart)
+    pieces = _boundary_pieces(model, face, chart, frame)
     # the inner coordinate s (axis) and the outer w: zeta varies most along s
     axis = 0
     if clip:
-        sample = np.vstack([function(np.linspace(0., 1., 17))[0] for function, _b in pieces])
+        sample = np.vstack([function(np.linspace(0., 1., 17))[0] for function, _b, _e in pieces])
         extent = np.ptp(sample, axis=0)
         scores = [chart.gradient_scale(k) * float(extent[k]) for k in (0, 1)]
         axis = 0 if scores[0] >= scores[1] else 1
@@ -530,25 +611,23 @@ def face_moments(model, face_id: int, frame: Frame, fields=volume_fields, order:
     nodes_out, rates_out, ws_out = [], [], []
     levels, turns = [], []
     if clip:
-        sample = np.vstack([function(np.linspace(0., 1., 17))[0] for function, _b in pieces])
+        sample = np.vstack([function(np.linspace(0., 1., 17))[0] for function, _b, _e in pieces])
         w_lo, w_hi = float(np.min(sample[:, other])), float(np.max(sample[:, other]))
         margin = 1e-9 * max(1.0, w_hi - w_lo)
         levels = chart.roots(other, 0.0, w_lo - margin, w_hi + margin)
         if isinstance(chart, _NurbsChart):
             turns = [level for level in _waterline_turns(chart.surface, frame, axis, _chart_box(model, face))
                      if w_lo - margin < level < w_hi + margin]
-    for function, cuts in pieces:
+    for function, cuts, events in pieces:
         singular = set()
         if clip:
-            extra = []
-            for lo, hi in zip(cuts, cuts[1:]):
-                extra += _sign_changes(lambda t: frame.zeta(function(t)[2]), lo, hi, dips=True)
-                for level in levels:
-                    extra += _sign_changes(lambda t, level=level: function(t)[0][:, other] - level, lo, hi)
-                for level in turns:
-                    found = _sign_changes(lambda t, level=level: function(t)[0][:, other] - level, lo, hi)
-                    extra += found
-                    singular.update(found)
+            extra = list(events(None))
+            for level in levels:
+                extra += events((other, level))
+            for level in turns:
+                found = events((other, level))
+                extra += found
+                singular.update(found)
             cuts = sorted(set(cuts) | set(extra))
         pairs = []
         for lo, hi in zip(cuts, cuts[1:]):

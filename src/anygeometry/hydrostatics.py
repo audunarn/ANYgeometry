@@ -72,6 +72,7 @@ def _shell(model, faces, order):
 
 def hydrostatics(model, faces, point, normal=(0., 0., 1.), longitudinal=(1., 0., 0.), order: int = 24,
                  rtol: float = 1e-8) -> dict:
+    raw_normal = tuple(float(value) for value in normal)
     from .shell_volume import closed_shell
     faces = list(faces)
     problems = closed_shell(model, faces)
@@ -81,9 +82,10 @@ def hydrostatics(model, faces, point, normal=(0., 0., 1.), longitudinal=(1., 0.,
     sign, total, centre, extent = _shell(model, faces, order)
     # the same plane with its origin at the foot of the shell's centre (review H1 round 1: a far origin
     # cancelled the central waterplane moments)
-    # the offset exactly from the given point and normal (review H1 round 2: rounding at a far point)
-    offset = sum(Fraction(float(a)) * (Fraction(float(c)) - Fraction(float(p)))
-                 for a, c, p in zip(frame.normal, centre, frame.origin))
+    # the offset exactly from the given point and the given (unnormalised) normal: the plane is
+    # raw_n . X = raw_n . point (review H1 rounds 2-3: a rounded unit normal tilts a plane given far away)
+    offset = sum(Fraction(a) * (Fraction(float(c)) - Fraction(float(p)))
+                 for a, c, p in zip(raw_normal, centre, point)) / Fraction(float(np.linalg.norm(raw_normal)))
     foot = centre - float(offset) * frame.normal
     frame = Frame(foot, frame.axes[0], frame.axes[1], normal=frame.normal)
     # clipped moments at two orders

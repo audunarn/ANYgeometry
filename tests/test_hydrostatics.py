@@ -382,7 +382,8 @@ def test_an_oblique_plane_given_by_a_far_point_is_the_same_plane():
         assert result["volume"] == pytest.approx(.5, rel=1e-12)
 
 
-def test_a_flat_section_root_is_converged():
+@pytest.mark.parametrize("scale", [1.0, 1e-12])
+def test_a_flat_section_root_is_converged(scale):
     from anygeometry.face_moments import Frame, _section_float, face_moments, waterplane_fields
     from anygeometry import GeometryModel, Plane
     from anygeometry.entities import OrientedEdge
@@ -390,7 +391,8 @@ def test_a_flat_section_root_is_converged():
     from anygeometry.support_curves import PlaneNurbsCurve
     # S(u, v) = (u, v, u^7 + 1e-48 u - 1e-42): its section with z = 0 is the line x = 1e-6 (review H1 round 2)
     z = [(1. if i == 7 else 0.) + 1e-48 * i / 7 - 1e-42 for i in range(8)]
-    surface = NurbsSurface(7, 1, (0.,) * 8 + (1.,) * 8, (0., 0., 1., 1.),
+    # scale 1e-12: the same geometry on a u-knot domain [0, 1e-12] (review H1 round 3)
+    surface = NurbsSurface(7, 1, (0.,) * 8 + (scale,) * 8, (0., 0., 1., 1.),
                            tuple(((i / 7, 0., z[i]), (i / 7, 1., z[i])) for i in range(8)))
     flat = Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.))
     curve = PlaneNurbsCurve.from_plane(flat, surface, 0)
@@ -414,3 +416,23 @@ def test_a_waterline_loop_outside_the_trimmed_face_does_not_refuse():
     model, faces = basin((.25, -.25, .25), (.2703, -.2497, .2303), footprint=(.1, .2, .1, .2))
     result = hydrostatics(model, faces, (.15, .15, 0.))
     assert result["volume"] == 0.0 or result["volume"] == pytest.approx(0., abs=1e-15)
+
+
+# ------------------------------------------------------------------ review H1 round 3
+
+
+@pytest.mark.parametrize("c, h", [(.503, 1e-6), (.50625, 1e-5)])
+def test_wet_caps_between_equal_samples_are_found(c, h):
+    # the cap of round 2, and one placed symmetrically between two boundary samples (review H1 round 3)
+    model, faces = basin((c * c - .1, c * c - c - .1, (1 - c) ** 2 - .1), (0., 0., 0.))
+    result = hydrostatics(model, faces, (c, .1, -.1 + h), (0., 1., 1.))
+    assert result["volume"] == pytest.approx(8 / 15 * h ** 2.5, rel=1e-6)
+    assert result["waterplane_area"] == pytest.approx(4 / 3 * h ** 1.5 * math.sqrt(2), rel=1e-6)
+
+
+@pytest.mark.parametrize("normal, point", [((1., -1., 1.), (1e12 + .5, 1e12 + .5, .5)),
+                                           ((1., 3., 7.), (7e12 + .5, .5, -1e12 + .5))])
+def test_planes_given_far_away_with_any_normal_are_exact(normal, point):
+    # the plane through the unit cube's centre given by a point 1e12 away (review H1 round 3: normal (1, 3, 7))
+    model, faces, _place = box((1., 1., 1.))
+    assert hydrostatics(model, faces, point, normal)["volume"] == pytest.approx(.5, rel=1e-12)
