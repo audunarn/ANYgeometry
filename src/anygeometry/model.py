@@ -6164,6 +6164,13 @@ class GeometryModel:
             raise GeometryError("certified trim polylines are defined for NURBS faces")
         if not (math.isfinite(tolerance) and tolerance > 0):
             raise GeometryError("tolerance must be finite and positive")
+        from .support_curves import PlaneNurbsCurve
+        if any(isinstance(self.edges[item.edge].curve, PlaneNurbsCurve)
+               for loop in (face.loop,) + tuple(face.holes) for item in loop):
+            # section edges have no pcurve; their certified chart polylines are not implemented yet
+            # (review B1-P4c round 2: a typed refusal instead of an AttributeError)
+            raise GeometryError("certified trim polylines are not available for faces with plane x NURBS "
+                                "section edges yet")
         loops, worst = [], 0.0
         for loop in (face.loop,) + tuple(face.holes):
             points = []

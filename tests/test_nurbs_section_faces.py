@@ -186,3 +186,9 @@ def test_a_collinear_segment_continuing_a_section_validates():
              build.segment((0., .75), (0., 0.))]
     face = build.model.add_face(edges, surface=surface)
     assert validate_nurbs_section_face(build.model, face) == []
+
+
+def test_certified_trim_polylines_refuse_section_edges_with_a_typed_error():
+    _surface, build, face = bow_below_deck()
+    with pytest.raises(GeometryError, match="section edges"):
+        build.model.trim_loops_uv_certified(face, 1e-6)
