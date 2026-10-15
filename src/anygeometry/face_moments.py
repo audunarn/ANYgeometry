@@ -228,7 +228,7 @@ def _section_float(curve, t):
         f_lo, f_hi = plane(lo), plane(hi)
         bad = (f_lo > 0) == (f_hi > 0)
         bad &= (f_lo != 0) & (f_hi != 0)
-        for _ in range(24):
+        for _ in range(12):
             middle = .5 * (lo + hi)
             f_mid = plane(middle)
             left = (f_mid > 0) == (f_lo > 0)
@@ -237,7 +237,7 @@ def _section_float(curve, t):
         x = .5 * (lo + hi)
         axis = 1 if arc.slicing == 0 else 0
         scale = (q1 - q0) if axis == 1 else (r1 - r0)
-        for _ in range(4):                                      # Newton inside the bracket
+        for _ in range(5):                                      # Newton inside the bracket
             knot = np.stack((s, x), axis=1) if arc.slicing == 0 else np.stack((x, s), axis=1)
             chart = np.stack(((knot[:, 0] - r0) / (r1 - r0), (knot[:, 1] - q0) / (q1 - q0)), axis=1)
             chart = np.clip(chart, 0.0, 1.0)
@@ -328,14 +328,18 @@ def _sign_changes(value, lo, hi, samples: int = 64):
     found = [float(t[k]) for k in range(1, samples) if f[k] == 0.0]
     brackets = np.flatnonzero(f[:-1] * f[1:] < 0)
     if len(brackets):
-        a, b, fa = t[brackets], t[brackets + 1], f[brackets]
-        for _ in range(60):                                     # all brackets at once
-            m = .5 * (a + b)
+        a, b, fa, fb = t[brackets], t[brackets + 1], f[brackets], f[brackets + 1]
+        for step in range(40):                                  # all brackets at once
+            # bisection first, then false position kept inside the bracket (superlinear on smooth f)
+            secant = a - fa * (b - a) / np.where(fb != fa, fb - fa, 1.0)
+            m = .5 * (a + b) if step < 8 else np.clip(secant, np.minimum(a, b), np.maximum(a, b))
             fm = value(m)
             left = (fm < 0) == (fa < 0)
-            a, fa = np.where(left, m, a), np.where(left, fm, fa)
-            b = np.where(left, b, m)
-        found += [float(x) for x in .5 * (a + b)]
+            a, fa, b, fb = (np.where(left, m, a), np.where(left, fm, fa), np.where(left, b, m),
+                            np.where(left, fb, fm))
+            if np.all((fm == 0) | (np.abs(b - a) <= 4 * np.finfo(float).eps * np.maximum(1.0, np.abs(a)))) or                     (step >= 8 and np.all(np.abs(fm) <= 1e-15 * np.maximum(np.abs(f).max(), 1e-300))):
+                break
+        found += [float(x) for x in np.where(np.abs(fa) <= np.abs(fb), a, b)]
     return found
 
 

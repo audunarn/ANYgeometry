@@ -18,6 +18,8 @@ entirely above the plane displaces nothing (the waterplane quantities are then z
 """
 from __future__ import annotations
 
+import math
+
 import numpy as np
 
 from .errors import GeometryError
@@ -35,6 +37,34 @@ def waterplane_frame(point, normal=(0., 0., 1.), longitudinal=(1., 0., 0.)) -> F
     return Frame(point, e1, np.cross(n, e1))
 
 
+_SHELLS: dict = {}
+
+
+def _shell(model, faces, order):
+    """``(sign, volume, vertex mean, extent)`` of the whole shell (unclipped, in a world frame at its
+    vertex mean): the loops' orientation and the refusal scales. Cached per model revision and faces
+    (a stability sweep evaluates many waterplanes of one shell)."""
+    key = (model.model_id, model.revision, tuple(faces), order)
+    cached = _SHELLS.get(key)
+    if cached is not None:
+        return cached
+    positions = np.asarray([model.vertices[v].position for v in
+                            {model.oriented_start_vertex(item) for face_id in faces
+                             for loop in (model.faces[face_id].loop,) + tuple(model.faces[face_id].holes)
+                             for item in loop}], dtype=float)
+    centre = positions.mean(axis=0)
+    whole = shell_moments(model, faces, Frame.world(centre), volume_fields, order)
+    sign = 1.0 if whole[0] > 0 else -1.0
+    total = sign * float(whole[0])
+    if not total > 0:
+        raise GeometryError("the shell encloses no volume")
+    extent = max(float(np.max(np.linalg.norm(positions - centre, axis=1))), 1e-300)
+    if len(_SHELLS) >= 32:
+        _SHELLS.clear()
+    _SHELLS[key] = cached = (sign, total, centre, extent)
+    return cached
+
+
 def hydrostatics(model, faces, point, normal=(0., 0., 1.), longitudinal=(1., 0., 0.), order: int = 24,
                  rtol: float = 1e-8) -> dict:
     from .shell_volume import closed_shell
@@ -43,18 +73,7 @@ def hydrostatics(model, faces, point, normal=(0., 0., 1.), longitudinal=(1., 0.,
     if problems:
         raise GeometryError("not a closed shell: " + "; ".join(problems))
     frame = waterplane_frame(point, normal, longitudinal)
-    positions = np.asarray([model.vertices[v].position for v in
-                            {model.oriented_start_vertex(item) for face_id in faces
-                             for loop in (model.faces[face_id].loop,) + tuple(model.faces[face_id].holes)
-                             for item in loop}], dtype=float)
-    # the whole shell (unclipped) in a frame at its vertex mean: orientation and scales
-    centre = Frame(positions.mean(axis=0), frame.axes[0], frame.axes[1])
-    whole = shell_moments(model, faces, centre, volume_fields, order)
-    sign = 1.0 if whole[0] > 0 else -1.0
-    total = sign * float(whole[0])
-    if not total > 0:
-        raise GeometryError("the shell encloses no volume")
-    extent = max(float(np.max(np.linalg.norm(positions - centre.origin, axis=1))), 1e-300)
+    sign, total, centre, extent = _shell(model, faces, order)
     # clipped moments at two orders
     results = []
     def both(local):
@@ -65,7 +84,7 @@ def hydrostatics(model, faces, point, normal=(0., 0., 1.), longitudinal=(1., 0.,
     (v1, p1), (v2, p2) = results
     # scales: volume ~ V, first moments ~ V L (here the frame origin may lie off the shell: use the
     # distance of the frame origin to the shell as well), area ~ L^2, area moments ~ L^3, L^4
-    reach = extent + float(np.linalg.norm(frame.origin - centre.origin))
+    reach = extent + float(np.linalg.norm(frame.origin - centre))
     scales_v = np.array([total, total * reach, total * reach, total * reach])
     scales_p = np.array([extent ** 2, extent ** 2 * reach, extent ** 2 * reach] + [extent ** 2 * reach ** 2] * 3)
     dv, dp = np.abs(v2 - v1), np.abs(p2 - p1)
@@ -93,3 +112,78 @@ def hydrostatics(model, faces, point, normal=(0., 0., 1.), longitudinal=(1., 0.,
     else:
         result.update(flotation_centre=None, i_transverse=0.0, i_longitudinal=0.0, i_product=0.0)
     return result
+
+
+# ------------------------------------------------------------------ sweeps for stability (H1c)
+
+
+def heel_normal(heel: float, trim: float = 0.0) -> np.ndarray:
+    """The upward waterplane normal of a hull heeled by ``heel`` (radians, positive: the +y side goes
+    down, the waterplane rises towards +y) and trimmed by ``trim`` (radians, positive: the +x end goes
+    down), in the hull's (body) axes."""
+    n = np.array([-math.sin(trim), -math.sin(heel) * math.cos(trim), math.cos(heel) * math.cos(trim)])
+    return n / np.linalg.norm(n)
+
+
+def float_at(model, faces, volume: float, normal=(0., 0., 1.), reference=(0., 0., 0.),
+             longitudinal=(1., 0., 0.), start: float | None = None, order: int = 24, rtol: float = 1e-8,
+             tolerance: float = 1e-12, max_iterations: int = 40) -> dict:
+    """The waterplane of the given ``normal`` that displaces ``volume``: the plane through
+    ``reference + zeta n`` with ``zeta`` from Newton (``dV / dzeta`` is the waterplane area), safeguarded
+    by bisection. Returns the ``hydrostatics`` result with ``zeta`` added."""
+    n = np.asarray(normal, dtype=float)
+    n = n / np.linalg.norm(n)
+    reference = np.asarray(reference, dtype=float)
+    positions = np.asarray([vertex.position for vertex in model.vertices.values()], dtype=float)
+    heights = (positions - reference) @ n
+    low, high = float(np.min(heights)), float(np.max(heights))
+    zeta = .5 * (low + high) if start is None else float(start)
+
+    def at(z):
+        return hydrostatics(model, faces, reference + z * n, n, longitudinal, order, rtol)
+    result = at(zeta)
+    for _ in range(max_iterations):
+        error = result["volume"] - volume
+        if abs(error) <= tolerance * max(volume, 1e-300):
+            break
+        if error > 0:
+            high = min(high, zeta)
+        else:
+            low = max(low, zeta)
+        area = result["waterplane_area"]
+        step = zeta - error / area if area > 0 else None
+        zeta = step if step is not None and low < step < high else .5 * (low + high)
+        result = at(zeta)
+    else:
+        raise GeometryError("float_at: no waterplane found for the displacement")
+    result["zeta"] = zeta
+    return result
+
+
+def hydrostatic_table(model, faces, drafts, reference=(0., 0., 0.), normal=(0., 0., 1.), **options) -> list:
+    """``hydrostatics`` at the waterplanes through ``reference + draft n`` for each draft."""
+    n = np.asarray(normal, dtype=float)
+    n = n / np.linalg.norm(n)
+    rows = []
+    for draft in drafts:
+        row = hydrostatics(model, faces, np.asarray(reference, dtype=float) + draft * n, n, **options)
+        row["draft"] = float(draft)
+        rows.append(row)
+    return rows
+
+
+def gz_curve(model, faces, volume: float, gravity_centre, heels, trim: float = 0.0,
+             reference=(0., 0., 0.), **options) -> list:
+    """Righting levers at the given heels (radians) for a displacement ``volume`` and a centre of
+    gravity (body axes), with free sinkage and fixed trim: at each heel the waterplane with
+    ``heel_normal(heel, trim)`` that displaces ``volume`` (``float_at``), and ``GZ = (B - G) . eta``
+    with ``eta`` the waterplane's transverse axis (positive: righting). Rows: heel, gz, zeta, result."""
+    g = np.asarray(gravity_centre, dtype=float)
+    rows, start = [], None
+    for heel in heels:
+        result = float_at(model, faces, volume, heel_normal(heel, trim), reference, start=start, **options)
+        start = result["zeta"]
+        eta = result["frame"].axes[1]
+        rows.append({"heel": float(heel), "gz": float((result["buoyancy_centre"] - g) @ eta),
+                     "zeta": start, "result": result})
+    return rows

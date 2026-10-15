@@ -183,3 +183,48 @@ def test_the_volume_grows_with_the_draft_at_the_waterplane_area(b1):
     d2 = (volume(draft + h / 2) - volume(draft - h / 2)) / h
     slope = (4 * d2 - d1) / 3
     assert slope == pytest.approx(hydrostatics(model, faces, (2.5, 0., draft))["waterplane_area"], rel=1e-7)
+
+
+# ------------------------------------------------------------------ sweeps (H1c)
+
+
+def test_a_box_floats_at_its_draft_for_its_displacement():
+    from anygeometry.hydrostatics import float_at
+    model, faces, _place = box((10., 4., 4.))
+    result = float_at(model, faces, 10. * 4. * 1.5)
+    assert result["zeta"] == pytest.approx(1.5, abs=1e-11)
+    assert result["volume"] == pytest.approx(60., rel=1e-12)
+
+
+def test_a_wall_sided_box_has_the_wall_sided_gz():
+    from anygeometry.hydrostatics import gz_curve
+    # a 10 x 4 x 4 box at draft 1.5, KG 1.8: wall-sided while tan(heel) B / 2 < T (up to about 36 deg)
+    length, beam, depth, draft, kg = 10., 4., 4., 1.5, 1.8
+    model, faces, _place = box((length, beam, depth))
+    heels = np.radians([0., 5., 10., 20., 30.])
+    rows = gz_curve(model, faces, length * beam * draft, (length / 2, beam / 2, kg), heels,
+                    reference=(length / 2, beam / 2, 0.))
+    kb, bm = draft / 2, beam ** 2 / (12 * draft)
+    gm = kb + bm - kg
+    for row, heel in zip(rows, heels):
+        expected = math.sin(heel) * (gm + .5 * bm * math.tan(heel) ** 2)
+        assert row["gz"] == pytest.approx(expected, abs=1e-10)
+        # the box heels about its centreline: the waterplane passes through the centreline at the draft
+        assert row["result"]["volume"] == pytest.approx(length * beam * draft, rel=1e-12)
+
+
+def test_the_b1_hydrostatic_table_is_consistent(b1):
+    import time
+    from anygeometry.hydrostatics import float_at, hydrostatic_table
+    model, faces = b1
+    drafts = [1.0, 1.5, 2.0, 2.5]
+    start = time.perf_counter()
+    rows = hydrostatic_table(model, faces, drafts)
+    per_waterplane = (time.perf_counter() - start) / len(drafts)
+    volumes = [row["volume"] for row in rows]
+    assert all(b > a for a, b in zip(volumes, volumes[1:]))
+    assert all(row["waterplane_area"] > 0 and row["bm_transverse"] > 0 for row in rows)
+    # floating at a tabulated displacement returns its draft
+    found = float_at(model, faces, volumes[2], start=1.8)
+    assert found["zeta"] == pytest.approx(2.0, abs=1e-9)
+    print(f"B1 hydrostatics per waterplane: {per_waterplane:.2f} s")
