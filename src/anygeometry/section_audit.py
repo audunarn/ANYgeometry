@@ -8,8 +8,9 @@ separating direction ``w``: each side's piece at ``X`` is certified strictly mon
 (a plane face lies at a constant offset, a NURBS face patch within a small intrusion), on opposite
 sides. With ``E`` = the joint-end offsets + ``tolerance |w|``, a point beyond the offset plane
 ``w . (P - X) = +-E`` of its side is farther than the tolerance from the whole other side, so
-contacts can only lie in the stretches before those planes; a stretch longer than ``E / (|w|
-sin(angular tolerance))`` (a departure flatter than the angular tolerance) refuses.
+contacts can only lie in the stretches before those planes; each stretch must lie within the joint
+ball of ``JOINT_BALL`` tolerances around ``X`` (review B1-P5 round 3: a radius scaled by
+``1 / sin(angular tolerance)`` admitted contacts 50 tolerances out), so flat departures refuse.
 
 Exception (owner decision 2026-10-15, option b): a plane face and a NURBS face that share section
 edges are certified on their exact intersection only (it must be exactly their shared section edges);
@@ -30,6 +31,7 @@ import math
 
 import numpy as np
 
+from .branch_predicates import JOINT_BALL
 from .curves import Straight
 from .plane_nurbs import CURRENT_WORK, PlaneNurbsNotCertified, plane_nurbs_section
 from .support_curves import PlaneNurbsCurve
@@ -248,14 +250,16 @@ def _curve_of(model, edge_id):
 
 def _stretch_box(curve, a, b, at_start, x, w, limit, side, work):
     """World box of the part of ``curve[a, b]`` next to its joint end where ``side * w . (P - x)`` may
-    still be at most ``limit`` (bisection: the rest is certified beyond ``limit``)."""
+    still be at most ``limit`` (bisection: the rest is certified beyond ``limit``). Callers certify
+    ``side * w . P`` strictly increasing away from the joint on ``curve[a, b]``, so the enclosure of
+    the cut point alone decides the rest (B1-P5 round 3: tight cuts for the fixed joint ball)."""
     lo, hi = (a, b) if at_start else (b, a)                    # lo: the joint end
     near, far = lo, hi
     for _ in range(work.max_depth):
         if not work.take():
             return None
         middle = .5 * (near + far)
-        low, high = _offsets(curve.box(min(middle, hi), max(middle, hi)), w, x)
+        low, high = _offsets(curve.box(middle, middle), w, x)
         beyond = (low > limit) if side > 0 else (high < -limit)
         if beyond:
             far = middle
@@ -264,10 +268,32 @@ def _stretch_box(curve, a, b, at_start, x, w, limit, side, work):
         if abs(far - near) <= 1e-300:
             break
     end = far
-    beyond_low, beyond_high = _offsets(curve.box(min(end, hi), max(end, hi)), w, x)
+    beyond_low, beyond_high = _offsets(curve.box(end, end), w, x)
     if not ((beyond_low > limit) if side > 0 else (beyond_high < -limit)) and end != hi:
         return None
     return curve.box(min(lo, end), max(lo, end))
+
+
+class _JointTooLong(PlaneNurbsNotCertified):
+    """A joint's departure stretch ends inside the piece yet leaves the joint ball: the departure is too
+    flat, which smaller pieces cannot change; the pair is refused at once (review B1-P5 round 3: retrying
+    on subdivided spans ran the audit's whole budget)."""
+
+
+def _joint_within(curve, a, b, at_start, x, w, limit, side, work, radius, final: bool = True) -> bool:
+    """The departure stretch of ``curve[a, b]`` within the joint ball; ``False`` to retry on smaller
+    pieces, ``_JointTooLong`` when the stretch ends inside the piece outside the ball and ``limit`` cannot
+    shrink with smaller pieces (``final``)."""
+    box = _stretch_box(curve, a, b, at_start, x, w, limit, side, work)
+    if box is None:
+        return False
+    if _within(box, x, radius * radius):
+        return True
+    hi = b if at_start else a
+    low, high = _offsets(curve.box(hi, hi), w, x)
+    if final and ((low > limit) if side > 0 else (high < -limit)):
+        raise _JointTooLong("a joint's departure stretch leaves the joint ball")
+    return False
 
 
 def _within(box, x, radius2) -> bool:
@@ -303,10 +329,9 @@ def _joint_curves(first, pa, second, pb, vertex, tolerance, angular, work) -> bo
         return False
     norm_w = _norm_up(w)
     limit = offsets[0] + offsets[1] + Fraction(float(tolerance)) * norm_w
-    radius = limit / norm_w / Fraction(math.sin(angular)) + Fraction(float(tolerance))
+    radius = JOINT_BALL * Fraction(float(tolerance))
     for (curve, a, b, at_start, _away), side in zip(pieces, sides):
-        box = _stretch_box(curve, a, b, at_start, x, wx, limit, side, work)
-        if box is None or not _within(box, x, radius * radius):
+        if not _joint_within(curve, a, b, at_start, x, wx, limit, side, work, radius):
             return False
     return True
 
@@ -440,9 +465,8 @@ def _joint_plane(curve, piece, vertex, n, d, norm_n, tol, angular, work) -> bool
     low, high = _offsets(curve.box(t, t), w, x)
     plane_offset = abs(_dot(n, x) - d)                          # the plane face's offset from the joint
     limit = max(abs(low), abs(high)) + plane_offset + tol * norm_n
-    radius = limit / norm_n / Fraction(math.sin(angular)) + tol
-    box = _stretch_box(curve, a, b, at_start, x, w, limit, 1, work)
-    return box is not None and _within(box, x, radius * radius)
+    radius = JOINT_BALL * Fraction(tol)
+    return _joint_within(curve, a, b, at_start, x, w, limit, 1, work, radius)
 
 
 def _face_chart_box(model, face):
@@ -577,9 +601,9 @@ def _joint_line_patch(line, vertex, rect, surface, chart_point, tol, angular, wo
     if intrusion > tol * norm_w:
         return False                                            # refine the patch first
     limit = max(intrusion, Fraction(0)) + tol * norm_w
-    radius = limit / norm_w / Fraction(math.sin(angular)) + tol
-    stretch = _stretch_box(line, 0.0, 1.0, at_start, x, w, limit, 1, work)
-    return stretch is not None and _within(stretch, x, radius * radius)
+    radius = JOINT_BALL * Fraction(tol)
+    # the limit includes the patch's intrusion, which a smaller patch may lower: retry, not refuse
+    return _joint_within(line, 0.0, 1.0, at_start, x, w, limit, 1, work, radius, final=False)
 
 
 # ------------------------------------------------------------------ public classifiers
@@ -821,42 +845,47 @@ def plane_faces(model, first_id: int, second_id: int, tolerance: float, work: Wo
     # the faces' interiors can cross along the planes' intersection line L (review B1-P5 rounds 1-2):
     # each face's inside stretches of L come from where its boundary actually crosses the other plane
     # (exact line parameters, isolated section roots); the stretches inside both faces must lie on
-    # shared edges or be no longer than the tolerance (a joint)
+    # shared edges (exact face intersection: only rounding slack, review B1-P5 round 3: spans widened
+    # by the tolerance let the faces overlap past a shared edge's end)
     direction = np.asarray([float(v) for v in _cross(n1, n2)], dtype=float)
     direction /= float(np.linalg.norm(direction))
+    scale = max([1.0] + [float(np.max(np.abs(model.vertices[v].position))) for v in vertices[0] | vertices[1]])
+    slack = 2.0 ** -40 * scale
     shared_spans = []
     for edge_id in edges[0] & edges[1]:
         edge = model.edges[edge_id]
         s0, s1 = (float(direction @ model.vertices[v].position) for v in (edge.start, edge.end))
-        shared_spans.append((min(s0, s1) - tolerance, max(s0, s1) + tolerance))
+        shared_spans.append((min(s0, s1) - slack, max(s0, s1) + slack))
     insides = []
     for own, other in ((first, second), (second, first)):
-        stretches = _inside_stretches(model, own, other, direction, tolerance, shared_spans)
+        stretches = _inside_stretches(model, own, other, direction, tolerance, slack, shared_spans)
         if stretches is None:
             return None
         insides.append(stretches)
     for lo_a, hi_a in insides[0]:
         for lo_b, hi_b in insides[1]:
             lo, hi = max(lo_a, lo_b), min(hi_a, hi_b)
-            if hi - lo <= tolerance:
+            if hi - lo <= slack:
                 continue
             if not any(span_lo <= lo and hi <= span_hi for span_lo, span_hi in shared_spans):
                 return None
     return True
 
 
-def _inside_stretches(model, face, other, direction, tolerance, shared_spans=()):
+def _inside_stretches(model, face, other, direction, tolerance, slack, shared_spans=()):
     """The stretches ``(s0, s1)`` (``s = direction . X``) of the planes' intersection line inside ``face``:
     the line's crossings with the face's boundary (straight edges: exact parameters; section edges:
-    isolated roots on the other plane; an edge lying on the line contributes its ends), the stretches
-    between consecutive crossings classified by ray parity at their midpoints; ``None`` if undecided.
+    isolated roots on the other plane, or an unresolved root within ``slack`` of the edge's end vertex;
+    an edge lying on the line contributes its ends), the stretches between consecutive crossings
+    classified by ray parity at their midpoints; ``None`` if undecided. Stretches no longer than
+    ``slack`` (rounding) are dropped.
     Stretches within ``shared_spans`` (on shared edges, where overlap is allowed) count as inside
     unclassified: their midpoints lie on the boundary."""
     from .branch_predicates import section_roots
     from .section_faces import _Frame, _inside
     n = _cross(_ex(other.surface.u_vector), _ex(other.surface.v_vector))
     d = _dot(n, _ex(other.surface.origin))
-    values = []
+    values, uncertain = [], []
     for loop in (face.loop,) + tuple(face.holes):
         for item in loop:
             edge = model.edges[item.edge]
@@ -876,12 +905,22 @@ def _inside_stretches(model, face, other, direction, tolerance, shared_spans=())
                     return None
                 for root in roots:
                     centre = .5 * (np.asarray(root.lower) + np.asarray(root.upper))
-                    if not root.isolated:
+                    if root.isolated:
+                        # the crossing lies somewhere in the root box: a box wider than the slack along
+                        # the line is an uncertain stretch, taken as inside (review B1-P5 round 3)
+                        box = np.array([[root.lower[k] if (i >> k) & 1 == 0 else root.upper[k] for k in range(3)]
+                                        for i in range(8)])
+                        reach = box @ direction
+                        if float(reach.max() - reach.min()) > slack:
+                            uncertain.append((float(reach.min()), float(reach.max())))
+                            values += [float(reach.min()), float(reach.max())]
+                            continue
+                    else:
                         # an unresolved root at the edge's end (a corner on the other plane): that vertex
                         ends = [model.vertices[v].position for v in (edge.start, edge.end)]
                         corners = np.array([[root.lower[k] if (i >> k) & 1 == 0 else root.upper[k] for k in range(3)]
                                             for i in range(8)])
-                        near = [end for end in ends if float(np.max(np.linalg.norm(corners - end, axis=1))) <= tolerance]
+                        near = [end for end in ends if float(np.max(np.linalg.norm(corners - end, axis=1))) <= slack]
                         if not near:
                             return None
                         centre = near[0]
@@ -896,9 +935,9 @@ def _inside_stretches(model, face, other, direction, tolerance, shared_spans=())
         return None
     stretches = []
     for s0, s1 in zip(values, values[1:]):
-        if s1 - s0 <= tolerance:
+        if s1 - s0 <= slack:
             continue
-        if any(lo <= s0 and s1 <= hi for lo, hi in shared_spans):
+        if any(lo <= s0 and s1 <= hi for lo, hi in list(shared_spans) + uncertain):
             stretches.append((s0, s1))
             continue
         middle = anchor + (.5 * (s0 + s1) - float(direction @ anchor)) * direction

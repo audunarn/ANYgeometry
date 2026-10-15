@@ -198,6 +198,72 @@ def test_a_tolerance_coplanar_segment_does_not_make_a_far_contact_a_joint():
     p = (0., 0., 5e-5)
     assert certify_line_section(curve, p, (1., 0., 9e-5), [p], 1e-4) is not True
 
+
+def test_a_flat_crossing_far_from_the_shared_vertex_is_reported_by_the_audit():
+    from anygeometry import GeometryModel
+    # review B1-P5 round 3: C(t) = (t, 0.01 t - 5e-10, 0) starts at the shared vertex (0,0,0) and crosses the
+    # line (0,0,0) -> (1,0,0) at x = 5e-8, 50 default tolerances out (the joint radius scaled by 1/sin(angular))
+    model = GeometryModel()
+    origin = model.add_point(0., 0., 0.)
+    flat = Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.))
+    model.add_curve(origin, model.add_point(1., .01 - 5e-10, 0.),
+                    _section_side(flat, (0., 0., 1.), (0., -5e-10, 0.), (1., .01 - 5e-10, 0.)))
+    model.add_line(origin, model.add_point(1., 0., 0.))
+    assert not model.strict_audit().clean
+
+
+def test_faces_overlapping_past_the_end_of_their_shared_edge_are_reported():
+    from anygeometry import GeometryModel
+    # review B1-P5 round 3: triangles in z = 0 and y = 0 sharing A -> B = (-1,0,0) -> (0,0,0); their sections
+    # from B start at (9e-10,1e-10,0) and (9e-10,0,1e-10), so the interiors overlap past B along the x-axis
+    model = GeometryModel()
+    a, b = model.add_point(-1., 0., 0.), model.add_point(0., 0., 0.)
+    shared = model.add_line(a, b)
+    flat = Plane((0., 0., 0.), (1., 0., 0.), (0., 1., 0.))
+    low = model.add_point(0., -1., 0.)
+    model.add_face([shared, model.add_curve(b, low, _section_side(flat, (0., 0., 1.), (9e-10, 1e-10, 0.), (0., -1., 0.))),
+                    model.add_line(low, a)], surface=flat)
+    upright = Plane((0., 0., 0.), (1., 0., 0.), (0., 0., 1.))
+    down = model.add_point(0., 0., -1.)
+    model.add_face([shared, model.add_curve(b, down, _section_side(upright, (0., 1., 0.), (9e-10, 0., 1e-10), (0., 0., -1.))),
+                    model.add_line(down, a)], surface=upright)
+    assert not model.strict_audit().clean
+
+
+def test_volume_is_translation_invariant():
+    from anygeometry import GeometryModel
+    from anygeometry.shell_volume import closed_shell, enclosed_volume
+    from anygeometry.entities import OrientedEdge
+    # review B1-P5 round 3: the unit cube at 1e6 lost ~1e-4 of its volume to cancellation
+    model = GeometryModel()
+    offset = 1e6
+    p = {(i, j, k): model.add_point(offset + i, offset + j, offset + k) for i in (0, 1) for j in (0, 1) for k in (0, 1)}
+    lines = {}
+
+    def line(u, v):
+        key = frozenset((u, v))
+        if key not in lines:
+            lines[key] = model.add_line(p[u], p[v])
+        return lines[key]
+    quads = [((0, 0, 0), (0, 1, 0), (1, 1, 0), (1, 0, 0)), ((0, 0, 1), (1, 0, 1), (1, 1, 1), (0, 1, 1)),   # outward
+             ((0, 0, 0), (0, 0, 1), (0, 1, 1), (0, 1, 0)), ((1, 0, 0), (1, 1, 0), (1, 1, 1), (1, 0, 1)),
+             ((0, 0, 0), (1, 0, 0), (1, 0, 1), (0, 0, 1)), ((0, 1, 0), (0, 1, 1), (1, 1, 1), (1, 1, 0))]
+    # explicit oriented loops (add_face orders a loop from its first edge's stored direction)
+    faces = []
+    for q in quads:
+        loop = []
+        for i in range(4):
+            u, v = q[i], q[(i + 1) % 4]
+            edge = line(u, v)
+            loop.append(OrientedEdge(edge, model.edges[edge].start == p[u]))
+        corner = [offset + c for c in q[0]]
+        u, v = ([float(b - a) for a, b in zip(q[0], q[k])] for k in (1, 3))
+        faces.append(model.add_face_from_loop(loop, surface=Plane(corner, u, v)))
+    assert closed_shell(model, faces) == []
+    result = enclosed_volume(model, faces)
+    assert result["volume"] == pytest.approx(1., abs=1e-12)
+    assert result["centroid"] == pytest.approx([offset + .5] * 3, abs=1e-9)
+
 def test_volume_quadrature_splits_at_knots():
     from anygeometry import GeometryModel
     from anygeometry.nurbs import CurveOnSurface, NurbsCurve, NurbsSurface
@@ -215,7 +281,7 @@ def test_volume_quadrature_splits_at_knots():
                              CurveOnSurface(roof, NurbsCurve(1, (0., 0., 1., 1.), (corners[i], corners[(i + 1) % 4]))))
              for i in range(4)]
     face = model.add_face(edges, surface=roof)
-    value = abs(_nurbs_face_moments(model, model.faces[face], 24)[0])
+    value = abs(_nurbs_face_moments(model, model.faces[face], 24, (0., 0., 0.))[0])
     assert abs(value - 1.001) <= 1e-12
 
 

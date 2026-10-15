@@ -101,7 +101,7 @@ def _edge_samples(model, item, order):
     raise GeometryError(f"edge {item.edge}: only straight and section edges bound the volume's plane faces")
 
 
-def _plane_face_moments(model, face, order):
+def _plane_face_moments(model, face, order, origin):
     from .surfaces import Plane
     plane = face.surface
     normal = np.cross(plane.u_vector, plane.v_vector)
@@ -112,12 +112,12 @@ def _plane_face_moments(model, face, order):
         return np.zeros(4)                                       # vertical: n_z = 0
     if exact[0] != 0 or exact[1] != 0:
         raise GeometryError(f"face {face.id}: tilted plane faces are not supported by the volume yet")
-    z0 = float(plane.origin[2])
+    z0 = float(plane.origin[2]) - origin[2]
     total = np.zeros(4)
     for loop in (face.loop,) + tuple(face.holes):
         for item in loop:
             points, derivatives, weights = _edge_samples(model, item, order)
-            x, y = points[:, 0], points[:, 1]
+            x, y = points[:, 0] - origin[0], points[:, 1] - origin[1]
             dy = derivatives[:, 1]
             # F with dF/dx = f(x, y, z0): z0 x, z0 x^2 / 2, z0 x y, z0^2 x / 2
             antiderivative = np.stack((z0 * x, .5 * z0 * x * x, z0 * x * y, .5 * z0 * z0 * x), axis=1)
@@ -125,7 +125,7 @@ def _plane_face_moments(model, face, order):
     return total
 
 
-def _nurbs_face_moments(model, face, order):
+def _nurbs_face_moments(model, face, order, origin):
     from .nurbs import CurveOnSurface
     surface = face.surface
     nodes, weights = np.polynomial.legendre.leggauss(order)
@@ -174,7 +174,7 @@ def _nurbs_face_moments(model, face, order):
                 for lo, hi in zip(cuts, cuts[1:]):
                     s = .5 * (hi - lo) * (nodes + 1.) + lo
                     uv = np.stack((s, np.full_like(s, v)), axis=1)
-                    points = surface.evaluate_many(uv)
+                    points = surface.evaluate_many(uv) - origin
                     s_u, s_v = surface.derivatives_many(uv)
                     jacobian_z = s_u[:, 0] * s_v[:, 1] - s_u[:, 1] * s_v[:, 0]
                     value += (.5 * (hi - lo) * weights) @ (_fields(points) * jacobian_z[:, None])
@@ -183,33 +183,45 @@ def _nurbs_face_moments(model, face, order):
     return total
 
 
-def _moments(model, faces, order):
+def _moments(model, faces, order, origin):
+    """The four field integrals in the local frame centred at ``origin`` (review B1-P5 round 3: absolute
+    coordinates far from the world origin cancel)."""
     from .nurbs import NurbsSurface
     from .surfaces import Plane
     total = np.zeros(4)
     for face_id in faces:
         face = model.faces[face_id]
         if isinstance(face.surface, Plane):
-            total += _plane_face_moments(model, face, order)
+            total += _plane_face_moments(model, face, order, origin)
         elif isinstance(face.surface, NurbsSurface):
-            total += _nurbs_face_moments(model, face, order)
+            total += _nurbs_face_moments(model, face, order, origin)
         else:
             raise GeometryError(f"face {face_id}: only plane and NURBS faces bound the volume")
     return total
 
 
-def enclosed_volume(model, faces, order: int = 24) -> dict:
-    """``{"volume", "centroid", "estimate"}`` of the region the closed shell ``faces`` encloses."""
+def enclosed_volume(model, faces, order: int = 24, rtol: float = 1e-8) -> dict:
+    """``{"volume", "centroid", "estimate"}`` of the region the closed shell ``faces`` encloses.
+
+    Integrated in a frame centred at the shell's vertices' mean (translated back); refused when the
+    order-doubling difference of the moments exceeds ``rtol`` of their scale (volume times extent^2)."""
     faces = list(faces)
     problems = closed_shell(model, faces)
     if problems:
         raise GeometryError("not a closed shell: " + "; ".join(problems))
-    coarse, fine = _moments(model, faces, order), _moments(model, faces, 2 * order)
+    positions = np.asarray([model.vertices[model.oriented_start_vertex(item)].position
+                            for face_id in faces for loop in (model.faces[face_id].loop,) + tuple(model.faces[face_id].holes)
+                            for item in loop], dtype=float)
+    origin = positions.mean(axis=0)
+    extent = float(np.max(np.linalg.norm(positions - origin, axis=1)))
+    coarse, fine = _moments(model, faces, order, origin), _moments(model, faces, 2 * order, origin)
     if fine[0] < 0:
         coarse, fine = -coarse, -fine                            # inward loops
     volume = float(fine[0])
     if volume <= 0:
         raise GeometryError("the shell encloses no volume")
-    centroid = fine[1:] / volume
     estimate = float(np.max(np.abs(fine - coarse)))
+    if not estimate <= rtol * volume * max(1.0, extent) ** 2:
+        raise GeometryError(f"the volume quadrature did not settle (moment difference {estimate:.3g})")
+    centroid = fine[1:] / volume + origin
     return {"volume": volume, "centroid": centroid, "estimate": estimate}
