@@ -456,10 +456,23 @@ def test_plane_basis_residuals_do_not_certify_whole_material_distance():
 
 def test_restricted_carriers_keep_unmoved_bounds_under_ulp_rounding(monkeypatch):
     # macOS Intel libm put an unmoved axial bound at local v ~3e-17 instead of 0, which moved the
-    # restricted Cylinder origin by one ulp and the receipt refused it. Bounds within native
-    # tolerance of the parent's own bounds are those bounds: nudge every near-0/near-1 chart
+    # restricted Cylinder origin by one ulp and the receipt refused it. Bounds physically within
+    # tolerance of the parent's own bounds are those bounds: nudge every near-0/near-1
     # Cylinder/Cone chart coordinate by a few ulps, as another platform's rounding would, and
     # require the same carriers.
+    _nudged_chart_bounds(monkeypatch)
+    model = _prepare(_mixed_bay(author_wall=True))
+    monkeypatch.undo()
+    query_prepared_mixed_sheet_joint_network(model, _seed_joint_edge(model))
+    reference = _prepare(_mixed_bay(author_wall=True))
+    from anygeometry import to_dict
+    def surfaces(document):
+        return [json.dumps(row['surface'], sort_keys=True) for row in document['faces']]
+    assert surfaces(to_dict(model)) == surfaces(to_dict(reference))
+
+
+def _nudged_chart_bounds(monkeypatch):
+    """Nudge near-0/near-1 Cylinder/Cone chart coordinates by a few ulps (another platform's rounding)."""
     from anygeometry import Cone, Cylinder
     from anygeometry.material_arrangement import MaterialDomain
     native = MaterialDomain.uv
@@ -476,11 +489,43 @@ def test_restricted_carriers_keep_unmoved_bounds_under_ulp_rounding(monkeypatch)
         return uv
 
     monkeypatch.setattr(MaterialDomain, 'uv', rounded)
-    model = _prepare(_mixed_bay(author_wall=True))
-    monkeypatch.undo()
-    query_prepared_mixed_sheet_joint_network(model, _seed_joint_edge(model))
-    reference = _prepare(_mixed_bay(author_wall=True))
+
+
+def _cut_cone():
+    from anygeometry.generators.structural import cone
+    model = cone(1., .6, 2., circumferential_segments=6, origin=(0., 0., 0.), axis=(0., 0., 1.))
+    for member in tuple(model.members):
+        model.remove_member(member)
+    model.add_plate(model.add_points(((-3., -3., 1.), (3., -3., 1.), (3., 3., 1.), (-3., 3., 1.))))
+    return _prepare(model)
+
+
+def test_restricted_cone_carriers_keep_unmoved_bounds_under_ulp_rounding(monkeypatch):
     from anygeometry import to_dict
-    def surfaces(document):
-        return [json.dumps(row['surface'], sort_keys=True) for row in document['faces']]
-    assert surfaces(to_dict(model)) == surfaces(to_dict(reference))
+    _nudged_chart_bounds(monkeypatch)
+    model = _cut_cone()
+    monkeypatch.undo()
+    reference = _cut_cone()
+    def cones(document):
+        return [json.dumps(row['surface'], sort_keys=True) for row in document['faces']
+                if row['surface'].get('type') == 'cone']
+    restricted = cones(to_dict(reference))
+    # both children of each panel are rebased Cone charts (the cut is at mid-height)
+    assert len(restricted) == 12 and len(set(restricted)) == 12
+    assert cones(to_dict(model)) == restricted
+
+
+def test_a_real_cut_near_a_long_carrier_end_is_kept():
+    # Snapping is per chart direction in physical length: a cut 5e-7 above the base of a
+    # 1000-long cylinder (far beyond tolerance) must stay, not snap to the parent's base.
+    model = cylinder(1., 1000., circumferential_segments=4)
+    for member in tuple(model.members):
+        model.remove_member(member)
+    model.add_plate(model.add_points(((-3., -3., 5e-7), (3., -3., 5e-7), (3., 3., 5e-7), (-3., 3., 5e-7))))
+    _prepare(model)
+    from anygeometry import Cylinder
+    bases = sorted({round(face.surface.origin[2], 12) for face in model.faces.values()
+                    if isinstance(face.surface, Cylinder)})
+    heights = sorted({face.surface.height for face in model.faces.values() if isinstance(face.surface, Cylinder)})
+    # the thin base sliver keeps the parent chart; the long child is rebased at the cut
+    assert bases == [0., 5e-7] and heights[0] == pytest.approx(1000. - 5e-7, abs=1e-9) and heights[-1] == 1000.
