@@ -1,6 +1,6 @@
 """Per-test CI durations from JUnit results (CI tiers plan, slices C0, C2 and C7).
 
-``build``  : JUnit files of one CI run (``label=path``, one per platform) -> ``reports/ci/durations.json``
+``build``  : JUnit files of one CI run (``label=path[,path...]``, one label per platform, shards merged) -> ``reports/ci/durations.json``
              with the run's totals per platform, every test of at least ``--min-seconds`` on any platform,
              and the mean duration of the remaining tests per platform (for balancing unknown tests).
 ``check``  : the totals recorded in the table are reproduced by its own entries (C0 acceptance).
@@ -49,7 +49,10 @@ def build(sources: list[str], min_seconds: float, run: str | None) -> dict:
         label, _, path = item.partition("=")
         if not path:
             raise SystemExit(f"expected label=path, got {item!r}")
-        platforms[label] = read_junit(Path(path))
+        merged: dict[str, float] = {}
+        for part in path.split(","):                     # a platform's shards, merged
+            merged.update(read_junit(Path(part)))
+        platforms[label] = merged
     names = set().union(*platforms.values())
     slow = sorted(n for n in names if any(p.get(n, 0.0) >= min_seconds for p in platforms.values()))
     table = {"run": run, "min_seconds": min_seconds, "platforms": sorted(platforms), "totals": {}, "rest_mean": {},

@@ -589,7 +589,7 @@ class PlaneNurbsCurve:
         ``depth`` are found by descending into the outer child first; the
         interval between them contains every zero (sound, linear in ``depth``).
         """
-        coefficients = self._sub_box(arc.box, arc.slicing, s_low, s_high)
+        coefficients = _integer_scaled(self._sub_box(arc.box, arc.slicing, s_low, s_high))
         x0, x1 = (arc.box.v_range if arc.slicing == 0 else arc.box.u_range)
 
         def excluded(coeffs):
@@ -597,7 +597,8 @@ class PlaneNurbsCurve:
             return all(value > 0 for value in flat) or all(value < 0 for value in flat)
 
         def halves(coeffs):
-            left, right = zip(*(_split_at(list(row), Fraction(1, 2)) for row in coeffs))
+            # only signs are used: integer coefficients and a uniform positive scale per split
+            left, right = zip(*(_halve_scaled(row) for row in coeffs))
             return [list(row) for row in left], [list(row) for row in right]
 
         def extreme(lowest: bool):
@@ -795,13 +796,49 @@ def _de_casteljau(values: list, t: Fraction) -> Fraction:
     return work[0]
 
 
+def _integer_scaled(rows) -> list:
+    """Bernstein rows (Fractions) times the least common denominator: integers with the same signs
+    (sign tests are all the subdivision needs; CI tiers C1: rational splits dominated the audit)."""
+    denominator = 1
+    for row in rows:
+        for value in row:
+            denominator = math.lcm(denominator, Fraction(value).denominator)
+    return [[int(Fraction(value) * denominator) for value in row] for row in rows]
+
+
+def _halve_scaled(values: list):
+    """De Casteljau split at 1/2 of integer Bernstein coefficients, both halves scaled by ``2**n``
+    (``n`` the degree): sums only, the signs those of the exact halves."""
+    n = len(values) - 1
+    left, right, work = [values[0] << n], [values[-1] << n], list(values)
+    for k in range(1, n + 1):
+        work = [a + b for a, b in zip(work, work[1:])]          # scaled by 2**k
+        left.append(work[0] << (n - k))
+        right.append(work[-1] << (n - k))
+    return left, right[::-1]
+
+
 def _split_at(values: list, t: Fraction):
-    """De Casteljau split of Bernstein coefficients at ``t``: (left on [0, t], right on [t, 1])."""
-    left, right, work = [values[0]], [values[-1]], list(values)
+    """De Casteljau split of Bernstein coefficients at ``t``: (left on [0, t], right on [t, 1]).
+
+    Exact, in integers: the values over a common denominator ``D`` and ``t = p / q``, each step
+    ``(q - p) a + p b`` multiplies the scale by ``q``; every output is normalised once (CI tiers C1:
+    the per-operation gcd of rational arithmetic dominated the exact section certificates)."""
+    t = Fraction(t)
+    p, q = t.numerator, t.denominator
+    fractions = [Fraction(value) for value in values]
+    denominator = 1
+    for value in fractions:
+        denominator = math.lcm(denominator, value.denominator)
+    work = [value.numerator * (denominator // value.denominator) for value in fractions]
+    left, right = [fractions[0]], [fractions[-1]]
+    scale = denominator
+    complement = q - p
     for _ in range(len(values) - 1):
-        work = [(1 - t) * a + t * b for a, b in zip(work, work[1:])]
-        left.append(work[0])
-        right.append(work[-1])
+        work = [complement * x + p * y for x, y in zip(work, work[1:])]
+        scale *= q
+        left.append(Fraction(work[0], scale))
+        right.append(Fraction(work[-1], scale))
     return left, right[::-1]
 
 

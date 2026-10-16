@@ -80,7 +80,8 @@ def test_waterplanes_missing_the_box_give_nothing_or_everything():
 @pytest.fixture(scope="module")
 def b1():
     from anygeometry.b1_example import build_b1_half_hull
-    model, faces = build_b1_half_hull()
+    from conftest import b1_half_hull_shared
+    model, faces = b1_half_hull_shared()
     return model, list(faces.values())
 
 
@@ -154,7 +155,8 @@ def test_the_upright_b1_hull_matches_the_independent_reference(b1, draft):
     xi_f = float(wx @ (x * y)) / area
     assert result["i_longitudinal"] == pytest.approx(float(wx @ (x * x * y)) - area * xi_f ** 2, rel=1e-8)
     # the same volume as the closed shell cut at the draft (P5c)
-    cut_model, cut_faces = build_b1_half_hull(deck=draft)
+    from conftest import b1_half_hull_shared
+    cut_model, cut_faces = b1_half_hull_shared(deck=draft)
     cut = enclosed_volume(cut_model, cut_faces.values())
     assert result["volume"] == pytest.approx(cut["volume"], rel=1e-9)
     assert result["buoyancy_centre"] == pytest.approx(cut["centroid"], abs=1e-9)
@@ -554,7 +556,8 @@ def test_free_trim_gz_of_a_symmetric_box_equals_the_fixed_trim_gz():
 @pytest.fixture(scope="module")
 def b1_full():
     from anygeometry.b1_example import build_b1_hull
-    model, faces = build_b1_hull()
+    from conftest import b1_full_hull_shared
+    model, faces = b1_full_hull_shared()
     return model, list(faces.values())
 
 
@@ -569,53 +572,70 @@ def _bisect(function, lo, hi, iterations=200):
     return .5 * (lo + hi)
 
 
+def _bisect_many(function, lo, hi, iterations=80):
+    """Vectorised bisection: ``function`` maps arrays; a sign change on every ``[lo, hi]``; 80 halvings
+    reach the float resolution of the unit-scale brackets used here (CI tiers C1: 200 scalar halvings
+    per root made the reference the slowest part of its test)."""
+    lo, hi = np.array(lo, dtype=float), np.array(hi, dtype=float)
+    f_lo = function(lo)
+    for _ in range(iterations):
+        middle = .5 * (lo + hi)
+        f_mid = function(middle)
+        left = (f_mid > 0) == (f_lo > 0)
+        lo, f_lo, hi = np.where(left, middle, lo), np.where(left, f_mid, f_lo), np.where(left, hi, middle)
+    return .5 * (lo + hi)
+
+
 def b1_full_heel_reference(draft, phi, frames=(1.5, 3.5), bottom=.5, deck=3., order=40):
     """Independent: the full hull below z = draft + tan(phi) y, by z-slices (v = z / 4): across each slice
     the wet y-range of the hull section at x is [max(-Y, c), Y] with c = (z - draft) / tan(phi) and Y(x, z)
-    the bow's half-breadth; the x-integral (in u, Newton for the frame limits) splits where Y = |c|, the
+    the bow's half-breadth; the x-integral (in u, bisection for the frame limits) splits where Y = |c|, the
     z-integral where that happens at a frame. Volume and centre of buoyancy."""
     from anygeometry.b1_example import b1_bow_surface
     surface = b1_bow_surface()
     nodes, weights = np.polynomial.legendre.leggauss(order)
     slope = math.tan(phi)
 
-    def point(u, v):
-        return surface.evaluate_many(np.array([[u, v]]))[0]
+    def points(u, v):
+        return surface.evaluate_many(np.stack((np.ravel(u), np.ravel(v)), axis=1)).reshape(np.shape(u) + (3,))
 
     def u_at(x, v):
-        return _bisect(lambda u: point(u, v)[0] - x, 0., .9)
+        v = np.asarray(v, dtype=float)
+        return _bisect_many(lambda u: points(u, v)[..., 0] - x, np.zeros_like(v), np.full_like(v, .9))
 
-    def half_breadth_gap(x, z):
-        c = (z - draft) / slope
-        return point(u_at(x, z / 4), z / 4)[1] - abs(c)
+    def gap(x, z):
+        z = np.asarray(z, dtype=float)
+        return points(u_at(x, z / 4), z / 4)[..., 1] - np.abs((z - draft) / slope)
     breaks = {bottom, deck}
+    zs = np.linspace(bottom, deck, 401)
     for x in frames:
-        g = lambda z, x=x: half_breadth_gap(x, z)
-        zs = np.linspace(bottom, deck, 401)
-        values = [g(z) for z in zs]
-        for z0, z1, g0, g1 in zip(zs, zs[1:], values, values[1:]):
-            if g0 * g1 < 0:
-                breaks.add(_bisect(g, z0, z1))
+        values = gap(x, zs)
+        changes = np.flatnonzero(values[:-1] * values[1:] < 0)
+        if len(changes):
+            roots = _bisect_many(lambda z, x=x: gap(x, z), zs[changes], zs[changes + 1])
+            breaks.update(float(z) for z in roots)
     breaks = sorted(breaks)
     totals = np.zeros(4)
     for z0, z1 in zip(breaks, breaks[1:]):
-        for z, wz in zip(.5 * (z1 - z0) * (nodes + 1) + z0, .5 * (z1 - z0) * weights):
-            v, c = z / 4, (z - draft) / slope
-            ua, ub = u_at(frames[0], v), u_at(frames[1], v)
-            cuts = [ua, ub]
-            if (point(ua, v)[1] - abs(c)) * (point(ub, v)[1] - abs(c)) < 0:
-                cuts.insert(1, _bisect(lambda u: point(u, v)[1] - abs(c), ua, ub))
-            for u0, u1 in zip(cuts, cuts[1:]):
-                u = .5 * (u1 - u0) * (nodes + 1) + u0
-                uv = np.stack((u, np.full_like(u, v)), axis=1)
-                points = surface.evaluate_many(uv)
-                s_u, _s_v = surface.derivatives_many(uv)
-                w = .5 * (u1 - u0) * weights * s_u[:, 0] * wz
-                x, big = points[:, 0], points[:, 1]
-                low = np.maximum(-big, c)
-                width = np.maximum(big - low, 0.)
-                totals += np.array([w @ width, w @ (x * width), w @ (.5 * (big * big - low * low) * (width > 0)),
-                                    w @ (z * width)])
+        z = .5 * (z1 - z0) * (nodes + 1) + z0
+        wz = .5 * (z1 - z0) * weights
+        v, c = z / 4, (z - draft) / slope
+        ua, ub = u_at(frames[0], v), u_at(frames[1], v)
+        ya, yb = points(ua, v)[:, 1] - np.abs(c), points(ub, v)[:, 1] - np.abs(c)
+        kink = ya * yb < 0
+        uk = np.where(kink, _bisect_many(lambda u: points(u, v)[:, 1] - np.abs(c), ua, np.where(kink, ub, ua + 1e-300)), ub)
+        for u0, u1 in ((ua, uk), (uk, ub)):
+            u = .5 * (u1 - u0)[:, None] * (nodes[None, :] + 1) + u0[:, None]          # (z node, u node)
+            vv = np.broadcast_to(v[:, None], u.shape)
+            p = points(u, vv)
+            s_u = surface.derivatives_many(np.stack((u.ravel(), vv.ravel()), axis=1))[0].reshape(u.shape + (3,))
+            w = (.5 * (u1 - u0) * wz)[:, None] * weights[None, :] * s_u[..., 0]
+            x, big = p[..., 0], p[..., 1]
+            low = np.maximum(-big, c[:, None])
+            width = np.maximum(big - low, 0.)
+            totals += np.array([np.sum(w * width), np.sum(w * x * width),
+                                np.sum(w * .5 * (big * big - low * low) * (width > 0)),
+                                np.sum(w * z[:, None] * width)])
     return totals[0], totals[1:] / totals[0]
 
 

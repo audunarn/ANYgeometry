@@ -45,8 +45,9 @@ MODULE_SCOPES = {"src/anygeometry/coordinates.py": "coordinates",
                  "src/anygeometry/serialization.py": "serialization"}
 DEVELOPMENT_JOBS = {
     "Classify changes", "Build and verify wheel", "Development gate",
-    "Development kernel (ubuntu-latest, Python 3.13)",
-    "Development kernel (windows-latest, Python 3.13)",
+    *(f"Development kernel ({os}, Python 3.13, shard {k}/3)"
+      for os in ("ubuntu-latest", "windows-latest") for k in (1, 2, 3)),
+    "Development kernel shards complete",
     "Installed wheel (ubuntu-latest)", "Installed wheel (macos-15)",
     "Installed mesher development check",
 }
