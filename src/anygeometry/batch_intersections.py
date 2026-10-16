@@ -710,6 +710,27 @@ def _store_extruded_support(model, face_id, support, check):
         remap_face_attachments(model, face, (face_id,), snapshots, check)
 
 
+def _snapped_chart_bounds(lower, upper, lengths, tolerance):
+    """Chart bounds of a rectangular child, with each bound physically within ``tolerance`` of the
+    parent's own bound 0 or 1 (``lengths``: physical length of each chart direction) set to it.
+
+    The snaps are taken only together and only when the worst chart corner, which can move in both
+    directions, moves at most ``tolerance`` (bounded by the sum of the two directions' moves);
+    otherwise the float bounds are returned unchanged.
+    """
+    moves=[[abs(lower[k])*lengths[k],abs(upper[k]-1.)*lengths[k]] for k in (0,1)]
+    moves=[[move if move<=tolerance else 0. for move in pair] for pair in moves]
+    if max(moves[0])+max(moves[1])>tolerance:
+        return lower,upper
+    lower,upper=np.array(lower,dtype=float),np.array(upper,dtype=float)
+    for k in (0,1):
+        if abs(lower[k])*lengths[k]<=tolerance:
+            lower[k]=0.
+        if abs(upper[k]-1.)*lengths[k]<=tolerance:
+            upper[k]=1.
+    return lower,upper
+
+
 def _child_support(model, face, outer, holes, tolerance):
     """Rebase a proven rectangular support; general trims stay native charts.
 
@@ -753,18 +774,14 @@ def _child_support(model, face, outer, holes, tolerance):
             # local_uv of an unmoved boundary can differ from 0 or 1 by a few ulps between
             # platforms' libm, which must not move the carrier's serialized origin/extent. Each
             # chart direction uses its own physical length (widest arc; slant for a Cone), so a
-            # real cut on the longer direction is never snapped away.
+            # real cut on the longer direction is never snapped away. A chart corner can move in both
+            # directions at once: the snaps are taken only when the worst corner's movement, bounded
+            # by the sum of the two directions' moves (a path along each), is within tolerance.
             if isinstance(support,Cone):
                 axial=math.hypot(support.height,support.radius_end-support.radius_start)
             else:
                 axial=support.height
-            lengths=(widest*abs(support.sweep_angle),axial)
-            lower,upper=lower.copy(),upper.copy()
-            for k in (0,1):
-                if abs(lower[k])*lengths[k]<=tolerance:
-                    lower[k]=0.
-                if abs(upper[k]-1.)*lengths[k]<=tolerance:
-                    upper[k]=1.
+            lower,upper=_snapped_chart_bounds(lower,upper,(widest*abs(support.sweep_angle),axial),tolerance)
             origin=support.origin if lower[1]==0. else support.origin+lower[1]*support.height*support.axis
             height=(upper[1]-lower[1])*support.height
             start=support.start_angle if lower[0]==0. else support.start_angle+lower[0]*support.sweep_angle

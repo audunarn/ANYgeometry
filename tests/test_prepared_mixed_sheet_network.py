@@ -529,3 +529,64 @@ def test_a_real_cut_near_a_long_carrier_end_is_kept():
     heights = sorted({face.surface.height for face in model.faces.values() if isinstance(face.surface, Cylinder)})
     # the thin base sliver keeps the parent chart; the long child is rebased at the cut
     assert bases == [0., 5e-7] and heights[0] == pytest.approx(1000. - 5e-7, abs=1e-9) and heights[-1] == 1000.
+
+
+def test_chart_bound_snaps_respect_the_corner_tolerance():
+    from anygeometry.batch_intersections import _snapped_chart_bounds
+    lengths, tolerance = (2., 1.), 1e-9
+    def snapped(du, dv):
+        lower, upper = _snapped_chart_bounds(np.array((du / 2., dv)), np.array((.5, .5)), lengths, tolerance)
+        return tuple(lower), tuple(upper)
+    # one direction within tolerance snaps; a move beyond tolerance stays
+    assert snapped(0., .8e-9) == ((0., 0.), (.5, .5))
+    assert snapped(0., 1.2e-9) == ((0., 1.2e-9), (.5, .5))
+    # both directions: a corner moves by up to the sum of the two moves
+    assert snapped(.4e-9, .4e-9) == ((0., 0.), (.5, .5))
+    assert snapped(.8e-9, .8e-9) == ((.4e-9, .8e-9), (.5, .5))
+    # a move beyond tolerance in one direction does not count against the other's snap
+    assert snapped(3e-9, .8e-9) == ((1.5e-9, 0.), (.5, .5))
+    # upper bounds and both ends of one direction
+    lower, upper = _snapped_chart_bounds(np.array((1e-10, .2)), np.array((1. - 1e-10, 1.)), lengths, tolerance)
+    assert tuple(lower) == (0., .2) and tuple(upper) == (1., 1.)
+
+
+def test_simultaneous_snaps_within_the_corner_tolerance(monkeypatch):
+    # Unit cylinder, quarter panels cut at mid-height; the lower children's base bound is offset by
+    # 0.4 tolerance axially and angularly (corner move <= 0.8 tolerance): both snap to the parent's.
+    import math
+    from anygeometry import Cylinder
+    import anygeometry.batch_intersections as batch
+    from anygeometry.material_arrangement import MaterialDomain
+    native, child_support, offset, active = MaterialDomain.uv, batch._child_support, .4e-9, []
+
+    def restricting(*args):
+        # the offset applies only to the restriction's own chart bounds, not to planning
+        active.append(True)
+        try:
+            return child_support(*args)
+        finally:
+            active.pop()
+
+    def shifted(self, curve, parameter):
+        uv = np.array(native(self, curve, parameter), dtype=float)
+        if active and isinstance(self.support, Cylinder):
+            if abs(uv[1]) < 1e-12:
+                uv[1] = offset / self.support.height
+            if abs(uv[0]) < 1e-12:
+                uv[0] = offset / (self.support.radius * abs(self.support.sweep_angle))
+        return uv
+
+    model = cylinder(1., 1., circumferential_segments=4)
+    for member in tuple(model.members):
+        model.remove_member(member)
+    model.add_plate(model.add_points(((-3., -3., .5), (3., -3., .5), (3., 3., .5), (-3., 3., .5))))
+    monkeypatch.setattr(MaterialDomain, 'uv', shifted)
+    monkeypatch.setattr(batch, '_child_support', restricting)
+    _prepare(model)
+    monkeypatch.undo()
+    lower = [face.surface for face in model.faces.values()
+             if isinstance(face.surface, Cylinder) and face.surface.origin[2] < .25]
+    assert len(lower) == 4
+    assert all(surface.origin[2] == 0. and surface.height == .5 for surface in lower)
+    starts = {round(k * math.pi / 2, 12) for k in range(-4, 4)}
+    assert all(round(surface.start_angle, 12) in starts for surface in lower)
