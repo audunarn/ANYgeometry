@@ -18,6 +18,8 @@ from anygeometry import (GeometryError, GeometryModel, plan_intersections, apply
     validate_prepared_native_arc_station_incidence_binding as validate)
 from anygeometry.entities import OrientedEdge
 from anygeometry.native_arc_parameter_maps import _digest
+from anygeometry.cylinder_charts import _Proof
+from anygeometry.native_arc_station_incidence import _station_record
 from anygeometry.native_arc_station_incidence import NativeArcStationIncidencePolicy as ProofPolicy
 from anygeometry.native_arc_station_incidence import _issued
 from anygeometry.edge_subcurve_preimages import _record_edge_subcurve_unification, _edge_ancestry_definition
@@ -188,24 +190,32 @@ def test_direct_ancestor_versus_double_tolerance():
     # still refuses: tolerances cannot be added.
     with pytest.raises(GeometryError, match='station distance exceeds'):
         query(model, [NativeArcStation(arc, F(0), (8. + float(3)*float(tolerance)/2, 0., 0.))])
-    # Direct ancestor counterexample: the point lies on the captured current
-    # harmonic up to the rounding of its float coordinates (exactly, bound zero,
-    # where the platform's split frames allow) yet the direct ancestor bound
-    # alone refuses at tolerances the current bound passes.
+    # Direct ancestor counterexample: a station on the captured current harmonic
+    # (up to its float coordinates) whose direct ancestor harmonic is 2**-30
+    # away refuses on the ancestor bound alone, at tolerances the current bound
+    # passes.  The ancestor frame is moved by an exact amount: which split
+    # frames happen to put a float station exactly on one harmonic but not the
+    # other differs between platforms' libm (CI, 2026-10-16), so the station
+    # record of a real map row is evaluated with a deliberately moved source.
     split_model, roots = cylinder_fixture()
     maps = query_prepared_native_arc_parameter_maps(split_model)
-    batch = query(split_model, [NativeArcStation(row.edge_id, F(0),
-        harmonic_point(row.current_frame, 0))
-        for row in maps.records if row.edge_id not in roots])
-    exact = min(batch.records, key=lambda record: record.current_bound)
-    assert exact.current_bound <= F(1, 2**48) and exact.current_bound <= exact.ancestor_bound/2
-    row = next(r for r in maps.records if r.edge_id == exact.edge_id)
-    with pytest.raises(GeometryError, match='ancestor distance exceeds'):
-        query(split_model, [NativeArcStation(row.edge_id, F(0),
-            harmonic_point(row.current_frame, 0))], tolerance=exact.ancestor_bound/2)
-    with pytest.raises(GeometryError, match='ancestor distance exceeds'):
-        query(split_model, [NativeArcStation(row.edge_id, F(0),
-            harmonic_point(row.current_frame, 0))], tolerance=F(1, 2**40))
+    stations = {row.edge_id: NativeArcStation(row.edge_id, F(0), harmonic_point(row.current_frame, 0))
+                for row in maps.records if row.edge_id not in roots}
+    batch = query(split_model, list(stations.values()), maps=maps)
+    assert all(record.current_bound <= F(1, 2**38) and record.ancestor_bound <= F(1, 2**38)
+               for record in batch.records)
+    row = next(r for r in maps.records if r.edge_id in stations)
+    source = row.source_frame
+    moved = replace(row, source_frame=replace(source, center=(source.center[0] + F(1, 2**30),) + tuple(source.center[1:])))
+    station = stations[row.edge_id]
+    proof = _Proof(ProofPolicy(), None)
+    record = _station_record(proof, station, moved, binding_tolerance(split_model))
+    assert record.current_bound == next(r.current_bound for r in batch.records if r.edge_id == row.edge_id)
+    assert record.current_bound <= F(1, 2**38) and F(1, 2**31) <= record.ancestor_bound <= F(1, 2**29)
+    for tolerance in (record.ancestor_bound / 2, F(1, 2**36)):
+        assert record.current_bound <= tolerance < record.ancestor_bound
+        with pytest.raises(NativeArcStationIncidenceError, match='ancestor distance exceeds'):
+            _station_record(proof, station, moved, tolerance)
 
 
 def test_offcurve_station_and_coordinate_substitution_refused():
