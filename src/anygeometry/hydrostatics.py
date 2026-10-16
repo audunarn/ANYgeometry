@@ -257,8 +257,13 @@ def float_free_trim(model, faces, volume: float, gravity_centre, heel: float = 0
 def _free_trim_bracketed(model, faces, volume, g, heel, reference, longitudinal, order, rtol, tolerance, extent,
                          limit: float = 1.2, samples: int = 49):
     """For each trim the sinkage displacing the volume (``float_at``, bracketed), and the trim where the
-    longitudinal lever ``(B - G) . xi`` changes sign: scanned over ``[-limit, limit]`` rad from zero
-    outwards (first sign change nearest to zero), then bisected to the tolerance."""
+    relative longitudinal lever ``(B - G) . xi / extent`` vanishes: a scanned trim already within the
+    tolerance is returned; otherwise the sign change nearest to zero on ``[-limit, limit]`` rad is
+    bisected until the lever is within the tolerance. Every return has both residuals checked; an
+    exhausted interval refuses (review H1-F round 2: a zero at a bracket end was lost and the width
+    stop returned a non-equilibrium)."""
+    total = _shell(model, faces, order)[1]
+
     def lever(trim):
         try:
             result = float_at(model, faces, volume, heel_normal(heel, trim), reference, longitudinal,
@@ -268,34 +273,42 @@ def _free_trim_bracketed(model, faces, volume, g, heel, reference, longitudinal,
         if result["buoyancy_centre"] is None:
             return None, None
         return float((result["buoyancy_centre"] - g) @ result["frame"].axes[0]) / extent, result
+
+    def accepted(value, result, trim):
+        volume_ok = abs(result["volume"] - volume) <= max(tolerance * volume, 64 * np.finfo(float).eps * total)
+        if value is not None and abs(value) <= tolerance and volume_ok:
+            result.update(trim=float(trim))
+            return result
+        return None
     grid = sorted(np.linspace(-limit, limit, samples), key=abs)
     values = {}
-    bracket = None
     for trim in grid:
-        values[trim] = lever(trim)[0]
+        value, result = lever(trim)
+        values[trim] = value
+        if value is not None:
+            done = accepted(value, result, trim)
+            if done is not None:
+                return done
     ordered = sorted(t for t in values if values[t] is not None)
-    candidates = [(a, b) for a, b in zip(ordered, ordered[1:])
-                  if values[a] == 0 or values[a] * values[b] < 0]
+    candidates = [(a, b) for a, b in zip(ordered, ordered[1:]) if values[a] * values[b] < 0]
     if not candidates:
         raise GeometryError("float_free_trim: no trim equilibrium within +-%.2f rad" % limit)
-    bracket = min(candidates, key=lambda pair: min(abs(pair[0]), abs(pair[1])))
-    lo, hi = bracket
+    lo, hi = min(candidates, key=lambda pair: min(abs(pair[0]), abs(pair[1])))
     f_lo = values[lo]
-    result = None
-    for _ in range(200):
+    while hi - lo > 4 * np.finfo(float).eps * max(1.0, abs(lo), abs(hi)):
         middle = .5 * (lo + hi)
-        f_mid, candidate = lever(middle)
+        f_mid, result = lever(middle)
         if f_mid is None:
             raise GeometryError("float_free_trim: a bracketed trim left the hull")
-        result = candidate
-        if abs(f_mid) <= tolerance or hi - lo <= 1e-15:
-            break
+        done = accepted(f_mid, result, middle)
+        if done is not None:
+            return done
         if (f_mid > 0) == (f_lo > 0):
             lo, f_lo = middle, f_mid
         else:
             hi = middle
-    result.update(trim=middle)
-    return result
+    raise GeometryError("float_free_trim: the trim equilibrium is not resolved to the tolerance "
+                        "(the lever changes too fast with the trim)")
 
 
 def _free_trim_newton(evaluate, model, faces, volume, heel, reference, longitudinal, start, order, rtol,

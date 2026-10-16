@@ -695,12 +695,28 @@ def test_free_trim_where_newton_stalls_uses_the_bracketed_solve():
 
 
 def test_free_trim_survives_probes_into_a_dry_hull():
+    from anygeometry.errors import GeometryError
     from anygeometry.hydrostatics import float_free_trim
-    # review H1-F round 1: a tiny displacement with a start at the bottom; finite-difference probes step dry
+    # review H1-F round 1: a tiny displacement with a start at the bottom; finite-difference probes step dry.
+    # The equilibrium trim (~3.6e-8 rad, where the waterline just spans the bottom) moves the lever by ~1e-6
+    # per 1e-15 rad: it is either resolved to the tolerance or refused (review H1-F round 2), never returned
+    # outside it
     model, faces, _place = box((10., 4., 4.))
     gravity = np.array([5.3, 2., 1e-6])
-    result = float_free_trim(model, faces, 4e-5, gravity, reference=(5., 2., 0.), start=(1e-6, 0.))
+    try:
+        result = float_free_trim(model, faces, 4e-5, gravity, reference=(5., 2., 0.), start=(1e-6, 0.))
+    except GeometryError as error:
+        assert "not resolved" in str(error)
+        return
     assert result["volume"] == pytest.approx(4e-5, rel=1e-8)
-    # the equilibrium trim is ~3.6e-8 rad, where the waterline just spans the bottom: the lever changes by
-    # ~1e-6 per 1e-15 rad of trim, so it is resolved to ~2e-9 at the trim's float resolution
-    assert abs((result["buoyancy_centre"] - gravity) @ result["frame"].axes[0]) <= 1e-8
+    assert abs((result["buoyancy_centre"] - gravity) @ result["frame"].axes[0]) <= 1e-11 * 8
+
+
+def test_free_trim_from_a_dry_start_finds_the_upright_equilibrium():
+    from anygeometry.hydrostatics import float_free_trim
+    # review H1-F round 2: G on the centreline; a dry start sends Newton to the fallback, whose scan has
+    # an exact zero at trim 0 (the upright equilibrium, zeta 1.5)
+    model, faces, _place = box((10., 4., 10.))
+    result = float_free_trim(model, faces, 60., (5., 2., 8.), reference=(5., 2., 0.), start=(-1., 0.))
+    assert abs(result["trim"]) <= 1e-12
+    assert result["zeta"] == pytest.approx(1.5, abs=1e-10)
