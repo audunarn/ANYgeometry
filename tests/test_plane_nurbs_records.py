@@ -9,6 +9,7 @@ from __future__ import annotations
 from copy import deepcopy
 import json
 import math
+import sys
 
 import pytest
 
@@ -147,8 +148,28 @@ def test_deeply_nested_surfaces_are_refused_before_decoding(stored):
     nested = {"type": "nurbs_pcurve"}
     for _ in range(990):
         nested = {"type": "curve_on_surface", "support": nested, "pcurve": {}, "also_on": [], "transform": []}
+    # the seal of this input is computed with room on the stack: on Python 3.11 the JSON encoder
+    # shares the interpreter's recursion limit with the test's own frames (3.12+: a separate C limit)
+    limit = sys.getrecursionlimit()
+    sys.setrecursionlimit(max(limit, 5000))
+    try:
+        forged = tampered(document, lambda c: c.__setitem__("surface", nested))
+    finally:
+        sys.setrecursionlimit(limit)
     with pytest.raises(GeometryError, match="nurbs_surface record"):
-        from_dict(tampered(document, lambda c: c.__setitem__("surface", nested)))
+        from_dict(forged)
+
+
+def test_documents_nested_beyond_json_are_refused(tmp_path):
+    nested = {}
+    for _ in range(200_000):
+        nested = {"next": nested}
+    with pytest.raises(GeometryError, match="nested too deeply"):
+        _checksum({"payload": nested})
+    path = tmp_path / "deep.json"
+    path.write_text('{"schema": "anygeometry", "x": ' + "[" * 200_000 + "]" * 200_000 + "}", encoding="utf-8")
+    with pytest.raises(GeometryError, match="nested too deeply"):
+        read_geometry(path)
 
 
 def test_integer_domains_round_trip_byte_identically():

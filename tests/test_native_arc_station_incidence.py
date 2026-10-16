@@ -188,15 +188,17 @@ def test_direct_ancestor_versus_double_tolerance():
     # still refuses: tolerances cannot be added.
     with pytest.raises(GeometryError, match='station distance exceeds'):
         query(model, [NativeArcStation(arc, F(0), (8. + float(3)*float(tolerance)/2, 0., 0.))])
-    # Direct ancestor counterexample: the point lies exactly on the captured
-    # current harmonic (bound zero) yet the direct ancestor bound alone refuses.
+    # Direct ancestor counterexample: the point lies on the captured current
+    # harmonic up to the rounding of its float coordinates (exactly, bound zero,
+    # where the platform's split frames allow) yet the direct ancestor bound
+    # alone refuses at tolerances the current bound passes.
     split_model, roots = cylinder_fixture()
     maps = query_prepared_native_arc_parameter_maps(split_model)
     batch = query(split_model, [NativeArcStation(row.edge_id, F(0),
         harmonic_point(row.current_frame, 0))
         for row in maps.records if row.edge_id not in roots])
-    exact = next(record for record in batch.records if record.current_bound == F(0))
-    assert exact.ancestor_bound > F(0)
+    exact = min(batch.records, key=lambda record: record.current_bound)
+    assert exact.current_bound <= F(1, 2**48) and exact.current_bound <= exact.ancestor_bound/2
     row = next(r for r in maps.records if r.edge_id == exact.edge_id)
     with pytest.raises(GeometryError, match='ancestor distance exceeds'):
         query(split_model, [NativeArcStation(row.edge_id, F(0),

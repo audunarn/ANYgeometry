@@ -152,25 +152,32 @@ def test_cached_gauss_legendre_rules_are_identical_fresh_copies(count):
 # Second review round: NumPy floating-point error modes and forged shapes.
 
 
+def outcome(route, points, tolerance):
+    try:
+        return route(points, tolerance)
+    except FloatingPointError as error:
+        return type(error), str(error)
+
+
 def test_vertex_lookup_keeps_overflow_errors_of_far_vertices():
+    # Whether np.linalg.norm raises on overflow depends on the platform's BLAS and NumPy (it does
+    # not on macOS arm64 or NumPy 1.26): the lookup must behave as the original scan does there.
     points = [(0., 0., 0.), (1e199, 0., 0.)]
     with np.errstate(over="raise"):
-        with pytest.raises(FloatingPointError):
-            scan(points, 1.)
-        with pytest.raises(FloatingPointError):
-            lookup(points, 1.)
+        try:
+            np.linalg.norm(np.asarray(points[1]) - np.asarray(points[0]))
+            raises = False
+        except FloatingPointError:
+            raises = True
+        expected = outcome(scan, points, 1.)
+        assert isinstance(expected, tuple) == raises
+        assert outcome(lookup, points, 1.) == expected
 
 
 def test_vertex_lookup_matches_the_scan_with_underflow_raising():
     points = [(0., 0., 0.), (1., 1e-170, 0.), (1., 2e-170, 0.)]
-    def outcome(route):
-        try:
-            return route(points, 1e-9)
-        except FloatingPointError as error:
-            return type(error), str(error)
-
     with np.errstate(under="raise"):
-        assert outcome(lookup) == outcome(scan)
+        assert outcome(lookup, points, 1e-9) == outcome(scan, points, 1e-9)
 
 
 def test_axial_local_uv_keeps_underflow_errors():

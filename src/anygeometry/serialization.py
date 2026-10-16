@@ -228,6 +228,8 @@ def _canonical_payload(document: Mapping[str, object]) -> bytes:
         )
     except (TypeError, ValueError) as error:
         raise GeometryError(f"geometry document is not canonical JSON: {error}") from error
+    except RecursionError as error:
+        raise GeometryError("geometry document is nested too deeply") from error
     return text.encode("utf-8")
 
 
@@ -2152,4 +2154,6 @@ def read_geometry(path: str | Path) -> GeometryModel:
             )
     except (json.JSONDecodeError, UnicodeDecodeError) as error:
         raise GeometryError(f"malformed JSON geometry document: {error}") from error
+    except RecursionError as error:
+        raise GeometryError("malformed JSON geometry document: nested too deeply") from error
     return from_dict(document)

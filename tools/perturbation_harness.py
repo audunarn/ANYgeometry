@@ -30,7 +30,8 @@ Variants
   (``LinePath.evaluate``); ``scalar`` uses Python ``math`` scalars
   (``math.atan2`` instead of ``np.arctan2``, closed-form Cramer on the normal
   equations instead of ``lstsq``, ``math.cos``/``math.sin``); ``fma`` is the
-  scalar route with fused multiply-add (``math.fma``, Python >= 3.13) in dot
+  scalar route with fused multiply-add (``math.fma`` on Python >= 3.13, an exact rational
+  equivalent before) in dot
   products, determinants and affine combinations. Route sites:
   ``ROUTE_SITES`` (plane/cylinder/cone chart inversion, plane/cylinder
   evaluation, line and ellipse evaluation).
@@ -60,6 +61,7 @@ import functools
 import hashlib
 import json
 import math
+from fractions import Fraction
 import re
 import sys
 import time
@@ -301,9 +303,28 @@ def _dot_plain(a, b):
     return float(a[0]) * float(b[0]) + float(a[1]) * float(b[1]) + float(a[2]) * float(b[2])
 
 
+def _exact_fma(x, y, z):
+    """``x*y + z`` with one rounding (``math.fma`` before Python 3.13): the exact rational
+    result rounds correctly to the nearest float (OverflowError on overflow, as ``math.fma``);
+    special values follow ``math.fma``: a finite product meets a non-finite ``z`` exactly, and an
+    invalid operation raises ValueError."""
+    if math.isfinite(x) and math.isfinite(y):
+        if not math.isfinite(z):
+            return z
+        exact = Fraction(x) * Fraction(y) + Fraction(z)
+        return math.copysign(0., x * y + z) if exact == 0 else float(exact)
+    result = x * y + z
+    if math.isnan(result) and not any(math.isnan(value) for value in (x, y, z)):
+        raise ValueError("invalid operation in fma")
+    return result
+
+
+_fma = getattr(math, "fma", _exact_fma)
+
+
 def _dot_fma(a, b):
-    return math.fma(float(a[0]), float(b[0]),
-                    math.fma(float(a[1]), float(b[1]), float(a[2]) * float(b[2])))
+    return _fma(float(a[0]), float(b[0]),
+                    _fma(float(a[1]), float(b[1]), float(a[2]) * float(b[2])))
 
 
 def _det2_plain(a, b, c, d):
@@ -312,7 +333,7 @@ def _det2_plain(a, b, c, d):
 
 def _det2_fma(a, d, b, c):
     # a*d - b*c with one rounding for the first product (Kahan-free fma form)
-    return math.fma(a, d, -(b * c))
+    return _fma(a, d, -(b * c))
 
 
 def _numpy_route_functions():
@@ -333,7 +354,7 @@ def _route_functions(fma: bool):
         return _det2_fma(a, d, b, c) if fma else _det2_plain(a, b, c, d)
 
     def lerp(s, t, e):
-        return math.fma(t, e - s, s) if fma else s + t * (e - s)
+        return _fma(t, e - s, s) if fma else s + t * (e - s)
 
     def plane_local_uv(original):
         def local_uv(self, point):
@@ -363,7 +384,7 @@ def _route_functions(fma: bool):
             u, v = float(u), float(v)
             o, a, b = self.origin, self.u_vector, self.v_vector
             if fma:
-                return np.array([math.fma(v, float(b[k]), math.fma(u, float(a[k]), float(o[k])))
+                return np.array([_fma(v, float(b[k]), _fma(u, float(a[k]), float(o[k])))
                                  for k in range(3)])
             return np.array([float(o[k]) + u * float(a[k]) + v * float(b[k]) for k in range(3)])
         return evaluate
@@ -376,7 +397,7 @@ def _route_functions(fma: bool):
             h = float(v) * self.height
             out = []
             for k in range(3):
-                radial = (math.fma(c, float(r[k]), s * float(w[k])) if fma
+                radial = (_fma(c, float(r[k]), s * float(w[k])) if fma
                           else c * float(r[k]) + s * float(w[k]))
                 out.append(float(o[k]) + self.radius * radial + h * float(axis[k]))
             return np.array(out)
@@ -406,7 +427,7 @@ def _route_functions(fma: bool):
                 angle = start + sweep * t
                 c, s = math.cos(angle), math.sin(angle)
                 if fma:
-                    return [math.fma(s, float(v[k]), math.fma(c, float(u[k]), float(centre[k])))
+                    return [_fma(s, float(v[k]), _fma(c, float(u[k]), float(centre[k])))
                             for k in range(3)]
                 return [float(centre[k]) + c * float(u[k]) + s * float(v[k]) for k in range(3)]
             return _per_parameter(at)(values)
