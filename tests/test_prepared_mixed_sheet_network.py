@@ -2,6 +2,7 @@
 import dataclasses
 import json
 
+import numpy as np
 import pytest
 
 from anygeometry import (
@@ -451,3 +452,35 @@ def test_plane_basis_residuals_do_not_certify_whole_material_distance():
     source, data, roots = _carrier_documents(original, dict(original))
     assert _surface_correspondence(source, data, roots, {5: tolerance}, lambda: None)[0][
         'carrier_correspondence'] == 'exact_fields'
+
+
+def test_restricted_carriers_keep_unmoved_bounds_under_ulp_rounding(monkeypatch):
+    # macOS Intel libm put an unmoved axial bound at local v ~3e-17 instead of 0, which moved the
+    # restricted Cylinder origin by one ulp and the receipt refused it. Bounds within native
+    # tolerance of the parent's own bounds are those bounds: nudge every near-0/near-1 chart
+    # Cylinder/Cone chart coordinate by a few ulps, as another platform's rounding would, and
+    # require the same carriers.
+    from anygeometry import Cone, Cylinder
+    from anygeometry.material_arrangement import MaterialDomain
+    native = MaterialDomain.uv
+
+    def rounded(self, curve, parameter):
+        uv = np.array(native(self, curve, parameter), dtype=float)
+        if not isinstance(self.support, (Cylinder, Cone)):
+            return uv
+        for k in (0, 1):
+            if abs(uv[k]) < 1e-12:
+                uv[k] = 3e-17
+            elif abs(uv[k] - 1.) < 1e-12:
+                uv[k] = np.nextafter(np.nextafter(1., 0.), 0.)
+        return uv
+
+    monkeypatch.setattr(MaterialDomain, 'uv', rounded)
+    model = _prepare(_mixed_bay(author_wall=True))
+    monkeypatch.undo()
+    query_prepared_mixed_sheet_joint_network(model, _seed_joint_edge(model))
+    reference = _prepare(_mixed_bay(author_wall=True))
+    from anygeometry import to_dict
+    def surfaces(document):
+        return [json.dumps(row['surface'], sort_keys=True) for row in document['faces']]
+    assert surfaces(to_dict(model)) == surfaces(to_dict(reference))

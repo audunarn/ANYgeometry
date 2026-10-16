@@ -749,9 +749,19 @@ def _child_support(model, face, outer, holes, tolerance):
             index=min((i for i,row in enumerate(rows) if abs(row[1]-lower[1])<=native_tolerance),
                       key=lambda i:rows[i][0])
             outer=outer[index:]+outer[:index]
-            origin=support.origin+lower[1]*support.height*support.axis
+            # A bound within native tolerance of the parent's own bound is that bound: the float
+            # local_uv of an unmoved boundary can differ from 0 or 1 by a few ulps between
+            # platforms' libm, which must not move the carrier's serialized origin/extent.
+            lower,upper=lower.copy(),upper.copy()
+            for k in (0,1):
+                if abs(lower[k])<=native_tolerance:
+                    lower[k]=0.
+                if abs(upper[k]-1.)<=native_tolerance:
+                    upper[k]=1.
+            origin=support.origin if lower[1]==0. else support.origin+lower[1]*support.height*support.axis
             height=(upper[1]-lower[1])*support.height
-            start,sweep=support.start_angle+lower[0]*support.sweep_angle,(upper[0]-lower[0])*support.sweep_angle
+            start=support.start_angle if lower[0]==0. else support.start_angle+lower[0]*support.sweep_angle
+            sweep=(upper[0]-lower[0])*support.sweep_angle
             if isinstance(support,Cone):
                 def radius(v):
                     return (1-v)*support.radius_start+v*support.radius_end
