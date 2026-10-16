@@ -219,18 +219,86 @@ def hydrostatic_table(model, faces, drafts, reference=(0., 0., 0.), normal=(0., 
     return rows
 
 
+def float_free_trim(model, faces, volume: float, gravity_centre, heel: float = 0.0, reference=(0., 0., 0.),
+                    longitudinal=(1., 0., 0.), start=None, order: int = 24, rtol: float = 1e-8,
+                    tolerance: float = 1e-11, max_iterations: int = 40) -> dict:
+    """Free floating at a heel: the sinkage ``zeta`` and trim (radians) at which the waterplane with
+    ``heel_normal(heel, trim)`` through ``reference + zeta n`` displaces ``volume`` and the centre of
+    buoyancy lies on the normal through the centre of gravity longitudinally, ``(B - G) . xi = 0``
+    (H1-F2). Newton on (zeta, trim) with a central-difference Jacobian and step halving; ``start`` is
+    ``(zeta, trim)`` (default: ``float_at`` at zero trim). Returns the ``hydrostatics`` result with
+    ``zeta`` and ``trim``; refuses when the residuals do not fall below ``tolerance`` (relative to the
+    volume and to the shell's extent)."""
+    g = np.asarray(gravity_centre, dtype=float)
+    faces = list(faces)
+    _sign, _total, centre, extent = _shell(model, faces, order)
+
+    def evaluate(z, trim):
+        result = hydrostatics(model, faces, reference, heel_normal(heel, trim), longitudinal, order, rtol,
+                              shift=z)
+        if result["buoyancy_centre"] is None:
+            raise GeometryError("float_free_trim: the hull is dry at this waterplane")
+        lever = float((result["buoyancy_centre"] - g) @ result["frame"].axes[0])
+        return result, np.array([(result["volume"] - volume) / volume, lever / extent])
+
+    if start is None:
+        z = float_at(model, faces, volume, heel_normal(heel, 0.0), reference, longitudinal, order=order,
+                     rtol=rtol)["zeta"]
+        trim = 0.0
+    else:
+        z, trim = (float(value) for value in start)
+    result, residual = evaluate(z, trim)
+    for _ in range(max_iterations):
+        if float(np.max(np.abs(residual))) <= tolerance:
+            result.update(zeta=z, trim=trim)
+            return result
+        hz, ht = 1e-6 * extent, 1e-6
+        columns = []
+        for dz, dt, h in ((hz, 0.0, hz), (0.0, ht, ht)):
+            plus = evaluate(z + dz, trim + dt)[1]
+            minus = evaluate(z - dz, trim - dt)[1]
+            columns.append((plus - minus) / (2 * h))
+        jacobian = np.stack(columns, axis=1)
+        try:
+            step = np.linalg.solve(jacobian, -residual)
+        except np.linalg.LinAlgError:
+            raise GeometryError("float_free_trim: singular Jacobian (no trim equilibrium)") from None
+        scale = 1.0
+        for _halving in range(30):
+            candidate = (z + scale * step[0], trim + scale * step[1])
+            try:
+                trial, trial_residual = evaluate(*candidate)
+            except GeometryError:
+                scale *= .5
+                continue
+            if float(np.linalg.norm(trial_residual)) < float(np.linalg.norm(residual)):
+                break
+            scale *= .5
+        else:
+            raise GeometryError("float_free_trim: no descent step")
+        (z, trim), result, residual = candidate, trial, trial_residual
+    raise GeometryError("float_free_trim: did not converge")
+
+
 def gz_curve(model, faces, volume: float, gravity_centre, heels, trim: float = 0.0,
-             reference=(0., 0., 0.), **options) -> list:
+             reference=(0., 0., 0.), free_trim: bool = False, **options) -> list:
     """Righting levers at the given heels (radians) for a displacement ``volume`` and a centre of
-    gravity (body axes), with free sinkage and fixed trim: at each heel the waterplane with
-    ``heel_normal(heel, trim)`` that displaces ``volume`` (``float_at``), and ``GZ = (B - G) . eta``
-    with ``eta`` the waterplane's transverse axis (positive: righting). Rows: heel, gz, zeta, result."""
+    gravity (body axes), with free sinkage and fixed ``trim`` (``float_at``), or with free trim as well
+    (``free_trim``: ``float_free_trim``, B and G on one normal longitudinally). ``GZ = (B - G) . eta``
+    with ``eta`` the waterplane's transverse axis (positive: righting). Rows: heel, gz, zeta, trim, result."""
     g = np.asarray(gravity_centre, dtype=float)
     rows, start = [], None
     for heel in heels:
-        result = float_at(model, faces, volume, heel_normal(heel, trim), reference, start=start, **options)
-        start = result["zeta"]
+        if free_trim:
+            result = float_free_trim(model, faces, volume, g, heel, reference, start=start, **options)
+            start = (result["zeta"], result["trim"])
+            zeta, row_trim = result["zeta"], result["trim"]
+        else:
+            result = float_at(model, faces, volume, heel_normal(heel, trim), reference,
+                              start=start, **options)
+            start = zeta = result["zeta"]
+            row_trim = trim
         eta = result["frame"].axes[1]
         rows.append({"heel": float(heel), "gz": float((result["buoyancy_centre"] - g) @ eta),
-                     "zeta": start, "result": result})
+                     "zeta": zeta, "trim": row_trim, "result": result})
     return rows

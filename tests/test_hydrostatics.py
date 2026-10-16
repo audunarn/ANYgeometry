@@ -503,3 +503,46 @@ def test_a_far_reference_keeps_the_offset_exact():
     assert found["zeta"] == pytest.approx(1 / math.sqrt(2), abs=1e-12)
     row = hydrostatic_table(model, faces, [1 / math.sqrt(2)], reference=reference, normal=(1., 0., 1.))[0]
     assert row["volume"] == pytest.approx(.5, rel=1e-12)
+
+
+# ------------------------------------------------------------------ H1-F2: free trim
+
+
+def test_free_trim_of_a_box_with_an_off_centre_gravity_matches_the_wall_sided_equation():
+    from anygeometry.hydrostatics import float_free_trim
+    # a 10 x 4 x 4 box at draft 1.5 with G 0.3 forward of midships at KG 1.8: the wall-sided trim angle
+    # solves (x_B - x_G) cos t + (z_B - z_G) sin t = 0 with x_B = L/2 + tan t L^2 / (12 T),
+    # z_B = T/2 + tan^2 t L^2 / (24 T) (root by bisection, independent of the solver)
+    length, beam, depth, draft, kg, offset = 10., 4., 4., 1.5, 1.8, .3
+    model, faces, _place = box((length, beam, depth))
+    result = float_free_trim(model, faces, length * beam * draft, (length / 2 + offset, beam / 2, kg), 0.0,
+                             reference=(length / 2, beam / 2, 0.))
+
+    def lever(t):
+        x_b = length / 2 + math.tan(t) * length ** 2 / (12 * draft)
+        z_b = draft / 2 + math.tan(t) ** 2 * length ** 2 / (24 * draft)
+        return (x_b - length / 2 - offset) * math.cos(t) + (z_b - kg) * math.sin(t)
+    lo, hi = -.3, .3
+    for _ in range(200):
+        middle = .5 * (lo + hi)
+        if (lever(lo) < 0) == (lever(middle) < 0):
+            lo = middle
+        else:
+            hi = middle
+    assert result["trim"] == pytest.approx(.5 * (lo + hi), abs=1e-9)
+    assert result["volume"] == pytest.approx(length * beam * draft, rel=1e-10)
+    lever_xi = (result["buoyancy_centre"] - np.array([length / 2 + offset, beam / 2, kg])) @ result["frame"].axes[0]
+    assert abs(lever_xi) <= 1e-9
+
+
+def test_free_trim_gz_of_a_symmetric_box_equals_the_fixed_trim_gz():
+    from anygeometry.hydrostatics import gz_curve
+    length, beam, depth, draft, kg = 10., 4., 4., 1.5, 1.8
+    model, faces, _place = box((length, beam, depth))
+    heels = np.radians([0., 10., 25.])
+    common = dict(reference=(length / 2, beam / 2, 0.))
+    fixed = gz_curve(model, faces, length * beam * draft, (length / 2, beam / 2, kg), heels, **common)
+    free = gz_curve(model, faces, length * beam * draft, (length / 2, beam / 2, kg), heels, free_trim=True, **common)
+    for a, b in zip(fixed, free):
+        assert b["gz"] == pytest.approx(a["gz"], abs=1e-10)
+        assert abs(b["trim"]) <= 1e-10
