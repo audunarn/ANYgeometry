@@ -295,19 +295,16 @@ def basin_on(surface, footprint=(.1, .9, .1, .9), top=1.):
 
 
 def test_a_wet_patch_inside_a_nurbs_face_is_not_missed():
-    from anygeometry.errors import GeometryError
     from anygeometry.shell_volume import closed_shell
     # bottom z = (x - 0.5)^2 + (y - 0.52)^2 - 1e-4: at z = 0 a wet disk of radius 0.01 inside the bottom
-    # face (review H1 round 1: both orders returned 0); exact V = pi r^4 / 2, A = pi r^2
+    # face, bounded by a closed waterline (review H1 round 1: both orders returned 0; then refused until
+    # H1-F1); exact V = pi r^4 / 2, A = pi r^2
     model, faces = basin((.25, -.25, .25), (.2703, -.2497, .2303))
     assert closed_shell(model, faces) == []
-    try:
-        result = hydrostatics(model, faces, (.5, .5, 0.))
-    except GeometryError as error:
-        assert "closed waterline" in str(error)                 # refused for this reason only
-        return
-    assert result["volume"] == pytest.approx(math.pi * 1e-8 / 2, rel=1e-6)
-    assert result["waterplane_area"] == pytest.approx(math.pi * 1e-4, rel=1e-6)
+    result = hydrostatics(model, faces, (.5, .5, 0.))
+    assert result["volume"] == pytest.approx(math.pi * 1e-8 / 2, rel=1e-8)
+    assert result["waterplane_area"] == pytest.approx(math.pi * 1e-4, rel=1e-8)
+    assert result["flotation_centre"][:2] == pytest.approx([.5, .52], abs=1e-9)
 
 
 def test_a_curved_bottom_below_its_vertices_floats():

@@ -271,17 +271,15 @@ class _NurbsChart:
 
 def _waterline_turns(surface, frame, axis, box=None) -> list:
     """The levels of the outer coordinate (``1 - axis``) where the waterline on a NURBS surface may turn
-    back (where it is tangent to the inner coordinate's iso-lines: ``G = 0`` and ``G_inner = 0``), from
-    the exact P1 section's boxes refined by exact Bernstein subdivision: a box is dropped once ``G`` or
-    ``G_inner`` has one strict sign on it (no turn there); boxes left at the depth limit give their
-    mid-level (review H1 round 3: the sampled turn search could miss a narrow excursion). A closed
-    waterline loop (P1 refuses cycles) and a surface in the waterplane refuse (review H1 round 1).
-    ``box`` (the face's outward chart box) restricts the section to the face's part of the support
-    (review H1 round 2)."""
-    from .plane_nurbs import (PlaneNurbsClosedSection, PlaneNurbsNotCertified, _all_sign, _split_u, _split_v,
-                              plane_nurbs_section)
-    from .surfaces import Plane
-    plane = Plane(tuple(frame.origin), tuple(frame.axes[0]), tuple(frame.axes[1]))
+    back (where it is tangent to the inner coordinate's iso-lines: ``G = 0`` and ``G_inner = 0``), by exact
+    Bernstein subdivision of ``G = n . (W P) - d W`` on the surface's Bezier sub-patches: a box is dropped
+    once ``G`` or ``G_inner`` has one strict sign on it (no turn there); boxes left at the depth limit give
+    their mid-level (review H1 round 3: a sampled search could miss a narrow excursion). Closed waterline
+    loops need no path topology here (H1-F1: P1 refuses cycles; their two extreme levels are turns like any
+    other). A surface lying in the waterplane refuses. ``box`` (the face's outward chart box) restricts the
+    search to the face's part of the support (review H1 round 2)."""
+    from fractions import Fraction
+    from .plane_nurbs import PlaneNurbsNotCertified, _all_sign, _split_u, _split_v, sub_patches_of
     (r0, r1), (q0, q1) = surface.u_range, surface.v_range
     sub = surface
     if box is not None:
@@ -290,21 +288,19 @@ def _waterline_turns(surface, frame, axis, box=None) -> list:
         sub = NurbsSurface(surface.degree_u, surface.degree_v, surface.knots_u, surface.knots_v,
                            surface.controls, surface.weights, (r0 + u0 * (r1 - r0), r0 + u1 * (r1 - r0)),
                            (q0 + v0 * (q1 - q0), q0 + v1 * (q1 - q0)))
+    n = tuple(Fraction(float(x)) for x in frame.normal)
+    d = sum(a * Fraction(float(b)) for a, b in zip(n, frame.origin))
     try:
-        section = plane_nurbs_section(plane, sub)
-    except PlaneNurbsClosedSection:
-        raise GeometryError("a closed waterline inside a NURBS face is not supported yet") from None
+        patches = sub_patches_of(n, d, sub)
     except PlaneNurbsNotCertified as error:
         raise GeometryError(f"the waterline on a NURBS face is not certified: {error}") from None
-    if section.coincident:
+    if all(c == 0 for patch in patches for row in patch.coefficients for c in row):
         raise GeometryError("a NURBS face lies in the waterplane")
     other = 1 - axis
     low, width = (r0, r1 - r0) if other == 0 else (q0, q1 - q0)
     levels, examined = [], 0
-    for leaf in section.boxes:
-        if leaf.kind == "empty":
-            continue
-        pending = [(leaf.u_range, leaf.v_range, leaf.coefficients, 0)]
+    for patch in patches:
+        pending = [(patch.u_range, patch.v_range, patch.coefficients, 0)]
         while pending:
             u_range, v_range, c, depth = pending.pop()
             examined += 1
@@ -312,6 +308,8 @@ def _waterline_turns(surface, frame, axis, box=None) -> list:
                 raise GeometryError("the waterline's turning points are not resolved (budget)")
             if _all_sign([x for row in c for x in row]):
                 continue                                        # no waterline in this box
+            if all(x == 0 for row in c for x in row):
+                raise GeometryError("a NURBS face lies partly in the waterplane")
             if axis == 0:
                 rates = [c[i + 1][j] - c[i][j] for i in range(len(c) - 1) for j in range(len(c[0]))]
             else:
