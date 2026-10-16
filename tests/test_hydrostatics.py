@@ -720,3 +720,21 @@ def test_free_trim_from_a_dry_start_finds_the_upright_equilibrium():
     result = float_free_trim(model, faces, 60., (5., 2., 8.), reference=(5., 2., 0.), start=(-1., 0.))
     assert abs(result["trim"]) <= 1e-12
     assert result["zeta"] == pytest.approx(1.5, abs=1e-10)
+
+def test_two_turns_squeezed_together_by_a_rational_chart_are_both_kept():
+    from anygeometry.face_moments import Frame, face_moments, waterplane_fields
+    from anygeometry.nurbs import NurbsSurface
+    from test_nurbs_faces import nurbs_face
+    # review H1-F round 3: a strongly rational v-direction (weights 2e-6 .. 1) puts the two turns of a thin
+    # diamond-shaped wet region within 1e-9 of each other in the chart; averaging them lost half the area
+    e, k, r = 2e-6, 1e-9, 2.4e-4
+    d = e + (1 - e) * k
+    yc = k / d
+    xs, ys = (0., .5, 1.), (0., yc, 1.)
+    controls = tuple(tuple((x, y, .001 * (5 * abs(x - .5) + abs(y - yc) - r)) for y in ys) for x in xs)
+    surface = NurbsSurface(1, 1, (0., 0., .5, 1., 1.), (0., 0., k, 1., 1.), controls,
+                           tuple((e, d, 1.) for _ in xs))
+    model, face, _edges = nurbs_face(surface, [(.25, 0.), (.75, 0.), (.75, .1), (.25, .1)])
+    for order in (24, 48):
+        moments = face_moments(model, face, Frame.world(), waterplane_fields, order, clip=True)
+        assert abs(moments[0]) == pytest.approx(2.304e-8, rel=1e-9)

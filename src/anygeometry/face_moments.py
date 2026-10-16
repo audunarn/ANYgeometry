@@ -339,13 +339,10 @@ def _waterline_turns(surface, frame, axis, box=None) -> list:
                 lower, upper = _split_v(half)
                 pending.append(((ua, ub), (v_range[0], vm), lower, depth + 1))
                 pending.append(((ua, ub), (vm, v_range[1]), upper, depth + 1))
-    merged = []
-    for level in sorted(levels):
-        if not merged or level - merged[-1][-1] > 1e-9:
-            merged.append([level])
-        else:
-            merged[-1].append(level)
-    return [float(np.mean(group)) for group in merged]
+    # distinct levels are all kept (a few per turn from its depth-limit boxes, each only an extra split):
+    # merging nearby ones averaged two genuine turns 1e-9 apart in a compressed rational chart away
+    # (review H1-F round 3)
+    return sorted(set(levels))
 
 
 def _chart_box(model, face):
