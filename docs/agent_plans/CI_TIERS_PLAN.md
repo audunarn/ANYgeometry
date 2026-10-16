@@ -1,6 +1,6 @@
 # CI tiers: a development path that stays fast and a final path that stays complete
 
-Status: proposal (2026-10-16), awaiting owner decisions D-CI1..D-CI4. Nothing changed in CI yet.
+Status: accepted (2026-10-16). Owner decisions: D-CI1 a, D-CI2 a, D-CI3 a, D-CI4 a; "Go C0-C7".
 
 ## Where we are (measured, run 38892370520 on main f864e6b)
 

@@ -1,0 +1,1284 @@
+{
+ "min_seconds": 1.0,
+ "platforms": [
+  "ubuntu",
+  "windows"
+ ],
+ "rest_mean": {
+  "ubuntu": 0.053722,
+  "windows": 0.096183
+ },
+ "run": "38892370520",
+ "tests": {
+  "tests/test_authored_boundary_correspondence.py::test_complete_descendant_exterior_preserves_original_loops_and_exact_tiling[True]": {
+   "ubuntu": 0.932,
+   "windows": 1.617
+  },
+  "tests/test_authored_child_coverage.py::test_rounded_split_controls_do_not_gain_literal_child_coverage[False]": {
+   "ubuntu": 0.582,
+   "windows": 1.018
+  },
+  "tests/test_authored_child_coverage.py::test_rounded_split_controls_do_not_gain_literal_child_coverage[True]": {
+   "ubuntu": 0.991,
+   "windows": 1.737
+  },
+  "tests/test_authored_constraint_scope.py::test_public_exports_and_portable_curved_wall_inventory": {
+   "ubuntu": 1.19,
+   "windows": 2.138
+  },
+  "tests/test_authored_curve_stations.py::test_all_internal_branches_independent_carrier_chart_and_cylinder": {
+   "ubuntu": 3.979,
+   "windows": 6.781
+  },
+  "tests/test_authored_curve_stations.py::test_cropped_and_reversed_original_ranges[ranges0]": {
+   "ubuntu": 1.44,
+   "windows": 2.527
+  },
+  "tests/test_authored_curve_stations.py::test_cropped_and_reversed_original_ranges[ranges1]": {
+   "ubuntu": 1.409,
+   "windows": 2.472
+  },
+  "tests/test_authored_curve_stations.py::test_forged_receipts_and_coordinate_errors": {
+   "ubuntu": 0.726,
+   "windows": 1.233
+  },
+  "tests/test_authored_curve_stations.py::test_last_callback_cannot_change_receipt_source_or_namespace[namespace]": {
+   "ubuntu": 0.472,
+   "windows": 1.102
+  },
+  "tests/test_authored_curve_stations.py::test_narrow_pipe_actual_fold_modes_have_independent_chart_and_carrier_coordinates": {
+   "ubuntu": 8.567,
+   "windows": 14.556
+  },
+  "tests/test_authored_curve_stations_both_folds.py::test_public_two_fold_stations_have_independent_original_chart": {
+   "ubuntu": 0.964,
+   "windows": 1.841
+  },
+  "tests/test_authored_domain_coverage.py::test_coons_recognition_refuses_unproved_original_coefficients[curved_connector-straight connectors]": {
+   "ubuntu": 0.762,
+   "windows": 1.523
+  },
+  "tests/test_authored_domain_coverage.py::test_coons_recognition_refuses_unproved_original_coefficients[different_corners-four-edge implicit Coons]": {
+   "ubuntu": 0.76,
+   "windows": 1.954
+  },
+  "tests/test_authored_domain_coverage.py::test_coons_recognition_refuses_unproved_original_coefficients[explicit_coons-four-edge implicit Coons]": {
+   "ubuntu": 0.756,
+   "windows": 1.489
+  },
+  "tests/test_authored_domain_coverage.py::test_coons_recognition_refuses_unproved_original_coefficients[near_control-exact coefficient translations]": {
+   "ubuntu": 0.759,
+   "windows": 1.436
+  },
+  "tests/test_authored_domain_coverage.py::test_coons_recognition_refuses_unproved_original_coefficients[nonparallel-exact coefficient translations]": {
+   "ubuntu": 0.765,
+   "windows": 1.474
+  },
+  "tests/test_authored_domain_coverage.py::test_coons_recognition_refuses_unproved_original_coefficients[unrepresentable_vector-exactly representable]": {
+   "ubuntu": 0.757,
+   "windows": 1.653
+  },
+  "tests/test_authored_domain_coverage.py::test_generated_implicit_coons_has_exact_original_extrusion_identity": {
+   "ubuntu": 0.82,
+   "windows": 1.524
+  },
+  "tests/test_authored_material_stations.py::test_all_current_root2_endpoints_have_one_canonical_exact_uv": {
+   "ubuntu": 2.715,
+   "windows": 4.677
+  },
+  "tests/test_authored_partition_holes.py::test_complete_grid_partitions_allow_exact_hole_contact_without_mutation": {
+   "ubuntu": 0.672,
+   "windows": 1.062
+  },
+  "tests/test_authored_rational_partition.py::test_both_roots_all_eight_children_exact_rational_partition": {
+   "ubuntu": 5.316,
+   "windows": 9.277
+  },
+  "tests/test_authored_rational_partition.py::test_float_only_root2_does_not_gain_exact_area_acceptance": {
+   "ubuntu": 1.528,
+   "windows": 2.695
+  },
+  "tests/test_authored_rational_partition.py::test_nondyadic_gap_or_overlap_that_float_rounds_away_refuses[-1]": {
+   "ubuntu": 0.6,
+   "windows": 1.058
+  },
+  "tests/test_authored_rational_partition.py::test_nondyadic_gap_or_overlap_that_float_rounds_away_refuses[1]": {
+   "ubuntu": 0.594,
+   "windows": 1.041
+  },
+  "tests/test_authored_rational_partition.py::test_rational_partition_cancellation_nonmutation": {
+   "ubuntu": 1.524,
+   "windows": 2.664
+  },
+  "tests/test_authored_surface_evaluation.py::test_cubic_original_power_formula_and_derivatives[False-False-True]": {
+   "ubuntu": 0.845,
+   "windows": 1.509
+  },
+  "tests/test_authored_surface_evaluation.py::test_cubic_original_power_formula_and_derivatives[True-False-True]": {
+   "ubuntu": 0.84,
+   "windows": 1.508
+  },
+  "tests/test_b1_model.py::test_a_crease_valley_touching_the_deck_is_reported": {
+   "ubuntu": 1.78,
+   "windows": 2.878
+  },
+  "tests/test_b1_model.py::test_a_descent_leaving_the_surface_is_not_a_band": {
+   "ubuntu": 0.672,
+   "windows": 1.021
+  },
+  "tests/test_b1_model.py::test_a_flipped_face_is_inconsistent": {
+   "ubuntu": 9.571,
+   "windows": 16.295
+  },
+  "tests/test_b1_model.py::test_a_nearby_unshared_vertex_grants_no_joint": {
+   "ubuntu": 0.817,
+   "windows": 1.335
+  },
+  "tests/test_b1_model.py::test_a_plane_cutting_through_the_hull_is_reported": {
+   "ubuntu": 22.875,
+   "windows": 39.522
+  },
+  "tests/test_b1_model.py::test_a_section_entering_a_plane_face_beyond_the_corner_band_is_reported": {
+   "ubuntu": 2.059,
+   "windows": 3.374
+  },
+  "tests/test_b1_model.py::test_a_section_entering_a_plane_face_within_the_corner_band_is_clean": {
+   "ubuntu": 2.152,
+   "windows": 3.546
+  },
+  "tests/test_b1_model.py::test_a_shallow_wall_over_the_deck_is_reported": {
+   "ubuntu": 1.717,
+   "windows": 2.913
+  },
+  "tests/test_b1_model.py::test_a_short_intersection_far_from_the_origin_is_reported": {
+   "ubuntu": 2.03,
+   "windows": 3.35
+  },
+  "tests/test_b1_model.py::test_a_steep_diagonal_section_through_rectangle_corners_is_clean[0.5]": {
+   "ubuntu": 0.987,
+   "windows": 1.607
+  },
+  "tests/test_b1_model.py::test_a_steep_diagonal_section_through_rectangle_corners_is_clean[0.6]": {
+   "ubuntu": 1.306,
+   "windows": 2.177
+  },
+  "tests/test_b1_model.py::test_a_steep_wall_on_a_deck_edge_is_clean": {
+   "ubuntu": 1.455,
+   "windows": 2.285
+  },
+  "tests/test_b1_model.py::test_a_steep_wall_over_the_deck_is_clean": {
+   "ubuntu": 1.501,
+   "windows": 2.518
+  },
+  "tests/test_b1_model.py::test_an_uncovered_section_near_the_plane_face_is_not_cleared": {
+   "ubuntu": 0.648,
+   "windows": 1.069
+  },
+  "tests/test_b1_model.py::test_crossings_that_floats_cannot_separate_are_refused": {
+   "ubuntu": 0.683,
+   "windows": 1.094
+  },
+  "tests/test_b1_model.py::test_every_edge_bounds_exactly_two_faces": {
+   "ubuntu": 9.485,
+   "windows": 15.884
+  },
+  "tests/test_b1_model.py::test_faces_meeting_beyond_their_only_shared_vertex_are_reported": {
+   "ubuntu": 8.054,
+   "windows": 13.286
+  },
+  "tests/test_b1_model.py::test_faces_overlapping_beyond_the_joint_band_are_reported": {
+   "ubuntu": 3.532,
+   "windows": 5.774
+  },
+  "tests/test_b1_model.py::test_faces_overlapping_within_the_joint_band_past_a_shared_end_are_clean[0.0]": {
+   "ubuntu": 1.974,
+   "windows": 3.228
+  },
+  "tests/test_b1_model.py::test_faces_overlapping_within_the_joint_band_past_a_shared_end_are_clean[1024.0]": {
+   "ubuntu": 1.942,
+   "windows": 3.181
+  },
+  "tests/test_b1_model.py::test_plane_faces_crossing_between_shared_vertices_are_reported": {
+   "ubuntu": 1.009,
+   "windows": 1.68
+  },
+  "tests/test_b1_model.py::test_the_b1_half_hull_audits_clean": {
+   "ubuntu": 13.216,
+   "windows": 22.208
+  },
+  "tests/test_batch_intersections.py::test_growing_interior_ended_plate_cuts_preserve_each_original_material_domain[25]": {
+   "ubuntu": 2.749,
+   "windows": 4.648
+  },
+  "tests/test_batch_intersections.py::test_growing_interior_ended_plate_cuts_preserve_each_original_material_domain[8]": {
+   "ubuntu": 0.625,
+   "windows": 1.134
+  },
+  "tests/test_batch_intersections.py::test_original_operand_batch_is_read_only_atomic_and_high_valence": {
+   "ubuntu": 0.71,
+   "windows": 1.244
+  },
+  "tests/test_boundary_curve_connect.py::test_a_boundary_curve_in_a_non_convex_or_trimmed_support_is_classified_by_the_exact_engine": {
+   "ubuntu": 1.967,
+   "windows": 3.637
+  },
+  "tests/test_branch_events.py::test_a_straight_bezier_path_drawn_on_the_pipe_is_resolved_by_subdivision": {
+   "ubuntu": 0.727,
+   "windows": 1.312
+  },
+  "tests/test_branch_models.py::test_a_second_pipe_splits_an_earlier_joint_with_explicit_attachment_remapping": {
+   "ubuntu": 9.762,
+   "windows": 17.458
+  },
+  "tests/test_branch_models.py::test_a_second_pipe_through_an_already_cut_wall_works_on_the_stored_child_supports": {
+   "ubuntu": 7.501,
+   "windows": 13.166
+  },
+  "tests/test_branch_models.py::test_branch_curves_follow_an_affine_transform_of_the_model": {
+   "ubuntu": 2.768,
+   "windows": 4.86
+  },
+  "tests/test_branch_models.py::test_models_with_branch_edges_can_be_copied_and_inserted": {
+   "ubuntu": 2.602,
+   "windows": 4.63
+  },
+  "tests/test_branch_models.py::test_the_plan_is_deterministic": {
+   "ubuntu": 1.207,
+   "windows": 2.121
+  },
+  "tests/test_branch_models.py::test_the_public_query_classifies_a_wall_and_a_pipe_by_the_exact_engine_and_imprints_it": {
+   "ubuntu": 1.216,
+   "windows": 2.128
+  },
+  "tests/test_branch_models.py::test_two_cubic_walls_of_different_directions_are_refused_in_planning": {
+   "ubuntu": 0.804,
+   "windows": 1.262
+  },
+  "tests/test_branch_models.py::test_whole_models_keep_their_topology_material_and_supports_and_round_trip_exactly[a cone whose apex is off the wall]": {
+   "ubuntu": 1.936,
+   "windows": 3.363
+  },
+  "tests/test_branch_models.py::test_whole_models_keep_their_topology_material_and_supports_and_round_trip_exactly[a cone]": {
+   "ubuntu": 3.926,
+   "windows": 7.416
+  },
+  "tests/test_branch_models.py::test_whole_models_keep_their_topology_material_and_supports_and_round_trip_exactly[a cubic and a quadratic wall of different directions]": {
+   "ubuntu": 1.847,
+   "windows": 3.232
+  },
+  "tests/test_branch_models.py::test_whole_models_keep_their_topology_material_and_supports_and_round_trip_exactly[a narrow pipe meeting the wall at two folds]": {
+   "ubuntu": 3.383,
+   "windows": 6.139
+  },
+  "tests/test_branch_models.py::test_whole_models_keep_their_topology_material_and_supports_and_round_trip_exactly[a pipe across the cubic wall]": {
+   "ubuntu": 2.276,
+   "windows": 4.0
+  },
+  "tests/test_branch_models.py::test_whole_models_keep_their_topology_material_and_supports_and_round_trip_exactly[a pipe along the extrusion (whole generators)]": {
+   "ubuntu": 1.267,
+   "windows": 2.215
+  },
+  "tests/test_branch_models.py::test_whole_models_keep_their_topology_material_and_supports_and_round_trip_exactly[a pipe grazing the apex of an arch]": {
+   "ubuntu": 1.046,
+   "windows": 1.821
+  },
+  "tests/test_branch_models.py::test_whole_models_keep_their_topology_material_and_supports_and_round_trip_exactly[a pipe leaving through the top of the wall]": {
+   "ubuntu": 2.07,
+   "windows": 3.679
+  },
+  "tests/test_branch_models.py::test_whole_models_keep_their_topology_material_and_supports_and_round_trip_exactly[a pipe lying in the wall's base plane (every fold on the boundary)]": {
+   "ubuntu": 1.55,
+   "windows": 2.692
+  },
+  "tests/test_branch_models.py::test_whole_models_keep_their_topology_material_and_supports_and_round_trip_exactly[a pipe through a mixed wall of a line, an arc and a spline]": {
+   "ubuntu": 3.291,
+   "windows": 5.725
+  },
+  "tests/test_branch_models.py::test_whole_models_keep_their_topology_material_and_supports_and_round_trip_exactly[a pipe through a quartic wall]": {
+   "ubuntu": 2.344,
+   "windows": 4.169
+  },
+  "tests/test_branch_models.py::test_whole_models_keep_their_topology_material_and_supports_and_round_trip_exactly[a pipe through two parallel cubic walls]": {
+   "ubuntu": 4.795,
+   "windows": 8.468
+  },
+  "tests/test_branch_models.py::test_whole_models_keep_their_topology_material_and_supports_and_round_trip_exactly[a pipe touching the apex of an arch at one point]": {
+   "ubuntu": 0.783,
+   "windows": 1.385
+  },
+  "tests/test_branch_models.py::test_whole_models_keep_their_topology_material_and_supports_and_round_trip_exactly[a tilted pipe]": {
+   "ubuntu": 2.391,
+   "windows": 4.331
+  },
+  "tests/test_branch_models.py::test_whole_models_keep_their_topology_material_and_supports_and_round_trip_exactly[a wide pipe]": {
+   "ubuntu": 1.814,
+   "windows": 3.251
+  },
+  "tests/test_branch_models.py::test_whole_models_keep_their_topology_material_and_supports_and_round_trip_exactly[an elliptic tube]": {
+   "ubuntu": 2.118,
+   "windows": 3.881
+  },
+  "tests/test_branch_models.py::test_whole_models_keep_their_topology_material_and_supports_and_round_trip_exactly[two quadratic walls of different directions]": {
+   "ubuntu": 1.387,
+   "windows": 2.563
+  },
+  "tests/test_branch_predicates.py::test_crossings_inside_the_joint_tolerance_are_not_offending": {
+   "ubuntu": 0.772,
+   "windows": 1.303
+  },
+  "tests/test_branch_predicates.py::test_line_certificates": {
+   "ubuntu": 0.608,
+   "windows": 1.052
+  },
+  "tests/test_branch_predicates.py::test_rounding_never_merges_two_isolated_roots": {
+   "ubuntu": 1.349,
+   "windows": 2.287
+  },
+  "tests/test_branch_projection.py::test_public_projection_preserves_exact_trim_boundary_station[11-81-0.3454125133797817]": {
+   "ubuntu": 1.39,
+   "windows": 2.519
+  },
+  "tests/test_branch_supports.py::test_a_quadratic_wall_gives_the_same_curves_from_the_polynomial_and_the_angular_engines[cone]": {
+   "ubuntu": 0.616,
+   "windows": 1.212
+  },
+  "tests/test_branch_wall_events.py::test_tangent_walls_and_pipe_form_one_shared_junction_in_either_insertion_order": {
+   "ubuntu": 5.974,
+   "windows": 10.818
+  },
+  "tests/test_changed_region_and_indexed_queries.py::test_changed_region_qualifies_conservative_coons_interior_candidate": {
+   "ubuntu": 0.693,
+   "windows": 1.314
+  },
+  "tests/test_cone_intersections_engine.py::test_a_cone_entering_a_cylinder_sideways_and_coaxial_rings": {
+   "ubuntu": 1.079,
+   "windows": 2.118
+  },
+  "tests/test_cone_intersections_engine.py::test_a_cone_hitting_a_cylinder_ten_degrees_off_the_perpendicular": {
+   "ubuntu": 1.209,
+   "windows": 2.139
+  },
+  "tests/test_cone_intersections_engine.py::test_a_cone_tip_on_a_cylinder_wall[0.0]": {
+   "ubuntu": 1.09,
+   "windows": 2.157
+  },
+  "tests/test_cone_intersections_engine.py::test_a_cone_tip_on_a_cylinder_wall[10.0]": {
+   "ubuntu": 1.166,
+   "windows": 2.123
+  },
+  "tests/test_cone_intersections_engine.py::test_a_plate_cutting_a_cone_splits_both_faces_and_conserves_material[0.0-1.5-0.0-expected0]": {
+   "ubuntu": 0.772,
+   "windows": 1.412
+  },
+  "tests/test_cone_intersections_engine.py::test_a_plate_cutting_a_cone_splits_both_faces_and_conserves_material[10.0-1.5-0.0-expected1]": {
+   "ubuntu": 0.825,
+   "windows": 1.497
+  },
+  "tests/test_cone_intersections_engine.py::test_a_plate_cutting_a_cone_splits_both_faces_and_conserves_material[70.0-1.5-0.0-expected2]": {
+   "ubuntu": 0.856,
+   "windows": 1.461
+  },
+  "tests/test_cone_intersections_engine.py::test_a_plate_cutting_a_cone_splits_both_faces_and_conserves_material[80.0-2.0-0.0-expected3]": {
+   "ubuntu": 1.289,
+   "windows": 2.083
+  },
+  "tests/test_cone_intersections_engine.py::test_a_plate_cutting_a_cone_splits_both_faces_and_conserves_material[90.0-1.5-0.4-expected4]": {
+   "ubuntu": 0.962,
+   "windows": 1.811
+  },
+  "tests/test_cone_intersections_engine.py::test_a_plate_cutting_some_facets_of_a_pointed_cone[0.0]": {
+   "ubuntu": 0.574,
+   "windows": 1.075
+  },
+  "tests/test_cone_intersections_engine.py::test_a_plate_cutting_some_facets_of_a_pointed_cone[30.0]": {
+   "ubuntu": 0.595,
+   "windows": 1.097
+  },
+  "tests/test_cone_intersections_engine.py::test_cone_cylinder_variants_including_tangent_and_folding_contacts[0.0-0.0-segments0]": {
+   "ubuntu": 1.053,
+   "windows": 1.962
+  },
+  "tests/test_cone_intersections_engine.py::test_cone_cylinder_variants_including_tangent_and_folding_contacts[10.0-1.2-segments2]": {
+   "ubuntu": 1.156,
+   "windows": 2.234
+  },
+  "tests/test_cone_intersections_engine.py::test_cone_cylinder_variants_including_tangent_and_folding_contacts[10.0-1.5-segments3]": {
+   "ubuntu": 1.787,
+   "windows": 3.686
+  },
+  "tests/test_cone_intersections_engine.py::test_cone_cylinder_variants_including_tangent_and_folding_contacts[10.0-1.5001-segments4]": {
+   "ubuntu": 1.94,
+   "windows": 3.587
+  },
+  "tests/test_cone_intersections_engine.py::test_cone_cylinder_variants_including_tangent_and_folding_contacts[10.0-1.8-segments5]": {
+   "ubuntu": 2.047,
+   "windows": 3.806
+  },
+  "tests/test_cone_intersections_engine.py::test_cone_cylinder_variants_including_tangent_and_folding_contacts[10.0-2.2-segments6]": {
+   "ubuntu": 2.147,
+   "windows": 3.992
+  },
+  "tests/test_cone_intersections_engine.py::test_cone_cylinder_variants_including_tangent_and_folding_contacts[30.0-0.0-segments1]": {
+   "ubuntu": 1.138,
+   "windows": 2.193
+  },
+  "tests/test_cone_intersections_engine.py::test_two_cones_crossing_at_an_angle[30.0]": {
+   "ubuntu": 1.481,
+   "windows": 2.833
+  },
+  "tests/test_cone_intersections_engine.py::test_two_cones_crossing_at_an_angle[60.0]": {
+   "ubuntu": 1.285,
+   "windows": 2.554
+  },
+  "tests/test_cone_intersections_engine.py::test_two_pointed_cones_with_a_common_apex_meet_along_common_generators": {
+   "ubuntu": 0.716,
+   "windows": 1.419
+  },
+  "tests/test_consumer_contract_fixtures.py::test_consumer_fixture_contract[cubic_oblique_pipe-args0]": {
+   "ubuntu": 2.688,
+   "windows": 5.21
+  },
+  "tests/test_consumer_contract_fixtures.py::test_consumer_fixture_contract[parabolic_pipe-args1]": {
+   "ubuntu": 1.466,
+   "windows": 2.724
+  },
+  "tests/test_consumer_contract_fixtures.py::test_consumer_fixture_contract[second_cut_with_attachments-args5]": {
+   "ubuntu": 9.975,
+   "windows": 18.392
+  },
+  "tests/test_curved_intersection_matrix.py::test_curve_surface_matrix_is_deterministic_and_certified[arc-cone]": {
+   "ubuntu": 0.614,
+   "windows": 1.255
+  },
+  "tests/test_curved_intersection_matrix.py::test_curve_surface_matrix_is_deterministic_and_certified[arc-coons]": {
+   "ubuntu": 3.495,
+   "windows": 6.677
+  },
+  "tests/test_curved_intersection_matrix.py::test_curve_surface_matrix_is_deterministic_and_certified[arc-cylinder]": {
+   "ubuntu": 0.564,
+   "windows": 1.137
+  },
+  "tests/test_curved_intersection_matrix.py::test_curve_surface_matrix_is_deterministic_and_certified[arc-ruled]": {
+   "ubuntu": 1.571,
+   "windows": 3.0
+  },
+  "tests/test_curved_intersection_matrix.py::test_curve_surface_matrix_is_deterministic_and_certified[spline-coons]": {
+   "ubuntu": 3.217,
+   "windows": 6.826
+  },
+  "tests/test_curved_intersection_matrix.py::test_curve_surface_matrix_is_deterministic_and_certified[spline-ruled]": {
+   "ubuntu": 1.391,
+   "windows": 2.714
+  },
+  "tests/test_curved_intersection_matrix.py::test_curved_face_pair_matrix_returns_complete_typed_result[0-1]": {
+   "ubuntu": 2.203,
+   "windows": 4.389
+  },
+  "tests/test_curved_intersection_matrix.py::test_curved_face_pair_matrix_returns_complete_typed_result[0-2]": {
+   "ubuntu": 5.11,
+   "windows": 9.851
+  },
+  "tests/test_curved_intersection_matrix.py::test_curved_face_pair_matrix_returns_complete_typed_result[0-3]": {
+   "ubuntu": 10.377,
+   "windows": 19.522
+  },
+  "tests/test_curved_intersection_matrix.py::test_curved_face_pair_matrix_returns_complete_typed_result[1-2]": {
+   "ubuntu": 4.733,
+   "windows": 9.17
+  },
+  "tests/test_curved_intersection_matrix.py::test_curved_face_pair_matrix_returns_complete_typed_result[1-3]": {
+   "ubuntu": 10.148,
+   "windows": 18.877
+  },
+  "tests/test_curved_intersection_matrix.py::test_curved_face_pair_matrix_returns_complete_typed_result[2-3]": {
+   "ubuntu": 2.913,
+   "windows": 5.557
+  },
+  "tests/test_curved_intersection_matrix.py::test_multi_component_curved_imprint_rolls_back_on_late_failure": {
+   "ubuntu": 0.631,
+   "windows": 1.28
+  },
+  "tests/test_curved_intersection_matrix.py::test_plane_support_completes_fifteen_face_pair_families[second_surface1]": {
+   "ubuntu": 0.908,
+   "windows": 1.845
+  },
+  "tests/test_curved_intersection_matrix.py::test_plane_support_completes_fifteen_face_pair_families[second_surface2]": {
+   "ubuntu": 0.96,
+   "windows": 1.928
+  },
+  "tests/test_curved_intersection_matrix.py::test_plane_support_completes_fifteen_face_pair_families[second_surface3]": {
+   "ubuntu": 1.975,
+   "windows": 3.742
+  },
+  "tests/test_curved_intersection_matrix.py::test_two_component_plane_cylinder_imprint_is_atomic_and_idempotent": {
+   "ubuntu": 0.648,
+   "windows": 1.283
+  },
+  "tests/test_cylinder_atlas_contract.py::test_public_recovered_plate_connect_retains_external_radial_incidence": {
+   "ubuntu": 1.475,
+   "windows": 2.598
+  },
+  "tests/test_cylinder_atlas_principal_cut.py::test_public_atlas_cut_covariance[identity]": {
+   "ubuntu": 0.631,
+   "windows": 1.085
+  },
+  "tests/test_cylinder_atlas_principal_cut.py::test_public_atlas_cut_covariance[reflect]": {
+   "ubuntu": 0.624,
+   "windows": 1.087
+  },
+  "tests/test_cylinder_atlas_principal_cut.py::test_public_atlas_cut_covariance[rotate_translate]": {
+   "ubuntu": 0.726,
+   "windows": 1.222
+  },
+  "tests/test_decision_sites.py::test_inventory_anchors_are_detected[material_arrangement.py-_VertexLookup.find-tolerance-compare-C1]": {
+   "ubuntu": 2.416,
+   "windows": 4.357
+  },
+  "tests/test_edge_subcurve_preimages_batch.py::test_cubic_exterior_splits_carry_the_actual_local_interval": {
+   "ubuntu": 0.739,
+   "windows": 1.374
+  },
+  "tests/test_elliptic_quadric_supports.py::test_a_pipe_through_an_oblique_tube_conserves_material_and_round_trips_through_the_document": {
+   "ubuntu": 2.087,
+   "windows": 3.8
+  },
+  "tests/test_elliptic_quadric_supports.py::test_either_role_gives_the_same_curve_set[cone with its apex almost on the tube]": {
+   "ubuntu": 0.661,
+   "windows": 1.453
+  },
+  "tests/test_elliptic_quadric_supports.py::test_pipes_in_other_positions_keep_the_topology_valid_and_the_material_conserved[pipe0]": {
+   "ubuntu": 2.254,
+   "windows": 4.217
+  },
+  "tests/test_elliptic_quadric_supports.py::test_pipes_in_other_positions_keep_the_topology_valid_and_the_material_conserved[pipe1]": {
+   "ubuntu": 2.088,
+   "windows": 3.922
+  },
+  "tests/test_exact_predicates.py::test_canonical_enclosures_contain_the_decimal_oracle[2]": {
+   "ubuntu": 0.578,
+   "windows": 1.056
+  },
+  "tests/test_extruded_intersections.py::test_a_horizontal_cut_rebases_each_half_onto_its_own_parameter_range": {
+   "ubuntu": 0.603,
+   "windows": 1.194
+  },
+  "tests/test_extruded_intersections.py::test_a_plate_cutting_an_extruded_polycurve_conserves_material_and_exactness[line, arc and spline x plate]": {
+   "ubuntu": 1.258,
+   "windows": 2.277
+  },
+  "tests/test_extruded_intersections.py::test_a_plate_cutting_an_extruded_polycurve_conserves_material_and_exactness[oblique spline x plate]": {
+   "ubuntu": 1.682,
+   "windows": 3.117
+  },
+  "tests/test_extruded_intersections.py::test_a_plate_cutting_an_extruded_polycurve_conserves_material_and_exactness[polycurve x horizontal plate]": {
+   "ubuntu": 1.456,
+   "windows": 2.464
+  },
+  "tests/test_extruded_intersections.py::test_a_plate_cutting_an_extruded_polycurve_conserves_material_and_exactness[polycurve x vertical plate parallel to the extrusion]": {
+   "ubuntu": 1.111,
+   "windows": 2.046
+  },
+  "tests/test_extruded_intersections.py::test_a_plate_cutting_an_extruded_polycurve_conserves_material_and_exactness[spline in a tilted, shifted profile plane x plate]": {
+   "ubuntu": 2.077,
+   "windows": 3.754
+  },
+  "tests/test_extruded_intersections.py::test_a_plate_cutting_an_extruded_polycurve_conserves_material_and_exactness[spline x horizontal plate]": {
+   "ubuntu": 1.63,
+   "windows": 2.986
+  },
+  "tests/test_extruded_intersections.py::test_a_plate_cutting_an_extruded_polycurve_conserves_material_and_exactness[spline x tilted plate]": {
+   "ubuntu": 1.733,
+   "windows": 3.203
+  },
+  "tests/test_extruded_intersections.py::test_an_extruded_face_without_contact_leaves_the_document_at_schema_five": {
+   "ubuntu": 1.117,
+   "windows": 1.958
+  },
+  "tests/test_extruded_intersections.py::test_extrusions_the_engine_cannot_represent_are_refused_in_planning": {
+   "ubuntu": 0.892,
+   "windows": 1.636
+  },
+  "tests/test_extruded_public_routing.py::test_a_wall_whose_boundary_edge_is_split_keeps_its_exact_support_its_attachments_and_can_be_cut_again": {
+   "ubuntu": 0.78,
+   "windows": 1.37
+  },
+  "tests/test_extruded_public_routing.py::test_the_exact_classification_is_planned_and_applied_with_material_conserved": {
+   "ubuntu": 0.874,
+   "windows": 1.558
+  },
+  "tests/test_features_editing.py::test_changed_cylinder_roles_preserve_structural_identity_and_parent_parameters": {
+   "ubuntu": 0.9,
+   "windows": 2.144
+  },
+  "tests/test_hydrostatics.py::test_a_curved_bottom_below_its_vertices_floats": {
+   "ubuntu": 25.61,
+   "windows": 44.953
+  },
+  "tests/test_hydrostatics.py::test_a_flat_section_root_is_converged[1.0]": {
+   "ubuntu": 4.006,
+   "windows": 6.863
+  },
+  "tests/test_hydrostatics.py::test_a_flat_section_root_is_converged[1e-12]": {
+   "ubuntu": 4.117,
+   "windows": 7.144
+  },
+  "tests/test_hydrostatics.py::test_a_narrow_wet_cap_at_a_face_boundary_is_found": {
+   "ubuntu": 16.521,
+   "windows": 28.294
+  },
+  "tests/test_hydrostatics.py::test_a_nurbs_face_on_far_shifted_knots_is_refused": {
+   "ubuntu": 7.732,
+   "windows": 13.237
+  },
+  "tests/test_hydrostatics.py::test_a_wall_sided_box_has_the_wall_sided_gz": {
+   "ubuntu": 0.863,
+   "windows": 1.684
+  },
+  "tests/test_hydrostatics.py::test_a_waterline_loop_outside_the_trimmed_face_does_not_refuse": {
+   "ubuntu": 14.647,
+   "windows": 25.552
+  },
+  "tests/test_hydrostatics.py::test_a_waterline_turning_on_a_knot_crease_is_found": {
+   "ubuntu": 0.525,
+   "windows": 1.028
+  },
+  "tests/test_hydrostatics.py::test_a_wet_patch_inside_a_nurbs_face_is_not_missed": {
+   "ubuntu": 17.041,
+   "windows": 28.313
+  },
+  "tests/test_hydrostatics.py::test_an_ill_conditioned_waterline_root_is_exact": {
+   "ubuntu": 43.049,
+   "windows": 75.773
+  },
+  "tests/test_hydrostatics.py::test_free_trim_gz_of_a_symmetric_box_equals_the_fixed_trim_gz": {
+   "ubuntu": 1.778,
+   "windows": 3.571
+  },
+  "tests/test_hydrostatics.py::test_free_trim_of_a_box_with_an_off_centre_gravity_matches_the_wall_sided_equation": {
+   "ubuntu": 1.529,
+   "windows": 2.991
+  },
+  "tests/test_hydrostatics.py::test_free_trim_survives_probes_into_a_dry_hull": {
+   "ubuntu": 59.739,
+   "windows": 129.563
+  },
+  "tests/test_hydrostatics.py::test_free_trim_where_newton_stalls_uses_the_bracketed_solve": {
+   "ubuntu": 29.054,
+   "windows": 58.456
+  },
+  "tests/test_hydrostatics.py::test_the_b1_hydrostatic_table_is_consistent": {
+   "ubuntu": 6.612,
+   "windows": 12.5
+  },
+  "tests/test_hydrostatics.py::test_the_full_b1_hull_audits_clean": {
+   "ubuntu": 26.089,
+   "windows": 50.469
+  },
+  "tests/test_hydrostatics.py::test_the_full_b1_hull_is_two_half_hulls_upright": {
+   "ubuntu": 21.546,
+   "windows": 38.817
+  },
+  "tests/test_hydrostatics.py::test_the_heeled_full_b1_hull_matches_the_independent_reference": {
+   "ubuntu": 53.966,
+   "windows": 112.08
+  },
+  "tests/test_hydrostatics.py::test_the_heeled_volume_grows_at_the_waterplane_area": {
+   "ubuntu": 9.45,
+   "windows": 18.722
+  },
+  "tests/test_hydrostatics.py::test_the_trimmed_b1_hull_matches_the_extended_reference[-0.2]": {
+   "ubuntu": 1.359,
+   "windows": 2.581
+  },
+  "tests/test_hydrostatics.py::test_the_trimmed_b1_hull_matches_the_extended_reference[0.15]": {
+   "ubuntu": 1.372,
+   "windows": 2.577
+  },
+  "tests/test_hydrostatics.py::test_the_upright_b1_hull_matches_the_independent_reference[1.0]": {
+   "ubuntu": 19.951,
+   "windows": 35.185
+  },
+  "tests/test_hydrostatics.py::test_the_upright_b1_hull_matches_the_independent_reference[1.75]": {
+   "ubuntu": 10.884,
+   "windows": 19.079
+  },
+  "tests/test_hydrostatics.py::test_the_upright_b1_hull_matches_the_independent_reference[2.5]": {
+   "ubuntu": 10.502,
+   "windows": 19.032
+  },
+  "tests/test_hydrostatics.py::test_the_volume_grows_with_the_draft_at_the_waterplane_area": {
+   "ubuntu": 4.484,
+   "windows": 8.326
+  },
+  "tests/test_hydrostatics.py::test_two_turns_squeezed_together_by_a_rational_chart_are_both_kept": {
+   "ubuntu": 0.516,
+   "windows": 1.002
+  },
+  "tests/test_hydrostatics.py::test_wet_caps_between_equal_samples_are_found[0.503-1e-06]": {
+   "ubuntu": 15.568,
+   "windows": 26.201
+  },
+  "tests/test_hydrostatics.py::test_wet_caps_between_equal_samples_are_found[0.50625-1e-05]": {
+   "ubuntu": 16.116,
+   "windows": 27.715
+  },
+  "tests/test_import_boundaries_cli.py::test_paired_asset_and_checksum_replacement_is_not_authority": {
+   "ubuntu": 0.117,
+   "windows": 1.782
+  },
+  "tests/test_import_boundaries_cli.py::test_release_authority_accepts_exact_ledger_bound_artifacts": {
+   "ubuntu": 0.277,
+   "windows": 1.911
+  },
+  "tests/test_import_boundaries_cli.py::test_release_authority_neutralizes_external_git_configuration[core-attributes-config]": {
+   "ubuntu": 0.125,
+   "windows": 1.895
+  },
+  "tests/test_import_boundaries_cli.py::test_release_authority_neutralizes_external_git_configuration[environment-external-diff]": {
+   "ubuntu": 0.122,
+   "windows": 1.802
+  },
+  "tests/test_import_boundaries_cli.py::test_release_authority_neutralizes_external_git_configuration[git-attr-source]": {
+   "ubuntu": 0.136,
+   "windows": 2.092
+  },
+  "tests/test_import_boundaries_cli.py::test_release_authority_neutralizes_external_git_configuration[global-attributes-config]": {
+   "ubuntu": 0.122,
+   "windows": 1.809
+  },
+  "tests/test_import_boundaries_cli.py::test_release_authority_neutralizes_external_git_configuration[local-external-diff]": {
+   "ubuntu": 0.122,
+   "windows": 1.835
+  },
+  "tests/test_import_boundaries_cli.py::test_release_authority_neutralizes_external_git_configuration[system-attributes-config]": {
+   "ubuntu": 0.119,
+   "windows": 1.817
+  },
+  "tests/test_import_boundaries_cli.py::test_release_authority_neutralizes_external_git_configuration[textconv-diff-driver]": {
+   "ubuntu": 0.126,
+   "windows": 1.878
+  },
+  "tests/test_import_boundaries_cli.py::test_release_authority_rejects_mutation[checksum]": {
+   "ubuntu": 0.114,
+   "windows": 1.846
+  },
+  "tests/test_import_boundaries_cli.py::test_release_authority_rejects_mutation[evidence-hash]": {
+   "ubuntu": 0.104,
+   "windows": 1.408
+  },
+  "tests/test_import_boundaries_cli.py::test_release_authority_rejects_mutation[extra-asset]": {
+   "ubuntu": 0.114,
+   "windows": 1.826
+  },
+  "tests/test_import_boundaries_cli.py::test_release_authority_rejects_mutation[extra-child-path]": {
+   "ubuntu": 0.119,
+   "windows": 1.798
+  },
+  "tests/test_import_boundaries_cli.py::test_release_authority_rejects_mutation[graft-file]": {
+   "ubuntu": 0.11,
+   "windows": 1.549
+  },
+  "tests/test_import_boundaries_cli.py::test_release_authority_rejects_mutation[info-attributes]": {
+   "ubuntu": 0.11,
+   "windows": 1.548
+  },
+  "tests/test_import_boundaries_cli.py::test_release_authority_rejects_mutation[missing-tag-ref]": {
+   "ubuntu": 0.162,
+   "windows": 1.462
+  },
+  "tests/test_import_boundaries_cli.py::test_release_authority_rejects_mutation[moved-tag-ref]": {
+   "ubuntu": 0.108,
+   "windows": 1.469
+  },
+  "tests/test_import_boundaries_cli.py::test_release_authority_rejects_mutation[noncanonical-tag-ref]": {
+   "ubuntu": 0.106,
+   "windows": 1.286
+  },
+  "tests/test_import_boundaries_cli.py::test_release_authority_rejects_mutation[noncanonical]": {
+   "ubuntu": 0.101,
+   "windows": 1.33
+  },
+  "tests/test_import_boundaries_cli.py::test_release_authority_rejects_mutation[paired-replacement]": {
+   "ubuntu": 0.115,
+   "windows": 1.881
+  },
+  "tests/test_import_boundaries_cli.py::test_release_authority_rejects_mutation[replacement-ref]": {
+   "ubuntu": 0.11,
+   "windows": 1.54
+  },
+  "tests/test_import_boundaries_cli.py::test_release_authority_rejects_mutation[review-hash]": {
+   "ubuntu": 0.105,
+   "windows": 1.422
+  },
+  "tests/test_import_boundaries_cli.py::test_release_authority_rejects_mutation[tag]": {
+   "ubuntu": 0.1,
+   "windows": 1.307
+  },
+  "tests/test_import_boundaries_cli.py::test_release_authority_rejects_mutation[unmerged-tag-child]": {
+   "ubuntu": 0.097,
+   "windows": 1.435
+  },
+  "tests/test_import_boundaries_cli.py::test_release_authority_rejects_mutation[wrong-byte-count]": {
+   "ubuntu": 0.118,
+   "windows": 1.813
+  },
+  "tests/test_import_boundaries_cli.py::test_release_authority_rejects_mutation[wrong-metadata]": {
+   "ubuntu": 0.125,
+   "windows": 1.821
+  },
+  "tests/test_import_boundaries_cli.py::test_release_authority_rejects_mutation[wrong-source]": {
+   "ubuntu": 0.111,
+   "windows": 1.738
+  },
+  "tests/test_import_boundaries_cli.py::test_release_authority_rejects_mutation[wrong-terminal]": {
+   "ubuntu": 0.102,
+   "windows": 1.461
+  },
+  "tests/test_import_boundaries_cli.py::test_source_import_graph_has_no_forbidden_or_undeclared_dependency": {
+   "ubuntu": 0.799,
+   "windows": 1.625
+  },
+  "tests/test_intersection_performance_equivalence.py::test_integer_remainder_sequences_equal_the_fraction_sequences": {
+   "ubuntu": 3.631,
+   "windows": 5.932
+  },
+  "tests/test_intersection_performance_equivalence.py::test_quadric_chart_roots_agree_with_the_fraction_pipeline": {
+   "ubuntu": 2.035,
+   "windows": 3.505
+  },
+  "tests/test_intersection_performance_equivalence.py::test_yun_classes_and_common_divisors_equal_the_fraction_versions": {
+   "ubuntu": 13.156,
+   "windows": 22.451
+  },
+  "tests/test_intersections.py::test_transverse_plane_cylinder_imprints_atomic_shared_ring": {
+   "ubuntu": 0.686,
+   "windows": 1.426
+  },
+  "tests/test_intersections.py::test_transverse_ring_clips_to_finite_plate_and_retains_material": {
+   "ubuntu": 0.89,
+   "windows": 1.77
+  },
+  "tests/test_intersections.py::test_transverse_ring_is_deterministic_and_preserves_argument_order": {
+   "ubuntu": 0.984,
+   "windows": 2.042
+  },
+  "tests/test_intersections.py::test_transverse_ring_rolls_back_if_fragmentation_fails": {
+   "ubuntu": 0.625,
+   "windows": 1.294
+  },
+  "tests/test_large_connected_contract.py::test_boundary_member_decomposition_preserves_point_attachment[4.5]": {
+   "ubuntu": 1.533,
+   "windows": 2.707
+  },
+  "tests/test_large_connected_contract.py::test_boundary_member_decomposition_preserves_point_attachment[5.0]": {
+   "ubuntu": 1.539,
+   "windows": 2.687
+  },
+  "tests/test_large_connected_contract.py::test_connected_source_owners_material_and_joint_oracles[concave_boundary_junctions-None]": {
+   "ubuntu": 1.641,
+   "windows": 2.922
+  },
+  "tests/test_large_connected_contract.py::test_connected_source_owners_material_and_joint_oracles[connected_hub-10]": {
+   "ubuntu": 0.656,
+   "windows": 1.075
+  },
+  "tests/test_large_connected_contract.py::test_connected_source_owners_material_and_joint_oracles[connected_mixed-10]": {
+   "ubuntu": 5.409,
+   "windows": 10.383
+  },
+  "tests/test_large_connected_contract.py::test_operand_order_produces_identical_document[connected_mixed]": {
+   "ubuntu": 4.758,
+   "windows": 9.028
+  },
+  "tests/test_large_connected_contract.py::test_translated_cubic_bay_retains_material_without_relaxed_tolerance[60]": {
+   "ubuntu": 5.171,
+   "windows": 9.905
+  },
+  "tests/test_large_connected_contract.py::test_translated_cubic_bay_retains_material_without_relaxed_tolerance[69]": {
+   "ubuntu": 5.258,
+   "windows": 9.835
+  },
+  "tests/test_material_regions.py::test_exact_region_conserves_area_and_retains_physical_internal_cut": {
+   "ubuntu": 1.361,
+   "windows": 2.632
+  },
+  "tests/test_material_regions.py::test_occurrence_and_orientation_reference_semantics_protect_seams[coedge]": {
+   "ubuntu": 1.497,
+   "windows": 2.766
+  },
+  "tests/test_material_regions.py::test_occurrence_and_orientation_reference_semantics_protect_seams[face_use]": {
+   "ubuntu": 1.434,
+   "windows": 6.365
+  },
+  "tests/test_material_regions.py::test_occurrence_and_orientation_reference_semantics_protect_seams[member_orientation]": {
+   "ubuntu": 1.492,
+   "windows": 2.776
+  },
+  "tests/test_material_regions.py::test_protected_seam_and_partial_selection_keep_source_constraints": {
+   "ubuntu": 1.527,
+   "windows": 2.998
+  },
+  "tests/test_material_regions.py::test_region_binding_rejects_tamper_staleness_and_cancellation_without_mutation": {
+   "ubuntu": 1.454,
+   "windows": 2.726
+  },
+  "tests/test_mixed_bay_oracle.py::test_callback_history_edits_cannot_retarget_pinned_face_ownership": {
+   "ubuntu": 0.658,
+   "windows": 1.254
+  },
+  "tests/test_mixed_bay_oracle.py::test_fixed_authored_fixture_inventory_never_claims_clipped_branch_completeness": {
+   "ubuntu": 0.569,
+   "windows": 1.068
+  },
+  "tests/test_mixed_bay_oracle.py::test_inventory_cancel_identity_and_translated_fixture_refusal": {
+   "ubuntu": 0.754,
+   "windows": 1.448
+  },
+  "tests/test_mixed_bay_oracle.py::test_retargeted_history_cannot_supply_missing_common_owner": {
+   "ubuntu": 0.575,
+   "windows": 1.078
+  },
+  "tests/test_nurbs_faces.py::test_certified_trim_polylines_bound_the_world_deviation": {
+   "ubuntu": 2.069,
+   "windows": 3.921
+  },
+  "tests/test_nurbs_faces.py::test_trimmed_face_area_against_gauss_legendre[triangle1]": {
+   "ubuntu": 1.062,
+   "windows": 2.0
+  },
+  "tests/test_nurbs_section_faces.py::test_a_bow_piece_bounded_by_four_sections_validates": {
+   "ubuntu": 11.739,
+   "windows": 20.501
+  },
+  "tests/test_nurbs_section_faces.py::test_a_hole_crossing_the_deck_edge_is_refused": {
+   "ubuntu": 0.702,
+   "windows": 1.143
+  },
+  "tests/test_nurbs_section_faces.py::test_a_section_crossing_the_deck_edge_again_from_a_shared_corner_is_not_certified": {
+   "ubuntu": 11.645,
+   "windows": 20.323
+  },
+  "tests/test_nurbs_section_faces.py::test_the_trimmed_bow_round_trips": {
+   "ubuntu": 0.925,
+   "windows": 1.509
+  },
+  "tests/test_nurbs_surface_capabilities.py::test_box_memo_is_order_free_validated_and_thread_safe": {
+   "ubuntu": 0.921,
+   "windows": 1.627
+  },
+  "tests/test_parabolic_quadric_supports.py::test_a_pipe_through_a_spline_wall_conserves_material_and_round_trips_through_the_document": {
+   "ubuntu": 1.757,
+   "windows": 3.172
+  },
+  "tests/test_parabolic_quadric_supports.py::test_pipes_in_other_positions_keep_the_topology_valid_and_the_material_conserved[pipe0]": {
+   "ubuntu": 2.194,
+   "windows": 3.951
+  },
+  "tests/test_parabolic_quadric_supports.py::test_pipes_in_other_positions_keep_the_topology_valid_and_the_material_conserved[pipe1]": {
+   "ubuntu": 1.843,
+   "windows": 3.122
+  },
+  "tests/test_planar_arc_containment.py::test_arc_point_rule_agrees_with_point_parameters": {
+   "ubuntu": 3.8,
+   "windows": 6.362
+  },
+  "tests/test_planar_arc_containment.py::test_ellipse_arcs_agree_with_the_float_route": {
+   "ubuntu": 2.985,
+   "windows": 5.052
+  },
+  "tests/test_planar_arc_containment.py::test_exact_route_agrees_with_the_float_route_on_generic_points[False-plane0]": {
+   "ubuntu": 11.844,
+   "windows": 19.723
+  },
+  "tests/test_planar_arc_containment.py::test_exact_route_agrees_with_the_float_route_on_generic_points[False-plane1]": {
+   "ubuntu": 11.868,
+   "windows": 20.146
+  },
+  "tests/test_planar_arc_containment.py::test_exact_route_agrees_with_the_float_route_on_generic_points[True-plane0]": {
+   "ubuntu": 11.837,
+   "windows": 20.061
+  },
+  "tests/test_planar_arc_containment.py::test_exact_route_agrees_with_the_float_route_on_generic_points[True-plane1]": {
+   "ubuntu": 12.014,
+   "windows": 20.417
+  },
+  "tests/test_planar_arc_containment.py::test_first_harmonic_angles_match_mains_roots": {
+   "ubuntu": 0.711,
+   "windows": 1.147
+  },
+  "tests/test_planar_containment_exact.py::test_exact_route_agrees_with_the_float_route_on_generic_points[0]": {
+   "ubuntu": 0.995,
+   "windows": 1.974
+  },
+  "tests/test_planar_containment_exact.py::test_exact_route_agrees_with_the_float_route_on_generic_points[1]": {
+   "ubuntu": 1.026,
+   "windows": 2.022
+  },
+  "tests/test_planar_containment_exact.py::test_exact_route_agrees_with_the_float_route_on_generic_points[2]": {
+   "ubuntu": 1.04,
+   "windows": 2.048
+  },
+  "tests/test_planar_containment_exact.py::test_exact_route_agrees_with_the_float_route_on_generic_points[3]": {
+   "ubuntu": 1.002,
+   "windows": 1.971
+  },
+  "tests/test_planar_stations.py::test_junctions_are_symmetric_in_their_operands": {
+   "ubuntu": 5.544,
+   "windows": 9.976
+  },
+  "tests/test_planar_stations.py::test_vertex_lookup_matches_an_exact_scan[1.0-1e-17]": {
+   "ubuntu": 0.813,
+   "windows": 1.438
+  },
+  "tests/test_planar_stations.py::test_vertex_lookup_matches_an_exact_scan[1e-100-1e-09]": {
+   "ubuntu": 1.122,
+   "windows": 1.898
+  },
+  "tests/test_plane_nurbs_curves.py::test_a_frame_section_of_the_bow": {
+   "ubuntu": 2.129,
+   "windows": 3.406
+  },
+  "tests/test_plane_nurbs_curves.py::test_arc_selection_covers_non_monotone_parameter_maps": {
+   "ubuntu": 1.497,
+   "windows": 2.57
+  },
+  "tests/test_plane_nurbs_curves.py::test_bounds_distance_bounds_and_projection": {
+   "ubuntu": 4.91,
+   "windows": 7.892
+  },
+  "tests/test_plane_nurbs_curves.py::test_bounds_hold_with_many_arcs": {
+   "ubuntu": 1.142,
+   "windows": 1.846
+  },
+  "tests/test_plane_nurbs_curves.py::test_near_vertical_lengths_refuse_rather_than_vanish": {
+   "ubuntu": 1.755,
+   "windows": 2.995
+  },
+  "tests/test_plane_nurbs_curves.py::test_points_lie_on_both_exact_surfaces": {
+   "ubuntu": 6.01,
+   "windows": 10.613
+  },
+  "tests/test_plane_nurbs_topology.py::test_random_wavy_patches_match_the_boundary_sign_count": {
+   "ubuntu": 1.061,
+   "windows": 1.956
+  },
+  "tests/test_polynomial_extrusion_support.py::test_public_binding_rejects_raw_same_revision_mutation_and_tamper": {
+   "ubuntu": 0.872,
+   "windows": 1.58
+  },
+  "tests/test_polynomial_extrusion_support.py::test_public_native_query_exposes_support_only_and_preserves_refusals": {
+   "ubuntu": 0.865,
+   "windows": 1.58
+  },
+  "tests/test_polynomial_extrusion_support.py::test_public_query_cancellation_and_error_identity": {
+   "ubuntu": 0.841,
+   "windows": 1.545
+  },
+  "tests/test_polynomial_extrusion_support.py::test_public_query_late_callback_cannot_publish_changed_support": {
+   "ubuntu": 0.837,
+   "windows": 1.526
+  },
+  "tests/test_prepared_member_sheet_network.py::test_connected_network_complete_exact_relations_and_material[10]": {
+   "ubuntu": 1.443,
+   "windows": 2.515
+  },
+  "tests/test_prepared_member_sheet_network.py::test_connected_network_complete_exact_relations_and_material[5]": {
+   "ubuntu": 0.633,
+   "windows": 1.103
+  },
+  "tests/test_prepared_mixed_sheet_network.py::test_forged_inventory_and_records_refused": {
+   "ubuntu": 1.324,
+   "windows": 2.333
+  },
+  "tests/test_prepared_mixed_sheet_network.py::test_mixed_binding_is_deterministic": {
+   "ubuntu": 4.912,
+   "windows": 8.932
+  },
+  "tests/test_prepared_mixed_sheet_network.py::test_mixed_receipt_qualifies_current_document": {
+   "ubuntu": 5.571,
+   "windows": 10.16
+  },
+  "tests/test_prepared_mixed_sheet_network.py::test_small_plane_cylinder_receipt": {
+   "ubuntu": 0.624,
+   "windows": 1.106
+  },
+  "tests/test_prepared_mixed_sheet_network.py::test_unowned_wall_source_less_owner_refused": {
+   "ubuntu": 2.399,
+   "windows": 4.384
+  },
+  "tests/test_prepared_planar_member_sheet_network.py::test_complete_small_network[connected_hub-10-25]": {
+   "ubuntu": 1.186,
+   "windows": 2.125
+  },
+  "tests/test_projection_equivalence.py::test_memoized_proof_matches_recomputation_including_work_and_callbacks": {
+   "ubuntu": 2.606,
+   "windows": 4.571
+  },
+  "tests/test_section_audit.py::test_a_deck_spreading_over_the_unshared_half_is_reported": {
+   "ubuntu": 7.714,
+   "windows": 13.018
+  },
+  "tests/test_section_audit.py::test_a_half_shared_deck_edge_with_the_rest_outside_the_deck_audits_clean": {
+   "ubuntu": 2.907,
+   "windows": 4.966
+  },
+  "tests/test_section_audit.py::test_a_line_piercing_the_bow_is_reported": {
+   "ubuntu": 2.853,
+   "windows": 4.76
+  },
+  "tests/test_section_audit.py::test_a_plane_face_cutting_the_bow_without_shared_edges_is_reported": {
+   "ubuntu": 3.154,
+   "windows": 5.25
+  },
+  "tests/test_section_audit.py::test_a_remote_near_contact_of_a_pair_sharing_a_vertex_is_reported": {
+   "ubuntu": 2.108,
+   "windows": 3.452
+  },
+  "tests/test_section_audit.py::test_a_section_crossing_a_chart_segment_on_a_folded_surface_is_reported": {
+   "ubuntu": 0.765,
+   "windows": 1.315
+  },
+  "tests/test_section_audit.py::test_delegated_predicates_follow_the_qualification_budget": {
+   "ubuntu": 1.192,
+   "windows": 2.023
+  },
+  "tests/test_section_audit.py::test_plane_and_nurbs_faces_sharing_section_edges_use_their_exact_intersection": {
+   "ubuntu": 0.947,
+   "windows": 1.532
+  },
+  "tests/test_section_audit.py::test_the_bow_and_the_deck_audit_clean": {
+   "ubuntu": 2.814,
+   "windows": 4.728
+  },
+  "tests/test_section_audit.py::test_two_pieces_of_a_self_crossing_section_are_not_cleared": {
+   "ubuntu": 0.98,
+   "windows": 1.637
+  },
+  "tests/test_section_faces.py::test_a_half_ellipse_deck_validates_and_has_the_analytic_area": {
+   "ubuntu": 3.62,
+   "windows": 6.297
+  },
+  "tests/test_section_faces.py::test_a_hole_crossing_the_curve_is_refused": {
+   "ubuntu": 1.558,
+   "windows": 2.696
+  },
+  "tests/test_section_faces.py::test_a_hole_outside_the_deck_is_refused": {
+   "ubuntu": 2.251,
+   "windows": 3.882
+  },
+  "tests/test_section_faces.py::test_a_line_crossing_the_curve_is_refused": {
+   "ubuntu": 0.692,
+   "windows": 1.18
+  },
+  "tests/test_section_faces.py::test_a_section_that_crosses_itself_is_refused": {
+   "ubuntu": 12.576,
+   "windows": 20.88
+  },
+  "tests/test_section_faces.py::test_a_self_crossing_inside_one_piece_is_refused": {
+   "ubuntu": 13.371,
+   "windows": 21.946
+  },
+  "tests/test_section_faces.py::test_a_square_hole_inside_the_deck": {
+   "ubuntu": 2.357,
+   "windows": 4.127
+  },
+  "tests/test_section_faces.py::test_acute_corners_validate": {
+   "ubuntu": 1.22,
+   "windows": 2.069
+  },
+  "tests/test_section_faces.py::test_an_excursion_before_the_joint_is_refused": {
+   "ubuntu": 70.456,
+   "windows": 117.217
+  },
+  "tests/test_section_faces.py::test_areas_use_local_coordinates": {
+   "ubuntu": 1.613,
+   "windows": 2.713
+  },
+  "tests/test_section_faces.py::test_far_origins_of_oblique_planes_validate": {
+   "ubuntu": 1.588,
+   "windows": 2.701
+  },
+  "tests/test_section_faces.py::test_far_plane_origins_validate": {
+   "ubuntu": 1.383,
+   "windows": 2.365
+  },
+  "tests/test_section_faces.py::test_small_holes_and_small_loops_are_judged_at_their_own_scale": {
+   "ubuntu": 2.952,
+   "windows": 5.007
+  },
+  "tests/test_section_faces.py::test_the_area_bound_tightens_with_pieces": {
+   "ubuntu": 2.675,
+   "windows": 4.757
+  },
+  "tests/test_section_faces.py::test_vertices_within_the_surface_residual_validate": {
+   "ubuntu": 1.388,
+   "windows": 2.391
+  },
+  "tests/test_strict_audit.py::test_coons_interior_outside_boundary_aabb_is_qualified_by_shared_predicate": {
+   "ubuntu": 0.689,
+   "windows": 1.326
+  },
+  "tests/test_strict_audit.py::test_shared_endpoint_curves_and_generated_cylinders_are_conformal": {
+   "ubuntu": 6.101,
+   "windows": 10.86
+  },
+  "tests/test_trim_domain_contract.py::test_recovered_cylinder_plate_public_reconstruction": {
+   "ubuntu": 0.726,
+   "windows": 1.301
+  },
+  "tests/test_volume_cut.py::test_a_cylinder_cut_by_a_tilted_box": {
+   "ubuntu": 0.559,
+   "windows": 1.006
+  },
+  "tests/test_volume_cut.py::test_a_cylinder_patch_across_a_seam": {
+   "ubuntu": 3.685,
+   "windows": 7.177
+  },
+  "tests/test_volume_cut.py::test_a_face_whose_surface_the_imprint_turns_refuses": {
+   "ubuntu": 0.625,
+   "windows": 1.094
+  },
+  "tests/test_volume_cut.py::test_a_plate_with_a_hole[box0-True]": {
+   "ubuntu": 1.402,
+   "windows": 2.523
+  },
+  "tests/test_volume_cut.py::test_a_plate_with_a_hole[box1-False]": {
+   "ubuntu": 1.955,
+   "windows": 3.666
+  },
+  "tests/test_volume_cut.py::test_a_t_junction_keeps_one_shared_inside_junction_edge": {
+   "ubuntu": 0.572,
+   "windows": 1.076
+  },
+  "tests/test_volume_cut.py::test_a_wider_cut_at_the_disc_extreme": {
+   "ubuntu": 1.611,
+   "windows": 2.791
+  },
+  "tests/test_volume_cut.py::test_an_extremum_between_samples_is_not_lost": {
+   "ubuntu": 1.408,
+   "windows": 2.422
+  },
+  "tests/test_volume_cut.py::test_seam_members_are_partitioned_at_the_box": {
+   "ubuntu": 0.755,
+   "windows": 1.36
+  },
+  "tests/test_volume_cut.py::test_the_cut_is_deterministic": {
+   "ubuntu": 0.78,
+   "windows": 1.361
+  },
+  "tests/test_volume_cut.py::test_the_partitioned_cut_is_deterministic": {
+   "ubuntu": 0.993,
+   "windows": 1.764
+  }
+ },
+ "totals": {
+  "ubuntu": {
+   "seconds": 1317.216,
+   "tests": 3738
+  },
+  "windows": {
+   "seconds": 2423.002,
+   "tests": 3738
+  }
+ }
+}
