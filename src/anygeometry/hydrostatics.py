@@ -281,7 +281,10 @@ def _free_trim_bracketed(model, faces, volume, g, heel, reference, longitudinal,
             return result
         return None
     grid = sorted(np.linspace(-limit, limit, samples), key=abs)
+    # scanned from zero outwards; stops at the first sign change between neighbouring scanned trims
+    # (the bracket nearest zero; CI tiers C1: the full scan was most of the fallback's cost)
     values = {}
+    bracket = None
     for trim in grid:
         value, result = lever(trim)
         values[trim] = value
@@ -289,14 +292,23 @@ def _free_trim_bracketed(model, faces, volume, g, heel, reference, longitudinal,
             done = accepted(value, result, trim)
             if done is not None:
                 return done
-    ordered = sorted(t for t in values if values[t] is not None)
-    candidates = [(a, b) for a, b in zip(ordered, ordered[1:]) if values[a] * values[b] < 0]
-    if not candidates:
+        ordered = sorted(t for t in values if values[t] is not None)
+        candidates = [(a, b) for a, b in zip(ordered, ordered[1:]) if values[a] * values[b] < 0
+                      and not any(a < other < b for other in values)]
+        if candidates:
+            bracket = min(candidates, key=lambda pair: min(abs(pair[0]), abs(pair[1])))
+            break
+    if bracket is None:
         raise GeometryError("float_free_trim: no trim equilibrium within +-%.2f rad" % limit)
-    lo, hi = min(candidates, key=lambda pair: min(abs(pair[0]), abs(pair[1])))
-    f_lo = values[lo]
+    lo, hi = bracket
+    f_lo, f_hi = values[lo], values[hi]
+    # false position with the Illinois modification, kept inside the sign bracket (bisection when a
+    # step would not shrink it), until the residuals hold or the bracket is exhausted
+    side = 0
     while hi - lo > 4 * np.finfo(float).eps * max(1.0, abs(lo), abs(hi)):
-        middle = .5 * (lo + hi)
+        middle = lo - f_lo * (hi - lo) / (f_hi - f_lo)
+        if not lo < middle < hi:
+            middle = .5 * (lo + hi)
         f_mid, result = lever(middle)
         if f_mid is None:
             raise GeometryError("float_free_trim: a bracketed trim left the hull")
@@ -305,8 +317,14 @@ def _free_trim_bracketed(model, faces, volume, g, heel, reference, longitudinal,
             return done
         if (f_mid > 0) == (f_lo > 0):
             lo, f_lo = middle, f_mid
+            if side == -1:
+                f_hi *= .5
+            side = -1
         else:
-            hi = middle
+            hi, f_hi = middle, f_mid
+            if side == 1:
+                f_lo *= .5
+            side = 1
     raise GeometryError("float_free_trim: the trim equilibrium is not resolved to the tolerance "
                         "(the lever changes too fast with the trim)")
 
