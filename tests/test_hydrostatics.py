@@ -662,3 +662,45 @@ def test_the_heeled_volume_grows_at_the_waterplane_area(b1_full):
     d2 = (volume(h / 2) - volume(-h / 2)) / h
     area = hydrostatics(model, faces, (2.5, 0., 1.75), normal)["waterplane_area"]
     assert (4 * d2 - d1) / 3 == pytest.approx(area, rel=1e-7)
+
+
+# ------------------------------------------------------------------ review H1-F round 1
+
+
+def test_a_waterline_turning_on_a_knot_crease_is_found():
+    from anygeometry.face_moments import Frame, face_moments, waterplane_fields
+    from anygeometry.nurbs import NurbsSurface
+    from test_nurbs_faces import nurbs_face
+    # z = |u - 0.5| + (v - 0.5)^2 - 1e-4 (degree 1 in u with a knot at 0.5): a closed waterline turning
+    # exactly on the crease at v = 0.49, 0.51 (review H1-F round 1: both orders returned 0)
+    us, q = (0., .5, 1.), (.25, -.25, .25)
+    surface = NurbsSurface(1, 2, (0., 0., .5, 1., 1.), (0., 0., 0., 1., 1., 1.),
+                           tuple(tuple((u, j / 2, abs(u - .5) + q[j] - 1e-4) for j in range(3)) for u in us))
+    model, face, _edges = nurbs_face(surface, [(.1, .1), (.9, .1), (.9, .9), (.1, .9)])
+    frame = Frame((0., 0., 0.), (1., 0., 0.), (0., 1., 0.))
+    area = 2 * (2 * .01 * 1e-4 - 2 * .01 ** 3 / 3)
+    for order in (24, 48):
+        moments = face_moments(model, face, frame, waterplane_fields, order, clip=True)
+        assert abs(moments[0]) == pytest.approx(area, rel=1e-9)
+
+
+def test_free_trim_where_newton_stalls_uses_the_bracketed_solve():
+    from anygeometry.hydrostatics import float_free_trim
+    # review H1-F round 1: a 10 x 4 x 10 box with vanishing upright longitudinal stiffness; the wall-sided
+    # equation gives trim 0.19075018011659012
+    model, faces, _place = box((10., 4., 10.))
+    result = float_free_trim(model, faces, 60., (5.02, 2., .75 + 100 / 18), reference=(5., 2., 0.))
+    assert result["trim"] == pytest.approx(0.19075018011659012, abs=1e-9)
+    assert result["volume"] == pytest.approx(60., rel=1e-10)
+
+
+def test_free_trim_survives_probes_into_a_dry_hull():
+    from anygeometry.hydrostatics import float_free_trim
+    # review H1-F round 1: a tiny displacement with a start at the bottom; finite-difference probes step dry
+    model, faces, _place = box((10., 4., 4.))
+    gravity = np.array([5.3, 2., 1e-6])
+    result = float_free_trim(model, faces, 4e-5, gravity, reference=(5., 2., 0.), start=(1e-6, 0.))
+    assert result["volume"] == pytest.approx(4e-5, rel=1e-8)
+    # the equilibrium trim is ~3.6e-8 rad, where the waterline just spans the bottom: the lever changes by
+    # ~1e-6 per 1e-15 rad of trim, so it is resolved to ~2e-9 at the trim's float resolution
+    assert abs((result["buoyancy_centre"] - gravity) @ result["frame"].axes[0]) <= 1e-8

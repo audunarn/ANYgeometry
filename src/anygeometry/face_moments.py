@@ -299,6 +299,19 @@ def _waterline_turns(surface, frame, axis, box=None) -> list:
     other = 1 - axis
     low, width = (r0, r1 - r0) if other == 0 else (q0, q1 - q0)
     levels, examined = [], 0
+    # a waterline may turn exactly on a knot line of the inner coordinate (a C0 crease: the inner
+    # derivative has one sign on each side, review H1-F round 1): every crossing of the waterline with
+    # a sub-patch's inner-coordinate edge is taken as a level (an extra split where it is no turn)
+    for patch in patches:
+        c = patch.coefficients
+        line = patch.v_range if other == 1 else patch.u_range
+        for edge in ((c[0], c[-1]) if axis == 0 else ([row[0] for row in c], [row[-1] for row in c])):
+            for root in _exact_unit_roots(list(edge)):
+                levels.append((float(line[0] + root * (line[1] - line[0])) - low) / width)
+            if edge[0] == 0:
+                levels.append((float(line[0]) - low) / width)
+            if edge[-1] == 0:
+                levels.append((float(line[1]) - low) / width)
     for patch in patches:
         pending = [(patch.u_range, patch.v_range, patch.coefficients, 0)]
         while pending:

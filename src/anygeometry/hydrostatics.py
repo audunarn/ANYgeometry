@@ -185,13 +185,16 @@ def float_at(model, faces, volume: float, normal=(0., 0., 1.), reference=(0., 0.
     span = float(np.max(heights) - np.min(heights)) or 1.0
     low, high = float(np.min(heights)) - 1e-9 * span, float(np.max(heights)) + 1e-9 * span
     zeta = .5 * (low + high) if start is None or not low < start < high else float(start)
+    total = _shell(model, faces, order)[1]
 
     def at(z):
         return hydrostatics(model, faces, reference, n, longitudinal, order, rtol, shift=z)
     result = at(zeta)
     for _ in range(max_iterations):
         error = result["volume"] - volume
-        if abs(error) <= tolerance * max(volume, 1e-300):
+        # never tighter than the rounding of the whole shell's volume (review H1-F round 1: a tiny
+        # displacement could not reach 1e-12 of itself)
+        if abs(error) <= max(tolerance * volume, 64 * np.finfo(float).eps * total):
             break
         if error > 0:
             high = min(high, zeta)
@@ -241,6 +244,62 @@ def float_free_trim(model, faces, volume: float, gravity_centre, heel: float = 0
         lever = float((result["buoyancy_centre"] - g) @ result["frame"].axes[0])
         return result, np.array([(result["volume"] - volume) / volume, lever / extent])
 
+    try:
+        return _free_trim_newton(evaluate, model, faces, volume, heel, reference, longitudinal, start, order,
+                                 rtol, tolerance, max_iterations, extent)
+    except GeometryError:
+        # the bracketed fallback (review H1-F round 1: Newton stalled where the longitudinal stiffness
+        # vanishes, and finite-difference probes stepped into a dry hull)
+        return _free_trim_bracketed(model, faces, volume, g, heel, reference, longitudinal, order, rtol,
+                                    tolerance, extent)
+
+
+def _free_trim_bracketed(model, faces, volume, g, heel, reference, longitudinal, order, rtol, tolerance, extent,
+                         limit: float = 1.2, samples: int = 49):
+    """For each trim the sinkage displacing the volume (``float_at``, bracketed), and the trim where the
+    longitudinal lever ``(B - G) . xi`` changes sign: scanned over ``[-limit, limit]`` rad from zero
+    outwards (first sign change nearest to zero), then bisected to the tolerance."""
+    def lever(trim):
+        try:
+            result = float_at(model, faces, volume, heel_normal(heel, trim), reference, longitudinal,
+                              order=order, rtol=rtol)
+        except GeometryError:
+            return None, None
+        if result["buoyancy_centre"] is None:
+            return None, None
+        return float((result["buoyancy_centre"] - g) @ result["frame"].axes[0]) / extent, result
+    grid = sorted(np.linspace(-limit, limit, samples), key=abs)
+    values = {}
+    bracket = None
+    for trim in grid:
+        values[trim] = lever(trim)[0]
+    ordered = sorted(t for t in values if values[t] is not None)
+    candidates = [(a, b) for a, b in zip(ordered, ordered[1:])
+                  if values[a] == 0 or values[a] * values[b] < 0]
+    if not candidates:
+        raise GeometryError("float_free_trim: no trim equilibrium within +-%.2f rad" % limit)
+    bracket = min(candidates, key=lambda pair: min(abs(pair[0]), abs(pair[1])))
+    lo, hi = bracket
+    f_lo = values[lo]
+    result = None
+    for _ in range(200):
+        middle = .5 * (lo + hi)
+        f_mid, candidate = lever(middle)
+        if f_mid is None:
+            raise GeometryError("float_free_trim: a bracketed trim left the hull")
+        result = candidate
+        if abs(f_mid) <= tolerance or hi - lo <= 1e-15:
+            break
+        if (f_mid > 0) == (f_lo > 0):
+            lo, f_lo = middle, f_mid
+        else:
+            hi = middle
+    result.update(trim=middle)
+    return result
+
+
+def _free_trim_newton(evaluate, model, faces, volume, heel, reference, longitudinal, start, order, rtol,
+                      tolerance, max_iterations, extent):
     if start is None:
         z = float_at(model, faces, volume, heel_normal(heel, 0.0), reference, longitudinal, order=order,
                      rtol=rtol)["zeta"]
