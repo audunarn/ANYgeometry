@@ -823,12 +823,19 @@ def _outside_plane_face(model, face, piece, tolerance, work, shared_vertices=(),
         for item in loop:
             edge = model.edges[item.edge]
             if isinstance(edge.curve, PlaneNurbsCurve):
-                # skipped only when it is another piece of the same section path, disjoint in its domain
-                # (a P1 path is simple): any other section boundary refuses (review B1-P5 round 1)
+                # skipped when it is another piece of the same section path, disjoint in its domain (a P1
+                # path is simple); a piece overlapping its own path's domain refuses (review B1-P5 round 1);
+                # a section of another surface or plane (e.g. the other bow side bounding a deck, H1-F3) is
+                # cleared by the distance-based pair engine like a straight edge
                 other = edge.curve
                 other_low, other_high = sorted(other.domain)
-                if (other.plane_record, other.surface, other.path) != own or \
-                        min(high, other_high) > max(low, other_low):
+                if (other.plane_record, other.surface, other.path) == own:
+                    if min(high, other_high) > max(low, other_low):
+                        return False
+                    continue
+                section = _Section(model, item.edge)
+                shared = sorted({section.start, section.end} & {curve.start, curve.end})
+                if not _curves_clean(curve, section, shared, tolerance, 1e-10, work):
                     return False
                 continue
             if not isinstance(edge.curve, Straight):

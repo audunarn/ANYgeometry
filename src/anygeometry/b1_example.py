@@ -96,3 +96,79 @@ def build_b1_half_hull(frames=(1.5, 3.5), bottom: float = .5, deck: float = 3.):
                                  surface=Plane((0., 0., 0.), (1., 0., 0.), (0., 0., 1.))),
     }
     return model, faces
+
+
+def b1_mirrored_bow_surface() -> NurbsSurface:
+    """The port bow: the starboard bow mirrored in y = 0 (controls with y negated)."""
+    surface = b1_bow_surface()
+    controls = tuple(tuple((x, -y, z) for x, y, z in row) for row in surface.controls)
+    return NurbsSurface(surface.degree_u, surface.degree_v, surface.knots_u, surface.knots_v, controls,
+                        surface.weights, surface.u_range, surface.v_range)
+
+
+def _consistent_loops(model, edge_lists):
+    """Loops for faces given as edge lists, oriented so that every edge shared by two faces runs opposite
+    ways in them (propagated from the first face; a closed shell then has one orientation throughout)."""
+    from .entities import OrientedEdge
+    loops = [list(model.order_loop(edges)) for edges in edge_lists]
+    done, pending = {0}, [0]
+    while pending:
+        index = pending.pop()
+        directions = {item.edge: item.forward for item in loops[index]}
+        for other, loop in enumerate(loops):
+            if other in done:
+                continue
+            common = [item for item in loop if item.edge in directions]
+            if not common:
+                continue
+            if common[0].forward == directions[common[0].edge]:
+                loops[other] = [OrientedEdge(item.edge, not item.forward) for item in reversed(loop)]
+            done.add(other)
+            pending.append(other)
+    return [tuple(loop) for loop in loops]
+
+
+def build_b1_hull(frames=(1.5, 3.5), bottom: float = .5, deck: float = 3.):
+    """The closed full B1 hull between the frames and the planes ``z = bottom, deck`` (H1-F3): the
+    starboard bow and its mirror image, deck/bottom/frame faces spanning port to starboard (each bounded
+    by two section curves and two straight lines). ``(model, faces)`` keyed bow, bow_port, deck,
+    bottom, aft, fore."""
+    a, b = frames
+    surfaces = {"s": b1_bow_surface(), "p": b1_mirrored_bow_surface()}
+    planes = {
+        "deck": (Plane((0., 0., deck), (1., 0., 0.), (0., 1., 0.)), (0, 0, 1), deck),
+        "bottom": (Plane((0., 0., bottom), (1., 0., 0.), (0., 1., 0.)), (0, 0, 1), bottom),
+        "aft": (Plane((a, 0., 0.), (0., 1., 0.), (0., 0., 1.)), (1, 0, 0), a),
+        "fore": (Plane((b, 0., 0.), (0., 1., 0.), (0., 0., 1.)), (1, 0, 0), b),
+    }
+    pairs = (("deck", "aft"), ("deck", "fore"), ("bottom", "aft"), ("bottom", "fore"))
+    model = GeometryModel()
+    corner, sections = {}, {}
+    for side, surface in surfaces.items():
+        curves = {key: PlaneNurbsCurve.from_plane(plane, surface, 0) for key, (plane, _n, _d) in planes.items()}
+        t = {}
+        for first, second in pairs:
+            t[(first, second)] = _parameter(curves[first], planes[second][1], planes[second][2])
+            t[(second, first)] = _parameter(curves[second], planes[first][1], planes[first][2])
+        for pair in pairs:
+            corner[(side, frozenset(pair))] = model.add_point(*curves[pair[0]].evaluate(t[pair]))
+        for key, (start, end) in (("bottom", ("aft", "fore")), ("fore", ("bottom", "deck")),
+                                  ("deck", ("fore", "aft")), ("aft", ("deck", "bottom"))):
+            sections[(side, key)] = model.add_curve(corner[(side, frozenset((key, start)))],
+                                                    corner[(side, frozenset((key, end)))],
+                                                    curves[key].subcurve(t[(key, start)], t[(key, end)]))
+    across = {pair: model.add_line(corner[("s", frozenset(pair))], corner[("p", frozenset(pair))]) for pair in pairs}
+    names = ["bow", "bow_port", "deck", "bottom", "aft", "fore"]
+    edge_lists = [
+        [sections[("s", k)] for k in ("bottom", "fore", "deck", "aft")],
+        [sections[("p", k)] for k in ("bottom", "fore", "deck", "aft")],
+        [sections[("s", "deck")], across[("deck", "aft")], sections[("p", "deck")], across[("deck", "fore")]],
+        [sections[("s", "bottom")], across[("bottom", "aft")], sections[("p", "bottom")], across[("bottom", "fore")]],
+        [sections[("s", "aft")], across[("deck", "aft")], sections[("p", "aft")], across[("bottom", "aft")]],
+        [sections[("s", "fore")], across[("deck", "fore")], sections[("p", "fore")], across[("bottom", "fore")]],
+    ]
+    loops = _consistent_loops(model, edge_lists)
+    supports = [surfaces["s"], surfaces["p"]] + [planes[key][0] for key in ("deck", "bottom", "aft", "fore")]
+    faces = {name: model.add_face_from_loop(loop, surface=support)
+             for name, loop, support in zip(names, loops, supports)}
+    return model, faces

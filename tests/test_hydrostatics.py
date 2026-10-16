@@ -546,3 +546,119 @@ def test_free_trim_gz_of_a_symmetric_box_equals_the_fixed_trim_gz():
     for a, b in zip(fixed, free):
         assert b["gz"] == pytest.approx(a["gz"], abs=1e-10)
         assert abs(b["trim"]) <= 1e-10
+
+
+# ------------------------------------------------------------------ H1-F3: the full B1 hull
+
+
+@pytest.fixture(scope="module")
+def b1_full():
+    from anygeometry.b1_example import build_b1_hull
+    model, faces = build_b1_hull()
+    return model, list(faces.values())
+
+
+def _bisect(function, lo, hi, iterations=200):
+    f_lo = function(lo)
+    for _ in range(iterations):
+        middle = .5 * (lo + hi)
+        if (function(middle) > 0) == (f_lo > 0):
+            lo, f_lo = middle, function(middle)
+        else:
+            hi = middle
+    return .5 * (lo + hi)
+
+
+def b1_full_heel_reference(draft, phi, frames=(1.5, 3.5), bottom=.5, deck=3., order=40):
+    """Independent: the full hull below z = draft + tan(phi) y, by z-slices (v = z / 4): across each slice
+    the wet y-range of the hull section at x is [max(-Y, c), Y] with c = (z - draft) / tan(phi) and Y(x, z)
+    the bow's half-breadth; the x-integral (in u, Newton for the frame limits) splits where Y = |c|, the
+    z-integral where that happens at a frame. Volume and centre of buoyancy."""
+    from anygeometry.b1_example import b1_bow_surface
+    surface = b1_bow_surface()
+    nodes, weights = np.polynomial.legendre.leggauss(order)
+    slope = math.tan(phi)
+
+    def point(u, v):
+        return surface.evaluate_many(np.array([[u, v]]))[0]
+
+    def u_at(x, v):
+        return _bisect(lambda u: point(u, v)[0] - x, 0., .9)
+
+    def half_breadth_gap(x, z):
+        c = (z - draft) / slope
+        return point(u_at(x, z / 4), z / 4)[1] - abs(c)
+    breaks = {bottom, deck}
+    for x in frames:
+        g = lambda z, x=x: half_breadth_gap(x, z)
+        zs = np.linspace(bottom, deck, 401)
+        values = [g(z) for z in zs]
+        for z0, z1, g0, g1 in zip(zs, zs[1:], values, values[1:]):
+            if g0 * g1 < 0:
+                breaks.add(_bisect(g, z0, z1))
+    breaks = sorted(breaks)
+    totals = np.zeros(4)
+    for z0, z1 in zip(breaks, breaks[1:]):
+        for z, wz in zip(.5 * (z1 - z0) * (nodes + 1) + z0, .5 * (z1 - z0) * weights):
+            v, c = z / 4, (z - draft) / slope
+            ua, ub = u_at(frames[0], v), u_at(frames[1], v)
+            cuts = [ua, ub]
+            if (point(ua, v)[1] - abs(c)) * (point(ub, v)[1] - abs(c)) < 0:
+                cuts.insert(1, _bisect(lambda u: point(u, v)[1] - abs(c), ua, ub))
+            for u0, u1 in zip(cuts, cuts[1:]):
+                u = .5 * (u1 - u0) * (nodes + 1) + u0
+                uv = np.stack((u, np.full_like(u, v)), axis=1)
+                points = surface.evaluate_many(uv)
+                s_u, _s_v = surface.derivatives_many(uv)
+                w = .5 * (u1 - u0) * weights * s_u[:, 0] * wz
+                x, big = points[:, 0], points[:, 1]
+                low = np.maximum(-big, c)
+                width = np.maximum(big - low, 0.)
+                totals += np.array([w @ width, w @ (x * width), w @ (.5 * (big * big - low * low) * (width > 0)),
+                                    w @ (z * width)])
+    return totals[0], totals[1:] / totals[0]
+
+
+def test_the_full_b1_hull_is_two_half_hulls_upright(b1, b1_full):
+    from anygeometry.shell_volume import closed_shell, enclosed_volume
+    model, faces = b1_full
+    assert closed_shell(model, faces) == []
+    half = enclosed_volume(*b1)["volume"]
+    assert enclosed_volume(model, faces)["volume"] == pytest.approx(2 * half, rel=1e-12)
+    upright = hydrostatics(model, faces, (2.5, 0., 1.75))
+    half_upright = hydrostatics(*b1, (2.5, 0., 1.75))
+    assert upright["volume"] == pytest.approx(2 * half_upright["volume"], rel=1e-12)
+    assert upright["buoyancy_centre"][1] == pytest.approx(0., abs=1e-12)
+    assert upright["waterplane_area"] == pytest.approx(2 * half_upright["waterplane_area"], rel=1e-12)
+
+
+def test_the_full_b1_hull_audits_clean(b1_full):
+    model, _faces = b1_full
+    assert model.strict_audit().clean
+
+
+def test_the_heeled_full_b1_hull_matches_the_independent_reference(b1_full):
+    from anygeometry.hydrostatics import heel_normal
+    model, faces = b1_full
+    draft, phi = 1.75, .1
+    result = hydrostatics(model, faces, (2.5, 0., draft), heel_normal(phi))
+    volume, centre = b1_full_heel_reference(draft, phi)
+    assert result["volume"] == pytest.approx(volume, rel=1e-8)
+    assert result["buoyancy_centre"] == pytest.approx(centre, abs=1e-8)
+    # heeling the other way mirrors the result
+    other = hydrostatics(model, faces, (2.5, 0., draft), heel_normal(-phi))
+    assert other["volume"] == pytest.approx(result["volume"], rel=1e-12)
+    assert other["buoyancy_centre"] == pytest.approx(result["buoyancy_centre"] * np.array([1., -1., 1.]), abs=1e-12)
+
+
+def test_the_heeled_volume_grows_at_the_waterplane_area(b1_full):
+    from anygeometry.hydrostatics import heel_normal
+    model, faces = b1_full
+    normal, h = heel_normal(.1), 1e-2
+
+    def volume(shift):
+        return hydrostatics(model, faces, (2.5, 0., 1.75), normal, shift=shift)["volume"]
+    d1 = (volume(h) - volume(-h)) / (2 * h)
+    d2 = (volume(h / 2) - volume(-h / 2)) / h
+    area = hydrostatics(model, faces, (2.5, 0., 1.75), normal)["waterplane_area"]
+    assert (4 * d2 - d1) / 3 == pytest.approx(area, rel=1e-7)
