@@ -63,9 +63,24 @@ def parse_shard(text: str) -> tuple[int, int]:
     return index, count
 
 
-def verify(reports: list[Path]) -> list[str]:
+def verify(reports: list[Path], results: str = "kernel-results.xml") -> list[str]:
+    """Also: next to each report, the shard's JUnit file (``results``) exists and records every test the
+    shard was assigned (a cancelled or crashed shard has no complete results; its report, written at
+    collection, alone proves nothing)."""
+    from ci_durations import read_junit
     data = [json.loads(path.read_text(encoding="utf-8")) for path in reports]
     problems = []
+    for path, item in zip(reports, data):
+        junit = path.parent / results
+        if not junit.is_file():
+            problems.append(f"shard {item['index']}/{item['count']} ({path.parent.name}): no {results} "
+                            "(cancelled or crashed)")
+            continue
+        recorded = set(read_junit(junit))
+        absent = [n for n in item["ran"] if n not in recorded]
+        if absent:
+            problems.append(f"shard {item['index']}/{item['count']} ({path.parent.name}): {len(absent)} assigned "
+                            f"tests have no result, e.g. {absent[0]}")
     selections = {tuple(sorted(item["selected"])) for item in data}
     if len(selections) != 1:
         problems.append("the shards saw different selections (collection differs between jobs)")
@@ -106,13 +121,14 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     v = sub.add_parser("verify")
     v.add_argument("reports", nargs="+", type=Path)
+    v.add_argument("--results", default="kernel-results.xml", help="the JUnit file name next to each report")
     g = sub.add_parser("guard")
     g.add_argument("--junit", nargs="+", type=Path, required=True)
     g.add_argument("--reports", nargs="+", type=Path, required=True)
     g.add_argument("--limit", type=float, default=2 * SLOW_SECONDS)
     args = parser.parse_args(argv)
     if args.command == "verify":
-        problems = verify(args.reports)
+        problems = verify(args.reports, args.results)
     else:
         problems = guard(args.junit, args.reports, args.limit)
     for problem in problems:

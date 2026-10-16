@@ -46,15 +46,27 @@ def test_shards_partition_the_tests_and_balance_them():
     assert ci_shards.assign(ids, 3, table) == owner             # deterministic
 
 
-def test_verify_finds_missing_and_doubled_tests(tmp_path):
-    def report(index, ran, selected=("a", "b", "c")):
-        path = tmp_path / f"s{index}.json"
+def test_verify_finds_missing_doubled_and_unfinished_shards(tmp_path):
+    calls = iter(range(100))
+
+    def report(index, ran, selected=("a", "b", "c"), results=True):
+        folder = tmp_path / f"lane-{index}-{next(calls)}"                 # a fresh folder per shard
+        folder.mkdir()
+        path = folder / f"shard-{index}.json"
         path.write_text(json.dumps({"index": index, "count": 2, "selected": list(selected), "ran": ran, "slow": []}))
+        if results:
+            _junit(folder / "kernel-results.xml", {f"test_m::{name.split('::')[-1]}": 1. for name in ran})
         return path
-    assert ci_shards.verify([report(1, ["a", "b"]), report(2, ["c"])]) == []
-    assert any("no shard" in p for p in ci_shards.verify([report(1, ["a"]), report(2, ["c"])]))
-    assert any("two shards" in p for p in ci_shards.verify([report(1, ["a", "b"]), report(2, ["b", "c"])]))
-    assert ci_shards.verify([report(1, ["a", "b", "c"])])        # shard 2 missing
+    ids = {n: f"tests/test_m.py::{n}" for n in "abc"}
+    selected = tuple(ids.values())
+    assert ci_shards.verify([report(1, [ids["a"], ids["b"]], selected), report(2, [ids["c"]], selected)]) == []
+    assert any("no shard" in p for p in ci_shards.verify([report(1, [ids["a"]], selected), report(2, [ids["c"]], selected)]))
+    assert any("two shards" in p for p in ci_shards.verify([report(1, [ids["a"], ids["b"]], selected),
+                                                            report(2, [ids["b"], ids["c"]], selected)]))
+    assert ci_shards.verify([report(1, list(selected), selected)])        # shard 2 missing
+    # a shard cancelled after collection: its report exists, its results do not
+    problems = ci_shards.verify([report(1, [ids["a"], ids["b"]], selected), report(2, [ids["c"]], selected, results=False)])
+    assert any("cancelled or crashed" in p for p in problems)
 
 
 def test_the_guard_reports_unmarked_slow_tests(tmp_path):

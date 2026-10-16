@@ -26,7 +26,7 @@ concurrency:
 
 jobs:
   pytest:
-    name: pytest (${{ matrix.os }}, Python ${{ matrix.python-version }}, shard ${{ matrix.shard }}/3)
+    name: pytest (${{ matrix.os }}, Python ${{ matrix.python-version }}, shard ${{ matrix.shard }}/${{ matrix.os == 'macos-15-intel' && 5 || 3 }})
     runs-on: ${{ matrix.os }}
     # CI tiers C5 (owner D-CI4 a): every lane keeps the full suite, in three duration-balanced shards
     timeout-minutes: 30
@@ -35,7 +35,15 @@ jobs:
       matrix:
         os: [windows-latest, ubuntu-latest, macos-15, macos-15-intel]
         python-version: ["3.11", "3.12", "3.13", "3.14"]
-        shard: [1, 2, 3]
+        # macOS Intel runs the suite ~2x slower: five shards there, three elsewhere
+        shard: [1, 2, 3, 4, 5]
+        exclude:
+          - {os: windows-latest, shard: 4}
+          - {os: windows-latest, shard: 5}
+          - {os: ubuntu-latest, shard: 4}
+          - {os: ubuntu-latest, shard: 5}
+          - {os: macos-15, shard: 4}
+          - {os: macos-15, shard: 5}
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -59,7 +67,7 @@ jobs:
       - name: Run tests
         shell: bash
         env:
-          ANYGEOMETRY_TEST_SHARD: ${{ matrix.shard }}/3
+          ANYGEOMETRY_TEST_SHARD: ${{ matrix.shard }}/${{ matrix.os == 'macos-15-intel' && 5 || 3 }}
           ANYGEOMETRY_SHARD_REPORT: shard-${{ matrix.shard }}.json
         run: |
           python tools/check_licenses.py --check-installed
@@ -106,7 +114,9 @@ jobs:
           PYTEST_RESULT: ${{ needs.pytest.result }}
           MINIMUM_RESULT: ${{ needs.minimum-dependencies.result }}
         run: |
-          test "$PYTEST_RESULT" = success && test "$MINIMUM_RESULT" = success
+          # explicit exits: under `set -e` a failing command inside an && list does not stop the step
+          if [ "$PYTEST_RESULT" != success ]; then echo "pytest lanes: $PYTEST_RESULT"; exit 1; fi
+          if [ "$MINIMUM_RESULT" != success ]; then echo "minimum dependencies: $MINIMUM_RESULT"; exit 1; fi
           for os in windows-latest ubuntu-latest macos-15 macos-15-intel; do
             for py in 3.11 3.12 3.13 3.14; do
               python tools/ci_shards.py verify lanes/kernel-runtime-$os-$py-*/shard-*.json
