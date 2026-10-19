@@ -252,6 +252,21 @@ def test_nearly_parallel_axes_keep_the_input_plane():
         assert np.abs(np.linalg.norm(points, axis=1) - 1.).max() <= 1e-15 * 8
 
 
+
+@pytest.mark.parametrize("scale", [1e-108, 1e-150, 1e-200, 1e150, 1e200])
+def test_arc_axes_scaled_far_from_one_give_the_circle_in_the_input_plane(scale):
+    """Confirmation review of A2a: the orthogonalisation rounds the whole exact quotient once;
+    a numerator rounded first underflowed (radius 1.023 at 1e-108) or overflowed (1e150)."""
+    x_axis, y_axis = np.array((1., 2., 3.)) * scale, np.array((1., 4., 2.)) * scale
+    arc = nurbs_circular_arc((0., 0., 0.), x_axis, y_axis, 1., 0., math.pi / 2)
+    normal = np.cross((1., 2., 3.), (1., 4., 2.))
+    normal = normal / np.linalg.norm(normal)
+    points = arc.evaluate(np.linspace(0., 1., 201))
+    assert np.abs(np.linalg.norm(points, axis=1) - 1.).max() <= 1e-15 * 8
+    assert np.abs(points @ normal).max() <= 1e-14
+    assert np.allclose(points[0], np.array((1., 2., 3.)) / math.sqrt(14.), atol=1e-15)
+
+
 def test_bounds_contain_the_float_evaluation():
     curve = NurbsCurve(2, (0., 0., 0., 1., 1., 1.), ((0., 1e6, 0.), (.5, 1e6, 0.), (1., 1e6, 0.)))
     t = np.linspace(0., 1., 4001)
