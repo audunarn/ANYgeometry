@@ -35,7 +35,7 @@ import numpy as np
 
 from .errors import GeometryError
 from .nurbs import NurbsSurface, _float_down, _float_up
-from .plane_nurbs import PlaneNurbsNotCertified, plane_nurbs_section
+from .plane_nurbs import PlaneNurbsNotCertified, charge_box, charge_split, depth_limit, plane_nurbs_section
 
 _SECTIONS: dict = {}
 _EPS = float(np.finfo(float).eps)
@@ -587,8 +587,12 @@ class PlaneNurbsCurve:
         Exact exclusion (a sub-box whose Bernstein coefficients share a strict
         sign holds no zero): the lowest and the highest non-excluded leaves at
         ``depth`` are found by descending into the outer child first; the
-        interval between them contains every zero (sound, linear in ``depth``).
+        interval between them contains every zero (sound, linear in ``depth``). Under an active
+        qualification budget every examined sub-box and split is charged and ``depth`` is capped
+        by the budget's depth limit (a shallower descent only widens the interval); an exhausted
+        budget refuses (``PlaneNurbsNotCertified``).
         """
+        depth = depth_limit(depth)
         coefficients = _integer_scaled(self._sub_box(arc.box, arc.slicing, s_low, s_high))
         x0, x1 = (arc.box.v_range if arc.slicing == 0 else arc.box.u_range)
 
@@ -606,10 +610,12 @@ class PlaneNurbsCurve:
             stack = [(Fraction(0), Fraction(1), coefficients, 0)]
             while stack:
                 lo, hi, coeffs, level = stack.pop()
+                charge_box()
                 if excluded(coeffs):
                     continue
                 if level >= depth:
                     return lo if lowest else hi
+                charge_split()
                 middle = (lo + hi) / 2
                 left, right = halves(coeffs)
                 inner, outer = ((middle, hi, right), (lo, middle, left)) if lowest else ((lo, middle, left), (middle, hi, right))

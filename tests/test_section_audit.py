@@ -320,6 +320,25 @@ def test_delegated_depths_follow_the_qualification_depth():
     assert projection_monotone(curve, (0, 1, 0)) is not None
 
 
+
+def test_the_exclusion_descent_is_charged_to_the_qualification_budget():
+    """Confirmation review of P4d: _tight_x's exclusion tree (48 splits here) was neither charged
+    nor depth-capped, so a one-box budget certified; it now refuses, and a sufficient budget
+    reports the work."""
+    from anygeometry.branch_predicates import projection_monotone
+    from anygeometry.section_audit import Work, _charging
+    surface = NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.),
+                           (((0., 0., 0.), (0., 0., 1.)), ((1., 0., 0.), (1., 0., 1.))))     # S = (u, 0, v)
+    curve = PlaneNurbsCurve.from_plane(Plane((0., 0., .3), (1., 0., 0.), (0., 1., 0.)), surface, 0)
+    with _charging(Work(1, 1)):
+        assert projection_monotone(curve, (1, 0, 0)) is None
+    work = Work(100, 32)
+    with _charging(work):
+        assert projection_monotone(curve, (1, 0, 0)) is not None
+    assert work.boxes > 1 and work.subdivisions > 0
+    assert projection_monotone(curve, (1, 0, 0)) is not None
+
+
 def test_plane_and_nurbs_faces_sharing_section_edges_use_their_exact_intersection():
     # the documented option-b contract: the B1 bow and deck share the deck edge, exactly their intersection
     model, bow, deck = bow_and_deck()
