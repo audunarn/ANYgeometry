@@ -758,3 +758,25 @@ def test_two_turns_squeezed_together_by_a_rational_chart_are_both_kept():
     for order in (24, 48):
         moments = face_moments(model, face, Frame.world(), waterplane_fields, order, clip=True)
         assert abs(moments[0]) == pytest.approx(2.304e-8, rel=1e-9)
+
+
+def test_sweeps_take_the_plane_through_a_far_reference_exactly():
+    """Confirmation review of H1: the table and float_at passed a pre-rounded unit normal, which
+    tilts the plane through a far reference (table 0.50009 instead of 0.5)."""
+    from anygeometry.hydrostatics import float_at, hydrostatic_table
+    model, faces, _place = box((1., 1., 1.))
+    normal, reference = (1., 3., 7.), (7e12 + .5, .5, -1e12 + .5)          # the plane bisects the cube
+    assert hydrostatics(model, faces, reference, normal)["volume"] == pytest.approx(.5, rel=1e-12)
+    (row,) = hydrostatic_table(model, faces, [0.], reference=reference, normal=normal)
+    assert row["volume"] == pytest.approx(.5, rel=1e-12)
+    assert float_at(model, faces, .5, normal=normal, reference=reference)["zeta"] == pytest.approx(0., abs=1e-9)
+
+
+def test_float_at_brackets_the_shell_from_a_far_reference():
+    """Confirmation review of H1: float heights from a reference at 1e16 collapsed to one value
+    and float_at refused a solvable displacement."""
+    from anygeometry.hydrostatics import float_at
+    model, faces, _place = box((1., 1., 1.))
+    result = float_at(model, faces, .5, normal=(1., 0., 1.), reference=(1e16, 0., -1e16))
+    assert result["zeta"] == pytest.approx(1 / math.sqrt(2.), abs=1e-9)
+    assert result["volume"] == pytest.approx(.5, rel=1e-10)

@@ -168,27 +168,50 @@ def _hull_points(model, faces) -> np.ndarray:
     return np.asarray(points, dtype=float)
 
 
+def _height_range(points, reference, normal):
+    """Lowest and highest of ``(point - reference) . normal / |normal|`` over ``points``, computed exactly
+    (with ``|normal|`` as ``hydrostatics`` rounds it) and rounded outward."""
+    norm = float(np.linalg.norm(np.asarray(normal, dtype=float)))
+    if not (math.isfinite(norm) and norm > 0) or not all(math.isfinite(float(value)) for value in normal):
+        raise GeometryError("the waterplane normal must be a finite non-zero vector")
+    raw = [Fraction(float(value)) for value in normal]
+    length = Fraction(norm)
+    origin = [Fraction(float(value)) for value in reference]
+    heights = [sum(a * (Fraction(float(x)) - r) for a, x, r in zip(raw, point, origin)) / length
+               for point in np.asarray(points, dtype=float)]
+    lowest, highest = min(heights), max(heights)
+    low, high = float(lowest), float(highest)
+    if low > lowest:
+        low = math.nextafter(low, -math.inf)
+    if high < highest:
+        high = math.nextafter(high, math.inf)
+    return low, high
+
+
 def float_at(model, faces, volume: float, normal=(0., 0., 1.), reference=(0., 0., 0.),
              longitudinal=(1., 0., 0.), start: float | None = None, order: int = 24, rtol: float = 1e-8,
              tolerance: float = 1e-12, max_iterations: int = 40) -> dict:
     """The waterplane of the given ``normal`` that displaces ``volume``: the plane through
     ``reference + zeta n`` with ``zeta`` from Newton (``dV / dzeta`` is the waterplane area), safeguarded
     by bisection. Returns the ``hydrostatics`` result with ``zeta`` added."""
-    n = np.asarray(normal, dtype=float)
-    n = n / np.linalg.norm(n)
+    # the caller's normal goes to hydrostatics unchanged: it takes the plane's offset exactly from
+    # the unnormalised normal (confirmation review of H1: a pre-rounded unit normal tilts the plane
+    # through a far reference point)
+    normal = tuple(float(value) for value in normal)
     reference = np.asarray(reference, dtype=float)
     faces = list(faces)
     # a bracket from points that bound the shell: its vertices and the control nets of its NURBS
     # surfaces (rational, positive weights: the surface lies in the net's convex hull; section edges
-    # lie on such surfaces) (review H1 round 1: vertices alone missed a bottom below them)
-    heights = (_hull_points(model, faces) - reference) @ n
-    span = float(np.max(heights) - np.min(heights)) or 1.0
-    low, high = float(np.min(heights)) - 1e-9 * span, float(np.max(heights)) + 1e-9 * span
+    # lie on such surfaces) (review H1 round 1: vertices alone missed a bottom below them). Heights
+    # along the normal exactly, rounded outward (float dot products cancel for a far reference).
+    lowest, highest = _height_range(_hull_points(model, faces), reference, normal)
+    span = (highest - lowest) or 1.0
+    low, high = lowest - 1e-9 * span, highest + 1e-9 * span
     zeta = .5 * (low + high) if start is None or not low < start < high else float(start)
     total = _shell(model, faces, order)[1]
 
     def at(z):
-        return hydrostatics(model, faces, reference, n, longitudinal, order, rtol, shift=z)
+        return hydrostatics(model, faces, reference, normal, longitudinal, order, rtol, shift=z)
     result = at(zeta)
     for _ in range(max_iterations):
         error = result["volume"] - volume
@@ -212,11 +235,10 @@ def float_at(model, faces, volume: float, normal=(0., 0., 1.), reference=(0., 0.
 
 def hydrostatic_table(model, faces, drafts, reference=(0., 0., 0.), normal=(0., 0., 1.), **options) -> list:
     """``hydrostatics`` at the waterplanes through ``reference + draft n`` for each draft."""
-    n = np.asarray(normal, dtype=float)
-    n = n / np.linalg.norm(n)
+    normal = tuple(float(value) for value in normal)          # unrounded: hydrostatics takes it exactly
     rows = []
     for draft in drafts:
-        row = hydrostatics(model, faces, np.asarray(reference, dtype=float), n, shift=draft, **options)
+        row = hydrostatics(model, faces, np.asarray(reference, dtype=float), normal, shift=draft, **options)
         row["draft"] = float(draft)
         rows.append(row)
     return rows
