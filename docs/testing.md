@@ -96,7 +96,7 @@ Each platform takes its shards' JUnit files, comma-separated (merged before use)
 The **Tests** workflow (`ci.yml`) is the final path. It runs weekly on main (Monday
 03:00 UTC) and is dispatched for the exact review branch/head before a release or
 whenever full qualification is needed; each platform x Python lane runs the full suite
-in three duration-balanced shards, and **pytest shards complete** proves every lane ran
+in three duration-balanced shards (five on macOS Intel, which runs about 2x slower), and **pytest shards complete** proves every lane ran
 every test exactly once:
 
 ```console
@@ -117,3 +117,32 @@ This split changes when expensive jobs run. It neither changes their acceptance
 criteria nor renews a consumed diagnostic budget. Preserve failed evidence; do not
 rerun a failed scientific case merely to obtain a green result. Qualification and
 release ledgers remain immutable. Consumer defects stay with their owners.
+
+## Runner images
+
+Workflows use the `*-latest` labels plus `macos-15` and `macos-15-intel`, so Linux
+follows GitHub's current image (Ubuntu 26 from 2026-10-19). Pinning a version (for
+example `ubuntu-24.04`) changes the job names: update `DEVELOPMENT_JOBS` in
+`tools/dev_checks.py` and any required status checks in the same change. Actions are
+pinned to commit SHAs; all run on Node 24.
+
+## Known local failures
+
+A full local run on Windows (`python -m pytest tests`, Python 3.14) has 15 failures that
+CI does not have. They are environmental, not product failures; any other failure is new.
+
+- Nine `tests/test_import_boundaries_cli.py` release-authority tests
+  (`test_release_authority_neutralizes_external_git_configuration[*]`, six cases;
+  `test_release_authority_rejects_mutation[noncanonical-tag-ref|paired-replacement|unmerged-tag-child]`):
+  a `git push` into the test's temporary repository fails during the full run. The file
+  passes when run on its own.
+- Six native runtime tests read the workflows' `env:` block and fail with a `KeyError`
+  without it: the thread settings `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS` and
+  `MKL_NUM_THREADS` set to `1`, and the `*_RUNTIME_EVIDENCE` output files (copy the
+  `env:` block of `.github/workflows/development.yml` to run them locally):
+  `test_native_arc_parameter_maps.py::test_effective_source_runtime`,
+  `test_native_arc_station_incidence.py::test_effective_source_runtime`,
+  `test_native_attachment_reference_scope.py::test_source_runtime`,
+  `test_native_curved_planar_material_scope.py::test_runtime`,
+  `test_native_material_reference_scope.py::test_source_runtime`,
+  `test_preparation_epoch.py::test_runtime`.
