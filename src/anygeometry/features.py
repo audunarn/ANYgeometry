@@ -141,6 +141,16 @@ def _values_equal(first: object, second: object) -> bool:
 def _validate_json_value(value: object, path: str) -> None:
     """Reject values that cannot survive the strict JSON feature codec."""
 
+    # Serialized baselines are predominantly built-in JSON scalars. Avoid
+    # repeated ABC/subclass dispatch for those leaves; non-built-in numeric
+    # values and custom mappings still follow the same validation below.
+    kind = type(value)
+    if value is None or kind in (bool, str, int):
+        return
+    if kind is float:
+        if not np.isfinite(value):
+            raise GeometryError(f"{path} must be finite")
+        return
     if value is None or isinstance(value, (bool, str)):
         return
     if isinstance(value, Integral):
@@ -1103,9 +1113,18 @@ class FeatureHistory:
         return self._next_id
 
     def snapshot(self) -> Dict[str, Any]:
+        return deepcopy(self._state_view())
+
+    def _state_view(self) -> Dict[str, Any]:
+        """Borrow state inside the owner for immediate comparison or copying.
+
+        Never expose this view to consumers or mutate its payloads. Public
+        snapshots remain detached, independently mutable copies.
+        """
+
         return {
-            "baseline": deepcopy(self._baseline),
-            "records": deepcopy(self._records),
+            "baseline": self._baseline,
+            "records": self._records,
             "next_id": self._next_id,
         }
 
@@ -1134,7 +1153,7 @@ class FeatureHistory:
         except Exception:
             self._restore_unchecked(before)
             raise
-        if not _values_equal(before, self.snapshot()) and self._owner is not None:
+        if not _values_equal(before, self._state_view()) and self._owner is not None:
             self._owner._feature_history_did_change(self)  # noqa: SLF001
         return result
 
@@ -1822,6 +1841,7 @@ class FeatureHistory:
         dirty_index: int,
         *,
         force_new: bool = False,
+        reuse_detached: bool = False,
     ) -> RegenerationReport:
         """Replay one additive dirty suffix on a clone of live materialization.
 
@@ -1832,7 +1852,9 @@ class FeatureHistory:
         involved.
         """
 
-        working = geometry.clone(include_features=False)
+        # Only the explicit disposable-stage entry point may consume this
+        # model directly. Public atomic replay always makes its own clone.
+        working = geometry if reuse_detached else geometry.clone(include_features=False)
         working.reserve_id_state(geometry.id_state())
         replayed = deepcopy(self._records)
         by_id = {record.feature_id: record for record in replayed}
@@ -2098,17 +2120,23 @@ class FeatureHistory:
                 if record.state == FeatureStatus.OK.value and record.outputs
                 else None
             )
-        staged = FeatureHistory(
-            baseline=self._baseline,
-            records=replayed,
-            next_id=self._next_id,
-        )
-        geometry.restore_design(
-            {
-                "topology": working.topology_snapshot(),
-                "features": staged.snapshot(),
-            }
-        )
+        if reuse_detached:
+            # Topology is already installed in the disposable stage and was
+            # qualified after execution. restore still copies and validates
+            # all history fields; no borrowed mutable history escapes.
+            self.restore({"baseline":self._baseline,"records":replayed,"next_id":self._next_id})
+        else:
+            staged = FeatureHistory(
+                baseline=self._baseline,
+                records=replayed,
+                next_id=self._next_id,
+            )
+            geometry.restore_design(
+                {
+                    "topology": working.topology_snapshot(),
+                    "features": staged.snapshot(),
+                }
+            )
         return RegenerationReport(True, tuple(results), transitions)
 
     def regenerate(
@@ -2117,6 +2145,16 @@ class FeatureHistory:
         registry: FeatureRegistry,
     ) -> RegenerationReport:
         """Atomically replay the history from its base materialization."""
+
+        return self._regenerate(geometry,registry)
+
+    def _regenerate(
+        self,
+        geometry: "GeometryModel",
+        registry: FeatureRegistry,
+        *,
+        appended_feature_ids: Sequence[int] = (),
+    ) -> RegenerationReport:
 
         self.validate()
         unknown = [
@@ -2182,8 +2220,22 @@ class FeatureHistory:
                 force_full_replay = True
                 dirty_index = 0
             else:
+                suffix=self._records[start:]
+                reuse_detached=bool(appended_feature_ids) and not force_new and (
+                    tuple(appended_feature_ids)==tuple(record.feature_id for record in suffix)
+                    and start==dirty_index
+                    and all(
+                        not record.outputs and record.materialization_checksum is None
+                        and not record.suppressed
+                        and registry.replay_mode(record.kind)!="mutating"
+                        and (self._incremental_additive(record.kind)
+                             or registry.replay_mode(record.kind)=="additive")
+                        for record in suffix
+                    )
+                )
                 incremental_report = self._regenerate_incremental(
-                    geometry, registry, start, force_new=force_new
+                    geometry, registry, start, force_new=force_new,
+                    reuse_detached=reuse_detached,
                 )
                 if (
                     incremental_report.success
