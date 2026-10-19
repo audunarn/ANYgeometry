@@ -5481,11 +5481,11 @@ class GeometryModel:
                     result.append(f"face {face_id} holes {index} and {other} overlap")
         return result
 
-    def _nurbs_chart_loop_points(self, loop: Sequence[OrientedEdge]) -> np.ndarray:
-        """Chart samples of a NURBS face loop from its pcurves (17 per edge, as other curved trims)."""
+    def _nurbs_chart_loop_points(self, loop: Sequence[OrientedEdge], count: int = 17) -> np.ndarray:
+        """Chart samples of a NURBS face loop from its pcurves (``count`` per edge, as other curved trims)."""
         points: List[np.ndarray] = []
         for item in loop:
-            samples = self.edges[item.edge].curve.chart(np.linspace(0.0, 1.0, 17))
+            samples = self.edges[item.edge].curve.chart(np.linspace(0.0, 1.0, count))
             if not item.forward:
                 samples = samples[::-1]
             points.extend(samples[:-1])
@@ -7514,10 +7514,11 @@ class GeometryModel:
         self, face_id: int, face: Face, count: int
     ) -> Tuple[np.ndarray, ...]:
         from .nurbs import NurbsSurface
-        if isinstance(face.surface, NurbsSurface):
+        if isinstance(face.surface, NurbsSurface) and face.parameterization is None:
             # the chart is a NURBS face's uv: chart samples of its trims (pcurves, section curves); the
-            # world-inversion route below has no NURBS local_uv (it raised AttributeError, B1-P4c)
-            return tuple(self._nurbs_chart_loop_points(loop) for loop in (face.loop,) + tuple(face.holes))
+            # world-inversion route below has no NURBS local_uv (it raised AttributeError, B1-P4c). An
+            # explicit parameterization defines the face's uv instead: the route below inverts it.
+            return tuple(self._nurbs_chart_loop_points(loop, count) for loop in (face.loop,) + tuple(face.holes))
         if (
             isinstance(face.surface, CoonsSurface)
             and not face.surface.has_boundaries

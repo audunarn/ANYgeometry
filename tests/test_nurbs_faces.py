@@ -191,3 +191,34 @@ def test_certified_trim_polylines_bound_the_world_deviation():
     assert counts[0] <= counts[1] <= counts[2]
     with pytest.raises(GeometryError):
         model.trim_loops_uv_certified(face, 0.)
+
+
+def test_trim_loops_follow_an_explicit_face_parameterization():
+    """Confirmation review of the NURBS trim samples: a NURBS face with an explicit
+    parameterization has that map's uv (its trims were returned in chart coordinates, so
+    face_contains_uv answered an interior point outside and an exterior point inside)."""
+    from anygeometry import Plane
+    surface = NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.),
+                           (((0., 0., 0.), (0., 1., 0.)), ((1., 0., 0.), (1., 1., 0.))),
+                           ((1., 1.), (1., 1.)))                                  # S(u, v) = (u, v, 0)
+    corners = [(.1, .2), (.3, .2), (.3, .7), (.1, .7)]
+    model = GeometryModel()
+    points = [model.add_point(u, v, 0.) for u, v in corners]
+    edges = [model.add_curve(points[k], points[(k + 1) % 4],
+                             CurveOnSurface(surface, NurbsCurve(1, (0., 0., 1., 1.), (corners[k], corners[(k + 1) % 4]))))
+             for k in range(4)]
+    face = model.add_face(edges, surface=surface)
+    (chart,) = model.face_trim_loops_uv(face)
+    assert np.allclose(chart.min(axis=0), (.1, .2)) and np.allclose(chart.max(axis=0), (.3, .7))
+    model.set_face_parameterization(face, Plane((1., 0., 0.), (-1., 0., 0.), (0., 1., 0.)))   # u = 1 - x
+    (loop,) = model.face_trim_loops_uv(face)
+    assert np.allclose(loop.min(axis=0), (.7, .2)) and np.allclose(loop.max(axis=0), (.9, .7))
+    assert model.face_contains_uv(face, (.8, .4))
+    assert not model.face_contains_uv(face, (.2, .4))
+
+
+@pytest.mark.parametrize("count", [3, 17, 65])
+def test_nurbs_trim_loops_use_the_requested_curve_samples(count):
+    model, face, _surface, _curves = curved_face()
+    (loop,) = model.face_trim_loops_uv(face, curve_samples=count)
+    assert len(loop) == 3 * (count - 1)
