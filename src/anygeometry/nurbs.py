@@ -1084,7 +1084,8 @@ def _unit_vector(vector):
     """``vector / |vector|`` for a finite non-zero vector; the length is taken on the vector
     scaled by its largest component when squaring would overflow or underflow (identical
     to the plain quotient for lengths in [1e-150, 1e150])."""
-    length = float(np.linalg.norm(vector))
+    with np.errstate(over="ignore", under="ignore"):
+        length = float(np.linalg.norm(vector))
     if np.isfinite(length) and 1e-150 <= length <= 1e150:
         return vector / length
     scaled = vector / float(np.max(np.abs(vector)))
@@ -1130,7 +1131,10 @@ def nurbs_circular_arc(center, x_axis, y_axis, radius: float, start: float, swee
     if (sum(p * p for p in exact_perpendicular)
             <= Fraction(1, 10**24) * sum(b * b for b in exact_y)):
         raise GeometryError("arc y axis must be non-zero and not parallel to the x axis")
-    y_axis = _unit_vector(np.array([float(p) for p in exact_perpendicular]))
+    # scaled exactly by its largest component before rounding: rounding the perpendicular itself
+    # loses its direction for subnormal axes and overflows near the float limit (review round 1)
+    largest = max(abs(p) for p in exact_perpendicular)
+    y_axis = _unit_vector(np.array([float(p / largest) for p in exact_perpendicular]))
     segments = max(1, math.ceil(abs(sweep) / (math.pi / 2) - 1e-12))
     delta = sweep / segments
     middle_weight = math.cos(delta / 2)

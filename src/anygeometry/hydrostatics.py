@@ -28,10 +28,34 @@ from .errors import GeometryError
 from .face_moments import Frame, shell_moments, volume_fields, waterplane_fields
 
 
+def _normal_length(vector) -> float:
+    """The length of a finite non-zero normal; taken on the vector scaled by its largest component
+    where squaring would overflow or underflow (identical to ``np.linalg.norm`` for lengths in
+    [1e-150, 1e150]; confirmation review of H1: a normal like (0, 0, 2e-162) underflowed)."""
+    vector = np.asarray(vector, dtype=float)
+    largest = float(np.max(np.abs(vector))) if vector.size else 0.0
+    if not (math.isfinite(largest) and largest > 0):
+        raise GeometryError("the waterplane normal must be a finite non-zero vector")
+    with np.errstate(over="ignore", under="ignore"):
+        length = float(np.linalg.norm(vector))
+    if math.isfinite(length) and 1e-150 <= length <= 1e150:
+        return length
+    return largest * float(np.linalg.norm(vector / largest))
+
+
+def _unit_normal(vector) -> np.ndarray:
+    """``vector / |vector|`` (``_normal_length``), scaled first outside lengths [1e-150, 1e150]."""
+    vector = np.asarray(vector, dtype=float)
+    length = _normal_length(vector)
+    if 1e-150 <= length <= 1e150:
+        return vector / length
+    scaled = vector / float(np.max(np.abs(vector)))
+    return scaled / float(np.linalg.norm(scaled))
+
+
 def waterplane_frame(point, normal=(0., 0., 1.), longitudinal=(1., 0., 0.)) -> Frame:
     """The waterplane frame: ``xi`` along ``longitudinal`` projected into the plane, ``zeta`` along ``normal``."""
-    n = np.asarray(normal, dtype=float)
-    n = n / np.linalg.norm(n)
+    n = _unit_normal(normal)
     given = np.asarray(longitudinal, dtype=float)
     e1 = given - (given @ n) * n
     # refuse a longitudinal direction within about 1e-6 rad of the normal: the projection cancels and
@@ -94,7 +118,7 @@ def hydrostatics(model, faces, point, normal=(0., 0., 1.), longitudinal=(1., 0.,
     # the offset exactly from the given point and the given (unnormalised) normal: the plane is
     # raw_n . X = raw_n . point (review H1 rounds 2-3: a rounded unit normal tilts a plane given far away)
     offset = sum(Fraction(a) * (Fraction(float(c)) - Fraction(float(p)))
-                 for a, c, p in zip(raw_normal, centre, point)) / Fraction(float(np.linalg.norm(raw_normal)))
+                 for a, c, p in zip(raw_normal, centre, point)) / Fraction(_normal_length(raw_normal))
     offset -= Fraction(float(shift))
     foot = centre - float(offset) * frame.normal
     frame = Frame(foot, frame.axes[0], frame.axes[1], normal=frame.normal)
@@ -171,11 +195,8 @@ def _hull_points(model, faces) -> np.ndarray:
 def _height_range(points, reference, normal):
     """Lowest and highest of ``(point - reference) . normal / |normal|`` over ``points``, computed exactly
     (with ``|normal|`` as ``hydrostatics`` rounds it) and rounded outward."""
-    norm = float(np.linalg.norm(np.asarray(normal, dtype=float)))
-    if not (math.isfinite(norm) and norm > 0) or not all(math.isfinite(float(value)) for value in normal):
-        raise GeometryError("the waterplane normal must be a finite non-zero vector")
     raw = [Fraction(float(value)) for value in normal]
-    length = Fraction(norm)
+    length = Fraction(_normal_length(normal))
     origin = [Fraction(float(value)) for value in reference]
     heights = [sum(a * (Fraction(float(x)) - r) for a, x, r in zip(raw, point, origin)) / length
                for point in np.asarray(points, dtype=float)]

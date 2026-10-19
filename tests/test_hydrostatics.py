@@ -780,3 +780,17 @@ def test_float_at_brackets_the_shell_from_a_far_reference():
     result = float_at(model, faces, .5, normal=(1., 0., 1.), reference=(1e16, 0., -1e16))
     assert result["zeta"] == pytest.approx(1 / math.sqrt(2.), abs=1e-9)
     assert result["volume"] == pytest.approx(.5, rel=1e-10)
+
+
+def test_a_normal_whose_square_underflows_gives_the_same_waterplane():
+    """Review round 1 of the confirmation fixes: the normal's length is taken robustly (a normal
+    (0, 0, 2e-162) gave volume 0.441 at draft .5)."""
+    from anygeometry.hydrostatics import float_at, hydrostatic_table
+    model, faces, _place = box((1., 1., 1.))
+    tiny = (0., 0., 2e-162)
+    assert hydrostatics(model, faces, (0., 0., .5), tiny)["volume"] == pytest.approx(.5, rel=1e-12)
+    (row,) = hydrostatic_table(model, faces, [.5], normal=tiny)
+    assert row["volume"] == pytest.approx(.5, rel=1e-12)
+    result = float_at(model, faces, .5, normal=tiny)
+    assert result["zeta"] == pytest.approx(.5, abs=1e-9)
+    assert result["volume"] == pytest.approx(.5, rel=1e-10)

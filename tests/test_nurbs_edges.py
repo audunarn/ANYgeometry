@@ -273,3 +273,17 @@ def test_bounds_contain_the_float_evaluation():
     low, high = curve.bounds()
     points = curve.evaluate(t)
     assert np.all(points >= low) and np.all(points <= high)
+
+
+@pytest.mark.parametrize("x_axis, y_axis", [
+    ((math.ulp(0.), math.ulp(0.), math.ulp(0.)), (math.ulp(0.), 0., 0.)),     # subnormal axes
+    ((1., 2.), (1.7e308, -1.7e308)),                                           # near the float limit
+])
+def test_arc_axes_at_the_ends_of_the_float_range(x_axis, y_axis):
+    """Review round 1 of the confirmation fixes: the exact perpendicular is scaled before rounding
+    (subnormal axes gave radius 1.256; axes near 1.7e308 raised OverflowError)."""
+    arc = nurbs_circular_arc((0.,) * len(x_axis), x_axis, y_axis, 1., 0., math.pi / 2)
+    points = arc.evaluate(np.linspace(0., 1., 201))
+    assert np.abs(np.linalg.norm(points, axis=1) - 1.).max() <= 1e-15 * 8
+    if len(x_axis) == 3:
+        assert np.abs(points[:, 1] - points[:, 2]).max() <= 1e-15 * 8         # plane of (1,1,1) and (1,0,0)
