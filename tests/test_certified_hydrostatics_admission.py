@@ -711,3 +711,45 @@ def test_every_refusal_has_a_sub_reason_attribute():
     from anygeometry.certified_hydrostatics import CertifiedHydrostaticsRefusal, RefusalCategory
     error = CertifiedHydrostaticsRefusal(RefusalCategory.CANCELLED, "cancelled")
     assert error.sub_reason is None
+
+
+def _box_with_isolated_points(extra):
+    model, faces = unit_box()
+    for i in range(extra):
+        model.add_point(10. + i, 10., 10.)
+    return model, faces
+
+
+def test_the_model_document_is_charged_per_entity_before_it_is_encoded(monkeypatch):
+    import anygeometry.certified_hydrostatics._prepare as prep
+
+    def entities(extra):
+        model, faces = _box_with_isolated_points(extra)
+        budget = WorkBudget(None, None)
+        prepare(model, faces, budget=budget)
+        return budget.counts()["units"]["document_entity"]
+
+    assert entities(1000) - entities(100) >= 900
+    calls = []
+    real = prep._serialized_model_state
+    monkeypatch.setattr(prep, "_serialized_model_state", lambda *a, **k: calls.append(1) or real(*a, **k))
+    model, faces = _box_with_isolated_points(1000)
+    budget = WorkBudget(None, None)
+    refusal = _stopped(lambda: prepare(model, faces, budget=budget, cancellation_check=lambda: budget.counts()[
+        "units"].get("document_entity", 0) >= 1))
+    assert refusal.category is C.CANCELLED and not calls          # refused before the encoding ran
+    limited = WorkBudget(budget.counts()["operations"] + 10, None)  # exhausted while charging the entities
+    calls.clear()
+    refusal = _stopped(lambda: prepare(model, faces, budget=limited))
+    assert refusal.category is C.BUDGET_EXHAUSTED and not calls
+
+
+def test_the_document_charge_covers_every_collection_the_encoder_walks():
+    import inspect
+    import re
+    import anygeometry.serialization as serialization
+    import anygeometry.certified_hydrostatics._prepare as prep
+    source = inspect.getsource(serialization._serialized_model_state)
+    walked = set(re.findall(r"\('([a-z_]+)', [A-Z][A-Za-z]+\)", source))
+    assert {"vertices", "edges", "faces", "coedges"} <= walked
+    assert walked <= set(prep._MODEL_COLLECTIONS) and "features" in prep._MODEL_COLLECTIONS

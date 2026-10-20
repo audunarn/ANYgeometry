@@ -82,7 +82,21 @@ def _meter_elements(document, meter: Meter) -> None:
         pending.extend(child for child in children if isinstance(child, (dict, list, tuple)))
 
 
+# every record collection the library encoder walks (serialization._serialized_model_state), plus the feature history
+_MODEL_COLLECTIONS = ("vertices", "edges", "faces", "parts", "sheets", "face_uses", "coedges", "members",
+                      "member_edge_uses", "attachments", "junctions", "groups", "tags", "features")
+
+
 def _document_checksum(model, meter: Meter) -> str:
+    """The model document's checksum. The library encoding is one bulk operation (design amendment 6b): one
+    ``document_entity`` unit per model entity is charged before it starts, and a checkpoint follows it."""
+    for name in _MODEL_COLLECTIONS:
+        try:
+            count = len(getattr(model, name))
+        except (AttributeError, TypeError):
+            count = 0
+        for _ in range(count):
+            meter.unit("document_entity")
     meter.unit("document_encode")
     try:
         document = _serialized_model_state(model)
