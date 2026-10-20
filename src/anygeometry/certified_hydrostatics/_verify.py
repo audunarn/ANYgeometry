@@ -2010,8 +2010,9 @@ def _environment() -> dict:
             "python": f"{platform.python_implementation()} {platform.python_version()}"}
 
 
-_MODEL_COLLECTIONS = ("vertices", "edges", "faces", "members", "sheets", "parts", "junctions", "attachments", "groups",
-                      "tags")
+# every record collection the library encoder walks (serialization._serialized_model_state), plus the feature history
+_MODEL_COLLECTIONS = ("vertices", "edges", "faces", "parts", "sheets", "face_uses", "coedges", "members",
+                      "member_edge_uses", "attachments", "junctions", "groups", "tags", "features")
 
 
 def _document_checksum(model) -> str:

@@ -1373,6 +1373,16 @@ def test_document_checksum_is_charged_per_model_entity_before_it_runs(monkeypatc
     assert calls                                            # ... which does run when not cancelled
 
 
+def test_document_charge_covers_every_collection_the_encoder_walks():
+    import inspect
+    import re
+    import anygeometry.serialization as serialization
+    source = inspect.getsource(serialization._serialized_model_state)
+    walked = set(re.findall(r"\('([a-z_]+)', [A-Z][A-Za-z]+\)", source))
+    assert {"vertices", "edges", "faces", "coedges"} <= walked             # the pattern still finds the loop
+    assert walked <= set(vm._MODEL_COLLECTIONS) and "features" in vm._MODEL_COLLECTIONS
+
+
 def _box_with_isolated_points(extra):
     model, faces = box()
     for i in range(extra):
