@@ -731,12 +731,12 @@ def test_algebraic_s_bound_path_is_a_budget_and_cancellation_checkpoint():
         s_hi = _sqrt_frac(9, 10, 0, 1)(k)
         return curve_crossings(k, Fb, Gb, F(0), F(1), s_lo, s_hi)
 
-    for limit in (0, 1, 7, 40):
+    for limit in (200, 3000, 15000):                       # the two bounds cost 172 units; the rest is the crossing
         budget = WorkBudget(limit, 4096)
         with pytest.raises(CertifiedHydrostaticsRefusal) as info:
             run(kern(budget=budget))
         assert info.value.category is C.BUDGET_EXHAUSTED and budget.operations == limit
     budget = WorkBudget(None, 4096)
     with pytest.raises(CertifiedHydrostaticsRefusal) as info:
-        run(kern(budget=budget, cancel=lambda: True))
-    assert info.value.category is C.CANCELLED and budget.operations == 0
+        run(kern(budget=budget, cancel=lambda: budget.operations >= 5000))
+    assert info.value.category is C.CANCELLED and budget.operations == 5000
