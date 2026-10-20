@@ -312,6 +312,8 @@ from .sketch import (
     SketchPlane,
     face_sketch_plane,
     materialize_sketch,
+    materialize_sketch_on_plane,
+    plane_sketch_plane,
     solve_sketch,
 )
 from .extrusions import BezierDirectrix, EllipseDirectrix
@@ -592,6 +594,8 @@ __all__ = [
     "fragment_coplanar_overlaps",
     "feature_entity_owners",
     "face_sketch_plane",
+    "materialize_sketch_on_plane",
+    "plane_sketch_plane",
     "from_dict",
     "find_coplanar_overlaps",
     "feature_extent",

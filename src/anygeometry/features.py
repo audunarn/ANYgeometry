@@ -60,6 +60,7 @@ _INCREMENTAL_ADDITIVE_FEATURES = frozenset(
         "geometry.plate",
         "geometry.extrude",
         "geometry.sketch.extrude",
+        "geometry.sketch.plane",
         "geometry.revolve",
         "geometry.copy",
         "geometry.mirror",
@@ -2548,6 +2549,26 @@ def builtin_feature_registry() -> FeatureRegistry:
         definition = SketchDefinition.from_parameters(feature.parameters)
         return materialize_sketch(geometry, support.id, definition)
 
+    def plane_sketch(geometry, feature, inputs):
+        from .sketch import (
+            SketchDefinition, materialize_sketch_on_plane, plane_sketch_plane,
+        )
+
+        if inputs:
+            raise GeometryError("a plane sketch cannot have geometry inputs")
+        raw_plane = feature.parameters.get("plane")
+        if not isinstance(raw_plane, Mapping):
+            raise GeometryError("a plane sketch needs plane origin, normal and x axis")
+        try:
+            plane = plane_sketch_plane(
+                raw_plane["origin"], raw_plane["normal"], raw_plane["x_axis"],
+            )
+        except KeyError as error:
+            raise GeometryError(f"a plane sketch needs plane {error.args[0]}") from None
+        return materialize_sketch_on_plane(
+            geometry, plane, SketchDefinition.from_parameters(feature.parameters),
+        )
+
     def fragment_overlaps(geometry, feature, inputs):
         from .overlaps import OverlapOwnershipPolicy, fragment_coplanar_overlaps
 
@@ -2781,6 +2802,7 @@ def builtin_feature_registry() -> FeatureRegistry:
         "geometry.plate": plate,
         "geometry.extrude": extrude,
         "geometry.sketch.extrude": sketch_extrude,
+        "geometry.sketch.plane": plane_sketch,
         "geometry.fragment.overlaps": fragment_overlaps,
         "geometry.revolve": revolve,
         "geometry.transform": transform_feature,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import numpy as np
 import pytest
 
@@ -28,6 +29,16 @@ from anygeometry import (
     to_dict,
 )
 from anygeometry.surfaces import closest_uv, surface_normal
+
+
+def test_plane_normal_is_reused_only_for_unchanged_surface() -> None:
+    plane = Plane(np.zeros(3), np.array((1., 0., 0.)), np.array((0., 1., 0.)))
+    first = plane.normal
+    assert first is plane.normal
+    assert not first.flags.writeable
+    np.testing.assert_array_equal(first, (0., 0., 1.))
+    reversed_plane = replace(plane, v_vector=np.array((0., -1., 0.)))
+    np.testing.assert_array_equal(reversed_plane.normal, (0., 0., -1.))
 
 
 def test_custom_bounded_surface_normal_uses_one_sided_endpoint_difference() -> None:

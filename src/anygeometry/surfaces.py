@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from functools import cached_property
 from typing import Protocol, Union, runtime_checkable
 
 import numpy as np
@@ -88,7 +89,7 @@ class Plane:
         uv, *_ = np.linalg.lstsq(matrix, offset, rcond=None)
         return float(uv[0]), float(uv[1])
 
-    @property
+    @cached_property
     def normal(self) -> np.ndarray:
         return _unit(np.cross(self.u_vector, self.v_vector), "plane normal")
 

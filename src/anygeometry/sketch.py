@@ -15,7 +15,8 @@ if TYPE_CHECKING:  # pragma: no cover
 
 __all__ = [
     "SketchConstraint", "SketchDefinition", "SketchPlane",
-    "face_sketch_plane", "materialize_sketch", "solve_sketch",
+    "face_sketch_plane", "plane_sketch_plane", "materialize_sketch",
+    "materialize_sketch_on_plane", "solve_sketch",
 ]
 
 ConstraintKind = Literal["distance", "coincident", "on_edge", "on_vertex"]
@@ -163,6 +164,34 @@ class SketchPlane:
         return np.asarray((delta @ self.x_axis, delta @ self.y_axis), dtype=float)
 
 
+def plane_sketch_plane(
+    origin: Sequence[float], normal: Sequence[float], x_axis: Sequence[float],
+) -> SketchPlane:
+    """Build a detached, right-handed sketch plane from persisted vectors."""
+
+    centre = np.asarray(origin, dtype=float)
+    axis = np.asarray(normal, dtype=float)
+    reference = np.asarray(x_axis, dtype=float)
+    if centre.shape != (3,) or not np.all(np.isfinite(centre)):
+        raise GeometryError("sketch plane origin needs three finite components")
+    if axis.shape != (3,) or not np.all(np.isfinite(axis)):
+        raise GeometryError("sketch plane normal needs three finite components")
+    if reference.shape != (3,) or not np.all(np.isfinite(reference)):
+        raise GeometryError("sketch plane x axis needs three finite components")
+    axis_length = float(np.linalg.norm(axis))
+    if axis_length <= 1.0e-12:
+        raise GeometryError("sketch plane normal must be non-zero")
+    axis = axis / axis_length
+    reference = reference - float(reference @ axis) * axis
+    reference_length = float(np.linalg.norm(reference))
+    if reference_length <= 1.0e-12:
+        raise GeometryError("sketch plane x axis must not be parallel to its normal")
+    reference = reference / reference_length
+    y_axis = np.cross(axis, reference)
+    y_axis /= np.linalg.norm(y_axis)
+    return SketchPlane(centre, reference, y_axis, axis, (), ())
+
+
 def face_sketch_plane(geometry: "GeometryModel", face_id: int) -> SketchPlane:
     """Return a deterministic local frame and reject non-flat support faces."""
 
@@ -260,6 +289,14 @@ def materialize_sketch(geometry: "GeometryModel", face_id: int, definition: Sket
     """Create named sketch topology and optional normal shell extrusion."""
 
     plane = face_sketch_plane(geometry, face_id)
+    return materialize_sketch_on_plane(geometry, plane, definition)
+
+
+def materialize_sketch_on_plane(
+    geometry: "GeometryModel", plane: SketchPlane, definition: SketchDefinition,
+) -> dict[str, EntityRef]:
+    """Create named sketch topology on an independent workplane."""
+
     solved = solve_sketch(definition, plane)
     parent = {key: key for key in solved}
 

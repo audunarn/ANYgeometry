@@ -128,13 +128,17 @@ def _check_line(segment: Segment, curve_floats=None):
     zero float squared length as main computes it on the stored doubles. Derived pieces
     (exact splits, kept down to any length by deferred removal, S2) are refused only when
     exactly degenerate: their float rounding is not data."""
+    direction = segment.__dict__.get("_checked_direction")
+    if direction is not None:
+        return direction
     direction = _difference(segment[1], segment[0])
-    if exact_dot(direction, direction) == 0:
+    if segment.length2() == 0:
         raise GeometryError("degenerate arrangement line")
     if not getattr(segment, "derived", False):
         floats = np.asarray(rounded(segment[1])) - np.asarray(rounded(segment[0]))
         if float(floats @ floats) == 0:
             raise GeometryError("degenerate arrangement line")
+    segment.__dict__["_checked_direction"] = direction
     return direction
 
 
@@ -146,7 +150,7 @@ def point_parameters(segment: Segment, point, tolerance: float) -> tuple:
     tol2 = Fraction(tolerance) ** 2
     tolerance_exact = Fraction(tolerance)
     direction = _check_line(segment)
-    length2 = exact_dot(direction, direction)
+    length2 = segment.length2()
     endpoints = tuple(t for t in (Fraction(0), Fraction(1)) if distance2(at(segment, t), point) <= tol2)
     parameter = exact_dot(_difference(point, segment[0]), direction) / length2
     roots = ()

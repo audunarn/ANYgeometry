@@ -73,6 +73,23 @@ def test_point_parameters_tolerance_is_exact():
         assert bool(st.point_parameters(line, (Fraction(1, 2), Fraction(gap), Fraction(0)), tol)) is hit
 
 
+def test_repeated_point_queries_reuse_exact_segment_length(monkeypatch):
+    segment = st.segment_of(LinePath((0., 0., 0.), (1., 0., 0.)))
+    point = (Fraction(10), Fraction(0), Fraction(0))
+    original = st.exact_dot
+    calls = 0
+
+    def counted(*args):
+        nonlocal calls
+        calls += 1
+        return original(*args)
+
+    monkeypatch.setattr(st, "exact_dot", counted)
+    assert st.point_parameters(segment, point, 1e-9) == ()
+    assert st.point_parameters(segment, point, 1e-9) == ()
+    assert calls == 1
+
+
 def test_degenerate_lines_are_refused_as_on_the_float_route():
     point = LinePath((0., 0., 0.), (0., 0., 0.))
     with pytest.raises(GeometryError, match="degenerate arrangement line"):
