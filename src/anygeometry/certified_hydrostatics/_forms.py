@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 
 from ._errors import RefusalCategory, refuse
+from ._arith import Ar, int_to_str
 from ._work import Meter
 
 __all__ = ["QuantityResult", "build_quantity", "binary64_enclosure", "decimal_enclosure", "DEFAULT_DECIMAL_WIDTH"]
@@ -36,27 +37,22 @@ class QuantityResult:
     accuracy_met: bool | None
 
 
-def _isqrt_counted(n: int, meter: Meter) -> int:
-    meter.unit("sqrt_step", 1 + n.bit_length() // 1024)
-    return math.isqrt(n)
-
-
-def _rational_value(numerator: Fraction, norm_squared, meter: Meter):
+def _rational_value(ar: Ar, numerator: Fraction, norm_squared):
     """The value as a Fraction when it is rational, else ``None`` (irrational ``Q / sqrt(N)``)."""
     if norm_squared is None:
         return numerator
     if numerator == 0:
         return Fraction(0)
-    square = meter.fit(numerator * numerator / norm_squared)
-    root_n, root_d = _isqrt_counted(square.numerator, meter), _isqrt_counted(square.denominator, meter)
+    square = ar.div(ar.mul(numerator, numerator), norm_squared)
+    root_n, root_d = ar.isqrt(square.numerator), ar.isqrt(square.denominator)
     if root_n * root_n == square.numerator and root_d * root_d == square.denominator:
         return Fraction(root_n, root_d) if numerator > 0 else -Fraction(root_n, root_d)
     return None
 
 
-def _compare_root(numerator: Fraction, norm_squared: Fraction, f: float, meter: Meter) -> int:
+def _compare_root(ar: Ar, numerator: Fraction, norm_squared: Fraction, f: float) -> int:
     """Sign of ``numerator / sqrt(norm_squared) - f`` (``numerator != 0``), exactly."""
-    meter.unit("sqrt_step")
+    ar.meter.unit("sqrt_step")
     sq = 1 if numerator > 0 else -1
     sf = (f > 0) - (f < 0)
     if sq > 0 and sf <= 0:
@@ -64,7 +60,7 @@ def _compare_root(numerator: Fraction, norm_squared: Fraction, f: float, meter: 
     if sq < 0 and sf >= 0:
         return -1
     ff = Fraction(f)
-    left, right = meter.fit(numerator * numerator), meter.fit(ff * ff * norm_squared)
+    left, right = ar.mul(numerator, numerator), ar.mul(ar.mul(ff, ff), norm_squared)
     difference = (left > right) - (left < right)
     return difference if sq > 0 else -difference
 
@@ -75,7 +71,8 @@ def _out_of_range(name: str):
 
 def binary64_enclosure(numerator: Fraction, norm_squared, meter: Meter, name: str = "value") -> tuple:
     """``(lo, hi)``: the exact value as a double twice, or the adjacent doubles around it (outward, exact)."""
-    value = _rational_value(numerator, norm_squared, meter)
+    ar = Ar(meter)
+    value = _rational_value(ar, numerator, norm_squared)
     try:
         if value is not None:
             meter.unit("enclosure_step")
@@ -89,17 +86,18 @@ def binary64_enclosure(numerator: Fraction, norm_squared, meter: Meter, name: st
         else:
             # irrational x = Q.num sqrt(M) / (Q.den N.num), M = N.num N.den: a ~100-bit approximation first,
             # then exact adjustment to the bracketing doubles
-            product = norm_squared.numerator * norm_squared.denominator
+            product = ar.mul(norm_squared.numerator, norm_squared.denominator)
             shift = max(0, (200 - product.bit_length()) // 2 + 1)
-            root = _isqrt_counted(product << (2 * shift), meter)              # sqrt(M) 2^shift
-            approx = Fraction(numerator.numerator * root,
-                              numerator.denominator * norm_squared.numerator * 2 ** shift)
+            ar.guard(product.bit_length() + 2 * shift)
+            root = ar.isqrt(product << (2 * shift))                       # sqrt(M) 2^shift
+            approx = Fraction(ar.mul(numerator.numerator, root),
+                              ar.mul(numerator.denominator, ar.mul(norm_squared.numerator, 2 ** shift)))
             lo = float(approx)
             if math.isinf(lo):
                 raise OverflowError
-            while _compare_root(numerator, norm_squared, lo, meter) < 0:
+            while _compare_root(ar, numerator, norm_squared, lo) < 0:
                 lo = math.nextafter(lo, -math.inf)
-            while _compare_root(numerator, norm_squared, math.nextafter(lo, math.inf), meter) > 0:
+            while _compare_root(ar, numerator, norm_squared, math.nextafter(lo, math.inf)) > 0:
                 lo = math.nextafter(lo, math.inf)
             hi = math.nextafter(lo, math.inf)
     except OverflowError:
@@ -111,29 +109,35 @@ def binary64_enclosure(numerator: Fraction, norm_squared, meter: Meter, name: st
 
 def decimal_enclosure(numerator: Fraction, norm_squared, width: Fraction, meter: Meter) -> tuple:
     """``(lo, hi)`` decimal strings containing the value with ``hi - lo <= width`` (multiples of ``10^-k``)."""
+    ar = Ar(meter)
     inverse = -(-width.denominator // width.numerator)         # ceil(1 / width)
-    digits = 0 if inverse <= 1 else len(str(inverse - 1))      # smallest k >= 0 with 10^k >= ceil(1 / width)
-    scale = 10 ** digits
+    digits = 0
+    if inverse > 1:                                            # smallest k >= 0 with 10^k >= ceil(1 / width)
+        digits = max(0, int(inverse.bit_length() * 0.30103) - 1)
+        while ar.pow10(digits) < inverse:
+            digits += 1
+    scale = ar.pow10(digits)
     meter.unit("enclosure_step")
-    value = _rational_value(numerator, norm_squared, meter)
+    value = _rational_value(ar, numerator, norm_squared)
     if value is not None:
-        scaled = meter.fit(value * scale)
+        scaled = ar.mul(value, scale)
         low, high = scaled.numerator // scaled.denominator, -((-scaled.numerator) // scaled.denominator)
     else:
         # |x| 10^k = T sqrt(M) / D with T = |Q.num| 10^k, M = N.num N.den, D = Q.den N.num
-        t = abs(numerator.numerator) * scale
-        d = numerator.denominator * norm_squared.numerator
-        radicand = meter.fit(t * t * norm_squared.numerator * norm_squared.denominator)
-        s = _isqrt_counted(radicand, meter)
+        t = ar.mul(abs(numerator.numerator), scale)
+        d = ar.mul(numerator.denominator, norm_squared.numerator)
+        radicand = ar.mul(ar.mul(t, t), ar.mul(norm_squared.numerator, norm_squared.denominator))
+        s = ar.isqrt(radicand)
         floor_abs = s // d
         ceil_abs = floor_abs + 1                                # the root is irrational here
         low, high = (floor_abs, ceil_abs) if numerator > 0 else (-ceil_abs, -floor_abs)
+    meter.unit("digit_conversion", 1)
     return _decimal_string(low, digits), _decimal_string(high, digits)
 
 
 def _decimal_string(scaled: int, digits: int) -> str:
     sign = "-" if scaled < 0 else ""
-    text = str(abs(scaled))
+    text = int_to_str(abs(scaled))
     if digits == 0:
         return sign + text
     text = text.rjust(digits + 1, "0")

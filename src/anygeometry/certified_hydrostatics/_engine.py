@@ -9,25 +9,14 @@ from ._errors import CertifiedHydrostaticsRefusal, RefusalCategory, refuse
 from ._forms import build_quantity
 from ._prepare import PreparedCertifiedHydrostatics
 from ._query import HalfSpaceQuery, WATERPLANE_NAMES
+from ._arith import Ar
 from ._result import (CertifiedHydrostaticsResult, Contacts, SectionResult, Topology, TopologyLoop, proof_document,
-                      serialize)
+                      write_canonical)
 from ._sections import (build_section, cap_sums, clipped_sums, contacts, exact_occupancy, vertex_heights,
                         waterplane_sums)
 from ._work import Meter, WorkBudget
 
 __all__ = ["query_certified_hydrostatics"]
-
-
-def _count_and_audit(value, max_digits: int) -> int:
-    """Number of scalar/array elements of a JSON document; refuses integer tokens over the digit limit."""
-    if isinstance(value, dict):
-        return len(value) + sum(_count_and_audit(v, max_digits) for v in value.values())
-    if isinstance(value, (list, tuple)):
-        return len(value) + sum(_count_and_audit(v, max_digits) for v in value)
-    if isinstance(value, int) and not isinstance(value, bool) and abs(value).bit_length() > max_digits * 3.32:
-        if len(str(abs(value))) > max_digits:
-            raise refuse(RefusalCategory.RESULT_OUT_OF_RANGE, "an integer of the proof exceeds the digit limit")
-    return 1
 
 
 def _delta(after: dict, before: dict) -> dict:
@@ -36,13 +25,14 @@ def _delta(after: dict, before: dict) -> dict:
     return {"operations": after["operations"] - before["operations"], "units": units}
 
 
-def _side(name: str, section, query: HalfSpaceQuery, meter: Meter) -> SectionResult:
+def _side(name: str, section, query: HalfSpaceQuery, nn, meter: Meter) -> SectionResult:
     if not section.points:
         return SectionResult(name, section.occupancy, "ABSENT", None, None)
     sums = waterplane_sums(section, query, meter)
-    quantities = tuple(build_quantity(key, sums[key], query.normal_squared, query.forms, query.accuracy(key), meter)
+    quantities = tuple(build_quantity(key, sums[key], nn, query.forms, query.accuracy(key), meter)
                        for key in WATERPLANE_NAMES)
-    meter.unit("topology_element", len(section.loops) + len(section.components))
+    for _ in range(len(section.loops) + len(section.components)):
+        meter.unit("topology_element")
     topology = Topology(tuple(TopologyLoop(loop.identity, loop.role) for loop in section.loops), section.components)
     return SectionResult(name, section.occupancy, "PRESENT", quantities, topology)
 
@@ -50,6 +40,11 @@ def _side(name: str, section, query: HalfSpaceQuery, meter: Meter) -> SectionRes
 def _evaluate(prepared: PreparedCertifiedHydrostatics, query: HalfSpaceQuery, meter: Meter,
               before: dict) -> CertifiedHydrostaticsResult:
     snapshot = prepared.snapshot
+    ar = Ar(meter)
+    for number in (*query.normal, query.offset, *query.waterplane_origin, *query.waterplane_axes[0],
+                   *query.waterplane_axes[1], *(w for _name, w in query.absolute_accuracy)):
+        meter.fit(number)
+    nn = ar.dot(query.normal, query.normal)
     heights = vertex_heights(snapshot, query, meter)
     vertices, edges, faces = contacts(snapshot, heights, meter)
     generic = not vertices
@@ -59,25 +54,26 @@ def _evaluate(prepared: PreparedCertifiedHydrostatics, query: HalfSpaceQuery, me
 
     total6, moment24 = clipped_sums(snapshot, heights, meter)
     cap6, cap24 = cap_sums(below, meter)
-    volume = meter.fit((total6 + cap6) / 6)
-    moments = [meter.fit((moment24[k] + cap24[k]) / 24) for k in range(3)]
+    volume = ar.div(ar.add(total6, cap6), 6)
+    moments = [ar.div(ar.add(moment24[k], cap24[k]), 24) for k in range(3)]
     volume_quantity = build_quantity("V", volume, None, query.forms, query.accuracy("V"), meter, always_exact=True)
     moment_quantities = tuple(build_quantity(name, value, None, query.forms, query.accuracy(name), meter,
                                              always_exact=True)
                               for name, value in zip(("Jx", "Jy", "Jz"), moments))
     if generic:
-        sections = (_side("plane", below, query, meter),)
+        sections = (_side("plane", below, query, nn, meter),)
     else:
-        sections = (_side("below", below, query, meter), _side("above", above, query, meter))
-    work = _delta(meter.budget.counts(), before)
+        sections = (_side("below", below, query, nn, meter), _side("above", above, query, nn, meter))
+    placeholder = {"operations": 0, "units": {}}
     result = CertifiedHydrostaticsResult(query, occupancy, generic, Contacts(vertices, edges, faces), volume_quantity,
-                                         moment_quantities, sections, work)
-    document = proof_document(prepared, query, result.claim())
-    meter.unit("serialize_element", _count_and_audit(document, prepared.policy.max_integer_digits))
-    proof = serialize(document)
-    if len(proof) > prepared.policy.max_proof_bytes:
-        raise refuse(RefusalCategory.RESULT_OUT_OF_RANGE, "the proof exceeds the policy's byte limit")
-    return replace(result, proof=proof)
+                                         moment_quantities, sections, placeholder)
+    limits = dict(max_digits=prepared.policy.max_integer_digits, max_bytes=prepared.policy.max_proof_bytes)
+    # pass 1: meter the serialization element by element (the work field itself is not charged); the work
+    # reported in the claim is then exactly this call's budget delta
+    write_canonical(proof_document(prepared, query, result.claim()), meter, uncharged=("result", "work"), **limits)
+    result = replace(result, work=_delta(meter.budget.counts(), before))
+    # pass 2: the final bytes carrying that work
+    return replace(result, proof=write_canonical(proof_document(prepared, query, result.claim()), None, **limits))
 
 
 def query_certified_hydrostatics(prepared: PreparedCertifiedHydrostatics, query: HalfSpaceQuery, *,

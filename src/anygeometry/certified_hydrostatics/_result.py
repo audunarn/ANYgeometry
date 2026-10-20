@@ -46,7 +46,6 @@ from dataclasses import dataclass, field
 from fractions import Fraction
 
 from ._forms import QuantityResult
-from ._identity import canonical_json
 from ._query import HalfSpaceQuery
 
 __all__ = ["CertifiedHydrostaticsResult", "SectionResult", "Topology", "TopologyLoop", "Contacts",
@@ -175,5 +174,56 @@ def proof_document(prepared, query: HalfSpaceQuery, claim: dict) -> dict:
             "preparation_policy": prepared.policy.as_dict(), "query": query.as_dict(), "result": claim}
 
 
-def serialize(document: dict) -> bytes:
-    return canonical_json(document)
+def write_canonical(document, meter=None, *, max_digits: int, max_bytes: int, uncharged=()) -> bytes:
+    """Canonical JSON bytes (sorted keys, no spaces, UTF-8), written element by element.
+
+    With ``meter`` every value (scalar, array or object) and every object key reserves one
+    ``serialize_element`` unit before it is written, so budget, deadline and cancellation are polled per
+    element. ``uncharged`` is a path of keys whose subtree is written without charge (the ``work`` field of
+    the proof, whose own elements are not part of the work it reports). Integers are written without the
+    interpreter's int/str digit limit; one over ``max_digits`` digits, or output over ``max_bytes``,
+    refuses ``RESULT_OUT_OF_RANGE``."""
+    from ._errors import RefusalCategory, refuse
+    from ._arith import int_to_str
+    limit = 10 ** max_digits
+    parts: list = []
+    size = 0
+
+    def emit(text: str) -> None:
+        nonlocal size
+        parts.append(text)
+        size += len(text)
+        if size > max_bytes:
+            raise refuse(RefusalCategory.RESULT_OUT_OF_RANGE, "the proof exceeds the policy's byte limit")
+
+    def walk(value, path) -> None:
+        charged = meter is not None and path[:len(uncharged)] != tuple(uncharged)
+        if charged:
+            meter.unit("serialize_element")
+        if isinstance(value, dict):
+            emit("{")
+            for index, key in enumerate(sorted(value)):
+                if charged:
+                    meter.unit("serialize_element")
+                emit(("," if index else "") + json.dumps(key, ensure_ascii=False) + ":")
+                walk(value[key], path + (key,))
+            emit("}")
+        elif isinstance(value, (list, tuple)):
+            emit("[")
+            for index, item in enumerate(value):
+                emit("," if index else "")
+                walk(item, path)
+            emit("]")
+        elif value is None or isinstance(value, bool):
+            emit("null" if value is None else ("true" if value else "false"))
+        elif isinstance(value, int):
+            if abs(value) >= limit:
+                raise refuse(RefusalCategory.RESULT_OUT_OF_RANGE, "an integer of the proof exceeds the digit limit")
+            emit(int_to_str(value))
+        elif isinstance(value, str):
+            emit(json.dumps(value, ensure_ascii=False))
+        else:
+            raise TypeError(f"cannot serialise {type(value).__name__}")
+
+    walk(document, ())
+    return "".join(parts).encode("utf-8")

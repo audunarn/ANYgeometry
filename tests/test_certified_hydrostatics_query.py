@@ -889,7 +889,7 @@ def test_a_query_shares_a_budget_with_preparation_and_reports_its_own_work():
     after_prepare = budget.operations
     result = ask(prepared, (0, 0, 1), 0.5, budget=budget)
     assert budget.operations > after_prepare
-    assert result.work["operations"] <= budget.operations - after_prepare       # serialisation is counted after the claim
+    assert result.work["operations"] == budget.operations - after_prepare       # complete: serialisation included
     assert result.work["units"].get("clip_vertex") == 24 and result.work["units"].get("vertex_height") == 8
     tight = WorkBudget(max_operations=budget.operations - 1, max_bits=None)
     with pytest.raises(CertifiedHydrostaticsRefusal) as info:
@@ -898,18 +898,125 @@ def test_a_query_shares_a_budget_with_preparation_and_reports_its_own_work():
     assert info.value.category is C.BUDGET_EXHAUSTED
 
 
+class SpyBudget(WorkBudget):
+    """Remembers the kind of the unit being reserved, so a test can cancel exactly at one kind."""
+
+    pending = None
+
+    def reserve(self, kind, count=1, cancellation_check=None):
+        self.pending = kind
+        super().reserve(kind, count, cancellation_check)
+
+
 def test_cancellation_is_polled_inside_the_section_sort():
-    result_units = ask(F6, (0, 0, 1), 0).work["units"]
-    assert result_units["sort_comparison"] > 0
-    seen = {"calls": 0}
-
-    def cancel():
-        seen["calls"] += 1
-        return seen["calls"] > 200
-
+    assert ask(F6, (0, 0, 1), 0).work["units"]["sort_comparison"] > 1
+    budget = SpyBudget(None, None)
     with pytest.raises(CertifiedHydrostaticsRefusal) as info:
-        ask(F6, (0, 0, 1), 0, cancellation_check=cancel)
-    assert info.value.category is C.CANCELLED and seen["calls"] == 201 and info.value.work["operations"] >= 200
+        ask(F6, (0, 0, 1), 0, budget=budget,
+            cancellation_check=lambda: budget.pending == "sort_comparison"
+            and budget.counts()["units"].get("sort_comparison", 0) >= 1)
+    assert info.value.category is C.CANCELLED and budget.pending == "sort_comparison"
+    assert info.value.work["units"]["sort_comparison"] == 1
+
+
+def test_every_unit_of_a_query_is_a_checkpoint():
+    total = ask(F2, (0, 0, 1), F(1, 4), forms=("exact", "binary64", "decimal")).work["operations"]
+    for limit in range(0, total):
+        with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+            ask(F2, (0, 0, 1), F(1, 4), forms=("exact", "binary64", "decimal"),
+                budget=WorkBudget(max_operations=limit, max_bits=None))
+        assert info.value.category is C.BUDGET_EXHAUSTED and info.value.work["operations"] == limit
+
+
+def test_proof_serialisation_is_metered_and_interruptible_per_element():
+    form = dict(forms=("exact", "binary64", "decimal"))
+    done = ask(F1, (0, 0, 1), F(1, 2), **form)
+    serial = done.work["units"]["serialize_element"]
+    assert serial > 300
+    # a budget that runs out inside the serialisation stops it there, after some elements, not before all
+    budget = WorkBudget(max_operations=done.work["operations"] - 50, max_bits=None)
+    with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+        ask(F1, (0, 0, 1), F(1, 2), budget=budget, **form)
+    refusal = info.value
+    assert refusal.category is C.BUDGET_EXHAUSTED and refusal.work["operations"] == done.work["operations"] - 50
+    assert 0 < refusal.work["units"]["serialize_element"] < serial
+    # cancellation and the deadline are polled between elements of the serialisation
+    spy = SpyBudget(None, None)
+    with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+        ask(F1, (0, 0, 1), F(1, 2), budget=spy, cancellation_check=lambda: spy.counts()["units"].get(
+            "serialize_element", 0) >= 5, **form)
+    assert info.value.category is C.CANCELLED and info.value.work["units"]["serialize_element"] == 5
+    ticks = {"n": 0}
+
+    def clock():
+        ticks["n"] += 1
+        return 0.0 if spy2.counts()["units"].get("serialize_element", 0) < 5 else 10.0
+    spy2 = SpyBudget(None, None, deadline=5.0, clock=clock)
+    with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+        ask(F1, (0, 0, 1), F(1, 2), budget=spy2, **form)
+    assert info.value.category is C.DEADLINE_EXCEEDED and info.value.work["units"]["serialize_element"] == 5
+
+
+def test_a_successful_result_reports_the_complete_work_of_the_query():
+    budget = WorkBudget(None, None)
+    before = budget.counts()
+    result = ask(F1, (0, 0, 1), F(1, 2), budget=budget, forms=("exact", "binary64", "decimal"))
+    after = budget.counts()
+    assert result.work["operations"] == after["operations"] - before["operations"]
+    assert result.work["units"] == {kind: count for kind, count in after["units"].items() if count}
+    assert json.loads(result.proof)["result"]["work"] == result.work
+    assert result.work["units"]["serialize_element"] > 300
+
+
+def test_intermediate_products_are_bit_capped_not_only_the_cancelled_result():
+    shift = 2.0 ** 50
+    moved = realise(box_data((0, 0, 0), (1, 1, 1)), lambda p: (p[0] + 2 ** 50, p[1] + 2 ** 50, p[2]))[2]
+    origin = (2 ** 50, 2 ** 50, 0)
+    done = ask(moved, (0, 0, 1), F(1, 2), origin, budget=WorkBudget(None, 4096))              # fine without a tight cap
+    assert done.volume.numerator == F(1, 2)
+    budget = WorkBudget(None, 60)
+    with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+        ask(moved, (0, 0, 1), F(1, 2), origin, budget=budget)
+    assert info.value.category is C.BIT_LENGTH_EXCEEDED and info.value.phase == "query"
+    assert info.value.work["max_bits_seen"] > 60                      # the raw product size was seen and refused
+
+
+def test_binary64_enclosure_checks_the_square_root_radicand_against_the_cap():
+    from anygeometry.certified_hydrostatics._forms import binary64_enclosure, decimal_enclosure
+    from anygeometry.certified_hydrostatics._work import Meter
+    norm = F(2 ** 3000 + 1, 2 ** 3000)
+    for call in (lambda m: binary64_enclosure(F(1), norm, m), lambda m: decimal_enclosure(F(1), norm, F(1, 10), m)):
+        call(Meter(WorkBudget(None, None)))                                             # fine without a cap
+        with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+            call(Meter(WorkBudget(None, 4096)))
+        assert info.value.category is C.BIT_LENGTH_EXCEEDED
+
+
+def test_huge_decimal_requests_do_not_raise_the_python_digit_limit_error():
+    import sys
+    tiny = F(1, 10 ** 5000)
+    box = realise(box_data((0, 0, 0), (1, 1, 1)))[2]
+    result = ask(box, (0, 0, 1), -1, forms=("exact", "decimal"), absolute_accuracy={"V": tiny})
+    low, high, width = result.volume.decimal
+    assert low == high == "0." + "0" * 5000 and width == tiny
+    third = ask(box, (0, 0, 1), F(1, 3), forms=("decimal",), absolute_accuracy={"V": tiny})
+    low, high, _w = third.volume.decimal
+    assert len(low) == len(high) == 5002 and F(Decimal(low)) <= F(1, 3) <= F(Decimal(high))
+    assert F(Decimal(high)) - F(Decimal(low)) == tiny
+    old = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(0)
+    try:
+        document = json.loads(result.proof)
+    finally:
+        sys.set_int_max_str_digits(old)
+    assert document["query"]["absolute_accuracy"]["V"] == [1, 10 ** 5000]
+    # consistent with the policy's digit limit: a structured refusal, never a raw ValueError
+    from anygeometry.certified_hydrostatics import CertifiedHydrostaticsPolicy
+    model, ids = build(*box_data((0, 0, 0), (1, 1, 1)))
+    small = prepare_certified_hydrostatics(model, ids, policy=CertifiedHydrostaticsPolicy(max_integer_digits=1000))
+    with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+        ask(small, (0, 0, 1), -1, forms=("decimal",), absolute_accuracy={"V": tiny})
+    assert info.value.category is C.RESULT_OUT_OF_RANGE and info.value.phase == "query" and info.value.work
 
 
 def test_argument_types_are_checked():
