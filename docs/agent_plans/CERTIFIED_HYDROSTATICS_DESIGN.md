@@ -358,18 +358,10 @@ After a refusal no further outside data are read: refusal context is built only 
 ingested. The verifier's returned object exposes only values it has checked or recomputed; it never
 forwards reads to the supplied result.
 
-*Known limits of the CH1c verifier against 6b (owner decision 2026-10-20: open obligations carried to CH2,
-not further CH1c rounds; final review of acc7a5b found no incorrect acceptance).* Each span below is bounded
-by `max_proof_bytes` but is not split by checkpoints:
-(a) canonical re-encoding: whole-string JSON escaping of one string token, the final join of the encoded
-document, and the whole-proof byte comparison (`_verify.py` `_encode` and the proof equality check);
-(b) decimal bounds: `10 ** len(frac)` is built before its bit length is checked, so a zero-padded decimal can
-create an integer of about 3.32 bits per character before a `BIT_LENGTH_EXCEEDED` refusal.
-Remedy for CH2 or later: compare encoded windows against the proof incrementally instead of joining; escape
-long strings per window; reject a decimal whose fraction length exceeds the bit cap / log2(10) before building
-the power.
-Also open, provider side (CH1b): `write_canonical` builds `10 ** max_digits`, so a policy with a very large
-`max_integer_digits` (for example 2**32) makes a query run outside its budget; compare digit counts instead.
+*Known limits of the CH1c verifier against 6b: fixed in commit b92a261 (branch claude/ch-fixes-6b).* The three defects found in the final CH1c review are closed:
+(a) canonical re-encoding in the verifier now escapes long strings window by window (at most 4096 characters per checkpoint), streams the encoded document as byte windows and compares them incrementally against the proof (a checkpoint per window, no join, no whole-proof `==`); hashing consumes the same stream;
+(b) a decimal bound whose denominator `10 ** len(frac)` or numerator is certain to exceed the bit cap is refused `BIT_LENGTH_EXCEEDED` before any power of ten is built (exact integer bounds on log2(10), no floats);
+(c) provider side: `write_canonical` no longer builds `10 ** max_digits`; the digit limit is checked by bit length with an exact chunked digit count only in the narrow band at the limit (`_arith.digits_exceed`), so a policy with `max_integer_digits = 2**32` runs inside its budget.
 Before parsing, a proof is checked against a byte-size limit and every integer token against a
 digit limit (both in the policy); a violation refuses `MALFORMED_PROOF` without converting the
 token.
