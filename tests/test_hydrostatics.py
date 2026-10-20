@@ -794,3 +794,32 @@ def test_a_normal_whose_square_underflows_gives_the_same_waterplane():
     result = float_at(model, faces, .5, normal=tiny)
     assert result["zeta"] == pytest.approx(.5, abs=1e-9)
     assert result["volume"] == pytest.approx(.5, rel=1e-10)
+
+
+@pytest.mark.parametrize("scale", [math.ulp(0.), 1e-300, 1.7e308])
+def test_oblique_normals_at_the_ends_of_the_float_range_give_the_same_plane(scale):
+    """Review round 2 of the confirmation fixes: the normal is scaled exactly by a power of two at
+    entry (a subnormal (q, 0, q) gave volume 0.043 instead of 0.125; (1.7e308, 0, 1.7e308) overflowed)."""
+    from anygeometry.hydrostatics import float_at, hydrostatic_table
+    model, faces, _place = box((1., 1., 1.))
+    normal = (scale, 0., scale)
+    reference = hydrostatics(model, faces, (0., 0., .5), (1., 0., 1.))
+    result = hydrostatics(model, faces, (0., 0., .5), normal)
+    assert reference["volume"] == pytest.approx(.125, rel=1e-12)
+    assert result["volume"] == pytest.approx(reference["volume"], rel=1e-14)
+    (row,) = hydrostatic_table(model, faces, [0.], reference=(0., 0., .5), normal=normal)
+    assert row["volume"] == pytest.approx(reference["volume"], rel=1e-14)
+    assert float_at(model, faces, .5, normal=normal)["zeta"] == pytest.approx(1 / math.sqrt(2.), abs=1e-9)
+
+
+@pytest.mark.parametrize("normal", [(math.nan, 0., 1.), (math.inf, 0., 1.), (0., 0., 0.)])
+def test_invalid_normals_refuse_with_a_geometry_error(normal):
+    from anygeometry import GeometryError
+    from anygeometry.hydrostatics import float_at, hydrostatic_table
+    model, faces, _place = box((1., 1., 1.))
+    with pytest.raises(GeometryError, match="finite non-zero"):
+        hydrostatics(model, faces, (0., 0., .5), normal)
+    with pytest.raises(GeometryError, match="finite non-zero"):
+        hydrostatic_table(model, faces, [0.], reference=(0., 0., .5), normal=normal)
+    with pytest.raises(GeometryError, match="finite non-zero"):
+        float_at(model, faces, .5, normal=normal)
