@@ -1,10 +1,12 @@
-# Certified hydrostatics CH3: certified point queries for the curved B1 hull (design, revision 3, 2026-10-20)
+# Certified hydrostatics CH3: certified point queries for the curved B1 hull (design, revision 4, 2026-10-20)
 
-Status: design for owner review; no library source changed. Revision 1 (af9aae5) and revision 2
-(da45088) were reviewed by Codex Astra; revision 3 answers the round-2 findings (2 blocking, 8 major,
-1 minor; section 12, each with the exact check that was run) and aligns section 7 with the owner's
-restated work contract (planar design amendment 6d, as relayed; that amendment is on
-`claude/ch-fixes-6b`, not yet on this branch). Owner decisions 2026-10-20: D-CH3-1..11 as recommended
+Status: design for owner review; no library source changed. Revisions 1-3 (af9aae5, da45088, 52cc918)
+were reviewed by Codex Astra; revision 3 left no blocking finding; revision 4 is the owner-approved
+final revision covering exactly the six remaining findings (5 major, 1 minor; section 12, round 3,
+each with the exact check that was run). Anything still open after the focused review of revision 4
+becomes a slice obligation tied to a test. Section 7 follows the owner's restated work contract
+(planar design amendment 6d, as relayed; that amendment is on `claude/ch-fixes-6b`, not yet on this
+branch). Owner decisions 2026-10-20: D-CH3-1..11 as recommended
 (section 11). Extends `CERTIFIED_HYDROSTATICS_DESIGN.md` (revision 5, "the planar design") and its
 acceptance manifest. Consumer request:
 `C:/Github/ANYstability/docs/ANYgeometry_CERTIFIED_HYDROSTATICS_HANDOFF.md` sections 1, 3 and 5 (Q08).
@@ -76,6 +78,19 @@ Measured on the source (`src/anygeometry/b1_example.py`, `nurbs.py`, `support_cu
 - **Group M construction**: on B1's deck arc, `n = C'(1/4) x e_z`, `d_t = n . C(1/4)` gives
   `g(1/4) = g'(1/4) = 0` (edge tangency); `d = d_t + 2^-10` gives two roots on the deck edge
   (`u = 0.24658`, `0.25342`); `d = d_t - 2^-10` gives none.
+- **Round-3 review counterexamples, checked exactly** (revision 4): (1) for the arcs
+  `C_1 = (1/u, 1/(u+1))`, `C_2 = (1/s + 1/(s+1), 1/s - 1/(s+1))` the raw resultant has degree 7 and
+  equals `u^2 (u+1)^2 (1 + 2u - 4u^2 - 4u^3)`; its only root in `(1/4, 2)` is `u* = 0.58504`, the gcd of
+  `F(u*, s)`, `G(u*, s)` over `Q(u*)` has degree 1 with `s* = 0.85464` in `(1/4, 2)`, and
+  `C_1(u*) = C_2(s*)`; (2) the starboard unit square with the genuinely mirrored basis sums to
+  `Mv = Iuv = 0`, the full rectangle's values, and an asymmetric triangle with a tilted basis agrees
+  with the relation; (3) the trim `z <= 12x - 12y - 2` on `S = (u, u^2, v)` has corners at `v = 1/4` but
+  reaches `v = 1` at its interior extremum `u = 1/2`; (4) for the diamond prism `n = (0, 1, 1)`,
+  `d = 1` gives the graph `v = 0`, outside the top, while `d = 11/8` gives `v = 3/8` with cut points at
+  `u = 5/8` and `3/8`, and `V(y + z <= 11/8) = 167/1536`; (5) on the parabolic prism
+  `n = (-3/2, 1, 1)`, `d = 3/16` has the deck-edge residual `(u - 3/4)^2` (E2 inside `[5/8, 7/8]`) while
+  `z <= 1/2` and `y + z <= 3/4` have only simple roots; (6) the conic slab's midpoint has
+  `x^2 + y^2 - 1 = 2.346e-17`.
 - **Algebraic corners are cheap**: a corner quadratic isolates to `2^-60` in `0.4 ms`; a crossing
   quartic (213-bit coefficients) in `< 1 ms`.
 - **Exact rational Taylor enclosures**: `int_{0.2}^{0.4} p / W^3` (degree-6 `p`): widths `8.9e-8`,
@@ -119,8 +134,10 @@ P_v = dP/dv = (B~_xyz - A~_xyz) / (k_2 - k_1).
 ```
 
 The face's parameter domain is the range box `[u_0, u_1] x [v_0, v_1] = u_range x v_range` (exact
-rationals), inside the span. Every admitted face lies strictly inside it (C3), so the chart boundary
-never bounds a face. The chart maps are recorded (3.4) and used only to interpret float hints.
+rationals), inside the span. Every admitted face lies strictly inside it: every corner **and every
+interior point of every trim edge** (the whole-edge range test of C3; corners alone do not suffice,
+revision 4), so the chart boundary never bounds a face. The chart maps are recorded (3.4) and used
+only to interpret float hints.
 
 A plane `n . r = d` meets the support where
 
@@ -157,7 +174,15 @@ conic unless the trim is iso-`v`); every predicate on it works at this degree.
   ranges equal) with a finite plane record; its graph `r_k = N_k / D_k` from the exact normal
   `m = u_vec x v_vec` and offset `m . origin`; `D_k` nonzero on the edge's `u`-interval (one-signed
   Bernstein coefficients over the interval's outer bounds; refine the ends to the policy depth, then
-  `UNSUPPORTED_TRIM`). Plane trims that are iso-`v` are ordinary trims. `Straight`/`CurveOnSurface`
+  `UNSUPPORTED_TRIM`). **Whole-edge range test** (revision 4): `v_0 < r_k(u) < v_1` on the whole closed
+  edge interval `[u_a, u_b]`: sufficient when the Bernstein coefficients of `N_k - v_0 D_k` and of
+  `v_1 D_k - N_k` over the interval's outer bounds all have the sign of `D_k` there; otherwise decided
+  exactly at the corners (C3) and at every interior extremum of `r_k`, the roots of `N_k' D_k - N_k D_k'`
+  in the open interval, where `r_k(u_e)` is compared with `v_0`, `v_1` by single-root tests; a value
+  `<= v_0` or `>= v_1` anywhere refuses `UNSUPPORTED_TRIM` (sub-kind `leaves_range_box`). Checked on
+  the review's upper trim `z <= 12x - 12y - 2` of `S = (u, u^2, v)` (`r = 12u - 12u^2 - 2`): corners
+  `r(1/4) = r(3/4) = 1/4` pass, the interior extremum at `u = 1/2` has `r = 1 = v_1` and refuses.
+  Plane trims that are iso-`v` are ordinary trims. `Straight`/`CurveOnSurface`
   edges of curved faces refuse `UNSUPPORTED_TRIM`.
 - **C3 corners and hints**: every vertex of a curved face is a root `u*` of the square-free
   `N_i D_j - N_j D_i` of its two incident trims with `u_0 < u* < u_1` and `v_0 < r_i(u*) < v_1`
@@ -256,9 +281,24 @@ Planar faces: segment-segment on `AlgebraicPoint`s (planar design); segment-arc:
 into the segment's line (two plane equations in space, or one in-plane line equation), degree `<= 2p`,
 roots filtered to the segment's parameter range by single-root tests; arc-arc: first exact box
 separation (Bernstein bounds of `E / M` over the intervals; B1's mirrored arcs are separated, section
-1), else the resultant in `s` of `E_1(u) M_2(s) - E_2(s) M_1(u)` (two coordinates), a polynomial in `u`
-of degree `<= (2p)^2`, roots in the open intervals, with endpoint tests as in (ii)-(iii). (Revision 3:
-no conic assumption anywhere.)
+1), else the **raw resultant** (revision 4): with in-plane coordinates `C_1 = (A_1, B_1) / M_1` in `u`
+and `C_2 = (A_2, B_2) / M_2` in `s`, the cleared equations `F = A_1(u) M_2(s) - A_2(s) M_1(u)` and
+`G = B_1(u) M_2(s) - B_2(s) M_1(u)` have `deg_u, deg_s <= 2p`, so `R(u) = Res_s(F, G)` has degree
+`<= deg_u F deg_s G + deg_u G deg_s F <= 8 p^2` (8 for `p = 1`, 32 for `p = 2`; the review's example has
+degree 7 and factors as `M_1(u)^2 (1 + 2u - 4u^2 - 4u^3)`). `R` has **spurious factors**: powers of
+`M_1(u)` (at a pole of `C_1`, `F` and `G` share the factor `M_2(s)`), which have no root in the arc's
+open `u`-interval by C2, and roots `u*` at which the leading coefficients of `F` and `G` in `s` vanish
+together (a common "root at `s = infinity`"), which can lie inside the interval. No factor is removed
+by division; instead every root `u*` of `R` isolated in the open `u`-interval of `C_1` is **validated
+in the number field `Q(u*)`**: with `q` the square-free factor of `R` having `u*` as a root (identity
+by 3.2), compute `gcd_s(F(u*, s), G(u*, s))` by the Euclidean algorithm over `Q[u]/(q)` (coefficient
+arithmetic modulo `q`, inverses by the extended Euclidean algorithm; every zero test of a coefficient
+is a single-root exact test); `u*` is a genuine crossing iff the gcd has positive degree and a real
+root `s*` in the open `s`-interval of `C_2` (Sturm counts over `Q(u*)`, each sign a single-root test;
+for a degree-1 gcd, `s* = -g_0 / g_1` evaluated on `u*`'s isolating interval). The verifier performs
+the same validation from its own isolation. Checked on the review's pair: `R` has the single root
+`u* = 0.58504` in `(1/4, 2)`, the gcd over `Q(u*)` has degree 1 and `s* = 0.85464` in `(1/4, 2)`, and
+`C_1(u*) = C_2(s*)` to `1e-12` in floats. (Revision 3: no conic assumption anywhere.)
 
 **Vertical-ray parity**: `(u_q, v_q)` with rational `u_q` chosen off every breakpoint is inside iff the
 number of pieces whose open `u`-interval contains `u_q` with `r_k(u_q) > v_q` is odd (B1 deck checked).
@@ -485,7 +525,7 @@ Models: `build_b1_half_hull()` and `build_b1_hull()` (defaults); units `m`; form
 | I inclined | heel `in {-0.5, -0.3, -0.1, 0.1, 0.3, 0.5}` x trim `in {-0.02, 0, 0.02}` through `(2.5, 0, z)`, `z in {0.75, 1.5, 2.25, 2.9, 3.0}` (90 per model) | PARTIAL unless the plane misses the hull (EMPTY/FULL, generic); planes without a cut arc (heel `+-0.3` at `z = 1.5`) answer; a typed degeneracy refusal is a correct answer and is recorded (none expected) |
 | T trim-only | heel `0`, trim `in {-0.02, 0.02}` through the five draft points (10 per model) | PARTIAL, generic; used for the half/full relation (symmetric planes) |
 | S scale | every I and T plane with `(2n, 2d)` | claims intersect, both meet `a` |
-| D constructed degeneracies (half hull) | E2: `n = C'(1/4) x e_z` on the deck arc, `d_t = n . C(1/4)` (rational; `g(1/4) = g'(1/4) = 0` checked); E4: `n = (B(1/4) - A(1/4)) x (1, 0, 0)`, `d = n . A(1/4)`; E3: `n = S_u x S_v` at `(1/4, 1/2)`, `d = n . S`; Z: a parabolic-prism plane `n = (1, 0, 0)`, `d = 1/2` (zero-beta, forbidden interval) and `d = 15/16` (generic, empty section); E1: the corner `(3/2, y*, 1/2)` with `n = (1, 0, 2)`, `d = 5/2`; E1 x2 (full hull): the mirrored deck corners with `n = (1, 0, 0)`, `d = 3/2` | E2/E3/E4/Z-inside refuse `CURVED_SECTION_DEGENERACY` with the sub-reasons; Z-outside answers; E1 cases answer with both limits |
+| D constructed degeneracies (half hull) | E2: `n = C'(1/4) x e_z` on the deck arc, `d_t = n . C(1/4)` (rational; `g(1/4) = g'(1/4) = 0` checked); E4: `n = (B(1/4) - A(1/4)) x (1, 0, 0)`, `d = n . A(1/4)`; E3: `n = S_u x S_v` at `(1/4, 1/2)`, `d = n . S`; Z: a parabolic-prism plane `n = (1, 0, 0)`, `d = 1/2` (zero-beta, forbidden interval) and `d = 15/16` (generic, empty section); E2 on F-A: `n = (-3/2, 1, 1)`, `d = 3/16` (deck-edge residual `(u - 3/4)^2`); E1: the corner `(3/2, y*, 1/2)` with `n = (1, 0, 2)`, `d = 5/2`; E1 x2 (full hull): the mirrored deck corners with `n = (1, 0, 0)`, `d = 3/2` | E2/E3/E4/Z-inside refuse `CURVED_SECTION_DEGENERACY` with the sub-reasons; Z-outside answers; E1 cases answer with both limits |
 | M multiple roots (mandatory) | `n = C'(1/4) x e_z`, `d = d_t + 2^-10` on the half hull (checked: two roots on the deck edge at `u = 0.24658`, `0.25342`; `d_t - 2^-10` gives none) | generic; two cut points with ordinals 0 and 1 on the deck edge |
 
 Success: every plane answers or refuses with a typed category; every answer verifies with the CH3d
@@ -505,17 +545,27 @@ claims, widths, work counts, wall time; manifest resource limits apply.
   exact graphs; own error estimate recorded); a reference outside a claim flags the plane.
 - **Sandwich** (group U): `claim(V(h_2)) - claim(V(h_1))` intersects `(h_2 - h_1) [lo A(h_1), hi A(h_2)]`
   (B1's `A(z)` increases with `z`, a fixture-specific expectation).
-- **Half/full relation** (revision 3). General, for any plane: the full hull's clipped solid is the
-  union of the starboard half-hull clipped by `(n, d)` and the mirror image of the starboard half-hull
-  clipped by the mirrored plane `(n~, d)`, `n~ = (n_x, -n_y, n_z)`; the centre face contributes `0` to
-  `V`, `J` (its plane contains the body origin, so every determinant with `q_f` vanishes) and its cut
-  segment cancels between the two caps. Hence, with the mirrored basis `(o~, e1~, e2~)` for the second
-  term, `V_full = V_half(n, d) + V_half(n~, d)`, `Jx`, `Jz` and `A`, `Mu`, `Iuu`, `Ivv` add, `Jy`, `Mv`,
-  `Iuv` add with the second term negated. Criterion for every group: the full hull's claim intersects
-  the interval sum of the two half-hull claims and both meet `a`. For **symmetric planes** (`n_y = 0`,
-  `o_y = 0`, `e2` parallel to `y`: groups U, B, N, T) this reduces to doubling the even quantities and
-  `0` for the odd ones. Group I (nonzero heel) uses the general relation only. Bitwise equality of
-  cores is an observation.
+- **Half/full relation** (revision 4; convention stated explicitly). Let `R` be the reflection
+  `(x, y, z) -> (x, -y, z)`. The full hull is `stb ∪ R(stb)`, so its clipped solid is
+  `[stb ∩ H(n, d)] ∪ R[stb ∩ H(n~, d)]` with `n~ = R n`. The second term is computed on the starboard
+  half hull with the **genuinely mirrored query** `(n~, d, o~ = R o, e1~ = R e1, e2~ = R e2)`; for a
+  point `r = R r'` of the mirrored part, `e1 . (r - o) = (R e1) . (r' - R o) = e1~ . (r' - o~)` and
+  likewise for `e2`, so both plane coordinates and the area element are preserved and **every
+  waterplane quantity adds**: `A, Mu, Mv, Iuu, Ivv, Iuv` of the full hull `= Q(n, d, o, e1, e2)
+  + Q(n~, d, o~, e1~, e2~)` on the half hull. `V` adds; `J_full = J(n, d) + R J(n~, d)`, i.e. `Jx`, `Jz`
+  add and `Jy = Jy(n, d) - Jy(n~, d)` (the only sign flip; it is the world coordinate that reflects).
+  The mirrored basis has opposite handedness (`(e1~ x e2~) . n~ = -(e1 x e2) . n`), which the query
+  allows. The centre face contributes `0` to `V`, `J` (its plane contains the body origin, so every
+  determinant with `q_f` vanishes) and its cut segment cancels between the two caps. Checked: the
+  starboard unit square with `e1 = x`, `e2 = y` has `Mv = 1/2`, `Iuv = 1/4`; the mirrored term with
+  `e2~ = R e2` gives `-1/2`, `-1/4`; the sums `0`, `0` equal the full rectangle's values; an asymmetric
+  triangle with a tilted basis `e1 = (1, 1, 0)`, `e2 = (-1, 2, 0)` gives `(A, Mu, Mv, Iuv) =
+  (1/2, 1/3, -1/3, -5/24)` both directly and by the relation. Criterion for every group: the full
+  hull's claim intersects the interval sum of the two half-hull claims and both meet `a`. For
+  **symmetric queries** (`n_y = 0`, `o_y = 0`, `e1_y = 0`, `e2` parallel to `y`: groups U, B, N, T)
+  `n~ = n`, `o~ = o`, `e1~ = e1`, `e2~ = -e2`, so the relation reduces to doubling `V`, `Jx`, `Jz`, `A`,
+  `Mu`, `Iuu`, `Ivv` and `0` for `Jy`, `Mv`, `Iuv`. Group I (nonzero heel) uses the general relation
+  only. Bitwise equality of cores is an observation.
 - **Transformations on the curved domain** (half hull, groups U and I at heel `0.3`): translation
   `(7, -3, 11)`; rotation by the exact `3/5, 4/5` matrix after scaling by 5; reflection `y -> -y`;
   moment origin shifted by `(1, 2, 3)` projected into the plane; basis `(e2, e1)` and `(2 e1, e2)`;
@@ -529,23 +579,38 @@ claims, widths, work counts, wall time; manifest resource limits apply.
     `beta = 1`); corners `(1/8, 1/4), (3/8, 1/4), (7/8, 3/4), (5/8, 3/4)`; closed by the planes `y = 0`,
     `z = 1/4`, `z = 3/4`, `z = x ± 1/8`. Every integral is polynomial with rational ends, so the engine
     returns **exact** forms: `V = 53/1536`, `V(z <= 1/2) = 29/3072`, `A(z = 1/2) = 49/768` (hand
-    integrals, and the chain convention reproduces them); inclined planes `n = (a, b, 1)` are generic
-    (`beta = 1`); `n = (1, 0, 0)` is the zero-beta case (group D).
+    integrals, and the chain convention reproduces them). `beta = 1` for every plane with `n_z = 1`
+    makes the waterplane a graph but does **not** make the plane generic (revision 4): each listed
+    query is subjected to the event tests of 5.1, with these exact outcomes: `z <= 1/2`: no root on the
+    bottom and deck edges, one simple root on each slanted edge (generic); `y + z <= 3/4`: likewise
+    generic; `n = (-3/2, 1, 1)`, `d = 3/16` (the review's plane): one simple root on each slanted edge
+    and on the deck edge `v = 3/4` the height numerator `(u - 3/4)^2` with a double root at `u = 3/4`
+    inside `[5/8, 7/8]`: **expected refusal** `CURVED_SECTION_DEGENERACY / edge_tangency` (listed in
+    group D); `n = (1, 0, 0)` is the zero-beta case (group D).
   - **F-B conic slab**: support the quarter unit circle `(1,0), (1,1), (0,1)` with weights `(1, w, 1)`
     and `z = 2 v` (rows at `z = 0`, `z = 2`); trims `z = 1/2`, `z = 3/2`, `3x + z = 2`, `3y + z = 2`
     (`beta = 2W` for all); corners `u = 0.1147, 0.3411, 0.6589, 0.8853` at `v = 3/4, 1/4, 1/4, 3/4`;
-    solid `{x, y >= (2 - z)/3, x^2 + y^2 <= 1, 1/2 <= z <= 3/2}` closed by the planes `z = 1/2`, `z = 3/2`
-    (regions bounded by the arc and the lines `x = (2 - z)/3`, `y = (2 - z)/3`) and the two slanted
-    planes (meeting along `x = y = (2 - z)/3`). Reference: `mpmath` quadrature of the exact-`w` conic
-    (40 digits); upright and inclined planes; the only fixture with `W != 1`.
+    solid `{x, y >= (2 - z)/3, (x, y) inside the conic, 1/2 <= z <= 3/2}` closed by the planes `z = 1/2`,
+    `z = 3/2` (regions bounded by the arc and the lines `x = (2 - z)/3`, `y = (2 - z)/3`) and the two
+    slanted planes (meeting along `x = y = (2 - z)/3`). **The curved boundary is the conic of the stored
+    `w`, not the unit circle** (revision 4): the rational quadratic through `(1, 0)` and `(0, 1)` with
+    tangents `x = 1`, `y = 1` and the double `w = 0.7071067811865476`; its midpoint `u = 1/2` is
+    `x = y = (1 + 2w) / (2 (1 + w))` with `x^2 + y^2 - 1 = +2.346e-17` exactly rational and nonzero. The
+    reference is the `mpmath` quadrature (40 digits) of this exact-`w` conic through its rational
+    parametrisation (never the circle formulas); upright and inclined planes; the only fixture with
+    `W != 1`.
   - **F-C diamond prism** (planar cross-check): top support `S = (u, v, 1)` as a degree-`(1,1)` patch
     (rows `(0,0,1), (1,0,1)` and `(0,1,1), (1,1,1)`, ranges `(0, 1)`), trims `y = x + 1/4`,
     `y = -x + 5/4`, `y = x - 1/4`, `y = -x + 3/4` (`beta = ±1`), corners `(1/4,1/2), (1/2,1/4),
     (3/4,1/2), (1/2,3/4)`; the prism over the diamond down to `z = 0` with four vertical planar sides
-    and the planar diamond bottom. `z <= 1/2` misses the top and `n = (0, 1, 1)`, `d = 1` crosses it
-    (`beta = 1`, a cut arc that is a straight line with rational parametrisation): in both cases every
+    and the planar diamond bottom. `z <= 1/2` misses the top; the crossing query is `n = (0, 1, 1)`,
+    `d = 11/8` (revision 4: on the top `n . r = y + 1` lies in `[5/4, 7/4]`, so `d = 1` missed it; `11/8`
+    cuts the top along `y = 3/8`, the graph `v = 3/8`, meeting the trims `y = x - 1/4` at `u = 5/8` and
+    `y = -x + 3/4` at `u = 3/8`, both strictly inside their edge intervals and away from the corners;
+    `beta = 1`; the cut arc is a straight line with rational parametrisation). In both cases every
     integral is polynomial with rational ends and the engine must return **exact** forms equal to CH1's
-    for the same prism with a `Plane` top.
+    for the same prism with a `Plane` top; the hand value of the crossing query is
+    `V(y + z <= 11/8) = 167/1536` (exact piecewise integration of the diamond area below `y = 11/8 - z`).
   - **Review counterexamples as unit fixtures**: the `(u, u^2, v)` hexagon and the endpoint-contact
     loop (3.3), the fan region (`1/18`), the `10^6 / (1 + u)` term, the sqrt case of 4.4, the
     `(2,2,4,4)` span, the zero-beta case.
@@ -560,7 +625,7 @@ equilibrium/GZ, admission.
 | Slice | Output | Acceptance criterion | Author | Depends on |
 |---|---|---|---|---|
 | CH3a | C1-C4, knot-space nets and graphs, H1/H2, loops of pieces (four simplicity tests, parity, `sigma_chart`), planar faces with rational-arc edges, extended checks 1-6, snapshot v2, new refusal categories, policy fields | `pytest tests/test_certified_hydrostatics_ch3_admission.py`: both B1 builds and F-A/F-B/F-C admit; each new refusal from a minimal case (unequal weight rows, interior knot, `Straight` edge on the bow, vertex hint moved `1e-6`, shortened and distant edge domains, reversed edge direction, non-graph-like patch, overlapping bows, a face reaching the range box, the endpoint-contact loop, coincident pieces); the hexagon admits; every CH1 fixture's digest and proof bytes unchanged | Sonnet (Opus review) | CH3b predicate layer |
-| CH3b | exact kernel: polynomials over `Q`, coprime basis, partial fractions, `AlgebraicNumber` identity/order, `Enclosure`, 1-D term integrator with allocation, `1/|n|` bounds, per-element metering | `pytest tests/test_certified_hydrostatics_ch3_kernel.py`: enclosures contain `mpmath` references for `int L / Q^k` (50 random pieces, `k in 1..5`, targets `1e-6..1e-20`; max bits recorded); the finding-2 term; identity cases; allocation sums; sqrt case; cancellation at element `k` and deadlines per loop; bit-cap refusals | Opus | - |
+| CH3b | exact kernel: polynomials over `Q`, coprime basis, partial fractions, `AlgebraicNumber` identity/order, `Enclosure`, 1-D term integrator with allocation, `1/|n|` bounds, bivariate resultants and the `Q(u*)` gcd validation (3.3), whole-edge range test, per-element metering | `pytest tests/test_certified_hydrostatics_ch3_kernel.py`: enclosures contain `mpmath` references for `int L / Q^k` (50 random pieces, `k in 1..5`, targets `1e-6..1e-20`; max bits recorded); the finding-2 term; identity cases; allocation sums; sqrt case (`|n|^2 = 2^201`); the round-3 resultant pair (`u* = 0.58504`, `s* = 0.85464`) plus a spurious leading-coefficient root and a pole factor rejected; the range-test trim `12u - 12u^2 - 2` refused; cancellation at element `k` and deadlines per loop; bit-cap refusals | Opus | - |
 | CH3c | curved query engine: breakpoints, chains, clipping, cap reversal, events E1-E7 and Z with the gap, enclosed quantities, forms, proof v2 | `pytest tests/test_certified_hydrostatics_ch3_query.py`: F-A exact values, F-C exact equality with CH1, F-B references, hexagon solid, B1 groups U, B, N, D, M, T and 6 planes of I, scale pairs, transformations, sandwich, half/full general relation; references inside claims or flagged | Sonnet (engine), Opus (4.3, 5, review) | CH3a, CH3b |
 | CH3d | verifier extension (section 6), separate session | `pytest tests/test_certified_hydrostatics_ch3_verify.py`: agrees on every CH3c fixture; refuses: claim shifted by its width (`enclosure`), `lo`/`hi` swapped (`MALFORMED_PROOF`), claim wider than `a` with `accuracy_met` true (`accuracy flag`), `exact` on an enclosed quantity, altered `(poly, ordinal)` or hint (`snapshot`), half-hull result for the full hull (`model`), CH1 attacks on a CH3 preparation; **an explicitly insufficient verifier budget** on an honest claim ends in `BUDGET_EXHAUSTED` (phase `verify`), never acceptance (revision 3); altered execution metadata leaves acceptance unchanged | separate Sonnet session (Opus review) | CH3c |
 | CH3e | Q08 run set (8.1), references (8.2), delivery addendum | all planes answer or refuse typed; all answers verify; matrix met; flags investigated; run record before assessment | Opus | CH3c, CH3d |
@@ -577,7 +642,10 @@ Patch version bump at CH3e (`0.4.7`).
 - Runtime unmeasured end to end.
 - Curved-curved embedding by box disjointness only.
 - Hint tolerances are policy numbers.
-- Arc-arc resultants of degree `<= (2p)^2 = 16` when boxes overlap (not needed for B1).
+- Arc-arc raw resultants of degree `<= 8 p^2 = 32` with the `Q(u*)` validation (3.3) when boxes
+  overlap (not needed for B1, whose mirrored arcs are box-separated); the number-field gcd is the most
+  intricate kernel routine and gets its own CH3b tests (the review's pair, a pair with a spurious
+  leading-coefficient root, a pair with a pole factor).
 - `mpmath` as a test-only dependency (D-CH3-8).
 - Whether a quantity is transcendental is not decided; the engine reports an enclosure whenever an
   enclosed term entered.
@@ -639,3 +707,14 @@ Patch version bump at CH3e (`0.4.7`).
 | 9 | M | fixtures inadmissible | 8.2: F-A parabolic prism, F-B conic slab, F-C diamond prism, all with non-ruling plane trims | for each fixture and trim: `beta` not identically zero; corners strictly inside the range box (F-A `(1/8,1/4), (3/8,1/4), (7/8,3/4), (5/8,3/4)`; F-B `u = 0.1147, 0.3411, 0.6589, 0.8853`; F-C `(1/4,1/2), (1/2,1/4), (3/4,1/2), (1/2,3/4)`); F-A's exact values by the engine's formulas |
 | 10 | M | half/full with heel; group B counts; group M optional | 8.2: general relation `full = half(n, d) ⊕ mirror(half(n~, d))` with the centre face contributing `0`; symmetric doubling only for `n_y = 0` (groups U, B, N, T); 8.1: contact counts corrected (4 vertices, 4 edges, 1 face for both hulls); group M mandatory with a rational construction | `n = C'(1/4) x e_z`, `d_t = n . C(1/4)`: `g(1/4) = g'(1/4) = 0`; `d_t + 2^-10`: two roots on the deck edge (`0.24658`, `0.25342`); `d_t - 2^-10`: none |
 | 11 | m | narrowed-claim test cannot force `BUDGET_EXHAUSTED` | CH3d: an explicitly insufficient verifier budget on an honest claim; exclusion by a shifted claim | none needed |
+
+### Revision 3 review (Codex Astra; resolved in revision 4, each with the exact check run)
+
+| # | Severity | Finding | Resolution | Exact check run |
+|---|---|---|---|---|
+| 1 | M | arc-arc resultant degree bound `(2p)^2` wrong; spurious factors | 3.3: raw resultant bound `8 p^2`; spurious factors identified (powers of `M_1`, outside the interval by C2; common vanishing of leading coefficients, possibly inside); no division — every isolated root `u*` validated by the gcd of `F(u*, s)`, `G(u*, s)` over `Q(u*)` with a real root `s*` in the open `s`-interval; the verifier does the same; 10: own CH3b tests | the review's pair: `Res_s(F, G)` degree 7 `= u^2 (u+1)^2 (1 + 2u - 4u^2 - 4u^3)` (quotient 1, remainder 0); one root `u* = 0.58504` in `(1/4, 2)`; gcd over `Q(u*)` of degree 1; `s* = 0.85464` in `(1/4, 2)`; `C_1(u*) = C_2(s*)` to `1e-12` |
+| 2 | M | half/full applied the reflection sign twice | 8.2: convention stated (`n~ = R n`, `o~ = R o`, `e1~ = R e1`, `e2~ = R e2`): all waterplane quantities add, only `Jy` flips; symmetric case `e2~ = -e2` recovers the doubling / zero rule | starboard unit square (`e1 = x`, `e2 = y`): `Mv = 1/2`, `Iuv = 1/4`; mirrored term `-1/2`, `-1/4`; sums `0`, `0` = full rectangle; asymmetric triangle with `e1 = (1,1,0)`, `e2 = (-1,2,0)`: direct `(1/2, 1/3, -1/3, -5/24)` = relation |
+| 3 | M | interior corners do not ensure the range box | 2.2, 2.3 C2: whole-edge range test (Bernstein sufficient test, else corners and interior extrema at the roots of `N' D - N D'` by single-root tests); `UNSUPPORTED_TRIM / leaves_range_box` | `z <= 12x - 12y - 2` on `S = (u, u^2, v)`: `r = 12u - 12u^2 - 2`, corners `r(1/4) = r(3/4) = 1/4` pass, interior extremum at `u = 1/2` has `r = 1 = v_1`: refused |
+| 4 | M | F-C crossing query missed the top | 8.2 F-C: `d = 11/8` (`v = 3/8`), hand value `V = 167/1536` | `d = 1` gives `v = 0` (outside `[1/4, 3/4]`); `d = 11/8` gives `v = 3/8`, cut points `u = 5/8` on `y = x - 1/4` and `u = 3/8` on `y = -x + 3/4` (open intervals `(1/2, 3/4)`, `(1/4, 1/2)`); `V = 167/1536` by exact piecewise integration |
+| 5 | M | `beta = 1` is not genericity | 8.2 F-A: blanket claim removed; per-query event outcomes listed; the review's plane is an expected `edge_tangency` refusal in group D | `z <= 1/2` and `y + z <= 3/4`: 0 roots on bottom/deck, 1 simple root on each slanted edge; `n = (-3/2, 1, 1)`, `d = 3/16`: deck residual `(u - 3/4)^2`, E2 at `u = 3/4` in `[5/8, 7/8]` |
+| 6 | m | F-B is not the unit circle | 8.2 F-B: the curved boundary is the exact-`w` conic; the solid and the reference defined by it | midpoint `x = y = (1 + 2w) / (2(1 + w)) = 0.70710678118654757`, `x^2 + y^2 - 1 = +2.346e-17` (exact rational) |
