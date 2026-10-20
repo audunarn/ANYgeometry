@@ -206,7 +206,11 @@ responsibilities.
 Every slice gets a Codex Sol review; the design gets a Codex Astra review first. Version: a
 patch bump (owner rule) when CH2 builds the wheel.
 
-## 10. Decisions for the owner
+## 10. Owner decisions (2026-10-20: all as recommended)
+
+Decided: D-CH1 exact rationals + intervals with one-sided limits; D-CH2 basis used as given;
+D-CH3 refuse `NOT_EXACTLY_PLANAR`; D-CH4 verifier from the specification by a separate session;
+D-CH5 curved shells in CH3, refused until then.
 
 - D-CH1: exact rational quantities with float intervals, one-sided waterplane limits by
   symbolic perturbation of `d` (recommended), rather than refusing planes through faces.
