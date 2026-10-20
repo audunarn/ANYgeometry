@@ -705,3 +705,9 @@ def test_a_non_finite_unrelated_vertex_is_a_structured_refusal():
     refusal = _stopped(lambda: prepare(model, faces))
     assert refusal.category is C.NONFINITE_INPUT and refusal.phase == "prepare"
     assert refusal.work["operations"] > 0 and refusal.__cause__ is not None
+
+
+def test_every_refusal_has_a_sub_reason_attribute():
+    from anygeometry.certified_hydrostatics import CertifiedHydrostaticsRefusal, RefusalCategory
+    error = CertifiedHydrostaticsRefusal(RefusalCategory.CANCELLED, "cancelled")
+    assert error.sub_reason is None

@@ -2002,8 +2002,8 @@ def _declared_dependencies(package: str) -> list:
 
 
 def _environment() -> dict:
-    import anygeometry
-    package = os.path.dirname(os.path.abspath(anygeometry.__file__))
+    from .. import __version__ as package_version      # relative: the package must not import itself by name
+    package = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))     # the anygeometry package directory
     rows = []
     for root, dirs, names in os.walk(package):
         dirs[:] = [d for d in _each(dirs, "package_entry") if d != "__pycache__"]
@@ -2041,7 +2041,7 @@ def _environment() -> dict:
             version = None
         deps.append([name.group(0), version])
     return {"distribution": "anygeometry", "distribution_version": dist_version,
-            "package_version": getattr(anygeometry, "__version__", None), "files": files,
+            "package_version": package_version, "files": files,
             "dependencies": _tsorted(deps, key=lambda x: x[0]),
             "python": f"{platform.python_implementation()} {platform.python_version()}"}
 

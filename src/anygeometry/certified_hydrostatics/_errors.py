@@ -43,13 +43,15 @@ class CertifiedHydrostaticsRefusal(GeometryError):
 
     ``category`` is the public enum, ``phase`` one of ``prepare``/``query``/``verify``/``check``,
     ``request`` and ``identity`` the request and model/preparation identity known at the refusal,
-    ``work`` the counts consumed so far (``WorkBudget.counts()``), ``__cause__`` the original error."""
+    ``work`` the counts consumed so far (``WorkBudget.counts()``), ``sub_reason`` the discrepancy class of a
+    ``VERIFICATION_FAILED`` refusal (``None`` for every other refusal), ``__cause__`` the original error."""
 
     def __init__(self, category: RefusalCategory, message: str, *, phase: str = "",
                  request: Mapping[str, Any] | None = None, identity: Mapping[str, Any] | None = None,
-                 work: Mapping[str, Any] | None = None) -> None:
+                 work: Mapping[str, Any] | None = None, sub_reason: str | None = None) -> None:
         super().__init__(f"{category.value}: {message}")
         self.category = category
+        self.sub_reason = sub_reason          # set for VERIFICATION_FAILED (design 6a), None otherwise
         self.detail = message
         self.phase = phase
         self.request = request

@@ -96,8 +96,8 @@ def _dependencies() -> tuple[tuple[str, str | None], ...]:
 
 
 def implementation_identity(meter: Meter) -> ImplementationIdentity:
-    import anygeometry
-    root = Path(anygeometry.__file__).resolve().parent
+    from .. import __version__ as package_version      # relative: the package must not import itself by name
+    root = Path(__file__).resolve().parent.parent       # the anygeometry package directory
     paths = sorted((path for path in root.rglob("*") if path.is_file() and "__pycache__" not in path.parts
                     and path.suffix != ".pyc"), key=lambda path: path.relative_to(root).as_posix())
     files = tuple((path.relative_to(root).as_posix(), _file_digest(path, meter)) for path in paths)
@@ -106,4 +106,4 @@ def implementation_identity(meter: Meter) -> ImplementationIdentity:
     except metadata.PackageNotFoundError:
         installed = None
     python = f"{platform.python_implementation()} {sys.version.split()[0]}"
-    return ImplementationIdentity(DISTRIBUTION, installed, str(anygeometry.__version__), files, _dependencies(), python)
+    return ImplementationIdentity(DISTRIBUTION, installed, str(package_version), files, _dependencies(), python)
