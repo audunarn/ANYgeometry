@@ -4,6 +4,13 @@ All notable user-visible changes to ANYgeometry are documented here.
 
 ## Unreleased
 
+- Add the certified-hydrostatics provider and independent verifier for closed
+  planar shells (`anygeometry.certified_hydrostatics`): exact rational volume,
+  first volume moments and waterplane quantities for a half-space, with
+  one-sided limits at degenerate planes, binary64/decimal enclosures, canonical
+  proofs and a separate verifier. Curved faces, events and intervals are not
+  covered. Package version 0.4.6 (not yet published).
+
 - Add NURBS definitions (`anygeometry.nurbs`: `NurbsCurve` for 3D curves and 2D
   pcurves, `NurbsSurface`, `CurveOnSurface`) with validation (degree <= 7,
   clamped knots, weight ratio <= 1e6, numeric ranges), evaluation and strict

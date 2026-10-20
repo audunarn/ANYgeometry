@@ -78,7 +78,7 @@ jobs:
         run: python tools/ci_durations.py summary kernel-results.xml >> "$GITHUB_STEP_SUMMARY" || true
       - name: Verify package import and CLI version
         run: |
-          python -c "import anygeometry; assert anygeometry.__version__ == '0.4.5'"
+          python -c "import anygeometry; assert anygeometry.__version__ == '0.4.6'"
           python -m anygeometry --version
       - name: Retain effective runtime evidence
         if: always()
