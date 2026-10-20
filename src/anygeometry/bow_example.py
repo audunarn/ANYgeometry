@@ -31,31 +31,42 @@ _STARBOARD = (
 )
 
 
-def bow_starboard_surface() -> NurbsSurface:
-    """The starboard bow patch (y >= 0)."""
-    return NurbsSurface(3, 3, BOW_KNOTS_U, BOW_KNOTS_V, _STARBOARD)
+def _starboard_controls(join: str):
+    if join == "G0":
+        return _STARBOARD
+    if join == "G1":
+        # the row next to X = 15 is the midship section moved forward: the bow leaves the flat bottom
+        # and the flat side tangentially (S_u along x at u = 1)
+        return _STARBOARD[:2] + (tuple((16.75, y, z) for _x, y, z in _STARBOARD[3]),) + _STARBOARD[3:]
+    raise ValueError("join must be 'G0' (a knuckle at X = 15) or 'G1' (tangent to the midship)")
 
 
-def bow_port_surface() -> NurbsSurface:
+def bow_starboard_surface(join: str = "G0") -> NurbsSurface:
+    """The starboard bow patch (y >= 0); ``join``: ``"G0"`` a knuckle at X = 15, ``"G1"`` tangent there."""
+    return NurbsSurface(3, 3, BOW_KNOTS_U, BOW_KNOTS_V, _starboard_controls(join))
+
+
+def bow_port_surface(join: str = "G0") -> NurbsSurface:
     """The port bow patch: the starboard patch mirrored in y = 0, exactly (controls with y negated;
     a zero stays +0.0, so the shared stem and keel controls are bit-identical)."""
-    controls = tuple(tuple((x, -y + 0.0, z) for x, y, z in row) for row in _STARBOARD)
+    controls = tuple(tuple((x, -y + 0.0, z) for x, y, z in row) for row in _starboard_controls(join))
     return NurbsSurface(3, 3, BOW_KNOTS_U, BOW_KNOTS_V, controls)
 
 
-def bow_two_patch() -> tuple[NurbsSurface, NurbsSurface]:
+def bow_two_patch(join: str = "G0") -> tuple[NurbsSurface, NurbsSurface]:
     """``(starboard, port)`` bow patches meeting at the stem (and the keel) in the plane y = 0."""
-    return bow_starboard_surface(), bow_port_surface()
+    return bow_starboard_surface(join), bow_port_surface(join)
 
 
 DECK_HEIGHT = 2.5
 
 
-def build_bow_faces_below_deck(sides=("starboard", "port")):
+def build_bow_faces_below_deck(sides=("starboard", "port"), make_faces: bool = True):
     """The two bow faces below the deck (probe P3b): each bounded by its keel, aft and stem iso-curves
     and its deck section (z = 2.5). The faces share the stem and keel vertices; each has its own stem
     and keel edges on its own support (one shared edge needs ``also_on``, which is not available).
-    ``sides`` selects the faces built. ``(model, {side: face}, {side: {edge name: edge}})``."""
+    ``sides`` selects the faces built; ``make_faces=False`` builds the edges only (faces ``{}``).
+    ``(model, {side: face}, {side: {edge name: edge}})``."""
     from .model import GeometryModel
     from .nurbs import CurveOnSurface, NurbsCurve
     from .surfaces import Plane
@@ -92,5 +103,6 @@ def build_bow_faces_below_deck(sides=("starboard", "port")):
             "deck": model.add_curve(deck_aft, stem_deck, deck),
             "stem": model.add_curve(stem_deck, keel_stem, segment(surface, stem_chart, (0., 0.))),
         }
-        faces[name] = model.add_face(list(edges[name].values()), surface=surface)
+        if make_faces:
+            faces[name] = model.add_face(list(edges[name].values()), surface=surface)
     return model, faces, edges
