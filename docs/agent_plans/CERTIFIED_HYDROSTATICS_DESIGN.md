@@ -1,7 +1,8 @@
-# Certified hydrostatics: design (CH0, revision 2, 2026-10-20)
+# Certified hydrostatics: design (CH0, revision 3, 2026-10-20)
 
-Status: design for owner review; no source changed. Revision 2 answers the Codex Astra review of
-revision 1 (4 blocking, 6 major, 2 minor; table in section 12). Request: ANYstability,
+Status: design for owner review; no source changed. Revision 2 answered the Codex Astra review of
+revision 1 (4 blocking, 6 major, 2 minor); revision 3 answers the review of revision 2 (2 blocking,
+4 major, 1 minor). Both are tabled in section 12. Request: ANYstability,
 `C:/Github/ANYstability/docs/ANYgeometry_CERTIFIED_HYDROSTATICS_HANDOFF.md` (20 October),
 requirements GEO-01..GEO-11 in `ANYstability/docs/ANYgeometry_REQUIREMENTS.md`. Owner decision
 2026-10-20: certified point queries for planar shells first (CH1 + CH2), the curved B1 hull
@@ -104,10 +105,14 @@ CH3. Each recipe3 solid (the hull and each tank) is its own preparation.
     degenerate plane both are always returned and no "plain" section is claimed, even when the
     quantities agree (the review's saddle solid `z <= |x| - |y|`: connected below, two components
     above, equal quantities).
-  - **States per side**: `EMPTY` (no part of the solid below the perturbed plane), `FULL` (all of
-    it), `PARTIAL`. A box cut at its top face is `FULL` with `V` = box volume; its `below` section
-    is the top rectangle, its `above` section is empty. Absent quantities are `None` with the state
-    as the reason, never zero-filled.
+  - **States.** The result has an **occupancy** for the exact half-space, `EMPTY` (`V = 0`),
+    `FULL` (`V` = the solid's volume) or `PARTIAL`, which governs `V` and `J` (always present,
+    exact; `0` for `EMPTY` is an exact value, not an absence). Each side (`below`, `above`) has
+    its own **occupancy** for its perturbed half-space and a **section** flag `PRESENT` or
+    `ABSENT` (no crossed edge); waterplane quantities and topology are present exactly when the
+    side's section is `PRESENT`, otherwise `None`, never zero-filled. Example, a box cut at its top
+    face: occupancy `FULL`; `below`: occupancy `PARTIAL`, section `PRESENT` (the top rectangle);
+    `above`: occupancy `FULL`, section `ABSENT`.
   - The consumer's upright WB1/WB2/WB7/WB8 main-deck query (GEO-06) thereby has an exact,
     documented meaning instead of an exclusion.
 
@@ -134,33 +139,47 @@ chain (non-convex pieces, holes, cancelling bridges).
    exact triangle formulas over `(q, a, b)`, with signed area element
    `((b - a) x (c - a)) . n / (2 |n|)` (rational / `|n|`).
 
-Arithmetic is exact (`Fraction` or integer-scaled). The number of arithmetic operations is
-linear in the number of loop vertices for the query, but bit lengths grow with the summands and
-their differing denominators; work is therefore counted in operations *and* each value is
-checked against a bit-length cap (section 7). Runtime is measured in CH1d, not assumed.
+Arithmetic is exact (`Fraction` or integer-scaled). Clipping and accumulation take a number of
+operations linear in the number of loop vertices; section construction adds the ordering of the
+crossings on each face's cut line (`O(k log k)` comparisons for `k` crossings) and the nesting
+tests (at most loops x loop edges); admission's embedding check is quadratic in faces in the
+worst case (bounding boxes prefilter it). Bit lengths grow with the summands and their differing
+denominators, so work is counted in primitive units *and* each value is checked against a
+bit-length cap (section 7). Runtime is measured in CH1d, not assumed.
 
 ## 5. Sections: symbolic cut points, segments, loops, topology
 
-Simulation of simplicity on `d`: for `below` every vertex with `n . p == d` is treated as
-strictly above, for `above` as strictly below. No vertex then lies on the perturbed plane, so:
+Simulation of simplicity on `d` (Edelsbrunner and Muecke): the `below` side uses the plane
+`n . r = d - epsilon`, the `above` side `n . r = d + epsilon`, for all sufficiently small
+`epsilon > 0`. No shell vertex lies on a perturbed plane. The crossing of an edge `(p, q)` with
+`n . p < d - epsilon < n . q` (or the reverse) is `p + t (q - p)` with
+`t = (d - epsilon - n . p) / (n . (q - p))`, affine in `epsilon`; every cut point is therefore an
+exact **affine point** `c0 + epsilon c1` (rational vectors). Every predicate below (comparison of
+positions along a line, orientation of three points, signed area, point-in-polygon side tests)
+is evaluated on these affine points as a polynomial in `epsilon` with rational coefficients,
+and its sign is **the sign of its first nonzero coefficient** (a predicate that is the zero
+polynomial is an internal inconsistency and refuses `SYMBOLIC_DEGENERACY`). Comparisons along a
+line are degree 1, orientations and signed areas degree 2. Quantities use the limit points
+`c0` (the limits of the integrals as `epsilon -> 0`). Then:
 
 - every **cut point** is the crossing of one shell edge whose endpoints are on opposite sides,
   identified symbolically by that edge, with exact limit coordinates (the exact crossing, or the
   on-plane vertex for an edge with one endpoint on the plane);
 - every face crossed by the plane has an even number of crossed edges. Its cut points lie on the
-  face's cut line; they are ordered along it by exact limit position, ties (several cut points at
-  one on-plane vertex) broken by the first-order perturbation term (each crossing's position as
-  `epsilon -> 0`: a rational slope in `epsilon`); consecutive points in that order alternate
+  face's cut line; they are ordered along it by the symbolic comparison (degree 1); consecutive
+  points in that order alternate
   between entering and leaving the face (crossing parity along the line, holes included), and
   each inside interval is one **cut segment**, directed from the face orientation;
 - a face lying in the plane is entirely above (`below`) or entirely below (`above`): it adds no
   segment and is never counted twice;
 - every cut point (edge) belongs to exactly two faces, so the cut-point graph has degree 2 and
-  splits into closed **loops** with no coordinate matching. Exact signed areas classify loops as
-  outer (positive about `n`) or holes; nesting is decided exactly (point in polygon on limit
-  coordinates, ties at shared limit points broken by the perturbation order). Components are
-  outer loops with their holes. Section topology comes only from these loops; the quantities
-  never depend on loop assembly.
+  splits into closed **loops** with no coordinate matching. A loop's symbolic signed area about
+  `n` (degree 2) classifies it as outer (positive) or hole (negative), also when its limit area
+  is zero (the tetrahedron `(0,0,0), (1,0,0), (0,1,0), (0,0,1)` at `z = 1`, `below`: area
+  `epsilon^2 / 2`, one outer loop; a pyramidal recess gives the collapsing hole). Nesting is
+  decided by symbolic point-in-polygon tests (a vertex of one loop against the other loop's edges;
+  loops do not cross, so one vertex decides). Components are outer loops with their holes.
+  Section topology comes only from these loops; the quantities never depend on loop assembly.
 - **Identity**: a loop's identity is the sorted tuple of the edges it crosses (with the
   preparation's identities); meaningful within one preparation.
 
@@ -170,14 +189,20 @@ and point or edge contacts appear as differences between the two limits.
 ## 6. Preparation lifecycle, proof and verification
 
 **Snapshot semantics** (no live-model promise). `prepare_certified_hydrostatics(model, faces,
-units, policy, budget)` reads the model once and returns an immutable
+units, policy, budget)` reads the model in one consistent read and returns an immutable
 `PreparedCertifiedHydrostatics`: the exact oriented geometry snapshot (rational loops, edge and
 face identities, shared cells), the domain verdict, units and frame convention, policy, model
 identity (model id, revision, document checksum) and implementation identity. Queries answer for
-the snapshot. `check_preparation(model, prepared)` and verification rebuild the snapshot from
-the model they are given and compare its canonical digest exactly, so mutations that bypass
-revision counters, clones sharing an identity and mutation during preparation are caught by
-content, not by counters.
+the snapshot. **Consistent read**: the preparation refuses (`CONCURRENT_MUTATION`) if a model
+transaction is open, and records the model's revision before and after collecting the snapshot,
+refusing if they differ; it then validates only the collected snapshot. `GeometryModel` is not
+thread-safe: the contract requires that no other thread mutates the model during preparation,
+`check_preparation` or verification (a documented precondition, not detected beyond the revision
+guard; public mutation always advances the revision). Later changes are caught by content:
+`check_preparation(model, prepared, budget, cancellation_check)` and verification rebuild the
+snapshot from the model they are given (under the same consistent-read guard) and compare its
+canonical digest exactly, so clones sharing an identity or edits that leave counters unchanged
+cannot pass as the prepared geometry.
 
 **Proof schema** (canonical JSON, sorted keys, rationals as integer pairs): `artifact`
 (distribution name and version, SHA-256 of every file of the installed `anygeometry` package,
@@ -192,15 +217,23 @@ achieved-accuracy flags; work counts).
 **Verifier.** `verify_certified_hydrostatics(model, faces, query, result, expected, budget,
 cancellation_check)` receives the *complete result object* and the consumer's **expected
 identities** (`expected`: artifact hashes or wheel SHA-256, convention version, units, policy),
-never trusting the proof's own declarations. It (1) recomputes the canonical proof from the
-result object and requires it equal to `result.proof` and consistent with `expected`;
+never trusting the proof's own declarations. It (0) requires the query bound in the result to
+equal the caller-supplied `query` exactly (`n`, `d`, `o`, `e1`, `e2`, requested forms and
+accuracies): equal quantities do not identify a query (a fully submerged box gives the same
+result at `z <= 2` and `z <= 3`); (1) recomputes the canonical proof from the result object and
+requires it equal to `result.proof` and consistent with `expected`;
 (2) rebuilds the snapshot from the supplied model and faces, re-runs the section 2 checks and
-requires the digest to match; (3) recomputes every exact quantity, both limits and the topology
+requires the digest to match; (3) recomputes every exact quantity, the occupancies, both limits
+and the topology
 independently: volume and first moments by the divergence theorem with Mirtich's projected face
 integrals on the clipped faces and the cap; cut points by intersecting every edge with the plane
 and segments by exact interval classification along each face's cut line; area and moments by
 Green's theorem in the coordinates of the two smallest components of `n`; (4) requires exact
-equality and checks every enclosure (contains the exact value, meets its claimed width). It
+equality, and checks every returned form against the request and its own rules: a binary64
+enclosure has `lo == hi` (a double equal to the exact value) or `lo`, `hi` adjacent doubles with
+`lo < exact < hi`; a decimal enclosure contains the exact value and its width is at most the
+requested width; every achieved-accuracy flag is recomputed (`True` exactly when the returned
+form meets the requested absolute accuracy, a refusal otherwise) and must match. It
 returns a `VerifiedHydrostatics` object for the consumer to use exclusively; any discrepancy
 raises `VERIFICATION_FAILED` with a sub-reason.
 
@@ -221,19 +254,24 @@ work consumed so far, and the original cause (`__cause__`). Categories: `UNSUPPO
 `NOT_EXACTLY_PLANAR`, `INVALID_LOOP`, `INVALID_HOLES`, `NOT_CLOSED`, `NON_MANIFOLD`,
 `SELF_INTERSECTING`, `INVERTED_ORIENTATION`, `NONFINITE_INPUT`, `INVALID_QUERY`,
 `ACCURACY_UNACHIEVABLE`, `RESULT_OUT_OF_RANGE`, `BIT_LENGTH_EXCEEDED`, `BUDGET_EXHAUSTED`,
+`CONCURRENT_MUTATION`, `SYMBOLIC_DEGENERACY`,
 `CANCELLED`, `DEADLINE_EXCEEDED`, `STALE_PREPARATION` (from `check_preparation`),
 `MALFORMED_PROOF`, `VERIFICATION_FAILED` (sub-reasons: artifact, model, face set, snapshot,
-convention, policy, query, value, enclosure, topology). Consumers never parse messages; a
+convention, policy, query, request, value, enclosure, accuracy flag, state, topology). Consumers never parse messages; a
 refusal is final for its request (no retry with a changed problem).
 
-**Work**: one caller-owned `WorkBudget` (shareable across preparation, queries, batches and
-verification) limits arithmetic operations, the bit length of any value and optionally a
-deadline. Work is reserved before each unit (a loop vertex clipped, an edge intersected, a
-triangle accumulated, a face pair tested, a square-root refinement step) and checked there, so
-the overshoot after a refusal is at most one unit (bounded by the bit-length cap).
-`cancellation_check` and the deadline are polled at the same checkpoints; the non-preemptible
-span is one unit. Work counts are returned on success and on refusal. A proof is size-checked
-before parsing (`MALFORMED_PROOF`).
+**Work**: one caller-owned `WorkBudget` (shareable across preparation, queries, batches,
+verification and `check_preparation`) limits primitive operations, the bit length of any value
+and optionally a deadline. A **primitive unit** is one bounded predicate or accumulation: reading
+one vertex or edge into the snapshot, one exact coplanarity or orientation test, one edge-pair
+intersection test (face-pair tests iterate these, reserving each), one loop-vertex clip, one
+edge-plane crossing, one comparison in a sort, one point-in-polygon edge test, one triangle
+accumulation, one square-root refinement step, one proof field parsed or compared. Each unit
+reserves its cost before it runs and every unit is a checkpoint for the budget, the deadline and
+`cancellation_check`; with the bit-length cap this bounds both the overshoot after a refusal and
+the non-preemptible span to one unit. These guarantees cover every public phase (preparation,
+query, verification, `check_preparation`). Work counts are returned on success and on refusal.
+A proof is size-checked before parsing (`MALFORMED_PROOF`).
 
 ## 8. Events and intervals (CH4 preview; not delivered in CH1)
 
@@ -264,13 +302,29 @@ check_preparation(model, prepared)          # STALE_PREPARATION when the snapsho
 | Slice | Output | Acceptance | Author |
 |---|---|---|---|
 | CH1a | snapshot, admission checks 1-6, refusal enum, implementation identity, `WorkBudget` | recipe3 hull and every tank admit; each refusal category is raised by a minimal case, including the review's wrong-winding bored box (`INVALID_HOLES`), a touching-hole face, two cubes sharing only a vertex (`NON_MANIFOLD`), an adjacent-face overlap and a self-intersecting shell (`SELF_INTERSECTING`) | Sonnet from this specification; Opus review |
-| CH1b | query: clipped-face sums, symbolic cut points, segments, loops, topology, both limits, forms and enclosures | closed forms (Q01): box, tetrahedron, prism, extruded U (two components), bored box (a hole), the saddle solid (below connected, above two components, equal quantities), a box at its top face (FULL; below = top rectangle; above empty; no double cap); `dV/dd = A/|n|` against finite differences of exact `V` on an interval; Q02: translations, exact rational rotations, moment-origin changes, reflection; binary64 width limits and `ACCURACY_UNACHIEVABLE`; planes built with ANYstability's own convention at finite heel/trim | Sonnet; Opus review |
-| CH1c | the independent verifier (section 6) | agrees exactly with CH1b on every CH1b case and on recipe3 for a registered plane set; refuses each substitution, alteration, staleness, wrong expected identity and malformed proof | a separate Sonnet session given only this specification |
+| CH1b | query: clipped-face sums, symbolic cut points, segments, loops, topology, both limits, states, forms and enclosures | the fixtures and expected values of the acceptance manifest (below), including closed forms (Q01) for box, tetrahedron, prism, extruded U (two components), bored box (a hole), the saddle solid (below one loop, above two, equal quantities), the box at its top face (states as in section 3, no double cap), the tetrahedron at its apex (collapsing outer loop) and a pyramidal recess at its apex (collapsing hole), a nesting tie at a shared limit point; the exact derivative check; Q02 translations, exact rational rotations, moment-origin changes, reflection; binary64 width limits and `ACCURACY_UNACHIEVABLE`; planes built with ANYstability's convention at finite heel/trim | Sonnet; Opus review |
+| CH1c | the independent verifier (section 6) | agrees exactly with CH1b on every manifest case; refuses each attack of the manifest: a result for another query with equal quantities (submerged box at `z <= 2` vs `z <= 3`), altered value, bound, state, flag or topology, an enclosure wider than requested (`[0, 2]` for `V = 1` at accuracy `1e-12`), non-adjacent binary64 endpoints, substituted model or face set, stale snapshot, wrong expected identity, malformed or oversized proof | a separate Sonnet session given only this specification |
 | CH1d | recipe3 runs: hull and WB tanks, upright and inclined, the WB1/2/7/8 deck plane | all admit and verify; the deck plane returns both limits; work and timings recorded | Opus |
 | CH2 | delivery folder (the handoff's section 5 inventory for the planar subset): wheel + SHA-256, source commit, docs (API, domain, argument, trust model), commands, requests, responses, proofs, verifier runs, refusals, work accounting, and the open obligations of the scope statement | installed-wheel runs in an isolated environment outside the checkouts | Sonnet; Opus check |
 
-Codex Sol reviews every slice; revision 2 of this design gets a Codex Astra review first. Patch
-version bump at CH2.
+**Acceptance manifest** (`docs/agent_plans/CERTIFIED_HYDROSTATICS_ACCEPTANCE.md`, written in CH1a
+and reviewed before any CH1d/CH2 assessment run; the criteria are fixed there, not after the runs):
+- fixtures: exact definitions (vertices, faces) of every CH1b case, with expected exact values,
+  per-side occupancies, section flags, loop counts and nesting;
+- the **derivative check**: on an open interval between consecutive vertex heights `V(d)` is a
+  polynomial of degree at most 3; it is recovered exactly from four exact evaluations, then its
+  exact derivative at an interior `d` must equal `A / |n|`, which is rational (`A = Q / |n|`):
+  exact equality, no finite-difference tolerance;
+- the recipe3 plane set: for each solid, the upright planes at the drafts listed in the manifest,
+  a heel/trim grid built with ANYstability's convention (`R = Ry(-trim) Rx(heel)`), and the
+  WB1/WB2/WB7/WB8 deck plane, all fixed before the runs;
+- comparison rules: exact equality for every exact form; enclosure rules of section 6;
+- refusal coverage per phase: budget exhaustion, deadline, cancellation and bit-length refusal in
+  preparation, query, verification and `check_preparation`, each with retained work counts;
+- resource limits for the runs (operation budget, bit-length cap, wall-time ceiling per run).
+
+Codex Sol reviews every slice; this design gets Codex Astra reviews until clean. Patch version
+bump at CH2.
 
 ## 11. Owner decisions (2026-10-20, all as recommended)
 
@@ -295,3 +349,15 @@ D-CH5 curved shells in CH3.
 | M10 | scoped delivery | scope statement; the CH2 inventory lists open obligations |
 | m11 | complexity claim | section 4: operation counts, bit-length cap, measured runtime |
 | m12 | vertex heights are candidate events | section 8 |
+
+Revision 2 review (round 2):
+
+| # | Finding | Response |
+|---|---|---|
+| B1 | symbolic orientation and nesting underspecified (collapsing loops have zero limit area) | section 5: affine cut points, every predicate a polynomial in `epsilon` decided by its first nonzero coefficient (degree 2 for orientation and area); `SYMBOLIC_DEGENERACY` for a zero polynomial |
+| B2 | verifier did not check the caller's query, requested forms, accuracies, flags and form rules | section 6 steps (0) and (4) |
+| M3 | top-face example contradicted the side states | section 3: exact-half-space occupancy separate from per-side occupancy and section flag |
+| M4 | hashing a snapshot does not make preparation atomic | section 6: consistent-read guard (no open transaction, equal revision before and after), documented no-concurrent-mutation precondition |
+| M5 | a face-pair test is not a bounded unit; phases without checkpoints | section 7: primitive units, every unit a checkpoint, all public phases including `check_preparation` |
+| M6 | acceptance not concrete or prospective; derivative check not exact | section 10: acceptance manifest fixed before assessment runs; exact polynomial derivative check; verifier attacks; refusals per phase |
+| m7 | linear-cost claim | section 4: linear only for clipping and accumulation; sort, nesting and embedding costs stated |
