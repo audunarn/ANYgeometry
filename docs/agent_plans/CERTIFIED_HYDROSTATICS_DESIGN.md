@@ -342,6 +342,21 @@ reserves its cost before it runs and every unit is a checkpoint for the budget, 
 `cancellation_check`; with the bit-length cap this bounds both the overshoot after a refusal and
 the non-preemptible span to one unit. These guarantees cover every public phase (preparation,
 query, verification, `check_preparation`). Work counts are returned on success and on refusal.
+
+*Listed bulk operations (amendment 6b, owner decision 2026-10-20).* Exactly the operations listed
+here may run as one non-preemptible span larger than one unit; each is bounded by a named limit,
+is charged its units before it starts, and is followed immediately by a checkpoint:
+
+| Bulk operation | Bound |
+|---|---|
+| canonical encoding of the whole model document for `document_checksum` (library serialisation and JSON encoding) | the model's own size (its vertex, edge and face counts); charged one unit per model entity before it runs |
+| one UTF-8 decode of the proof bytes | `max_proof_bytes` (checked before decoding) |
+
+Nothing else is exempt. Every other token scan is bounded by the limit it enforces: an integer
+token is scanned to at most `max_integer_digits + 1` digits before the refusal, never to its end.
+After a refusal no further outside data are read: refusal context is built only from values already
+ingested. The verifier's returned object exposes only values it has checked or recomputed; it never
+forwards reads to the supplied result.
 Before parsing, a proof is checked against a byte-size limit and every integer token against a
 digit limit (both in the policy); a violation refuses `MALFORMED_PROOF` without converting the
 token.

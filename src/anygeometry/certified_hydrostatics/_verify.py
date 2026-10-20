@@ -20,6 +20,10 @@ Structural rules this module keeps (and a source-inspection test enforces):
 * Every loop, comprehension, generator and data builtin over input-sized data ticks once per element (``_each``),
   so the work between two checkpoints does not grow with the data.
 * Structured comparisons of parsed JSON use ``_same`` (type exact: ``true`` is not ``1``).
+* The only operations allowed to run as one span larger than a unit are the two listed in design amendment 6b: the
+  canonical encoding of the model document for ``document_checksum`` (charged one unit per model entity first) and
+  one UTF-8 decode of the proof (bounded by ``max_proof_bytes``). After a refusal no outside data are read.
+* The returned ``VerifiedHydrostatics`` holds only checked or recomputed values; it forwards nothing.
 
 Conventions used here (the specification leaves them open):
 * ``expected`` is a mapping with ``artifact_files`` (sequence of ``(relative path, sha256 hex)``; an
@@ -47,6 +51,9 @@ from typing import Any, Callable, Mapping
 from ..curves import Straight
 from ..surfaces import Plane
 from ._errors import CertifiedHydrostaticsRefusal, RefusalCategory
+from ._forms import QuantityResult
+from ._query import HalfSpaceQuery
+from ._result import CertifiedHydrostaticsResult, Contacts, SectionResult, Topology, TopologyLoop
 from ._work import Meter, WorkBudget
 
 __all__ = ["VerifiedHydrostatics", "verify_certified_hydrostatics"]
@@ -1679,7 +1686,12 @@ def _claim_of(res: _Res) -> dict:
 # ------------------------------------------------------------------ the proof document
 
 
-_NUMBER = re.compile(r"-?(?:0|[1-9][0-9]*)")
+@functools.lru_cache(maxsize=16)
+def _number_pattern(limit: int):
+    """An integer token pattern that consumes at most ``limit + 1`` digits (the scan never runs to the token's end)."""
+    return re.compile("-?(?:0|[1-9][0-9]{0,%d})" % limit)
+
+
 _STRING_SPECIAL = re.compile(r'["\\\x00-\x1f]')
 _HEX4 = re.compile(r"[0-9a-fA-F]{4}")
 _ESCAPES = {'"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t"}
@@ -1791,16 +1803,16 @@ def _parse_proof(proof: bytes, policy: dict) -> dict:
             return False, i + 5
         if text.startswith("null", i):
             return None, i + 4
-        match = _NUMBER.match(text, i)
+        match = _number_pattern(limit).match(text, i)
         if match is None:
             raise bad("an unexpected character")
         token = match.group(0)
         end = match.end()
-        if end < n and text[end] in ".eE0123456789+-":
-            raise bad("non-integer numbers are not allowed")
         digits = token.lstrip("-")
-        if len(digits) > limit:
+        if len(digits) > limit or (end < n and text[end] in "0123456789"):
             raise bad("an integer token exceeds the digit limit")
+        if end < n and text[end] in ".eE+-":
+            raise bad("non-integer numbers are not allowed")
         number = _int_from_digits(digits)
         return (-number if token.startswith("-") else number), end
 
@@ -1998,13 +2010,28 @@ def _environment() -> dict:
             "python": f"{platform.python_implementation()} {platform.python_version()}"}
 
 
+_MODEL_COLLECTIONS = ("vertices", "edges", "faces", "members", "sheets", "parts", "junctions", "attachments", "groups",
+                      "tags")
+
+
 def _document_checksum(model) -> str:
+    """Hash of the canonical model document. The library serialisation and the JSON encoding of the whole document are
+    one bulk operation (design 6b): it is charged one unit per model entity before it starts and is followed
+    immediately by a checkpoint."""
     from ..serialization import to_dict
+    for name in _MODEL_COLLECTIONS:
+        try:
+            count = len(getattr(model, name))
+        except (AttributeError, TypeError):
+            count = 0
+        for _ in _each(range(count), "document_entity"):
+            pass
     document = to_dict(model)
     payload = {k: v for k, v in _each(document.items(), "document_entry") if k != "checksum"}
     # one library call over the whole document: its hashing below is metered per 64 KiB
     data = json.dumps(payload, ensure_ascii=False, allow_nan=False, separators=(",", ":"),
                       sort_keys=True).encode("utf-8")
+    _tick("document_encoded")
     own = _sha256_chunks(data, "document_hash_chunk")
     if own != document["checksum"]["value"]:
         raise _fail("model", "the document checksum could not be reproduced independently")
@@ -2018,9 +2045,11 @@ def _document_checksum(model) -> str:
 class VerifiedHydrostatics:
     """A result whose every claim was recomputed and found equal (design section 6).
 
-    ``exact`` holds the recomputed (trusted) exact values: ``V``, ``J`` (three Fractions), ``occupancy``, ``generic``,
-    ``contacts`` and per side the ``(numerator, norm_squared)`` pairs of the waterplane quantities and the
-    topology. ``result`` is the object that was supplied and checked; attribute access falls through to it."""
+    Nothing here is forwarded to, or references, the objects that were supplied: ``result`` and ``query`` are rebuilt
+    from the checked copies, and ``exact`` holds the recomputed exact values (plain Fractions): ``V``, ``J``,
+    ``occupancy``, ``generic``, ``contacts`` and per side the ``(numerator, norm_squared)`` pairs of the waterplane
+    quantities and the topology. ``volume``, ``moments``, ``sections``, ``occupancy``, ``generic`` and ``contacts`` read
+    the rebuilt ``result``."""
 
     result: Any
     query: Any
@@ -2035,10 +2064,77 @@ class VerifiedHydrostatics:
     exact: dict = field(compare=False)
     work: dict = field(compare=False)
 
-    def __getattr__(self, name):
-        if name.startswith("__") or name == "result":
-            raise AttributeError(name)
-        return getattr(self.result, name)
+    @property
+    def volume(self):
+        return self.result.volume
+
+    @property
+    def moments(self):
+        return self.result.moments
+
+    @property
+    def sections(self):
+        return self.result.sections
+
+    @property
+    def occupancy(self):
+        return self.result.occupancy
+
+    @property
+    def generic(self):
+        return self.result.generic
+
+    @property
+    def contacts(self):
+        return self.result.contacts
+
+
+def _plain(q) -> Fraction:
+    return Fraction(q.numerator, q.denominator)
+
+
+def _plain3(v) -> tuple:
+    return (_plain(v[0]), _plain(v[1]), _plain(v[2]))
+
+
+def _plain_or_none(q):
+    return None if q is None else _plain(q)
+
+
+def _rebuild_quantity(item: _QR) -> QuantityResult:
+    decimal = None if item.decimal is None else (item.decimal[0], item.decimal[1], _plain(item.decimal[2]))
+    return QuantityResult(item.name, _plain_or_none(item.numerator), _plain_or_none(item.norm_squared), item.binary64,
+                          decimal, _plain_or_none(item.accuracy), item.accuracy_met)
+
+
+def _rebuild_section(section: _Sec) -> SectionResult:
+    quantities = None
+    if section.quantities is not None:
+        quantities = tuple(_rebuild_quantity(q) for q in _each(section.quantities, "rebuild"))
+    topology = None
+    if section.topology is not None:
+        topology = Topology(
+            loops=tuple(TopologyLoop(identity, role) for identity, role in _each(section.topology[0], "rebuild")),
+            components=tuple((outer, holes) for outer, holes in _each(section.topology[1], "rebuild")))
+    return SectionResult(section.side, section.occupancy, section.section, quantities, topology)
+
+
+def _rebuild_query(r: _Req) -> HalfSpaceQuery:
+    return HalfSpaceQuery(
+        normal=_plain3(r.normal), offset=_plain(r.offset), waterplane_origin=_plain3(r.origin),
+        waterplane_axes=(_plain3(r.e1), _plain3(r.e2)),
+        absolute_accuracy=tuple((name, _plain(v)) for name, v in _each(r.accuracy, "rebuild")),
+        forms=tuple(_each(r.forms, "rebuild")))
+
+
+def _rebuild_result(res: _Res, r: _Req) -> CertifiedHydrostaticsResult:
+    return CertifiedHydrostaticsResult(
+        query=_rebuild_query(r), occupancy=res.occupancy, generic=res.generic,
+        contacts=Contacts(res.contacts[0], res.contacts[1], res.contacts[2]),
+        volume=_rebuild_quantity(res.volume), moments=tuple(_rebuild_quantity(m) for m in _each(res.moments, "rebuild")),
+        sections=tuple(_rebuild_section(x) for x in _each(res.sections, "rebuild")),
+        work={"operations": res.ops, "units": {k: v for k, v in _each(res.units.items(), "rebuild")}},
+        proof=res.proof)
 
 
 # ------------------------------------------------------------------ main entry
@@ -2058,6 +2154,20 @@ class _Gauge:
         return self.meter.fit(value)
 
 
+def _refusal_context(r) -> dict | None:
+    """Constant-size context of a refusal from the already ingested request (``None`` before it was ingested)."""
+    if r is None:
+        return None
+
+    def pairs(vector):
+        return [[vector[0].numerator, vector[0].denominator], [vector[1].numerator, vector[1].denominator],
+                [vector[2].numerator, vector[2].denominator]]
+
+    return {"normal": pairs(r.normal), "offset": [r.offset.numerator, r.offset.denominator],
+            "waterplane_origin": pairs(r.origin), "waterplane_axes": [pairs(r.e1), pairs(r.e2)],
+            "accuracy_count": len(r.accuracy), "form_count": len(r.forms)}
+
+
 def verify_certified_hydrostatics(model, faces, query, result, expected, *, budget: WorkBudget | None = None,
                                   cancellation_check: Callable[[], bool] | None = None) -> VerifiedHydrostatics:
     """Verify ``result`` for ``query`` against ``model`` / ``faces`` and the consumer's ``expected`` identities.
@@ -2069,31 +2179,30 @@ def verify_certified_hydrostatics(model, faces, query, result, expected, *, budg
     previous = (getattr(_ACTIVE, "gauge", None), getattr(_ACTIVE, "budget", None))
     _ACTIVE.gauge = meter
     _ACTIVE.budget = meter.budget
+    holder: dict = {}
     try:
         exp = _expected_identity(expected)      # a malformed ``expected`` is the caller's error: ValueError/TypeError
         try:
-            return _verify(model, faces, query, result, exp)
+            return _verify(model, faces, query, result, exp, holder)
         except (AttributeError, KeyError, TypeError, IndexError, ValueError) as error:
             if isinstance(error, CertifiedHydrostaticsRefusal):
                 raise
             raise _refuse(C.MALFORMED_PROOF, f"malformed proof or result structure: {error!r}") from error
     except CertifiedHydrostaticsRefusal as error:
-        _ACTIVE.gauge = None            # building the error context is not metered work (no further checkpoints)
+        _ACTIVE.gauge = None            # the error context is not metered work and reads no outside data
         _ACTIVE.budget = None
-        try:
-            request = _req_dict(_ingest_query(query))
-        except Exception:
-            request = None
-        error.complete(phase="verify", request=request, work=meter.budget.counts())
+        error.complete(phase="verify", request=_refusal_context(holder.get("request")),
+                       work=meter.budget.counts())
         raise
     finally:
         _ACTIVE.gauge, _ACTIVE.budget = previous
 
 
-def _verify(model, faces, query, result, exp) -> VerifiedHydrostatics:
+def _verify(model, faces, query, result, exp, holder) -> VerifiedHydrostatics:
     faces = _ingest_faces(faces)
     # (0) the bound query is the caller's query
     mine_req = _ingest_query(query)
+    holder["request"] = mine_req
     try:
         bound_req = _ingest_query(result.query)
     except CertifiedHydrostaticsRefusal:
@@ -2226,13 +2335,17 @@ def _verify(model, faces, query, result, exp) -> VerifiedHydrostatics:
         if not _same(got_loops, side.topology["loops"]) or not _same(got_components, side.topology["components"]):
             raise _fail("topology", f"side {section.side}: loops or components differ")
 
-    exact = {"V": truth["V"], "J": tuple(_each(truth["J"], "compare_element")), "occupancy": truth["occupancy"], "generic": truth["generic"],
-            "contacts": truth["contacts"],
-            "sides": {name: {"occupancy": s.occupancy, "section": s.section, "quantities": s.quantities,
-                             "topology": s.topology} for name, s in _each(truth["sides"].items(), "compare_element")}}
+    exact = {"V": _plain(truth["V"]), "J": tuple(_plain(x) for x in _each(truth["J"], "compare_element")),
+             "occupancy": truth["occupancy"], "generic": truth["generic"],
+             "contacts": {k: tuple(_each(v, "compare_element")) for k, v in _each(truth["contacts"].items(), "compare_element")},
+             "sides": {name: {"occupancy": side.occupancy, "section": side.section,
+                              "quantities": None if side.quantities is None else {
+                                  q: (_plain(v[0]), _plain(v[1])) for q, v in _each(side.quantities.items(), "compare_element")},
+                              "topology": side.topology}
+                       for name, side in _each(truth["sides"].items(), "compare_element")}}
     return VerifiedHydrostatics(
-        result=result, query=query, face_ids=faces, model_id=model_id, revision=revision,
-        document_checksum=checksum, snapshot_digest=digest,
+        result=_rebuild_result(res, mine_req), query=_rebuild_query(mine_req), face_ids=faces, model_id=model_id,
+        revision=revision, document_checksum=checksum, snapshot_digest=digest,
         artifact_files_sha256=hashlib.sha256(_encode(exp["files"])).hexdigest(),
-        proof_sha256=hashlib.sha256(res.proof).hexdigest(), solid_volume=total_volume, exact=exact,
+        proof_sha256=hashlib.sha256(res.proof).hexdigest(), solid_volume=_plain(total_volume), exact=exact,
         work=_ACTIVE.gauge.budget.counts())

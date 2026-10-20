@@ -195,7 +195,7 @@ def test_verifier_agrees_with_the_provider(name, n, d):
     c = case(name)
     q, r, verified = c.run(n, d, accuracy={"V": 1e-9, "A": 1e-9})
     assert isinstance(verified, VerifiedHydrostatics)
-    assert verified.result is r and verified.face_ids == tuple(c.faces)
+    assert verified.result == r and verified.face_ids == tuple(c.faces)
     assert verified.work["operations"] > 0
 
 
@@ -244,7 +244,7 @@ def test_planes_in_the_consumers_convention_verify(name, d, heel, trim):
                        forms=ALL_FORMS)
     c = case(name)
     result = query_certified_hydrostatics(c.prepared, q)
-    assert c.verify(q, result).result is result
+    assert c.verify(q, result).result == result
 
 
 def test_exact_only_and_binary64_only_requests_verify():
@@ -341,7 +341,7 @@ def box_result(box_case):
 
 def test_genuine_result_verifies(box_case, box_result):
     q, r = box_result
-    assert box_case.verify(q, r).result is r
+    assert box_case.verify(q, r).result == r
 
 
 def test_attack_result_of_another_query_with_equal_quantities():
@@ -739,7 +739,7 @@ def test_verification_inside_an_open_transaction_is_refused():
     with c.model.transaction():
         error = refusal_of(lambda: c.verify(q, r))
     assert error.category == C.CONCURRENT_MUTATION and error.phase == "verify"
-    assert c.verify(q, r).result is r
+    assert c.verify(q, r).result == r
 
 
 def test_huge_integers_do_not_depend_on_pythons_digit_limit():
@@ -747,11 +747,11 @@ def test_huge_integers_do_not_depend_on_pythons_digit_limit():
     c = case("F9")
     q, r = c.query(Z_, F(1, 2), forms=("exact",), accuracy={"V": F(1, 10 ** 5000)})
     assert len(r.proof) > 10000
-    assert c.verify(q, r).result is r
+    assert c.verify(q, r).result == r
     old = sys.get_int_max_str_digits()
     sys.set_int_max_str_digits(640)
     try:
-        assert c.verify(q, r).result is r
+        assert c.verify(q, r).result == r
         digits = dict(c.expected, policy=CertifiedHydrostaticsPolicy(max_integer_digits=4000))
         error = refusal_of(lambda: verify_certified_hydrostatics(c.model, c.faces, q, r, digits))
         assert error.category == C.MALFORMED_PROOF and "digit" in error.detail
@@ -763,7 +763,7 @@ def test_non_ascii_units_are_written_as_utf8():
     c = Case(lambda: box(), units="mètres")
     q, r = c.query(Z_, F(1, 2))
     assert "mètres".encode("utf-8") in r.proof
-    assert c.verify(q, r).result is r
+    assert c.verify(q, r).result == r
     wrong = dict(c.expected, units="metres")
     failed(lambda: verify_certified_hydrostatics(c.model, c.faces, q, r, wrong), "convention")
 
@@ -908,7 +908,7 @@ def test_products_and_sums_are_checked_as_they_are_formed():
     q = HalfSpaceQuery(normal=Z_, offset=F(-1), waterplane_axes=((a, a, 0), (a, a + 1, 0)), forms=("exact",))
     r = query_certified_hydrostatics(c.prepared, q)
     assert r.occupancy == "EMPTY"
-    assert c.verify(q, r, budget=WorkBudget(None, 200)).result is r
+    assert c.verify(q, r, budget=WorkBudget(None, 200)).result == r
     error = refusal_of(lambda: c.verify(q, r, budget=WorkBudget(None, 64)))
     assert error.category == C.BIT_LENGTH_EXCEEDED
     # the guard sits in the number type itself: sums, products, quotients and ordering products
@@ -931,7 +931,7 @@ def test_long_decimal_enclosures_span_string_windows():
     c = case("F2")
     q, r = c.query(Z_, F(1, 2), forms=("decimal",), accuracy={"V": F(1, 10 ** 5000)})
     assert max(len(x) for x in r.volume.decimal[:2]) > 5000
-    assert c.verify(q, r).result is r
+    assert c.verify(q, r).result == r
 
 
 def test_long_strings_with_escapes_cross_windows():
@@ -939,7 +939,7 @@ def test_long_strings_with_escapes_cross_windows():
     c = Case(lambda: box(), units=units)
     q, r = c.query(Z_, F(1, 2))
     assert len(units) > 4096 + 1000
-    assert c.verify(q, r).result is r
+    assert c.verify(q, r).result == r
 
 
 def test_decimal_strings_are_not_limited_by_the_integer_digit_limit():
@@ -950,7 +950,7 @@ def test_decimal_strings_are_not_limited_by_the_integer_digit_limit():
                        absolute_accuracy=accuracy, forms=ALL_FORMS)
     r = query_certified_hydrostatics(c.prepared, q)
     assert r.section("plane").quantity("Mu").decimal[0].startswith("-0.5")
-    assert c.verify(q, r).result is r
+    assert c.verify(q, r).result == r
     # integer tokens remain limited
     tight = dict(c.expected, policy=CertifiedHydrostaticsPolicy(max_integer_digits=4))
     assert refusal_of(lambda: verify_certified_hydrostatics(c.model, c.faces, q, r, tight)).category == C.MALFORMED_PROOF
@@ -989,7 +989,7 @@ import pathlib as _pathlib
 
 VERIFY_SOURCE = _pathlib.Path(vm.__file__)
 
-# Functions whose iteration is bounded by a constant (polynomials in epsilon have at most three coefficients, Green
+# Functions whose iteration is bounded by a constant (the lint below is local syntax only, see its docstring) (polynomials in epsilon have at most three coefficients, Green
 # polynomials at most four); every entry is justified on its line. Nothing else may loop over input-sized data
 # without a checkpoint.
 ALLOWED_CONSTANT_SIZE = {
@@ -1032,9 +1032,14 @@ def _constant_iterable(node):
 
 
 def checkpoint_violations(allowed=ALLOWED_CONSTANT_SIZE):
-    """Every For/While/comprehension/generator and every data builtin/method call of the verifier that neither
-    iterates a constant, nor sits in an allowlisted constant-size function, nor ticks (``_tick``/``_each``/``_tsorted``/
-    ``_joined``/``.unit``) within the same loop, comprehension or call arguments."""
+    """Local syntax check only: every For/While/comprehension/generator and every data builtin/method call of
+    ``_verify.py`` must iterate a constant, sit in an allowlisted constant-size function, or tick (``_tick``/``_each``/
+    ``_tsorted``/``_joined``/``.unit``) within the same loop, comprehension or call arguments. It does NOT follow calls
+    (a tick inside a callee does not count for the caller's loop), does not see work inside C-level calls or the
+    control flow that decides how often a loop runs, and cannot judge a loop whose body ticks only on some paths. The
+    only operations exempt from one-unit spans are the two listed bulk operations of design amendment 6b (the model
+    document encoding for ``document_checksum`` and one UTF-8 decode of the proof); both are covered by their own tests
+    (units charged per model entity before the encoding; the decode is bounded by ``max_proof_bytes``)."""
     tree = _ast.parse(VERIFY_SOURCE.read_text(encoding="utf-8"))
     for parent in _ast.walk(tree):
         for child in _ast.iter_child_nodes(parent):
@@ -1278,3 +1283,168 @@ def test_huge_identity_does_not_create_a_long_span_between_checkpoints():
             refusal_of(lambda: c.verify(q, forged, budget=budget, cancellation_check=check))
 
         assert max_lines_between_checkpoints(run_other) <= LINE_BOUND
+
+
+# ------------------------------------------------------------------ CH1c review round 4: regression tests
+
+import types as _types
+import dataclasses as _dataclasses
+import fractions as _fractions
+
+
+class ShiftingResult:
+    """A result proxy that reports the true attributes on the first read and a forged volume afterwards."""
+
+    def __init__(self, real):
+        self._real = real
+        self._volume_reads = 0
+
+    def __getattr__(self, name):
+        value = getattr(self._real, name)
+        if name == "volume":
+            self._volume_reads += 1
+            if self._volume_reads > 1:
+                return replace(value, numerator=F(999))
+        return value
+
+
+def test_the_verified_object_holds_only_checked_values_and_forwards_nothing():
+    c = Case(lambda: box())
+    q, r = c.query(Z_, F(1, 2), forms=("exact", "binary64", "decimal"), accuracy={"V": F(1, 10 ** 6)})
+    proxy = ShiftingResult(r)
+    verified = c.verify(q, proxy)
+    assert verified.exact["V"] == F(1, 2)
+    assert verified.volume.numerator == F(1, 2) and verified.result.volume.numerator == F(1, 2)
+    assert verified.result is not proxy and verified.result is not r and verified.query is not q
+    assert not hasattr(verified, "no_such_attribute")
+    for item in (verified.result, verified.query, verified.exact, verified.work):
+        assert not isinstance(item, ShiftingResult)
+    seen = []
+
+    def walk(value):
+        seen.append(value)
+        if _dataclasses.is_dataclass(value) and not isinstance(value, type):
+            for f in _dataclasses.fields(value):
+                walk(getattr(value, f.name))
+        elif isinstance(value, (tuple, list)):
+            for x in value:
+                walk(x)
+        elif isinstance(value, dict):
+            for x in value.values():
+                walk(x)
+
+    walk(verified)
+    assert all(x is not proxy and x is not r and x is not q for x in seen)
+    assert all(type(x) is not vm._Q for x in seen)            # no guarded internal numbers leak out
+    # every public field equals the recomputed values
+    plain = c.verify(q, r)
+    assert verified.volume == plain.volume == r.volume
+    assert verified.moments == r.moments and verified.sections == r.sections
+    assert verified.occupancy == r.occupancy and verified.generic is r.generic and verified.contacts == r.contacts
+    assert verified.exact["J"] == (F(1, 4), F(1, 4), F(1, 8)) and verified.solid_volume == F(1)
+    assert verified.face_ids == tuple(c.faces) and verified.model_id == str(c.model.model_id)
+    assert verified.work["operations"] > 0
+
+
+def test_document_checksum_is_charged_per_model_entity_before_it_runs(monkeypatch):
+    import anygeometry.serialization as serialization
+
+    def charged(extra):
+        c = Case(lambda: _box_with_isolated_points(extra))
+        q, r = c.query(Z_, F(1, 2))
+        budget = WorkBudget.unlimited()
+        c.verify(q, r, budget=budget)
+        return budget.counts()["units"]["document_entity"], c, q, r
+
+    few, *_ = charged(100)
+    many, c, q, r = charged(1000)
+    assert many - few >= 900 and many >= 1000
+    calls = []
+    real = serialization.to_dict
+    monkeypatch.setattr(serialization, "to_dict", lambda *a, **k: calls.append(1) or real(*a, **k))
+    budget = WorkBudget.unlimited()
+
+    def cancel():
+        return budget.counts()["units"].get("document_entity", 0) >= 1
+
+    error = refusal_of(lambda: c.verify(q, r, budget=budget, cancellation_check=cancel))
+    assert error.category == C.CANCELLED and not calls      # refused before the encoding ran
+    c.verify(q, r)
+    assert calls                                            # ... which does run when not cancelled
+
+
+def _box_with_isolated_points(extra):
+    model, faces = box()
+    for i in range(extra):
+        model.add_point(10. + i, 10., 10.)
+    return model, faces
+
+
+def test_integer_tokens_are_scanned_to_at_most_the_limit_plus_one_digit(monkeypatch):
+    c = Case(lambda: box(), policy=CertifiedHydrostaticsPolicy(max_integer_digits=40))
+    q, r = c.query(Z_, F(1, 2))
+    huge = r.proof.replace(b'"revision":', b'"revision":' + b"9" * 100001 + b',"x":', 1)
+    spans = []
+    original = vm._number_pattern
+
+    def recording(limit):
+        pattern = original(limit)
+
+        class Spy:
+            def match(self, text, pos):
+                found = pattern.match(text, pos)
+                if found is not None:
+                    spans.append(found.end() - pos)
+                return found
+
+        return Spy()
+
+    monkeypatch.setattr(vm, "_number_pattern", recording)
+    error = refusal_of(lambda: c.verify(q, replace(r, proof=huge)))
+    assert error.category == C.MALFORMED_PROOF and "digit" in error.detail
+    assert max(spans) <= 42, max(spans)          # a sign and at most 41 digits, never the 100,001
+    monkeypatch.undo()
+    assert c.verify(q, r).result == r
+
+
+def test_refusal_context_reads_no_outside_data(monkeypatch):
+    c = Case(lambda: box())
+    _q0, r = c.query(Z_, F(1, 2))
+    reads_after = {}
+
+    def run(pairs, cancel_at):
+        accuracy = tuple(("V" if i == 0 else f"V{i}", F(i + 1, 7)) for i in range(pairs))
+        query = _types.SimpleNamespace(normal=(0, 0, 1), offset=F(1, 2), waterplane_origin=(0, 0, 0),
+                                       waterplane_axes=((1, 0, 0), (0, 1, 0)), absolute_accuracy=accuracy,
+                                       forms=("exact",))
+        reads = []
+        original = _fractions.Fraction.numerator
+
+        def counting(self):
+            if type(self) is _fractions.Fraction:
+                reads.append(1)
+            return original.fget(self)
+
+        calls = []
+        marks = []
+
+        def cancel():
+            calls.append(1)
+            if len(calls) >= cancel_at:
+                marks.append(len(reads))
+                return True
+            return False
+
+        monkeypatch.setattr(_fractions.Fraction, "numerator", property(counting))
+        try:
+            error = refusal_of(lambda: verify_certified_hydrostatics(
+                c.model, c.faces, query, r, c.expected, cancellation_check=cancel))
+        finally:
+            monkeypatch.undo()
+        assert error.category == C.CANCELLED
+        assert error.request is None or len(error.request) <= 6      # constant-size context
+        return len(reads) - marks[0]
+
+    for cancel_at in (1, 5, 40):
+        small, large = run(100, cancel_at), run(10000, cancel_at)
+        assert small == 0 and large == 0, (cancel_at, small, large)
