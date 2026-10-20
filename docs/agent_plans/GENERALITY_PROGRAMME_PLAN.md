@@ -28,10 +28,15 @@ Everything listed as merged below is on GitHub main (df0fe27 and later); stateme
 
 Remaining, in the recommended order (owner to confirm each slice):
 
-1. Hygiene: final path green on main; CI action/runner updates; stale worktrees and
-   branches; this document on main; one known-failures list (`docs/testing.md`).
-2. One confirmation review over the final fixes merged without a confirming round (P2,
-   P3, P4a-P4e, H1, H1-F, A1e-lite, A3b, E2 last fixes).
+1. Hygiene: DONE 2026-10-19 (final path green on 9fb68e2; download-artifact on Node 24;
+   stale worktrees and branches removed, E5 restored; this document on main; known local
+   failures in `docs/testing.md`).
+2. Confirmation review of the final fixes merged without a confirming round: DONE
+   2026-10-20. 18 commits, 13 confirmed; 5 major + 2 minor findings fixed on
+   `claude/confirm-fixes` (arc axes far from scale 1; nested lobes of a compound hole walk;
+   NURBS trims with an explicit parameterization and `curve_samples`; `_tight_x` charged to
+   the qualification budget; hydrostatic sweeps with the caller's exact normal, exact
+   bracket heights, any finite normal), four Sol rounds to clean.
 3. Real-bow probe: decide Q2 (bow form) and build the 15-20 m bow joined to the midship
    planes; expected refusals: a patch boundary in the collision-bulkhead plane (P1), the
    stem (two patches need NURBS x NURBS adjacency, 4L), smooth runs tangent to flat
