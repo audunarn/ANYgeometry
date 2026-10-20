@@ -226,8 +226,7 @@ def write_canonical(document, meter=None, *, max_digits: int, max_bytes: int, la
     Integers are written without the interpreter's int/str digit limit; one over ``max_digits`` digits, or
     output over ``max_bytes`` *encoded bytes*, refuses ``RESULT_OUT_OF_RANGE``."""
     from ._errors import RefusalCategory, refuse
-    from ._arith import int_to_str
-    limit = 10 ** max_digits
+    from ._arith import digits_exceed, int_to_str
     parts: list = []
     size = 0
 
@@ -264,7 +263,7 @@ def write_canonical(document, meter=None, *, max_digits: int, max_bytes: int, la
         elif value is None or isinstance(value, bool):
             emit("null" if value is None else ("true" if value else "false"))
         elif isinstance(value, int):
-            if abs(value) >= limit:
+            if digits_exceed(value, max_digits):
                 raise refuse(RefusalCategory.RESULT_OUT_OF_RANGE, "an integer of the proof exceeds the digit limit")
             emit(int_to_str(value))
         elif isinstance(value, str):

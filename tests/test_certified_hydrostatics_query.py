@@ -1130,3 +1130,47 @@ def test_write_canonical_meters_everything_by_default():
     budget = WorkBudget(None, None)
     assert write_canonical({"a": [1, 2]}, Meter(budget), max_digits=10, max_bytes=100) == b'{"a":[1,2]}'
     assert budget.operations == 5                                # object, key, array, 1, 2
+
+
+# ------------------------------------------------------------------ CH fixes 6b: FX3 digit limit without 10 ** limit
+
+_HUGE_LIMIT_SCRIPT = r'''
+import sys
+from fractions import Fraction as F
+from test_certified_hydrostatics_verify import box
+from anygeometry.certified_hydrostatics import (
+    CertifiedHydrostaticsPolicy, HalfSpaceQuery, prepare_certified_hydrostatics, query_certified_hydrostatics)
+model, faces = box()
+policy = CertifiedHydrostaticsPolicy(max_integer_digits=2 ** 32)
+prepared = prepare_certified_hydrostatics(model, faces, policy=policy)
+q = HalfSpaceQuery(normal=(0, 0, 1), offset=F(1, 2), waterplane_origin=(0, 0, F(1, 2)),
+                   waterplane_axes=((1, 0, 0), (0, 1, 0)), forms=("exact",))
+r = query_certified_hydrostatics(prepared, q)
+assert r.volume.numerator == F(1, 2) or r.volume.numerator is not None
+print("OK", len(r.proof))
+'''
+
+
+@pytest.mark.parametrize("digits", [2 ** 32, 2 ** 40])
+def test_a_huge_digit_limit_does_not_build_a_power_of_ten(digits):
+    import os
+    import subprocess
+    import sys
+    here = os.path.dirname(os.path.abspath(__file__))
+    src = os.path.join(os.path.dirname(here), "src")
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join([src, here]))
+    script = _HUGE_LIMIT_SCRIPT.replace("2 ** 32", str(digits))
+    done = subprocess.run([sys.executable, "-B", "-c", script], env=env, capture_output=True, text=True, timeout=60,
+                          cwd=here)
+    assert done.returncode == 0 and done.stdout.startswith("OK"), done.stderr[-2000:]
+
+
+def test_the_digit_limit_is_exact_at_the_boundary():
+    from anygeometry.certified_hydrostatics._arith import digits_exceed
+    for limit in (0, 1, 2, 3, 9, 10, 30, 31, 100, 640, 1000):
+        top = 10 ** limit
+        assert not digits_exceed(top - 1, limit) and digits_exceed(top, limit), limit
+        assert not digits_exceed(-(top - 1), limit) and digits_exceed(-top, limit), limit
+        assert not digits_exceed(0, limit)
+    assert not digits_exceed(10 ** 5000 - 1, 2 ** 32) and not digits_exceed(-(10 ** 5000), 2 ** 32)
+    assert digits_exceed(10 ** 5000, 4999) and not digits_exceed(10 ** 5000, 5001)

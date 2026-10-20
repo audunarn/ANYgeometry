@@ -103,6 +103,30 @@ class Ar:
         return 10 ** digits
 
 
+# log2(10) = 3.32192809488736...; the two constants bracket it, so the bounds below are exact integer arithmetic
+_LOG2_10_LOW = 3321928094
+_LOG2_10_HIGH = 3321928095
+_LOG2_10_SCALE = 10 ** 9
+
+
+def digits_exceed(n: int, max_digits: int) -> bool:
+    """``abs(n) >= 10 ** max_digits`` (more than ``max_digits`` digits) without ever building ``10 ** max_digits``.
+
+    The bit length decides unless it lies in the narrow band around ``max_digits * log2(10)``; only then the exact
+    decimal length is counted (in chunks, see ``int_to_str``)."""
+    bits = abs(n).bit_length()
+    if bits == 0:
+        return False
+    # 2**(bits-1) <= abs(n) < 2**bits and 10**d has between floor(d*log2 10)+1 bits and ceil(d*log2 10)+1 bits
+    low = max_digits * _LOG2_10_LOW // _LOG2_10_SCALE            # <= max_digits * log2(10)
+    high = -(-max_digits * _LOG2_10_HIGH // _LOG2_10_SCALE)       # >= max_digits * log2(10)
+    if bits <= low:
+        return False                         # abs(n) < 2**bits <= 2**low <= 10**max_digits
+    if bits - 1 >= high:
+        return True                          # abs(n) >= 2**(bits-1) >= 2**high >= 10**max_digits
+    return len(int_to_str(abs(n))) > max_digits
+
+
 _CHUNK_DIGITS = 500        # str() of <= 500 digits is below every legal limit (>= 640)
 _CHUNK = 10 ** _CHUNK_DIGITS
 

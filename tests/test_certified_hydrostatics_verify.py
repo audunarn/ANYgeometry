@@ -1522,3 +1522,120 @@ def test_refusal_context_carries_the_exact_ingested_request():
     error = refusal_of(lambda: c.verify(q, with_proof(forged)))
     assert error.request["forms"] == ("exact",)
     assert tuple(error.request["absolute_accuracy"]) == (("V", (1, 100)),)
+
+
+# ------------------------------------------------------------------ CH fixes 6b: FX1 streaming re-encoding, FX2 decimal bounds
+
+TRICKY_STRINGS = [
+    "", "plain", 'a"b', "a\b", '"' * 9000, "\\" * 9000, "\x00\x01\x1f\x7f", "\n\r\t\b\f" * 2000,
+    "m\u00e8tres \u00e9\u00e0 \u20ac", "\U0001F600" * 5000, "a\ud83d\ude00b",            # a pair as two code points
+    "x" * 4095 + '"', "x" * 4095 + "\n", "x" * 4096 + "\\", "x" * 4094 + "\u00e9" + '"\\',
+    "q" * 4095 + "\U0001F600" + "r" * 4097, "\ud83d" + "y" * 4094 + "\ude00",       # pair split across windows
+    "".join(chr(i) for i in range(0, 0x250)) * 20,
+]
+
+
+@pytest.mark.parametrize("window", [4096, 7, 1])
+@pytest.mark.parametrize("text", TRICKY_STRINGS, ids=range(len(TRICKY_STRINGS)))
+def test_window_escaper_equals_json_dumps(text, window, monkeypatch):
+    monkeypatch.setattr(vm, "_WINDOW", window)
+    pieces = list(vm._json_string_pieces(text))
+    assert "".join(pieces) == json.dumps(text, ensure_ascii=False)
+    assert len(pieces) <= max(1, -(-len(text) // window)) + 2        # one piece per window plus the quotes
+
+
+class _DumpsSpy:
+    """Stands in for the ``json`` module of the verifier and records the longest string handed to ``dumps``."""
+
+    def __init__(self):
+        self.longest = 0
+
+    def dumps(self, obj, *args, **kw):
+        if isinstance(obj, str):
+            self.longest = max(self.longest, len(obj))
+        return json.dumps(obj, *args, **kw)
+
+    def __getattr__(self, name):
+        return getattr(json, name)
+
+
+def _long_units_case(n):
+    c = Case(lambda: box(), units="m" * n)
+    q, r = c.query(Z_, F(1, 2), forms=("exact",))
+    return c, q, r
+
+
+def test_a_long_string_token_is_escaped_and_compared_window_by_window(monkeypatch):
+    c, q, r = _long_units_case(100_000)
+    spy = _DumpsSpy()
+    monkeypatch.setattr(vm, "json", spy)
+    ops = c.verify(q, r).work["operations"]
+    assert 0 < spy.longest <= vm._WINDOW, spy.longest             # no single dumps call spans more than one window
+    c2, q2, r2 = _long_units_case(200_000)
+    ops2 = c2.verify(q2, r2).work["operations"]
+    assert ops2 - ops >= 100_000 // vm._WINDOW                    # checkpoints grow with the token length
+    c0, q0, r0 = _long_units_case(10)
+    assert ops - c0.verify(q0, r0).work["operations"] >= 2 * (100_000 // vm._WINDOW)
+
+
+def test_the_canonical_comparison_is_incremental_and_never_joins_the_document():
+    c, q, r = _long_units_case(100_000)
+    ok = c.verify(q, r).work["operations"]
+    reordered = json.dumps(dict(reversed(list(json.loads(r.proof).items()))), separators=(",", ":"),
+                           ensure_ascii=False).encode()
+    error = failed(lambda: c.verify(q, replace(r, proof=reordered)), "value")
+    # refused at the first window that differs: far fewer checkpoints than a complete comparison needs
+    assert error.work["operations"] < ok - 100_000 // vm._WINDOW + 10, (error.work["operations"], ok)
+    source = VERIFY_SOURCE.read_text(encoding="utf-8")
+    start = source.index("def _encode")
+    assert 'b"".join' not in source[start:source.index("def _same")]
+    assert "canonical != res.proof" not in source
+
+
+def test_a_non_canonical_long_string_is_still_refused_with_the_same_reason():
+    c, q, r = _long_units_case(20_000)
+    spaced = r.proof.replace(b'"units":', b'"units": ', 1)
+    assert spaced != r.proof
+    assert refusal_of(lambda: c.verify(q, replace(r, proof=spaced))).category == C.MALFORMED_PROOF
+    swapped = r.proof.replace(b"m" * 10, b"m" * 9 + b"n", 1)
+    failed(lambda: c.verify(q, replace(r, proof=swapped)), "convention")
+
+
+def _dry_box_with_decimal(lo, hi):
+    c = Case(lambda: box())
+    q, r = c.query(Z_, F(-1))                                      # z <= -1: dry
+    vol = r.volume
+    assert vol.decimal is not None
+    bad = replace(r, volume=replace(vol, decimal=(lo, hi, vol.decimal[2])))
+    return c, q, with_proof(bad)
+
+
+@pytest.mark.parametrize("lo,hi", [("0." + "0" * 20000, "0"), ("1" * 20000 + ".5", "0"), ("0", "0." + "0" * 20000),
+                                   ("-" + "0" * 5000 + "." + "0" * 20000, "0")],
+                         ids=["fraction", "numerator", "hi-fraction", "negative"])
+def test_a_long_decimal_bound_is_refused_before_a_power_of_ten_is_built(lo, hi, monkeypatch):
+    c, q, r = _dry_box_with_decimal(lo, hi)
+    seen = []
+    original = vm._fit
+
+    def spy(x):
+        seen.append(int(x.numerator if isinstance(x, F) else x).bit_length()
+                    if not isinstance(x, F) else max(x.numerator.bit_length(), x.denominator.bit_length()))
+        return original(x)
+
+    monkeypatch.setattr(vm, "_fit", spy)
+    error = refusal_of(lambda: c.verify(q, r, budget=WorkBudget(None, 128)))
+    assert error.category == C.BIT_LENGTH_EXCEEDED and error.phase == "verify"
+    assert max(seen, default=0) <= 128 + 1100, max(seen)          # at most one 300-digit chunk beyond the cap
+    assert error.work["max_bits_seen"] <= 128 + 1100
+
+
+def test_the_decimal_precheck_is_exact_at_the_cap(monkeypatch):
+    for k in (1, 2, 7, 38, 39, 40, 100, 301, 1000):
+        exact = (10 ** k).bit_length()
+        assert vm._pow10_bits_lower(k) <= exact <= vm._pow10_bits_lower(k) + 1, k
+    c, q, r = _dry_box_with_decimal("0." + "0" * 30, "0")
+    assert c.verify(q, r, budget=WorkBudget(None, 128)).result is not None
+    assert vm._pow10_bits_lower(30) == (10 ** 30).bit_length() == 100
+    tight = refusal_of(lambda: c.verify(q, r, budget=WorkBudget(None, 99)))
+    assert tight.category == C.BIT_LENGTH_EXCEEDED

@@ -289,57 +289,88 @@ def _reversed_list(items):
     return out
 
 
-def _encode(document) -> bytes:
-    """Canonical JSON (design 6a): UTF-8, sorted keys, no whitespace, full integers; one checkpoint per element."""
-    out: list = []
+def _json_string_pieces(text: str):
+    """``json.dumps(text, ensure_ascii=False)`` as pieces: the opening quote, the escaped text window by window (at most
+    ``_WINDOW`` characters per checkpoint), the closing quote. Escaping is per character, so the concatenation equals
+    the whole-string result exactly (a window boundary never falls inside an escape sequence)."""
+    yield '"'
+    for k in range(0, len(text), _WINDOW):
+        _tick("escape_window")
+        yield json.dumps(text[k:k + _WINDOW], ensure_ascii=False)[1:-1]
+    yield '"'
 
-    def emit(node, depth):
-        _tick("serialise_element")
-        if depth > 64:
-            raise _refuse(C.MALFORMED_PROOF, "nesting too deep")
-        if node is None:
-            out.append("null")
-        elif node is True:
-            out.append("true")
-        elif node is False:
-            out.append("false")
-        elif type(node) is int:
-            out.append(_int_to_digits(node))
-        elif type(node) is str:
-            out.append(json.dumps(node, ensure_ascii=False))
-        elif type(node) in (list, tuple):
-            out.append("[")
-            first = True
-            for item in _each(node, "serialise_element"):
-                if not first:
-                    out.append(",")
-                first = False
-                emit(item, depth + 1)
-            out.append("]")
-        elif type(node) is dict:
-            out.append("{")
-            first = True
-            for key in _tsorted(node):
-                if not first:
-                    out.append(",")
-                first = False
-                out.append(json.dumps(key, ensure_ascii=False))
-                out.append(":")
-                emit(node[key], depth + 1)
-            out.append("}")
-        else:
-            raise _refuse(C.MALFORMED_PROOF, f"cannot serialise {type(node).__name__}")
 
+def _encode_pieces(node, depth):
+    """Canonical JSON text of ``node`` (design 6a) as a lazy stream of pieces; one checkpoint per element, per
+    window of a long string and per chunk of a long integer."""
+    _tick("serialise_element")
+    if depth > 64:
+        raise _refuse(C.MALFORMED_PROOF, "nesting too deep")
+    if node is None:
+        yield "null"
+    elif node is True:
+        yield "true"
+    elif node is False:
+        yield "false"
+    elif type(node) is int:
+        yield _int_to_digits(node)
+    elif type(node) is str:
+        yield from _json_string_pieces(node)
+    elif type(node) in (list, tuple):
+        yield "["
+        first = True
+        for item in _each(node, "serialise_element"):
+            if not first:
+                yield ","
+            first = False
+            yield from _encode_pieces(item, depth + 1)
+        yield "]"
+    elif type(node) is dict:
+        yield "{"
+        first = True
+        for key in _tsorted(node):
+            if not first:
+                yield ","
+            first = False
+            yield from _json_string_pieces(key)
+            yield ":"
+            yield from _encode_pieces(node[key], depth + 1)
+        yield "}"
+    else:
+        raise _refuse(C.MALFORMED_PROOF, f"cannot serialise {type(node).__name__}")
+
+
+def _encode_windows(document):
+    """The canonical UTF-8 encoding of ``document`` as a lazy stream of byte windows of at most ``_WINDOW``
+    characters each (one checkpoint per window); nothing is joined."""
     try:
-        emit(document, 0)
-        encoded = []
-        for piece in _each(out, "encode_piece"):
+        for piece in _each(_encode_pieces(document, 0), "encode_piece"):
             for k in range(0, len(piece), _WINDOW):
                 _tick("encode_window")
-                encoded.append(piece[k:k + _WINDOW].encode("utf-8"))
-        return b"".join(_each(encoded, "join_piece"))
+                yield piece[k:k + _WINDOW].encode("utf-8")
     except UnicodeEncodeError as error:
         raise _refuse(C.MALFORMED_PROOF, "the document is not valid UTF-8 text") from error
+
+
+def _sha256_windows(windows, kind: str) -> str:
+    h = hashlib.sha256()
+    for window in windows:
+        _tick(kind)
+        h.update(window)
+    return h.hexdigest()
+
+
+def _equals_windows(windows, data: bytes) -> bool:
+    """Whether the stream of byte windows spells exactly ``data``; compared window by window with one checkpoint per
+    window, stopping at the first difference."""
+    position = 0
+    for window in windows:
+        _tick("compare_element")
+        end = position + len(window)
+        if data[position:end] != window:
+            return False
+        position = end
+    return position == len(data)
 
 
 def _same(a, b) -> bool:
@@ -1606,6 +1637,44 @@ def _decimal_parts(text):
     return negative, text[start:dot], text[dot + 1:]
 
 
+_LOG2_10_LOW = 3321928094          # 3.321928094 < log2(10) = 3.32192809488...; exact integer arithmetic, no floats
+_LOG2_10_SCALE = 10 ** 9
+
+
+def _pow10_bits_lower(k: int) -> int:
+    """A lower bound of ``(10 ** k).bit_length()`` (exact for every k up to 10**9 or so; never above the true value)."""
+    return k * _LOG2_10_LOW // _LOG2_10_SCALE + 1
+
+
+def _significant_digits(whole: str, frac: str) -> int:
+    """The number of digits of ``whole + frac`` after its leading zeros, found window by window (one checkpoint each)."""
+    skipped = 0
+    for part in (whole, frac):
+        for k in range(0, len(part), _WINDOW):
+            _tick("decimal_window")
+            window = part[k:k + _WINDOW]
+            stripped = len(window.lstrip("0"))
+            skipped += len(window) - stripped
+            if stripped:
+                return len(whole) + len(frac) - skipped
+    return 0
+
+
+def _require_decimal_fits(whole: str, frac: str) -> None:
+    """Refuse ``BIT_LENGTH_EXCEEDED`` before any integer is built when the denominator ``10 ** len(frac)`` or the
+    numerator (its digits without leading zeros) is certain to exceed the active bit cap."""
+    budget = getattr(_ACTIVE, "budget", None)
+    cap = None if budget is None else budget.max_bits
+    if cap is None:
+        return
+    digits = _significant_digits(whole, frac)     # a number of k digits (leading one nonzero) is >= 10 ** (k - 1)
+    for name, bits in (("denominator", _pow10_bits_lower(len(frac))),
+                       ("numerator", _pow10_bits_lower(digits - 1) if digits else 0)):
+        if bits > cap:
+            raise _refuse(C.BIT_LENGTH_EXCEEDED,
+                          f"a decimal bound's {name} needs at least {bits} bits, the cap is {cap}")
+
+
 def _decimal_fraction(text):
     """A decimal bound (a trusted ``str``); the grammar is `-?digits(.digits)?`. The digit limit of the policy applies
     to integer tokens of the proof only, not to decimal strings (their length is bounded by the proof's byte limit)."""
@@ -1613,6 +1682,7 @@ def _decimal_fraction(text):
     if parts is None:
         raise _fail("enclosure", "a decimal bound is not a plain decimal string")
     negative, whole, frac = parts
+    _require_decimal_fits(whole, frac)
     numerator = _int_from_digits(whole + frac)
     denominator = _fit(10 ** len(frac))
     value = _fit(_Q(numerator, denominator))
@@ -2271,10 +2341,7 @@ def _verify(model, faces, query, result, exp, holder) -> VerifiedHydrostatics:
     if difference:
         path, kind = difference
         raise _fail(_classify(path, kind), f"the proof's claim differs from the result object at {path!r}")
-    canonical = _encode(proof)
-    for _chunk in range(0, max(len(canonical), 1), _CHUNK):
-        _tick("compare_element")
-    if canonical != res.proof:
+    if not _equals_windows(_encode_windows(proof), res.proof):
         raise _fail("value", "the proof is not in canonical form")
     if not _same(proof["preparation_policy"], exp["policy"]):
         raise _fail("policy", "the proof's preparation policy differs from the expected policy")
@@ -2304,7 +2371,7 @@ def _verify(model, faces, query, result, exp, holder) -> VerifiedHydrostatics:
         raise _refuse(C.CONCURRENT_MUTATION, "the model changed during verification")
     _consistent_read(model)
     document = _snapshot_document(snap)
-    digest = _sha256_chunks(_encode(document), "snapshot_hash_chunk")
+    digest = _sha256_windows(_encode_windows(document), "snapshot_hash_chunk")
     pm = proof["model"]
     if not _same(digest, pm["snapshot_digest"]):
         raise _fail("snapshot", "the rebuilt snapshot digest differs from the proof")
@@ -2383,6 +2450,6 @@ def _verify(model, faces, query, result, exp, holder) -> VerifiedHydrostatics:
     return VerifiedHydrostatics(
         result=_rebuild_result(res, mine_req), query=_rebuild_query(mine_req), face_ids=faces, model_id=model_id,
         revision=revision, document_checksum=checksum, snapshot_digest=digest,
-        artifact_files_sha256=_sha256_chunks(_encode(exp["files"]), "files_hash_chunk"),
+        artifact_files_sha256=_sha256_windows(_encode_windows(exp["files"]), "files_hash_chunk"),
         proof_sha256=_sha256_chunks(res.proof, "proof_hash_chunk"), solid_volume=_plain(total_volume), exact=exact,
         work=_ACTIVE.gauge.budget.counts())
