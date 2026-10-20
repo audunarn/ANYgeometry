@@ -759,3 +759,190 @@ def test_fabricated_work_counts_are_refused(box_case, box_result):
         failed(lambda: box_case.verify(q, forged), "value")
     for work in ({"operations": 3}, {"operations": 3, "units": []}, None, 5):
         failed(lambda: box_case.verify(q, replace(r, work=work)), "value")
+
+
+# ------------------------------------------------------------------ CH1c review round 2: regression tests
+
+import sys as _sys
+import anygeometry.certified_hydrostatics._verify as vm
+
+
+def comb(teeth):
+    """Prism over a comb polygon (a base bar with ``teeth`` upright teeth): many edges crossed by one plane."""
+    width = 2 * teeth - 1
+    pts = [(0., 0.), (float(width), 0.)]
+    for j in range(teeth):
+        hi = width - 2 * j
+        lo = hi - 1
+        pts += [(float(hi), 3.), (float(lo), 3.)]
+        if j < teeth - 1:
+            pts += [(float(lo), 1.), (float(lo - 1), 1.)]
+    return extrusion(pts, 1.0)
+
+
+def max_lines_between_checkpoints(call):
+    """Run ``call(check, budget)`` while counting executed lines of the verifier between consecutive cancellation
+    callbacks of the recomputation phase (tracing starts once the first vertex height has been computed).
+
+    Arithmetic wrappers are not counted (their cost is one rational operation); returns the largest gap."""
+    skip = {"operation", "_wrap", "_fit", "fit", "_guarded", "_ordered", "check_value"}
+    state = {"count": 0, "gap": 0, "on": False}
+    budget = WorkBudget.unlimited()
+
+    def local(frame, event, arg):
+        if event == "line":
+            state["count"] += 1
+        return local
+
+    def tracer(frame, event, arg):
+        code = frame.f_code
+        if code.co_filename.endswith("_verify.py") and code.co_name not in skip:
+            return local
+        return None
+
+    def check():
+        if state["on"]:
+            state["gap"] = max(state["gap"], state["count"])
+            state["count"] = 0
+        elif budget.counts()["units"].get("vertex_height", 0):
+            state["on"] = True
+            _sys.settrace(tracer)
+        return False
+
+    previous = _sys.gettrace()
+    try:
+        call(check, budget)
+    finally:
+        _sys.settrace(previous)
+    state["gap"] = max(state["gap"], state["count"])
+    assert state["on"]
+    return state["gap"]
+
+
+# a single checkpoint interval may run one bounded predicate (an edge integral, one quantity comparison)
+LINE_BOUND = 450
+
+
+@pytest.mark.parametrize("plane", [(Z_, F(1, 2)), (Y_, F(2)), (Y_, F(1))], ids=["clip", "sort-and-nesting", "contact"])
+def test_no_uninterruptible_span_grows_with_the_data(plane):
+    c = Case(lambda: comb(18))
+    n, d = plane
+    q, r = c.query(n, d, forms=("exact",))
+    gap = max_lines_between_checkpoints(
+        lambda check, budget: c.verify(q, r, budget=budget, cancellation_check=check))
+    assert gap <= LINE_BOUND, gap
+
+
+def test_every_loop_vertex_is_its_own_checkpoint_in_clipping():
+    c = Case(lambda: comb(18))
+    q, r = c.query(Z_, F(1, 2), forms=("exact",))
+    lt_calls = []
+    cls = getattr(vm, "_Q", F)
+    original = cls.__lt__
+
+    def counting(self, other):
+        lt_calls.append(1)
+        return original(self, other)
+
+    trail = []
+
+    def check():
+        trail.append(len(lt_calls))
+        return False
+
+    cls.__lt__ = counting
+    try:
+        c.verify(q, r, cancellation_check=check)
+    finally:
+        cls.__lt__ = original
+    worst = max(b - a for a, b in zip(trail, trail[1:]))
+    assert worst <= 40, worst        # comparisons between two checkpoints: a bounded number, not a loop's worth
+
+
+def test_requested_accuracies_are_checked_against_the_bit_cap():
+    c = case("F9")
+    q = make_query(Z_, F(1, 2), forms=("exact",), accuracy={"V": F(1, 10 ** 100)})
+    r = query_certified_hydrostatics(c.prepared, q)
+    assert c.verify(q, r).work["max_bits_seen"] >= 330
+    error = refusal_of(lambda: c.verify(q, r, budget=WorkBudget(None, 64)))
+    assert error.category == C.BIT_LENGTH_EXCEEDED and error.phase == "verify"
+
+
+def test_products_and_sums_are_checked_as_they_are_formed():
+    a = 2 ** 63
+    c = case("F9")
+    q = HalfSpaceQuery(normal=Z_, offset=F(-1), waterplane_axes=((a, a, 0), (a, a + 1, 0)), forms=("exact",))
+    r = query_certified_hydrostatics(c.prepared, q)
+    assert r.occupancy == "EMPTY"
+    assert c.verify(q, r, budget=WorkBudget(None, 200)).result is r
+    error = refusal_of(lambda: c.verify(q, r, budget=WorkBudget(None, 64)))
+    assert error.category == C.BIT_LENGTH_EXCEEDED
+    # the guard sits in the number type itself: sums, products, quotients and ordering products
+    gauge = vm._Gauge(vm.Meter(WorkBudget(None, 64)))
+    vm._ACTIVE.gauge, vm._ACTIVE.budget = gauge, gauge.budget
+    try:
+        big = vm._Q(2 ** 40 + 1, 2 ** 40 + 3)
+        other = vm._Q(2 ** 40 + 5, 2 ** 40 + 7)
+        for operation in (lambda: big * other, lambda: big + other, lambda: big - other, lambda: big / other,
+                          lambda: big < other, lambda: big >= other, lambda: 2 ** 40 * big * 2 ** 30):
+            with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+                operation()
+            assert info.value.category == C.BIT_LENGTH_EXCEEDED
+        assert (vm._Q(3, 4) * vm._Q(2, 3)) == F(1, 2) and vm._Q(1, 3) < vm._Q(1, 2)
+    finally:
+        vm._ACTIVE.gauge = vm._ACTIVE.budget = None
+
+
+def test_long_decimal_enclosures_span_string_windows():
+    c = case("F2")
+    q, r = c.query(Z_, F(1, 2), forms=("decimal",), accuracy={"V": F(1, 10 ** 5000)})
+    assert max(len(x) for x in r.volume.decimal[:2]) > 5000
+    assert c.verify(q, r).result is r
+
+
+def test_long_strings_with_escapes_cross_windows():
+    units = ('m\u00e8"\\x\n' * 900) + "end"
+    c = Case(lambda: box(), units=units)
+    q, r = c.query(Z_, F(1, 2))
+    assert len(units) > 4096 + 1000
+    assert c.verify(q, r).result is r
+
+
+def test_decimal_strings_are_not_limited_by_the_integer_digit_limit():
+    policy = CertifiedHydrostaticsPolicy(max_integer_digits=8)
+    c = Case(lambda: box(), policy=policy)
+    accuracy = {name: F(1, 10 ** 6) for name in ("V", "Jx", "Jy", "Jz", "A", "Mu", "Mv", "Iuu", "Ivv", "Iuv")}
+    q = HalfSpaceQuery(normal=Z_, offset=F(1, 2), waterplane_origin=(1, 1, 0), waterplane_axes=((1, 0, 0), (0, 1, 0)),
+                       absolute_accuracy=accuracy, forms=ALL_FORMS)
+    r = query_certified_hydrostatics(c.prepared, q)
+    assert r.section("plane").quantity("Mu").decimal[0].startswith("-0.5")
+    assert c.verify(q, r).result is r
+    # integer tokens remain limited
+    tight = dict(c.expected, policy=CertifiedHydrostaticsPolicy(max_integer_digits=4))
+    assert refusal_of(lambda: verify_certified_hydrostatics(c.model, c.faces, q, r, tight)).category == C.MALFORMED_PROOF
+
+
+@pytest.mark.parametrize("regenerate", [False, True])
+def test_booleans_and_integers_must_have_their_exact_types(box_case, box_result, regenerate):
+    q, r = box_result
+    fix = (lambda x: with_proof(x)) if regenerate else (lambda x: x)
+    failed(lambda: box_case.verify(q, fix(replace(r, generic=1))), "value")
+    failed(lambda: box_case.verify(q, fix(alter_quantity(r, "V", accuracy_met=1))), "accuracy flag")
+    failed(lambda: box_case.verify(q, fix(alter_quantity(r, ("plane", "A"), accuracy_met=1))), "accuracy flag")
+    failed(lambda: box_case.verify(q, fix(alter_quantity(r, ("plane", "Mu"), accuracy_met=0))), "accuracy flag")
+    c = case("F1")
+    q5, r5 = c.query(Z_, F(5))
+    assert r5.contacts.vertices
+    for field_name in ("vertices", "edges", "faces"):
+        ids = getattr(r5.contacts, field_name)
+        if ids:
+            forged = replace(r5.contacts, **{field_name: (float(ids[0]),) + tuple(ids[1:])})
+            failed(lambda: c.verify(q5, fix(replace(r5, contacts=forged))), "value")
+    topology_case = case("F5")
+    qt, rt = topology_case.query(Z_, F(1, 2))
+    section = rt.section("plane")
+    loop = section.topology.loops[0]
+    twisted = Topology(loops=(TopologyLoop((float(loop.identity[0]),) + tuple(loop.identity[1:]), loop.role),)
+                       + section.topology.loops[1:], components=section.topology.components)
+    failed(lambda: topology_case.verify(qt, fix(replace(rt, sections=(replace(section, topology=twisted),)))),
+           "topology")

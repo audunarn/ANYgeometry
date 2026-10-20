@@ -19,11 +19,13 @@ Conventions used here (the specification leaves them open):
 """
 from __future__ import annotations
 
+import functools
 import hashlib
 import importlib.metadata as _metadata
 import json
 import json.decoder as _json_decoder
 import math
+import operator
 import os
 import platform
 import re
@@ -80,36 +82,128 @@ _ACTIVE = threading.local()
 
 
 def _fit(x):
-    """Check an exact value against the bit-length cap of the running verification (every result is checked)."""
-    gauge = getattr(_ACTIVE, "gauge", None)
-    if gauge is not None:
-        gauge.fit(x)
+    """Check an exact value against the bit-length cap of the running verification.
+
+    Fast path: the budget's high-water mark is compared directly; the budget itself decides (and raises) whenever the
+    value exceeds the largest length seen so far."""
+    budget = getattr(_ACTIVE, "budget", None)
+    if budget is not None:
+        if isinstance(x, Fraction):
+            bits = max(x.numerator.bit_length(), x.denominator.bit_length())
+        else:
+            bits = int(x).bit_length()
+        if bits > budget._bits or (budget.max_bits is not None and bits > budget.max_bits):
+            budget.check_value(x)
     return x
 
 
+def _tick(kind: str) -> None:
+    """One checkpoint (budget, deadline, cancellation) for one processed element."""
+    gauge = getattr(_ACTIVE, "gauge", None)
+    if gauge is not None:
+        gauge.unit(kind)
+
+
+class _Q(Fraction):
+    """A rational whose every arithmetic result and every ordering product is checked against the bit cap as it is
+    formed. All exact values of the verifier are ``_Q``; mixed operations with plain Fractions or ints stay guarded
+    because ``_Q`` is a subclass (its reflected operators run first)."""
+
+    __slots__ = ()
+
+
+def _wrap(result):
+    if isinstance(result, Fraction):
+        _fit(result)
+        return _Q._from_coprime_ints(result.numerator, result.denominator)
+    return result
+
+
+def _guarded(name):
+    base = getattr(Fraction, name)
+
+    def operation(self, *args):
+        return _wrap(base(self, *args))
+
+    operation.__name__ = name
+    return operation
+
+
+def _ordered(name, compare):
+    base = getattr(Fraction, name)
+
+    def operation(self, other):
+        if isinstance(other, Fraction):
+            other_num, other_den = other.numerator, other.denominator
+        elif isinstance(other, int):
+            other_num, other_den = other, 1
+        else:
+            return base(self, other)
+        left, right = self.numerator * other_den, other_num * self.denominator
+        _fit(left)
+        _fit(right)
+        return compare(left, right)
+
+    operation.__name__ = name
+    return operation
+
+
+for _name in ("__add__", "__radd__", "__sub__", "__rsub__", "__mul__", "__rmul__", "__truediv__", "__rtruediv__",
+              "__floordiv__", "__rfloordiv__", "__mod__", "__rmod__", "__pow__", "__rpow__", "__neg__", "__pos__",
+              "__abs__"):
+    setattr(_Q, _name, _guarded(_name))
+for _name, _op in (("__lt__", operator.lt), ("__le__", operator.le), ("__gt__", operator.gt), ("__ge__", operator.ge)):
+    setattr(_Q, _name, _ordered(_name, _op))
+
+Z = _Q(0)
+ONE = _Q(1)
+HALF = _Q(1, 2)
+
+
+def _q(value) -> "_Q":
+    """A guarded rational from an int, float or Fraction (checked against the cap)."""
+    return _fit(_Q(value))
+
+
+def _pair(x) -> list:
+    _fit(x)
+    return [x.numerator, x.denominator]
+
+
+def _tsorted(items, key=None):
+    """``sorted`` with one checkpoint per comparison."""
+    gauge = _ACTIVE.gauge
+
+    def compare(a, b):
+        gauge.unit("sort_comparison")
+        ka, kb = (a, b) if key is None else (key(a), key(b))
+        return (ka > kb) - (ka < kb)
+
+    return sorted(items, key=functools.cmp_to_key(compare))
+
+
 def _fit3(v):
-    _fit(v[0]), _fit(v[1]), _fit(v[2])
     return v
 
 
 def _cross(a, b):
-    return _fit3((a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]))
+    return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
 
 
 def _dot(a, b):
-    return _fit(a[0] * b[0] + a[1] * b[1] + a[2] * b[2])
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 
 
 def _sub3(a, b):
-    return _fit3((a[0] - b[0], a[1] - b[1], a[2] - b[2]))
+    return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
 
 
 def _add3(a, b):
-    return _fit3((a[0] + b[0], a[1] + b[1], a[2] + b[2]))
+    return (a[0] + b[0], a[1] + b[1], a[2] + b[2])
 
 
 def _scale3(a, s):
-    return _fit3((a[0] * s, a[1] * s, a[2] * s))
+    return (a[0] * s, a[1] * s, a[2] * s)
 
 
 def _argmax_abs(v) -> int:
@@ -128,12 +222,14 @@ _INT_CHUNK = 300
 
 
 def _int_from_digits(digits: str, gauge) -> int:
-    """Convert a digit string in chunks of at most 300 digits (independent of Python's global digit limit)."""
+    """Convert a digit string in chunks of at most 300 digits (independent of Python's global digit limit); the
+    partial value is checked against the bit cap after every chunk."""
     value = 0
     for i in range(0, len(digits), _INT_CHUNK):
         gauge.unit("integer_chunk")
         chunk = digits[i:i + _INT_CHUNK]
         value = value * 10 ** len(chunk) + int(chunk)
+        gauge.fit(value)
     return value
 
 
@@ -177,7 +273,7 @@ def _encode(document, gauge) -> bytes:
             out.append("]")
         elif isinstance(node, dict):
             out.append("{")
-            for i, key in enumerate(sorted(node)):
+            for i, key in enumerate(_tsorted(list(node))):
                 if i:
                     out.append(",")
                 gauge.unit("serialise_element")
@@ -199,7 +295,7 @@ def _fraction_of_float(value) -> Fraction:
     x = float(value)
     if not math.isfinite(x):
         raise _refuse(C.NONFINITE_INPUT, "a stored coordinate is not finite")
-    return Fraction(x)
+    return _q(x)
 
 
 # ------------------------------------------------------------------ polynomials in epsilon (simulation of simplicity)
@@ -207,12 +303,12 @@ def _fraction_of_float(value) -> Fraction:
 
 def _padd(p, q):
     n = max(len(p), len(q))
-    return tuple(_fit((p[i] if i < len(p) else Z) + (q[i] if i < len(q) else Z)) for i in range(n))
+    return tuple((p[i] if i < len(p) else Z) + (q[i] if i < len(q) else Z) for i in range(n))
 
 
 def _psub(p, q):
     n = max(len(p), len(q))
-    return tuple(_fit((p[i] if i < len(p) else Z) - (q[i] if i < len(q) else Z)) for i in range(n))
+    return tuple((p[i] if i < len(p) else Z) - (q[i] if i < len(q) else Z) for i in range(n))
 
 
 def _pmul(p, q):
@@ -220,7 +316,7 @@ def _pmul(p, q):
     for i, x in enumerate(p):
         if x:
             for j, y in enumerate(q):
-                out[i + j] = _fit(out[i + j] + x * y)
+                out[i + j] = out[i + j] + x * y
     return tuple(out)
 
 
@@ -254,6 +350,7 @@ def _read_snapshot(model, faces, meter: Meter) -> _Snapshot:
         surface = face.surface
         if not isinstance(surface, Plane):
             raise _refuse(C.UNSUPPORTED_SURFACE, f"face {fid} is not supported by a Plane")
+        meter.unit("snapshot_read")
         f = _Face()
         f.id = fid
         support = []
@@ -278,6 +375,7 @@ def _read_snapshot(model, faces, meter: Meter) -> _Snapshot:
             if len(items) < 3:
                 raise _refuse(C.INVALID_LOOP, f"a loop of face {fid} has fewer than three edges")
             for i, item in enumerate(items):
+                meter.unit("snapshot_close")
                 if item[3] != items[(i + 1) % len(items)][2]:
                     raise _refuse(C.NOT_CLOSED, f"a loop of face {fid} is not a closed chain")
             f.loops.append(items)
@@ -288,24 +386,35 @@ def _read_snapshot(model, faces, meter: Meter) -> _Snapshot:
 def _snapshot_document(snap: _Snapshot) -> dict:
     faces = []
     for f in snap.faces:
-        faces.append({"id": f.id, "support": [[_pair(x) for x in vec] for vec in f.support],
-                      "loops": [[[eid, fwd, start] for eid, fwd, start, _end in loop] for loop in f.loops]})
+        _tick("snapshot_document")
+        loops = []
+        for loop in f.loops:
+            row = []
+            for eid, fwd, start, _end in loop:
+                _tick("snapshot_document")
+                row.append([eid, fwd, start])
+            loops.append(row)
+        faces.append({"id": f.id, "support": [[_pair(x) for x in vec] for vec in f.support], "loops": loops})
     uses: dict[int, list] = {}
     vertex_faces: dict[int, set] = {}
     vertex_edges: dict[int, set] = {}
     for f in snap.faces:
         for loop in f.loops:
             for eid, fwd, start, end in loop:
+                _tick("snapshot_document")
                 uses.setdefault(eid, []).append([f.id, fwd])
                 for vid in (start, end):
                     vertex_faces.setdefault(vid, set()).add(f.id)
                     vertex_edges.setdefault(vid, set()).add(eid)
-    return {
-        "faces": faces,
-        "vertices": [[vid, [_pair(x) for x in snap.pos[vid]]] for vid in sorted(vertex_faces)],
-        "edges": [[eid, snap.edges[eid][0], snap.edges[eid][1], sorted(uses[eid])] for eid in sorted(uses)],
-        "vertex_incidence": [[vid, sorted(vertex_faces[vid]), sorted(vertex_edges[vid])] for vid in sorted(vertex_faces)],
-    }
+    vertices, edges, incidence = [], [], []
+    for vid in _tsorted(list(vertex_faces)):
+        _tick("snapshot_document")
+        vertices.append([vid, [_pair(x) for x in snap.pos[vid]]])
+        incidence.append([vid, _tsorted(list(vertex_faces[vid])), _tsorted(list(vertex_edges[vid]))])
+    for eid in _tsorted(list(uses)):
+        _tick("snapshot_document")
+        edges.append([eid, snap.edges[eid][0], snap.edges[eid][1], _tsorted(uses[eid])])
+    return {"faces": faces, "vertices": vertices, "edges": edges, "vertex_incidence": incidence}
 
 
 def _sha256_chunks(data: bytes, meter, kind: str) -> str:
@@ -324,7 +433,7 @@ def _project(point, axis):
 
 
 def _orient2(p, q, r):
-    return _fit((q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]))
+    return (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
 
 
 def _on_segment2(p, q, r) -> bool:
@@ -346,6 +455,7 @@ def _locate2(p, loops) -> str:
     for loop in loops:
         m = len(loop)
         for i in range(m):
+            _tick("locate_edge")
             q, r = loop[i], loop[(i + 1) % m]
             if _orient2(q, r, p) == 0 and _on_segment2(p, q, r):
                 return "on"
@@ -353,6 +463,7 @@ def _locate2(p, loops) -> str:
     for loop in loops:
         m = len(loop)
         for i in range(m):
+            _tick("locate_edge")
             q, r = loop[i], loop[(i + 1) % m]
             q_le, r_le = q[1] <= p[1], r[1] <= p[1]
             if q_le == r_le:
@@ -367,11 +478,12 @@ def _newell(points):
     nx = ny = nz = Z
     m = len(points)
     for i in range(m):
+        _tick("newell_vertex")
         p, q = points[i], points[(i + 1) % m]
         nx += (p[1] - q[1]) * (p[2] + q[2])
         ny += (p[2] - q[2]) * (p[0] + q[0])
         nz += (p[0] - q[0]) * (p[1] + q[1])
-    return _fit3((nx / 2, ny / 2, nz / 2))
+    return (nx / 2, ny / 2, nz / 2)
 
 
 def _prepare_faces(snap: _Snapshot, meter: Meter) -> None:
@@ -383,11 +495,13 @@ def _prepare_faces(snap: _Snapshot, meter: Meter) -> None:
         f.loops2d = []
         pts_loops = []
         for loop in f.loops:
-            pts = [snap.pos[start] for _e, _f, start, _end in loop]
-            for p in pts:
+            pts = []
+            for _e, _f, start, _end in loop:
                 meter.unit("coplanarity_test")
+                p = snap.pos[start]
                 if _dot(_sub3(p, o), support_normal) != 0:
                     raise _refuse(C.NOT_EXACTLY_PLANAR, f"face {f.id} has a vertex off its support plane")
+                pts.append(p)
             pts_loops.append(pts)
         normals = [_newell(p) for p in pts_loops]
         outer = normals[0]
@@ -399,11 +513,19 @@ def _prepare_faces(snap: _Snapshot, meter: Meter) -> None:
         for k, pts in enumerate(pts_loops):
             if normals[k] == (0, 0, 0):
                 raise _refuse(C.INVALID_LOOP, f"a loop of face {f.id} has zero area")
-            f.loops2d.append([_project(p, f.axis) for p in pts])
+            loop2 = []
+            for p in pts:
+                _tick("project_vertex")
+                loop2.append(_project(p, f.axis))
+            f.loops2d.append(loop2)
             if k and _dot(normals[k], outer) >= 0:
                 raise _refuse(C.INVALID_HOLES, f"a hole of face {f.id} is not wound against its outer loop")
-        f.vids = {start for loop in f.loops for _e, _f, start, _end in loop}
-        f.eids = {eid for loop in f.loops for eid, _f, _s, _e2 in loop}
+        f.vids, f.eids = set(), set()
+        for loop in f.loops:
+            for eid, _f, start, _end in loop:
+                _tick("face_index")
+                f.vids.add(start)
+                f.eids.add(eid)
 
 
 def _check_loops(snap: _Snapshot, meter: Meter) -> None:
@@ -411,6 +533,7 @@ def _check_loops(snap: _Snapshot, meter: Meter) -> None:
         for k, loop2 in enumerate(f.loops2d):
             m = len(loop2)
             for i in range(m):
+                meter.unit("loop_edge_length")
                 if loop2[i] == loop2[(i + 1) % m]:
                     raise _refuse(C.INVALID_LOOP, f"face {f.id} has a zero-length edge")
             for i in range(m):
@@ -455,7 +578,6 @@ def _check_combinatorics(snap: _Snapshot, meter: Meter) -> None:
     corners: dict[int, list] = {}
     for f in snap.faces:
         for loop in f.loops:
-            m = len(loop)
             for i, (eid, fwd, start, _end) in enumerate(loop):
                 meter.unit("edge_use")
                 uses.setdefault(eid, []).append((f.id, fwd))
@@ -464,11 +586,13 @@ def _check_combinatorics(snap: _Snapshot, meter: Meter) -> None:
 
     def find(x):
         while parent[x] != x:
+            _tick("union_find")
             parent[x] = parent[parent[x]]
             x = parent[x]
         return x
 
     for eid, items in uses.items():
+        meter.unit("edge_use_check")
         if len(items) != 2:
             raise _refuse(C.NOT_CLOSED if len(items) < 2 else C.NON_MANIFOLD, f"edge {eid} is used {len(items)} times")
         (fa, da), (fb, db) = items
@@ -477,18 +601,24 @@ def _check_combinatorics(snap: _Snapshot, meter: Meter) -> None:
         if fa == fb:
             raise _refuse(C.NON_MANIFOLD, f"edge {eid} is used twice by one face")
         parent[find(fa)] = find(fb)
-    if len({find(f.id) for f in snap.faces}) != 1:
+    roots = set()
+    for f in snap.faces:
+        _tick("union_find")
+        roots.add(find(f.id))
+    if len(roots) != 1:
         raise _refuse(C.NON_MANIFOLD, "the faces do not form one connected shell")
     for vid, cs in corners.items():
         meter.unit("vertex_link")
         adjacency: dict[int, list] = {}
         for a, b in cs:
+            meter.unit("vertex_link")
             adjacency.setdefault(a, []).append(b)
             adjacency.setdefault(b, []).append(a)
         if any(len(v) != 2 for v in adjacency.values()):
             raise _refuse(C.NON_MANIFOLD, f"the link of vertex {vid} is not a cycle")
         seen, stack = set(), [next(iter(adjacency))]
         while stack:
+            meter.unit("vertex_link")
             e = stack.pop()
             if e not in seen:
                 seen.add(e)
@@ -499,7 +629,8 @@ def _check_combinatorics(snap: _Snapshot, meter: Meter) -> None:
 
 def _merge_intervals(intervals):
     out = []
-    for lo, hi in sorted(intervals):
+    for lo, hi in _tsorted(list(intervals)):
+        _tick("interval_merge")
         if out and lo <= out[-1][1]:
             if hi > out[-1][1]:
                 out[-1] = (out[-1][0], hi)
@@ -512,6 +643,7 @@ def _intersect_intervals(a, b):
     out = []
     for lo1, hi1 in a:
         for lo2, hi2 in b:
+            _tick("interval_intersect")
             lo, hi = max(lo1, lo2), min(hi1, hi2)
             if lo <= hi:
                 out.append((lo, hi))
@@ -536,7 +668,7 @@ def _seg_intersection2(p1, p2, q1, q2):
     dd = d1[0] * d1[0] + d1[1] * d1[1]
     t1 = (w[0] * d1[0] + w[1] * d1[1]) / dd
     t2 = ((q2[0] - p1[0]) * d1[0] + (q2[1] - p1[1]) * d1[1]) / dd
-    lo, hi = max(Z, min(t1, t2)), min(Fraction(1), max(t1, t2))
+    lo, hi = max(Z, min(t1, t2)), min(ONE, max(t1, t2))
     if lo > hi:
         return None
     return ((p1[0] + lo * d1[0], p1[1] + lo * d1[1]), (p1[0] + hi * d1[0], p1[1] + hi * d1[1]))
@@ -552,9 +684,14 @@ def _covered(piece, shared_pts, shared_segs) -> bool:
     if x == y:
         if x in shared_pts:
             return True
-        return any(_orient2(a, b, x) == 0 and _on_segment2(x, a, b) for a, b in shared_segs)
+        for a, b in shared_segs:
+            _tick("cover_test")
+            if _orient2(a, b, x) == 0 and _on_segment2(x, a, b):
+                return True
+        return False
     intervals = []
     for a, b in shared_segs:
+        _tick("cover_test")
         if _orient2(a, b, x) == 0 and _orient2(a, b, y) == 0:
             ta, tb = _param_on(a, x, y), _param_on(b, x, y)
             intervals.append((min(ta, tb), max(ta, tb)))
@@ -567,20 +704,25 @@ def _edges2(face: _Face, snap: _Snapshot):
     out = []
     for loop in face.loops:
         for eid, fwd, start, end in loop:
+            _tick("edge_project")
             out.append((eid, fwd, _project(snap.pos[start], face.axis), _project(snap.pos[end], face.axis)))
     return out
 
 
 def _coplanar_pair(snap, f, g, shared_edges, shared_vids, meter) -> None:
-    shared_pts = {_project(snap.pos[v], f.axis) for v in shared_vids}
+    shared_pts = set()
+    for v in shared_vids:
+        _tick("shared_cell")
+        shared_pts.add(_project(snap.pos[v], f.axis))
     shared_segs = []
     for e in shared_edges:
+        _tick("shared_cell")
         s, t = snap.edges[e]
         shared_segs.append((_project(snap.pos[s], f.axis), _project(snap.pos[t], f.axis)))
     ef, eg = _edges2(f, snap), _edges2(g, snap)
     sigma_f, sigma_g = _sign(f.normal[f.axis]), _sign(g.normal[f.axis])
-    splits_f = {i: [Z, Fraction(1)] for i in range(len(ef))}
-    splits_g = {j: [Z, Fraction(1)] for j in range(len(eg))}
+    splits_f = {i: [Z, ONE] for i in range(len(ef))}
+    splits_g = {j: [Z, ONE] for j in range(len(eg))}
     for i, (_a, _fa, p1, p2) in enumerate(ef):
         for j, (_b, _fb, q1, q2) in enumerate(eg):
             meter.unit("edge_pair_test")
@@ -601,7 +743,7 @@ def _coplanar_pair(snap, f, g, shared_edges, shared_vids, meter) -> None:
                     raise _refuse(C.SELF_INTERSECTING, f"faces {f.id} and {g.id} overlap")
     for edges, splits, other in ((ef, splits_f, g.loops2d), (eg, splits_g, f.loops2d)):
         for idx, (_e, _fw, p1, p2) in enumerate(edges):
-            ts = sorted(set(splits[idx]))
+            ts = _tsorted(list(set(splits[idx])))
             for t0, t1 in zip(ts, ts[1:]):
                 meter.unit("subpiece_test")
                 tm = (t0 + t1) / 2
@@ -632,14 +774,15 @@ def _line_intervals(face: _Face, snap, other_normal, other_w, direction, meter):
                 tau = gq / (gq - gr)
                 point = _add3(q, _scale3(_sub3(r, q), tau))
                 critical.append((_dot(direction, point), point))
-    critical.sort(key=lambda item: item[0])
+    critical = _tsorted(critical, key=lambda item: item[0])
     for s, _p in critical:
+        _tick("critical_point")
         intervals.append((s, s))
     for (s0, p0), (s1, p1) in zip(critical, critical[1:]):
         if s0 == s1:
             continue
         meter.unit("line_interval_test")
-        mid = _scale3(_add3(p0, p1), Fraction(1, 2))
+        mid = _scale3(_add3(p0, p1), HALF)
         if _locate2(_project(mid, face.axis), face.loops2d) != "out":
             intervals.append((s0, s1))
     return _merge_intervals(intervals)
@@ -652,10 +795,12 @@ def _noncoplanar_pair(snap, f, g, shared_edges, shared_vids, meter) -> None:
     touching = _intersect_intervals(i_f, i_g)
     shared = []
     for e in shared_edges:
+        _tick("shared_cell")
         s, t = snap.edges[e]
         a, b = _dot(direction, snap.pos[s]), _dot(direction, snap.pos[t])
         shared.append((min(a, b), max(a, b)))
     for v in shared_vids:
+        _tick("shared_cell")
         a = _dot(direction, snap.pos[v])
         shared.append((a, a))
     if touching != _merge_intervals(shared):
@@ -666,12 +811,20 @@ def _check_embedding(snap: _Snapshot, meter: Meter) -> None:
     scale = 1
     for p in snap.pos.values():
         for x in p:
+            meter.unit("box_scale")
             scale = max(scale, x.denominator)
     for f in snap.faces:
-        coords = [snap.pos[start] for loop in f.loops for _e, _f, start, _end in loop]
-        f.box = tuple((min(int(p[i] * scale) for p in coords), max(int(p[i] * scale) for p in coords))
-                      for i in range(3))
-    order = sorted(range(len(snap.faces)), key=lambda i: snap.faces[i].box[0][0])
+        lows, highs = [None] * 3, [None] * 3
+        for loop in f.loops:
+            for _e, _f, start, _end in loop:
+                meter.unit("box_build")
+                p = snap.pos[start]
+                for i in range(3):
+                    c = int(p[i] * scale)
+                    lows[i] = c if lows[i] is None or c < lows[i] else lows[i]
+                    highs[i] = c if highs[i] is None or c > highs[i] else highs[i]
+        f.box = tuple((lows[i], highs[i]) for i in range(3))
+    order = _tsorted(list(range(len(snap.faces))), key=lambda i: snap.faces[i].box[0][0])
     for pos, i in enumerate(order):
         f = snap.faces[i]
         j_pos = pos + 1
@@ -718,7 +871,7 @@ def _pmul_list(p, q):
     out = [Z] * (len(p) + len(q) - 1)
     for i, x in enumerate(p):
         for j, y in enumerate(q):
-            out[i + j] += x * y
+            out[i + j] = out[i + j] + x * y
     return out
 
 
@@ -729,20 +882,19 @@ def _edge_G(a0, b0, a1, b1):
         return (Z, Z, Z, Z, Z, Z)
     da = a1 - a0
     A1, B1 = [a0, da], [b0, db]
-    A2 = [_fit(x) for x in _pmul_list(A1, A1)]
-    B2 = [_fit(x) for x in _pmul_list(B1, B1)]
+    A2 = _pmul_list(A1, A1)
+    B2 = _pmul_list(B1, B1)
 
     def integral(poly):
         return sum((c / (k + 1) for k, c in enumerate(poly)), Z)
 
     ab = _pmul_list(A1, B1)
-    return tuple(_fit(x) for x in (
-        db * integral(A1),
-        db * integral(A2) / 2,
-        db * integral(ab),
-        db * integral(_pmul_list(A2, A1)) / 3,
-        db * integral(_pmul_list(A2, B1)) / 2,
-        db * integral(_pmul_list(A1, B2))))
+    return (db * integral(A1),
+            db * integral(A2) / 2,
+            db * integral(ab),
+            db * integral(_pmul_list(A2, A1)) / 3,
+            db * integral(_pmul_list(A2, B1)) / 2,
+            db * integral(_pmul_list(A1, B2)))
 
 
 def _chain_G(points, axis, meter: Meter, closed=True):
@@ -797,10 +949,11 @@ class _Side:
 
 
 def _clip_loop(points, h):
-    """Sutherland-Hodgman against h < 0 (the ``below`` convention) -> list of 3D points."""
+    """Sutherland-Hodgman against h < 0 (the ``below`` convention) -> list of 3D points; one checkpoint per vertex."""
     out = []
     m = len(points)
     for i in range(m):
+        _tick("clip_vertex")
         p, q = points[i], points[(i + 1) % m]
         hp, hq = h[i], h[(i + 1) % m]
         p_in, q_in = hp < 0, hq < 0
@@ -816,10 +969,10 @@ class _Plane:
     """The request, exactly."""
 
     def __init__(self, query):
-        self.n = tuple(_fit(Fraction(x)) for x in query.normal)
-        self.d = _fit(Fraction(query.offset))
-        self.o = tuple(_fit(Fraction(x)) for x in query.waterplane_origin)
-        self.e1, self.e2 = (tuple(_fit(Fraction(x)) for x in axis) for axis in query.waterplane_axes)
+        self.n = tuple(_q(x) for x in query.normal)
+        self.d = _q(query.offset)
+        self.o = tuple(_q(x) for x in query.waterplane_origin)
+        self.e1, self.e2 = (tuple(_q(x) for x in axis) for axis in query.waterplane_axes)
         self.nn = _dot(self.n, self.n)
         self.k = _argmax_abs(self.n)
         self.ab = tuple(i for i in range(3) if i != self.k)
@@ -834,7 +987,7 @@ def _section_side(snap: _Snapshot, plane: _Plane, side: str, heights: dict, mete
     inside = (lambda h: h < 0) if side == "below" else (lambda h: h <= 0)
     tau = 1 if side == "below" else -1
     crossing = {}
-    for eid, (s, e) in sorted(snap.edges.items()):
+    for eid, (s, e) in snap.edges.items():
         meter.unit("edge_crossing")
         hs, he = heights[s], heights[e]
         if inside(hs) != inside(he):
@@ -842,42 +995,57 @@ def _section_side(snap: _Snapshot, plane: _Plane, side: str, heights: dict, mete
             nn = he - hs
             t0 = -hs / nn
             delta = _sub3(pe, ps)
-            c0 = tuple(meter.fit(x) for x in _add3(ps, _scale3(delta, t0)))
-            c1 = tuple(meter.fit(x) for x in _scale3(delta, -tau / nn))
+            c0 = _add3(ps, _scale3(delta, t0))
+            c1 = _scale3(delta, -tau / nn)
             crossing[eid] = _affine_vertex(c0, c1)
-    values = [inside(h) for h in heights.values()]
-    if all(values):
-        occupancy = "FULL"
-    elif not any(values):
-        occupancy = "EMPTY"
-    else:
-        occupancy = "PARTIAL"
+    any_in = any_out = False
+    for h in heights.values():
+        meter.unit("side_class")
+        if inside(h):
+            any_in = True
+        else:
+            any_out = True
+    occupancy = "PARTIAL" if any_in and any_out else ("FULL" if any_in else "EMPTY")
     if not crossing:
         return _Side(occupancy, "ABSENT", None, None)
     segments = []
     for f in snap.faces:
         direction = _cross(plane.n, f.normal)
-        cuts = [eid for loop in f.loops for eid, _fw, _s, _e in loop if eid in crossing]
+        cuts = []
+        for loop in f.loops:
+            for eid, _fw, _s, _e in loop:
+                meter.unit("face_cut_scan")
+                if eid in crossing:
+                    cuts.append(eid)
         if not cuts:
             continue
         if len(cuts) % 2 or direction == (0, 0, 0):
             raise _refuse(C.SYMBOLIC_DEGENERACY, f"face {f.id} has an odd or impossible number of cut points")
 
-        def key(eid):
+        def key(eid, direction=direction):
             point = crossing[eid]
             return (sum(direction[i] * point[i][0] for i in range(3)), sum(direction[i] * point[i][1] for i in range(3)))
 
-        meter.unit("sort_comparison", max(1, len(cuts) * max(1, len(cuts).bit_length())))
-        cuts.sort(key=key)
-        keys = [key(eid) for eid in cuts]
+        cuts = _tsorted(cuts, key=key)
+        keys = []
+        for eid in cuts:
+            meter.unit("cut_key")
+            keys.append(key(eid))
         for k0, k1 in zip(keys, keys[1:]):
+            meter.unit("cut_key")
             if k0 == k1:
                 raise _refuse(C.SYMBOLIC_DEGENERACY, "two distinct cut points coincide on a cut line")
         axis = f.axis
         a_i, b_i = (axis + 1) % 3, (axis + 2) % 3
-        loops_const = [[((p[0],), (p[1],)) for p in loop] for loop in f.loops2d]
+        loops_const = []
+        for loop in f.loops2d:
+            row = []
+            for p in loop:
+                meter.unit("loop_constant")
+                row.append(((p[0],), (p[1],)))
+            loops_const.append(row)
         for e0, e1 in zip(cuts, cuts[1:]):
-            meter.unit("interval_classification", sum(len(loop) for loop in f.loops2d))
+            meter.unit("interval_classification")
             p0, p1 = crossing[e0], crossing[e1]
             mid = tuple(((p0[i][0] + p1[i][0]) / 2, (p0[i][1] + p1[i][1]) / 2) for i in range(3))
             if _inside_sym(mid[a_i], mid[b_i], loops_const):
@@ -885,6 +1053,7 @@ def _section_side(snap: _Snapshot, plane: _Plane, side: str, heights: dict, mete
     # loops
     nxt, indeg = {}, {}
     for a, b in segments:
+        meter.unit("loop_link")
         if a in nxt or b in indeg:
             raise _refuse(C.SYMBOLIC_DEGENERACY, "the cut-point graph is not 2-regular")
         nxt[a] = b
@@ -892,19 +1061,22 @@ def _section_side(snap: _Snapshot, plane: _Plane, side: str, heights: dict, mete
     if set(nxt) != set(indeg) or set(nxt) != set(crossing):
         raise _refuse(C.SYMBOLIC_DEGENERACY, "the cut-point graph has open chains")
     loops, seen = [], set()
-    for start in sorted(nxt):
+    for start in _tsorted(list(nxt)):
         if start in seen:
             continue
         loop, cur = [], start
         while cur not in seen:
+            meter.unit("loop_walk")
             seen.add(cur)
             loop.append(cur)
             cur = nxt[cur]
         loops.append(loop)
     # waterplane quantities from the limit chain
     a_i, b_i = plane.ab
-    chain = [(tuple(crossing[x][i][0] for i in range(3)), tuple(crossing[y][i][0] for i in range(3)))
-             for x, y in segments]
+    chain = []
+    for x, y in segments:
+        meter.unit("chain_segment")
+        chain.append((tuple(crossing[x][i][0] for i in range(3)), tuple(crossing[y][i][0] for i in range(3))))
     g00, g10, g01, g20, g11, g02 = _segments_G(chain, (a_i, b_i), meter)
     n, k = plane.n, plane.k
     u_c = _basis_coeffs(plane, plane.e1)
@@ -915,44 +1087,55 @@ def _section_side(snap: _Snapshot, plane: _Plane, side: str, heights: dict, mete
         return (p0 * q0 * g00 + (p0 * q1 + p1 * q0) * g10 + (p0 * q2 + p2 * q0) * g01 + p1 * q1 * g20
                 + (p1 * q2 + p2 * q1) * g11 + p2 * q2 * g02)
 
-    one = (Fraction(1), Z, Z)
+    one = (ONE, Z, Z)
     raw = {"A": g00, "Mu": combine(u_c, one), "Mv": combine(v_c, one), "Iuu": combine(u_c, u_c),
            "Ivv": combine(v_c, v_c), "Iuv": combine(u_c, v_c)}
     factor = plane.nn * plane.orient / abs(n[k])
-    quantities = {name: (meter.fit(raw[name] * factor), plane.nn) for name in _QUANTITIES}
+    quantities = {name: (raw[name] * factor, plane.nn) for name in _QUANTITIES}
     # topology
     roles, polys = [], []
     for loop in loops:
-        meter.unit("loop_area", len(loop))
         area = (Z,)
         m = len(loop)
         for i in range(m):
+            meter.unit("loop_area")
             p, q = crossing[loop[i]], crossing[loop[(i + 1) % m]]
             area = _padd(area, _psub(_pmul(p[a_i], q[b_i]), _pmul(q[a_i], p[b_i])))
         s = _psign(area) * plane.orient
         if s == 0:
             raise _refuse(C.SYMBOLIC_DEGENERACY, "a loop has zero symbolic area")
         roles.append("outer" if s > 0 else "hole")
-        polys.append([(crossing[e][a_i], crossing[e][b_i]) for e in loop])
+        row = []
+        for e in loop:
+            meter.unit("loop_polygon")
+            row.append((crossing[e][a_i], crossing[e][b_i]))
+        polys.append(row)
     outers = [i for i, r in enumerate(roles) if r == "outer"]
     holes = [i for i, r in enumerate(roles) if r == "hole"]
     holders: dict[int, list] = {i: [] for i in outers}
     for h in holes:
         probe = polys[h][0]
-        cands = [o for o in outers if _inside_sym(probe[0], probe[1], [polys[o]])]
+        cands = []
+        for o in outers:
+            meter.unit("nesting")
+            if _inside_sym(probe[0], probe[1], [polys[o]]):
+                cands.append(o)
         if not cands:
             raise _refuse(C.SYMBOLIC_DEGENERACY, "a hole loop lies in no outer loop")
-        best = [o for o in cands if all(o2 == o or _inside_sym(polys[o][0][0], polys[o][0][1], [polys[o2]])
-                                        for o2 in cands)]
+        best = []
+        for o in cands:
+            meter.unit("nesting")
+            if all(o2 == o or _inside_sym(polys[o][0][0], polys[o][0][1], [polys[o2]]) for o2 in cands):
+                best.append(o)
         if len(best) != 1:
             raise _refuse(C.SYMBOLIC_DEGENERACY, "the nesting of a hole loop is ambiguous")
         holders[best[0]].append(h)
 
     def ident(i):
-        return tuple(sorted(loops[i]))
+        return tuple(_tsorted(loops[i]))
 
-    topology = {"loops": sorted((ident(i), roles[i]) for i in range(len(loops))),
-                "components": sorted((ident(o), tuple(sorted(ident(h) for h in holders[o]))) for o in outers)}
+    topology = {"loops": _tsorted([(ident(i), roles[i]) for i in range(len(loops))]),
+                "components": _tsorted([(ident(o), tuple(_tsorted([ident(h) for h in holders[o]]))) for o in outers])}
     return _Side(occupancy, "PRESENT", quantities, topology, chain)
 
 
@@ -971,6 +1154,7 @@ def _inside_sym(pa, pb, loops) -> bool:
     for loop in loops:
         m = len(loop)
         for i in range(m):
+            _tick("point_in_polygon_edge")
             qa, qb = loop[i]
             ra, rb = loop[(i + 1) % m]
             q_le = _psign(_psub(pb, qb)) >= 0
@@ -990,18 +1174,34 @@ def _recompute(snap: _Snapshot, plane: _Plane, total_volume: Fraction, meter: Me
     heights = {}
     for vid, p in snap.pos.items():
         meter.unit("vertex_height")
-        heights[vid] = meter.fit(_dot(plane.n, p) - plane.d)
-    on_plane = sorted(v for v, h in heights.items() if h == 0)
+        heights[vid] = _dot(plane.n, p) - plane.d
+    on_plane, nonneg, nonpos = [], True, True
+    for v, h in heights.items():
+        meter.unit("vertex_class")
+        if h == 0:
+            on_plane.append(v)
+        nonneg = nonneg and h >= 0
+        nonpos = nonpos and h <= 0
+    on_plane = _tsorted(on_plane)
     generic = not on_plane
-    contacts_edges = sorted(e for e, (s, t) in snap.edges.items() if heights[s] == 0 and heights[t] == 0)
-    contacts_faces = sorted(f.id for f in snap.faces if all(heights[v] == 0 for v in f.vids))
-    hv = list(heights.values())
-    if all(h >= 0 for h in hv):
-        occupancy = "EMPTY"
-    elif all(h <= 0 for h in hv):
-        occupancy = "FULL"
-    else:
-        occupancy = "PARTIAL"
+    contacts_edges = []
+    for e, (s, t) in snap.edges.items():
+        meter.unit("contact_edge")
+        if heights[s] == 0 and heights[t] == 0:
+            contacts_edges.append(e)
+    contacts_edges = _tsorted(contacts_edges)
+    contacts_faces = []
+    for f in snap.faces:
+        flat = True
+        for v in f.vids:
+            meter.unit("contact_face")
+            if heights[v] != 0:
+                flat = False
+                break
+        if flat:
+            contacts_faces.append(f.id)
+    contacts_faces = _tsorted(contacts_faces)
+    occupancy = "EMPTY" if nonneg else ("FULL" if nonpos else "PARTIAL")
     # V and J: clipped faces (below convention) plus the cap
     volume = Z
     moments = [Z, Z, Z]
@@ -1010,7 +1210,6 @@ def _recompute(snap: _Snapshot, plane: _Plane, total_volume: Fraction, meter: Me
         for loop in f.loops:
             pts = [snap.pos[start] for _e, _fw, start, _end in loop]
             h = [heights[start] for _e, _fw, start, _end in loop]
-            meter.unit("clip_vertex", len(pts))
             clipped = _clip_loop(pts, h)
             if len(clipped) >= 3:
                 part = _chain_G(clipped, f.axis, meter)
@@ -1027,15 +1226,12 @@ def _recompute(snap: _Snapshot, plane: _Plane, total_volume: Fraction, meter: Me
         sides["below"] = below
         sides["above"] = _section_side(snap, plane, "above", heights, meter)
     if below.section == "PRESENT":
-        cap_segments = below.chain
         k = plane.k
-        g = _segments_G(cap_segments, ((k + 1) % 3, (k + 2) % 3), meter)
+        g = _segments_G(below.chain, ((k + 1) % 3, (k + 2) % 3), meter)
         v, j = _face_contribution(g, plane.n, plane.d, k)
         volume += v
         for i in range(3):
             moments[i] += j[i]
-    volume = meter.fit(volume)
-    moments = [meter.fit(x) for x in moments]
     if occupancy == "EMPTY" and (volume != 0 or any(moments)):
         raise _refuse(C.SYMBOLIC_DEGENERACY, "an empty half-space has non-zero volume")
     if occupancy == "FULL" and volume != total_volume:
@@ -1045,23 +1241,22 @@ def _recompute(snap: _Snapshot, plane: _Plane, total_volume: Fraction, meter: Me
             "V": volume, "J": moments, "sides": sides}
 
 
-
 # ------------------------------------------------------------------ comparisons of forms
 
 
-def _cmp_exact(r: Fraction, num: Fraction, ns: Fraction | None) -> int:
-    """sign(r - x) with x = num (ns None) or num / sqrt(ns)."""
+def _cmp_exact(r, num, ns) -> int:
+    """sign(r - x) with x = num (ns None) or num / sqrt(ns); all arguments are guarded rationals."""
     if ns is None:
         return _sign(r - num)
     num_root, den_root = math.isqrt(ns.numerator), math.isqrt(ns.denominator)
     if num_root * num_root == ns.numerator and den_root * den_root == ns.denominator:
-        return _sign(r - num / Fraction(num_root, den_root))
+        return _sign(r - num / _Q(num_root, den_root))
     # compare r * sqrt(ns) with num
     if r >= 0 and num < 0:
         return 1
     if r < 0 and num >= 0:
         return -1
-    lhs, rhs = _fit(r * r * ns), _fit(num * num)
+    lhs, rhs = r * r * ns, num * num
     if r >= 0:
         return _sign(lhs - rhs)
     return -_sign(lhs - rhs)
@@ -1071,21 +1266,32 @@ _DECIMAL = re.compile(r"-?[0-9]+(?:\.[0-9]+)?")
 
 
 def _decimal_fraction(text) -> Fraction:
+    """A decimal bound; the grammar is `-?digits(.digits)?`. The digit limit of the policy applies to integer tokens
+    of the proof only, not to decimal strings (their length is bounded by the proof's byte limit)."""
     gauge = _ACTIVE.gauge
-    if not isinstance(text, str) or not _DECIMAL.fullmatch(text) or len(text) > _ACTIVE.digit_limit:
+    if not isinstance(text, str) or not _DECIMAL.fullmatch(text):
         raise _fail("enclosure", "a decimal bound is not a plain decimal string")
     negative = text.startswith("-")
     body = text[1:] if negative else text
     whole, _, frac = body.partition(".")
-    value = Fraction(_int_from_digits(whole + frac, gauge), 10 ** len(frac))
+    numerator = _int_from_digits(whole + frac, gauge)
+    denominator = 10 ** len(frac)
+    gauge.fit(denominator)
+    value = _Q(numerator, denominator)
     return _fit(-value if negative else value)
 
 
 def _check_quantity(item, name, num, ns, query, exact_required, meter: Meter) -> None:
-    meter.unit("compare_element", 6)
+    meter.unit("compare_element")
     if getattr(item, "name", None) != name:
         raise _fail("request", f"quantity {name} is missing or misnamed")
     forms = tuple(query.forms)
+    for attribute in ("numerator", "norm_squared", "accuracy"):
+        value = getattr(item, attribute)
+        if value is not None and not isinstance(value, Fraction):
+            raise _fail("value" if attribute != "accuracy" else "request", f"{name}: {attribute} is not a Fraction")
+    if item.accuracy_met is not None and type(item.accuracy_met) is not bool:
+        raise _fail("accuracy flag", f"{name}: the accuracy flag is not a boolean")
     if exact_required:
         if item.numerator is None:
             raise _fail("request", f"{name}: exact form missing")
@@ -1099,14 +1305,15 @@ def _check_quantity(item, name, num, ns, query, exact_required, meter: Meter) ->
         if present != (form in forms):
             raise _fail("request", f"{name}: form {form} {'present' if present else 'missing'} against the request")
     acc = query.accuracy(name)
+    acc = None if acc is None else _q(acc)
     if item.accuracy != acc:
         raise _fail("request", f"{name}: bound accuracy differs from the request")
     met_ok = True
     if item.binary64 is not None:
         lo, hi = item.binary64
-        if not (isinstance(lo, float) and isinstance(hi, float) and math.isfinite(lo) and math.isfinite(hi)):
+        if not (type(lo) is float and type(hi) is float and math.isfinite(lo) and math.isfinite(hi)):
             raise _fail("enclosure", f"{name}: binary64 bounds are not finite doubles")
-        flo, fhi = Fraction(lo), Fraction(hi)
+        flo, fhi = _q(lo), _q(hi)
         if lo == hi:
             if _cmp_exact(flo, num, ns) != 0:
                 raise _fail("enclosure", f"{name}: a point enclosure differs from the exact value")
@@ -1119,8 +1326,10 @@ def _check_quantity(item, name, num, ns, query, exact_required, meter: Meter) ->
                 met_ok = False
     if item.decimal is not None:
         lo_s, hi_s, width = item.decimal
+        if not isinstance(width, Fraction):
+            raise _fail("enclosure", f"{name}: the decimal width is not a Fraction")
         lo, hi = _decimal_fraction(lo_s), _decimal_fraction(hi_s)
-        requested = acc if acc is not None else Fraction(1, 10 ** 12)
+        requested = acc if acc is not None else _Q(1, 10 ** 12)
         if width != requested:
             raise _fail("enclosure", f"{name}: decimal width differs from the requested width")
         if hi - lo > requested or lo > hi:
@@ -1128,7 +1337,7 @@ def _check_quantity(item, name, num, ns, query, exact_required, meter: Meter) ->
         if not (_cmp_exact(lo, num, ns) <= 0 <= _cmp_exact(hi, num, ns)):
             raise _fail("enclosure", f"{name}: the decimal enclosure does not contain the exact value")
     flag = (True if met_ok else False) if acc is not None else None
-    if item.accuracy_met != flag or flag is False:
+    if item.accuracy_met is not flag or flag is False:
         raise _fail("accuracy flag", f"{name}: accuracy flag differs from the recomputed one")
 
 
@@ -1136,14 +1345,15 @@ def _check_quantity(item, name, num, ns, query, exact_required, meter: Meter) ->
 
 
 def _query_dict(q) -> dict:
-    accuracy = {name: _pair(Fraction(v)) for name, v in q.absolute_accuracy}
+    accuracy = {name: _pair(_q(v)) for name, v in q.absolute_accuracy}
     return {"absolute_accuracy": accuracy, "forms": list(q.forms),
-            "normal": [_pair(Fraction(x)) for x in q.normal], "offset": _pair(Fraction(q.offset)),
-            "waterplane_axes": [[_pair(Fraction(x)) for x in axis] for axis in q.waterplane_axes],
-            "waterplane_origin": [_pair(Fraction(x)) for x in q.waterplane_origin]}
+            "normal": [_pair(_q(x)) for x in q.normal], "offset": _pair(_q(q.offset)),
+            "waterplane_axes": [[_pair(_q(x)) for x in axis] for axis in q.waterplane_axes],
+            "waterplane_origin": [_pair(_q(x)) for x in q.waterplane_origin]}
 
 
 def _claim_quantity(item) -> dict:
+    _tick("claim_element")
     out: dict = {"accuracy": None if item.accuracy is None else _pair(item.accuracy),
                  "accuracy_met": item.accuracy_met}
     if item.numerator is not None:
@@ -1159,12 +1369,19 @@ def _claim_quantity(item) -> dict:
 def _claim_section(section) -> dict:
     topology = None
     if section.topology is not None:
-        topology = {"loops": [{"identity": list(l.identity), "role": l.role} for l in section.topology.loops],
-                    "components": [{"outer": list(o), "holes": [list(h) for h in hs]}
-                                   for o, hs in section.topology.components]}
+        loops, components = [], []
+        for l in section.topology.loops:
+            _tick("claim_element")
+            loops.append({"identity": list(l.identity), "role": l.role})
+        for o, hs in section.topology.components:
+            _tick("claim_element")
+            components.append({"outer": list(o), "holes": [list(h) for h in hs]})
+        topology = {"loops": loops, "components": components}
     quantities = None
     if section.quantities is not None:
-        quantities = {q.name: _claim_quantity(q) for q in section.quantities}
+        quantities = {}
+        for q in section.quantities:
+            quantities[q.name] = _claim_quantity(q)
     return {"occupancy": section.occupancy, "section": section.section, "quantities": quantities,
             "topology": topology}
 
@@ -1195,6 +1412,8 @@ class _Gauge:
 
 
 _NUMBER = re.compile(r"-?(?:0|[1-9][0-9]*)")
+_STRING_SPECIAL = re.compile(r'["\\\x00-\x1f]')
+_HEX4 = re.compile(r"[0-9a-fA-F]{4}")
 
 
 def _parse_proof(proof, policy: dict, gauge: _Gauge) -> dict:
@@ -1216,16 +1435,47 @@ def _parse_proof(proof, policy: dict, gauge: _Gauge) -> dict:
     def bad(message):
         return _refuse(C.MALFORMED_PROOF, message)
 
+    escapes = {'"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t"}
+
     def string(i):
+        """Scan a string in windows of at most 4096 characters, one checkpoint per window or escape."""
         if i >= n or text[i] != '"':
             raise bad("a string was expected")
-        gauge.unit("string_piece")
-        window = text[i + 1:i + 1 + 4096]     # longer strings are not valid proof content
-        try:
-            found, after = _json_decoder.scanstring(window, 0)
-        except ValueError as error:
-            raise bad(f"invalid string: {error}") from error
-        return found, i + 1 + after
+        pieces, k = [], i + 1
+        while True:
+            gauge.unit("string_piece")
+            window_end = min(k + 4096, n)
+            found = _STRING_SPECIAL.search(text, k, window_end)
+            if found is None:
+                if window_end >= n:
+                    raise bad("an unterminated string")
+                pieces.append(text[k:window_end])
+                k = window_end
+                continue
+            pieces.append(text[k:found.start()])
+            ch = found.group()
+            if ch == '"':
+                return "".join(pieces), found.end()
+            if ch != "\\":
+                raise bad("a control character inside a string")
+            esc = text[found.end():found.end() + 1]
+            if esc in escapes:
+                pieces.append(escapes[esc])
+                k = found.end() + 1
+            elif esc == "u":
+                hexa = text[found.end() + 1:found.end() + 5]
+                if not _HEX4.fullmatch(hexa):
+                    raise bad("an invalid unicode escape")
+                code = int(hexa, 16)
+                k = found.end() + 5
+                if 0xD800 <= code < 0xDC00 and text.startswith("\\u", k):
+                    low = text[k + 2:k + 6]
+                    if _HEX4.fullmatch(low) and 0xDC00 <= int(low, 16) < 0xE000:
+                        code = 0x10000 + ((code - 0xD800) << 10) + (int(low, 16) - 0xDC00)
+                        k += 6
+                pieces.append(chr(code))
+            else:
+                raise bad("an invalid escape")
 
     def value(i, depth):
         gauge.unit("proof_element")
@@ -1326,12 +1576,20 @@ def _check_shape(document) -> dict:
     if set(artifact) != {"distribution", "distribution_version", "package_version", "files", "dependencies",
                          "python"}:
         raise _refuse(C.MALFORMED_PROOF, "the proof's artifact section has the wrong fields")
-    if not (isinstance(artifact["files"], list) and all(_is_pair(x) for x in artifact["files"])):
+    if not isinstance(artifact["files"], list):
         raise _refuse(C.MALFORMED_PROOF, "the proof's file list is malformed")
+    for x in artifact["files"]:
+        _tick("shape_check")
+        if not _is_pair(x):
+            raise _refuse(C.MALFORMED_PROOF, "the proof's file list is malformed")
     deps = artifact["dependencies"]
-    if not (isinstance(deps, list) and all(isinstance(x, list) and len(x) == 2 and isinstance(x[0], str)
-                                           and (x[1] is None or isinstance(x[1], str)) for x in deps)):
+    if not isinstance(deps, list):
         raise _refuse(C.MALFORMED_PROOF, "the proof's dependency list is malformed")
+    for x in deps:
+        _tick("shape_check")
+        if not (isinstance(x, list) and len(x) == 2 and isinstance(x[0], str)
+                and (x[1] is None or isinstance(x[1], str))):
+            raise _refuse(C.MALFORMED_PROOF, "the proof's dependency list is malformed")
     if set(document["preparation_policy"]) != {"convention_version", "max_integer_digits", "max_proof_bytes"}:
         raise _refuse(C.MALFORMED_PROOF, "the proof's policy section has the wrong fields")
     return document
@@ -1347,6 +1605,35 @@ _CONVENTION = {
 }
 
 
+def _check_types(result) -> None:
+    """Boolean and integer fields of the result must really be bool / int (``1`` is not ``True``)."""
+    if type(result.generic) is not bool:
+        raise _fail("value", "the degeneracy flag is not a boolean")
+    for ids in (result.contacts.vertices, result.contacts.edges, result.contacts.faces):
+        for x in ids:
+            _tick("type_check")
+            if type(x) is not int:
+                raise _fail("value", "a contact identity is not an integer")
+    items = [result.volume, *result.moments]
+    for section in result.sections:
+        _tick("type_check")
+        items.extend(section.quantities or ())
+        topology = section.topology
+        if topology is not None:
+            for loop in topology.loops:
+                _tick("type_check")
+                if not all(type(x) is int for x in loop.identity) or type(loop.role) is not str:
+                    raise _fail("topology", "a loop identity is not a tuple of integers")
+            for outer, holes in topology.components:
+                _tick("type_check")
+                if not all(type(x) is int for x in outer) or not all(type(x) is int for h in holes for x in h):
+                    raise _fail("topology", "a component identity is not a tuple of integers")
+    for item in items:
+        _tick("type_check")
+        if item.accuracy_met is not None and type(item.accuracy_met) is not bool:
+            raise _fail("accuracy flag", "an accuracy flag is not a boolean")
+
+
 def _check_work(work) -> None:
     """Design 6a: non-negative integers, ``operations`` equal to the sum of the unit counts."""
     def good(x):
@@ -1355,7 +1642,12 @@ def _check_work(work) -> None:
     try:
         operations, units = work["operations"], work["units"]
         ok = good(operations) and isinstance(units, dict) and all(
-            isinstance(k, str) and good(v) for k, v in units.items()) and operations == sum(units.values())
+            isinstance(k, str) and good(v) for k, v in units.items())
+        if ok:
+            for v in units.values():
+                _tick("work_check")
+                _fit(v)
+            ok = operations == sum(units.values())
     except (KeyError, TypeError):
         ok = False
     if not ok:
@@ -1368,8 +1660,9 @@ def _consistent_read(model) -> None:
 
 
 def _first_difference(a, b, path=()):
+    _tick("diff_node")
     if isinstance(a, dict) and isinstance(b, dict):
-        for key in sorted(set(a) | set(b)):
+        for key in _tsorted(list(set(a) | set(b))):
             if key not in a or key not in b:
                 return path + (key,), "missing"
             found = _first_difference(a[key], b[key], path + (key,))
@@ -1444,6 +1737,14 @@ def _policy_dict(policy) -> dict:
             "max_proof_bytes": get("max_proof_bytes")}
 
 
+def _sorted_pairs(files) -> list:
+    rows = []
+    for p, h in files:
+        _tick("file_row")
+        rows.append([str(p), str(h)])
+    return _tsorted(rows)
+
+
 def _expected_identity(expected) -> dict:
     if not isinstance(expected, Mapping):
         raise TypeError("expected must be a mapping with artifact_files, convention_version, units and policy")
@@ -1457,7 +1758,7 @@ def _expected_identity(expected) -> dict:
     for key in ("convention_version", "units", "policy"):
         if key not in expected:
             raise ValueError(f"expected lacks {key}")
-    return {"files": sorted([str(p), str(h)] for p, h in files), "convention_version": expected["convention_version"],
+    return {"files": _sorted_pairs(files), "convention_version": expected["convention_version"],
             "units": expected["units"], "policy": _policy_dict(expected["policy"])}
 
 
@@ -1471,8 +1772,9 @@ def _environment(meter: Meter) -> dict:
     for root, dirs, names in os.walk(package):
         dirs[:] = [d for d in dirs if d != "__pycache__"]
         for name in names:
+            meter.unit("package_entry")
             rows.append(os.path.relpath(os.path.join(root, name), package).replace(os.sep, "/"))
-    rows.sort()
+    rows = _tsorted(rows)
     files = []
     for rel in rows:
         h = hashlib.sha256()
@@ -1504,7 +1806,7 @@ def _environment(meter: Meter) -> dict:
         deps.append([name.group(0), version])
     return {"distribution": "anygeometry", "distribution_version": dist_version,
             "package_version": getattr(anygeometry, "__version__", None), "files": files,
-            "dependencies": sorted(deps, key=lambda x: x[0]),
+            "dependencies": _tsorted(deps, key=lambda x: x[0]),
             "python": f"{platform.python_implementation()} {platform.python_version()}"}
 
 
@@ -1556,6 +1858,7 @@ def verify_certified_hydrostatics(model, faces, query, result, expected, *, budg
     meter = _Gauge(Meter(budget, cancellation_check))
     previous = (getattr(_ACTIVE, "gauge", None), getattr(_ACTIVE, "digit_limit", None))
     _ACTIVE.gauge = meter
+    _ACTIVE.budget = meter.budget
     _ACTIVE.digit_limit = 100000
     try:
         try:
@@ -1573,6 +1876,7 @@ def verify_certified_hydrostatics(model, faces, query, result, expected, *, budg
         raise
     finally:
         _ACTIVE.gauge, _ACTIVE.digit_limit = previous
+        _ACTIVE.budget = previous[0].budget if previous[0] is not None else None
 
 
 def _verify(model, faces, query, result, expected, meter: _Gauge) -> VerifiedHydrostatics:
@@ -1582,10 +1886,11 @@ def _verify(model, faces, query, result, expected, meter: _Gauge) -> VerifiedHyd
     # (0) the bound query is the caller's query
     try:
         bound = _query_dict(result.query)
+    except CertifiedHydrostaticsRefusal:
+        raise
     except Exception as error:
         raise _fail("query", "the result carries no readable query", error) from error
     mine = _query_dict(query)
-    meter.unit("compare_element", _count_elements(mine))
     if bound != mine:
         raise _fail("query", "the query bound in the result differs from the supplied query")
     plane = _Plane(query)
@@ -1596,6 +1901,7 @@ def _verify(model, faces, query, result, expected, meter: _Gauge) -> VerifiedHyd
             raise _refuse(C.INVALID_QUERY, "unknown form")
 
     # (1) proof
+    _check_types(result)
     _check_work(result.work)
     proof = _parse_proof(result.proof, exp["policy"], meter)
     if proof["query"] != mine:
@@ -1617,7 +1923,7 @@ def _verify(model, faces, query, result, expected, meter: _Gauge) -> VerifiedHyd
     if exp["policy"]["convention_version"] != exp["convention_version"]:
         raise _fail("convention", "the expected policy names another convention version")
     artifact = proof["artifact"]
-    if not isinstance(artifact, dict) or sorted(map(list, artifact.get("files", []))) != exp["files"]:
+    if not isinstance(artifact, dict) or _sorted_pairs(artifact.get("files", [])) != exp["files"]:
         raise _fail("artifact", "the proof's file hashes differ from the expected artifact identity")
 
     # (2) snapshot, admission, identities
@@ -1648,10 +1954,10 @@ def _verify(model, faces, query, result, expected, meter: _Gauge) -> VerifiedHyd
     env = _environment(meter)
     for key, value in env.items():
         if key == "dependencies":
-            if sorted(map(list, artifact.get(key, []))) != value:
+            if _sorted_pairs(artifact.get(key, [])) != [[str(a), str(b)] for a, b in value]:
                 raise _fail("artifact", "the claimed dependency versions differ from the running environment")
         elif key == "files":
-            if sorted(map(list, artifact.get(key, []))) != sorted(value):
+            if _sorted_pairs(artifact.get(key, [])) != _sorted_pairs(value):
                 raise _fail("artifact", "the package file hashes differ from the running environment")
         elif artifact.get(key) != value:
             raise _fail("artifact", f"the claimed {key} differs from the running environment")
@@ -1662,11 +1968,12 @@ def _verify(model, faces, query, result, expected, meter: _Gauge) -> VerifiedHyd
     truth = _recompute(snap, plane, total_volume, meter)
 
     # (4)/(5) compare, with completeness
-    if result.generic != truth["generic"]:
+    if result.generic is not truth["generic"]:
         raise _fail("value", "the degeneracy flag differs")
     contacts = result.contacts
-    if (sorted(contacts.vertices) != truth["contacts"]["vertices"] or sorted(contacts.edges) != truth["contacts"]["edges"]
-            or sorted(contacts.faces) != truth["contacts"]["faces"]):
+    if (_tsorted(list(contacts.vertices)) != truth["contacts"]["vertices"]
+            or _tsorted(list(contacts.edges)) != truth["contacts"]["edges"]
+            or _tsorted(list(contacts.faces)) != truth["contacts"]["faces"]):
         raise _fail("value", "the contact lists differ")
     if result.occupancy != truth["occupancy"]:
         raise _fail("state", "the exact half-space occupancy differs")
@@ -1696,10 +2003,14 @@ def _verify(model, faces, query, result, expected, meter: _Gauge) -> VerifiedHyd
             _check_quantity(item, name, num, ns, query, "exact" in query.forms, meter)
         if section.topology is None:
             raise _fail("topology", f"side {section.side}: topology missing for a present section")
-        meter.unit("compare_element", len(side.topology["loops"]) + len(side.topology["components"]) + 1)
-        got_loops = sorted((tuple(l.identity), l.role) for l in section.topology.loops)
-        got_components = sorted((tuple(o), tuple(sorted(tuple(h) for h in hs)))
-                                for o, hs in section.topology.components)
+        got_loops, got_components = [], []
+        for loop in section.topology.loops:
+            meter.unit("compare_element")
+            got_loops.append((tuple(loop.identity), loop.role))
+        for outer, holes in section.topology.components:
+            meter.unit("compare_element")
+            got_components.append((tuple(outer), tuple(_tsorted([tuple(h) for h in holes]))))
+        got_loops, got_components = _tsorted(got_loops), _tsorted(got_components)
         if got_loops != side.topology["loops"] or got_components != side.topology["components"]:
             raise _fail("topology", f"side {section.side}: loops or components differ")
 
