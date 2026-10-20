@@ -339,13 +339,26 @@ accumulation, one square-root refinement step, one scalar or array element seria
 compared (topology arrays and identity lists count per element), one chunk of at most 64 KiB
 hashed (snapshot, document and package files). Each unit
 reserves its cost before it runs and every unit is a checkpoint for the budget, the deadline and
-`cancellation_check`; with the bit-length cap this bounds both the overshoot after a refusal and
-the non-preemptible span to one unit. These guarantees cover every public phase (preparation,
-query, verification, `check_preparation`). Work counts are returned on success and on refusal.
+`cancellation_check`. These guarantees cover every public phase (preparation, query, verification,
+`check_preparation`). Work counts are returned on success and on refusal.
 
-*Listed bulk operations (amendment 6b, owner decision 2026-10-20).* Exactly the operations listed
-here may run as one non-preemptible span larger than one unit; each is bounded by a named limit,
-is charged its units before it starts, and is followed immediately by a checkpoint:
+*Span bound (amendment 6d, owner decision 2026-10-20; replaces the earlier claim that every
+non-preemptible span is one unit).* In Python, built-in operations (string and tuple comparison,
+hashing, set operations, slicing, joins, encodes, sorts' native passes) run as single native calls
+over a whole value, so a literal one-unit span is not achievable. The guarantee is:
+1. every loop written in this package checkpoints at least once per element, or per 64 KiB of data
+   it processes, before that element's work;
+2. every non-preemptible span is a native operation over at most one value or collection whose size
+   is bounded by a named limit times a constant: `max_proof_bytes` for any string, key, decimal or
+   encoded text; `max_integer_digits` (and the bit cap) for integers; the model's entity counts and
+   the proof's element count (itself bounded by `max_proof_bytes`) for collections;
+3. a span whose data size is not bounded by a policy limit known before it runs is charged in
+   proportion before it runs (the rows below), and the bulk step is followed by a checkpoint.
+Hence the overshoot after a refusal, and the longest non-preemptible span, are bounded by one such
+operation on data within those limits; with the bit-length cap no exact value exceeds the cap.
+
+*Charged bulk operations (amendments 6b/6c, owner decisions 2026-10-20).* These spans are charged in
+proportion to their size before they start and are followed by a checkpoint:
 
 | Bulk operation | Bound |
 |---|---|
@@ -353,7 +366,7 @@ is charged its units before it starts, and is followed immediately by a checkpoi
 | one UTF-8 decode of the proof bytes | `max_proof_bytes` (checked before decoding) |
 | one linear copy, comparison, escape or encoding of a single string scalar, or the final join and UTF-8 encoding of the proof (amendment 6c, owner decision 2026-10-20) | `max_proof_bytes` (a string longer than the limit is refused before it is escaped); charged one unit per 64 KiB before it runs (`string_bulk` in the verifier; `serialize_bulk` in the provider, charged per 64 KiB block as the output grows) |
 
-Nothing else is exempt. Every other token scan is bounded by the limit it enforces: an integer
+Every other token scan is bounded by the limit it enforces: an integer
 token is scanned to at most `max_integer_digits + 1` digits before the refusal, never to its end.
 After a refusal no further outside data are read: refusal context is built only from values already
 ingested. The verifier's returned object exposes only values it has checked or recomputed; it never

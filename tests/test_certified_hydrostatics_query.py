@@ -1184,3 +1184,33 @@ def test_long_proof_strings_are_charged_per_64_kib_before_they_are_escaped():
                            waterplane_axes=((1, 0, 0), (0, 1, 0)), forms=("exact",))
     result = query_certified_hydrostatics(prepared, query)
     assert result.work["units"].get("serialize_bulk", 0) >= 2 * (1_000_000 // 65536)
+
+
+def test_non_ascii_proof_strings_are_charged_for_their_size_measurement_too():
+    from test_certified_hydrostatics_admission import unit_box
+    query = HalfSpaceQuery(normal=(0, 0, 1), offset=F(1, 2), waterplane_origin=(0, 0, 0),
+                           waterplane_axes=((1, 0, 0), (0, 1, 0)), forms=("exact",))
+
+    def bulk(units):
+        model, faces = unit_box()
+        prepared = prepare_certified_hydrostatics(model, faces, units=units)
+        return query_certified_hydrostatics(prepared, query).work["units"]["serialize_bulk"]
+
+    blocks = 1_000_000 // 65536
+    # same length: the non-ASCII string costs one more 64 KiB pass for its byte measurement and twice the output
+    assert bulk("é" * 1_000_000) - bulk("m" * 1_000_000) >= 2 * blocks - 2
+
+
+def test_the_final_proof_join_is_followed_by_a_checkpoint():
+    from test_certified_hydrostatics_admission import unit_box
+    model, faces = unit_box()
+    prepared = prepare_certified_hydrostatics(model, faces)
+    query = HalfSpaceQuery(normal=(0, 0, 1), offset=F(1, 2), waterplane_origin=(0, 0, 0),
+                           waterplane_axes=((1, 0, 0), (0, 1, 0)), forms=("exact",))
+    first = WorkBudget(None, None)
+    query_certified_hydrostatics(prepared, query, budget=first)
+    total = first.operations
+    budget = WorkBudget(None, None)
+    with pytest.raises(CertifiedHydrostaticsRefusal) as info:      # a poll happens after the last charged unit
+        query_certified_hydrostatics(prepared, query, budget=budget, cancellation_check=lambda: budget.operations >= total)
+    assert info.value.category is RefusalCategory.CANCELLED

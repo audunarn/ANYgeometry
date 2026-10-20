@@ -278,11 +278,14 @@ def write_canonical(document, meter=None, *, max_digits: int, max_bytes: int, la
             # one unit per 64 KiB before it runs
             if len(value) > max_bytes:
                 raise refuse(RefusalCategory.RESULT_OUT_OF_RANGE, "a string of the proof exceeds the byte limit")
-            if charged and meter is not None:
-                meter.unit("serialize_bulk", len(value) // 65536 + 1)
+            if charged and meter is not None:      # the escape and the UTF-8 size measurement of a non-ASCII string
+                meter.unit("serialize_bulk", (1 if value.isascii() else 2) * (len(value) // 65536 + 1))
             emit(json.dumps(value, ensure_ascii=False))
         else:
             raise TypeError(f"cannot serialise {type(value).__name__}")
 
     walk(document, (), True)
-    return "".join(parts).encode("utf-8")     # its cost was charged per 64 KiB block as the output grew (6b bulk)
+    data = "".join(parts).encode("utf-8")     # its cost was charged per 64 KiB block as the output grew (6b bulk)
+    if meter is not None:
+        meter.unit("serialize_bulk", 0)        # the checkpoint after the bulk step (polls; charges nothing)
+    return data
