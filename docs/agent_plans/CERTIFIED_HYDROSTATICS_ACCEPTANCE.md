@@ -18,10 +18,14 @@ with a new assessment; the earlier result stays as recorded.
 
 ## 2. Closed-form fixtures (Q01)
 
-All fixtures use body coordinates in metres and the waterplane basis `o = (0, 0, 0)`,
-`e1 = (1, 0, 0)`, `e2 = (0, 1, 0)` unless stated, with `n = (0, 0, 1)` (so `|n| = 1` and every
-quantity is rational). Expected values follow from elementary integration; the fixture code
-states each one next to its definition.
+All fixtures use body coordinates in metres, `o = (0, 0, 0)` and `n = (0, 0, 1)` unless stated
+(so `|n| = 1` and every quantity is rational). **Registered waterplane basis** for an axis-aligned
+normal (a valid basis needs `(e1 x e2) . n != 0`): `n = +-e_x`: `e1 = (0, 1, 0)`, `e2 = (0, 0, 1)`;
+`n = +-e_y`: `e1 = (1, 0, 0)`, `e2 = (0, 0, 1)`; `n = +-e_z`: `e1 = (1, 0, 0)`, `e2 = (0, 1, 0)`;
+a fixture may state another basis explicitly. Expected values follow from elementary integration;
+the fixture code states each one next to its definition. (Amended 2026-10-20 before any
+assessment run: revision 1 gave one default basis, invalid for the `x`- and `y`-normal planes of
+F5 and F9; Codex review of CH1b.)
 
 | Id | Solid | Plane(s) | Expected |
 |---|---|---|---|
@@ -38,10 +42,14 @@ states each one next to its definition.
 ## 3. Transformations (Q02)
 
 For F1, F2 and F4: translations by `(7, -3, 11)`; rotations by exact rational orthogonal matrices
-(from Pythagorean triples, e.g. `[[3/5, -4/5, 0], [4/5, 3/5, 0], [0, 0, 1]]` and a 3-axis product);
-reflection in `x = 0` with the face orientations reversed; the plane and basis transformed with the
-solid. Expected: `V`, `A` and the waterplane moments in the transformed basis unchanged; `J`
-transformed exactly (`J' = R J + V t`). Planes built with ANYstability's convention
+(from Pythagorean triples, e.g. `[[3/5, -4/5, 0], [4/5, 3/5, 0], [0, 0, 1]]` and a 3-axis product
+with denominator 1105); reflection in `x = 0` with the face orientations reversed; the plane and
+basis transformed with the solid. A model stores float coordinates, so before a rotation with
+denominator `q` the solid is scaled by `q` (5 or 1105), making the rotated coordinates exact floats.
+Expected: for a scale `s`, `V' = s^3 V`, `J' = s^4 R J + V' t` (exact), `A' = s^2 A`, first
+waterplane moments `s^3` and second moments `s^4` times the originals in the transformed basis;
+without scaling (`s = 1`) `V`, `A` and the waterplane moments are unchanged and `J' = R J + V t`.
+(Amended 2026-10-20 before any assessment run to describe the scaling the fixtures need.) Planes built with ANYstability's convention
 (`R = Ry(-trim) Rx(heel)`, half-space `R[2] . r <= -origin_z`, basis `R[0]`, `R[1]`) at heel
 `0.1, 0.5` and trim `0.02` (floats as given; the exact results are for those floats).
 
