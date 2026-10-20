@@ -6,7 +6,7 @@ Topology is returned only after every junction and material cycle is resolved.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from fractions import Fraction
 import functools
 import heapq
@@ -73,6 +73,54 @@ class MaterialDomain:
     face_id: int
     support: Plane | Cylinder | Cone | ExtrudedSurface | NurbsSurface
     boundaries: tuple[tuple[ArrangementPath, ...], ...]
+    # Instance-lifetime reuse of the support's exact chart (see _exact_chart).
+    _exact_chart_cache: tuple | None = field(default=None, init=False, hash=False,
+                                             compare=False, repr=False)
+    _exact_boundary_cache: tuple | None = field(default=None, init=False, hash=False,
+                                                compare=False, repr=False)
+
+    def _prepared_exact_boundary(self, loop):
+        """Lazy exact line data, retained only for this immutable domain's edges."""
+        if (type(self) is not MaterialDomain or type(self.support) is not Plane
+                or any(vector.flags.writeable for vector in (
+                    self.support.origin, self.support.u_vector, self.support.v_vector))
+                or type(self.boundaries) is not tuple
+                or not any(loop is item for item in self.boundaries)
+                or type(loop) is not tuple):
+            return None
+        # LinePath is frozen, but callers can construct it with mutable payloads.
+        # Such records continue to use the uncached exact predicates.
+        if not all(type(path) is ArrangementPath and type(path.curve) is LinePath
+                   and type(path.curve.start) is tuple and type(path.curve.end) is tuple
+                   and len(path.curve.start) == 3 and len(path.curve.end) == 3
+                   and all(type(value) in (float, int, np.float64, Fraction)
+                           for value in (*path.curve.start, *path.curve.end))
+                   for path in loop):
+            return None
+        cache = self._exact_boundary_cache
+        if cache is None or cache[0] is not self.support or cache[1] is not self.boundaries:
+            cache = (self.support, self.boundaries, {})
+            object.__setattr__(self, "_exact_boundary_cache", cache)
+        return cache[2].setdefault(id(loop), {})
+
+    def _exact_chart(self):
+        """The support's exact chart, reused across this domain's queries.
+
+        ``ExactPlane.from_plane`` is a pure function of the immutable support
+        record, so the first query's chart serves every later query of the
+        same domain. The cache is identity-checked: a domain copied with a
+        different support (``replace``) never reuses the stale chart, and a
+        failed construction is never cached.
+        """
+        # Only the exact immutable owner record carries the reuse guarantee.
+        if type(self.support) is not Plane:
+            return ExactPlane.from_plane(self.support)
+        cache = self._exact_chart_cache
+        if cache is not None and cache[0] is self.support:
+            return cache[1]
+        chart = ExactPlane.from_plane(self.support)
+        object.__setattr__(self, '_exact_chart_cache', (self.support, chart))
+        return chart
 
     @property
     def area_jacobian(self):
@@ -344,7 +392,7 @@ class MaterialDomain:
         position = Station(curve, parameter).exact_position() if type(curve) in (LinePath, BezierPath) else None
         if position is None:
             return None
-        return ExactPlane.from_plane(self.support).uv(position)
+        return self._exact_chart().uv(position)
 
     def contains_loop(self, loop, uv, tolerance, *, boundary=True):
         # Exact route (robust-predicate R1b): only for an exact (rational) query
@@ -352,12 +400,13 @@ class MaterialDomain:
         # rounded chart output, so it keeps the float route unchanged.
         if len(uv) == 2 and all(type(v) is Fraction for v in uv):
             if self._exact_planar(self.boundaries) and self._exact_planar((loop,)):
-                return _contains_loop_exact(ExactPlane.from_plane(self.support), loop, tuple(uv), tolerance,
-                                            boundary=boundary)
+                return _contains_loop_exact(self._exact_chart(), loop, tuple(uv), tolerance,
+                                            boundary=boundary,
+                                            prepared=self._prepared_exact_boundary(loop))
             if self._exact_curved_planar(self.boundaries) and self._exact_curved_planar((loop,)):
                 # Lines and elliptic arcs (robust-predicate R1c, E4): certified replica.
                 from .planar_arcs import contains_loop_exact_curved
-                return contains_loop_exact_curved(ExactPlane.from_plane(self.support), loop, tuple(uv),
+                return contains_loop_exact_curved(self._exact_chart(), loop, tuple(uv),
                                                   tolerance, boundary=boundary)
         if isinstance(self.support, NurbsSurface):        # exact level sets on the pcurves (A1e-lite)
             return nurbs_domain.contains_loop(self, loop, uv, tolerance, boundary=boundary)
@@ -631,7 +680,7 @@ def _clip_intervals(domain,curve,tolerance,check,*,isolated_contacts=None):
 
 def _contains_point_exact(domain, point, tolerance):
     """Material containment of an exact world point on an all-straight Plane domain (R1b)."""
-    uv = ExactPlane.from_plane(domain.support).uv(point)
+    uv = domain._exact_chart().uv(point)
     return (domain.contains_loop(domain.boundaries[0], uv, tolerance)
             and not any(domain.contains_loop(loop, uv, tolerance, boundary=False) for loop in domain.boundaries[1:]))
 
@@ -1953,7 +2002,31 @@ def _within(value: Fraction, bound_squared: Fraction) -> bool:
     return value * value <= bound_squared
 
 
-def _exact_horizontal_roots(chart, curve, level, tolerance):
+@dataclass(frozen=True, slots=True)
+class _ExactBoundaryLine:
+    start: tuple
+    direction: tuple
+    length2: Fraction
+    uv_start: tuple
+    uv_direction: tuple
+    start_level: Fraction
+    delta_level: Fraction
+    normal2: Fraction
+
+
+def _prepare_exact_boundary_line(chart, curve):
+    start, end = exact_vector(curve.start), exact_vector(curve.end)
+    direction = tuple(b - a for a, b in zip(start, end))
+    normal = tuple(value / chart._scale for value in chart._dual_v)
+    return _ExactBoundaryLine(
+        start, direction, exact_dot(direction, direction),
+        chart.uv(start), chart.uv_direction(direction),
+        exact_dot(normal, start) - exact_dot(normal, chart.origin),
+        exact_dot(normal, direction), exact_dot(normal, normal),
+    )
+
+
+def _exact_horizontal_roots(chart, curve, level, tolerance, *, prepared=None):
     """Exact replica of ``MaterialDomain.horizontal_roots`` for a LinePath on a Plane.
 
     The chart's v-level ``level`` is the world plane ``n . x = level + n . origin``
@@ -1962,12 +2035,17 @@ def _exact_horizontal_roots(chart, curve, level, tolerance):
     Returns None (coincident), or the sorted roots in [0, 1] with the 128-eps
     endpoint snapping of the float route.
     """
-    normal = tuple(value / chart._scale for value in chart._dual_v)
-    offset = level + exact_dot(normal, chart.origin)
-    bound2 = Fraction(tolerance) ** 2 * exact_dot(normal, normal)
-    start_point, end_point = exact_vector(curve.start), exact_vector(curve.end)
-    start = exact_dot(normal, start_point) - offset
-    delta = exact_dot(normal, tuple(b - a for a, b in zip(start_point, end_point)))
+    if prepared is None:
+        normal = tuple(value / chart._scale for value in chart._dual_v)
+        offset = level + exact_dot(normal, chart.origin)
+        bound2 = Fraction(tolerance) ** 2 * exact_dot(normal, normal)
+        start_point, end_point = exact_vector(curve.start), exact_vector(curve.end)
+        start = exact_dot(normal, start_point) - offset
+        delta = exact_dot(normal, tuple(b - a for a, b in zip(start_point, end_point)))
+    else:
+        bound2 = Fraction(tolerance) ** 2 * prepared.normal2
+        start = prepared.start_level - level
+        delta = prepared.delta_level
     if _within(start, bound2) and _within(start + delta, bound2):
         return None
     if delta == 0:
@@ -1978,8 +2056,9 @@ def _exact_horizontal_roots(chart, curve, level, tolerance):
     roots = () if (below or above) else (min(Fraction(1), max(Fraction(0), root)),)
     endpoints = tuple(t for t, value in ((Fraction(0), start), (Fraction(1), start + delta)) if _within(value, bound2))
     snapped = []
-    length2 = exact_dot(tuple(b - a for a, b in zip(start_point, end_point)),
+    length2 = (exact_dot(tuple(b - a for a, b in zip(start_point, end_point)),
                         tuple(b - a for a, b in zip(start_point, end_point)))
+               if prepared is None else prepared.length2)
     tol2 = Fraction(tolerance) ** 2
     for root in roots:
         # S1a: snap to an accepted endpoint when the sub-piece is no longer than tol.
@@ -2012,7 +2091,7 @@ def _exact_point_on_segment(curve, world, tolerance) -> bool:
     return sum((a - b) ** 2 for a, b in zip(point, world)) <= tol2
 
 
-def _contains_loop_exact(chart, loop, uv, tolerance, *, boundary=True):
+def _contains_loop_exact(chart, loop, uv, tolerance, *, boundary=True, prepared=None):
     """Exact replica of ``MaterialDomain.contains_loop`` for straight loops on a Plane.
 
     The same rules as the float route (horizontal-ray roots, the world-distance
@@ -2024,9 +2103,35 @@ def _contains_loop_exact(chart, loop, uv, tolerance, *, boundary=True):
     tol2 = Fraction(tolerance) ** 2
     window = 8 * _EPS_EXACT
 
+    def line_data(curve):
+        key = id(curve)
+        entry = prepared.get(key)
+        if entry is None or entry[0] is not curve:
+            # Lazy construction preserves the predicate's edge visitation and
+            # refusal order; a failed construction is never retained.
+            entry = (curve, _prepare_exact_boundary_line(chart, curve))
+            prepared[key] = entry
+        return entry[1]
+
     def station_uv(curve, t):
+        if prepared is not None:
+            data = line_data(curve)
+            # Exact affine interpolation: the same rational coordinates as
+            # projecting the exact world station, without repeated chart work.
+            return tuple(a + t * d for a, d in zip(data.uv_start, data.uv_direction))
         start, end = exact_vector(curve.start), exact_vector(curve.end)
         return chart.uv(tuple(a + t * (b - a) for a, b in zip(start, end)))
+
+    root_cache = {}
+
+    def horizontal_roots(curve):
+        if prepared is None:
+            return _exact_horizontal_roots(chart, curve, v_query, tolerance)
+        key = id(curve)
+        if key not in root_cache:
+            root_cache[key] = _exact_horizontal_roots(
+                chart, curve, v_query, tolerance, prepared=line_data(curve))
+        return root_cache[key]
 
     def world_distance2(du, dv):
         vector = tuple(du * a + dv * b for a, b in zip(chart.u_vector, chart.v_vector))
@@ -2035,7 +2140,7 @@ def _contains_loop_exact(chart, loop, uv, tolerance, *, boundary=True):
     winding = 0
     for index, path in enumerate(loop):
         curve = path.curve
-        roots = _exact_horizontal_roots(chart, curve, v_query, tolerance)
+        roots = horizontal_roots(curve)
         if roots is None:
             if _exact_point_on_segment(curve, chart.world(u_query, v_query), tolerance):
                 return boundary
@@ -2049,12 +2154,12 @@ def _contains_loop_exact(chart, loop, uv, tolerance, *, boundary=True):
                 continue
             if t <= window:
                 previous = loop[index - 1].curve
-                previous_roots = _exact_horizontal_roots(chart, previous, v_query, tolerance)
+                previous_roots = horizontal_roots(previous)
                 for distance in range(2, len(loop) + 1):
                     if previous_roots is not None:
                         break
                     previous = loop[index - distance].curve
-                    previous_roots = _exact_horizontal_roots(chart, previous, v_query, tolerance)
+                    previous_roots = horizontal_roots(previous)
                 previous_lower = max((r for r in (previous_roots or ()) if r < 1 - window), default=Fraction(0))
                 before = station_uv(previous, (previous_lower + 1) / 2)[1] - v_query
             else:

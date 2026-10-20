@@ -2210,13 +2210,13 @@ class GeometryModel:
 
         staged_features = FeatureHistory()
         try:
+            # restore already validates the detached candidate before return.
             staged_features.restore(feature_snapshot)
-            staged_features.validate()
         except (GeometryError, TypeError, ValueError, AttributeError) as error:
             raise GeometryError(f"invalid feature snapshot: {error}") from error
 
         feature_changed = not _records_equal(
-            self.features.snapshot(), staged_features.snapshot()
+            self.features._state_view(), staged_features._state_view()
         )
         events: list[ChangeSet] = []
         original_hooks = self._change_hooks
@@ -2227,7 +2227,7 @@ class GeometryModel:
             self._change_hooks = original_hooks
         # Keep the owner-bound history object stable so previously acquired
         # read handles cannot become a detached mutable design history.
-        self._features._restore_unchecked(staged_features.snapshot())  # noqa: SLF001
+        self._features._restore_unchecked(staged_features._state_view())  # noqa: SLF001
         if events or feature_changed:
             if events:
                 change_set = replace(events[0], feature_history_changed=feature_changed)
@@ -2282,7 +2282,7 @@ class GeometryModel:
         # detached planning/application copies without sharing mutable payloads.
         made._serialization_extensions = deepcopy(getattr(self, '_serialization_extensions', {}))
         if include_features:
-            made._features._restore_unchecked(self.features.snapshot())  # noqa: SLF001
+            made._features._restore_unchecked(self.features._state_view())  # noqa: SLF001
         return made
 
     def insert_model(
@@ -2328,6 +2328,32 @@ class GeometryModel:
 
             registry = builtin_feature_registry()
         return self.features.regenerate(self, registry)
+
+    def regenerate_features_detached(
+        self, registry: FeatureRegistry | None = None, *,
+        appended_feature_ids: Sequence[int] = (),
+    ) -> RegenerationReport:
+        """Regenerate a caller-owned disposable staging model.
+
+        The caller must own an isolated model and discard it after a failed
+        report or exception. This method may change that model before failure;
+        use :meth:`regenerate_features` for atomic live-model regeneration.
+
+        ``appended_feature_ids`` identifies only features newly appended by
+        this staging operation. A matching, unmaterialized additive suffix can
+        reuse staging topology; existing, suppressed and mutating features
+        retain the normal atomic replay path. All execution/history validation
+        remains enabled. Publishing the stage into a live model still requires
+        the normal validated design restoration.
+        """
+        if self._transaction_journal is not None or self._notifying_hooks:
+            raise GeometryError("detached feature regeneration requires an exclusively owned staging model")
+        if registry is None:
+            from .features import builtin_feature_registry
+            registry=builtin_feature_registry()
+        return self.features._regenerate(
+            self,registry,appended_feature_ids=tuple(appended_feature_ids)
+        )
 
     def entity_keys(self) -> Set[Tuple[str, int]]:
         """Every entity in the model, as ``(kind, id)`` pairs."""
@@ -2849,10 +2875,17 @@ class GeometryModel:
             if set(mapping.get(bucket, ())) != expected:
                 errors.append(message)
 
+        expected_face_uses_by_face: Dict[int, Set[int]] = {}
+        for use in local_face_uses.values():
+            expected_face_uses_by_face.setdefault(use.face_id, set()).add(use.id)
+        expected_member_uses_by_edge: Dict[int, Set[int]] = {}
+        for use in local_member_uses.values():
+            expected_member_uses_by_edge.setdefault(use.edge_id, set()).add(use.id)
+        expected_coedges_by_edge: Dict[int, Set[int]] = {}
+        for coedge in local_coedges.values():
+            expected_coedges_by_edge.setdefault(coedge.edge_id, set()).add(coedge.id)
         for face_id in face_ids:
-            expected = {
-                use.id for use in local_face_uses.values() if use.face_id == face_id
-            }
+            expected = expected_face_uses_by_face.get(face_id, set())
             actual = set(self._face_structural_uses.get(face_id, ()))
             if not expected.issubset(actual) or any(
                 use_id not in self.face_uses
@@ -2861,9 +2894,7 @@ class GeometryModel:
             ):
                 errors.append(f"face {face_id} structural reverse incidence is stale")
         for edge_id in edge_ids:
-            expected_members = {
-                use.id for use in local_member_uses.values() if use.edge_id == edge_id
-            }
+            expected_members = expected_member_uses_by_edge.get(edge_id, set())
             actual_members = set(self._edge_member_uses.get(edge_id, ()))
             if not expected_members.issubset(actual_members) or any(
                 use_id not in self.member_edge_uses
@@ -2871,9 +2902,7 @@ class GeometryModel:
                 for use_id in actual_members
             ):
                 errors.append(f"edge {edge_id} member reverse incidence is stale")
-            expected_coedges = {
-                use.id for use in local_coedges.values() if use.edge_id == edge_id
-            }
+            expected_coedges = expected_coedges_by_edge.get(edge_id, set())
             actual_coedges = set(self._edge_coedges.get(edge_id, ()))
             if not expected_coedges.issubset(actual_coedges) or any(
                 use_id not in self.coedges

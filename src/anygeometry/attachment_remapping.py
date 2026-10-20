@@ -13,6 +13,7 @@ from .exact_curves import EXACT_CURVES, EllipticArc
 from .material_arrangement import MaterialDomain, _clip_intervals
 from .member_arrangements import _support_roots
 from .runtime_diagnostics import _increment
+from .exact_predicates import exact_vector
 from .structural import ParameterRange, Orientation, AttachmentTargetKind
 from .surfaces import Plane, Cylinder
 
@@ -158,6 +159,48 @@ def _box_rejects(domain_box, curve_box, tolerance):
                 or np.any(curve_lower > reject_upper))
 
 
+def _chart_point_box(chart, point):
+    """Outward enclosure of a point's exact orthogonal chart projection."""
+    if _certified_box((point, point)) is None:
+        return None
+    position = chart.world(*chart.uv(exact_vector(point)))
+    try:
+        rounded = np.asarray(tuple(float(value) for value in position))
+    except OverflowError:
+        return None
+    return _certified_box((np.nextafter(rounded, -np.inf),
+                           np.nextafter(rounded, np.inf)))
+
+
+def _projected_point_box(domain, point):
+    """Bound the same projection as exact straight-planar containment."""
+    if type(domain.support) is not Plane or not domain._exact_planar(domain.boundaries):
+        return None
+    return _chart_point_box(domain._exact_chart(), point)
+
+
+def _projected_domain_box(domain):
+    """Enclose projected straight trims, including accepted support residuals.
+
+    Exact containment projects boundary stations as well as the query. The
+    raw world boundary box is therefore insufficient when trim coordinates
+    differ from the support within its admitted residual tolerance. A linear
+    projection maps each straight boundary to its projected endpoint segment;
+    their outward box encloses the material tested by the exact winding rule.
+    Curved and unsupported boundary families keep the original exact route.
+    """
+    if type(domain.support) is not Plane or not domain._exact_planar(domain.boundaries):
+        return None
+    chart = domain._exact_chart()
+    boxes = [_chart_point_box(chart, point)
+             for loop in domain.boundaries for path in loop
+             for point in (path.curve.start, path.curve.end)]
+    if not boxes or any(box is None for box in boxes):
+        return None
+    return _certified_box((np.min([box[0] for box in boxes], axis=0),
+                           np.max([box[1] for box in boxes], axis=0)))
+
+
 def remap_face_attachments(model,old_face,descendants,snapshots,check):
     # Descendant material domains and their effective tolerances are fixed
     # once the geometry modifications are complete, so each descendant face
@@ -169,7 +212,8 @@ def remap_face_attachments(model,old_face,descendants,snapshots,check):
             boxes=tuple(path.curve.bounds() for loop in domain.boundaries for path in loop)
             tolerance=model.tolerance.effective_length(max(
                 (np.linalg.norm(hi-lo) for lo,hi in boxes),default=1.))
-            descendant_domains[face_id]=(domain,tolerance,_domain_box(domain,boxes))
+            descendant_domains[face_id]=(domain,tolerance,_domain_box(domain,boxes),
+                                          _projected_domain_box(domain))
         return descendant_domains[face_id]
     curve_boxes={}
     def curve_box(curve):
@@ -183,10 +227,19 @@ def remap_face_attachments(model,old_face,descendants,snapshots,check):
     for role,attachment,paths in snapshots:
         candidates=[]
         for face_id in sorted(descendants):
-            domain,tolerance,domain_box=descendant_domain(face_id)
+            domain,tolerance,domain_box,point_domain_box=descendant_domain(face_id)
             for curve,point,source_interval in paths:
                 check()
                 if curve is None:
+                    # Bound the same support projection as exact containment,
+                    # retaining normal-offset points and uncertain cases.
+                    if point_domain_box is not None:
+                        point_box=_projected_point_box(domain,point)
+                        if point_box is not None:
+                            _increment('attachment_point_bounds_tests')
+                            if _box_rejects(point_domain_box,point_box,tolerance):
+                                _increment('attachment_point_bounds_pruned')
+                                continue
                     probe=LinePath(point,point)
                     if domain.contains(probe,0.,tolerance):
                         uv=domain.support.local_uv(point)
