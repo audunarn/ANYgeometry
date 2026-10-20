@@ -48,3 +48,48 @@ def test_the_aft_boundary_is_the_midship_section_at_x_15():
     assert all(z == 0. for _x, _y, z in bottom) and bottom[0][1] == 0. and bottom[-1][1] == 5.5   # keel to chine
     assert all(y == 5.5 for _x, y, _z in side) and side[-1][2] == 3.                              # chine to above the deck
     assert starboard.knots_v.count(.5) == 3                                                        # the chine crease
+
+
+# ------------------------------------------------------------------ P3b probe: the faces below the deck
+# These record the current behaviour (refusals included); they change when the stem-adjacency design lands.
+
+def test_the_deck_meets_the_stem_at_one_exact_point_on_both_patches():
+    from anygeometry.bow_example import build_bow_faces_below_deck
+    model, faces, edges = build_bow_faces_below_deck()
+    starboard_end = model.edges[edges["starboard"]["deck"]].curve.evaluate(np.array([1.]))
+    port_end = model.edges[edges["port"]["deck"]].curve.evaluate(np.array([1.]))
+    assert np.array_equal(starboard_end, port_end) and starboard_end[0][1] == 0.
+
+
+def test_one_bow_face_audits_clean():
+    from anygeometry.bow_example import build_bow_faces_below_deck
+    from anygeometry.nurbs_section_faces import validate_nurbs_section_face
+    model, faces, _edges = build_bow_faces_below_deck()
+    assert validate_nurbs_section_face(model, faces["starboard"]) == []
+    assert validate_nurbs_section_face(model, faces["port"]) == []
+    single, _faces, _edges = build_bow_faces_below_deck(sides=("starboard",))
+    assert single.strict_audit().clean
+
+
+def test_a_shared_stem_curve_needs_the_also_on_proof():
+    import pytest
+    from anygeometry import GeometryError
+    from anygeometry.nurbs import CurveOnSurface, NurbsCurve
+    starboard, port = bow_two_patch()
+    with pytest.raises(GeometryError, match="also_on requires an exact shared-boundary proof"):
+        CurveOnSurface(starboard, NurbsCurve(1, (0., 0., 1., 1.), ((0., 1.), (0., 0.))), (port,))
+
+
+def test_the_two_bow_faces_are_not_classified_across_the_stem():
+    from anygeometry.bow_example import build_bow_faces_below_deck
+    model, faces, edges = build_bow_faces_below_deck()
+    report = model.strict_audit()
+    assert not report.clean
+    codes = {issue.code.value for issue in report.issues}
+    assert codes == {"unclassified_candidate", "unverified_classification"}
+    pairs = {tuple(sorted((entity.kind, entity.id) for entity in issue.entities))
+             for issue in report.issues if issue.code.value == "unclassified_candidate"}
+    s, p = faces["starboard"], faces["port"]
+    assert (("face", p), ("face", s)) in pairs or (("face", s), ("face", p)) in pairs
+    duplicates = {tuple(sorted((edges["starboard"][k], edges["port"][k]))) for k in ("stem", "keel")}
+    assert duplicates <= {tuple(sorted(e[1] for e in pair)) for pair in pairs if all(e[0] == "edge" for e in pair)}
