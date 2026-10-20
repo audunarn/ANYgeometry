@@ -289,9 +289,10 @@ new convention version.
   full (no digit limit), rationals as `[numerator, denominator]` in lowest terms with a positive
   denominator, doubles as `float.hex()` strings, no JSON floats.
 - **Snapshot document** (hashed with SHA-256 for the snapshot digest): `{"faces", "vertices",
-  "edges", "vertex_incidence"}`. `faces`: in the selected order, each `{"id", "support": {"origin",
-  "u", "v"} (exact pairs), "loops": [[edge id, forward, start vertex id], ...] per loop, outer loop
-  first}`. `vertices`: `[id, [x, y, z] exact]` sorted by id. `edges`: `[id, start, end,
+  "edges", "vertex_incidence"}`. `faces`: in the selected order, each `{"id", "support" (see below), "loops": [[edge id, forward, start vertex id], ...] per loop, outer loop
+  first}`, with `support` the list `[origin, u, v]` of exact points (corrected 2026-10-20: an
+  earlier wording said a mapping; both implementations write the list). `vertices`:
+  `[id, [x, y, z] exact]` sorted by id. `edges`: `[id, start, end,
   sorted [[face id, forward], ...]]` sorted by id. `vertex_incidence`: `[id, sorted face ids,
   sorted edge ids]` sorted by id.
 - **Artifact descriptor**: distribution name and version, `__version__`, every file under the
@@ -301,6 +302,16 @@ new convention version.
 - **`expected` argument of the verifier**: a mapping with `artifact_files` (the per-file SHA-256
   list of the admitted wheel), `convention_version`, `units` and `policy` (the verifier takes its
   parse limits from `expected["policy"]`, never from the proof).
+- **Convention block** (convention version 1): exactly these values, compared exactly by the
+  verifier (a different string is a different convention and refuses `convention`):
+  `body_frame` = "model coordinates are the body frame; no rotation, no normalisation";
+  `half_space` = "n.r <= d with exact rational n, d (unnormalised)";
+  `area_element` = "true area element dA of the plane; waterplane quantities are numerator/|n|";
+  `moment_order` = ["A", "Mu", "Mv", "Iuu", "Ivv", "Iuv"];
+  `limits` = "below: n.r = d - eps, above: n.r = d + eps, eps -> 0+; V and J use the below convention";
+  `loop_identity` = "sorted ids of the crossed shell edges"; plus `convention_version` and `units`.
+- **Work counts** in a result: non-negative integers; `operations` equals the sum of the unit
+  counts.
 - **Refusal sub-reason**: `CertifiedHydrostaticsRefusal.sub_reason` (a public attribute; `None`
   except for `VERIFICATION_FAILED`), one of the section 7 sub-reasons.
 
