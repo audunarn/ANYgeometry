@@ -1,9 +1,9 @@
-# Certified hydrostatics: design (CH0, revision 4, 2026-10-20)
+# Certified hydrostatics: design (CH0, revision 5, 2026-10-20)
 
 Status: design for owner review; no source changed. Revision 2 answered the Codex Astra review of
 revision 1 (4 blocking, 6 major, 2 minor); revision 3 the review of revision 2 (2 blocking,
 4 major, 1 minor); revision 4 the review of revision 3 (1 blocking, 3 major, 2 minor). All are
-tabled in section 12. Request: ANYstability,
+tabled in section 12; revision 5 fixes the two majors of the round-4 review. Request: ANYstability,
 `C:/Github/ANYstability/docs/ANYgeometry_CERTIFIED_HYDROSTATICS_HANDOFF.md` (20 October),
 requirements GEO-01..GEO-11 in `ANYstability/docs/ANYgeometry_REQUIREMENTS.md`. Owner decision
 2026-10-20: certified point queries for planar shells first (CH1 + CH2), the curved B1 hull
@@ -243,8 +243,9 @@ result at `z <= 2` and `z <= 3`); (1) recomputes the canonical proof from the re
 requires it equal to `result.proof` and consistent with `expected`;
 (2) rebuilds the snapshot from the supplied model and faces, re-runs the section 2 checks and
 requires the digest to match, and recomputes the model id, revision and document checksum from the
-supplied model and the artifact file hashes from the running package and requires each to equal
-the proof's fields; the consumer's `expected` artifact identity is the per-file SHA-256 list of
+supplied model, and the complete artifact descriptor from the running environment (distribution
+name and version, every package file hash, runtime dependency versions, Python version), and
+requires each to equal the proof's fields; the consumer's `expected` artifact identity is the per-file SHA-256 list of
 the wheel it admitted (the wheel's own `RECORD`, from the delivery manifest), compared with the
 installed files, not a hash of the wheel archive; (3) recomputes every exact quantity, the degeneracy and the
 contact lists (vertices, edges and faces in the plane), the occupancies, both limits and the
@@ -253,7 +254,9 @@ independently: volume and first moments by the divergence theorem with Mirtich's
 integrals on the clipped faces and the cap; cut points by intersecting every edge with the plane
 and segments by exact interval classification along each face's cut line; area and moments by
 Green's theorem in projection coordinates (drop the index `k` maximising `|n[k]|`, lowest index
-on ties; the projected area is multiplied by `|n| / |n[k]|`, its sign by the sign of `n[k]`);
+on ties; remaining coordinates in increasing index order; the projected area is multiplied by
+`|n| / |n[k]|` and its sign by `(-1)^k sign(n[k])` with zero-based `k`: dropping the middle index
+with increasing-order coordinates reverses the orientation, e.g. the unit cube at `y <= 1/2`);
 (4) requires exact
 equality, and checks every returned form against the request and its own rules: a binary64
 enclosure has `lo == hi` (a double equal to the exact value) or `lo`, `hi` adjacent doubles with
@@ -339,7 +342,8 @@ check_preparation(model, prepared)          # STALE_PREPARATION when the snapsho
 | CH1a | snapshot, admission checks 1-6, refusal enum, implementation identity, `WorkBudget` | recipe3 hull and every tank admit; each refusal category is raised by a minimal case, including the review's wrong-winding bored box (`INVALID_HOLES`), a touching-hole face, two cubes sharing only a vertex (`NON_MANIFOLD`), an adjacent-face overlap and a self-intersecting shell (`SELF_INTERSECTING`) | Sonnet from this specification; Opus review |
 | CH1b | query: clipped-face sums, symbolic cut points, segments, loops, topology, both limits, states, forms and enclosures | the fixtures and expected values of the acceptance manifest (below), including closed forms (Q01) for box, tetrahedron, prism, extruded U (two components), bored box (a hole), the saddle solid (below one loop, above two, equal quantities), the box at its top face (states as in section 3, no double cap), the tetrahedron at its apex (collapsing outer loop) and a pyramidal recess at its apex (collapsing hole), a nesting tie at a shared limit point; the exact derivative check; Q02 translations, exact rational rotations, moment-origin changes, reflection; binary64 width limits and `ACCURACY_UNACHIEVABLE`; planes built with ANYstability's convention at finite heel/trim | Sonnet; Opus review |
 | CH1c | the independent verifier (section 6) | agrees exactly with CH1b on every manifest case; refuses each attack of the manifest: a result for another query with equal quantities (submerged box at `z <= 2` vs `z <= 3`), altered value, bound, state, flag or topology, deleted forms or flags (a requested decimal form
-removed and the proof regenerated), altered contacts or identity fields, an enclosure wider than
+removed and the proof regenerated), altered contacts or identity fields (including a claimed
+Python or dependency version differing from the running one), an enclosure wider than
 requested (`[0, 2]` for `V = 1` at accuracy `1e-12`), non-adjacent binary64 endpoints, substituted model or face set, stale snapshot, wrong expected identity, malformed or oversized proof | a separate Sonnet session given only this specification |
 | CH1d | recipe3 runs: hull and WB tanks, upright and inclined, the WB1/2/7/8 deck plane | all admit and verify; the deck plane returns both limits; work and timings recorded | Opus |
 | CH2 | delivery folder (the handoff's section 5 inventory for the planar subset): wheel + SHA-256, source commit, docs (API, domain, argument, trust model), commands, requests, responses, proofs, verifier runs, refusals, work accounting, and the open obligations of the scope statement | installed-wheel runs in an isolated environment outside the checkouts | Sonnet; Opus check |
@@ -409,3 +413,7 @@ Revision 3 review (round 3):
 | M4 | serialization, hashing and composite fields unbounded | section 7: per-element and 64 KiB-chunk units; proof byte and integer-digit limits before parsing |
 | m5 | binary64 refusal contradicted exact doubles | section 3: judged on the returned bound; zero width always meets |
 | m6 | projection axis ambiguous for negative normals | sections 5 and 6: drop the index maximising `|n[k]|`, lowest index on ties, sign from `n[k]` |
+
+Revision 4 review (round 4): B1, M2, M4, m5 adequate. M3 (runtime fields of the artifact descriptor
+unchecked) and m6 (projection sign when dropping the middle index) fixed in revision 5: the
+verifier rebuilds the complete artifact descriptor; the orientation factor is `(-1)^k sign(n[k])`.
