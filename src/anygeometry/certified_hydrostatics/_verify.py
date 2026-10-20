@@ -22,10 +22,12 @@ from __future__ import annotations
 import hashlib
 import importlib.metadata as _metadata
 import json
+import json.decoder as _json_decoder
 import math
 import os
 import platform
 import re
+import threading
 from dataclasses import dataclass, field
 from fractions import Fraction
 from typing import Any, Callable, Mapping
@@ -74,24 +76,40 @@ def _pair(x: Fraction) -> list:
     return [x.numerator, x.denominator]
 
 
+_ACTIVE = threading.local()
+
+
+def _fit(x):
+    """Check an exact value against the bit-length cap of the running verification (every result is checked)."""
+    gauge = getattr(_ACTIVE, "gauge", None)
+    if gauge is not None:
+        gauge.fit(x)
+    return x
+
+
+def _fit3(v):
+    _fit(v[0]), _fit(v[1]), _fit(v[2])
+    return v
+
+
 def _cross(a, b):
-    return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+    return _fit3((a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]))
 
 
 def _dot(a, b):
-    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+    return _fit(a[0] * b[0] + a[1] * b[1] + a[2] * b[2])
 
 
 def _sub3(a, b):
-    return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
+    return _fit3((a[0] - b[0], a[1] - b[1], a[2] - b[2]))
 
 
 def _add3(a, b):
-    return (a[0] + b[0], a[1] + b[1], a[2] + b[2])
+    return _fit3((a[0] + b[0], a[1] + b[1], a[2] + b[2]))
 
 
 def _scale3(a, s):
-    return (a[0] * s, a[1] * s, a[2] * s)
+    return _fit3((a[0] * s, a[1] * s, a[2] * s))
 
 
 def _argmax_abs(v) -> int:
@@ -106,8 +124,75 @@ def _sign(x) -> int:
     return (x > 0) - (x < 0)
 
 
-def _canonical_json(document) -> bytes:
-    return json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+_INT_CHUNK = 300
+
+
+def _int_from_digits(digits: str, gauge) -> int:
+    """Convert a digit string in chunks of at most 300 digits (independent of Python's global digit limit)."""
+    value = 0
+    for i in range(0, len(digits), _INT_CHUNK):
+        gauge.unit("integer_chunk")
+        chunk = digits[i:i + _INT_CHUNK]
+        value = value * 10 ** len(chunk) + int(chunk)
+    return value
+
+
+def _int_to_digits(value: int, gauge) -> str:
+    negative = value < 0
+    value = abs(value)
+    parts = []
+    base = 10 ** _INT_CHUNK
+    while value >= base:
+        gauge.unit("integer_chunk")
+        value, rest = divmod(value, base)
+        parts.append(f"{rest:0{_INT_CHUNK}d}")
+    gauge.unit("integer_chunk")
+    return ("-" if negative else "") + str(value) + "".join(reversed(parts))
+
+
+def _encode(document, gauge) -> bytes:
+    """Canonical JSON (design 6a): UTF-8, sorted keys, no whitespace, full integers; one unit per element."""
+    out: list = []
+
+    def emit(node, depth):
+        gauge.unit("serialise_element")
+        if depth > 64:
+            raise _refuse(C.MALFORMED_PROOF, "nesting too deep")
+        if node is None:
+            out.append("null")
+        elif node is True:
+            out.append("true")
+        elif node is False:
+            out.append("false")
+        elif isinstance(node, int):
+            out.append(_int_to_digits(node, gauge))
+        elif isinstance(node, str):
+            out.append(json.dumps(node, ensure_ascii=False))
+        elif isinstance(node, (list, tuple)):
+            out.append("[")
+            for i, item in enumerate(node):
+                if i:
+                    out.append(",")
+                emit(item, depth + 1)
+            out.append("]")
+        elif isinstance(node, dict):
+            out.append("{")
+            for i, key in enumerate(sorted(node)):
+                if i:
+                    out.append(",")
+                gauge.unit("serialise_element")
+                out.append(json.dumps(key, ensure_ascii=False))
+                out.append(":")
+                emit(node[key], depth + 1)
+            out.append("}")
+        else:
+            raise _refuse(C.MALFORMED_PROOF, f"cannot serialise {type(node).__name__}")
+
+    try:
+        emit(document, 0)
+        return "".join(out).encode("utf-8")
+    except UnicodeEncodeError as error:
+        raise _refuse(C.MALFORMED_PROOF, "the document is not valid UTF-8 text") from error
 
 
 def _fraction_of_float(value) -> Fraction:
@@ -122,12 +207,12 @@ def _fraction_of_float(value) -> Fraction:
 
 def _padd(p, q):
     n = max(len(p), len(q))
-    return tuple((p[i] if i < len(p) else Z) + (q[i] if i < len(q) else Z) for i in range(n))
+    return tuple(_fit((p[i] if i < len(p) else Z) + (q[i] if i < len(q) else Z)) for i in range(n))
 
 
 def _psub(p, q):
     n = max(len(p), len(q))
-    return tuple((p[i] if i < len(p) else Z) - (q[i] if i < len(q) else Z) for i in range(n))
+    return tuple(_fit((p[i] if i < len(p) else Z) - (q[i] if i < len(q) else Z)) for i in range(n))
 
 
 def _pmul(p, q):
@@ -135,7 +220,7 @@ def _pmul(p, q):
     for i, x in enumerate(p):
         if x:
             for j, y in enumerate(q):
-                out[i + j] += x * y
+                out[i + j] = _fit(out[i + j] + x * y)
     return tuple(out)
 
 
@@ -223,7 +308,7 @@ def _snapshot_document(snap: _Snapshot) -> dict:
     }
 
 
-def _sha256_chunks(data: bytes, meter: Meter, kind: str) -> str:
+def _sha256_chunks(data: bytes, meter, kind: str) -> str:
     h = hashlib.sha256()
     for i in range(0, max(len(data), 1), _CHUNK):
         meter.unit(kind)
@@ -239,7 +324,7 @@ def _project(point, axis):
 
 
 def _orient2(p, q, r):
-    return (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+    return _fit((q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]))
 
 
 def _on_segment2(p, q, r) -> bool:
@@ -286,7 +371,7 @@ def _newell(points):
         nx += (p[1] - q[1]) * (p[2] + q[2])
         ny += (p[2] - q[2]) * (p[0] + q[0])
         nz += (p[0] - q[0]) * (p[1] + q[1])
-    return (nx / 2, ny / 2, nz / 2)
+    return _fit3((nx / 2, ny / 2, nz / 2))
 
 
 def _prepare_faces(snap: _Snapshot, meter: Meter) -> None:
@@ -440,8 +525,8 @@ def _seg_intersection2(p1, p2, q1, q2):
     w = (q1[0] - p1[0], q1[1] - p1[1])
     den = d1[0] * d2[1] - d1[1] * d2[0]
     if den != 0:
-        t = (w[0] * d2[1] - w[1] * d2[0]) / den
-        u = (w[0] * d1[1] - w[1] * d1[0]) / den
+        t = _fit((w[0] * d2[1] - w[1] * d2[0]) / den)
+        u = _fit((w[0] * d1[1] - w[1] * d1[0]) / den)
         if 0 <= t <= 1 and 0 <= u <= 1:
             pt = (p1[0] + t * d1[0], p1[1] + t * d1[1])
             return pt, pt
@@ -644,19 +729,20 @@ def _edge_G(a0, b0, a1, b1):
         return (Z, Z, Z, Z, Z, Z)
     da = a1 - a0
     A1, B1 = [a0, da], [b0, db]
-    A2 = _pmul_list(A1, A1)
-    B2 = _pmul_list(B1, B1)
+    A2 = [_fit(x) for x in _pmul_list(A1, A1)]
+    B2 = [_fit(x) for x in _pmul_list(B1, B1)]
 
     def integral(poly):
         return sum((c / (k + 1) for k, c in enumerate(poly)), Z)
 
     ab = _pmul_list(A1, B1)
-    return (db * integral(A1),
-            db * integral(A2) / 2,
-            db * integral(ab),
-            db * integral(_pmul_list(A2, A1)) / 3,
-            db * integral(_pmul_list(A2, B1)) / 2,
-            db * integral(_pmul_list(A1, B2)))
+    return tuple(_fit(x) for x in (
+        db * integral(A1),
+        db * integral(A2) / 2,
+        db * integral(ab),
+        db * integral(_pmul_list(A2, A1)) / 3,
+        db * integral(_pmul_list(A2, B1)) / 2,
+        db * integral(_pmul_list(A1, B2))))
 
 
 def _chain_G(points, axis, meter: Meter, closed=True):
@@ -730,10 +816,10 @@ class _Plane:
     """The request, exactly."""
 
     def __init__(self, query):
-        self.n = tuple(Fraction(x) for x in query.normal)
-        self.d = Fraction(query.offset)
-        self.o = tuple(Fraction(x) for x in query.waterplane_origin)
-        self.e1, self.e2 = (tuple(Fraction(x) for x in axis) for axis in query.waterplane_axes)
+        self.n = tuple(_fit(Fraction(x)) for x in query.normal)
+        self.d = _fit(Fraction(query.offset))
+        self.o = tuple(_fit(Fraction(x)) for x in query.waterplane_origin)
+        self.e1, self.e2 = (tuple(_fit(Fraction(x)) for x in axis) for axis in query.waterplane_axes)
         self.nn = _dot(self.n, self.n)
         self.k = _argmax_abs(self.n)
         self.ab = tuple(i for i in range(3) if i != self.k)
@@ -975,23 +1061,24 @@ def _cmp_exact(r: Fraction, num: Fraction, ns: Fraction | None) -> int:
         return 1
     if r < 0 and num >= 0:
         return -1
-    lhs, rhs = r * r * ns, num * num
+    lhs, rhs = _fit(r * r * ns), _fit(num * num)
     if r >= 0:
         return _sign(lhs - rhs)
     return -_sign(lhs - rhs)
 
 
-_DECIMAL = re.compile(r"^-?[0-9]+(\.[0-9]+)?$")
+_DECIMAL = re.compile(r"-?[0-9]+(?:\.[0-9]+)?")
 
 
 def _decimal_fraction(text) -> Fraction:
-    if not isinstance(text, str) or not _DECIMAL.match(text) or len(text) > 100000:
+    gauge = _ACTIVE.gauge
+    if not isinstance(text, str) or not _DECIMAL.fullmatch(text) or len(text) > _ACTIVE.digit_limit:
         raise _fail("enclosure", "a decimal bound is not a plain decimal string")
     negative = text.startswith("-")
     body = text[1:] if negative else text
     whole, _, frac = body.partition(".")
-    value = Fraction(int(whole + frac), 10 ** len(frac))
-    return -value if negative else value
+    value = Fraction(_int_from_digits(whole + frac, gauge), 10 ** len(frac))
+    return _fit(-value if negative else value)
 
 
 def _check_quantity(item, name, num, ns, query, exact_required, meter: Meter) -> None:
@@ -1092,37 +1179,118 @@ def _claim_of(result) -> dict:
             "work": {"operations": result.work["operations"], "units": dict(result.work["units"])}}
 
 
-def _parse_proof(proof, policy: dict, meter: Meter) -> dict:
+class _Gauge:
+    """One operation per unit: every primitive unit is a checkpoint (budget, deadline, cancellation)."""
+
+    def __init__(self, meter: Meter):
+        self.meter = meter
+        self.budget = meter.budget
+
+    def unit(self, kind: str, count: int = 1) -> None:
+        for _ in range(count):
+            self.meter.unit(kind, 1)
+
+    def fit(self, value):
+        return self.meter.fit(value)
+
+
+_NUMBER = re.compile(r"-?(?:0|[1-9][0-9]*)")
+
+
+def _parse_proof(proof, policy: dict, gauge: _Gauge) -> dict:
+    """Bounded, metered parser of the canonical JSON subset (no whitespace, no floats, integers only).
+
+    Every value costs one unit; integer tokens are checked against the digit limit before conversion and converted in
+    chunks of at most 300 digits; strings are scanned in windows of at most 4096 characters."""
     if not isinstance(proof, (bytes, bytearray)):
         raise _refuse(C.MALFORMED_PROOF, "the proof is not bytes")
     if len(proof) > policy["max_proof_bytes"]:
         raise _refuse(C.MALFORMED_PROOF, "the proof exceeds the byte limit")
     limit = policy["max_integer_digits"]
-
-    def parse_int(token):
-        if len(token.lstrip("-")) > limit:
-            raise _refuse(C.MALFORMED_PROOF, "an integer token exceeds the digit limit")
-        try:
-            return int(token)
-        except ValueError as error:
-            raise _refuse(C.MALFORMED_PROOF, "an integer token cannot be converted") from error
-
-    def reject(_token):
-        raise _refuse(C.MALFORMED_PROOF, "non-integer numbers and constants are not allowed")
-
     try:
         text = bytes(proof).decode("utf-8")
-        document = json.loads(text, parse_int=parse_int, parse_float=reject, parse_constant=reject)
-    except CertifiedHydrostaticsRefusal:
-        raise
-    except (ValueError, RecursionError) as error:
-        raise _refuse(C.MALFORMED_PROOF, f"the proof is not valid JSON: {error}") from error
-    if not isinstance(document, dict) or set(document) != {"artifact", "model", "convention", "preparation_policy",
-                                                            "query", "result"}:
-        raise _refuse(C.MALFORMED_PROOF, "the proof has the wrong top-level structure")
-    count = _count_elements(document)
-    meter.unit("proof_element", count)
-    return document
+    except UnicodeDecodeError as error:
+        raise _refuse(C.MALFORMED_PROOF, "the proof is not UTF-8") from error
+    n = len(text)
+
+    def bad(message):
+        return _refuse(C.MALFORMED_PROOF, message)
+
+    def string(i):
+        if i >= n or text[i] != '"':
+            raise bad("a string was expected")
+        gauge.unit("string_piece")
+        window = text[i + 1:i + 1 + 4096]     # longer strings are not valid proof content
+        try:
+            found, after = _json_decoder.scanstring(window, 0)
+        except ValueError as error:
+            raise bad(f"invalid string: {error}") from error
+        return found, i + 1 + after
+
+    def value(i, depth):
+        gauge.unit("proof_element")
+        if depth > 32:
+            raise bad("the proof is nested too deeply")
+        if i >= n:
+            raise bad("unexpected end of the proof")
+        c = text[i]
+        if c == "{":
+            out = {}
+            i += 1
+            if text.startswith("}", i):
+                return out, i + 1
+            while True:
+                key, i = string(i)
+                if key in out:
+                    raise bad("duplicate key")
+                if not text.startswith(":", i):
+                    raise bad("a colon was expected")
+                out[key], i = value(i + 1, depth + 1)
+                if text.startswith(",", i):
+                    i += 1
+                    continue
+                if text.startswith("}", i):
+                    return out, i + 1
+                raise bad("a comma or closing brace was expected")
+        if c == "[":
+            out = []
+            i += 1
+            if text.startswith("]", i):
+                return out, i + 1
+            while True:
+                item, i = value(i, depth + 1)
+                out.append(item)
+                if text.startswith(",", i):
+                    i += 1
+                    continue
+                if text.startswith("]", i):
+                    return out, i + 1
+                raise bad("a comma or closing bracket was expected")
+        if c == '"':
+            return string(i)
+        for word, result in (("true", True), ("false", False), ("null", None)):
+            if text.startswith(word, i):
+                return result, i + len(word)
+        match = _NUMBER.match(text, i)
+        if match is None:
+            raise bad("an unexpected character")
+        token = match.group(0)
+        end = match.end()
+        if end < n and text[end] in ".eE0123456789+-":
+            raise bad("non-integer numbers are not allowed")
+        digits = token.lstrip("-")
+        if len(digits) > limit:
+            raise bad("an integer token exceeds the digit limit")
+        number = _int_from_digits(digits, gauge)
+        return (-number if token.startswith("-") else number), end
+
+    try:
+        document, end = value(0, 0)
+    except RecursionError as error:
+        raise bad("the proof is nested too deeply") from error
+    if end != n:
+        raise bad("trailing characters after the proof")
+    return _check_shape(document)
 
 
 def _count_elements(node) -> int:
@@ -1135,6 +1303,68 @@ def _count_elements(node) -> int:
         elif isinstance(x, list):
             stack.extend(x)
     return count
+
+
+def _is_pair(x) -> bool:
+    return isinstance(x, list) and len(x) == 2 and all(isinstance(v, str) for v in x)
+
+
+def _check_shape(document) -> dict:
+    """Every top-level section has its expected container type and the artifact fields their expected types."""
+    sections = ("artifact", "model", "convention", "preparation_policy", "query", "result")
+    if not isinstance(document, dict) or set(document) != set(sections):
+        raise _refuse(C.MALFORMED_PROOF, "the proof has the wrong top-level structure")
+    for key in sections:
+        if not isinstance(document[key], dict):
+            raise _refuse(C.MALFORMED_PROOF, f"proof section {key} is not an object")
+    model = document["model"]
+    if set(model) != {"model_id", "revision", "document_checksum", "face_ids", "snapshot_digest"}:
+        raise _refuse(C.MALFORMED_PROOF, "the proof's model section has the wrong fields")
+    if not isinstance(model["face_ids"], list):
+        raise _refuse(C.MALFORMED_PROOF, "the proof's face ids are not a list")
+    artifact = document["artifact"]
+    if set(artifact) != {"distribution", "distribution_version", "package_version", "files", "dependencies",
+                         "python"}:
+        raise _refuse(C.MALFORMED_PROOF, "the proof's artifact section has the wrong fields")
+    if not (isinstance(artifact["files"], list) and all(_is_pair(x) for x in artifact["files"])):
+        raise _refuse(C.MALFORMED_PROOF, "the proof's file list is malformed")
+    deps = artifact["dependencies"]
+    if not (isinstance(deps, list) and all(isinstance(x, list) and len(x) == 2 and isinstance(x[0], str)
+                                           and (x[1] is None or isinstance(x[1], str)) for x in deps)):
+        raise _refuse(C.MALFORMED_PROOF, "the proof's dependency list is malformed")
+    if set(document["preparation_policy"]) != {"convention_version", "max_integer_digits", "max_proof_bytes"}:
+        raise _refuse(C.MALFORMED_PROOF, "the proof's policy section has the wrong fields")
+    return document
+
+
+_CONVENTION = {
+    "body_frame": "model coordinates are the body frame; no rotation, no normalisation",
+    "half_space": "n.r <= d with exact rational n, d (unnormalised)",
+    "area_element": "true area element dA of the plane; waterplane quantities are numerator/|n|",
+    "moment_order": ["A", "Mu", "Mv", "Iuu", "Ivv", "Iuv"],
+    "limits": "below: n.r = d - eps, above: n.r = d + eps, eps -> 0+; V and J use the below convention",
+    "loop_identity": "sorted ids of the crossed shell edges",
+}
+
+
+def _check_work(work) -> None:
+    """Design 6a: non-negative integers, ``operations`` equal to the sum of the unit counts."""
+    def good(x):
+        return isinstance(x, int) and not isinstance(x, bool) and x >= 0
+
+    try:
+        operations, units = work["operations"], work["units"]
+        ok = good(operations) and isinstance(units, dict) and all(
+            isinstance(k, str) and good(v) for k, v in units.items()) and operations == sum(units.values())
+    except (KeyError, TypeError):
+        ok = False
+    if not ok:
+        raise _fail("value", "the reported work counts are not non-negative integers summing to the operations")
+
+
+def _consistent_read(model) -> None:
+    if getattr(model, "_transaction_journal", None) is not None:
+        raise _refuse(C.CONCURRENT_MUTATION, "a model transaction is open")
 
 
 def _first_difference(a, b, path=()):
@@ -1323,9 +1553,17 @@ def verify_certified_hydrostatics(model, faces, query, result, expected, *, budg
 
     Raises ``CertifiedHydrostaticsRefusal`` (``VERIFICATION_FAILED`` with ``sub_reason``, ``MALFORMED_PROOF``, or a
     resource category) and never returns a partially verified object."""
-    meter = Meter(budget, cancellation_check)
+    meter = _Gauge(Meter(budget, cancellation_check))
+    previous = (getattr(_ACTIVE, "gauge", None), getattr(_ACTIVE, "digit_limit", None))
+    _ACTIVE.gauge = meter
+    _ACTIVE.digit_limit = 100000
     try:
-        return _verify(model, faces, query, result, expected, meter)
+        try:
+            return _verify(model, faces, query, result, expected, meter)
+        except (AttributeError, KeyError, TypeError, IndexError, ValueError) as error:
+            if isinstance(error, CertifiedHydrostaticsRefusal):
+                raise
+            raise _refuse(C.MALFORMED_PROOF, f"malformed proof or result structure: {error!r}") from error
     except CertifiedHydrostaticsRefusal as error:
         try:
             request = _query_dict(query)
@@ -1333,11 +1571,14 @@ def verify_certified_hydrostatics(model, faces, query, result, expected, *, budg
             request = None
         error.complete(phase="verify", request=request, work=meter.budget.counts())
         raise
+    finally:
+        _ACTIVE.gauge, _ACTIVE.digit_limit = previous
 
 
-def _verify(model, faces, query, result, expected, meter: Meter) -> VerifiedHydrostatics:
+def _verify(model, faces, query, result, expected, meter: _Gauge) -> VerifiedHydrostatics:
     faces = tuple(faces)
     exp = _expected_identity(expected)
+    _ACTIVE.digit_limit = exp["policy"]["max_integer_digits"]
     # (0) the bound query is the caller's query
     try:
         bound = _query_dict(result.query)
@@ -1355,6 +1596,7 @@ def _verify(model, faces, query, result, expected, meter: Meter) -> VerifiedHydr
             raise _refuse(C.INVALID_QUERY, "unknown form")
 
     # (1) proof
+    _check_work(result.work)
     proof = _parse_proof(result.proof, exp["policy"], meter)
     if proof["query"] != mine:
         raise _fail("query", "the proof's query differs from the supplied query")
@@ -1363,21 +1605,17 @@ def _verify(model, faces, query, result, expected, meter: Meter) -> VerifiedHydr
     if difference:
         path, kind = difference
         raise _fail(_classify(path, kind), f"the proof's claim differs from the result object at {list(path)}")
-    if _canonical_json(proof) != bytes(result.proof):
+    canonical = _encode(proof, meter)
+    for _chunk in range(0, max(len(canonical), 1), _CHUNK):
+        meter.unit("compare_element")
+    if canonical != bytes(result.proof):
         raise _fail("value", "the proof is not in canonical form")
     if proof["preparation_policy"] != exp["policy"]:
         raise _fail("policy", "the proof's preparation policy differs from the expected policy")
-    convention = proof["convention"]
-    if (not isinstance(convention, dict) or convention.get("convention_version") != exp["convention_version"]
-            or exp["policy"]["convention_version"] != exp["convention_version"]):
-        raise _fail("convention", "the convention version differs from the expected one")
-    if convention.get("units") != exp["units"]:
-        raise _fail("convention", "the units differ from the expected ones")
-    if convention.get("moment_order") != list(_QUANTITIES):
-        raise _fail("convention", "the moment order differs from the specification")
-    for key in ("body_frame", "half_space", "area_element", "limits", "loop_identity"):
-        if not isinstance(convention.get(key), str) or not convention[key]:
-            raise _fail("convention", f"convention field {key} is missing")
+    if proof["convention"] != dict(_CONVENTION, convention_version=exp["convention_version"], units=exp["units"]):
+        raise _fail("convention", "the convention block differs from the specified one")
+    if exp["policy"]["convention_version"] != exp["convention_version"]:
+        raise _fail("convention", "the expected policy names another convention version")
     artifact = proof["artifact"]
     if not isinstance(artifact, dict) or sorted(map(list, artifact.get("files", []))) != exp["files"]:
         raise _fail("artifact", "the proof's file hashes differ from the expected artifact identity")
@@ -1385,6 +1623,7 @@ def _verify(model, faces, query, result, expected, meter: Meter) -> VerifiedHydr
     # (2) snapshot, admission, identities
     if [*faces] != proof["model"].get("face_ids"):
         raise _fail("face set", "the supplied face list differs from the proof's face set")
+    _consistent_read(model)
     revision_before = model.revision
     try:
         snap = _read_snapshot(model, faces, meter)
@@ -1395,8 +1634,9 @@ def _verify(model, faces, query, result, expected, meter: Meter) -> VerifiedHydr
                     error) from error
     if model.revision != revision_before:
         raise _refuse(C.CONCURRENT_MUTATION, "the model changed during verification")
+    _consistent_read(model)
     document = _snapshot_document(snap)
-    digest = _sha256_chunks(_canonical_json(document), meter, "snapshot_hash_chunk")
+    digest = _sha256_chunks(_encode(document, meter), meter, "snapshot_hash_chunk")
     if digest != proof["model"].get("snapshot_digest"):
         raise _fail("snapshot", "the rebuilt snapshot digest differs from the proof")
     total_volume = _admit(snap, meter)
@@ -1466,6 +1706,6 @@ def _verify(model, faces, query, result, expected, meter: Meter) -> VerifiedHydr
     return VerifiedHydrostatics(
         result=result, query=query, face_ids=faces, model_id=model_id, revision=model.revision,
         document_checksum=checksum, snapshot_digest=digest,
-        artifact_files_sha256=hashlib.sha256(_canonical_json(exp["files"])).hexdigest(),
+        artifact_files_sha256=hashlib.sha256(_encode(exp["files"], meter)).hexdigest(),
         proof_sha256=hashlib.sha256(bytes(result.proof)).hexdigest(), solid_volume=total_volume,
         work=meter.budget.counts())

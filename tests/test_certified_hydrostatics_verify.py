@@ -129,9 +129,9 @@ def make_query(n, d, forms=ALL_FORMS, accuracy=None, basis=None):
 class Case:
     """A prepared fixture with helpers to query and verify."""
 
-    def __init__(self, maker, policy=None):
+    def __init__(self, maker, policy=None, units="m"):
         self.model, self.faces = maker()
-        self.prepared = prepare_certified_hydrostatics(self.model, self.faces, policy=policy)
+        self.prepared = prepare_certified_hydrostatics(self.model, self.faces, policy=policy, units=units)
         self.expected = expected_for(self.prepared)
 
     def query(self, n, d, **kw):
@@ -264,13 +264,13 @@ def with_proof(result, edit=None):
     doc["result"] = _claim_of(result)
     if edit:
         edit(doc)
-    return replace(result, proof=json.dumps(doc, sort_keys=True, separators=(",", ":")).encode())
+    return replace(result, proof=json.dumps(doc, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
 
 
 def rewrite(result, edit):
     doc = json.loads(result.proof.decode())
     edit(doc)
-    return replace(result, proof=json.dumps(doc, sort_keys=True, separators=(",", ":")).encode())
+    return replace(result, proof=json.dumps(doc, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
 
 
 def alter_quantity(result, getter, **changes):
@@ -554,7 +554,11 @@ def test_malformed_and_oversized_proofs(box_case, box_result):
 def test_non_canonical_but_equal_proof_is_refused(box_case, box_result):
     q, r = box_result
     pretty = json.dumps(json.loads(r.proof), indent=1, sort_keys=True).encode()
-    failed(lambda: box_case.verify(q, replace(r, proof=pretty)), "value")
+    error = refusal_of(lambda: box_case.verify(q, replace(r, proof=pretty)))
+    assert error.category == C.MALFORMED_PROOF            # whitespace is not part of the canonical grammar
+    reordered = json.dumps(dict(reversed(list(json.loads(r.proof).items()))), separators=(",", ":")).encode()
+    assert reordered != r.proof
+    failed(lambda: box_case.verify(q, replace(r, proof=reordered)), "value")
 
 
 # ------------------------------------------------------------------ resource refusals during verification
@@ -596,7 +600,7 @@ def test_cancellation_stops_within_one_unit():
     budget = WorkBudget.unlimited()
     error = refusal_of(lambda: c.verify(q, r, budget=budget, cancellation_check=check))
     assert error.category == C.CANCELLED and error.phase == "verify"
-    assert len(calls) == 41 and error.work["operations"] >= 40     # units may reserve several operations at once
+    assert len(calls) == 41 and error.work["operations"] == 40      # exactly one operation per checkpoint
     assert error.work == budget.counts()
 
 
@@ -629,3 +633,129 @@ def test_invalid_basis_cannot_be_posed():
     with pytest.raises(CertifiedHydrostaticsRefusal) as info:
         HalfSpaceQuery(normal=X_, offset=F(1), waterplane_axes=((1, 0, 0), (0, 1, 0)))
     assert info.value.category == C.INVALID_QUERY
+
+
+# ------------------------------------------------------------------ CH1c review round 1: regression tests
+
+
+@pytest.mark.parametrize("text", ["5.0\n", "5.0 ", " 5.0", "+5.0", "5.", ".5", "5e-1", "0x5", "５.0", "5.0\x00", ""])
+def test_decimal_bounds_must_match_the_grammar_in_full(text):
+    c = case("F9")
+    q, r = c.query(Z_, F(1, 2), forms=("decimal",))
+    assert r.volume.decimal[0].startswith("0.5")
+    forged = alter_quantity(r, "V", decimal=(text, text, F(1, 10 ** 12)))
+    failed(lambda: c.verify(q, with_proof(forged)), "enclosure")
+
+
+def test_convention_block_is_compared_exactly(box_case, box_result):
+    q, r = box_result
+    for key, value in (("half_space", "n.r >= d"), ("body_frame", "rotated"), ("area_element", "x"),
+                       ("limits", "below: n.r = d + eps"), ("loop_identity", "ids"),
+                       ("moment_order", ["Mu", "A", "Mv", "Iuu", "Ivv", "Iuv"])):
+        failed(lambda: box_case.verify(q, rewrite(r, lambda d: d["convention"].__setitem__(key, value))), "convention")
+    failed(lambda: box_case.verify(q, rewrite(r, lambda d: d["convention"].__setitem__("extra", "x"))), "convention")
+    failed(lambda: box_case.verify(q, rewrite(r, lambda d: d["convention"].pop("limits"))), "convention")
+
+
+def test_every_checkpoint_is_one_operation_including_parsing_and_hashing():
+    c = case("F6")
+    q, r = c.query(Z_, F(0), forms=ALL_FORMS)
+    total = c.verify(q, r).work["operations"]
+    for stop in sorted({1, 2, 3, 7, 50, 333, 1000, total // 4, total // 2, total - 2}):
+        calls = []
+
+        def check(stop=stop, calls=calls):
+            calls.append(1)
+            return len(calls) > stop
+
+        error = refusal_of(lambda: c.verify(q, r, cancellation_check=check))
+        assert error.category == C.CANCELLED and error.work["operations"] == stop, (stop, error.work["operations"])
+        budget = WorkBudget(stop, None)
+        error = refusal_of(lambda: c.verify(q, r, budget=budget))
+        assert error.category == C.BUDGET_EXHAUSTED and error.work["operations"] == stop
+    budget = WorkBudget.unlimited()
+    c.verify(q, r, budget=budget)
+    assert budget.counts()["units"]["proof_element"] > 100         # the parser is metered element by element
+
+
+def test_bit_cap_covers_query_values_and_intermediate_arithmetic():
+    c = case("F9")
+    q = HalfSpaceQuery(normal=(1, 0, 0), offset=F(1, 2), waterplane_origin=(F(1, 2), 0, 0),
+                       waterplane_axes=((2 ** 10000, 0, 1), (0, 1, 0)), forms=("exact",))
+    r = query_certified_hydrostatics(c.prepared, q)
+    assert c.verify(q, r).work["max_bits_seen"] > 64
+    error = refusal_of(lambda: c.verify(q, r, budget=WorkBudget(None, 64)))
+    assert error.category == C.BIT_LENGTH_EXCEEDED and error.phase == "verify"
+    # intermediate products: the cap must bind at the largest value any operation forms
+    q2 = make_query(Z_, F(1, 2))
+    r2 = query_certified_hydrostatics(c.prepared, q2)
+    seen = c.verify(q2, r2).work["max_bits_seen"]
+    assert refusal_of(lambda: c.verify(q2, r2, budget=WorkBudget(None, seen - 1))).category == C.BIT_LENGTH_EXCEEDED
+    assert c.verify(q2, r2, budget=WorkBudget(None, seen)).work["max_bits_seen"] == seen
+
+
+def test_verification_inside_an_open_transaction_is_refused():
+    c = Case(lambda: box())
+    q, r = c.query(Z_, F(1, 2))
+    with c.model.transaction():
+        error = refusal_of(lambda: c.verify(q, r))
+    assert error.category == C.CONCURRENT_MUTATION and error.phase == "verify"
+    assert c.verify(q, r).result is r
+
+
+def test_huge_integers_do_not_depend_on_pythons_digit_limit():
+    import sys
+    c = case("F9")
+    q, r = c.query(Z_, F(1, 2), forms=("exact",), accuracy={"V": F(1, 10 ** 5000)})
+    assert len(r.proof) > 10000
+    assert c.verify(q, r).result is r
+    old = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(640)
+    try:
+        assert c.verify(q, r).result is r
+        digits = dict(c.expected, policy=CertifiedHydrostaticsPolicy(max_integer_digits=4000))
+        error = refusal_of(lambda: verify_certified_hydrostatics(c.model, c.faces, q, r, digits))
+        assert error.category == C.MALFORMED_PROOF and "digit" in error.detail
+    finally:
+        sys.set_int_max_str_digits(old)
+
+
+def test_non_ascii_units_are_written_as_utf8():
+    c = Case(lambda: box(), units="mètres")
+    q, r = c.query(Z_, F(1, 2))
+    assert "mètres".encode("utf-8") in r.proof
+    assert c.verify(q, r).result is r
+    wrong = dict(c.expected, units="metres")
+    failed(lambda: verify_certified_hydrostatics(c.model, c.faces, q, r, wrong), "convention")
+
+
+MALFORMED_EDITS = [
+    lambda d: d.__setitem__("model", None), lambda d: d.__setitem__("artifact", None),
+    lambda d: d.__setitem__("convention", []), lambda d: d.__setitem__("preparation_policy", 5),
+    lambda d: d.__setitem__("query", "x"), lambda d: d.__setitem__("result", None),
+    lambda d: d["model"].__setitem__("face_ids", None), lambda d: d["model"].pop("revision"),
+    lambda d: d["artifact"].__setitem__("files", [1, 2]), lambda d: d["artifact"].__setitem__("files", {}),
+    lambda d: d["artifact"].__setitem__("dependencies", "numpy"), lambda d: d["artifact"].pop("python"),
+    lambda d: d["preparation_policy"].pop("max_proof_bytes"), lambda d: d.__setitem__("extra", 1),
+]
+
+
+@pytest.mark.parametrize("edit", MALFORMED_EDITS, ids=range(len(MALFORMED_EDITS)))
+def test_malformed_nested_shapes_refuse_with_phase_and_work(box_case, box_result, edit):
+    q, r = box_result
+    error = refusal_of(lambda: box_case.verify(q, rewrite(r, edit)))
+    assert error.category == C.MALFORMED_PROOF and error.phase == "verify" and error.work["operations"] > 0
+
+
+def test_fabricated_work_counts_are_refused(box_case, box_result):
+    q, r = box_result
+    for work in ({"operations": -100, "units": {"green_edge": -200}},
+                 {"operations": 5, "units": {"green_edge": 4}},
+                 {"operations": 1.0, "units": {"green_edge": 1.0}},
+                 {"operations": True, "units": {"a": True}},
+                 {"operations": 0, "units": {"a": 1, "b": -1}}):
+        forged = replace(r, work=work)
+        failed(lambda: box_case.verify(q, with_proof(forged)), "value")
+        failed(lambda: box_case.verify(q, forged), "value")
+    for work in ({"operations": 3}, {"operations": 3, "units": []}, None, 5):
+        failed(lambda: box_case.verify(q, replace(r, work=work)), "value")
