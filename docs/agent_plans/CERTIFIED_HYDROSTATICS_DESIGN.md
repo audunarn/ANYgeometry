@@ -1,8 +1,9 @@
-# Certified hydrostatics: design (CH0, revision 3, 2026-10-20)
+# Certified hydrostatics: design (CH0, revision 4, 2026-10-20)
 
 Status: design for owner review; no source changed. Revision 2 answered the Codex Astra review of
-revision 1 (4 blocking, 6 major, 2 minor); revision 3 answers the review of revision 2 (2 blocking,
-4 major, 1 minor). Both are tabled in section 12. Request: ANYstability,
+revision 1 (4 blocking, 6 major, 2 minor); revision 3 the review of revision 2 (2 blocking,
+4 major, 1 minor); revision 4 the review of revision 3 (1 blocking, 3 major, 2 minor). All are
+tabled in section 12. Request: ANYstability,
 `C:/Github/ANYstability/docs/ANYgeometry_CERTIFIED_HYDROSTATICS_HANDOFF.md` (20 October),
 requirements GEO-01..GEO-11 in `ANYstability/docs/ANYgeometry_REQUIREMENTS.md`. Owner decision
 2026-10-20: certified point queries for planar shells first (CH1 + CH2), the curved B1 hull
@@ -92,9 +93,11 @@ CH3. Each recipe3 solid (the hull and each tank) is its own preparation.
   decimal enclosure of a requested absolute width (arbitrary-precision decimal strings from
   integer square-root bounds). Bound semantics: the binary64 midpoint `m = (lo + hi) / 2`
   rounded to a double satisfies `|exact - m| <= hi - lo`; a decimal enclosure `[a, b]` contains
-  the exact value and `b - a` is at most the requested width. A requested binary64 accuracy finer
-  than the double spacing at the value refuses `ACCURACY_UNACHIEVABLE` (the decimal form remains
-  available); values outside the binary64 range refuse `RESULT_OUT_OF_RANGE` for that form.
+  the exact value and `b - a` is at most the requested width. A requested binary64 accuracy is
+  judged against the returned form's own bound: a zero-width enclosure (`lo == hi`, the exact
+  value is a double) meets every accuracy; otherwise the bound is `hi - lo`, and a request finer
+  than it refuses `ACCURACY_UNACHIEVABLE` (the decimal form remains available). Values outside the
+  binary64 range refuse `RESULT_OUT_OF_RANGE` for that form.
 - **Generic and degenerate planes**: a plane is *generic* when no shell vertex lies on it (exact
   test `n . p == d`), otherwise *degenerate*; the result lists the contacts (vertices, edges and
   faces in the plane).
@@ -157,10 +160,14 @@ Simulation of simplicity on `d` (Edelsbrunner and Muecke): the `below` side uses
 exact **affine point** `c0 + epsilon c1` (rational vectors). Every predicate below (comparison of
 positions along a line, orientation of three points, signed area, point-in-polygon side tests)
 is evaluated on these affine points as a polynomial in `epsilon` with rational coefficients,
-and its sign is **the sign of its first nonzero coefficient** (a predicate that is the zero
-polynomial is an internal inconsistency and refuses `SYMBOLIC_DEGENERACY`). Comparisons along a
-line are degree 1, orientations and signed areas degree 2. Quantities use the limit points
-`c0` (the limits of the integrals as `epsilon -> 0`). Then:
+and its sign is **the sign of its first nonzero coefficient**. Perturbing `d` alone does not
+remove every degeneracy (two holes in one face can have a vertex of one collinear with an edge of
+the other for every `epsilon`), so a zero polynomial is an *outcome* each predicate must handle,
+not an error. Only the predicates proved nonzero for a valid admitted solid refuse
+`SYMBOLIC_DEGENERACY` when they come out zero: the order of two distinct cut points on one cut
+line, a loop's signed area, and a test point lying on another loop's edge (loops are disjoint).
+Comparisons along a line are degree 1, orientations and signed areas degree 2. Quantities use the
+limit points `c0` (the limits of the integrals as `epsilon -> 0`). Then:
 
 - every **cut point** is the crossing of one shell edge whose endpoints are on opposite sides,
   identified symbolically by that edge, with exact limit coordinates (the exact crossing, or the
@@ -176,9 +183,17 @@ line are degree 1, orientations and signed areas degree 2. Quantities use the li
   splits into closed **loops** with no coordinate matching. A loop's symbolic signed area about
   `n` (degree 2) classifies it as outer (positive) or hole (negative), also when its limit area
   is zero (the tetrahedron `(0,0,0), (1,0,0), (0,1,0), (0,0,1)` at `z = 1`, `below`: area
-  `epsilon^2 / 2`, one outer loop; a pyramidal recess gives the collapsing hole). Nesting is
-  decided by symbolic point-in-polygon tests (a vertex of one loop against the other loop's edges;
-  loops do not cross, so one vertex decides). Components are outer loops with their holes.
+  `epsilon^2 / 2`, one outer loop; a pyramidal recess gives the collapsing hole). Nesting: the
+  perturbed loops are disjoint simple polygons, so one vertex `p` of a loop decides whether it lies
+  inside another loop `L`. The test is ray parity in the section's projection coordinates (drop
+  the index `k` maximising `|n[k]|`, lowest index on ties; coordinates `(a, b)` are the other two
+  in increasing index order): cast the ray from `p` in the `+a` direction; an edge `(q, r)` of `L`
+  counts when exactly one endpoint has `b` coordinate `<= p.b` (half-open rule: `q.b <= p.b < r.b`
+  or `r.b <= p.b < q.b`, symbolic comparisons) and the crossing lies strictly right of `p` (the
+  sign of the degree-2 orientation of `(q, r, p)` against the edge's `b` direction). Collinear
+  configurations outside an edge's half-open span (the two-hole example) are thereby resolved
+  deterministically; a zero orientation for a counted edge means `p` is on `L` and refuses
+  `SYMBOLIC_DEGENERACY`. Components are outer loops with their holes.
   Section topology comes only from these loops; the quantities never depend on loop assembly.
 - **Identity**: a loop's identity is the sorted tuple of the edges it crosses (with the
   preparation's identities); meaningful within one preparation.
@@ -207,7 +222,11 @@ cannot pass as the prepared geometry.
 **Proof schema** (canonical JSON, sorted keys, rationals as integer pairs): `artifact`
 (distribution name and version, SHA-256 of every file of the installed `anygeometry` package,
 versions of its runtime dependencies, Python version); `model` (model id, revision, document
-checksum, selected face ids, snapshot digest = SHA-256 of the canonical exact snapshot);
+checksum, selected face ids, snapshot digest). The **snapshot digest** is the SHA-256 of the
+canonical exact snapshot: the selected face ids in order, and per face its loops as oriented
+edge identities and exact vertex coordinates, and the vertex and edge identities with their
+shared-cell incidences; it does not include model id, revision or document checksum, which are
+separate fields;
 `convention` (convention version, units, body-frame statement, half-space form, area element,
 moment order); `preparation_policy`; `query` (exact `n`, `d`, `o`, `e1`, `e2`, requested
 accuracies and forms); `result` (the complete claim: degeneracy and contacts; `V`, `J`; per side
@@ -223,17 +242,29 @@ accuracies): equal quantities do not identify a query (a fully submerged box giv
 result at `z <= 2` and `z <= 3`); (1) recomputes the canonical proof from the result object and
 requires it equal to `result.proof` and consistent with `expected`;
 (2) rebuilds the snapshot from the supplied model and faces, re-runs the section 2 checks and
-requires the digest to match; (3) recomputes every exact quantity, the occupancies, both limits
-and the topology
+requires the digest to match, and recomputes the model id, revision and document checksum from the
+supplied model and the artifact file hashes from the running package and requires each to equal
+the proof's fields; the consumer's `expected` artifact identity is the per-file SHA-256 list of
+the wheel it admitted (the wheel's own `RECORD`, from the delivery manifest), compared with the
+installed files, not a hash of the wheel archive; (3) recomputes every exact quantity, the degeneracy and the
+contact lists (vertices, edges and faces in the plane), the occupancies, both limits and the
+topology
 independently: volume and first moments by the divergence theorem with Mirtich's projected face
 integrals on the clipped faces and the cap; cut points by intersecting every edge with the plane
 and segments by exact interval classification along each face's cut line; area and moments by
-Green's theorem in the coordinates of the two smallest components of `n`; (4) requires exact
+Green's theorem in projection coordinates (drop the index `k` maximising `|n[k]|`, lowest index
+on ties; the projected area is multiplied by `|n| / |n[k]|`, its sign by the sign of `n[k]`);
+(4) requires exact
 equality, and checks every returned form against the request and its own rules: a binary64
 enclosure has `lo == hi` (a double equal to the exact value) or `lo`, `hi` adjacent doubles with
 `lo < exact < hi`; a decimal enclosure contains the exact value and its width is at most the
 requested width; every achieved-accuracy flag is recomputed (`True` exactly when the returned
-form meets the requested absolute accuracy, a refusal otherwise) and must match. It
+form meets the requested absolute accuracy, a refusal otherwise) and must match; (5) checks
+**completeness** against an exact inventory derived from the request and the recomputed states:
+`V` and `J`; for each side its occupancy and section flag; for each side with a `PRESENT`
+section every waterplane quantity in every requested form, its bound and its achieved-accuracy
+flag, and its topology; nothing else (no missing and no extra entries; absence only where the
+state rules allow it). It
 returns a `VerifiedHydrostatics` object for the consumer to use exclusively; any discrepancy
 raises `VERIFICATION_FAILED` with a sub-reason.
 
@@ -266,12 +297,16 @@ and optionally a deadline. A **primitive unit** is one bounded predicate or accu
 one vertex or edge into the snapshot, one exact coplanarity or orientation test, one edge-pair
 intersection test (face-pair tests iterate these, reserving each), one loop-vertex clip, one
 edge-plane crossing, one comparison in a sort, one point-in-polygon edge test, one triangle
-accumulation, one square-root refinement step, one proof field parsed or compared. Each unit
+accumulation, one square-root refinement step, one scalar or array element serialised, parsed or
+compared (topology arrays and identity lists count per element), one chunk of at most 64 KiB
+hashed (snapshot, document and package files). Each unit
 reserves its cost before it runs and every unit is a checkpoint for the budget, the deadline and
 `cancellation_check`; with the bit-length cap this bounds both the overshoot after a refusal and
 the non-preemptible span to one unit. These guarantees cover every public phase (preparation,
 query, verification, `check_preparation`). Work counts are returned on success and on refusal.
-A proof is size-checked before parsing (`MALFORMED_PROOF`).
+Before parsing, a proof is checked against a byte-size limit and every integer token against a
+digit limit (both in the policy); a violation refuses `MALFORMED_PROOF` without converting the
+token.
 
 ## 8. Events and intervals (CH4 preview; not delivered in CH1)
 
@@ -303,7 +338,9 @@ check_preparation(model, prepared)          # STALE_PREPARATION when the snapsho
 |---|---|---|---|
 | CH1a | snapshot, admission checks 1-6, refusal enum, implementation identity, `WorkBudget` | recipe3 hull and every tank admit; each refusal category is raised by a minimal case, including the review's wrong-winding bored box (`INVALID_HOLES`), a touching-hole face, two cubes sharing only a vertex (`NON_MANIFOLD`), an adjacent-face overlap and a self-intersecting shell (`SELF_INTERSECTING`) | Sonnet from this specification; Opus review |
 | CH1b | query: clipped-face sums, symbolic cut points, segments, loops, topology, both limits, states, forms and enclosures | the fixtures and expected values of the acceptance manifest (below), including closed forms (Q01) for box, tetrahedron, prism, extruded U (two components), bored box (a hole), the saddle solid (below one loop, above two, equal quantities), the box at its top face (states as in section 3, no double cap), the tetrahedron at its apex (collapsing outer loop) and a pyramidal recess at its apex (collapsing hole), a nesting tie at a shared limit point; the exact derivative check; Q02 translations, exact rational rotations, moment-origin changes, reflection; binary64 width limits and `ACCURACY_UNACHIEVABLE`; planes built with ANYstability's convention at finite heel/trim | Sonnet; Opus review |
-| CH1c | the independent verifier (section 6) | agrees exactly with CH1b on every manifest case; refuses each attack of the manifest: a result for another query with equal quantities (submerged box at `z <= 2` vs `z <= 3`), altered value, bound, state, flag or topology, an enclosure wider than requested (`[0, 2]` for `V = 1` at accuracy `1e-12`), non-adjacent binary64 endpoints, substituted model or face set, stale snapshot, wrong expected identity, malformed or oversized proof | a separate Sonnet session given only this specification |
+| CH1c | the independent verifier (section 6) | agrees exactly with CH1b on every manifest case; refuses each attack of the manifest: a result for another query with equal quantities (submerged box at `z <= 2` vs `z <= 3`), altered value, bound, state, flag or topology, deleted forms or flags (a requested decimal form
+removed and the proof regenerated), altered contacts or identity fields, an enclosure wider than
+requested (`[0, 2]` for `V = 1` at accuracy `1e-12`), non-adjacent binary64 endpoints, substituted model or face set, stale snapshot, wrong expected identity, malformed or oversized proof | a separate Sonnet session given only this specification |
 | CH1d | recipe3 runs: hull and WB tanks, upright and inclined, the WB1/2/7/8 deck plane | all admit and verify; the deck plane returns both limits; work and timings recorded | Opus |
 | CH2 | delivery folder (the handoff's section 5 inventory for the planar subset): wheel + SHA-256, source commit, docs (API, domain, argument, trust model), commands, requests, responses, proofs, verifier runs, refusals, work accounting, and the open obligations of the scope statement | installed-wheel runs in an isolated environment outside the checkouts | Sonnet; Opus check |
 
@@ -361,3 +398,14 @@ Revision 2 review (round 2):
 | M5 | a face-pair test is not a bounded unit; phases without checkpoints | section 7: primitive units, every unit a checkpoint, all public phases including `check_preparation` |
 | M6 | acceptance not concrete or prospective; derivative check not exact | section 10: acceptance manifest fixed before assessment runs; exact polynomial derivative check; verifier attacks; refusals per phase |
 | m7 | linear-cost claim | section 4: linear only for clipping and accumulation; sort, nesting and embedding costs stated |
+
+Revision 3 review (round 3):
+
+| # | Finding | Response |
+|---|---|---|
+| B1 | zero-polynomial predicates are not always inconsistencies (collinear hole vertex) | section 5: zero is an outcome; only predicates proved nonzero refuse; ray-parity nesting with the half-open rule |
+| M2 | verifier lacked a completeness check; contacts not recomputed | section 6 steps (3) and (5): exact inventory, contact lists recomputed; CH1c deletion attacks |
+| M3 | identity fields beyond the snapshot digest unchecked; wheel hash relationship | section 6: snapshot digest content defined; model id, revision, checksum and file hashes recomputed; expected identity = the admitted wheel's per-file `RECORD` hashes |
+| M4 | serialization, hashing and composite fields unbounded | section 7: per-element and 64 KiB-chunk units; proof byte and integer-digit limits before parsing |
+| m5 | binary64 refusal contradicted exact doubles | section 3: judged on the returned bound; zero width always meets |
+| m6 | projection axis ambiguous for negative normals | sections 5 and 6: drop the index maximising `|n[k]|`, lowest index on ties, sign from `n[k]` |
