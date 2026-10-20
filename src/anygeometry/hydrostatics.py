@@ -42,6 +42,18 @@ def _scaled_normal(normal) -> tuple:
     return tuple(math.ldexp(value, -exponent) for value in values)
 
 
+def _exact_normal(normal) -> tuple:
+    """``(components, length)`` for exact plane offsets ``components . X / length``: the caller's
+    components exactly (scaling may round tiny components to zero, review round 3: such a
+    component matters for a far reference) and the length of the scaled normal times the exact
+    power of two (bit-identical to ``np.linalg.norm`` of the caller's normal for ordinary normals)."""
+    scaled = _scaled_normal(normal)                       # validates the normal
+    values = tuple(float(value) for value in normal)
+    exponent = math.frexp(max(abs(value) for value in values))[1]
+    length = Fraction(float(np.linalg.norm(scaled))) * Fraction(2) ** exponent
+    return tuple(Fraction(value) for value in values), length
+
+
 def waterplane_frame(point, normal=(0., 0., 1.), longitudinal=(1., 0., 0.)) -> Frame:
     """The waterplane frame: ``xi`` along ``longitudinal`` projected into the plane, ``zeta`` along ``normal``."""
     n = np.asarray(_scaled_normal(normal))
@@ -95,7 +107,7 @@ def hydrostatics(model, faces, point, normal=(0., 0., 1.), longitudinal=(1., 0.,
     """``shift``: the waterplane is moved by ``shift`` along the unit normal from ``point`` (kept exact:
     ``point + shift n`` in floats rounds away the offset for a point far from the shell, review H1
     round 5)."""
-    raw_normal = _scaled_normal(normal)
+    raw_normal, normal_length = _exact_normal(normal)
     from .shell_volume import closed_shell
     faces = list(faces)
     problems = closed_shell(model, faces)
@@ -107,8 +119,8 @@ def hydrostatics(model, faces, point, normal=(0., 0., 1.), longitudinal=(1., 0.,
     # cancelled the central waterplane moments)
     # the offset exactly from the given point and the given (unnormalised) normal: the plane is
     # raw_n . X = raw_n . point (review H1 rounds 2-3: a rounded unit normal tilts a plane given far away)
-    offset = sum(Fraction(a) * (Fraction(float(c)) - Fraction(float(p)))
-                 for a, c, p in zip(raw_normal, centre, point)) / Fraction(float(np.linalg.norm(raw_normal)))
+    offset = sum(a * (Fraction(float(c)) - Fraction(float(p)))
+                 for a, c, p in zip(raw_normal, centre, point)) / normal_length
     offset -= Fraction(float(shift))
     foot = centre - float(offset) * frame.normal
     frame = Frame(foot, frame.axes[0], frame.axes[1], normal=frame.normal)
@@ -185,9 +197,7 @@ def _hull_points(model, faces) -> np.ndarray:
 def _height_range(points, reference, normal):
     """Lowest and highest of ``(point - reference) . normal / |normal|`` over ``points``, computed exactly
     (with ``|normal|`` as ``hydrostatics`` rounds it) and rounded outward."""
-    normal = _scaled_normal(normal)
-    raw = [Fraction(value) for value in normal]
-    length = Fraction(float(np.linalg.norm(normal)))
+    raw, length = _exact_normal(normal)
     origin = [Fraction(float(value)) for value in reference]
     heights = [sum(a * (Fraction(float(x)) - r) for a, x, r in zip(raw, point, origin)) / length
                for point in np.asarray(points, dtype=float)]

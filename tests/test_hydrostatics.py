@@ -823,3 +823,16 @@ def test_invalid_normals_refuse_with_a_geometry_error(normal):
         hydrostatic_table(model, faces, [0.], reference=(0., 0., .5), normal=normal)
     with pytest.raises(GeometryError, match="finite non-zero"):
         float_at(model, faces, .5, normal=normal)
+
+
+def test_a_tiny_normal_component_keeps_its_offset_for_a_far_reference():
+    """Review round 3 of the confirmation fixes: the exact offset uses the caller's components (the
+    scaled normal rounds (q, 0, 1) to (0, 0, 1/2); with a reference at the float limit q matters)."""
+    import sys
+    model, faces, _place = box((1., 1., 1e-8))
+    q = math.ulp(0.)
+    point = (sys.float_info.max, 0., 5e-9)
+    # the plane q x + z = q x0 + 5e-9: z = 5e-9 + q (x0 - x), integrated over the unit square
+    expected = 5e-9 + q * (sys.float_info.max - .5)
+    # to the quadrature's own accuracy (rtol 1e-8 of the shell volume 1e-8); the lost offset is 8.9e-16
+    assert hydrostatics(model, faces, point, (q, 0., 1.))["volume"] == pytest.approx(expected, abs=1e-16)
