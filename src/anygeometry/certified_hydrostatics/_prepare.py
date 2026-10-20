@@ -12,6 +12,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable, Iterable
 
+import numpy as np
+
+from ..errors import GeometryError
 from ..serialization import _canonical_payload, _serialized_model_state
 from ._admission import admit
 from ._errors import CertifiedHydrostaticsRefusal, RefusalCategory, refuse
@@ -64,9 +67,32 @@ class PreparedCertifiedHydrostatics:
         return {"artifact": self.artifact_identity(), "model": self.model_identity()}
 
 
+def _meter_elements(document, meter: Meter) -> None:
+    """One unit per scalar/array element of the encoded document (polled once per container)."""
+    pending = [document]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, dict):
+            children = list(node.values())
+        elif isinstance(node, (list, tuple)):
+            children = list(node)
+        else:
+            continue
+        meter.unit("document_element", len(children) + 1)
+        pending.extend(child for child in children if isinstance(child, (dict, list, tuple)))
+
+
 def _document_checksum(model, meter: Meter) -> str:
-    document = _serialized_model_state(model)
-    digest = sha256_chunks(_canonical_payload(document), meter)
+    meter.unit("document_encode")
+    try:
+        document = _serialized_model_state(model)
+        payload = _canonical_payload(document)
+    except (GeometryError, ValueError, RecursionError, TypeError) as error:
+        broken = any(not np.all(np.isfinite(vertex.position)) for vertex in model.vertices.values())
+        raise refuse(RefusalCategory.NONFINITE_INPUT if broken else RefusalCategory.INVALID_QUERY,
+                     "the model document cannot be encoded: " + str(error), error)
+    _meter_elements(document, meter)         # the encoder itself is one non-preemptible call
+    digest = sha256_chunks(payload, meter)
     if digest != document["checksum"]["value"]:
         raise RuntimeError("the geometry document checksum is not reproducible")   # an internal defect
     return digest
@@ -103,7 +129,14 @@ def prepare_certified_hydrostatics(model, faces: Iterable[int], *, units: str = 
     if not isinstance(policy, CertifiedHydrostaticsPolicy):
         raise TypeError("policy must be a CertifiedHydrostaticsPolicy or None")
     meter = Meter(budget, cancellation_check)
-    faces = list(faces)
+    requested: list = []
+    try:
+        for face in faces:                   # one unit per requested id: an endless iterable still stops
+            meter.unit("face_request")
+            requested.append(face)
+    except CertifiedHydrostaticsRefusal as refusal:
+        raise refusal.complete(phase="prepare", request={"units": units}, work=meter.budget.counts())
+    faces = requested
     request = {"faces": [f if isinstance(f, int) else repr(f) for f in faces], "units": units}
     identity = {"model_id": str(model.model_id)}
     try:
@@ -134,6 +167,8 @@ def check_preparation(model, prepared: PreparedCertifiedHydrostatics, *, budget:
     identity = prepared.model_identity()
     try:
         implementation = implementation_identity(meter)
+        if prepared.snapshot.digest(meter) != prepared.snapshot_digest:
+            raise refuse(RefusalCategory.STALE_PREPARATION, "the stored snapshot does not match its digest")
         snapshot, model_id, revision, checksum = _consistent_read(model, prepared.face_ids, meter)
         digest = snapshot.digest(meter)
         differences = [name for name, now, before in (

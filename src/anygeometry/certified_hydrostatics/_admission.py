@@ -6,6 +6,8 @@ primitive units before running them (``Meter``), so budget, deadline and cancell
 every predicate."""
 from __future__ import annotations
 
+import functools
+from contextvars import ContextVar
 from fractions import Fraction
 
 import numpy as np
@@ -17,18 +19,33 @@ from ._work import Meter
 __all__ = ["admit"]
 
 ZERO = Fraction(0)
+_ACTIVE: ContextVar = ContextVar("certified_hydrostatics_meter", default=None)
+
+
+def _fit(value):
+    """Check an exact result against the active bit-length cap (every predicate result goes through here)."""
+    meter = _ACTIVE.get()
+    if meter is not None:
+        meter.fit(value)
+    return value
+
+
+def _fit_all(values):
+    for value in values:
+        _fit(value)
+    return values
 
 
 def _sub(a, b):
-    return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
+    return _fit_all((a[0] - b[0], a[1] - b[1], a[2] - b[2]))
 
 
 def _cross(a, b):
-    return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+    return _fit_all((a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]))
 
 
 def _dot(a, b):
-    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+    return _fit(a[0] * b[0] + a[1] * b[1] + a[2] * b[2])
 
 
 def _is_zero(a) -> bool:
@@ -40,7 +57,7 @@ def _sign(x) -> int:
 
 
 def _orient(p, q, r):
-    return (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+    return _fit((q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]))
 
 
 def _on_segment(p, a, b) -> bool:
@@ -65,23 +82,23 @@ def _segment_intersection(p1, p2, q1, q2):
     qp = (q1[0] - p1[0], q1[1] - p1[1])
     denominator = r[0] * s[1] - r[1] * s[0]
     if denominator != 0:
-        t = Fraction(qp[0] * s[1] - qp[1] * s[0]) / denominator
-        u = Fraction(qp[0] * r[1] - qp[1] * r[0]) / denominator
+        t = _fit(Fraction(qp[0] * s[1] - qp[1] * s[0]) / denominator)
+        u = _fit(Fraction(qp[0] * r[1] - qp[1] * r[0]) / denominator)
         if 0 <= t <= 1 and 0 <= u <= 1:
-            return ("p", (p1[0] + t * r[0], p1[1] + t * r[1]))
+            return ("p", _fit_all((p1[0] + t * r[0], p1[1] + t * r[1])))
         return None
     if qp[0] * r[1] - qp[1] * r[0] != 0:
         return None
     rr = r[0] * r[0] + r[1] * r[1]
-    t0 = Fraction(qp[0] * r[0] + qp[1] * r[1]) / rr
-    t1 = Fraction((q2[0] - p1[0]) * r[0] + (q2[1] - p1[1]) * r[1]) / rr
+    t0 = _fit(Fraction(qp[0] * r[0] + qp[1] * r[1]) / rr)
+    t1 = _fit(Fraction((q2[0] - p1[0]) * r[0] + (q2[1] - p1[1]) * r[1]) / rr)
     low, high = max(ZERO, min(t0, t1)), min(Fraction(1), max(t0, t1))
     if low > high:
         return None
-    start = (p1[0] + low * r[0], p1[1] + low * r[1])
+    start = _fit_all((p1[0] + low * r[0], p1[1] + low * r[1]))
     if low == high:
         return ("p", start)
-    return ("s", start, (p1[0] + high * r[0], p1[1] + high * r[1]))
+    return ("s", start, _fit_all((p1[0] + high * r[0], p1[1] + high * r[1])))
 
 
 def _point_in_loop(point, loop, meter: Meter) -> int:
@@ -94,7 +111,7 @@ def _point_in_loop(point, loop, meter: Meter) -> int:
         if _on_segment(point, a, b):
             return 0
         if (a[1] > point[1]) != (b[1] > point[1]):
-            crossing = a[0] + Fraction((point[1] - a[1]) * (b[0] - a[0])) / (b[1] - a[1])
+            crossing = _fit(a[0] + Fraction((point[1] - a[1]) * (b[0] - a[0])) / (b[1] - a[1]))
             if point[0] < crossing:
                 inside = not inside
     return 1 if inside else -1
@@ -131,13 +148,16 @@ def _newell(points):
     total = (ZERO, ZERO, ZERO)
     for i in range(1, len(points) - 1):
         c = _cross(_sub(points[i], base), _sub(points[i + 1], base))
-        total = (total[0] + c[0], total[1] + c[1], total[2] + c[2])
+        total = _fit_all((total[0] + c[0], total[1] + c[1], total[2] + c[2]))
     return total
 
 
 def _signed_area2(loop2):
     base = loop2[0]
-    return sum(_orient(base, loop2[i], loop2[i + 1]) for i in range(1, len(loop2) - 1))
+    total = ZERO
+    for i in range(1, len(loop2) - 1):
+        total = _fit(total + _orient(base, loop2[i], loop2[i + 1]))
+    return total
 
 
 # ------------------------------------------------------------------ checks 1-3 (per face)
@@ -325,9 +345,17 @@ def _check_shell(faces: list, meter: Meter) -> None:
 # ------------------------------------------------------------------ check 5: embedding
 
 
-def _merge(intervals: list) -> list:
+def _sorted(items, meter: Meter) -> list:
+    """Sort with one work unit per comparison."""
+    def compare(a, b):
+        meter.unit("sort_comparison")
+        return (a > b) - (a < b)
+    return sorted(items, key=functools.cmp_to_key(compare))
+
+
+def _merge(intervals: list, meter: Meter) -> list:
     merged: list = []
-    for low, high in sorted(intervals):
+    for low, high in _sorted(intervals, meter):
         if merged and low <= merged[-1][1]:
             if high > merged[-1][1]:
                 merged[-1] = (merged[-1][0], high)
@@ -352,20 +380,20 @@ def _line_intervals(face: _Face, values: dict, direction, point_at, meter: Meter
             if g0 == 0:
                 critical.add(_dot(direction, p))
             elif g1 != 0 and (g0 > 0) != (g1 > 0):
-                ratio = g0 / (g0 - g1)
-                critical.add(_dot(direction, tuple(p[a] + ratio * (q[a] - p[a]) for a in range(3))))
-    ordered = sorted(critical)
+                ratio = _fit(g0 / (g0 - g1))
+                critical.add(_dot(direction, _fit_all(tuple(p[a] + ratio * (q[a] - p[a]) for a in range(3)))))
+    ordered = _sorted(critical, meter)
     found = []
     for t in ordered:
         if _closed_member(face, point_at(t), meter):
             found.append((t, t))
     for t0, t1 in zip(ordered, ordered[1:]):
-        if _closed_member(face, point_at((t0 + t1) / 2), meter):
+        if _closed_member(face, point_at(_fit((t0 + t1) / 2)), meter):
             found.append((t0, t1))
-    return _merge(found)
+    return _merge(found, meter)
 
 
-def _covered(item, cells: list) -> bool:
+def _covered(item, cells: list, meter: Meter) -> bool:
     """A 2D point or segment lies inside the union of the shared cells (points and closed segments)."""
     points = [c[1] for c in cells if c[0] == "v"]
     segments = [c[1:] for c in cells if c[0] == "e"]
@@ -378,10 +406,10 @@ def _covered(item, cells: list) -> bool:
     spans = []
     for a, b in segments:
         if _orient(x, y, a) == 0 and _orient(x, y, b) == 0:
-            ta = Fraction((a[0] - x[0]) * direction[0] + (a[1] - x[1]) * direction[1]) / norm
-            tb = Fraction((b[0] - x[0]) * direction[0] + (b[1] - x[1]) * direction[1]) / norm
+            ta = _fit(Fraction((a[0] - x[0]) * direction[0] + (a[1] - x[1]) * direction[1]) / norm)
+            tb = _fit(Fraction((b[0] - x[0]) * direction[0] + (b[1] - x[1]) * direction[1]) / norm)
             spans.append((min(ta, tb), max(ta, tb)))
-    return any(low <= 0 and high >= 1 for low, high in _merge(spans))
+    return any(low <= 0 and high >= 1 for low, high in _merge(spans, meter))
 
 
 def _coplanar_ok(a: _Face, b: _Face, shared_vertices, shared_edges, meter: Meter) -> bool:
@@ -396,13 +424,13 @@ def _coplanar_ok(a: _Face, b: _Face, shared_vertices, shared_edges, meter: Meter
             if ea == eb:
                 continue
             hit = _segment_intersection(p1, p2, q1, q2)
-            if hit is not None and not _covered(hit, cells):
+            if hit is not None and not _covered(hit, cells, meter):
                 return False
     for own, other, edges in ((a, b, edges_a), (b, a, edges_b)):
         for edge, (p, q) in edges.items():
             if edge in shared_edges:
                 continue
-            middle = ((p[0] + q[0]) / 2, (p[1] + q[1]) / 2)
+            middle = _fit_all(((p[0] + q[0]) / 2, (p[1] + q[1]) / 2))
             if _region_state(middle, other.loops2, meter) >= 0:
                 return False
     for edge in shared_edges:
@@ -436,35 +464,37 @@ def _pair_embeds(a: _Face, b: _Face, meter: Meter) -> bool:
         return _coplanar_ok(a, b, shared_vertices, shared_edges, meter)
     direction = _cross(a.normal, b.normal)
     norm = _dot(direction, direction)
-    x0 = tuple((a.offset * c1 + b.offset * c2) / norm
-               for c1, c2 in zip(_cross(b.normal, direction), _cross(direction, a.normal)))
+    x0 = _fit_all(tuple(_fit((a.offset * c1 + b.offset * c2) / norm)
+                        for c1, c2 in zip(_cross(b.normal, direction), _cross(direction, a.normal))))
     t0 = _dot(direction, x0)
 
     def point_at(t):
-        scale = (t - t0) / norm
-        return tuple(x0[i] + scale * direction[i] for i in range(3))
+        scale = _fit((t - t0) / norm)
+        return _fit_all(tuple(x0[i] + scale * direction[i] for i in range(3)))
 
     meet = _merge_intersection(_line_intervals(a, values_a, direction, point_at, meter),
-                               _line_intervals(b, values_b, direction, point_at, meter))
+                               _line_intervals(b, values_b, direction, point_at, meter), meter)
     cells = [(_dot(direction, a.vertex_points[v]),) * 2 for v in shared_vertices]
     for edge in shared_edges:
         start, end = a.edge_points[edge]
         cells.append(tuple(sorted((_dot(direction, start), _dot(direction, end)))))
-    return meet == _merge(cells)
+    return meet == _merge(cells, meter)
 
 
-def _merge_intersection(first: list, second: list) -> list:
+def _merge_intersection(first: list, second: list, meter: Meter) -> list:
     found = []
     for low1, high1 in first:
         for low2, high2 in second:
+            meter.unit("interval_pair")
             low, high = max(low1, low2), min(high1, high2)
             if low <= high:
                 found.append((low, high))
-    return _merge(found)
+    return _merge(found, meter)
 
 
 def _check_embedding(faces: list, meter: Meter) -> None:
     for face in faces:
+        meter.unit("box_vertex", len(face.vertex_points))
         coordinates = np.array([[float(c) for c in p] for p in face.vertex_points.values()])
         face.box = (coordinates.min(axis=0), coordinates.max(axis=0))
     low = np.array([face.box[0] for face in faces])
@@ -487,20 +517,24 @@ def _check_orientation(faces: list, meter: Meter) -> None:
     total = ZERO
     for face in faces:
         for points in face.points:
-            meter.unit("triangle_sum", len(points) - 2)
             relative = [_sub(p, base) for p in points]
             for i in range(1, len(relative) - 1):
-                total += _dot(relative[0], _cross(relative[i], relative[i + 1]))
+                meter.unit("triangle_sum")
+                total = _fit(total + _dot(relative[0], _cross(relative[i], relative[i + 1])))
     if meter.fit(total) <= 0:
         raise refuse(RefusalCategory.INVERTED_ORIENTATION, "the shell encloses a non-positive signed volume")
 
 
 def admit(snapshot: ExactSnapshot, meter: Meter) -> None:
     """Raise ``CertifiedHydrostaticsRefusal`` unless the snapshot is the oriented boundary of a solid."""
-    _check_supports(snapshot, meter)
-    faces = _build_faces(snapshot, meter)
-    _check_loops(faces, meter)
-    _check_holes(faces, meter)
-    _check_shell(faces, meter)
-    _check_embedding(faces, meter)
-    _check_orientation(faces, meter)
+    token = _ACTIVE.set(meter)
+    try:
+        _check_supports(snapshot, meter)
+        faces = _build_faces(snapshot, meter)
+        _check_loops(faces, meter)
+        _check_holes(faces, meter)
+        _check_shell(faces, meter)
+        _check_embedding(faces, meter)
+        _check_orientation(faces, meter)
+    finally:
+        _ACTIVE.reset(token)

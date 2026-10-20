@@ -542,3 +542,166 @@ def test_work_budget_arguments_are_validated():
     model, faces = unit_box()
     with pytest.raises(TypeError):
         prepare(model, faces, budget=object())
+
+
+# ------------------------------------------------------------------ review round 1 regressions
+
+
+def test_the_bit_cap_applies_to_derived_values_not_only_to_inputs():
+    # support vectors scaled by 2**100: the inputs need 101 bits, the support normal 201
+    model = GeometryModel()
+    ids = [model.add_point(*p) for p in CUBE_POINTS]
+    lines, faces = {}, []
+    big = float(2 ** 100)
+    for quad in CUBE_QUADS:
+        loop = []
+        for a, b in zip(quad, quad[1:] + quad[:1]):
+            key = frozenset((a, b))
+            if key not in lines:
+                lines[key] = model.add_line(ids[a], ids[b])
+            loop.append(OrientedEdge(lines[key], model.edges[lines[key]].start == ids[a]))
+        o = np.array(CUBE_POINTS[quad[0]])
+        u, v = np.array(CUBE_POINTS[quad[1]]) - o, np.array(CUBE_POINTS[quad[3]]) - o
+        faces.append(model.add_face_from_loop(loop, surface=Plane(o, big * u, big * v)))
+    assert prepare(model, faces).work["max_bits_seen"] > 101           # admitted without a cap
+    with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+        prepare(model, faces, budget=WorkBudget(None, 101))
+    assert info.value.category is C.BIT_LENGTH_EXCEEDED
+
+
+def test_an_exhausted_budget_stops_the_face_iterable_at_once():
+    model, faces = unit_box()
+    consumed = []
+
+    def generator():
+        for index in range(10_000):
+            consumed.append(index)
+            yield faces[0]
+    with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+        prepare(model, generator(), budget=WorkBudget(0, None))
+    assert info.value.category is C.BUDGET_EXHAUSTED and len(consumed) <= 1
+    consumed.clear()
+    with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+        prepare(model, generator(), cancellation_check=lambda: True)
+    assert info.value.category is C.CANCELLED and len(consumed) <= 1
+
+
+def test_an_endless_face_iterable_is_stopped_by_the_budget():
+    import itertools
+    model, _faces = unit_box()
+    with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+        prepare(model, itertools.cycle([1]), budget=WorkBudget(1000, None))
+    assert info.value.category is C.BUDGET_EXHAUSTED and info.value.phase == "prepare"
+
+
+def test_check_preparation_verifies_the_stored_snapshot_against_its_digest():
+    model, faces = unit_box()
+    prepared = prepare(model, faces)
+    bad = replace(prepared, snapshot=replace(prepared.snapshot, faces=prepared.snapshot.faces[:-1]))
+    with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+        check_preparation(model, bad)
+    assert info.value.category is C.STALE_PREPARATION
+
+
+def _cube_with_identified_corners():
+    """Triangulated cube whose opposite corners 0 and 7 are one vertex: connected, edge-consistent, pinched."""
+    diagonals = {0: (1, 2), 1: (5, 6), 2: (2, 4), 3: (3, 5), 4: (1, 4), 5: (3, 6)}
+    faces = []
+    for index, quad in enumerate(CUBE_QUADS):
+        x, y = diagonals[index]
+        quad = list(quad)
+        i, j = quad.index(x), quad.index(y)
+        first = [quad[k % 4] for k in range(i, i + 1 + (j - i) % 4)]          # split along the diagonal x-y
+        second = [quad[k % 4] for k in range(j, j + 1 + (i - j) % 4)]
+        faces += [[[0 if v == 7 else v for v in first]], [[0 if v == 7 else v for v in second]]]
+    return build(CUBE_POINTS, faces)
+
+
+def test_a_pinched_connected_shell_fails_the_vertex_link_check():
+    model, faces = _cube_with_identified_corners()
+    refusal = _stopped(lambda: prepare(model, faces))
+    assert refusal.category is C.NON_MANIFOLD
+    assert "link_corner" in refusal.work["units"] and "bbox_pair" not in refusal.work["units"]
+
+
+def test_disconnected_shells_fail_before_the_vertex_link_check():
+    points = list(CUBE_POINTS) + [(x + 5., y, z) for x, y, z in CUBE_POINTS]
+    faces = [[list(q)] for q in CUBE_QUADS] + [[[v + 8 for v in q]] for q in CUBE_QUADS]
+    model, ids = build(points, faces)
+    refusal = _stopped(lambda: prepare(model, ids))
+    assert refusal.category is C.NON_MANIFOLD and "link_corner" not in refusal.work["units"]
+
+
+class _Recording(WorkBudget):
+    """Budget that notes, for each unit kind, the reserve call and operation count at its first appearance."""
+
+    def __init__(self, **kwargs):
+        super().__init__(None, None, **kwargs)
+        self.calls, self.first = 0, {}
+
+    def reserve(self, kind, count=1, cancellation_check=None):
+        self.first.setdefault(kind, (self.calls, self.operations, count))
+        super().reserve(kind, count, cancellation_check)
+        self.calls += 1                                  # completed reserve calls
+
+
+def _stops_inside(run, kind, phase):
+    """Budget, cancellation and deadline stops that fire just after unit ``kind`` ran; the work record shows it."""
+    probe = _Recording()
+    run(probe, None)
+    index, operations, count = probe.first[kind]
+    refusal = _stopped(lambda: run(WorkBudget(operations + count + 1, None), None))
+    assert refusal.category is C.BUDGET_EXHAUSTED and refusal.phase == phase and refusal.work["units"][kind] >= 1
+    seen = {"n": 0}
+
+    def cancel():
+        seen["n"] += 1
+        return seen["n"] > index + 2
+    refusal = _stopped(lambda: run(WorkBudget(None, None), cancel))
+    assert refusal.category is C.CANCELLED and refusal.phase == phase and refusal.work["units"][kind] >= 1
+    clocked = _Recording(deadline=index + 2, clock=lambda: clocked.calls)
+    refusal = _stopped(lambda: run(clocked, None))
+    assert refusal.category is C.DEADLINE_EXCEEDED and refusal.phase == phase and refusal.work["units"][kind] >= 1
+
+
+@pytest.mark.parametrize("kind", ["face_request", "serialize_element", "document_element", "plane_test", "loop_edge",
+                                  "edge_pair", "point_edge_test", "link_corner", "bbox_pair", "triangle_sum"])
+def test_stops_fire_inside_every_stage_of_preparation(kind):
+    model, faces = bored_box()
+    _stops_inside(lambda budget, cancel: prepare(model, faces, budget=budget, cancellation_check=cancel), kind,
+                  "prepare")
+
+
+@pytest.mark.parametrize("kind", ["serialize_element", "document_element", "vertex_read"])
+def test_stops_fire_inside_check_preparation(kind):
+    model, faces = unit_box()
+    prepared = prepare(model, faces)
+    _stops_inside(lambda budget, cancel: check_preparation(model, prepared, budget=budget,
+                                                           cancellation_check=cancel), kind, "check")
+
+
+def test_the_bit_cap_stops_admission_after_the_snapshot_and_its_serialization():
+    model, faces = unit_box(0.1)                           # inputs need 56 bits; the support normals about 112
+    refusal = _stopped(lambda: prepare(model, faces, budget=WorkBudget(None, 60)))
+    assert refusal.category is C.BIT_LENGTH_EXCEEDED and refusal.work["max_bits_seen"] > 60
+    assert refusal.work["units"]["serialize_element"] > 0 and "vertex_read" in refusal.work["units"]
+
+
+def test_an_edge_pointing_to_a_missing_vertex_is_a_structured_refusal():
+    model, faces = unit_box()
+    edge = next(iter(model.edges))
+    model._put_entity("edge", replace(model.edges[edge], end=10 ** 6))
+    refusal = _stopped(lambda: prepare(model, faces))
+    assert refusal.category is C.INVALID_LOOP and refusal.phase == "prepare"
+    assert refusal.work["operations"] > 0 and isinstance(refusal.__cause__, KeyError)
+
+
+def test_a_non_finite_unrelated_vertex_is_a_structured_refusal():
+    model, faces = unit_box()
+    stray = model.add_point(5., 5., 5.)
+    position = model.vertices[stray].position
+    position.flags.writeable = True
+    position[2] = np.nan
+    refusal = _stopped(lambda: prepare(model, faces))
+    assert refusal.category is C.NONFINITE_INPUT and refusal.phase == "prepare"
+    assert refusal.work["operations"] > 0 and refusal.__cause__ is not None

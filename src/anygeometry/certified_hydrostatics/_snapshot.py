@@ -47,18 +47,18 @@ class ExactSnapshot:
     def face_ids(self) -> tuple:
         return tuple(face.id for face in self.faces)
 
-    def canonical(self) -> tuple[dict, int]:
-        """The canonical exact document and the number of scalar/array elements in it."""
-        count = 0
+    def canonical(self, meter: Meter | None = None) -> dict:
+        """The canonical exact document; with ``meter`` one unit per scalar/array element, as it is produced."""
+        def tick(n: int = 1) -> None:
+            if meter is not None:
+                meter.unit("serialize_element", n)
 
         def pair(value: Fraction) -> list:
-            nonlocal count
-            count += 2
+            tick(2)
             return [value.numerator, value.denominator]
 
         def point(p) -> list:
-            nonlocal count
-            count += 1
+            tick(1)
             return [pair(c) for c in p]
 
         faces = []
@@ -70,27 +70,31 @@ class ExactSnapshot:
             for loop in face.loops:
                 items = []
                 for (edge, forward), vertex in zip(loop.edges, loop.vertices):
+                    tick(3)
                     items.append([edge, forward, vertex])
-                    count += 3
                     edge_uses.setdefault(edge, []).append([face.id, forward])
                     vertex_faces.setdefault(vertex, set()).add(face.id)
                     vertex_edges.setdefault(vertex, set()).add(edge)
+                tick(1)
                 loops.append(items)
-                count += 1
+            tick(3)
             faces.append({"id": face.id, "support": [point(p) for p in face.support], "loops": loops})
-            count += 3
-        vertices = [[vid, point(self.positions[vid])] for vid in sorted(self.positions)]
-        edges = [[edge, *self.edges[edge], edge_uses[edge]] for edge in sorted(edge_uses)]
-        count += 3 * len(edges) + 2 * sum(len(uses) for uses in edge_uses.values())
-        incidence = [[vid, sorted(vertex_faces[vid]), sorted(vertex_edges[vid])] for vid in sorted(vertex_faces)]
-        count += sum(1 + len(vertex_faces[v]) + len(vertex_edges[v]) for v in vertex_faces)
-        document = {"faces": faces, "vertices": vertices, "edges": edges, "vertex_incidence": incidence}
-        return document, count
+        vertices = []
+        for vid in sorted(self.positions):
+            tick(1)
+            vertices.append([vid, point(self.positions[vid])])
+        edges = []
+        for edge in sorted(edge_uses):
+            tick(3 + 2 * len(edge_uses[edge]))
+            edges.append([edge, *self.edges[edge], edge_uses[edge]])
+        incidence = []
+        for vid in sorted(vertex_faces):
+            tick(1 + len(vertex_faces[vid]) + len(vertex_edges[vid]))
+            incidence.append([vid, sorted(vertex_faces[vid]), sorted(vertex_edges[vid])])
+        return {"faces": faces, "vertices": vertices, "edges": edges, "vertex_incidence": incidence}
 
     def digest(self, meter: Meter) -> str:
-        document, count = self.canonical()
-        meter.unit("serialize_element", count)
-        return sha256_chunks(canonical_json(document), meter)
+        return sha256_chunks(canonical_json(self.canonical(meter)), meter)
 
 
 def _exact(value, meter: Meter) -> Fraction:
@@ -143,7 +147,12 @@ def collect_snapshot(model, faces: Iterable[int], meter: Meter) -> ExactSnapshot
                 for vertex in edges[item.edge]:
                     if vertex not in positions:
                         meter.unit("vertex_read")
-                        positions[vertex] = _exact_point(model.vertices[vertex].position, meter)
+                        record = model.vertices.get(vertex)
+                        if record is None:
+                            raise refuse(RefusalCategory.INVALID_LOOP,
+                                         f"edge {item.edge} of face {face_id} ends at the missing vertex {vertex}",
+                                         KeyError(vertex))
+                        positions[vertex] = _exact_point(record.position, meter)
                 items.append((int(item.edge), bool(item.forward)))
                 starts.append(start)
             loops.append(SnapshotLoop(tuple(items), tuple(starts)))
