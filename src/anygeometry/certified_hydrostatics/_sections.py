@@ -58,7 +58,12 @@ def vertex_heights(snapshot: ExactSnapshot, query, meter: Meter) -> dict:
 
 def contacts(snapshot: ExactSnapshot, heights: dict, meter: Meter) -> tuple:
     """``(vertices, edges, faces)`` (sorted id tuples) lying in the plane ``n.r = d``."""
-    vertices = tuple(v for v in sorted(heights) if heights[v] == 0)
+    vertices = []
+    for v in sorted(heights):
+        meter.unit("contact_test")
+        if heights[v] == 0:
+            vertices.append(v)
+    vertices = tuple(vertices)
     edges = []
     for edge in sorted(snapshot.edges):
         meter.unit("contact_test")
@@ -77,12 +82,16 @@ def contacts(snapshot: ExactSnapshot, heights: dict, meter: Meter) -> tuple:
     return vertices, tuple(edges), tuple(faces)
 
 
-def exact_occupancy(heights: dict) -> str:
+def exact_occupancy(heights: dict, meter: Meter) -> str:
     """Occupancy of the exact half-space: ``EMPTY`` when no vertex is strictly below, ``FULL`` when none is above."""
-    values = heights.values()
-    if all(h >= 0 for h in values):
+    below = above = False
+    for h in heights.values():
+        meter.unit("occupancy_test")
+        below = below or h < 0
+        above = above or h > 0
+    if not below:
         return "EMPTY"
-    if all(h <= 0 for h in values):
+    if not above:
         return "FULL"
     return "PARTIAL"
 
@@ -128,8 +137,11 @@ def clipped_sums(snapshot: ExactSnapshot, heights: dict, meter: Meter) -> tuple:
     positions = snapshot.positions
     for face in snapshot.faces:
         for loop in face.loops:
-            points = [positions[v] for v in loop.vertices]
-            hs = [heights[v] for v in loop.vertices]
+            points, hs = [], []
+            for v in loop.vertices:
+                meter.unit("loop_vertex_read")
+                points.append(positions[v])
+                hs.append(heights[v])
             _fan(ar, _clip_chain(ar, points, hs, meter), meter, total, moment)
     return total[0], moment
 

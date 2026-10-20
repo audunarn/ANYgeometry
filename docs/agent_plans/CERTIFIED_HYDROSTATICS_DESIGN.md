@@ -356,13 +356,16 @@ over a whole value, so a literal one-unit span is not achievable. The guarantee 
    proportion before it runs (the rows below), and the bulk step is followed by a checkpoint.
 Hence the overshoot after a refusal, and the longest non-preemptible span, are bounded by one such
 operation on data within those limits; with the bit-length cap no exact value exceeds the cap.
+Span coverage is enforced by tests (per-element charges, cancellation probes, the verifier's source
+lint) rather than by further review rounds (owner decision 2026-10-20); a span found later is
+recorded here as a known limit.
 
 *Charged bulk operations (amendments 6b/6c, owner decisions 2026-10-20).* These spans are charged in
 proportion to their size before they start and are followed by a checkpoint:
 
 | Bulk operation | Bound |
 |---|---|
-| canonical encoding of the whole model document for `document_checksum` (library serialisation and JSON encoding) | the model's own size (its vertex, edge and face counts); charged one unit per model entity before it runs |
+| canonical encoding of the whole model document for `document_checksum` (library serialisation and JSON encoding) | the model's own persisted content; charged one unit per model entity before it runs, and one unit per 64 KiB of the encoded document immediately after it (free-form content such as units, CRS metadata, face metadata and names is not bounded by entity counts; this is the one charge that follows its span, so the overshoot after a refusal is one encoding of the model) |
 | one UTF-8 decode of the proof bytes | `max_proof_bytes` (checked before decoding) |
 | one linear copy, comparison, escape or encoding of a single string scalar, or the final join and UTF-8 encoding of the proof (amendment 6c, owner decision 2026-10-20) | `max_proof_bytes` (a string longer than the limit is refused before it is escaped); charged one unit per 64 KiB before it runs (`string_bulk` in the verifier; `serialize_bulk` in the provider, charged per 64 KiB block as the output grows) |
 

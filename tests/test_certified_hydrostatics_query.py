@@ -1214,3 +1214,13 @@ def test_the_final_proof_join_is_followed_by_a_checkpoint():
     with pytest.raises(CertifiedHydrostaticsRefusal) as info:      # a poll happens after the last charged unit
         query_certified_hydrostatics(prepared, query, budget=budget, cancellation_check=lambda: budget.operations >= total)
     assert info.value.category is RefusalCategory.CANCELLED
+
+
+def test_occupancy_and_clipping_reads_checkpoint_per_vertex():
+    from test_certified_hydrostatics_admission import unit_box
+    model, faces = unit_box()
+    prepared = prepare_certified_hydrostatics(model, faces)
+    query = HalfSpaceQuery(normal=(0, 0, 1), offset=F(1, 2), waterplane_origin=(0, 0, 0),
+                           waterplane_axes=((1, 0, 0), (0, 1, 0)), forms=("exact",))
+    units = query_certified_hydrostatics(prepared, query).work["units"]
+    assert units["occupancy_test"] >= 8 and units["loop_vertex_read"] >= 24

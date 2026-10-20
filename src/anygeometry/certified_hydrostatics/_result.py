@@ -272,7 +272,7 @@ def write_canonical(document, meter=None, *, max_digits: int, max_bytes: int, la
         elif isinstance(value, int):
             if digits_exceed(value, max_digits):
                 raise refuse(RefusalCategory.RESULT_OUT_OF_RANGE, "an integer of the proof exceeds the digit limit")
-            emit(int_to_str(value))
+            emit(int_to_str(value, (lambda: meter.unit("digit_chunk")) if charged and meter is not None else None))
         elif isinstance(value, str):
             # design 6b: escaping one string scalar is one bulk operation, bounded by the byte limit and charged
             # one unit per 64 KiB before it runs

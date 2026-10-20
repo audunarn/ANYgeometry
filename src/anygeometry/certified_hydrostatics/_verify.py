@@ -60,6 +60,7 @@ __all__ = ["VerifiedHydrostatics", "verify_certified_hydrostatics"]
 
 C = RefusalCategory
 _CHUNK = 65536
+_MAX_UNIT_NAME = 64     # work-unit kinds are short identifiers; a longer name is refused before it is compared
 _WINDOW = 4096          # characters scanned or encoded per checkpoint
 _QUANTITIES = ("A", "Mu", "Mv", "Iuu", "Ivv", "Iuv")
 _MOMENTS = ("Jx", "Jy", "Jz")
@@ -605,8 +606,10 @@ def _ingest_work(work):
     total = 0
     copy = {}
     for key in _each(units, "ingest"):
+        if type(key) is not str or len(key) > _MAX_UNIT_NAME:
+            raise _fail("value", "a reported work unit name is not a short string")
         value = units[key]
-        if type(key) is not str or type(value) is not int or value < 0:
+        if type(value) is not int or value < 0:
             raise _fail("value", "the reported work counts are not non-negative integers")
         _fit(value)
         total += value
@@ -1824,10 +1827,12 @@ def _parse_proof(proof: bytes, policy: dict) -> dict:
     if len(proof) > policy["max_proof_bytes"]:
         raise _refuse(C.MALFORMED_PROOF, "the proof exceeds the byte limit")
     limit = policy["max_integer_digits"]
+    _charge_text(len(proof), "decode_bulk")       # 6b: the one UTF-8 decode, charged per 64 KiB before it runs
     try:
         text = proof.decode("utf-8")
     except UnicodeDecodeError as error:
         raise _refuse(C.MALFORMED_PROOF, "the proof is not UTF-8") from error
+    _tick("decode_done")
     n = len(text)
     # a token can never be longer than the text, so the scan bound is the smaller of the two; the regex engine's
     # repetition limit (2**32 - 1) caps it, which can only refuse (never accept) a token over 2**31 - 1 digits
@@ -2156,6 +2161,10 @@ def _document_checksum(model) -> str:
     # one library call over the whole document: its hashing below is metered per 64 KiB
     data = json.dumps(payload, ensure_ascii=False, allow_nan=False, separators=(",", ":"),
                       sort_keys=True).encode("utf-8")
+    # 6b: the encoding's size includes free-form content (units, CRS, metadata, names) that entity counts do not
+    # bound; it is charged per 64 KiB immediately after the encoding, before anything else uses it
+    for _ in range(len(data) // _CHUNK + 1):
+        _tick("document_bytes")
     _tick("document_encoded")
     own = _sha256_chunks(data, "document_hash_chunk")
     if own != document["checksum"]["value"]:

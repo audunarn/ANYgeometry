@@ -131,12 +131,12 @@ def decimal_enclosure(numerator: Fraction, norm_squared, width: Fraction, meter:
         ceil_abs = floor_abs + 1                                # the root is irrational here
         low, high = (floor_abs, ceil_abs) if numerator > 0 else (-ceil_abs, -floor_abs)
     meter.unit("digit_conversion", 1)
-    return _decimal_string(low, digits), _decimal_string(high, digits)
+    return _decimal_string(low, digits, meter), _decimal_string(high, digits, meter)
 
 
-def _decimal_string(scaled: int, digits: int) -> str:
+def _decimal_string(scaled: int, digits: int, meter=None) -> str:
     sign = "-" if scaled < 0 else ""
-    text = int_to_str(abs(scaled))
+    text = int_to_str(abs(scaled), None if meter is None else (lambda: meter.unit("digit_chunk")))
     if digits == 0:
         return sign + text
     text = text.rjust(digits + 1, "0")

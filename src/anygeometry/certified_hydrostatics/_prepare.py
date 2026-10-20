@@ -105,6 +105,9 @@ def _document_checksum(model, meter: Meter) -> str:
         broken = any(not np.all(np.isfinite(vertex.position)) for vertex in model.vertices.values())
         raise refuse(RefusalCategory.NONFINITE_INPUT if broken else RefusalCategory.INVALID_QUERY,
                      "the model document cannot be encoded: " + str(error), error)
+    # 6b: the encoding's size includes free-form content (units, CRS, metadata, names) that entity counts do not
+    # bound; it is charged per 64 KiB immediately after the encoding, before anything else uses it
+    meter.unit("document_bytes", len(payload) // 65536 + 1)
     _meter_elements(document, meter)         # the encoder itself is one non-preemptible call
     digest = sha256_chunks(payload, meter)
     if digest != document["checksum"]["value"]:

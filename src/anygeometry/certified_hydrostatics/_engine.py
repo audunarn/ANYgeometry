@@ -48,7 +48,7 @@ def _evaluate(prepared: PreparedCertifiedHydrostatics, query: HalfSpaceQuery, me
     heights = vertex_heights(snapshot, query, meter)
     vertices, edges, faces = contacts(snapshot, heights, meter)
     generic = not vertices
-    occupancy = exact_occupancy(heights)
+    occupancy = exact_occupancy(heights, meter)
     below = build_section(snapshot, query, heights, +1, meter)
     above = None if generic else build_section(snapshot, query, heights, -1, meter)
 

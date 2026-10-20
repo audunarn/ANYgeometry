@@ -1667,3 +1667,20 @@ def test_long_decimal_strings_are_charged_before_they_are_split():
     except CertifiedHydrostaticsRefusal:
         pass
     assert budget.counts()["units"].get("string_bulk", 0) >= 2 * (len(long_lo) // 65536)
+
+
+def test_long_work_unit_names_are_refused_before_they_are_compared():
+    c = Case(lambda: box())
+    q, r = c.query(Z_, F(1, 2))
+    units = dict(r.work["units"], **{"k" * 200_000 + "a": 0, "k" * 200_000 + "b": 0})
+    error = failed(lambda: c.verify(q, with_proof(replace(r, work=dict(r.work, units=units)))), "value")
+    assert len(str(error)) < 2000
+
+
+def test_the_proof_decode_is_charged_before_it_runs():
+    c = Case(lambda: box())
+    q, r = c.query(Z_, F(1, 2))
+    budget = WorkBudget.unlimited()
+    error = refusal_of(lambda: c.verify(q, replace(r, proof=b"a" * 131071 + b"\xff"), budget=budget))
+    assert error.category == C.MALFORMED_PROOF
+    assert budget.counts()["units"].get("decode_bulk", 0) >= 131072 // 65536

@@ -753,3 +753,28 @@ def test_the_document_charge_covers_every_collection_the_encoder_walks():
     walked = set(re.findall(r"\('([a-z_]+)', [A-Z][A-Za-z]+\)", source))
     assert {"vertices", "edges", "faces", "coedges"} <= walked
     assert walked <= set(prep._MODEL_COLLECTIONS) and "features" in prep._MODEL_COLLECTIONS
+
+
+def test_free_form_model_content_is_charged_by_the_size_of_its_encoding():
+    def charged(label):
+        model, faces = unit_box()
+        model.set_document_settings(crs_metadata={"label": label})
+        budget = WorkBudget(None, None)
+        prepare(model, faces, budget=budget)
+        return budget.counts()["units"]["document_bytes"]
+    assert charged("x" * 400_000) - charged("x") >= 400_000 // 65536 - 1
+
+
+def test_the_integer_text_conversion_checkpoints_per_chunk():
+    from anygeometry.certified_hydrostatics._arith import int_to_str
+    ticks = []
+    import sys
+    value = 7 ** 118_000                                       # about 100,000 dense digits
+    text = int_to_str(value, lambda: ticks.append(1))
+    old = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(0)
+    try:
+        assert text == str(value)
+    finally:
+        sys.set_int_max_str_digits(old)
+    assert len(ticks) >= len(text) // 500                    # at least one checkpoint per 500-digit chunk

@@ -131,18 +131,23 @@ _CHUNK_DIGITS = 500        # str() of <= 500 digits is below every legal limit (
 _CHUNK = 10 ** _CHUNK_DIGITS
 
 
-def int_to_str(n: int) -> str:
-    """Decimal text of an integer of any size, independent of ``sys.set_int_max_str_digits``."""
+def int_to_str(n: int, tick=None) -> str:
+    """Decimal text of an integer of any size, independent of ``sys.set_int_max_str_digits``; ``tick`` (if given) is
+    called once per squaring and once per chunk (the checkpoints of this loop)."""
     if n < 0:
-        return "-" + int_to_str(-n)
+        return "-" + int_to_str(-n, tick)
     if n < _CHUNK:
         return str(n)
     powers = [(_CHUNK_DIGITS, _CHUNK)]
     while powers[-1][1] * powers[-1][1] <= n:
+        if tick is not None:
+            tick()
         digits, power = powers[-1]
         powers.append((2 * digits, power * power))
 
     def rec(value: int, level: int) -> str:
+        if tick is not None:
+            tick()
         if value < _CHUNK:
             return str(value)
         while powers[level][1] > value:
