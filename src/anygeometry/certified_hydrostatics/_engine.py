@@ -68,12 +68,16 @@ def _evaluate(prepared: PreparedCertifiedHydrostatics, query: HalfSpaceQuery, me
     result = CertifiedHydrostaticsResult(query, occupancy, generic, Contacts(vertices, edges, faces), volume_quantity,
                                          moment_quantities, sections, placeholder)
     limits = dict(max_digits=prepared.policy.max_integer_digits, max_bytes=prepared.policy.max_proof_bytes)
-    # pass 1: meter the serialization element by element (the work field itself is not charged); the work
-    # reported in the claim is then exactly this call's budget delta
-    write_canonical(proof_document(prepared, query, result.claim()), meter, uncharged=("result", "work"), **limits)
-    result = replace(result, work=_delta(meter.budget.counts(), before))
-    # pass 2: the final bytes carrying that work
-    return replace(result, proof=write_canonical(proof_document(prepared, query, result.claim()), None, **limits))
+    # one metered pass: the claim is copied out of the result and the document is written element by element,
+    # both reserving units and polling; the work field is appended last (uncharged) from the budget delta
+    document = proof_document(prepared, query, result.claim(meter, with_work=False), meter)
+    taken: dict = {}
+
+    def work_field():
+        taken["work"] = _delta(meter.budget.counts(), before)
+        return taken["work"]
+    proof = write_canonical(document, meter, late=(("result",), "work", work_field), **limits)
+    return replace(result, work=taken["work"], proof=proof)
 
 
 def query_certified_hydrostatics(prepared: PreparedCertifiedHydrostatics, query: HalfSpaceQuery, *,

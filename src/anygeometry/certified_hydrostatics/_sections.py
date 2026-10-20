@@ -213,10 +213,9 @@ def _face_segments(ar: Ar, snapshot, query, points, meter: Meter) -> list:
 
         def compare(x, y):
             meter.unit("sort_comparison")
-            if x[1] != y[1]:
-                return -1 if x[1] < y[1] else 1
-            if x[2] != y[2]:
-                return -1 if x[2] < y[2] else 1
+            order = ar.cmp(x[1], y[1]) or ar.cmp(x[2], y[2])
+            if order:
+                return order
             raise refuse(RefusalCategory.SYMBOLIC_DEGENERACY,
                          f"two cut points of face {face.id} coincide for every epsilon (edges {x[0]} and {y[0]})")
 
