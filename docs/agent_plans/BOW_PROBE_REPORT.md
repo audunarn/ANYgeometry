@@ -18,9 +18,14 @@ makes the aft boundary exactly the midship section (flat bottom z = 0 from the k
 at y = 5.5, flat side y = 5.5). The stem and the keel both lie in the centreline plane, so the
 two patches share two boundary curves. The port patch is the exact mirror: its stem and keel
 iso-curves are the same exact NURBS curves as the starboard ones, and its evaluation equals the
-mirrored starboard evaluation bitwise (10^4 samples). The normal never vanishes (min |n| 0.56),
-the orientation is consistent, and the two halves meet in a sharp V of about 24 degrees at the
-stem.
+mirrored starboard evaluation bitwise (10^4 samples). The normal never vanishes (min |n| 0.56)
+and the orientation is consistent (mirroring reverses the port patch's natural orientation:
+its S_u x S_v points inwards). The interior angle between the two halves, from their outward
+normals, is blunt along the stem (about 120-175 degrees), approaches 180 degrees along the keel
+towards X = 15 (the halves meet tangentially in the flat bottom: a smooth seam, not a crease),
+and is 0 at the forefoot where the stem meets the keel: both curves lie in the centreline
+plane, so the surface's tangent plane there is the centreline plane (a cusp; inherent to any
+bow whose stem and keel both lie in the centreline).
 
 ## What works
 
@@ -69,12 +74,14 @@ were corrected and are not findings.
    curve: equal degree, knots, controls and weights, compared exactly. For the mirrored bow
    that is a complete proof. One edge then serves both faces (each face reads its own chart
    iso-line), and `closed_shell` closes.
-2. **Adjacent NURBS faces in the audit** (class A, size M-L): two NURBS faces that share only
-   that exact edge are certified to touch only along it. That needs a joint band across the
-   shared edge (the P4e argument for adjacent patches: a lower bound of the angle between the
-   two patches along the stem, about 24 degrees here, from exact derivative bounds) and exact
-   separation of the sub-patches away from the edge. This is a narrow part of A5, not general
-   NURBS x NURBS.
+2. **Adjacent NURBS faces in the audit** (class A, size L): two NURBS faces that share only
+   their exact stem and keel edges are certified to touch only along them, with exact
+   separation of the sub-patches away from the edges. A joint band from a lower bound of the
+   angle between the patches (the P4e argument) covers the stem, but not the keel, where the
+   halves meet tangentially towards X = 15, nor the forefoot cusp (angle 0). For a mirror pair
+   the seam can instead be argued by symmetry: each half lies on one side of the centreline
+   plane (exact sign of y over the patch, zero only on the shared curves), which separates the
+   halves without any angle bound. This is a narrow part of A5, not general NURBS x NURBS.
 3. **Plane faces trimmed by in-plane iso-curves** (class B, size M). Certificate: every 3D
    control point of the iso-curve lies exactly on the plane (here x = 15 and y = 0 exactly);
    with positive weights the curve then lies in the plane. Trim validation needs line x

@@ -155,3 +155,37 @@ def test_the_g1_variant_leaves_the_midship_tangentially():
     assert [(y, z) for _x, y, z in surface.controls[2]] == [(y, z) for _x, y, z in surface.controls[3]]
     su, _sv = surface.derivatives_many(np.array([[1., v] for v in np.linspace(0., 1., 41)]))
     assert np.all(su[:, 0] < -1.) and np.abs(su[:, 1:]).max() <= 1e-15 * np.abs(su[:, 0]).max()
+
+
+def test_the_halves_meet_bluntly_at_the_stem_tangentially_at_the_keel_and_in_a_cusp_at_the_forefoot():
+    """Review of the probe: the interior angle between the halves (from outward normals) is blunt
+    along the stem, 180 degrees towards X = 15 along the keel, and 0 at the forefoot."""
+    starboard, port = bow_two_patch()
+
+    def interior_angles(points):
+        a, b = starboard.derivatives_many(points)
+        c, d = port.derivatives_many(points)
+        outward_s, outward_p = np.cross(a, b), -np.cross(c, d)      # mirroring reverses the port orientation
+        cos = np.einsum("ij,ij->i", outward_s, outward_p) / (
+            np.linalg.norm(outward_s, axis=1) * np.linalg.norm(outward_p, axis=1))
+        return 180. - np.degrees(np.arccos(np.clip(cos, -1., 1.)))
+
+    stem = interior_angles(np.array([[0., v] for v in np.linspace(.05, 1., 20)]))
+    keel = interior_angles(np.array([[u, 0.] for u in np.linspace(.8, 1., 5)]))
+    forefoot = interior_angles(np.array([[0., 0.]]))
+    assert 110. < stem.min() and stem.max() < 177.
+    assert keel.min() > 179.                                          # the flat bottom: a tangent seam
+    assert forefoot[0] < 1e-6                                         # tangent plane = centreline plane
+
+
+def test_the_centreline_plane_separates_the_halves_exactly():
+    """The symmetry certificate for the audit across the stem (report, response 2): starboard
+    controls have y >= 0, zero only in the stem row and the keel column, so (polynomial weights)
+    y > 0 inside the patch and y = 0 exactly on the shared stem and keel curves."""
+    starboard, _port = bow_two_patch()
+    controls = np.asarray(starboard.controls)
+    assert starboard.weights is None
+    assert np.all(controls[..., 1] >= 0.)
+    zero = controls[..., 1] == 0.
+    assert np.all(zero[0, :]) and np.all(zero[:, 0])                  # stem row, keel column
+    assert not np.any(zero[1:, 1:])                                   # positive everywhere else
