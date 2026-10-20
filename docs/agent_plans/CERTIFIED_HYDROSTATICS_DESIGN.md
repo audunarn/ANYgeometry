@@ -357,6 +357,19 @@ token is scanned to at most `max_integer_digits + 1` digits before the refusal, 
 After a refusal no further outside data are read: refusal context is built only from values already
 ingested. The verifier's returned object exposes only values it has checked or recomputed; it never
 forwards reads to the supplied result.
+
+*Known limits of the CH1c verifier against 6b (owner decision 2026-10-20: open obligations carried to CH2,
+not further CH1c rounds; final review of acc7a5b found no incorrect acceptance).* Each span below is bounded
+by `max_proof_bytes` but is not split by checkpoints:
+(a) canonical re-encoding: whole-string JSON escaping of one string token, the final join of the encoded
+document, and the whole-proof byte comparison (`_verify.py` `_encode` and the proof equality check);
+(b) decimal bounds: `10 ** len(frac)` is built before its bit length is checked, so a zero-padded decimal can
+create an integer of about 3.32 bits per character before a `BIT_LENGTH_EXCEEDED` refusal.
+Remedy for CH2 or later: compare encoded windows against the proof incrementally instead of joining; escape
+long strings per window; reject a decimal whose fraction length exceeds the bit cap / log2(10) before building
+the power.
+Also open, provider side (CH1b): `write_canonical` builds `10 ** max_digits`, so a policy with a very large
+`max_integer_digits` (for example 2**32) makes a query run outside its budget; compare digit counts instead.
 Before parsing, a proof is checked against a byte-size limit and every integer token against a
 digit limit (both in the policy); a violation refuses `MALFORMED_PROOF` without converting the
 token.
