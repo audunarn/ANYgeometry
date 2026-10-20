@@ -60,6 +60,7 @@ __all__ = ["VerifiedHydrostatics", "verify_certified_hydrostatics"]
 
 C = RefusalCategory
 _CHUNK = 65536
+_WINDOW = 4096          # characters scanned or encoded per checkpoint
 _QUANTITIES = ("A", "Mu", "Mv", "Iuu", "Ivv", "Iuv")
 _MOMENTS = ("Jx", "Jy", "Jz")
 _SUB_REASONS = ("artifact", "model", "face set", "snapshot", "convention", "policy", "query", "request", "value",
@@ -331,7 +332,12 @@ def _encode(document) -> bytes:
 
     try:
         emit(document, 0)
-        return _joined(out).encode("utf-8")
+        encoded = []
+        for piece in _each(out, "encode_piece"):
+            for k in range(0, len(piece), _WINDOW):
+                _tick("encode_window")
+                encoded.append(piece[k:k + _WINDOW].encode("utf-8"))
+        return b"".join(_each(encoded, "join_piece"))
     except UnicodeEncodeError as error:
         raise _refuse(C.MALFORMED_PROOF, "the document is not valid UTF-8 text") from error
 
@@ -449,7 +455,8 @@ def _vec3(items, sub: str, what: str) -> tuple:
 class _Req:
     """A request (half-space, basis, accuracies, forms) rebuilt from exact built-in types."""
 
-    __slots__ = ("normal", "offset", "origin", "e1", "e2", "accuracy", "forms", "want_binary64", "want_decimal")
+    __slots__ = ("normal", "offset", "origin", "e1", "e2", "accuracy", "accuracy_pairs", "forms", "want_binary64",
+                 "want_decimal")
 
     def accuracy_of(self, name: str):
         for key, value in _each(self.accuracy, "ingest"):
@@ -478,6 +485,8 @@ def _ingest_query(q) -> _Req:
             raise _fail("query", "an accuracy entry is not a pair")
         pairs.append((_str(item[0], "query", "an accuracy name"), _rat(item[1], "query", "an accuracy")))
     r.accuracy = tuple(_each(pairs, "ingest"))
+    # plain integer pairs, prepared while ingesting, so a refusal can report them without further work
+    r.accuracy_pairs = tuple((name, (v.numerator, v.denominator)) for name, v in _each(r.accuracy, "ingest"))
     forms = []
     for form in _each(_seq(q.forms, "query", "the forms"), "ingest"):
         forms.append(_str(form, "query", "a form"))
@@ -1569,17 +1578,41 @@ def _cmp_exact(r, num, ns) -> int:
     return -_sign(lhs - rhs)
 
 
-_DECIMAL = re.compile(r"-?[0-9]+(?:\.[0-9]+)?")
+_DECIMAL_CHARS = re.compile(r"[0-9.]*")
+
+
+def _decimal_parts(text):
+    """Split a decimal bound of the grammar `-?digits(.digits)?` into (negative, whole, frac), scanning it in windows
+    of at most 4096 characters (one checkpoint each); ``None`` when the grammar does not hold."""
+    negative = text.startswith("-")
+    start = 1 if negative else 0
+    dot = -1
+    for k in range(start, max(len(text), start + 1), _WINDOW):
+        _tick("decimal_window")
+        window = text[k:k + _WINDOW]
+        if not _DECIMAL_CHARS.fullmatch(window):
+            return None
+        at = window.find(".")
+        if at >= 0:
+            if dot >= 0 or window.find(".", at + 1) >= 0:
+                return None
+            dot = k + at
+    if len(text) == start:
+        return None
+    if dot < 0:
+        return negative, text[start:], ""
+    if dot == start or dot == len(text) - 1:
+        return None
+    return negative, text[start:dot], text[dot + 1:]
 
 
 def _decimal_fraction(text):
     """A decimal bound (a trusted ``str``); the grammar is `-?digits(.digits)?`. The digit limit of the policy applies
     to integer tokens of the proof only, not to decimal strings (their length is bounded by the proof's byte limit)."""
-    if not _DECIMAL.fullmatch(text):
+    parts = _decimal_parts(text)
+    if parts is None:
         raise _fail("enclosure", "a decimal bound is not a plain decimal string")
-    negative = text.startswith("-")
-    body = text[1:] if negative else text
-    whole, _, frac = body.partition(".")
+    negative, whole, frac = parts
     numerator = _int_from_digits(whole + frac)
     denominator = _fit(10 ** len(frac))
     value = _fit(_Q(numerator, denominator))
@@ -1710,6 +1743,9 @@ def _parse_proof(proof: bytes, policy: dict) -> dict:
     except UnicodeDecodeError as error:
         raise _refuse(C.MALFORMED_PROOF, "the proof is not UTF-8") from error
     n = len(text)
+    # a token can never be longer than the text, so the scan bound is the smaller of the two; the regex engine's
+    # repetition limit (2**32 - 1) caps it, which can only refuse (never accept) a token over 2**31 - 1 digits
+    scan_limit = min(limit, n, 2**31 - 1)
 
     def bad(message):
         return _refuse(C.MALFORMED_PROOF, message)
@@ -1803,7 +1839,7 @@ def _parse_proof(proof: bytes, policy: dict) -> dict:
             return False, i + 5
         if text.startswith("null", i):
             return None, i + 4
-        match = _number_pattern(limit).match(text, i)
+        match = _number_pattern(scan_limit).match(text, i)
         if match is None:
             raise bad("an unexpected character")
         token = match.group(0)
@@ -2166,7 +2202,7 @@ def _refusal_context(r) -> dict | None:
 
     return {"normal": pairs(r.normal), "offset": [r.offset.numerator, r.offset.denominator],
             "waterplane_origin": pairs(r.origin), "waterplane_axes": [pairs(r.e1), pairs(r.e2)],
-            "accuracy_count": len(r.accuracy), "form_count": len(r.forms)}
+            "absolute_accuracy": getattr(r, "accuracy_pairs", None), "forms": getattr(r, "forms", None)}
 
 
 def verify_certified_hydrostatics(model, faces, query, result, expected, *, budget: WorkBudget | None = None,
@@ -2347,6 +2383,6 @@ def _verify(model, faces, query, result, exp, holder) -> VerifiedHydrostatics:
     return VerifiedHydrostatics(
         result=_rebuild_result(res, mine_req), query=_rebuild_query(mine_req), face_ids=faces, model_id=model_id,
         revision=revision, document_checksum=checksum, snapshot_digest=digest,
-        artifact_files_sha256=hashlib.sha256(_encode(exp["files"])).hexdigest(),
-        proof_sha256=hashlib.sha256(res.proof).hexdigest(), solid_volume=_plain(total_volume), exact=exact,
+        artifact_files_sha256=_sha256_chunks(_encode(exp["files"]), "files_hash_chunk"),
+        proof_sha256=_sha256_chunks(res.proof, "proof_hash_chunk"), solid_volume=_plain(total_volume), exact=exact,
         work=_ACTIVE.gauge.budget.counts())

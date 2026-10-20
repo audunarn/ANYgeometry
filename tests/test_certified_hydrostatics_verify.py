@@ -1458,3 +1458,67 @@ def test_refusal_context_reads_no_outside_data(monkeypatch):
     for cancel_at in (1, 5, 40):
         small, large = run(100, cancel_at), run(10000, cancel_at)
         assert small == 0 and large == 0, (cancel_at, small, large)
+
+
+# ------------------------------------------------------------------ review round 5: windowed bulk work, limits, context
+
+def _long_decimal_case():
+    c = case("F2")
+    q, r = c.query(Z_, F(1, 2), forms=("decimal",), accuracy={"V": F(1, 10 ** 9000)})
+    assert max(len(x) for x in r.volume.decimal[:2]) > 9000
+    return c, q, r
+
+
+def test_proof_hashing_encoding_and_decimal_scans_tick_per_window():
+    c, q, r = _long_decimal_case()
+    budget = WorkBudget.unlimited()
+    c.verify(q, r, budget=budget)
+    units = budget.counts()["units"]
+    longest = max(len(x) for x in r.volume.decimal[:2])
+    assert units.get("proof_hash_chunk", 0) >= max(1, len(r.proof) // 65536)
+    assert units.get("encode_window", 0) >= longest // 4096
+    assert units.get("decimal_window", 0) >= 2 * (longest // 4096)
+
+
+def test_cancellation_is_seen_inside_the_proof_hash():
+    c, q, r = _long_decimal_case()
+    budget = WorkBudget.unlimited()
+    # the artifact-file digest is hashed just before the proof: the proof's first chunk checkpoint sees the request
+    error = refusal_of(lambda: c.verify(q, r, budget=budget, cancellation_check=lambda: budget.counts()["units"].get(
+        "files_hash_chunk", 0) >= 1))
+    assert error.category == C.CANCELLED
+    assert budget.counts()["units"].get("proof_hash_chunk", 0) <= 1
+
+
+@pytest.mark.parametrize("text", [
+    "0", "-0", "007", "1.5", "-1.5", "12.000", "", "-", ".", ".5", "5.", "-.5", "1.2.3", "1..2", "+1", "1e5", " 1",
+    "1 ", "１", "1.５", "--1", "1-", "9" * 4095 + ".5", "9" * 4096 + ".5", "9" * 4095 + "..5",
+    "9" * 4096 + "." + "5" * 4096 + ".5", "-" + "9" * 4096, "9" * 8192 + ".", "." + "9" * 8192])
+def test_windowed_decimal_grammar_matches_the_plain_grammar(text):
+    import re
+    plain = re.fullmatch(r"-?[0-9]+(?:\.[0-9]+)?", text) is not None
+    parts = vm._decimal_parts(text)
+    assert (parts is not None) == plain
+    if parts is not None:
+        negative, whole, frac = parts
+        assert ("-" if negative else "") + whole + ("." + frac if frac else "") == text
+
+
+def test_huge_integer_digit_limits_are_accepted():
+    # the proof and the expected policy agree on a 2**32-digit limit (built without the provider, which is not
+    # exercised at that limit here)
+    c = Case(lambda: box())
+    q, r = c.query(Z_, F(1, 2))
+    big = rewrite(r, lambda d: d["preparation_policy"].__setitem__("max_integer_digits", 2 ** 32))
+    expected = dict(c.expected, policy=replace(c.expected["policy"], max_integer_digits=2 ** 32))
+    verified = verify_certified_hydrostatics(c.model, c.faces, q, big, expected)
+    assert verified.exact["V"] == F(1, 2)
+
+
+def test_refusal_context_carries_the_exact_ingested_request():
+    c = Case(lambda: box())
+    q, r = c.query(Z_, F(1, 2), forms=("exact",), accuracy={"V": F(1, 100)})
+    forged = alter_quantity(r, "V", numerator=F(999))
+    error = refusal_of(lambda: c.verify(q, with_proof(forged)))
+    assert error.request["forms"] == ("exact",)
+    assert tuple(error.request["absolute_accuracy"]) == (("V", (1, 100)),)
