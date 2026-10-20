@@ -33,7 +33,7 @@ from fractions import Fraction
 from typing import Callable
 
 from ._ch3_algebraic import AlgebraicNumber, Enclosure, compare, lower_bound, upper_bound
-from ._ch3_poly import (Kernel, ONE, ZERO, abs_upper, coprime_basis, partial_fractions, pderiv, pintegrate_definite,
+from ._ch3_poly import (Kernel, ONE, ZERO, abs_upper, at_most_pow2, coprime_basis, partial_fractions, pderiv, pintegrate_definite,
                         pmul, pscale, pshift, psub, refusal, signed_lower)
 from ._errors import RefusalCategory
 
@@ -225,6 +225,10 @@ def enclose_term(k: Kernel, L: tuple, Q: tuple, kpow: int, a: Fraction, b: Fract
     orders = _orders(k)
     total = Enclosure(ZERO, ZERO)
     stack = [(a, b, allowance, 0)]
+    if record.taylor_pieces + 1 > k.limits.max_pieces_per_integral:
+        raise refusal(RefusalCategory.ACCURACY_UNACHIEVABLE,
+                      f"the integral needs more than max_pieces_per_integral={k.limits.max_pieces_per_integral} "
+                      f"Taylor pieces (one per partial-fraction term at least)")
     record.taylor_pieces += 1
     while stack:
         k.tick("piece_split")
@@ -286,6 +290,7 @@ def _decompose(k: Kernel, num: tuple, dens: list) -> tuple:
     for (f, e), (c, ex) in zip(dens, expansions):
         k.tick("poly_coefficient")
         for _ in range(e):
+            k.tick("poly_coefficient")
             constant = k.ar.mul(constant, c)
         for i in range(len(basis)):
             k.tick("poly_coefficient")
@@ -368,7 +373,7 @@ def enclose_rational_integral(k: Kernel, num: tuple, dens: list, a, b, tau: Frac
             if e is not None and 2 * e <= end_share:
                 inner[which] = snapped
                 break
-            if x.hi - x.lo <= Fraction(2, 1 << k.limits.max_isolation_bits):
+            if at_most_pow2(x.hi - x.lo, k.limits.max_isolation_bits, 2):
                 achieved = "unbounded" if e is None else f"{float(2 * e):.3e}"
                 raise refusal(RefusalCategory.ACCURACY_UNACHIEVABLE,
                               f"end enclosure at max_isolation_bits: achieved width {achieved}")

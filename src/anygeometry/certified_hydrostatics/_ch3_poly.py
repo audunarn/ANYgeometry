@@ -24,7 +24,7 @@ __all__ = ["KernelLimits", "Kernel", "poly_from", "degree", "lc", "padd", "psub"
            "pderiv", "peval", "pdivmod", "pexact_div", "pgcd", "pxgcd", "ppow", "primitive", "positive_primitive",
            "squarefree", "squarefree_factors", "pshift", "pscale_var", "bernstein", "abs_upper", "signed_lower",
            "sturm_sequence", "variations_at", "variations_at_infinity", "coprime_basis", "partial_fractions",
-           "pintegrate_definite", "cauchy_bound"]
+           "pintegrate_definite", "cauchy_bound", "at_most_pow2"]
 
 ZERO = Fraction(0)
 ONE = Fraction(1)
@@ -76,6 +76,18 @@ class Kernel:
 
 def refusal(category: RefusalCategory, message: str, sub_reason: str | None = None) -> CertifiedHydrostaticsRefusal:
     return CertifiedHydrostaticsRefusal(category, message, sub_reason=sub_reason)
+
+
+def at_most_pow2(w: Fraction, e: int, mult: int = 1) -> bool:
+    """Exactly ``w <= mult * 2**-e`` for a policy exponent ``e`` of any size, without building ``2**e``
+    (a large ``max_isolation_bits`` must not allocate more than the values it is compared with)."""
+    if w <= 0:
+        return True
+    n, d = w.numerator, w.denominator
+    bound = mult * d
+    if n.bit_length() + e - 1 >= bound.bit_length():
+        return False                    # n 2^e >= 2^(bits(n) - 1 + e) >= 2^bits(bound) > bound
+    return (n << e) <= bound            # here e < bits(bound): the shifted value is no larger than the operands
 
 
 # ------------------------------------------------------------------ construction
@@ -166,8 +178,10 @@ def pmul(k: Kernel, p: tuple, q: tuple) -> tuple:
 
 
 def ppow(k: Kernel, p: tuple, e: int) -> tuple:
+    """``p ** e``; one unit per iteration (a zero ``p`` multiplies for free, so the loop itself is metered)."""
     out = (ONE,)
     for _ in range(e):
+        k.tick("poly_coefficient")
         out = pmul(k, out, p)
     return out
 

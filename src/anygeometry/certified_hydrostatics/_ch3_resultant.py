@@ -24,7 +24,7 @@ from fractions import Fraction
 
 from ._ch3_algebraic import AlgebraicNumber, Enclosure, compare, count_open, isolate_roots, lower_bound, \
     sign_at, upper_bound
-from ._ch3_poly import (Kernel, ONE, ZERO, padd, pdivmod, pexact_div, pgcd, pmul, pneg, primitive, psub,
+from ._ch3_poly import (Kernel, ONE, ZERO, at_most_pow2, padd, pdivmod, pexact_div, pgcd, pmul, pneg, ppow, primitive, psub,
                         pxgcd, refusal, squarefree)
 from ._errors import RefusalCategory
 
@@ -44,7 +44,14 @@ def biv_trim(k: Kernel, F: list) -> tuple:
 
 def bivariate(k: Kernel, rows) -> tuple:
     """``rows[i]`` is the ``u``-polynomial coefficient of ``s^i`` (tuples of Fractions)."""
-    return biv_trim(k, [tuple(Fraction(c) for c in r) for r in rows])
+    out = []
+    for r in rows:
+        row = []
+        for c in r:
+            k.tick("poly_coefficient")
+            row.append(k.ar.fit(Fraction(c)))
+        out.append(tuple(row))
+    return biv_trim(k, out)
 
 
 def _det_bareiss(k: Kernel, M: list) -> tuple:
@@ -87,15 +94,9 @@ def resultant_s(k: Kernel, F: tuple, G: tuple) -> tuple:
     if m == 0 and n == 0:
         return (ONE,)
     if m == 0:
-        out = (ONE,)
-        for _ in range(n):
-            out = pmul(k, out, F[0])
-        return out
+        return ppow(k, F[0], n)
     if n == 0:
-        out = (ONE,)
-        for _ in range(m):
-            out = pmul(k, out, G[0])
-        return out
+        return ppow(k, G[0], m)
     size = m + n
     rows = []
     for i in range(n):
@@ -296,11 +297,81 @@ class CrossingValidation:
     splits: int
 
 
+def _s_bound(k: Kernel, x):
+    """An ``s`` bound: a rational (size-checked) or a genuinely irrational ``AlgebraicNumber``."""
+    if isinstance(x, AlgebraicNumber):
+        return k.ar.fit(x.lo) if x.is_rational else x
+    return k.ar.fit(Fraction(x))
+
+
+def _side(nf: NumberField, h: tuple, enc: Enclosure, S) -> int | None:
+    """``-1``, ``0``, ``1`` as the single root in ``enc`` is below, equal to or above ``S``; ``None`` if the
+    intervals do not decide it yet. ``enc`` isolates one root of ``h`` in its open interval (or is a point)."""
+    if isinstance(S, AlgebraicNumber) and S.is_rational:
+        S = S.lo
+    if isinstance(S, AlgebraicNumber):                   # irrational: never equal to an enclosure's rational end
+        if enc.hi <= S.lo:
+            return -1
+        if enc.lo >= S.hi:
+            return 1
+        return None
+    if enc.lo == enc.hi:
+        return (enc.lo > S) - (enc.lo < S)
+    if enc.hi <= S:
+        return -1
+    if enc.lo >= S:
+        return 1
+    return 0 if nf.sign(nf.eval_s(h, S)) == 0 else None     # S strictly inside: equal, or bisect further
+
+
+def _refine_s_root(nf: NumberField, seq: list, h: tuple, enc: Enclosure) -> Enclosure:
+    """One exact bisection of an enclosure holding exactly one root of ``h`` in its open interval."""
+    k = nf.k
+    a, b = enc.lo, enc.hi
+    if a == b:
+        return enc
+    if at_most_pow2(b - a, k.limits.max_isolation_bits):
+        raise refusal(RefusalCategory.UNDECIDED_PREDICATE, "s-root isolation reached max_isolation_bits")
+    k.tick("root_refine")
+    m = k.ar.div(k.ar.add(a, b), 2)
+    if nf.sign(nf.eval_s(h, m)) == 0:
+        return Enclosure(m, m)
+    return Enclosure(a, m) if _field_count_open(nf, seq, a, m) == 1 else Enclosure(m, b)
+
+
+def _inside_algebraic_bounds(nf: NumberField, seq: list, h: tuple, enc: Enclosure, checks: list):
+    """``enc`` (refined as far as needed) if its root is certified strictly inside every algebraic bound
+    ``(S, want)`` (``want`` is the required side), else ``None``. A root on a bound is never decided by
+    intervals alone and ends in ``UNDECIDED_PREDICATE`` at ``max_isolation_bits`` (fail closed)."""
+    k = nf.k
+    while True:
+        undecided = []
+        for S, want in checks:
+            rel = _side(nf, h, enc, S)
+            if rel is None:
+                undecided.append(S)
+            elif rel != want:
+                return None
+        if not undecided:
+            return enc
+        k.tick("root_refine")
+        for S in undecided:
+            S.refine(k)
+        enc = _refine_s_root(nf, seq, h, enc)
+
+
 def validate_crossing(k: Kernel, F: tuple, G: tuple, u: AlgebraicNumber, s_lo, s_hi, q: tuple | None = None,
                       s_width=Fraction(1, 2 ** 40)) -> CrossingValidation:
     """Validate the resultant root ``u`` in ``Q(u)``: genuine iff ``gcd_s(F(u, s), G(u, s))`` has positive degree
-    and a real root in the open interval ``(s_lo, s_hi)``. Each such root is enclosed to ``s_width``."""
-    s_lo, s_hi = Fraction(s_lo), Fraction(s_hi)
+    and a real root in the open interval ``(s_lo, s_hi)``. Each such root is enclosed to ``s_width``.
+
+    ``s_lo``, ``s_hi`` may be rational or ``AlgebraicNumber``: the Sturm count runs on the outer rational
+    bounds and each root is then kept only when its enclosure is certified strictly inside every algebraic
+    bound (refining both); a root on an algebraic bound refuses ``UNDECIDED_PREDICATE`` at the bit limit."""
+    s_lo, s_hi = _s_bound(k, s_lo), _s_bound(k, s_hi)
+    outer_lo = s_lo.lo if isinstance(s_lo, AlgebraicNumber) else s_lo
+    outer_hi = s_hi.hi if isinstance(s_hi, AlgebraicNumber) else s_hi
+    checks = [(S, want) for S, want in ((s_lo, 1), (s_hi, -1)) if isinstance(S, AlgebraicNumber)]
     nf = NumberField(k, u, q)
     h = field_gcd(nf, F, G)
     degree = len(h) - 1 if h else -1
@@ -312,9 +383,9 @@ def validate_crossing(k: Kernel, F: tuple, G: tuple, u: AlgebraicNumber, s_lo, s
     if len(common) > 1:
         h, _ = nf.divmod_s(h, common)
     seq = _field_sturm(nf, h)
-    count = _field_count_open(nf, seq, s_lo, s_hi)
+    count = _field_count_open(nf, seq, outer_lo, outer_hi)
     roots = []
-    stack = [(s_lo, s_hi, count)]
+    stack = [(outer_lo, outer_hi, count)]
     while stack:
         k.tick("root_refine")
         a, b, c = stack.pop()
@@ -323,7 +394,7 @@ def validate_crossing(k: Kernel, F: tuple, G: tuple, u: AlgebraicNumber, s_lo, s
         if c == 1 and b - a <= s_width:
             roots.append(Enclosure(a, b))
             continue
-        if b - a <= Fraction(1, 1 << k.limits.max_isolation_bits):
+        if at_most_pow2(b - a, k.limits.max_isolation_bits):
             raise refusal(RefusalCategory.UNDECIDED_PREDICATE, "s-root isolation reached max_isolation_bits")
         m = k.ar.div(k.ar.add(a, b), 2)
         if nf.sign(nf.eval_s(h, m)) == 0:
@@ -331,6 +402,10 @@ def validate_crossing(k: Kernel, F: tuple, G: tuple, u: AlgebraicNumber, s_lo, s
         stack.append((m, b, _field_count_open(nf, seq, m, b)))
         stack.append((a, m, _field_count_open(nf, seq, a, m)))
     roots.sort(key=lambda e: e.lo)
+    if checks:                      # algebraic bounds: keep the roots certified strictly inside them
+        kept = (_inside_algebraic_bounds(nf, seq, h, e, checks) for e in roots)
+        roots = [e for e in kept if e is not None]
+        count = len(roots)
     return CrossingValidation(u, count >= 1, degree, tuple(roots), nf.q, nf.splits)
 
 

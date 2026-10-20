@@ -16,7 +16,7 @@ from __future__ import annotations
 from fractions import Fraction
 
 from ._ch3_algebraic import AlgebraicNumber, compare, isolate_roots, lower_bound, sign_at, upper_bound
-from ._ch3_poly import Kernel, bernstein, pderiv, pmul, pscale, psub, refusal, signed_lower
+from ._ch3_poly import Kernel, at_most_pow2, bernstein, pderiv, pmul, pscale, psub, refusal, signed_lower
 from ._errors import RefusalCategory
 
 __all__ = ["graph_in_range"]
@@ -51,7 +51,7 @@ def graph_in_range(k: Kernel, N: tuple, D: tuple, u_a, u_b, v_0, v_1) -> str:
         if sign:
             break
         movable = [x for x in (u_a, u_b) if isinstance(x, AlgebraicNumber) and not x.is_rational
-                   and x.hi - x.lo > Fraction(2, 1 << k.limits.max_isolation_bits)]
+                   and not at_most_pow2(x.hi - x.lo, k.limits.max_isolation_bits, 2)]
         if not movable:
             raise refusal(RefusalCategory.UNSUPPORTED_TRIM, "the graph denominator is not certified one-signed "
                           "on the edge interval", "denominator_not_certified")

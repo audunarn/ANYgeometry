@@ -545,3 +545,198 @@ def test_bit_cap_refuses_before_the_native_operation():
     with pytest.raises(CertifiedHydrostaticsRefusal) as info:   # the resultant pipeline under a tiny cap
         curve_crossings(kern(max_bits=8), *review_pair(), F(1, 4), F(2), F(1, 4), F(2))
     assert info.value.category is C.BIT_LENGTH_EXCEEDED
+
+
+# ---------------------------------------------------------------- Codex review round 1 (FIXES1)
+# Every expectation below is a hard-coded input and a hard-coded tiny budget: none derives a stop position
+# from the implementation's own counters.
+
+import tracemalloc
+
+from anygeometry.certified_hydrostatics._arith import Ar
+
+
+def _peak_bytes(fn):
+    tracemalloc.start()
+    try:
+        try:
+            fn()
+        except CertifiedHydrostaticsRefusal:
+            pass
+        return tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+
+def _huge_limit_ops():
+    Fb, Gb = review_pair()
+    sq2 = lambda k: AlgebraicNumber.from_interval(k, P(-2, 0, 1), 1, 2)
+    return {
+        "refine": lambda k: sq2(k).refine(k),
+        "isolate": lambda k: isolate_roots(k, P(-2, 0, 1)),
+        "integral": lambda k: enclose_rational_integral(k, P(1, 2), [(P(1, 1), 2)], F(0), sq2(k), F(1, 10 ** 6)),
+        "range": lambda k: graph_in_range(k, P(1), P(F(-141, 100), 1), sq2(k), F(3, 2), -5, 5),
+        "crossing": lambda k: curve_crossings(k, Fb, Gb, F(1, 4), F(2), F(1, 4), F(2)),
+    }
+
+
+@pytest.mark.parametrize("name", sorted(_huge_limit_ops()))
+def test_isolation_threshold_is_never_built_as_a_power_of_two(name):
+    """Finding 1: ``1 << max_isolation_bits`` allocated 12.5 MB here although only a few bits were seen."""
+    op = _huge_limit_ops()[name]
+    limits = KernelLimits(max_isolation_bits=10 ** 8)
+    peak = _peak_bytes(lambda: op(kern(max_bits=4096, limits=limits)))
+    assert peak < 1_000_000
+
+
+def test_threshold_comparison_is_exact_at_the_boundary():
+    from anygeometry.certified_hydrostatics._ch3_poly import at_most_pow2
+    for e in (1, 2, 5, 64):
+        for mult in (1, 2):
+            edge = F(mult, 2 ** e)
+            assert at_most_pow2(edge, e, mult) and not at_most_pow2(edge + F(1, 2 ** (e + 70)), e, mult)
+            assert at_most_pow2(F(0), e, mult) and not at_most_pow2(F(7), e, mult)
+    assert not at_most_pow2(F(1, 3), 10 ** 12) and not at_most_pow2(F(1, 10 ** 400), 10 ** 12)
+    assert at_most_pow2(F(1, 2 ** 5000), 4000)
+
+
+def test_bivariate_construction_is_metered_and_size_checked():
+    """Finding 2: coefficients were converted with no checkpoint and no size check."""
+    big = [(F(1 << 100),)]
+    with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+        bivariate(kern(budget=WorkBudget(0, 8), cancel=lambda: True), big)
+    assert info.value.category is C.CANCELLED
+    with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+        bivariate(kern(max_bits=8), big)
+    assert info.value.category is C.BIT_LENGTH_EXCEEDED
+    with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+        bivariate(kern(budget=WorkBudget(2, 4096)), [(1, 2, 3, 4, 5)])
+    assert info.value.category is C.BUDGET_EXHAUSTED
+
+
+def test_ppow_of_zero_is_metered_per_iteration():
+    with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+        ppow(kern(cancel=lambda: True), (), 100000)
+    assert info.value.category is C.CANCELLED
+    budget = WorkBudget(5, 4096)
+    with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+        ppow(kern(budget=budget), (), 100000)
+    assert info.value.category is C.BUDGET_EXHAUSTED and budget.operations == 5
+
+
+def test_denominator_exponent_loop_is_metered_per_iteration(monkeypatch):
+    """Finding 2: ``1 / 1**10000`` ran 10 000 native multiplications under an operation budget of four."""
+    calls = [0]
+    original = Ar.mul
+
+    def counting(self, a, b):
+        calls[0] += 1
+        return original(self, a, b)
+
+    monkeypatch.setattr(Ar, "mul", counting)
+    budget = WorkBudget(4, 4096)
+    with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+        enclose_rational_integral(kern(budget=budget), P(1), [(P(1), 10000)], F(0), F(1), F(1, 10))
+    assert info.value.category is C.BUDGET_EXHAUSTED and budget.operations == 4
+    assert calls[0] < 100
+    calls[0] = 0
+    with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+        enclose_rational_integral(kern(cancel=lambda: True), P(1), [(P(1), 10000)], F(0), F(1), F(1, 10))
+    assert info.value.category is C.CANCELLED and calls[0] < 100
+
+
+def test_input_conversions_are_size_checked():
+    big = F(1 << 300)
+    with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+        AlgebraicNumber.from_interval(kern(max_bits=64), P(-2, 0, 1), F(1), big)
+    assert info.value.category is C.BIT_LENGTH_EXCEEDED
+    with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+        enclose_rational_integral(kern(max_bits=64), P(1), [(P(1, 1), 1)], F(0), F(1), F(1, 1 << 300))
+    assert info.value.category is C.BIT_LENGTH_EXCEEDED
+    Fb, Gb = review_pair()
+    with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+        curve_crossings(kern(max_bits=4096), Fb, Gb, F(1, 4), F(2), F(1, 4), F(1 << 5000))
+    assert info.value.category is C.BIT_LENGTH_EXCEEDED
+
+
+def _sqrt_frac(num, den, lo, hi):
+    return lambda k: AlgebraicNumber.from_interval(k, P(-num, 0, den), lo, hi)
+
+
+def _vertical_pair():
+    Fb = bivariate(K0, [P(0, 1), P(-1)])                    # u - s
+    Gb = bivariate(K0, [P(F(-1, 2), 0, 1)])                 # u^2 - 1/2 (a vertical line)
+    return Fb, Gb
+
+
+def test_crossing_with_algebraic_s_bounds():
+    """Finding 3: algebraic bounds of the second arc raised TypeError."""
+    k = kern()
+    Fb, Gb = _vertical_pair()
+    s_lo = _sqrt_frac(1, 10, 0, 1)(k)                        # sqrt(1/10)
+    s_hi = _sqrt_frac(9, 10, 0, 1)(k)                        # sqrt(9/10)
+    _, validations = curve_crossings(k, Fb, Gb, F(0), F(1), s_lo, s_hi)
+    assert len(validations) == 1 and validations[0].genuine
+    (root,) = validations[0].s_roots
+    assert root.width <= F(1, 2 ** 40) and root.lo <= 1 / math.sqrt(2) <= root.hi
+
+
+def test_crossing_with_algebraic_s_bounds_excluding_the_root():
+    k = kern()
+    Fb, Gb = _vertical_pair()
+    s_lo = _sqrt_frac(8, 10, 0, 1)(k)                        # sqrt(0.8) > 1/sqrt(2)
+    s_hi = _sqrt_frac(9, 10, 0, 1)(k)
+    _, validations = curve_crossings(k, Fb, Gb, F(0), F(1), s_lo, s_hi)
+    assert len(validations) == 1 and not validations[0].genuine and validations[0].s_roots == ()
+    s_lo = _sqrt_frac(1, 10, 0, 1)(k)
+    s_hi = _sqrt_frac(3, 10, 0, 1)(k)                        # sqrt(0.3) < 1/sqrt(2)
+    _, validations = curve_crossings(k, Fb, Gb, F(0), F(1), s_lo, s_hi)
+    assert len(validations) == 1 and not validations[0].genuine
+
+
+def test_crossing_with_a_mixed_rational_and_algebraic_bound_and_a_tie():
+    k = kern(limits=KernelLimits(max_isolation_bits=64))
+    Fb, Gb = _vertical_pair()
+    s_hi = _sqrt_frac(9, 10, 0, 1)(k)
+    _, validations = curve_crossings(k, Fb, Gb, F(0), F(1), F(1, 2), s_hi)
+    assert len(validations) == 1 and validations[0].genuine
+    # the root s = 1/sqrt(2) sits exactly on the algebraic bound: undecidable by intervals, so refused (fail closed)
+    s_tie = _sqrt_frac(1, 2, 0, 1)(k)
+    with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+        curve_crossings(k, Fb, Gb, F(0), F(1), F(0), s_tie)
+    assert info.value.category is C.UNDECIDED_PREDICATE
+
+
+def test_initial_term_pieces_respect_max_pieces_per_integral():
+    """Finding 4: two terms produced two Taylor pieces under ``max_pieces_per_integral=1``."""
+    k = kern(limits=KernelLimits(max_pieces_per_integral=1))
+    num, dens = P(1), [(P(1, 1), 1), (P(2, 1), 1)]            # 1 / ((1 + u)(2 + u))
+    with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+        enclose_rational_integral(k, num, dens, F(0), F(1, 10), F(1, 10 ** 6))
+    assert info.value.category is C.ACCURACY_UNACHIEVABLE
+    ok = enclose_rational_integral(kern(limits=KernelLimits(max_pieces_per_integral=2)), num, dens, F(0), F(1, 10),
+                                   F(1, 10 ** 6))
+    assert ok.record.taylor_pieces == 2
+    with pytest.raises(CertifiedHydrostaticsRefusal) as info:   # the same through the term entry point
+        enclose_term(kern(limits=KernelLimits(max_pieces_per_integral=1)), P(1), P(1, 1), 1, F(0), F(1, 10),
+                     F(1, 10 ** 6), AllocationRecord(F(1, 10 ** 6), taylor_pieces=1))
+    assert info.value.category is C.ACCURACY_UNACHIEVABLE
+
+
+def test_algebraic_s_bound_path_is_a_budget_and_cancellation_checkpoint():
+    Fb, Gb = _vertical_pair()
+
+    def run(k):
+        s_lo = _sqrt_frac(1, 10, 0, 1)(k)
+        s_hi = _sqrt_frac(9, 10, 0, 1)(k)
+        return curve_crossings(k, Fb, Gb, F(0), F(1), s_lo, s_hi)
+
+    for limit in (0, 1, 7, 40):
+        budget = WorkBudget(limit, 4096)
+        with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+            run(kern(budget=budget))
+        assert info.value.category is C.BUDGET_EXHAUSTED and budget.operations == limit
+    budget = WorkBudget(None, 4096)
+    with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+        run(kern(budget=budget, cancel=lambda: True))
+    assert info.value.category is C.CANCELLED and budget.operations == 0

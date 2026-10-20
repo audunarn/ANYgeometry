@@ -20,7 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from fractions import Fraction
 
-from ._ch3_poly import (Kernel, ZERO, bernstein, cauchy_bound, psub, peval, pgcd, primitive, refusal,
+from ._ch3_poly import (Kernel, ZERO, at_most_pow2, bernstein, cauchy_bound, psub, peval, pgcd, primitive, refusal,
                         squarefree, sturm_sequence, variations_at, variations_at_infinity)
 from ._errors import RefusalCategory
 
@@ -119,7 +119,7 @@ class AlgebraicNumber:
         if self.lo == self.hi:
             return
         k.tick("root_refine")
-        if self.hi - self.lo <= Fraction(2, 1 << k.limits.max_isolation_bits):
+        if at_most_pow2(self.hi - self.lo, k.limits.max_isolation_bits, 2):
             raise refusal(RefusalCategory.UNDECIDED_PREDICATE,
                           f"isolating interval refined to max_isolation_bits={k.limits.max_isolation_bits}")
         mid = k.ar.div(k.ar.add(self.lo, self.hi), 2)
@@ -176,7 +176,6 @@ def isolate_roots(k: Kernel, p: tuple, lo=None, hi=None) -> list[AlgebraicNumber
         return []
     found: list[AlgebraicNumber] = []
     stack = [(a, b, _count_open_seq(k, q, seq, a, b))]
-    min_width = Fraction(1, 2 ** k.limits.max_isolation_bits)
     while stack:
         k.tick("root_refine")
         x, y, c = stack.pop()
@@ -185,7 +184,7 @@ def isolate_roots(k: Kernel, p: tuple, lo=None, hi=None) -> list[AlgebraicNumber
         if c == 1:
             found.append(AlgebraicNumber(q, _ordinal(k, q, seq, x, y), x, y, seq))
             continue
-        if y - x <= min_width:
+        if at_most_pow2(y - x, k.limits.max_isolation_bits):
             raise refusal(RefusalCategory.UNDECIDED_PREDICATE,
                           f"root isolation reached max_isolation_bits={k.limits.max_isolation_bits}")
         m = k.ar.div(k.ar.add(x, y), 2)
