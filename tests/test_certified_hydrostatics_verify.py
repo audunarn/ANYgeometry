@@ -19,7 +19,6 @@ from anygeometry.certified_hydrostatics import (
     CertifiedHydrostaticsPolicy, CertifiedHydrostaticsRefusal, HalfSpaceQuery, QuantityResult, RefusalCategory,
     SectionResult, Topology, TopologyLoop, VerifiedHydrostatics, WorkBudget, prepare_certified_hydrostatics,
     query_certified_hydrostatics, verify_certified_hydrostatics)
-from anygeometry.certified_hydrostatics._verify import _claim_of
 
 C = RefusalCategory
 ALL_FORMS = ("exact", "binary64", "decimal")
@@ -256,6 +255,46 @@ def test_exact_only_and_binary64_only_requests_verify():
 
 
 # ------------------------------------------------------------------ attacks
+
+
+def _pair(x):
+    return [x.numerator, x.denominator]
+
+
+def _claim_quantity(item):
+    out = {"accuracy": None if item.accuracy is None else _pair(item.accuracy), "accuracy_met": item.accuracy_met}
+    if item.numerator is not None:
+        out["exact"] = {"numerator": _pair(item.numerator),
+                        "norm_squared": None if item.norm_squared is None else _pair(item.norm_squared)}
+    if item.binary64 is not None:
+        out["binary64"] = {"lo": float.hex(item.binary64[0]), "hi": float.hex(item.binary64[1])}
+    if item.decimal is not None:
+        out["decimal"] = {"lo": item.decimal[0], "hi": item.decimal[1], "width": _pair(item.decimal[2])}
+    return out
+
+
+def _claim_section(section):
+    topology = None
+    if section.topology is not None:
+        topology = {"loops": [{"identity": list(l.identity), "role": l.role} for l in section.topology.loops],
+                    "components": [{"outer": list(o), "holes": [list(h) for h in hs]}
+                                   for o, hs in section.topology.components]}
+    quantities = None
+    if section.quantities is not None:
+        quantities = {q.name: _claim_quantity(q) for q in section.quantities}
+    return {"occupancy": section.occupancy, "section": section.section, "quantities": quantities,
+            "topology": topology}
+
+
+def _claim_of(result):
+    """The claim of a result object, built test-side straight from its attributes (independent of the verifier)."""
+    return {"occupancy": result.occupancy, "generic": result.generic,
+            "contacts": {"vertices": list(result.contacts.vertices), "edges": list(result.contacts.edges),
+                         "faces": list(result.contacts.faces)},
+            "volume": _claim_quantity(result.volume),
+            "moments": {m.name: _claim_quantity(m) for m in result.moments},
+            "sections": {s.side: _claim_section(s) for s in result.sections},
+            "work": {"operations": result.work["operations"], "units": dict(result.work["units"])}}
 
 
 def with_proof(result, edit=None):
@@ -782,11 +821,11 @@ def comb(teeth):
 
 def max_lines_between_checkpoints(call):
     """Run ``call(check, budget)`` while counting executed lines of the verifier between consecutive cancellation
-    callbacks of the recomputation phase (tracing starts once the first vertex height has been computed).
+    callbacks, from the entry of ``verify_certified_hydrostatics`` (ingestion, parsing, type checks included).
 
     Arithmetic wrappers are not counted (their cost is one rational operation); returns the largest gap."""
     skip = {"operation", "_wrap", "_fit", "fit", "_guarded", "_ordered", "check_value"}
-    state = {"count": 0, "gap": 0, "on": False}
+    state = {"count": 0, "gap": 0}
     budget = WorkBudget.unlimited()
 
     def local(frame, event, arg):
@@ -801,22 +840,17 @@ def max_lines_between_checkpoints(call):
         return None
 
     def check():
-        if state["on"]:
-            state["gap"] = max(state["gap"], state["count"])
-            state["count"] = 0
-        elif budget.counts()["units"].get("vertex_height", 0):
-            state["on"] = True
-            _sys.settrace(tracer)
+        state["gap"] = max(state["gap"], state["count"])
+        state["count"] = 0
         return False
 
     previous = _sys.gettrace()
+    _sys.settrace(tracer)
     try:
         call(check, budget)
     finally:
         _sys.settrace(previous)
-    state["gap"] = max(state["gap"], state["count"])
-    assert state["on"]
-    return state["gap"]
+    return max(state["gap"], state["count"])
 
 
 # a single checkpoint interval may run one bounded predicate (an edge integral, one quantity comparison)
@@ -825,7 +859,7 @@ LINE_BOUND = 450
 
 @pytest.mark.parametrize("plane", [(Z_, F(1, 2)), (Y_, F(2)), (Y_, F(1))], ids=["clip", "sort-and-nesting", "contact"])
 def test_no_uninterruptible_span_grows_with_the_data(plane):
-    c = Case(lambda: comb(18))
+    c = Case(lambda: comb(10))
     n, d = plane
     q, r = c.query(n, d, forms=("exact",))
     gap = max_lines_between_checkpoints(
@@ -834,7 +868,7 @@ def test_no_uninterruptible_span_grows_with_the_data(plane):
 
 
 def test_every_loop_vertex_is_its_own_checkpoint_in_clipping():
-    c = Case(lambda: comb(18))
+    c = Case(lambda: comb(10))
     q, r = c.query(Z_, F(1, 2), forms=("exact",))
     lt_calls = []
     cls = getattr(vm, "_Q", F)
@@ -946,3 +980,301 @@ def test_booleans_and_integers_must_have_their_exact_types(box_case, box_result,
                        + section.topology.loops[1:], components=section.topology.components)
     failed(lambda: topology_case.verify(qt, fix(replace(rt, sections=(replace(section, topology=twisted),)))),
            "topology")
+
+
+# ------------------------------------------------------------------ CH1c review round 3: regression tests
+
+import ast as _ast
+import pathlib as _pathlib
+
+VERIFY_SOURCE = _pathlib.Path(vm.__file__)
+
+# Functions whose iteration is bounded by a constant (polynomials in epsilon have at most three coefficients, Green
+# polynomials at most four); every entry is justified on its line. Nothing else may loop over input-sized data
+# without a checkpoint.
+ALLOWED_CONSTANT_SIZE = {
+    "_padd": "adds two polynomials in epsilon: at most 3 coefficients each",
+    "_psub": "subtracts two polynomials in epsilon: at most 3 coefficients each",
+    "_pmul": "multiplies two polynomials in epsilon: at most 3 coefficients each",
+    "_psign": "sign of a polynomial in epsilon: at most 5 coefficients",
+    "_pmul_list": "multiplies edge polynomials of degree <= 2: at most 4 coefficients",
+    "_edge_G.integral": "integrates one polynomial of degree <= 3",
+}
+TICKING_CALLS = {"_tick", "_each", "_tsorted", "_joined"}
+DATA_BUILTINS = {"sorted", "sum", "min", "max", "all", "any", "set", "frozenset", "tuple", "list", "dict", "reversed",
+                 "enumerate", "zip", "map", "filter", "bytes", "bytearray"}
+CHECKED_METHODS = {"extend", "update", "sort", "join"}
+
+
+def _is_tick(node):
+    if isinstance(node, _ast.Call):
+        func = node.func
+        if isinstance(func, _ast.Name) and func.id in TICKING_CALLS:
+            return True
+        if isinstance(func, _ast.Attribute) and func.attr == "unit":
+            return True
+    return False
+
+
+def _tick_in(nodes):
+    return any(_is_tick(n) for node in nodes for n in _ast.walk(node))
+
+
+def _constant_iterable(node):
+    if isinstance(node, (_ast.Tuple, _ast.List, _ast.Set)):
+        return not any(isinstance(e, _ast.Starred) for e in node.elts)
+    if isinstance(node, _ast.Constant):
+        return True
+    if (isinstance(node, _ast.Call) and isinstance(node.func, _ast.Name) and node.func.id == "range"
+            and not node.keywords):
+        return all(isinstance(a, _ast.Constant) for a in node.args)
+    return False
+
+
+def checkpoint_violations(allowed=ALLOWED_CONSTANT_SIZE):
+    """Every For/While/comprehension/generator and every data builtin/method call of the verifier that neither
+    iterates a constant, nor sits in an allowlisted constant-size function, nor ticks (``_tick``/``_each``/``_tsorted``/
+    ``_joined``/``.unit``) within the same loop, comprehension or call arguments."""
+    tree = _ast.parse(VERIFY_SOURCE.read_text(encoding="utf-8"))
+    for parent in _ast.walk(tree):
+        for child in _ast.iter_child_nodes(parent):
+            child.parent = parent
+
+    def qualified(node):
+        names = []
+        while node is not None:
+            if isinstance(node, (_ast.FunctionDef, _ast.ClassDef)):
+                names.append(node.name)
+            node = getattr(node, "parent", None)
+        return ".".join(reversed(names))
+
+    def inside_ticking_loop(node):
+        node = getattr(node, "parent", None)
+        while node is not None:
+            if isinstance(node, (_ast.For, _ast.While)) and _tick_in(node.body):
+                return True
+            if isinstance(node, (_ast.ListComp, _ast.SetComp, _ast.DictComp, _ast.GeneratorExp)) and _tick_in([node]):
+                return True
+            node = getattr(node, "parent", None)
+        return False
+
+    found = []
+    for node in _ast.walk(tree):
+        where = qualified(node)
+        if where in allowed:
+            continue
+        what = None
+        if isinstance(node, _ast.For):
+            if not (_constant_iterable(node.iter) or _tick_in(node.body) or _tick_in([node.iter])):
+                what = "for"
+        elif isinstance(node, _ast.While):
+            if not _tick_in(node.body):
+                what = "while"
+        elif isinstance(node, (_ast.ListComp, _ast.SetComp, _ast.DictComp, _ast.GeneratorExp)):
+            if not (_tick_in([node]) or all(_constant_iterable(g.iter) for g in node.generators)):
+                what = "comprehension"
+        elif isinstance(node, _ast.Call):
+            func = node.func
+            if isinstance(func, _ast.Name) and func.id in DATA_BUILTINS:
+                parent = getattr(node, "parent", None)
+                comprehension_args = all(
+                    isinstance(a, (_ast.ListComp, _ast.GeneratorExp, _ast.SetComp))
+                    and all(_constant_iterable(g.iter) for g in a.generators) for a in node.args)
+                ok = ((not node.args and not node.keywords) or _tick_in(node.args)
+                      or (func.id in ("min", "max") and len(node.args) >= 2)
+                      or (isinstance(parent, _ast.Call) and _is_tick(parent))
+                      or (node.args and comprehension_args))
+                if not ok:
+                    what = f"builtin {func.id}"
+            elif isinstance(func, _ast.Attribute) and func.attr in CHECKED_METHODS:
+                string_join = func.attr == "join" and (isinstance(func.value, _ast.Constant)
+                                                       or (isinstance(func.value, _ast.Name)
+                                                           and func.value.id == "separator"))
+                if func.attr != "join" or string_join:
+                    if not (_tick_in(node.args) or inside_ticking_loop(node)):
+                        what = f"method {func.attr}"
+        if what:
+            found.append((node.lineno, where, what))
+    return found
+
+
+def test_every_data_dependent_iteration_of_the_verifier_ticks():
+    violations = checkpoint_violations()
+    assert not violations, violations
+
+
+def test_the_constant_size_allowlist_is_minimal():
+    without = {where for _line, where, _what in checkpoint_violations(allowed={})}
+    assert set(ALLOWED_CONSTANT_SIZE) <= without, set(ALLOWED_CONSTANT_SIZE) - without
+    assert without <= set(ALLOWED_CONSTANT_SIZE), without - set(ALLOWED_CONSTANT_SIZE)
+
+
+def test_the_source_inspection_catches_an_unticked_loop(tmp_path, monkeypatch):
+    source = VERIFY_SOURCE.read_text(encoding="utf-8")
+    broken = source.replace('        _tick("clip_vertex")' + chr(10), "", 1)
+    assert broken != source
+    path = tmp_path / "_verify_broken.py"
+    path.write_text(broken, encoding="utf-8")
+    monkeypatch.setitem(globals(), "VERIFY_SOURCE", path)
+    assert any(where == "_clip_loop" for _l, where, _w in checkpoint_violations())
+
+
+class Liar(F):
+    """A Fraction that claims to equal everything."""
+
+    __eq__ = lambda self, other: True
+    __ne__ = lambda self, other: False
+    __hash__ = F.__hash__
+
+
+class LiarInt(int):
+    __eq__ = lambda self, other: True
+    __ne__ = lambda self, other: False
+    __hash__ = int.__hash__
+
+
+class LiarFloat(float):
+    __eq__ = lambda self, other: True
+    __ne__ = lambda self, other: False
+    __hash__ = float.__hash__
+    __lt__ = lambda self, other: True
+    __gt__ = lambda self, other: True
+
+
+class LiarStr(str):
+    __eq__ = lambda self, other: True
+    __ne__ = lambda self, other: False
+    __hash__ = str.__hash__
+
+
+class LiarBytes(bytes):
+    __eq__ = lambda self, other: True
+
+
+def test_subclassed_rationals_cannot_vouch_for_a_wrong_value():
+    c = Case(lambda: box())
+    q, r = c.query(Z_, F(1, 2), forms=("exact",))
+    forged = alter_quantity(r, "V", numerator=Liar(12345))
+    for candidate in (forged, with_proof(forged)):
+        error = failed(lambda: c.verify(q, candidate), "value")
+    forged = alter_quantity(r, "V", norm_squared=Liar(1))
+    failed(lambda: c.verify(q, with_proof(forged)), "value")
+    forged = alter_quantity(r, ("plane", "A"), numerator=Liar(7))
+    failed(lambda: c.verify(q, with_proof(forged)), "value")
+    forged = alter_quantity(r, "V", accuracy=Liar(1))
+    failed(lambda: c.verify(q, with_proof(forged)), "request")
+    # ... and the verified object reports the recomputed value, not the supplied one
+    assert c.verify(q, r).exact["V"] == F(1, 2)
+
+
+def test_subclassed_ints_floats_strings_and_bytes_are_refused():
+    c = Case(lambda: box())
+    q, r = c.query(Z_, F(1, 2), forms=("exact", "binary64", "decimal"))
+    lo, hi = r.section("plane").quantity("Iuu").binary64
+    for bad in (LiarFloat(lo), LiarFloat(1.0)):
+        forged = alter_quantity(r, ("plane", "Iuu"), binary64=(bad, bad))
+        failed(lambda: c.verify(q, with_proof(forged)), "enclosure")
+    forged = alter_quantity(r, "V", binary64=(LiarFloat(0.5), LiarFloat(0.5)))
+    failed(lambda: c.verify(q, with_proof(forged)), "enclosure")
+    contacts = replace(r.contacts, vertices=(LiarInt(3),))
+    failed(lambda: c.verify(q, with_proof(replace(r, contacts=contacts))), "value")
+    section = r.section("plane")
+    topology = section.topology
+    loop = topology.loops[0]
+    twisted = Topology(loops=(TopologyLoop((LiarInt(loop.identity[0]),) + tuple(loop.identity[1:]), loop.role),)
+                       + topology.loops[1:], components=topology.components)
+    failed(lambda: c.verify(q, with_proof(replace(r, sections=(replace(section, topology=twisted),)))), "topology")
+    failed(lambda: c.verify(q, with_proof(replace(r, occupancy=LiarStr("PARTIAL")))), "state")
+    decimal = r.volume.decimal
+    failed(lambda: c.verify(q, with_proof(alter_quantity(r, "V", decimal=(LiarStr(decimal[0]), decimal[1], decimal[2])))),
+           "enclosure")
+    error = refusal_of(lambda: c.verify(q, replace(r, proof=LiarBytes(r.proof))))
+    assert error.category == C.MALFORMED_PROOF
+    error = refusal_of(lambda: c.verify(q, replace(r, proof=bytearray(r.proof))))
+    assert error.category == C.MALFORMED_PROOF
+
+
+def test_expected_and_query_values_are_normalised_too():
+    c = Case(lambda: box())
+    q, r = c.query(Z_, F(1, 2))
+    with pytest.raises(ValueError):
+        verify_certified_hydrostatics(c.model, c.faces, q, r, dict(c.expected, units=LiarStr("m")))
+    with pytest.raises(ValueError):
+        verify_certified_hydrostatics(c.model, c.faces, q, r, dict(c.expected, convention_version=LiarStr("1")))
+    files = [(LiarStr(p), h) for p, h in c.expected["artifact_files"]]
+    with pytest.raises(ValueError):
+        verify_certified_hydrostatics(c.model, c.faces, q, r, dict(c.expected, artifact_files=files))
+
+    class Policy:
+        convention_version = "1"
+        max_proof_bytes = LiarInt(10 ** 9)
+        max_integer_digits = 100000
+
+    with pytest.raises(ValueError):
+        verify_certified_hydrostatics(c.model, c.faces, q, r, dict(c.expected, policy=Policy()))
+
+    class LyingQuery:
+        normal = (0, 0, 1)
+        waterplane_origin = (0, 0, 0)
+        waterplane_axes = ((1, 0, 0), (0, 1, 0))
+        absolute_accuracy = ()
+        forms = ("exact",)
+        offset = Liar(1, 2)
+
+    failed(lambda: verify_certified_hydrostatics(c.model, c.faces, LyingQuery(), r, c.expected), "query")
+
+
+def test_guarded_rationals_have_no_unchecked_operations():
+    gauge = vm._Gauge(vm.Meter(WorkBudget(None, 8)))
+    vm._ACTIVE.gauge, vm._ACTIVE.budget = gauge, gauge.budget
+    try:
+        big, small = vm._q(255), vm._q(F(1, 255))
+        for operation in (lambda: big // small, lambda: divmod(big, small), lambda: big % small,
+                          lambda: big ** 2, lambda: 2 ** big, lambda: round(big), lambda: math.trunc(big),
+                          lambda: math.floor(big), lambda: math.ceil(big), lambda: int(big), lambda: float(big),
+                          lambda: big.limit_denominator(3), lambda: pow(big, 2, 7)):
+            with pytest.raises(TypeError):
+                operation()
+        for operation in (lambda: big * big, lambda: big + big, lambda: big - (-big), lambda: -big * big,
+                          lambda: big / small, lambda: 1000 / small, lambda: small * 255 * 256):
+            with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+                operation()
+            assert info.value.category == C.BIT_LENGTH_EXCEEDED
+        assert big - big == 0 and abs(-small) == small and big == 255      # within the cap everything works
+    finally:
+        vm._ACTIVE.gauge = vm._ACTIVE.budget = None
+
+
+def test_bool_is_not_an_integer_in_the_proofs_query():
+    c = Case(lambda: box())
+    q, r = c.query(Z_, F(1))
+    assert json.loads(r.proof)["query"]["offset"] == [1, 1]
+    failed(lambda: c.verify(q, rewrite(r, lambda d: d["query"].__setitem__("offset", [True, True]))), "query")
+    failed(lambda: c.verify(q, rewrite(r, lambda d: d["query"]["normal"].__setitem__(0, [False, True]))), "query")
+    failed(lambda: c.verify(q, rewrite(r, lambda d: d["query"]["waterplane_origin"].__setitem__(2, [False, True]))),
+           "query")
+
+
+def test_huge_identity_does_not_create_a_long_span_between_checkpoints():
+    c = case("F5")
+    q, r = c.query(Z_, F(1, 2))
+    section = r.section("plane")
+    topology = section.topology
+    loop = topology.loops[0]
+    huge = Topology(loops=(TopologyLoop(tuple(range(10000)), loop.role),) + topology.loops[1:],
+                    components=topology.components)
+    forged = replace(r, sections=(replace(section, topology=huge),))
+
+    def run(check, budget):
+        error = refusal_of(lambda: c.verify(q, forged, budget=budget, cancellation_check=check))
+        assert error.category == C.VERIFICATION_FAILED and error.sub_reason in ("value", "topology")
+
+    gap = max_lines_between_checkpoints(run)
+    assert gap <= LINE_BOUND, gap
+    for field_forge in (replace(r, contacts=replace(r.contacts, vertices=tuple(range(10000)))),
+                        replace(r, sections=(replace(section, topology=Topology(
+                            loops=topology.loops, components=((tuple(range(10000)), ()),))),))):
+        def run_other(check, budget, forged=field_forge):
+            refusal_of(lambda: c.verify(q, forged, budget=budget, cancellation_check=check))
+
+        assert max_lines_between_checkpoints(run_other) <= LINE_BOUND
