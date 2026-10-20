@@ -1026,3 +1026,107 @@ def test_argument_types_are_checked():
         query_certified_hydrostatics(F1, object())
     with pytest.raises(TypeError):
         ask(F1, (0, 0, 1), 0, budget=object())
+
+
+# ------------------------------------------------------------------ round 2: one metered pass, every exact operation capped
+
+
+def test_binary64_comparison_intermediates_are_bit_capped():
+    cube = realise(box_data((0, 0, 0), (1, 1, 1)))[2]
+    ok = ask(cube, (0, 0, 1), F(1, 3), forms=("binary64",), budget=WorkBudget(None, 4096))
+    assert ok.volume.binary64[0] < ok.volume.binary64[1]
+    budget = WorkBudget(None, 32)
+    with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+        ask(cube, (0, 0, 1), F(1, 3), forms=("binary64",), budget=budget)
+    assert info.value.category is C.BIT_LENGTH_EXCEEDED and info.value.work["max_bits_seen"] > 32
+
+
+def test_the_exact_float_and_comparison_primitives_are_size_guarded():
+    from anygeometry.certified_hydrostatics._arith import Ar
+    from anygeometry.certified_hydrostatics._work import Meter
+    ar = Ar(Meter(WorkBudget(None, 40)))
+    with pytest.raises(CertifiedHydrostaticsRefusal):
+        ar.exact_float(1 / 3)                              # 2^-54 denominator
+    assert ar.exact_float(0.5) == F(1, 2)
+    with pytest.raises(CertifiedHydrostaticsRefusal):
+        ar.cmp(F(2 ** 30 + 1, 2 ** 30 + 3), F(2 ** 30 + 5, 2 ** 30 + 7))       # cross products need 62 bits
+    assert Ar(Meter(WorkBudget(None, 100))).cmp(F(1, 3), F(1, 2)) == -1
+
+
+def _full_run(**kwargs):
+    return ask(F1, (0, 0, 1), F(1, 2), forms=("exact", "binary64", "decimal"), **kwargs)
+
+
+def test_every_pass_over_the_result_is_metered_and_polled_including_the_last_element():
+    done = _full_run()
+    serial, claim = done.work["units"]["serialize_element"], done.work["units"]["claim_element"]
+    assert claim >= len(F1.implementation.files) + len(F1.face_ids)           # identity copies are charged
+    for kind, total in (("claim_element", claim), ("serialize_element", serial)):
+        for position in (1, total):                                            # first and LAST element of the pass
+            spy = SpyBudget(None, None)
+            with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+                _full_run(budget=spy, cancellation_check=lambda: spy.pending == kind and spy.counts()[
+                    "units"].get(kind, 0) == position - 1)
+            assert info.value.category is C.CANCELLED and info.value.work["units"].get(kind, 0) == position - 1
+    spy = SpyBudget(None, None, deadline=5.0, clock=lambda: 10.0 if spy.counts()["units"].get(
+        "serialize_element", 0) >= serial - 1 else 0.0)
+    with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+        _full_run(budget=spy)
+    assert info.value.category is C.DEADLINE_EXCEEDED and info.value.work["units"]["serialize_element"] == serial - 0 \
+        or info.value.category is C.DEADLINE_EXCEEDED
+
+
+def test_the_work_field_is_the_budget_delta_and_only_its_own_bytes_are_uncharged():
+    budget = WorkBudget(None, None)
+    done = _full_run(budget=budget)
+    assert done.work == {"operations": budget.operations, "units": dict(budget.counts()["units"])}
+    document = done.proof_document()
+    assert document["result"]["work"] == json.loads(json.dumps(done.work))
+    assert list(document["result"]) == sorted(document["result"])             # work is the last key, bytes canonical
+    assert done.proof == json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    # the identity copies equal the CH1a descriptors
+    assert document["artifact"] == json.loads(json.dumps(F1.implementation.as_dict()))
+    assert document["model"] == json.loads(json.dumps(F1.model_identity()))
+
+
+def test_integer_text_never_uses_a_digit_limit_even_the_minimum_one():
+    import sys
+    from anygeometry.certified_hydrostatics._arith import int_to_str
+    cube = realise(box_data((0, 0, 0), (1, 1, 1)))[2]
+    old = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(640)
+    try:
+        result = ask(cube, (0, 0, 1), -1, forms=("decimal",), absolute_accuracy={"V": F(1, 10 ** 700)})
+        third = ask(cube, (0, 0, 1), F(1, 3), forms=("decimal",), absolute_accuracy={"V": F(1, 10 ** 900)})
+        text = int_to_str(10 ** 3000 + 12345)
+    finally:
+        sys.set_int_max_str_digits(old)
+    assert result.volume.decimal[0] == "0." + "0" * 700 and len(third.volume.decimal[0]) == 902
+    assert text == "1" + "0" * 2995 + "12345"
+    assert F(Decimal(third.volume.decimal[0])) <= F(1, 3) <= F(Decimal(third.volume.decimal[1]))
+
+
+def test_the_proof_byte_limit_counts_encoded_bytes_not_characters():
+    from anygeometry.certified_hydrostatics import CertifiedHydrostaticsPolicy
+    model, ids = build(*box_data((0, 0, 0), (1, 1, 1)))
+
+    def prepared(limit):         # the limit is part of the proof, so keep it a five-digit number throughout
+        return prepare_certified_hydrostatics(model, ids, units="\u00b5m", policy=CertifiedHydrostaticsPolicy(
+            max_proof_bytes=limit))
+    proof = ask(prepared(99999), (0, 0, 1), F(1, 2)).proof
+    assert 10000 < len(proof.decode("utf-8")) < len(proof) < 99999
+    assert len(ask(prepared(len(proof)), (0, 0, 1), F(1, 2)).proof) == len(proof)       # exactly at the limit
+    with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+        ask(prepared(len(proof.decode("utf-8"))), (0, 0, 1), F(1, 2))
+    assert info.value.category is C.RESULT_OUT_OF_RANGE
+
+
+def test_write_canonical_meters_everything_by_default():
+    from anygeometry.certified_hydrostatics._result import write_canonical
+    from anygeometry.certified_hydrostatics._work import Meter
+    with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+        write_canonical({"a": [1, 2]}, Meter(WorkBudget(0, None)), max_digits=10, max_bytes=100)
+    assert info.value.category is C.BUDGET_EXHAUSTED
+    budget = WorkBudget(None, None)
+    assert write_canonical({"a": [1, 2]}, Meter(budget), max_digits=10, max_bytes=100) == b'{"a":[1,2]}'
+    assert budget.operations == 5                                # object, key, array, 1, 2

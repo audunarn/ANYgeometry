@@ -122,21 +122,42 @@ class CertifiedHydrostaticsResult:
     def degenerate(self) -> bool:
         return not self.generic
 
-    def claim(self) -> dict:
-        """The complete claim as the canonical JSON-able document (schema in the module docstring)."""
-        return {"occupancy": self.occupancy, "generic": self.generic,
-                "contacts": {"vertices": list(self.contacts.vertices), "edges": list(self.contacts.edges),
-                             "faces": list(self.contacts.faces)},
-                "volume": claim_quantity(self.volume),
-                "moments": {item.name: claim_quantity(item) for item in self.moments},
-                "sections": {item.side: _claim_section(item) for item in self.sections},
-                "work": {"operations": self.work["operations"], "units": dict(self.work["units"])}}
+    def claim(self, meter=None, *, with_work: bool = True) -> dict:
+        """The complete claim as the canonical JSON-able document (schema in the module docstring).
+
+        With ``meter`` every element copied out of the result (contact ids, topology ids, quantities) reserves
+        a ``claim_element`` unit first; ``with_work=False`` omits the ``work`` field (the engine appends it last)."""
+        tick = _ticker(meter)
+        out = {"occupancy": self.occupancy, "generic": self.generic,
+               "contacts": {"vertices": _copy(self.contacts.vertices, tick), "edges": _copy(self.contacts.edges, tick),
+                            "faces": _copy(self.contacts.faces, tick)},
+               "volume": claim_quantity(self.volume, tick),
+               "moments": {item.name: claim_quantity(item, tick) for item in self.moments},
+               "sections": {item.side: _claim_section(item, tick) for item in self.sections}}
+        if with_work:
+            out["work"] = {"operations": self.work["operations"], "units": dict(self.work["units"])}
+        return out
 
     def proof_document(self) -> dict:
         return json.loads(self.proof.decode("utf-8"))
 
 
-def claim_quantity(item: QuantityResult) -> dict:
+def _ticker(meter):
+    if meter is None:
+        return lambda: None
+    return lambda: meter.unit("claim_element")
+
+
+def _copy(values, tick) -> list:
+    out = []
+    for value in values:
+        tick()
+        out.append(value)
+    return out
+
+
+def claim_quantity(item: QuantityResult, tick=lambda: None) -> dict:
+    tick()
     out: dict = {"accuracy": None if item.accuracy is None else _pair(item.accuracy),
                  "accuracy_met": item.accuracy_met}
     if item.numerator is not None:
@@ -149,19 +170,38 @@ def claim_quantity(item: QuantityResult) -> dict:
     return out
 
 
-def _claim_section(item: SectionResult) -> dict:
+def _claim_section(item: SectionResult, tick=lambda: None) -> dict:
+    tick()
     topology = None
     if item.topology is not None:
-        topology = {"loops": [{"identity": list(loop.identity), "role": loop.role} for loop in item.topology.loops],
-                    "components": [{"outer": list(outer), "holes": [list(h) for h in holes]}
-                                   for outer, holes in item.topology.components]}
-    quantities = None if item.quantities is None else {q.name: claim_quantity(q) for q in item.quantities}
+        topology = {"loops": [], "components": []}
+        for loop in item.topology.loops:
+            tick()
+            topology["loops"].append({"identity": _copy(loop.identity, tick), "role": loop.role})
+        for outer, holes in item.topology.components:
+            tick()
+            topology["components"].append({"outer": _copy(outer, tick), "holes": [_copy(h, tick) for h in holes]})
+    quantities = None if item.quantities is None else {q.name: claim_quantity(q, tick) for q in item.quantities}
     return {"occupancy": item.occupancy, "section": item.section, "quantities": quantities, "topology": topology}
 
 
-def proof_document(prepared, query: HalfSpaceQuery, claim: dict) -> dict:
-    """The canonical proof document of ``claim`` for ``query`` against ``prepared`` (see the module docstring)."""
-    identity = prepared.proof_identity()
+def proof_document(prepared, query: HalfSpaceQuery, claim: dict, meter=None) -> dict:
+    """The canonical proof document of ``claim`` for ``query`` against ``prepared`` (see the module docstring).
+
+    With ``meter`` the per-element copies of the artifact and model identity reserve ``claim_element`` units."""
+    tick = _ticker(meter)
+    impl = prepared.implementation
+    artifact = {"distribution": impl.distribution, "distribution_version": impl.distribution_version,
+                "package_version": impl.package_version, "files": [], "dependencies": [], "python": impl.python}
+    for path, digest in impl.files:
+        tick()
+        artifact["files"].append([path, digest])
+    for name, version in impl.dependencies:
+        tick()
+        artifact["dependencies"].append([name, version])
+    model = {"model_id": prepared.model_id, "revision": prepared.revision,
+             "document_checksum": prepared.document_checksum, "face_ids": _copy(prepared.face_ids, tick),
+             "snapshot_digest": prepared.snapshot_digest}
     convention = {
         "convention_version": prepared.policy.convention_version, "units": prepared.units,
         "body_frame": "model coordinates are the body frame; no rotation, no normalisation",
@@ -170,19 +210,21 @@ def proof_document(prepared, query: HalfSpaceQuery, claim: dict) -> dict:
         "moment_order": ["A", "Mu", "Mv", "Iuu", "Ivv", "Iuv"],
         "limits": "below: n.r = d - eps, above: n.r = d + eps, eps -> 0+; V and J use the below convention",
         "loop_identity": "sorted ids of the crossed shell edges"}
-    return {"artifact": identity["artifact"], "model": identity["model"], "convention": convention,
+    return {"artifact": artifact, "model": model, "convention": convention,
             "preparation_policy": prepared.policy.as_dict(), "query": query.as_dict(), "result": claim}
 
 
-def write_canonical(document, meter=None, *, max_digits: int, max_bytes: int, uncharged=()) -> bytes:
+def write_canonical(document, meter=None, *, max_digits: int, max_bytes: int, late=None) -> bytes:
     """Canonical JSON bytes (sorted keys, no spaces, UTF-8), written element by element.
 
     With ``meter`` every value (scalar, array or object) and every object key reserves one
     ``serialize_element`` unit before it is written, so budget, deadline and cancellation are polled per
-    element. ``uncharged`` is a path of keys whose subtree is written without charge (the ``work`` field of
-    the proof, whose own elements are not part of the work it reports). Integers are written without the
-    interpreter's int/str digit limit; one over ``max_digits`` digits, or output over ``max_bytes``,
-    refuses ``RESULT_OUT_OF_RANGE``."""
+    element; without a meter nothing is charged (the default charges everything that is written).
+    ``late = (path, key, produce)`` appends ``key: produce()`` as the last key of the object at ``path``
+    (``key`` must sort after the others), after every charged element; that value is written without charge:
+    the bytes of the proof's ``work`` field are the only part not counted in the work it reports.
+    Integers are written without the interpreter's int/str digit limit; one over ``max_digits`` digits, or
+    output over ``max_bytes`` *encoded bytes*, refuses ``RESULT_OUT_OF_RANGE``."""
     from ._errors import RefusalCategory, refuse
     from ._arith import int_to_str
     limit = 10 ** max_digits
@@ -192,27 +234,32 @@ def write_canonical(document, meter=None, *, max_digits: int, max_bytes: int, un
     def emit(text: str) -> None:
         nonlocal size
         parts.append(text)
-        size += len(text)
+        size += len(text) if text.isascii() else len(text.encode("utf-8"))
         if size > max_bytes:
             raise refuse(RefusalCategory.RESULT_OUT_OF_RANGE, "the proof exceeds the policy's byte limit")
 
-    def walk(value, path) -> None:
-        charged = meter is not None and path[:len(uncharged)] != tuple(uncharged)
-        if charged:
+    def walk(value, path, charged) -> None:
+        if charged and meter is not None:
             meter.unit("serialize_element")
         if isinstance(value, dict):
             emit("{")
-            for index, key in enumerate(sorted(value)):
-                if charged:
+            keys = sorted(value)
+            for index, key in enumerate(keys):
+                if charged and meter is not None:
                     meter.unit("serialize_element")
                 emit(("," if index else "") + json.dumps(key, ensure_ascii=False) + ":")
-                walk(value[key], path + (key,))
+                walk(value[key], path + (key,), charged)
+            if late is not None and path == tuple(late[0]):
+                key = late[1]
+                assert not keys or keys[-1] < key
+                emit(("," if keys else "") + json.dumps(key, ensure_ascii=False) + ":")
+                walk(late[2](), path + (key,), False)
             emit("}")
         elif isinstance(value, (list, tuple)):
             emit("[")
             for index, item in enumerate(value):
                 emit("," if index else "")
-                walk(item, path)
+                walk(item, path, charged)
             emit("]")
         elif value is None or isinstance(value, bool):
             emit("null" if value is None else ("true" if value else "false"))
@@ -225,5 +272,5 @@ def write_canonical(document, meter=None, *, max_digits: int, max_bytes: int, un
         else:
             raise TypeError(f"cannot serialise {type(value).__name__}")
 
-    walk(document, ())
+    walk(document, (), True)
     return "".join(parts).encode("utf-8")

@@ -59,9 +59,8 @@ def _compare_root(ar: Ar, numerator: Fraction, norm_squared: Fraction, f: float)
         return 1
     if sq < 0 and sf >= 0:
         return -1
-    ff = Fraction(f)
-    left, right = ar.mul(numerator, numerator), ar.mul(ar.mul(ff, ff), norm_squared)
-    difference = (left > right) - (left < right)
+    ff = ar.exact_float(f)
+    difference = ar.cmp(ar.mul(numerator, numerator), ar.mul(ar.mul(ff, ff), norm_squared))
     return difference if sq > 0 else -difference
 
 
@@ -79,10 +78,10 @@ def binary64_enclosure(numerator: Fraction, norm_squared, meter: Meter, name: st
             f = float(value)
             if math.isinf(f):
                 raise OverflowError
-            exact = Fraction(f)
-            if exact == value:
+            order = ar.cmp(ar.exact_float(f), value)
+            if order == 0:
                 return (f + 0.0, f + 0.0)
-            lo, hi = (f, math.nextafter(f, math.inf)) if exact < value else (math.nextafter(f, -math.inf), f)
+            lo, hi = (f, math.nextafter(f, math.inf)) if order < 0 else (math.nextafter(f, -math.inf), f)
         else:
             # irrational x = Q.num sqrt(M) / (Q.den N.num), M = N.num N.den: a ~100-bit approximation first,
             # then exact adjustment to the bracketing doubles
@@ -150,7 +149,9 @@ def build_quantity(name: str, numerator: Fraction, norm_squared, forms, accuracy
     binary64 = decimal = None
     if "binary64" in forms:
         binary64 = binary64_enclosure(numerator, norm_squared, meter, name)
-        if accuracy is not None and Fraction(binary64[1]) - Fraction(binary64[0]) > accuracy:
+        ar = Ar(meter)
+        if accuracy is not None and ar.cmp(ar.sub(ar.exact_float(binary64[1]), ar.exact_float(binary64[0])),
+                                           accuracy) > 0:
             raise refuse(RefusalCategory.ACCURACY_UNACHIEVABLE,
                          f"binary64 cannot meet the accuracy {float(accuracy)!r} for {name}; its bound is "
                          f"{binary64[1] - binary64[0]!r} (the decimal form remains available)")

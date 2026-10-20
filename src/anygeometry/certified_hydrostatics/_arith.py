@@ -63,6 +63,19 @@ class Ar:
         self.guard(max(an + bd, ad + bn))
         return self.meter.fit(Fraction(a) / b)
 
+    def cmp(self, a, b) -> int:
+        """Sign of ``a - b``; the cross-multiplication of the comparison is size-guarded first."""
+        an, ad = _parts(a)
+        bn, bd = _parts(b)
+        self.guard(max(an + bd, bn + ad))
+        return (a > b) - (a < b)
+
+    def exact_float(self, f: float) -> Fraction:
+        """The exact value of a double, size-guarded before the Fraction is formed."""
+        numerator, denominator = f.as_integer_ratio()
+        self.guard(max(abs(numerator).bit_length(), denominator.bit_length()))
+        return Fraction(numerator, denominator)
+
     def sub3(self, a, b):
         return (self.sub(a[0], b[0]), self.sub(a[1], b[1]), self.sub(a[2], b[2]))
 
@@ -90,7 +103,7 @@ class Ar:
         return 10 ** digits
 
 
-_CHUNK_DIGITS = 2000
+_CHUNK_DIGITS = 500        # str() of <= 500 digits is below every legal limit (>= 640)
 _CHUNK = 10 ** _CHUNK_DIGITS
 
 
