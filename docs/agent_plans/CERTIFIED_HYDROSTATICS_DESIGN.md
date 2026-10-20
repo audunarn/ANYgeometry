@@ -9,9 +9,10 @@ hull later (CH3), events/intervals after (CH4). The bow programme (step 4) waits
 ## 1. Key facts this design rests on
 
 - The consumer's reference vessel (recipe3: `HULL`, `PUMPROOM`, `V1..V4`, `WB1..WB8`) is planar:
-  900 `Plane` faces, all straight edges, no holes, loops of at most 4 vertices, every solid a
-  clean `closed_shell`, and **every face loop exactly coplanar in its float vertices** (checked
-  with exact rational arithmetic, 2026-10-20). Each solid is therefore an exact polyhedron.
+  830 `Plane` faces, all straight edges, no holes, loops of at most 4 vertices, every solid a
+  clean `closed_shell`, **every face loop exactly coplanar in its float vertices** and contained
+  exactly in its stored `Plane` support (both checked with exact rational arithmetic,
+  2026-10-20). Each solid is therefore an exact polyhedron.
 - A rational polyhedron cut by a rational half-space is a rational polyhedron. Its volume and
   first volume moments are rational: they can be computed **exactly** (absolute bound 0).
 - A planar polygon in a plane with rational normal `n` has an area `Q / |n|` with `Q` rational
@@ -211,8 +212,8 @@ patch bump (owner rule) when CH2 builds the wheel.
   symbolic perturbation of `d` (recommended), rather than refusing planes through faces.
 - D-CH2: the waterplane basis is used exactly as the caller gives it (not orthonormalised).
 - D-CH3: a face whose loop is exactly coplanar but whose stored `Plane` support differs from the
-  loop's exact plane: refuse `NOT_EXACTLY_PLANAR` (recommended; recipe3 to be checked in CH1a)
-  or use the loop's exact plane.
+  loop's exact plane: refuse `NOT_EXACTLY_PLANAR` (recommended; all 830 recipe3
+  faces lie exactly in their supports) or use the loop's exact plane.
 - D-CH4: the verifier written by a separate session from the specification only, as the
   independence measure; final independent admission remains ANYstability's.
 - D-CH5: B1/curved shells follow in CH3 (certified enclosures by exact sub-patch subdivision);
