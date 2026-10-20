@@ -2875,10 +2875,17 @@ class GeometryModel:
             if set(mapping.get(bucket, ())) != expected:
                 errors.append(message)
 
+        expected_face_uses_by_face: Dict[int, Set[int]] = {}
+        for use in local_face_uses.values():
+            expected_face_uses_by_face.setdefault(use.face_id, set()).add(use.id)
+        expected_member_uses_by_edge: Dict[int, Set[int]] = {}
+        for use in local_member_uses.values():
+            expected_member_uses_by_edge.setdefault(use.edge_id, set()).add(use.id)
+        expected_coedges_by_edge: Dict[int, Set[int]] = {}
+        for coedge in local_coedges.values():
+            expected_coedges_by_edge.setdefault(coedge.edge_id, set()).add(coedge.id)
         for face_id in face_ids:
-            expected = {
-                use.id for use in local_face_uses.values() if use.face_id == face_id
-            }
+            expected = expected_face_uses_by_face.get(face_id, set())
             actual = set(self._face_structural_uses.get(face_id, ()))
             if not expected.issubset(actual) or any(
                 use_id not in self.face_uses
@@ -2887,9 +2894,7 @@ class GeometryModel:
             ):
                 errors.append(f"face {face_id} structural reverse incidence is stale")
         for edge_id in edge_ids:
-            expected_members = {
-                use.id for use in local_member_uses.values() if use.edge_id == edge_id
-            }
+            expected_members = expected_member_uses_by_edge.get(edge_id, set())
             actual_members = set(self._edge_member_uses.get(edge_id, ()))
             if not expected_members.issubset(actual_members) or any(
                 use_id not in self.member_edge_uses
@@ -2897,9 +2902,7 @@ class GeometryModel:
                 for use_id in actual_members
             ):
                 errors.append(f"edge {edge_id} member reverse incidence is stale")
-            expected_coedges = {
-                use.id for use in local_coedges.values() if use.edge_id == edge_id
-            }
+            expected_coedges = expected_coedges_by_edge.get(edge_id, set())
             actual_coedges = set(self._edge_coedges.get(edge_id, ()))
             if not expected_coedges.issubset(actual_coedges) or any(
                 use_id not in self.coedges
