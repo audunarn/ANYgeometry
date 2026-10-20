@@ -758,3 +758,81 @@ def test_two_turns_squeezed_together_by_a_rational_chart_are_both_kept():
     for order in (24, 48):
         moments = face_moments(model, face, Frame.world(), waterplane_fields, order, clip=True)
         assert abs(moments[0]) == pytest.approx(2.304e-8, rel=1e-9)
+
+
+def test_sweeps_take_the_plane_through_a_far_reference_exactly():
+    """Confirmation review of H1: the table and float_at passed a pre-rounded unit normal, which
+    tilts the plane through a far reference (table 0.50009 instead of 0.5)."""
+    from anygeometry.hydrostatics import float_at, hydrostatic_table
+    model, faces, _place = box((1., 1., 1.))
+    normal, reference = (1., 3., 7.), (7e12 + .5, .5, -1e12 + .5)          # the plane bisects the cube
+    assert hydrostatics(model, faces, reference, normal)["volume"] == pytest.approx(.5, rel=1e-12)
+    (row,) = hydrostatic_table(model, faces, [0.], reference=reference, normal=normal)
+    assert row["volume"] == pytest.approx(.5, rel=1e-12)
+    assert float_at(model, faces, .5, normal=normal, reference=reference)["zeta"] == pytest.approx(0., abs=1e-9)
+
+
+def test_float_at_brackets_the_shell_from_a_far_reference():
+    """Confirmation review of H1: float heights from a reference at 1e16 collapsed to one value
+    and float_at refused a solvable displacement."""
+    from anygeometry.hydrostatics import float_at
+    model, faces, _place = box((1., 1., 1.))
+    result = float_at(model, faces, .5, normal=(1., 0., 1.), reference=(1e16, 0., -1e16))
+    assert result["zeta"] == pytest.approx(1 / math.sqrt(2.), abs=1e-9)
+    assert result["volume"] == pytest.approx(.5, rel=1e-10)
+
+
+def test_a_normal_whose_square_underflows_gives_the_same_waterplane():
+    """Review round 1 of the confirmation fixes: the normal's length is taken robustly (a normal
+    (0, 0, 2e-162) gave volume 0.441 at draft .5)."""
+    from anygeometry.hydrostatics import float_at, hydrostatic_table
+    model, faces, _place = box((1., 1., 1.))
+    tiny = (0., 0., 2e-162)
+    assert hydrostatics(model, faces, (0., 0., .5), tiny)["volume"] == pytest.approx(.5, rel=1e-12)
+    (row,) = hydrostatic_table(model, faces, [.5], normal=tiny)
+    assert row["volume"] == pytest.approx(.5, rel=1e-12)
+    result = float_at(model, faces, .5, normal=tiny)
+    assert result["zeta"] == pytest.approx(.5, abs=1e-9)
+    assert result["volume"] == pytest.approx(.5, rel=1e-10)
+
+
+@pytest.mark.parametrize("scale", [math.ulp(0.), 1e-300, 1.7e308])
+def test_oblique_normals_at_the_ends_of_the_float_range_give_the_same_plane(scale):
+    """Review round 2 of the confirmation fixes: the normal is scaled exactly by a power of two at
+    entry (a subnormal (q, 0, q) gave volume 0.043 instead of 0.125; (1.7e308, 0, 1.7e308) overflowed)."""
+    from anygeometry.hydrostatics import float_at, hydrostatic_table
+    model, faces, _place = box((1., 1., 1.))
+    normal = (scale, 0., scale)
+    reference = hydrostatics(model, faces, (0., 0., .5), (1., 0., 1.))
+    result = hydrostatics(model, faces, (0., 0., .5), normal)
+    assert reference["volume"] == pytest.approx(.125, rel=1e-12)
+    assert result["volume"] == pytest.approx(reference["volume"], rel=1e-14)
+    (row,) = hydrostatic_table(model, faces, [0.], reference=(0., 0., .5), normal=normal)
+    assert row["volume"] == pytest.approx(reference["volume"], rel=1e-14)
+    assert float_at(model, faces, .5, normal=normal)["zeta"] == pytest.approx(1 / math.sqrt(2.), abs=1e-9)
+
+
+@pytest.mark.parametrize("normal", [(math.nan, 0., 1.), (math.inf, 0., 1.), (0., 0., 0.)])
+def test_invalid_normals_refuse_with_a_geometry_error(normal):
+    from anygeometry import GeometryError
+    from anygeometry.hydrostatics import float_at, hydrostatic_table
+    model, faces, _place = box((1., 1., 1.))
+    with pytest.raises(GeometryError, match="finite non-zero"):
+        hydrostatics(model, faces, (0., 0., .5), normal)
+    with pytest.raises(GeometryError, match="finite non-zero"):
+        hydrostatic_table(model, faces, [0.], reference=(0., 0., .5), normal=normal)
+    with pytest.raises(GeometryError, match="finite non-zero"):
+        float_at(model, faces, .5, normal=normal)
+
+
+def test_a_tiny_normal_component_keeps_its_offset_for_a_far_reference():
+    """Review round 3 of the confirmation fixes: the exact offset uses the caller's components (the
+    scaled normal rounds (q, 0, 1) to (0, 0, 1/2); with a reference at the float limit q matters)."""
+    import sys
+    model, faces, _place = box((1., 1., 1e-8))
+    q = math.ulp(0.)
+    point = (sys.float_info.max, 0., 5e-9)
+    # the plane q x + z = q x0 + 5e-9: z = 5e-9 + q (x0 - x), integrated over the unit square
+    expected = 5e-9 + q * (sys.float_info.max - .5)
+    # to the quadrature's own accuracy (rtol 1e-8 of the shell volume 1e-8); the lost offset is 8.9e-16
+    assert hydrostatics(model, faces, point, (q, 0., 1.))["volume"] == pytest.approx(expected, abs=1e-16)

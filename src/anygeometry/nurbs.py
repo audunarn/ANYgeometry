@@ -1080,6 +1080,18 @@ def nurbs_from_record(record: object):
 
 
 
+def _unit_vector(vector):
+    """``vector / |vector|`` for a finite non-zero vector; the length is taken on the vector
+    scaled by its largest component when squaring would overflow or underflow (identical
+    to the plain quotient for lengths in [1e-150, 1e150])."""
+    with np.errstate(over="ignore", under="ignore"):
+        length = float(np.linalg.norm(vector))
+    if np.isfinite(length) and 1e-150 <= length <= 1e150:
+        return vector / length
+    scaled = vector / float(np.max(np.abs(vector)))
+    return scaled / float(np.linalg.norm(scaled))
+
+
 def nurbs_circular_arc(center, x_axis, y_axis, radius: float, start: float, sweep: float) -> NurbsCurve:
     """A circular arc as a rational quadratic NURBS curve (Piegl & Tiller A7.1).
 
@@ -1101,23 +1113,28 @@ def nurbs_circular_arc(center, x_axis, y_axis, radius: float, start: float, swee
         raise GeometryError("a NURBS circular arc needs a positive radius and 0 < |sweep| <= 2 pi")
     if center.shape != x_axis.shape or center.shape != y_axis.shape or len(center) not in (2, 3):
         raise GeometryError("arc centre and axes must be 2D or 3D vectors of one dimension")
-    x_length = float(np.linalg.norm(x_axis))
-    if not np.isfinite(x_length) or x_length == 0.0:
+    if not np.all(np.isfinite(x_axis)) or not np.any(x_axis):
         raise GeometryError("arc x axis must be a non-zero finite vector")
+    if not np.all(np.isfinite(y_axis)):
+        raise GeometryError("arc y axis must be non-zero and not parallel to the x axis")
     raw_x, raw_y = x_axis, y_axis
-    x_axis = x_axis / x_length
-    y_scale = float(np.linalg.norm(y_axis))
-    # y - x (x.y)/(x.x) in exact rationals on the stored axes, rounded once: the
-    # arc's plane is the input plane to rounding even for nearly parallel axes.
+    x_axis = _unit_vector(x_axis)
+    # y - x (x.y)/(x.x) in exact rationals on the stored axes, rounded once (the whole
+    # quotient: a numerator rounded first underflows or overflows for axes scaled far
+    # from 1): the arc's plane is the input plane to rounding even for nearly parallel axes.
     exact_x = [Fraction(float(value)) for value in raw_x]
     exact_y = [Fraction(float(value)) for value in raw_y]
     xx = sum(a * a for a in exact_x)
     xy = sum(a * b for a, b in zip(exact_x, exact_y))
-    y_axis = np.array([float(b * xx - a * xy) for a, b in zip(exact_x, exact_y)]) / float(xx)
-    y_length = float(np.linalg.norm(y_axis))
-    if not np.isfinite(y_length) or y_length <= 1e-12 * y_scale:
+    exact_perpendicular = [(b * xx - a * xy) / xx for a, b in zip(exact_x, exact_y)]
+    # not parallel: |y_perp| > 1e-12 |y|, decided exactly
+    if (sum(p * p for p in exact_perpendicular)
+            <= Fraction(1, 10**24) * sum(b * b for b in exact_y)):
         raise GeometryError("arc y axis must be non-zero and not parallel to the x axis")
-    y_axis = y_axis / y_length
+    # scaled exactly by its largest component before rounding: rounding the perpendicular itself
+    # loses its direction for subnormal axes and overflows near the float limit (review round 1)
+    largest = max(abs(p) for p in exact_perpendicular)
+    y_axis = _unit_vector(np.array([float(p / largest) for p in exact_perpendicular]))
     segments = max(1, math.ceil(abs(sweep) / (math.pi / 2) - 1e-12))
     delta = sweep / segments
     middle_weight = math.cos(delta / 2)

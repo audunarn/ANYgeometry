@@ -252,9 +252,38 @@ def test_nearly_parallel_axes_keep_the_input_plane():
         assert np.abs(np.linalg.norm(points, axis=1) - 1.).max() <= 1e-15 * 8
 
 
+
+@pytest.mark.parametrize("scale", [1e-108, 1e-150, 1e-200, 1e150, 1e200])
+def test_arc_axes_scaled_far_from_one_give_the_circle_in_the_input_plane(scale):
+    """Confirmation review of A2a: the orthogonalisation rounds the whole exact quotient once;
+    a numerator rounded first underflowed (radius 1.023 at 1e-108) or overflowed (1e150)."""
+    x_axis, y_axis = np.array((1., 2., 3.)) * scale, np.array((1., 4., 2.)) * scale
+    arc = nurbs_circular_arc((0., 0., 0.), x_axis, y_axis, 1., 0., math.pi / 2)
+    normal = np.cross((1., 2., 3.), (1., 4., 2.))
+    normal = normal / np.linalg.norm(normal)
+    points = arc.evaluate(np.linspace(0., 1., 201))
+    assert np.abs(np.linalg.norm(points, axis=1) - 1.).max() <= 1e-15 * 8
+    assert np.abs(points @ normal).max() <= 1e-14
+    assert np.allclose(points[0], np.array((1., 2., 3.)) / math.sqrt(14.), atol=1e-15)
+
+
 def test_bounds_contain_the_float_evaluation():
     curve = NurbsCurve(2, (0., 0., 0., 1., 1., 1.), ((0., 1e6, 0.), (.5, 1e6, 0.), (1., 1e6, 0.)))
     t = np.linspace(0., 1., 4001)
     low, high = curve.bounds()
     points = curve.evaluate(t)
     assert np.all(points >= low) and np.all(points <= high)
+
+
+@pytest.mark.parametrize("x_axis, y_axis", [
+    ((math.ulp(0.), math.ulp(0.), math.ulp(0.)), (math.ulp(0.), 0., 0.)),     # subnormal axes
+    ((1., 2.), (1.7e308, -1.7e308)),                                           # near the float limit
+])
+def test_arc_axes_at_the_ends_of_the_float_range(x_axis, y_axis):
+    """Review round 1 of the confirmation fixes: the exact perpendicular is scaled before rounding
+    (subnormal axes gave radius 1.256; axes near 1.7e308 raised OverflowError)."""
+    arc = nurbs_circular_arc((0.,) * len(x_axis), x_axis, y_axis, 1., 0., math.pi / 2)
+    points = arc.evaluate(np.linspace(0., 1., 201))
+    assert np.abs(np.linalg.norm(points, axis=1) - 1.).max() <= 1e-15 * 8
+    if len(x_axis) == 3:
+        assert np.abs(points[:, 1] - points[:, 2]).max() <= 1e-15 * 8         # plane of (1,1,1) and (1,0,0)

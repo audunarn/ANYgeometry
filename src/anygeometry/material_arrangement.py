@@ -1420,6 +1420,7 @@ def certify_persisted_cells(support, loops, edge_ends, position, check=lambda: N
                 if signature != want:
                     raise failure("winding or lobes changed")
     touching_holes = {}
+    hole_lobes = {}                     # compound hole walk -> its simple lobes of the walk's sense
     for outer, holes in loops:
         for loop in (outer, *holes):
             lobes = []
@@ -1444,6 +1445,8 @@ def certify_persisted_cells(support, loops, edge_ends, position, check=lambda: N
                         if not any(point_in_polygon(probe, other) is Outcome.ABOVE for other in main_lobes):
                             raise failure("touching lobe outside its loop")
                         touching_holes.setdefault(id(outer), []).append(lobe)
+                if loop is not outer:
+                    hole_lobes[id(loop)] = main_lobes
     areas = [(_shoelace(op), [_shoelace(hp) for hp in hps]) for _o, _h, op, hps in cells]
     if any(a == 0 for outer_area, hole_areas in areas for a in (outer_area, *hole_areas)):
         raise failure("zero-area loop")
@@ -1483,9 +1486,12 @@ def certify_persisted_cells(support, loops, edge_ends, position, check=lambda: N
                    for g, other in enumerate(hole_polygons) if g != h):
                 raise failure("hole inside another hole")
     for outer, holes, _outer_polygon, hole_polygons in cells:
-        # Hole regions of a cell -- its hole loops and the touching-hole lobes of its outer walk --
-        # never lie inside one another (they may share vertices only).
-        regions = list(hole_polygons) + touching_holes.get(id(outer), [])
+        # Hole regions of a cell -- its hole loops (the simple lobes of a compound hole walk), and
+        # the touching-hole lobes of its outer walk -- never lie inside one another (they may share
+        # vertices only).
+        regions = [region for hole, hole_polygon in zip(holes, hole_polygons)
+                   for region in hole_lobes.get(id(hole), [hole_polygon])]
+        regions += touching_holes.get(id(outer), [])
         for a, region in enumerate(regions):
             probe = ((region[0][0] + region[1][0]) / 2, (region[0][1] + region[1][1]) / 2)
             if any(point_in_polygon(probe, other) is Outcome.ABOVE for b, other in enumerate(regions) if b != a):

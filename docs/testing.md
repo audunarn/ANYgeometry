@@ -128,14 +128,14 @@ pinned to commit SHAs; all run on Node 24.
 
 ## Known local failures
 
-A full local run on Windows (`python -m pytest tests`, Python 3.14) has 15 failures that
+A full local run on Windows (`python -m pytest tests`, Python 3.14) has 15-16 failures that
 CI does not have. They are environmental, not product failures; any other failure is new.
 
-- Nine `tests/test_import_boundaries_cli.py` release-authority tests
-  (`test_release_authority_neutralizes_external_git_configuration[*]`, six cases;
-  `test_release_authority_rejects_mutation[noncanonical-tag-ref|paired-replacement|unmerged-tag-child]`):
-  a `git push` into the test's temporary repository fails during the full run. The file
-  passes when run on its own.
+- Nine or ten `tests/test_import_boundaries_cli.py` release-authority tests (usually
+  `test_release_authority_neutralizes_external_git_configuration[*]`, six cases, and
+  `test_release_authority_rejects_mutation[...]`, three or four cases; which ones varies):
+  a `git push` into the test's temporary repository fails during the full run
+  (`CalledProcessError`). The file passes when run on its own.
 - Six native runtime tests read the workflows' `env:` block and fail with a `KeyError`
   without it: the thread settings `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS` and
   `MKL_NUM_THREADS` set to `1`, and the `*_RUNTIME_EVIDENCE` output files (copy the

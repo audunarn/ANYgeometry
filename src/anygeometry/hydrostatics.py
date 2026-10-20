@@ -28,9 +28,35 @@ from .errors import GeometryError
 from .face_moments import Frame, shell_moments, volume_fields, waterplane_fields
 
 
+def _scaled_normal(normal) -> tuple:
+    """The waterplane normal scaled by a power of two so its largest component lies in [1/2, 1):
+    the same plane direction (exactly, except components more than ~2**1074 below the largest,
+    which may round to zero), with lengths and offsets free of overflow and underflow for any
+    finite normal. For ordinary normals every later norm, unit vector and offset is bit-identical
+    to the unscaled one (power-of-two scaling is exact). Confirmation review of H1, round 2:
+    subnormal and near-limit normals gave wrong planes or overflowed."""
+    values = tuple(float(value) for value in normal)
+    if not values or not all(math.isfinite(value) for value in values) or not any(values):
+        raise GeometryError("the waterplane normal must be a finite non-zero vector")
+    exponent = math.frexp(max(abs(value) for value in values))[1]
+    return tuple(math.ldexp(value, -exponent) for value in values)
+
+
+def _exact_normal(normal) -> tuple:
+    """``(components, length)`` for exact plane offsets ``components . X / length``: the caller's
+    components exactly (scaling may round tiny components to zero, review round 3: such a
+    component matters for a far reference) and the length of the scaled normal times the exact
+    power of two (bit-identical to ``np.linalg.norm`` of the caller's normal for ordinary normals)."""
+    scaled = _scaled_normal(normal)                       # validates the normal
+    values = tuple(float(value) for value in normal)
+    exponent = math.frexp(max(abs(value) for value in values))[1]
+    length = Fraction(float(np.linalg.norm(scaled))) * Fraction(2) ** exponent
+    return tuple(Fraction(value) for value in values), length
+
+
 def waterplane_frame(point, normal=(0., 0., 1.), longitudinal=(1., 0., 0.)) -> Frame:
     """The waterplane frame: ``xi`` along ``longitudinal`` projected into the plane, ``zeta`` along ``normal``."""
-    n = np.asarray(normal, dtype=float)
+    n = np.asarray(_scaled_normal(normal))
     n = n / np.linalg.norm(n)
     given = np.asarray(longitudinal, dtype=float)
     e1 = given - (given @ n) * n
@@ -81,7 +107,7 @@ def hydrostatics(model, faces, point, normal=(0., 0., 1.), longitudinal=(1., 0.,
     """``shift``: the waterplane is moved by ``shift`` along the unit normal from ``point`` (kept exact:
     ``point + shift n`` in floats rounds away the offset for a point far from the shell, review H1
     round 5)."""
-    raw_normal = tuple(float(value) for value in normal)
+    raw_normal, normal_length = _exact_normal(normal)
     from .shell_volume import closed_shell
     faces = list(faces)
     problems = closed_shell(model, faces)
@@ -93,8 +119,8 @@ def hydrostatics(model, faces, point, normal=(0., 0., 1.), longitudinal=(1., 0.,
     # cancelled the central waterplane moments)
     # the offset exactly from the given point and the given (unnormalised) normal: the plane is
     # raw_n . X = raw_n . point (review H1 rounds 2-3: a rounded unit normal tilts a plane given far away)
-    offset = sum(Fraction(a) * (Fraction(float(c)) - Fraction(float(p)))
-                 for a, c, p in zip(raw_normal, centre, point)) / Fraction(float(np.linalg.norm(raw_normal)))
+    offset = sum(a * (Fraction(float(c)) - Fraction(float(p)))
+                 for a, c, p in zip(raw_normal, centre, point)) / normal_length
     offset -= Fraction(float(shift))
     foot = centre - float(offset) * frame.normal
     frame = Frame(foot, frame.axes[0], frame.axes[1], normal=frame.normal)
@@ -168,27 +194,46 @@ def _hull_points(model, faces) -> np.ndarray:
     return np.asarray(points, dtype=float)
 
 
+def _height_range(points, reference, normal):
+    """Lowest and highest of ``(point - reference) . normal / |normal|`` over ``points``, computed exactly
+    (with ``|normal|`` as ``hydrostatics`` rounds it) and rounded outward."""
+    raw, length = _exact_normal(normal)
+    origin = [Fraction(float(value)) for value in reference]
+    heights = [sum(a * (Fraction(float(x)) - r) for a, x, r in zip(raw, point, origin)) / length
+               for point in np.asarray(points, dtype=float)]
+    lowest, highest = min(heights), max(heights)
+    low, high = float(lowest), float(highest)
+    if low > lowest:
+        low = math.nextafter(low, -math.inf)
+    if high < highest:
+        high = math.nextafter(high, math.inf)
+    return low, high
+
+
 def float_at(model, faces, volume: float, normal=(0., 0., 1.), reference=(0., 0., 0.),
              longitudinal=(1., 0., 0.), start: float | None = None, order: int = 24, rtol: float = 1e-8,
              tolerance: float = 1e-12, max_iterations: int = 40) -> dict:
     """The waterplane of the given ``normal`` that displaces ``volume``: the plane through
     ``reference + zeta n`` with ``zeta`` from Newton (``dV / dzeta`` is the waterplane area), safeguarded
     by bisection. Returns the ``hydrostatics`` result with ``zeta`` added."""
-    n = np.asarray(normal, dtype=float)
-    n = n / np.linalg.norm(n)
+    # the caller's normal goes to hydrostatics unchanged: it takes the plane's offset exactly from
+    # the unnormalised normal (confirmation review of H1: a pre-rounded unit normal tilts the plane
+    # through a far reference point)
+    normal = tuple(float(value) for value in normal)
     reference = np.asarray(reference, dtype=float)
     faces = list(faces)
     # a bracket from points that bound the shell: its vertices and the control nets of its NURBS
     # surfaces (rational, positive weights: the surface lies in the net's convex hull; section edges
-    # lie on such surfaces) (review H1 round 1: vertices alone missed a bottom below them)
-    heights = (_hull_points(model, faces) - reference) @ n
-    span = float(np.max(heights) - np.min(heights)) or 1.0
-    low, high = float(np.min(heights)) - 1e-9 * span, float(np.max(heights)) + 1e-9 * span
+    # lie on such surfaces) (review H1 round 1: vertices alone missed a bottom below them). Heights
+    # along the normal exactly, rounded outward (float dot products cancel for a far reference).
+    lowest, highest = _height_range(_hull_points(model, faces), reference, normal)
+    span = (highest - lowest) or 1.0
+    low, high = lowest - 1e-9 * span, highest + 1e-9 * span
     zeta = .5 * (low + high) if start is None or not low < start < high else float(start)
     total = _shell(model, faces, order)[1]
 
     def at(z):
-        return hydrostatics(model, faces, reference, n, longitudinal, order, rtol, shift=z)
+        return hydrostatics(model, faces, reference, normal, longitudinal, order, rtol, shift=z)
     result = at(zeta)
     for _ in range(max_iterations):
         error = result["volume"] - volume
@@ -212,11 +257,10 @@ def float_at(model, faces, volume: float, normal=(0., 0., 1.), reference=(0., 0.
 
 def hydrostatic_table(model, faces, drafts, reference=(0., 0., 0.), normal=(0., 0., 1.), **options) -> list:
     """``hydrostatics`` at the waterplanes through ``reference + draft n`` for each draft."""
-    n = np.asarray(normal, dtype=float)
-    n = n / np.linalg.norm(n)
+    normal = tuple(float(value) for value in normal)          # unrounded: hydrostatics takes it exactly
     rows = []
     for draft in drafts:
-        row = hydrostatics(model, faces, np.asarray(reference, dtype=float), n, shift=draft, **options)
+        row = hydrostatics(model, faces, np.asarray(reference, dtype=float), normal, shift=draft, **options)
         row["draft"] = float(draft)
         rows.append(row)
     return rows

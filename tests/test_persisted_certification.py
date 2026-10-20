@@ -202,3 +202,25 @@ def test_nested_touching_hole_lobes_refuse():
     cells, ends, position = _persisted(arrangement, lambda key: (*moved.get(key[:2], key[:2]), key[2]))
     with pytest.raises(GeometryError, match="hole inside another hole"):
         certify_persisted_cells(PLANE, cells, ends, position, expected=expected_cell_signatures(arrangement))
+
+
+def test_nested_lobes_of_a_compound_hole_walk_refuse():
+    """Confirmation review of E2a: two holes touching each other's corner (not the outer loop)
+    form one hole walk with two lobes; moving one lobe inside the other (contact vertex kept)
+    must refuse, as constructing that domain does."""
+    from anygeometry.arrangement_geometry import LinePath
+    from anygeometry.material_arrangement import (ArrangementPath, MaterialDomain, arrange_material,
+                                                  expected_cell_signatures)
+
+    def ring(points):
+        return tuple(ArrangementPath(LinePath((*a, 0.), (*b, 0.))) for a, b in zip(points, points[1:] + points[:1]))
+    arrangement = arrange_material(MaterialDomain(1, PLANE, (ring([(0., 0.), (10., 0.), (10., 10.), (0., 10.)]),
+                                                             ring([(5., 5.), (3., 4.), (4., 3.)]),
+                                                             ring([(5., 5.), (7., 6.), (6., 7.)]))), (), tolerance=1e-6)
+    assert len(arrangement.cells) == 1
+    cells, ends, position = _persisted(arrangement)
+    certify_persisted_cells(PLANE, cells, ends, position, expected=expected_cell_signatures(arrangement))
+    moved = {(7., 6.): (4., 4.25), (6., 7.): (4.25, 4.)}
+    cells, ends, position = _persisted(arrangement, lambda key: (*moved.get(key[:2], key[:2]), key[2]))
+    with pytest.raises(GeometryError, match="hole inside another hole"):
+        certify_persisted_cells(PLANE, cells, ends, position, expected=expected_cell_signatures(arrangement))
