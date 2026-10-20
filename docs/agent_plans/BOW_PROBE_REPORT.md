@@ -74,13 +74,17 @@ were corrected and are not findings.
 
 1. **Exact shared boundary (`also_on`) for identical boundary rows** (class A, size S-M). Two
    supports share a boundary edge when their boundary restrictions are the same exact curve
-   with the same parameterisation: the boundary rows of the control nets (and of the weights)
-   equal exactly, the same degree and knot vector in the running direction, the same parameter
-   range (`u_range`/`v_range`, i.e. the curve's domain) and the chart correspondence fixed (which
-   boundary of each chart, and its direction). Comparing `iso_curve()` extractions is not
-   enough: they round their controls (two boundaries 2**-54 apart extract identically) and
-   omit the domain. For the mirrored bow the clamped boundary rows and ranges are equal, so
-   the stem and keel qualify. One edge then serves both faces (each face reads its own chart
+   with the same parameterisation. Sufficient, and checkable exactly: each chart boundary lies
+   at a clamped end of its knot vector (the parameter range starts or ends at the first or
+   last knot, so the boundary row of the control net *is* that curve's control polygon); the
+   boundary rows of the control nets (and of the weights) are equal exactly; the knot vectors
+   and parameter ranges in the running direction are equal; and the chart correspondence is
+   fixed (which boundary of each chart, and its direction). Without the clamped-end condition
+   equal rows prove nothing: both bow patches restricted to `u_range = (0.25, 1)` keep equal
+   rows, knots and ranges, but their chart boundaries are mirror curves (y = +-245/128 at
+   v = 0.5). Comparing rounded `iso_curve()` extractions is not enough either (two boundaries
+   2**-54 apart extract identically). For the mirrored bow the stem (u = 0) and keel (v = 0)
+   are clamped ends with equal rows, knots and ranges, so they qualify. One edge then serves both faces (each face reads its own chart
    iso-line), and `closed_shell` closes.
 2. **Adjacent NURBS faces in the audit** (class A, size L): two NURBS faces that share only
    their exact stem and keel edges are certified to touch only along them, with exact

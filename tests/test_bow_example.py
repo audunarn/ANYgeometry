@@ -9,7 +9,7 @@ from anygeometry.bow_example import bow_two_patch
 
 
 def _curve_definition(curve):
-    return curve.degree, tuple(curve.knots), tuple(map(tuple, curve.controls)), curve.weights
+    return curve.degree, tuple(curve.knots), tuple(map(tuple, curve.controls)), curve.weights, curve.domain
 
 
 def test_the_stem_and_keel_iso_curves_of_both_patches_are_the_same_exact_curves():
@@ -273,3 +273,21 @@ def test_a_port_face_cannot_use_the_starboard_stem_edge():
     _starboard, port = bow_two_patch()
     with pytest.raises(GeometryError, match="is not an exact chart curve on the face's support"):
         model.add_face([p["keel"], p["aft"], p["deck"], s["stem"]], surface=port)
+
+
+def test_equal_boundary_rows_prove_a_shared_boundary_only_at_a_clamped_end():
+    """Review round 2 of the probe: restricted to u_range = (0.25, 1), both patches keep equal stem
+    rows, knots and ranges, yet their chart boundaries u = 0 are mirror curves, not one curve."""
+    from anygeometry.nurbs import NurbsSurface
+    starboard, port = bow_two_patch()
+
+    def cropped(surface):
+        return NurbsSurface(surface.degree_u, surface.degree_v, surface.knots_u, surface.knots_v,
+                            surface.controls, surface.weights, (.25, 1.), surface.v_range)
+    s, p = cropped(starboard), cropped(port)
+    assert s.controls[0] == p.controls[0] and (s.u_range, s.v_range) == (p.u_range, p.v_range)
+    assert s.u_range[0] != s.knots_u[0]                                   # not a clamped end
+    ends = s.evaluate_many(np.array([[0., .5]])), p.evaluate_many(np.array([[0., .5]]))
+    assert ends[0][0][1] > 0. and ends[1][0][1] == -ends[0][0][1]          # mirror points, not shared
+    # at the clamped end the same rows are the shared curve
+    assert np.array_equal(starboard.evaluate_many(np.array([[0., .5]])), port.evaluate_many(np.array([[0., .5]])))
