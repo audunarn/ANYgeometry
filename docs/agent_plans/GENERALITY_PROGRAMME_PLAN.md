@@ -68,7 +68,7 @@ workflow still needs the owner) listed as open; "volume with an error bound" in 
 estimate with a refusal threshold was delivered). Order: B2 (A4e) comes before M1/F1, as
 in the architecture; the slice table's "M1 depends on A3/A4" is incomplete. Bow form is
 undecided (plan: one smooth shell; architecture section 6: two patches sharing the stem;
-Q2: one patch per side).
+Q2: one patch per side). Q2 decided 2026-10-20: two patches meeting at the stem (step 3).
 
 ## Owner decisions (2026-10-13)
 
@@ -773,6 +773,36 @@ distance along a chart axis across Bezier pieces, M/m <= JOINT_BALL, crossed in 
 two-sided extension inside the chart). Known: near a shared plane x NURBS corner the clearance's joint
 stretches reach JOINT_BALL (JOINT_BALL + 1) tolerances; descents leaving the chart and near-tangent
 sections that P1 cannot section refuse.
+
+## Step 3: real-bow probe (owner 2026-10-20: Q2 = two patches meeting at the stem)
+
+Owner decision Q2: the bow is two patches meeting at the stem, the architecture's section 6
+form (two bidegree-(3, 3) `NurbsSurface` patches sharing the stem iso-curve exactly via
+`also_on`), chosen because it enables symmetry investigations. The port patch is the exact
+mirror of the starboard patch. The probe builds the real bow, finds which parts work and
+which refuse, and turns each refusal into a minimal reproducer and a proposed design
+response for step 4 (B2 design). It is a probe: a refusal that is reproduced and explained
+meets its acceptance; nothing is forced through.
+
+Geometry (proposal, owner to confirm): midship section of `floating_barge_large` (flat
+bottom z = 0, flat sides y = +-5.5, deck z = 2.5); bow X = 15 .. 20. Starboard patch
+S(u, v): u from the stem (u = 0, in the centreline plane y = 0) to the aft boundary (u = 1,
+in the collision-bulkhead plane X = 15, matching the midship section), v from the keel
+(v = 0) to above the deck (v = 1, z ~ 3, so the deck is a plane x NURBS section). The stem
+rakes forward to the deck; the bottom rises towards the stem. Variant G0 (knuckle at
+X = 15) first; variant G1 (tangent to the flat side and bottom at X = 15) measured in P3e.
+
+| Slice | Output | Acceptance | Depends |
+|---|---|---|---|
+| P3a | `bow_two_patch()` in `b1_example.py` (or a new `bow_example.py`): the starboard patch and its exact mirror | the stem iso-curves of both patches are bit-identical (signed zeros normalised); mirror exact: port controls = starboard with y negated, port evaluation = mirrored starboard evaluation bitwise on 1e4 samples; G0 across the stem; aft boundary in X = 15 within 0 (exact controls) | - |
+| P3b | the two bow faces sharing one stem edge (`CurveOnSurface` on both patches, `also_on`), trimmed by the deck section (z = 2.5) and the aft iso-curve | topology validates; `strict_audit` of the two faces clean, or the refusal reproduced minimally and recorded (expected: NURBS x NURBS face pair across the stem, A5/Q9 scope) | P3a |
+| P3c | closed bow hull: the two bow faces, the deck (bounded by the two deck sections meeting at the stem vertex and the line at X = 15), the collision-bulkhead face at X = 15 (bounded by the two aft iso-curves and straight lines) | `closed_shell` clean and the volume against an independent reference (z-slices, Newton y-limits) within 1e-8, or each refusal reproduced and recorded (expected: a plane face bounded by iso-curves lying in its plane, outside P4b's straight + section edges; two section curves of different surfaces meeting at the stem vertex) | P3b |
+| P3d | symmetry checks on what closes: centre of buoyancy on the centreline (|y_B| <= 1e-12 x extent); heeled +-phi mirror-symmetric (GZ(-phi) = -GZ(phi) within 1e-10); the starboard half closed by the centreline plane | each holds, or refuses with a recorded reason (expected: sectioning the centreline plane, which contains the stem boundary, is P1's patch-boundary-in-plane refusal) | P3c |
+| P3e | probe report `docs/agent_plans/BOW_PROBE_REPORT.md`: every refusal with a minimal reproducer, measured costs (audit, hydrostatics, GZ at bow scale), the G1 variant's tangency behaviour, and a design response per refusal | covers the three expected refusal classes (patch boundary in a plane; stem adjacency; tangency to the flat bottom/side) plus any unexpected one; owner reviews it before step 4 | P3a-P3d |
+
+Open risks: exact predicates at barge scale may be slow (the report measures them; native
+speed work waits for these numbers); the joint band near the stem vertex where two section
+curves and the shared stem edge meet; bit-equality of the stem curve under transforms.
 
 ## Open questions
 
