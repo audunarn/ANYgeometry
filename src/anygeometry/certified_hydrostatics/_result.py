@@ -229,13 +229,18 @@ def write_canonical(document, meter=None, *, max_digits: int, max_bytes: int, la
     from ._arith import digits_exceed, int_to_str
     parts: list = []
     size = 0
+    blocks = 0                 # 64 KiB blocks of output charged for the final join and encoding (6b bulk)
+    metering = meter is not None
 
     def emit(text: str) -> None:
-        nonlocal size
+        nonlocal size, blocks
         parts.append(text)
         size += len(text) if text.isascii() else len(text.encode("utf-8"))
         if size > max_bytes:
             raise refuse(RefusalCategory.RESULT_OUT_OF_RANGE, "the proof exceeds the policy's byte limit")
+        if metering and size // 65536 + 1 > blocks:
+            meter.unit("serialize_bulk", size // 65536 + 1 - blocks)
+            blocks = size // 65536 + 1
 
     def walk(value, path, charged) -> None:
         if charged and meter is not None:
@@ -249,6 +254,8 @@ def write_canonical(document, meter=None, *, max_digits: int, max_bytes: int, la
                 emit(("," if index else "") + json.dumps(key, ensure_ascii=False) + ":")
                 walk(value[key], path + (key,), charged)
             if late is not None and path == tuple(late[0]):
+                nonlocal metering
+                metering = False       # the work field is written after the count it reports (not charged)
                 key = late[1]
                 assert not keys or keys[-1] < key
                 emit(("," if keys else "") + json.dumps(key, ensure_ascii=False) + ":")
@@ -267,9 +274,15 @@ def write_canonical(document, meter=None, *, max_digits: int, max_bytes: int, la
                 raise refuse(RefusalCategory.RESULT_OUT_OF_RANGE, "an integer of the proof exceeds the digit limit")
             emit(int_to_str(value))
         elif isinstance(value, str):
+            # design 6b: escaping one string scalar is one bulk operation, bounded by the byte limit and charged
+            # one unit per 64 KiB before it runs
+            if len(value) > max_bytes:
+                raise refuse(RefusalCategory.RESULT_OUT_OF_RANGE, "a string of the proof exceeds the byte limit")
+            if charged and meter is not None:
+                meter.unit("serialize_bulk", len(value) // 65536 + 1)
             emit(json.dumps(value, ensure_ascii=False))
         else:
             raise TypeError(f"cannot serialise {type(value).__name__}")
 
     walk(document, (), True)
-    return "".join(parts).encode("utf-8")
+    return "".join(parts).encode("utf-8")     # its cost was charged per 64 KiB block as the output grew (6b bulk)

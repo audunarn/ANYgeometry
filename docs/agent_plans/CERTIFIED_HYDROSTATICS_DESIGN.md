@@ -351,6 +351,7 @@ is charged its units before it starts, and is followed immediately by a checkpoi
 |---|---|
 | canonical encoding of the whole model document for `document_checksum` (library serialisation and JSON encoding) | the model's own size (its vertex, edge and face counts); charged one unit per model entity before it runs |
 | one UTF-8 decode of the proof bytes | `max_proof_bytes` (checked before decoding) |
+| one linear copy, comparison, escape or encoding of a single string scalar, or the final join and UTF-8 encoding of the proof (amendment 6c, owner decision 2026-10-20) | `max_proof_bytes` (a string longer than the limit is refused before it is escaped); charged one unit per 64 KiB before it runs (`string_bulk` in the verifier; `serialize_bulk` in the provider, charged per 64 KiB block as the output grows) |
 
 Nothing else is exempt. Every other token scan is bounded by the limit it enforces: an integer
 token is scanned to at most `max_integer_digits + 1` digits before the refusal, never to its end.

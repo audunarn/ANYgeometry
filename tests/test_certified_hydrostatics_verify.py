@@ -1639,3 +1639,31 @@ def test_the_decimal_precheck_is_exact_at_the_cap(monkeypatch):
     assert vm._pow10_bits_lower(30) == (10 ** 30).bit_length() == 100
     tight = refusal_of(lambda: c.verify(q, r, budget=WorkBudget(None, 99)))
     assert tight.category == C.BIT_LENGTH_EXCEEDED
+
+
+# ------------------------------------------------------------------ 6b: single-string bulk operations are charged first
+
+def test_long_strings_are_charged_per_64_kib_before_they_are_copied_or_compared():
+    def units(n):
+        c = Case(lambda: box(), units="m" * n)
+        q, r = c.query(Z_, F(1, 2))
+        budget = WorkBudget.unlimited()
+        c.verify(q, r, budget=budget)
+        return budget.counts()["units"].get("string_bulk", 0)
+
+    small, large = units(10), units(1_000_000)
+    assert large - small >= 2 * (1_000_000 // 65536)      # parsed (joined) and compared at least once each
+
+
+def test_long_decimal_strings_are_charged_before_they_are_split():
+    c = Case(lambda: box())
+    q, r = c.query(Z_, F(-1), forms=("decimal",))
+    lo, hi, width = r.volume.decimal
+    long_lo = "0" * 1_000_000 + ".0"
+    candidate = with_proof(alter_quantity(r, "V", decimal=(long_lo, hi, width)))
+    budget = WorkBudget(None, 128)
+    try:
+        c.verify(q, candidate, budget=budget)
+    except CertifiedHydrostaticsRefusal:
+        pass
+    assert budget.counts()["units"].get("string_bulk", 0) >= 2 * (len(long_lo) // 65536)

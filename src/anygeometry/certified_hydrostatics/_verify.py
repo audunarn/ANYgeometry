@@ -123,8 +123,21 @@ def _each(items, kind: str = "element"):
         yield item
 
 
+def _charge_text(length: int, kind: str = "string_bulk") -> None:
+    """Design 6b: one linear copy, compare, escape or encode of a single string scalar (bounded by the proof's byte
+    limit) is one bulk operation, charged one unit per 64 KiB before it runs."""
+    for _ in range(length // _CHUNK + 1):
+        _tick(kind)
+
+
 def _joined(parts, separator: str = "") -> str:
-    return separator.join(_each(parts, "join_piece"))
+    pieces = []
+    length = 0
+    for piece in _each(parts, "join_piece"):
+        pieces.append(piece)
+        length += len(piece) + len(separator)
+    _charge_text(length)                 # the copy into one string, charged before it runs (6b)
+    return separator.join(_each(pieces, "join_copy"))
 
 
 def _tsorted(items, key=None):
@@ -394,6 +407,8 @@ def _same(a, b) -> bool:
             if not _same(x, y):
                 return False
         return True
+    if type(a) is str and type(b) is str:
+        _charge_text(min(len(a), len(b)))
     return a == b
 
 
@@ -1678,6 +1693,7 @@ def _require_decimal_fits(whole: str, frac: str) -> None:
 def _decimal_fraction(text):
     """A decimal bound (a trusted ``str``); the grammar is `-?digits(.digits)?`. The digit limit of the policy applies
     to integer tokens of the proof only, not to decimal strings (their length is bounded by the proof's byte limit)."""
+    _charge_text(2 * len(text))          # the split into whole and fraction digits and their concatenation (6b)
     parts = _decimal_parts(text)
     if parts is None:
         raise _fail("enclosure", "a decimal bound is not a plain decimal string")
@@ -2004,6 +2020,8 @@ def _first_difference(a, b, path=()):
             if found:
                 return found
         return None
+    if ta is str and tb is str:
+        _charge_text(min(len(a), len(b)))
     if ta is not tb or a != b:
         return path, "value"
     return None

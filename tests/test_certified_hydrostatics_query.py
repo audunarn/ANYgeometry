@@ -1129,7 +1129,7 @@ def test_write_canonical_meters_everything_by_default():
     assert info.value.category is C.BUDGET_EXHAUSTED
     budget = WorkBudget(None, None)
     assert write_canonical({"a": [1, 2]}, Meter(budget), max_digits=10, max_bytes=100) == b'{"a":[1,2]}'
-    assert budget.operations == 5                                # object, key, array, 1, 2
+    assert budget.operations == 6           # object, key, array, 1, 2 + one 64 KiB output block (final join, 6b)
 
 
 # ------------------------------------------------------------------ CH fixes 6b: FX3 digit limit without 10 ** limit
@@ -1174,3 +1174,13 @@ def test_the_digit_limit_is_exact_at_the_boundary():
         assert not digits_exceed(0, limit)
     assert not digits_exceed(10 ** 5000 - 1, 2 ** 32) and not digits_exceed(-(10 ** 5000), 2 ** 32)
     assert digits_exceed(10 ** 5000, 4999) and not digits_exceed(10 ** 5000, 5001)
+
+
+def test_long_proof_strings_are_charged_per_64_kib_before_they_are_escaped():
+    from test_certified_hydrostatics_admission import unit_box
+    model, faces = unit_box()
+    prepared = prepare_certified_hydrostatics(model, faces, units="m" * 1_000_000)
+    query = HalfSpaceQuery(normal=(0, 0, 1), offset=F(1, 2), waterplane_origin=(0, 0, 0),
+                           waterplane_axes=((1, 0, 0), (0, 1, 0)), forms=("exact",))
+    result = query_certified_hydrostatics(prepared, query)
+    assert result.work["units"].get("serialize_bulk", 0) >= 2 * (1_000_000 // 65536)
