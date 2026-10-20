@@ -280,6 +280,30 @@ implementation is untrusted. Agreement of the two implementations corroborates; 
 trusted checker (b) is the justification. Nothing is claimed about the physical vessel, its
 source drawings, tank communication or loading.
 
+## 6a. Normative formats (added 2026-10-20 after CH1c)
+
+Both CH1b (provider) and CH1c (independent verifier) produce these byte for byte; a change is a
+new convention version.
+
+- **Canonical JSON**: UTF-8, sorted keys, separators `,` and `:` without whitespace, integers in
+  full (no digit limit), rationals as `[numerator, denominator]` in lowest terms with a positive
+  denominator, doubles as `float.hex()` strings, no JSON floats.
+- **Snapshot document** (hashed with SHA-256 for the snapshot digest): `{"faces", "vertices",
+  "edges", "vertex_incidence"}`. `faces`: in the selected order, each `{"id", "support": {"origin",
+  "u", "v"} (exact pairs), "loops": [[edge id, forward, start vertex id], ...] per loop, outer loop
+  first}`. `vertices`: `[id, [x, y, z] exact]` sorted by id. `edges`: `[id, start, end,
+  sorted [[face id, forward], ...]]` sorted by id. `vertex_incidence`: `[id, sorted face ids,
+  sorted edge ids]` sorted by id.
+- **Artifact descriptor**: distribution name and version, `__version__`, every file under the
+  installed package directory except `__pycache__` directories, sorted by POSIX relative path,
+  each with its SHA-256; runtime dependencies = the distribution's `Requires-Dist` entries without
+  an `extra ==` marker, compared as a set; the Python version string.
+- **`expected` argument of the verifier**: a mapping with `artifact_files` (the per-file SHA-256
+  list of the admitted wheel), `convention_version`, `units` and `policy` (the verifier takes its
+  parse limits from `expected["policy"]`, never from the proof).
+- **Refusal sub-reason**: `CertifiedHydrostaticsRefusal.sub_reason` (a public attribute; `None`
+  except for `VERIFICATION_FAILED`), one of the section 7 sub-reasons.
+
 ## 7. Refusals, work, cancellation
 
 `CertifiedHydrostaticsRefusal(GeometryError)` carries `category` (public enum), `phase`
