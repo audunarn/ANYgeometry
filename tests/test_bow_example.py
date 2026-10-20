@@ -16,6 +16,10 @@ def test_the_stem_and_keel_iso_curves_of_both_patches_are_the_same_exact_curves(
     starboard, port = bow_two_patch()
     for fixed, value in (("u", 0.), ("v", 0.)):              # stem (u = 0) and keel (v = 0)
         assert _curve_definition(starboard.iso_curve(fixed, value)) == _curve_definition(port.iso_curve(fixed, value))
+    # the exact boundary rows of the nets (iso_curve() rounds its controls) and the ranges
+    assert starboard.controls[0] == port.controls[0]                                       # stem row
+    assert [row[0] for row in starboard.controls] == [row[0] for row in port.controls]     # keel column
+    assert (starboard.u_range, starboard.v_range) == (port.u_range, port.v_range)
     stem = np.asarray(starboard.iso_curve("u", 0.).controls)
     keel = np.asarray(starboard.iso_curve("v", 0.).controls)
     assert np.all(stem[:, 1] == 0.) and np.all(keel[:, 1] == 0.)          # both in the centreline plane
@@ -125,27 +129,49 @@ def test_a_plane_face_bounded_by_iso_curves_in_its_plane_is_refused():
 import pytest
 
 
+_SECTION_PLANES = {
+    "deck": ((0., 0., 2.5), (1., 0., 0.), (0., 1., 0.)),
+    "waterline": ((0., 0., 1.2), (1., 0., 0.), (0., 1., 0.)),
+    "frame": ((17., 0., 0.), (0., 1., 0.), (0., 0., 1.)),
+    "longitudinal": ((0., 2., 0.), (1., 0., 0.), (0., 0., 1.)),      # across the chine
+    "bulkhead": ((15., 0., 0.), (0., 1., 0.), (0., 0., 1.)),         # contains the aft boundary
+    "centreline": ((0., 0., 0.), (1., 0., 0.), (0., 0., 1.)),        # contains the stem and keel
+    "side": ((0., 5.5, 0.), (1., 0., 0.), (0., 0., 1.)),             # aft side boundary (G1: tangent)
+    "bottom": ((0., 0., 0.), (1., 0., 0.), (0., 1., 0.)),            # aft bottom boundary (G1: tangent)
+}
+_BOX_EDGE = "the section runs along a box edge"
+# expected outcome per (plane, join), absent = certified; a string = the exact refusal message; a chart
+# point = a singular box (smaller than 1e-3) containing that chart corner
+_SECTION_OUTCOMES = {
+    ("bulkhead", "G0"): _BOX_EDGE, ("bulkhead", "G1"): _BOX_EDGE,
+    ("centreline", "G0"): (0., 0.), ("centreline", "G1"): (0., 0.),   # the forefoot corner
+    ("side", "G0"): _BOX_EDGE, ("side", "G1"): (1., 1.),
+    ("bottom", "G0"): _BOX_EDGE, ("bottom", "G1"): (1., .5),
+}
+
+
 @pytest.mark.parametrize("join", ["G0", "G1"])
-@pytest.mark.parametrize("origin, u_vector, v_vector, certified", [
-    ((0., 0., 2.5), (1., 0., 0.), (0., 1., 0.), True),          # deck
-    ((0., 0., 1.2), (1., 0., 0.), (0., 1., 0.), True),          # waterline
-    ((17., 0., 0.), (0., 1., 0.), (0., 0., 1.), True),          # frame
-    ((0., 2., 0.), (1., 0., 0.), (0., 0., 1.), True),           # longitudinal across the chine
-    ((15., 0., 0.), (0., 1., 0.), (0., 0., 1.), False),         # bulkhead: contains the aft boundary
-    ((0., 0., 0.), (1., 0., 0.), (0., 0., 1.), False),          # centreline: contains the stem and keel
-    ((0., 5.5, 0.), (1., 0., 0.), (0., 0., 1.), False),         # flat side: aft boundary (G1: tangent)
-    ((0., 0., 0.), (1., 0., 0.), (0., 1., 0.), False),          # flat bottom: aft boundary (G1: tangent)
-])
-def test_which_planes_section_the_bow(join, origin, u_vector, v_vector, certified):
+@pytest.mark.parametrize("name", list(_SECTION_PLANES))
+def test_which_planes_section_the_bow(join, name):
+    import re
     from anygeometry import Plane
     from anygeometry.bow_example import bow_starboard_surface
     from anygeometry.plane_nurbs import PlaneNurbsNotCertified, plane_nurbs_section
-    plane, surface = Plane(origin, u_vector, v_vector), bow_starboard_surface(join)
-    if certified:
+    plane, surface = Plane(*_SECTION_PLANES[name]), bow_starboard_surface(join)
+    expected = _SECTION_OUTCOMES.get((name, join))
+    if expected is None:
         assert plane_nurbs_section(plane, surface).paths
+        return
+    with pytest.raises(PlaneNurbsNotCertified) as refusal:
+        plane_nurbs_section(plane, surface)
+    message = str(refusal.value)
+    if isinstance(expected, str):
+        assert message == expected
     else:
-        with pytest.raises(PlaneNurbsNotCertified, match="runs along a box edge|singular box"):
-            plane_nurbs_section(plane, surface)
+        found = re.fullmatch(r"singular box at depth \d+: u \(([^,]+), ([^)]+)\), v \(([^,]+), ([^)]+)\)", message)
+        assert found, message
+        u0, u1, v0, v1 = map(float, found.groups())
+        assert u0 <= expected[0] <= u1 and v0 <= expected[1] <= v1 and u1 - u0 < 1e-3 and v1 - v0 < 1e-3
 
 
 def test_the_g1_variant_leaves_the_midship_tangentially():
@@ -172,10 +198,12 @@ def test_the_halves_meet_bluntly_at_the_stem_tangentially_at_the_keel_and_in_a_c
 
     stem = interior_angles(np.array([[0., v] for v in np.linspace(.05, 1., 20)]))
     keel = interior_angles(np.array([[u, 0.] for u in np.linspace(.8, 1., 5)]))
-    forefoot = interior_angles(np.array([[0., 0.]]))
-    assert 110. < stem.min() and stem.max() < 177.
+    foot = interior_angles(np.array([[0., v] for v in (0., .0025, .005, .01, .02, .04)]))
+    assert 110. < stem.min() and stem.max() < 177.                    # blunt along most of the stem
     assert keel.min() > 179.                                          # the flat bottom: a tangent seam
-    assert forefoot[0] < 1e-6                                         # tangent plane = centreline plane
+    assert foot[0] < 1e-6                                             # tangent plane = centreline plane
+    # (review of the probe) the angle falls continuously to 0 towards the forefoot: no positive bound
+    assert np.all(np.diff(foot) > 0.) and abs(foot[3] - 37.5) < 2. and abs(foot[4] - 68.3) < 2.
 
 
 def test_the_centreline_plane_separates_the_halves_exactly():
@@ -189,3 +217,59 @@ def test_the_centreline_plane_separates_the_halves_exactly():
     zero = controls[..., 1] == 0.
     assert np.all(zero[0, :]) and np.all(zero[:, 0])                  # stem row, keel column
     assert not np.any(zero[1:, 1:])                                   # positive everywhere else
+
+
+def _closed_models():
+    """(full bow with consistently oriented loops, starboard half closed by the centreline plane)."""
+    from anygeometry import Plane
+    from anygeometry.b1_example import _consistent_loops
+    from anygeometry.bow_example import build_bow_faces_below_deck
+    starboard, port = bow_two_patch()
+    deck_plane = Plane((0., 0., 2.5), (1., 0., 0.), (0., 1., 0.))
+    bulkhead_plane = Plane((15., 0., 0.), (0., 1., 0.), (0., 0., 1.))
+    model, _faces, edges = build_bow_faces_below_deck(make_faces=False)
+    s, p = edges["starboard"], edges["port"]
+    line = model.add_line(model.edges[s["deck"]].start, model.edges[p["deck"]].start)
+    loops = _consistent_loops(model, [list(s.values()), list(p.values()), [s["deck"], p["deck"], line],
+                                      [s["aft"], p["aft"], line]])
+    full = (model, [model.add_face_from_loop(loop, surface=support)
+                    for loop, support in zip(loops, (starboard, port, deck_plane, bulkhead_plane))], edges)
+    half, _faces, edges = build_bow_faces_below_deck(sides=("starboard",), make_faces=False)
+    s = edges["starboard"]
+    centre_aft = half.add_point(15., 0., 2.5)
+    deck_centre = half.add_line(half.edges[s["deck"]].end, centre_aft)
+    deck_aft = half.add_line(centre_aft, half.edges[s["deck"]].start)
+    bulkhead_centre = half.add_line(half.edges[s["keel"]].end, centre_aft)
+    loops = _consistent_loops(half, [list(s.values()), [s["deck"], deck_centre, deck_aft],
+                                     [s["aft"], deck_aft, bulkhead_centre],
+                                     [s["stem"], s["keel"], bulkhead_centre, deck_centre]])
+    supports = (starboard, deck_plane, bulkhead_plane, Plane((0., 0., 0.), (1., 0., 0.), (0., 0., 1.)))
+    return full, (half, [half.add_face_from_loop(loop, surface=sp) for loop, sp in zip(loops, supports)])
+
+
+def test_the_full_bow_fails_to_close_only_on_the_duplicate_stem_and_keel_edges():
+    from anygeometry.shell_volume import closed_shell
+    (model, faces, edges), _half = _closed_models()
+    duplicates = sorted(edges[side][k] for side in edges for k in ("stem", "keel"))
+    assert closed_shell(model, faces) == [f"edge {edge} bounds 1 faces of the shell (needs exactly 2)"
+                                          for edge in duplicates]
+
+
+def test_the_starboard_half_closes_but_its_hydrostatics_refuse_the_in_plane_iso_curves():
+    from anygeometry import GeometryError
+    from anygeometry.hydrostatics import hydrostatics
+    from anygeometry.shell_volume import closed_shell
+    _full, (half, faces) = _closed_models()
+    assert closed_shell(half, faces) == []
+    with pytest.raises(GeometryError, match="only straight and section edges bound plane faces"):
+        hydrostatics(half, faces, (17., 2., 1.))
+
+
+def test_a_port_face_cannot_use_the_starboard_stem_edge():
+    from anygeometry import GeometryError
+    from anygeometry.bow_example import build_bow_faces_below_deck
+    model, _faces, edges = build_bow_faces_below_deck(make_faces=False)
+    p, s = edges["port"], edges["starboard"]
+    _starboard, port = bow_two_patch()
+    with pytest.raises(GeometryError, match="is not an exact chart curve on the face's support"):
+        model.add_face([p["keel"], p["aft"], p["deck"], s["stem"]], surface=port)

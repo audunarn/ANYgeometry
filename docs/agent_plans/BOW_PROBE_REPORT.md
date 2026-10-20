@@ -6,8 +6,9 @@ chosen for symmetry investigations. Dimensions: the `floating_barge_large` midsh
 X = 15) first; variant G1 (tangent to the flat bottom and side) measured.
 
 Code: `src/anygeometry/bow_example.py` (`bow_two_patch(join)`, `build_bow_faces_below_deck`);
-every finding below is pinned by `tests/test_bow_example.py`, including the refusals, so the
-tests change when a design response lands.
+the findings below, refusals included, are pinned by `tests/test_bow_example.py` (geometry,
+sections, face validation, audit, `closed_shell` and the hydrostatics refusal), so the tests
+change when a design response lands. Timings are observations on one machine, not guarantees.
 
 ## Geometry (P3a): met
 
@@ -21,7 +22,9 @@ iso-curves are the same exact NURBS curves as the starboard ones, and its evalua
 mirrored starboard evaluation bitwise (10^4 samples). The normal never vanishes (min |n| 0.56)
 and the orientation is consistent (mirroring reverses the port patch's natural orientation:
 its S_u x S_v points inwards). The interior angle between the two halves, from their outward
-normals, is blunt along the stem (about 120-175 degrees), approaches 180 degrees along the keel
+normals, is blunt along most of the stem (about 120-175 degrees for v >= 0.05) but falls
+continuously to 0 towards the forefoot (about 37 degrees at v = 0.01, 68 at v = 0.02), so no
+positive angle bound holds along the whole stem; it approaches 180 degrees along the keel
 towards X = 15 (the halves meet tangentially in the flat bottom: a smooth seam, not a crease),
 and is 0 at the forefoot where the stem meets the keel: both curves lie in the centreline
 plane, so the surface's tangent plane there is the centreline plane (a cusp; inherent to any
@@ -69,21 +72,28 @@ were corrected and are not findings.
 
 ## Proposed design responses (input to step 4)
 
-1. **Exact shared boundary (`also_on`) for identical iso-curves** (class A, size S-M). Two
-   supports share a boundary edge when their boundary iso-curves are the same exact NURBS
-   curve: equal degree, knots, controls and weights, compared exactly. For the mirrored bow
-   that is a complete proof. One edge then serves both faces (each face reads its own chart
+1. **Exact shared boundary (`also_on`) for identical boundary rows** (class A, size S-M). Two
+   supports share a boundary edge when their boundary restrictions are the same exact curve
+   with the same parameterisation: the boundary rows of the control nets (and of the weights)
+   equal exactly, the same degree and knot vector in the running direction, the same parameter
+   range (`u_range`/`v_range`, i.e. the curve's domain) and the chart correspondence fixed (which
+   boundary of each chart, and its direction). Comparing `iso_curve()` extractions is not
+   enough: they round their controls (two boundaries 2**-54 apart extract identically) and
+   omit the domain. For the mirrored bow the clamped boundary rows and ranges are equal, so
+   the stem and keel qualify. One edge then serves both faces (each face reads its own chart
    iso-line), and `closed_shell` closes.
 2. **Adjacent NURBS faces in the audit** (class A, size L): two NURBS faces that share only
    their exact stem and keel edges are certified to touch only along them, with exact
    separation of the sub-patches away from the edges. A joint band from a lower bound of the
-   angle between the patches (the P4e argument) covers the stem, but not the keel, where the
-   halves meet tangentially towards X = 15, nor the forefoot cusp (angle 0). For a mirror pair
+   angle between the patches (the P4e argument) does not work here: the angle falls to 0
+   towards the forefoot along the stem, and the halves meet tangentially along the keel
+   towards X = 15. For a mirror pair
    the seam can instead be argued by symmetry: each half lies on one side of the centreline
    plane (exact sign of y over the patch, zero only on the shared curves), which separates the
    halves without any angle bound. This is a narrow part of A5, not general NURBS x NURBS.
 3. **Plane faces trimmed by in-plane iso-curves** (class B, size M). Certificate: every 3D
-   control point of the iso-curve lies exactly on the plane (here x = 15 and y = 0 exactly);
+   control point of the exact boundary row (not a rounded `iso_curve()` extraction) lies
+   exactly on the plane (here x = 15 and y = 0 exactly);
    with positive weights the curve then lies in the plane. Trim validation needs line x
    in-plane-curve predicates (the P4a engine on a planar curve) and `face_moments` the Green
    line integral along such edges. This unblocks the bulkhead, the centreline face, the half
