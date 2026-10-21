@@ -609,15 +609,26 @@ def test_a_shell_missing_a_face_is_not_closed_and_a_hole_is_invalid():
 
 
 def test_a_planar_face_off_its_support_plane_is_not_exactly_planar():
+    """The centre face has straight edges only: only the exact vertex-in-plane test can refuse it; the deck face
+    also has an arc, which the arc test refuses with the same category."""
     model, faces = half_hull()
     ids = list(faces.values())
-    deck = model.faces[faces["deck"]]
-    model._put_entity("face", replace(deck, surface=Plane((0., 0., 3.0000001), (1., 0., 0.), (0., 1., 0.))))
-    try:
-        error = refused(model, ids)
-        assert error.category is C.NOT_EXACTLY_PLANAR
-    finally:
-        model._put_entity("face", deck)
+    for key, plane in (("centre", Plane((0., 1e-7, 0.), (1., 0., 0.), (0., 0., 1.))),
+                       ("deck", Plane((0., 0., 3.0000001), (1., 0., 0.), (0., 1., 0.)))):
+        face = model.faces[faces[key]]
+        model._put_entity("face", replace(face, surface=plane))
+        try:
+            error = refused(model, ids)
+            assert error.category is C.NOT_EXACTLY_PLANAR and "support plane" in error.detail or key == "deck"
+            assert error.category is C.NOT_EXACTLY_PLANAR
+        finally:
+            model._put_entity("face", face)
+
+
+def test_a_zero_length_planar_edge_is_an_invalid_loop():
+    view = seg_view([(0, 0), (0, 0), (1, 1), (0, 2)])
+    error = refusal_of(lambda: ca._check_supports(kern(), [view]))
+    assert error.category is C.INVALID_LOOP and "zero length" in error.detail
 
 
 # ------------------------------------------------------------------ unshared and doubly shared curved edges
