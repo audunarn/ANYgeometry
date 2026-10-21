@@ -34,7 +34,7 @@ ONE = Fraction(1)
 
 @dataclass(frozen=True)
 class KernelLimits:
-    """Policy limits that bound every loop of the kernel (D-CH3-7 defaults).
+    """Policy limits that bound every loop of the kernel (D-CH3-7 defaults; order 16 by owner decision 2026-10-21, 32 is opt-in).
 
     ``max_isolation_bits``: an isolating interval is never refined below width ``2**-max_isolation_bits``;
     ``max_taylor_order``: the highest Taylor order of a term enclosure; ``max_pieces_per_integral``: the
@@ -42,7 +42,7 @@ class KernelLimits:
     kernel itself does not consume it)."""
 
     max_isolation_bits: int = 4096
-    max_taylor_order: int = 32
+    max_taylor_order: int = 16
     max_pieces_per_integral: int = 1024
     max_refinement_rounds: int = 8
 

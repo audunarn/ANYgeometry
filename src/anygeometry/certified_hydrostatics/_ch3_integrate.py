@@ -22,7 +22,7 @@ bound; refined by bisection), and the inner piece starts at the rational interva
 
 Allocation: the target ``tau`` of an integral is split equally over its pieces; in each piece the algebraic
 ends draw first (each refined until its width is at most a quarter of the piece's share), the rest is split
-equally over the partial-fraction terms; orders run 8, 16, 32 (capped by ``max_taylor_order``) before a term
+equally over the partial-fraction terms; orders run 8, 16 by default (32 only if opted in via ``max_taylor_order``; capped by it) before a term
 piece is bisected, and each child gets half of its parent's allowance. The total width is the sum of every term
 and end width (the enclosures are added exactly). Failure within ``max_pieces_per_integral`` refuses
 ``ACCURACY_UNACHIEVABLE`` with the achieved width."""

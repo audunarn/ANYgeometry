@@ -248,7 +248,7 @@ def test_composite_integrands_with_algebraic_ends_contain_mpmath_references():
 
 
 def test_design_issue_long_centre_bits_at_order_32_exceed_the_cap():
-    """Design issue (reported, not worked around): algebraic ends refined for tau = 1e-14 give inner ends with
+    """Design issue (reported, not worked around; order 32 is now opt-in, passed explicitly): algebraic ends refined for tau = 1e-14 give inner ends with
     ~46-bit denominators; with the design's midpoint centre, g_j = P_j(c) / (Q(c)^{k+j} j!) at k = 3, K = 32 needs
     about 6575 bits, beyond max_bits = 4096. The kernel refuses (fail closed) rather than changing the formula."""
     rng = random.Random(SEED + 1)
@@ -258,8 +258,29 @@ def test_design_issue_long_centre_bits_at_order_32_exceed_the_cap():
     a = AlgebraicNumber.from_interval(K0, P(-F(1, 10), 0, 1), F(3, 10), F(4, 10))
     b = AlgebraicNumber.from_interval(K0, P(-F(1, 2), 0, 1), F(7, 10), F(3, 4))
     with pytest.raises(CertifiedHydrostaticsRefusal) as info:
-        enclose_rational_integral(kern(), num, [(W, 3), (D, 3)], a, b, F(1, 10 ** 14))
+        enclose_rational_integral(kern(limits=KernelLimits(max_taylor_order=32)), num, [(W, 3), (D, 3)], a, b,
+                                  F(1, 10 ** 14))
     assert info.value.category is C.BIT_LENGTH_EXCEEDED
+
+
+def test_policy_default_max_taylor_order_is_16_and_32_is_opt_in():
+    """2026-10-21 owner decision (a): the default order is 16 (bit cap: ~140 bits per end-denominator bit at order
+    32). The long-end case that refuses BIT_LENGTH_EXCEEDED at order 32 succeeds with default limits."""
+    assert KernelLimits().max_taylor_order == 16
+    assert KernelLimits(max_taylor_order=32).max_taylor_order == 32
+    rng = random.Random(SEED + 1)
+    W = P(1, F(-1, 2), F(1, 2))
+    D = P(rng.randint(3, 6), rng.choice((-1, 1)))
+    num = P(*[rng.randint(-5, 5) for _ in range(rng.randint(1, 9))]) or P(1)
+    a = AlgebraicNumber.from_interval(K0, P(-F(1, 10), 0, 1), F(3, 10), F(4, 10))
+    b = AlgebraicNumber.from_interval(K0, P(-F(1, 2), 0, 1), F(7, 10), F(3, 4))
+    tau = F(1, 10 ** 14)
+    with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+        enclose_rational_integral(kern(limits=KernelLimits(max_taylor_order=32)), num, [(W, 3), (D, 3)], a, b, tau)
+    assert info.value.category is C.BIT_LENGTH_EXCEEDED
+    budget = WorkBudget(None, 4096)
+    result = enclose_rational_integral(kern(budget=budget), num, [(W, 3), (D, 3)], a, b, tau)
+    assert result.enclosure.width <= tau and budget.counts()["max_bits_seen"] <= 4096
 
 
 def test_polynomial_integrals_with_rational_ends_are_exact():
