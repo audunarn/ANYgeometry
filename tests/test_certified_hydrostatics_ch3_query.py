@@ -625,7 +625,7 @@ def test_the_proof_carries_the_enclosures_cut_points_and_orientation_convention(
     result = answer("half", "heel+0.1")
     document = result.proof_document()
     assert document["model"]["snapshot_digest"] == prepared("half").snapshot_digest
-    assert document["preparation_policy"]["convention_version"] == "2" and document["preparation_policy"]["max_bits"] == 4096
+    assert document["preparation_policy"]["convention_version"] == "2" and document["preparation_policy"]["max_bits"] == CertifiedHydrostaticsPolicy().max_bits
     claim = document["result"]
     assert claim["volume"]["enclosure"]["lo"] == [result.volume.enclosure[0].numerator, result.volume.enclosure[0].denominator]
     assert "exact" not in claim["volume"] and set(claim["volume"]) >= {"enclosure", "binary64", "decimal", "accuracy"}
@@ -654,7 +654,7 @@ def test_planar_queries_still_ignore_the_enclosure_form():
 def test_the_policy_bit_cap_is_enforced_when_the_budget_carries_it():
     """A budget made by ``policy.new_budget()`` caps exact values at ``max_bits``: the pilot queries at 1e-9 need
     longer integers and are refused ``BIT_LENGTH_EXCEEDED`` (fail closed) -- the default budget is unlimited."""
-    policy = CertifiedHydrostaticsPolicy()
+    policy = CertifiedHydrostaticsPolicy(max_bits=4096)   # the former default; the cap is a policy choice
     p = prepared("half")
     with pytest.raises(CertifiedHydrostaticsRefusal) as info:
         query_certified_hydrostatics(p, make_query(PLANES["z1.75"], accuracy={"V": 1e-9}, forms=("enclosure",)),
@@ -672,3 +672,28 @@ def test_cancellation_and_budget_stop_a_curved_query():
     with pytest.raises(CertifiedHydrostaticsRefusal) as info:
         query_certified_hydrostatics(p, q, cancellation_check=lambda: True)
     assert info.value.category is C.CANCELLED
+
+
+def test_binary64_and_decimal_contain_the_published_claim_also_when_the_value_is_exact():
+    """Review finding (Sol r1): for a curved quantity with an exact value the binary64 form rounded the exact value
+    and not the published claim; the binary64 form must be an outward rounding of the claim (design 4.4)."""
+    model, ids = solids.solid_fc(build_face, surface_fc, planes_fc)
+    curved = prepare_certified_hydrostatics(model, ids)
+    q = HalfSpaceQuery(normal=(0., 1., 1.), offset=F(11, 8), absolute_accuracy={"A": 1e-9},
+                       forms=("enclosure", "binary64", "decimal"))
+    area = query_certified_hydrostatics(curved, q).section("plane").quantity("A")
+    lo, hi = area.enclosure
+    assert area.binary64[0] <= float(lo) and float(hi) <= area.binary64[1]
+    assert F(area.binary64[0]) <= lo and hi <= F(area.binary64[1])
+
+
+def test_the_policy_default_bit_cap_admits_the_pilot_queries():
+    """Owner decision 2026-10-21: ``max_bits`` is raised so that a budget made by ``policy.new_budget()`` runs the
+    pilot queries (7.5k bits upright, 15-33k inclined at 1e-9)."""
+    policy = CertifiedHydrostaticsPolicy()
+    assert policy.max_bits >= 1 << 16
+    p = prepared("full")
+    for name in ("z1.75", "both+0.1"):
+        q = make_query(PLANES[name], accuracy={"V": 1e-9}, forms=("enclosure",))
+        result = query_certified_hydrostatics(p, q, budget=policy.new_budget())
+        assert result.volume.enclosure is not None

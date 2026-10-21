@@ -40,7 +40,7 @@ class CertifiedHydrostaticsPolicy:
     max_integer_digits: int = 100_000
     delta_hint_bits: int = 40
     delta_chart_bits: int = 40
-    max_bits: int = 4096
+    max_bits: int = 1 << 16   # raised from 4096 (owner 2026-10-21): the B1 pilot queries at 1e-9 reach ~33k bits
     max_isolation_bits: int = 4096
     max_taylor_order: int = 16
     max_pieces_per_integral: int = 1024

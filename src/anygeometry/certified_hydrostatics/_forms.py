@@ -210,16 +210,12 @@ def build_enclosed_quantity(name: str, claim: tuple, exact, forms, accuracy, wid
     """A quantity of a curved preparation: the claim ``[lo, hi]`` (design 4.4, width at most ``3/4`` of ``width``,
     the accuracy asked for or the default width) in the requested forms. ``exact`` is ``(numerator,
     norm_squared)`` when the computation was exact (then the exact form is carried as for planar quantities),
-    else ``None``. ``binary64`` and ``decimal`` are outward roundings of the claim (the exact value when
-    ``exact``); one that cannot meet ``width`` refuses ``ACCURACY_UNACHIEVABLE`` for that form."""
+    else ``None``. ``binary64`` and ``decimal`` are outward roundings of the claim; one that cannot meet ``width`` refuses ``ACCURACY_UNACHIEVABLE`` for that form."""
     ar = Ar(meter)
     lo, hi = claim
     binary64 = decimal = None
     if "binary64" in forms:
-        if exact is not None:
-            binary64 = binary64_enclosure(exact[0], exact[1], meter, name)
-        else:
-            binary64 = interval_binary64(lo, hi, meter, name)
+        binary64 = interval_binary64(lo, hi, meter, name)   # outward rounding of the published claim
         if ar.cmp(ar.sub(ar.exact_float(binary64[1]), ar.exact_float(binary64[0])), width) > 0:
             raise refuse(RefusalCategory.ACCURACY_UNACHIEVABLE,
                          f"binary64 cannot meet the accuracy {float(width)!r} for {name}; its bound is "
