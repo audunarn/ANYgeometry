@@ -226,21 +226,20 @@ def test_composite_integrands_with_algebraic_ends_contain_mpmath_references():
         b = AlgebraicNumber.from_interval(K0, P(-F(1, 2), 0, 1), F(7, 10), F(3, 4))          # sqrt(0.5) = 0.707
         tau = F(1, 10 ** rng.randint(8, 16))
         dens = [(W, 3), (D, 3)]
-        # policy max_taylor_order = 16 (more pieces at lower order, design 10 risk 1): order 32 with the long
-        # inner ends exceeds max_bits (see the design-issue test below)
+        # DEFAULT limits (policy max_taylor_order = 16, owner decision 2026-10-21): the long inner ends no longer
+        # exceed max_bits (the order-32 refusal is pinned by the design-issue test below)
         budget = WorkBudget(None, 4096)
-        result = enclose_rational_integral(kern(budget=budget, limits=KernelLimits(max_taylor_order=16)),
-                                           num, dens, a, b, tau)
+        result = enclose_rational_integral(kern(budget=budget), num, dens, a, b, tau)
         worst = max(worst, budget.counts()["max_bits_seen"])
         with mpmath.workdps(60):
             def f(x):
                 return mp_poly(num, x) / (mp_poly(W, x) ** 3 * mp_poly(D, x) ** 3)
             ref = mpmath.quad(f, [mpmath.sqrt(mpmath.mpf(1) / 10), mpmath.sqrt(mpmath.mpf(1) / 2)])
         assert result.exact is None and result.enclosure.width <= tau and contains(result.enclosure, ref), case
-    print(f"\nCH3b composite W^3 D^3 with algebraic ends, order <= 16: max bits {worst}")
+    print(f"\nCH3b composite W^3 D^3 with algebraic ends, default limits: max bits {worst}")
     # reversed orientation negates
     a = AlgebraicNumber.from_interval(K0, P(-F(1, 10), 0, 1), F(3, 10), F(4, 10))
-    low = KernelLimits(max_taylor_order=16)
+    low = KernelLimits()
     fwd = enclose_rational_integral(kern(limits=low), P(1), [(W, 2)], a, F(1), F(1, 10 ** 10)).enclosure
     a = AlgebraicNumber.from_interval(K0, P(-F(1, 10), 0, 1), F(3, 10), F(4, 10))
     bwd = enclose_rational_integral(kern(limits=low), P(1), [(W, 2)], F(1), a, F(1, 10 ** 10)).enclosure
