@@ -94,6 +94,15 @@ def segment_of(curve: LinePath) -> Segment:
 
 def at(segment: Segment, t) -> tuple:
     start, end = segment
+    # Exact rational endpoints already are their interpolated values. Avoid
+    # rebuilding nine rational operations for the many endpoint incidence tests.
+    # Custom segments/numbers and ordinary floating interpolation retain their
+    # original arithmetic (including signed-zero and operator behavior).
+    if (type(segment) is Segment and type(t) in (int, Fraction) and t in (0, 1)
+            and type(start) is tuple and type(end) is tuple
+            and len(start) == len(end) == 3
+            and all(type(value) is Fraction for point in (start, end) for value in point)):
+        return tuple(value for value in (start if t == 0 else end))
     return tuple(a + t * (b - a) for a, b in zip(start, end))
 
 
