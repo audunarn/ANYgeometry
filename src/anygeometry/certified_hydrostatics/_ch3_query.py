@@ -315,7 +315,7 @@ class Builder:
         self.arcs: dict = {}
         self.line_cuts: dict = {}
         self.cut_roots: dict = {}
-        self.exec_info = {"integrals": 0, "taylor_pieces": 0, "point_bits": 0}
+        self.exec_info = {"integrals": 0, "taylor_pieces": 0, "point_bits": 0, "core": {}}
         self.vertex_clone: dict = {}
 
     # ---------------------------------------------------------------- setup and analysis
@@ -334,6 +334,9 @@ class Builder:
             else:
                 lo_vertex, hi_vertex = trim.end_vertex, trim.start_vertex
             self.arcs[edge] = Arc(edge, fid, trim, curve, g, lo, hi, lo_vertex, hi_vertex)
+        for edge, arc in self.arcs.items():            # a plane containing a whole edge is named before a corner
+            if not arc.g:
+                raise _csd(f"edge {edge} lies in the plane", "edge_in_plane")
         for edge, arc in self.arcs.items():
             self._analyse_arc(arc)
         for fid, face in curved.faces.items():
@@ -423,8 +426,14 @@ class Builder:
                 hi = b if hi is None or compare(k, b, hi) > 0 else hi
             self.extent[fid] = (lo, hi)
             if not beta:
-                raise _csd(f"the plane is parallel to every ruling of face {fid}" if alpha
-                           else f"face {fid} lies in the plane", "zero_beta" if alpha else "face_in_plane")
+                # zero-beta face (design 5.1, row Z): the plane is parallel to every ruling, f = alpha(u). A root of
+                # alpha in the extent is a ruling in the plane; otherwise the face lies wholly on one side (the sign
+                # of alpha), it has no cut arc, and its corner signs already say which side.
+                if not alpha:
+                    raise _csd(f"face {fid} lies in the plane", "face_in_plane")
+                if len(alpha) > 1 and self._roots_between(alpha, lo, hi, True):
+                    raise _csd(f"the plane contains a ruling of face {fid}", "ruling_in_plane")
+                continue
             common = pgcd(k, alpha, beta) if alpha else beta
             if len(common) > 1 and self._roots_between(common, lo, hi, True):
                 raise _csd(f"the plane contains a ruling of face {fid}", "ruling_in_plane")
@@ -899,10 +908,23 @@ class Builder:
                                   f"the point terms of {name} cannot reach the width {float(share):.3e}")
             self.exec_info["point_bits"] = max(self.exec_info["point_bits"], bits)
             total = total.add(k, acc)
+        if total.width > tau:                       # the allocation invariant (integral shares + point share <= tau)
+            raise refusal(RefusalCategory.ACCURACY_UNACHIEVABLE,
+                          f"{name}: the enclosure is {float(total.width):.3e} wide, the target {float(tau):.3e}")
         return total
 
 
 # ------------------------------------------------------------------ entry point
+
+def _pairs(enclosure: Enclosure) -> list:
+    return [[enclosure.lo.numerator, enclosure.lo.denominator], [enclosure.hi.numerator, enclosure.hi.denominator]]
+
+
+def _rational_sqrt(x: Fraction):
+    """``sqrt(x)`` when it is rational, else ``None``."""
+    n, d = math.isqrt(x.numerator), math.isqrt(x.denominator)
+    return Fraction(n, d) if n * n == x.numerator and d * d == x.denominator else None
+
 
 def _default_width(policy) -> Fraction:
     return Fraction(1, 10 ** policy.default_enclosure_digits)
@@ -938,6 +960,7 @@ def evaluate_curved(prepared, query, meter: Meter, before: dict) -> CertifiedHyd
         a = query.accuracy(name) or default
         a_eff = a * 3 / 4
         core = b.evaluate(name, a_eff / 3)
+        b.exec_info["core"][name] = _pairs(core)
         width = core.width
         claim = (core.lo - width, core.hi + width)
         exact = (core.lo, None) if width == 0 else None
@@ -958,9 +981,15 @@ def evaluate_curved(prepared, query, meter: Meter, before: dict) -> CertifiedHyd
                 return captured["enc"]
 
             nq = divide_by_norm(b.k, n2, numerator, a * 3 / 4)
-            exact = (captured["enc"].lo, n2) if captured["enc"].width == 0 else None
-            waterplane.append(build_enclosed_quantity(name, (nq.claim.lo, nq.claim.hi), exact, forms,
-                                                      query.accuracy(name), a, meter))
+            b.exec_info["core"][name] = _pairs(nq.core)
+            claim = (nq.claim.lo, nq.claim.hi)
+            exact = None
+            if captured["enc"].width == 0:                     # an exact numerator: the planar exact form
+                exact = (captured["enc"].lo, n2)
+                root = _rational_sqrt(n2)
+                if root is not None:
+                    claim = (captured["enc"].lo / root,) * 2
+            waterplane.append(build_enclosed_quantity(name, claim, exact, forms, query.accuracy(name), a, meter))
         topology = b.topology(cap)
         sections = (SectionResult("plane", "PARTIAL", "PRESENT", tuple(waterplane), topology),)
     return _finish(prepared, query, meter, before, occupancy, volume, moments, sections, b)
