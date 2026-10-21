@@ -166,7 +166,9 @@ def test_the_refusal_categories_are_the_design_list():
         "SELF_INTERSECTING", "INVERTED_ORIENTATION", "NONFINITE_INPUT", "INVALID_QUERY", "ACCURACY_UNACHIEVABLE",
         "RESULT_OUT_OF_RANGE", "BIT_LENGTH_EXCEEDED", "BUDGET_EXHAUSTED", "CONCURRENT_MUTATION",
         "SYMBOLIC_DEGENERACY", "CANCELLED", "DEADLINE_EXCEEDED", "STALE_PREPARATION", "MALFORMED_PROOF",
-        "VERIFICATION_FAILED"}
+        "VERIFICATION_FAILED",
+        # CH3 kernel (CERTIFIED_HYDROSTATICS_CH3_DESIGN.md 2.3, 3.2); the remaining CH3 categories come with CH3a
+        "UNDECIDED_PREDICATE", "UNSUPPORTED_TRIM"}
 
 
 # ------------------------------------------------------------------ refusals

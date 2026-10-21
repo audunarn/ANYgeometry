@@ -49,6 +49,7 @@ def test_dependency_inventory_is_canonical_and_complete() -> None:
     assert inventory["project_license"] == "MPL-2.0"
     assert {row["name"] for row in inventory["dependencies"]} == {
         "build",
+        "mpmath",
         "numpy",
         "pytest",
         "setuptools",

@@ -38,6 +38,7 @@ INSTALLED_LICENSE_ALIASES = {
         "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0",
         "BSD-3-Clause",
     },
+    "mpmath": {"BSD-3-Clause", "BSD"},
     "pytest": {"MIT"},
     "shapely": {"BSD-3-Clause", "BSD 3-Clause"},
     "setuptools": {"MIT"},

@@ -26,6 +26,7 @@ anygeometry = "anygeometry.__main__:main"
 [project.optional-dependencies]
 planar = ["shapely>=2.0"]
 dev = ["build>=1.2", "pytest>=8", "twine>=5"]
+test = ["mpmath>=1.3"]
 
 [tool.setuptools]
 package-dir = { "" = "src" }
