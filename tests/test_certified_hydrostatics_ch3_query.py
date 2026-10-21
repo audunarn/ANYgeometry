@@ -108,8 +108,9 @@ def make_query(plane, accuracy=ALL_ACCURACY, forms=FORMS):
 
 
 def run(which, plane, **kwargs):
+    model = prepared(which)                      # preparation (and the model build) is not part of the query time
     start = time.perf_counter()
-    result = query_certified_hydrostatics(prepared(which), make_query(plane, **kwargs))
+    result = query_certified_hydrostatics(model, make_query(plane, **kwargs))
     return result, time.perf_counter() - start
 
 
@@ -606,6 +607,18 @@ def test_repeated_queries_give_identical_claims_and_proofs():
     p = prepared("half")
     a, b = query_certified_hydrostatics(p, q), query_certified_hydrostatics(p, q)
     assert a.proof == b.proof and a.claim() == b.claim()
+
+
+def test_a_query_leaves_the_preparation_untouched():
+    """The loop tests refine isolating intervals in place; the engine works on copies, so the stored corners keep
+    their intervals (and a second preparation of the same model is not affected by earlier queries)."""
+    p = prepared("half")
+
+    def intervals():
+        return [(t.u_lo.lo, t.u_lo.hi, t.u_hi.lo, t.u_hi.hi) for f in p.snapshot.curved.faces.values() for t in f.trims]             + [(c.number.lo, c.number.hi) for f in p.snapshot.curved.faces.values() for c in f.corners.values()]
+    before = intervals()
+    query_certified_hydrostatics(p, make_query(PLANES["trim+0.1"], accuracy={"V": 1e-9}, forms=("enclosure",)))
+    assert intervals() == before
 
 
 def test_the_proof_carries_the_enclosures_cut_points_and_orientation_convention():

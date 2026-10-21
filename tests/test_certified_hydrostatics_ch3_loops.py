@@ -183,10 +183,12 @@ def test_cold_preparation_of_the_full_hull_is_recorded():
     print(f"full hull preparation: {seconds:.2f} s, {p.work['operations']} units, {p.work['max_bits_seen']} bits")
 
 
-def test_a_curved_prepared_model_answers_a_query_with_a_typed_refusal():
+def test_a_curved_prepared_model_is_answered_by_the_curved_query_engine():
+    """CH3a2 left a typed stub (UNSUPPORTED_SURFACE / curved_query) here; CH3c replaced it with the engine
+    (tests/test_certified_hydrostatics_ch3_query.py pins the values)."""
     model, ids, p = prepared("half")
-    error = refusal_of(lambda: query_certified_hydrostatics(p, HalfSpaceQuery(normal=(0., 0., 1.), offset=1.5)))
-    assert error.category is C.UNSUPPORTED_SURFACE and error.sub_reason == "curved_query" and error.phase == "query"
+    result = query_certified_hydrostatics(p, HalfSpaceQuery(normal=(0., 0., 1.), offset=1.5))
+    assert result.occupancy == "PARTIAL" and result.volume.enclosure is not None and result.proof
 
 
 def test_check_preparation_detects_a_changed_curved_model():

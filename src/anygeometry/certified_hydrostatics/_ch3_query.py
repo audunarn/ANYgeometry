@@ -27,11 +27,12 @@ graph portion of a curved face is directed ``-sign(beta) * sigma_chart`` (``+1``
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from fractions import Fraction
 
 from ._arith import Ar
 from ._ch3_admission import RuledSupport, plane_alpha_beta
+from ._ch3_admission_trims import CurvedFace
 from ._ch3_admission_trims import enclose_coordinates
 from ._ch3_algebraic import (AlgebraicNumber, Enclosure, compare, isolate_roots, lower_bound, sign_at,
                              upper_bound)
@@ -746,7 +747,11 @@ class Builder:
 
     def curved_face(self, fid: int, cap_links: list) -> None:
         k, ar = self.k, self.ar
-        face = self.curved.faces[fid]
+        stored = self.curved.faces[fid]
+        # the loop tests refine isolating intervals in place: they work on copies, the preparation stays untouched
+        face = CurvedFace(stored.face, stored.support,
+                          tuple(replace(t, u_lo=_clone(t.u_lo), u_hi=_clone(t.u_hi)) for t in stored.trims),
+                          stored.corners)
         support = face.support
         sigma = self.curved.sigma[fid]
         self.face_polys[fid] = face_polys(k, support)
