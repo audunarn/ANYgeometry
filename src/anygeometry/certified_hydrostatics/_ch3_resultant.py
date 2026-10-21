@@ -46,6 +46,7 @@ def bivariate(k: Kernel, rows) -> tuple:
     """``rows[i]`` is the ``u``-polynomial coefficient of ``s^i`` (tuples of Fractions)."""
     out = []
     for r in rows:
+        k.tick("poly_coefficient")                  # every row is a checkpoint, empty or not
         row = []
         for c in r:
             k.tick("poly_coefficient")
@@ -344,6 +345,7 @@ def _inside_algebraic_bounds(nf: NumberField, seq: list, h: tuple, enc: Enclosur
     ``(S, want)`` (``want`` is the required side), else ``None``. A root on a bound is never decided by
     intervals alone and ends in ``UNDECIDED_PREDICATE`` at ``max_isolation_bits`` (fail closed)."""
     k = nf.k
+    k.tick("root_refine")                           # one checkpoint per candidate root, even when decided at once
     while True:
         undecided = []
         for S, want in checks:

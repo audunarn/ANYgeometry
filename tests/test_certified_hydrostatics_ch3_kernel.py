@@ -740,3 +740,50 @@ def test_algebraic_s_bound_path_is_a_budget_and_cancellation_checkpoint():
     with pytest.raises(CertifiedHydrostaticsRefusal) as info:
         run(kern(budget=budget, cancel=lambda: budget.operations >= 5000))
     assert info.value.category is C.CANCELLED and budget.operations == 5000
+
+
+def test_bivariate_empty_rows_are_metered_and_cancellable():
+    """Re-review finding 1: 100000 empty rows were consumed for one operation."""
+    rows = [()] * 100000 + [(F(1),)]
+    budget = WorkBudget(1, 4096)
+    with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+        bivariate(kern(budget=budget), rows)
+    assert info.value.category is C.BUDGET_EXHAUSTED and budget.operations == 1
+    budget = WorkBudget(None, 4096)
+    with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+        bivariate(kern(budget=budget, cancel=lambda: budget.operations >= 10), rows)
+    assert info.value.category is C.CANCELLED and budget.operations == 10
+
+
+def test_algebraic_filter_loop_is_a_budget_and_cancellation_checkpoint(monkeypatch):
+    """Re-review finding 2: stops inside ``_inside_algebraic_bounds`` (first entered at operation 22675).
+    The hard-coded positions are verified by instrumenting the filter."""
+    import anygeometry.certified_hydrostatics._ch3_resultant as R
+    Fb, Gb = _vertical_pair()
+    inner = R._inside_algebraic_bounds
+    entries = []
+
+    def spy(nf, seq, h, enc, checks):
+        entries.append(1)
+        return inner(nf, seq, h, enc, checks)
+
+    monkeypatch.setattr(R, "_inside_algebraic_bounds", spy)
+
+    def run(k):
+        s_lo = _sqrt_frac(1, 10, 0, 1)(k)
+        s_hi = _sqrt_frac(9, 10, 0, 1)(k)
+        return curve_crossings(k, Fb, Gb, F(0), F(1), s_lo, s_hi)
+
+    for limit in (22700, 23000, 23300):          # the filter runs from 22675 to 23350
+        entries.clear()
+        budget = WorkBudget(limit, 4096)
+        with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+            run(kern(budget=budget))
+        assert info.value.category is C.BUDGET_EXHAUSTED and budget.operations == limit
+        assert len(entries) >= 1, limit
+    entries.clear()
+    budget = WorkBudget(None, 4096)
+    with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+        run(kern(budget=budget, cancel=lambda: budget.operations >= 23000))
+    assert info.value.category is C.CANCELLED and budget.operations == 23000
+    assert len(entries) >= 1
