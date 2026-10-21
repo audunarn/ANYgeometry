@@ -167,8 +167,9 @@ def test_the_refusal_categories_are_the_design_list():
         "RESULT_OUT_OF_RANGE", "BIT_LENGTH_EXCEEDED", "BUDGET_EXHAUSTED", "CONCURRENT_MUTATION",
         "SYMBOLIC_DEGENERACY", "CANCELLED", "DEADLINE_EXCEEDED", "STALE_PREPARATION", "MALFORMED_PROOF",
         "VERIFICATION_FAILED",
-        # CH3 kernel (CERTIFIED_HYDROSTATICS_CH3_DESIGN.md 2.3, 3.2); the remaining CH3 categories come with CH3a
-        "UNDECIDED_PREDICATE", "UNSUPPORTED_TRIM"}
+        # CH3 (CERTIFIED_HYDROSTATICS_CH3_DESIGN.md 2.3, 3.2): the kernel's two and CH3a's hint mismatch; the
+        # remaining CH3 categories come with CH3a2 and CH3c
+        "UNDECIDED_PREDICATE", "UNSUPPORTED_TRIM", "TRIM_HINT_MISMATCH"}
 
 
 # ------------------------------------------------------------------ refusals

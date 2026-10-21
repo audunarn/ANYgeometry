@@ -28,15 +28,50 @@ __all__ = ["CertifiedHydrostaticsPolicy", "PreparedCertifiedHydrostatics", "chec
 
 @dataclass(frozen=True)
 class CertifiedHydrostaticsPolicy:
-    """Preparation policy recorded in the proof (limits the later proof parsing needs, design section 7)."""
+    """Preparation policy recorded in the proof (limits the later proof parsing needs, design section 7).
+
+    The curved-class fields (CH3 design D-CH3-2 and D-CH3-7) are used only by the curved admission and queries;
+    ``as_dict`` records them only for another ``convention_version`` than ``"1"``, so planar proofs, digests and
+    defaults are unchanged. ``delta_hint = 2**-delta_hint_bits * (1 + max |coord|)`` (world units, max-norm) and
+    ``delta_chart = 2**-delta_chart_bits`` (knot units) are the tolerances of the vertex and domain hints."""
 
     convention_version: str = "1"
     max_proof_bytes: int = 64 * 1024 * 1024
     max_integer_digits: int = 100_000
+    delta_hint_bits: int = 40
+    delta_chart_bits: int = 40
+    max_bits: int = 4096
+    max_isolation_bits: int = 4096
+    max_taylor_order: int = 16
+    max_pieces_per_integral: int = 1024
+    max_refinement_rounds: int = 8
+    default_enclosure_digits: int = 12
+
+    _CURVED = ("delta_hint_bits", "delta_chart_bits", "max_bits", "max_isolation_bits", "max_taylor_order",
+               "max_pieces_per_integral", "max_refinement_rounds", "default_enclosure_digits")
+
+    def __post_init__(self) -> None:
+        for name in self._CURVED:
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValueError(f"{name} must be a positive integer")
 
     def as_dict(self) -> dict:
-        return {"convention_version": self.convention_version, "max_proof_bytes": self.max_proof_bytes,
-                "max_integer_digits": self.max_integer_digits}
+        planar = {"convention_version": self.convention_version, "max_proof_bytes": self.max_proof_bytes,
+                  "max_integer_digits": self.max_integer_digits}
+        if self.convention_version == "1":
+            return planar
+        return {**planar, **{name: getattr(self, name) for name in self._CURVED}}
+
+    def kernel_limits(self):
+        """The CH3 kernel limits of this policy (``max_bits`` belongs to the work budget, see ``new_budget``)."""
+        from ._ch3_poly import KernelLimits
+        return KernelLimits(self.max_isolation_bits, self.max_taylor_order, self.max_pieces_per_integral,
+                            self.max_refinement_rounds)
+
+    def new_budget(self, max_operations: int | None = None, deadline: float | None = None) -> WorkBudget:
+        """A work budget carrying this policy's ``max_bits``."""
+        return WorkBudget(max_operations, self.max_bits, deadline)
 
 
 @dataclass(frozen=True)
