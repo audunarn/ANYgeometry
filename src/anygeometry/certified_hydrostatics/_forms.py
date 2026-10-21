@@ -26,7 +26,9 @@ class QuantityResult:
     moments always carry it). ``binary64``: ``(lo, hi)`` floats with ``lo == hi`` or adjacent. ``decimal``:
     ``(lo, hi, width)`` decimal strings and the width used (requested accuracy, or the default width).
     ``accuracy``: requested accuracy or ``None``; ``accuracy_met``: ``True`` when requested and met, else ``None``
-    (a request that cannot be met is refused ``ACCURACY_UNACHIEVABLE``)."""
+    (a request that cannot be met is refused ``ACCURACY_UNACHIEVABLE``). ``enclosure``: ``(lo, hi)`` Fractions, the
+    published claim of a quantity of a curved preparation (CH3c, design 4.4: core +- width); ``None`` for planar
+    quantities. For a curved quantity ``numerator`` is present only when the computation was exact."""
 
     name: str
     numerator: Fraction | None
@@ -35,6 +37,7 @@ class QuantityResult:
     decimal: tuple | None
     accuracy: Fraction | None
     accuracy_met: bool | None
+    enclosure: tuple | None = None
 
 
 def _rational_value(ar: Ar, numerator: Fraction, norm_squared):
@@ -158,6 +161,77 @@ def build_quantity(name: str, numerator: Fraction, norm_squared, forms, accuracy
     if "decimal" in forms:
         width = DEFAULT_DECIMAL_WIDTH if accuracy is None else accuracy
         decimal = (*decimal_enclosure(numerator, norm_squared, width, meter), width)
-    keep_exact = always_exact or "exact" in forms
+    keep_exact = always_exact or "exact" in forms or "enclosure" in forms
     return QuantityResult(name, numerator if keep_exact else None, norm_squared if keep_exact else None, binary64,
                           decimal, accuracy, None if accuracy is None else True)
+
+
+def interval_binary64(lo: Fraction, hi: Fraction, meter: Meter, name: str = "value") -> tuple:
+    """Doubles ``(f_lo, f_hi)`` with ``f_lo <= lo`` and ``hi <= f_hi``, as tight as possible (exact comparisons)."""
+    ar = Ar(meter)
+    try:
+        meter.unit("enclosure_step")
+        f_lo, f_hi = float(lo), float(hi)
+        if math.isinf(f_lo) or math.isinf(f_hi):
+            raise OverflowError
+        while ar.cmp(ar.exact_float(f_lo), lo) > 0:
+            meter.unit("enclosure_step")
+            f_lo = math.nextafter(f_lo, -math.inf)
+        while ar.cmp(ar.exact_float(f_hi), hi) < 0:
+            meter.unit("enclosure_step")
+            f_hi = math.nextafter(f_hi, math.inf)
+    except OverflowError:
+        raise _out_of_range(name) from None
+    if math.isinf(f_lo) or math.isinf(f_hi):
+        raise _out_of_range(name)
+    return (f_lo + 0.0, f_hi + 0.0)
+
+
+def interval_decimal(lo: Fraction, hi: Fraction, width: Fraction, meter: Meter) -> tuple:
+    """``(low, high, k)``: integers with ``low / 10^k <= lo`` and ``hi <= high / 10^k``, ``k`` fixed by ``width / 8``;
+    the caller checks that the rounded interval still fits ``width``."""
+    ar = Ar(meter)
+    inverse = -(-(8 * width.denominator) // width.numerator)
+    digits = 0
+    if inverse > 1:
+        digits = max(0, int(inverse.bit_length() * 0.30103) - 1)
+        while ar.pow10(digits) < inverse:
+            digits += 1
+    scale = ar.pow10(digits)
+    meter.unit("enclosure_step")
+    low_scaled, high_scaled = ar.mul(lo, scale), ar.mul(hi, scale)
+    low = low_scaled.numerator // low_scaled.denominator
+    high = -((-high_scaled.numerator) // high_scaled.denominator)
+    return low, high, digits
+
+
+def build_enclosed_quantity(name: str, claim: tuple, exact, forms, accuracy, width: Fraction,
+                            meter: Meter) -> QuantityResult:
+    """A quantity of a curved preparation: the claim ``[lo, hi]`` (design 4.4, width at most ``3/4`` of ``width``,
+    the accuracy asked for or the default width) in the requested forms. ``exact`` is ``(numerator,
+    norm_squared)`` when the computation was exact (then the exact form is carried as for planar quantities),
+    else ``None``. ``binary64`` and ``decimal`` are outward roundings of the claim (the exact value when
+    ``exact``); one that cannot meet ``width`` refuses ``ACCURACY_UNACHIEVABLE`` for that form."""
+    ar = Ar(meter)
+    lo, hi = claim
+    binary64 = decimal = None
+    if "binary64" in forms:
+        if exact is not None:
+            binary64 = binary64_enclosure(exact[0], exact[1], meter, name)
+        else:
+            binary64 = interval_binary64(lo, hi, meter, name)
+        if ar.cmp(ar.sub(ar.exact_float(binary64[1]), ar.exact_float(binary64[0])), width) > 0:
+            raise refuse(RefusalCategory.ACCURACY_UNACHIEVABLE,
+                         f"binary64 cannot meet the accuracy {float(width)!r} for {name}; its bound is "
+                         f"{binary64[1] - binary64[0]!r} (the decimal form remains available)")
+    if "decimal" in forms:
+        low, high, digits = interval_decimal(lo, hi, width, meter)
+        if ar.cmp(Fraction(high - low), ar.mul(width, ar.pow10(digits))) > 0:
+            raise refuse(RefusalCategory.ACCURACY_UNACHIEVABLE,
+                         f"decimal cannot meet the accuracy {float(width)!r} for {name}")
+        meter.unit("digit_conversion", 1)
+        d_lo, d_hi = _decimal_string(low, digits, meter), _decimal_string(high, digits, meter)
+        decimal = (d_lo, d_hi, width)
+    keep_exact = exact is not None
+    return QuantityResult(name, exact[0] if keep_exact else None, exact[1] if keep_exact else None, binary64,
+                          decimal, accuracy, None if accuracy is None else True, (lo, hi))
