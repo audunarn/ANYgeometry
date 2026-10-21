@@ -525,8 +525,13 @@ def _check_orientation(faces: list, meter: Meter) -> None:
         raise refuse(RefusalCategory.INVERTED_ORIENTATION, "the shell encloses a non-positive signed volume")
 
 
-def admit(snapshot: ExactSnapshot, meter: Meter) -> None:
+def admit(snapshot: ExactSnapshot, meter: Meter, policy=None) -> None:
     """Raise ``CertifiedHydrostaticsRefusal`` unless the snapshot is the oriented boundary of a solid."""
+    if snapshot.curved is not None:                  # CH3a2: a shell with curved faces
+        from ._ch3_curved_admit import admit_curved
+        from ._prepare import CertifiedHydrostaticsPolicy
+        admit_curved(snapshot, meter, CertifiedHydrostaticsPolicy() if policy is None else policy)
+        return
     token = _ACTIVE.set(meter)
     try:
         _check_supports(snapshot, meter)

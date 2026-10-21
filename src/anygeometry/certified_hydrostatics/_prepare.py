@@ -9,7 +9,7 @@ thread may mutate the model during these calls (a documented precondition, not d
 revision guard)."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable, Iterable
 
 import numpy as np
@@ -154,12 +154,12 @@ def _transaction_open(model) -> bool:
     return getattr(model, "_transaction_journal", None) is not None
 
 
-def _consistent_read(model, faces: Iterable[int], meter: Meter):
+def _consistent_read(model, faces: Iterable[int], meter: Meter, policy=None):
     """``(snapshot, model id, revision, document checksum)`` read between two equal revisions."""
     if _transaction_open(model):
         raise refuse(RefusalCategory.CONCURRENT_MUTATION, "a model transaction is open")
     revision = model.revision
-    snapshot = collect_snapshot(model, faces, meter)
+    snapshot = collect_snapshot(model, faces, meter, policy)
     checksum = _document_checksum(model, meter)
     if _transaction_open(model) or model.revision != revision:
         raise refuse(RefusalCategory.CONCURRENT_MUTATION, "the model changed while it was being read")
@@ -193,10 +193,12 @@ def prepare_certified_hydrostatics(model, faces: Iterable[int], *, units: str = 
     identity = {"model_id": str(model.model_id)}
     try:
         implementation = implementation_identity(meter)
-        snapshot, model_id, revision, checksum = _consistent_read(model, faces, meter)
+        snapshot, model_id, revision, checksum = _consistent_read(model, faces, meter, policy)
         identity.update(revision=revision, document_checksum=checksum)
         digest = snapshot.digest(meter)
-        admit(snapshot, meter)
+        if snapshot.curved is not None and policy.convention_version == "1":
+            policy = replace(policy, convention_version="2")      # curved faces: convention 2 (design 3.4)
+        admit(snapshot, meter, policy)
     except CertifiedHydrostaticsRefusal as refusal:
         raise refusal.complete(phase="prepare", request=request, identity=identity,
                                work=meter.budget.counts())
@@ -221,7 +223,8 @@ def check_preparation(model, prepared: PreparedCertifiedHydrostatics, *, budget:
         implementation = implementation_identity(meter)
         if prepared.snapshot.digest(meter) != prepared.snapshot_digest:
             raise refuse(RefusalCategory.STALE_PREPARATION, "the stored snapshot does not match its digest")
-        snapshot, model_id, revision, checksum = _consistent_read(model, prepared.face_ids, meter)
+        snapshot, model_id, revision, checksum = _consistent_read(model, prepared.face_ids, meter,
+                                                                  prepared.policy)
         digest = snapshot.digest(meter)
         differences = [name for name, now, before in (
             ("snapshot_digest", digest, prepared.snapshot_digest), ("model_id", model_id, prepared.model_id),

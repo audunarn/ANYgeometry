@@ -14,6 +14,8 @@ from types import MappingProxyType
 from typing import Iterable, Mapping
 
 from ..curves import Straight
+from ..nurbs import NurbsSurface
+from ..support_curves import PlaneNurbsCurve
 from ..surfaces import Plane
 from ._errors import RefusalCategory, refuse
 from ._identity import canonical_json, sha256_chunks
@@ -33,7 +35,7 @@ class SnapshotLoop:
 @dataclass(frozen=True)
 class SnapshotFace:
     id: int
-    support: tuple        # (origin, u_vector, v_vector), each three Fractions
+    support: tuple        # (origin, u_vector, v_vector), each three Fractions; None for a curved face (see ``curved``)
     loops: tuple          # SnapshotLoop, the outer loop first
 
 
@@ -42,6 +44,7 @@ class ExactSnapshot:
     faces: tuple
     positions: Mapping    # vertex id -> (Fraction, Fraction, Fraction)
     edges: Mapping        # edge id -> (start vertex id, end vertex id)
+    curved: object = None  # CurvedData of a model with curved faces (convention version 2), else None
 
     @property
     def face_ids(self) -> tuple:
@@ -78,20 +81,80 @@ class ExactSnapshot:
                 tick(1)
                 loops.append(items)
             tick(3)
-            faces.append({"id": face.id, "support": [point(p) for p in face.support], "loops": loops})
+            support = self._curved_support(face.id, tick) if face.support is None \
+                else [point(p) for p in face.support]
+            faces.append({"id": face.id, "support": support, "loops": loops})
         vertices = []
         for vid in sorted(self.positions):
             tick(1)
-            vertices.append([vid, point(self.positions[vid])])
+            entry = [vid, point(self.positions[vid])]
+            if self.curved is not None:
+                entry.append(self._corner_doc(vid, tick))
+            vertices.append(entry)
         edges = []
         for edge in sorted(edge_uses):
             tick(3 + 2 * len(edge_uses[edge]))
-            edges.append([edge, *self.edges[edge], edge_uses[edge]])
+            edges.append([edge, *self.edges[edge], edge_uses[edge]]
+                         + ([self._section_doc(edge, tick)] if self.curved is not None else []))
         incidence = []
         for vid in sorted(vertex_faces):
             tick(1 + len(vertex_faces[vid]) + len(vertex_edges[vid]))
             incidence.append([vid, sorted(vertex_faces[vid]), sorted(vertex_edges[vid])])
-        return {"faces": faces, "vertices": vertices, "edges": edges, "vertex_incidence": incidence}
+        document = {"faces": faces, "vertices": vertices, "edges": edges, "vertex_incidence": incidence}
+        if self.curved is not None:
+            document["snapshot_version"] = 2
+        return document
+
+    # ---- convention version 2 (design CH3 3.4): curved supports, section edges and corner identities
+
+    def _curved_support(self, face_id: int, tick) -> dict:
+        support = self.curved.faces[face_id].support
+
+        def pair(value) -> list:
+            tick(2)
+            return [value.numerator, value.denominator]
+
+        def poly(p) -> list:
+            tick(1)
+            return [pair(c) for c in p]
+
+        tick(8)
+        return {"kind": "ruled", "degree_u": support.degree_u,
+                "net": [[poly(p) for p in support.A], [poly(p) for p in support.B]],
+                "span": [[pair(x) for x in support.span_u], [pair(x) for x in support.span_v]],
+                "u_range": [pair(x) for x in support.u_range], "v_range": [pair(x) for x in support.v_range],
+                "sigma_chart": self.curved.sigma[face_id]}
+
+    def _section_doc(self, edge: int, tick):
+        entry = self.curved.arcs.get(edge)
+        if entry is None:
+            return None
+        _fid, trim = entry
+        plane = trim.plane
+        domain, path = self.curved.hints[edge]
+
+        def pair(value) -> list:
+            tick(2)
+            return [value.numerator, value.denominator]
+
+        def poly(p) -> list:
+            tick(1)
+            return [pair(c) for c in p]
+
+        tick(6)
+        return {"kind": "section",
+                "plane": [[pair(c) for c in vector] for vector in (plane.origin, plane.u_vector, plane.v_vector)],
+                "domain_hint": [float(x).hex() for x in domain], "path_hint": path,
+                "graph": [poly(plane.N), poly(plane.D)]}
+
+    def _corner_doc(self, vertex: int, tick):
+        for face in self.curved.faces.values():
+            corner = face.corners.get(vertex)
+            if corner is not None:
+                tick(5)
+                return {"corner": {"poly": [int(c) for c in corner.poly], "ordinal": corner.ordinal,
+                                   "hint": [float(c).hex() for c in self.positions[vertex]]}}
+        return None
 
     def digest(self, meter: Meter) -> str:
         return sha256_chunks(canonical_json(self.canonical(meter)), meter)
@@ -108,7 +171,7 @@ def _exact_point(values, meter: Meter) -> Point:
     return tuple(_exact(value, meter) for value in values)
 
 
-def collect_snapshot(model, faces: Iterable[int], meter: Meter) -> ExactSnapshot:
+def collect_snapshot(model, faces: Iterable[int], meter: Meter, policy=None) -> ExactSnapshot:
     """Read ``faces`` of ``model`` into exact rational loops (no admission decisions beyond the types)."""
     face_ids = []
     for face_id in faces:
@@ -120,16 +183,22 @@ def collect_snapshot(model, faces: Iterable[int], meter: Meter) -> ExactSnapshot
     positions: dict = {}
     edges: dict = {}
     result = []
+    curved_ids, arc_edges = [], {}
+    curved_mode = any(isinstance(getattr(model.faces.get(f), "surface", None), NurbsSurface) for f in face_ids)
     for face_id in face_ids:
         meter.unit("face_read")
         face = model.faces.get(face_id)
         if face is None:
             raise refuse(RefusalCategory.INVALID_QUERY, f"face {face_id} is not in the model")
-        if not isinstance(face.surface, Plane):
+        is_curved = curved_mode and isinstance(face.surface, NurbsSurface)
+        if is_curved:
+            curved_ids.append(face_id)
+        if not is_curved and not isinstance(face.surface, Plane):
             raise refuse(RefusalCategory.UNSUPPORTED_SURFACE,
                          f"face {face_id} has no Plane support ({type(face.surface).__name__})")
-        support = (_exact_point(face.surface.origin, meter), _exact_point(face.surface.u_vector, meter),
-                   _exact_point(face.surface.v_vector, meter))
+        support = None if is_curved else (_exact_point(face.surface.origin, meter),
+                                          _exact_point(face.surface.u_vector, meter),
+                                          _exact_point(face.surface.v_vector, meter))
         loops = []
         for loop in (face.loop, *face.holes):
             items, starts = [], []
@@ -139,7 +208,9 @@ def collect_snapshot(model, faces: Iterable[int], meter: Meter) -> ExactSnapshot
                     raise refuse(RefusalCategory.INVALID_LOOP, f"face {face_id} uses unknown edge {item.edge}")
                 if item.edge not in edges:
                     meter.unit("edge_read")
-                    if not isinstance(edge.curve, Straight):
+                    if curved_mode and isinstance(edge.curve, PlaneNurbsCurve):
+                        arc_edges[item.edge] = face_id
+                    elif not isinstance(edge.curve, Straight):
                         raise refuse(RefusalCategory.UNSUPPORTED_SURFACE,
                                      f"edge {item.edge} of face {face_id} is not straight")
                     edges[item.edge] = (int(edge.start), int(edge.end))
@@ -157,4 +228,14 @@ def collect_snapshot(model, faces: Iterable[int], meter: Meter) -> ExactSnapshot
                 starts.append(start)
             loops.append(SnapshotLoop(tuple(items), tuple(starts)))
         result.append(SnapshotFace(face_id, support, tuple(loops)))
-    return ExactSnapshot(tuple(result), MappingProxyType(positions), MappingProxyType(edges))
+    curved = None
+    if curved_ids:
+        from ._ch3_collect import collect_curved
+        from ._prepare import CertifiedHydrostaticsPolicy
+        curved = collect_curved(model, curved_ids, meter,
+                                CertifiedHydrostaticsPolicy() if policy is None else policy)
+        for edge_id, face_id in arc_edges.items():
+            if edge_id not in curved.arcs:
+                raise refuse(RefusalCategory.UNSUPPORTED_TRIM,
+                             f"edge {edge_id} of face {face_id} is a curved edge not shared with a curved face")
+    return ExactSnapshot(tuple(result), MappingProxyType(positions), MappingProxyType(edges), curved)

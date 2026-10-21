@@ -169,7 +169,8 @@ def test_the_refusal_categories_are_the_design_list():
         "VERIFICATION_FAILED",
         # CH3 (CERTIFIED_HYDROSTATICS_CH3_DESIGN.md 2.3, 3.2): the kernel's two and CH3a's hint mismatch; the
         # remaining CH3 categories come with CH3a2 and CH3c
-        "UNDECIDED_PREDICATE", "UNSUPPORTED_TRIM", "TRIM_HINT_MISMATCH"}
+        "UNDECIDED_PREDICATE", "UNSUPPORTED_TRIM", "TRIM_HINT_MISMATCH",
+        "EMBEDDING_UNDECIDED", "CURVED_SECTION_DEGENERACY"}
 
 
 # ------------------------------------------------------------------ refusals
