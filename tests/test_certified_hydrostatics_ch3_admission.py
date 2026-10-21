@@ -390,6 +390,11 @@ def test_c2_curve_on_surface_edge_and_foreign_support_refused():
     model._put_entity("face", replace(model.faces[face], surface=other))
     error = refusal_of(lambda: admit(model, face))
     assert error.category is C.UNSUPPORTED_TRIM and error.sub_reason == "support_mismatch"
+    for narrower in ({"u_range": (0., .5)}, {"v_range": (0., .5)}):           # the same support, another range box
+        model, face, vertices, edges = _fresh("fa")
+        model._put_entity("face", replace(model.faces[face], surface=replace(model.faces[face].surface, **narrower)))
+        error = refusal_of(lambda: admit(model, face))
+        assert error.category is C.UNSUPPORTED_TRIM and error.sub_reason == "support_mismatch"
 
 
 def test_c3_vertex_hint_moved_1e6_refused_and_1e13_accepted():
@@ -408,6 +413,9 @@ def test_h2_shortened_and_distant_domains_and_reversed_direction_refused():
         model, face, vertices, edges = _fresh("fa", **options)
         error = refusal_of(lambda: admit(model, face))
         assert error.category is C.TRIM_HINT_MISMATCH and error.sub_reason == "domain_start", options
+    model, face, vertices, edges = _fresh("fa", domains={1: lambda a, b: (a, (a + 3 * b) / 4)})   # right start, short end
+    error = refusal_of(lambda: admit(model, face))
+    assert error.category is C.TRIM_HINT_MISMATCH and error.sub_reason == "domain_end"
     # the unmodified fixture passes the same checks
     model, face, vertices, edges = _fresh("fa")
     admit(model, face)
@@ -417,8 +425,10 @@ def test_h2_midpoint_conditions(monkeypatch):
     model, face, vertices, edges = _fresh("fa")
     original = PlaneNurbsCurve._knot_points
 
-    def shifted(self, t, du=0., dv=0.):
+    def shifted(self, t, du=0., dv=0., only_bottom=False):
         us, vs = original(self, t)
+        if only_bottom and self.plane_record[0][2] != .25:           # the graph v = 1/4 is constant: a shift of u
+            return us, vs                                            # is invisible to the graph test
         us, vs = us.copy(), vs.copy()
         us[1] += du
         vs[1] += dv
@@ -427,7 +437,7 @@ def test_h2_midpoint_conditions(monkeypatch):
     monkeypatch.setattr(PlaneNurbsCurve, "_knot_points", lambda self, t: shifted(self, t, 0., 1e-3))
     error = refusal_of(lambda: admit(model, face))
     assert error.category is C.TRIM_HINT_MISMATCH and error.sub_reason == "domain_mid"
-    monkeypatch.setattr(PlaneNurbsCurve, "_knot_points", lambda self, t: shifted(self, t, 0.5, 0.))
+    monkeypatch.setattr(PlaneNurbsCurve, "_knot_points", lambda self, t: shifted(self, t, 0.5, 0., True))
     error = refusal_of(lambda: admit(model, face))
     assert error.category is C.TRIM_HINT_MISMATCH and error.sub_reason == "domain_mid"
     monkeypatch.setattr(PlaneNurbsCurve, "_knot_points", lambda self, t: shifted(self, t, 0., 0.))

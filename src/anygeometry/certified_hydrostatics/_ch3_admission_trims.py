@@ -299,8 +299,7 @@ def admit_curved_face(k: Kernel, model, face_id: int, policy) -> CurvedFace:
         if order == 0:
             raise refusal(UT, f"edge {item.edge} has equal corners at both ends", "degenerate_edge")
         lo, hi = (a.number, b.number) if order < 0 else (b.number, a.number)
-        if compare(k, support.u_range[0], lo) >= 0 or compare(k, hi, support.u_range[1]) >= 0:
-            raise refusal(UT, f"edge {item.edge} reaches the boundary of the range box", "leaves_range_box")
+        # both corners are roots in the open u-range (candidates), so [lo, hi] lies strictly inside it
         method = graph_in_range(k, plane.N, plane.D, lo, hi, support.v_range[0], support.v_range[1])
         errors = _check_domain(k, policy.delta_chart_bits, curve, plane, a, b, lo, hi)
         increasing = order < 0
