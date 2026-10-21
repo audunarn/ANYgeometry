@@ -39,6 +39,7 @@ from dataclasses import dataclass
 from enum import Enum
 from fractions import Fraction
 import math
+from threading import RLock
 from typing import Sequence
 
 import numpy as np
@@ -239,6 +240,12 @@ class Box:
         return self.lo <= exact(value) <= self.hi
 
 
+_NATIVE_BOX = Box
+_NATIVE_BOX_NAMESPACE = tuple(vars(Box).items())
+_NATIVE_FRACTION = Fraction
+_NATIVE_FRACTION_NAMESPACE = tuple(vars(Fraction).items())
+
+
 class _BudgetExhausted(Exception):
     """Undecided at this level (budget, zero-straddling denominator, ambiguous quadrant); a finer level may succeed."""
 
@@ -376,9 +383,27 @@ class Canonical:
 
     def pi(self) -> Box:
         if self._pi is None:
+            key = _pi_cache_key(self)
+            with _PI_CACHE_LOCK:
+                cached = _PI_CACHE.get(key) if key is not None else None
+            if cached is not None:
+                enclosure, charges = cached
+                # Reuse arithmetic, never numerical execution authority. Charge
+                # through the original primitive so exhausted counters/refusals
+                # stop at exactly the same operation as the uncached series.
+                for _ in range(charges):
+                    self._charge()
+                self._pi = enclosure
+                return self._pi
+            before = self.operations
             # Machin: pi = 16 atan(1/5) - 4 atan(1/239).
             self._pi = self.sub(self.mul(16, self._atan_series(self.box(Fraction(1, 5)))),
                                 self.mul(4, self._atan_series(self.box(Fraction(1, 239)))))
+            if key is not None and key == _pi_cache_key(self):
+                with _PI_CACHE_LOCK:
+                    if key not in _PI_CACHE and len(_PI_CACHE) >= 8:
+                        del _PI_CACHE[next(iter(_PI_CACHE))]
+                    _PI_CACHE[key] = (self._pi, self.operations-before)
         return self._pi
 
     def atan(self, x) -> Box:
@@ -449,6 +474,46 @@ class Canonical:
 
     def cos(self, x) -> Box:
         return self.sincos(x)[1]
+
+
+# Only immutable precision constants are shared. Preserve custom evaluators,
+# instance hooks and replaced arithmetic methods through the original route.
+_NATIVE_CANONICAL_CLASS = Canonical
+_NATIVE_CANONICAL_NAMESPACE = tuple(vars(Canonical).items())
+_NATIVE_GRID_BITS = grid_bits
+_NATIVE_EXACT = exact
+_PI_CACHE: dict[tuple[int, int], tuple[Box, int]] = {}
+_PI_CACHE_LOCK = RLock()
+
+
+def _pi_cache_key(engine):
+    cls = type(engine)
+    if (cls is not _NATIVE_CANONICAL_CLASS or Canonical is not cls
+            or grid_bits is not _NATIVE_GRID_BITS or Box is not _NATIVE_BOX
+            or Fraction is not _NATIVE_FRACTION or exact is not _NATIVE_EXACT
+            or type(_MAX_OPERATIONS) is not int):
+        return None
+    for native, original in ((Box, _NATIVE_BOX_NAMESPACE),
+                             (Fraction, _NATIVE_FRACTION_NAMESPACE)):
+        namespace = vars(native)
+        if (len(namespace) != len(original)
+                or any(namespace.get(name) is not value for name, value in original)):
+            return None
+    namespace = vars(cls)
+    if (len(namespace) != len(_NATIVE_CANONICAL_NAMESPACE)
+            or any(namespace.get(name) is not value
+                   for name, value in _NATIVE_CANONICAL_NAMESPACE)):
+        return None
+    state = vars(engine)
+    if state.keys() != {'level', 'bits', 'grid', 'operations', '_pi'}:
+        return None
+    level, bits, grid, operations = (state[name] for name in
+                                     ('level', 'bits', 'grid', 'operations'))
+    if (any(type(value) is not int for value in (level, bits, grid, operations))
+            or not 0 <= level <= L_MAX or not 0 < bits <= 512
+            or bits != grid_bits(level) or grid != 1 << bits):
+        return None
+    return bits, grid
 
 
 # ----------------------------------------------------------------------------------- T3 decision policy

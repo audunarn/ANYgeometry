@@ -122,7 +122,7 @@ def _ids(model, kind, values):
 
 def plan_independent_components(model, *, face_ids=None, member_ids=None,
                                 edge_ids=(), separation=0.0, expected_revision=None,
-                                cancellation_check=None):
+                                cancellation_check=None, stop_if_single_component=False):
     """Certify independent selected components without modifying the model.
 
     ``separation`` grows *each* support box in every direction. Overlap, shared
@@ -132,7 +132,14 @@ def plan_independent_components(model, *, face_ids=None, member_ids=None,
     Refusal returns an empty ``components`` tuple: callers must use their serial
     route, never treat it as an empty workload. No contact/noncontact claim is
     made for roots merged by boxes.
+
+    ``stop_if_single_component`` is a noncertifying parallel-eligibility probe.
+    When authoritative joins already connect every unit, it may return early
+    with an explicit refusal instead of completing the independence audit.
+    The default always performs the complete audit.
     """
+    if type(stop_if_single_component) is not bool:
+        raise GeometryError("stop_if_single_component must be Boolean")
     if isinstance(separation, bool):
         raise GeometryError("component separation must be finite and nonnegative")
     try:
@@ -158,6 +165,7 @@ def plan_independent_components(model, *, face_ids=None, member_ids=None,
                           *(('member', i) for i in model.members), *selected}))
     index = {key: i for i, key in enumerate(units)}
     parents = list(range(len(units)))
+    component_count = len(units)
     reasons = []
     refusals = []
     def handle(key):
@@ -168,6 +176,7 @@ def plan_independent_components(model, *, face_ids=None, member_ids=None,
             i = parents[i]
         return i
     def join(keys, reason, relation=None):
+        nonlocal component_count
         keys = sorted(set(keys))
         if not keys:
             return
@@ -176,7 +185,18 @@ def plan_independent_components(model, *, face_ids=None, member_ids=None,
             a, b = find(index[first]), find(index[other])
             if a != b:
                 parents[max(a, b)] = min(a, b)
+                component_count -= 1
                 reasons.append(ComponentMergeReason(handle(first), handle(other), reason, relation))
+    def single_component_refusal():
+        if not stop_if_single_component or not selected or component_count != 1:
+            return None
+        check()
+        if revision != model.revision or checksum != _qualified_model_state(model)["checksum"]["value"]:
+            raise GeometryError("geometry changed during component partition")
+        return ComponentPartition(model.model_id, revision, checksum,
+            tuple(handle(key) for key in sorted(selected)), separation, (),
+            tuple(reasons), (*refusals, ComponentRefusal(
+                "all units joined; parallel extraction declined without full independence certification")))
     owners = {}
     vertices = {}
     root_edges = {}
@@ -212,6 +232,9 @@ def plan_independent_components(model, *, face_ids=None, member_ids=None,
         join(keys, "sheet membership", handle(('sheet', sheet_id)))
         if keys & selected and not keys <= selected:
             refusals.append(ComponentRefusal("partial sheet selection", (handle(('sheet', sheet_id)),)))
+    early = single_component_refusal()
+    if early is not None:
+        return early
     for identifier, use in model.face_uses.items():
         owners[('face_use', identifier)] = {('face', use.face_id)}
     for identifier, coedge in model.coedges.items():
@@ -225,7 +248,7 @@ def plan_independent_components(model, *, face_ids=None, member_ids=None,
     def referenced(key):
         return owners.get(key, set())
 
-    expanded_pairs = set()
+    expanded_consumers = {}
     def claim(keys, dependency):
         """Register every consumer of a copied dependency, even an orphan one."""
         kind, identifier = dependency
@@ -239,17 +262,20 @@ def plan_independent_components(model, *, face_ids=None, member_ids=None,
         # (consumer, dependency) pairs are tracked separately. Only fresh
         # pairs recurse through the face/edge/vertex closure; a repeated
         # pair would only repeat idempotent set insertions.
-        fresh = []
-        for key in keys:
+        expanded = expanded_consumers.setdefault(dependency, set())
+        fresh_members = set(keys).difference(expanded)
+        if not fresh_members:
+            return changed
+        # Keep the original caller order for recursive expansion while using
+        # native set difference for the usually repeated consumer batch. Each
+        # consumer already in expanded has also received this dependency in
+        # root_geometry; its repeated insertion could not change the fixpoint.
+        fresh = [key for key in keys if key in fresh_members]
+        expanded.update(fresh_members)
+        for key in fresh:
             before = len(root_geometry[key])
             root_geometry[key].add(dependency)
             changed |= len(root_geometry[key]) != before
-            pair = (key, dependency)
-            if pair not in expanded_pairs:
-                expanded_pairs.add(pair)
-                fresh.append(key)
-        if not fresh:
-            return changed
         if kind == "face":
             face = model.faces[identifier]
             for loop in (face.loop, *face.holes):
@@ -268,6 +294,9 @@ def plan_independent_components(model, *, face_ids=None, member_ids=None,
             claim({('member', member_id)}, member.orientation_reference)
             join({('member', member_id), *referenced(member.orientation_reference)},
                  "member orientation dependency", handle(('member', member_id)))
+            early = single_component_refusal()
+            if early is not None:
+                return early
     attachment_keys = {}
     for identifier, attachment in sorted(model.attachments.items()):
         keys = {*referenced(attachment.source_key), *referenced(attachment.target_key)}
@@ -281,6 +310,9 @@ def plan_independent_components(model, *, face_ids=None, member_ids=None,
         attachment_keys[identifier] = keys
         owners[('attachment', identifier)] = keys
         join(keys, "declared attachment (all connection intents)", handle(('attachment', identifier)))
+        early = single_component_refusal()
+        if early is not None:
+            return early
     for identifier, junction in sorted(model.junctions.items()):
         keys = {('member', i) for i in junction.member_ids}
         for sheet_id in junction.sheet_ids:
@@ -289,6 +321,9 @@ def plan_independent_components(model, *, face_ids=None, member_ids=None,
             keys.update(attachment_keys[attachment_id])
         owners[('junction', identifier)] = keys
         join(keys, "declared junction", handle(('junction', identifier)))
+        early = single_component_refusal()
+        if early is not None:
+            return early
     # Active lineage may name later structural relations or a complete Part.
     # Resolve their transitive owners before claiming extraction independence.
     while True:
@@ -309,6 +344,9 @@ def plan_independent_components(model, *, face_ids=None, member_ids=None,
             for dependency in dependencies:
                 changed |= claim(consumers, dependency)
             join(keys, "active attachment lineage", handle(('attachment', identifier)))
+            early = single_component_refusal()
+            if early is not None:
+                return early
         for identifier, junction in sorted(model.junctions.items()):
             keys = owners[('junction', identifier)]
             before = len(keys)
@@ -316,11 +354,17 @@ def plan_independent_components(model, *, face_ids=None, member_ids=None,
                 keys.update(attachment_keys[attachment_id])
             changed |= len(keys) != before
             join(keys, "declared junction", handle(('junction', identifier)))
+            early = single_component_refusal()
+            if early is not None:
+                return early
         if not changed:
             break
     for dependency, keys in sorted(owners.items()):
         if dependency[0] in ("vertex", "edge", "face"):
             join(keys, "shared extraction dependency", handle(dependency))
+            early = single_component_refusal()
+            if early is not None:
+                return early
     # Metadata has no authoritative eccentric-offset schema in this version.
     # Refuse such declarations rather than guessing axis/radius conventions.
     for kind, table in (("member", model.members), ("member_edge_use", model.member_edge_uses),
@@ -358,12 +402,23 @@ def plan_independent_components(model, *, face_ids=None, member_ids=None,
             raise
         dependency_bounds[cache_key] = bound
         return bound
+    # Repeated complete closures share an aggregate only when every cached
+    # dependency box consists of immutable native numeric scalars. Mutable or
+    # custom boxes keep the original per-unit conversion/reduction path.
+    # Bounds and keys are retained only within this invocation and under both
+    # an entry and a total dependency-membership budget.
+    aggregate_bounds = {}
+    aggregate_memberships = 0
     boxes = {}
     for key in units:
         check()
         kind, identifier = key
         try:
             dependencies = root_geometry[key]
+            aggregate_key = frozenset(dependencies) if len(dependencies) <= 16384 else None
+            if aggregate_key is not None and aggregate_key in aggregate_bounds:
+                boxes[key] = aggregate_bounds[aggregate_key]
+                continue
             enclosures = []
             for dependency_kind, dependency_id in sorted(dependencies):
                 enclosures.append(certified_dependency_bound(dependency_kind, dependency_id))
@@ -374,6 +429,17 @@ def plan_independent_components(model, *, face_ids=None, member_ids=None,
             if box is None or len(box) != 6 or not np.all(np.isfinite(box)) or any(box[i] > box[i+3] for i in range(3)):
                 raise GeometryError("missing or invalid conservative bound")
             boxes[key] = tuple(float(x) for x in box)
+            if (aggregate_key is not None
+                    and all(type(value) is tuple and len(value) == 6
+                            and all(type(number) in (float, int, np.float64, np.int64)
+                                    for number in value) for value in enclosures)):
+                while aggregate_bounds and (len(aggregate_bounds) >= 8
+                        or aggregate_memberships + len(aggregate_key) > 16384):
+                    evicted = next(iter(aggregate_bounds))
+                    aggregate_memberships -= len(evicted)
+                    del aggregate_bounds[evicted]
+                aggregate_bounds[aggregate_key] = boxes[key]
+                aggregate_memberships += len(aggregate_key)
         except (GeometryError, TypeError, ValueError) as error:
             # An unbounded unselected support can interact with anything selected.
             if selected:
