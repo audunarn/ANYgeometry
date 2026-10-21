@@ -229,7 +229,7 @@ def classify_surface(k: Kernel, surface) -> RuledSupport:
     v_range = tuple(exact_float(k, x) for x in surface.v_range)
     for (lo, hi), (a, b) in ((u_range, span_u), (v_range, span_v)):
         k.tick("admission_element")
-        if not (a <= lo < hi <= b):
+        if not (k.ar.cmp(a, lo) <= 0 and k.ar.cmp(lo, hi) < 0 and k.ar.cmp(hi, b) <= 0):
             raise refusal(US, "a parameter range lies outside the knot domain", "range")
     if surface.weights is None:
         weights = tuple((ONE, ONE) for _ in range(p + 1))
@@ -259,6 +259,7 @@ def _joint_integer_form(k: Kernel, N: tuple, D: tuple):
     den = 1
     for c in N + D:
         k.tick("poly_coefficient")
+        k.ar.guard(den.bit_length() + c.denominator.bit_length())          # the lcm is formed below
         den = k.ar.fit(den // math.gcd(den, c.denominator) * c.denominator)
     g = 0
     for c in N + D:

@@ -323,10 +323,22 @@ def test_fixture_faces_pass_c1_to_c4_with_corners_hints_and_h2(name, expected):
         assert trim.chart_errors and max(trim.chart_errors) <= F(1, 2 ** 40)
         assert trim.range_method in ("bernstein", "exact") and trim.forward
         assert trim.loop_increasing == trim.curve_increasing
+    # every trim's u-interval is strictly ordered and is exactly the interval between its two corners' roots
+    for trim in result.trims:
+        a, b = result.corners[trim.start_vertex], result.corners[trim.end_vertex]
+        order = compare(k, a.number, b.number)
+        assert order != 0
+        lo, hi = (a, b) if order < 0 else (b, a)
+        assert compare(k, trim.u_lo, trim.u_hi) < 0
+        assert (trim.u_lo.poly, trim.u_lo.ordinal) == (lo.poly, lo.ordinal)
+        assert (trim.u_hi.poly, trim.u_hi.ordinal) == (hi.poly, hi.ordinal)
+        assert compare(k, trim.u_lo, lo.number) == 0 and compare(k, trim.u_hi, hi.number) == 0
+        assert trim.curve_increasing == (order < 0)
     # F-A and F-C have rational corners: the exact u-intervals end at those rationals
     if name != "fb":
-        ends = sorted(compare(k, t.u_lo, F(1, 8)) for t in result.trims)
-        assert ends[0] >= -1
+        assert all(compare(k, t.u_lo, t.u_hi) < 0 for t in result.trims)
+        assert {(t.u_lo.lo, t.u_hi.lo) for t in result.trims} == {
+            tuple(sorted((expected[i][0], expected[(i + 1) % 4][0]))) for i in range(4)}
 
 
 def test_b1_half_hull_bow_passes_with_the_measured_corners():
@@ -423,24 +435,22 @@ def test_h2_shortened_and_distant_domains_and_reversed_direction_refused():
 
 def test_h2_midpoint_conditions(monkeypatch):
     model, face, vertices, edges = _fresh("fa")
-    original = PlaneNurbsCurve._knot_points
+    original = PlaneNurbsCurve._exact_points
 
     def shifted(self, t, du=0., dv=0., only_bottom=False):
-        us, vs = original(self, t)
+        points = original(self, t)
         if only_bottom and self.plane_record[0][2] != .25:           # the graph v = 1/4 is constant: a shift of u
-            return us, vs                                            # is invisible to the graph test
-        us, vs = us.copy(), vs.copy()
-        us[1] += du
-        vs[1] += dv
-        return us, vs
+            return points                                            # is invisible to the graph test
+        arc, (u, v), world = points[1]
+        return [points[0], (arc, (u + F(du), v + F(dv)), world), points[2]]
 
-    monkeypatch.setattr(PlaneNurbsCurve, "_knot_points", lambda self, t: shifted(self, t, 0., 1e-3))
+    monkeypatch.setattr(PlaneNurbsCurve, "_exact_points", lambda self, t: shifted(self, t, 0., 1e-3))
     error = refusal_of(lambda: admit(model, face))
     assert error.category is C.TRIM_HINT_MISMATCH and error.sub_reason == "domain_mid"
-    monkeypatch.setattr(PlaneNurbsCurve, "_knot_points", lambda self, t: shifted(self, t, 0.5, 0., True))
+    monkeypatch.setattr(PlaneNurbsCurve, "_exact_points", lambda self, t: shifted(self, t, 0.5, 0., True))
     error = refusal_of(lambda: admit(model, face))
     assert error.category is C.TRIM_HINT_MISMATCH and error.sub_reason == "domain_mid"
-    monkeypatch.setattr(PlaneNurbsCurve, "_knot_points", lambda self, t: shifted(self, t, 0., 0.))
+    monkeypatch.setattr(PlaneNurbsCurve, "_exact_points", lambda self, t: shifted(self, t, 0., 0.))
     admit(model, face)
 
 
@@ -590,3 +600,57 @@ def test_the_bit_cap_refuses_before_an_over_cap_value_is_formed():
     model, face, _v, _e = fixture("fc")
     error = refusal_of(lambda: admit(model, face, budget=WorkBudget(None, 30)))
     assert error.category is C.BIT_LENGTH_EXCEEDED
+
+
+# ------------------------------------------------------------------ the value-size contract of H2 and the distances
+
+def test_the_bit_cap_covers_the_h2_evaluation_of_the_stored_curve():
+    """F-A admits at max_bits 4096 and its H2 evaluation holds ~117-bit exact coordinates: a 44-bit cap refuses."""
+    model, face, _v, _e = fixture("fa")
+    admit(model, face)
+    error = refusal_of(lambda: admit(model, face, budget=WorkBudget(None, 44)))
+    assert error.category is C.BIT_LENGTH_EXCEEDED
+
+
+def _rational_number(k, value):
+    from anygeometry.certified_hydrostatics._ch3_algebraic import AlgebraicNumber
+    value = F(value)
+    return AlgebraicNumber.from_interval(k, (-value.numerator, value.denominator), value, value)
+
+
+def test_h2_distances_are_bit_capped():
+    """Start u = 2^51/(2^52 - 1) with its rounded float hint: the exact distance needs ~105 bits."""
+    from anygeometry.certified_hydrostatics._ch3_admission import TrimPlane
+    from anygeometry.certified_hydrostatics._ch3_admission_trims import Corner, _check_domain
+    u0 = F(2 ** 51, 2 ** 52 - 1)
+
+    class Fake:
+        def _exact_points(self, t):
+            return [(None, (u0, F(1, 2)), None), (None, (F(5, 8), F(1, 2)), None), (None, (F(3, 4), F(1, 2)), None)]
+
+        def _knot_points(self, t):
+            return np.array([float(u0), .625, .75]), np.array([.5, .5, .5])
+
+    def run(cap):
+        k = kern(max_bits=cap)
+        plane = TrimPlane((), (), (), (), F(0), (F(1),), (F(2),), (), ())
+        start, end = _rational_number(kern(), u0), _rational_number(kern(), F(3, 4))   # built under a roomy cap
+        corners = [Corner(i, n, F(0)) for i, n in enumerate((start, end))]
+        return _check_domain(k, 40, Fake(), plane, corners[0], corners[1], start, end)
+
+    assert max(run(4096)) < F(1, 2 ** 40)
+    error = refusal_of(lambda: run(64))
+    assert error.category is C.BIT_LENGTH_EXCEEDED
+
+
+def test_the_exact_helpers_of_the_trim_module_refuse_over_the_cap():
+    from anygeometry.certified_hydrostatics._ch3_algebraic import Enclosure
+    from anygeometry.certified_hydrostatics import _ch3_admission_trims as t
+    big = F(2 ** 40 + 1, 2 ** 41 - 1)
+    other = F(2 ** 40 + 3, 2 ** 41 - 3)
+    enc = Enclosure(other, other + F(1, 2 ** 45 + 1))
+    for call in (lambda k: t._distance(k, big, enc), lambda k: t._width(k, enc), lambda k: t._max(k, (big, other)),
+                 lambda k: t._min(k, (big, other)), lambda k: t._delta(k, 20, big)):
+        call(kern())                                                    # fine under the roomy cap
+        error = refusal_of(lambda c=call: c(kern(max_bits=60)))
+        assert error.category is C.BIT_LENGTH_EXCEEDED
