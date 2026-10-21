@@ -128,6 +128,16 @@ def _consistent_loops(model, edge_lists):
     return [tuple(loop) for loop in loops]
 
 
+def _loop_area_z(model, loop) -> float:
+    """Twice the signed xy area of the polygon through the loop's start vertices (positive: anticlockwise
+    seen from +z)."""
+    points = []
+    for item in loop:
+        edge = model.edges[item.edge]
+        points.append(model.vertices[edge.start if item.forward else edge.end].position)
+    return sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(points, points[1:] + points[:1]))
+
+
 def build_b1_hull(frames=(1.5, 3.5), bottom: float = .5, deck: float = 3.):
     """The closed full B1 hull between the frames and the planes ``z = bottom, deck`` (H1-F3): the
     starboard bow and its mirror image, deck/bottom/frame faces spanning port to starboard (each bounded
@@ -167,7 +177,12 @@ def build_b1_hull(frames=(1.5, 3.5), bottom: float = .5, deck: float = 3.):
         [sections[("s", "aft")], across[("deck", "aft")], sections[("p", "aft")], across[("bottom", "aft")]],
         [sections[("s", "fore")], across[("deck", "fore")], sections[("p", "fore")], across[("bottom", "fore")]],
     ]
+    from .entities import OrientedEdge
     loops = _consistent_loops(model, edge_lists)
+    if _loop_area_z(model, loops[2]) < 0.:
+        # the deck's outward normal is +z: its loop must run anticlockwise seen from above; if not, the whole
+        # (consistently oriented) shell is inward and is reversed so the hull is an OUTWARD closed hull
+        loops = [tuple(OrientedEdge(item.edge, not item.forward) for item in reversed(loop)) for loop in loops]
     supports = [surfaces["s"], surfaces["p"]] + [planes[key][0] for key in ("deck", "bottom", "aft", "fore")]
     faces = {name: model.add_face_from_loop(loop, surface=support)
              for name, loop, support in zip(names, loops, supports)}
