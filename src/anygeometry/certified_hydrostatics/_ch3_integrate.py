@@ -295,7 +295,11 @@ def _decompose(k: Kernel, num: tuple, dens: list) -> tuple:
         for i in range(len(basis)):
             k.tick("poly_coefficient")
             exps[i] += ex[i] * e
-    factors = [(basis[i], exps[i]) for i in range(len(basis)) if exps[i] > 0]
+    factors = []
+    for i in range(len(basis)):
+        k.tick("poly_coefficient")
+        if exps[i] > 0:
+            factors.append((basis[i], exps[i]))
     scaled = pscale(k, num, k.ar.div(ONE, constant))
     poly_part, terms = partial_fractions(k, scaled, factors)
     return poly_part, terms, factors, constant

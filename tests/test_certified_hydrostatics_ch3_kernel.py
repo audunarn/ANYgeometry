@@ -807,3 +807,57 @@ def test_algebraic_filter_loop_is_a_budget_and_cancellation_checkpoint(monkeypat
         run(kern(budget=budget, cancel=lambda: budget.operations >= 23000))
     assert info.value.category is C.CANCELLED and budget.operations == 23000
     assert len(entries) >= 1
+
+
+# --- round-3 sweep: per-element checkpoints in caller-sized collection loops (hard-coded budgets).
+# Each case: the old code finished within OLD operations; the metered code needs NEW (more) and refuses at OLD.
+
+def _poly_product(factors):
+    from anygeometry.certified_hydrostatics._ch3_poly import pmul
+    p = (F(1),)
+    for c, e in factors:
+        for _ in range(e):
+            p = pmul(K0, p, (F(c), F(1)))
+    return p
+
+
+def _resultant_identity(n):
+    return [[(F(1),) if i == j else () for j in range(n)] for i in range(n)]
+
+
+def _decompose_linear_denominators():
+    from anygeometry.certified_hydrostatics._ch3_integrate import _decompose
+    return lambda k: _decompose(k, (F(1),), [((F(i), F(1)), 1) for i in range(1, 31)])
+
+
+_SWEEP_CASES = {
+    # name: (callable of a kernel, old operations, new operations)
+    "constant_inputs_expansion_pass": (lambda k: coprime_basis(k, [(F(1),)] * 10000), 10001, 20001),
+    "square_free_factor_collection": (lambda k: coprime_basis(k, [_poly_product(((1, 1), (2, 2), (3, 3)))]), 344, 348),
+    "duplicate_split_remainder_list": (lambda k: coprime_basis(k, [(F(1), F(1))] * 40), 2456, 3355),
+    "bareiss_matrix_copy": (lambda k: __import__("anygeometry.certified_hydrostatics._ch3_resultant",
+                                                 fromlist=["_det_bareiss"])._det_bareiss(k, _resultant_identity(64)),
+                            93534, 93598),
+    "decompose_factor_list": (_decompose_linear_denominators(), 20414, 20504),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_SWEEP_CASES))
+def test_round3_collection_loops_are_budget_checkpoints(name):
+    run, old, new = _SWEEP_CASES[name]
+    budget = WorkBudget(old, 4096)
+    with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+        run(kern(budget=budget))
+    assert info.value.category is C.BUDGET_EXHAUSTED and budget.operations == old
+    budget = WorkBudget(new, 4096)
+    run(kern(budget=budget))
+    assert budget.operations == new
+
+
+@pytest.mark.parametrize("name", sorted(_SWEEP_CASES))
+def test_round3_collection_loops_observe_cancellation(name):
+    run, old, new = _SWEEP_CASES[name]
+    budget = WorkBudget(None, 4096)
+    with pytest.raises(CertifiedHydrostaticsRefusal) as info:
+        run(kern(budget=budget, cancel=lambda: budget.operations >= old))
+    assert info.value.category is C.CANCELLED and budget.operations == old

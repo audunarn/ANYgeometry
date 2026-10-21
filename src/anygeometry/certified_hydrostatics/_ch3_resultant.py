@@ -60,7 +60,11 @@ def _det_bareiss(k: Kernel, M: list) -> tuple:
     n = len(M)
     if n == 0:
         return (ONE,)
-    M = [list(row) for row in M]
+    copy = []
+    for row in M:
+        k.tick("poly_coefficient")
+        copy.append(list(row))
+    M = copy
     sign = 1
     prev = (ONE,)
     for c in range(n - 1):

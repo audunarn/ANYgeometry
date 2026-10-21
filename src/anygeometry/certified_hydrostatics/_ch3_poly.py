@@ -498,6 +498,7 @@ def coprime_basis(k: Kernel, polys) -> tuple[list[tuple], list[tuple[Fraction, l
         if not p:
             raise ZeroDivisionError("the zero polynomial has no coprime factorisation")
         for f, _ in squarefree_factors(k, p):
+            k.tick("poly_coefficient")
             items.append(f)
     changed = True
     while changed:
@@ -510,7 +511,11 @@ def coprime_basis(k: Kernel, polys) -> tuple[list[tuple], list[tuple[Fraction, l
                 if len(g) > 1:
                     a = pexact_div(k, items[i], g)
                     b = pexact_div(k, items[j], g)
-                    rest = [items[t] for t in range(len(items)) if t not in (i, j)]
+                    rest = []
+                    for t in range(len(items)):
+                        k.tick("poly_coefficient")
+                        if t not in (i, j):
+                            rest.append(items[t])
                     for f in (a, g, b):
                         k.tick("poly_coefficient")
                         if len(f) > 1:
@@ -527,6 +532,7 @@ def coprime_basis(k: Kernel, polys) -> tuple[list[tuple], list[tuple[Fraction, l
         basis.append(f)
     expansions = []
     for p in polys:
+        k.tick("poly_coefficient")
         exps = []
         rest = p
         for f in basis:

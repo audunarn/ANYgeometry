@@ -509,6 +509,14 @@ Consequences for CH3 (replacing revision 2's bulk rows):
 Policy limits bound every loop: `max_isolation_bits`, `max_taylor_order`, `max_pieces_per_integral`,
 `max_refinement_rounds`.
 
+**Known limits of the metering (owner contract decision, 2026-10-21; CH3b review round 3).** Kernel loops
+over caller-sized collections are bounded by the named policy limits and charge one unit per element. Any
+residual place where cancellation, a deadline or the budget is observed late (by up to one loop pass) is a
+known limit, not a defect; no further review rounds are spent on such places. The round-3 sweep added the
+per-element checkpoint to the coprime-basis expansion pass, the square-free factor collection, the
+duplicate-split remainder list, the Bareiss matrix copy and the integrand factor list (tests
+`test_round3_collection_loops_*`). Sites not changed: single native big-integer or `Fraction` operations (above); the sweep fixed the sites listed by the round-3 review and did not re-audit every other loop, so other short collection copies may still be observed up to one pass late (known limit).
+
 ## 8. Q08: evidence and the consumer's part (revision 3: fixtures, matrix, relations)
 
 ### 8.1 Run set and success matrix (fixed before any assessment run)
