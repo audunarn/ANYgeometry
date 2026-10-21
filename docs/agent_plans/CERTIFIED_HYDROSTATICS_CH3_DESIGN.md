@@ -521,6 +521,15 @@ duplicate-split remainder list, the Bareiss matrix copy and the integrand factor
 
 ### 8.1 Run set and success matrix (fixed before any assessment run)
 
+**Amended 2026-10-21 (owner, from ANYstability's minimum Q08 answer): the run set is narrowed to the 12 fixed pilot
+planes on the full hull (`z` = 1.0/1.75/2.5 upright; heel +-0.1; trim +-0.1; combined +-0.1/+-0.1 through
+(2.5, 0, 1.75), `n = R^T e_z`, `R = Ry(-trim) Rx(heel)`; dry/full `z` = 0.25/3.25; bottom-adjacent `z` = 0.500001),
+the same cuts on the half hull (half/full volume relation), the +- heel reflection pair, and the independent
+references; working request accuracy 1e-9; cold preparation <= 120 s, <= 30 s per query, verification overhead
+recorded separately. The groups U, B, N, I, S, D, T below shrink to unit-test level; group M (two roots on one
+deck edge) stays a CH3c unit test; planes through a vertex or edge refuse (D-CH3-5). F-A and F-C stay as exact
+anchors.**
+
 Models: `build_b1_half_hull()` and `build_b1_hull()` (defaults); units `m`; forms `("enclosure",
 "binary64", "decimal")`; accuracies `1e-9` for every quantity. ANYstability's convention: `n = R[2]`,
 `d = n . point`, basis `R[0]`, `R[1]`, origin `point`, `R = Ry(-trim) Rx(heel)` with float entries.
@@ -669,6 +678,9 @@ Patch version bump at CH3e (`0.4.7`).
   binary64 as outward rounding, default `10^-12`); square-root allocation in output units (4.4).
 - **D-CH3-5** degenerate planes: E1, E5, E6, E7 and zero-beta-outside supported by the certified event
   gap; E2, E3, E4 and zero-beta-inside refuse `CURVED_SECTION_DEGENERACY`.
+  **Amended 2026-10-21 owner decision (narrowed plan, CH3c): planes through a vertex or an edge (E1, E5, E6),
+  tangencies and ruling-in-plane planes also get a typed refusal (`CURVED_SECTION_DEGENERACY` or the matching
+  category); no event-gap support in CH3c. The gap method (section 5.2) stays a documented later extension.**
 - **D-CH3-6** kernel re-implemented inside `certified_hydrostatics` with metering; verifier has its own.
 - **D-CH3-7** policy defaults: `max_bits` 4096, `max_isolation_bits` 4096, `max_taylor_order` 16,
   `max_pieces_per_integral` 1024, `max_refinement_rounds` 8, `default_enclosure_width` 10^-12.

@@ -18,7 +18,7 @@ __all__ = ["HalfSpaceQuery", "QUANTITY_NAMES", "FORM_NAMES", "VOLUME_NAMES", "WA
 VOLUME_NAMES = ("V", "Jx", "Jy", "Jz")
 WATERPLANE_NAMES = ("A", "Mu", "Mv", "Iuu", "Ivv", "Iuv")   # area, first moments, second moments u^2, v^2, uv
 QUANTITY_NAMES = VOLUME_NAMES + WATERPLANE_NAMES
-FORM_NAMES = ("exact", "binary64", "decimal")
+FORM_NAMES = ("exact", "enclosure", "binary64", "decimal")
 
 
 def _refusal(category: RefusalCategory, message: str) -> CertifiedHydrostaticsRefusal:

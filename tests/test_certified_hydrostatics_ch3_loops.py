@@ -6,6 +6,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import time
+from fractions import Fraction
 from dataclasses import replace
 from fractions import Fraction as F
 
@@ -17,6 +18,7 @@ from anygeometry.certified_hydrostatics import (CertifiedHydrostaticsPolicy, Cer
                                                 HalfSpaceQuery, RefusalCategory, WorkBudget, check_preparation,
                                                 prepare_certified_hydrostatics, query_certified_hydrostatics)
 from anygeometry.certified_hydrostatics import _ch3_curved_admit as ca
+from anygeometry.certified_hydrostatics._ch3_poly import Kernel
 from anygeometry.certified_hydrostatics._ch3_loops import check_loop, is_v_monotone, loop_sigma, region_contains
 from anygeometry.certified_hydrostatics._identity import canonical_json
 from anygeometry.certified_hydrostatics._snapshot import collect_snapshot
@@ -35,7 +37,7 @@ def half_hull():
 
 
 def full_hull():
-    """The full B1 hull with outward loops (the library builds it inward, see the finding below)."""
+    """The full B1 hull with outward loops (the public builder)."""
     if "full" not in _CACHE:
         _CACHE["full"] = solids.outward_full_hull()
     return _CACHE["full"]
@@ -141,13 +143,16 @@ def test_the_snapshot_v2_document_records_the_corner_identity_and_is_determinist
     assert "snapshot_version" not in collect_snapshot(*unit_box(), Meter(None)).canonical()
 
 
-def test_finding_the_library_full_hull_is_built_with_inward_loops():
-    """``build_b1_hull`` loops are anticlockwise about the inward normals: the exact signed volume is negative
-    (-2 x the half hull's, which is +29.6157 = 59.2412 / 2) and admission refuses INVERTED_ORIENTATION."""
+def test_the_library_full_hull_is_outward_and_prepares():
+    """``build_b1_hull`` returns an OUTWARD closed hull: signed volume +59.2412 (2 x the half hull's 29.6157),
+    and preparation admits it (it used to refuse INVERTED_ORIENTATION, volume -59.24)."""
     from anygeometry.b1_example import build_b1_hull
     model, faces = build_b1_hull()
-    error = refused(model, list(faces.values()))
-    assert error.category is C.INVERTED_ORIENTATION and error.phase == "prepare"
+    p = prepare_certified_hydrostatics(model, list(faces.values()))
+    k = Kernel(Meter(None), POLICY.kernel_limits())
+    pts = ca._points(k, p.snapshot)
+    v = ca._volume(k, p.snapshot, ca._build_views(k, p.snapshot, pts), pts, 1024, Fraction(1, 2 ** 20))
+    assert float(v.lo) <= 59.241180737020 <= float(v.hi) and float(v.hi - v.lo) < 0.04
 
 
 def test_the_signed_volume_is_the_known_one():
@@ -178,10 +183,12 @@ def test_cold_preparation_of_the_full_hull_is_recorded():
     print(f"full hull preparation: {seconds:.2f} s, {p.work['operations']} units, {p.work['max_bits_seen']} bits")
 
 
-def test_a_curved_prepared_model_answers_a_query_with_a_typed_refusal():
+def test_a_curved_prepared_model_is_answered_by_the_curved_query_engine():
+    """CH3a2 left a typed stub (UNSUPPORTED_SURFACE / curved_query) here; CH3c replaced it with the engine
+    (tests/test_certified_hydrostatics_ch3_query.py pins the values)."""
     model, ids, p = prepared("half")
-    error = refusal_of(lambda: query_certified_hydrostatics(p, HalfSpaceQuery(normal=(0., 0., 1.), offset=1.5)))
-    assert error.category is C.UNSUPPORTED_SURFACE and error.sub_reason == "curved_query" and error.phase == "query"
+    result = query_certified_hydrostatics(p, HalfSpaceQuery(normal=(0., 0., 1.), offset=1.5))
+    assert result.occupancy == "PARTIAL" and result.volume.enclosure is not None and result.proof
 
 
 def test_check_preparation_detects_a_changed_curved_model():

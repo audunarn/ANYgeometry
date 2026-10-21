@@ -100,12 +100,9 @@ def solid_fb(build_face, surface_fb, planes=planes_fb4):
 
 
 def outward_full_hull():
-    """``build_b1_hull`` with every loop reversed when needed: the library builds it with inward loops."""
+    """``build_b1_hull``: the public builder returns an outward closed hull."""
     from anygeometry.b1_example import build_b1_hull
-    model, faces = build_b1_hull()
-    ids = list(faces.values())
-    flip_all(model, ids)
-    return model, faces
+    return build_b1_hull()
 
 
 def polygon_face(build_face, surface_fa, points):

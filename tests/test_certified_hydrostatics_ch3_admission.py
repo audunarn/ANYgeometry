@@ -162,7 +162,7 @@ def test_the_policy_keeps_the_planar_dictionary_and_maps_the_curved_fields():
     assert full["convention_version"] == "2" and full["max_taylor_order"] == 16
     assert (full["delta_hint_bits"], full["delta_chart_bits"], full["max_bits"], full["max_isolation_bits"],
             full["max_pieces_per_integral"], full["max_refinement_rounds"], full["default_enclosure_digits"]) \
-        == (40, 40, 4096, 4096, 1024, 8, 12)
+        == (40, 40, 1 << 16, 4096, 1024, 8, 12)
     assert POLICY.kernel_limits() == KernelLimits(4096, 16, 1024, 8)
     custom = CertifiedHydrostaticsPolicy(convention_version="2", max_taylor_order=32, max_isolation_bits=100,
                                          max_pieces_per_integral=7, max_refinement_rounds=3, max_bits=999)

@@ -40,10 +40,9 @@ def _side(name: str, section, query: HalfSpaceQuery, nn, meter: Meter) -> Sectio
 def _evaluate(prepared: PreparedCertifiedHydrostatics, query: HalfSpaceQuery, meter: Meter,
               before: dict) -> CertifiedHydrostaticsResult:
     snapshot = prepared.snapshot
-    if snapshot.curved is not None:         # CH3c is the curved query engine; this planar engine must not read a curved loop as a polygon
-        raise CertifiedHydrostaticsRefusal(RefusalCategory.UNSUPPORTED_SURFACE,
-                                           "queries on a model with curved faces are not available yet",
-                                           sub_reason="curved_query")
+    if snapshot.curved is not None:         # CH3c: the curved query engine (the planar engine reads polygons only)
+        from ._ch3_query import evaluate_curved
+        return evaluate_curved(prepared, query, meter, before)
     ar = Ar(meter)
     for number in (*query.normal, query.offset, *query.waterplane_origin, *query.waterplane_axes[0],
                    *query.waterplane_axes[1], *(w for _name, w in query.absolute_accuracy)):
