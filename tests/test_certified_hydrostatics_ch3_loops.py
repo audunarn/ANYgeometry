@@ -331,9 +331,9 @@ def rat(vertex, x, y, z=0):
     return Pt(vertex, rat=(F(x), F(y), F(z)))
 
 
-def seg_view(points, view_id=1, plane=((0, 0, 1), 0), edge_base=100):
+def seg_view(points, view_id=1, plane=((0, 0, 1), 0), edge_base=100, vertex_base=0):
     """A planar view from rational points (vertex ids 1..n): closed loop of segments in the plane ``n . x = d``."""
-    pts = [rat(i + 1, *p) for i, p in enumerate(points)]
+    pts = [rat(i + 1 + vertex_base, *p) for i, p in enumerate(points)]
     n = len(pts)
     pieces = [ca._Piece("seg", edge_base + i, pts[i], pts[(i + 1) % n]) for i in range(n)]
     normal, d = plane
@@ -500,7 +500,7 @@ def test_a_planar_face_whose_plane_cuts_the_bow_is_embedding_undecided():
     k, views = curved_views("half")
     bow = next(v for v in views if v.curved)
     wall = seg_view([(F(5, 2), 0, F(1, 2)), (F(5, 2), 10, F(1, 2)), (F(5, 2), 10, 3), (F(5, 2), 0, 3)], view_id=99,
-                    plane=((1, 0, 0), F(5, 2)), edge_base=700)
+                    plane=((1, 0, 0), F(5, 2)), edge_base=700, vertex_base=1000)
     wall.box = ca._view_box(k, wall)
     error = refusal_of(lambda: ca._curved_planar(k, bow, wall))
     assert error.category is C.EMBEDDING_UNDECIDED and error.sub_reason == "arc_meets_plane"
@@ -511,19 +511,65 @@ def test_a_ruling_in_the_plane_and_unshared_contact_are_embedding_undecided():
     face = next(v for v in views if v.curved)
     # y = x - 1/4 is tangent to y = u^2 along the ruling u = 1/2 (the face spans u in [1/8, 7/8])
     tangent = seg_view([(F(2, 5), F(3, 20), 0), (F(3, 5), F(7, 20), 0), (F(3, 5), F(7, 20), 1), (F(2, 5), F(3, 20), 1)],
-                       view_id=98, plane=((-1, 1, 0), F(-1, 4)), edge_base=710)
+                       view_id=98, plane=((-1, 1, 0), F(-1, 4)), edge_base=710, vertex_base=1100)
     error = refusal_of(lambda: ca._ruling_check(k, face, tangent))
     assert error.category is C.EMBEDDING_UNDECIDED and error.sub_reason == "ruling_in_plane"
-    # a plane z = 1/4 face over the curved face's bottom trim, without sharing it
-    overlap = seg_view([(F(1, 5), 0, F(1, 4)), (F(1, 2), 0, F(1, 4)), (F(1, 2), F(1, 5), F(1, 4)),
-                        (F(1, 5), F(1, 5), F(1, 4))], view_id=97, plane=((0, 0, 1), F(1, 4)), edge_base=720)
+    # a plane z = 1/4 face over the curved face's bottom trim, without sharing it: the trim, not a corner, meets it
+    overlap = seg_view([(F(1, 5), 0, F(1, 4)), (F(3, 10), 0, F(1, 4)), (F(3, 10), F(1, 5), F(1, 4)),
+                        (F(1, 5), F(1, 5), F(1, 4))], view_id=97, plane=((0, 0, 1), F(1, 4)), edge_base=720,
+                       vertex_base=1200)
     overlap.box = ca._view_box(k, overlap)
     error = refusal_of(lambda: ca._curved_planar(k, face, overlap))
     assert error.category is C.EMBEDDING_UNDECIDED and error.sub_reason == "trim_contact"
+    # the same plane with a face around the corner (3/8, 9/64, 1/4): corner_contact
+    around = seg_view([(F(3, 10), 0, F(1, 4)), (F(1, 2), 0, F(1, 4)), (F(1, 2), F(1, 5), F(1, 4)),
+                       (F(3, 10), F(1, 5), F(1, 4))], view_id=95, plane=((0, 0, 1), F(1, 4)), edge_base=740,
+                      vertex_base=1400)
+    around.box = ca._view_box(k, around)
+    error = refusal_of(lambda: ca._curved_planar(k, face, around))
+    assert error.category is C.EMBEDDING_UNDECIDED and error.sub_reason == "corner_contact"
     apart = seg_view([(F(3, 5), F(1, 2), F(1, 4)), (F(9, 10), F(1, 2), F(1, 4)), (F(9, 10), F(9, 10), F(1, 4)),
-                      (F(3, 5), F(9, 10), F(1, 4))], view_id=96, plane=((0, 0, 1), F(1, 4)), edge_base=730)
+                      (F(3, 5), F(9, 10), F(1, 4))], view_id=96, plane=((0, 0, 1), F(1, 4)), edge_base=730,
+                     vertex_base=1300)
     apart.box = ca._view_box(k, apart)
     ca._curved_planar(k, face, apart)                                  # the exact boxes are disjoint: no contact
+
+
+def test_a_plane_through_two_opposite_corners_that_splits_the_loop_is_a_curved_straddle():
+    """2x - z = 1/2 passes through the corners (3/8, 9/64, 1/4) and (5/8, 25/64, 3/4) of F-A with two arcs on each
+    side and no interior crossing: the face lies on both sides of the plane."""
+    k, views = curved_views("fa")
+    face = next(v for v in views if v.curved)
+    plane = seg_view([(F(2, 5), F(1, 2), F(3, 10)), (F(3, 5), F(1, 2), F(7, 10)), (F(3, 5), F(9, 10), F(7, 10)),
+                      (F(2, 5), F(9, 10), F(3, 10))], view_id=94, plane=((2, 0, -1), F(1, 2)), edge_base=750,
+                     vertex_base=1500)
+    plane.box = ca._view_box(k, plane)
+    error = refusal_of(lambda: ca._curved_planar(k, face, plane))
+    assert error.category is C.EMBEDDING_UNDECIDED and error.sub_reason == "straddle"
+
+
+def test_a_segment_between_algebraic_points_without_a_rational_line_is_refused():
+    k, deck = _deck_view()
+    arc, a_seg, _b_seg, c_seg = deck.pieces
+    chord = ca._Piece("seg", 905, arc.b, arc.a)               # the chord between the two algebraic arc ends
+    error = refusal_of(lambda: ca._check_planar_loop(k, replace(deck, pieces=[arc, a_seg, chord, c_seg])))
+    assert error.category is C.UNDECIDED_PREDICATE and error.sub_reason == "irrational_segment_line"
+
+
+def test_an_arc_off_the_plane_of_its_face_is_not_exactly_planar_although_its_vertices_are_in_it():
+    k, views = curved_views("fa")
+    arc_view = next(v for v in views if not v.curved and any(p.kind == "arc" for p in v.pieces))
+    arc = next(p for p in arc_view.pieces if p.kind == "arc")
+    a, b = arc.a, arc.b
+    apex = rat(3000, F(1, 5), F(1, 20), F(9, 10))
+    ab = tuple(b.rat[i] - a.rat[i] for i in range(3))
+    ax = tuple(apex.rat[i] - a.rat[i] for i in range(3))
+    normal = (ab[1] * ax[2] - ab[2] * ax[1], ab[2] * ax[0] - ab[0] * ax[2], ab[0] * ax[1] - ab[1] * ax[0])
+    d = sum(n * c for n, c in zip(normal, a.rat))
+    pieces = [arc, ca._Piece("seg", 3001, b, apex), ca._Piece("seg", 3002, apex, a)]
+    view = replace(arc_view, pieces=pieces, n=normal, d=d, vids=[a.vertex, b.vertex, 3000])
+    error = refusal_of(lambda: ca._check_supports(k, [view]))
+    assert error.category is C.NOT_EXACTLY_PLANAR and "arc edge" in error.detail
 
 
 def test_two_curved_faces_with_overlapping_boxes_are_embedding_undecided():
