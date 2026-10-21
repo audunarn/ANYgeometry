@@ -20,7 +20,7 @@ from ._ch3_poly import (Kernel, ONE, ZERO, bernstein, padd, pgcd, pexact_div, pm
                         refusal)
 from ._errors import RefusalCategory
 
-__all__ = ["RuledSupport", "TrimPlane", "classify_surface", "plane_graph", "exact_float", "poly_dot3"]
+__all__ = ["RuledSupport", "TrimPlane", "classify_surface", "plane_graph", "plane_alpha_beta", "exact_float", "poly_dot3"]
 
 US = RefusalCategory.UNSUPPORTED_SURFACE
 UT = RefusalCategory.UNSUPPORTED_TRIM
@@ -271,6 +271,19 @@ def _joint_integer_form(k: Kernel, N: tuple, D: tuple):
     return pscale(k, N, scale), pscale(k, D, scale)
 
 
+def plane_alpha_beta(k: Kernel, support: RuledSupport, m: tuple, d) -> tuple:
+    """``(alpha, beta)`` of the plane ``m . x = d`` on ``support``: ``m . P - d W = alpha(u) + v beta(u)`` (2.2)."""
+    ar = k.ar
+    k1, k2 = support.span_v
+    width = ar.sub(k2, k1)
+    mA = poly_dot3(k, m, support.A[:3])
+    mB = poly_dot3(k, m, support.B[:3])
+    alpha = psub(k, pscale(k, psub(k, pscale(k, mA, k2), pscale(k, mB, k1)), ar.div(ONE, width)),
+                 pscale(k, support.W, d))
+    beta = pscale(k, psub(k, mB, mA), ar.div(ONE, width))
+    return alpha, beta
+
+
 def plane_graph(k: Kernel, support: RuledSupport, origin: tuple, u_vector: tuple, v_vector: tuple) -> TrimPlane:
     """The graph ``v = N / D`` of the plane ``m . x = d`` (``m = u_vector x v_vector``) on ``support``.
 
@@ -283,11 +296,7 @@ def plane_graph(k: Kernel, support: RuledSupport, origin: tuple, u_vector: tuple
     d = ar.dot(m, origin)
     k1, k2 = support.span_v
     width = ar.sub(k2, k1)
-    mA = poly_dot3(k, m, support.A[:3])
-    mB = poly_dot3(k, m, support.B[:3])
-    alpha = psub(k, pscale(k, psub(k, pscale(k, mA, k2), pscale(k, mB, k1)), ar.div(ONE, width)),
-                 pscale(k, support.W, d))
-    beta = pscale(k, psub(k, mB, mA), ar.div(ONE, width))
+    alpha, beta = plane_alpha_beta(k, support, m, d)
     if not beta:
         raise refusal(UT, "the plane is parallel to the rulings" if alpha else "the face lies in the plane",
                       "ruling_trim" if alpha else "face_in_plane")

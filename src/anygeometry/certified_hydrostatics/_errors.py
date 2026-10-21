@@ -38,6 +38,10 @@ class RefusalCategory(enum.Enum):
     UNSUPPORTED_TRIM = "UNSUPPORTED_TRIM"
     # CH3a (design 2.3 C3, H1/H2): a stored vertex position or edge domain disagrees with the exact edge
     TRIM_HINT_MISMATCH = "TRIM_HINT_MISMATCH"
+    # CH3a2: embedding of a curved face with a neighbour cannot be decided inside the supported class (2.3 check 5);
+    # a query plane meets a curved section degenerately (CH3c, reserved here with the admission categories)
+    EMBEDDING_UNDECIDED = "EMBEDDING_UNDECIDED"
+    CURVED_SECTION_DEGENERACY = "CURVED_SECTION_DEGENERACY"
 
 
 PHASES = ("prepare", "query", "verify", "check")
