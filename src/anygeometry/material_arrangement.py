@@ -75,9 +75,9 @@ class MaterialDomain:
     boundaries: tuple[tuple[ArrangementPath, ...], ...]
     # Instance-lifetime reuse of the support's exact chart (see _exact_chart).
     _exact_chart_cache: tuple | None = field(default=None, init=False, hash=False,
-                                             compare=False, repr=False)
+                                             compare=False, repr=False, metadata={"definition": False})
     _exact_boundary_cache: tuple | None = field(default=None, init=False, hash=False,
-                                                compare=False, repr=False)
+                                                compare=False, repr=False, metadata={"definition": False})
 
     def _prepared_exact_boundary(self, loop):
         """Lazy exact line data, retained only for this immutable domain's edges."""
