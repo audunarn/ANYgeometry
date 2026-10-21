@@ -386,7 +386,7 @@ def _profile(k: Kernel, v: _View, n, d, allow_arc_in_plane: bool) -> "_Profile |
             continue
         s, root = poly_sign_on_open(k, g, arc.lo, arc.hi)
         if root:
-            raise refusal(EU, f"arc {arc.edge} touches the plane of the other face inside", "arc_touches_plane")
+            raise refusal(EU, f"arc {arc.edge} meets the plane of the other face inside", "arc_meets_plane")
         m_sign, m_root = poly_sign_on_open(k, arc.M, arc.lo, arc.hi)
         if m_root or not m_sign:
             raise refusal(RefusalCategory.UNSUPPORTED_TRIM, "an arc denominator is not one-signed", "denominator_not_certified")

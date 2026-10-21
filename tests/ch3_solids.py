@@ -106,3 +106,39 @@ def outward_full_hull():
     ids = list(faces.values())
     flip_all(model, ids)
     return model, faces
+
+
+def polygon_face(build_face, surface_fa, points):
+    """A curved face of F-A whose chart loop is the polygon ``points`` ((u, v) pairs, all edges non-vertical):
+    every edge is the section of the plane through the chart line. The face is written into the store (the
+    library's own loop check refuses a non-simple chart loop, which these fixtures need)."""
+    from anygeometry import GeometryModel
+    from anygeometry.entities import Face
+
+    def raw(self, loop, surface):
+        face = self._next_id["face"]
+        self._next_id["face"] = face + 1
+        self._put_entity("face", Face(face, tuple(loop), surface=surface))
+        return face
+
+    n = len(points)
+    planes = [Plane((points[i][0], 0., points[i][1]),
+                    (points[(i + 1) % n][0] - points[i][0], 0., points[(i + 1) % n][1] - points[i][1]),
+                    (0., 1., 0.)) for i in range(n)]
+    original = GeometryModel.add_face_from_loop
+    GeometryModel.add_face_from_loop = raw
+    try:
+        return build_face(surface_fa(), planes)
+    finally:
+        GeometryModel.add_face_from_loop = original
+
+
+def hull_with_port(port_surface):
+    """``build_b1_hull`` with a chosen port bow surface (to make the two bows overlap); loops left as built."""
+    import anygeometry.b1_example as b1
+    original = b1.b1_mirrored_bow_surface
+    b1.b1_mirrored_bow_surface = lambda: port_surface
+    try:
+        return b1.build_b1_hull()
+    finally:
+        b1.b1_mirrored_bow_surface = original
