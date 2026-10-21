@@ -36,6 +36,8 @@ class RefusalCategory(enum.Enum):
     # CH3 kernel (design CERTIFIED_HYDROSTATICS_CH3_DESIGN.md sections 2.3 and 3.2)
     UNDECIDED_PREDICATE = "UNDECIDED_PREDICATE"
     UNSUPPORTED_TRIM = "UNSUPPORTED_TRIM"
+    # CH3a (design 2.3 C3, H1/H2): a stored vertex position or edge domain disagrees with the exact edge
+    TRIM_HINT_MISMATCH = "TRIM_HINT_MISMATCH"
 
 
 PHASES = ("prepare", "query", "verify", "check")
