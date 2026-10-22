@@ -356,14 +356,17 @@ class Computation:
     def plane_values(self,origin,c,a,b,cap=False):
         cp=tuple(x.derivative() for x in c);triple=dot(origin,cross(c,cp))
         self.integrate('V',triple/R(6),a,b)
-        for name,x,o in zip(('Jx','Jy','Jz'),c,origin):self.integrate(name,triple*(R(o)+R(2)*x)/R(24),a,b)
+        for name,x,o in zip(('Jx','Jy','Jz'),c,origin):
+            if self.wanted is not None and name not in self.wanted:continue
+            self.integrate(name,triple*(R(o)+R(2)*x)/R(24),a,b)
         if cap:
             z=tuple(x-R(q) for x,q in zip(c,self.qcap));da=dot(cross(z,cp),self.n)/R(2);uv=[dot(e,tuple(x-R(o) for x,o in zip(c,self.o))) for e in self.axes];quv=[dot(e,vsub(self.qcap,self.o)) for e in self.axes]
             fs=[R(1),(R(quv[0])+R(2)*uv[0])/R(3),(R(quv[1])+R(2)*uv[1])/R(3),(R(quv[0]**2)+R(2*quv[0])*uv[0]+R(3)*uv[0]**2)/R(6),(R(quv[1]**2)+R(2*quv[1])*uv[1]+R(3)*uv[1]**2)/R(6),(R(quv[0]*quv[1])+R(quv[0])*uv[1]+R(quv[1])*uv[0]+R(3)*uv[0]*uv[1])/R(6)]
             for name,f in zip(('A','Mu','Mv','Iuu','Ivv','Iuv'),fs):self.integrate(name,da*f,a,b)
     def segment_values(self,origin,a,b,cap=False):
         det=dot(tuple(I(x) for x in origin),cross(a,b));self.accumulate('V',det/F(6))
-        for name,x,y,o in zip(('Jx','Jy','Jz'),a,b,origin):self.accumulate(name,det*(I(o)+x+y)/F(24))
+        for name,x,y,o in zip(('Jx','Jy','Jz'),a,b,origin):
+            if self.wanted is None or name in self.wanted:self.accumulate(name,det*(I(o)+x+y)/F(24))
         if cap:
             da=dot(cross(tuple(x-I(q) for x,q in zip(a,self.qcap)),tuple(y-I(q) for y,q in zip(b,self.qcap))),self.n)/2
             au=[dot(e,tuple(x-I(o) for x,o in zip(a,self.o))) for e in self.axes];bu=[dot(e,tuple(x-I(o) for x,o in zip(b,self.o))) for e in self.axes];q=[dot(e,vsub(self.qcap,self.o)) for e in self.axes]
@@ -418,10 +421,17 @@ class Computation:
         if not wd:
             if roots_in_extent(wn):fail('ruling in waterplane','CURVED_SECTION_DEGENERACY')
         elif roots_in_extent(wd):fail('water graph denominator zero','CURVED_SECTION_DEGENERACY')
-        P=[[R(a),R(b)] for a,b in zip(s.H0,s.H1)];Pu=[[x.derivative() for x in p] for p in P];Pv=[[p[1]] for p in P];triple=bpdot(P,bpcross(Pu,Pv));vol=[x/R(power(s.W,3)) for x in triple];mom=[ [x/R(power(s.W,4)) for x in bpmul(triple,p)] for p in P]
+        if not hasattr(s,'volume_terms'):
+            P=[[R(a),R(b)] for a,b in zip(s.H0,s.H1)];Pu=[[x.derivative() for x in p] for p in P];Pv=[[p[1]] for p in P];triple=bpdot(P,bpcross(Pu,Pv));vol=[x/R(power(s.W,3)) for x in triple];mom=[[x/R(power(s.W,4)) for x in bpmul(triple,p)] for p in P];s.volume_terms=(vol,mom);s.boundary_primitives={}
+        vol,mom=s.volume_terms
         def integrate_graph(g,a,b):
-            self.integrate('V',-antiderivative_at(vol,R(*g))/R(3),a,b)
-            for name,p in zip(('Jx','Jy','Jz'),mom):self.integrate(name,-antiderivative_at(p,R(*g))/R(4),a,b)
+            key=tuple(tuple(p) for p in g)
+            if key not in s.boundary_primitives:s.boundary_primitives[key]={}
+            primitives=s.boundary_primitives[key]
+            for name,terms,divisor in [('V',vol,3),*zip(('Jx','Jy','Jz'),mom,(4,4,4))]:
+                if self.wanted is not None and name not in self.wanted:continue
+                if name not in primitives:primitives[name]=-antiderivative_at(terms,R(*g))/R(divisor)
+                self.integrate(name,primitives[name],a,b)
         graph_points=[]
         for oe in f.loop:
             eid=oe.edge;a,b=rec.arc_ends(eid,oe.forward);ordered=sorted(cuts[eid],key=cmp_to_key(compare),reverse=compare(a,b)>0);ends=[a]+ordered+[b];g=rec.arcs[eid]['graph'];c=rec.arcs[eid]['curve']

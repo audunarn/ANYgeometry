@@ -158,7 +158,7 @@ def verify_curved(model,faces,query,result,expected,*,budget=None,cancellation_c
     from ._query import HalfSpaceQuery
     from ._prepare import CertifiedHydrostaticsPolicy
     from ._verify import VerifiedHydrostatics
-    from ..serialization import to_dict
+    from ..serialization import _qualified_model_state
     meter=Meter(budget if budget is not None else WorkBudget(None,65536),cancellation_check)
     copied=False;arithmetic_token=_active.set(None)
     try:
@@ -226,7 +226,7 @@ def verify_curved(model,faces,query,result,expected,*,budget=None,cancellation_c
         mismatch(structural(artifact,runtime),'artifact','runtime artifact metadata differs')
         meter.unit('verify_model_entities',len(model.vertices)+len(model.edges)+len(model.faces))
         if getattr(model,'_transaction_journal',None) is not None:fail('live model transaction is in progress','CONCURRENT_MUTATION')
-        before=(str(model.model_id),int(model.revision));document=to_dict(model);check=dict(document);check.pop('checksum',None);checksum=digest(check)
+        before=(str(model.model_id),int(model.revision));document=_qualified_model_state(model);check=dict(document);check.pop('checksum',None);checksum=digest(check)
         mismatch(document.get('checksum',{}).get('value')==checksum,'model','public document checksum mismatch')
         ident=doc['model'];mismatch(ident.get('model_id')==before[0] and ident.get('revision')==before[1] and ident.get('document_checksum')==checksum and structural(ident.get('face_ids'),list(ids)),'model','model identity differs')
         ar=Arithmetic(meter,policy);rec=Reconstruction(model,ids,ar);plain(rec.snapshot,meter);snapshot_digest=digest(rec.snapshot)
@@ -303,7 +303,9 @@ def verify_curved(model,faces,query,result,expected,*,budget=None,cancellation_c
                 raise
             mismatch(full_occupancy=='FULL','model','full-volume support bound failed');full=full_values['V']
         require_positive_full(full)
-        after=to_dict(model);after_check=dict(after);after_check.pop('checksum',None)
+        try:after=_qualified_model_state(model,expected_checksum=checksum,changed_message='verification source binding changed')
+        except ValueError as exc:raise CertifiedHydrostaticsRefusal(RefusalCategory.CONCURRENT_MUTATION,'model changed during verification',phase='verify') from exc
+        after_check=dict(after);after_check.pop('checksum',None)
         if getattr(model,'_transaction_journal',None) is not None or before!=(str(model.model_id),int(model.revision)) or digest(after_check)!=checksum:fail('model changed during verification','CONCURRENT_MUTATION')
         rebuilt=replace(rebuilt,work=plain(claimed['work'],meter),execution=plain(claimed.get('execution'),meter))
         present=section['section']=='PRESENT'

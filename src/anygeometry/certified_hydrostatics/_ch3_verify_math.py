@@ -37,7 +37,8 @@ def power(a,n):
     r=(F(1),)
     while n:
         if n&1:r=mul(r,a)
-        a=mul(a,a); n//=2
+        n//=2
+        if n:a=mul(a,a)
     return r
 def derivative(a):return trim([i*a[i] for i in range(1,len(a))])
 def evaluate(a,x):
@@ -75,7 +76,11 @@ def squarefree(a):return divide(a,pgcd(a,derivative(a)))[0] if len(a)>1 else a
 def bernstein(a,lo,hi):
     n=len(a)-1
     if n<0:return (F(0),)
-    c=[audit(sum((audit(audit(audit(a[j]*comb(j,i))*audit(lo**(j-i)))*audit((hi-lo)**i)) for j in range(i,n+1)),F(0))) for i in range(n+1)]
+    # Share affine powers across coefficients; factor h**i outside the
+    # j-sum. This is the same exact power-to-Bernstein transformation.
+    lp=[F(1)];hp=[F(1)];h=hi-lo
+    for _ in range(n):lp.append(audit(lp[-1]*lo));hp.append(audit(hp[-1]*h))
+    c=[audit(hp[i]*audit(sum((audit(audit(a[j]*comb(j,i))*lp[j-i]) for j in range(i,n+1)),F(0)))) for i in range(n+1)]
     return tuple(audit(sum((audit(c[i]*F(comb(k,i),comb(n,i))) for i in range(k+1)),F(0))) for k in range(n+1))
 def bounds(a,lo,hi):
     b=bernstein(a,lo,hi);return min(b),max(b)
@@ -164,6 +169,21 @@ class Arithmetic:
         nl,nh=bounds(r.n,a,b);dl,dh=bounds(r.d,a,b)
         if dl<=0<=dh:return None
         return Interval(nl,nh)/Interval(dl,dh)
+    def rounded_taylor(self,main,rho,tol):
+        # The true leaf integral lies in main +/- rho. Reserve half the
+        # requested width for the residual and the rest for outward rounding.
+        self.tick('verify_taylor_round');self.fit((main,rho,tol))
+        if not rho:return Interval(main)
+        k=max(64,tol.denominator.bit_length()-abs(tol.numerator).bit_length()+6)
+        while F(1,2**k)>tol/16:k+=1
+        if k+1>self.policy['max_bits']:fail('Taylor rounding precision exhausted','BUDGET_EXHAUSTED')
+        grid=F(2**k);self.fit((grid,))
+        scaled_main=audit(main*grid);scaled_radius=audit(rho*grid)
+        lower=scaled_main.__floor__();upper=-(-scaled_main).__floor__();radius=-(-scaled_radius).__floor__()
+        self.fit((lower,upper,radius))
+        # All returned denominators are powers of two, so recursive child
+        # sums cannot multiply unrelated Taylor-coefficient denominators.
+        return Interval(F(lower-radius,grid.numerator),F(upper+radius,grid.numerator))
     def _piece(self,r,a,b,tol,depth):
         self.tick('verify_taylor_piece');self.pieces+=1
         if self.pieces>self.policy['max_pieces_per_integral']*max(1,self.integrals):fail('verifier Taylor subdivision budget exhausted','BUDGET_EXHAUSTED')
@@ -187,9 +207,9 @@ class Arithmetic:
                 if j in (3,7,self.policy['max_taylor_order']):
                     residual=sub(nn,mul(dd,tuple(coeff)));lo,hi=bounds(residual,F(0),F(1))
                     rho=h*max(abs(lo),abs(hi))/minimum
-                    if 2*rho<=tol:
+                    if 2*rho<=tol/2:
                         main=h*sum((c/F(i+1) for i,c in enumerate(coeff)),F(0))
-                        return Interval(main-rho,main+rho)
+                        return self.rounded_taylor(main,rho,tol)
         if depth>256:fail('verifier refinement exhausted','BUDGET_EXHAUSTED')
         c=(a+b)/2
         return self._piece(r,a,c,tol/2,depth+1)+self._piece(r,c,b,tol/2,depth+1)
@@ -234,19 +254,33 @@ class Rational:
         if isinstance(n,Rational):self.n,self.d=n.n,n.d;return
         n=trim(n if isinstance(n,(tuple,list)) else (n,));d=trim(d)
         if not d:raise ZeroDivisionError
+        if not n:self.n,self.d=(),(F(1),);return
+        if len(d)==1:self.n,self.d=scale(n,1/d[0]),(F(1),);return
+        if len(n)==1:self.n,self.d=scale(n,1/d[-1]),scale(d,1/d[-1]);return
         g=pgcd(n,d);n=divide(n,g)[0] if g else ();d=divide(d,g)[0] if g else (F(1),)
         self.n,self.d=scale(n,1/d[-1]),scale(d,1/d[-1])
     def __add__(self,b):
-        b=Rational(b);return Rational(add(mul(self.n,b.d),mul(b.n,self.d)),mul(self.d,b.d))
+        b=b if isinstance(b,Rational) else Rational(b)
+        if not self.n:audit();return Rational(b)
+        if not b.n:audit();return Rational(self)
+        return Rational(add(mul(self.n,b.d),mul(b.n,self.d)),mul(self.d,b.d))
     __radd__=__add__
     def __neg__(self):return Rational(neg(self.n),self.d)
     def __sub__(self,b):return self+-Rational(b)
     def __rsub__(self,b):return Rational(b)+-self
     def __mul__(self,b):
-        b=Rational(b);return Rational(mul(self.n,b.n),mul(self.d,b.d))
+        b=b if isinstance(b,Rational) else Rational(b)
+        if not self.n or not b.n:audit();return Rational(0)
+        if b.d==(F(1),) and len(b.n)==1:
+            result=object.__new__(Rational);result.n=scale(self.n,b.n[0]);result.d=self.d;return result
+        if self.d==(F(1),) and len(self.n)==1:return b*self
+        return Rational(mul(self.n,b.n),mul(self.d,b.d))
     __rmul__=__mul__
     def __truediv__(self,b):
-        b=Rational(b);return Rational(mul(self.n,b.d),mul(self.d,b.n))
+        b=b if isinstance(b,Rational) else Rational(b)
+        if not b.n:raise ZeroDivisionError
+        if b.d==(F(1),) and len(b.n)==1:return self*Rational(1/b.n[0])
+        return Rational(mul(self.n,b.d),mul(self.d,b.n))
     def __pow__(self,n):return Rational(power(self.n,n),power(self.d,n))
     def derivative(self):return Rational(sub(mul(derivative(self.n),self.d),mul(self.n,derivative(self.d))),mul(self.d,self.d))
     def at(self,u):return evaluate(self.n,u)/evaluate(self.d,u)
