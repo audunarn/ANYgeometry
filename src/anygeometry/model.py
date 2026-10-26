@@ -5660,6 +5660,20 @@ class GeometryModel:
     # operations
     # ------------------------------------------------------------------
     @_transactional
+    def loft(self, first_edges, second_edges, *, reverse_first=False, reverse_second=False,
+             first_start=0, second_start=0, flip_normal=False, cancellation_check=None):
+        """Join ordered profiles on a canonical NURBS support, atomically.
+
+        Unsupported or uncertifiable mappings refuse without changing topology.
+        """
+        from .loft import build_loft
+        return build_loft(self, first_edges, second_edges, reverse_first=reverse_first,
+                          reverse_second=reverse_second, first_start=first_start,
+                          second_start=second_start, flip_normal=flip_normal,
+                          cancellation_check=cancellation_check)
+
+
+    @_transactional
     def extrude(
         self, edge_ids: Sequence[int], vector: Sequence[float]
     ) -> List[int]:
