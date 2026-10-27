@@ -230,6 +230,8 @@ class GeometryModel:
         self._vertices: Dict[int, Vertex] = {}
         self._edges: Dict[int, Edge] = {}
         self._faces: Dict[int, Face] = {}
+        self._solid_regions = {}
+        self.solid_regions = MappingProxyType(self._solid_regions)
         self.vertices: Mapping[int, Vertex] = MappingProxyType(self._vertices)
         self.edges: Mapping[int, Edge] = MappingProxyType(self._edges)
         self.faces: Mapping[int, Face] = MappingProxyType(self._faces)
@@ -438,6 +440,8 @@ class GeometryModel:
         if not isinstance(made_tolerance, TolerancePolicy):
             raise TypeError("tolerance must be a TolerancePolicy")
         made_units = self._units if units is None else str(units)
+        if self.solid_regions and made_units != "m":
+            raise GeometryError("solid regions require SI metres")
         if not made_units or "\x00" in made_units:
             raise GeometryError("units must be a non-empty string without NUL")
         made_origin = (
@@ -734,8 +738,10 @@ class GeometryModel:
                     or journal.member_changes
                     or journal.attachment_changes
                 )
+                validates_commit = validates_commit or any(ns == "solid_region" for ns, _ in journal.mapping_before)
                 if validates_commit:
-                    problems = self._validate_incremental(journal)
+                    from .solid_regions import validate_regions
+                    problems = (*self._validate_incremental(journal), *validate_regions(self))
                     if problems:
                         raise GeometryError("; ".join(problems))
                 self._commit_transaction(journal)
@@ -1019,6 +1025,70 @@ class GeometryModel:
             key for key in made if allowed is None or key[0] in allowed
         )
 
+    def _set_solid_region(self, region_id, record):
+        self._capture_mapping("solid_region", region_id, self._solid_regions.get(region_id, _MISSING))
+        if record is None:
+            self._solid_regions.pop(region_id, None)
+        else:
+            self._solid_regions[region_id] = record
+
+    @_transactional
+    def add_solid_prism(self, profile, vector, *, offset=0, name=None):
+        """Create a capped convex normal prism atomically, returning its UUID."""
+        from .solid_regions import add_prism
+        return add_prism(self, profile, vector, offset=offset, name=name)
+
+    @_transactional
+    def add_solid_box(self, lower, upper, *, name=None):
+        """Create an axis-aligned closed box from strictly ordered SI bounds."""
+        lo, hi = np.asarray(lower, dtype=float), np.asarray(upper, dtype=float)
+        if lo.shape != (3,) or hi.shape != (3,) or not np.isfinite([lo, hi]).all() or np.any(hi <= lo):
+            raise GeometryError("solid box requires finite strictly ordered 3D bounds")
+        x,y,z = lo
+        a,b,c = hi
+        return self.add_solid_prism(((x,y,z),(a,y,z),(a,b,z),(x,b,z)), (0,0,c-z), name=name)
+
+    def solid_region_snapshot(self, region_id):
+        """Detach a validated immutable closed-region snapshot."""
+        if self._transaction_journal is not None:
+            raise GeometryError("solid snapshots require committed geometry")
+        from .solid_regions import region_snapshot
+        return region_snapshot(self, region_id)
+
+    def validate_solid_region_snapshot(self, snapshot):
+        """Refuse reuse after owner, revision or source content changes."""
+        from .solid_regions import SolidRegionSnapshot
+        if not isinstance(snapshot, SolidRegionSnapshot):
+            raise GeometryError("expected a solid region snapshot")
+        current = self.solid_region_snapshot(snapshot.region_id)
+        if (snapshot.model_id, snapshot.revision, snapshot.source_signature) != (current.model_id, current.revision, current.source_signature):
+            raise GeometryError("stale or foreign solid region snapshot")
+        if (not np.array_equal(snapshot.coordinates, current.coordinates)
+                or snapshot.face_loops != current.face_loops or snapshot.face_refs != current.face_refs
+                or snapshot.face_groups != current.face_groups or snapshot.volume != current.volume
+                or snapshot.bounds != current.bounds or snapshot.provenance != current.provenance
+                or snapshot.schema_version != current.schema_version or snapshot.units != current.units
+                or snapshot.geometry_class != current.geometry_class):
+            raise GeometryError("solid snapshot content differs from its source")
+
+    @_transactional
+    def regenerate_solid_prism(self, region_id, profile, vector, *, offset=0):
+        """Update a prism while preserving existing topology and selections."""
+        from .solid_regions import regenerate_prism
+        return regenerate_prism(self, region_id, profile, vector, offset=offset)
+
+    @_transactional
+    def set_solid_face_group(self, region_id, name, face_refs):
+        """Bind a named selection of whole owner-bound region faces."""
+        region = self.solid_regions.get(region_id)
+        if region is None:
+            raise GeometryError("unknown solid region")
+        groups = dict(region.face_groups)
+        groups[name] = tuple(face_refs)
+        record = replace(region, face_groups=groups)
+        if record != region:
+            self._set_solid_region(region_id, record)
+
     def strict_audit(self, *, policy=None, qualification=None):
         """Run deterministic, fail-closed full-model qualification."""
 
@@ -1264,6 +1334,7 @@ class GeometryModel:
                 "replacement": self._replacement_history,
                 "structural_replacement": self._structural_replacement_history,
                 "construction_vertex": self._construction_vertices,
+                "solid_region": self._solid_regions,
             }.get(namespace)
             if mapping is None:
                 continue
@@ -1456,7 +1527,8 @@ class GeometryModel:
                 spatial_updates.add(key)
 
         semantic_change = bool(
-            journal.structural_before
+            any(ns == "solid_region" for ns, _ in journal.mapping_before)
+            or journal.structural_before
             or journal.group_changes
             or journal.tag_changes
             or journal.ownership_changes
@@ -1906,6 +1978,7 @@ class GeometryModel:
                 "junctions": dict(self.junctions),
             },
             "structural_ids": dict(self._next_structural_id),
+            "solid_regions": dict(self.solid_regions),
         }
 
     def design_snapshot(self) -> Dict[str, object]:
@@ -1939,7 +2012,8 @@ class GeometryModel:
             raise
         except (KeyError, TypeError, ValueError) as error:
             raise GeometryError(f"invalid topology snapshot: {error}") from error
-        problems = (*candidate.validate_topology(), *candidate._validate_structural())
+        from .solid_regions import validate_regions
+        problems = (*candidate.validate_topology(), *candidate._validate_structural(), *validate_regions(candidate))
         if problems:
             raise GeometryError("invalid topology snapshot: " + "; ".join(problems))
 
@@ -2025,6 +2099,7 @@ class GeometryModel:
             or self._replacement_history != candidate._replacement_history
             or self._structural_replacement_history
             != candidate._structural_replacement_history
+            or self._solid_regions != candidate._solid_regions
             or self._construction_vertices != candidate._construction_vertices
         )
         if not changed_geometry and not semantic_change:
@@ -2046,6 +2121,8 @@ class GeometryModel:
         self._structural_replacement_history = dict(
             candidate._structural_replacement_history
         )
+        self._solid_regions.clear()
+        self._solid_regions.update(candidate._solid_regions)
         self._construction_vertices = dict(candidate._construction_vertices)
         self._replacements = list(candidate._replacements)
         self._next_id.update(candidate._next_id)
@@ -2100,6 +2177,8 @@ class GeometryModel:
     def _restore_topology_unchecked(self, snapshot: Mapping[str, object]) -> None:
         """Decode into an unpublished staging model."""
 
+        self._solid_regions.clear()
+        self._solid_regions.update({key: region.rebound(self.model_id) for key, region in snapshot.get("solid_regions", {}).items()})
         vertex_state = snapshot.get("vertex_state", {})
         self._vertices.clear()
         for vertex_id, vertex in snapshot["vertices"].items():  # type: ignore[union-attr]
@@ -4997,6 +5076,8 @@ class GeometryModel:
             if (reference.kind, reference.id) not in keys and reference not in self._replacement_history:
                 errors.append(f"tags reference missing entity {reference}")
         errors.extend(self._validate_replacement_history())
+        from .solid_regions import validate_regions
+        errors.extend(validate_regions(self))
         return tuple(errors)
 
     @staticmethod

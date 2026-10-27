@@ -4035,6 +4035,10 @@ class _StrictAuditState:
                 self.collector.record_classification(classified=False)
 
     def run(self) -> None:
+        from .solid_regions import validate_regions
+        for error in validate_regions(self.model):
+            self.issue(AuditCode.CHECK_FAILED, AuditSeverity.BLOCKER, error,
+                       classification="invalid_closed_solid_region", blocks_strict_handoff=True)
         self.audit_topology()
         self.audit_spatial_pairs()
         self.audit_same_edge_members()

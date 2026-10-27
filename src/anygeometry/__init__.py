@@ -331,6 +331,7 @@ from .surfaces import (
 )
 
 __all__ = [
+    "ClosedSolidRegion", "SolidRegionSnapshot",
     "backend_info",
     "model_to_world_points",
     "world_to_model_points",
@@ -650,3 +651,5 @@ __all__ = [
 ]
 
 __version__ = "0.4.6"
+
+from .solid_regions import ClosedSolidRegion, SolidRegionSnapshot

@@ -75,6 +75,9 @@ _QUADRIC_VERSION = 6
 # 2026-10-13); schema 6 keeps its meaning. A document's version is the largest
 # requirement of any record it holds, found recursively (required_version).
 _NURBS_VERSION = 7
+# Closed regions have their own top-level schema; old strict readers must not
+# receive an extra field under a version they otherwise understand.
+_SOLID_VERSION = 8
 _RECORD_VERSIONS = {
     "extruded": _QUADRIC_VERSION,
     "quadric_intersection": _QUADRIC_VERSION,
@@ -94,6 +97,8 @@ def required_version(record: object) -> int:
     while stack:
         value = stack.pop()
         if isinstance(value, Mapping):
+            if value.get("schema") == SCHEMA and value.get("solid_regions"):
+                version = max(version, _SOLID_VERSION)
             kind = value.get("type")
             if isinstance(kind, str):
                 version = max(version, _RECORD_VERSIONS.get(kind, VERSION))
@@ -604,6 +609,10 @@ def to_dict(
     qualification API is available and refuses a non-certifiable report.
     """
 
+    from .solid_regions import validate_regions
+    region_errors = validate_regions(geometry)
+    if region_errors:
+        raise GeometryError("; ".join(region_errors))
     _qualify_document(geometry, include_features=include_features, certified=certified)
     document = _serialized_model_state(geometry, include_features=include_features)
     if include_features:
@@ -775,7 +784,7 @@ def _serialized_model_state(
                           for surface in (face.surface, face.parameterization)))
     document: dict[str, object] = {
         "schema": SCHEMA,
-        "version": _NURBS_VERSION if needs_nurbs else _QUADRIC_VERSION if needs_quadric else VERSION,
+        "version": _SOLID_VERSION if geometry.solid_regions else _NURBS_VERSION if needs_nurbs else _QUADRIC_VERSION if needs_quadric else VERSION,
         "model_id": model_id,
         "revision": revision,
         "coordinates": {
@@ -842,6 +851,9 @@ def _serialized_model_state(
     }
     if include_features:
         document["features"] = _feature_history(geometry.features, geometry)
+    if geometry.solid_regions:
+        from .solid_regions import region_document
+        document["solid_regions"] = [region_document(r) for r in sorted(geometry.solid_regions.values(), key=lambda r:r.region_id)]
     document["checksum"] = _checksum(document)
     return document
 
@@ -1865,7 +1877,7 @@ def from_dict(document: Mapping[str, Any]) -> GeometryModel:
     if document.get("schema", SCHEMA) != SCHEMA:
         raise GeometryError("not an ANYgeometry document")
     version = _integer(document.get("version", 1), "version")
-    if version not in (1, 2, 3, 4, VERSION, _QUADRIC_VERSION, _NURBS_VERSION):
+    if version not in (1, 2, 3, 4, VERSION, _QUADRIC_VERSION, _NURBS_VERSION, _SOLID_VERSION):
         raise GeometryError(f"unsupported ANYgeometry version {version}")
     strict_document = version >= 3
     # Schemas 4 and 5 share identity, tolerance and additive semantic fields.
@@ -1876,7 +1888,7 @@ def from_dict(document: Mapping[str, Any]) -> GeometryModel:
         _exact_fields(
             document,
             required=_CURRENT_REQUIRED_FIELDS,
-            optional=_CURRENT_OPTIONAL_FIELDS,
+            optional=_CURRENT_OPTIONAL_FIELDS | ({"solid_regions"} if version >= _SOLID_VERSION else set()),
             name=f"schema-{version} geometry document",
         )
     elif version == 3:
@@ -1974,6 +1986,9 @@ def from_dict(document: Mapping[str, Any]) -> GeometryModel:
             )
         else:
             _migrate_legacy_structural(geometry, version)
+        if "solid_regions" in document:
+            from .solid_regions import decode_regions
+            decode_regions(geometry, document["solid_regions"])
         _restore_counters(document, geometry, strict=strict_document)
         _decode_semantics(document, geometry, strict=strict_document)
         if current:
@@ -1990,7 +2005,8 @@ def from_dict(document: Mapping[str, Any]) -> GeometryModel:
     geometry._rebuild_member_incidence()  # noqa: SLF001
     geometry._spatial_index = None  # noqa: SLF001
     errors = geometry.validate_topology()
-    errors = (*errors, *geometry._validate_structural())  # noqa: SLF001
+    from .solid_regions import validate_regions
+    errors = (*errors, *geometry._validate_structural(), *validate_regions(geometry))  # noqa: SLF001
     if errors:
         raise GeometryError("invalid geometry topology: " + "; ".join(errors))
     for kind, store in (("vertex", geometry.vertices), ("edge", geometry.edges), ("face", geometry.faces)):
@@ -2103,6 +2119,8 @@ def from_dict(document: Mapping[str, Any]) -> GeometryModel:
                 if diagnostic is None
                 else diagnostic
             )
+    if version == _SOLID_VERSION and ("solid_regions" not in document or not document["solid_regions"]):
+        raise GeometryError("schema-8 geometry document requires solid_regions")
     if strict_document:
         _verify_checksum(document)
     # The revision was assigned before content was restored.
