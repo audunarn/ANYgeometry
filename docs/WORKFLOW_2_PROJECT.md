@@ -1,5 +1,87 @@
 # Workflow 2 project record
 
+## 2026-10-28 — Native/ABI compatibility complete locally; hosted gates pending
+
+Windows3.11 current-source native owner/mesher wheels pass118 focused contracts,
+zero failures/skips/deselections, with two actual compiled-kernel witnesses and
+the controlled P1/P2 example. Exact118-node/354-phase inventory and JUnit are
+validated;12 synthetic refusal controls pass. Four prospective amendments and
+the independent pytest-steering finding are preserved. The finding was repaired
+before the single released contract run; effective pytest steering is sanitized,
+actual driver/supervisor identities enforced and incomplete/skipped selections
+refused. Frozen manifest217f47f08211c88484ac8f32c3364c5841b6465ed73de3fe1a899074a09126f8;
+96.031000000017s/1200s,16 completed owned Jobs with verified zero active processes.
+This is local targeted Windows3.11 proof, not a full-suite/hosted/real-provider
+qualification. Existing Linux312 native results were reused, not replayed.
+
+Remaining recipient ABIs Windows312 ABI3 and Linux311 relink/import successfully,
+10 controls pass,10 receipts all completed with cleanup verified and all10
+executed runner snapshots retained.10.067699122998s/600s,zero meshing/physics.
+Prior12 generator tests reused after exact source-hash match. All four delivered
+ABI families now have separate technical relink/import evidence. All new
+derivatives remain unqualified; modified-library/source/distribution conclusions
+and earlier campaign evidence limitations remain explicit.
+
+Non-author same-family Read reviews support both outcomes. Root inspected source
+and reconciled manifests, mandatory operations, inventories, JUnit, snapshots and
+accounting: `evidence/remaining-compatibility-root-review-20261028.json`, receipt
+`w2-remaining-compatibility-root-review-e60596075e`,4.109999999986s/30s,zero new
+builds/imports/tests/physics. Detailed reports/commands/hashes/failures/omissions
+are in ANYmesh `docs/workflow2_windows_native_20261028.md` and
+`docs/provider_remaining_abis_20261028.md` and matching evidence directories.
+
+The existing candidate-owner CI lane now runs pure/native profiles on PRs and
+manual dispatch (16 Windows/Linux Python3.11–3.14 cells), validates the exact
+owner SHA, and verifies two successful native-witness outcomes. PR owner pin
+6a72e9d6eecf4db2aca5a5c4c37badfe4eb3a3ee matches tested source; manual override is
+still validated40hex. Original historical workflows/macOS coverage remain intact.
+No hosted CI has run: candidate branches are unpublished and the new workflow
+was absent on default at remote read. Publishing draft branches/PRs is the next
+external-write boundary; source changes and local evidence are ready for that
+decision. No merge, package publication or production-provider enabling is
+authorized by the accepted case deviation. Existing broad/native failures and
+artifact/distribution/release gates remain unwaived; W2-DEV-001 stays closed.
+
+## 2026-10-28 — Remaining ABI/native compatibility gate continuation
+
+User instructed proceeding after the accepted deviation and local delivery.
+W2-DEV-001 remains closed: no rerun, tighter-boundary campaign, threshold change
+or new real provider mesh. Existing failures and consumed registrations stay
+immutable. Separate remaining-input/platform slices:
+
+1. Complete recipient technical link/import proof for Windows312 ABI3 and
+   Linux311 using copied original relink inputs, matching child interpreters and
+   correct Python/GMP/MPIR import libraries. Reuse the fixed UTF-8/LF generator
+   and old12-test evidence after source identity checks. New600s total,
+   each<=180s,90s reserve,zero provider generation or physics. Preserve full
+   runner snapshots before each step, derivative identities and original
+   wheels/payloads. Acceptance is technical linkability only, never numerical
+   equivalence, modified-library/source closure or distribution approval.
+2. Build native ANYgeometry/ANYmesher Windows3.11 wheels from immutable copied
+   inputs and run prospectively selected W2 owner/consumer/array contracts and
+   the controlled example outside source trees. Prove effective native flags,
+   installed origins, extension presence and a native-kernel operation. New1200s
+   supervised total,each<=300s,120s reserve,zero TetWild generation. No broad
+   shell/surface regression run; existing Linux312 native evidence reused.
+3. Extend the existing candidate-owner CI lane with explicit Python/native
+   profiles and a pre-merge pull-request trigger. Keep its manual dispatch and
+   immutable40-character owner ref validation. Root's remote read found neither
+   candidate branch published and the new manual-only workflow absent on
+   default; it cannot currently supply hosted pre-merge evidence. PR fallback
+   owner source SHA6a72e9d6eecf4db2aca5a5c4c37badfe4eb3a3ee is explicit; original
+   historical jobs/macOS coverage are preserved. Local checks do not establish
+   hosted matrix results.
+4. Independently review/reconcile, checkpoint local branches and identify the
+   exact hosted CI/publication boundary. Root owns any external write decision;
+   no merge/push/publication authority is inferred from W2-DEV-001.
+
+Implementation ownership is separate for remaining ABI delivery and Windows
+native/CI compatibility. Root owns cross-repository contract/authority decisions
+and final acceptance. Cached Claude subscription/Mistral quota unavailability
+remains unchanged; available OpenAI workers provide explicitly same-family
+non-author implementation/review. Existing broad failure/platform/artifact gates
+are not waived. No scientific budget is renewed by these distinct inputs.
+
 ## 2026-10-28 — Accepted deviation and verified local delivery checkpoint
 
 W2-DEV-001 records the user's acceptance of the exact aligned v2 nominal-source
