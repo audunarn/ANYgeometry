@@ -22,6 +22,7 @@ from typing import Any, Callable, Dict, Iterable, Mapping, Protocol, Sequence, T
 import numpy as np
 
 from .curves import Arc, Spline, Straight
+from .nurbs import NurbsCurve, NurbsSurface, CurveOnSurface, nurbs_record
 from .entities import Edge, EntityKind, EntityRef, Face, Vertex
 from .errors import GeometryError
 from .extrusions import BezierDirectrix
@@ -78,6 +79,7 @@ _INCREMENTAL_MUTATING_FEATURES = frozenset(
         "geometry.split_face",
         "geometry.strip_face",
         "geometry.trim_hole",
+        "geometry.sketch.cut",
         "geometry.set_face_corners",
         "geometry.reverse",
     }
@@ -207,6 +209,8 @@ def _closure_surface(surface: object) -> dict[str, object] | None:
 
     if surface is None:
         return None
+    if isinstance(surface, NurbsSurface):
+        return nurbs_record(surface)
     if isinstance(surface, CoonsSurface):
         if not surface.has_boundaries:
             return {"type": "coons"}
@@ -286,6 +290,8 @@ def _closure_edge(edge: Edge) -> dict[str, object]:
             "type": "spline",
             "control_vertices": list(edge.curve.control_vertices),
         }
+    elif isinstance(edge.curve, (NurbsCurve, CurveOnSurface)):
+        curve = nurbs_record(edge.curve)
     else:  # pragma: no cover - closed public union
         raise GeometryError(f"unsupported curve type {type(edge.curve).__name__}")
     return {
@@ -344,6 +350,8 @@ def _exact_entity_payload(
                     for item in edge.curve.control_vertices
                 ],
             }
+        elif isinstance(edge.curve, (NurbsCurve, CurveOnSurface)):
+            curve = nurbs_record(edge.curve)
         else:  # pragma: no cover - closed public union
             raise GeometryError(f"unsupported curve type {type(edge.curve).__name__}")
         payload = {
@@ -768,6 +776,8 @@ class FeatureTopologyRole(str, Enum):
     MODIFIER = "modifier"
 
 
+_METADATA_PARAMETERS = frozenset({"reference_links"})
+_SKETCH_FEATURE_KINDS = frozenset({"geometry.sketch.plane", "geometry.sketch.extrude"})
 _AUTHORED_FEATURE_KINDS = frozenset(
     {
         "geometry.point",
@@ -787,6 +797,7 @@ _MODIFIER_FEATURE_KINDS = frozenset(
         "geometry.split_face",
         "geometry.strip_face",
         "geometry.trim_hole",
+        "geometry.sketch.cut",
         "geometry.set_face_corners",
         "geometry.reverse",
     }
@@ -1319,6 +1330,44 @@ class FeatureHistory:
 
         self._apply_mutation(apply)
         return deepcopy(record)
+
+    def parameter_values(self, key: str) -> Dict[int, Any]:
+        """Detached copies of one optional parameter, for features that carry it.
+
+        A cheap scan for optional metadata (for example sketch reference
+        links): only matching values are copied, never whole records.
+        """
+
+        return {
+            int(record.feature_id): deepcopy(record.parameters[key])
+            for record in self._records
+            if key in record.parameters
+        }
+
+    def set_metadata_parameter(self, feature_id: int, key: str, value: Any) -> None:
+        """Replace one optional metadata parameter without invalidating output.
+
+        Only the ``reference_links`` metadata of sketch features is supported: it
+        does not influence materialization, so the feature stays up to date and
+        nothing regenerates. Any other key or feature kind is refused atomically,
+        because it could change geometry without invalidation. An empty value
+        removes the key.
+        """
+
+        record = self._get_record(feature_id)
+        if str(key) not in _METADATA_PARAMETERS or record.kind not in _SKETCH_FEATURE_KINDS:
+            raise GeometryError(
+                f"{key!r} on a {record.kind!r} feature is not metadata; "
+                "use update() so the feature is invalidated"
+            )
+
+        def apply() -> None:
+            if value is None or (isinstance(value, (list, tuple, dict)) and not value):
+                record.parameters.pop(str(key), None)
+            else:
+                record.parameters[str(key)] = deepcopy(value)
+
+        self._apply_mutation(apply)
 
     def adopt_frozen(
         self,
@@ -2252,6 +2301,18 @@ class FeatureHistory:
                 # is identity/history replay, never a proximity repair.
                 force_full_replay = True
                 dirty_index = 0
+        if dirty_index > 0 and not force_full_replay and self._baseline is not None:
+            # A sketch cut may target a face authored in the exact baseline.
+            # Full replay restores that pre-cut face before executing every
+            # associative profile again. This exception is deliberately scoped
+            # to cuts; generic modifiers still require their checkpoint.
+            baseline_faces={int(item['id']) for item in self._baseline.get('faces',())}
+            modifiers=[r for r in self._records if r.outputs and not r.suppressed and not self._incremental_additive(r.kind)]
+            if modifiers and all(r.kind=='geometry.sketch.cut' for r in modifiers):
+                raw=[(name,ref) for r in modifiers for name,refs in r.inputs.items() for ref in refs if not isinstance(ref,FeatureOutputRef)]
+                if raw and all(name=='target' and ref.kind=='face' and ref.id in baseline_faces for name,ref in raw):
+                    force_full_replay=True
+                    dirty_index=0
         if dirty_index > 0 and not force_full_replay:
             return RegenerationReport(
                 False,
@@ -2544,15 +2605,19 @@ def builtin_feature_registry() -> FeatureRegistry:
 
     def sketch_extrude(geometry, feature, inputs):
         from .sketch import SketchDefinition, materialize_sketch
+        from .sketch_references import bind_references
 
         support = _one(inputs, "support_face", "face")
-        definition = SketchDefinition.from_parameters(feature.parameters)
+        # Reference snapshots are fixed anchors; the model is never consulted.
+        definition = bind_references(SketchDefinition.from_parameters(feature.parameters))
         return materialize_sketch(geometry, support.id, definition)
 
     def plane_sketch(geometry, feature, inputs):
         from .sketch import (
             SketchDefinition, materialize_sketch_on_plane, plane_sketch_plane,
         )
+
+        from .sketch_references import bind_references
 
         if inputs:
             raise GeometryError("a plane sketch cannot have geometry inputs")
@@ -2565,9 +2630,22 @@ def builtin_feature_registry() -> FeatureRegistry:
             )
         except KeyError as error:
             raise GeometryError(f"a plane sketch needs plane {error.args[0]}") from None
-        return materialize_sketch_on_plane(
-            geometry, plane, SketchDefinition.from_parameters(feature.parameters),
-        )
+        definition = SketchDefinition.from_parameters(feature.parameters)
+        # Reference snapshots are fixed anchors; the model is never consulted.
+        definition = bind_references(definition)
+        return materialize_sketch_on_plane(geometry, plane, definition)
+
+    def sketch_cut(geometry,feature,inputs):
+        from .sketch_cut import apply_sketch_cut
+        target=_one(inputs,'target','face')
+        profile=inputs.get('profile',())
+        sizes=tuple(int(n) for n in feature.parameters.get('wire_sizes',()))
+        if not sizes or any(n<=0 for n in sizes) or sum(sizes)!=len(profile) or any(r.kind!='edge' for r in profile):
+            raise GeometryError('cut needs complete closed sketch contour references')
+        groups=[]; offset=0
+        for n in sizes:
+            groups.append(tuple(r.id for r in profile[offset:offset+n])); offset+=n
+        return apply_sketch_cut(geometry,target.id,groups)
 
     def fragment_overlaps(geometry, feature, inputs):
         from .overlaps import OverlapOwnershipPolicy, fragment_coplanar_overlaps
@@ -2803,6 +2881,7 @@ def builtin_feature_registry() -> FeatureRegistry:
         "geometry.extrude": extrude,
         "geometry.sketch.extrude": sketch_extrude,
         "geometry.sketch.plane": plane_sketch,
+        "geometry.sketch.cut": sketch_cut,
         "geometry.fragment.overlaps": fragment_overlaps,
         "geometry.revolve": revolve,
         "geometry.transform": transform_feature,
