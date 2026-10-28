@@ -277,6 +277,11 @@ def quad_residual_bound(support, uv, xyz, orientation=None, method=None):
     table = coefficients(support, boxes)
     if table is None:
         return None
+    return _quad_residual_from_table(table, boxes, xyz, orientation, method)
+
+
+def _quad_residual_from_table(table, boxes, xyz, orientation=None, method=None):
+    """Existing whole-Q4 algebra with an independently established exact table."""
     xyz = tuple(tuple(Q(x) for x in p) for p in xyz)
     if orientation is not None:
         for k in range(4):

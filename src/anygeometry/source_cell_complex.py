@@ -8,7 +8,8 @@ from collections import defaultdict
 from fractions import Fraction as Q
 import math
 
-from .errors import GeometryError, SourceCellRefinementRequired
+from .errors import (GeometryError, SourceCellRefinementRequired,
+                     _FanApproximationInconclusive, SourceCellApproximationInconclusive)
 from .identity import EntityHandle
 from .nurbs import NurbsSurface, CurveOnSurface
 from .support_curves import PlaneNurbsCurve
@@ -69,6 +70,58 @@ class _SideEnclosures:
 
 def _skeleton(cells, boundary_sides, sides, nodes, check):
     """Certify noncollapsed source skeleton and absence of undeclared contact."""
+    def _boundary_index(boundary, take):
+        """Complete balanced partition of boundary *occurrences*, with exact unions.
+
+        Every occurrence is one leaf, even if two occurrences use the same side.
+        Each internal node is the coordinatewise union of its two children. Thus
+        strict separation from a node box proves separation from ALL its leaves;
+        overlap/touching is never evidence of separation. No proof escapes this call.
+        ``take`` charges every leaf enclosure and every composite construction.
+        """
+        leaves = []
+        for occurrence, (_, _, curve) in enumerate(boundary):
+            take()
+            leaves.append((curve.box(Q(0), Q(1)), None, None, occurrence))
+        # Explicit postorder construction keeps every callback frontier in
+        # this pinned calculator. There is no mutable recursive callee or
+        # self-recursive closure binding capable of dropping a later subtree.
+        pending, completed = [(leaves, False)] if leaves else [], []
+        while pending:
+            rows, combine = pending.pop()
+            if combine:
+                right, left = completed.pop(), completed.pop()
+                take()
+                box = tuple((min(a[0], b[0]), max(a[1], b[1]))
+                            for a, b in zip(left[0], right[0]))
+                completed.append((box, left, right, None))
+                continue
+            if len(rows) == 1:
+                completed.append(rows[0])
+                continue
+            # Sorting only partitions the complete occurrence list; it is not a
+            # geometric predicate. Exact midpoint ordering makes the tree balanced.
+            axis = max(range(2), key=lambda k:
+                max(row[0][k][1] for row in rows)-min(row[0][k][0] for row in rows))
+            rows.sort(key=lambda row: (sum(row[0][axis]), row[3]))
+            middle = len(rows)//2
+            pending.extend(((None, True), (rows[middle:], False), (rows[:middle], False)))
+        return completed[0] if completed else None
+
+
+    def _boundary_candidates(tree, box, take):
+        """Yield exactly the unseparated leaves; every node comparison is charged."""
+        pending = [] if tree is None else [tree]
+        while pending:
+            node = pending.pop()
+            take()  # cache hits, composite comparisons and surviving leaves count
+            if _gap(box, node[0]):
+                continue
+            if node[3] is not None:
+                yield node[3]
+            else:
+                pending.extend((node[2], node[1]))
+
     internal, boundary = {}, []
     for i, cell in enumerate(cells):
         for side, (a, b) in enumerate(zip(cell.node_ids, cell.node_ids[1:]+cell.node_ids[:1])):
@@ -87,6 +140,20 @@ def _skeleton(cells, boundary_sides, sides, nodes, check):
         rows.append((a, b, first, last, box))
     rows.sort(key=lambda row: row[4][0][0])
     examined = 0
+    builder, candidates, gap = _boundary_index, _boundary_candidates, _gap
+    def take():
+        nonlocal examined
+        check()
+        if ((_boundary_index, _boundary_candidates, _gap, take) != calculators
+                or tuple(f.__code__ for f in calculators) != codes):
+            raise GeometryError('source skeleton boundary index calculator changed')
+        charge_box()
+        examined += 1
+        if examined > 2000000:
+            raise GeometryError('source skeleton proof pair budget exhausted')
+    calculators = builder, candidates, gap, take
+    codes = tuple(f.__code__ for f in calculators)
+    tree = builder(boundary, take) if rows else None
     for index, (a, b, first, last, box) in enumerate(rows):
         check()
         for c, d, p, q, other in rows[index+1:]:
@@ -110,25 +177,12 @@ def _skeleton(cells, boundary_sides, sides, nodes, check):
                   _same_strict_sign(_orientation(p, q, first), _orientation(p, q, last))):
                 continue
             raise GeometryError('source internal edges have an undeclared or unresolved contact')
-        for c, d, curve in boundary:
-            # every internal-edge x boundary-side examination is a logical proof step: it is checked,
-            # charged and counted against the pair cap BEFORE the (possibly memoized) full-side test,
-            # so a cache hit can never bypass cancellation or the existing budgets
-            check()
-            charge_box()
-            examined += 1
-            if examined > 2000000:
-                raise GeometryError('source skeleton proof pair budget exhausted')
-            if _gap(box, curve.box(Q(0), Q(1))):
-                continue
+        for occurrence in candidates(tree, box, take):
+            c, d, curve = boundary[occurrence]
             pending = [(Q(0), Q(1), 0)]
             while pending:
-                check()
+                take()
                 lo, hi, depth = pending.pop()
-                charge_box()
-                examined += 1
-                if examined > 2000000:
-                    raise GeometryError('source skeleton proof pair budget exhausted')
                 curved_box = curve.box(lo, hi)
                 side = _orientation(first, last, curved_box)
                 if _gap(box, curved_box) or side[0] > 0 or side[1] < 0:
@@ -161,9 +215,55 @@ def _support_owner(model, face):
     return chart_model(model, face) if has_sweep_chart(model.faces[face]) else model
 
 
+def _rational_loop_area(owner, loop, reference):
+    from .plane_nurbs import depth_limit
+    from .regular_source_reference import RationalSourceSide
+    sides = []
+    for use in loop:
+        edge = owner.edges[use.edge]
+        params = (Q(0), Q(1)) if use.forward else (Q(1), Q(0))
+        verts = (edge.start, edge.end) if use.forward else (edge.end, edge.start)
+        nodes = tuple(reference.node(use.edge, t, v) for t, v in zip(params, verts))
+        side = reference.side(use.edge, params, *nodes)
+        if type(side) not in (SourceSide, RationalSourceSide):
+            raise GeometryError('source-cell polynomial boundary family is not qualified')
+        sides.append(side)
+    for level in range(depth_limit(8)+1):
+        if level:
+            for side in sides:
+                if type(side) is RationalSourceSide:
+                    for _ in range(2**(level-1)):
+                        charge_split()
+        total = (Q(0), Q(0))
+        size = 2**level
+        for side in sides:
+            if type(side) is SourceSide and side.curve is None:
+                a, b = side.start.box, side.end.box
+                total = add(total, scale(sub(mul(a[0], b[1]), mul(a[1], b[0])), Q(1, 2)))
+                continue
+            for k in range(size):
+                lo, hi = Q(k, size), Q(k+1, size)
+                (u, v), (du, dv) = side._ranges(lo, hi)
+                total = add(total, scale(sub(mul(u, dv), mul(v, du)), (hi-lo)/2))
+        if total[0] > 0 or total[1] < 0:
+            return total
+    raise GeometryError('source-cell polynomial boundary orientation is not certified')
+
+
 def _boundary_proof(owner, face, support):
     """Reuse exact owner embedding only for unchanged complete source images."""
     directions = {}
+    from .nurbs_intersection_faces import has_intersection_edges, validate_intersection_face,loop_area
+    if has_intersection_edges(owner,face):
+        problems = validate_intersection_face(owner,face.id)
+        if problems:
+            raise GeometryError('; '.join(problems))
+        for index,loop in enumerate((face.loop,*face.holes)):
+            area = loop_area(owner,loop,support)
+            sign,desired = (1 if area[0] > 0 else -1),(1 if index == 0 else -1)
+            for use in loop:
+                directions[use.edge] = use.forward if sign == desired else not use.forward
+        return directions
     from .surfaces import Plane
     if isinstance(support, Plane):
         from .plane_section_plate import loop_area
@@ -181,9 +281,19 @@ def _boundary_proof(owner, face, support):
     for loop_index, loop in enumerate((face.loop, *face.holes)):
         curves = [owner.edges[use.edge].curve for use in loop]
         if all(isinstance(curve, CurveOnSurface) for curve in curves):
-            if any(curve.support != support or curve.pcurve.degree != 1 or len(curve.pcurve.controls) != 2
-                   for curve in curves):
+            if any(curve.support != support for curve in curves):
                 raise GeometryError('source-cell polynomial boundary family is not qualified')
+            if any(curve.pcurve.degree != 1 or len(curve.pcurve.controls) != 2 for curve in curves):
+                problems = owner._validate_face_geometry(face.id)
+                if problems:
+                    raise GeometryError('; '.join(problems))
+                from .regular_source_reference import NurbsReference
+                area = _rational_loop_area(owner, loop, NurbsReference(owner, face))[0]
+                sign = 1 if area > 0 else -1
+                desired = 1 if loop_index == 0 else -1
+                for use in loop:
+                    directions[use.edge] = use.forward if sign == desired else not use.forward
+                continue
         elif all(isinstance(curve, PlaneNurbsCurve) for curve in curves):
             first = curves[0]
             if any((curve.surface, curve.plane_record, curve.path) !=
@@ -270,7 +380,61 @@ def _manifold(cells, boundary_sides, hole_count):
         raise GeometryError('source-cell Euler characteristic does not match the owner holes')
 
 
-def certify_source_cells(model, regions, chords, cells, surface_error, check):
+from ._quad_bound_reuse import quad_bound_operation
+
+
+@quad_bound_operation()
+def _boundary_failure_kind(cell, cell_index, fans, boundary_sides, error_limit, check, *, cell_error_limit=None):
+    """Diagnose only the exact side law; boundary incidence alone proves nothing.
+
+    This is a refusal classification, never an admission or replacement cell
+    proof. A boundary witness must exceed the GLOBAL requested ceiling, which
+    cannot rise after local footprint refinement. Proving only that ceiling is
+    insufficient to diagnose an interior-only local failure; the returned upper
+    must also meet the current cell limit. Unsupported side parameterizations
+    preserve the original retries.
+    """
+    from .regular_source_reference import RationalSourceSide
+    from .prepared_material_curvilinear import (_parameterized_world_chord, _WorldChordNeedsRefinement,
+        _ParameterizedChordInconclusive)
+    found = False
+    complete = True
+    cell_error_limit = error_limit if cell_error_limit is None else cell_error_limit
+    callback_errors = []
+    def checked():
+        try:
+            check()
+        except BaseException as error:
+            callback_errors.append(error)
+            raise
+    for side, current, transport in fans:
+        if (cell_index,side) not in boundary_sides:
+            continue
+        found = True
+        if type(current) is not RationalSourceSide:
+            complete = False
+            continue
+        current._validate()
+        try:
+            upper, _ = _parameterized_world_chord(current.curve,*current.parameters,
+                (cell.xyz[side],cell.xyz[(side+1)%len(cell.node_ids)]),
+                error_limit-transport,checked)
+            if Q(upper) > cell_error_limit-transport:
+                complete = False
+        except _WorldChordNeedsRefinement as error:
+            if any(error is cause for cause in callback_errors):
+                raise
+            current._validate()
+            return 'boundary_limited'
+        except _ParameterizedChordInconclusive as error:
+            if any(error is cause for cause in callback_errors):
+                raise
+            complete = False
+        current._validate()
+    return 'interior_only' if not found or complete else 'unresolved'
+
+
+def certify_source_cells(model, regions, chords, cells, surface_error, check, *, face_error_limits=(), local_limit_query=None, local_allocation_records=None):
     from .prepared_material_curvilinear import CurvilinearMaterialCell
     sources = {chart.face.id: chart for region in regions.regions for chart in region.sources}
     if any(len(region.sources) != 1 for region in regions.regions):
@@ -300,7 +464,10 @@ def certify_source_cells(model, regions, chords, cells, surface_error, check):
         raise GeometryError('source-cell proof does not cover every selected material face')
     node_records, reference_uv, bounds, boundary_records = [], [], [], []
     global_station_nodes = {}
+    requested_surface_error=surface_error
+    local_limits=dict(face_error_limits)
     for face_id, face_cells in sorted(grouped.items()):
+        surface_error=min(requested_surface_error,local_limits[face_id]) if local_limits else requested_surface_error
         check()
         chart = sources[face_id]
         from .surfaces import Plane
@@ -420,9 +587,32 @@ def certify_source_cells(model, regions, chords, cells, surface_error, check):
             for side in range(len(ids)):
                 current = sides.get((cell_index, side), SourceSide(nodes[ids[side]], nodes[ids[(side+1)%len(ids)]]))
                 transport = parameter_transport_bound(current)
-                if transport > Q(chart.world_tolerance) or transport >= surface_error:
+                if transport > Q(chart.world_tolerance):
                     raise GeometryError('true source endpoint transport exceeds the existing precision contract')
                 fans.append((side, current, transport))
+            if local_limit_query is not None:
+                # The authentic corrected source maps, not the caller's vertex
+                # hull, supply the complete footprint enclosure.
+                footprints = []
+                for side, current, transport in fans:
+                    if len(ids) == 4:
+                        from .curvilinear_reference_maps import _source_quad_fan
+                        footprint = _source_quad_fan(tuple(nodes[node].box for node in ids),
+                            current, side, (Q(0), Q(1)), (Q(0), Q(1)))[0]
+                    else:
+                        edge_box = current.box(Q(0), Q(1))
+                        footprint = tuple((min(a, c), max(b, c))
+                            for (a, b), c in zip(edge_box, centre))
+                    footprints.append(footprint)
+                limit, mapped = local_limit_query(face_id, tuple(footprints))
+                surface_error = min(requested_surface_error, limit)
+                if local_allocation_records is not None:
+                    key = (face_id, tuple(ids))
+                    if key in local_allocation_records:
+                        raise GeometryError('duplicate local cell allocation identity')
+                    local_allocation_records[key] = (surface_error, mapped)
+            if any(transport >= surface_error for _, _, transport in fans):
+                raise GeometryError('true source endpoint transport exceeds the existing precision contract')
             for side, current, transport in fans:
                 from ._source_cell_point_error import fan_point_error_lower_squared
                 lower = fan_point_error_lower_squared(chart.support, current, centre,
@@ -431,6 +621,7 @@ def certify_source_cells(model, regions, chords, cells, surface_error, check):
                     quad_uv=tuple(nodes[node].box for node in ids) if len(ids) == 4 else None)
                 allocated = surface_error-transport
                 if lower is not None and lower > allocated*allocated:
+                    failure_kind = _boundary_failure_kind(cell,cell_index,fans,boundary_sides,requested_surface_error,check,cell_error_limit=surface_error)
                     # Initial public validation plus guarded arithmetic and a
                     # fresh final complete source/chord binding are mandatory.
                     check()
@@ -438,16 +629,55 @@ def certify_source_cells(model, regions, chords, cells, surface_error, check):
                     validate_prepared_material_boundary_chords_binding(model, regions, chords,
                                                                        expected_revision=model.revision)
                     check()
-                    raise SourceCellRefinementRequired(face_id, cell.node_ids, allocated, lower,
-                                                       requested_error=surface_error)
+                    failure = SourceCellRefinementRequired(face_id, cell.node_ids, allocated, lower,
+                                                       requested_error=requested_surface_error)
+                    failure.boundary_failure_kind = failure_kind
+                    raise failure
             for side, current, transport in fans:
-                error, _pieces = certify_fan_subtriangle(chart.support, current, centre,
-                    (cell.xyz[side], cell.xyz[(side+1)%len(ids)]), centre_xyz,
-                    orientation=orientation, surface_error=surface_error-transport,
-                    quad_xyz=cell.xyz if len(ids) == 4 else None, quad_side=side,
-                    quad_uv=tuple(nodes[node].box for node in ids) if len(ids) == 4 else None,
-                    quad_nodes=tuple(nodes[node] for node in ids) if len(ids) == 4 else None,
-                    cancellation_check=lambda: (check() or False))
+                callback_error = None
+                from .curvilinear_reference_maps import _closed_fan_window
+                def fan_check():
+                    nonlocal callback_error
+                    try:
+                        check()
+                    except BaseException as cause:
+                        callback_error = cause
+                        raise
+                    return False
+                try:
+                    # An issued check verifies the finite window/helper slice
+                    # after any opaque local-limit query, before entering it.
+                    from .curvilinear_reference_maps import _CLOSED_FAN_STEPS, _ClosedFunction
+                    if type(check) is _ClosedFunction and check in _CLOSED_FAN_STEPS:
+                        check()
+                    with _closed_fan_window(check) as closed:
+                        error, _pieces = certify_fan_subtriangle(chart.support, current, centre,
+                            (cell.xyz[side], cell.xyz[(side+1)%len(ids)]), centre_xyz,
+                            orientation=orientation, surface_error=surface_error-transport,
+                            quad_xyz=cell.xyz if len(ids) == 4 else None, quad_side=side,
+                            quad_uv=tuple(nodes[node].box for node in ids) if len(ids) == 4 else None,
+                            quad_nodes=tuple(nodes[node] for node in ids) if len(ids) == 4 else None,
+                            cancellation_check=closed if closed is not None else fan_check)
+                except _FanApproximationInconclusive as uncertain:
+                    if uncertain is callback_error or type(uncertain) is not _FanApproximationInconclusive:
+                        raise
+                    if uncertain.error_limit != surface_error-transport:
+                        raise GeometryError('inconclusive fan error allocation changed') from uncertain
+                    failure_kind = _boundary_failure_kind(cell,cell_index,fans,boundary_sides,requested_surface_error,check,cell_error_limit=surface_error)
+                    check()
+                    from .prepared_material_curvilinear import validate_prepared_material_boundary_chords_binding
+                    from .definition_binding import definition_checksum
+                    validate_prepared_material_boundary_chords_binding(model, regions, chords,
+                                                                       expected_revision=model.revision)
+                    check()
+                    failure = SourceCellApproximationInconclusive(face_id, cell.node_ids,
+                        uncertain.error_limit, uncertain.upper_error, requested_error=requested_surface_error,
+                        jacobian_lower=uncertain.jacobian_lower, proof_box=uncertain.proof_box,
+                        proof_depth=uncertain.proof_depth, source_model_id=model.model_id,
+                        source_revision=model.revision, source_checksum=chords.source_checksum,
+                        chord_checksum=definition_checksum(chords))
+                    failure.boundary_failure_kind = failure_kind
+                    raise failure from uncertain
                 maximum = max(maximum, error+transport)
             reference_uv.append((cell.face, cell.node_ids, tuple(map(float, centre))))
             bounds.append((cell.face, cell.node_ids, maximum))

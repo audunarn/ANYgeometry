@@ -227,6 +227,12 @@ class MaterialDomain:
         if has_sweep_chart(face):
             model = chart_model(model, face_id)
             face = model.faces[face_id]
+        else:
+            from .nurbs_sweep_chart import source_sweep_chart_model
+            source_view = source_sweep_chart_model(model, face_id)
+            if source_view is not None:
+                model = source_view
+                face = model.faces[face_id]
         support = face.surface
         if isinstance(support, NurbsSurface):              # the chart of the face's own support (A3b)
             extruded = None

@@ -9,6 +9,7 @@ from fractions import Fraction as Q
 from .errors import GeometryError
 from .nurbs import CurveOnSurface
 from .support_curves import PlaneNurbsCurve
+from .nurbs_intersection_curve import NurbsSurfaceIntersectionCurve
 from .definition_binding import definition_checksum
 from .plane_nurbs import charge_box
 from .nurbs_metric import add, sub, mul, scale
@@ -92,6 +93,10 @@ def _path_node(curve, parameter, *, encoded_joint=False):
 
 def source_node(curve, parameter, *, vertex=None):
     parameter = Q(parameter)
+    if isinstance(curve,NurbsSurfaceIntersectionCurve):
+        a,b = curve.domain
+        station = a+(b-a)*parameter
+        return SourceNode(curve.point_identity(parameter),curve.chart_box(parameter,parameter),station)
     if isinstance(curve, CurveOnSurface):
         point = tuple(curve.pcurve.exact_point(parameter))
         return SourceNode(('chart_point', definition_checksum(curve.support), *point), tuple((x, x) for x in point))
@@ -113,6 +118,14 @@ class NurbsReference:
         uses = [use for loop in (face.loop, *face.holes) for use in loop]
         for use in uses:
             edge = owner.edges[use.edge]
+            if isinstance(edge.curve,NurbsSurfaceIntersectionCurve):
+                curve = edge.curve.for_support(face.surface)
+                for t,vertex in ((Q(0),edge.start),(Q(1),edge.end)):
+                    node = source_node(curve,t,vertex=vertex)
+                    old = self.vertices.get(vertex)
+                    if old is not None and old.identity != node.identity:
+                        raise GeometryError('intersection true source joint has conflicting identities')
+                    self.vertices[vertex] = node
             if isinstance(edge.curve, PlaneNurbsCurve):
                 for t, vertex in ((Q(0), edge.start), (Q(1), edge.end)):
                     node = source_node(edge.curve, t, vertex=vertex)
@@ -139,6 +152,9 @@ class NurbsReference:
                         self.vertices[vertex] = native
 
     def node(self, edge_id, parameter, vertex=None):
+        curve = self.owner.edges[edge_id].curve
+        if isinstance(curve,NurbsSurfaceIntersectionCurve):
+            return source_node(curve.for_support(self.face.surface),parameter,vertex=vertex)
         if vertex is None:
             return source_node(self.owner.edges[edge_id].curve, parameter)
         canonical = self.vertices[vertex]
@@ -162,9 +178,13 @@ class NurbsReference:
 
     def side(self, edge_id, parameters, first, last):
         curve = self.owner.edges[edge_id].curve
+        if isinstance(curve,NurbsSurfaceIntersectionCurve):
+            return source_side(curve.for_support(self.face.surface),parameters,first,last)
         if isinstance(curve, PlaneNurbsCurve):
             return source_side(curve, parameters, first, last)
         side = source_side(curve, parameters, first, last)
+        if type(side) is RationalSourceSide:
+            return side  # its exact endpoints were checked; never linearize it
         # Geometric-line reparameterization, with full-span endpoint image
         # transport. Its derivative correction is included in side.derivative
         # and hence in the strict fan Jacobian, not silently discarded.
@@ -279,11 +299,132 @@ class SourceSide:
         return self._ranges(lo, hi)[1]
 
 
+@dataclass(frozen=True)
+class IntersectionSourceSide:
+    start: SourceNode
+    end: SourceNode
+    curve: object
+    parameters: tuple
+    endpoint_transport: object = Q(0)
+
+    def _view(self):
+        a,b = self.start.path_parameter,self.end.path_parameter
+        if a == b:
+            raise GeometryError('intersection source-side station interval collapses')
+        from dataclasses import replace
+        return replace(self.curve,domain=(a,b))
+
+    def box(self,lo,hi):
+        if lo == hi == 0:
+            return self.start.box
+        if lo == hi == 1:
+            return self.end.box
+        return self._view().chart_box(lo,hi)
+
+    def derivative(self,lo,hi):
+        return self._view().chart_derivative_bounds(lo,hi)
+
+
+
+def _pcurve_point_jet(pcurve, parameter):
+    """Exact zero-width value plus both one-sided derivatives at a knot."""
+    from .nurbs import _exact_refine
+    a,b=map(Q,pcurve.domain);native=a+(b-a)*Q(parameter)
+    knots=list(map(Q,pcurve.knots));degree=pcurve.degree
+    if any(knots.count(k)>degree for k in set(knots) if knots[0]<k<knots[-1]):
+        raise GeometryError('discontinuous rational source pcurve')
+    weights=pcurve.weights or (1,)*len(pcurve.controls)
+    if degree<1 or any(Q(w)<=0 for w in weights):
+        raise GeometryError('rational source requires positive degree and weights')
+    homogeneous=[tuple(Q(x)*Q(w) for x in row)+(Q(w),) for row,w in zip(pcurve.controls,weights)]
+    def evaluate(rows,t):
+        rows=list(rows)
+        while len(rows)>1:
+            rows=[tuple((1-t)*x+t*y for x,y in zip(u,v)) for u,v in zip(rows,rows[1:])]
+        return rows[0]
+    values=[];derivatives=[]
+    distinct=sorted(set(knots))
+    for lo,hi in zip(distinct,distinct[1:]):
+        if not lo<=native<=hi or lo==hi:continue
+        _,net,active=_exact_refine(degree,knots,homogeneous,lo,hi)
+        if len(active)!=degree+1:raise GeometryError('rational source point lacks a Bezier span')
+        coefficients=[net[i] for i in active];t=(native-lo)/(hi-lo)
+        derivative=[tuple(degree*(y-x)/(hi-lo) for x,y in zip(u,v))
+                    for u,v in zip(coefficients,coefficients[1:])]
+        h=evaluate(coefficients,t);dh=evaluate(derivative,t)
+        if h[-1]<=0:raise GeometryError('rational source point weight is not positive')
+        point=tuple(x/h[-1] for x in h[:-1])
+        values.append(point)
+        derivatives.append(tuple((x-value*dh[-1])/h[-1]*(b-a) for x,value in zip(dh[:-1],point)))
+    if not values or any(value!=values[0] for value in values):
+        raise GeometryError('rational source knot has no continuous exact point')
+    return tuple((x,x) for x in values[0]),tuple((min(row[k] for row in derivatives),max(row[k] for row in derivatives)) for k in range(2))
+
+
+@dataclass(frozen=True)
+class RationalSourceSide:
+    """C(s)=pcurve(a+(b-a)s), preserving authentic exact chart endpoints."""
+    start: SourceNode
+    end: SourceNode
+    curve: object
+    parameters: tuple
+    curve_signature: str
+    endpoint_transport: object = Q(0)
+
+    def _validate(self, *, endpoints=True):
+        from .nurbs import NurbsCurve,NurbsSurface,_IDENTITY
+        from .nurbs_runtime_binding import validate_curve_runtime
+        if (type(self.curve) is not CurveOnSurface or type(self.curve.pcurve) is not NurbsCurve
+                or type(self.curve.support) is not NurbsSurface or self.curve.transform!=_IDENTITY
+                or definition_checksum(self.curve)!=self.curve_signature):
+            raise GeometryError('rational source side definition changed or unsupported')
+        p=self.curve.pcurve
+        validate_curve_runtime(p)
+        from .native_support_snapshots import _material_support_read_pin
+        if _material_support_read_pin(self.curve.support) is None:
+            raise GeometryError('rational source side support native binding is unknown')
+        if (len(self.parameters)!=2 or any(not 0<=Q(t)<=1 for t in self.parameters)
+                or self.parameters[0]==self.parameters[1] or any(len(row)!=2 for row in p.controls)):
+            raise GeometryError('invalid rational source side parameters')
+        for node,t in (zip((self.start,self.end),self.parameters) if endpoints else ()):
+            point,_=_pcurve_point_jet(p,Q(t))
+            identity=('chart_point',definition_checksum(self.curve.support),*(row[0] for row in point))
+            if type(node) is not SourceNode or node.box!=point or node.identity!=identity:
+                raise GeometryError('rational source side endpoint identity or exact point differs')
+        if self.endpoint_transport!=0:raise GeometryError('rational source side transport must be exact zero')
+
+    def _ranges(self,lo,hi):
+        self._validate();lo,hi=Q(lo),Q(hi)
+        if not 0<=lo<=hi<=1:raise GeometryError('rational source range outside side')
+        a,b=map(Q,self.parameters);u,v=sorted((a+(b-a)*lo,a+(b-a)*hi))
+        if u==v:
+            box,derivative=_pcurve_point_jet(self.curve.pcurve,u)
+            return box,tuple(scale(row,b-a) for row in derivative)
+        from ._local_curve_geometry import _curve_jet
+        p=self.curve.pcurve;c,d=map(Q,p.domain)
+        cuts=sorted({u,v,*((Q(k)-c)/(d-c) for k in p.knots if u<(Q(k)-c)/(d-c)<v)})
+        boxes=[];derivatives=[]
+        for left,right in zip(cuts,cuts[1:]):
+            charge_box()
+            x,dx,_=_curve_jet(p,left,right)
+            boxes.append(tuple((value.lo,value.hi) for value in x))
+            derivatives.append(tuple(scale((value.lo,value.hi),b-a) for value in dx))
+        combine=lambda rows:tuple((min(row[k][0] for row in rows),max(row[k][1] for row in rows)) for k in range(2))
+        if definition_checksum(self.curve)!=self.curve_signature:raise GeometryError('rational source changed during range')
+        return combine(boxes),combine(derivatives)
+
+    def box(self,lo,hi):return self._ranges(lo,hi)[0]
+    def derivative(self,lo,hi):return self._ranges(lo,hi)[1]
+
 def source_side(curve, parameters, first, last):
+    if isinstance(curve,NurbsSurfaceIntersectionCurve):
+        return IntersectionSourceSide(first,last,curve,tuple(parameters))
     if isinstance(curve, CurveOnSurface):
         p = curve.pcurve
         if p.degree != 1 or len(p.controls) != 2:
-            raise GeometryError('curved polynomial source pcurves are not yet qualified')
+            result=RationalSourceSide(first,last,curve,tuple(map(Q,parameters)),definition_checksum(curve))
+            result._validate()
+            return result
         # A rational segment has the same oriented image as its endpoint
         # chord. Reference parameterization is independent of sample speed.
         return SourceSide(first, last)
@@ -313,6 +454,11 @@ def parameter_transport_bound(side):
     all certified arc-joint enclosures cover possible nominal-map jumps.
     This changes reference speed, never the source image.
     """
+    if type(side) is RationalSourceSide:
+        side._validate()
+        return Q(0)
+    if isinstance(side,IntersectionSourceSide):
+        return Q(0)  # exact same algebraic station/parameter map, no proxy transport
     from .plane_source_reference import PlaneSide
     if type(side) is PlaneSide:
         return side.transport_bound()
@@ -356,3 +502,10 @@ def parameter_transport_bound(side):
     delta2 = curve._world_bound()[3]
     delta = Q(math.nextafter(correctly_rounded_sqrt(delta2), math.inf))
     return sigma*(maximum+path_lipschitz*shift+2*joints)+2*delta
+
+
+# Exact owner methods required by the optional arithmetic-only fan memo.
+_RATIONAL_SIDE_METHODS = tuple((name,getattr(RationalSourceSide,name),
+    getattr(RationalSourceSide,name).__code__,repr(getattr(RationalSourceSide,name).__defaults__),
+    repr(getattr(RationalSourceSide,name).__kwdefaults__))
+    for name in ('_validate','_ranges','box','derivative'))

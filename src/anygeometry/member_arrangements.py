@@ -41,6 +41,10 @@ def _support_roots(curve, support, tolerance, check):
     from .support_curves import PlaneNurbsCurve
     if isinstance(support, NurbsSurface):
         check()
+        from .nurbs_intersection_curve import NurbsSurfaceIntersectionCurve
+        if isinstance(curve,NurbsSurfaceIntersectionCurve):
+            curve.for_support(support)._shape()
+            return None
         if ((isinstance(curve, CurveOnSurface) and curve.support == support
              and curve.transform == _IDENTITY)
                 or (isinstance(curve, PlaneNurbsCurve) and curve.surface == support)):

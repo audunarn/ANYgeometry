@@ -85,6 +85,46 @@ def test_equivalent_curve_copies_reuse_canonical_truth_and_keep_actual_copy_sema
     assert calls == {'prepared': first['prepared']+2, 'row': first['row']}
 
 
+@pytest.mark.parametrize('context', ('known_warm', 'unknown'))
+@pytest.mark.parametrize('target', ('endpoint', 'point'))
+def test_actual_point_numeric_equality_matches_fresh_contract(monkeypatch, context, target):
+    c = curve()
+    c.evaluate(0.)
+    c.evaluate(.25)
+    validate_curve_runtime(c)  # warm independent truth before actual-row changes
+    if context == 'unknown':
+        original_kernel = backend._evaluate_prepared_bspline_curve
+        def forwarding_kernel(*args):
+            return original_kernel(*args)
+        monkeypatch.setattr(backend, '_evaluate_prepared_bspline_curve', forwarding_kernel)
+        assert memo.kernel_context() is None
+    else:
+        assert memo.kernel_context() is not None
+    key = np.float64(.25).tobytes()
+    original = c._endpoint_values[0] if target == 'endpoint' else c._point_values[key]
+    def install(row):
+        if target == 'endpoint':
+            object.__setattr__(c, '_endpoint_values', (row, c._endpoint_values[1]))
+        else:
+            object.__setattr__(c, '_point_values', {**c._point_values, key: row})
+    zero = original.copy()
+    assert np.all(zero[..., 2] == 0.)
+    zero[..., 2] = -0.
+    assert np.all(np.signbit(zero[..., 2]))
+    install(zero)
+    validate_curve_runtime(c)
+    # Numeric equality must not become byte-equality (NaN) or normalize
+    # changed values, dtype or shape into the admitted actual cache.
+    changed = zero.copy(); changed[..., 2] = 1.
+    nonfinite = zero.copy(); nonfinite[..., 2] = np.nan
+    for invalid in (changed, nonfinite, zero.astype(np.float32), zero.reshape(-1, 1)):
+        install(invalid)
+        with pytest.raises(GeometryError, match='point cache'):
+            validate_curve_runtime(c)
+    install(zero)
+    validate_curve_runtime(c)
+
+
 @pytest.mark.parametrize('attack', ('prepared', 'endpoint', 'point', 'shape', 'dtype', 'nan',
                                    'key', 'nonfinite_station', 'outside_domain', 'size'))
 def test_warm_canonical_truth_refuses_each_actual_cache_corruption(attack):

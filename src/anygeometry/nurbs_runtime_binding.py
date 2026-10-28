@@ -81,7 +81,7 @@ def validate_curve_runtime(curve):
 
 
 def _validate_curve_runtime(curve, bank=None):
-    from ._canonical_curve_runtime import (expected_prepared, expected_row, descriptor,
+    from ._canonical_curve_runtime import (expected_prepared, expected_row,
                                            kernel_context, begin_validation, _compute_prepared)
     try:
         curve._require_prepared_binding()
@@ -114,11 +114,16 @@ def _validate_curve_runtime(curve, bank=None):
         try:
             expected = (backend._evaluate_prepared_bspline_curve(fresh, np.array([knot]), 0)
                         if canonical is None else expected_row(canonical[0], canonical[1], np.float64(knot).tobytes()))
+            if canonical is not None:
+                # Expected bytes are immutable independent truth, but actual
+                # admission retains the original numeric equality contract:
+                # signed zeros compare equal and NaNs never compare equal.
+                dtype, shape, data = expected
+                expected = np.frombuffer(data, dtype=dtype).reshape(shape)
         except (ValueError, TypeError, ArithmeticError) as error:
             raise GeometryError('NURBS evaluated point cache cannot be qualified') from error
-        if (type(value) is not np.ndarray or
-                ((value.shape != expected.shape or value.dtype != expected.dtype or not np.array_equal(value, expected))
-                 if canonical is None else descriptor(value) != expected)):
+        if (type(value) is not np.ndarray or value.shape != expected.shape
+                or value.dtype != expected.dtype or not np.array_equal(value, expected)):
             raise GeometryError('NURBS evaluated point cache differs from its public definition')
     if kernel_context() != initial_context:
         raise GeometryError('NURBS backend changed during runtime validation')

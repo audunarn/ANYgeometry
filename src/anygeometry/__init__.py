@@ -182,7 +182,7 @@ from .editing import (
     rotate_entities,
     translate_entities,
 )
-from .errors import GeometryError, GeometryTopologyError, SourceCellRefinementRequired
+from .errors import GeometryError, GeometryTopologyError, SourceCellRefinementRequired, SourceCellApproximationInconclusive
 from .evaluation import (
     edge_tangent_many,
     evaluate_edge_many,
@@ -528,6 +528,7 @@ __all__ = [
     "FeatureTopologyRole",
     "GeometryError",
     "SourceCellRefinementRequired",
+    "SourceCellApproximationInconclusive",
     "GeometryModel",
     "GeometryTopologyError",
     "FrozenMetadata",
@@ -698,3 +699,9 @@ __all__ += ["query_same_support_material_disjoint_interiors"]
 __all__ += ["PlaneSplitPlan", "PlaneSplitApplication", "plan_plane_split", "apply_plane_split"]
 from .wave_surface_clipping import SignedClip, clip_triangle_positive, clip_polygon_positive
 __all__ += ["SignedClip", "clip_triangle_positive", "clip_polygon_positive"]
+
+from .approximation_scale import (ApproximationSourceBinding, TrimEnclosureScale,
+    query_approximation_source_binding, validate_approximation_source_binding,
+    query_trim_enclosure_scale, validate_trim_enclosure_scale_binding)
+__all__ += ["ApproximationSourceBinding", "TrimEnclosureScale", "query_approximation_source_binding",
+    "validate_approximation_source_binding", "query_trim_enclosure_scale", "validate_trim_enclosure_scale_binding"]

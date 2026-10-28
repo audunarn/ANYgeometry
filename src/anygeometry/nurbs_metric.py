@@ -71,6 +71,52 @@ def derivative_intervals(surface, box):
                        for i in range(3)) for pieces in collected)
 
 
+def _trace_derivative_intervals(surface, box):
+    """Derivative enclosure on a closed trace line/point, not an immersion proof.
+
+    Differentiate positive-area knot patches BEFORE restricting to a zero-width
+    trace coordinate. Include both one-sided limits at every coincident knot.
+    The public positive-area derivative_intervals contract is unchanged.
+    """
+    try:
+        box=tuple(tuple(map(Q,pair)) for pair in box)
+    except (TypeError,ValueError,OverflowError) as error:
+        raise GeometryError('invalid trace derivative box') from error
+    if len(box)!=2 or any(len(pair)!=2 for pair in box):
+        raise GeometryError('invalid trace derivative box')
+    if all(a<b for a,b in box):return derivative_intervals(surface,box)
+    if any(not 0<=a<=b<=1 for a,b in box):
+        raise GeometryError('trace derivative box leaves support chart')
+    if type(surface) is not NurbsSurface:
+        raise GeometryError('degenerate trace derivatives require a canonical NURBS support')
+    rows=_homogeneous(surface)
+    spans=tuple(tuple(map(Q,pair)) for pair in (surface.u_range,surface.v_range))
+    ranges=tuple(tuple(sorted(a+(b-a)*t for t in pair)) for (a,b),pair in zip(spans,box))
+    collected=[[],[]]
+    for index,patch in enumerate(rows[3]):
+        u=max(ranges[0][0],patch.u_range[0]),min(ranges[0][1],patch.u_range[1])
+        v=max(ranges[1][0],patch.v_range[0]),min(ranges[1][1],patch.v_range[1])
+        if u[0]>u[1] or v[0]>v[1]:continue
+        uw=patch.u_range[1]-patch.u_range[0];vw=patch.v_range[1]-patch.v_range[0]
+        if uw<=0 or vw<=0:raise GeometryError('degenerate native knot patch')
+        values=[];derivatives=[]
+        for component in rows:
+            grid=component[index].coefficients;p=len(grid)-1;q=len(grid[0])-1
+            du=[[p*(grid[i+1][j]-grid[i][j])/uw for j in range(q+1)] for i in range(p)] if p else [[Q(0)]*(q+1)]
+            dv=[[q*(row[j+1]-row[j])/vw for j in range(q)] for row in grid] if q else [[Q(0)] for row in grid]
+            values.append(_range(_rect(grid,patch.u_range,patch.v_range,u,v)))
+            derivatives.append(tuple(_range(_rect(g,patch.u_range,patch.v_range,u,v)) for g in (du,dv)))
+        w=values[3]
+        if w[0]<=0:raise GeometryError('NURBS metric denominator is not positive')
+        inverse_w2=Q(1)/(w[1]*w[1]),Q(1)/(w[0]*w[0])
+        for axis,(a,b) in enumerate(spans):
+            collected[axis].append(tuple(scale(mul(sub(mul(derivatives[i][axis],w),
+                mul(values[i],derivatives[3][axis])),inverse_w2),b-a) for i in range(3)))
+    if not collected[0]:raise GeometryError('trace derivative box has no native support')
+    return tuple(tuple((min(row[i][0] for row in pieces),max(row[i][1] for row in pieces))
+        for i in range(3)) for pieces in collected)
+
+
 @dataclass(frozen=True)
 class ProjectedChartCertificate:
     box: tuple

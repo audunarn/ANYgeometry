@@ -14,7 +14,7 @@ from .support_curves import PlaneNurbsCurve
 from .planar_exact import ExactPlane, point_in_region, region_is_simple
 from .exact_predicates import Outcome
 from .plane_nurbs import charge_box, charge_split, depth_limit
-from .nurbs_metric import add, sub, mul, scale, derivative_intervals
+from .nurbs_metric import add, sub, mul, scale, derivative_intervals, _trace_derivative_intervals
 
 
 class PlateBoundaryCrossingRequired(GeometryError):
@@ -381,7 +381,7 @@ def loop_area(model, loop, frame, check):
                 lo, hi = Q(k, size), Q(k+1, size)
                 chart, dchart = side.box(lo, hi), side.derivative(lo, hi)
                 uv = _project_interval(frame, _source_box(curve.surface, chart))
-                du, dv = derivative_intervals(curve.surface, chart)
+                du, dv = _trace_derivative_intervals(curve.surface, chart)
                 world_d = tuple(add(mul(a, dchart[0]), mul(b, dchart[1])) for a, b in zip(du, dv))
                 delta = _project_interval(frame, world_d, direction=True)
                 total = add(total, scale(sub(mul(uv[0], delta[1]), mul(uv[1], delta[0])), (hi-lo)/2))

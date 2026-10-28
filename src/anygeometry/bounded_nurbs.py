@@ -21,6 +21,9 @@ ALGORITHM = 'plane_nurbs_bounded_station_graph_v1'
 
 
 def handles_bounded(model, handles):
+    from .nurbs_pair_imprint import handles_pair
+    if handles_pair(model,handles):
+        return True
     if not handles or any(h.kind != 'face' for h in handles):
         return False
     from .nurbs_sweep_chart import has_sweep_chart
@@ -44,6 +47,9 @@ def _signature(plan):
 
 
 def _candidate(model, handles, policy, qualification, *, require_cells):
+    from .nurbs_pair_imprint import handles_pair,candidate_pair
+    if handles_pair(model,handles):
+        return candidate_pair(model,handles,policy,qualification,require_cells=require_cells)
     from .predicates import DEFAULT_INTERSECTION_QUALIFICATION_POLICY, IntersectionQualificationPolicy
     from .section_audit import Work
     from .plane_split import _stage_plane_split
@@ -125,6 +131,15 @@ def _candidate(model, handles, policy, qualification, *, require_cells):
                     mappings.append((flat[0], children))
                 else:
                     mappings.append((flat[0], (flat[0],)))
+            if require_cells and traces and any(statuses) and policy.intent is ConnectionIntent.CONNECT:
+                # Geometry and structural declarations form ONE logical commit.
+                # The journal retains complete face replacements and source+1
+                # revision, matching atomic publication's qualified checksum.
+                from .joint_edges import declare_joint_edge
+                for edge_id in sorted(set(traces)):
+                    check()
+                    declare_joint_edge(candidate,edge_id,
+                        candidate.tolerance.effective_length(candidate.edge_length(edge_id)))
         if not traces or not any(statuses):
             auxiliary = ()
             candidate, traces = model.clone(preserve_identity=True), []
@@ -276,6 +291,9 @@ def _connected_trace_curves(staged, traces):
 
 
 def _query_pair(model, first, second, qualification, work):
+    from .nurbs_pair_imprint import handles_pair,query_pair as query_nurbs_pair
+    if handles_pair(model,(first,second)):
+        return query_nurbs_pair(model,first,second,qualification)
     from .batch_intersections import IntersectionBatchPolicy
     from .intersections import _qualified_result
     from .predicates import IntersectionKind, IntersectionDimension, IntersectionComponent, IntersectionQuality, IntersectionCertificate

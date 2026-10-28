@@ -10,7 +10,6 @@ from weakref import WeakKeyDictionary, ref
 
 from .errors import GeometryError
 from .definition_binding import definition_checksum
-from .translational_imprint import _checksum
 from .native_support_snapshots import capture_native_supports
 from .nurbs import NurbsSurface
 from .surfaces import Plane
@@ -27,7 +26,12 @@ def _state(model):
     if model._transaction_journal is not None:
         raise GeometryError('source transport requires committed models')
     try:
-        return model.revision, _checksum(model), capture_native_supports(model)
+        from .serialization import _qualified_model_state
+        # Full current content and reverse incidence are bound on EVERY read.
+        # Only unchanged topology qualification is reused; native state below
+        # is still freshly captured, independently of persisted definitions.
+        document = _qualified_model_state(model)
+        return model.revision, document['checksum']['value'], capture_native_supports(model)
     except (AttributeError, TypeError, ValueError, KeyError) as error:
         raise GeometryError('source transport complete definitions are malformed or changed') from error
 
@@ -381,6 +385,8 @@ class PreparedMaterialSourceTransfer:
     edge_parameter_maps: tuple
     source_trace_ownership: tuple
     boundary_station_correspondence: tuple
+    local_field_fingerprints: tuple = ()
+    local_boundary_errors: tuple = ()
 
 
 def _signature(receipt):
@@ -401,6 +407,95 @@ def _frontier(source, prepared, receipts, callback):
         if cancelled:
             raise GeometryError('source transfer cancelled')
     return check, states
+
+
+def _qualify_two_support_virtual_trace(source, prepared, edge_id, represented_faces,
+                                      selected_faces, occurrence_faces, check,continuation_check=None):
+    """Classify one new-family edge using live owner lineage, never its type alone.
+
+    This helper issues no receipt. Its caller supplies faces from independently
+    authenticated cell/chord receipts, then retains the normal whole-cell,
+    station, XYZ, source-map and final publication checks.
+    """
+    from .nurbs_intersection_curve import NurbsSurfaceIntersectionCurve,intersection_curve_operation
+    from .nurbs_surface_intersection import SourceDefinition
+    from .joint_edges import query_joint_edge
+    from .structural import AttachmentKind,AttachmentEvidence,ConnectionIntent,ParameterRange
+    check('two-support virtual trace qualification')
+    states = (_state(source),_state(prepared))
+    links = _LINKS.get(prepared)
+    routes = [row for row in links or () if row[0]() is source]
+    if len(routes) != 1 or routes[0][1:3] != states:
+        raise GeometryError('two-support virtual trace needs current authenticated source lineage')
+    edge = prepared.edges.get(edge_id)
+    if (edge is None or edge_id in source.edges
+            or type(edge.curve) is not NurbsSurfaceIntersectionCurve):
+        raise GeometryError('two-support virtual trace needs its native generated owner curve')
+    joint = query_joint_edge(prepared,edge_id)
+    if not joint.declared:
+        raise GeometryError('two-support virtual trace requires a current explicit CONNECT joint declaration')
+    joint_sheets = {handle.id for handle in joint.sheets}
+    joint_attachments = {identifier for handle in joint.junctions
+        for identifier in prepared.junctions[handle.id].attachment_ids
+        for item in (prepared.attachments[identifier],)
+        if (item.kind is AttachmentKind.SHEET_ON_JOINT and item.source_kind == 'sheet'
+            and item.source_id in joint_sheets and item.target_kind == 'edge' and item.target_id == edge_id
+            and item.connection_intent is ConnectionIntent.CONNECT and item.evidence is AttachmentEvidence.EXACT
+            and item.target_parameters == (ParameterRange(0.,1.),) and item.max_residual <= item.tolerance_used)}
+    if prepared.members_using_edge(edge_id) or any(
+            ((item.source_kind == 'edge' and item.source_id == edge_id)
+             or (item.target_kind == 'edge' and item.target_id == edge_id))
+            and item.id not in joint_attachments for item in prepared.attachments.values()):
+        raise GeometryError('two-support virtual trace cannot reinterpret member or attachment ownership')
+    # Scan actual loops as well as reverse incidence: neither a stale index nor
+    # an invented chord declaration can hide an incident material face.
+    counts = {face.id:sum(use.edge == edge_id for loop in (face.loop,*face.holes) for use in loop)
+              for face in prepared.faces.values()}
+    incident = {face for face,count in counts.items() if count}
+    if (len(incident) != 4 or any(counts[face] != 1 for face in incident)
+            or set(prepared.faces_using_edge(edge_id)) != incident
+            or not incident <= set(represented_faces)
+            or len(occurrence_faces) != 4 or set(occurrence_faces) != incident):
+        raise GeometryError('two-support virtual trace needs all four declared current material uses')
+    mapping = routes[0][3]
+    parents = {child:parent for parent,children in mapping for child in children}
+    if len(parents) != sum(len(children) for _,children in mapping) or not incident <= set(parents):
+        raise GeometryError('two-support virtual trace has missing or overlapping parent lineage')
+    originals = {parents[child] for child in incident}
+    if (len(originals) != 2 or any(sum(parents[child] == parent for child in incident) != 2 for parent in originals)
+            or any(not set(children) <= set(selected_faces) for parent,children in mapping if parent in originals)):
+        raise GeometryError('two-support virtual trace requires complete descendants of two original parents')
+    curve = edge.curve
+    expected = (curve.owner.first_source,curve.owner.second_source)
+    supports = {}
+    for parent in originals:
+        support = _effective(source,parent)
+        if type(support) is not NurbsSurface:
+            raise GeometryError('two-support virtual trace original parent is not native NURBS')
+        definition = SourceDefinition.capture(support)
+        indices = [i for i,item in enumerate(expected) if item == definition]
+        if len(indices) != 1:
+            raise GeometryError('two-support virtual trace owner does not match its source parents')
+        supports[parent] = (support,indices[0])
+    if {index for _,index in supports.values()} != {0,1}:
+        raise GeometryError('two-support virtual trace lacks one original support')
+    with intersection_curve_operation(continuation_check):
+        # Revalidate the canonical branch, issued context/configuration and
+        # both oriented pcurves. No samples qualify an interval here.
+        curve._shape()
+        for parent,(support,_) in supports.items():
+            chart = curve.for_support(support)
+            chart.chart_box(Q(0),Q(1))
+            for child in incident:
+                if parents[child] == parent:
+                    _chart_map(source,parent,_effective(prepared,child))
+        if not curve.enclose(Q(0),Q(1)):
+            raise GeometryError('two-support virtual trace has no certified source interval')
+        check('two-support virtual trace qualification complete')
+        curve._shape()
+    if _LINKS.get(prepared) is not links or (_state(source),_state(prepared)) != states:
+        raise GeometryError('two-support virtual trace lineage changed before classification')
+    return tuple(sorted(originals)),tuple(sorted(incident))
 
 
 def query_prepared_material_source_transfer(source, prepared, cell_receipts, *,
@@ -433,11 +528,27 @@ def query_prepared_material_source_transfer(source, prepared, cell_receipts, *,
     if not selected_faces or any(selected_faces.intersection(children) and not set(children) <= selected_faces
                                  for parent, children in mapping):
         raise GeometryError('source transfer omits required material descendants')
+    represented_edges = {}
+    for owner_receipt in receipts:
+        _,owner_chords = _source_transfer_cell_inputs(prepared,owner_receipt)
+        for cell in owner_receipt.cells:
+            for _,index,_ in cell.boundary_intervals:
+                edge_id = owner_chords.intervals[index].edge.id
+                represented_edges.setdefault(edge_id,set()).add(cell.face.id)
+    qualified_two_support = {}
+    local_fingerprints=[];local_boundary_errors=[]
     cells, source_cells, references, prepared_refs, maps, errors, bounds = [], [], [], [], [], [], []
     covered, station_nodes, xyz_nodes, operands = set(), {}, {}, []
     for receipt in receipts:
         check('source transfer cell binding')
         regions, chords = _source_transfer_cell_inputs(prepared, receipt)
+        local_errors=dict(zip(((cell.face.id,cell.node_ids) for cell in receipt.cells),receipt.surface_errors_by_cell))
+        if receipt.local_field_fingerprint:
+            if len(local_errors)!=len(receipt.cells):raise GeometryError('source transfer lost local cell allocations')
+            local_fingerprints.append(receipt.local_field_fingerprint)
+            if len(chords.interval_errors)!=len(chords.intervals):
+                raise GeometryError('source transfer lost local boundary interval allocations')
+        local_chord_limits={(edge,a,b):limit for edge,a,b,limit in chords.interval_errors}
         operands.append((receipt, regions, chords))
         faces = {cell.face.id for cell in receipt.cells}
         if covered & faces:
@@ -458,29 +569,49 @@ def query_prepared_material_source_transfer(source, prepared, cell_receipts, *,
                 xyz_nodes[node] = xyz
             for side, index, forward in cell.boundary_intervals:
                 chord = chords.intervals[index]
+                chord_transport=Q(0)
                 edge = prepared.edges[chord.edge.id]
                 if edge.id in edge_map:
                     ancestor, first_parameter, last_parameter = edge_map[edge.id]
                     target = source.handle('edge', ancestor)
                     edge_parameters[edge.id] = (chord.edge, target, first_parameter, last_parameter)
-                    edge_transport = max(edge_transport, _edge_transport_error(source, prepared, ancestor,
-                        edge.id, first_parameter, last_parameter))
+                    chord_transport = _edge_transport_error(source, prepared, ancestor,
+                        edge.id, first_parameter, last_parameter)
+                    edge_transport = max(edge_transport,chord_transport)
                     owners = ()
                 else:
                     from .support_curves import PlaneNurbsCurve
                     from .curves import Straight
+                    from .nurbs_intersection_curve import NurbsSurfaceIntersectionCurve
                     # a virtual edge: a section trace / same-support auxiliary partition (PlaneNurbsCurve), or
                     # a STRAIGHT auxiliary partition only when the owner registered it with its complete
                     # definition (a persisted tag is never authority)
-                    if edge.id in source.edges or not (isinstance(edge.curve, PlaneNurbsCurve) or (
+                    if type(edge.curve) is NurbsSurfaceIntersectionCurve:
+                        declared = tuple(occurrence.face.id for occurrence in chord.occurrences)
+                        if edge.id not in qualified_two_support:
+                            qualified_two_support[edge.id] = _qualify_two_support_virtual_trace(
+                                source,prepared,edge.id,represented_edges.get(edge.id,()),selected_faces,declared,check,
+                                (lambda:check('two-support virtual trace continuation'))
+                                if cancellation_check is not None else None)
+                        original_ids,incident = qualified_two_support[edge.id]
+                        if len(declared) != 4 or set(declared) != set(incident):
+                            raise GeometryError('two-support virtual trace chord omits a declared material use')
+                        owners = tuple(source.handle('face',value) for value in original_ids)
+                    elif edge.id in source.edges or not (isinstance(edge.curve, PlaneNurbsCurve) or (
                             isinstance(edge.curve, Straight) and _qualified_auxiliary(prepared, edge.id))):
                         raise GeometryError('source edge split station transport is not qualified')
+                    else:
+                        owners = tuple(source.handle('face', value) for value in sorted({
+                            parents[item.face.id] for item in receipt.cells
+                            if any(chords.intervals[i].edge.id == edge.id for _, i, _ in item.boundary_intervals)}))
                     target = None
-                    owners = tuple(source.handle('face', value) for value in sorted({
-                        parents[item.face.id] for item in receipt.cells
-                        if any(chords.intervals[i].edge.id == edge.id for _, i, _ in item.boundary_intervals)}))
                     previous = trace_ownership.get(edge.id, (chord.edge, ()))
                     trace_ownership[edge.id] = (chord.edge, tuple(sorted(set(previous[1]+owners), key=lambda h: h.id)))
+                if receipt.local_field_fingerprint:
+                    limit=local_chord_limits[(edge.id,*chord.parameter_range)]
+                    if Q(chord.world_error)+chord_transport>limit:
+                        raise GeometryError('source boundary transport exceeds local interval allowance')
+                    local_boundary_errors.append((chord.edge,chord.parameter_range,target,limit,chord_transport))
                 parameters = chord.parameter_range if forward else chord.parameter_range[::-1]
                 for offset, t in enumerate(parameters):
                     key = ('vertex', edge.start if t == 0 else edge.end) if t in (0, 1) else ('edge', edge.id, t)
@@ -502,10 +633,12 @@ def query_prepared_material_source_transfer(source, prepared, cell_receipts, *,
             references.append((source_face, cell.node_ids, _map_uv(transform, centre)))
             prepared_refs.append((cell.face, cell.node_ids, centre))
             maps.append((source_face, cell.face, transform))
-            errors.append((source_face, cell.node_ids, receipt.surface_error))
+            from .nurbs import _float_down
+            local_error=_float_down(local_errors[(cell.face.id,cell.node_ids)]) if receipt.local_field_fingerprint else receipt.surface_error
+            errors.append((source_face, cell.node_ids, local_error))
             from .nurbs import _float_up
             combined = Q(cell_bounds[(cell.face.id, cell.node_ids)])+edge_transport
-            if combined > Q(receipt.surface_error):
+            if combined > Q(local_error):
                 raise GeometryError('source edge transport exceeds supplied surface approximation error')
             bounds.append((source_face, cell.node_ids, _float_up(combined)))
     if not covered or any(covered.intersection(children) and not set(children) <= covered for parent, children in mapping):
@@ -523,7 +656,7 @@ def query_prepared_material_source_transfer(source, prepared, cell_receipts, *,
         tuple(references), tuple(prepared_refs), tuple(maps), tuple(errors), tuple(bounds),
         tuple(edge_parameters[key] for key in sorted(edge_parameters)),
         tuple(trace_ownership[key] for key in sorted(trace_ownership)),
-        tuple(stations[key] for key in sorted(stations)))
+        tuple(stations[key] for key in sorted(stations)),tuple(local_fingerprints),tuple(local_boundary_errors))
     _TRANSFERS[result] = (ref(source), ref(prepared), receipts, _literal(receipts), tuple(operands), _signature(result), _LINKS.get(prepared), (source_state, prepared_state))
     return result
 

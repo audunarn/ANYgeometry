@@ -34,6 +34,8 @@ def _definition_value(value, memo):
     cached = memo.get(id(value)) if memo is not None else None
     if cached is not None:
         return cached[1]
+    if isinstance(value,Fraction):
+        return {"rational":[str(value.numerator),str(value.denominator)]}
     if isinstance(value, np.ndarray):
         result = {"array":value.tolist(),"shape":list(value.shape)}
     elif isinstance(value, np.generic):

@@ -47,6 +47,10 @@ def chart_curve_of(domain, curve):
     """Declared chart representation, keeping implicit sections distinct from polynomials."""
     from .support_curves import PlaneNurbsCurve
     from .section_chart import SectionChart
+    from .nurbs_intersection_curve import NurbsSurfaceIntersectionCurve
+    from .intersection_chart import IntersectionChart
+    if isinstance(curve,NurbsSurfaceIntersectionCurve):
+        return IntersectionChart(curve.for_support(domain.support))
     if isinstance(curve, PlaneNurbsCurve):
         if curve.surface != domain.support:
             raise GeometryError('section belongs to a different NURBS support')
@@ -75,16 +79,19 @@ def world_delta(domain, delta, v=0.0, u=0.0) -> np.ndarray:
 
 
 def uv(domain, curve, parameter) -> np.ndarray:
-    chart_curve_of(domain, curve)
-    return np.asarray(curve.chart(float(parameter)), dtype=float)
+    chart = chart_curve_of(domain, curve)
+    return np.asarray(chart.evaluate(float(parameter)), dtype=float)
 
 
 def tangent(domain, curve, parameter) -> np.ndarray:
-    chart_curve_of(domain, curve)
-    return np.asarray(curve.chart_derivative(float(parameter)), dtype=float)
+    chart = chart_curve_of(domain, curve)
+    return np.asarray(chart.derivative(float(parameter)), dtype=float)
 
 
 def curvature(domain, curve, parameter, forward) -> float | None:
+    from .nurbs_intersection_curve import NurbsSurfaceIntersectionCurve
+    if isinstance(curve,NurbsSurfaceIntersectionCurve):
+        return None
     from .support_curves import PlaneNurbsCurve
     chart_curve_of(domain, curve)
     if isinstance(curve, PlaneNurbsCurve):
@@ -126,7 +133,8 @@ def level_roots(pcurve: NurbsCurve, axis: int, value: float, chart_tolerance: fl
 def horizontal_roots(domain, curve, value, tolerance):
     from .section_chart import SectionChart
     chart = chart_curve_of(domain, curve)
-    if isinstance(chart, SectionChart):
+    from .intersection_chart import IntersectionChart
+    if isinstance(chart, (SectionChart,IntersectionChart)):
         return chart.level_roots(1, value)
     return level_roots(chart, 1, float(value), _chart_tolerance(domain, tolerance))
 
@@ -151,6 +159,14 @@ def contains_loop(domain, loop, uv_point, tolerance, *, boundary=True) -> bool:
     the query (exactly, or within the tolerance in the world) is the boundary.
     """
     from .support_curves import PlaneNurbsCurve
+    from .nurbs_intersection_curve import NurbsSurfaceIntersectionCurve
+    if any(isinstance(path.curve,NurbsSurfaceIntersectionCurve) for path in loop):
+        from .intersection_chart import contains_owner_loop,IntersectionChartContactUndecided
+        try:
+            return contains_owner_loop([path.curve for path in loop],domain.support,uv_point,
+                                       Fraction(_chart_tolerance(domain,tolerance)))
+        except IntersectionChartContactUndecided as error:
+            raise ChartContainmentUndecided(str(error)) from error
     if any(isinstance(path.curve, PlaneNurbsCurve) for path in loop):
         from .nurbs_section_faces import contains_chart_curves, chart_boundary_contact
         curves = [path.curve for path in loop]
@@ -320,7 +336,8 @@ def _knot_crossings(surface: NurbsSurface, pcurve: NurbsCurve) -> tuple[float, .
     line contributes its ends.
     """
     from .section_chart import SectionChart
-    if isinstance(pcurve, SectionChart):
+    from .intersection_chart import IntersectionChart
+    if isinstance(pcurve, (SectionChart,IntersectionChart)):
         # Every implicit arc already lies in one extracted Bezier sub-patch.
         return pcurve.breakpoints()
     found: list[float] = []
@@ -360,6 +377,32 @@ def _inner_integral(surface: NurbsSurface, u: np.ndarray, v: np.ndarray, count: 
 
 
 def world_area_estimate(domain, loop, tolerance) -> tuple[float, float]:
+    """Advisory quadrature, with literal-bound reuse inside one owner operation."""
+    from .nurbs_intersection_curve import NurbsSurfaceIntersectionCurve
+    from .material_arrangement import ArrangementPath
+    # Limit reuse to the new connected family; existing families keep their
+    # established estimator route. Unsupported duck paths also retain it.
+    scoped = any(type(path.curve) is NurbsSurfaceIntersectionCurve for path in loop)
+    if not scoped or not all(type(path) is ArrangementPath for path in loop):
+        return _world_area_estimate_uncached(domain,loop,tolerance)
+    return _cached_world_area_estimate(domain,loop,tolerance)
+
+
+def _world_area_estimate_key(domain,loop,tolerance):
+    from .nurbs_surface_intersection import SourceDefinition
+    from .definition_binding import definition_value
+    def literal(value):
+        if isinstance(value,dict):
+            return tuple(sorted((key,literal(item)) for key,item in value.items()))
+        if isinstance(value,(list,tuple)):
+            return tuple(literal(item) for item in value)
+        return value
+    return ('advisory-nurbs-world-area-gauss-v1',SourceDefinition.capture(domain.support).values,
+            tuple(literal(definition_value(path)) for path in loop),
+            (type(tolerance),literal(definition_value(tolerance))),(8,16,32,64,128))
+
+
+def _world_area_estimate_uncached(domain, loop, tolerance) -> tuple[float, float]:
     """Signed world area ``oint G(u, v) dv`` and the last change of the doubling (an estimate, not a bound)."""
     surface = domain.support
     pcurves = [chart_curve_of(domain, path.curve) for path in loop]
@@ -370,7 +413,10 @@ def world_area_estimate(domain, loop, tolerance) -> tuple[float, float]:
         for pcurve, extra in zip(pcurves, crossings):
             nodes, weights = _span_nodes(pcurve, count, extra)
             q = np.clip(pcurve.evaluate(nodes), 0.0, 1.0)
-            dq = pcurve.derivative(nodes)
+            # This is advisory quadrature, never the continuous Green/source
+            # proof path. An implicit chart may supply a first-order witness.
+            witness = getattr(pcurve,'derivative_witness',None)
+            dq = witness(nodes) if witness is not None else pcurve.derivative(nodes)
             moving = dq[:, 1] != 0.0
             samples = np.zeros(len(nodes))
             if np.any(moving):
@@ -380,6 +426,10 @@ def world_area_estimate(domain, loop, tolerance) -> tuple[float, float]:
         return value, magnitude
 
     return _settle(evaluate, tolerance, "NURBS world area")
+
+
+from .nurbs_intersection_curve import operation_cached
+_cached_world_area_estimate = operation_cached(_world_area_estimate_key)(_world_area_estimate_uncached)
 
 
 def world_area_loop(domain, loop, tolerance) -> float:

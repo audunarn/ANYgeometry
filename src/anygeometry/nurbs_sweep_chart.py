@@ -112,12 +112,12 @@ def authored_query_uv(model, face_id, support, rows):
     return tuple(result)
 
 
-def install_sweep_chart(model, face_id):
-    """Declare a proven tensor chart only inside an authorized cutting stage."""
+def _qualified_sweep_chart_face(model, face_id):
+    """Derive the existing exact recipe without modifying the source model."""
     face = model.faces[face_id]
     if has_sweep_chart(face):
         chart_model(model, face_id)
-        return
+        return face
     from ._translational_pairs import _sweep
     recognized = _sweep(model, face_id)
     if recognized is None:
@@ -153,7 +153,15 @@ def install_sweep_chart(model, face_id):
     for loop in (face.loop, *face.holes):
         for use in loop:
             view.chart_edge(model.edges[use.edge])
-    model._put_entity('face', made)
+    return made
+
+
+def install_sweep_chart(model, face_id):
+    """Declare a proven tensor chart only inside an authorized cutting stage."""
+    if has_sweep_chart(model.faces[face_id]):
+        chart_model(model, face_id)
+        return
+    model._put_entity('face', _qualified_sweep_chart_face(model, face_id))
 
 
 class _Edges(Mapping):
@@ -394,3 +402,39 @@ def chart_model(model, face_id):
         for use in loop:
             view.chart_edge(model.edges[use.edge])
     return view
+
+
+class _SourceSweepChartView(SweepChartModel):
+    """Read-only material-domain adapter; no metadata is installed on raw."""
+    def __init__(self,model,face):
+        self._qualified_source_face=face
+        super().__init__(model,face)
+
+    def chart_face(self,face):
+        if face.id==self.face_id:
+            return replace(self._qualified_source_face,surface=self.support)
+        return super().chart_face(face)
+
+    def _put_entity(self,*args,**kwargs):
+        raise GeometryError('source sweep read view cannot mutate topology')
+
+    def split_edge(self,*args,**kwargs):
+        raise GeometryError('source sweep read view cannot mutate topology')
+
+
+def source_sweep_chart_model(model,face_id):
+    """Optional exact raw-Coons material view, retaining original IDs/state.
+
+    Ordinary unsupported surfaces return None and keep their existing route.
+    A recognized recipe must pass the SAME full connector correspondence as an
+    installed chart. Callers qualify/bind against the original source model.
+    """
+    from .surfaces import CoonsSurface
+    from ._translational_pairs import _sweep
+    face=model.faces[face_id]
+    if (type(face.surface) is not CoonsSurface or face.parameterization is not None
+            or face.holes or len(face.corners)!=4 or has_sweep_chart(face)):
+        return None
+    if _sweep(model,face_id) is None:return None
+    made=_qualified_sweep_chart_face(model,face_id)
+    return _SourceSweepChartView(model,made)

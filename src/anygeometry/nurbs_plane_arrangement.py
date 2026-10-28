@@ -40,6 +40,13 @@ def _straight_event_key(model, source_edge, plane, event):
 
 
 def _area(model, loop, surface):
+    from .nurbs_intersection_curve import NurbsSurfaceIntersectionCurve
+    if any(isinstance(model.edges[e.edge].curve,NurbsSurfaceIntersectionCurve) for e in loop):
+        from .nurbs_intersection_faces import loop_area
+        lo,hi = loop_area(model,loop,surface)
+        from .nurbs_surface_intersection._intervals import float_up
+        middle = (lo+hi)/2
+        return float(middle),float_up(max(abs(lo-Q(float(middle))),abs(hi-Q(float(middle)))))
     for level in (2, 4, 6, 8):
         value, error = chart_loop_area(model, loop, surface, level)
         if abs(value) > error:

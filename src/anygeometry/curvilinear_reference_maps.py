@@ -15,6 +15,145 @@ from .nurbs import CurveOnSurface, _float_down, _float_up
 from .support_curves import PlaneNurbsCurve
 from .plane_nurbs import charge_box, charge_split, depth_limit
 from .nurbs_metric import add, sub, mul, scale, sum_intervals, derivative_intervals
+from contextlib import contextmanager as _closed_contextmanager
+from contextvars import ContextVar as _ClosedContextVar
+from threading import get_ident as _closed_thread
+from types import FunctionType as _ClosedFunction
+
+
+_CLOSED_FAN_SCOPE = _ClosedContextVar('owner_closed_fan_scope', default=None)
+_CLOSED_FAN_ACTIVE = _ClosedContextVar('owner_closed_fan_active', default=None)
+_CLOSED_FAN_STEPS = {}
+
+
+def _closed_fan_context():
+    from . import plane_nurbs as work
+    functions = (_closed_fan_context, _closed_fan_live, _closed_fan_step, _closed_fan_services,
+                 _closed_fan_ready,
+                 _closed_fan_window, _closed_fan_window.__wrapped__,
+                 _closed_fan_steps, _closed_fan_steps.__wrapped__)
+    if any(type(f) is not _ClosedFunction for f in functions):
+        return None
+    return (work.CURRENT_WORK, _CLOSED_FAN_SCOPE, _CLOSED_FAN_ACTIVE, _closed_thread, _ClosedFunction,
+            _CLOSED_FAN_CERTIFIER, _CLOSED_FAN_WORK, _CLOSED_FAN_SIDE_TYPE, _CLOSED_FAN_SIDE_METHODS,
+            tuple((f, f.__code__, f.__defaults__, f.__kwdefaults__) for f in functions))
+
+
+def _closed_fan_live(step):
+    """Recognize only a live issued internal checkpoint, never caller markers.
+
+    Every non-None Work is deliberately ineligible, including canonical Work:
+    no inference about a parent's/child's arbitrary take/property callbacks.
+    """
+    record = _CLOSED_FAN_STEPS.get(step) if type(step) is _ClosedFunction else None
+    if record is None:
+        return False
+    from . import plane_nurbs as work
+    from . import source_cell_complex as complex
+    scope, thread, code, bindings = record
+    if (type(_closed_fan_context) is not _ClosedFunction
+            or (_closed_fan_context, _closed_fan_context.__code__) != _CLOSED_FAN_BASE[-1][0][:2]):
+        raise GeometryError('closed fan checkpoint implementation changed')
+    current = _closed_fan_context()
+    if (current is None or any(a is not b for a,b in zip(current[:-1],_CLOSED_FAN_BASE[:-1]))
+            or current[-1] != _CLOSED_FAN_BASE[-1]):
+        raise GeometryError('closed fan checkpoint implementation changed')
+    try:
+        actual_bindings = tuple(cell.cell_contents for cell in step.__closure__)
+    except ValueError as error:
+        raise GeometryError('closed fan checkpoint binding changed') from error
+    if (_CLOSED_FAN_SCOPE.get() is not scope or _closed_thread() != thread
+            or step.__code__ is not code or step.__defaults__ is not None
+            or step.__kwdefaults__ is not None
+            or len(actual_bindings) != len(bindings)
+            or any(a is not b for a,b in zip(actual_bindings,bindings))):
+        raise GeometryError('closed fan checkpoint scope, work or implementation changed')
+    return True
+
+
+def _closed_fan_step(step):
+    return _closed_fan_live(step) and _CLOSED_FAN_ACTIVE.get() is step and _closed_fan_ready()
+
+
+@_closed_contextmanager
+def _closed_fan_window(step):
+    """Activate only at the actual fan call, never over opaque field queries."""
+    if type(step) is not _ClosedFunction or step not in _CLOSED_FAN_STEPS:
+        yield None
+        return
+    selected = step if _closed_fan_live(step) and _closed_fan_ready() else None
+    token = _CLOSED_FAN_ACTIVE.set(selected)
+    try:
+        yield selected
+    finally:
+        _CLOSED_FAN_ACTIVE.reset(token)
+
+
+@_closed_contextmanager
+def _closed_fan_steps(public_callback):
+    """One query lease for callback-free checkpoints, not proof authority.
+
+    The issued function calls no caller code. Unknown/custom work and actual
+    public callbacks retain the original strict callback route. Nested scopes
+    shadow outer issuers and cleanup always invalidates the issued identity.
+    """
+    from . import plane_nurbs as work
+    from . import source_cell_complex as complex
+    if (type(_closed_fan_context) is not _ClosedFunction
+            or (_closed_fan_context, _closed_fan_context.__code__) != _CLOSED_FAN_BASE[-1][0][:2]):
+        raise GeometryError('closed fan checkpoint implementation changed')
+    current = _closed_fan_context()
+    if (current is None or any(a is not b for a,b in zip(current[:-1],_CLOSED_FAN_BASE[:-1]))
+            or current[-1] != _CLOSED_FAN_BASE[-1]):
+        raise GeometryError('closed fan checkpoint implementation changed')
+    scope = object()
+    token = _CLOSED_FAN_SCOPE.set(scope)
+    step = None
+    issued = None
+    try:
+        if public_callback is None and _closed_fan_ready():
+            def step():
+                if (type(_closed_fan_live) is not _ClosedFunction or (_closed_fan_live, _closed_fan_live.__code__)
+                        != _CLOSED_FAN_BASE[-1][1][:2]):
+                    raise GeometryError('closed fan checkpoint implementation changed')
+                if not _closed_fan_live(step):
+                    raise GeometryError('closed fan checkpoint was not issued')
+                return False
+            _CLOSED_FAN_STEPS[step] = (scope, _closed_thread(), step.__code__,
+                                      tuple(cell.cell_contents for cell in step.__closure__))
+            issued = step  # cleanup must not follow a poisoned self-binding
+        yield step
+    finally:
+        if issued is not None:
+            _CLOSED_FAN_STEPS.pop(issued, None)
+        _CLOSED_FAN_SCOPE.reset(token)
+
+
+def _closed_fan_services():
+    for function,expected,code,keywords in (
+            (certify_fan_subtriangle, *_CLOSED_FAN_CERTIFIER[:3]),
+            (_certify_fan_subtriangle, *_CLOSED_FAN_CERTIFIER[3:])):
+        if (type(function) is not _ClosedFunction or function is not expected
+                or function.__code__ is not code or function.__defaults__ is not None):
+            return False
+        current = function.__kwdefaults__
+        if (type(current) is not dict or any(type(k) is not str for k in current)
+                or tuple(current) != keywords or any(value is not None for value in current.values())):
+            return False
+    return True
+
+
+def _closed_fan_ready():
+    """Dynamic opacity disables optimization; it never invalidates a token."""
+    from . import plane_nurbs as work, source_cell_complex as complex
+    if (work.CURRENT_WORK.get() is not None or not _closed_fan_services()
+            or complex.certify_fan_subtriangle is not _CLOSED_FAN_CERTIFIER[0]):
+        return False
+    actual = (charge_box,charge_split,depth_limit,work.charge_box,work.charge_split,
+              work.depth_limit,complex.charge_box,complex.charge_split)
+    return all(type(f) is _ClosedFunction and f is expected and f.__code__ is code
+               and f.__defaults__ is None and f.__kwdefaults__ is None
+               for f,(expected,code) in zip(actual,_CLOSED_FAN_WORK))
 
 
 def constant(value):
@@ -41,6 +180,9 @@ def interval(value, lo, hi):
 
 def native_derivatives(curve, lo, hi):
     """Exact chart derivative bounds in the edge's normalized parameter."""
+    from .nurbs_intersection_curve import NurbsSurfaceIntersectionCurve
+    if isinstance(curve,NurbsSurfaceIntersectionCurve):
+        return curve.chart_derivative_bounds(lo,hi)
     if isinstance(curve, CurveOnSurface):
         p = curve.pcurve
         if p.degree != 1 or len(p.controls) != 2:
@@ -112,6 +254,9 @@ class BoundaryMap:
 
 
 def boundary_map(support, curve, parameters, targets):
+    from .nurbs_intersection_curve import NurbsSurfaceIntersectionCurve
+    if isinstance(curve,NurbsSurfaceIntersectionCurve):
+        curve = curve.for_support(support)
     from .prepared_material_curvilinear import _uv_box
     endpoints = tuple(_uv_box(support, curve, t) for t in parameters)
     correction = tuple(tuple(sub(constant(Q(x)), bound) for x, bound in zip(target, point))
@@ -131,10 +276,10 @@ def _source_box(support, box):
         frame = ExactPlane.from_plane(support)
         points = [frame.world(*p) for p in product(*box)]
         return tuple((min(p[i] for p in points), max(p[i] for p in points)) for i in range(3))
-    from .surface_capabilities import capabilities
     if any(a < 0 or b > 1 for a, b in box):
         raise GeometryError('source-curved map exceeds its declared support chart')
-    enclosed = capabilities(support).enclosure(tuple((_float_down(a), _float_up(b)) for a, b in box))
+    from ._source_box_hull import source_enclosure
+    enclosed = source_enclosure(support, tuple((_float_down(a), _float_up(b)) for a, b in box))
     return tuple((Q(float(a)), Q(float(b))) for a, b in zip(enclosed.lower, enclosed.upper))
 
 
@@ -200,7 +345,7 @@ def _source_quad_fan(uv_boxes, boundary, side, s, t, *, corner_hull=False):
     if corner_hull:
         # The SAME endpoint symbols make L(t) the quad's own side. Writing
         # u=s/2+(1-s)t, the remaining four corner weights (cyclic from side)
-        # are s²/4+s(1-s)t/2, s²/4+s(1-s)(1-t)/2,
+        # are sÂ²/4+s(1-s)t/2, sÂ²/4+s(1-s)(1-t)/2,
         # (s/2)u, (s/2)(1-u). They are nonnegative and sum to s;
         # Q(t) has weight 1-s. Intersect with that true convex hull, never
         # with an arbitrary global chart clamp. The map/derivatives stay fixed.
@@ -211,6 +356,16 @@ def _source_quad_fan(uv_boxes, boundary, side, s, t, *, corner_hull=False):
     rs = tuple(sub(b, e) for b, e in zip(base_s, correction))
     reduced_t = tuple(add(b, e) for b, e in zip(base_reduced_t, derivative_correction))
     return r, rs, reduced_t
+
+
+# Pin the effective fan algebra when its owner module initializes, before a
+# later point-preflight callback could replace it. The value-only helper may
+# be imported lazily, but must not bless a wrapper installed before that import.
+_POINT_FAN_FUNCTIONS = tuple((name, globals()[name], globals()[name].__code__,
+                              globals()[name].__defaults__,
+                              None if globals()[name].__kwdefaults__ is None else
+                              tuple(globals()[name].__kwdefaults__.items()))
+    for name in ('_source_quad_fan','_quad_fan','interval','constant','add','sub','mul','scale'))
 
 
 class _SideMemo:
@@ -224,15 +379,21 @@ class _SideMemo:
     ``certify_fan_subtriangle`` call, never stored, shared or consulted for identity, and every examined
     box is still charged by the caller; exceptions are not cached. Other attributes delegate to the side.
 
-    Eligibility is the EXACT owner ``SourceSide`` type only (immutable exact operands, deterministic
-    ``_ranges``). Subclasses, ``BoundaryMap`` and any custom boundary are never wrapped: every query is
+    Eligibility is exact owner SourceSide or a runtime-qualified RationalSourceSide. Rational hits
+    revalidate current source/native definitions; endpoint qualification brackets the proof and
+    every callback. Subclasses, BoundaryMap and custom boundaries are never wrapped: every query is
     delegated, so callbacks, refusals and Work behaviour of such objects can never be hidden by a cache.
     """
     def __init__(self, side):
-        from .regular_source_reference import SourceSide
-        if type(side) is not SourceSide:
+        from .regular_source_reference import SourceSide, RationalSourceSide
+        if type(side) not in (SourceSide, RationalSourceSide):
             raise TypeError('only an exact SourceSide may be memoized')
         self._side = side
+        self._rational = type(side) is RationalSourceSide
+        if self._rational:
+            side._validate()
+        from .definition_binding import definition_checksum
+        self._literal = definition_checksum((side.start,side.end,side.parameters)) if self._rational else None
         self._both = {}
 
     def __getattr__(self, name):
@@ -241,12 +402,20 @@ class _SideMemo:
         return getattr(self._side, name)
 
     def _ranges(self, lo, hi):
+        # Reuse only arithmetic results, never source/native qualification.
+        if self._rational:
+            from .definition_binding import definition_checksum
+            if definition_checksum((self._side.start,self._side.end,self._side.parameters)) != self._literal:
+                raise GeometryError("rational memo endpoints changed")
+            self._side._validate(endpoints=False)
         key = (lo, hi)
         if key not in self._both:
             self._both[key] = self._side._ranges(lo, hi)
         return self._both[key]
 
     def box(self, lo, hi):
+        if self._rational:
+            return self._ranges(lo,hi)[0]
         if lo == hi == 0:                           # SourceSide.box's exact endpoint cases
             return self._side.start.box
         if lo == hi == 1:
@@ -263,7 +432,7 @@ def _polynomial_fast_path(support, boundary, centre_uv, xyz_side, centre_xyz, or
     ``None`` (use the general interval proof). Sufficient proof only: a bound above the requested error
     also falls back, so a genuine violation is still decided by the unchanged general proof."""
     from .regular_source_reference import SourceSide
-    from .polynomial_cell_bounds import triangle_residual_bound, quad_residual_bound
+    from .polynomial_cell_bounds import triangle_residual_bound
     if type(boundary) is not SourceSide or boundary.curve is not None or orientation not in (1, -1):
         return None
     # The true corner/vertex charts may be certified intervals; the bounds enclose EVERY choice of true
@@ -278,10 +447,13 @@ def _polynomial_fast_path(support, boundary, centre_uv, xyz_side, centre_xyz, or
     # the fan side must be the quad's own side: same certified boxes, not merely nearby ones
     if boundary.start.box != quad_uv[quad_side] or boundary.end.box != quad_uv[(quad_side+1) % 4]:
         return None
-    return quad_residual_bound(support, quad_uv, quad_xyz, orientation)
+    # The memo pins this module's exact norm helper. Import only after both
+    # modules have initialized, including direct memo-module imports.
+    from ._quad_bound_reuse import quadratic_quad_bound
+    return quadratic_quad_bound(support, quad_uv, quad_xyz, orientation)
 
 
-def certify_fan_subtriangle(support, boundary, centre_uv, xyz_side, centre_xyz, *,
+def _certify_fan_subtriangle(support, boundary, centre_uv, xyz_side, centre_xyz, *,
                            orientation, surface_error, quad_xyz=None, quad_side=None, quad_uv=None,
                            cancellation_check=None, quad_nodes=None):
     """Bound a ruled source-UV map against its literal affine FE subtriangle.
@@ -308,7 +480,8 @@ def certify_fan_subtriangle(support, boundary, centre_uv, xyz_side, centre_xyz, 
                 or any(type(node) is not SourceNode for node in quad_nodes)
                 or _literal(tuple(node.box for node in quad_nodes)) != _literal(quad_uv)):
             raise GeometryError('source quad canonical corner correspondence is malformed')
-        if type(boundary) is SourceSide:
+        from .regular_source_reference import RationalSourceSide
+        if type(boundary) in (SourceSide,RationalSourceSide):
             corners = quad_nodes[quad_side],quad_nodes[(quad_side+1)%4]
             if any(type(node) is not SourceNode for node in (boundary.start,boundary.end)) or any(
                     _literal(node.identity) != _literal(corner.identity) or _literal(node.box) != _literal(corner.box)
@@ -373,14 +546,33 @@ def certify_fan_subtriangle(support, boundary, centre_uv, xyz_side, centre_xyz, 
             orientation=orientation, surface_error=surface_error, cancellation_check=cancellation_check)
         if structural is not None:
             return structural
-    from .regular_source_reference import SourceSide as _ExactSide
-    if type(boundary) is _ExactSide:
+    from .regular_source_reference import SourceSide as _ExactSide, RationalSourceSide
+    from .prepared_material_curvilinear import _canonical_cos
+    # A mutable live registry cannot grant optional arithmetic memo admission.
+    canonical_side = RationalSourceSide is _CLOSED_FAN_SIDE_TYPE
+    for name,function,code in _CLOSED_FAN_SIDE_METHODS:
+        current = vars(RationalSourceSide).get(name)
+        if (type(current) is not _ClosedFunction or current is not function
+                or current.__code__ is not code or current.__defaults__ is not None):
+            canonical_side = False
+            break
+        keywords = current.__kwdefaults__
+        if ((name == '_validate' and (type(keywords) is not dict
+                or any(type(key) is not str for key in keywords)
+                or tuple(keywords) != ('endpoints',) or keywords['endpoints'] is not True))
+                or (name != '_validate' and keywords is not None)):
+            canonical_side = False
+            break
+    if (type(boundary) is _ExactSide or
+            (type(boundary) is RationalSourceSide and canonical_side and _canonical_cos(boundary.curve))):
         boundary = _SideMemo(boundary)      # proof-local: one exact enclosure per parameter interval
     pending, maximum, examined = [((Q(0), Q(1)), (Q(0), Q(1)), 0)], Q(0), 0
     while pending:
         if cancellation_check is not None and cancellation_check():
             raise GeometryError('source-curved reference map proof cancelled')
         s, t, depth = pending.pop()
+        discrepancy = None  # never reuse a bound from a different proof box
+        inconclusive_chart = False
         charge_box()
         examined += 1
         if examined > 32768:
@@ -400,6 +592,7 @@ def certify_fan_subtriangle(support, boundary, centre_uv, xyz_side, centre_xyz, 
             r, rs, reduced_t = _source_quad_fan(quad_uv, boundary, quad_side, s, t, corner_hull=correlated_quad)
             wedge = scale(_cross(reduced_t, rs), Q(orientation))
         if wedge[0] > 0 and (isinstance(support, Plane) or all(0 <= a <= b <= 1 for a, b in r)):
+            inconclusive_chart = all(type(a) is Q and type(b) is Q and a <= b for a,b in r)
             du, dv = derivative_intervals(support, r)
             rt = tuple(mul((1-s[1], 1-s[0]), d) for d in reduced_t)
             world_s = tuple(add(mul(du[i], rs[0]), mul(dv[i], rs[1])) for i in range(3))
@@ -430,6 +623,11 @@ def certify_fan_subtriangle(support, boundary, centre_uv, xyz_side, centre_xyz, 
                 maximum = max(maximum, discrepancy)
                 continue
         if depth >= depth_limit(12):
+            if inconclusive_chart and type(discrepancy) is Q and discrepancy > surface_error:
+                # Assigned only after this box passed the positive-wedge and
+                # chart gates and every bound computation completed freshly.
+                from .errors import _FanApproximationInconclusive
+                raise _FanApproximationInconclusive(Q(surface_error), discrepancy, wedge[0], (s,t), depth)
             raise GeometryError('source-curved cell Jacobian or approximation is not certified')
         charge_split()
         axis = 0 if s[1]-s[0] >= t[1]-t[0] else 1
@@ -440,3 +638,134 @@ def certify_fan_subtriangle(support, boundary, centre_uv, xyz_side, centre_xyz, 
             child[axis] = part
             pending.append((*child, depth+1))
     return maximum, examined
+
+
+def certify_fan_subtriangle(support, boundary, centre_uv, xyz_side, centre_xyz, *,
+        orientation, surface_error, quad_xyz=None, quad_side=None, quad_uv=None,
+        cancellation_check=None, quad_nodes=None):
+    """Fresh qualification brackets invocation-local rational enclosure reuse."""
+    from . import regular_source_reference as reference
+    rational = type(boundary) is reference.RationalSourceSide
+    callback = cancellation_check
+    callback_error = None
+    if rational:
+        from . import _local_curve_geometry as jets
+        from . import prepared_material_curvilinear as prepared
+        from . import nurbs, nurbs_runtime_binding as runtime, native_support_snapshots as native
+        def context():
+            functions = (reference.RationalSourceSide._validate, reference.RationalSourceSide._ranges,
+                reference.RationalSourceSide.box, reference.RationalSourceSide.derivative,
+                reference._pcurve_point_jet, reference.definition_checksum, jets._curve_jet,
+                nurbs._exact_refine, runtime.validate_curve_runtime, native._material_support_read_pin,
+                jets._rational, jets._divide, jets.jet, jets.bezier_piece, jets._exact_refine,
+                _SideMemo.__init__, _SideMemo.__getattr__, _SideMemo._ranges, _SideMemo.box,
+                _SideMemo.derivative, _certify_fan_subtriangle, prepared._canonical_cos,
+                prepared._chord_function_pin)
+            # Classifying declared calculator metadata must execute no repr
+            # or rich comparison on caller-supplied defaults.
+            def literal(value):
+                kind = type(value)
+                if kind is type(None) or kind is bool or kind is int or kind is str or kind is bytes:
+                    return (id(kind),value)
+                if kind is float:
+                    return (id(kind),value.hex())
+                if kind is tuple:
+                    return (id(kind),tuple(literal(item) for item in value))
+                raise GeometryError('rational fan calculator metadata is not literal')
+            pins, retained = [], []
+            for function in functions:
+                if type(function) is not _ClosedFunction:
+                    raise GeometryError('rational fan calculator is not an owned function')
+                defaults,keywords = function.__defaults__,function.__kwdefaults__
+                if defaults is not None and type(defaults) is not tuple:
+                    raise GeometryError('rational fan calculator defaults changed')
+                if keywords is not None and (type(keywords) is not dict
+                        or any(type(key) is not str for key in keywords)):
+                    raise GeometryError('rational fan calculator keywords changed')
+                code = function.__code__
+                retained.append((function,code))
+                pins.append((id(function),id(code),literal(defaults),
+                    None if keywords is None else tuple((key,literal(keywords[key]))
+                                                       for key in sorted(keywords))))
+            return ((id(reference.RationalSourceSide),id(reference.SourceNode),id(_SideMemo),tuple(pins)),
+                    tuple(retained))
+        # IDs are compared as scalars, while these exact function AND code
+        # objects remain alive for the whole proof, including callback exits.
+        expected, retained_context = context()
+        validate = boundary._validate
+        literal = (boundary.start, boundary.end, boundary.parameters, boundary.curve_signature,
+                   boundary.endpoint_transport)
+        from .definition_binding import definition_checksum
+        signature = definition_checksum(literal)
+        def context_guard():
+            current, current_objects = context()
+            if not retained_context or current != expected or definition_checksum((boundary.start, boundary.end,
+                    boundary.parameters,boundary.curve_signature,boundary.endpoint_transport)) != signature:
+                raise GeometryError('rational fan proof context or endpoints changed')
+        def guard():
+            context_guard()
+            validate()
+        guard()
+        if callback is not None:
+            # Only this lease-issued checkpoint executes no external callback.
+            # Side reads/memo hits retain ALL fresh _validate calls; ordinary
+            # callbacks retain the original full pre/post guard unchanged.
+            closed = False
+            if type(callback) is _ClosedFunction and callback in _CLOSED_FAN_STEPS:
+                if (type(_closed_fan_live) is not _ClosedFunction
+                        or (_closed_fan_live,_closed_fan_live.__code__) != _CLOSED_FAN_BASE[-1][1][:2]):
+                    raise GeometryError('closed fan checkpoint implementation changed')
+                _closed_fan_live(callback)
+                closed = _CLOSED_FAN_ACTIVE.get() is callback
+            closed = closed and reference.RationalSourceSide is _CLOSED_FAN_SIDE_TYPE
+            for name,function,code in _CLOSED_FAN_SIDE_METHODS:
+                current = vars(reference.RationalSourceSide).get(name)
+                if (type(current) is not _ClosedFunction or current is not function
+                        or current.__code__ is not code or current.__defaults__ is not None):
+                    closed = False
+                    break
+                keywords = current.__kwdefaults__
+                if ((name == '_validate' and (type(keywords) is not dict
+                        or any(type(key) is not str for key in keywords)
+                or tuple(keywords) != ('endpoints',) or keywords['endpoints'] is not True))
+                        or (name != '_validate' and keywords is not None)):
+                    closed = False
+                    break
+            def checked():
+                nonlocal callback_error
+                (context_guard if closed and _closed_fan_step(callback) else guard)()
+                if closed:
+                    _closed_fan_live(callback)  # refuse changed code BEFORE invoking it
+                try:
+                    result = callback()
+                except BaseException as error:
+                    callback_error = error
+                    raise
+                (context_guard if closed and _closed_fan_step(callback) else guard)()
+                return result
+            cancellation_check = checked
+    try:
+        result = _certify_fan_subtriangle(support, boundary, centre_uv, xyz_side, centre_xyz,
+            orientation=orientation, surface_error=surface_error, quad_xyz=quad_xyz,
+            quad_side=quad_side, quad_uv=quad_uv, cancellation_check=cancellation_check,
+            quad_nodes=quad_nodes)
+    except BaseException as error:
+        if rational and error is not callback_error:
+            guard()
+        raise
+    if rational:
+        guard()  # no callback after the final endpoint/native gate
+    return result
+
+
+_CLOSED_FAN_CERTIFIER = (certify_fan_subtriangle, certify_fan_subtriangle.__code__,
+    tuple(certify_fan_subtriangle.__kwdefaults__),
+    _certify_fan_subtriangle, _certify_fan_subtriangle.__code__,
+    tuple(_certify_fan_subtriangle.__kwdefaults__))
+from . import regular_source_reference as _closed_reference, plane_nurbs as _closed_work
+_CLOSED_FAN_SIDE_TYPE = _closed_reference.RationalSourceSide
+_CLOSED_FAN_SIDE_METHODS = tuple((name,vars(_CLOSED_FAN_SIDE_TYPE)[name],
+    vars(_CLOSED_FAN_SIDE_TYPE)[name].__code__) for name in ('_validate','_ranges','box','derivative'))
+_CLOSED_FAN_WORK = tuple((f,f.__code__) for f in (charge_box,charge_split,depth_limit,
+    _closed_work.charge_box,_closed_work.charge_split,_closed_work.depth_limit,charge_box,charge_split))
+_CLOSED_FAN_BASE = _closed_fan_context()

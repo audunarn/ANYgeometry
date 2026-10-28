@@ -900,9 +900,12 @@ class GeometryModel:
             # The chart box of the trim pcurves (their sound boxes, clipped to the
             # chart), enclosed by the support's exact sub-patch hull (A3a).
             from .surface_capabilities import capabilities
+            from .nurbs_intersection_curve import NurbsSurfaceIntersectionCurve
+            curves = (chart_owner.edges[item.edge].curve for loop in (face.loop,) + face.holes for item in loop)
+            curves = (curve.for_support(support) if isinstance(curve,NurbsSurfaceIntersectionCurve) else curve
+                      for curve in curves)
             boxes = [curve.chart_bounds() if hasattr(curve, "chart_bounds") else curve.pcurve.bounds()
-                     for curve in (chart_owner.edges[item.edge].curve for loop in (face.loop,) + face.holes
-                                   for item in loop)]                 # section edges: B1-P4c
+                     for curve in curves]                 # section edges: B1-P4c
             low = np.clip(np.min([box[0] for box in boxes], axis=0), 0.0, 1.0)
             high = np.clip(np.max([box[1] for box in boxes], axis=0), 0.0, 1.0)
             enclosure = capabilities(support).enclosure(((float(low[0]), float(high[0])),
@@ -4673,7 +4676,8 @@ class GeometryModel:
                                 "BezierQuadricCurve or NurbsCurve")
         from .nurbs import CurveOnSurface, NurbsCurve
         from .support_curves import PlaneNurbsCurve
-        if isinstance(curve, PlaneNurbsCurve):
+        from .nurbs_intersection_curve import NurbsSurfaceIntersectionCurve
+        if isinstance(curve, (PlaneNurbsCurve,NurbsSurfaceIntersectionCurve)):
             self._check_plane_nurbs_ends(start_point, end_point, curve)
             return self._add_edge(start, end, curve)
         if isinstance(curve, (NurbsCurve, CurveOnSurface)):
@@ -4828,6 +4832,15 @@ class GeometryModel:
         from .nurbs import CurveOnSurface, _IDENTITY
         from .support_curves import PlaneNurbsCurve
         for loop in loops:
+            from .nurbs_intersection_curve import NurbsSurfaceIntersectionCurve
+            if any(isinstance(self.edges[item.edge].curve,NurbsSurfaceIntersectionCurve) for item in loop):
+                for item in loop:
+                    curve = self.edges[item.edge].curve
+                    if isinstance(curve,NurbsSurfaceIntersectionCurve):
+                        curve.for_support(surface)
+                    elif not isinstance(curve,CurveOnSurface) or curve.support != surface or curve.transform != _IDENTITY:
+                        raise GeometryError('intersection trim loop has an unsupported boundary curve')
+                continue
             if any(isinstance(self.edges[item.edge].curve, PlaneNurbsCurve) for item in loop):
                 # loops with plane x NURBS section edges: the curves must be on this support; their
                 # chart continuity (algebraic section ends) is decided in validation (B1-P4c)
@@ -5343,6 +5356,9 @@ class GeometryModel:
             except GeometryError as error:
                 return [f'face {face_id}: {error}']
         if isinstance(face.surface, NurbsSurface):
+            from .nurbs_intersection_faces import has_intersection_edges, validate_intersection_face
+            if has_intersection_edges(self,face):
+                return validate_intersection_face(self,face_id)
             # Chart polygons straight from the pcurves (no world inversion, architecture 4.6).
             from .nurbs_section_faces import has_section_edges as _nurbs_sections, validate_nurbs_section_face
             if _nurbs_sections(self, face):
@@ -6237,6 +6253,13 @@ class GeometryModel:
             points = []
             for item in loop:
                 curve = owner.edges[item.edge].curve
+                from .nurbs_intersection_curve import NurbsSurfaceIntersectionCurve
+                if isinstance(curve,NurbsSurfaceIntersectionCurve):
+                    from .intersection_chart import IntersectionChart
+                    polyline,bound = IntersectionChart(curve.for_support(face.surface)).certified_polyline(tolerance)
+                    worst = max(worst,bound)
+                    points.extend((polyline if item.forward else polyline[::-1])[:-1])
+                    continue
                 if isinstance(curve, PlaneNurbsCurve):
                     from .section_chart import SectionChart
                     if curve.surface != face.surface:
