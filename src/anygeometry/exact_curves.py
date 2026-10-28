@@ -634,6 +634,7 @@ from .branch_curves import BezierQuadricCurve  # noqa: E402
 
 from .nurbs import CurveOnSurface, NurbsCurve  # noqa: E402
 from .support_curves import PlaneNurbsCurve  # noqa: E402
+from .line_ranges import LineRange  # noqa: E402
 
 EXACT_CURVES = (EllipticArc, CylinderIntersectionCurve, QuadricIntersectionCurve, BezierQuadricCurve, NurbsCurve,
-                CurveOnSurface, PlaneNurbsCurve)
+                CurveOnSurface, PlaneNurbsCurve, LineRange)

@@ -4310,10 +4310,11 @@ def query_intersection(
     second_handle = _normalize_operand(geometry, second)
     pair = (first_handle.kind, second_handle.kind)
     if pair == ("face", "face"):
-        result = _query_face_face(
-            geometry, first_handle, second_handle, qualified_policy
-        )
-        if not result.classified and BOUNDARY_CURVE_REFUSAL not in result.diagnostics:
+        from .bounded_nurbs import handles_bounded, query_pair
+        bounded = handles_bounded(geometry, (first_handle, second_handle))
+        result = (query_pair(geometry, first_handle, second_handle, qualified_policy) if bounded else
+                  _query_face_face(geometry, first_handle, second_handle, qualified_policy))
+        if not bounded and not result.classified and BOUNDARY_CURVE_REFUSAL not in result.diagnostics:
             from .material_pair import domains_for_pair, query_exact_pair
             try:
                 domains_for_pair(geometry, first_handle, second_handle)
@@ -4573,6 +4574,21 @@ def plan_imprint(
     no_geometric_intersection = result.kind is IntersectionKind.DISJOINT
     pair = {first_parent.kind, second_parent.kind}
     batch_plan = None
+    from .bounded_nurbs import handles_bounded, plan_bounded
+    if (policy_value in ('connect', 'imprint')
+            and handles_bounded(geometry, (first_parent, second_parent))):
+        # The bounded owner requalifies the literal source definitions.  A
+        # caller-supplied query is never geometric authority for publication.
+        batch_plan = plan_bounded(geometry, tuple(sorted((first_parent, second_parent))),
+                                  normalized_policy, qualified_policy)
+        fresh = query_intersection(geometry, first_parent, second_parent,
+                                   qualification=qualified_policy)
+        if not fresh.classified:
+            raise GeometryError('bounded imprint query is not certified')
+        return ImprintPlan(geometry.model_id, revision, first_parent, second_parent,
+                           fresh, normalized_policy, ImprintOperation.FACE_IMPRINT,
+                           (), tuple(sorted((first_parent, second_parent))),
+                           qualified_policy, batch_plan)
     if same_parent or no_geometric_intersection:
         operation = ImprintOperation.NO_TOPOLOGY
         changes = ()

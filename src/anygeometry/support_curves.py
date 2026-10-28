@@ -29,6 +29,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from fractions import Fraction
+from contextvars import ContextVar
+from .curve_parameter_matching import _cooperative_tick
 import math
 
 import numpy as np
@@ -38,6 +40,12 @@ from .nurbs import NurbsSurface, _float_down, _float_up
 from .plane_nurbs import PlaneNurbsNotCertified, charge_box, charge_split, depth_limit, plane_nurbs_section
 
 _SECTIONS: dict = {}
+_RUNTIME_CACHE_BANK = ContextVar('plane_nurbs_runtime_cache_bank', default=None)
+
+
+def _runtime_cache(name, shared):
+    isolated = _RUNTIME_CACHE_BANK.get()
+    return shared if isolated is None else isolated.setdefault(name, {})
 _EPS = float(np.finfo(float).eps)
 
 
@@ -93,8 +101,9 @@ class PlaneNurbsCurve:
         return 3
 
     def _arcs(self) -> tuple:
+        cache = _runtime_cache('sections', _SECTIONS)
         key = (self.plane_record, self.surface, self.path)
-        cached = _SECTIONS.get(key)
+        cached = cache.get(key)
         if cached is not None:
             return cached
         section = plane_nurbs_section(self.plane, self.surface)
@@ -109,6 +118,7 @@ class PlaneNurbsCurve:
             if ident not in refined:
                 root = replace(section.roots[ident])
                 for _ in range(self._MAX_BISECTIONS):
+                    _cooperative_tick()
                     if root.exact or self._rect_ok(self._root_rect(root)):
                         break
                     root.refine()
@@ -123,6 +133,7 @@ class PlaneNurbsCurve:
         # the root interval is refined until the rectangle holding both the true root and C*(s0) is
         # within the error bound, for every arc using the root (review B1-P4a round 3).
         for _ in range(self._MAX_BISECTIONS):
+            _cooperative_tick()
             loose = {id(root): root for box, slicing, start, finish in chain for root in (start, finish)
                      if not root.exact and not self._joint_ok(box, slicing, root)}
             if not loose:
@@ -140,9 +151,9 @@ class PlaneNurbsCurve:
         arcs = [_Arc(box, slicing, s_of(start, slicing), s_of(finish, slicing), start, finish)
                 for box, slicing, start, finish in chain]
         result = tuple(arcs)
-        if len(_SECTIONS) >= 64:
-            _SECTIONS.clear()
-        _SECTIONS[key] = result
+        if len(cache) >= 64:
+            cache.clear()
+        cache[key] = result
         return result
 
     # ---------------------------------------------------------- parameter maps
@@ -181,7 +192,8 @@ class PlaneNurbsCurve:
         ``(m . P - d)**2 <= limit_squared`` (within ``2**-50`` of the surface's magnitude of the
         plane), and ``limit >= sqrt(limit_squared)`` (rational, for the distance bound)."""
         key = ("slab", self.plane_record, self.surface)
-        cached = _SECTIONS.get(key)
+        cache = _runtime_cache('sections', _SECTIONS)
+        cached = cache.get(key)
         if cached is not None:
             return cached
         origin, u_vector, v_vector = ([Fraction(value) for value in vector] for vector in self.plane_record)
@@ -196,9 +208,9 @@ class PlaneNurbsCurve:
         # rational upper bound of sqrt(mm): (isqrt(n d) + 1) / d for mm = n / d
         root_up = Fraction(math.isqrt(mm.numerator * mm.denominator) + 1, mm.denominator)
         result = (m, d, mm, delta * delta * mm, delta * root_up)
-        if len(_SECTIONS) >= 64:
-            _SECTIONS.clear()
-        _SECTIONS[key] = result
+        if len(cache) >= 64:
+            cache.clear()
+        cache[key] = result
         return result
 
     def _world_bound(self):
@@ -206,15 +218,16 @@ class PlaneNurbsCurve:
         units, exact), the knot widths of the chart ranges and the squared error bound ``delta``
         (``2**-50`` of the surface magnitude, as the plane slab)."""
         key = ("bound", self.surface, self.plane_record)
-        cached = _SECTIONS.get(key)
+        cache = _runtime_cache('sections', _SECTIONS)
+        cached = cache.get(key)
         if cached is None:
             _m, _d, mm, limit_squared, _l = self._plane_slab()
             sigma2 = self.surface.patch_bounds(((0.0, 1.0), (0.0, 1.0)), _surface_net(self.surface))[2]
             (r0, r1), (q0, q1) = self._chart_ranges()
             cached = (Fraction(sigma2), abs(r1 - r0), abs(q1 - q0), limit_squared / mm)
-            if len(_SECTIONS) >= 64:
-                _SECTIONS.clear()
-            _SECTIONS[key] = cached
+            if len(cache) >= 64:
+                cache.clear()
+            cache[key] = cached
         return cached
 
     def _joint_ok(self, box, slicing, root) -> bool:
@@ -222,6 +235,7 @@ class PlaneNurbsCurve:
         error bound. ``s0`` is the root's value on a constant-s edge (C*(s0) is the root itself), else
         the midpoint of its interval: then C*(s0) is the box's zero at s0 (bracketed exactly) or, outside
         the gap, the root."""
+        _cooperative_tick()
         rect = self._root_rect(root)
         if root.axis == slicing:
             return self._rect_ok(rect)
@@ -246,6 +260,7 @@ class PlaneNurbsCurve:
         else:
             # bracket C*(s0) until its own rectangle meets the bound (else root refinement cannot help)
             for _ in range(self._MAX_BISECTIONS):
+                _cooperative_tick()
                 bracket = (x0 + lo * (x1 - x0), x0 + hi * (x1 - x0))
                 if self._rect_ok(((s0, s0), bracket) if slicing == 0 else (bracket, (s0, s0))):
                     break
@@ -284,6 +299,7 @@ class PlaneNurbsCurve:
         return (root.lo, root.hi), (root.value, root.value)
 
     _MAX_BISECTIONS = 1100
+    _INITIAL_ROOT_BISECTIONS = 60
 
     def _refine(self, rect, line_point, lo, hi, side_lo, side_hi):
         """Bisect ``[lo, hi]`` on a knot line (``line_point(x)`` the knot point) until the midpoint's
@@ -296,6 +312,7 @@ class PlaneNurbsCurve:
         """
         _m, _d, _mm, limit, _l = self._plane_slab()
         for _ in range(self._MAX_BISECTIONS):
+            _cooperative_tick()
             middle = (lo + hi) / 2
             point = line_point(middle)
             world, side = self._world(point)
@@ -320,6 +337,7 @@ class PlaneNurbsCurve:
     def _root_point(self, root):
         """The defined point at an end root: its isolating interval bisected into the plane slab."""
         if root.lo == root.hi:
+            _cooperative_tick()
             rect = self._root_rect(root)
             point = ((rect[0][0] + rect[0][1]) / 2, (rect[1][0] + rect[1][1]) / 2)
             return rect, point, self._world(point)[0]
@@ -371,7 +389,7 @@ class PlaneNurbsCurve:
             lo = hi = Fraction(1)
         else:
             lo, hi = Fraction(0), Fraction(1)
-            for _ in range(60):
+            for _ in range(self._INITIAL_ROOT_BISECTIONS):
                 middle = (lo + hi) / 2
                 value = _de_casteljau(column, middle)
                 if value == 0:
@@ -629,6 +647,92 @@ class PlaneNurbsCurve:
         high = extreme(False)
         return x0 + low * (x1 - x0), x0 + high * (x1 - x0)
 
+    def _graph_view(self, arc):
+        """The shared primitive rectangle view of ``branch_predicates._Arc`` for the graph ``G1 = 0`` only
+        (no second plane or weight polynomial is needed by the graph proofs used here)."""
+        from .branch_predicates import _Arc
+        view = _Arc.__new__(_Arc)
+        box = arc.box
+        view.curve, view.arc = self, arc
+        view.u_box, view.v_box = box.u_range, box.v_range
+        view.g1 = [list(row) for row in box.coefficients]
+        view.g2 = view.w = None
+        view.slicing = arc.slicing
+        view.x_box = box.v_range if arc.slicing == 0 else box.u_range
+        return view
+
+    def _graph_x(self, arc, s_low, s_high, level, parent=None):
+        """An x interval (knot coordinates) containing the section graph over ``[s_low, s_high]``, from the
+        certified monotone-graph proof, or ``None`` when that proof is undecided (never a guess).
+
+        ``parent`` (default the box's x range) must contain the graph over the piece. Where the ambient
+        ``G_x`` has one strict sign and ``G_s`` a weak sign over ``piece x parent``, ``x(s)`` is monotone
+        (``dx/ds = -G_s / G_x``) and the interval between exact brackets of the two ends contains it. A
+        piece whose ``G_s`` straddles zero is bisected (at most ``depth_limit(3)`` levels, each bisection charged
+        as a subdivision) and the halves united; the exact end-bracket bisection is a point refinement, not charged. The exact
+        constant graph identity (``G1`` vanishing on the whole line ``x = x0`` with strict ``G_x``)
+        gives ``[x0, x0]``. A bracket is ``None`` outside the arc's gap (end-root region): undecided.
+        Every examined box is charged to the active qualification budget.
+        """
+        view = self._graph_view(arc)
+        x_box = view.x_box
+        s_box = view.u_box if view.slicing == 0 else view.v_box
+        root_x = [self._ordered_root_rect(arc, root)[1] for root in (arc.first, arc.second)]
+        if root_x[0][0] == root_x[0][1] == root_x[1][0] == root_x[1][1]:
+            x0 = root_x[0][0]
+            if parent is None or parent[0] <= x0 <= parent[1]:
+                charge_box()
+                restriction = view.over(view.g1, s_box, (x0, x0))
+                du, dv = view.derivative_ranges(view.g1, s_box, (x0, x0))
+                gx = dv if view.slicing == 0 else du
+                if all(value == 0 for row in restriction for value in row) and (gx[0] > 0 or gx[1] < 0):
+                    return (x0, x0)
+        parent = x_box if parent is None else parent
+        x_span, s_span = x_box[1] - x_box[0], s_box[1] - s_box[0]
+        if s_high <= s_low:
+            charge_box()
+            return view.bracket(s_low, x_span / 2 ** 60)
+
+        def attempt(lo, hi, splits):
+            charge_box()
+            g_u, g_v = view.derivative_ranges(view.g1, (lo, hi), parent)
+            g_s, g_x = (g_u, g_v) if view.slicing == 0 else (g_v, g_u)
+            if not (g_x[0] > 0 or g_x[1] < 0):
+                return None
+            if g_s[0] >= 0 or g_s[1] <= 0:
+                charge_box()
+                width = x_span * (hi - lo) / s_span / 64
+                first, second = view.bracket(lo, width), view.bracket(hi, width)
+                if first is None or second is None:
+                    return None
+                return min(first[0], second[0]), max(first[1], second[1])
+            if splits <= 0:
+                return None
+            charge_split()                  # an actual spatial s-bisection (not an exact root-bracket step)
+            middle = (lo + hi) / 2
+            left = attempt(lo, middle, splits - 1)
+            right = attempt(middle, hi, splits - 1) if left is not None else None
+            if left is None or right is None:
+                return None
+            return min(left[0], right[0]), max(left[1], right[1])
+
+        return attempt(s_low, s_high, depth_limit(3))
+
+    def _certified_x(self, arc, s_low, s_high, level):
+        """x interval containing the zero set over ``[s_low, s_high]``: the graph proof (box, then a coarse
+        exclusion interval as parent), else the exclusion interval ``_tight_x`` at the full depth; ``None``
+        only when exact exclusion shows no zero (or a zero-width piece is outside the gap)."""
+        x = self._graph_x(arc, s_low, s_high, level)
+        if x is not None or s_high <= s_low:
+            return x
+        coarse = self._tight_x(arc, s_low, s_high, depth=min(8, 24 + level))
+        if coarse is None:
+            return None
+        x = self._graph_x(arc, s_low, s_high, level, parent=coarse)
+        if x is not None:
+            return x
+        return self._tight_x(arc, s_low, s_high, depth=24 + level)
+
     def _ordered_root_rect(self, arc, root):
         """An end root's rectangle as ((s_lo, s_hi), (x_lo, x_hi)) in the arc's slicing order."""
         (u_lo, u_hi), (v_lo, v_hi) = self._root_rect(root)
@@ -646,6 +750,7 @@ class PlaneNurbsCurve:
         scaled_low, scaled_high = Fraction(a) * count - slack, Fraction(b) * count + slack
         rects = []
         for k, arc in enumerate(arcs):
+            _cooperative_tick()
             if scaled_high < k or scaled_low > k + 1:
                 continue
             tau0 = min(Fraction(1), max(Fraction(0), scaled_low - k))
@@ -660,7 +765,7 @@ class PlaneNurbsCurve:
             level = 0
             while level < 40 and (s_high - s_low) * 2 ** (level + 1) <= box_s[1] - box_s[0]:
                 level += 1
-            x_range = self._tight_x(arc, s_low, s_high, depth=24 + level) if s_high > s_low else None
+            x_range = self._certified_x(arc, s_low, s_high, level)
             box_x = (arc.box.v_range if arc.slicing == 0 else arc.box.u_range)
             if x_range is None:
                 x_range = box_x
@@ -852,11 +957,12 @@ _NETS: dict = {}
 
 
 def _surface_net(surface):
-    net = _NETS.get(surface)
+    cache = _runtime_cache('nets', _NETS)
+    net = cache.get(surface)
     if net is None:
-        if len(_NETS) >= 32:
-            _NETS.clear()
-        net = _NETS[surface] = surface.exact_net()
+        if len(cache) >= 32:
+            cache.clear()
+        net = cache[surface] = surface.exact_net()
     return net
 
 
@@ -865,14 +971,15 @@ _ABSOLUTE: dict = {}
 
 def _absolute_box(box):
     """The box with absolute coefficients (for the float evaluation error bound)."""
-    cached = _ABSOLUTE.get(id(box))
+    cache = _runtime_cache('absolute', _ABSOLUTE)
+    cached = cache.get(id(box))
     if cached is not None and cached[0] is box:
         return cached[1]
     from dataclasses import replace as _replace
     result = _replace(box, coefficients=tuple(tuple(abs(value) for value in row) for row in box.coefficients))
-    if len(_ABSOLUTE) >= 512:
-        _ABSOLUTE.clear()
-    _ABSOLUTE[id(box)] = (box, result)
+    if len(cache) >= 512:
+        cache.clear()
+    cache[id(box)] = (box, result)
     return result
 
 
@@ -881,7 +988,8 @@ _SCALED: dict = {}
 
 def _scaled_float_coefficients(box) -> np.ndarray:
     """Float coefficients of the box scaled exactly by a power of two (largest magnitude in [1/2, 1))."""
-    cached = _SCALED.get(id(box))
+    cache = _runtime_cache('scaled', _SCALED)
+    cached = cache.get(id(box))
     if cached is not None and cached[0] is box:
         return cached[1]
     largest = max(abs(value) for row in box.coefficients for value in row)
@@ -891,9 +999,9 @@ def _scaled_float_coefficients(box) -> np.ndarray:
         shift = largest.numerator.bit_length() - largest.denominator.bit_length()
         scale = Fraction(2) ** (-shift) if shift >= 0 else Fraction(2) ** (-shift)
         array = np.asarray([[float(value * scale) for value in row] for row in box.coefficients])
-    if len(_SCALED) >= 512:
-        _SCALED.clear()
-    _SCALED[id(box)] = (box, array)
+    if len(cache) >= 512:
+        cache.clear()
+    cache[id(box)] = (box, array)
     return array
 
 

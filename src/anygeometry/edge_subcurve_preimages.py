@@ -344,6 +344,13 @@ def _edge_subcurve_definition(model, edge):
     edge = _identifier(edge)
     if edge not in model.edges:
         raise GeometryError('edge subcurve provenance edge is not active')
+    from .line_ranges import LineRange
+    entity = model.edges[edge]
+    if type(entity.curve) is LineRange:
+        points = (entity.curve.exact_point(0), entity.curve.exact_point(1))
+        controls = tuple(tuple(_pack(x) for x in point) for point in points)
+        checksum = definition_checksum((entity, model.vertices[entity.start], model.vertices[entity.end]))
+        return PolynomialEdgeDefinition(edge, entity.start, entity.end, controls, checksum)
     path = freeze_edge(model, edge)
     if type(path) not in (LinePath, BezierPath):
         return None
@@ -705,10 +712,16 @@ def _record_edge_subcurve_split(draft, edge, parameter, children, tolerance, *, 
                                                  for i in ids) or edge in model.edges:
         raise GeometryError('edge subcurve split children are inconsistent')
     try:
-        parameter, tolerance = float(parameter), float(tolerance)
+        if arc_parent:
+            if Fraction(parameter) != Fraction(float(parameter)):
+                raise GeometryError('arc source publication requires an exact binary64 station parameter')
+            parameter = float(parameter)
+        else:
+            parameter = Fraction(parameter)
+        tolerance = float(tolerance)
     except (TypeError, ValueError, OverflowError) as exc:
         raise GeometryError('edge subcurve split parameter/tolerance is invalid') from exc
-    if not math.isfinite(parameter) or not 0 < parameter < 1 or not math.isfinite(tolerance) or tolerance <= 0:
+    if not 0 < parameter < 1 or not math.isfinite(tolerance) or tolerance <= 0:
         raise GeometryError('edge subcurve split parameter/tolerance is invalid')
     definitions = tuple(_edge_ancestry_definition(model, i) for i in ids)
     first, second = definitions

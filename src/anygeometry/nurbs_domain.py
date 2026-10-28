@@ -43,6 +43,17 @@ def pcurve_of(domain, curve) -> NurbsCurve:
     return curve.pcurve
 
 
+def chart_curve_of(domain, curve):
+    """Declared chart representation, keeping implicit sections distinct from polynomials."""
+    from .support_curves import PlaneNurbsCurve
+    from .section_chart import SectionChart
+    if isinstance(curve, PlaneNurbsCurve):
+        if curve.surface != domain.support:
+            raise GeometryError('section belongs to a different NURBS support')
+        return SectionChart(curve)
+    return pcurve_of(domain, curve)
+
+
 def _chart_tolerance(domain, tolerance: float) -> float:
     """World tolerance to chart tolerance, ``tol / (sqrt(2) sigma_max)`` (architecture 1.4, forward only)."""
     from .surface_capabilities import capabilities
@@ -64,17 +75,20 @@ def world_delta(domain, delta, v=0.0, u=0.0) -> np.ndarray:
 
 
 def uv(domain, curve, parameter) -> np.ndarray:
-    pcurve_of(domain, curve)
+    chart_curve_of(domain, curve)
     return np.asarray(curve.chart(float(parameter)), dtype=float)
 
 
 def tangent(domain, curve, parameter) -> np.ndarray:
-    pcurve_of(domain, curve)
+    chart_curve_of(domain, curve)
     return np.asarray(curve.chart_derivative(float(parameter)), dtype=float)
 
 
 def curvature(domain, curve, parameter, forward) -> float | None:
-    pcurve_of(domain, curve)
+    from .support_curves import PlaneNurbsCurve
+    chart_curve_of(domain, curve)
+    if isinstance(curve, PlaneNurbsCurve):
+        return None  # No chart second derivative contract yet.
     first = np.asarray(curve.chart_derivative(float(parameter)), dtype=float) * (1 if forward else -1)
     second = np.asarray(curve.chart_second_derivative(float(parameter)), dtype=float)
     length = float(np.linalg.norm(first))
@@ -110,12 +124,20 @@ def level_roots(pcurve: NurbsCurve, axis: int, value: float, chart_tolerance: fl
 
 
 def horizontal_roots(domain, curve, value, tolerance):
-    return level_roots(pcurve_of(domain, curve), 1, float(value), _chart_tolerance(domain, tolerance))
+    from .section_chart import SectionChart
+    chart = chart_curve_of(domain, curve)
+    if isinstance(chart, SectionChart):
+        return chart.level_roots(1, value)
+    return level_roots(chart, 1, float(value), _chart_tolerance(domain, tolerance))
 
 
 def _exact_sign(pcurve: NurbsCurve, axis: int, value: float, t: Fraction) -> int:
     difference = pcurve.exact_point(t)[axis] - Fraction(value)
     return 0 if difference == 0 else (1 if difference > 0 else -1)
+
+
+class ChartContainmentUndecided(GeometryError):
+    """This candidate witness is unresolved; not a resource/unsupported error."""
 
 
 def contains_loop(domain, loop, uv_point, tolerance, *, boundary=True) -> bool:
@@ -128,6 +150,23 @@ def contains_loop(domain, loop, uv_point, tolerance, *, boundary=True) -> bool:
     ``event_side`` (the exact sign of ``u - u0`` at the root). A stretch through
     the query (exactly, or within the tolerance in the world) is the boundary.
     """
+    from .support_curves import PlaneNurbsCurve
+    if any(isinstance(path.curve, PlaneNurbsCurve) for path in loop):
+        from .nurbs_section_faces import contains_chart_curves, chart_boundary_contact
+        curves = [path.curve for path in loop]
+        for curve in curves:
+            chart_curve_of(domain, curve)
+        point = tuple(map(Fraction, uv_point))
+        chart_tolerance = Fraction(_chart_tolerance(domain, tolerance))
+        contact = chart_boundary_contact(curves, point, chart_tolerance)
+        if contact is True:
+            return boundary
+        if contact is None:
+            raise ChartContainmentUndecided('section-trimmed chart boundary contact is not certified')
+        answer = contains_chart_curves(curves, point, chart_tolerance)
+        if answer is None:
+            raise ChartContainmentUndecided('section-trimmed chart containment is not certified at this query')
+        return answer
     # The query is used exactly (doubles or Fractions; review A3b round 2: a rounded
     # chart vertex can cross a boundary); floats only for the tolerance conversion.
     exact_u0, exact_v0 = Fraction(uv_point[0]), Fraction(uv_point[1])
@@ -204,7 +243,10 @@ def contains_loop(domain, loop, uv_point, tolerance, *, boundary=True) -> bool:
 
 def on_horizontal(domain, curve, uv_point, tolerance) -> bool:
     """Whether a pcurve lying on the level ``v = uv_point[1]`` passes through ``uv_point``."""
-    roots = level_roots(pcurve_of(domain, curve), 0, float(uv_point[0]), _chart_tolerance(domain, tolerance))
+    from .section_chart import SectionChart
+    chart = chart_curve_of(domain, curve)
+    roots = (chart.level_roots(0, uv_point[0]) if isinstance(chart, SectionChart) else
+             level_roots(chart, 0, float(uv_point[0]), _chart_tolerance(domain, tolerance)))
     return roots is None or bool(roots)
 
 
@@ -239,7 +281,7 @@ def _settle(evaluate, tolerance: float, name: str) -> tuple[float, float]:
 
 def area_loop(domain, loop, tolerance) -> float:
     """Signed chart area ``1/2 oint (u dv - v du)`` (positive counterclockwise)."""
-    pcurves = [pcurve_of(domain, path.curve) for path in loop]
+    pcurves = [chart_curve_of(domain, path.curve) for path in loop]
 
     def evaluate(count):
         value = magnitude = 0.0
@@ -277,6 +319,10 @@ def _knot_crossings(surface: NurbsSurface, pcurve: NurbsCurve) -> tuple[float, .
     continuity), so the outer Gauss rule is split at them; a run along a knot
     line contributes its ends.
     """
+    from .section_chart import SectionChart
+    if isinstance(pcurve, SectionChart):
+        # Every implicit arc already lies in one extracted Bezier sub-patch.
+        return pcurve.breakpoints()
     found: list[float] = []
     for axis, breaks in ((0, _u_breakpoints(surface)), (1, _v_breakpoints(surface))):
         for value in breaks:
@@ -316,7 +362,7 @@ def _inner_integral(surface: NurbsSurface, u: np.ndarray, v: np.ndarray, count: 
 def world_area_estimate(domain, loop, tolerance) -> tuple[float, float]:
     """Signed world area ``oint G(u, v) dv`` and the last change of the doubling (an estimate, not a bound)."""
     surface = domain.support
-    pcurves = [pcurve_of(domain, path.curve) for path in loop]
+    pcurves = [chart_curve_of(domain, path.curve) for path in loop]
     crossings = [_knot_crossings(surface, pcurve) for pcurve in pcurves]
 
     def evaluate(count):

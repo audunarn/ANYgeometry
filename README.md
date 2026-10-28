@@ -40,6 +40,30 @@ python -m pip install -e "C:\Github\ANYgeometry[planar]"
 
 ## Quick start
 
+Fit-point sketch splines use the optional `sketch` extra:
+
+```powershell
+python -m pip install "ANYgeometry[sketch]"
+```
+
+Control-point NURBS, lines, arcs, circles and sketch constraints require only
+NumPy. Sketch entities use stable point/entity/contour IDs. For example:
+
+```python
+from anygeometry import SketchDefinition, SketchEntity, sample_sketch_entity
+
+sketch = SketchDefinition(
+    points={"a": (0, 0), "b": (1, 1), "c": (2, 0)},
+    version=2,
+    entities=(SketchEntity("curve", "spline", ("a", "b", "c")),),
+)
+display_points = sample_sketch_entity(sketch, "curve")
+```
+
+Use `solve_sketch_edit` for constrained editing and
+`materialize_sketch_on_plane` to create exact topology. Sampled display points
+are not geometric validity evidence.
+
 Build topology directly:
 
 ```python

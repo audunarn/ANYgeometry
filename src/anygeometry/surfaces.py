@@ -719,9 +719,17 @@ def _angle_on_sweep(angle: float, start: float, sweep: float) -> float:
         return 0.0
     if sweep > 0.0:
         delta = float(raw % (2.0 * np.pi))
-        return 0.0 if abs(delta - 2.0 * np.pi) <= tolerance else delta
+        if abs(delta - 2.0 * np.pi) <= tolerance:
+            return 0.0
+        # For a partial chart, preserve a small residual before its start
+        # instead of wrapping it onto a distant, out-of-chart revolution.
+        before = delta - 2.0 * np.pi
+        return before if delta > sweep and -before < delta - sweep else delta
     delta = -float((-raw) % (2.0 * np.pi))
-    return 0.0 if abs(delta + 2.0 * np.pi) <= tolerance else delta
+    if abs(delta + 2.0 * np.pi) <= tolerance:
+        return 0.0
+    before = delta + 2.0 * np.pi
+    return before if delta < sweep and before < sweep - delta else delta
 
 
 def closest_uv(
@@ -757,11 +765,54 @@ def closest_uv(
 _CLOSEST_UV_STEP = 1.0e-6
 
 
+# Optional acceleration for the inspected NumPy implementation. The public
+# least-squares function remains authoritative on every unsupported path.
+_PUBLIC_LSTSQ = np.linalg.lstsq
+try:
+    from numpy.linalg import _linalg as _numpy_linalg
+    _LSTSQ_GUFUNC = _numpy_linalg._umath_linalg.lstsq
+    _LSTSQ_ERROR = _numpy_linalg._raise_linalgerror_lstsq
+except (ImportError, AttributeError):
+    _numpy_linalg = _LSTSQ_GUFUNC = _LSTSQ_ERROR = None
+
+
+def _closest_uv_deltas(du, dv, residual):
+    """Same float64 LAPACK calls as NumPy2.4.6 public lstsq, or fallback."""
+    if (np.__version__ != '2.4.6' or np.linalg.lstsq is not _PUBLIC_LSTSQ
+            or _numpy_linalg is None
+            or getattr(getattr(_numpy_linalg, "_umath_linalg", None), "lstsq", None) is not _LSTSQ_GUFUNC
+            or getattr(_numpy_linalg, '_raise_linalgerror_lstsq', None) is not _LSTSQ_ERROR
+            or getattr(_LSTSQ_GUFUNC, 'signature', None)
+                != '(m,n),(m,nrhs),()->(n,nrhs),(nrhs),(),(p)'
+            or np.geterr() != {'divide': 'warn', 'over': 'warn',
+                                  'under': 'ignore', 'invalid': 'warn'}
+            or np.geterrcall() is not None):
+        return None
+    if any(type(a) is not np.ndarray or a.dtype != np.dtype('float64')
+           or a.ndim != 2 or a.shape[1] != 3 or not np.all(np.isfinite(a))
+           for a in (du, dv, residual)) or du.shape != dv.shape or du.shape != residual.shape:
+        return None
+    jacobian = np.stack((du, dv), axis=-1)
+    try:
+        with np.errstate(call=_LSTSQ_ERROR,
+                         invalid='call', over='ignore', divide='ignore', under='ignore'):
+            result = _LSTSQ_GUFUNC(jacobian, residual[:, :, None],
+                                   np.finfo(float).eps*3, signature='ddd->ddid')[0]
+        if result.shape != (len(du), 2, 1) or not np.all(np.isfinite(result)):
+            return None
+        return result[:, :, 0]
+    except (np.linalg.LinAlgError, TypeError, ValueError, FloatingPointError):
+        # Public calls reproduce their ordinary result/error and row ordering.
+        return None
+
+
 def _closest_uv_many(
     surface: RuledSurface | CoonsSurface,
     points: np.ndarray,
     *,
     iterations: int = 30,
+    _evaluate=None,
+    _batch_samples: bool = False,
 ) -> np.ndarray:
     """``closest_uv`` for many points on an explicit ruled or Coons surface.
 
@@ -772,6 +823,7 @@ def _closest_uv_many(
     """
 
     targets = np.asarray(points, dtype=float).reshape((-1, 3))
+    evaluate = (lambda parameters: _evaluate_surface_many(surface, parameters)) if _evaluate is None else _evaluate
     uv = np.full((len(targets), 2), 0.5, dtype=float)
     active = np.arange(len(targets))
     step = _CLOSEST_UV_STEP
@@ -779,24 +831,40 @@ def _closest_uv_many(
         if not len(active):
             break
         params = uv[active]
-        current = _evaluate_surface_many(surface, params)
-        derivatives = []
+        probes = []
+        spans = []
         for axis in range(2):
             low = params.copy()
             high = params.copy()
             low[:, axis] = np.maximum(0.0, params[:, axis] - step)
             high[:, axis] = np.minimum(1.0, params[:, axis] + step)
             span = high[:, axis] - low[:, axis]
-            derivatives.append(
-                (_evaluate_surface_many(surface, high) - _evaluate_surface_many(surface, low))
-                / span[:, None]
-            )
+            probes.extend((high, low))
+            spans.append(span)
+        if _batch_samples:
+            # These five point evaluations are independent. Coalescing only
+            # their rows preserves every per-point operation and Newton step,
+            # while the owner callback can share identical chain parameters.
+            rows = len(params)
+            samples = evaluate(np.concatenate((params, *probes), axis=0))
+            current = samples[:rows]
+            derivatives = [(samples[(1+2*axis)*rows:(2+2*axis)*rows]
+                            - samples[(2+2*axis)*rows:(3+2*axis)*rows]) / spans[axis][:, None]
+                           for axis in range(2)]
+        else:
+            current = evaluate(params)
+            derivatives = [(evaluate(probes[2*axis])-evaluate(probes[2*axis+1]))
+                           / spans[axis][:, None] for axis in range(2)]
         du, dv = derivatives
         residual = targets[active] - current
+        deltas = _closest_uv_deltas(du, dv, residual) if _batch_samples else None
         still: list[int] = []
         for row, index in enumerate(active.tolist()):
-            jacobian = np.column_stack((du[row], dv[row]))
-            delta, *_ = np.linalg.lstsq(jacobian, residual[row], rcond=None)
+            if deltas is None:
+                jacobian = np.column_stack((du[row], dv[row]))
+                delta, *_ = np.linalg.lstsq(jacobian, residual[row], rcond=None)
+            else:
+                delta = deltas[row]
             uv[index, 0] = _clamp01(float(uv[index, 0]) + float(delta[0]))
             uv[index, 1] = _clamp01(float(uv[index, 1]) + float(delta[1]))
             if float(np.linalg.norm(delta)) > 1.0e-12:

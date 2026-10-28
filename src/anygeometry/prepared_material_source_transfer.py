@@ -1,0 +1,581 @@
+"""Authenticated live source/clone lineage and curvilinear cell transport.
+
+Ordinary cloning, serialization, support matching and historical authored
+snapshots do not issue lineage. Only the owner clone boundary and qualified
+whole-material publications below can compose it.
+"""
+from dataclasses import dataclass, fields
+from fractions import Fraction as Q
+from weakref import WeakKeyDictionary, ref
+
+from .errors import GeometryError
+from .definition_binding import definition_checksum
+from .translational_imprint import _checksum
+from .native_support_snapshots import capture_native_supports
+from .nurbs import NurbsSurface
+from .surfaces import Plane
+from .prepared_material_curvilinear import (_literal, _detached, CurvilinearMaterialCell,
+    _source_transfer_cell_inputs, validate_prepared_material_curvilinear_cells_binding)
+
+_LINKS = WeakKeyDictionary()
+_AUXILIARY = WeakKeyDictionary()      # model -> {edge id: complete edge definition checksum}, owner-issued
+_TRANSFERS = WeakKeyDictionary()
+_EDGE_PARTITIONS = WeakKeyDictionary()
+
+
+def _state(model):
+    if model._transaction_journal is not None:
+        raise GeometryError('source transport requires committed models')
+    try:
+        return model.revision, _checksum(model), capture_native_supports(model)
+    except (AttributeError, TypeError, ValueError, KeyError) as error:
+        raise GeometryError('source transport complete definitions are malformed or changed') from error
+
+
+def _effective(model, face_id):
+    from .nurbs_sweep_chart import has_sweep_chart, chart_model, _tensor
+    from ._translational_pairs import _sweep
+    face = model.faces[face_id]
+    if has_sweep_chart(face):
+        return chart_model(model, face_id).support
+    if isinstance(face.surface, (Plane, NurbsSurface)) and (face.parameterization is None or face.parameterization is face.surface):
+        return face.surface
+    found = _sweep(model, face_id)
+    if found is not None:
+        return _tensor(found[0], found[1])
+    raise GeometryError('source chart transport support is not qualified')
+
+
+def _chart_map(source, face, support):
+    if definition_checksum(_effective(source, face)) != definition_checksum(support):
+        raise GeometryError('qualified descendant changed its original physical support')
+    if isinstance(support, Plane):
+        return ((Q(1), Q(0), Q(0)), (Q(0), Q(1), Q(0)))
+    from .nurbs_sweep_chart import authored_query_uv
+    origin, u, v = authored_query_uv(source, face, support, ((0., 0.), (1., 0.), (0., 1.)))
+    return tuple((Q(u[i])-Q(origin[i]), Q(v[i])-Q(origin[i]), Q(origin[i])) for i in (0, 1))
+
+
+def _map_uv(matrix, uv):
+    return tuple(float(a*Q(u)+b*Q(v)+c) for a, b, c in matrix for u, v in (uv,))
+
+
+def _edge_definition(model, identifier):
+    edge = model.edges[identifier]
+    points = tuple(tuple(float(x) for x in model.vertex_position(vertex)) for vertex in (edge.start, edge.end))
+    return definition_checksum((edge, points))
+
+
+def _begin_edge_partition(model):
+    """Private transaction-local producer ledger, never reconstructed by fitting."""
+    initial = tuple((edge, _edge_definition(model, edge)) for edge in sorted(model.edges))
+    return {'initial': initial, 'generated': set(),
+            'current': {edge: (edge, Q(0), Q(1), signature) for edge, signature in initial}}
+
+
+def _mark_generated_edges(draft, edge_ids):
+    """Edges CREATED by this staging (section traces, auxiliary partitions) have no source ancestry; they are
+    tracked separately so their later splits (by a second cut of the same staging) never touch the ledger of
+    initial source edges."""
+    if draft is not None:
+        draft['generated'].update(edge_ids)
+
+
+def _before_edge_partition_split(draft, model, identifier):
+    if draft is None:
+        return None
+    if identifier in draft.get('generated', ()):
+        return ('generated',)
+    row = draft['current'].get(identifier)
+    if row is None or row[3] != _edge_definition(model, identifier):
+        raise GeometryError('producer edge partition source changed before split')
+    edge = model.edges[identifier]
+    points = tuple(tuple(Q(float(x)) for x in model.vertex_position(vertex)) for vertex in (edge.start, edge.end))
+    return edge, points
+
+
+def _record_edge_partition_split(draft, model, identifier, parameter, children, before, exact=None):
+    """``exact``: the EXACT rational split parameter of a straight edge whose split vertex is exactly collinear
+    (route C); the recorded child spans and the vertex check then use it instead of the rounded float."""
+    if draft is None:
+        return
+    if isinstance(before, tuple) and before == ('generated',):
+        draft['generated'].discard(identifier)
+        draft['generated'].update(children)
+        return
+    from .curves import Straight, LineRange
+    from .nurbs import NurbsCurve, CurveOnSurface
+    from .support_curves import PlaneNurbsCurve
+    old, points = before
+    root, first, last, signature = draft['current'].pop(identifier)
+    left, right = (model.edges[child] for child in children)
+    if (left.start != old.start or right.end != old.end or left.end != right.start
+            or len(set(children)) != 2):
+        raise GeometryError('producer edge partition endpoint identity changed')
+    if isinstance(old.curve, LineRange) or (isinstance(old.curve, Straight)
+            and all(isinstance(child.curve, LineRange) for child in (left, right))):
+        carrier = old.curve if isinstance(old.curve, LineRange) else LineRange(*points)
+        middle = Q(exact) if exact is not None else Q(parameter)
+        expected = (carrier.subcurve(0, middle), carrier.subcurve(middle, 1))
+        if any(child.curve != curve for child, curve in zip((left, right), expected)):
+            raise GeometryError('retained line children do not partition their exact carrier')
+        target = tuple(Q(float(x)) for x in model.vertex_position(left.end))
+        if sum(abs(x-y) for x, y in zip(target, carrier.exact_point(middle))) > Q(model.tolerance.effective_length(1.)):
+            raise GeometryError('retained carrier station exceeds joint correspondence tolerance')
+        local = ((Q(0), middle), (middle, Q(1)))
+    elif isinstance(old.curve, (NurbsCurve, CurveOnSurface, PlaneNurbsCurve)):
+        expected = (old.curve.subcurve(0., float(parameter)), old.curve.subcurve(float(parameter), 1.))
+        if any(definition_checksum(child.curve) != definition_checksum(curve)
+               for child, curve in zip((left, right), expected)):
+            raise GeometryError('producer edge partition is not the actual source restriction')
+        def domain(curve):
+            return tuple(map(Q, curve.pcurve.domain if isinstance(curve, CurveOnSurface) else curve.domain))
+        a, b = domain(old.curve)
+        domains = tuple(domain(child.curve) for child in (left, right))
+        if a == b or domains[0][0] != a or domains[0][1] != domains[1][0] or domains[1][1] != b:
+            raise GeometryError('producer restriction domains do not exactly partition their source')
+        local = tuple(tuple((value-a)/(b-a) for value in interval) for interval in domains)
+    elif isinstance(old.curve, Straight) and all(isinstance(child.curve, Straight) for child in (left, right)):
+        middle = Q(exact) if exact is not None else Q(float(parameter))
+        local = ((Q(0), middle), (middle, Q(1)))
+        target = tuple(Q(float(x)) for x in model.vertex_position(left.end))
+        bound = sum(abs(x-((1-middle)*a+middle*b)) for x, a, b in zip(target, *points))
+        if bound > Q(model.tolerance.effective_length(1.)):
+            raise GeometryError('source straight split exceeds existing joint correspondence tolerance')
+    else:
+        raise GeometryError('producer edge partition curve family is not qualified')
+    for child, (lo, hi) in zip(children, local):
+        if not 0 <= lo < hi <= 1:
+            raise GeometryError('producer edge partition parameter order is invalid')
+        draft['current'][child] = (root, first+(last-first)*lo, first+(last-first)*hi,
+                                   _edge_definition(model, child))
+
+
+def _finish_edge_partition(draft, model):
+    entries = tuple((edge, *row) for edge, row in sorted(draft['current'].items()) if edge in model.edges)
+    result = (draft['initial'], entries)
+    _validate_edge_partition(result, None, model, issuing=True)
+    _EDGE_PARTITIONS[model] = result
+    return result
+
+
+def _validate_edge_partition(partition, source, prepared, *, issuing=False):
+    if not issuing and _EDGE_PARTITIONS.get(prepared) is not partition:
+        raise GeometryError('producer edge partition was copied or not owner-issued')
+    if type(partition) is not tuple or len(partition) != 2:
+        raise GeometryError('producer edge partition is malformed')
+    initial, entries = partition
+    if source is not None and initial != tuple((edge, _edge_definition(source, edge)) for edge in sorted(source.edges)):
+        raise GeometryError('producer edge partition belongs to changed source edges')
+    covers = {edge: [] for edge, signature in initial}
+    seen = set()
+    for child, parent, a, b, signature in entries:
+        if (child in seen or parent not in covers or type(a) is not Q or type(b) is not Q
+                or not 0 <= a < b <= 1 or child not in prepared.edges
+                or signature != _edge_definition(prepared, child)):
+            raise GeometryError('producer edge partition definitions or intervals changed')
+        seen.add(child)
+        covers[parent].append((a, b))
+    for intervals in covers.values():
+        reach = Q(0)
+        for a, b in sorted(intervals):
+            if a != reach:
+                raise GeometryError('producer edge partition omits or overlaps source material')
+            reach = b
+        if reach != 1:
+            raise GeometryError('producer edge partition omits source material')
+    return entries
+
+def _edge_transport_error(source, prepared, source_edge, prepared_edge, first, last):
+    """Full-span error of producer-partitioned straight world targets.
+
+    Parameter identity is issued by the split producer. This bound qualifies
+    its rounded world representation; it never discovers edge ownership.
+    Exact native restrictions need no world-curve refit or sampled comparison.
+    """
+    from .curves import Straight, LineRange
+    original, child = source.edges[source_edge], prepared.edges[prepared_edge]
+    if isinstance(child.curve, LineRange) and isinstance(original.curve, (Straight, LineRange)):
+        carrier = original.curve if isinstance(original.curve, LineRange) else LineRange(
+            source.vertex_position(original.start), source.vertex_position(original.end))
+        if child.curve != carrier.subcurve(first, last):
+            raise GeometryError('retained line descendant changed its raw source carrier')
+        error = max(sum(abs(Q(float(x))-y) for x, y in zip(prepared.vertex_position(v), child.curve.exact_point(t)))
+                    for v, t in ((child.start, 0), (child.end, 1)))
+        if error > min(Q(source.tolerance.effective_length(1.)), Q(prepared.tolerance.effective_length(1.))):
+            raise GeometryError('retained source carrier transport exceeds existing joint tolerance')
+        return error
+    if not isinstance(original.curve, Straight):
+        return Q(0)
+    if not isinstance(child.curve, Straight):
+        raise GeometryError('straight source descendant changed curve family')
+    endpoints = tuple(tuple(Q(float(x)) for x in source.vertex_position(vertex))
+                      for vertex in (original.start, original.end))
+    error = Q(0)
+    for vertex, parameter in zip((child.start, child.end), (first, last)):
+        target = tuple(Q(float(x)) for x in prepared.vertex_position(vertex))
+        error = max(error, sum(abs(x-((1-parameter)*a+parameter*b))
+                               for x, a, b in zip(target, *endpoints)))
+    if error > min(Q(source.tolerance.effective_length(1.)), Q(prepared.tolerance.effective_length(1.))):
+        raise GeometryError('composed source edge transport exceeds existing joint tolerance')
+    return error
+
+def _register_auxiliary(model, edge_ids):
+    """Called ONLY by the bounded-section owner at publication: the straight auxiliary partition edges it
+    created, bound to their complete edge definitions. A persisted tag alone never grants this authority;
+    loaded or copied models start with none and must be regenerated by the owner. Returns the prior entry
+    (for rollback)."""
+    previous = _AUXILIARY.get(model)
+    _AUXILIARY[model] = {edge: _edge_definition(model, edge) for edge in edge_ids if edge in model.edges}
+    return previous
+
+
+def _restore_auxiliary(model, previous):
+    if previous is None:
+        _AUXILIARY.pop(model, None)
+    else:
+        _AUXILIARY[model] = previous
+
+
+def _qualified_auxiliary(model, edge_id):
+    entry = _AUXILIARY.get(model)
+    return bool(entry) and edge_id in entry and entry[edge_id] == _edge_definition(model, edge_id)
+
+
+def _register_source_clone(source, prepared):
+    """Called ONLY by clone_prepared_geometry after its genuine clone."""
+    from .serialization import to_dict
+    before, copied = to_dict(source), to_dict(prepared)
+    if ({k: v for k, v in before.items() if k not in ('model_id', 'checksum')}
+            != {k: v for k, v in copied.items() if k not in ('model_id', 'checksum')}):
+        raise GeometryError('immediate source clone changed complete definitions')
+    source_state, prepared_state = _state(source), _state(prepared)
+    if source_state[2] != prepared_state[2]:
+        raise GeometryError('immediate source clone changed native definitions')
+    routes = [(ref(source), source_state, prepared_state,
+               tuple((face, (face,)) for face in sorted(source.faces)),
+               tuple((edge, edge, Q(0), Q(1)) for edge in sorted(source.edges)))]
+    # Carry authenticated ancestor routes across this exact clone, rather
+    # than confusing authored history with the immediate live source.
+    for owner, original, current, mapping, edge_map in _LINKS.get(source, ()):
+        ancestor = owner()
+        if ancestor is not None and current == source_state and _state(ancestor) == original:
+            routes.append((owner, original, prepared_state, mapping, edge_map))
+    if len(routes) > 64:
+        raise GeometryError('source clone lineage depth limit exceeded')
+    if _state(source) != source_state or _state(prepared) != prepared_state:
+        raise GeometryError('source clone changed while issuing lineage')
+    _LINKS[prepared] = tuple(routes)
+    # genuine owner clone boundary: qualified auxiliary edges keep their authority only when the clone
+    # reproduces each complete edge definition
+    carried = {edge: signature for edge, signature in _AUXILIARY.get(source, {}).items()
+               if edge in prepared.edges and _edge_definition(prepared, edge) == signature}
+    if carried:
+        _AUXILIARY[prepared] = carried
+
+
+def _register_source_closure(source, work, faces, edges, source_state, work_state):
+    """Called ONLY by ``closure_source.qualify_model_closure_source`` after its independent reconstruction.
+
+    ``faces``: ``(source_face, work_face)`` pairs; ``edges``: ``(work_edge, source_edge)`` pairs (whole
+    edges, parameters 0..1). Nothing is published unless both live models still equal the qualified
+    states; the prior lineage is replaced only at the final assignment, and a prior route from the same
+    source is replaced rather than accumulated.
+    """
+    if _state(source) != source_state or _state(work) != work_state:
+        raise GeometryError('closure source definitions changed before lineage registration')
+    route = (ref(source), source_state, work_state,
+             tuple((parent, (child,)) for parent, child in sorted(faces)),
+             tuple((child, parent, Q(0), Q(1)) for child, parent in sorted(edges)))
+    routes = [route]
+    for owner, original, current, mapping, edge_map in _LINKS.get(work, ()):
+        ancestor = owner()
+        if (ancestor is not None and ancestor is not source and current == work_state
+                and _state(ancestor) == original):
+            routes.append((owner, original, current, mapping, edge_map))
+    if len(routes) > 64:
+        raise GeometryError('source clone lineage depth limit exceeded')
+    if _state(source) != source_state or _state(work) != work_state:
+        raise GeometryError('closure source definitions changed while issuing lineage')
+    complete = tuple(routes)
+    if _LINKS.get(work) == complete:
+        return                  # exact same current routes: keep the existing entry (and issued receipts) intact
+    _LINKS[work] = complete
+
+
+def _prepare_source_lineage(model, candidate, replacements, edge_partition=None):
+    """Stage only after a qualified owner's COMPLETE material partition."""
+    old = _LINKS.get(model)
+    if old is None:
+        return None
+    current, future = _state(model), _state(candidate)
+    changes = dict(replacements)
+    if (any(parent not in model.faces or not children or any(child not in candidate.faces for child in children)
+            for parent, children in changes.items())
+            or {child for parent in model.faces for child in changes.get(parent, (parent,))} != set(candidate.faces)):
+        raise GeometryError('source lineage publication omits or invents material descendants')
+    routes = []
+    parts = _validate_edge_partition(edge_partition, model, candidate) if edge_partition is not None else None
+    from .serialization import to_dict
+    old_edges = {row["id"]: row for row in to_dict(model)["edges"]}
+    new_edges = {row["id"]: row for row in to_dict(candidate)["edges"]}
+    for owner, original, bound, mapping, edge_map in old:
+        source = owner()
+        if source is None or bound != current or _state(source) != original:
+            continue  # stale ancestry never becomes new authority
+        descendants = tuple((parent, tuple(child for face in faces for child in changes.get(face, (face,))))
+                            for parent, faces in mapping)
+        for parent, children in descendants:
+            for child in children:
+                _chart_map(source, parent, _effective(candidate, child))
+        if parts is None:
+            retained = tuple((child, parent, a, b) for child, parent, a, b in edge_map
+                             if child in new_edges and new_edges[child] == old_edges.get(child))
+        else:
+            previous = {edge: (parent, a, b) for edge, parent, a, b in edge_map}
+            retained = tuple((child, previous[edge][0],
+                              previous[edge][1]+(previous[edge][2]-previous[edge][1])*a,
+                              previous[edge][1]+(previous[edge][2]-previous[edge][1])*b)
+                             for child, edge, a, b, signature in parts if edge in previous)
+        routes.append((owner, original, future, descendants, retained))
+    return old, tuple(routes)
+
+
+def _publish_source_lineage(model, staged):
+    if staged is None:
+        return
+    old, routes = staged
+    if _LINKS.get(model) is not old:
+        raise GeometryError('source lineage changed during publication')
+    now = _state(model)
+    if any(current != now or owner() is None or _state(owner()) != original
+           for owner, original, current, mapping, edge_map in routes):
+        raise GeometryError('source lineage source or published definitions changed')
+    _LINKS[model] = routes
+
+
+def _restore_source_lineage(model, staged):
+    if staged is not None:
+        _LINKS[model] = staged[0]
+
+
+@dataclass(frozen=True, eq=False)
+class PreparedMaterialSourceTransfer:
+    source_model_id: object
+    prepared_model_id: object
+    source_revision: int
+    prepared_revision: int
+    source_checksum: str
+    prepared_checksum: str
+    source_to_prepared_faces: tuple
+    # Transferred carrier rows retain literal XYZ/connectivity; source UV is
+    # an evaluation target. Exact chart_correspondence, live partition lineage
+    # and the registered prepared proof supply authority, not this row alone.
+    source_cells: tuple
+    prepared_cells: tuple
+    reference_uv_by_cell: tuple
+    prepared_reference_uv_by_cell: tuple
+    chart_correspondence: tuple
+    surface_errors: tuple
+    source_map_bounds: tuple
+    edge_parameter_maps: tuple
+    source_trace_ownership: tuple
+    boundary_station_correspondence: tuple
+
+
+def _signature(receipt):
+    return tuple((f.name, _literal(getattr(receipt, f.name))) for f in fields(receipt))
+
+
+def _frontier(source, prepared, receipts, callback):
+    states = (_state(source), _state(prepared))
+    literal = _literal(receipts)
+    links = _LINKS.get(prepared)
+    operands = tuple(_source_transfer_cell_inputs(prepared, receipt) for receipt in receipts)
+    pins = tuple((definition_checksum(regions), _literal(chords)) for regions, chords in operands)
+    def check(phase):
+        cancelled = callback(phase) if callback is not None else False
+        if (_state(source), _state(prepared)) != states or _literal(receipts) != literal or _LINKS.get(prepared) is not links or tuple(
+                (definition_checksum(regions), _literal(chords)) for regions, chords in operands) != pins:
+            raise GeometryError('source transfer operands changed during callback')
+        if cancelled:
+            raise GeometryError('source transfer cancelled')
+    return check, states
+
+
+def query_prepared_material_source_transfer(source, prepared, cell_receipts, *,
+        expected_source_revision=None, expected_prepared_revision=None, cancellation_check=None):
+    receipts = tuple(cell_receipts)
+    check, (source_state, prepared_state) = _frontier(source, prepared, receipts, cancellation_check)
+    if ((expected_source_revision is not None and expected_source_revision != source_state[0])
+            or (expected_prepared_revision is not None and expected_prepared_revision != prepared_state[0])):
+        raise GeometryError('source transfer expected revision is stale')
+    check('source transfer qualification')
+    routes = [row for row in _LINKS.get(prepared, ()) if row[0]() is source]
+    if len(routes) != 1 or routes[0][1:3] != (source_state, prepared_state):
+        raise GeometryError('no current authenticated immediate source/clone lineage')
+    mapping = routes[0][3]
+    edge_map = {edge: (parent, a, b) for edge, parent, a, b in routes[0][4]}
+    edge_parameters, trace_ownership, stations = {}, {}, {}
+    parents = {child: parent for parent, children in mapping for child in children}
+    if len(parents) != sum(len(children) for parent, children in mapping):
+        raise GeometryError('source lineage contains overlapping ownership')
+    # Authenticate complete selected source descendants before inspecting edge
+    # ancestry, so a missing child cannot be hidden by an unrelated edge refusal.
+    selected_faces = set()
+    for owner_receipt in receipts:
+        owner_faces = {cell.face.id for cell in owner_receipt.cells}
+        if selected_faces & owner_faces:
+            raise GeometryError('source transfer has duplicate prepared material coverage')
+        if not owner_faces <= set(parents):
+            raise GeometryError('source transfer cell has no owner lineage')
+        selected_faces.update(owner_faces)
+    if not selected_faces or any(selected_faces.intersection(children) and not set(children) <= selected_faces
+                                 for parent, children in mapping):
+        raise GeometryError('source transfer omits required material descendants')
+    cells, source_cells, references, prepared_refs, maps, errors, bounds = [], [], [], [], [], [], []
+    covered, station_nodes, xyz_nodes, operands = set(), {}, {}, []
+    for receipt in receipts:
+        check('source transfer cell binding')
+        regions, chords = _source_transfer_cell_inputs(prepared, receipt)
+        operands.append((receipt, regions, chords))
+        faces = {cell.face.id for cell in receipt.cells}
+        if covered & faces:
+            raise GeometryError('source transfer has duplicate prepared material coverage')
+        covered.update(faces)
+        centres = {(face.id, ids): uv for face, ids, uv in receipt.reference_uv_by_cell}
+        cell_bounds = {(face.id, ids): bound for face, ids, bound in receipt.source_map_bounds}
+        for cell in receipt.cells:
+            if cell.face.id not in parents:
+                raise GeometryError('source transfer cell has no owner lineage')
+            parent = parents[cell.face.id]
+            edge_transport = Q(0)
+            transform = _chart_map(source, parent, _effective(prepared, cell.face.id))
+            source_face = source.handle('face', parent)
+            for node, xyz in zip(cell.node_ids, cell.xyz):
+                if node in xyz_nodes and xyz_nodes[node] != xyz:
+                    raise GeometryError('source transfer global node has conflicting literal XYZ')
+                xyz_nodes[node] = xyz
+            for side, index, forward in cell.boundary_intervals:
+                chord = chords.intervals[index]
+                edge = prepared.edges[chord.edge.id]
+                if edge.id in edge_map:
+                    ancestor, first_parameter, last_parameter = edge_map[edge.id]
+                    target = source.handle('edge', ancestor)
+                    edge_parameters[edge.id] = (chord.edge, target, first_parameter, last_parameter)
+                    edge_transport = max(edge_transport, _edge_transport_error(source, prepared, ancestor,
+                        edge.id, first_parameter, last_parameter))
+                    owners = ()
+                else:
+                    from .support_curves import PlaneNurbsCurve
+                    from .curves import Straight
+                    # a virtual edge: a section trace / same-support auxiliary partition (PlaneNurbsCurve), or
+                    # a STRAIGHT auxiliary partition only when the owner registered it with its complete
+                    # definition (a persisted tag is never authority)
+                    if edge.id in source.edges or not (isinstance(edge.curve, PlaneNurbsCurve) or (
+                            isinstance(edge.curve, Straight) and _qualified_auxiliary(prepared, edge.id))):
+                        raise GeometryError('source edge split station transport is not qualified')
+                    target = None
+                    owners = tuple(source.handle('face', value) for value in sorted({
+                        parents[item.face.id] for item in receipt.cells
+                        if any(chords.intervals[i].edge.id == edge.id for _, i, _ in item.boundary_intervals)}))
+                    previous = trace_ownership.get(edge.id, (chord.edge, ()))
+                    trace_ownership[edge.id] = (chord.edge, tuple(sorted(set(previous[1]+owners), key=lambda h: h.id)))
+                parameters = chord.parameter_range if forward else chord.parameter_range[::-1]
+                for offset, t in enumerate(parameters):
+                    key = ('vertex', edge.start if t == 0 else edge.end) if t in (0, 1) else ('edge', edge.id, t)
+                    node = cell.node_ids[(side+offset)%len(cell.node_ids)]
+                    if key in station_nodes and station_nodes[key] != node:
+                        raise GeometryError('source transfer shared station has different global node IDs')
+                    station_nodes[key] = node
+                    station = (chord.edge, t, target, first_parameter+(last_parameter-first_parameter)*t if target is not None else None, owners)
+                    prior = stations.get((edge.id, t))
+                    if prior is not None:
+                        if prior[:4] != station[:4]:
+                            raise GeometryError('source transfer station ancestry conflicts')
+                        station = (*station[:4], tuple(sorted(set(prior[4]+owners), key=lambda h: h.id)))
+                    stations[(edge.id, t)] = station
+            centre = centres[(cell.face.id, cell.node_ids)]
+            cells.append(cell)
+            source_cells.append(CurvilinearMaterialCell(source_face, cell.node_ids,
+                tuple(_map_uv(transform, uv) for uv in cell.uv), cell.xyz, ()))
+            references.append((source_face, cell.node_ids, _map_uv(transform, centre)))
+            prepared_refs.append((cell.face, cell.node_ids, centre))
+            maps.append((source_face, cell.face, transform))
+            errors.append((source_face, cell.node_ids, receipt.surface_error))
+            from .nurbs import _float_up
+            combined = Q(cell_bounds[(cell.face.id, cell.node_ids)])+edge_transport
+            if combined > Q(receipt.surface_error):
+                raise GeometryError('source edge transport exceeds supplied surface approximation error')
+            bounds.append((source_face, cell.node_ids, _float_up(combined)))
+    if not covered or any(covered.intersection(children) and not set(children) <= covered for parent, children in mapping):
+        raise GeometryError('source transfer omits required material descendants')
+    selected = tuple((source.handle('face', parent), tuple(prepared.handle('face', child) for child in children))
+                     for parent, children in mapping if covered.intersection(children))
+    check('source transfer qualification complete')
+    # All user callbacks have completed. Revalidate owner operands before issue.
+    for receipt, regions, chords in operands:
+        validate_prepared_material_curvilinear_cells_binding(prepared, regions, receipt)
+    if (_state(source), _state(prepared)) != (source_state, prepared_state):
+        raise GeometryError('source transfer definitions changed before issue')
+    result = PreparedMaterialSourceTransfer(source.model_id, prepared.model_id, source_state[0], prepared_state[0],
+        source_state[1], prepared_state[1], selected, _detached(tuple(source_cells)), _detached(tuple(cells)),
+        tuple(references), tuple(prepared_refs), tuple(maps), tuple(errors), tuple(bounds),
+        tuple(edge_parameters[key] for key in sorted(edge_parameters)),
+        tuple(trace_ownership[key] for key in sorted(trace_ownership)),
+        tuple(stations[key] for key in sorted(stations)))
+    _TRANSFERS[result] = (ref(source), ref(prepared), receipts, _literal(receipts), tuple(operands), _signature(result), _LINKS.get(prepared), (source_state, prepared_state))
+    return result
+
+
+def validate_prepared_material_source_transfer_binding(source, prepared, receipt, *, cell_receipts, cancellation_check=None):
+    if type(receipt) is not PreparedMaterialSourceTransfer or receipt not in _TRANSFERS:
+        raise GeometryError('source transfer receipt was not issued by this owner')
+    first, second, issued, literals, operands, signature, links, issued_states = _TRANSFERS[receipt]
+    supplied = tuple(cell_receipts)
+    if first() is not source or second() is not prepared or supplied != issued or any(a is not b for a, b in zip(supplied, issued)):
+        raise GeometryError('source transfer belongs to other model or receipt objects')
+    check, states = _frontier(source, prepared, supplied, cancellation_check)
+    def bound():
+        if (states != issued_states or _LINKS.get(prepared) is not links or _signature(receipt) != signature or _literal(supplied) != literals
+                or states[0][:2] != (receipt.source_revision, receipt.source_checksum)
+                or states[1][:2] != (receipt.prepared_revision, receipt.prepared_checksum)):
+            raise GeometryError('source transfer receipt is stale or changed')
+    bound()
+    check('source transfer binding')
+    bound()
+    for cell, regions, chords in operands:
+        validate_prepared_material_curvilinear_cells_binding(prepared, regions, cell)
+    check('source transfer binding complete')
+    bound()
+
+
+def _source_station_transport_inputs(source, prepared, transfer):
+    """Live owner operands for the nominal-alias certifier; never reconstructed tokens."""
+    if type(transfer) is not PreparedMaterialSourceTransfer or transfer not in _TRANSFERS:
+        raise GeometryError('source station transport requires a live owner source transfer')
+    row = _TRANSFERS[transfer]
+    receipts = row[2]
+    validate_prepared_material_source_transfer_binding(source, prepared, transfer, cell_receipts=receipts)
+    return receipts, row[4]
+
+
+def _prepared_partition_context(model):
+    """Fresh live same-parent partition context; no topology/history inference."""
+    current = _state(model)
+    links = _LINKS.get(model)
+    routes = []
+    for owner,original,bound,mapping,edge_map in links or ():
+        source = owner()
+        if source is None:
+            continue
+        if bound != current or _state(source) != original:
+            raise GeometryError('prepared partition source lineage is stale or changed')
+        children = [child for _,group in mapping for child in group]
+        if (len(children) != len(set(children)) or set(children) != set(model.faces)
+                or len({parent for parent,_ in mapping}) != len(mapping)
+                or any(parent not in source.faces or not group or any(child not in model.faces for child in group)
+                       for parent,group in mapping)):
+            raise GeometryError('prepared partition complete lineage is malformed')
+        routes.append((source,original,mapping))
+    return current,links,tuple(routes)

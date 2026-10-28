@@ -3,6 +3,7 @@ from dataclasses import fields, is_dataclass
 from enum import Enum
 from collections.abc import Mapping
 from uuid import UUID
+from fractions import Fraction
 import hashlib
 import json
 import numpy as np
@@ -28,6 +29,8 @@ def _definition_value(value, memo):
     # Subclasses (notably str-backed Enum) retain the original dispatch below.
     if value is None or type(value) in (str, int, float, bool):
         return value
+    if type(value) is Fraction:
+        return {'fraction': [value.numerator, value.denominator]}
     cached = memo.get(id(value)) if memo is not None else None
     if cached is not None:
         return cached[1]

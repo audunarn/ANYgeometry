@@ -18,12 +18,14 @@ from .material_arrangement import MaterialDomain, arrange_material
 from .member_arrangements import _support_roots
 from .serialization import to_dict, _serialized_model_state, _qualified_model_state
 from .surfaces import Plane, Cylinder
+from .support_curves import PlaneNurbsCurve
 from .definition_binding import definition_checksum
 
 # Reuse completed qualification only while both immutable evidence and the
 # complete live document retain their content bindings. The cache is external
-# to model state. Retain a bounded set of recent collections so alternating
-# component/face queries reuse qualification. This bounds cache memory only;
+# to model state. A current-source epoch retains one signature per live
+# singleton face plus eight recent other collections. This bounds memory by
+# the current live model scope rather than evicting alternating face proofs;
 # evicted collections are fully validated, never refused. Changed evidence and
 # direct document edits still require full validation.
 _validated_collections = WeakKeyDictionary()
@@ -123,12 +125,42 @@ def _qualified_chart(model, face_id, cancellation_check):
                 lambda: _check(cancellation_check, "trim support predicate"))
             if roots is not None:
                 raise GeometryError(f"face {face_id} trim is not contained in its analytic support")
-    arrangement = arrange_material(domain, (), tolerance=tolerance,
-        area_tolerance=model.tolerance.effective_area(length),
-        cancellation_check=lambda: (_check(cancellation_check, "trim arrangement") or False))
+    from .nurbs import NurbsSurface
+    if isinstance(domain.support, NurbsSurface):
+        # NURBS material is established by the owner's chart predicates, not
+        # by the generic proximity-based analytic arrangement. This is trim
+        # authority only; metric/whole-cell source maps remain separate.
+        problems = model._validate_face_geometry(face_id)
+        if problems:
+            raise GeometryError('; '.join(problems))
+        area_tolerance = model.tolerance.effective_area(length)
+        material_area = abs(domain.world_area_loop(domain.boundaries[0], area_tolerance)) - sum(
+            abs(domain.world_area_loop(loop, area_tolerance)) for loop in domain.boundaries[1:])
+        if not np.isfinite(material_area) or material_area <= 0:
+            raise GeometryError('NURBS material area estimate is not positive and finite')
+    elif isinstance(domain.support, Plane) and any(
+            isinstance(path.curve, PlaneNurbsCurve)
+            for loop in domain.boundaries for path in loop):
+        problems = model._validate_face_geometry(face_id)
+        if problems:
+            raise GeometryError('; '.join(problems))
+        # The fresh face proof above uses bounded Green intervals for
+        # orientation/coverage. Their loose midpoint is NOT an accurate area
+        # estimate. Preserve the established metadata estimator and precisely
+        # the same tolerance expression used by collection binding below.
+        area_tolerance = model.tolerance.effective_area(length)
+        native_tolerance = area_tolerance/domain.area_jacobian
+        material_area = domain.original_world_area(native_tolerance*.05*domain.area_jacobian)
+        if not np.isfinite(material_area) or material_area <= 0:
+            raise GeometryError('plane implicit material area estimate is not positive')
+    else:
+        arrangement = arrange_material(domain, (), tolerance=tolerance,
+            area_tolerance=model.tolerance.effective_area(length),
+            cancellation_check=lambda: (_check(cancellation_check, "trim arrangement") or False))
+        material_area = domain.material_world_area(arrangement)
     return TrimmedSurfaceChart(model.handle("face",face_id), tuple(
         model.handle("face_use",identifier) for identifier,use in sorted(model.face_uses.items())
-        if use.face_id == face_id), domain, tolerance, domain.material_world_area(arrangement))
+        if use.face_id == face_id), domain, tolerance, material_area)
 
 
 def _query_start(model, expected_revision, cancellation_check):
@@ -194,6 +226,9 @@ def validate_trimmed_surface_charts_binding(model, result, *, expected_revision=
                                             cancellation_check=None):
     if not isinstance(result, TrimmedSurfaceCharts):
         raise TypeError("trimmed chart binding needs a TrimmedSurfaceCharts result")
+    from ._material_validation_cache import (guarded_callback, validation_epoch, singleton_face,
+                                             contains, remember, validate_evidence_native)
+    cancellation_check = guarded_callback(model, result, cancellation_check, result.source_checksum)
     _check(cancellation_check, "trimmed surface chart binding")
     if result.model_id != model.model_id:
         raise GeometryError("trimmed chart binding belongs to another model")
@@ -203,7 +238,11 @@ def validate_trimmed_surface_charts_binding(model, result, *, expected_revision=
     _qualified_model_state(model, expected_checksum=result.source_checksum,
                            changed_message="trimmed chart source binding changed")
     signature=(result.source_checksum,definition_checksum(result))
-    if signature in _validated_collections.get(model,()):
+    epoch = validation_epoch(model, result.source_checksum)
+    if not validate_evidence_native(result):
+        epoch = None
+    scope = singleton_face(model, result)
+    if contains(_validated_collections, model, epoch, scope, signature):
         return
     # A changed evidence collection must receive full source qualification.
     to_dict(model)
@@ -237,9 +276,11 @@ def validate_trimmed_surface_charts_binding(model, result, *, expected_revision=
         raise GeometryError("trimmed chart source binding changed during validation")
     _qualified_model_state(model, expected_checksum=result.source_checksum,
                            changed_message="trimmed chart source binding changed during validation")
-    previous=tuple(item for item in _validated_collections.get(model,())
-                   if item[0]==result.source_checksum and item!=signature)
-    _validated_collections[model]=(*previous[-7:],signature)
+    final_epoch = validation_epoch(model, result.source_checksum)
+    validate_evidence_native(result)
+    if (epoch is not None and final_epoch != epoch) or definition_checksum(result) != signature[1]:
+        raise GeometryError('trimmed chart native or evidence binding changed during validation')
+    remember(_validated_collections, model, epoch, scope, signature)
 
 
 def _rows(parameters):

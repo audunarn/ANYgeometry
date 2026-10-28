@@ -70,7 +70,8 @@ def _separated_at(first, second, vertex, normal) -> bool:
     return True
 
 
-def _certify_pieces(first, first_range, second, second_range, contacts, budget: int) -> bool | None:
+def _certify_pieces(first, first_range, second, second_range, contacts, budget: int, *, _hull=None,
+                    _qualification=False, _depth=0) -> bool | None:
     """Exact certificate: the two curve pieces meet at most at the listed contact points.
 
     ``first_range``/``second_range`` are parameter intervals of the curves
@@ -94,14 +95,21 @@ def _certify_pieces(first, first_range, second, second_range, contacts, budget: 
             return None                                    # tangent at the contact: not certified here
         vertices.append(vertex)
         normals.append([Fraction(float(value)) for value in normal])
-    queue = [(tuple(first_range), tuple(second_range))]
+    queue = [(tuple(first_range), tuple(second_range), _depth)]
     work = 0
     while queue:
         work += 1
         if work > budget:
             return None
-        (a0, a1), (b0, b1) = queue.pop()
-        hull_first, hull_second = _exact_hull(first, a0, a1), _exact_hull(second, b0, b1)
+        (a0, a1), (b0, b1), depth = queue.pop()
+        hull = _exact_hull if _hull is None else _hull
+        if _qualification:
+            from .plane_nurbs import charge_box, charge_split, depth_limit
+            charge_box()
+        hull_first = hull(first, a0, a1)
+        if _qualification:
+            charge_box()
+        hull_second = hull(second, b0, b1)
         if hull_first is None or hull_second is None:
             return None
         if _strictly_separated(hull_first, hull_second):
@@ -111,10 +119,15 @@ def _certify_pieces(first, first_range, second, second_range, contacts, budget: 
             continue
         if a1 - a0 <= 2. ** -16 and b1 - b0 <= 2. ** -16:
             return None                                    # inseparable at this scale: a crossing or a near-touch
+        if _qualification:
+            if depth >= depth_limit(16):
+                return None
+            charge_split()
+            charge_split()
         am, bm = 0.5 * (a0 + a1), 0.5 * (b0 + b1)
         for first_piece in ((a0, am), (am, a1)):
             for second_piece in ((b0, bm), (bm, b1)):
-                queue.append((first_piece, second_piece))
+                queue.append((first_piece, second_piece, depth+1))
     return True
 
 

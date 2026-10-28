@@ -25,8 +25,8 @@ oracle of architecture 5.3); only reported positions are rounded.
   range at a rational ``s_m`` in the gap (``G`` is monotone in ``x`` there):
   exact, no Newton. Inside gaps are arcs joining their two events.
 * **Accounting.** Roots on the patch boundary have degree 1, all others 2;
-  the arcs form paths between boundary roots; cycles, other degrees or
-  leftovers refuse (``PlaneNurbsClosedSection`` / ``PlaneNurbsNotCertified``).
+  the arcs form paths between boundary roots followed by closed cycles.
+  Other degrees and unaccounted events refuse.
 * **Coincidence (step 5).** ``G`` identically zero: the surface lies in the plane.
 
 The result lists paths of arcs (box, slicing, event roots); slice P2 adds the
@@ -47,6 +47,7 @@ MAX_DEPTH = 12
 # with ``take() -> bool`` (one box) and a ``subdivisions`` counter, or ``None``. Every certified
 # subdivision below charges it, so delegated predicates respect and report the audit's limits.
 from contextvars import ContextVar
+from .curve_parameter_matching import _cooperative_tick
 CURRENT_WORK: ContextVar = ContextVar("anygeometry_section_work", default=None)
 
 
@@ -74,7 +75,7 @@ class PlaneNurbsNotCertified(GeometryError):
 
 
 class PlaneNurbsClosedSection(PlaneNurbsNotCertified):
-    """The section contains a closed loop inside the patch (outside the certified scope)."""
+    """Legacy refusal type retained for import compatibility."""
 
 
 # ------------------------------------------------------------------ exact Bezier sub-patches
@@ -160,16 +161,16 @@ def _split(row: list, at: Fraction = Fraction(1, 2)):
     return left, right[::-1]
 
 
-def _split_u(coefficients):
+def _split_u(coefficients, at=Fraction(1, 2)):
     columns = list(zip(*coefficients))
-    halves = [_split(list(column)) for column in columns]
+    halves = [_split(list(column), at) for column in columns]
     left = tuple(tuple(column[i] for column, _ in halves) for i in range(len(coefficients)))
     right = tuple(tuple(column[i] for _, column in halves) for i in range(len(coefficients)))
     return left, right
 
 
-def _split_v(coefficients):
-    halves = [_split(list(row)) for row in coefficients]
+def _split_v(coefficients, at=Fraction(1, 2)):
+    halves = [_split(list(row), at) for row in coefficients]
     return tuple(tuple(h[0]) for h in halves), tuple(tuple(h[1]) for h in halves)
 
 
@@ -213,7 +214,7 @@ def _classify(coefficients) -> str | None:
     return None
 
 
-def _boxes(patch: SubPatch, budget: list) -> list[Box]:
+def _boxes(patch: SubPatch, budget: list, split_at=Fraction(1, 2)) -> list[Box]:
     """Quad-tree leaves of one sub-patch; ``budget`` is the pair's shared box counter ``[examined]``."""
     leaves: list[Box] = []
     pending = [(patch.u_range, patch.v_range, patch.coefficients, 0)]
@@ -233,10 +234,11 @@ def _boxes(patch: SubPatch, budget: list) -> list[Box]:
             raise PlaneNurbsNotCertified(f"singular box at depth {depth}: u {tuple(map(float, u_range))}, "
                                          f"v {tuple(map(float, v_range))}")
         charge_split()
-        um, vm = (u_range[0] + u_range[1]) / 2, (v_range[0] + v_range[1]) / 2
-        left, right = _split_u(coefficients)
+        um = u_range[0] + split_at * (u_range[1] - u_range[0])
+        vm = v_range[0] + split_at * (v_range[1] - v_range[0])
+        left, right = _split_u(coefficients, split_at)
         for (ua, ub), half in (((u_range[0], um), left), ((um, u_range[1]), right)):
-            low, high = _split_v(half)
+            low, high = _split_v(half, split_at)
             pending.append(((ua, ub), (v_range[0], vm), low, depth + 1))
             pending.append(((ua, ub), (vm, v_range[1]), high, depth + 1))
     return leaves
@@ -269,6 +271,7 @@ class Root:
         """Halve the isolating interval (bisection on the restriction's sign; exact midpoints)."""
         if self.exact:
             return
+        _cooperative_tick()
         a, b = self.edge
         t_lo, t_hi = (self.lo - a) / (b - a), (self.hi - a) / (b - a)
         middle = (t_lo + t_hi) / 2
@@ -406,6 +409,7 @@ def _arcs(box: Box, roots: list[Root]) -> list[tuple[int, int]]:
         return (root.lo, root.hi)
 
     for _ in range(200):
+        _cooperative_tick()
         spans = sorted((projection(root), root.ident) for root in events)
         overlapping = [(i, j) for i in range(len(spans)) for j in range(i + 1, len(spans))
                        if spans[i][0][0] <= spans[j][0][1] and spans[j][0][0] <= spans[i][0][1]]
@@ -436,9 +440,10 @@ def _arcs(box: Box, roots: list[Root]) -> list[tuple[int, int]]:
 
 @dataclass(frozen=True)
 class SectionPath:
-    """One section path: global root ids in path order (first and last on the patch boundary) and its arcs."""
+    """Ordered root/arc chain; a closed chain repeats its first root at the end."""
     roots: tuple
     arcs: tuple                     # (box index, first root id, second root id) per arc, in path order
+    closed: bool = False
 
 
 @dataclass(frozen=True)
@@ -458,11 +463,23 @@ class PlaneNurbsSection:
 
 def plane_nurbs_section(plane, surface: NurbsSurface) -> PlaneNurbsSection:
     """Certified topology of ``plane`` x ``surface`` (architecture 4.2); refuses outside the scope."""
+    budget = [0]
+    for split_at in (Fraction(1, 2), Fraction(1, 3), Fraction(2, 5)):
+        try:
+            return _plane_nurbs_section(plane, surface, budget, split_at)
+        except PlaneNurbsNotCertified as error:
+            if str(error) not in ("the section is tangent to a box edge",
+                                  "the section runs along a box edge"):
+                raise
+    raise PlaneNurbsNotCertified("section contacts remain uncertified after alternate subdivision")
+
+
+def _plane_nurbs_section(plane, surface, budget, split_at):
     patches = _sub_patches(plane, surface)
     if all(c == 0 for patch in patches for row in patch.coefficients for c in row):
         return PlaneNurbsSection(True, (), (), (), tuple(patches))
-    budget = [0]                                       # max_boxes_per_pair: shared by every sub-patch (review B1-P1)
-    boxes = [box for patch in patches for box in _boxes(patch, budget)]
+    # The budget is shared across sub-patches AND alternate certified subdivisions.
+    boxes = [box for patch in patches for box in _boxes(patch, budget, split_at)]
     regular = [box for box in boxes if box.kind != "empty"]
     per_box = [_edge_roots(box) for box in regular]
     distinct = _identify([root for roots in per_box for root in roots], patches)
@@ -510,9 +527,26 @@ def plane_nurbs_section(plane, surface: NurbsSurface) -> PlaneNurbsSection:
             path_arcs.append(arc if arc[1] == order[-1] else (arc[0], arc[2], arc[1]))
             order.append(current)
         paths.append(SectionPath(tuple(order), tuple(path_arcs)))
-    if len(used) != len(arcs):
-        raise PlaneNurbsClosedSection("the section contains a closed loop inside the patch")
+    # Every remaining component is degree two (checked above), hence a cycle.
+    # Root and adjacency order are deterministic; preserve the existing open paths.
+    for start in sorted(adjacency):
+        if all(arc in used for arc in adjacency[start]):
+            continue
+        order, path_arcs, current = [start], [], start
+        while True:
+            options = [arc for arc in adjacency[current] if arc not in used]
+            if not options:
+                raise PlaneNurbsNotCertified("incomplete closed section component")
+            arc = options[0]
+            used.add(arc)
+            following = arc[2] if arc[1] == current else arc[1]
+            path_arcs.append((arc[0], current, following))
+            order.append(following)
+            current = following
+            if current == start:
+                break
+        paths.append(SectionPath(tuple(order), tuple(path_arcs), closed=True))
     boundary_roots = sum(1 for root in distinct if on_boundary(root))
-    if boundary_roots != 2 * len(paths):
+    if boundary_roots != 2 * sum(not path.closed for path in paths):
         raise PlaneNurbsNotCertified("patch-boundary roots do not match the paths")
     return PlaneNurbsSection(False, tuple(paths), tuple(distinct), tuple(regular), tuple(patches))

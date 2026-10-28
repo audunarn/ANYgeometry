@@ -190,10 +190,11 @@ def test_a_collinear_segment_continuing_a_section_validates():
     assert validate_nurbs_section_face(build.model, face) == []
 
 
-def test_certified_trim_polylines_refuse_section_edges_with_a_typed_error():
+def test_certified_trim_polylines_include_declared_section_edges():
     _surface, build, face = bow_below_deck()
-    with pytest.raises(GeometryError, match="section edges"):
-        build.model.trim_loops_uv_certified(face, 1e-6)
+    loops, bound = build.model.trim_loops_uv_certified(face, 1e-6)
+    assert len(loops) == 1 and bound <= 1e-6
+    assert np.max(loops[0][:, 1]) <= .75 + 1e-12
 
 
 def test_display_trim_loops_of_nurbs_faces_are_chart_samples():

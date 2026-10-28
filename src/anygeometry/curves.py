@@ -36,6 +36,7 @@ from ._cross3 import _cross3
 from .exact_curves import EllipticArc, CylinderIntersectionCurve
 from .quadric_curves import QuadricIntersectionCurve
 from .branch_curves import BezierQuadricCurve
+from .line_ranges import LineRange
 
 __all__ = [
     "Arc",
@@ -47,6 +48,7 @@ __all__ = [
     "CurveShape",
     "DegenerateArcError",
     "Straight",
+    "LineRange",
     "Spline",
     "arc_frame",
     "arc_tangent",
@@ -98,7 +100,7 @@ class Spline:
     control_vertices: Tuple[int, ...]
 
 
-CurveShape = Union[Straight, Arc, Spline, EllipticArc, CylinderIntersectionCurve, QuadricIntersectionCurve,
+CurveShape = Union[Straight, LineRange, Arc, Spline, EllipticArc, CylinderIntersectionCurve, QuadricIntersectionCurve,
                    BezierQuadricCurve]
 
 

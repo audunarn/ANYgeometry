@@ -206,10 +206,10 @@ def test_alternating_chart_collections_reuse_only_completed_qualification(monkey
 def test_chart_cache_eviction_requalifies_without_limiting_collections(monkeypatch):
     from anygeometry.material_arrangement import MaterialDomain
     model=GeometryModel()
-    for x in range(9):
+    for x in range(10):
         model.add_plate(model.add_points(((2*x,0,0),(2*x+1,0,0),(2*x+1,1,0),(2*x,1,0))))
     all_charts=query_trimmed_surface_charts(model)
-    collections=[replace(all_charts,charts=(chart,)) for chart in all_charts.charts]
+    collections=[replace(all_charts,charts=(all_charts.charts[0],chart)) for chart in all_charts.charts[1:]]
     calls=[]
     original=MaterialDomain.original_world_area
     def measured(*args,**kwargs):
@@ -218,11 +218,11 @@ def test_chart_cache_eviction_requalifies_without_limiting_collections(monkeypat
     monkeypatch.setattr(MaterialDomain,'original_world_area',measured)
     for evidence in collections:
         validate_trimmed_surface_charts_binding(model,evidence)
-    assert len(calls)==9
+    assert len(calls)==18
     validate_trimmed_surface_charts_binding(model,collections[-1])
-    assert len(calls)==9
+    assert len(calls)==18
     validate_trimmed_surface_charts_binding(model,collections[0])
-    assert len(calls)==10
+    assert len(calls)==20
 
 
 def test_cancelled_chart_qualification_is_not_cached(monkeypatch):

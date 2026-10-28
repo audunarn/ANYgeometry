@@ -164,13 +164,27 @@ def segment_section(curve: PlaneNurbsCurve, p0, p1, shared, tolerance):
                 return "done"
             return "split"
         signs = (context.sign_from, context.sign_to)
-        if 0 not in signs and context.view.monotone(context.s_range, context.x_range):
-            if signs[0] == signs[1]:
-                return "done"
-            if all(_rect_point_gap2(rect, p) > tol2 for p in shared) and \
-                    all(_segment_distance2(corner, p0, p1) <= tol2 for corner in corners):
-                crossing[0] = True
-                return "done"
+        if context.view.monotone(context.s_range, context.x_range):
+            if 0 not in signs:
+                if signs[0] == signs[1]:
+                    return "done"
+                if all(_rect_point_gap2(rect, p) > tol2 for p in shared) and \
+                        all(_segment_distance2(corner, p0, p1) <= tol2 for corner in corners):
+                    crossing[0] = True
+                    return "done"
+            if shared and context.depth >= 8:
+                # Every possible line root is enclosed, including a root at
+                # an arc endpoint with an undecided/zero endpoint sign.
+                # The enclosure proves exclusion away from declared joints;
+                # it does not establish a crossing from a zero sign.
+                from .section_events import contract_crossing
+                def in_joint(uv):
+                    box = chart.rect(*uv)
+                    return any(all((x-p[0])**2+(y-p[1])**2 <= tol2 for x, y in _corners(box))
+                               for p in shared)
+                contracted = contract_crossing(context, accept=in_joint)
+                if in_joint(contracted):
+                    return "done"
         width = (rect[0][1] - rect[0][0]) ** 2 + (rect[1][1] - rect[1][0]) ** 2
         if tol2 > 0 and width * 256 <= tol2:
             raise PlaneNurbsNotCertified("chart segment x section contact undecided at the tolerance scale")
@@ -485,19 +499,60 @@ def _pair(model, a, b, chart, shared, shared_ids, tolerance, neighbours=False):
                 return True if shared_ids else None             # touching domain ends: a shared vertex
             return True                                         # P1 paths are simple in the chart
         if shared_ids:
-            # two section curves meeting at a corner (B1-P5a): P4b's world piece certificate (non-neighbour
-            # pieces separated, the corner's pieces departing on opposite sides); a surface map is
-            # injective on a NURBS face's chart, so world simplicity gives chart simplicity
-            from .entities import OrientedEdge
-            from .section_faces import _sections_simple
-            world_tolerance = model.tolerance.effective_length(_pair_extent(a, b))
-            loose, _pieces = _sections_simple(model, ((OrientedEdge(a.id, True), OrientedEdge(b.id, True)),),
-                                              world_tolerance)
-            return True if not loose else None
+            return section_pair_clean(a.curve, b.curve, shared, tolerance)
         return True if _sections_apart(a.curve, b.curve, chart, tolerance) else None
     section, segment = (a, b) if first_section else (b, a)
     p0, p1 = segment.curve.pcurve.exact_point(0), segment.curve.pcurve.exact_point(1)
     return segment_section(section.curve, p0, p1, shared, tolerance)
+
+
+def section_pair_clean(first, second, shared, tolerance):
+    """Every intersection of two own-support sections lies in a declared chart joint.
+
+    The second plane supplies an exact equation; the complete first path is
+    excluded by sign or certified outside the second path's chart enclosures.
+    Shared topology authorizes only the existing chart joint tolerance ball.
+    """
+    if first.surface != second.surface:
+        return None
+    plane = second.plane
+    a, b = [tuple(Fraction(float(x)) for x in v) for v in (plane.u_vector, plane.v_vector)]
+    normal = (a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0])
+    offset = sum(x*Fraction(float(y)) for x, y in zip(normal, plane.origin))
+    chart = _Chart(first.surface)
+    second_boxes = [chart.rect(*( (s, x) if arc.slicing == 0 else (x, s)))
+                    for arc, s, x in second._arc_rects(0., 1.)]
+    tol2 = tolerance*tolerance
+
+    def in_joint(rect):
+        return any(all((p[0]-joint[0])**2+(p[1]-joint[1])**2 <= tol2 for p in _corners(rect))
+                   for joint in shared)
+
+    def classify(context):
+        low, high = context.g2_range()
+        if low > 0 or high < 0:
+            return 'done'
+        rect = _context_rect(chart, context)
+        if in_joint(rect):
+            return 'done'
+        if all(_rect_gap2(rect, other) > 0 for other in second_boxes):
+            return 'done'
+        if context.view.monotone(context.s_range, context.x_range):
+            if context.sign_from and context.sign_to and context.sign_from == context.sign_to:
+                return 'done'
+            if context.depth >= 8:
+                from .section_events import contract_crossing
+                contracted = chart.rect(*contract_crossing(context,
+                    accept=lambda uv: in_joint(chart.rect(*uv))))
+                if in_joint(contracted):
+                    return 'done'
+        return 'split'
+
+    try:
+        _engine(first, normal, offset, classify, MAX_DEPTH)
+    except PlaneNurbsNotCertified:
+        return None
+    return True
 
 
 def _pair_extent(a, b) -> float:
@@ -510,13 +565,16 @@ def _pair_extent(a, b) -> float:
 
 
 def _inside(model, loop, point, chart, tolerance):
+    return contains_chart_curves([model.edges[item.edge].curve for item in loop], point, tolerance)
+
+
+def contains_chart_curves(curves, point, tolerance):
     """Chart ray parity over a fixed sequence of rational directions; ``None`` when no ray decides."""
     tol2 = tolerance * tolerance
     for k in range(_RAYS):
         direction = (Fraction(1000 + 37 * k), Fraction(377 - 101 * k))
         count, decided = 0, True
-        for item in loop:
-            curve = model.edges[item.edge].curve
+        for curve in curves:
             if isinstance(curve, PlaneNurbsCurve):
                 crossings = ray_crossings(curve, point, direction, tolerance)
                 if crossings is None:
@@ -524,6 +582,8 @@ def _inside(model, loop, point, chart, tolerance):
                     break
                 count += crossings
                 continue
+            if not hasattr(curve, 'pcurve') or not _is_segment_pcurve(curve):
+                return None
             p0, p1 = curve.pcurve.exact_point(0), curve.pcurve.exact_point(1)
             side0 = (p0[0] - point[0]) * direction[1] - (p0[1] - point[1]) * direction[0]
             side1 = (p1[0] - point[0]) * direction[1] - (p1[1] - point[1]) * direction[0]
@@ -542,3 +602,34 @@ def _inside(model, loop, point, chart, tolerance):
         if decided:
             return count % 2 == 1
     return None
+
+
+def chart_boundary_contact(curves, point, tolerance, max_pieces=1 << 16):
+    """Certified near-boundary predicate: True within chart tolerance, False clear, None unresolved."""
+    tolerance2 = Fraction(tolerance)**2
+    examined = 0
+    for curve in curves:
+        if not isinstance(curve, PlaneNurbsCurve):
+            if not hasattr(curve, 'pcurve') or not _is_segment_pcurve(curve):
+                return None
+            if _segment_distance2(point, curve.pcurve.exact_point(0), curve.pcurve.exact_point(1)) <= tolerance2:
+                return True
+            continue
+        chart = _Chart(curve.surface)
+        cuts = (0., *curve.breakpoints(), 1.)
+        pending = list(zip(cuts, cuts[1:]))
+        while pending:
+            examined += 1
+            if examined > max_pieces:
+                return None
+            lo, hi = pending.pop()
+            rect = _piece_rect(curve, chart, lo, hi)
+            if _rect_point_gap2(rect, point) > tolerance2:
+                continue
+            if all((p[0]-point[0])**2+(p[1]-point[1])**2 <= tolerance2 for p in _corners(rect)):
+                return True  # The nonempty continuous section piece lies in this box.
+            if hi-lo <= 1e-14:
+                return None
+            mid = (lo+hi)/2
+            pending.extend(((lo, mid), (mid, hi)))
+    return False

@@ -20,6 +20,7 @@ import numpy as np
 _qualified_documents = WeakKeyDictionary()
 
 from .curves import Arc, Spline, Straight
+from .line_ranges import LineRange
 from .exact_curves import EllipticArc, CylinderIntersectionCurve
 from .quadric_algebra import EllipticRuledSupport, QuadricSupport, RuledSupport
 from .branch_algebra import BezierRuledSupport
@@ -75,7 +76,9 @@ _QUADRIC_VERSION = 6
 # 2026-10-13); schema 6 keeps its meaning. A document's version is the largest
 # requirement of any record it holds, found recursively (required_version).
 _NURBS_VERSION = 7
+_LINE_RANGE_VERSION = 8
 _RECORD_VERSIONS = {
+    "line_range": _LINE_RANGE_VERSION,
     "extruded": _QUADRIC_VERSION,
     "quadric_intersection": _QUADRIC_VERSION,
     "bezier_quadric_intersection": _QUADRIC_VERSION,
@@ -737,6 +740,9 @@ def _serialized_model_state(
     for edge in sorted(geometry.edges.values(), key=lambda item: item.id):
         if isinstance(edge.curve, Straight):
             curve: dict[str, object] = {"type": "straight"}
+        elif isinstance(edge.curve, LineRange):
+            curve = {'type': 'line_range', 'a': list(edge.curve.a), 'b': list(edge.curve.b),
+                     'domain': [list(pair) for pair in edge.curve.exact_domain]}
         elif isinstance(edge.curve, Arc):
             curve = {"type": "arc", "via_vertex": edge.curve.via_vertex}
         elif isinstance(edge.curve, Spline):
@@ -775,7 +781,8 @@ def _serialized_model_state(
                           for surface in (face.surface, face.parameterization)))
     document: dict[str, object] = {
         "schema": SCHEMA,
-        "version": _NURBS_VERSION if needs_nurbs else _QUADRIC_VERSION if needs_quadric else VERSION,
+        "version": (_LINE_RANGE_VERSION if any(isinstance(edge.curve, LineRange) for edge in geometry.edges.values())
+                    else _NURBS_VERSION if needs_nurbs else _QUADRIC_VERSION if needs_quadric else VERSION),
         "model_id": model_id,
         "revision": revision,
         "coordinates": {
@@ -1617,6 +1624,19 @@ def _decode_geometry_records(
             if strict:
                 _exact_fields(curve_data, required={"type"}, name="straight curve")
             curve = Straight()
+        elif curve_kind == 'line_range':
+            if schema_version < _LINE_RANGE_VERSION:
+                raise GeometryError('retained line ranges require schema 8')
+            _exact_fields(curve_data, required={'type', 'a', 'b', 'domain'}, name='line range')
+            from fractions import Fraction
+            domain = curve_data['domain']
+            if (not isinstance(domain, (list, tuple)) or len(domain) != 2
+                    or any(not isinstance(pair, (list, tuple)) or len(pair) != 2
+                           or any(type(x) is not int for x in pair) or pair[1] <= 0 for pair in domain)):
+                raise GeometryError('line range domain must contain exact integer fraction pairs')
+            curve = LineRange(_finite_array(curve_data['a'], (3,), 'line carrier a'),
+                              _finite_array(curve_data['b'], (3,), 'line carrier b'),
+                              tuple(Fraction(*pair) for pair in domain))
         elif curve_kind == "arc":
             if strict:
                 _exact_fields(
@@ -1865,7 +1885,7 @@ def from_dict(document: Mapping[str, Any]) -> GeometryModel:
     if document.get("schema", SCHEMA) != SCHEMA:
         raise GeometryError("not an ANYgeometry document")
     version = _integer(document.get("version", 1), "version")
-    if version not in (1, 2, 3, 4, VERSION, _QUADRIC_VERSION, _NURBS_VERSION):
+    if version not in (1, 2, 3, 4, VERSION, _QUADRIC_VERSION, _NURBS_VERSION, _LINE_RANGE_VERSION):
         raise GeometryError(f"unsupported ANYgeometry version {version}")
     strict_document = version >= 3
     # Schemas 4 and 5 share identity, tolerance and additive semantic fields.
