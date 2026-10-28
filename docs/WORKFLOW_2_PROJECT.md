@@ -1,5 +1,132 @@
 # Workflow 2 project record
 
+## 2026-10-28 — Revised thin and convex-prism verification: terminal results
+
+The missing convex-prism end-to-end slice now passes: exact retained regular
+pentagon, radius0.1m/height0.06m,463nodes/1899Tet4,9 geometry predicates and
+22 P1/P2 physical checks, complete498-facet/7-source-face readmission. Original
+source handles and overlapping groups are retained; five installed ANYsolid
+package files match the registered wheel. One physics attempt, zero native
+calls,119.604706017/600s charged including conservative startup overhead.
+Root non-author review accepts this finite source-owner/installed-consumer
+slice. No new owner-wheel/platform coverage is inferred.
+
+Revised thin candidate h=0.002m completed within all registered bounds:
+
+| Case | Cells | Max axial span/t (limit0.5) | Max condition (limit32) | P1/P2 physical result |
+|---|---:|---:|---:|---|
+| Aligned |29440|0.3488468668528982|5.029858745144823|16 pass /6 fail; NO_GO|
+| Rotated negative offset |32313|0.4043397736867796|4.579452318608783|22 pass /0 fail; PASS|
+
+Both geometry/ownership/group predicates pass20/20, source/identity/group
+comparisons under refinement pass28/28. The original geometry/snapshot/input
+bytes are reused exactly; native mesh topology/IDs are not promised identical.
+Changed registration controls14 pass. Both native calls are consumed; no retries.
+Outer case wall405.443420885s/448.507262533s (limit480); native meshing itself
+2.087019407s/6.415012900s. All seven supervised outer receipts and both native
+cleanup records verify zero owned processes. Total939.985701038/1200s including
+preparation/verification/reconciliation; unused260.014298962s does not authorize
+more native calls. No timeout occurred in this new thin campaign.
+
+The candidate is **NO_GO** because aligned P1/P2 each fail affine equilibrium,
+force/moment and energy/work. Sampling/conditioning are resolved for these
+outputs; they cannot waive the physical failures. The aligned boundary is within
+delta1e-6m, but its relative volume difference8.0859255e-9 matches the affine
+energy discrepancy and exceeds1e-10. The unchanged helper applies source-face
+normals and nominal source references to loads/work integrated on the numerical
+mesh. Independent Read review identifies this as a stronger combined nominal
+geometry/physics contract, not evidence of an FE implementation defect and not
+permission to change the reference. Existing numerical and geometry limits all
+remain unchanged. Favorable cases from different registrations cannot be combined
+post hoc to promote a general h<=thickness/5 envelope.
+
+Evidence: `thin-resolution-v2-20261028-a1/{handoff.json,terminal-summary.json}`,
+`prism-e2e-20261028-a1/{handoff.json,root-final-review.json}`, and
+`thin-v2-reference-review-20261028.json` under the shared evidence root. ANYmesh
+docs contain `thin_resolution_v2_results_20261028.md` and
+`prism_e2e_results_20261028.md`. Independent final non-author same-family review
+is stored with the thin study; no different-family/human acceptance is claimed.
+Setup/bookkeeping failures, originals and all previous NO_GO records are retained.
+
+Final independent non-author same-family Read review supports the terminal v2
+NO_GO (`thin-resolution-v2-20261028-a1/independent-final-review.json`): identities,
+complete journals, group memberships, counts, two calls and cleanup reconcile.
+It does not claim a new full external-library rehash; the recorded fresh per-case
+runtime verification and frozen inventory integrity were inspected. Root static
+reconciliation independently passes Python/JSON syntax, frozen input/source/limit
+hashes, control XML and result inventories, zero physics/native calls:
+`evidence/w2-v2-root-static-reconciliation-03a8265ced`,0.421999999991s, separate
+30s inspection bound. Both isolated repositories pass `git diff --check`.
+
+Next critical-path proposal: investigate an explicitly tighter generator boundary
+accuracy request consistent with the retained nominal force/work gates, derive
+and freeze its precision/execution bounds before any further case. No automatic
+boundary repair, tolerance relaxation, provider switch or new native execution
+is authorized here. A reference-domain change would instead be a scientific
+contract proposal, not a silent harness fix. This campaign performed no unrelated
+shell/surface regression work. Whole Workflow2/public provider remains NO_GO;
+full repository/native, applicable platform/CI, artifact/relink and final release
+gates remain separate and unwaived. Workflow1 coupling failures remain separate.
+
+## 2026-10-28 — Authorized revised thin candidate and end-to-end verification
+
+User explicitly resumed the revised thin candidate and Workflow 2 end-to-end
+verification, preserving limits and failed evidence and time-boxing unrelated
+regressions. This grants the new v2 registration below; it does not reopen prior
+campaigns, waive full integration/platform gates or authorize publication.
+
+1. Prepare the v2 candidate using the exact prior native geometry snapshots,
+   source model/face/region identities and triangulated input arrays. Change only
+   explicit h from 0.0025m to 0.002m. Freeze the new manifest, runner, helpers,
+   source/runtime/backend identities and prior-to-new input equivalence.
+   Acceptance: focused registration/refusal checks and independent non-author
+   review before native execution. Existing unchanged metric/cleanup evidence
+   may be reused after hash verification.
+2. Execute exactly two fresh native calls, one per original orientation, with
+   h <= thickness/5. Independent output requirements remain axial span/t <= 0.5,
+   regular-tet condition <= 32, physical delta 1e-6m and every original geometry,
+   group/ownership and P1/P2 predicate. Bounds: native child <=120s, complete
+   case <=480s, total supervised checks including preparation <=1200s, no retries,
+   <=100000 cells and <=150000 coefficients; retain a 90s reconciliation reserve.
+   Failed geometry prevents physics for that case. Every attempt and cleanup is
+   retained; no automatic sizing loop or additional native call is authorized.
+3. Audit the required boxes, convex polygonal prisms and thin offset path from
+   native geometry through classified Tet4 output into installed ANYsolid,
+   including identity/group retention under refinement. Reuse matching existing
+   finite evidence and identify actual gaps; no additional native execution is
+   implied. Independent Read audit has no numerical budget.
+4. Reconcile terminal outcomes, independent review and exact commands/hashes;
+   publish local reviewable code/docs/evidence checkpoints only. Native/macOS,
+   candidate-owner CI and artifact release gates stay explicit. No broad
+   shell/surface regression run or repair belongs to this campaign.
+
+The implementation worker owns the connected v2 runner, controlled checks,
+execution and result handoff. Root owns the scientific delta, registration,
+cross-repository acceptance and final integration. Claude subscription/Mistral
+quota exhaustion remains cached; available OpenAI workers provide implementation
+and explicitly same-family non-author review. No different-family/human final
+acceptance is claimed. Source production algorithms and all acceptance limits
+remain unchanged; target-size refinement is a new candidate, not retroactive
+acceptance of the failed h=thickness/4 case.
+
+End-to-end audit found the installed matrix is cube-only and the frozen regular
+pentagonal prism has real geometry-admitted Tet4 output but no P1/P2 physics
+evidence. Root therefore registers a separate retained-input slice under the
+user's end-to-end request: load the exact original pentagon geometry/snapshot and
+463-node/1899-cell raw mesh, preserve source handles/groups, re-admit, and run the
+unchanged installed ANYsolid physical checks in both orders. Zero native meshing
+calls; no extra prism refinement mesh. Original delta6e-6m, volume/area1e-3,
+normal1degree, numerical limits unchanged, regular-tet condition<=32,
+100000-cell/150000-coefficient caps. Thin axial-span criterion is inapplicable
+to this thick prism. Fresh600s supervised total, each process<=300s, 45s reserve,
+no physics retry. New runner/manifest/source/runtime identities and controlled
+checks must be frozen and independently reviewed before its case runs. This is
+source-owner/installed-ANYsolid evidence; owner-wheel/platform gates remain
+separate. Audit: `evidence/w2-e2e-review-20261028-b.md`. Old named box refinement
+records have different owners; same-owner refinement must instead be established
+by the new thin study's exact input/identity reuse, never inferred from those
+historical names.
+
 ## Delivery priority — user steering, 2026-10-28
 
 Keep the complete geometry-to-analysis workflow in view. Prioritize native
