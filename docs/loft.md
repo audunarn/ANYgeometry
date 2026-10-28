@@ -118,3 +118,13 @@ Feature regeneration permits support transitions among canonical Coons, Cylinder
 and Cone only for lofts with the same complete stable edge roles, four-edge mapped
 loops, no holes and no optional parameterizations. Other feature kinds retain
 their existing strict support-type compatibility rule.
+
+
+## Current integration limits
+
+The basic authored line, polyline, polygon and circle construction/persistence
+workflows are covered by this delivery. Closed non-arc profiles producing exactly
+two patches currently refuse; changing profile correspondence does not resolve
+that case. Feature regeneration does not yet forward a cancellation callback.
+Source-cell mesh publication and physical/S3 acceptance are separate owner gates;
+a successful loft construction does not grant those authorities.
