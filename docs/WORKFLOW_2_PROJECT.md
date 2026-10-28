@@ -1,5 +1,184 @@
 # Workflow 2 project record
 
+## 2026-10-28 — Live continuation checkpoint
+
+Terminal installed-matrix delta: all8 Windows/Linux3.11–3.14 cells passed125
+installed tests +22 P1/P2 checks each (1000test executions,176checks). All8
+separate base-only imports also pass without ANYsolid/solver/optional backends.
+Instrumented process-wall1180.9966024031112/2400s;8/8native calls consumed.
+The worker model hit capacity but its driver continued; root recovered and
+reconciled all frozen input/core/native hashes and terminal XML/cleanup/budgets
+without repeating cells. Source/core artifacts unchanged. Summary:
+`evidence/installed-matrix-20261028-a1/reconciled-result.json`.
+Current omissions remain native-core/macOS/full repository release gates,
+thin-resolution/quality acceptance, provider peak-memory and native-artifact
+license/distribution adjudication. Public provider remains disabled.
+Independent non-author same-family Read review supports the finite installed
+slice; root accepts its registered case evidence. Review record: ANYmesh
+`docs/volume_installed_review_20261028.md`. This is not full workflow acceptance.
+
+Source integration slice stopped after a bounded diagnostic and baseline
+comparison: fail-fast144passed1failed3skipped; the Q4/T3 conforming-recovery
+failure reproduces on exact original ANYmesh0415256e/ANYgeometry72a7e011 source
+snapshots. No W2 quad code change. The earlier unfiltered collection error
+(absent ANYfem) and complementary600.0445s timeout remain unwaived.
+Supervised check-process655.584185192/900s; no further broad run. Details:
+ANYmesh `docs/volume_full_gate_checkpoint_20261028.md`. This establishes only
+the first failure as pre-existing in this environment; other timeout failures
+are unclassified and no full-suite count/pass is inferred.
+
+Latest delta (08:10 UTC): all four exact1 native wheels now built and import
+checked: Windows311, Windows312+ABI3, Linux311, Linux312+ABI3. Native build
+budget1379.061363631/2400s; remaining1020.938636369s. Build owner was unavailable
+after model-capacity failure, so root recovered receipts and finished only DLL
+packaging/import bookkeeping. A Windows312 path-separator comparison failed;
+DLL bytes matched the proven inventory. Normalized POSIX comparison passed,
+with original failed receipt retained. No meshing in the build campaign.
+
+Both retained box and thin cases passed22 P1/P2 finite checks each. Independent
+non-author same-family review found that the original named six-rigid-mode
+check could accept zero columns; that claim was suspended and corrected.
+Five reporting/rigid regressions pass. Supplemental runs independently derive
+physical translations/rotations, prove rank6 and span agreement, and check both
+normalized stiffness residuals. Box31.555603853s and thin59.954966004s both PASS.
+All original scientific limits remain unchanged. Original360s case budget:
+301.520741163s used including the preserved failed serialization attempt,
+58.479258837s unused. Prior load/tensor/solve evidence was not rerun. Metrics
+use prospectively registered finite-case scaling, not universal relative-error
+claims. Evidence: retained-qualification-repair-ledger.json and supplemental
+result directories. Public real-provider admission remains disabled.
+
+New bounded slices in progress: five distinct required geometry/refinement
+cases, inputs/criteria/source/backend frozen before native calls (900s total,
+5calls maximum); installed owner/consumer/backend matrix Windows/Linux3.11–3.14
+(2400s total,8 small-cube native calls maximum). Prior two-call feasibility
+authority is consumed. Neither slice changes limits or promotes the provider.
+
+Next integration slice: existing ANYmesher full regression gate on the current
+Linux/Python3.12 source candidate, with its two optional quad workers built
+first. Bound900s total including collection/build/checks, each process<=600s;
+no frozen historical numerical campaign is replayed. Existing pytest selection
+and skips remain unchanged; inspect exact counts/failures and compiled-native
+absence separately. Source hashes and effective worker/runtime settings are
+recorded by the existing supervisor. This source gate is separate from the
+installed-wheel native/full/macOS matrix and does not replace those obligations.
+
+Five-case geometry slice completed: cube2284cells, pentagon1899,
+rotated negative/offset mm-input prism4402, box refinement1394, thin
+refinement16017. Every frozen geometry/ownership/group predicate passed;
+171.836363233/900process seconds,5/5native calls consumed, no retries or
+timeouts, all owned cleanup verified. Root reviewed runner before execution
+and inspected final evidence. Frozen identitye55b174d3738b6a9ce9242ab6a4804b50c854cbec76a2003d7073e0dbcc96989;
+summary `evidence/volume-geometry-20261028-summary.json`. Quality/thin-resolution
+acceptance remains OPEN: measured distributions do not establish
+a prospectively unspecified uniform-layer or FE-accuracy criterion. No new
+floor is inferred after observation. Box cell-count refinement is nonmonotone
+with the earlier differently triangulated input; no convergence claim.
+
+Source full-gate environment findings retained: exact FE runtime lacks pytest
+(0.072932978s failed launch); existing Linux test runtime lacks ANYfem, causing
+two collection errors (18.744680483s). Quad worker build13.304323844s passed.
+Complementary source coverage omits exactly those two unavailable-consumer
+modules and is not a full-gate pass. Read-only investigation found relevant
+consumer signatures compatible, but no installed ANYfem artifact or dependency
+closure in these runtimes. Another ANYfem module references floating_overlap
+absent from this isolated owner; that is not established as an eager Project
+import failure. Import compatibility remains unproved. Use a pinned real
+consumer with headless dependencies; do not silently substitute dirty sibling
+source, stub the consumer, or edit sibling repositories.
+
+State: exact-envelope backend feasibility established for two Linux cases;
+full workflow qualification/release is still incomplete. Public provider
+admission remains disabled. No merge, push or publication.
+
+The registered 15s native profile completed15.009s with1386 samples;
+1349 samples(~97%) were in sampled-envelope mark_surface_fs. Receipt:
+native-profile-20261028-8a812cd51a, summary/raw stacks in native-profile-20261028.
+Pinned upstream exact-envelope mode replaces that sampled path without changing
+the physical error budgets. A separately identified exact1 candidate adds the
+missing raw-wrapper tree.init_sf_tree after params.init and a compiled marker.
+Independent non-author Read review found no raw-wrapper correctness blocker.
+
+Linux312ABI3 wheel56886d352d99175ccb178c491e7845befd178b280144c30e0e598a953a413146;
+Windows311 repaired wheel6a4742c7719197e7c25e2100aefb377f97ee932e5d9285d978bb14aa28c2bebb.
+Both import-only checks prove exact1 and actual compiled marker True, no PyVista.
+Windows DLL origins and MSVC rounding branch/flags were inspected; i_pred's
+MSVC header enables fenv_access(on). Source/build/relink/license evidence is
+under evidence/exact-envelope-20261028-a1. FastEnvelope top-level MIT does not
+describe its entire closure: bundled i_pred is LGPL-3.0-or-later; its lgpl.txt
+and recursive Git identities are retained. No redistribution acceptance claimed.
+The build owner is finishing Linux311 and Windows312ABI3 within original2400s
+budget, preserving two existing wheels and prior failures; no native calls there.
+
+Fresh exact1 raw Linux feasibility: box1546cells/388nodes native0.2028215s,
+thin7641cells/1954nodes native0.8747561s. Every original predicate passed with
+zero missing/ambiguous facets; all source physical tolerances unchanged.
+Receipts exact-box-feasibility-20261028-90fa3b3aed and
+exact-thin-feasibility-20261028-3af534316f. Old import/timeout evidence unchanged.
+Auxiliary upstream STL output was moved into the retained thin attempt with
+hash record; future raw calls use their own attempt cwd (production already did).
+
+Full geometry source gate:4386passed15existing compiled-core skips,0failures,
+4401selected across3verified CI shards,1319.797/1800s. All6 runtime receipts
+match intended sources/interpreter/one thread; coverage/no-duplicates/timing
+guards pass. No source repairs. Evidence geometry-full-20261028-summary.json;
+details docs/geometry_full_gate_checkpoint.md. An intermediate model-capacity
+failure left the first test running; terminal evidence was recovered, not rerun.
+
+Admission performance repair: original SAT/clipping/rational pair body remains
+verbatim as fallback. Sufficient face separation/contact certificates use a
+conservative float64 orient3d filter; non-float64/uncertain cases fall back.
+Root reviewed proof and required the float32 guard.90tests pass. Same-env box
+common admission84.779935s→13.783117s with byte-identical output; thin32.969022s
+without a baseline speed claim. No native/FE execution by this worker.
+Evidence validation-fastpath-worker-summary.json, owned performance checkpoint.
+
+Root repaired missing generated source-region cell group and extracted common
+admission postchecks (no provider execution/capability bypass). New regression
+preserves that group in external cell IDs. Qualification harness now rejects
+nonfinite tensors/resultants/solves/metrics and emits strict JSON; black-box
+NaN-stress regression2passed, after an independent review found a max(NaN) gap.
+
+Retained-mesh qualification original360s budget: first box attempt124.716525s
+finished calculations but lost report to NumPy int32 JSON serialization; failure
+and solution arrays retained. Corrected box28.477561s PASS22/22 P1/P2 checks,
+including constrained analytical tension solve. Energy/work use the prospectively
+registered centered physical deformation; shifted diagnostic retained and limits
+unchanged. Remaining206.805914s before thin. Thin now active under180s bound,
+no new meshing calls. Ledger retained-qualification-repair-ledger.json.
+
+Still required: thin terminal assessment, broader convex/rotated/offset/refinement
+cases, all eight optional-backend installed cells, full applicable mesher/native
+gates, artifact compatibility/performance evidence and final independent review.
+Workflow1 reference/NLG-007 and production coupling NO_GO remain separate.
+
+## 2026-10-28 — Resumed bounded timeout diagnosis
+
+User: Proceed. Clean isolated branches remain at27efeba86d1e1d494a69b0e7f2a072e94f55bfe4
+and1d30ad0e5a49924d4038097fe755eb09cd456bf0. Process inspection found no owned
+workflow2 processes left from interruption. Existing failed evidence and limits
+remain unchanged; this continuation does not replay consumed registrations.
+
+Question: why do both platforms stall after triangle insertion, including when
+optimization is disabled? Competing explanations: (A) dense sampled-envelope
+surface classification at the required tolerance; (B) native threading/hang;
+(C) later orientation/filter cost. Pinned upstream source inspection identifies
+fTetWild d7d99bb4387a07895b9adce058dc7305f6b6e5ab and wrapper tagv0.4.2.
+Default FLOAT_TETWILD_WITH_EXACT_ENVELOPE=OFF selects a sampling path inside
+mark_surface_fs, matching the last logged stage. This is an inference to test.
+
+Next bounded development diagnostic: one Linux native stack profile, sampling
+15seconds with45second process-tree limit, same box coordinates/sizing/error
+limits and one worker thread. No qualifying mesh expected; retain partial output
+and exact command/source/environment identities. If sampler dominates, assess
+the documented upstream exact-envelope option and its license/build dependencies;
+if not, diagnose the measured hot path. Do not relax epsilon, geometry checks or
+production admission. A native build would be a separately identified candidate,
+not covered by the already approved import-only patch identity.
+
+Root owns this initial high-consequence diagnosis and backend/acceptance decision;
+cached Claude/Mistral quota exhaustion is not probed or treated as renewed.
+
 ## 2026-10-27 — Implemented core, provider feasibility unresolved
 
 Current state: PARTIAL_IMPLEMENTATION_BLOCKED_PROVIDER_FEASIBILITY.
