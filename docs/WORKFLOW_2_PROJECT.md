@@ -1,5 +1,129 @@
 # Workflow 2 project record
 
+## 2026-10-28 — Terminal reconciliation: Workflow 2 remains NO_GO
+
+This entry supersedes the pending status in the historical entries below;
+their source identities, failures and consumed authority remain evidence.
+Neither repository is merged/pushed and the public volume provider stays disabled.
+
+- Q4/T3 conforming recovery now discovers the touched midpoint fronts and stages
+  retile plus production front advancement in one transaction. Source checks:
+  333 quad tests and 11 real pinned ANYfem consumer tests passed; full collection
+  only succeeded (4078 tests). Root and independent non-author OpenAI review
+  found no blocking defect in this repair; no scientific predicate was weakened.
+- Native Linux 3.12 wheels were built from immutable copies and both native
+  modules were proved installed. Focused selections passed 242 tests. The full
+  gate selected 4129 tests and timed out after 900.053781692 seconds: 1155 passed
+  calls, 29 failed calls, 3 skipped nodes, one unfinished call and 2941 unstarted.
+  The 335 quad_first nodes all passed in this prefix; this is not a full pass.
+  Subsequent explicit Existing-policy reference fixtures retained all assertions
+  and tolerances: 73 passed / 9 failed, then one targeted PQ6 check still failed.
+  Outstanding conical, graded, MCF/front-work, protected-station and other
+  adaptive/reference issues are unwaived. Native campaign closed at
+  1275.912226017/1800 process seconds; no second full run occurred.
+- Fresh frozen thin study: aligned case passed geometry and 22 P1/P2 checks.
+  Rotated negative-offset case failed the prospective axial-span/thickness
+  bound: 0.5021240286845365 > 0.5. Its physics was not run after failure.
+  Conditioning remained below 32. Both registered native calls are consumed;
+  304.863301733/1200 process seconds used. Full-lifetime native worker RSS was
+  95,002,624 and 98,377,728 bytes, respectively. These are measured local
+  baselines, not a performance improvement claim. The finer h <= t/5 v2 proposal
+  is an unexecuted draft requiring a fresh prospective registration.
+- Linux reusable check entry points now use the tested descendant-aware
+  supervisor. Six controlled tests passed, including actual CLI/source-gate
+  callers, nested sessions, timeout/cancellation/SIGTERM and refusal when pidfd
+  support is absent. Cleanup verified zero owned descendants. This controller
+  requirement does not narrow the separately tested product Python ABI range.
+- Notice-only refresh of four exact1 provider wheels passed independent root
+  byte/RECORD checks; runtime bytes and version/tags are unchanged. Complete
+  LGPL/GPL notices, corresponding source and relink inputs are supplied. Eleven
+  focused packaging tests and four isolated ABI import smokes passed. Recipient
+  relink is unexecuted, final retained symbols unmeasured, and Microsoft
+  redistribution conditions unadjudicated. No distribution-ready claim follows.
+
+Evidence and exact commands: ANYmesh docs `volume_source_gate_repair_20261028.md`,
+`volume_native_gate_20261028.md`, `thin_resolution_results_20261028.md`,
+`pytetwild_exact_notice_handoff.md`, and `workflow2_testing_regime.md`.
+Raw records remain under the shared `evidence/` directory; canonical current
+status is ANYmesh `docs/volume_qualification.json`. Same-family independent
+reviews support the finite slices only; no human/different-family acceptance
+is claimed. Root accepts their recorded outcomes, including both NO_GO gates.
+
+Remaining completion gates: required thin geometry envelope; unresolved full
+repository/native regressions; applicable candidate-owner CI/native platform and
+macOS coverage; artifact/relink and release review. Previous eight-cell pure-core
+Windows/Linux 3.11–3.14 evidence remains valid only for its unchanged finite slice.
+Workflow 1's coupling failures remain separate. No tolerances, failed attempts,
+historical platform jobs or publication gates have been waived.
+
+### Remaining-gate decisions after prerequisite verification
+
+Q4 recovery candidate now passes333 quad tests including the original conforming
+recovery failure and new error/cancellation rollback. Root independently reviewed
+the local-midpoint candidate discovery and shared one-transaction front staging;
+no shape/area/angle predicate was relaxed. Real ANYfem80d failed eager GUI imports
+against this owner. Root adopted ed845899e7c358b46376bc3ad873327b0267e174 solely
+for the headless11-test consumer slice: reference-scope and region semantics are
+byte-identical, GUI editing is not qualified. Those11tests pass and full4078
+collection succeeds. Repair campaign216.586728690/1200s closes with failures
+retained; no full suite was executed by it.
+
+Next distinct candidate gate: build native ANYgeometry/ANYmesher wheels from
+owned immutable source snapshots, install into the real pinned consumer runtime,
+prove installed origins/native presence, run applicable native contracts and the
+full ANYmesher suite with live per-test journals. Linux3.12 initial envelope,
+1800supervised process seconds total, each<=900s; exact selection/source/artifact
+identities and case bounds recorded before run. Existing source/matrix budgets
+are not renewed, historical scientific campaigns not replayed. Use the new
+descendant-aware Linux supervisor after controlled14-test evidence. No writes
+to live source native binaries (thin study uses source owners concurrently).
+Other platform/macOS and release CI claims remain separate. Unexpected production
+changes outside the assigned quad repair require a concrete root scope decision.
+
+Thin criteria/runner received independent non-author review. Initial review found
+and root repaired nested-session cleanup and incomplete runtime identity coverage
+before any native call. New Linux supervision passed timeout, cancel and actual
+SIGTERM with three owned sessions, all reaped;14controlled tests pass. Native
+worker measurement now distinguishes observation from full child-lifetime peak.
+Fresh runtime origin/hash verification is mandatory before the two new calls.
+Root implements this qualification slice because criterion adoption and frozen
+resource/evidence boundaries are reserved coordinator decisions; the worker owns
+the substantial connected Q4 algorithm/consumer/gate implementation.
+
+## 2026-10-28 — Resumed remaining-gate implementation
+
+User requested proceeding after local checkpoints ANYmesh2f9a331 and
+ANYgeometry5a3c37f. Both isolated worktrees were clean on resume. Earlier native
+call registrations and source/installed campaigns remain closed; failed evidence
+and all scientific limits remain unchanged. No merge/publication authority added.
+
+Small dependent slices:
+1. Repair the demonstrated Q4/T3 conforming-recovery defect blocking the existing
+   ANYmesher regression gate, and establish a real pinned ANYfem consumer test
+   prerequisite without sibling source edits. Acceptance: original recovery
+   regression plus rollback/negative contracts and the real consumer modules;
+   no removed assertions, tolerance changes, stubs or skipped required tests.
+   New candidate development/check budget1200 supervised process seconds,
+   per process<=300s, with final verification reserve. No unchanged broad suite
+   replay before an actionable candidate/harness change. Full gate selection and
+   execution bounds will be set after those prerequisites are ready.
+2. Establish prospective geometric thin-resolution/conditioning acceptance for
+   fresh thin offset fixtures, reviewed before new native execution. Earlier
+   favorable distributions are not retroactively accepted. Retain1e-3 volume/
+   face-area,1degree normal, supplied physical boundary delta and all numerical
+   limits. Explicitly separate geometric sampling from mechanical FE accuracy.
+3. Complete applicable native/artifact/performance evidence and release handoff,
+   preserving native/macOS/CI gates and stopping on actual unavailable authority
+   or platform prerequisites. Public provider remains disabled until promotion
+   criteria are met. Reuse evidence only for unchanged relevant implementation.
+
+Claude subscription/Mistral quota exhaustion remains cached. OpenAI implementation
+worker is the available fallback; root owns scientific criterion adoption,
+cross-repository acceptance and final Git delivery. All other repositories remain
+read-only. Initial risks: real consumer dependency closure and existing shell
+regressions; unsupported platform runners; choosing a defensible prospective
+thin sampling envelope without implying general elasticity accuracy.
+
 ## 2026-10-28 — Live continuation checkpoint
 
 Terminal installed-matrix delta: all8 Windows/Linux3.11–3.14 cells passed125
