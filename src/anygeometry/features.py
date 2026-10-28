@@ -60,6 +60,7 @@ _INCREMENTAL_ADDITIVE_FEATURES = frozenset(
         "geometry.face",
         "geometry.plate",
         "geometry.extrude",
+        "geometry.loft",
         "geometry.sketch.extrude",
         "geometry.sketch.plane",
         "geometry.revolve",
@@ -592,6 +593,7 @@ def _bind_topology_roles(
     *,
     _reverse_edge: bool = False,
     _edge_directions: Dict[EntityRef, bool] | None = None,
+    _stable_face_edges: bool = False,
 ) -> None:
     """Bind two feature-output closures by their exact topological roles.
 
@@ -701,8 +703,21 @@ def _bind_topology_roles(
 
     old_face = old_geometry.faces[old.id]
     new_face = new_geometry.faces[new.id]
+    # A freshly admitted loft may change its analytic representation when its
+    # seam or radii change. This is geometric support, not a topological role.
+    # Keep the exception confined to canonical four-edge loft patches; the
+    # complete stable edge-role bijection is checked immediately below.
+    loft_support_transition = (
+        _stable_face_edges
+        and type(old_face.surface) in (CoonsSurface, Cylinder, Cone)
+        and type(new_face.surface) in (CoonsSurface, Cylinder, Cone)
+        and len(old_face.loop) == len(new_face.loop) == 4
+        and old_face.corners == new_face.corners == (0, 1, 2, 3)
+        and not old_face.holes and not new_face.holes
+        and old_face.parameterization is None and new_face.parameterization is None
+    )
     if (
-        type(old_face.surface) is not type(new_face.surface)
+        (type(old_face.surface) is not type(new_face.surface) and not loft_support_transition)
         or type(old_face.parameterization) is not type(new_face.parameterization)
         or len(old_face.loop) != len(new_face.loop)
         or len(old_face.holes) != len(new_face.holes)
@@ -713,6 +728,14 @@ def _bind_topology_roles(
         (old_face.loop,) + tuple(old_face.holes),
         (new_face.loop,) + tuple(new_face.holes),
     ):
+        if _stable_face_edges:
+            # Loft publishes explicit vertex/edge output slots before faces.
+            # A normal flip changes face uses, never those edge definitions.
+            mapped = [bindings.get(EntityRef("edge", item.edge)) for item in old_loop]
+            expected = {EntityRef("edge", item.edge) for item in new_loop}
+            if any(value is None or len(value) != 1 for value in mapped) or {value[0] for value in mapped} != expected:
+                raise GeometryError("loft face boundary no longer matches its stable edge output roles")
+            continue
         for old_item, new_item in zip(old_loop, new_loop):
             _bind_topology_roles(
                 EntityRef("edge", old_item.edge),
@@ -1967,6 +1990,9 @@ class FeatureHistory:
                     if not current:
                         blocked = f"input {port!r} cannot be resolved"
                         break
+                    if record.kind == "geometry.loft" and (len(current) != 1 or current[0].kind != "edge"):
+                        blocked = f"loft input {port!r} changed topology; reselect its profile edges"
+                        break
                     made.extend(current)
                 if blocked:
                     break
@@ -2018,7 +2044,7 @@ class FeatureHistory:
             ):
                 for key in old_outputs:
                     _bind_topology_roles(outputs[key],working,old_outputs[key],geometry,
-                                         discarded_roles)
+                                         discarded_roles, _stable_face_edges=record.kind == "geometry.loft")
                 record.outputs = old_outputs
                 for reference in outputs.values():
                     discard_new.update(_entity_closure_refs((reference,), working))
@@ -2054,6 +2080,7 @@ class FeatureHistory:
                             working,
                             transition_by_old,
                             _edge_directions=edge_directions,
+                            _stable_face_edges=new_by_id[feature_id].kind == "geometry.loft",
                         )
                 else:
                     for old in old_items:
@@ -2385,6 +2412,9 @@ class FeatureHistory:
                     if not current:
                         blocked = f"input {port!r} cannot be resolved"
                         break
+                    if record.kind == "geometry.loft" and (len(current) != 1 or current[0].kind != "edge"):
+                        blocked = f"loft input {port!r} changed topology; reselect its profile edges"
+                        break
                     made.extend(current)
                 if blocked:
                     break
@@ -2454,6 +2484,7 @@ class FeatureHistory:
                             working,
                             transition_by_old,
                             _edge_directions=edge_directions,
+                            _stable_face_edges=new_by_id[feature_id].kind == "geometry.loft",
                         )
                 else:
                     for old in old_items:
@@ -2601,6 +2632,20 @@ def builtin_feature_registry() -> FeatureRegistry:
             raise GeometryError("an extrude feature needs edges")
         before = _before(geometry)
         geometry.extrude([item.id for item in edges], feature.parameters["vector"])
+        return _created_outputs(geometry, before)
+
+    def loft(geometry, feature, inputs):
+        first, second = inputs.get("first_edges", ()), inputs.get("second_edges", ())
+        if any(len(inputs.get(port, ())) != len(feature.inputs.get(port, ()))
+               for port in ("first_edges", "second_edges")):
+            raise GeometryError("loft source topology changed; reselect the profile edges explicitly")
+        if not first or not second or any(item.kind != "edge" for item in (*first, *second)):
+            raise GeometryError("a loft feature needs two edge profiles")
+        before = _before(geometry)
+        geometry.loft([item.id for item in first], [item.id for item in second],
+                      **{key: feature.parameters[key] for key in
+                         ("reverse_first", "reverse_second", "first_start", "second_start", "flip_normal")
+                         if key in feature.parameters})
         return _created_outputs(geometry, before)
 
     def sketch_extrude(geometry, feature, inputs):
@@ -2879,6 +2924,7 @@ def builtin_feature_registry() -> FeatureRegistry:
         "geometry.face": face,
         "geometry.plate": plate,
         "geometry.extrude": extrude,
+        "geometry.loft": loft,
         "geometry.sketch.extrude": sketch_extrude,
         "geometry.sketch.plane": plane_sketch,
         "geometry.sketch.cut": sketch_cut,
