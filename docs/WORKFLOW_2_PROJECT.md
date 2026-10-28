@@ -1,5 +1,110 @@
 # Workflow 2 project record
 
+## 2026-10-28 — Accepted deviation and verified local delivery checkpoint
+
+W2-DEV-001 records the user's acceptance of the exact aligned v2 nominal-source
+discrepancy. The six failed values and original measured NO_GO remain unchanged;
+no numerical/source/reference threshold was edited and no physics/native case
+was rerun. Static adjudication verification passes (0.312000000005s,30s bound),
+matching frozen geometry/input/raw/admitted hashes and both orders' eight
+observed scalar errors. Independent non-author Read review found no scope or
+evidence mismatch. The accepted specimen no longer blocks finite E2E handoff.
+
+Local delivery advanced:
+
+- Fresh candidate ANYgeometry/ANYmesher pure wheels plus unchanged ANYsolid were
+  installed into an independent Windows3.11 venv. All installed origins and
+  wheel payload bytes match; base imports remain optional-backend independent;
+  pip check passes. The controlled six-Tet4 signed-offset box example passes
+  P1/P2 assembly/recovery/tensor/energy/load checks;3 focused tests pass with
+  zero failures/skips. Actual completed-input refresh is refused (exit2),350
+  protected hashes remain unchanged. Total77.059000000008s/600s,all owned cleanup
+  verified,zero native calls. Build-temp/JSON serialization failures remain.
+- Delivered application/static objects relink and import successfully on
+  Windows3.11 and Ubuntu24.04/Linux3.12. Linux recipient CRLF script failure
+  remains; canonical generator now emits UTF-8/LF. Regression through its
+  actual export path passes12 tests,zero failures/skips. Original inputs/wheels
+  remain unchanged; new raw/Windows DLL-adapted derivative hashes are separate
+  and unqualified. Exact supervised10.677205986963s/600s plus a documented
+  accounting-recovery tool-wall upper bound0.8284962s. All spawned cleanup
+  verified; no meshing or numerical qualification rerun. Initial fixture,
+  post-link parsing and bookkeeping failures are retained. Early runner-version
+  snapshot gaps and first Linux runner hash omission remain explicit.
+
+Root inspected the new example, installed-origin proof, refusal path, relink
+packaging and canonical generator wiring. Separate non-author same-family Read
+reviews support finite acceptance: `evidence/delivery-independent-review-20261028.json`
+and `evidence/provider-relink-20261028-a1/independent-final-review.json`.
+No different-family/human final acceptance is claimed. Exact commands, input/
+artifact hashes, logs, JUnit, process receipts, omissions and cleanup are in
+ANYmesh `docs/installed_delivery_20261028.md` and
+`docs/provider_relink_verification_20261028.md`, with machine handoffs under
+their matching evidence directories. The installed matrix CI lane already
+builds the candidate owner wheel and is preserved; no duplicate lane, broad
+regression replay or unrelated repair was added.
+
+Root final static reconciliation passes at
+`evidence/w2-final-local-delivery-review-d53851b103` (0.312999999995s,30s bound),
+with zero package/provider imports, tests, builds or physics executed. It parses
+new Python/JSON, verifies exact-case authority, preserved raw NO_GO,15 final
+passing pytest cases, fresh wheel identities, installed example, actual refresh
+refusal and both technical relink imports. Root accepts these finite local
+delivery outcomes with the recorded timing/runner/platform limitations. The
+machine decision is `evidence/delivery-root-review-20261028.json`.
+
+The numerical/core implementation, finite E2E handoff (with the accepted
+deviation) and these local delivery slices are reviewable. Whole Workflow2
+release remains gated by unresolved repository/native results, applicable
+candidate-owner CI/platform/macOS coverage, remaining native-artifact/source/
+relink/distribution assessment and final acceptance. Other ABI relinks,
+modified-library rebuild and derivative numerical equivalence are unverified.
+Production provider enabling, merge, push and publication are not authorized
+by the case acceptance. No further numerical/native runs are needed for the
+accepted aligned discrepancy; do not reopen that closed scientific campaign.
+
+## 2026-10-28 — User acceptance and remaining delivery work
+
+User: "We accept this discrepancy. Proceed" after the aligned v2 nominal-source
+physics discrepancy was reported. Root records decision W2-DEV-001 in ANYmesh
+`docs/decisions/W2-DEV-001-aligned-nominal-discrepancy.json`, scoped to the exact
+frozen aligned specimen and its six reported P1/P2 failed predicates. The
+nominal-reference discrepancies are accepted; measured NO_GO, failed values and
+all original limits remain unchanged. This is acceptance with a documented
+deviation, not a numerical PASS or a general waiver for other outputs.
+
+Finite cube/rectangular-prism, convex-prism and thin-region handoff may now
+proceed with that explicit case deviation. No tighter-boundary candidate or
+repeat physics/native meshing is needed for this decision. No other repository,
+platform, artifact/distribution, Workflow1 or release gate is waived, and the
+public provider remains disabled until its separate promotion requirements.
+
+Remaining small delivery slices and acceptance:
+
+1. Record source/input/raw/admitted mesh identities and exact measured limits
+   in W2-DEV-001; update current capability/handoff status without changing
+   original scientific runners/manifests/evidence. Acceptance: static identity
+   and authority reconciliation, preserving the original six failures.
+2. Verify delivered recipient relink recipes on copied Windows3.11 and
+   Linux3.12 artifacts; implement only concrete portable-handoff repairs in
+   fresh copies/harness. Acceptance: exact input hashes, successful isolated
+   import/export/marker checks, zero meshing calls, separate derivative hashes
+   and cleanup. Fresh600s total supervised checks, each<=180s,90s reserve.
+   Qualified wheels, runtime bytes and original payload remain untouched.
+3. Deliver a minimal controlled-fixture example and fresh source-free installed
+   owner/consumer-wheel smoke. Acceptance: candidate ANYgeometry/ANYmesher wheel
+   origins, unchanged registered ANYsolid wheel, optional backend independence,
+   reproducible small P1/P2 checks, honest provider guard/capability docs.
+   Fresh600s total, each<=180s,60s reserve,zero native meshing calls. Existing
+   eight-cell CI lane is reused; no duplicate platform campaign or broad suite.
+4. Independently review/reconcile those slices and save local handoff commits.
+   Historical jobs/platform coverage and unresolved broader regressions remain
+   explicit; no merging, pushing or publication is authorized.
+
+Implementation ownership is separate for recipient relink and installed
+example/delivery; root owns the case adjudication and cross-repository record.
+Cached Claude subscription/Mistral quota exhaustion remains unchanged; available
+OpenAI workers are the fallback, with same-family review limits explicit.
+
 ## 2026-10-28 — Revised thin and convex-prism verification: terminal results
 
 The missing convex-prism end-to-end slice now passes: exact retained regular
