@@ -80,7 +80,11 @@ def world_delta(domain, delta, v=0.0, u=0.0) -> np.ndarray:
 
 def uv(domain, curve, parameter) -> np.ndarray:
     chart = chart_curve_of(domain, curve)
-    return np.asarray(chart.evaluate(float(parameter)), dtype=float)
+    from .intersection_chart import IntersectionChart
+    if isinstance(chart, IntersectionChart):
+        return np.asarray(chart.evaluate(float(parameter)), dtype=float)
+    # Every other chart keeps the owning curve's own chart(): an iso-line's constant coordinate is exact there.
+    return np.asarray(curve.chart(float(parameter)), dtype=float)
 
 
 def tangent(domain, curve, parameter) -> np.ndarray:
