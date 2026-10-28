@@ -36,6 +36,7 @@ import math
 import numpy as np
 
 from .errors import GeometryError
+from ._cert_exact_runtime import fraction_kind as _fraction_kind
 from .nurbs import NurbsSurface, _float_down, _float_up
 from .plane_nurbs import PlaneNurbsNotCertified, charge_box, charge_split, depth_limit, plane_nurbs_section
 
@@ -902,6 +903,36 @@ class PlaneNurbsCurve:
 
 def _de_casteljau(values: list, t: Fraction) -> Fraction:
     work = list(values)
+    kind = ().__class__.__class__
+    rational = _fraction_kind(Fraction)
+    canonical = rational is not None and len(work) > 1 and kind(t) is rational
+    if canonical:
+        for value in work:
+            if kind(value) is not rational:
+                canonical = False
+                break
+    if canonical and '_from_coprime_ints' in rational.__dict__:
+        factory = rational._from_coprime_ints
+        # One common denominator for the coefficients, then integer affine
+        # recurrence. Each level adds exactly one factor of t._denominator.
+        denominator = 1
+        for a in work:
+            d = a._denominator
+            x, y = denominator, d
+            while y:
+                x, y = y, x % y
+            denominator = denominator // x * d
+        work = [a._numerator * (denominator // a._denominator) for a in work]
+        p, q = t._numerator, t._denominator
+        complement = q - p
+        for _ in range(len(work) - 1):
+            work = [complement * a + p * b for a, b in zip(work, work[1:])]
+            denominator *= q
+        numerator = work[0]
+        x, y = numerator, denominator
+        while y:
+            x, y = y, x % y
+        return factory(numerator // x, denominator // x)
     for _ in range(len(work) - 1):
         work = [(1 - t) * a + t * b for a, b in zip(work, work[1:])]
     return work[0]

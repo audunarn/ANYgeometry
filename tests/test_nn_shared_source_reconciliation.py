@@ -55,8 +55,30 @@ def test_refinement_error_is_strict_control_signal_with_original_full_error():
 def test_adopted_error_and_fresh_cos_pins_and_other_primitives_still_match():
     from anygeometry.nurbs_surface_intersection._dependencies import PINS,verify_dependencies
     assert dict(PINS)['errors.py']=='a6da540fff83f27e8f4fc5cc2b187f8413da6d2d3460461fa64b820429e04c89'
-    assert dict(PINS)['nurbs.py']=='ab19c366cbe6ec3646592809bde77fffd60df336b21c7525b8add7b7f5d00545'
+    assert dict(PINS)['nurbs.py']=='53310819017985a2bd6153a3449f27b24d087ecee713eb9c379f1eb021f21b77'
+    assert dict(PINS)['_cert_exact_runtime.py']=='68427a0294a160c10c32af712fb374eb4ac95d249fc719940f629e2a798c4afa'
+    assert dict(PINS)['plane_nurbs.py']=='f60c8b6d80ab2c652af2db32df3adfd0817af467b2aac20d775281991aa21db2'
+    assert dict(PINS)['tolerance.py']=='f7709e89d2294dab1b71aecdb6a6a92f212a42905531e21ace78e89f1e0ab7f5'
     verify_dependencies()
+
+
+def test_new_exact_runtime_dependency_mismatch_is_refused(monkeypatch):
+    from pathlib import Path
+    from anygeometry.nurbs_surface_intersection import _dependencies
+    from anygeometry.nurbs_surface_intersection._source import NurbsSurfaceIntersectionIntegrityError
+    target = Path(_dependencies.__file__).resolve().parent.parent / '_cert_exact_runtime.py'
+    original = Path.read_bytes
+    observed = []
+    def changed_read(path):
+        data = original(path)
+        if path == target:
+            observed.append(path)
+            return data + b'\n# simulated incompatible source\n'
+        return data
+    monkeypatch.setattr(Path, 'read_bytes', changed_read)
+    with pytest.raises(NurbsSurfaceIntersectionIntegrityError, match=r'dependency changed: _cert_exact_runtime\.py'):
+        _dependencies.verify_dependencies()
+    assert observed == [target]
 
 
 def test_frozen_direct_dependency_alias_and_initial_root_contract():

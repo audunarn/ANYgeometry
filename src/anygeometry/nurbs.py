@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
+from ._cert_exact_runtime import fraction_kind as _fraction_kind
 import math
 from typing import Sequence
 
@@ -655,6 +656,88 @@ class NurbsSurface:
         p, q, count_u, count_v = self.degree_u, self.degree_v, len(net), len(net[0])
         span_u, span_v = _exact_span(p, knots_u, count_u, s), _exact_span(q, knots_v, count_v, t)
         basis_u, basis_v = _exact_basis(p, knots_u, span_u, s), _exact_basis(q, knots_v, span_v, t)
+        entries = None
+        tuple_kind, list_kind = ().__class__, [].__class__
+        kind = tuple_kind.__class__
+        rational = _fraction_kind(Fraction)
+        canonical = (rational is not None and kind(net) is tuple_kind
+                and kind(basis_u) is list_kind and kind(basis_v) is list_kind
+                and 0 <= span_u - p and span_u < len(net) and 0 <= span_v - q
+                and len(basis_u) == p + 1 and len(basis_v) == q + 1)
+        if canonical:
+            for i in range(span_u - p, span_u + 1):
+                if kind(net[i]) is not tuple_kind or span_v >= len(net[i]):
+                    canonical = False
+                    break
+        if canonical:
+            for basis in (basis_u, basis_v):
+                for value in basis:
+                    if kind(value) is not rational:
+                        canonical = False
+                        break
+                if not canonical:
+                    break
+        if canonical:
+            entries = [[net[span_u - p + a][span_v - q + b]
+                        for b in range(len(basis_v))] for a in range(len(basis_u))]
+            for row in entries:
+                for entry in row:
+                    if kind(entry) is not tuple_kind or len(entry) != 4:
+                        canonical = False
+                        break
+                    for value in entry:
+                        if kind(value) is not rational:
+                            canonical = False
+                            break
+                    if not canonical:
+                        break
+                if not canonical:
+                    break
+        if canonical and '_from_coprime_ints' in rational.__dict__:
+            factory = rational._from_coprime_ints
+            # Only the active span is inspected. A single exact scale cancels
+            # in the final homogeneous quotient.
+            denominator = 1
+            for row in entries:
+                for entry in row:
+                    for value in entry:
+                        d = value._denominator
+                        x, y = denominator, d
+                        while y:
+                            x, y = y, x % y
+                        denominator = denominator // x * d
+            integer_bases = []
+            for basis in (basis_u, basis_v):
+                base_denominator = 1
+                for value in basis:
+                    d = value._denominator
+                    x, y = base_denominator, d
+                    while y:
+                        x, y = y, x % y
+                    base_denominator = base_denominator // x * d
+                integer_bases.append([value._numerator * (base_denominator // value._denominator)
+                                      for value in basis])
+            totals = [0] * 4
+            for a, nu in enumerate(integer_bases[0]):
+                for b, nv in enumerate(integer_bases[1]):
+                    factor = nu * nv
+                    for axis, value in enumerate(entries[a][b]):
+                        totals[axis] += factor * value._numerator * (denominator // value._denominator)
+            if totals[3] != 0:
+                result = []
+                for numerator in totals[:3]:
+                    denominator = totals[3]
+                    x, y = numerator, denominator
+                    while y:
+                        x, y = y, x % y
+                    if denominator < 0:
+                        # Python's remainder makes gcd negative in this case;
+                        # dividing by it normalizes the denominator's sign.
+                        if x > 0:
+                            x = -x
+                    result.append(factory(numerator // x, denominator // x))
+                return tuple(result)
+            # Keep the original division exception, including its message.
         total = [Fraction(0)] * 4
         for a, nu in enumerate(basis_u):
             for b, nv in enumerate(basis_v):

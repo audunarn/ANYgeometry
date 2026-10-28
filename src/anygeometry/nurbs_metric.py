@@ -7,6 +7,7 @@ import numpy as np
 
 from .branch_predicates import _rect, _range, _derivative_ranges
 from .errors import GeometryError
+from ._cert_exact_runtime import fraction_kind as _fraction_kind
 from .nurbs import NurbsSurface
 from .plane_nurbs import sub_patches_of, charge_box, charge_split, depth_limit
 
@@ -16,11 +17,48 @@ def add(a, b):
 
 
 def mul(a, b):
+    # Literal-derived builtin types cannot be replaced through module globals.
+    tuple_kind = ().__class__
+    kind = tuple_kind.__class__
+    rational = _fraction_kind(Q)
+    if (kind(a) is tuple_kind and kind(b) is tuple_kind and a.__len__() == b.__len__() == 2
+            and rational is not None and kind(a[0]) is rational and kind(a[1]) is rational
+            and kind(b[0]) is rational and kind(b[1]) is rational
+            and a[0]._numerator * a[1]._denominator <= a[1]._numerator * a[0]._denominator
+            and b[0]._numerator * b[1]._denominator <= b[1]._numerator * b[0]._denominator):
+        al, ah = a
+        bl, bh = b
+        if al._numerator >= 0:
+            if bl._numerator >= 0:
+                return al * bl, ah * bh
+            if bh._numerator <= 0:
+                return ah * bl, al * bh
+            return ah * bl, ah * bh
+        if ah._numerator <= 0:
+            if bl._numerator >= 0:
+                return al * bh, ah * bl
+            if bh._numerator <= 0:
+                return ah * bh, al * bl
+            return al * bh, al * bl
+        if bl._numerator >= 0:
+            return al * bh, ah * bh
+        if bh._numerator <= 0:
+            return ah * bl, al * bl
+        return min(al * bh, ah * bl), max(al * bl, ah * bh)
     values = [x*y for x in a for y in b]
     return min(values), max(values)
 
 
 def scale(a, value):
+    tuple_kind = ().__class__
+    kind = tuple_kind.__class__
+    rational = _fraction_kind(Q)
+    if (kind(a) is tuple_kind and a.__len__() == 2 and rational is not None and kind(value) is rational
+            and kind(a[0]) is rational and kind(a[1]) is rational
+            and a[0]._numerator * a[1]._denominator <= a[1]._numerator * a[0]._denominator):
+        if value._numerator >= 0:
+            return a[0] * value, a[1] * value
+        return a[1] * value, a[0] * value
     return mul(a, (value, value))
 
 

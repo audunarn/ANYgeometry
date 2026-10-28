@@ -159,9 +159,6 @@ _CELLS = WeakKeyDictionary()
 _SAMPLINGS = WeakKeyDictionary()
 
 
-_LITERAL_SCALARS = (bool, int, float, str)
-
-
 def _literal(value):
     kind = type(value)
     if value is None or kind in (bool, int, float, str):
@@ -175,7 +172,8 @@ def _literal(value):
     if kind is tuple:
         # Exact scalar items are encoded inline; every other item takes the
         # unchanged recursion (identical output and refusals).
-        return tuple([(type(v).__name__, v) if v is None or type(v) in _LITERAL_SCALARS
+        return tuple([(item_kind.__name__, v) if ((item_kind := type(v)) is bool
+                      or item_kind is int or item_kind is float or item_kind is str or v is None)
                       else _literal(v) for v in value])
     if kind in (EntityHandle, BoundaryChordOccurrence, MaterialBoundaryChord,
                 PreparedMaterialBoundaryChords, PreparedMaterialBoundarySampling,
@@ -297,15 +295,41 @@ _COS_CHORD_INTERVAL = _chord_jets.I
 def _chord_function_pin(function):
     # Same value as the former sorted()/getattr form; only the empty-kwdefaults
     # case (nearly every pinned function) skips building and sorting a dict.
-    kwdefaults = getattr(function, '__kwdefaults__', None)
     return (function, getattr(function, '__code__', None),
             getattr(function, '__defaults__', None),
             tuple((key, id(value)) for key, value in sorted(kwdefaults.items()))
-            if kwdefaults else ())
+            if (kwdefaults := getattr(function, '__kwdefaults__', None)) else ())
+
+
+from . import _cert_exact_runtime as _exact_runtime
+
+_EXACT_RUNTIME_PINS = tuple((name, _chord_function_pin(getattr(_exact_runtime, name)))
+                          for name in ('fraction_kind', 'binding'))
+
+
+def _exact_arithmetic_context(_runtime=_exact_runtime, _pins=_EXACT_RUNTIME_PINS):
+    """Reject renewed admission declarations before capturing a proof context."""
+    from . import nurbs_metric as metric, support_curves as section
+    if _exact_runtime is not _runtime or _EXACT_RUNTIME_PINS is not _pins:
+        raise GeometryError('exact arithmetic admission declaration changed')
+    for name, pin in _pins:
+        current = getattr(_runtime, name)
+        if (current is not pin[0] or current.__code__ is not pin[1]
+                or current.__defaults__ is not pin[2] or current.__kwdefaults__ is not None):
+            raise GeometryError('exact arithmetic admission calculator changed')
+    aliases = (_chord_nurbs._fraction_kind, section._fraction_kind, metric._fraction_kind)
+    declaration = _runtime.binding(aliases)
+    if declaration is None:
+        raise GeometryError('exact arithmetic admission binding changed')
+    return (_pins, declaration, aliases, id(section.Fraction), id(_chord_nurbs.Fraction), id(metric.Q))
+
+
+_EXACT_CONTEXT_PIN = _chord_function_pin(_exact_arithmetic_context)
 
 
 _COS_CHORD_CONTEXT = tuple((owner, name, _chord_function_pin(getattr(owner, name)))
     for owner, names in (
+        (_exact_runtime, ('fraction_kind', 'binding')),
         (_chord_nurbs.CurveOnSurface, ('evaluate', 'bounds', 'exact_point')),
         (_chord_nurbs.NurbsCurve, ('evaluate', 'exact_hull', 'exact_point')),
         (_chord_nurbs.NurbsSurface, ('evaluate', 'evaluate_many', 'exact_net', 'exact_point')),
@@ -331,6 +355,12 @@ def _canonical_cos(curve):
             or curve.transform != _IDENTITY
             or type(curve.also_on) is not tuple or curve.also_on):
         return False
+    if (_exact_arithmetic_context is not _EXACT_CONTEXT_PIN[0]
+            or _exact_arithmetic_context.__code__ is not _EXACT_CONTEXT_PIN[1]
+            or _exact_arithmetic_context.__defaults__ is not _EXACT_CONTEXT_PIN[2]
+            or _exact_arithmetic_context.__kwdefaults__ is not None):
+        raise GeometryError('exact arithmetic context calculator changed')
+    _exact_arithmetic_context()
     return all(_chord_function_pin(getattr(owner, name)) == pin
                for owner, name, pin in _COS_CHORD_CONTEXT)
 
@@ -981,6 +1011,12 @@ def _cell_reference_calculator_context():
     Class identity does not bind its methods. Include private dispatch and
     arithmetic aliases, as in the owner's rational fan proof context.
     """
+    if (_exact_arithmetic_context is not _EXACT_CONTEXT_PIN[0]
+            or _exact_arithmetic_context.__code__ is not _EXACT_CONTEXT_PIN[1]
+            or _exact_arithmetic_context.__defaults__ is not _EXACT_CONTEXT_PIN[2]
+            or _exact_arithmetic_context.__kwdefaults__ is not None):
+        raise GeometryError('exact arithmetic context calculator changed')
+    exact_arithmetic = _exact_arithmetic_context()
     from . import regular_source_reference as source, plane_source_reference as plane
     from . import curvilinear_reference_maps as maps, nurbs_metric as metric
     from . import nurbs_runtime_binding as runtime, native_support_snapshots as native
@@ -1034,7 +1070,8 @@ def _cell_reference_calculator_context():
         plane.PlaneSide,maps._SideMemo,_chord_jets.I,_chord_intervals.Interval,planar.ExactPlane)
     aliases = (source.Q,plane.Q,maps.Q,metric.Q,_chord_jets.Q,_chord_nurbs.Fraction)
     return (classes,functions,aliases,plane_constructor,enclosure_functions,
-        enclosure_bindings,enclosure_declarations)
+        enclosure_bindings,enclosure_declarations,exact_arithmetic,
+        _chord_function_pin(_exact_arithmetic_context))
 
 
 def _cell_reference_world_chord(model, references, edge_id, a, b, endpoints, error, check):

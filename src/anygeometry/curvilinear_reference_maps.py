@@ -653,6 +653,15 @@ def certify_fan_subtriangle(support, boundary, centre_uv, xyz_side, centre_xyz, 
         from . import prepared_material_curvilinear as prepared
         from . import nurbs, nurbs_runtime_binding as runtime, native_support_snapshots as native
         def context():
+            exact_context = prepared._exact_arithmetic_context
+            expected_context = prepared._EXACT_CONTEXT_PIN
+            if (exact_context is not expected_context[0]
+                    or exact_context.__code__ is not expected_context[1]
+                    or exact_context.__defaults__ is not expected_context[2]
+                    or exact_context.__kwdefaults__ is not None):
+                raise GeometryError('exact arithmetic context calculator changed')
+            exact_arithmetic = prepared._exact_arithmetic_context()
+            exact_pin = prepared._chord_function_pin(prepared._exact_arithmetic_context)
             functions = (reference.RationalSourceSide._validate, reference.RationalSourceSide._ranges,
                 reference.RationalSourceSide.box, reference.RationalSourceSide.derivative,
                 reference._pcurve_point_jet, reference.definition_checksum, jets._curve_jet,
@@ -687,8 +696,8 @@ def certify_fan_subtriangle(support, boundary, centre_uv, xyz_side, centre_xyz, 
                 pins.append((id(function),id(code),literal(defaults),
                     None if keywords is None else tuple((key,literal(keywords[key]))
                                                        for key in sorted(keywords))))
-            return ((id(reference.RationalSourceSide),id(reference.SourceNode),id(_SideMemo),tuple(pins)),
-                    tuple(retained))
+            return ((id(reference.RationalSourceSide),id(reference.SourceNode),id(_SideMemo),tuple(pins),
+                     exact_arithmetic,exact_pin), tuple(retained)+(exact_arithmetic,exact_pin))
         # IDs are compared as scalars, while these exact function AND code
         # objects remain alive for the whole proof, including callback exits.
         expected, retained_context = context()
