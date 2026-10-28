@@ -1,5 +1,21 @@
 # Workflow 2 project record
 
+## Delivery priority — user steering, 2026-10-28
+
+Keep the complete geometry-to-analysis workflow in view. Prioritize native
+boxes/convex prisms/thin offsets, authoritative boundary transfer, optional
+tetrahedral meshing and installed ANYsolid interoperability as one usable path.
+The next substantive qualification issue is the required thin-region sampling
+envelope. Preserve the failed study and its closed registration; a revised
+candidate needs its own prospective inputs and execution bounds.
+
+Time-box unrelated shell/surface regression investigation. Track its exact
+failures as unresolved integration/release gates, and return to them when they
+block the relevant delivery step. Do not let one broad-suite timeout become the
+organizing objective or imply that tetrahedral generation is hanging. Preserve
+all required gates, platform coverage, independent review and release limits;
+this priority change grants no extra numerical calls or publication authority.
+
 ## 2026-10-28 — Terminal reconciliation: Workflow 2 remains NO_GO
 
 This entry supersedes the pending status in the historical entries below;
