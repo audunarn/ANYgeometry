@@ -13,6 +13,7 @@ import numpy as np
 from .errors import GeometryError
 from .entities import EntityRef
 from .nurbs import NurbsCurve
+from .reference import bspline as _reference
 from .curves import arc_frame
 
 
@@ -164,6 +165,33 @@ def solve_sketch_edit(definition, plane, *, fixed_points=(), drag_targets=None, 
     return SketchSolveResult({k:tuple(map(float,coordinates[i])) for i,k in enumerate(keys)},True,rank,2*n-rank,(),float(np.max(np.abs(residual))) if len(residual) else 0.)
 
 
+def _interpolation_controls(degree, knots, parameters, values):
+    """Controls of the B-spline through ``values`` at ``parameters`` (exact collocation).
+
+    The square collocation matrix is nonsingular exactly when every site lies
+    inside the support of its basis function (Schoenberg-Whitney); that is
+    checked before solving. B-spline collocation matrices are totally positive,
+    so Gaussian elimination with partial pivoting is backward stable here.
+    """
+    knots = np.asarray(knots,dtype=float); count = len(parameters)
+    interior = np.arange(1,count-1)
+    if len(knots) != count+degree+1 or np.any(knots[interior] >= parameters[interior]) \
+            or np.any(parameters[interior] >= knots[interior+degree+1]):
+        raise GeometryError('spline fit points violate the Schoenberg-Whitney condition')
+    spans = _reference.find_spans(degree,knots,count,parameters)
+    basis = _reference.basis_derivatives(degree,knots,spans,parameters,0)[:,0,:]
+    matrix = np.zeros((count,count))
+    for row,(span,local) in enumerate(zip(spans,basis)):
+        matrix[row,span-degree:span+1] = local
+    try:
+        controls = np.linalg.solve(matrix,values)
+    except np.linalg.LinAlgError as error:
+        raise GeometryError('spline fit-point interpolation system is singular') from error
+    if not np.all(np.isfinite(controls)):
+        raise GeometryError('spline fit-point interpolation is not representable in float64')
+    return tuple(tuple(map(float,point)) for point in controls)
+
+
 def _nurbs(points, degree=3, weights=(), fit=False, closed=False):
     values = np.asarray(points,dtype=float)
     if len(values) < 2:
@@ -174,26 +202,31 @@ def _nurbs(points, degree=3, weights=(), fit=False, closed=False):
     if degree < 1:
         raise GeometryError('spline degree must be positive')
     if fit:
-        try:
-            from scipy.interpolate import make_interp_spline
-        except ImportError as error:
-            raise GeometryError('fit-point sketch splines require SciPy; install ANYgeometry[sketch]') from error
+        if not np.all(np.isfinite(values)):
+            raise GeometryError('spline fit points must be finite')
         distances = np.linalg.norm(np.diff(values,axis=0),axis=1)
         if np.any(distances <= 1e-14):
             raise GeometryError('spline fit points must be distinct neighbours')
         t = np.r_[0.,np.cumsum(distances)]; t /= t[-1]
+        if np.any(np.diff(t) <= 0.):
+            raise GeometryError('spline fit point chord parameters must be strictly increasing')
         # Three fit points define a quadratic, not two straight spans.
         # Its explicit clamped knots avoid relying on an even-degree
         # not-a-knot convention. Retain the existing cubic default for
         # larger fit-point sets when a quadratic was requested.
-        knots = None
         if degree == 2:
             if len(values) == 3:
-                knots = (0., 0., 0., 1., 1., 1.)
+                knots = np.asarray((0., 0., 0., 1., 1., 1.))
             else:
                 degree = 3
-        spline = make_interp_spline(t,values,k=degree,t=knots)
-        return NurbsCurve(degree,tuple(spline.t),tuple(map(tuple,spline.c)))
+        if degree != 2:
+            if degree % 2 != 1:
+                raise GeometryError('fit-point sketch splines need an odd degree (or a three-point quadratic)')
+            # Not-a-knot end conditions for odd degree: interior knots at the
+            # chord parameters, omitting (degree-1)/2 + 1 sites at each end.
+            m = (degree-1)//2
+            knots = np.r_[(t[0],)*(degree+1),t[m+1:len(t)-m-1],(t[-1],)*(degree+1)]
+        return NurbsCurve(degree,tuple(map(float,knots)),_interpolation_controls(degree,knots,t,values))
     count = len(values); interior = count-degree-1
     knots = (0.,)*(degree+1)+tuple(i/(interior+1) for i in range(1,interior+1))+(1.,)*(degree+1)
     w = tuple(weights)

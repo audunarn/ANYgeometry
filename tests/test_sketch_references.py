@@ -108,7 +108,7 @@ def test_planar_plate_section_is_captured_as_exact_straight_segment():
     reference = capture_sketch_reference(model, _plane(), face, "s")
     assert reference.kind == "section" and reference.source_kind == "face"
     (start, end), = reference.segments
-    assert sorted((start, end)) == pytest.approx([(0.0, 0.0), (2.0, 0.0)])
+    assert np.asarray(sorted((start, end)), dtype=float) == pytest.approx(np.array([[0.0, 0.0], [2.0, 0.0]]))
     assert reference.keys == ("ref:s:0", "ref:s:1")
     assert SketchReference.from_dict(reference.to_dict()) == reference
 
