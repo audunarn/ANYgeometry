@@ -650,3 +650,22 @@ __all__ = [
 ]
 
 __version__ = "0.4.6"
+
+from .wave_surface_clipping import SignedClip, clip_triangle_positive, clip_polygon_positive
+__all__ += ["SignedClip", "clip_triangle_positive", "clip_polygon_positive"]
+
+from .sketch_entities import (SketchEntity, SketchWire, SketchSolveResult, upgrade_sketch,
+    solve_sketch_edit, sample_sketch_entity, sketch_entity_radius, set_sketch_radius,
+    round_sketch_corner, sketch_wire_edge_keys)
+from .sketch_references import (ReferenceLink, SketchReference, SketchReferenceError, bind_references,
+    capture_reference_link, capture_sketch_reference, reference_links_from_parameters,
+    reference_links_to_parameters, reference_source_signature, resolve_reference_source,
+    surviving_reference_links)
+__all__ += ["SketchEntity", "SketchWire", "SketchSolveResult", "upgrade_sketch", "solve_sketch_edit",
+    "sample_sketch_entity", "sketch_entity_radius", "set_sketch_radius", "round_sketch_corner", "sketch_wire_edge_keys",
+    "ReferenceLink", "SketchReference", "SketchReferenceError", "bind_references", "capture_reference_link",
+    "capture_sketch_reference", "reference_links_from_parameters", "reference_links_to_parameters",
+    "reference_source_signature", "resolve_reference_source", "surviving_reference_links"]
+
+from .sketch_cut import validate_sketch_cut, apply_sketch_cut
+__all__ += ['validate_sketch_cut', 'apply_sketch_cut']

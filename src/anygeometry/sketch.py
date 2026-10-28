@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal, Mapping, Sequence, TYPE_CHECKING
+from uuid import uuid4
 
 import numpy as np
 
@@ -19,7 +20,7 @@ __all__ = [
     "materialize_sketch_on_plane", "solve_sketch",
 ]
 
-ConstraintKind = Literal["distance", "coincident", "on_edge", "on_vertex"]
+ConstraintKind = Literal["distance", "coincident", "on_edge", "on_vertex", "horizontal", "vertical", "fixed"]
 
 
 def _finite_pair(value: Sequence[float], label: str) -> tuple[float, float]:
@@ -38,13 +39,15 @@ class SketchConstraint:
     second: str | None = None
     value: float | None = None
     boundary_index: int | None = None
+    id: str | None = None
+    position: tuple[float, float] | None = None
 
     def __post_init__(self) -> None:
-        if self.kind not in ("distance", "coincident", "on_edge", "on_vertex"):
+        if self.kind not in ("distance", "coincident", "on_edge", "on_vertex", "horizontal", "vertical", "fixed"):
             raise GeometryError(f"unknown sketch constraint {self.kind!r}")
         if not str(self.first).strip():
             raise GeometryError("a sketch constraint needs a first point")
-        if self.kind in ("distance", "coincident"):
+        if self.kind in ("distance", "coincident", "horizontal", "vertical"):
             if not self.second or self.second == self.first:
                 raise GeometryError(f"sketch {self.kind} needs two different points")
         if self.kind == "distance":
@@ -57,9 +60,15 @@ class SketchConstraint:
             if index < 0:
                 raise GeometryError(f"sketch {self.kind} needs a boundary index")
             object.__setattr__(self, "boundary_index", index)
+        if self.position is not None:
+            object.__setattr__(self, 'position', _finite_pair(self.position, 'fixed position'))
 
     def to_dict(self) -> dict[str, object]:
         result: dict[str, object] = {"kind": self.kind, "first": self.first}
+        if self.id is not None:
+            result["id"] = self.id
+        if self.position is not None:
+            result['position'] = list(self.position)
         if self.second is not None:
             result["second"] = self.second
         if self.value is not None:
@@ -76,6 +85,8 @@ class SketchConstraint:
             second=None if data.get("second") is None else str(data["second"]),
             value=None if data.get("value") is None else float(data["value"]),
             boundary_index=None if data.get("boundary_index") is None else int(data["boundary_index"]),
+            id=None if data.get("id") is None else str(data["id"]),
+            position=None if data.get('position') is None else tuple(data['position']),
         )
 
 
@@ -84,28 +95,55 @@ class SketchDefinition:
     """JSON-safe editable sketch intent."""
 
     points: Mapping[str, tuple[float, float]]
-    path: tuple[str, ...]
+    path: tuple[str, ...] = ()
     constraints: tuple[SketchConstraint, ...] = ()
     closed: bool = True
     extrusion: float = 0.0
+    version: int = 1
+    entities: tuple = ()
+    wires: tuple = ()
+    references: tuple = ()
+    # Transient: identities of solve-time reference anchors in a bound definition.
+    # Never persisted; legacy user points that merely start with "ref:" are not listed.
+    bound_reference_keys: frozenset = frozenset()
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "bound_reference_keys", frozenset(str(key) for key in self.bound_reference_keys))
         points = {str(key): _finite_pair(value, f"sketch point {key!r}") for key, value in self.points.items()}
-        if len(points) < 2:
+        if self.version not in (1, 2):
+            raise GeometryError("unsupported sketch version")
+        if self.version == 1 and len(points) < 2:
             raise GeometryError("a sketch needs at least two points")
         path = tuple(str(item) for item in self.path)
         minimum = 3 if self.closed else 2
-        if len(path) < minimum:
+        if self.version == 1 and len(path) < minimum:
             raise GeometryError(f"a sketch path needs at least {minimum} points")
         missing = [item for item in path if item not in points]
         if missing:
             raise GeometryError(f"sketch path references missing point {missing[0]!r}")
         if len(set(path)) != len(path):
             raise GeometryError("sketch path cannot repeat a point key")
-        constraints = tuple(self.constraints)
+        constraints = tuple(replace(c, position=points[c.first]) if c.kind=='fixed' and c.position is None and c.first in points else c for c in self.constraints)
+        if self.version == 2:
+            constraints = tuple(replace(c,id=str(uuid4())) if c.id is None else c for c in constraints)
+            if len({c.id for c in constraints}) != len(constraints):
+                raise GeometryError('sketch constraint IDs must be unique')
+        from .sketch_references import SketchReference
+        references = tuple(SketchReference.from_dict(item) for item in self.references)
+        if references and self.version != 2:
+            raise GeometryError("sketch references need a version 2 sketch")
+        if len({item.id for item in references}) != len(references):
+            raise GeometryError("sketch reference IDs must be unique")
+        reference_keys = {key for item in references for key in item.keys}
+        if reference_keys & set(points):
+            raise GeometryError("sketch points cannot reuse a reference point key")
         for constraint in constraints:
-            if constraint.first not in points or (constraint.second is not None and constraint.second not in points):
+            names = (constraint.first,) + (() if constraint.second is None else (constraint.second,))
+            if constraint.kind == "fixed" and constraint.first in reference_keys:
+                raise GeometryError("a reference point is already fixed; it cannot be constrained again")
+            if any(name not in points and name not in reference_keys for name in names):
                 raise GeometryError("sketch constraint references an unavailable point")
+        object.__setattr__(self, "references", references)
         extrusion = float(self.extrusion)
         if not np.isfinite(extrusion):
             raise GeometryError("sketch extrusion must be finite")
@@ -113,15 +151,31 @@ class SketchDefinition:
         object.__setattr__(self, "path", path)
         object.__setattr__(self, "constraints", constraints)
         object.__setattr__(self, "extrusion", extrusion)
+        from .sketch_entities import SketchEntity, SketchWire
+        entities = tuple(item if isinstance(item, SketchEntity) else SketchEntity.from_dict(item) for item in self.entities)
+        wires = tuple(item if isinstance(item, SketchWire) else SketchWire.from_dict(item) for item in self.wires)
+        if len({item.id for item in entities}) != len(entities) or len({item.id for item in wires}) != len(wires):
+            raise GeometryError("sketch entity and contour IDs must be unique")
+        if any(key not in points for item in entities for key in item.points):
+            raise GeometryError("sketch entity references unavailable point")
+        if any(key not in {item.id for item in entities} for wire in wires for key in wire.entities):
+            raise GeometryError("sketch contour references unavailable entity")
+        object.__setattr__(self, "entities", entities)
+        object.__setattr__(self, "wires", wires)
 
     def to_parameters(self) -> dict[str, object]:
-        return {
+        result = {
             "points": {key: list(value) for key, value in self.points.items()},
             "path": list(self.path),
             "constraints": [item.to_dict() for item in self.constraints],
             "closed": bool(self.closed),
             "extrusion": float(self.extrusion),
         }
+        if self.version == 2:
+            result.update(version=2, entities=[item.to_dict() for item in self.entities], wires=[item.to_dict() for item in self.wires])
+            if self.references:
+                result["references"] = [item.to_dict() for item in self.references]
+        return result
 
     @classmethod
     def from_parameters(cls, data: Mapping[str, object]) -> "SketchDefinition":
@@ -142,6 +196,10 @@ class SketchDefinition:
             constraints=tuple(constraints),
             closed=bool(data.get("closed", True)),
             extrusion=float(data.get("extrusion", 0.0)),
+            version=int(data.get("version", 1)),
+            entities=tuple(data.get("entities", ())),
+            wires=tuple(data.get("wires", ())),
+            references=tuple(data.get("references", ())),
         )
 
 
@@ -227,7 +285,12 @@ def _constraint_system(coordinates: np.ndarray, keys: tuple[str, ...], constrain
     for item in constraints:
         first_index = index[item.first]
         first = coordinates[first_index]
-        if item.kind == "coincident":
+        if item.kind in ("horizontal", "vertical"):
+            axis = 1 if item.kind == "horizontal" else 0
+            second_index = index[item.second or ""]
+            row = np.zeros(columns); row[2 * first_index + axis] = 1.; row[2 * second_index + axis] = -1.
+            rows.append(row); residuals.append(float(first[axis] - coordinates[second_index, axis]))
+        elif item.kind == "coincident":
             second_index = index[item.second or ""]
             for axis in (0, 1):
                 row = np.zeros(columns); row[2 * first_index + axis] = 1.0; row[2 * second_index + axis] = -1.0
@@ -260,6 +323,15 @@ def _constraint_system(coordinates: np.ndarray, keys: tuple[str, ...], constrain
 def solve_sketch(definition: SketchDefinition, plane: SketchPlane, *, tolerance: float = 1.0e-9, maximum_iterations: int = 30) -> dict[str, tuple[float, float]]:
     """Solve constraints with minimum-norm Newton corrections."""
 
+    if definition.references:
+        raise GeometryError("sketch references must be resolved and bound before solving")
+
+    if definition.version == 2 or any(c.kind == 'fixed' for c in definition.constraints):
+        from .sketch_entities import solve_sketch_edit
+        result = solve_sketch_edit(definition, plane, tolerance=tolerance, maximum_iterations=maximum_iterations)
+        if not result.converged:
+            raise GeometryError('sketch constraints are inconsistent: ' + ', '.join(result.conflicts))
+        return dict(result.points)
     keys = tuple(definition.points)
     coordinates = np.asarray([definition.points[key] for key in keys], dtype=float)
     if not definition.constraints:
@@ -297,6 +369,11 @@ def materialize_sketch_on_plane(
 ) -> dict[str, EntityRef]:
     """Create named sketch topology on an independent workplane."""
 
+    if definition.references:
+        raise GeometryError("sketch references must be resolved and bound before materialization")
+    if definition.version == 2:
+        from .sketch_entities import materialize_entities
+        return materialize_entities(geometry, plane, definition)
     solved = solve_sketch(definition, plane)
     parent = {key: key for key in solved}
 
