@@ -104,7 +104,7 @@ jobs:
           python-version: '3.13'
           cache: pip
       - run: python -m pip install -e '.[dev,planar]'
-      - run: python tools/check_licenses.py --check-installed
+      - run: python tools/check_licenses.py --check-installed --installed-extra dev --installed-extra planar
       - name: Run the kernel shard
         shell: bash
         env:
@@ -184,7 +184,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev,planar]"
-          python tools/check_licenses.py --check-installed
+          python tools/check_licenses.py --check-installed --installed-extra dev --installed-extra planar
           python - <<'PY'
           import re
           import tomllib

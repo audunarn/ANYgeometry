@@ -10,6 +10,14 @@
     },
     {
       "bundled": false,
+      "license_expression": "BSD-3-Clause",
+      "name": "mpmath",
+      "requirement": "mpmath>=1.3",
+      "scope": "optional:test",
+      "upstream": "https://mpmath.org/"
+    },
+    {
+      "bundled": false,
       "license_expression": "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0",
       "name": "numpy",
       "requirement": "numpy>=1.26",
@@ -23,6 +31,14 @@
       "requirement": "pytest>=8",
       "scope": "development",
       "upstream": "https://pytest.org/"
+    },
+    {
+      "bundled": false,
+      "license_expression": "BSD-3-Clause",
+      "name": "scipy",
+      "requirement": "scipy>=1.13",
+      "scope": "optional:sketch",
+      "upstream": "https://scipy.org/"
     },
     {
       "bundled": false,
@@ -55,14 +71,6 @@
       "requirement": "wheel",
       "scope": "build",
       "upstream": "https://github.com/pypa/wheel"
-    },
-    {
-      "bundled": false,
-      "license_expression": "BSD-3-Clause",
-      "name": "mpmath",
-      "requirement": "mpmath>=1.3",
-      "scope": "optional:test",
-      "upstream": "https://mpmath.org/"
     }
   ],
   "project": "ANYgeometry",

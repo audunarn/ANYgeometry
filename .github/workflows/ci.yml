@@ -70,7 +70,7 @@ jobs:
           ANYGEOMETRY_TEST_SHARD: ${{ matrix.shard }}/${{ matrix.os == 'macos-15-intel' && 5 || 3 }}
           ANYGEOMETRY_SHARD_REPORT: shard-${{ matrix.shard }}.json
         run: |
-          python tools/check_licenses.py --check-installed
+          python tools/check_licenses.py --check-installed --installed-extra dev --installed-extra planar
           python -m pytest --durations=20 --junitxml=kernel-results.xml
       - name: Slowest tests
         if: always()
@@ -176,7 +176,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev,planar]"
-          python tools/check_licenses.py --check-installed
+          python tools/check_licenses.py --check-installed --installed-extra dev --installed-extra planar
           python - <<'PY'
           import re
           import tomllib
