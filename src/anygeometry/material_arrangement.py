@@ -755,8 +755,13 @@ def _same_ray(first, second) -> bool:
     return bool(np.linalg.norm(unit_a - unit_b) <= 64 * _EPS)
 
 
-def _add_exact_planar_seams(domain, boundaries, paths, segments, points, tolerance, check, *, deferred=True):
+def _add_exact_planar_seams(domain, boundaries, paths, segments, points, tolerance, check, *, deferred=True,
+                            rotation=None):
     """Decomposition seams on a Plane support through exact stations (R1b step 2b, D6/D7).
+
+    Returns the number of seam ends. ``rotation`` (cosine, sine) turns both seam directions in the
+    support plane; ``None`` (every first attempt) keeps main's directions. It is used only by the
+    refusal-only retry of :func:`_arrange_material`.
 
     Main's rules: an interior trace end (on no boundary) with at most one ray
     gets two seams, along the authored ``u`` direction and its in-plane
@@ -838,6 +843,10 @@ def _add_exact_planar_seams(domain, boundaries, paths, segments, points, toleran
     normal = np.cross(support.u_vector, support.v_vector)
     normal /= np.linalg.norm(normal)
     authored = np.asarray(support.u_vector)/np.linalg.norm(support.u_vector)
+    if rotation is not None:
+        cosine, sine = rotation
+        authored = cosine*authored + sine*np.cross(normal, authored)
+        authored /= np.linalg.norm(authored)
     # Main's seam: through the end point along the authored direction and its
     # physical perpendicular, as float unit vectors scaled by ``extent``. The
     # same parameterization is kept (clipping's 32-eps parameter windows depend
@@ -852,6 +861,7 @@ def _add_exact_planar_seams(domain, boundaries, paths, segments, points, toleran
                                           deferred=deferred):
                 segments[len(paths)] = piece
                 paths.append(ArrangementPath(stations.to_line(piece), decomposition=True))
+    return len(endpoints)
 
 
 def _exact_outgoing_direction(chart, edge_segments, item):
@@ -1611,13 +1621,61 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
                                  area_tolerance=area_tolerance, points=points)
 
 
+#: OPT-S refusal-only retry: (cosine, sine) of the seam-direction rotation, the nearest doubles to the
+#: rational angle (3/5, 4/5) (about 53.13 degrees: not a multiple of 90, so neither seam family maps onto
+#: an authored one).
+_SEAM_RETRY_ROTATION = (0.6, 0.8)
+#: The refusals that may stem from the seam directions (decomposition seams made tangent to a trace at its
+#: own end, two seams collinear within tol whose boundary hits are not, seam-carried conservation gaps).
+_SEAM_RETRY_REFUSALS = ("arrangement contains an unresolved bridge", "arrangement failed material conservation")
+
+
 def _arrange_material(domain, traces, *, tolerance, cancellation_check=None,
                       max_predicates=None, area_tolerance=None, points=()):
     """Return the complete arrangement, or raise without returning partial cells.
 
     ``max_predicates`` is an explicit optional resource budget; default planning
     has no model/intersection-count limit. The caller owns atomic application.
+
+    OPT-S: when a Plane face with decomposition seams refuses with an unresolved bridge or failed
+    material conservation, the arrangement is rebuilt once with both seam directions rotated by
+    :data:`_SEAM_RETRY_ROTATION`; every check and tolerance is unchanged. If the retry fails too, the
+    original error is raised (a cancellation during the retry propagates). Accepted first attempts are
+    returned unchanged. No retry under an explicit ``max_predicates`` budget.
     """
+    traces = tuple(traces)
+    options = dict(tolerance=tolerance, cancellation_check=cancellation_check, max_predicates=max_predicates,
+                   area_tolerance=area_tolerance, points=points)
+    record = {}
+    try:
+        return _arrange_material_once(domain, traces, record=record, **options)
+    except GeometryError as error:
+        if str(error) not in _SEAM_RETRY_REFUSALS or not record.get("seams") or max_predicates is not None:
+            raise
+        original = error
+    from .runtime_diagnostics import _increment, _timed_phase
+    _increment("arrangement_seam_rotation_retries")
+    if cancellation_check is not None and cancellation_check():
+        raise GeometryError("intersection arrangement cancelled")
+    failed = False
+    with _timed_phase("arrangement_seam_rotation"):
+        try:
+            arrangement = _arrange_material_once(domain, traces, seam_rotation=_SEAM_RETRY_ROTATION, **options)
+        except Exception as error:
+            if (isinstance(error, GeometryError) and str(error).endswith("cancelled")) or (
+                    cancellation_check is not None and cancellation_check()):
+                raise
+            failed = True
+    if failed:
+        raise original
+    _increment("arrangement_seam_rotation_accepted")
+    return arrangement
+
+
+def _arrange_material_once(domain, traces, *, tolerance, cancellation_check=None,
+                           max_predicates=None, area_tolerance=None, points=(), seam_rotation=None, record=None):
+    """One arrangement attempt; ``seam_rotation`` and ``record`` (receives ``seams``, the number of
+    Plane seam ends) serve the retry of :func:`_arrange_material`."""
     native_area_tolerance = (tolerance if area_tolerance is None else area_tolerance/domain.area_jacobian)
     examined = 0
     def check():
@@ -1663,7 +1721,10 @@ def _arrange_material(domain, traces, *, tolerance, cancellation_check=None,
         add_clipped(trace, trace.curve)
 
     if exact:
-        _add_exact_planar_seams(domain, boundaries, paths, segments, points, tolerance, check, deferred=deferred)
+        seams = _add_exact_planar_seams(domain, boundaries, paths, segments, points, tolerance, check,
+                                        deferred=deferred, rotation=seam_rotation)
+        if record is not None:
+            record["seams"] = seams
     else:
         # Interior-ended traces need material decomposition seams. Their physical
         # directions must not inherit scale/shear from an affine support chart.
