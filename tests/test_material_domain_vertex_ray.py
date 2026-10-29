@@ -309,3 +309,241 @@ def test_vertex_ray_containment_matches_winding_oracle(seed):
                     if domain.contains(_plane_query(route, x, y0), 0., 1e-9) != want:
                         wrong.append((trial, route, x, y0, want))
     assert not wrong
+
+
+# --- T2-0 fix round 2: an off-band end root keeps its own crossing location (review R2 P2) ---------------
+#
+# A long oblique edge ends at a vertex V k eps (of its height) away from the ray, outside the tolerance
+# band, so its root t ~ 1 - k eps is not snapped. Fix 1 skipped that root and counted the crossing at V,
+# i.e. moved it horizontally by ~k eps * L (31x the tolerance for L = 1e8, k = 4): a query between the
+# true crossing and V was inside. The truth below is an exact rational winding number.
+
+_EPS = 2.**-52
+_TOL = 1e-9
+
+
+def _exact_winding(vertices, q):
+    """Winding number of a closed polygon around q (exact rationals; q is not on the polygon)."""
+    from fractions import Fraction
+    qx, qy = map(Fraction, q)
+    winding = 0
+    for (ax, ay), (bx, by) in zip(vertices, vertices[1:]+vertices[:1]):
+        ax, ay, bx, by = map(Fraction, (ax, ay, bx, by))
+        side = (bx-ax)*(qy-ay)-(qx-ax)*(by-ay)
+        if ay <= qy < by and side > 0:
+            winding += 1
+        elif by <= qy < ay and side < 0:
+            winding -= 1
+    return winding
+
+
+def _exact_distance2(vertices, q):
+    from fractions import Fraction
+    qx, qy = map(Fraction, q)
+    best = None
+    for (ax, ay), (bx, by) in zip(vertices, vertices[1:]+vertices[:1]):
+        ax, ay, bx, by = map(Fraction, (ax, ay, bx, by))
+        dx, dy = bx-ax, by-ay
+        length2 = dx*dx+dy*dy
+        t = 0 if length2 == 0 else max(Fraction(0), min(Fraction(1), ((qx-ax)*dx+(qy-ay)*dy)/length2))
+        ex, ey = ax+t*dx-qx, ay+t*dy-qy
+        best = ex*ex+ey*ey if best is None else min(best, ex*ex+ey*ey)
+    return best
+
+
+def _bulge(p, q):
+    """A half circle from p to q bulging to the right of p -> q (start = centre + u: p up to rounding)."""
+    centre = (.5*(p[0]+q[0]), .5*(p[1]+q[1]), 0.)
+    u = (p[0]-centre[0], p[1]-centre[1], 0.)
+    v = (-u[1], u[0], 0.)                       # u turned counterclockwise: theta = pi/2 is right of p -> q
+    return EllipticArc(centre, u, v, 0., math.pi)
+
+
+def _lens_winding(arc, q):
+    """Winding number around q of the arc closed by its chord (float; q is far from both)."""
+    a, b = _point(arc, 0.), _point(arc, 1.)
+    radius = math.hypot(arc.u_vector[0], arc.u_vector[1])
+    centre = arc.center
+    if math.hypot(q[0]-centre[0], q[1]-centre[1]) >= radius:
+        return 0
+    chord_side = (b[0]-a[0])*(q[1]-a[1])-(q[0]-a[0])*(b[1]-a[1])      # > 0: q left of the chord a -> b
+    mid = _point(arc, .5)
+    bulge_side = (b[0]-a[0])*(mid[1]-a[1])-(mid[0]-a[0])*(b[1]-a[1])
+    if chord_side*bulge_side <= 0:
+        return 0
+    return 1 if bulge_side < 0 else -1          # arc a -> b then chord b -> a: counterclockwise if bulging right
+
+
+def _arc_distance(arc, q):
+    centre = arc.center
+    radius = math.hypot(arc.u_vector[0], arc.u_vector[1])
+    mid = _point(arc, .5)
+    best = min(math.hypot(q[0]-p[0], q[1]-p[1]) for p in (_point(arc, 0.), _point(arc, 1.)))
+    # the half circle is the half on the side of its midpoint
+    if (q[0]-centre[0])*(mid[0]-centre[0])+(q[1]-centre[1])*(mid[1]-centre[1]) >= 0:
+        best = min(best, abs(math.hypot(q[0]-centre[0], q[1]-centre[1])-radius))
+    return best
+
+
+def _off_band_loop(vertices, arc_after=None):
+    """Lines through ``vertices``; with ``arc_after = i`` the edge from vertex i is a right-bulging half circle."""
+    curves = []
+    for i, a in enumerate(vertices):
+        b = vertices[(i+1) % len(vertices)]
+        if i == arc_after:
+            curves.append(_bulge(a, b))
+        else:
+            curves.append(LinePath((a[0], a[1], 0.), (b[0], b[1], 0.)))
+    return curves
+
+
+def _truth(vertices, curves, q):
+    """(inside, distance) by the exact polygon winding plus the float lens of any arc (q far from it)."""
+    winding = _exact_winding(vertices, q)
+    distance = math.sqrt(float(_exact_distance2(vertices, q)))
+    for curve in curves:
+        if isinstance(curve, EllipticArc):
+            winding += _lens_winding(curve, q)
+            distance = min(distance, _arc_distance(curve, q))
+    return winding != 0, distance
+
+
+def _route_answers(curves, q, boundary):
+    """{route: contains_loop answer} over the exact and float routes for the loop ``curves`` and query q."""
+    from fractions import Fraction
+    loop = tuple(ArrangementPath(c) for c in curves)
+    domain = MaterialDomain(0, _plane(), (loop,))
+    exact = "exact-curved" if any(isinstance(c, EllipticArc) for c in curves) else "exact-straight"
+    return {exact: domain.contains_loop(loop, tuple(map(Fraction, q)), _TOL, boundary=boundary),
+            "float": domain.contains_loop(loop, tuple(map(float, q)), _TOL, boundary=boundary)}
+
+
+def _check_off_band(vertices, arc_after, queries, wrong, label, margin=2*_TOL):
+    """Both orientations, every first curve, both boundary settings; queries closer than margin are skipped."""
+    curves = _off_band_loop(vertices, arc_after)
+    checked = 0
+    for q in queries:
+        want, distance = _truth(vertices, curves, q)
+        if distance <= margin:
+            continue
+        for loop in _variants(curves):
+            for boundary in (False, True):
+                for route, got in _route_answers(loop, q, boundary).items():
+                    checked += 1
+                    if got != want:
+                        wrong.append((label, route, q, want, type(loop[0]).__name__, boundary))
+    return checked
+
+
+def _codex_queries(scale, k):
+    """The review repro family: incoming edge (-L, -L) -> V = (1, 0), the ray at y = -k eps L."""
+    from fractions import Fraction
+    delta = k*_EPS*scale
+    crossing = 1-Fraction(delta)*(1+1/Fraction(scale))      # exact x of the incoming edge at y = -delta
+    gap = max(4*delta, 1e-7)
+    xs = (float(crossing)-gap, float((crossing+1)/2), 1.-delta/2, 1.+gap, 1.75, -scale/2., 2.)
+    return [(x, -delta) for x in xs]
+
+
+@pytest.mark.parametrize("scale", (1., 1e4, 1e8))
+@pytest.mark.parametrize("arc", (False, True), ids=("lines", "arc"))
+def test_off_band_end_root_keeps_its_crossing_location(scale, arc):
+    """Review R2 P2 repro family (both orientations, every first curve, three routes, offsets 1..9 eps)."""
+    vertices = [(-scale, -scale), (1., 0.), (1., 1.), (-scale-1., 1.), (-scale-1., -scale)]
+    wrong, checked = [], 0
+    for k in range(1, 10):
+        checked += _check_off_band(vertices, 1 if arc else None, _codex_queries(scale, k), wrong, (scale, k))
+    assert checked
+    assert not wrong, (len(wrong), checked, wrong[:6])
+
+
+def test_off_band_review_repro_exact_and_float():
+    """The reviewer's standalone script: a query > 31x the tolerance outside the polygon."""
+    from fractions import Fraction
+    scale = 1e8
+    delta = 4*_EPS*scale
+    curves = _off_band_loop([(-scale, -scale), (1., 0.), (1., 1.), (-scale-1., 1.), (-scale-1., -scale)])
+    loop = tuple(ArrangementPath(c) for c in curves)
+    domain = MaterialDomain(0, _plane(), (loop,))
+    query = (1.-delta/2, -delta)
+    assert not domain.contains_loop(loop, tuple(map(Fraction, query)), _TOL, boundary=False)
+    assert not domain.contains_loop(loop, query, _TOL, boundary=False)
+
+
+def _spike_wrong(arc, tip):
+    """A spike: two long edges both cross the ray within 8 eps of a common apex k eps L above it (L = 1e8)."""
+    scale = 1e8
+    wrong, checked = [], 0
+    for k in range(1, 10):
+        apex = (0., k*_EPS*scale)
+        vertices = [(-scale, -scale), apex, (scale, -scale), (scale, -2*scale), (-scale, -2*scale)]
+        curves = _off_band_loop(vertices, 3 if arc else None)
+        xs = (0.,) if tip else (-1e-7-2*k*_EPS*scale, 1e-7+2*k*_EPS*scale, -scale/2, 2*scale)
+        for x in xs:
+            q = (x, 0.)
+            want, distance = _truth(vertices, curves, q)
+            assert distance > 2*_TOL
+            for loop in _variants(curves):
+                for boundary in (False, True):
+                    for route, got in _route_answers(loop, q, boundary).items():
+                        checked += 1
+                        if got != want:
+                            wrong.append((k, route, x, want, type(loop[0]).__name__, boundary))
+    assert checked
+    return wrong
+
+
+@pytest.mark.parametrize("arc", (False, True), ids=("lines", "arc"))
+def test_off_band_spike_counts_both_crossings_away_from_the_tip(arc):
+    """Both off-band crossings near the apex: queries left of, right of and far from the tip (all routes)."""
+    wrong = _spike_wrong(arc, tip=False)
+    assert not wrong, (len(wrong), wrong[:6])
+
+
+@pytest.mark.xfail(strict=True, reason="known limit (as before T2-0): the two off-band crossings of a spike "
+                   "within 8 eps of its apex are decided together by the junction's branch sides, so the "
+                   "tip between them (<= 8 eps of the edge lengths wide) is cut off at the ray")
+def test_off_band_spike_tip_known_limit():
+    wrong = _spike_wrong(False, tip=True)
+    assert not wrong, (len(wrong), wrong[:6])
+
+
+def _random_off_band_polygon(rng):
+    """A long edge P0 -> V with V k eps (1..16) of the edge's height off the ray y = 0, then W either on V's
+    side (the next edge has no root) or far across the ray (its root is a few eps after its start), then
+    1-3 far vertices. Returns (vertices, queries near the junction and one far query)."""
+    from fractions import Fraction
+    scale = 10.**rng.uniform(0., 8.)
+    k = rng.randint(1, 16)
+    side = rng.choice((-1., 1.))
+    vx = rng.uniform(-1., 1.)
+    v = (vx, side*k*_EPS*scale)
+    p0 = (vx-rng.uniform(.2, 2.)*scale, -side*scale)
+    if rng.random() < .5:
+        w = (vx+rng.choice((-1., 1.))*rng.uniform(.5, 2.), side*rng.uniform(.5, 2.))
+    else:
+        w = (vx+rng.uniform(.2, 2.)*scale*rng.choice((-1., 1.)), -side*scale*rng.uniform(.5, 1.5))
+    vertices = [p0, v, w]
+    for _ in range(rng.randint(1, 3)):
+        vertices.append((rng.uniform(-3., 3.)*scale, rng.uniform(-3., 3.)*scale))
+    (ax, ay), (bx, by) = (tuple(map(Fraction, p)) for p in (p0, v))
+    crossing = ax+(bx-ax)*(0-ay)/(by-ay)                     # exact x of the incoming edge at y = 0
+    gap = max(abs(float(crossing)-vx), 1e-7)
+    xs = [float(crossing)-2*gap, float((crossing+Fraction(vx))/2), vx+(float(crossing)-vx)/4,
+          vx+2*gap, vx-2*gap, rng.uniform(-3., 3.)*scale]
+    return vertices, [(x, 0.) for x in xs]
+
+
+@pytest.mark.parametrize("seed", (11, 12, 13))
+def test_off_band_junctions_match_exact_winding_oracle(seed):
+    """Random long-edge junctions off the band (L 1..1e8, 1..16 eps): lines, and a following half circle."""
+    import random
+    rng = random.Random(seed)
+    wrong, checked = [], 0
+    for trial in range(6):
+        vertices, queries = _random_off_band_polygon(rng)
+        checked += _check_off_band(vertices, None, queries, wrong, (seed, trial, "lines"))
+        if math.hypot(vertices[2][0]-vertices[1][0], vertices[2][1]-vertices[1][1]) < 10.:
+            checked += _check_off_band(vertices, 1, queries, wrong, (seed, trial, "arc"))
+    assert checked
+    assert not wrong, (len(wrong), checked, wrong[:6])

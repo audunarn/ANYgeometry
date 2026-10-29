@@ -512,28 +512,44 @@ class MaterialDomain:
         window. Then the same two branches are compared here, at ``B``'s
         start, so each junction is decided exactly once whatever the number
         of junctions, horizontal runs or the loop's first curve, and the side
-        sequence telescopes. A junction whose vertex lies outside the
-        tolerance band of the level (both band tests) and which ends no root
-        is not on the ray: its two branches lie on the vertex's side.
+        sequence telescopes.
+
+        The crossing is located at the vertex only when the vertex lies on the
+        ray (``_junction_on_ray``). Off the band, the crossing is the skipped
+        end root itself and is located there (T2-0 fix 2): the vertex can lie
+        up to 8 eps of the curve's length away from it, far more than the
+        tolerance for a long curve. The sides stay the two branch midpoints:
+        an off-band root within 8 eps of an end means the vertex is within a
+        few ulps (of the curve's extent) of the ray, so samples between that
+        root and the vertex carry no reliable sign (float rounding; in the
+        exact replicas, an arc end and the next curve's start can differ by
+        such a gap). Known limit, as before T2-0: when the next curve also has
+        an off-band root within 8 eps of its start, both crossings are decided
+        together by these two sides (no net crossing), so a query between the
+        two crossings (a tip at most 8 eps of the two curves' lengths wide) is
+        classified as if the tip were cut off at the ray.
         """
-        roots, ends = roots_at(index)
+        roots = roots_at(index)[0]
         if roots is None:
             return 0
         count = len(loop)
-        following = next((index+distance) % count for distance in range(1, count+1)
-                         if roots_at(index+distance)[0] is not None)
-        following_roots, following_ends = roots_at(following)
+        following = _following_index(count, index, roots_at)
+        following_roots = roots_at(following)[0]
         first = min((min(1., max(0., float(t))) for t in following_roots), default=1.)
         if first <= window:
             return 0
-        if not (1. in ends or 0. in following_ends or any(t >= 1-window for t in roots)):
+        end_roots = [min(1., max(0., float(t))) for t in roots if t >= 1-window]
+        on_ray = _junction_on_ray(count, index, roots_at)
+        if not (on_ray or end_roots):
             return 0
         previous_lower = max((r for r in roots if r < 1-window), default=0.)
         before = self.uv(loop[index].curve, .5*(previous_lower+1))[1]-uv[1]
         after = self.uv(loop[following].curve, .5*first)[1]-uv[1]
         if not (before <= 0 < after or after <= 0 < before):
             return 0
-        if self.uv(loop[following].curve, 0.)[0] <= uv[0]:
+        location = (self.uv(loop[following].curve, 0.) if on_ray
+                    else self.uv(loop[index].curve, min(end_roots)))
+        if location[0] <= uv[0]:
             return 0
         return 1 if before <= 0 else -1
 
@@ -2121,6 +2137,30 @@ def _prepare_exact_boundary_line(chart, curve):
     )
 
 
+def _following_index(count, index, roots_at):
+    """Index of the next curve after ``index`` with roots (horizontal curves, None roots, walked over)."""
+    return next((index + distance) % count for distance in range(1, count + 1)
+                if roots_at((index + distance) % count)[0] is not None)
+
+
+def _junction_on_ray(count, index, roots_at):
+    """Whether the junction after the non-horizontal curve ``index`` lies on the ray (T2-0 fix 2).
+
+    ``roots_at(i)`` is (roots, ends) of curve ``i``: its ray roots (None when it lies
+    on the ray) and its ends (0, 1) within the tolerance band of the level. The
+    junction's vertex lies on the ray when either band test accepts it or a
+    horizontal run (curves within the band) joins the two curves. Only then may a
+    junction crossing be located at the vertex; off the band it is located at the
+    skipped end root, up to 8 eps of the curve's length away from the vertex
+    (``MaterialDomain._unowned_junction_crossing``). Shared by the float and both
+    exact routes.
+    """
+    if 1 in roots_at(index)[1]:
+        return True
+    following = _following_index(count, index, roots_at)
+    return 0 in roots_at(following)[1] or following != (index + 1) % count
+
+
 def _exact_horizontal_roots(chart, curve, level, tolerance, *, prepared=None, ends=False):
     """Exact replica of ``MaterialDomain.horizontal_roots`` for a LinePath on a Plane.
 
@@ -2234,19 +2274,23 @@ def _contains_loop_exact(chart, loop, uv, tolerance, *, boundary=True, prepared=
                 chart, curve, v_query, tolerance, prepared=line_data(curve), ends=True)
         return root_cache[key]
 
-    def horizontal_roots(curve):
-        return roots_and_ends(curve)[0]
-
     def world_distance2(du, dv):
         vector = tuple(du * a + dv * b for a, b in zip(chart.u_vector, chart.v_vector))
         return exact_dot(vector, vector)
 
+    count = len(loop)
+    found = {}
+
+    def roots_at(index):
+        index %= count
+        if index not in found:
+            found[index] = roots_and_ends(loop[index].curve)
+        return found[index]
+
     winding = 0
-    found = []
     for index, path in enumerate(loop):
         curve = path.curve
-        found.append(roots_and_ends(curve))
-        roots = found[-1][0]
+        roots = roots_at(index)[0]
         if roots is None:
             if _exact_point_on_segment(curve, chart.world(u_query, v_query), tolerance):
                 return boundary
@@ -2260,12 +2304,12 @@ def _contains_loop_exact(chart, loop, uv, tolerance, *, boundary=True, prepared=
                 continue
             if t <= window:
                 previous = loop[index - 1].curve
-                previous_roots = horizontal_roots(previous)
-                for distance in range(2, len(loop) + 1):
+                previous_roots = roots_at(index - 1)[0]
+                for distance in range(2, count + 1):
                     if previous_roots is not None:
                         break
                     previous = loop[index - distance].curve
-                    previous_roots = horizontal_roots(previous)
+                    previous_roots = roots_at(index - distance)[0]
                 previous_lower = max((r for r in (previous_roots or ()) if r < 1 - window), default=Fraction(0))
                 before = station_uv(previous, (previous_lower + 1) / 2)[1] - v_query
             else:
@@ -2278,24 +2322,28 @@ def _contains_loop_exact(chart, loop, uv, tolerance, *, boundary=True, prepared=
             elif after <= 0 < before:
                 winding -= 1
     # Vertex junctions no start root owns (T2-0; MaterialDomain._unowned_junction_crossing).
-    count = len(loop)
-    for index, (roots, ends) in enumerate(found):
+    for index in range(count):
+        roots = roots_at(index)[0]
         if roots is None:
             continue
-        following = next((index + distance) % count for distance in range(1, count + 1)
-                         if found[(index + distance) % count][0] is not None)
-        following_roots, following_ends = found[following]
+        following = _following_index(count, index, roots_at)
+        following_roots = roots_at(following)[0]
         first = min(following_roots, default=Fraction(1))
         if first <= window:
             continue
-        if not (Fraction(1) in ends or Fraction(0) in following_ends or any(t >= 1 - window for t in roots)):
+        end_roots = [t for t in roots if t >= 1 - window]
+        on_ray = _junction_on_ray(count, index, roots_at)
+        if not (on_ray or end_roots):
             continue
         previous_lower = max((r for r in roots if r < 1 - window), default=Fraction(0))
         before = station_uv(loop[index].curve, (previous_lower + 1) / 2)[1] - v_query
         after = station_uv(loop[following].curve, first / 2)[1] - v_query
         if not (before <= 0 < after or after <= 0 < before):
             continue
-        if station_uv(loop[following].curve, Fraction(0))[0] <= u_query:
+        # T2-0 fix 2: off the band the crossing is the end root itself, not the vertex.
+        location = (station_uv(loop[following].curve, Fraction(0)) if on_ray
+                    else station_uv(loop[index].curve, min(end_roots)))
+        if location[0] <= u_query:
             continue
         winding += 1 if before <= 0 else -1
     return winding != 0

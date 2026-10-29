@@ -370,7 +370,8 @@ def arc_point_rule(curve: EllipticArc, point, tolerance: float) -> bool:
 
 def contains_loop_exact_curved(chart, loop, uv, tolerance: float, *, boundary: bool = True) -> bool:
     """Exact replica of ``MaterialDomain.contains_loop`` for loops of lines and elliptic arcs on a Plane."""
-    from .material_arrangement import _exact_horizontal_roots, _exact_point_on_segment
+    from .material_arrangement import (_exact_horizontal_roots, _exact_point_on_segment, _following_index,
+                                       _junction_on_ray)
 
     u_query, v_query = uv
     tol2 = Fraction(tolerance) ** 2
@@ -382,9 +383,6 @@ def contains_loop_exact_curved(chart, loop, uv, tolerance: float, *, boundary: b
             line_roots, ends = _exact_horizontal_roots(chart, curve, v_query, tolerance, ends=True)
             return (None if line_roots is None else [ArcRoot(Num(t), None) for t in line_roots]), ends
         return arc_horizontal_roots(chart, curve, v_query, tolerance, ends=True)
-
-    def roots_of(curve):
-        return roots_and_ends(curve)[0]
 
     def chart_uv(point):
         offset = tuple(Num.of(p) - Num(o) for p, o in zip(point, chart.origin))
@@ -412,12 +410,19 @@ def contains_loop_exact_curved(chart, loop, uv, tolerance: float, *, boundary: b
                 unique.append(root)
         return sorted(unique, key=functools.cmp_to_key(lambda a, b: compare(a.t, b.t)))
 
+    count = len(loop)
+    found = {}
+
+    def roots_at(index):
+        index %= count
+        if index not in found:
+            found[index] = roots_and_ends(loop[index].curve)
+        return found[index]
+
     winding = 0
-    found = []
     for index, path in enumerate(loop):
         curve = path.curve
-        found.append(roots_and_ends(curve))
-        roots = found[-1][0]
+        roots = roots_at(index)[0]
         if roots is None:
             world = chart.world(u_query, v_query)
             hit = (_exact_point_on_segment(curve, world, tolerance) if type(curve) is LinePath
@@ -436,12 +441,12 @@ def contains_loop_exact_curved(chart, loop, uv, tolerance: float, *, boundary: b
                 continue
             if compare(root.t, window) <= 0:
                 previous = loop[index - 1].curve
-                previous_roots = roots_of(previous)
-                for distance in range(2, len(loop) + 1):
+                previous_roots = roots_at(index - 1)[0]
+                for distance in range(2, count + 1):
                     if previous_roots is not None:
                         break
                     previous = loop[index - distance].curve
-                    previous_roots = roots_of(previous)
+                    previous_roots = roots_at(index - distance)[0]
                 below = [r.t for r in (previous_roots or ()) if compare(r.t, 1 - window) < 0]
                 previous_lower = functools.reduce(lambda a, b: a if compare(a, b) >= 0 else b, below,
                                                   Num(Fraction(0))) if below else Num(Fraction(0))
@@ -457,30 +462,33 @@ def contains_loop_exact_curved(chart, loop, uv, tolerance: float, *, boundary: b
             elif after_sign <= 0 < before_sign:
                 winding -= 1
     # main (T2-0): a vertex junction no start root owns (MaterialDomain._unowned_junction_crossing).
-    count = len(loop)
     one, zero = Num(Fraction(1)), Num(Fraction(0))
-    for index, (roots, ends) in enumerate(found):
+    for index in range(count):
+        roots = roots_at(index)[0]
         if roots is None:
             continue
-        following = next((index + distance) % count for distance in range(1, count + 1)
-                         if found[(index + distance) % count][0] is not None)
+        following = _following_index(count, index, roots_at)
         following_curve = loop[following].curve
-        following_roots = ordered(following_curve, found[following][0])
+        following_roots = ordered(following_curve, roots_at(following)[0])
         first = following_roots[0].t if following_roots else one
         if following_roots and compare(first, window) <= 0:
             continue
-        if not (Fraction(1) in ends or Fraction(0) in found[following][1]
-                or any(compare(r.t, 1 - window) >= 0 for r in roots)):
+        curve = loop[index].curve
+        end_roots = [r for r in ordered(curve, roots) if compare(r.t, 1 - window) >= 0]
+        on_ray = _junction_on_ray(count, index, roots_at)
+        if not (on_ray or end_roots):
             continue
         below = [r.t for r in roots if compare(r.t, 1 - window) < 0]
         previous_lower = functools.reduce(lambda a, b: a if compare(a, b) >= 0 else b, below, zero) if below else zero
-        curve = loop[index].curve
         before = station_uv(curve, at_parameter(curve, (previous_lower + 1) / 2))[1] - v_query
         after = station_uv(following_curve, at_parameter(following_curve, (zero + first) / 2))[1] - v_query
         before_sign, after_sign = sign(before), sign(after)
         if not (before_sign <= 0 < after_sign or after_sign <= 0 < before_sign):
             continue
-        if compare(station_uv(following_curve, at_parameter(following_curve, zero))[0], u_query) <= 0:
+        # main (T2-0 fix 2): off the band the crossing is the end root itself, not the vertex.
+        location = (station_uv(following_curve, at_parameter(following_curve, zero)) if on_ray
+                    else station_uv(curve, end_roots[0]))
+        if compare(location[0], u_query) <= 0:
             continue
         winding += 1 if before_sign <= 0 else -1
     return winding != 0
