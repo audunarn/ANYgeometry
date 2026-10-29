@@ -267,6 +267,29 @@ def _exact_check(lengths, fractions):
     return worst
 
 
+def test_bound_covers_underflow_of_the_product_and_quotient():
+    """Codex S0e review P2: with subnormal lengths fl(c T) underflows (here to 0: index 0, local 0
+    against the exact 1/2); the bound must still hold. Also tiny normal and mixed scales."""
+
+    tiny = 2.0 ** -1074
+    lengths = np.asarray([tiny, tiny])
+    total = float(lengths.sum())
+    cumulative = np.concatenate(([0.0], np.cumsum(lengths)))
+    index, local = model_module._chain_local_parameter(lengths, total, cumulative, 2, 0.25)
+    assert (index, float(local)) == (0, 0.0)  # precondition: the product underflowed
+    assert Fraction(1, 2) <= _bound(2, total, float(lengths[index]))
+    rng = np.random.default_rng(1075)
+    worst = 0.0
+    for scale in (2.0 ** -1074, 2.0 ** -1070, 2.0 ** -1060, 2.0 ** -1030, 2.0 ** -1022, 1e-300):
+        for n in (1, 2, 3, 5, 9):
+            for _ in range(40):
+                lengths = np.maximum(np.round(rng.uniform(1.0, 64.0, n)) * scale, scale) if scale < 1e-307 \
+                    else rng.uniform(1.0, 64.0, n) * scale
+                fractions = [0.0, 1.0, 0.25, *rng.uniform(0.0, 1.0, 4).tolist()]
+                worst = max(worst, _exact_check(lengths, fractions))
+    assert worst <= 1.0
+
+
 def test_bound_is_never_exceeded_against_exact_rational_evaluation():
     """Empirical check of the analysis on random chains: n in 1..12 and NumPy pairwise-sum sizes
     (8, 9, 16, 17, 129, 130), fractions at 0, 1, uniformly random and at every computed breakpoint
