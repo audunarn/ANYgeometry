@@ -6,12 +6,13 @@ outcome; capability assertions are made only for fixed inputs of small proof cos
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from fractions import Fraction
 import math
 import pathlib
 import random
+import types
 
 import mpmath
 import numpy as np
@@ -869,8 +870,10 @@ def test_out_of_range_rational_coordinate_is_undecided(monkeypatch):
 
 
 _EXACT_KINDS = ("int", "np.int64", "np.uint64", "np.int32", "Fraction", "Decimal", "float",
-                "np.float64", "np.float32", "np.longdouble")
-_REFUSED_KINDS = ("bool", "np.bool_", "str", "complex", "ndarray0d", "None")
+                "np.float64", "np.float32")
+# np.longdouble is refused explicitly: its precision is platform dependent and a test built from
+# Python floats cannot exercise values beyond binary64 (Codex R3 P3).
+_REFUSED_KINDS = ("bool", "np.bool_", "str", "complex", "ndarray0d", "None", "np.longdouble")
 _MAGNITUDES = {"one": Fraction(1), "tenth": Fraction(1, 10), "2^53+1": Fraction(2**53 + 1),
                "2^1100": Fraction(2)**1100, "2^-1100": Fraction(1, 2**1100), "nan": "nan", "inf": "inf",
                "-inf": "-inf"}
@@ -896,19 +899,18 @@ def _make_typed(kind, m):
         if integral:
             return Decimal(int(m)), m
         return (Decimal("0.1"), m) if m == Fraction(1, 10) else None
-    if kind in ("float", "np.float64", "np.float32", "np.longdouble"):
+    if kind in ("float", "np.float64", "np.float32"):
         if finite and not small:
             return None
         number = float(m)
-        value = {"float": float, "np.float64": np.float64, "np.float32": np.float32,
-                 "np.longdouble": np.longdouble}[kind](number)
+        value = {"float": float, "np.float64": np.float64, "np.float32": np.float32}[kind](number)
         if not finite:
             return value, None
         return value, Fraction(*value.as_integer_ratio())
     if not small or m != 1:                    # refused kinds: one representative magnitude
         return None
     value = {"bool": True, "np.bool_": np.True_, "str": "1", "complex": complex(1.0),
-             "ndarray0d": np.array(1.0), "None": None}[kind]
+             "ndarray0d": np.array(1.0), "None": None, "np.longdouble": np.longdouble(1)}[kind]
     return value, None
 
 
@@ -1244,6 +1246,123 @@ def test_full_turn_refusal_catches_the_no_net_turn_double(monkeypatch):
         _face(annulus)
     monkeypatch.setattr(sp._Face, "_check_net_turn", lambda self, ar: None)
     _face(annulus)                                          # the double accepts the winding loop
+
+
+# ------------------------------- Codex R3: N3 exempts exact rationals; the window is a float boundary
+
+BIG, TINY = Fraction(2)**1000, Fraction(1, 2**1000)
+
+
+def _origin_plates(origin):
+    """Codex R3 repro: plate A's support origin moved along its own u axis (the plane is unchanged)."""
+    A, B = L_plates()
+    return replace(A, support=sp.PlaneSupport(origin, A.support.u_vector, A.support.v_vector)), B
+
+
+def _tall_plates(h):
+    """Plate A (z = 0, 0 <= y <= h) and plate B (y = 0, 0 <= z <= 1) share the edge 0 <= x <= 1 and meet
+    nowhere else, for every h > 0: the exact distance of G_A n G_B to T_out is 0."""
+    V1, V2 = (0, 0, 0), (1, 0, 0)
+    shared = LinePath(V1, V2)
+    A = plate(1, [V1, V2, (1, h, 0), (0, h, 0)], [1, 2, 3, 4], [10, 11, 12, 13], edges={0: (shared, True)})
+    B = plate(2, [V2, V1, (0, 0, 1), (1, 0, 1)], [2, 1, 5, 6], [10, 14, 15, 16],
+              curves=[LinePath(V2, V1), None, None, None], edges={0: (shared, False)})
+    return A, B
+
+
+def _tilted_fin_pair(tilt):
+    """The fin pair of A2 with the strip's (unshared) top arc tilted by ``tilt`` along the axis; the arc
+    stays on the cylinder (radius 1) exactly, so only incidence defects of size ~tilt change."""
+    strip, fin = _fin_pair(0.0)
+    loop = list(strip.loops[0])
+    top = loop[2].curve
+    loop[2] = replace(loop[2], curve=_RawArc(tuple(top.center), (1., 0., tilt), (0., 1., 0.),
+                                             float(top.start_angle), float(top.sweep_angle)))
+    return replace(strip, loops=(tuple(loop),)), fin
+
+
+# Expected outcomes are derived without the module's reader: the exact geometry is unchanged or the
+# exact distance is 0 (so any certified bound is sound), and these inputs certified on the R2 module
+# (3372265, which applied the window to float-held values only); a shared-edge endpoint is a float
+# input of the delta_eval forward-error model, so outside the window it must refuse.
+_EXACT_RATIONAL_CASES = {
+    "origin_tiny": (lambda: _origin_plates((TINY, 0, 0)), "certified"),
+    "origin_big": (lambda: _origin_plates((BIG, 0, 0)), "certified"),
+    "far_corner_big": (lambda: _tall_plates(BIG), "certified"),
+    # |n_A| = 2^-1000 is below the 2^-80 grid of the outward square root: an exact-path capability
+    # limit (the same refusal on R2), not a window refusal.
+    "far_corner_tiny": (lambda: _tall_plates(TINY), "face:degenerate_plane_support"),
+    "arc_tilt_tiny": (lambda: _tilted_fin_pair(TINY), "certified"),
+    "shared_edge_endpoint_big": (lambda: _huge_edge_plates(BIG), "numeric_window:delta_eval"),
+}
+
+
+def _r3_outcome(name):
+    build, expected = _EXACT_RATIONAL_CASES[name]
+    res = sp.certify_face_pair(*build(), TOL)
+    if expected == "certified":
+        return res.certified and res.r_pair >= 0           # exact distance 0: any certified bound is sound
+    return not res.certified and expected in res.reason
+
+
+@pytest.mark.parametrize("name", list(_EXACT_RATIONAL_CASES))
+def test_exact_rationals_outside_the_float_window_are_exact_inputs(name, monkeypatch):
+    """Codex R3 P2: N3 exempts exact rational arithmetic; the window applies where a float is held or
+    produced. Double: the b20fbeb rule (window on every input) refuses the certified cases."""
+    assert _r3_outcome(name)
+    if _EXACT_RATIONAL_CASES[name][1] == "certified":
+        monkeypatch.setattr(sp, "_float_held", lambda value: True)
+        assert not _r3_outcome(name)
+
+
+def test_degree_two_bound_of_a_tiny_exact_rational():
+    """Codex R3 repro: a purely rational routine; a0 = 2^-1000 and S = 0 give [a0, a0] exactly."""
+    assert sp.degree_two_bound((TINY, 0, 0, 0, 0)) == (TINY, TINY)
+    assert sp.degree_two_bound((BIG, 1, 0, 0, 0)) == (BIG - 1, BIG + 1)
+
+
+_FLOAT_HELD_CASES = {
+    "origin": lambda: _origin_plates((2.0**-1000, 0., 0.)),
+    "arc_tilt": lambda: _tilted_fin_pair(2.0**-1000),
+    "far_corner": lambda: _tall_plates(2.0**1000),
+}
+
+
+@pytest.mark.parametrize("name", list(_FLOAT_HELD_CASES))
+def test_float_held_values_outside_the_window_still_refuse(name, monkeypatch):
+    """N3 for stored binary64 values is unchanged; double: no window at float inputs certifies."""
+    res = sp.certify_face_pair(*_FLOAT_HELD_CASES[name](), TOL)
+    assert not res.certified and "numeric_window" in res.reason
+    if name != "far_corner":
+        monkeypatch.setattr(sp, "_float_held", lambda value: False)
+        assert sp.certify_face_pair(*_FLOAT_HELD_CASES[name](), TOL).certified
+
+
+def test_lower_bound_above_the_window_refuses():
+    """Codex R3 P3: a float lower bound above 2^960 is a refusal (N3), not a clamped value."""
+    with pytest.raises(sp.SPRefusal, match="numeric_window"):
+        sp._down(Fraction(2)**1100)
+    assert sp._down(Fraction(3, 2)) == 1.5
+
+
+def test_malformed_records_are_undecided():
+    """Codex R3 P3: structurally malformed records give UNDECIDED, never TypeError/ValueError/AttributeError."""
+    A, B = L_plates()
+    broken = [replace(A, loops=None), replace(A, vertices=((1,),)), replace(A, vertices=None),
+              replace(A, loops=((object(),),)), replace(A, loops=(None,)),
+              types.SimpleNamespace(support=A.support, loops=A.loops, vertices=A.vertices), None]
+    for record in broken:
+        for pair in ((record, B), (B, record)):
+            try:
+                res = sp.certify_face_pair(*pair, TOL)
+            except Exception as error:             # noqa: BLE001
+                pytest.fail(f"escaped {type(error).__name__}: {error}")
+            assert not res.certified and "record:malformed" in res.reason
+
+
+def test_longdouble_is_refused_explicitly():
+    with pytest.raises(sp.SPRefusal, match="numeric_window:type"):
+        sp.degree_two_bound((np.longdouble(1), 0, 0, 0, 0))
 
 
 def test_module_is_not_wired_into_production():

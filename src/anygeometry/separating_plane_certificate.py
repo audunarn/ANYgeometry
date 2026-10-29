@@ -146,11 +146,13 @@ def _rational(value, what):
     Every numeric input of the module enters here. Accepted, each read exactly and never through
     ``float()``: int and numpy integers (``int()``), Fraction, and finite float, numpy floating
     and Decimal values (``as_integer_ratio``). bool and numpy.bool_, str, complex, arrays and
-    every other type are refused, as are NaN and infinities.
+    every other type are refused, as are NaN and infinities. numpy.longdouble is refused
+    explicitly: its precision is platform dependent (binary64 on Windows, 80- or 128-bit
+    elsewhere), so neither the stored-binary64 model nor the tests cover it.
     """
     if type(value) is Fraction:
         return value
-    if isinstance(value, (bool, np.bool_)):
+    if isinstance(value, (bool, np.bool_, np.longdouble)):
         raise _Refusal(f"numeric_window:type:{what}")
     if isinstance(value, (int, np.integer)):
         return Fraction(int(value))
@@ -169,14 +171,22 @@ def _rational(value, what):
 
 
 def _input_in_window(made):
-    """N3 for every input, whatever its type: zero or a magnitude in [2^-960, 2^960]."""
+    """The N3 window: zero or a magnitude in [2^-960, 2^960]."""
     return made == 0 or _WINDOW_LO <= abs(made) <= _WINDOW_HI
 
 
+def _float_held(value):
+    """A stored binary64 (float, numpy floating): the values N3's window applies to on input."""
+    return isinstance(value, (float, np.floating))
+
+
 def _exact(value, what):
-    """A stored value as an exact rational (N1) inside the N3 window, else a typed refusal."""
+    """A stored value as an exact rational (N1). N3: a float-held value must lie in the window;
+    exact rationals (int, Fraction, Decimal) are exempt, since the arithmetic on them is exact.
+    The window is enforced again wherever a float is produced (``_up``/``_down``, r_max) or
+    enters a forward-error model (``_binary64`` of delta_eval)."""
     made = _rational(value, what)
-    if not _input_in_window(made):
+    if _float_held(value) and not _input_in_window(made):
         raise _Refusal(f"numeric_window:{what}")
     if max(abs(made.numerator).bit_length(), made.denominator.bit_length()) > 4096:
         raise _Refusal("rational_bit_budget")
@@ -241,14 +251,14 @@ def _up(value):
 
 def _down(value):
     """Rational lower bound as a float rounded down (N2); below the window it becomes 0, above it
-    the window edge 2^960 (still a lower bound)."""
+    a refusal (N3: no clamped value)."""
     value = Fraction(value)
     if value <= 0:
         return 0.0 if value == 0 else -_up(-value)
     if value < _WINDOW_LO:
         return 0.0
     if value > _WINDOW_HI:
-        return float(_WINDOW_HI)
+        raise _Refusal("numeric_window:lower_bound")
     result = _to_float(value, "lower_bound")
     if Fraction(result) > value:
         result = math.nextafter(result, -math.inf)
@@ -685,14 +695,45 @@ class _Use:
                  "loop", "index", "representative")
 
 
+class _UseRecord:
+    __slots__ = ("curve", "edge", "start_vertex", "end_vertex", "forward", "edge_curve")
+
+
+def _record_parts(record):
+    """(face_id, support, vertices, loops) of a FaceRecord-like object, with every structural field
+    read once and checked (hashable ids, (id, position) pairs, loops of uses with all fields); a
+    malformed record is UNDECIDED (``record:malformed``), never a TypeError/ValueError/AttributeError."""
+    try:
+        face_id, support = record.face_id, record.support
+        hash(face_id)
+        vertices = []
+        for item in tuple(record.vertices):
+            vid, position = item
+            hash(vid)
+            vertices.append((vid, position))
+        loops = []
+        for loop in tuple(record.loops):
+            uses = []
+            for item in tuple(loop):
+                use = _UseRecord()
+                use.curve, use.edge = item.curve, item.edge
+                use.start_vertex, use.end_vertex = item.start_vertex, item.end_vertex
+                use.forward, use.edge_curve = bool(item.forward), item.edge_curve
+                hash(use.edge), hash(use.start_vertex), hash(use.end_vertex)
+                uses.append(use)
+            loops.append(tuple(uses))
+    except (AttributeError, TypeError, ValueError):
+        raise _Refusal("record:malformed") from None
+    return face_id, support, tuple(vertices), tuple(loops)
+
+
 class _Face:
     """Per-face certified data (closure rule and defects, ADR 4.1); budget of its own."""
 
     def __init__(self, record, policy, check):
         ar = _Ar(policy, check)
         ar.phase("face preparation")
-        self.id = record.face_id
-        support = record.support
+        self.id, support, record_vertices, record_loops = _record_parts(record)
         if isinstance(support, PlaneSupport):
             self.kind = "plane"
             origin = _vec(support.origin, "plane.origin")
@@ -725,16 +766,16 @@ class _Face:
             raise _Refusal("unsupported_support:" + type(support).__name__)
 
         self.vertices = {}
-        for vid, position in record.vertices:
+        for vid, position in record_vertices:
             self.vertices[vid] = _vec(position, f"vertex.{vid}")
         self.loops = []
         self.edges = {}
-        for li, loop in enumerate(record.loops):
+        for li, loop in enumerate(record_loops):
             uses = []
             for i, item in enumerate(loop):
                 u = _Use()
                 u.geom = _make_curve(item.curve, policy, f"face{self.id}.loop{li}.{i}")
-                u.edge, u.vs, u.ve, u.forward = item.edge, item.start_vertex, item.end_vertex, bool(item.forward)
+                u.edge, u.vs, u.ve, u.forward = item.edge, item.start_vertex, item.end_vertex, item.forward
                 u.loop, u.index = li, i
                 if u.vs not in self.vertices or u.ve not in self.vertices:
                     raise _Refusal("missing_vertex")
@@ -1625,7 +1666,8 @@ class SPCertifier:
         raise original
 
     def _certify(self, first, second, tolerance, check):
-        evidence = {"version": CERTIFICATE_VERSION, "faces": (first.face_id, second.face_id)}
+        evidence = {"version": CERTIFICATE_VERSION,
+                    "faces": (getattr(first, "face_id", None), getattr(second, "face_id", None))}
         try:
             r_max = contract_r_max(tolerance)
             evidence["r_max"] = r_max
@@ -1773,7 +1815,9 @@ def _delta_eval(curve, policy):
 
 def _binary64(value):
     """A stored value that must be an exact binary64 inside the N3 window (the evaluate model)."""
-    made = _exact(value, "eval")                       # range checked before any conversion
+    made = _exact(value, "eval")
+    if not _input_in_window(made):                     # a float input of the model: N3, before conversion
+        raise _Refusal("numeric_window:delta_eval")
     if Fraction(_to_float(made, "delta_eval")) != made:
         raise _Refusal("numeric_window:delta_eval_not_binary64")
     return made
