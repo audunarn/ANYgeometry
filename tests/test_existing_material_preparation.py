@@ -272,3 +272,16 @@ def test_baseexception_after_real_epoch_consumption_restores_all_authority(flat_
     for name, value in state.items(): assert vars(model)[name] is value
     assert _seals.get(model) == seal and _permits.get(model) == permit and _LINKS.get(model) is links
     assert not has_current_intersection_preparation(model)
+
+
+def test_planning_inside_an_open_transaction_uses_the_general_route():
+    """Automation plans and applies every command inside model.transaction(). Publication of the
+    strict same-chart route is not journaled (global seals/permits), so it must not be offered
+    there; ordinary crossing plates must still plan through the general route."""
+    model = GeometryModel()
+    horizontal = model.add_plate(model.add_points(((-1, -1, 0), (1, -1, 0), (1, 1, 0), (-1, 1, 0))))
+    vertical = model.add_plate(model.add_points(((-1, 0, -1), (1, 0, -1), (1, 0, 1), (-1, 0, 1))))
+    faces = (model.handle("face", horizontal), model.handle("face", vertical))
+    with model.transaction():
+        plan = plan_intersections(model, faces, policy=imprint())
+    assert id(plan) not in _PLANS

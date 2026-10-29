@@ -98,7 +98,7 @@ def try_plan_existing(model, handles, policy):
     from .section_audit import Work
     from .preparation_epochs import _epoch_plan_required, _issue_native_plan
     if model._transaction_journal is not None or model._notifying_hooks:
-        raise GeometryError('existing material preparation requires an idle model')
+        return None    # publication (seals, permits, lineage) is not journaled: not offered inside a transaction
     token = CURRENT_WORK.set(Work()) if CURRENT_WORK.get() is None else None
     try:
         if not eligible(model, handles):
