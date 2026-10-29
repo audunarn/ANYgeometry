@@ -34,7 +34,9 @@ def load_table(path: Path = TABLE) -> dict:
     # Missing/cancelled results never replace timings with zero or claim a run.
     observations = path.with_name("duration-observations.json")
     if observations.is_file():
-        table["observations"] = json.loads(observations.read_text(encoding="utf-8"))["tests"]
+        observed = json.loads(observations.read_text(encoding="utf-8"))
+        table["observations"] = observed["tests"]
+        table["failed_observations"] = observed.get("partial_tests", {})
     return table
 
 
@@ -42,6 +44,8 @@ def slow_ids(table: dict, threshold: float = SLOW_SECONDS) -> set[str]:
     return {name for name, times in table.get("tests", {}).items()
             if times.get(BALANCE_PLATFORM, max(times.values(), default=0.0)) >= threshold} | {
                 name for name, times in table.get("observations", {}).items()
+                if max(times.values(), default=0.0) >= threshold} | {
+                name for name, times in table.get("failed_observations", {}).items()
                 if max(times.values(), default=0.0) >= threshold}
 
 
@@ -49,7 +53,8 @@ def duration(table: dict, name: str) -> float:
     times = table.get("tests", {}).get(name)
     # The largest actual observed platform time is a conservative scheduling
     # weight, not an estimated Windows measurement or a performance claim.
-    observed = max(table.get("observations", {}).get(name, {}).values(), default=0.0)
+    observed = max(max(table.get("observations", {}).get(name, {}).values(), default=0.0),
+                   max(table.get("failed_observations", {}).get(name, {}).values(), default=0.0))
     if times:
         return max(observed, times.get(BALANCE_PLATFORM, max(times.values())))
     return max(observed, table.get("rest_mean", {}).get(BALANCE_PLATFORM, .1) or .1)

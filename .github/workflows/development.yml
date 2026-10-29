@@ -113,6 +113,7 @@ jobs:
         env:
           ANYGEOMETRY_TEST_SHARD: ${{ matrix.shard }}/6
           ANYGEOMETRY_SHARD_REPORT: shard-${{ matrix.shard }}.json
+          ANYGEOMETRY_ACTIVE_TEST_REPORT: active-test.json
           SCOPE: ${{ needs.plan.outputs.scope }}
           FOCUSED: ${{ needs.plan.outputs.focused }}
         run: |
@@ -137,6 +138,7 @@ jobs:
             kernel-results.xml
             focused-results.xml
             shard-*.json
+            active-test.json*
             *-runtime.json
           if-no-files-found: error
 

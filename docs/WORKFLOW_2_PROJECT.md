@@ -853,3 +853,34 @@ review caught the required outside-domain inverse guard before integration.
 The earlier inset failures, partial timeout and corrected test oracle remain
 evidence. The original full near-tangent-plan verification gap and full hosted
 geometry gate remain open. No qualification limits or failed records change.
+
+### Terminal full-suite follow-up
+
+The full functional6a suite retained five distinct failed assertions/cases and
+two 40-minute shard cancellations. CI-only expectation fixes preserve fixed
+canonical source hashes and the original tamper refusal. Two mutation fixtures
+now verify immutable/public refusal before explicitly bypassing that guard to
+retain the original raw-definition rejection. The under-threshold quadratic
+chord test checks its exact analytic maximum, unchanged .0025 limit and complete
+coverage against a cold hostile cache; it no longer demands unnecessary extra
+proof pieces. Both metadata/hull fixture corrections pass focused checks.
+
+A separate exact mixed-loop containment defect checked infinite line contact
+before segment/ray domains. Strictly outside-segment/behind-ray intersections
+are now excluded first; actual forward vertex/origin/collinear ambiguities and
+all curved/witness/area gates remain. Seventeen exact and real-caller controls
+pass. The full hole/material-area target remains unverified locally after a
+30-second timeout and a diagnostic Windows process failure with unconfirmed
+cause; no area/conservation pass is inferred. This admits no new provider hole
+or cavity class.
+
+CI now retains an atomic opt-in active-test artifact to identify the case when
+a shard is cancelled. No fault-handler diagnostic was added. The full selected
+suite, 40-minute job ceiling and 20-second slow-mark guard remain. Completed
+failure elapsed timings are separately labelled partial scheduling observations,
+not passes or completed performance measurements; cancelled data stay unknown.
+The complete historical table is retained, with sparse observations supplementing
+its weights. Two cases with bounded verification/resource-sensitive evidence
+are explicitly slow for the fast development profile; both remain mandatory
+in full CI and qualification. No failed case is skipped or accepted by a profile
+change. Fresh full hosted evidence is still required before acceptance.

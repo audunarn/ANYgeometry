@@ -192,9 +192,20 @@ def test_same_endpoint_poison_cannot_falsely_refine_under_threshold_iso(monkeypa
     monkeypatch.setattr(nurbs, '_ISO_CACHE', {curve: poison})
     bound, coverage = _world_chord(curve, Q(0), Q(1),
         ((0., 0., 0.), (1., 0., 0.)), .0025, lambda: None)
-    assert bound <= .0025 and len(coverage) > 1
+    # x=t and z=2*float(.0048)*t*(1-t): the exact maximum occurs at t=1/2.
+    # One certified piece is valid; subdivision count is not physical evidence.
+    assert Q(.0048)/2 <= Q(bound) <= Q(.0025)
     assert sum(b-a for a, b in coverage) == 1
+    assert coverage[0][0] == 0 and coverage[-1][1] == 1
+    assert all(a < b for a, b in coverage)
+    assert all(left[1] == right[0] for left, right in zip(coverage, coverage[1:]))
     assert nurbs._ISO_CACHE[curve] is poison
+    # Query the hostile cache first. Only then obtain an independent clean
+    # cache baseline, so a prior good result cannot mask the poison test.
+    monkeypatch.setattr(nurbs, '_ISO_CACHE', {})
+    clean = _world_chord(curve, Q(0), Q(1),
+        ((0., 0., 0.), (1., 0., 0.)), .0025, lambda: None)
+    assert (bound, coverage) == clean
 
 
 def test_same_endpoint_poison_cannot_certify_noniso_actual_violation(monkeypatch):

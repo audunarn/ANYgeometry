@@ -11,6 +11,29 @@ import pytest
 from anygeometry import GeometryModel
 
 
+def _record_active_test(nodeid, phase):
+    import os
+    report = os.environ.get("ANYGEOMETRY_ACTIVE_TEST_REPORT")
+    if not report:
+        return
+    import json
+    from datetime import datetime, timezone
+    path = Path(report)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(json.dumps({"nodeid": nodeid, "phase": phase,
+        "utc": datetime.now(timezone.utc).isoformat(),
+        "shard": os.environ.get("ANYGEOMETRY_TEST_SHARD")}) + "\n", encoding="utf-8")
+    temporary.replace(path)
+
+
+def pytest_runtest_logstart(nodeid, location):
+    _record_active_test(nodeid, "started")
+
+
+def pytest_runtest_logfinish(nodeid, location):
+    _record_active_test(nodeid, "finished")
+
+
 def pytest_configure(config):
     if getattr(config.option, "basetemp", None) is None:
         root = Path(__file__).resolve().parents[1]

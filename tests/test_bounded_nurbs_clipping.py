@@ -128,6 +128,7 @@ def test_exact_near_tangent_boundary_events_are_empty_without_geometry_change():
     assert to_dict(model) == before
 
 
+@pytest.mark.slow  # Retained dedicated bounded attempts did not finish; still mandatory in full CI.
 def test_dyadic_edge_is_now_expressed_exactly_and_the_near_tangent_circle_is_never_clipped_by_rounding():
     """Exact dyadic plate edge: no rounding-created root; conservative public-plan refusal stays atomic."""
     model, face, plate, plane, curve, frame = _dyadic_near_tangent_fixture()
@@ -261,6 +262,7 @@ def test_partial_crossing_clips_both_domains_with_physical_traces_and_nurbs_only
     assert edge_kinds(loaded) == edge_kinds(model)                          # persisted tags, same edge ids
 
 
+@pytest.mark.slow  # Resource-sensitive full material/area case; full CI retains it.
 def test_plate_with_a_hole_crossing_the_section_keeps_all_material():
     hole = [(.6, -.2), (.6, .2), (.9, .2), (.9, -.2)]
     model, face, plate, plan, result, policy = bounded_run([(-2., -2.), (2., -2.), (2., 2.), (-2., 2.)], hole=hole)
