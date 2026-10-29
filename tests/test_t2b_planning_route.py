@@ -251,8 +251,17 @@ def _resealed(plan, **changes):
         return changed
 
 
-def _no_route_validation(plan):                         # double for every route row
-    return "T" if isinstance(plan, TopologyCertifiedPlan) else "E"
+_ROUTE_FIELDS = ("planning_mode", "route_checksum", "certificate_version", "r_max", "r_pairs", "route_tolerance")
+
+
+def _only_this_field_is_wrong(plan, certified):
+    """Discrimination check (the double for every route row is a validator that ignores the
+    tampered field): restoring the tampered fields, and only them, makes the plan valid again."""
+    changed = {name: getattr(certified, name) for name in _ROUTE_FIELDS
+               if repr(getattr(plan, name)) != repr(getattr(certified, name))}
+    assert changed, "the tampered plan must differ in a route field"
+    restored = replace(plan, **changed)
+    return bi._route_state(restored) == "T"
 
 
 def test_matrix_rows_1_and_3_accept_and_apply_identically(plans):
@@ -311,20 +320,33 @@ def test_matrix_malformed_route_rows_are_rejected_at_apply_and_load(plans, row):
                 apply_intersections(model, plan, policy=policy)
         with pytest.raises(GeometryError):
             pickle.loads(pickle.dumps(plan))                  # plan load
-        assert _no_route_validation(plan) == "T"              # the double would accept it
+        assert _only_this_field_is_wrong(plan, certified)
     assert to_dict(model) == before
 
 
-def test_matrix_row_8_rejects_a_wrong_contract_value_at_apply(plans):
+def test_matrix_row_8_rejects_a_wrong_contract_value_at_load_and_apply(plans):
     model, _exact, certified = plans
-    # Positive normal values that load, but are not tol/1000 rounded down for this model; the
-    # float product 1e-3*tol is not the contract value when it differs from the rounded-down one.
+    # Positive normal values that are not tol/1000 rounded down; the float product 1e-3*tol is not
+    # the contract value when it differs from the rounded-down rational.
     for value in (certified.r_max/2, math.nextafter(certified.r_max, math.inf), 1e-3*1e-9*(1+2**-50)):
         plan = _resealed(certified, r_max=value, r_pairs=())
-        assert pickle.loads(pickle.dumps(plan)).r_max == value
+        with pytest.raises(GeometryError, match="contract value"):
+            pickle.loads(pickle.dumps(plan))
         with pytest.raises(GeometryError, match="contract value"):
             apply_intersections(model, plan, policy=T)
-        assert _no_route_validation(plan) == "T"
+    # A self-consistent plan for ANOTHER tolerance loads, but is refused against this model.
+    other = _resealed(certified, route_tolerance=2e-9, r_max=sp.contract_r_max(2e-9), r_pairs=())
+    assert pickle.loads(pickle.dumps(other)).route_tolerance == 2e-9
+    with pytest.raises(GeometryError, match="contract value"):
+        apply_intersections(model, other, policy=T)
+
+
+def test_plan_load_checks_the_content_checksum(plans):
+    _model, _exact, certified = plans
+    tampered = replace(certified, face_contacts=((),))
+    with pytest.raises(GeometryError, match="content binding"):
+        pickle.loads(pickle.dumps(tampered))
+    assert pickle.loads(pickle.dumps(certified)).route_checksum == certified.route_checksum
 
 
 def test_matrix_row_12_invalid_content_checksum(plans):
@@ -386,14 +408,19 @@ def test_records_are_keyed_by_domain_object_not_face_id():
         sp.face_record_from_model(model, faces[1], domain=domain)
 
 
-def test_support_stage_refusal_is_raised_in_shadow_on_certified_pairs(monkeypatch):
-    """D3 / section 5: every support-stage refusal stays reachable for certified pairs."""
-    model, strips, fin = _strips_and_fin()
-    faces = (*strips, fin)
+@pytest.mark.parametrize("entry", ["plane_cylinder_support", "cylinder_cylinder_support", "qualified_plane_plane"])
+def test_support_stage_refusal_is_raised_in_shadow_on_certified_pairs(monkeypatch, entry):
+    """D3 / section 5: support-stage refusals of the pp, cp and cc families stay reachable for
+    certified pairs (the coincident cc strips reach cylinder_cylinder_support first)."""
+    if entry == "qualified_plane_plane":
+        model, faces, _ = _l_joint()
+    else:
+        model, strips, fin = _strips_and_fin()
+        faces = (*strips, fin)
 
     def refuse(*args, **kwargs):
-        raise GeometryError("injected plane/cylinder support refusal")
-    monkeypatch.setattr(bi, "plane_cylinder_support", refuse)
+        raise GeometryError(f"injected {entry} refusal")
+    monkeypatch.setattr(bi, entry, refuse)
     exact = _refusal(lambda: plan_intersections(model, faces, policy="connect"))
     assert exact and "injected" in exact
     assert _refusal(lambda: plan_intersections(model, faces, policy=T)) == exact
@@ -488,13 +515,40 @@ def test_a9c_overlap_refusals_on_coincident_pairs_in_both_modes(monkeypatch):
     with monkeypatch.context() as patch:
         _with_certifier(patch, _StubCertifier(coincident=True))
         assert _refusal(lambda: plan_intersections(model, faces, policy=T)) == exact
-    # corner overlap within delta: B's corner 1e-13 rad inside A; below tolerance for both modes
-    model, strips, _fin = _strips_and_fin()
-    sample = strips[:2]
-    outcome_e = plan_intersections(model, sample, policy="connect").content_checksum
-    with monkeypatch.context() as patch:
-        _with_certifier(patch, _StubCertifier(coincident=True))
-        assert plan_intersections(model, sample, policy=T).content_checksum == outcome_e
+    # corner overlap: B's bottom corner moved delta into A (B shares only A's top-right vertex)
+    for delta in (1e-13, 1e-5):
+        model, faces = _corner_strips(delta)
+        outcome_e = _plan_outcome(model, faces, "connect")
+        assert _plan_outcome(model, faces, T) == outcome_e
+        with monkeypatch.context() as patch:
+            _with_certifier(patch, _StubCertifier(coincident=True))
+            assert _plan_outcome(model, faces, T) == outcome_e
+
+
+def _plan_outcome(model, faces, policy):
+    try:
+        return ("planned", plan_intersections(model, faces, policy=policy).content_checksum)
+    except GeometryError as exc:
+        return ("refused", str(exc))
+
+
+def _corner_strips(delta):
+    """Strip A (theta in [0, pi/4], z in [0, 1]) and strip B (theta in [pi/4, pi/2]) whose left
+    side runs from A's top-right vertex down to a bottom corner moved delta rad into A."""
+    model = GeometryModel()
+    q = math.pi/4
+    a0, a1 = _cyl_point(model, 0, 0), _cyl_point(model, 0, 1)
+    s0, s1 = _cyl_point(model, q, 0), _cyl_point(model, q, 1)
+    loop_a = (OrientedEdge(_arc(model, a0, s0, 0, q, 0), True), OrientedEdge(model.add_line(s0, s1), True),
+              OrientedEdge(_arc(model, a1, s1, 0, q, 1), False), OrientedEdge(model.add_line(a0, a1), False))
+    cyl = dict(radius=1., origin=(0, 0, 0), axis=(0, 0, 1), radial_direction=(1, 0, 0), height=1.)
+    face_a = model.add_face_from_loop(loop_a, surface=Cylinder(start_angle=0., sweep_angle=q, **cyl))
+    c = _cyl_point(model, q - delta, 0)
+    b0, b1 = _cyl_point(model, 2*q, 0), _cyl_point(model, 2*q, 1)
+    loop_b = (OrientedEdge(_arc(model, c, b0, q - delta, 2*q, 0), True), OrientedEdge(model.add_line(b0, b1), True),
+              OrientedEdge(_arc(model, s1, b1, q, 2*q, 1), False), OrientedEdge(model.add_line(c, s1), False))
+    face_b = model.add_face_from_loop(loop_b, surface=Cylinder(start_angle=q - delta, sweep_angle=q + delta, **cyl))
+    return model, (face_a, face_b)
 
 
 class _Cancel(Exception):
@@ -573,3 +627,136 @@ def test_cancellation_flag_gives_the_same_refusal_text_in_both_modes():
         results.append(_refusal(lambda: plan_intersections(model, faces, policy=IntersectionBatchPolicy(
             planning_mode=mode, cancellation_check=cancellation))))
     assert all(r and "cancelled" in r for r in results)
+
+
+# ----------------------------------------------------------------------------------- review round 1
+
+def test_a9b_orientation_check_is_reached_through_the_route(monkeypatch):
+    """A9 4(b) end to end: production-coincident strips, the certificate flags coincidence, the
+    second face's loop runs the other way (unequal orientation sign): counted as ineligible; the
+    output is the exact one. The double without the production orientation call counts it eligible."""
+    model, strips, _fin = _strips_and_fin()
+    first, second = (MaterialDomain.from_model(model, f) for f in strips[:2])
+    flipped = MaterialDomain(second.face_id, second.support, tuple(
+        tuple(replace(path, curve=path.curve.subcurve(1., 0.)) for path in reversed(loop))
+        for loop in second.boundaries))
+
+    def run(route_type):
+        route = route_type(model)
+        route.certifier = _StubCertifier(coincident=True)
+        route._records[id(flipped)] = (flipped, route._record(second))
+        exact = bi._pair_paths(first, flipped, model, 1e-9, lambda: None, point_contacts=[])
+        with collect_runtime_diagnostics() as counters:
+            out = bi._pair_paths(first, flipped, model, 1e-9, lambda: None, point_contacts=[], route=route)
+        assert len(out) == len(exact)
+        return counters
+    real = run(bi._TopologyRoute)
+    assert real.get("t2b_fallback:coincident_support_ineligible:radial_or_orientation") == 1
+    assert not real.get("t2b_coincident_exact_output")
+
+    class NoOrientation(bi._TopologyRoute):
+        def _orientation(self, domain):
+            return 1
+    assert run(NoOrientation).get("t2b_coincident_exact_output") == 1      # the double misses it
+
+
+def test_a9d_cancellation_inside_the_coincident_overlap_shadow(monkeypatch):
+    model, faces = _lobe_strips()
+    sentinel = _Cancel("stop in overlap check")
+    original = bi._coplanar_traces
+    fired = []
+
+    def overlap(first, second, tolerance, check, model):
+        check()                                         # the overlap check polls the planning check
+        return original(first, second, tolerance, check, model)
+    monkeypatch.setattr(bi, "_coplanar_traces", overlap)
+
+    def cancellation():
+        if inside and not fired:
+            fired.append(1)
+            raise sentinel
+        return False
+    inside = []
+    shadow = bi._pair_paths_exact
+
+    def tracked(*args, _shadow=None, **kwargs):
+        if _shadow is not None:
+            inside.append(1)
+        return shadow(*args, _shadow=_shadow, **kwargs)
+    monkeypatch.setattr(bi, "_pair_paths_exact", tracked)
+    _with_certifier(monkeypatch, _StubCertifier(coincident=True))
+    policy = IntersectionBatchPolicy(planning_mode="topology_certified", cancellation_check=cancellation)
+    with pytest.raises(_Cancel) as info:
+        plan_intersections(model, faces, policy=policy)
+    assert info.value is sentinel and fired
+
+
+def test_shared_vertices_are_emitted_by_identity_not_merged_within_tolerance():
+    """Review R1: two distinct shared vertices 1e-10 apart (r_max < 1e-10 < pair tolerance) are two
+    point contacts; the tolerance-merging double drops one."""
+    model, faces, _ = _l_joint()
+    route = bi._TopologyRoute(model)
+    d1, d2 = (MaterialDomain.from_model(model, f) for f in faces)
+    plate = sp.PlaneSupport((0., 0., 0.), (1., 0., 0.), (0., 1., 0.))
+    line = lambda a, b: bi.LinePath(a, b)
+    p, q, r = (0., 0., 0.), (1e-10, 0., 0.), (1., 1., 0.)
+    loop1 = (sp.BoundaryUse(line(p, q), 101, 1, 2), sp.BoundaryUse(line(q, r), 102, 2, 3),
+             sp.BoundaryUse(line(r, p), 103, 3, 1))
+    loop2 = (sp.BoundaryUse(line(q, p), 201, 2, 1), sp.BoundaryUse(line(p, (0., -1., 1.)), 202, 1, 4),
+             sp.BoundaryUse(line((0., -1., 1.), q), 203, 4, 2))
+    r1 = sp.FaceRecord(d1.face_id, plate, (loop1,), ((1, p), (2, q), (3, r)))
+    r2 = sp.FaceRecord(d2.face_id, plate, (loop2,), ((1, p), (2, q), (4, (0., -1., 1.))))
+    route._records[id(d1)], route._records[id(d2)] = (d1, r1), (d2, r2)
+    points = []
+    assert route._emit(sp.Certified(0.), d1, d2, 1e-9, points) == ()
+    assert points == [p, q]
+    merged = []
+    for point in points:                               # double: merge within the pair tolerance
+        if not any(np.linalg.norm(np.asarray(point)-old) <= 1e-9 for old in merged):
+            merged.append(point)
+    assert len(merged) == 1
+
+
+def test_mode_agnostic_routes_and_reapplication_in_topology_mode(monkeypatch):
+    """Review R2: plans of the existing-material route (a re-plan of a prepared model) carry no mode
+    and apply under a topology_certified or environment-selected mode; an explicit exact is not
+    stored."""
+    from anygeometry.existing_material_preparation import is_existing_plan
+    model, faces, _ = _l_joint()
+    apply_intersections(model, plan_intersections(model, faces, policy=T), policy=T)
+    replanned = plan_intersections(model, tuple(model.faces), policy=T)
+    if is_existing_plan(replanned) or type(replanned) is IntersectionPlan:
+        assert replanned.policy.planning_mode is None
+    apply_intersections(model, replanned, policy=T)
+    monkeypatch.setenv(bi.PLANNING_MODE_ENVIRONMENT, "topology_certified")
+    again = plan_intersections(model, tuple(model.faces), policy="connect")
+    apply_intersections(model, again, policy="connect")
+    explicit = plan_intersections(model, tuple(model.faces), policy=IntersectionBatchPolicy(planning_mode="exact"))
+    assert explicit.policy.planning_mode is None and b"planning_mode" not in pickle.dumps(explicit.policy)
+
+
+def test_cancellation_geometry_error_is_wrapped_exactly_as_in_exact_mode(monkeypatch):
+    """Review R6: a GeometryError raised by the callback inside the certificate reaches the caller
+    through the same pair-loop wrapper as in exact mode, with the original object as __cause__."""
+    model, faces, _ = _l_joint()
+    original = sp.SPCertifier.certify
+    error = GeometryError("host cancelled")
+    state = {"armed": False}
+
+    def certify(self, *args, **kwargs):
+        state["armed"] = True
+        try:
+            return original(self, *args, **kwargs)
+        finally:
+            state["armed"] = False
+    monkeypatch.setattr(sp.SPCertifier, "certify", certify)
+
+    def cancellation():
+        if state["armed"]:
+            raise error
+        return False
+    with pytest.raises(GeometryError) as info:
+        plan_intersections(model, faces, policy=IntersectionBatchPolicy(planning_mode="topology_certified",
+                                                                        cancellation_check=cancellation))
+    assert info.value.__cause__ is error
+    assert str(info.value) == f"intersection batch face:{faces[0]}/face:{faces[1]}: host cancelled"

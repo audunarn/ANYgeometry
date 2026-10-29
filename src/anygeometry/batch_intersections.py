@@ -143,14 +143,18 @@ class TopologyCertifiedPlan(IntersectionPlan):
     ``content_checksum`` is the unchanged geometry identity. ``route_checksum`` binds the mode:
     definition_checksum((content_checksum, planning_mode, certificate_version, r_max)).
     ``r_pairs`` holds ``(first_face_id, second_face_id, r_pair)`` of every certified pair in
-    candidate order (diagnostics; validated against ``r_max``). Exact plans are never of this
-    type and carry no route field (state E). Unpickling validates the route fields.
+    candidate order (diagnostics; validated against ``r_max``). ``route_tolerance`` is the model
+    length tolerance the certificate used: r_max must be its contract value (tol/1000 rounded down)
+    at load, and it must equal the model's tolerance at apply. Exact plans are never of this type
+    and carry no route field (state E). Unpickling validates the route fields and the content
+    checksum (section 7 rows 5-12).
     """
     planning_mode: str | None = None
     route_checksum: str | None = None
     certificate_version: str | None = None
     r_max: float | None = None
     r_pairs: tuple = ()
+    route_tolerance: float | None = None
 
     def __setstate__(self, state):
         names = [item.name for item in fields(self)]
@@ -159,6 +163,8 @@ class TopologyCertifiedPlan(IntersectionPlan):
             raise GeometryError("topology-certified plan state is malformed")
         for name, value in zip(names, state):
             object.__setattr__(self, name, value)
+        if self.content_checksum != _plan_content(self):
+            raise GeometryError("intersection plan analytic content binding changed")
         _route_state(self)
 
 
@@ -209,6 +215,12 @@ def resolve_planning_mode(policy):
     return mode
 
 
+def _mode_agnostic(policy):
+    """The policy as the mode-agnostic routes (existing-material, bounded) see it: no mode stored
+    in their plans; validated as exact (an explicit "exact" also overrides the environment)."""
+    return policy if policy.planning_mode is None else replace(policy, planning_mode=None)
+
+
 def _route_checksum(plan):
     return definition_checksum((plan.content_checksum, plan.planning_mode, plan.certificate_version, plan.r_max))
 
@@ -235,6 +247,8 @@ def _route_state(plan):
         raise GeometryError("topology-certified intersection plan has an unsupported certificate_version")
     if not _normal_positive_float(plan.r_max):
         raise GeometryError("topology-certified intersection plan r_max is not a positive normal float")
+    if not _normal_positive_float(plan.route_tolerance) or plan.r_max != _contract_r_max(plan.route_tolerance):
+        raise GeometryError("topology-certified intersection plan r_max is not the contract value")
     if type(plan.r_pairs) is not tuple:
         raise GeometryError("topology-certified intersection plan r_pair diagnostics are malformed")
     for item in plan.r_pairs:
@@ -255,18 +269,23 @@ def _validate_route(plan, policy, model=None):
     if state == "T":
         if mode != "topology_certified":
             raise GeometryError("a topology-certified intersection plan is never applied as exact")
-        if model is not None and plan.r_max != _plan_r_max(model):
+        if model is not None and (plan.route_tolerance != model.tolerance.length
+                                  or plan.r_max != _plan_r_max(model)):
             raise GeometryError("topology-certified intersection plan r_max is not the contract value")
     return state
 
 
-def _plan_r_max(model):
-    """The per-plan contract bound: tol/1000 of the model length tolerance, rounded down."""
+def _contract_r_max(tolerance):
     from .separating_plane_certificate import contract_r_max, SPRefusal
     try:
-        return contract_r_max(model.tolerance.length)
+        return contract_r_max(tolerance)
     except SPRefusal as exc:
         raise GeometryError(f"topology_certified r_max is unavailable for this tolerance: {exc}") from None
+
+
+def _plan_r_max(model):
+    """The per-plan contract bound: tol/1000 of the model length tolerance, rounded down."""
+    return _contract_r_max(model.tolerance.length)
 
 
 def _policy(value):
@@ -727,12 +746,14 @@ class _TopologyRoute:
                 traces.append(use.edge_curve if use.edge_curve is not None else use.curve)
         positions1, ids2 = dict(r1.vertices), {vid for vid, _position in r2.vertices}
         if point_contacts is not None:
+            emitted = set()
             for use in uses1:
+                # One point per shared vertex IDENTITY: the certified bound r_pair << tol does not
+                # allow merging distinct vertices within the pair tolerance.
                 vertex = use.start_vertex
-                if vertex in ids2 and vertex not in on_edges:
-                    point = tuple(float(x) for x in positions1[vertex])
-                    if not any(np.linalg.norm(np.asarray(point)-old) <= tolerance for old in point_contacts):
-                        point_contacts.append(point)
+                if vertex in ids2 and vertex not in on_edges and vertex not in emitted:
+                    emitted.add(vertex)
+                    point_contacts.append(tuple(float(x) for x in positions1[vertex]))
         self.r_pairs.append((first.face_id, second.face_id, float(verdict.r_pair)))
         _increment("t2b_certified")
         return tuple(traces)
@@ -741,7 +762,7 @@ class _TopologyRoute:
         values = {item.name: getattr(plan, item.name) for item in fields(IntersectionPlan)}
         sealed = TopologyCertifiedPlan(**values, planning_mode="topology_certified", route_checksum="",
                                        certificate_version=self.version, r_max=self.r_max,
-                                       r_pairs=tuple(self.r_pairs))
+                                       r_pairs=tuple(self.r_pairs), route_tolerance=float(self.tolerance))
         return replace(sealed, route_checksum=_route_checksum(sealed))
 
 
@@ -849,13 +870,16 @@ def plan_intersections(model, operands, *, policy):
     handles = tuple(sorted(set(_normalize_operand(model, value) for value in operands)))
     effective = _policy(policy)
     mode = resolve_planning_mode(effective)         # once per planning call (ADR-T2 v2 section 1)
+    # The existing-material and bounded routes are mode-agnostic: they plan (and apply) exactly as
+    # in exact mode and return state-E plans without any mode in their stored policy.
+    early = _mode_agnostic(effective)
     from .existing_material_preparation import try_plan_existing
-    existing = try_plan_existing(model, handles, effective)
+    existing = try_plan_existing(model, handles, early)
     if existing is not None:
         return existing
     native=capture_native_supports(model) if _epoch_plan_required(model) else None
     if effective.face_connections and handles_bounded(model, handles):
-        plan = plan_bounded(model, handles, effective)
+        plan = plan_bounded(model, handles, early)
         if native is not None:
             if capture_native_supports(model) != native:
                 raise GeometryError('bounded epoch source native geometry changed during planning')
@@ -1726,13 +1750,13 @@ def _apply_intersections(model, plan, *, policy):
         _validate_policy(plan, effective, model)
     from .existing_material_preparation import is_existing_plan, eligible, apply_existing
     if is_existing_plan(plan):
-        return apply_existing(model, plan, effective)
+        return apply_existing(model, plan, replace(effective, planning_mode="exact"))   # mode-agnostic route
     if effective.face_connections and eligible(model, plan.operands):
         raise GeometryError('same-chart material preparation plan is not owner-issued')
     from .bounded_nurbs import is_bounded_plan, handles_bounded, apply_bounded
     active_faces = all(h.kind == 'face' and h.id in model.faces for h in plan.operands)
     if is_bounded_plan(plan) or (active_faces and handles_bounded(model, plan.operands)):
-        return apply_bounded(model, plan, effective)
+        return apply_bounded(model, plan, replace(effective, planning_mode="exact"))    # mode-agnostic route
     _validate_policy(plan,effective,model)
     if model.model_id != plan.model_id:
         raise GeometryError("intersection plan belongs to another model")
