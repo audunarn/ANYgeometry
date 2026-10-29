@@ -51,7 +51,7 @@ from .predicates import IntersectionDimension, IntersectionKind, qualified_plane
 from .serialization import to_dict, _serialized_model_state, _qualified_model_state
 from .structural import ConnectionIntent, Orientation
 from .surfaces import Cone, Cylinder, ExtrudedSurface, Plane
-from .transactions import ChangeSet
+from .transactions import AABBChange, ChangeSet
 from .definition_binding import definition_checksum
 
 
@@ -150,8 +150,8 @@ class TopologyCertifiedPlan(IntersectionPlan):
     candidate order (diagnostics; validated against ``r_max``). ``route_tolerance`` is the model
     length tolerance the certificate used: r_max must be its contract value (tol/1000 rounded down)
     at load, and it must equal the model's tolerance at apply. Exact plans are never of this type
-    and carry no route field (state E). Unpickling validates the route fields and the content
-    checksum (section 7 rows 5-12).
+    and carry no route field (state E). Construction, unpickling and apply validate every field
+    with the one route-carrier validator (``_validate_route_carrier``; section 7 rows 5-12 and 14).
     """
     planning_mode: str | None = None
     route_checksum: str | None = None
@@ -160,16 +160,11 @@ class TopologyCertifiedPlan(IntersectionPlan):
     r_pairs: tuple = ()
     route_tolerance: float | None = None
 
+    def __post_init__(self):
+        _validate_route_carrier(self)
+
     def __setstate__(self, state):
-        names = [item.name for item in fields(self)]
-        state = list(state)
-        if len(state) != len(names):
-            raise GeometryError("topology-certified plan state is malformed")
-        for name, value in zip(names, state):
-            object.__setattr__(self, name, value)
-        if self.content_checksum != _plan_content(self):
-            raise GeometryError("intersection plan analytic content binding changed")
-        _route_state(self)
+        _restore_route_carrier(self, state)
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,20 +174,28 @@ class TopologyCertifiedApplication(IntersectionApplication):
     ADR section 7 row 3: the mode, r_max and certificate version are also written into the change
     set (``change_set`` is a ``TopologyCertifiedChangeSet``, the same object that
     ``model.last_change_set`` holds and change hooks receive) and into the model document record
-    (``intersection_planning_record``).
+    (``intersection_planning_record``). Construction and unpickling validate every field (row 14):
+    the identity is exactly the plan's and the change set's.
     """
     planning_mode: str | None = None
     r_max: float | None = None
     certificate_version: str | None = None
+
+    def __post_init__(self):
+        _validate_route_carrier(self)
+
+    def __setstate__(self, state):
+        _restore_route_carrier(self, state)
 
 
 @dataclass(frozen=True, slots=True)
 class TopologyCertifiedChangeSet(ChangeSet):
     """The ChangeSet of a topology-certified application (ADR section 7 row 3, matrix row 14).
 
-    Exact applications keep the plain ``ChangeSet`` (byte-identical pickles). The route identity is
-    checked at construction and at unpickling by the same section-7 row checks as a state-T plan
-    (rows 11, 10, 5, 7, 8, 6): missing or mismatched fields are rejected.
+    Exact applications keep the plain ``ChangeSet`` (byte-identical pickles). Every field is checked
+    at construction and at unpickling by the one route-carrier validator, with the same section-7 row
+    checks as a state-T plan (rows 12, 11, 10, 5, 7, 8, 6, 14): missing, malformed or mismatched
+    fields are rejected.
     """
     planning_mode: str | None = None
     certificate_version: str | None = None
@@ -202,51 +205,43 @@ class TopologyCertifiedChangeSet(ChangeSet):
     route_checksum: str | None = None
 
     def __post_init__(self):
-        _check_route_identity(self)
+        _validate_route_carrier(self)
 
     def __setstate__(self, state):
-        names = [item.name for item in fields(self)]
-        state = list(state)
-        if len(state) != len(names):
-            raise GeometryError("topology-certified change set state is malformed")
-        for name, value in zip(names, state):
-            object.__setattr__(self, name, value)
-        _check_route_identity(self)
+        _restore_route_carrier(self, state)
 
 
 @dataclass(frozen=True, slots=True)
-class _RouteIdentity:
-    """The route identity of one entry of the model record, checked like a state-T plan."""
+class _RecordEntry:
+    """One publication entry of the model record, validated as a route carrier."""
     planning_mode: object
     certificate_version: object
     r_max: object
     route_tolerance: object
     content_checksum: object
     route_checksum: object
+    source_revision: object
+    source_checksum: object
 
 
 INTERSECTION_PLANNING_EXTENSION = "anygeometry:intersection_planning"
 _RECORD_FORMAT = 1
 _ROUTE_IDENTITY_FIELDS = ("planning_mode", "certificate_version", "r_max", "route_tolerance", "content_checksum",
                           "route_checksum")
-_RECORD_FIELDS = frozenset((*_ROUTE_IDENTITY_FIELDS, "source_revision", "source_checksum"))
+_RECORD_ENTRY_FIELDS = tuple(item.name for item in fields(_RecordEntry))
+_RECORD_FIELDS = frozenset(_RECORD_ENTRY_FIELDS)
 
 
 def _record_fields(entry):
-    """Matrix row 14, entry structure: exactly the record fields, the source binding typed."""
-    if not isinstance(entry, dict) or set(entry) != _RECORD_FIELDS:
+    """Matrix row 14, entry structure: a dict with exactly the record fields (their values are
+    checked by the route-carrier validator)."""
+    if type(entry) is not dict or set(entry) != _RECORD_FIELDS:
         raise GeometryError("an entry does not have exactly the record fields")
-    revision = entry["source_revision"]
-    if type(revision) is not int or revision < 0:
-        raise GeometryError("an entry source_revision is not a non-negative integer")
-    for name in ("source_checksum", "content_checksum"):
-        if type(entry[name]) is not str or not entry[name]:
-            raise GeometryError(f"an entry {name} is not a non-empty string")
 
 
 def _record_entry(entry):
     _record_fields(entry)
-    _check_route_identity(_RouteIdentity(*(entry.get(name) for name in _ROUTE_IDENTITY_FIELDS)))
+    _validate_route_carrier(_RecordEntry(*(entry.get(name) for name in _RECORD_ENTRY_FIELDS)))
     return entry
 
 
@@ -254,7 +249,7 @@ def validate_intersection_planning_record(value):
     """Load check of the model document record (matrix row 14); returns the entries, or raises
     ``GeometryError``. Called by ``from_dict`` whenever the record is present."""
     try:
-        if not isinstance(value, dict) or set(value) != {"format", "publications"}:
+        if type(value) is not dict or set(value) != {"format", "publications"}:
             raise GeometryError("the record must have exactly 'format' and 'publications'")
         if type(value["format"]) is not int or value["format"] != _RECORD_FORMAT:
             raise GeometryError(f"the record format must be {_RECORD_FORMAT}")
@@ -381,17 +376,155 @@ def _mode_agnostic(policy):
     return policy if policy.planning_mode is None else replace(policy, planning_mode=None)
 
 
-def _route_checksum(plan):
-    return definition_checksum((plan.content_checksum, plan.planning_mode, plan.certificate_version, plan.r_max))
+def _route_binding(content_checksum, planning_mode, certificate_version, r_max):
+    return definition_checksum((content_checksum, planning_mode, certificate_version, r_max))
+
+
+def _route_checksum(carrier):
+    return _route_binding(carrier.content_checksum, carrier.planning_mode, carrier.certificate_version,
+                          carrier.r_max)
 
 
 def _normal_positive_float(value):
     return type(value) is float and math.isfinite(value) and value >= 2.2250738585072014e-308
 
 
+# ------------------------------------------------------------------------------------------------
+# The route-carrier validator (fix round 5, review R6: one validator, every field, every path).
+#
+# Route carriers: TopologyCertifiedPlan, TopologyCertifiedChangeSet, TopologyCertifiedApplication and
+# _RecordEntry (one publication of the model record). ``_validate_route_carrier`` is the only entry:
+# construction (__post_init__), unpickling (__setstate__ via _restore_route_carrier), apply
+# (_route_state), document load (validate_intersection_planning_record from from_dict), record read
+# and record write. It runs the section-7 row checks of the carrier's type, in a fixed order; each
+# field is owned by exactly one row (route_checksum by rows 5 and 6):
+#   12 content_checksum   11/10 planning_mode   5/6 route_checksum   7 certificate_version
+#   8 r_max, route_tolerance (finite normal floats, consistent)   9 r_pairs (plans)
+#   14 every other field (exact type and form, _CARRIER_FIELDS; an application's identity is its plan's).
+# Types are exact (bool is not an int, numpy scalars are not floats); every checksum is a SHA-256
+# hex digest, the form of definition_checksum and of the document checksum. A dataclass carrier's
+# state must have exactly its fields (_restore_route_carrier); a record entry exactly the record
+# fields (_record_fields).
+
+_CHECKSUM_DIGITS = frozenset("0123456789abcdef")
+
+
+def _is_checksum(value):
+    return type(value) is str and len(value) == 64 and _CHECKSUM_DIGITS.issuperset(value)
+
+
+def _is_revision(value):
+    return type(value) is int and value >= 0
+
+
+def _is_tuple_of(value, valid):
+    return type(value) is tuple and all(valid(item) for item in value)
+
+
+def _of_type(kind):
+    return lambda value: type(value) is kind
+
+
+def _tuple_of_type(kind):
+    return lambda value: _is_tuple_of(value, _of_type(kind))
+
+
+def _is_entity_key(value):
+    return type(value) is tuple and len(value) == 2 and type(value[0]) is str and type(value[1]) is int
+
+
+def _is_replacement(value):
+    return (type(value) is tuple and len(value) == 2 and type(value[0]) is EntityRef
+            and _is_tuple_of(value[1], _of_type(EntityRef)))
+
+
+_ENTITY_KEYS = lambda value: _is_tuple_of(value, _is_entity_key)
+# Row 14: the fields of each carrier that are not owned by rows 5-12.
+_CARRIER_FIELDS = {
+    TopologyCertifiedPlan: {
+        "model_id": _of_type(UUID), "revision": _is_revision, "source_checksum": _is_checksum,
+        "operands": _tuple_of_type(EntityHandle), "policy": _of_type(IntersectionBatchPolicy),
+        "arrangements": _tuple_of_type(MaterialArrangement), "axes": _tuple_of_type(MemberAxisArrangement),
+        "contacts": _tuple_of_type(MemberPointContact), "face_contacts": _tuple_of_type(FacePointContact)},
+    TopologyCertifiedChangeSet: {
+        "revision_before": _is_revision, "revision_after": _is_revision,
+        "added": _ENTITY_KEYS, "removed": _ENTITY_KEYS, "modified": _ENTITY_KEYS,
+        "replacements": lambda value: _is_tuple_of(value, _is_replacement),
+        "ownership_changes": _ENTITY_KEYS, "member_changes": _ENTITY_KEYS, "attachment_changes": _ENTITY_KEYS,
+        "group_changes": _tuple_of_type(str), "tag_changes": _ENTITY_KEYS,
+        "affected_aabbs": _tuple_of_type(AABBChange), "invalidated_caches": _ENTITY_KEYS,
+        "spatial_updates": _ENTITY_KEYS, "feature_history_changed": _of_type(bool),
+        "document_settings_changed": _of_type(bool)},
+    _RecordEntry: {"source_revision": _is_revision, "source_checksum": _is_checksum},
+    TopologyCertifiedApplication: {
+        "plan": _of_type(TopologyCertifiedPlan), "change_set": _of_type(TopologyCertifiedChangeSet),
+        "joint_edges": _tuple_of_type(EntityHandle), "reused": _of_type(bool)},
+}
+_IDENTITY_ROWS = (12, 11, 10, 5, 7, 8, 6, 14)  # persisted route identities carry no r_pairs
+_CARRIER_ROWS = {TopologyCertifiedPlan: (12, 11, 10, 5, 7, 8, 9, 6, 14),
+                 TopologyCertifiedChangeSet: _IDENTITY_ROWS,
+                 _RecordEntry: _IDENTITY_ROWS,
+                 TopologyCertifiedApplication: (14,)}
+
+
+def _validate_route_carrier(carrier):
+    """THE validator of every route carrier (see the section comment); raises ``GeometryError``."""
+    rows = _CARRIER_ROWS.get(type(carrier))
+    if rows is None:
+        raise GeometryError(f"{type(carrier).__name__} is not a topology-certified route carrier")
+    checks = globals()             # looked up at call time: each row has its own unsound test double
+    for row in rows:
+        checks[f"_route_row_{row}"](carrier)
+
+
+def _restore_route_carrier(carrier, state):
+    """Unpickling of a dataclass route carrier: exactly its fields, then the validator."""
+    names = [item.name for item in fields(carrier)]
+    state = list(state) if type(state) in (list, tuple) else None
+    if state is None or len(state) != len(names):
+        raise GeometryError(f"{type(carrier).__name__} state is malformed")
+    for name, value in zip(names, state):
+        object.__setattr__(carrier, name, value)
+    _validate_route_carrier(carrier)
+
+
 # ADR section 7 matrix: one function per row, each with its own unsound test double (review R5).
-# They are looked up by name at call time, in this order (the order of the checks before fix
-# round 4, so the first failing row and its message are unchanged).
+# They are looked up by name at call time, in the order of _CARRIER_ROWS (rows 11-6 keep the order
+# of the checks before fix round 4, so the first failing row and its message are unchanged).
+
+def _route_row_12(carrier):
+    """Row 12: content_checksum is a SHA-256 hex digest; a plan's recomputes from its content."""
+    value = carrier.content_checksum
+    if isinstance(carrier, IntersectionPlan):
+        try:
+            bound = _is_checksum(value) and value == _plan_content(carrier)
+        except (GeometryError, TypeError, ValueError, AttributeError):     # content that cannot be bound
+            bound = False
+        if not bound:
+            raise GeometryError("intersection plan analytic content binding changed")
+    elif not _is_checksum(value):
+        raise GeometryError("topology-certified route content_checksum is not a SHA-256 hex digest")
+
+
+def _same_value(first, second):
+    return type(first) is type(second) and first == second
+
+
+def _route_row_14(carrier):
+    """Row 14: every field not owned by rows 5-12 has its exact type and form; an application's
+    identity is exactly its plan's (mode, r_max, version) and its change set's (all six fields)."""
+    for name, valid in _CARRIER_FIELDS[type(carrier)].items():
+        if not valid(getattr(carrier, name)):
+            raise GeometryError(f"topology-certified route carrier field {name} is malformed")
+    if type(carrier) is TopologyCertifiedChangeSet and carrier.revision_after < carrier.revision_before:
+        raise GeometryError("topology-certified route carrier field revision_after is malformed")
+    if type(carrier) is TopologyCertifiedApplication:
+        for name in ("planning_mode", "r_max", "certificate_version"):
+            if not _same_value(getattr(carrier, name), getattr(carrier.plan, name)):
+                raise GeometryError(f"topology-certified route carrier field {name} is malformed")
+        for name in _ROUTE_IDENTITY_FIELDS:
+            if not _same_value(getattr(carrier.change_set, name), getattr(carrier.plan, name)):
+                raise GeometryError("topology-certified route carrier field change_set is malformed")
 
 def _route_row_11(plan):
     """Row 11: route fields without planning_mode, or planning_mode = "exact" stored explicitly."""
@@ -410,9 +543,9 @@ def _route_row_10(plan):
 
 
 def _route_row_5(plan):
-    """Row 5: route_checksum missing or empty."""
-    if type(plan.route_checksum) is not str or not plan.route_checksum:
-        raise GeometryError("topology-certified intersection plan has no route_checksum")
+    """Row 5: route_checksum missing, empty or not a SHA-256 hex digest."""
+    if not _is_checksum(plan.route_checksum):
+        raise GeometryError("topology-certified intersection plan has no route_checksum (SHA-256 hex digest)")
 
 
 def _route_row_7(plan):
@@ -444,40 +577,33 @@ def _route_row_9(plan):
         raise GeometryError("topology-certified intersection plan r_pair diagnostics are malformed")
     for item in plan.r_pairs:
         if (type(item) is not tuple or len(item) != 3 or type(item[0]) is not int or type(item[1]) is not int
+                or item[0] < 1 or item[1] < 1
                 or type(item[2]) is not float or not math.isfinite(item[2]) or not 0. <= item[2] <= plan.r_max):
             raise GeometryError("topology-certified intersection plan r_pair is missing, non-finite or above r_max")
 
 
 def _route_row_6(plan):
     """Row 6: the route checksum recomputes from (content_checksum, mode, version, r_max)."""
-    if plan.route_checksum != _route_checksum(plan):
+    try:
+        binding = _route_checksum(plan)
+    except (TypeError, ValueError):                 # unbindable values (only reachable with row 8 removed)
+        binding = None
+    if binding is None or plan.route_checksum != binding:
         raise GeometryError("topology-certified intersection plan route binding changed")
 
 
-_PLAN_ROWS = (11, 10, 5, 7, 8, 9, 6)
-_IDENTITY_ROWS = (11, 10, 5, 7, 8, 6)          # persisted route identities carry no r_pairs
-
-
 def _route_state(plan):
-    """``"E"`` or ``"T"``; a malformed route state raises ``GeometryError`` (ADR section 7 rows 5-11)."""
+    """``"E"`` or ``"T"``; a malformed state-T plan raises ``GeometryError`` (the route-carrier
+    validator: ADR section 7 rows 5-12 and 14)."""
     if not isinstance(plan, TopologyCertifiedPlan):
         return "E"
-    checks = globals()
-    for row in _PLAN_ROWS:
-        checks[f"_route_row_{row}"](plan)
+    _validate_route_carrier(plan)
     return "T"
 
 
-def _check_route_identity(identity):
-    """A persisted route identity (change set, model record entry) passes the plan's row checks."""
-    checks = globals()
-    for row in _IDENTITY_ROWS:
-        checks[f"_route_row_{row}"](identity)
-
-
-def _validate_route(plan, policy, model=None):
-    """Mode/state agreement (ADR section 7); with ``model``, r_max against the model tolerance."""
-    state = _route_state(plan)
+def _validate_route(plan, state, policy, model=None):
+    """Mode/state agreement (ADR section 7) for a plan of ``state`` (from ``_route_state``); with
+    ``model``, r_max against the model tolerance."""
     mode = resolve_planning_mode(policy)
     if state == "E" and mode != "exact":
         raise GeometryError("an exact intersection plan cannot be applied in topology_certified mode")
@@ -518,12 +644,15 @@ def _plan_content(plan):
 
 
 def _validate_policy(plan, policy, model=None):
+    # A state-T plan is first validated field by field by the route-carrier validator (row 12 is its
+    # content binding), so the comparisons below read validated fields; a state-E plan does no work here.
+    state = _route_state(plan)
     if any(getattr(policy,name) != getattr(plan.policy,name) for name in (
         'intent','face_connections','member_connections','member_face_connections')):
         raise GeometryError("apply policy does not match intersection planning")
-    if plan.content_checksum != _plan_content(plan):
+    if state == "E" and plan.content_checksum != _plan_content(plan):
         raise GeometryError("intersection plan analytic content binding changed")
-    _validate_route(plan, policy, model)
+    _validate_route(plan, state, policy, model)
 
 
 def _normalise_cells(arrangement):
@@ -974,10 +1103,10 @@ class _TopologyRoute:
 
     def seal(self, plan):
         values = {item.name: getattr(plan, item.name) for item in fields(IntersectionPlan)}
-        sealed = TopologyCertifiedPlan(**values, planning_mode="topology_certified", route_checksum="",
-                                       certificate_version=self.version, r_max=self.r_max,
-                                       r_pairs=tuple(self.r_pairs), route_tolerance=float(self.tolerance))
-        return replace(sealed, route_checksum=_route_checksum(sealed))
+        route_checksum = _route_binding(plan.content_checksum, "topology_certified", self.version, self.r_max)
+        return TopologyCertifiedPlan(**values, planning_mode="topology_certified", route_checksum=route_checksum,
+                                     certificate_version=self.version, r_max=self.r_max,
+                                     r_pairs=tuple(self.r_pairs), route_tolerance=float(self.tolerance))
 
 
 def _pair_paths(first, second, model, tolerance, check, *, point_contacts=None, face_tolerances=None, route=None):

@@ -247,23 +247,30 @@ def plans():
     return model, exact, certified
 
 
+def _forge(carrier, **changes):
+    """``carrier`` with ``changes`` set WITHOUT construction: a corrupted object as unpickling, a
+    caller or an attacker could present it (fix round 5: construction itself validates every field,
+    so tampered plans and change sets can no longer be made with ``dataclasses.replace``)."""
+    made = object.__new__(type(carrier))
+    for item in fields(carrier):
+        object.__setattr__(made, item.name, changes[item.name] if item.name in changes else getattr(carrier, item.name))
+    return made
+
+
 def _resealed(plan, **changes):
-    changed = replace(plan, **changes)
+    changed = _forge(plan, **changes)
     try:
-        return replace(changed, route_checksum=bi._route_checksum(changed))
+        return _forge(changed, route_checksum=bi._route_checksum(changed))
     except (ValueError, TypeError):                     # non-finite values cannot be bound at all
         return changed
 
 
-_ROUTE_FIELDS = ("planning_mode", "route_checksum", "certificate_version", "r_max", "r_pairs", "route_tolerance")
-
-
 def _only_this_field_is_wrong(plan, certified):
-    """Discrimination check (the double for every route row is a validator that ignores the
-    tampered field): restoring the tampered fields, and only them, makes the plan valid again."""
-    changed = {name: getattr(certified, name) for name in _ROUTE_FIELDS
-               if repr(getattr(plan, name)) != repr(getattr(certified, name))}
-    assert changed, "the tampered plan must differ in a route field"
+    """Discrimination check (the double for every row is a validator that ignores the tampered
+    field): restoring the tampered fields, and only them, makes the plan valid again."""
+    changed = {item.name: getattr(certified, item.name) for item in fields(certified)
+               if repr(getattr(plan, item.name)) != repr(getattr(certified, item.name))}
+    assert changed, "the tampered plan must differ in a field"
     restored = replace(plan, **changed)
     return bi._route_state(restored) == "T"
 
@@ -297,9 +304,9 @@ def test_matrix_mode_mismatch_rows(plans, row):
 
 def _tampered(certified, row):
     if row == 5:
-        return [replace(certified, route_checksum=value) for value in ("", None)]
+        return [_forge(certified, route_checksum=value) for value in ("", None)]
     if row == 6:
-        return [replace(certified, route_checksum="0"*64), replace(certified, r_max=math.nextafter(certified.r_max, 0.))]
+        return [_forge(certified, route_checksum="0"*64), _forge(certified, r_max=math.nextafter(certified.r_max, 0.))]
     if row == 7:
         return [_resealed(certified, certificate_version=value) for value in (None, "sp-exact-t2-1a-0", 1)]
     if row == 8:
@@ -315,10 +322,20 @@ def _tampered(certified, row):
         return [_resealed(certified, planning_mode=value) for value in ("topology", "", 3)]
     if row == 11:
         return [_resealed(certified, planning_mode=None), _resealed(certified, planning_mode="exact")]
+    if row == 12:                       # fix round 5: the content checksum's form and binding (R6)
+        return [_resealed(certified, content_checksum=value) for value in ("0"*64, None, "", 123, "0"*63)]
+    if row == 14:                       # fix round 5: every other field has its exact type and form
+        policy = _PolicySubclass(**{item.name: getattr(certified.policy, item.name)
+                                    for item in fields(certified.policy)})
+        return [_forge(certified, policy=policy), _forge(certified, revision=np.int64(certified.revision)),
+                _forge(certified, revision=True), _forge(certified, source_checksum=certified.source_checksum.upper())]
     raise AssertionError(row)
 
 
-@pytest.mark.parametrize("row", [5, 6, 7, 8, 9, 10, 11])
+_ROWS = [5, 6, 7, 8, 9, 10, 11, 12, 14]
+
+
+@pytest.mark.parametrize("row", _ROWS)
 def test_matrix_malformed_route_rows_are_rejected_at_apply_and_load(plans, row, monkeypatch):
     model, _exact, certified = plans
     before = to_dict(model)
@@ -334,7 +351,8 @@ def test_matrix_malformed_route_rows_are_rejected_at_apply_and_load(plans, row, 
 
 _ROW_MESSAGES = {5: "no route_checksum", 6: "route binding changed", 7: "unsupported certificate_version",
                  8: "r_max is not", 9: "r_pair", 10: "is not supported",
-                 11: "without planning_mode|carries no route fields"}
+                 11: "without planning_mode|carries no route fields",
+                 12: "content binding changed|content_checksum is not", 14: "field .* is malformed"}
 
 
 def _disable_row(monkeypatch, row):
@@ -355,7 +373,7 @@ def _load_and_apply(model, plan):
     return None
 
 
-@pytest.mark.parametrize("row", [5, 6, 7, 8, 9, 10, 11])
+@pytest.mark.parametrize("row", _ROWS)
 def test_matrix_row_checks_each_have_their_own_unsound_double(plans, row, monkeypatch):
     """Review R5 (fix round 4): one double per check, not one global double. For every tampered plan
     of a row, that row's check rejects it on its own; with ONLY that check removed, at least one
@@ -417,7 +435,7 @@ def test_matrix_row_8_rejects_a_wrong_contract_value_at_load_and_apply(plans):
 
 def test_plan_load_checks_the_content_checksum(plans):
     _model, _exact, certified = plans
-    tampered = replace(certified, face_contacts=((),))
+    tampered = _forge(certified, face_contacts=((),))
     with pytest.raises(GeometryError, match="content binding"):
         pickle.loads(pickle.dumps(tampered))
     assert pickle.loads(pickle.dumps(certified)).route_checksum == certified.route_checksum
@@ -426,7 +444,7 @@ def test_plan_load_checks_the_content_checksum(plans):
 def test_matrix_row_12_invalid_content_checksum(plans):
     model, exact, certified = plans
     for plan, policy in ((replace(exact, face_contacts=((),)), "connect"),
-                         (replace(certified, content_checksum="0"*64), T)):
+                         (_forge(certified, content_checksum="0"*64), T)):
         with pytest.raises(GeometryError, match="content binding"):
             apply_intersections(model, plan, policy=policy)
 
@@ -976,7 +994,11 @@ _RECORD_TAMPERS = {
     "r_max_not_contract": (lambda e: e.update(r_max=2*e["r_max"]), True, "_route_row_8"),
     "route_checksum_mismatch": (lambda e: e.update(route_checksum="0"*64), False, "_route_row_6"),
     "route_checksum_empty": (lambda e: e.update(route_checksum=""), False, None),
-    "source_revision_bool": (lambda e: e.update(source_revision=True), False, "_record_fields"),
+    "source_revision_bool": (lambda e: e.update(source_revision=True), False, "_route_row_14"),
+    # fix round 5 (R6): the same rows 12 and 14 as for plans and change sets
+    "content_checksum_none": (lambda e: e.update(content_checksum=None), True, "_route_row_12"),
+    "content_checksum_short": (lambda e: e.update(content_checksum=e["content_checksum"][:-1]), True, "_route_row_12"),
+    "source_checksum_upper": (lambda e: e.update(source_checksum=e["source_checksum"].upper()), False, "_route_row_14"),
 }
 
 
@@ -1025,6 +1047,11 @@ _CHANGE_SET_TAMPERS = {
     "r_max_missing": ({"r_max": None}, True, "_route_row_8"),
     "route_checksum_mismatch": ({"route_checksum": "0"*64}, False, "_route_row_6"),
     "route_checksum_missing": ({"route_checksum": None}, False, None),
+    # fix round 5 (review R6): content_checksum None, "" and 123 were accepted with a resealed route checksum
+    "content_checksum_none": ({"content_checksum": None}, True, "_route_row_12"),
+    "content_checksum_empty": ({"content_checksum": ""}, True, "_route_row_12"),
+    "content_checksum_int": ({"content_checksum": 123}, True, "_route_row_12"),
+    "revision_bool": ({"revision_before": True}, False, "_route_row_14"),
 }
 
 
@@ -1071,6 +1098,226 @@ def test_topology_certified_plan_is_refused_inside_a_caller_transaction(plans, m
     with model.transaction():
         apply_intersections(model, certified, policy=T)
     assert model.revision == certified.revision + 1 and bi.intersection_planning_record(model) == ()
+
+
+# ----------------------------------------------------------------------------------- fix round 5 (R6): one validator
+#
+# Review R6 found content_checksum None/""/123 accepted by change-set construction and unpickling.
+# The class: every field of every route carrier (TopologyCertifiedPlan, TopologyCertifiedChangeSet,
+# a model record entry, TopologyCertifiedApplication) is validated by one shared validator in every
+# path (construction, unpickling, apply, document load, record read). The kind of every field is
+# listed here; the tables must cover the dataclass fields exactly, so a new field needs a kind.
+
+class _PolicySubclass(IntersectionBatchPolicy):           # equal values, not the exact type
+    __slots__ = ()
+
+
+_IDENTITY_KINDS = {"planning_mode": "mode", "certificate_version": "version", "r_max": "r_max",
+                   "route_tolerance": "tolerance", "content_checksum": "checksum", "route_checksum": "checksum"}
+_KEY_FIELDS = ("added", "removed", "modified", "ownership_changes", "member_changes", "attachment_changes",
+               "tag_changes", "invalidated_caches", "spatial_updates")
+_CARRIER_KINDS = {
+    "plan": {"model_id": "uuid", "revision": "revision", "source_checksum": "checksum", "operands": "tuple",
+             "policy": "policy", "arrangements": "tuple", "axes": "tuple", "contacts": "tuple",
+             "face_contacts": "tuple", "r_pairs": "r_pairs", **_IDENTITY_KINDS},
+    "change_set": {"revision_before": "revision", "revision_after": "revision", "replacements": "tuple",
+                   "group_changes": "tuple", "affected_aabbs": "tuple", "feature_history_changed": "bool",
+                   "document_settings_changed": "bool", **{name: "tuple" for name in _KEY_FIELDS}, **_IDENTITY_KINDS},
+    "record": {"source_revision": "revision", "source_checksum": "checksum", **_IDENTITY_KINDS},
+    "application": {"plan": "plan", "change_set": "change_set", "joint_edges": "tuple", "reused": "bool",
+                    "planning_mode": "mode", "r_max": "r_max", "certificate_version": "version"},
+}
+_COMMON_BAD = (None, "", 123, True, math.nan, math.inf, -1, -1.0, [], {})
+
+
+def _bad_values(kind, valid, exact):
+    """Bad values of one field kind: the common ones that are not valid for the kind, then the
+    kind's own (wrong form, wrong range, inconsistent, numpy scalars, wrong container elements)."""
+    common = [v for v in _COMMON_BAD if not ((kind == "revision" and type(v) is int and v >= 0)
+                                             or (kind == "bool" and type(v) is bool))]
+    own = {
+        "checksum": lambda: ["0"*63, "0"*65, "A"*64, "g"*64, ("0"*64,)],
+        "mode": lambda: ["exact", "topology", "TOPOLOGY_CERTIFIED", ("topology_certified",)],
+        "version": lambda: ["sp-exact-t2-1a-0", sp.CERTIFICATE_VERSION.upper()],
+        "r_max": lambda: [0., 5e-324, -valid, 2*valid, math.nextafter(valid, math.inf), np.float64(valid)],
+        "tolerance": lambda: [0., 5e-324, -valid, 2*valid, np.float64(valid)],
+        "revision": lambda: [-5, 1.0, np.int64(valid)],
+        "uuid": lambda: [str(valid), valid.hex],
+        "bool": lambda: [0, 1, "False", np.bool_(valid)],
+        "tuple": lambda: [(1,), (("face", True),), [*valid]],
+        "r_pairs": lambda: [("x",), ((1, 2),), ((1, 2, None),), ((1, 2, math.nan),), ((0, 2, 0.),),
+                            ((True, 2, 0.),), ((1, 2, -0.5),)],
+        "policy": lambda: [_PolicySubclass(), "connect"],
+        "plan": lambda: [exact],
+        "change_set": lambda: [ChangeSet(0, 0)],
+    }[kind]()
+    return [v for v in [*common, *own] if not (type(v) is type(valid) and repr(v) == repr(valid))]
+
+
+@pytest.fixture
+def carriers(plans):
+    model, exact, certified = plans
+    applied = apply_intersections(model.clone(preserve_identity=True), certified, policy=T)
+    document = _record_document((model.clone(preserve_identity=True), exact, certified))   # model stays current
+    return model, exact, certified, applied, document
+
+
+def _refused(call):
+    """``None`` when ``call`` raises GeometryError, else what happened instead."""
+    try:
+        call()
+    except GeometryError:
+        return None
+    except Exception as exc:                             # noqa: BLE001 - wrong refusal type is a finding
+        return f"{type(exc).__name__}: {exc}"
+    return "accepted"
+
+
+def _dataclass_paths(carrier):
+    """Construction, unpickling under every protocol, and unpickling a state with a missing or an
+    extra item, for a dataclass carrier."""
+    cls = type(carrier)
+    values = {item.name: getattr(carrier, item.name) for item in fields(carrier)}
+    paths = {"construct": lambda: cls(**values)}
+    for protocol in range(pickle.HIGHEST_PROTOCOL + 1):
+        paths[f"unpickle-p{protocol}"] = (lambda p: lambda: pickle.loads(pickle.dumps(carrier, p)))(protocol)
+    return paths
+
+
+def _record_paths(document, entry_changes, model):
+    """Document load (from_dict with a correct document checksum), the record validator itself and
+    the model record read, for a document whose first publication entry has ``entry_changes``."""
+    import copy
+    document = copy.deepcopy(document)
+    record = document["extensions"][bi.INTERSECTION_PLANNING_EXTENSION]
+    entry = record["publications"][0]
+    for name, value in entry_changes.items():
+        if value is _MISSING:
+            entry.pop(name)
+        else:
+            entry[name] = value
+    if "route_checksum" not in entry_changes and all(n in entry for n in ("content_checksum", "planning_mode",
+                                                                          "certificate_version", "r_max")):
+        try:
+            _reseal_entry(entry)
+        except (ValueError, TypeError):
+            pass
+    paths = {"validate": lambda: bi.validate_intersection_planning_record(record)}
+    reader = model.clone(preserve_identity=True)
+    reader._serialization_extensions = {bi.INTERSECTION_PLANNING_EXTENSION: record}
+    paths["record-read"] = lambda: bi.intersection_planning_record(reader)
+    try:
+        document["checksum"] = _checksum(document)
+    except (ValueError, TypeError):                      # a value no JSON document can hold
+        return paths
+    paths["from_dict"] = lambda: from_dict(document)
+    return paths
+
+
+_MISSING = object()
+
+
+def _route_resealed(values):
+    if all(name in values for name in ("content_checksum", "planning_mode", "certificate_version", "r_max")) \
+            and "route_checksum" in values:
+        try:
+            values["route_checksum"] = bi.definition_checksum((values["content_checksum"], values["planning_mode"],
+                                                               values["certificate_version"], values["r_max"]))
+        except (ValueError, TypeError):
+            pass
+    return values
+
+
+def test_route_carrier_kind_tables_cover_every_field():
+    for name, cls in (("plan", TopologyCertifiedPlan), ("change_set", bi.TopologyCertifiedChangeSet),
+                      ("application", bi.TopologyCertifiedApplication)):
+        assert set(_CARRIER_KINDS[name]) == {item.name for item in fields(cls)}, name
+    assert set(_CARRIER_KINDS["record"]) == set(bi._RECORD_FIELDS)
+
+
+@pytest.mark.parametrize("carrier_name, field_name", [(c, f) for c in ("plan", "change_set", "application")
+                                                      for f in _CARRIER_KINDS[c]])
+def test_every_carrier_field_is_validated_in_every_path(carriers, carrier_name, field_name):
+    """Each bad value of the field, in each path, is refused with GeometryError (never accepted,
+    never another exception type). Route fields are resealed (route checksum recomputed) wherever
+    possible, so the field's own check is the one under test. Fails on 1ea67e2: construction of a
+    plan and an application validated nothing; content_checksum None/""/123 passed the change set."""
+    model, exact, certified, applied, _document = carriers
+    carrier = {"plan": certified, "change_set": applied.change_set, "application": applied}[carrier_name]
+    valid = getattr(carrier, field_name)
+    failures = []
+    for value in _bad_values(_CARRIER_KINDS[carrier_name][field_name], valid, exact):
+        values = {item.name: getattr(carrier, item.name) for item in fields(carrier)}
+        values[field_name] = value
+        if field_name != "route_checksum":
+            _route_resealed(values)
+        forged = _forge(carrier, **values)
+        paths = _dataclass_paths(forged)
+        if carrier_name == "plan":
+            paths["apply"] = lambda: apply_intersections(model.clone(preserve_identity=True), forged, policy=T)
+        for path, call in paths.items():
+            outcome = _refused(call)
+            if outcome is not None:
+                failures.append((field_name, repr(value), path, outcome[:120]))
+    assert not failures, failures
+
+
+@pytest.mark.parametrize("carrier_name", ["plan", "change_set", "application"])
+def test_carrier_state_with_a_missing_or_extra_item_is_refused(carriers, carrier_name):
+    _model, _exact, certified, applied, _document = carriers
+    carrier = {"plan": certified, "change_set": applied.change_set, "application": applied}[carrier_name]
+    state = [getattr(carrier, item.name) for item in fields(carrier)]
+    for bad in (state[:-1], [*state, None], []):
+        blank = object.__new__(type(carrier))
+        assert _refused(lambda: blank.__setstate__(bad)) is None
+
+
+@pytest.mark.parametrize("field_name", sorted(_CARRIER_KINDS["record"]))
+def test_every_record_field_is_validated_in_every_path(carriers, field_name):
+    """The model record entry (extensions['anygeometry:intersection_planning']): every bad value and
+    the missing field are refused at document load, by the record validator and by the record read."""
+    model, exact, certified, _applied, document = carriers
+    entry = document["extensions"][bi.INTERSECTION_PLANNING_EXTENSION]["publications"][0]
+    valid = entry[field_name]
+    failures = []
+    for value in [*_bad_values(_CARRIER_KINDS["record"][field_name], valid, exact), _MISSING]:
+        for path, call in _record_paths(document, {field_name: value}, model).items():
+            outcome = _refused(call)
+            if outcome is not None:
+                failures.append((field_name, "missing" if value is _MISSING else repr(value), path, outcome[:120]))
+    assert not failures, failures
+
+
+def test_record_container_and_extra_entry_field_are_refused(carriers):
+    model, _exact, _certified, _applied, document = carriers
+    for changes in ({"note": 1}, {"source_revision ": 1}):
+        for path, call in _record_paths(document, changes, model).items():
+            assert _refused(call) is None, (changes, path)
+    record = document["extensions"][bi.INTERSECTION_PLANNING_EXTENSION]
+    for bad in ({**record, "format": True}, {**record, "format": 1.0}, {**record, "publications": tuple(record["publications"])},
+                {**record, "publications": [tuple(record["publications"][0].items())]}, dict(record, extra=1)):
+        assert _refused(lambda: bi.validate_intersection_planning_record(bad)) is None, bad
+
+
+def test_route_carriers_round_trip_unchanged(carriers):
+    """Positive round trip: valid carriers construct, unpickle under every protocol to equal bytes,
+    and the record survives to_dict/from_dict."""
+    model, _exact, certified, applied, document = carriers
+    for carrier in (certified, applied.change_set, applied):
+        values = {item.name: getattr(carrier, item.name) for item in fields(carrier)}
+        rebuilt = type(carrier)(**values)
+        for protocol in range(pickle.HIGHEST_PROTOCOL + 1):
+            blob = pickle.dumps(carrier, protocol)
+            assert pickle.dumps(rebuilt, protocol) == blob
+            # The first trip may change object sharing inside the arrangements (pickle memo, as on
+            # 1ea67e2); from then on the bytes are stable.
+            once = pickle.dumps(pickle.loads(blob), protocol)
+            assert pickle.dumps(pickle.loads(once), protocol) == once
+    assert pickle.loads(pickle.dumps(applied.change_set)) == applied.change_set
+    loaded = from_dict(document)
+    assert to_dict(loaded) == document
+    assert bi.intersection_planning_record(loaded) == tuple(document["extensions"][
+        bi.INTERSECTION_PLANNING_EXTENSION]["publications"])
 
 
 # ----------------------------------------------------------------------------------- fix round 4 (R5): cc_cross
