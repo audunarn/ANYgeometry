@@ -448,7 +448,24 @@ class MaterialDomain:
                 point_uv = self.uv(curve, t)
                 if np.linalg.norm(self.world_delta(point_uv-uv, float(uv[1]), float(uv[0]))) <= tolerance:
                     return boundary
-                if point_uv[0] <= uv[0] or t >= 1-8*np.finfo(float).eps:
+                if point_uv[0] <= uv[0]:
+                    continue
+                if t >= 1-8*np.finfo(float).eps:
+                    # The vertex event belongs to the next curve's start root.
+                    # When that curve reports none (its start lies within the
+                    # tolerance band but on one side of the ray, e.g. a cap arc
+                    # 1 ulp above a generator's snapped end), the side change
+                    # from this curve's last branch to the next curve's first
+                    # branch is counted here, exactly once (T2-0).
+                    after = self._unowned_vertex_side(loop, index, uv, tolerance)
+                    if after is None:
+                        continue
+                    previous_root = roots[position-1] if position else 0.
+                    before = self.uv(curve, .5*(previous_root+t))[1]-uv[1]
+                    if before <= 0 < after:
+                        winding += 1
+                    elif after <= 0 < before:
+                        winding -= 1
                     continue
                 if t <= 8*np.finfo(float).eps:
                     previous = loop[index-1].curve
@@ -473,6 +490,27 @@ class MaterialDomain:
                 elif after <= 0 < before:
                     winding -= 1
         return winding != 0
+
+    def _unowned_vertex_side(self, loop, index, uv, tolerance):
+        """The next curve's initial side of the ray when it reports no start root, else None.
+
+        ``contains_loop`` skips a root at the end of ``loop[index]`` because the
+        next curve's root at ``t <= 8 eps`` owns the vertex event. If the next
+        curve has such a root, or lies on the ray (``None`` roots), the old
+        accounting is kept (None). Otherwise the returned value is the signed
+        chart height of the next curve's first branch, the same midpoint
+        ``contains_loop`` uses as that curve's first ``before``, so the side
+        sequence along the loop telescopes and no crossing is counted twice.
+        """
+        following = loop[(index+1) % len(loop)].curve
+        roots = self.horizontal_roots(following, float(uv[1]), tolerance)
+        if roots is None:
+            return None
+        roots = sorted(set(min(1., max(0., float(t))) for t in roots))
+        if roots and roots[0] <= 8*np.finfo(float).eps:
+            return None
+        first = roots[0] if roots else 1.
+        return self.uv(following, .5*first)[1]-uv[1]
 
     def contains(self, curve, parameter, tolerance, *, boundary=True):
         uv = None

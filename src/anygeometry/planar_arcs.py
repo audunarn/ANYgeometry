@@ -425,7 +425,27 @@ def contains_loop_exact_curved(chart, loop, uv, tolerance: float, *, boundary: b
             delta = tuple(du * a + dv * b for a, b in zip(plane_u, plane_v))
             if compare(_dot(delta, delta), tol2) <= 0:
                 return boundary
-            if compare(point_u, u_query) <= 0 or compare(root.t, 1 - window) >= 0:
+            if compare(point_u, u_query) <= 0:
+                continue
+            if compare(root.t, 1 - window) >= 0:
+                # main (T2-0): the next curve's start root owns the vertex event; when it reports
+                # none, the side change into its first branch is counted here, exactly once.
+                following = loop[(index + 1) % len(loop)].curve
+                following_roots = roots_of(following)
+                if following_roots is None:
+                    continue
+                following_roots = ordered(following, following_roots)
+                if following_roots and compare(following_roots[0].t, window) <= 0:
+                    continue
+                first = following_roots[0].t if following_roots else Num(Fraction(1))
+                after = station_uv(following, at_parameter(following, first / 2))[1] - v_query
+                previous_root = roots[position - 1].t if position else Num(Fraction(0))
+                before = station_uv(curve, at_parameter(curve, (previous_root + root.t) / 2))[1] - v_query
+                before_sign, after_sign = sign(before), sign(after)
+                if before_sign <= 0 < after_sign:
+                    winding += 1
+                elif after_sign <= 0 < before_sign:
+                    winding -= 1
                 continue
             if compare(root.t, window) <= 0:
                 previous = loop[index - 1].curve
