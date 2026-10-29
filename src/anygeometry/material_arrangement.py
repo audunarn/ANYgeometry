@@ -1657,17 +1657,19 @@ def _arrange_material(domain, traces, *, tolerance, cancellation_check=None,
     _increment("arrangement_seam_rotation_retries")
     if cancellation_check is not None and cancellation_check():
         raise GeometryError("intersection arrangement cancelled")
-    failed = False
+    outcome = None                                  # None: accepted; else the error to raise
     with _timed_phase("arrangement_seam_rotation"):
         try:
             arrangement = _arrange_material_once(domain, traces, seam_rotation=_SEAM_RETRY_ROTATION, **options)
         except Exception as error:
-            if (isinstance(error, GeometryError) and str(error).endswith("cancelled")) or (
-                    cancellation_check is not None and cancellation_check()):
-                raise
-            failed = True
-    if failed:
-        raise original
+            if isinstance(error, GeometryError) and str(error).endswith("cancelled"):
+                raise                               # a cancellation from within the retry, as raised
+            # Any other retry failure: a cancellation requested meanwhile wins, else the original refusal
+            # (raised outside this handler, so it is not chained to the retry's error).
+            cancelled = cancellation_check is not None and cancellation_check()
+            outcome = GeometryError("intersection arrangement cancelled") if cancelled else original
+    if outcome is not None:
+        raise outcome
     _increment("arrangement_seam_rotation_accepted")
     return arrangement
 

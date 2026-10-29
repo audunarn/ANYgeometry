@@ -192,6 +192,22 @@ def test_cancellation_during_the_retry_propagates(monkeypatch):
     assert state["polls_after"] >= 1
 
 
+def test_cancellation_seen_after_an_unrelated_retry_failure_is_reported_as_cancellation(monkeypatch):
+    # Review OPT-S P2: the retry fails with an unrelated error while cancellation has been requested; the
+    # caller gets the cancellation (not the unrelated error, not the original refusal).
+    state = {"cancel": False}
+
+    def broken_seams(*args, **kwargs):
+        if kwargs.get("rotation") is not None:
+            state["cancel"] = True
+            raise ZeroDivisionError("retry-only failure")
+        return seams(*args, **kwargs)
+    seams = ma._add_exact_planar_seams
+    monkeypatch.setattr(ma, "_add_exact_planar_seams", broken_seams)
+    with pytest.raises(GeometryError, match="^intersection arrangement cancelled$"):
+        _arrange("kept_1082_449", cancellation_check=lambda: state["cancel"])
+
+
 def test_cancellation_requested_before_the_retry_is_raised(monkeypatch):
     state = {"cancel": False}
     calls = _spy(monkeypatch, after=lambda attempt, _outcome: state.update(cancel=True))
