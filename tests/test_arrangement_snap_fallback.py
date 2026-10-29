@@ -199,18 +199,88 @@ def test_snapped_line_crossing_an_arc_is_detected():
 
 def test_incident_arc_shallow_touch_is_excused_and_a_transversal_crossing_is_not():
     # A segment leaving the arc's end, turned by alpha into the circle from the tangent, meets the unit circle
-    # again after a chord 2 sin(alpha) with a dip of depth 1 - cos(alpha): 5e-11 m for alpha = 1e-5 (a
-    # tolerance-level tangential touch, as on cap 1082), 5e-3 m for alpha = 0.1 (a real crossing).
+    # again after a chord 2 sin(alpha) with a dip of depth 1 - cos(alpha):
+    # - alpha = 1e-7: chord 2e-7 m (inside the 1.02e-6 m touch disc), depth 5e-15 m, sine 1e-7 (a
+    #   tolerance-level tangential touch, as on cap 1082: contact 8.1e-8 m, sine 6.7e-13) -> excused;
+    # - alpha = 1e-5: depth 5e-11 m and sine 1e-5 pass, but the contact is 2e-5 m from the vertex -> not
+    #   excused (fix 1 excused it on the depth alone);
+    # - alpha = 0.1: depth 5e-3 m, a real crossing -> not excused.
     tol = 1e-9
     chart = ma.ExactPlane.from_plane(Plane((0, 0, 0), (1, 0, 0), (0, 1, 0)))
     arc = ArrangementPath(EllipticArc((0., 0., 0.), (1., 0., 0.), (0., 1., 0.), -0.5, 1.))
     end = np.asarray(arc.curve.evaluate(1.))
-    for alpha, clear in ((1e-5, True), (0.1, False)):
+    for alpha, clear in ((1e-7, True), (1e-5, False), (0.1, False)):
         heading = 0.5 - 0.5 * math.pi - alpha                  # tangent towards decreasing angle, turned inwards
         far = end + 0.25 * np.array([math.cos(heading), math.sin(heading), 0.])
         segment = ma.stations.Segment(exact_vector(end), exact_vector(far), derived=True)
         edges = [ArrangementPath(ma.stations.to_line(segment)), arc]
         assert ma._snapped_edges_clear(chart, edges, {0: segment}, [(1, 0), (2, 1)], {0}, tol) is clear
+
+
+def test_review_r2_transversal_crossing_of_a_flat_incident_arc_refuses():
+    # REVIEW-CAP1-R2 P1: a flat ellipse (V = 5e-10 m) lies within tol of the line y = 0, so the depth test
+    # alone excused the pair, but the snapped segment crosses the arc at ~90 deg at (-1, 0, 0), 2 m from
+    # the shared vertex (1, 0, 0). Fix 1 returned True here.
+    tol = 1e-9
+    chart = ma.ExactPlane.from_plane(Plane((0, 0, 0), (1, 0, 0), (0, 1, 0)))
+    arc = ArrangementPath(EllipticArc((0., 0., 0.), (1., 0., 0.), (0., 5e-10, 0.), 0., 1.5 * math.pi))
+    straight = ma.stations.Segment(_station(1, Fraction(8e-10)), _station(-2, Fraction(8e-10)), derived=True)
+    leg = ma.stations.Segment(_station(-2, 0), _station(-2, -1), derived=True)
+    edges = [ArrangementPath(ma.stations.to_line(straight)), arc, ArrangementPath(ma.stations.to_line(leg))]
+    endpoints = [(0, 1), (0, 2), (1, 3)]
+    representatives = [exact_vector(arc.curve.evaluate(0.)), _station(-2, 0), exact_vector(arc.curve.evaluate(1.)),
+                       _station(-2, -1)]
+    snapped = ma._snap_open_vertices(edges, {0: straight, 2: leg}, endpoints, representatives, tolerance=tol)
+    new_edges, new_segments, moved, max_move2, _snapped, _open, _curved = snapped
+    assert moved == {0} and max_move2 == Fraction(8e-10) ** 2
+    assert new_segments[0] == (_station(1, 0), _station(-2, 0))
+    assert ma._snapped_edges_clear(chart, new_edges, new_segments, endpoints, moved, tol) is False
+
+
+def test_each_shallow_touch_condition_is_load_bearing(monkeypatch):
+    tol = 1e-9
+    chart = ma.ExactPlane.from_plane(Plane((0, 0, 0), (1, 0, 0), (0, 1, 0)))
+    radius2 = (2 * Fraction(tol) * ma._SNAP_RESIDUAL_GAP) ** 2
+
+    def clear(arc, a, b, end):
+        return ma._chart_segment_arc_clear(chart, (a, b), arc, [(a, b, end)], radius2, tol)
+    # Tangency: a tiny flat ellipse (U = 1e-7, V = 5e-10) leaves its start (1e-7, 0) along +-y; the segment
+    # along -x passes the depth test (dip 5e-10 <= tol) and its second contact (-1e-7, 0) is 2e-7 m away
+    # (inside the 1.02e-6 m disc), but it meets the arc at ~90 deg: only the tangency condition refuses it.
+    flat = ArrangementPath(EllipticArc((0., 0., 0.), (1e-7, 0., 0.), (0., 5e-10, 0.), 0., 1.5 * math.pi))
+    start = exact_vector(flat.curve.evaluate(0.))
+    assert clear(flat, start, _station(-1, 0), 0) is False
+    # Confinement: on the unit circle a segment turned 1e-5 rad inwards from the tangent passes the depth
+    # (5e-11 m) and tangency (sine 1e-5 <= 1/1024) tests; its contact 2e-5 m away refuses it.
+    circle = ArrangementPath(EllipticArc((0., 0., 0.), (1., 0., 0.), (0., 1., 0.), -0.5, 1.))
+    end = np.asarray(circle.curve.evaluate(1.))
+    heading = 0.5 - 0.5 * math.pi - 1e-5
+    far = exact_vector(end + 0.25 * np.array([math.cos(heading), math.sin(heading), 0.]))
+    assert clear(circle, exact_vector(end), far, 1) is False
+    # Each refusal above is due to that one condition: relaxing it alone excuses the pair.
+    with monkeypatch.context() as patch:
+        patch.setattr(ma, "_arc_tangent_aligned", lambda *args: True)
+        assert clear(flat, start, _station(-1, 0), 0) is True
+    with monkeypatch.context() as patch:
+        patch.setattr(ma, "_SNAP_TOUCH_RADIUS", 2 ** 15)              # 3.3e-5 m disc; sine bound 3.1e-5
+        assert clear(circle, exact_vector(end), far, 1) is True
+
+
+def test_arc_tangent_alignment_is_certified_at_both_ends_and_both_sweep_signs():
+    bound = Fraction(1, ma._SNAP_TOUCH_RADIUS)                       # sine 9.77e-4
+    quarter = EllipticArc((0., 0., 0.), (1., 0., 0.), (0., 1., 0.), 0., .5 * math.pi)
+    backwards = EllipticArc((0., 0., 0.), (1., 0., 0.), (0., 1., 0.), 0., -.5 * math.pi)
+    cases = [
+        (quarter, 0, (Fraction(1, 10 ** 4), 1), True),                # into the arc at its start is +y
+        (quarter, 0, (Fraction(1, 100), 1), False),                   # sine 1e-2 > bound
+        (quarter, 0, (0, -1), False),                                 # opposite direction (dot < 0)
+        (quarter, 1, (1, Fraction(1, 10 ** 4)), True),                # into the arc at its end (0, 1) is +x
+        (quarter, 1, (-1, 0), False),
+        (backwards, 0, (0, -1), True),                                # negative sweep: into the arc is -y
+        (backwards, 0, (0, 1), False),
+    ]
+    for curve, end, (x, y), aligned in cases:
+        assert ma._arc_tangent_aligned(curve, end, (Fraction(x), Fraction(y), Fraction(0)), bound) is aligned
 
 
 def test_overlap_from_a_shared_vertex_is_a_crossing():
@@ -270,3 +340,44 @@ def test_cancellation_during_the_fallback_is_not_swallowed(monkeypatch):
         return calls["at_fallback"] is not None
     with pytest.raises(GeometryError, match="intersection arrangement cancelled"):
         _arrange(cancellation_check=cancel)
+
+
+def test_cancellation_while_validation_refuses_is_the_cancel_error(monkeypatch):
+    # REVIEW-CAP1-R2 P2: a cancellation requested while the crossing validation refuses must not turn into
+    # the conservation refusal.
+    state = {"cancel": False, "polls_after": 0}
+
+    def refusing(*args):
+        state["cancel"] = True
+        return False
+    monkeypatch.setattr(ma, "_snapped_edges_clear", refusing)
+
+    def cancel():
+        if state["cancel"]:
+            state["polls_after"] += 1
+        return state["cancel"]
+    with collect_runtime_diagnostics() as counters:
+        with pytest.raises(GeometryError, match="intersection arrangement cancelled"):
+            _arrange(cancellation_check=cancel)
+    assert state["polls_after"] >= 1
+    assert counters.get("arrangement_snap_fallback_refusals", 0) == 0
+
+
+def test_validation_polls_the_cancellation(monkeypatch):
+    # The crossing validation itself polls: a cancellation raised inside it propagates from inside it.
+    real = ma._snapped_edges_clear
+    state = {"inside": False, "raised_inside": False}
+
+    def spy(*args):
+        state["inside"] = True
+        try:
+            return real(*args)
+        except GeometryError:
+            state["raised_inside"] = True
+            raise
+        finally:
+            state["inside"] = False
+    monkeypatch.setattr(ma, "_snapped_edges_clear", spy)
+    with pytest.raises(GeometryError, match="intersection arrangement cancelled"):
+        _arrange(cancellation_check=lambda: state["inside"])
+    assert state["raised_inside"]
