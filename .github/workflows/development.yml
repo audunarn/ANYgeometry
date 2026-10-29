@@ -103,8 +103,8 @@ jobs:
         with:
           python-version: '3.13'
           cache: pip
-      - run: python -m pip install -e '.[dev,planar]'
-      - run: python tools/check_licenses.py --check-installed --installed-extra dev --installed-extra planar
+      - run: python -m pip install -e '.[dev,planar,test]'
+      - run: python tools/check_licenses.py --check-installed --installed-extra dev --installed-extra planar --installed-extra test
       - name: Run the kernel shard
         shell: bash
         env:
