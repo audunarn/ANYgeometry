@@ -629,7 +629,7 @@ def test_junction_rule_needs_a_well_conditioned_plane_chart(u, v, admitted):
 
 
 def test_junction_rule_domain_supports_and_curves():
-    """Cylinder supports (orthonormal frame) are admitted; other supports and other curve types are not."""
+    """Seam-free Cylinder loops are admitted (review R5 closure); other supports and other curve types are not."""
     from anygeometry.arrangement_geometry import BezierPath
     from anygeometry.surfaces import Cone
     domain, _up = _strip()
@@ -901,3 +901,136 @@ def test_known_limit_cylinder_strip_at_1e7():
     big = strip(1e7)
     assert not _applies(big, big.boundaries[0])
     assert big.contains(query(1e7), 0., _TOL) is _PARENT["cylinder_1e7"]
+
+
+# --- review R5: domain closure (seam period, arc phase, chart-test overflow, cache mutation) -----------------
+#
+# Each repro is outside the closed domain and keeps the parent's answer (recorded on the 2608332 export), and
+# its in-domain counterpart gives the oracle's answer. See redesign/T20-DOMAIN-AUDIT.md (T2-0 work folder).
+
+_PARENT_R5 = {
+    "seam": [False, True, True],                 # 3, 9, -6 deg at z = 20; truth: True, False, False
+    "seam_clip": [[], [[0., 1.]]],               # generator z 19..21 at 3 and 9 deg
+    "phase": [True, True, False, False],         # float (boundary False, True), exact (False, True)
+    "plane_overflow": [False, False, True, True],
+}
+
+
+def _seam_strip():
+    """Review R5 P2-1: the tripod strip (0..6 deg) on a full-turn chart that starts at 6 deg, i.e. the strip's
+    6-deg edge lies on the chart's cut; the period choice of MaterialDomain.uv mixes the loop's periods."""
+    from dataclasses import replace
+    domain, _up = _strip()
+    return replace(domain, support=replace(domain.support, start_angle=SIX))
+
+
+def test_r5_cylinder_loop_on_the_chart_cut_is_outside_the_domain():
+    from anygeometry.material_arrangement import _clip_intervals
+    domain = _seam_strip()
+    assert not _applies(domain, domain.boundaries[0])
+    angles = [math.radians(a) for a in (3., 9., -6.)]
+    assert [_contains(domain, a, 20.) for a in angles] == _PARENT_R5["seam"]
+    clips = []
+    for a in angles[:2]:
+        point = (R*math.cos(a), R*math.sin(a))
+        clips.append([list(map(float, i)) for i in _clip_intervals(
+            domain, LinePath((*point, 19.), (*point, 21.)), _TOL, lambda: None, isolated_contacts=[])])
+    assert clips == _PARENT_R5["seam_clip"]
+    # In-domain counterpart (the tripod chart, starting at -0.25 rad): the oracle's answers.
+    inside, _up = _strip()
+    assert _applies(inside, inside.boundaries[0])
+    assert [_contains(inside, a, 20.) for a in angles] == [True, False, False]
+
+
+@pytest.mark.parametrize("start, sweep, admitted", (
+    (0., math.tau, False),                     # full turn: the cut is the start, 0 deg, inside the strip
+    (-.25, math.tau, True),                    # the tripod arms' chart
+    (math.pi, -math.tau, True),
+    (-.5, 1., True),                           # partial: cut at start + sweep/2 + pi = pi
+    (.1, -1., True),                           # cut at 0.1 - 0.5 + pi
+    (-math.pi-.5, 1., False),                  # partial, cut at 0 deg
+))
+def test_r5_cylinder_seam_rule(start, sweep, admitted):
+    """A strip from -3 to 3 deg is admitted exactly when the chart's cut (start + sweep/2 + pi; the start for
+    a full turn) is away from it; then its answers are the oracle's. Queries outside the cut-free window
+    (and non-finite ones) keep the parent rule."""
+    from anygeometry.surfaces import Cylinder
+    three = math.radians(3.)
+    support = Cylinder(origin=(0., 0., 0.), axis=(0., 0., 1.), radial_direction=(1., 0., 0.), radius=R,
+                       height=52., start_angle=start, sweep_angle=sweep)
+    bottom = EllipticArc((0., 0., 4.), (R, 0., 0.), (0., R, -1.), -three, 2*three)
+    top = EllipticArc((0., 0., 45.), (R, 0., 0.), (0., R, -1.), three, -2*three)
+    up = LinePath(_point(bottom, 1.), _point(top, 0.))
+    down = LinePath(_point(top, 1.), _point(bottom, 0.))
+    for loop in _variants([bottom, up, top, down]):
+        domain = MaterialDomain(0, support, (tuple(ArrangementPath(c) for c in loop),))
+        assert _applies(domain, domain.boundaries[0]) is admitted
+        if admitted:
+            assert [_contains(domain, math.radians(a), 20.) for a in (0., 2., 5., -9.)] == [True, True, False, False]
+    if admitted:
+        scale = domain._float_ray_scale(domain.boundaries[0])
+        assert domain._junction_query_admitted(domain.uv(up, .5), scale)
+        assert not domain._junction_query_admitted((float("nan"), .5), scale)
+        if abs(sweep) == math.tau:
+            assert not domain._junction_query_admitted((0., .5), scale)     # on the cut
+            assert not domain._junction_query_admitted((1.02, .5), scale)   # shifted by a period
+
+
+def _phase_loop(start):
+    """Review R5 P2-2: a unit arc of sweep 2 starting at ``start``, closed by its chord."""
+    arc = EllipticArc((0., 0., 0.), (1., 0., 0.), (0., 1., 0.), start, 2.)
+    return (ArrangementPath(arc), ArrangementPath(LinePath(_point(arc, 1.), _point(arc, 0.))))
+
+
+def test_r5_arc_phase_is_part_of_the_scale():
+    from fractions import Fraction
+    query = (math.sqrt(.75)+1e-6, .5)                         # 866 tolerances outside the unit circle
+    loop = _phase_loop(1e12)
+    domain = MaterialDomain(0, _plane(), (loop,))
+    assert not _applies(domain, loop)
+    got = [_answer(domain, loop, q, b) for q in (query, tuple(map(Fraction, query))) for b in (False, True)]
+    assert got == _PARENT_R5["phase"]
+    # In-domain counterpart: the same arc with its start reduced to [0, 2 pi).
+    loop = _phase_loop(math.fmod(1e12, math.tau))
+    domain = MaterialDomain(0, _plane(), (loop,))
+    assert _applies(domain, loop)
+    assert [_answer(domain, loop, q, b) for q in (query, tuple(map(Fraction, query))) for b in (False, True)] == [False]*4
+
+
+def test_r5_plane_chart_test_does_not_overflow():
+    from fractions import Fraction
+    from anygeometry.material_arrangement import _plane_chart_conditioned
+    from anygeometry.surfaces import Plane
+    s = 1e100                                                  # condition ~2e12; |u x v|^2 overflowed to inf
+    loop = _square_loop()
+    domain = MaterialDomain(0, Plane((0., 0., 0.), (s, 0., 0.), (s, s*1e-12, 0.)), (loop,))
+    assert not _applies(domain, loop)
+    uv = (-499999999999.99994/s, 500000000000./s)
+    got = [_answer(domain, loop, q, b) for q in (uv, tuple(map(Fraction, uv))) for b in (False, True)]
+    assert got == _PARENT_R5["plane_overflow"]
+    # A uniformly scaled orthonormal chart stays admitted inside [2^-128, 2^128], is refused outside it.
+    domain = MaterialDomain(0, Plane((0., 0., 0.), (1e30, 0., 0.), (0., 1e30, 0.)), (loop,))
+    assert _applies(domain, loop)
+    assert not _plane_chart_conditioned((1e39, 0., 0.), (0., 1e39, 0.))
+    assert not _plane_chart_conditioned((float("inf"), 0., 0.), (0., 1., 0.))
+
+
+def test_r5_scale_is_not_reused_after_its_coordinates_change():
+    """Review R5 P2-4: LinePaths built on lists; the lists change after the first query."""
+    from fractions import Fraction
+    points = [[x, y, 0.] for x, y in _r3_vertices(100.)]
+    loop = tuple(ArrangementPath(LinePath(points[i], points[(i+1) % len(points)])) for i in range(len(points)))
+    domain = MaterialDomain(0, _plane(), (loop,))
+    assert _applies(domain, loop)
+    domain.contains_loop(loop, (0., .5), _TOL)
+    for point, (x, y) in zip(points, _r3_vertices()):
+        point[:] = [x, y, 0.]
+    fresh = MaterialDomain(0, _plane(), (loop,))
+    assert not _applies(fresh, loop) and not _applies(domain, loop)
+    for uv in (tuple(map(Fraction, _R3_QUERY)), _R3_QUERY):
+        for boundary in (False, True):
+            assert _answer(domain, loop, uv, boundary) is _answer(fresh, loop, uv, boundary) is False
+    # Immutable payloads are still cached.
+    loop = tuple(ArrangementPath(c) for c in _off_band_loop(_r3_vertices(100.)))
+    domain = MaterialDomain(0, _plane(), (loop,))
+    assert _applies(domain, loop) and domain._float_scale_cache[2][0] is not None

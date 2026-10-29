@@ -40,49 +40,180 @@ _EPS = float(np.finfo(float).eps)
 # no start root owns (_unowned_junction_crossing). That rule is certified only in a narrow domain; in
 # every other case contains_loop is the parent rule (2608332) bit for bit, with no new refusal:
 #   (a) the loop's curves are LinePath or EllipticArc;
-#   (b) the support is a Cylinder (orthonormal frame by construction; its chart coordinates, angle and
-#       axial fraction, carry no cancellation) or a Plane whose chart [u v] has condition number
-#       sigma_max / sigma_min <= 16, i.e. |u|^2 + |v|^2 <= (16 + 1/16) |u x v|, which implies
-#       sin(u, v) >= 1/8.03 and |u| / |v| within [1/16, 16]; and the scale (support origin, curve
-#       coordinates and parametric speeds; exact bounds for lines and arcs) satisfies
-#       scale * K * eps <= tol / M with K = 128, M = 16: scale <= tol / (2048 eps), 2199 for tol = 1e-9
-#       (tripod coordinates of 10-60 m are 37x inside);
-#   (c) for the query, no curve has two roots in one 8-eps end window and no junction has roots strictly
-#       inside both its 8-eps windows (an apex/spike) (_window_roots_ambiguous).
+#   (b) the support is a Plane whose chart [u v] has condition number sigma_max / sigma_min <= 16, i.e.
+#       |u|^2 + |v|^2 <= (16 + 1/16) |u x v| (sin(u, v) >= 1/8.03, |u| / |v| within [1/16, 16]), with
+#       max |u_i|, max |v_i| in [2^-128, 2^128] (no overflow or underflow in the test or the chart); or a
+#       Cylinder whose loop is seam-free (_cylinder_loop_admitted: every curve keeps half the radius from
+#       the axis, every curve's angle path stays a margin away from the chart's cut and does not wrap,
+#       and the full-turn endpoint period shift of MaterialDomain.uv is inert); and the scale (support
+#       origin, curve coordinates, parametric speeds and angular phases, the Cylinder's angle arithmetic;
+#       exact bounds for lines and arcs) satisfies scale * K * eps <= tol / M with K = 128, M = 16:
+#       scale <= tol / (2048 eps), 2199 for tol = 1e-9 (tripod: largest scale 105, 20.9x inside), tol in [2^-128, 2^64];
+#   (c) for the query: finite chart coordinates, on a Cylinder an angle the margin away from the cut, and
+#       no curve has two roots in one 8-eps end window and no junction has roots strictly inside both its
+#       8-eps windows (an apex/spike) (_window_roots_ambiguous).
 # Why: roots within 128 eps of an in-band end are snapped and roots within 8 eps of an end are junction
 # roots; a window of w eps moves a crossing by w eps times the parametric speed. Under (b) the widest
 # window moves it by at most tol / 16 and chart rounding (a few eps times the condition number times the
 # scale) stays below tol / 32, so a window root lies at an in-band vertex and the rule's location is
 # exact to the tolerance. Outside (b) the reviews found wrong answers of the rule (L = 1e8, a sampled
-# Bezier scale, an ill-conditioned chart); the parent rule's own limits there are kept and documented
-# (tests/test_material_domain_vertex_ray.py, KNOWN LIMITS).
+# Bezier scale, an ill-conditioned chart, a seam-period mix, a 1e12 arc phase, an overflowing chart
+# test); the parent rule's own limits there are kept and documented (tests/test_material_domain_vertex_ray.py,
+# KNOWN LIMITS). The closure audit (every quantity feeding a decision and its bound) is
+# redesign/T20-DOMAIN-AUDIT.md in the T2-0 work folder.
 _FLOAT_RAY_BAND = 128
 _FLOAT_RAY_MARGIN = 16
 _CHART_CONDITION = 16
+_MAGNITUDE_RANGE = (2.**-128, 2.**128)       # chart vectors, Cylinder radius and height
+_TOLERANCE_RANGE = (2.**-128, 2.**64)
 
 
 def float_ray_scale_trusted(scale, tolerance) -> bool:
     """Whether ``scale`` is inside the junction rule's scale bound at this world tolerance (False on NaN)."""
-    return float(scale) * (_FLOAT_RAY_BAND * _FLOAT_RAY_MARGIN * _EPS) <= float(tolerance)
+    tolerance = float(tolerance)
+    return (_TOLERANCE_RANGE[0] <= tolerance <= _TOLERANCE_RANGE[1]
+            and float(scale) * (_FLOAT_RAY_BAND * _FLOAT_RAY_MARGIN * _EPS) <= tolerance)
+
+
+def _in_magnitude_range(value) -> bool:
+    return _MAGNITUDE_RANGE[0] <= value <= _MAGNITUDE_RANGE[1]      # False on NaN and inf
 
 
 def _plane_chart_conditioned(u_vector, v_vector) -> bool:
-    """Whether the Plane chart [u v] has condition number <= _CHART_CONDITION (False on NaN)."""
+    """Whether the Plane chart [u v] has condition number <= _CHART_CONDITION (False on NaN or inf).
+
+    The largest components of u and v must lie in [2^-128, 2^128]: then |u|^2 + |v|^2 and u x v neither
+    overflow nor lose relative accuracy to underflow (review R5: an unscaled 1e100 chart overflowed the
+    norm to inf and passed), and the test's own rounding (a few eps, relative) is immaterial to the bound.
+    """
     u, v = np.asarray(u_vector, dtype=float), np.asarray(v_vector, dtype=float)
+    if not (_in_magnitude_range(float(np.max(np.abs(u)))) and _in_magnitude_range(float(np.max(np.abs(v))))):
+        return False
     bound = _CHART_CONDITION + 1 / _CHART_CONDITION        # kappa + 1/kappa = (|u|^2 + |v|^2) / |u x v|
     return float(u @ u + v @ v) <= bound * float(np.linalg.norm(np.cross(u, v)))
 
 
 def _curve_float_scale(curve) -> float:
-    """Largest absolute world coordinate and parametric speed of a line or elliptic arc; inf otherwise."""
+    """Bound on a line's or elliptic arc's coordinates, parametric speed and phase error; inf otherwise.
+
+    A line: its largest absolute coordinate and its length. An arc ``c + u cos(s + w t) + v sin(s + w t)``
+    with ``rho = |u| + |v|``: ``max|c| + rho`` bounds its coordinates and ``rho |w|`` its speed (the window
+    term, weight K). Its phase ``s + w t`` is rounded by eps (|s| + |w|), its cos/sin by eps, and its
+    trigonometric roots are mapped into the sweep with an error of a few eps (pi + |s| + |w|): together at
+    most 4 eps rho (4 + |s| + |w|) in world units, a rounding term, so ``rho (4 + |s| + |w|) / 8`` keeps it
+    below 32 eps scale <= tol / 64, inside the rounding budget (review R5: a start angle of 1e12 moved the
+    arc by 1e-4 at scale 4).
+    """
     if type(curve) is LinePath:
         start, end = [float(v) for v in curve.start], [float(v) for v in curve.end]
         return max(*map(abs, start), *map(abs, end), math.dist(start, end))
     if type(curve) is EllipticArc:
         radius = (math.hypot(*(float(v) for v in curve.u_vector))
                   + math.hypot(*(float(v) for v in curve.v_vector)))   # bounds |u cos + v sin| and its rate
-        return max(max(abs(float(v)) for v in curve.center) + radius, abs(float(curve.sweep_angle)) * radius)
+        sweep = abs(float(curve.sweep_angle))
+        phase = 4. + abs(float(curve.start_angle)) + sweep
+        return max(max(abs(float(v)) for v in curve.center) + radius, sweep * radius, phase * radius / 8.)
     return math.inf
+
+
+def _cylinder_frame_admitted(support) -> bool:
+    """A Cylinder's radius, height and sweep in range and its frame orthonormal to 64 eps (False on NaN)."""
+    sweep = abs(float(support.sweep_angle))
+    if not (_in_magnitude_range(float(support.radius)) and _in_magnitude_range(abs(float(support.height)))
+            and 2.**-64 <= sweep <= math.tau and math.isfinite(float(support.start_angle))):
+        return False
+    axis, radial = np.asarray(support.axis, dtype=float), np.asarray(support.radial_direction, dtype=float)
+    circumferential = np.asarray(support.circumferential_direction, dtype=float)
+    limit = 64 * _EPS
+    return bool(abs(float(axis @ axis) - 1) <= limit and abs(float(radial @ radial) - 1) <= limit
+                and abs(float(axis @ radial)) <= limit
+                and float(np.max(np.abs(circumferential - np.cross(axis, radial)))) <= limit)
+
+
+def _cylinder_angle_scale(support) -> float:
+    """World effect bound of a Cylinder's angle arithmetic: ``R (4 + |start| + |sweep|)``.
+
+    ``_angle_on_sweep`` rounds ``angle - start`` and its reduction by eps (pi + |start|) and snaps angles
+    within 64 eps max(1, |angle|, |start|, |sweep|) of the start; an angle error delta moves a chart point by
+    R delta in world units (``world_delta``).
+    """
+    return float(support.radius) * (4. + abs(float(support.start_angle)) + abs(float(support.sweep_angle)))
+
+
+def _cylinder_cut_margin(support, scale) -> float:
+    """The angular margin to the chart's cut, in chart u units, for a seam-free loop of this scale.
+
+    The angle of a point at least R/2 from the axis is computed with an error of at most
+    K eps (4 + |start| + |sweep| + 2 scale / R) (coordinate rounding over the radial distance, plus the
+    angle arithmetic of ``_cylinder_angle_scale``); the margin is M times that, as the scale bound.
+    """
+    radius, sweep = float(support.radius), abs(float(support.sweep_angle))
+    error = _FLOAT_RAY_BAND * _EPS * (4. + abs(float(support.start_angle)) + sweep + 2. * float(scale) / radius)
+    return _FLOAT_RAY_MARGIN * error / sweep
+
+
+def _cylinder_chart_window(support, margin):
+    """The u interval of the Cylinder's chart that keeps ``margin`` from its cut.
+
+    ``_angle_on_sweep`` cuts the circle at ``start + sweep / 2 + pi`` (for a full turn: at the start), so
+    every chart value lies in [1/2 - pi / |sweep|, 1/2 + pi / |sweep|].
+    """
+    half = math.pi / abs(float(support.sweep_angle))
+    return .5 - half + margin, .5 + half - margin
+
+
+def _cylinder_loop_admitted(support, loop, scale) -> bool:
+    """Whether ``loop`` (lines and elliptic arcs) is seam-free on the Cylinder ``support`` (review R5).
+
+    MaterialDomain.uv picks each point's angle period per curve: a loop that touches the chart's cut, or a
+    curve that crosses it, mixes periods and the ray test is wrong (on the parent as well). Admitted only
+    when, with ``margin`` = _cylinder_cut_margin:
+    - every curve keeps at least R/2 from the axis (lines: max end distance minus projected length; arcs:
+      the projected ellipse contains the axis with its inscribed-circle bound minus the centre's offset),
+      so its angle is well conditioned and, for an arc, monotone along it;
+    - the chart u of both ends and the middle (as MaterialDomain.uv evaluates them) lies in the cut-free
+      window; a line's ends are less than pi - margin apart (its angle path, shorter than pi, is then the
+      direct one); an arc's u advances by at least the margin in its own direction (its monotone path,
+      shorter than a full turn, is then the direct one), so no point of the loop is near the cut;
+    - for a full-turn chart, every end is within half a period minus the margin of the curve's middle, so
+      the endpoint period shift of MaterialDomain.uv is zero.
+    """
+    origin = np.asarray(support.origin, dtype=float)
+    axis = np.asarray(support.axis, dtype=float)
+    radius, sweep = float(support.radius), float(support.sweep_angle)
+    margin = _cylinder_cut_margin(support, scale)
+    low, high = _cylinder_chart_window(support, margin)
+    full = abs(abs(sweep) - math.tau) <= 1e-12                       # as MaterialDomain.uv
+    half_period = .5 * math.tau / abs(sweep) - margin
+
+    def perpendicular(vector):
+        return vector - float(vector @ axis) * axis
+
+    for path in loop:
+        curve = path.curve
+        us = [float(support.local_uv(curve.evaluate(t))[0]) for t in (0., .5, 1.)]
+        if not all(low <= u <= high for u in us):
+            return False
+        if full and not (abs(us[1] - us[0]) <= half_period and abs(us[1] - us[2]) <= half_period):
+            return False
+        if type(curve) is LinePath:
+            start = perpendicular(np.asarray(curve.start, dtype=float) - origin)
+            end = perpendicular(np.asarray(curve.end, dtype=float) - origin)
+            reach = max(float(np.linalg.norm(start)), float(np.linalg.norm(end))) - float(np.linalg.norm(end - start))
+            if not (reach >= .5 * radius and abs(us[2] - us[0]) * abs(sweep) <= math.pi - margin * abs(sweep)):
+                return False
+        else:                                                         # EllipticArc (clause (a))
+            centre = perpendicular(np.asarray(curve.center, dtype=float) - origin)
+            u_vector = perpendicular(np.asarray(curve.u_vector, dtype=float))
+            v_vector = perpendicular(np.asarray(curve.v_vector, dtype=float))
+            normal = float(np.cross(u_vector, v_vector) @ axis)
+            spread = math.sqrt(float(u_vector @ u_vector + v_vector @ v_vector))
+            if not (spread > 0 and abs(normal) / spread - float(np.linalg.norm(centre)) >= .5 * radius):
+                return False
+            direction = math.copysign(1., normal) * math.copysign(1., float(curve.sweep_angle)) * math.copysign(1., sweep)
+            if not direction * (us[2] - us[0]) >= margin:
+                return False
+    return True
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,35 +269,97 @@ class MaterialDomain:
 
         Otherwise ``contains_loop`` is the parent rule for this loop. Clause (c) is per query.
         """
-        support = self.support
-        if isinstance(support, Plane):
-            if not _plane_chart_conditioned(support.u_vector, support.v_vector):
-                return False
-        elif type(support) is not Cylinder:
-            return False
         return float_ray_scale_trusted(self._float_ray_scale(loop), tolerance)
 
     def _float_ray_scale(self, loop) -> float:
         """The scale of ``float_ray_scale_trusted`` for ``loop`` on this support (T2-0 contract).
 
-        inf when a curve is not a LinePath or EllipticArc. Cached for this domain's own boundary loops
-        (identity-checked like the exact caches); other loops are measured on each call.
+        inf when clause (a) or the support part of clause (b) fails: a curve other than a LinePath or
+        EllipticArc, a support other than a conditioned Plane or a Cylinder, or a Cylinder loop that is
+        not seam-free. Cached only for this domain's own boundary loops when every input is immutable
+        (``_float_ray_scale_cacheable``, as ``_prepared_exact_boundary``); otherwise measured on each call.
         """
-        index = next((i for i, item in enumerate(self.boundaries) if item is loop), None)
+        cacheable = self._float_ray_scale_cacheable(loop)
+        index = next((i for i, item in enumerate(self.boundaries) if item is loop), None) if cacheable else None
         cache = self._float_scale_cache
         if index is not None and cache is not None and cache[0] is self.support and cache[1] is self.boundaries:
             scale = cache[2][index]
             if scale is not None:
                 return scale
-        origin = getattr(self.support, "origin", None)
-        scale = max([float(np.max(np.abs(np.asarray(origin, dtype=float)))) if origin is not None else 0.,
-                     *(_curve_float_scale(path.curve) for path in loop)])
+        scale = self._measure_float_ray_scale(loop)
         if index is not None:
             if cache is None or cache[0] is not self.support or cache[1] is not self.boundaries:
                 cache = (self.support, self.boundaries, [None] * len(self.boundaries))
                 object.__setattr__(self, "_float_scale_cache", cache)
             cache[2][index] = scale
         return scale
+
+    def _float_ray_scale_cacheable(self, loop) -> bool:
+        """Whether the scale of ``loop`` can be reused: every input it is measured from is immutable.
+
+        Checked on every call, like ``_prepared_exact_boundary`` (review R5: a LinePath built on lists
+        kept a stale scale after the lists were changed). Frozen records with tuple payloads of scalars
+        and read-only support arrays cannot change; anything else is measured again. (A Cylinder's
+        private derived ``_circumferential`` is never handed out: ``circumferential_direction`` copies.)
+        """
+        support = self.support
+        if type(support) is Plane:
+            arrays = (support.origin, support.u_vector, support.v_vector)
+        elif type(support) is Cylinder:
+            arrays = (support.origin, support.axis, support.radial_direction)
+        else:
+            return False
+        if (type(self) is not MaterialDomain or type(self.boundaries) is not tuple or type(loop) is not tuple
+                or any(type(array) is not np.ndarray or array.flags.writeable for array in arrays)):
+            return False
+        scalars = (float, int, np.float64, Fraction)
+        for path in loop:
+            if type(path) is not ArrangementPath:
+                return False
+            curve = path.curve
+            if type(curve) is LinePath:
+                if not (type(curve.start) is tuple and type(curve.end) is tuple
+                        and all(type(value) in scalars for value in (*curve.start, *curve.end))):
+                    return False
+            elif type(curve) is EllipticArc:
+                if not all(type(vector) is tuple and all(type(value) is float for value in vector)
+                           for vector in (curve.center, curve.u_vector, curve.v_vector)):
+                    return False
+            else:
+                return False
+        return True
+
+    def _measure_float_ray_scale(self, loop) -> float:
+        support = self.support
+        if type(support) is Plane:
+            if not _plane_chart_conditioned(support.u_vector, support.v_vector):
+                return math.inf
+            extra = 0.
+        elif type(support) is Cylinder:
+            if not _cylinder_frame_admitted(support):
+                return math.inf
+            extra = _cylinder_angle_scale(support)
+        else:
+            return math.inf
+        scale = max([float(np.max(np.abs(np.asarray(support.origin, dtype=float)))), extra,
+                     *(_curve_float_scale(path.curve) for path in loop)])
+        if type(support) is Cylinder and math.isfinite(scale) and not _cylinder_loop_admitted(support, loop, scale):
+            return math.inf
+        return scale
+
+    def _junction_query_admitted(self, uv, scale) -> bool:
+        """The query part of clause (c) of the junction rule's domain (before the window-root test).
+
+        Finite chart coordinates; on a Cylinder the query's u lies in the cut-free window of the loop of
+        this (finite) scale, so it is on the chart sheet of the seam-free loop: MaterialDomain.uv shifts a
+        point of a curve that crosses the cut by a period.
+        """
+        if not (math.isfinite(float(uv[0])) and math.isfinite(float(uv[1]))):
+            return False
+        if type(self.support) is not Cylinder:
+            return True
+        low, high = _cylinder_chart_window(self.support, _cylinder_cut_margin(self.support, scale))
+        return low <= float(uv[0]) <= high
 
     def _prepared_exact_boundary(self, loop):
         """Lazy exact line data, retained only for this immutable domain's edges."""
@@ -528,7 +721,8 @@ class MaterialDomain:
                                                   junctions=self._junction_rule_applies(loop, tolerance))
         if isinstance(self.support, NurbsSurface):        # exact level sets on the pcurves (A1e-lite)
             return nurbs_domain.contains_loop(self, loop, uv, tolerance, boundary=boundary)
-        junctions = self._junction_rule_applies(loop, tolerance)
+        scale = self._float_ray_scale(loop)
+        junctions = float_ray_scale_trusted(scale, tolerance) and self._junction_query_admitted(uv, scale)
         winding = 0
         level = float(uv[1])
         window = 8*np.finfo(float).eps
