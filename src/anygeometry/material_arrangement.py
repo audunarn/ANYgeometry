@@ -57,8 +57,13 @@ _EPS = float(np.finfo(float).eps)
 # Why: roots within 128 eps of an in-band end are snapped and roots within 8 eps of an end are junction
 # roots; a window of w eps moves a crossing by w eps times the parametric speed. Under (b) the widest
 # window moves it by at most tol / 16 and chart rounding (a few eps times the condition number times the
-# scale) stays below tol / 32, so a window root lies at an in-band vertex and the rule's location is
-# exact to the tolerance. Outside (b) the reviews found wrong answers of the rule (L = 1e8, a sampled
+# scale) stays below tol / 32, so a window root lies at an in-band vertex and the rule's crossing location
+# is exact to the tolerance. Inside the domain the rule therefore keeps the parent's ray-crossing and
+# containment semantics, and corrects them only where the parent loses a vertex crossing; it does NOT
+# promise Euclidean tolerance-band membership: the boundary test (boundary=True) is the parent's
+# ray-based one (review R7 P3, a known policy pinned in the tests). Clause (c) is decided by one predicate,
+# MaterialDomain._junction_rule_applies_to, on every route (float, exact straight, exact curved, the
+# arrangement's hole-owner test), so a query outside the reach takes the parent path on all of them. Outside (b) the reviews found wrong answers of the rule (L = 1e8, a sampled
 # Bezier scale, an ill-conditioned chart, a seam-period mix, a 1e12 arc phase, an overflowing chart
 # test); the parent rule's own limits there are kept and documented (tests/test_material_domain_vertex_ray.py,
 # KNOWN LIMITS). The closure audit (every quantity feeding a decision and its bound) is
@@ -277,6 +282,19 @@ class MaterialDomain:
         Otherwise ``contains_loop`` is the parent rule for this loop. Clause (c) is per query.
         """
         return float_ray_scale_trusted(self._float_ray_scale(loop), tolerance)
+
+    def _junction_rule_applies_to(self, loop, uv, tolerance) -> bool:
+        """The rule's full domain for one query: the loop clauses (a), (b) and the query clause (c).
+
+        Every route (float, exact straight, exact curved, the arrangement's hole-owner test) asks this
+        one predicate, so a query outside the reach takes the parent path on all of them (review R7 P2).
+        Any conversion error is outside the domain.
+        """
+        try:
+            scale = self._float_ray_scale(loop)
+            return float_ray_scale_trusted(scale, tolerance) and self._junction_query_admitted(uv, scale)
+        except _ADMISSION_ERRORS:
+            return False
 
     def _float_ray_scale(self, loop) -> float:
         """The scale of ``float_ray_scale_trusted`` for ``loop`` on this support (T2-0 contract).
@@ -731,7 +749,7 @@ class MaterialDomain:
             if all(isinstance(path.curve, LinePath) for path in loop):
                 return _contains_loop_exact(self._exact_chart(), loop, tuple(map(Fraction, uv)), tolerance,
                                             boundary=boundary, prepared=self._prepared_exact_boundary(loop),
-                                            junctions=self._junction_rule_applies(loop, tolerance))
+                                            junctions=self._junction_rule_applies_to(loop, uv, tolerance))
             from .plane_source_reference import contains_section_loop
             return contains_section_loop(self.support, loop, uv, tolerance, boundary=boundary)
         # Exact route (robust-predicate R1b): only for an exact (rational) query
@@ -742,17 +760,16 @@ class MaterialDomain:
                 return _contains_loop_exact(self._exact_chart(), loop, tuple(uv), tolerance,
                                             boundary=boundary,
                                             prepared=self._prepared_exact_boundary(loop),
-                                            junctions=self._junction_rule_applies(loop, tolerance))
+                                            junctions=self._junction_rule_applies_to(loop, uv, tolerance))
             if self._exact_curved_planar(self.boundaries) and self._exact_curved_planar((loop,)):
                 # Lines and elliptic arcs (robust-predicate R1c, E4): certified replica.
                 from .planar_arcs import contains_loop_exact_curved
                 return contains_loop_exact_curved(self._exact_chart(), loop, tuple(uv),
                                                   tolerance, boundary=boundary,
-                                                  junctions=self._junction_rule_applies(loop, tolerance))
+                                                  junctions=self._junction_rule_applies_to(loop, uv, tolerance))
         if isinstance(self.support, NurbsSurface):        # exact level sets on the pcurves (A1e-lite)
             return nurbs_domain.contains_loop(self, loop, uv, tolerance, boundary=boundary)
-        scale = self._float_ray_scale(loop)
-        junctions = float_ray_scale_trusted(scale, tolerance) and self._junction_query_admitted(uv, scale)
+        junctions = self._junction_rule_applies_to(loop, uv, tolerance)
         winding = 0
         level = float(uv[1])
         window = 8*np.finfo(float).eps
@@ -1351,7 +1368,7 @@ def _exact_planar_cells(domain, chains, edges, edge_segments, tolerance, native_
         def contains(outer):
             loop = straight_loop(outer)
             return _contains_loop_exact(chart, loop, probe, tolerance, boundary=False,
-                                        junctions=domain._junction_rule_applies(loop, tolerance))
+                                        junctions=domain._junction_rule_applies_to(loop, probe, tolerance))
 
         containers = [i for i, (outer, _area, _probe) in enumerate(positive) if contains(outer)]
         if not containers:

@@ -1105,3 +1105,75 @@ def test_r6_far_plane_query_is_bounded_in_both_coordinates():
     assert not domain._junction_query_admitted((-1e12, .5), scale)
     assert not domain._junction_query_admitted((.5, 1e308), scale)
     assert [domain.contains_loop(loop, q, _TOL) for q in ((.5, 1e12), (-1e12, .5), (.5, 1e308))] == [False] * 3
+
+
+# --- T2-0 review R7: the query-reach guard on every route (P2) and the boundary policy (P3) --------------
+
+def _far_query_cases():
+    from fractions import Fraction
+    out = []
+    for x in (-10**12, -10**400):
+        out.append((Fraction(x), "rational"))
+        if abs(x) < 10**300:
+            out.append((float(x), "float"))
+    return out
+
+
+def test_r7_far_query_on_the_mixed_arc_loop_takes_the_parent_path():
+    """Review R7 P2: a query beyond the reach is outside the domain on every route. Parent 2608332: True for all
+    of these (rational and float); the exact curved dispatch used to skip the reach guard (answered False)."""
+    from fractions import Fraction
+    domain, vertex = _plane_face()
+    loop = domain.boundaries[0]
+    y = vertex[1]-1e-12
+    scale = domain._float_ray_scale(loop)
+    for x, kind in _far_query_cases():
+        q = (x, Fraction(y) if kind == "rational" else y)
+        assert not domain._junction_query_admitted(q, scale)
+        for boundary in (False, True):
+            assert _answer(domain, loop, q, boundary) is True, (kind, x)
+
+
+def test_r7_far_query_on_the_straight_loop_takes_the_parent_path():
+    """Same on the all-straight exact route (the short-line face; parent 2608332: True)."""
+    from fractions import Fraction
+    loop = tuple(ArrangementPath(c) for c in _short_line_face())
+    domain = MaterialDomain(0, _plane(), (loop,))
+    scale = domain._float_ray_scale(loop)
+    assert _applies(domain, loop)
+    for x, kind in _far_query_cases():
+        q = (x, Fraction(0) if kind == "rational" else 0.)
+        assert not domain._junction_query_admitted(q, scale)
+        for boundary in (False, True):
+            assert _answer(domain, loop, q, boundary) is True, (kind, x)
+
+
+def test_r7_one_predicate_for_every_route():
+    """The loop clauses and the query reach are one predicate (_junction_rule_applies_to): the exact routes,
+    the float route and the arrangement's hole-owner test all ask it."""
+    from fractions import Fraction
+    loop = tuple(ArrangementPath(c) for c in _short_line_face())
+    domain = MaterialDomain(0, _plane(), (loop,))
+    assert domain._junction_rule_applies_to(loop, (Fraction(1), Fraction(0)), _TOL) is True
+    assert domain._junction_rule_applies_to(loop, (Fraction(-10**12), Fraction(0)), _TOL) is False
+    assert domain._junction_rule_applies_to(loop, (Fraction(-10**400), Fraction(0)), _TOL) is False
+    assert domain._junction_rule_applies_to(loop, (float("nan"), 0.), _TOL) is False
+    assert domain._junction_rule_applies_to(loop, (0., 0.), float("nan")) is False
+    assert domain._junction_rule_applies_to(loop, (0., 0.), 10**400) is False
+
+
+def test_known_policy_r7_p3_boundary_is_ray_based():
+    """Review R7 P3, known policy (the parent's): with boundary=True the float route measures the distance to the
+    ray roots, so a query 0.9 tolerances from a vertex that is not on its ray is outside on the float route and
+    inside on the rational route. The rule keeps the parent's answers bit for bit and does not promise Euclidean
+    tolerance-band membership."""
+    from fractions import Fraction
+    vertices = [(0., -1.), (1., .5e-9), (1., .1), (0., .1)]
+    loop = tuple(ArrangementPath(LinePath((a[0], a[1], 0.), (b[0], b[1], 0.)))
+                 for a, b in zip(vertices, vertices[1:]+vertices[:1]))
+    domain = MaterialDomain(0, _plane(), (loop,))
+    assert _applies(domain, loop)
+    x = 1.+.75e-9
+    # parent 2608332: float (False, False); rational (False, True) for boundary = False, True
+    assert [_answer(domain, loop, (x, 0.), b) for b in (False, True)] == [False, False]
+    assert [_answer(domain, loop, (Fraction(x), Fraction(0)), b) for b in (False, True)] == [False, True]
