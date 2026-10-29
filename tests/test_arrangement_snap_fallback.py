@@ -64,10 +64,19 @@ def test_reproducer_is_accepted_by_the_snap_fallback():
     with collect_runtime_diagnostics() as counters:
         arrangement = _arrange()
     domain, _traces, tolerance, area_tolerance = _fixture()
-    # The unchanged conservation check, recomputed independently on the returned cells.
-    original = abs(domain.area_loop(domain.boundaries[0], area_tolerance / domain.area_jacobian * .05))
-    assert abs(original - arrangement.area) <= area_tolerance / domain.area_jacobian
-    assert arrangement.native_area_tolerance == area_tolerance / domain.area_jacobian
+    native = area_tolerance / domain.area_jacobian
+    original = abs(domain.area_loop(domain.boundaries[0], native * .05))
+    # Areas recomputed from the RETURNED cell geometry (each cell's outer loop and holes rebuilt from the
+    # returned paths), independently of the stored ``area``.
+    def loop_area(loop):
+        pieces = tuple(ArrangementPath(arrangement.paths[i].curve if forward else arrangement.paths[i].curve.subcurve(1., 0.))
+                       for i, forward in loop)
+        return domain.area_loop(pieces, native * .05)
+    recomputed = sum(loop_area(cell.outer) + sum(loop_area(hole) for hole in cell.holes) for cell in arrangement.cells)
+    assert all(loop_area(cell.outer) > 0 for cell in arrangement.cells)
+    assert abs(original - recomputed) <= native
+    assert abs(original - arrangement.area) <= native
+    assert arrangement.native_area_tolerance == native
     assert len(arrangement.cells) >= 2
     assert _loop_gaps(arrangement) <= 1e-13          # the loops are closed (gaps were up to 8.7e-12 m)
     assert counters["arrangement_snap_fallback_attempts"] == 1
@@ -140,9 +149,103 @@ def test_snap_bound_is_exact_and_inclusive():
                                         tolerance=tol)
         assert (result is not None) == accepted
         if accepted:
-            new_edges, new_segments, moved, max_move2, _snapped, _open = result
+            new_edges, new_segments, moved, max_move2, _snapped, _open, _curved = result
             assert moved == {0} and new_segments[0][0] == a and max_move2 == Fraction(tol) ** 2
             assert new_edges[0].curve.start == (0., 0., 0.)
+
+
+def _station(x, y):
+    return (Fraction(x), Fraction(y), Fraction(0))
+
+
+def _shoelace(points):
+    return sum(a[0] * b[1] - a[1] * b[0] for a, b in zip(points, points[1:] + points[:1])) / 2
+
+
+def test_snap_that_creates_a_crossing_is_detected_although_area_conserves():
+    # Square 0..4 split by the polyline (2,4) -> P -> (2,0); a triangle cell sits right of it with its left
+    # edge at x = 2 + 4e-10. The snap moves P from x = 2 + 1e-10 to x = 2 + 6e-10 (5e-10 <= tol): both
+    # moved edges now cross the triangle's left edge. The signed cycle areas still sum to the square's area
+    # (Green telescoping over shared edges), so the conservation check alone cannot see the crossing.
+    tol = 1e-9
+    e = Fraction(1, 10 ** 10)
+    top, bottom = _station(2, 4), _station(2, 0)
+    t1, t2, t3 = _station(2 + 4 * e, Fraction(3, 2)), _station(3, 2), _station(2 + 4 * e, Fraction(5, 2))
+    chart = ma.ExactPlane.from_plane(Plane((0, 0, 0), (1, 0, 0), (0, 1, 0)))
+    for x, clear in ((2 + e, True), (2 + 6 * e, False)):
+        p = _station(x, 2)
+        square = [_station(0, 0), bottom, _station(4, 0), _station(4, 4), top, _station(0, 4)]
+        left = [_station(0, 0), bottom, p, top, _station(0, 4)]
+        right = [bottom, _station(4, 0), _station(4, 4), top, p]
+        triangle = [t1, t2, t3]
+        assert (_shoelace([q[:2] for q in left]) + _shoelace([q[:2] for q in right]) - _shoelace([q[:2] for q in triangle])
+                + _shoelace([q[:2] for q in triangle]) == _shoelace([q[:2] for q in square]) == 16)
+        pieces = [(top, p), (p, bottom), (t1, t2), (t2, t3), (t3, t1)]
+        segments = {i: ma.stations.Segment(a, b, derived=True) for i, (a, b) in enumerate(pieces)}
+        edges = [ArrangementPath(ma.stations.to_line(segment)) for segment in segments.values()]
+        endpoints = [(0, 1), (1, 2), (3, 4), (4, 5), (5, 3)]
+        assert ma._snapped_edges_clear(chart, edges, segments, endpoints, {0, 1}, tol) is clear
+
+
+def test_snapped_line_crossing_an_arc_is_detected():
+    tol = 1e-9
+    chart = ma.ExactPlane.from_plane(Plane((0, 0, 0), (1, 0, 0), (0, 1, 0)))
+    arc = ArrangementPath(EllipticArc((0., 0., 0.), (1., 0., 0.), (0., 1., 0.), -0.5, 1.))   # right of x = 0.877
+    for x, clear in ((Fraction(87, 100), True), (Fraction(9, 10), False)):
+        segment = ma.stations.Segment(_station(x, -1), _station(x, 1), derived=True)
+        edges = [ArrangementPath(ma.stations.to_line(segment)), arc]
+        assert ma._snapped_edges_clear(chart, edges, {0: segment}, [(0, 1), (2, 3)], {0}, tol) is clear
+
+
+def test_incident_arc_shallow_touch_is_excused_and_a_transversal_crossing_is_not():
+    # A segment leaving the arc's end, turned by alpha into the circle from the tangent, meets the unit circle
+    # again after a chord 2 sin(alpha) with a dip of depth 1 - cos(alpha): 5e-11 m for alpha = 1e-5 (a
+    # tolerance-level tangential touch, as on cap 1082), 5e-3 m for alpha = 0.1 (a real crossing).
+    tol = 1e-9
+    chart = ma.ExactPlane.from_plane(Plane((0, 0, 0), (1, 0, 0), (0, 1, 0)))
+    arc = ArrangementPath(EllipticArc((0., 0., 0.), (1., 0., 0.), (0., 1., 0.), -0.5, 1.))
+    end = np.asarray(arc.curve.evaluate(1.))
+    for alpha, clear in ((1e-5, True), (0.1, False)):
+        heading = 0.5 - 0.5 * math.pi - alpha                  # tangent towards decreasing angle, turned inwards
+        far = end + 0.25 * np.array([math.cos(heading), math.sin(heading), 0.])
+        segment = ma.stations.Segment(exact_vector(end), exact_vector(far), derived=True)
+        edges = [ArrangementPath(ma.stations.to_line(segment)), arc]
+        assert ma._snapped_edges_clear(chart, edges, {0: segment}, [(1, 0), (2, 1)], {0}, tol) is clear
+
+
+def test_overlap_from_a_shared_vertex_is_a_crossing():
+    o, a, b, c = _station(0, 0), _station(1, 0), _station(2, 0), _station(-1, 0)
+    assert ma._chart_segments_clear((o, a), (o, b), True) is False                             # same direction
+    assert ma._chart_segments_clear((o, a), (o, c), True) is True                              # opposite
+    assert ma._chart_segments_clear((o, a), (a, b), False) is False                            # touching, not shared
+
+
+def test_curved_ends_disagreeing_beyond_the_residual_bound_refuse():
+    # Two immutable (curved) ends at vertex 0 and one straight edge. The curved ends differ by 2e-12 m
+    # (> tol / 1024 ~ 9.8e-13): moving straight ends cannot close the vertex, so the snap refuses; at 5e-13
+    # it snaps the straight end to the first curved end.
+    tol = 1e-9
+    for gap, accepted in ((2e-12, False), (5e-13, True)):
+        curved_a = ArrangementPath(LinePath((0., 0., 0.), (0., 1., 0.)))          # not in edge_segments: immutable
+        curved_b = ArrangementPath(LinePath((gap, 0., 0.), (1., 1., 0.)))
+        straight = ma.stations.Segment(_station(Fraction(1, 10 ** 10), 0), _station(1, 0), derived=True)
+        edges = [curved_a, curved_b, ArrangementPath(ma.stations.to_line(straight))]
+        representatives = [exact_vector((0., 0., 0.)), exact_vector((0., 1., 0.)), exact_vector((1., 1., 0.)),
+                           straight[1]]
+        result = ma._snap_open_vertices(edges, {2: straight}, [(0, 1), (0, 2), (0, 3)], representatives,
+                                        tolerance=tol)
+        assert (result is not None) == accepted
+        if accepted:
+            assert result[2] == {2} and result[1][2][0] == exact_vector((0., 0., 0.))
+
+
+def test_rejected_crossing_check_raises_the_original_error(monkeypatch):
+    monkeypatch.setattr(ma, "_snapped_edges_clear", lambda *args: False)
+    with collect_runtime_diagnostics() as counters:
+        with pytest.raises(GeometryError) as caught:
+            _arrange()
+    assert str(caught.value) == CONSERVATION and caught.value.__context__ is None
+    assert counters["arrangement_snap_fallback_refusals"] == 1
 
 
 def test_explicit_predicate_budget_keeps_the_original_refusal():

@@ -1927,9 +1927,9 @@ def _arrange_material(domain, traces, *, tolerance, cancellation_check=None,
         failure = GeometryError("arrangement failed material conservation")
         if exact and not deferred and edge_segments and max_predicates is None:
             # CAP-1: refusal-only snap fallback (see _snap_fallback). It returns None, and this original
-            # error is raised unchanged, unless the unchanged check accepts the closed loops.
+            # error is raised unchanged, unless the closed loops pass every acceptance check.
             snapped = _snap_fallback(domain, vertices, lookup, edges, edge_segments, endpoints_by_edge, entries,
-                                     outgoing, evaluated, (outer_area, original), retained, tolerance,
+                                     outgoing, evaluated, cells, (outer_area, original), retained, tolerance,
                                      native_area_tolerance, cancellation_check, chart_exact, chart)
             if snapped is not None:
                 return snapped
@@ -2069,6 +2069,13 @@ def _float_material_cells(domain, cycles, tolerance, native_area_tolerance, area
     return cells, retained, outer_area, original
 
 
+#: Residual closure bound of the snap fallback, as a fraction of the vertex-merge tolerance: after snapping,
+#: every cell loop must close within ``tolerance * _SNAP_RESIDUAL_GAP`` (about 9.8e-13 m at 1e-9). Only curved
+#: ends (which never move) can still differ; measured on tripod cap 1082: 1.6e-14 m. The bound is below the
+#: largest loop gap the unchanged float route accepts on ordinary faces (1.1e-12 m on cap 1083).
+_SNAP_RESIDUAL_GAP = Fraction(1, 1024)
+
+
 def _snap_open_vertices(edges, edge_segments, endpoints_by_edge, representatives, *, tolerance):
     """Close the cell loops at their identified vertices by moving straight edge ends; None if not allowed.
 
@@ -2076,10 +2083,12 @@ def _snap_open_vertices(edges, edge_segments, endpoints_by_edge, representatives
     curved ends: their float evaluation, which is their position). Its canonical point is the end of its
     first incident curved edge (curved pieces cannot move), else the vertex's representative (the station
     every member was identified against). Every straight end at an open vertex moves to it. Returns None
-    when any end would move farther than ``tolerance`` (the vertex-merge tolerance; exact comparison) or a
-    moved edge would collapse (equal stations, or equal correctly rounded stations).
+    when any end would move farther than ``tolerance`` (the vertex-merge tolerance; exact comparison), when
+    the curved ends of a vertex differ from its canonical point by more than the residual bound
+    ``tolerance * _SNAP_RESIDUAL_GAP`` (they cannot be closed by moving straight ends), or when a moved edge
+    would collapse (equal stations, or equal correctly rounded stations).
     Returns ``(edges, edge_segments, moved edge indices, max squared move, snapped vertices, vertices
-    whose curved ends differ)``; the inputs are not modified.
+    whose curved ends differ, max squared curved disagreement)``; the inputs are not modified.
     """
     ends = [[] for _ in representatives]
     for index, (start, end) in enumerate(endpoints_by_edge):
@@ -2088,14 +2097,20 @@ def _snap_open_vertices(edges, edge_segments, endpoints_by_edge, representatives
             point = segment[k] if segment is not None else exact_vector(edges[index].curve.evaluate(float(k)))
             ends[vertex_id].append((index, k, point))
     tol2 = Fraction(tolerance) ** 2
-    replaced, max_move2, snapped_vertices, open_curved = {}, Fraction(0), 0, 0
+    residual2 = (Fraction(tolerance) * _SNAP_RESIDUAL_GAP) ** 2
+    replaced, max_move2, max_curved2, snapped_vertices, open_curved = {}, Fraction(0), Fraction(0), 0, 0
     for vertex_id, items in enumerate(ends):
         if len({point for _index, _k, point in items}) <= 1:
             continue
         curved = [point for index, _k, point in items if index not in edge_segments]
+        canonical = curved[0] if curved else representatives[vertex_id]
         if len(set(curved)) > 1:
             open_curved += 1
-        canonical = curved[0] if curved else representatives[vertex_id]
+            for point in curved[1:]:
+                gap2 = stations.distance2(point, canonical)
+                if gap2 > residual2:
+                    return None
+                max_curved2 = max(max_curved2, gap2)
         straight = [(index, k, point) for index, k, point in items if index in edge_segments and point != canonical]
         if not straight:
             continue
@@ -2113,12 +2128,202 @@ def _snap_open_vertices(edges, edge_segments, endpoints_by_edge, representatives
         piece = stations.Segment(a, b, derived=True)
         new_segments[index] = piece
         new_edges[index] = replace(edges[index], curve=stations.to_line(piece))
-    return new_edges, new_segments, set(replaced), max_move2, snapped_vertices, open_curved
+    return new_edges, new_segments, set(replaced), max_move2, snapped_vertices, open_curved, max_curved2
+
+
+def _orient(a, b, c) -> Fraction:
+    return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+
+def _chart_segments_clear(first, second, shared) -> bool:
+    """Exact: the chart segments ``first`` and ``second`` meet at most in their shared end point.
+
+    ``shared`` is True when the two edges share a vertex; then their ends at it must be the same exact
+    point (the snap makes them so) and the segments may not overlap from it. Otherwise they may not meet.
+    """
+    p, q = first
+    r, s = second
+    if shared:
+        common = next(((a, b) for a in (p, q) for b in (r, s) if a == b), None)
+        if common is None:
+            return False
+        x = common[0]
+        a = q if p == x else p
+        b = s if r == x else r
+        if _orient(x, a, b) != 0:
+            return True
+        # Collinear from the common point: they overlap unless they leave it in opposite directions.
+        return (a[0] - x[0]) * (b[0] - x[0]) + (a[1] - x[1]) * (b[1] - x[1]) < 0
+    d1, d2 = _orient(r, s, p), _orient(r, s, q)
+    d3, d4 = _orient(p, q, r), _orient(p, q, s)
+    if ((d1 > 0 and d2 < 0) or (d1 < 0 and d2 > 0)) and ((d3 > 0 and d4 < 0) or (d3 < 0 and d4 > 0)):
+        return False
+
+    def on(a, b, c):                                            # c on the closed segment ab (collinear given)
+        return (min(a[0], b[0]) <= c[0] <= max(a[0], b[0])) and (min(a[1], b[1]) <= c[1] <= max(a[1], b[1]))
+    return not ((d1 == 0 and on(r, s, p)) or (d2 == 0 and on(r, s, q))
+                or (d3 == 0 and on(p, q, r)) or (d4 == 0 and on(p, q, s)))
+
+
+def _chart_segment_arc_clear(chart, segment, arc, excused, radius2, tolerance) -> bool:
+    """Certified: the chart image of the straight ``segment`` meets the arc's chart image only within
+    ``sqrt(radius2)`` (world) of an ``excused`` point (the segment's ends at vertices shared with the arc),
+    or, for an incident pair (``excused`` not empty), only as a shallow tangential touch: the whole ellipse
+    lies on one side of the segment's line except for a dip no deeper than ``tolerance`` (world distance,
+    certified with a rational lower bound of the line-normal length). A transversal crossing, and any
+    meeting of a non-incident pair, is never excused.
+
+    The segment's chart line is ``n . uv(X) = n . uv(a)``; on the arc ``X = C + U cos + V sin`` this is
+    ``c0 + c1 cos + c2 sin = 0`` with exact rational coefficients. Its roots (exact tan-half-angle
+    quadratic irrationals, ``planar_arcs.first_harmonic_angles``) are tested against the stored sweep and the
+    segment's parameter range by certified comparisons; an undecidable tie raises (the caller refuses).
+    """
+    from .exact_predicates import exact
+    from .planar_arcs import Num, _dot, _end_angle, _turn_range, _turned, arc_point, compare, first_harmonic_angles
+    if type(arc.curve) is not EllipticArc:
+        return False                                             # no certified test for other curve kinds
+    curve = arc.curve
+    a, b = segment
+    ua, ub = chart.uv(a), chart.uv(b)
+    du, dv = ub[0] - ua[0], ub[1] - ua[1]
+    n = (-dv, du)
+    # uv(X) = ((X - O) . Du, (X - O) . Dv) / scale, so n . uv(X) = w . X - w . O.
+    w = tuple((n[0] * x + n[1] * y) / chart._scale for x, y in zip(chart._dual_u, chart._dual_v))
+    offset = exact_dot(w, chart.origin) + n[0] * ua[0] + n[1] * ua[1]
+    c0 = exact_dot(w, exact_vector(curve.center)) - offset
+    c1 = exact_dot(w, exact_vector(curve.u_vector))
+    c2 = exact_dot(w, exact_vector(curve.v_vector))
+    if c1 * c1 + c2 * c2 < c0 * c0:
+        return True                                              # the line misses the whole ellipse
+    if excused:
+        # c0 + c1 cos + c2 sin = w . X - w . a: the in-plane distance to the line is |.| / |w| (w lies in
+        # the plane). Depth across the line <= tol  <=>  sqrt(c1^2 + c2^2) <= |c0| + tol |w|.
+        w_lower = Fraction(math.sqrt(float(exact_dot(w, w)))) * (1 - Fraction(1, 10 ** 12))
+        if c1 * c1 + c2 * c2 <= (abs(c0) + Fraction(tolerance) * w_lower) ** 2:
+            return True
+    length2 = du * du + dv * dv
+    du_w = tuple((du * x + dv * y) / chart._scale for x, y in zip(chart._dual_u, chart._dual_v))
+    start, end = exact(curve.start_angle), _end_angle(curve)
+    lower, upper = min(start, end), max(start, end)
+    turns = _turn_range(lower, upper, Fraction(0))
+    angles = first_harmonic_angles(c0, c1, c2)
+    enclosures = _root_angle_enclosures(c0, c1, c2, len(angles))
+    lower_f, upper_f = float(lower), float(upper)
+    for number, angle in enumerate(angles):
+        for turn in turns:
+            if enclosures is not None:
+                # Outward float enclosure of theta + 2 pi turn: a turn certainly outside the sweep (by more
+                # than 1e-9 rad) skips the certified comparisons; anything closer is decided by them.
+                lo, hi = enclosures[number]
+                shift = 2 * math.pi * turn
+                if hi + shift + 1e-9 < lower_f or lo + shift - 1e-9 > upper_f:
+                    continue
+            candidate = _turned(angle, turn)
+            if compare(candidate.theta, lower) < 0 or compare(candidate.theta, upper) > 0:
+                continue
+            point = arc_point(curve, candidate)
+            # Segment parameter of the root: ((uv(X) - uv(a)) . d) / |d|^2.
+            along = (_dot(du_w, point) - exact_dot(du_w, chart.origin) - du * ua[0] - dv * ua[1]) / Num(length2)
+            if compare(along, 0) < 0 or compare(along, 1) > 0:
+                continue
+            if not any(compare(_dot(delta, delta), radius2) <= 0
+                       for x in excused for delta in [tuple(p - Num(c) for p, c in zip(point, x))]):
+                return False
+    return True
+
+
+def _root_angle_enclosures(c0, c1, c2, count):
+    """Float enclosures ``(lo, hi)`` (widened by 1e-12 rad) of the root angles of ``c0 + c1 cos + c2 sin``, in
+    ``planar_arcs.first_harmonic_angles`` order, or None (then every root is decided by certified comparisons).
+
+    The roots are ``2 atan(x)`` with ``x = (-b +- sqrt(D)) / (2 a)`` (``a = c0 - c1``, ``b = 2 c2``,
+    ``c = c0 + c1``, ``D = b^2 - 4 a c``). ``sqrt(D)`` is enclosed by its float value widened by a relative
+    1e-12, ``x`` by exact rational arithmetic on that enclosure (monotone in ``sqrt(D)``), and ``atan`` is
+    1-Lipschitz, so the float conversion and ``atan`` rounding (a few 1e-16) stay far inside the widening.
+    """
+    a, b, c = c0 - c1, 2 * c2, c0 + c1
+    discriminant = b * b - 4 * a * c
+    if a == 0 or discriminant <= 0 or count != 2:
+        return None
+    root = math.sqrt(float(discriminant))
+    if not math.isfinite(root) or root == 0:
+        return None
+    lo_root, hi_root = Fraction(root) * (1 - Fraction(1, 10 ** 12)), Fraction(root) * (1 + Fraction(1, 10 ** 12))
+    result = []
+    for sign in (1, -1):
+        ends = sorted(((-b + sign * value) / (2 * a)) for value in (lo_root, hi_root))
+        result.append((2 * math.atan(float(ends[0])) - 1e-12, 2 * math.atan(float(ends[1])) + 1e-12))
+    return result
+
+
+def _snapped_edges_clear(chart, edges, segments, endpoints_by_edge, moved, tolerance) -> bool:
+    """Every moved straight edge meets every other edge only at a shared vertex (chart image).
+
+    Straight pairs are decided exactly (``_chart_segments_clear``); straight/arc pairs by the certified root
+    test (``_chart_segment_arc_clear``: intersections within twice the residual closure bound of a shared
+    vertex, and a shallow tangential touch no deeper than tol of an incident arc, are excused); any other curved partner refuses. Pairs whose world boxes, each widened by its height
+    bound above the support plane plus tol, are separated cannot meet in the chart and are skipped.
+    """
+    count = len(edges)
+    lo, hi, height = np.empty((count, 3)), np.empty((count, 3)), np.empty(count)
+    origin = np.asarray(stations.rounded(chart.origin))
+    normal = np.cross(np.asarray(stations.rounded(chart.u_vector)), np.asarray(stations.rounded(chart.v_vector)))
+    normal = normal / np.linalg.norm(normal)
+    for index, path in enumerate(edges):
+        if index in segments:
+            lo[index], hi[index] = segments[index].lo, segments[index].hi
+            height[index] = max(abs(float(normal @ (np.asarray(stations.rounded(point)) - origin)))
+                                for point in segments[index])
+        else:
+            lo[index], hi[index] = path.curve.bounds()
+            curve = path.curve
+            height[index] = (abs(float(normal @ (np.asarray(curve.center, dtype=float) - origin)))
+                             + abs(float(normal @ np.asarray(curve.u_vector, dtype=float)))
+                             + abs(float(normal @ np.asarray(curve.v_vector, dtype=float)))
+                             if type(curve) is EllipticArc else math.inf)
+    # Chart images meet only where the world points are within both edges' heights above the support.
+    expand = (height + tolerance)[:, None]
+    lo, hi = lo - expand, hi + expand
+    radius2 = (2 * Fraction(tolerance) * _SNAP_RESIDUAL_GAP) ** 2
+    uv = {}
+
+    def chart_segment(index):
+        if index not in uv:
+            uv[index] = tuple(chart.uv(point) for point in segments[index])
+        return uv[index]
+    for index in sorted(moved):
+        near = np.flatnonzero(np.all(lo <= hi[index], axis=1) & np.all(hi >= lo[index], axis=1))
+        for other in near:
+            other = int(other)
+            if other == index:
+                continue
+            shared = set(endpoints_by_edge[index]) & set(endpoints_by_edge[other])
+            if other in segments:
+                if not _chart_segments_clear(chart_segment(index), chart_segment(other), bool(shared)):
+                    return False
+                continue
+            excused = [segments[index][k] for k in (0, 1) if endpoints_by_edge[index][k] in shared]
+            if not _chart_segment_arc_clear(chart, segments[index], edges[other], excused, radius2, tolerance):
+                return False
+    return True
+
+
+def _cycle_ends(edges, segments, chain):
+    """``(entry, exit)`` exact points of each piece of a cycle, in walking order."""
+    result = []
+    for index, forward in chain:
+        if index in segments:
+            first, last = segments[index]
+        else:
+            curve = edges[index].curve
+            first, last = exact_vector(curve.evaluate(0.)), exact_vector(curve.evaluate(1.))
+        result.append((first, last) if forward else (last, first))
+    return result
 
 
 def _snap_fallback(domain, vertices, lookup, edges, edge_segments, endpoints_by_edge, entries, outgoing,
-                   evaluated, areas, refused_retained, tolerance, native_area_tolerance, cancellation_check,
-                   chart_exact, chart):
+                   evaluated, first_cells, areas, refused_retained, tolerance, native_area_tolerance,
+                   cancellation_check, chart_exact, chart):
     """CAP-1 refusal-only fallback of the float cell route on a Plane support; None means refuse as before.
 
     Called only after the unchanged conservation check refused, so every accepted arrangement is
@@ -2126,9 +2331,15 @@ def _snap_fallback(domain, vertices, lookup, edges, edge_segments, endpoints_by_
     different paths; vertex identity joins them, but each straight edge keeps its own end station, so cell
     loops stay open by up to the merge tolerance and their Green areas miss the check. Here the loops are
     closed at the identified vertices (``_snap_open_vertices``: straight ends only, each move at most the
-    vertex-merge tolerance), the embedding order is recomputed at the touched vertices, cycles without a
-    moved edge reuse their first-pass loop, area and material decision, and the unchanged check with the
-    unchanged tolerance decides. Any refusal on the way returns None; a cancellation propagates.
+    vertex-merge tolerance, curved ends within the residual bound). The result is accepted only if all of
+    these hold, else None:
+    - no moved edge meets another edge except at a shared vertex (``_snapped_edges_clear``);
+    - the embedding walk yields exactly the first pass's cycles, each with the same negligible/material
+      decision and area sign, and the same cells and hole ownership (snapping moved geometry only);
+    - every cycle closes within ``tolerance * _SNAP_RESIDUAL_GAP`` (exact distances);
+    - the unchanged conservation check with the unchanged tolerance.
+    Cycles without a moved edge reuse their first-pass loop, area and material decision. Any GeometryError
+    on the way returns None; a cancellation propagates.
     """
     from time import perf_counter
     from .runtime_diagnostics import _increment, _record
@@ -2142,40 +2353,56 @@ def _snap_fallback(domain, vertices, lookup, edges, edge_segments, endpoints_by_
             raise GeometryError("intersection arrangement cancelled")
 
     outer_area, original = areas
+    accepted = False
     try:
         representatives = [station if station is not None else exact_vector(vertices[vertex_id])
                            for vertex_id, station in enumerate(lookup.exact)]
         snapped = _snap_open_vertices(edges, edge_segments, endpoints_by_edge, representatives, tolerance=tolerance)
-        if snapped is None:
-            accepted = False
-        else:
-            new_edges, new_segments, moved, max_move2, snapped_vertices, open_curved = snapped
-            new_entries = list(entries)
-            for index in sorted(moved):
-                new_entries[index] = _outgoing_entries(domain, chart_exact, new_segments, index, new_edges[index])
-            touched = {vertex_id: [] for index in sorted(moved) for vertex_id in endpoints_by_edge[index]}
-            for (start, end), (first_entry, second_entry) in zip(endpoints_by_edge, new_entries):
-                if start in touched:
-                    touched[start].append(first_entry)
-                if end in touched:
-                    touched[end].append(second_entry)
-            new_outgoing = list(outgoing)
-            for vertex_id, values in touched.items():
-                _order_outgoing(values, True, chart, new_segments)
-                new_outgoing[vertex_id] = values
-            cycles = []
+        if snapped is not None:
+            new_edges, new_segments, moved, max_move2, snapped_vertices, open_curved, max_curved2 = snapped
+            if moved and _snapped_edges_clear(chart, new_edges, new_segments, endpoints_by_edge, moved, tolerance):
+                new_entries = list(entries)
+                for index in sorted(moved):
+                    new_entries[index] = _outgoing_entries(domain, chart_exact, new_segments, index, new_edges[index])
+                touched = {vertex_id: [] for index in sorted(moved) for vertex_id in endpoints_by_edge[index]}
+                for (start, end), (first_entry, second_entry) in zip(endpoints_by_edge, new_entries):
+                    if start in touched:
+                        touched[start].append(first_entry)
+                    if end in touched:
+                        touched[end].append(second_entry)
+                new_outgoing = list(outgoing)
+                for vertex_id, values in touched.items():
+                    _order_outgoing(values, True, chart, new_segments)
+                    new_outgoing[vertex_id] = values
+                cycles, walked, same = [], set(), [True]
+                gap_bound2 = (Fraction(tolerance) * _SNAP_RESIDUAL_GAP) ** 2
+                max_gap2 = [Fraction(0)]
 
-            def visit(chain):
-                if chain in evaluated and not any(index in moved for index, _direction in chain):
-                    item = evaluated[chain]
-                else:
-                    item = _float_cycle(domain, new_edges, chain, tolerance, native_area_tolerance)
-                if item is not None:
-                    cycles.append(item)
-            _walk_cycles(new_edges, endpoints_by_edge, new_outgoing, check, visit)
-            cells, retained, _outer, _original = _float_material_cells(domain, cycles, tolerance,
-                                                                       native_area_tolerance, areas)
-            accepted = bool(cells) and not abs(original-retained) > native_area_tolerance
+                def visit(chain):
+                    walked.add(chain)
+                    if chain not in evaluated:
+                        same[0] = False
+                        return
+                    old = evaluated[chain]
+                    ends = _cycle_ends(new_edges, new_segments, chain)
+                    for k, (_entry, exit_point) in enumerate(ends):
+                        following = ends[(k + 1) % len(ends)][0]
+                        if following != exit_point:
+                            max_gap2[0] = max(max_gap2[0], stations.distance2(exit_point, following))
+                    if not any(index in moved for index, _direction in chain):
+                        item = old
+                    else:
+                        item = _float_cycle(domain, new_edges, chain, tolerance, native_area_tolerance)
+                        if (item is None) != (old is None) or (item is not None and (item[2] > 0) != (old[2] > 0)):
+                            same[0] = False
+                    if item is not None:
+                        cycles.append(item)
+                _walk_cycles(new_edges, endpoints_by_edge, new_outgoing, check, visit)
+                if same[0] and walked == set(evaluated) and max_gap2[0] <= gap_bound2:
+                    cells, retained, _outer, _original = _float_material_cells(domain, cycles, tolerance,
+                                                                               native_area_tolerance, areas)
+                    accepted = (cells == first_cells and bool(cells)
+                                and not abs(original-retained) > native_area_tolerance)
     except GeometryError:
         if cancelled:
             raise
@@ -2188,6 +2415,7 @@ def _snap_fallback(domain, vertices, lookup, edges, edge_segments, endpoints_by_
     _record("arrangement_snap_fallback", {
         "face_id": domain.face_id, "moved_edges": len(moved), "snapped_vertices": snapped_vertices,
         "open_curved_vertices": open_curved, "max_move": math.sqrt(max_move2),
+        "max_curved_disagreement": math.sqrt(max_curved2), "max_cycle_gap": math.sqrt(max_gap2[0]),
         "refused_ratio": float(abs(original-refused_retained)/native_area_tolerance),
         "accepted_ratio": float(abs(original-retained)/native_area_tolerance),
         "seconds": perf_counter()-started})
