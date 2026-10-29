@@ -44,6 +44,35 @@ def _increment(key, amount=1):
         counters[key] = counters.get(key, 0) + amount
 
 
+# Structured records (non-integer details) are collected separately, so the counter mapping keeps its
+# contract of integer values that consumers sum. Same ContextVar scoping as the counters.
+_RECORD_COLLECTORS: ContextVar[tuple] = ContextVar(
+    "anygeometry_runtime_record_collectors", default=())
+
+
+@contextmanager
+def collect_runtime_records():
+    """Yield a fresh ``dict[str, list]`` receiving the observational records made within its scope.
+
+    Records are strictly observational, like the counters. Current keys:
+    ``arrangement_snap_fallback`` (one dict per material arrangement accepted by the snap fallback of
+    the float cell route: face id, moved edges, snapped vertices, maximum move, refused and accepted
+    conservation ratios, seconds).
+    """
+    records = {}
+    token = _RECORD_COLLECTORS.set((*_RECORD_COLLECTORS.get(), records))
+    try:
+        yield records
+    finally:
+        _RECORD_COLLECTORS.reset(token)
+
+
+def _record(key, item):
+    """Append ``item`` to the list ``key`` of every active record collector; no-op without one."""
+    for records in _RECORD_COLLECTORS.get():
+        records.setdefault(key, []).append(item)
+
+
 @contextmanager
 def _timed_phase(name):
     """Accumulate observational nanoseconds, including failed phases."""
