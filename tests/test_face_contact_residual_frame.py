@@ -13,8 +13,9 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from anygeometry import to_dict
+from anygeometry import GeometryModel, to_dict
 from anygeometry.batch_intersections import apply_intersections, plan_intersections
+from anygeometry.errors import GeometryError
 from anygeometry.generators import cylinder
 from anygeometry.structural import AttachmentKind, ConnectionIntent
 from anygeometry.surfaces import CoonsSurface, Cylinder
@@ -44,6 +45,12 @@ def _face_contact_attachments(model):
             if item.kind is AttachmentKind.VERTEX_ON_FACE]
 
 
+def _support_residual(model, face_id, point):
+    support = model.faces[face_id].surface
+    uv = np.clip(support.local_uv(point), 0., 1.)
+    return float(np.linalg.norm(support.evaluate(float(uv[0]), float(uv[1])) - point))
+
+
 def test_parameterized_face_contact_residual_uses_face_frame():
     model = _touching_quarter_cylinders(parameterize=True)
     plan = plan_intersections(model, tuple(model.faces), policy=ConnectionIntent.CONNECT)
@@ -65,8 +72,10 @@ def test_parameterized_face_contact_residual_uses_face_frame():
         assert model.faces[attachment.target_id].parameterization is not None
         u, v = (value.start for value in attachment.target_parameters)
         station = model.vertex_position(attachment.source_id)
-        assert float(np.linalg.norm(model.face_point(attachment.target_id, u, v) - station)) \
-            == attachment.max_residual
+        # The stored residual is the larger of the face-frame residual and the
+        # authoritative support's own residual (old formula on the support).
+        assert max(float(np.linalg.norm(model.face_point(attachment.target_id, u, v) - station)),
+                   _support_residual(model, attachment.target_id, station)) == attachment.max_residual
     assert model.validate_topology() == ()
     after = to_dict(model)
     assert apply_intersections(model, plan, policy=ConnectionIntent.CONNECT).reused
@@ -90,3 +99,48 @@ def test_unparameterized_face_contact_residual_is_the_support_residual():
         assert float(np.linalg.norm(face.surface.evaluate(u, v) - station)) == attachment.max_residual
         assert attachment.max_residual <= attachment.tolerance_used
     assert model.validate_topology() == ()
+
+
+def test_parameterized_face_contact_off_its_support_is_refused():
+    """The face-frame residual alone is self-confirming; the support still decides.
+
+    The first cylinder's boundary sits 1.2e-9 off its support (origin moved),
+    the second cylinder's 0.8e-9 the other way, so the merged station lies
+    about 1.2e-9 from the first support, beyond the 1e-9 contact tolerance.
+    A topology Coons parameterization interpolates the boundary and so contains
+    the station by construction; the contact must still be refused.
+    """
+    model = cylinder(1., 1., origin=(1.2e-9, 0., 0.), circumferential_segments=4)
+    first = set(model.faces)
+    model.insert_model(cylinder(1., 1., origin=(2. + 0.8e-9, 0., 1.), circumferential_segments=4))
+    for face_id, face in list(model.faces.items()):
+        support = replace(face.surface, start_angle=face.surface.start_angle - np.pi / 4,
+                          sweep_angle=2 * np.pi)
+        if face_id in first:
+            support = replace(support, origin=np.asarray(support.origin) - np.array([1.2e-9, 0., 0.]))
+        model.set_face_surface(face_id, support)
+        model.set_face_parameterization(face_id, CoonsSurface())
+    assert model.validate_topology() == ()
+    plan = plan_intersections(model, tuple(model.faces), policy=ConnectionIntent.CONNECT)
+    assert plan.face_contacts
+    assert all(contact.world_tolerance == 1e-9 for contact in plan.face_contacts)
+    with pytest.raises(GeometryError, match='canonical face contact exceeds its qualified tolerance'):
+        apply_intersections(model, plan, policy=ConnectionIntent.CONNECT)
+    assert not _face_contact_attachments(model)
+
+
+def test_unparameterized_topology_coons_face_contact_keeps_old_refusal():
+    """A topology-backed Coons support without a parameterization refuses as before."""
+    model = GeometryModel()
+    first = model.add_plate(model.add_points(((0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0))))
+    second = model.add_plate(model.add_points(((1, 1, 0), (2, 1, 0), (2, 1, 1), (1, 1, 1))))
+    for face_id in (first, second):
+        model.set_face_surface(face_id, CoonsSurface())
+        assert model.faces[face_id].parameterization is None
+    plan = plan_intersections(model, tuple(model.faces), policy=ConnectionIntent.CONNECT)
+    assert plan.face_contacts
+    before = to_dict(model)
+    with pytest.raises(GeometryError, match='topology-backed Coons evaluation requires GeometryModel.face_point'):
+        apply_intersections(model, plan, policy=ConnectionIntent.CONNECT)
+    assert not _face_contact_attachments(model)
+    assert to_dict(model) == before

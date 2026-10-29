@@ -1251,12 +1251,24 @@ def _apply_intersections_in_place(model, plan, *, policy, _edge_preimage_draft=N
                 for parent in contact.face_ids:
                     for face in sorted(ref.id for ref in model.resolve_ref(EntityRef('face',parent))
                                        if ref.id in incident):
-                        # face_local_uv inverts the face's parameterization when it has
-                        # one; face_point evaluates that same frame (for a face without
-                        # a parameterization both use its support, unchanged).
-                        uv=model.face_local_uv(face,model.vertex_position(station))
-                        residual=float(np.linalg.norm(model.face_point(face,*uv)
-                                                      -model.vertex_position(station)))
+                        point=model.vertex_position(station)
+                        uv=model.face_local_uv(face,point)
+                        target=model.faces[face]
+                        if target.parameterization is None:
+                            # Unchanged: uv is in the support's own frame.
+                            residual=float(np.linalg.norm(target.surface.evaluate(*uv)-point))
+                        else:
+                            # face_local_uv inverted the parameterization, so the stored uv
+                            # is checked with face_point in that frame. That residual alone
+                            # can be self-confirming (a topology Coons map contains its own
+                            # merged boundary stations), so the station must ALSO lie on the
+                            # authoritative support, measured with the support's own inverse
+                            # and evaluator exactly as for an unparameterized face.
+                            support_uv=np.clip(target.surface.local_uv(point),0.,1.)
+                            residual=max(
+                                float(np.linalg.norm(model.face_point(face,*uv)-point)),
+                                float(np.linalg.norm(target.surface.evaluate(
+                                    float(support_uv[0]),float(support_uv[1]))-point)))
                         if residual>tolerance:
                             raise GeometryError('canonical face contact exceeds its qualified tolerance')
                         model.ensure_attachment(None,AttachmentKind.VERTEX_ON_FACE,
