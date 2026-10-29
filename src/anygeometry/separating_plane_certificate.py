@@ -28,8 +28,12 @@ over the whole parameter interval on which it is used.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal
 from fractions import Fraction
+import itertools
 import math
+
+import numpy as np
 
 from .cylinder_charts import _I, _Proof, _Refusal
 
@@ -56,6 +60,22 @@ class SPCertificatePolicy:
     end_refinement: int = 6
     trig_argument_bits: int = 400
     s_min: Fraction = S_MIN
+
+    def __post_init__(self):
+        # Configuration is validated (ValueError) when built, so a certificate never meets a
+        # float budget or a float s_min in its exact arithmetic.
+        for name in ("max_interval_operations", "max_distance_boxes", "end_refinement", "trig_argument_bits"):
+            value = getattr(self, name)
+            if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer)) or value < 0:
+                raise ValueError(f"SPCertificatePolicy.{name} must be a nonnegative integer")
+            object.__setattr__(self, name, int(value))
+        try:
+            s_min = _rational(self.s_min, "s_min")
+        except _Refusal:
+            raise ValueError("SPCertificatePolicy.s_min must be a finite real number") from None
+        if s_min <= 0:
+            raise ValueError("SPCertificatePolicy.s_min must be positive")
+        object.__setattr__(self, "s_min", s_min)
 
 
 # ----------------------------------------------------------------------------------- records
@@ -120,34 +140,72 @@ class Undecided:
 
 # ----------------------------------------------------------------------------------- numerics
 
-def _exact(value, what):
-    """A stored value as an exact rational (N1); floats must lie in the N3 window."""
-    if isinstance(value, Fraction):
-        made = value
-    elif isinstance(value, bool):
+def _rational(value, what):
+    """The exact rational value of one stored scalar (N1), or a typed refusal BEFORE any conversion.
+
+    Every numeric input of the module enters here. Accepted, each read exactly and never through
+    ``float()``: int and numpy integers (``int()``), Fraction, and finite float, numpy floating
+    and Decimal values (``as_integer_ratio``). bool and numpy.bool_, str, complex, arrays and
+    every other type are refused, as are NaN and infinities.
+    """
+    if type(value) is Fraction:
+        return value
+    if isinstance(value, (bool, np.bool_)):
         raise _Refusal(f"numeric_window:type:{what}")
-    elif isinstance(value, int):
-        made = Fraction(value)
-    else:
+    if isinstance(value, (int, np.integer)):
+        return Fraction(int(value))
+    if isinstance(value, Fraction):                 # a subclass: rebuild from its integer parts
+        n, d = value.numerator, value.denominator
+        if type(n) is int and type(d) is int and d > 0:
+            return Fraction(n, d)
+        raise _Refusal(f"numeric_window:type:{what}")
+    if isinstance(value, (float, np.floating, Decimal)):
         try:
-            number = float(value)
-        except (TypeError, ValueError):
-            raise _Refusal(f"numeric_window:type:{what}") from None
-        if not math.isfinite(number):
-            raise _Refusal(f"numeric_window:nonfinite:{what}")
-        made = Fraction(number)
-        if made and not (_WINDOW_LO <= abs(made) <= _WINDOW_HI):
-            raise _Refusal(f"numeric_window:{what}")
+            n, d = value.as_integer_ratio()
+        except (OverflowError, ValueError):
+            raise _Refusal(f"numeric_window:nonfinite:{what}") from None
+        return Fraction(n, d)
+    raise _Refusal(f"numeric_window:type:{what}")
+
+
+def _input_in_window(made):
+    """N3 for every input, whatever its type: zero or a magnitude in [2^-960, 2^960]."""
+    return made == 0 or _WINDOW_LO <= abs(made) <= _WINDOW_HI
+
+
+def _exact(value, what):
+    """A stored value as an exact rational (N1) inside the N3 window, else a typed refusal."""
+    made = _rational(value, what)
+    if not _input_in_window(made):
+        raise _Refusal(f"numeric_window:{what}")
     if max(abs(made.numerator).bit_length(), made.denominator.bit_length()) > 4096:
         raise _Refusal("rational_bit_budget")
     return made
 
 
-def _vec(value, what):
-    items = tuple(value)
-    if len(items) != 3:
+def _to_float(value, what):
+    """Nearest binary64 of an exact rational; an overflow is a typed refusal, never an exception."""
+    try:
+        return float(value)
+    except OverflowError:
+        raise _Refusal(f"numeric_window:{what}") from None
+
+
+def _items(value, what, count=3):
+    """The ``count`` entries of a stored vector, or a typed refusal (no unbounded iteration)."""
+    if isinstance(value, (str, bytes)):
         raise _Refusal(f"malformed_vector:{what}")
-    return tuple(_exact(x, what) for x in items)
+    try:
+        items = tuple(itertools.islice(iter(value), count + 1))
+    except TypeError:
+        raise _Refusal(f"malformed_vector:{what}") from None
+    if len(items) != count:
+        raise _Refusal(f"malformed_vector:{what}")
+    return items
+
+
+def _vec(value, what):
+    return tuple(_exact(x, what) for x in _items(value, what))
 
 
 def _dot(a, b):
@@ -167,26 +225,31 @@ def _vscale(a, k):
 
 
 def _up(value):
-    """Rational upper bound as a float rounded up (N2), kept in the N3 window."""
+    """Rational upper bound as a float rounded up (N2), kept in the N3 window (else a refusal)."""
     value = Fraction(value)
     if value <= 0:
         return 0.0 if value == 0 else -_down(-value)
     if value < _WINDOW_LO:
         return float(_WINDOW_LO)
-    result = float(value)
+    if value > _WINDOW_HI:
+        raise _Refusal("numeric_window:upper_bound")
+    result = _to_float(value, "upper_bound")
     if Fraction(result) < value:
         result = math.nextafter(result, math.inf)
     return result
 
 
 def _down(value):
-    """Rational lower bound as a float rounded down (N2); below the window it becomes 0."""
+    """Rational lower bound as a float rounded down (N2); below the window it becomes 0, above it
+    the window edge 2^960 (still a lower bound)."""
     value = Fraction(value)
     if value <= 0:
         return 0.0 if value == 0 else -_up(-value)
     if value < _WINDOW_LO:
         return 0.0
-    result = float(value)
+    if value > _WINDOW_HI:
+        return float(_WINDOW_HI)
+    result = _to_float(value, "lower_bound")
     if Fraction(result) > value:
         result = math.nextafter(result, -math.inf)
     return result
@@ -279,7 +342,7 @@ def _sincos_fixed(x, max_bits):
 
 def certified_sincos(x, *, max_bits=400):
     """Public test hook: ((sin_lo, sin_hi), (cos_lo, cos_hi)) of an exact rational ``x``."""
-    s, c = _sincos_fixed(Fraction(x), max_bits)
+    s, c = _sincos_fixed(_rational(x, "x"), max_bits)
     return (s.lo, s.hi), (c.lo, c.hi)
 
 
@@ -383,8 +446,8 @@ def _sqrt_up(value):
     if value == 0:
         return Fraction(0)
     try:
-        t = Fraction(math.sqrt(float(value)))
-    except (OverflowError, ValueError):
+        t = Fraction(math.sqrt(_to_float(value, "sqrt")))
+    except (_Refusal, OverflowError, ValueError):
         t = Fraction(1)
     if t <= 0:
         t = Fraction(1)
@@ -596,29 +659,22 @@ def _make_curve(curve, policy, what):
 
 
 def _same_record(a, b):
+    """Exact identity of two curve records (every stored value compared as an exact rational,
+    read by ``_rational``); a value that cannot be read exactly makes the records differ."""
     if a is b:
         return True
-    """Exact identity of two curve records (every stored value compared as an exact rational)."""
     if type(a) is not type(b):
         return False
     names = ("start", "end") if type(a).__name__ in ("LinePath", "_RawLine") else \
         ("center", "u_vector", "v_vector", "start_angle", "sweep_angle")
 
-    def exact(value):
-        items = tuple(value) if isinstance(value, (tuple, list)) else (value,)
-        out = []
-        for x in items:
-            if isinstance(x, (Fraction, int)) and not isinstance(x, bool):
-                out.append(Fraction(x))
-                continue
-            x = float(x)                       # a stored binary64 (or numpy float64): exact
-            if not math.isfinite(x):
-                raise ValueError
-            out.append(Fraction(x))
-        return tuple(out)
+    def exact(name, value):
+        if name in ("start_angle", "sweep_angle"):
+            return _rational(value, "record")
+        return tuple(_rational(x, "record") for x in _items(value, "record"))
     try:
-        return all(exact(getattr(a, n)) == exact(getattr(b, n)) for n in names)
-    except (AttributeError, TypeError, ValueError):
+        return all(exact(n, getattr(a, n)) == exact(n, getattr(b, n)) for n in names)
+    except (AttributeError, _Refusal):
         return False
 
 
@@ -658,7 +714,10 @@ class _Face:
             if self.R <= 0 or self.a == (0, 0, 0):
                 raise _Refusal("degenerate_cylinder_support")
             self.a2 = _dot(self.a, self.a)
-            radial = tuple(support.radial_direction)
+            try:
+                radial = tuple(itertools.islice(iter(support.radial_direction), 4))
+            except TypeError:
+                raise _Refusal("malformed_vector:cylinder.radial") from None
             if radial:
                 radial = _vec(radial, "cylinder.radial")
             self.support_key = ("cyl", self.A, self.a, self.R, tuple(radial))
@@ -818,18 +877,10 @@ class _Face:
             w = _vsub(p, self.A)
             return _vsub(w, _vscale(a, _dot(w, a)/self.a2))     # exact axis-perpendicular part
 
-        def box_error(box):
-            # The true point lies in the box; its radial vector is at least R/2 long (projection
-            # check above) and moves by at most the half-diagonal hw: angle <= (pi/2) hw/(R/2).
-            lows, highs = box
-            hw = sum((highs[i] - lows[i])/2 for i in range(3))
-            mid = tuple((lows[i] + highs[i])/2 for i in range(3))
-            return mid, PI_ENCLOSURE.hi*hw/self.R
-
         def turn_bound(p, q):
             """Upper bound of the radial turn along a short element from p to q (boxes)."""
-            mp_, ep = box_error(p)
-            mq_, eq = box_error(q)
+            mp_, ep = _box_turn_error(p, self.R)
+            mq_, eq = _box_turn_error(q, self.R)
             rp, rq = perp(mp_), perp(mq_)
             if _dot(rp, rq) <= 0:
                 raise _Refusal("cylinder_turn_unqualified")
@@ -867,6 +918,23 @@ class _Face:
                 error += PI_ENCLOSURE.hi*eta/Up_lo        # 2 asin(x) <= pi x
             if not abs(exact_sum) + error < two_pi_lo:
                 raise _Refusal("cylinder_loop_winds")
+
+
+def _box_turn_error(box, R):
+    """(midpoint, bound on the chart-angle error of using it) for a box holding a true point.
+
+    The true point's radial vector r has |r| >= R/2 (projection check of the face); the box
+    midpoint differs from it by d with |d_perp| <= |d| <= hw (sum of half-widths). If |d_perp|
+    < |r|, angle(r, r + d_perp) <= asin(hw/(R/2)) <= (pi/2) hw/(R/2) = pi hw/R. That hypothesis
+    (addendum A5, H5.4) is checked here, conservatively as 2 hw < R/2, instead of being relied on
+    structurally; otherwise UNDECIDED.
+    """
+    lows, highs = box
+    hw = sum((highs[i] - lows[i])/2 for i in range(3))
+    if not 2*hw < R/2:
+        raise _Refusal("cylinder_turn_unqualified:box_width")
+    mid = tuple((lows[i] + highs[i])/2 for i in range(3))
+    return mid, PI_ENCLOSURE.hi*hw/R
 
 
 # ----------------------------------------------------------------------------------- functionals
@@ -1027,7 +1095,8 @@ def _cones(ar, geom, which, policy):
     sigma = 1 if at_lo else -1                         # away from V: increasing phi when V is the low end
     cs = _sincos_fixed(phiV, policy.trig_argument_bits)
     sm, cm = cs[0].mid, cs[1].mid
-    t = tuple(Fraction(float(sigma*(-geom.U[i]*sm + geom.V[i]*cm))) for i in range(3))
+    # A nearby binary64 direction (any t works: c_alpha below is certified for this exact t).
+    t = tuple(Fraction(_to_float(sigma*(-geom.U[i]*sm + geom.V[i]*cm), "cone_direction")) for i in range(3))
     if t == (0, 0, 0):
         return []
     t_norm_hi = ar.sqrt(_dot(t, t)).hi
@@ -1146,7 +1215,7 @@ def contract_r_max(tolerance):
     if tol <= 0:
         raise _Refusal("tolerance_not_positive")
     exact = tol/1000
-    value = float(exact)
+    value = _to_float(exact, "r_max")                  # tol is inside the window: no overflow
     if Fraction(value) > exact:
         value = math.nextafter(value, -math.inf)
     if not (value > 0 and _WINDOW_LO <= Fraction(value) <= _WINDOW_HI) or value < 2.0**-1022:
@@ -1704,14 +1773,14 @@ def _delta_eval(curve, policy):
 
 def _binary64(value):
     """A stored value that must be an exact binary64 inside the N3 window (the evaluate model)."""
-    made = _exact(value, "eval")
-    if Fraction(float(made)) != made:
+    made = _exact(value, "eval")                       # range checked before any conversion
+    if Fraction(_to_float(made, "delta_eval")) != made:
         raise _Refusal("numeric_window:delta_eval_not_binary64")
     return made
 
 
 def _float_op(x, y, op):
-    result = op(float(x), float(y))
+    result = op(_to_float(x, "delta_eval"), _to_float(y, "delta_eval"))
     if not math.isfinite(result):
         raise _Refusal("numeric_window:delta_eval")
     return Fraction(result)
@@ -1776,12 +1845,16 @@ def face_record_from_model(model, face_id):
     domain = MaterialDomain.from_model(model, face_id)
     face = model.faces[face_id]
     support = domain.support
+    def floats(values, what):
+        return tuple(_stored_float(x, what) for x in values)
     if type(support) is Plane:
-        record_support = PlaneSupport(tuple(map(float, support.origin)), tuple(map(float, support.u_vector)),
-                                      tuple(map(float, support.v_vector)))
+        record_support = PlaneSupport(floats(support.origin, "plane.origin"), floats(support.u_vector, "plane.u"),
+                                      floats(support.v_vector, "plane.v"))
     elif type(support) is Cylinder:
-        record_support = CylinderSupport(tuple(map(float, support.origin)), tuple(map(float, support.axis)),
-                                         float(support.radius), tuple(map(float, support.radial_direction)))
+        record_support = CylinderSupport(floats(support.origin, "cylinder.origin"),
+                                         floats(support.axis, "cylinder.axis"),
+                                         _stored_float(support.radius, "cylinder.radius"),
+                                         floats(support.radial_direction, "cylinder.radial"))
     else:
         record_support = support
     loops, vids = [], set()
@@ -1802,5 +1875,17 @@ def face_record_from_model(model, face_id):
             items.append(BoundaryUse(path.curve, use.edge, start, end, bool(use.forward),
                                      freeze_edge(model, use.edge)))
         loops.append(tuple(items))
-    vertices = tuple((v, tuple(map(float, model.vertex_position(v)))) for v in sorted(vids))
+    vertices = tuple((v, floats(model.vertex_position(v), f"vertex.{v}")) for v in sorted(vids))
     return FaceRecord(face_id, record_support, tuple(loops), vertices)
+
+
+def _stored_float(value, what):
+    """A model value copied into a record as the binary64 it already is; a value that is not
+    exactly a binary64 (or not a number) is a refusal instead of a silent rounding."""
+    made = _rational(value, what)
+    if isinstance(value, float):                       # float and numpy.float64: exact, keeps -0.0
+        return float(value)
+    result = _to_float(made, what)
+    if Fraction(result) != made:
+        raise _Refusal(f"record:not_binary64:{what}")
+    return result
