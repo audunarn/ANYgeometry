@@ -54,7 +54,9 @@ def pytest_collection_modifyitems(config, items):
     """CI tiers C2: the tests the duration table records as slow get ``@pytest.mark.slow`` before
     ``-m`` deselection, so ``-m slow`` and ``-m "not slow"`` partition the suite."""
     shards = _ci_shards()
-    slow = shards.slow_ids(shards.load_table())
+    table = shards.load_table()
+    slow = shards.slow_ids(table) | shards.fixture_cost_slow_ids(
+        items, table, Path(__file__).resolve().parents[1])
     for item in items:
         if item.nodeid in slow:
             item.add_marker(pytest.mark.slow)

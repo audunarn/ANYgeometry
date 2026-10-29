@@ -89,6 +89,83 @@ def test_partial_observations_preserve_baseline_and_missing_platforms(tmp_path):
     assert ci_shards.slow_ids(table, 35.) == {"changed", "failed"}
 
 
+def test_fixture_setup_classification_follows_definitions_and_preserves_execution(tmp_path):
+    import os
+    import shutil
+    import subprocess
+    project = tmp_path / 'fixture-cost'
+    (project/'tests').mkdir(parents=True)
+    (project/'tools').mkdir()
+    (project/'reports/ci').mkdir(parents=True)
+    source = Path(__file__).resolve().parent
+    shutil.copy2(source/'conftest.py', project/'tests/conftest.py')
+    shutil.copy2(TOOLS/'ci_shards.py', project/'tools/ci_shards.py')
+    (project/'pytest.ini').write_text('[pytest]\ntestpaths=tests\nmarkers=slow\n')
+    (project/'reports/ci/durations.json').write_text(json.dumps({'tests': {}, 'rest_mean': {}}))
+    (project/'reports/ci/duration-observations.json').write_text(json.dumps({
+        'tests': {}, 'setup_tests': {'tests/test_cost.py::test_known': {'windows': 80.},
+                                  'tests/test_cost.py::test_function_only': {'windows': 12.}}}))
+    (project/'tests/test_cost.py').write_text('''import pytest
+from pathlib import Path
+@pytest.fixture(scope='module')
+def data():
+    p=Path('executions.txt');p.write_text(p.read_text()+'x' if p.exists() else 'x')
+    return 1
+@pytest.fixture(scope='module')
+def indirect(data): return data
+def test_known(data): assert data==1
+@pytest.mark.parametrize('unused',(0,1))
+def test_indirect(indirect,unused): assert indirect==1
+@pytest.mark.parametrize('data',(9,))
+def test_direct_parameter(data): assert data==9
+class TestOverride:
+    @pytest.fixture(scope='class')
+    def data(self): return 2
+    def test_fast(self,data): assert data==2
+class TestParentOverride:
+    @pytest.fixture(scope='class')
+    def data(self,data): return data+1
+    def test_slow(self,data): assert data==2
+def test_unrelated(): pass
+def test_builtin(tmp_path): assert tmp_path.exists()
+def test_function_only(): pass
+''')
+    report = project/'selection.json'
+    env = dict(os.environ, PYTEST_DISABLE_PLUGIN_AUTOLOAD='1', ANYGEOMETRY_SHARD_REPORT=str(report))
+    for name in ('ANYGEOMETRY_TEST_SHARD', 'ANYGEOMETRY_ACTIVE_TEST_REPORT'):
+        env.pop(name, None)
+    command = [sys.executable, '-m', 'pytest', '-q', '-p', 'no:cacheprovider',
+        '--rootdir='+str(project), '--confcutdir='+str(project), '-c', str(project/'pytest.ini')]
+    completed = subprocess.run(command, cwd=project, env=env, capture_output=True, text=True, timeout=15)
+    assert completed.returncode == 0, completed.stdout+completed.stderr
+    row = json.loads(report.read_text())
+    assert len(row['selected']) == len(row['ran']) == 9
+    assert set(row['slow']) == {'tests/test_cost.py::test_known', 'tests/test_cost.py::test_indirect[0]',
+                               'tests/test_cost.py::test_indirect[1]',
+                               'tests/test_cost.py::TestParentOverride::test_slow',
+                               'tests/test_cost.py::test_function_only'}
+    assert (project/'executions.txt').read_text() == 'x'
+    expected_slow = set(row['slow'])
+    completed = subprocess.run(command+['-m', 'not slow'], cwd=project, env=env,
+                               capture_output=True, text=True, timeout=15)
+    assert completed.returncode == 0, completed.stdout+completed.stderr
+    row = json.loads(report.read_text())
+    expected_fast = {'tests/test_cost.py::TestOverride::test_fast',
+                     'tests/test_cost.py::test_direct_parameter[9]',
+                     'tests/test_cost.py::test_unrelated', 'tests/test_cost.py::test_builtin'}
+    assert len(row['selected']) == len(row['ran']) == 4
+    assert set(row['selected']) == set(row['ran']) == expected_fast
+    assert row['slow'] == []
+    assert (project/'executions.txt').read_text() == 'x'
+    completed = subprocess.run(command+['-m', 'slow'], cwd=project, env=env,
+                               capture_output=True, text=True, timeout=15)
+    assert completed.returncode == 0, completed.stdout+completed.stderr
+    row = json.loads(report.read_text())
+    assert len(row['selected']) == len(row['ran']) == 5
+    assert set(row['selected']) == set(row['ran']) == set(row['slow']) == expected_slow
+    assert (project/'executions.txt').read_text() == 'xx'
+
+
 def test_shards_partition_the_tests_and_balance_them():
     table = {"tests": {f"t{i}": {"windows": float(i)} for i in range(1, 31)}, "rest_mean": {"windows": .1}}
     ids = [f"t{i}" for i in range(1, 31)] + [f"u{i}" for i in range(40)]
@@ -137,6 +214,7 @@ def test_the_slow_marks_follow_the_table():
         table["tests"].get(n, {}).get("windows", 0.) >= ci_shards.SLOW_SECONDS
         or max(table.get("observations", {}).get(n, {}).values(), default=0.) >= ci_shards.SLOW_SECONDS
         or max(table.get("failed_observations", {}).get(n, {}).values(), default=0.) >= ci_shards.SLOW_SECONDS
+        or max(table.get("setup_observations", {}).get(n, {}).values(), default=0.) >= ci_shards.SLOW_SECONDS
         for n in slow)
 
 

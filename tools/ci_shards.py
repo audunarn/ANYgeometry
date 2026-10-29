@@ -37,6 +37,7 @@ def load_table(path: Path = TABLE) -> dict:
         observed = json.loads(observations.read_text(encoding="utf-8"))
         table["observations"] = observed["tests"]
         table["failed_observations"] = observed.get("partial_tests", {})
+        table["setup_observations"] = observed.get("setup_tests", {})
     return table
 
 
@@ -46,7 +47,66 @@ def slow_ids(table: dict, threshold: float = SLOW_SECONDS) -> set[str]:
                 name for name, times in table.get("observations", {}).items()
                 if max(times.values(), default=0.0) >= threshold} | {
                 name for name, times in table.get("failed_observations", {}).items()
+                if max(times.values(), default=0.0) >= threshold} | {
+                name for name, times in table.get("setup_observations", {}).items()
                 if max(times.values(), default=0.0) >= threshold}
+
+
+def fixture_cost_slow_ids(items, table: dict, root: Path) -> set[str]:
+    """Classify static consumers of observed costly shared fixture definitions.
+
+    Collection only: no fixture execution, case ordering or shard assignment.
+    FixtureDef/FuncFixtureInfo fields used here are shared by pytest 8 and 9;
+    override selection mirrors FixtureRequest's same-name ancestor indexing.
+    Dynamic request.getfixturevalue dependencies remain under the runtime guard.
+    Anchors must be in the collected item set; narrow explicit-node collections
+    may lack an anchor. Parameter variants of a shared definition are classified
+    conservatively together. Full CI and the runtime guard remain authoritative.
+    """
+    import inspect
+    root = root.resolve()
+    known = {name for name, times in table.get("setup_observations", {}).items()
+             if max(times.values(), default=0.) >= SLOW_SECONDS}
+    repo_defs = {}
+    def owned(definition):
+        if definition not in repo_defs:
+            try:
+                source = inspect.getsourcefile(definition.func)
+                repo_defs[definition] = source is not None and Path(source).resolve().is_relative_to(root)
+            except (TypeError, OSError):
+                repo_defs[definition] = False
+        return repo_defs[definition]
+    def closure(item):
+        info = getattr(item, '_fixtureinfo', None)
+        if info is None:
+            return set()
+        found = set()
+        def visit(name, chain, active):
+            definitions = info.name2fixturedefs.get(name, ())
+            index = -1 - chain.count(name)
+            if not definitions or -index > len(definitions):
+                return
+            definition = definitions[index]
+            if definition in active:
+                return  # Invalid recursion still refuses when pytest executes it.
+            callspec = getattr(item, 'callspec', None)
+            override = getattr(callspec, '_arg2scope', {}).get(name)
+            scope = getattr(override, 'value', override) or definition.scope
+            if scope in ('module', 'class', 'session') and owned(definition):
+                import pytest
+                node = (item.getparent(pytest.Module) if scope == 'module' else
+                        item.getparent(pytest.Class) if scope == 'class' else item.session)
+                # A class-scoped fixture outside a class has function lifetime.
+                if node is not None:
+                    found.add((definition, scope, node))
+            for dependency in definition.argnames:
+                visit(dependency, (*chain, name), active | {definition})
+        for name in info.initialnames:
+            visit(name, (), set())
+        return found
+    consumers = {item.nodeid: closure(item) for item in items}
+    costly = set().union(*(defs for name, defs in consumers.items() if name in known))
+    return known | {name for name, defs in consumers.items() if defs & costly}
 
 
 def duration(table: dict, name: str) -> float:
