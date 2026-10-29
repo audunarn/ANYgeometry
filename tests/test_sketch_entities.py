@@ -161,7 +161,7 @@ def test_explicit_coincidence_unifies_topology_identity():
     assert out['point/b']==out['point/c']
     assert g.edges[out['entity/e1/edge/0'].id].end==g.edges[out['entity/e2/edge/0'].id].start
 
-def test_fit_spline_missing_scipy_is_actionable_but_controls_do_not_require_it(monkeypatch):
+def test_fit_spline_and_controls_do_not_require_scipy(monkeypatch):
     import builtins
     original=builtins.__import__
     def unavailable(name,*args,**kwargs):
@@ -172,5 +172,5 @@ def test_fit_spline_missing_scipy_is_actionable_but_controls_do_not_require_it(m
         entities=(SketchEntity('curve','nurbs',('a','b','c')),))
     assert len(sample_sketch_entity(d,'curve'))>2
     fit=replace(d,entities=(replace(d.entities[0],kind='spline'),))
-    with pytest.raises(GeometryError,match=r'ANYgeometry\[sketch\]'):
-        sample_sketch_entity(fit,'curve')
+    samples=sample_sketch_entity(fit,'curve')
+    assert samples[0]==pytest.approx((0,0)) and samples[-1]==pytest.approx((2,0))
