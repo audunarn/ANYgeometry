@@ -1251,8 +1251,11 @@ def _apply_intersections_in_place(model, plan, *, policy, _edge_preimage_draft=N
                 for parent in contact.face_ids:
                     for face in sorted(ref.id for ref in model.resolve_ref(EntityRef('face',parent))
                                        if ref.id in incident):
+                        # face_local_uv inverts the face's parameterization when it has
+                        # one; face_point evaluates that same frame (for a face without
+                        # a parameterization both use its support, unchanged).
                         uv=model.face_local_uv(face,model.vertex_position(station))
-                        residual=float(np.linalg.norm(model.faces[face].surface.evaluate(*uv)
+                        residual=float(np.linalg.norm(model.face_point(face,*uv)
                                                       -model.vertex_position(station)))
                         if residual>tolerance:
                             raise GeometryError('canonical face contact exceeds its qualified tolerance')
