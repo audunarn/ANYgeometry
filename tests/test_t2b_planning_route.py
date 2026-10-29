@@ -311,7 +311,7 @@ def _tampered(certified, row):
 
 
 @pytest.mark.parametrize("row", [5, 6, 7, 8, 9, 10, 11])
-def test_matrix_malformed_route_rows_are_rejected_at_apply_and_load(plans, row):
+def test_matrix_malformed_route_rows_are_rejected_at_apply_and_load(plans, row, monkeypatch):
     model, _exact, certified = plans
     before = to_dict(model)
     for plan in _tampered(certified, row):
@@ -322,6 +322,15 @@ def test_matrix_malformed_route_rows_are_rejected_at_apply_and_load(plans, row):
             pickle.loads(pickle.dumps(plan))                  # plan load
         assert _only_this_field_is_wrong(plan, certified)
     assert to_dict(model) == before
+    # Unsound double: no route-state validation. The malformed plans whose r_max/tolerance are intact
+    # (row 8 has a second, model-side check) then APPLY in topology_certified mode.
+    monkeypatch.setattr(bi, "_route_state", lambda plan: "T" if isinstance(plan, TopologyCertifiedPlan) else "E")
+    accepted = 0
+    for plan in _tampered(certified, row):
+        if repr(plan.r_max) == repr(certified.r_max) and plan.route_tolerance == certified.route_tolerance:
+            apply_intersections(model.clone(preserve_identity=True), plan, policy=T)
+            accepted += 1
+    assert accepted or row == 8
 
 
 def test_matrix_row_8_rejects_a_wrong_contract_value_at_load_and_apply(plans):
@@ -408,7 +417,8 @@ def test_records_are_keyed_by_domain_object_not_face_id():
         sp.face_record_from_model(model, faces[1], domain=domain)
 
 
-@pytest.mark.parametrize("entry", ["plane_cylinder_support", "cylinder_cylinder_support", "qualified_plane_plane"])
+@pytest.mark.parametrize("entry", ["plane_cylinder_support", "cylinder_cylinder_support", "qualified_plane_plane",
+                                   "plane_ruled.qualify_plane_cylinder_result"])
 def test_support_stage_refusal_is_raised_in_shadow_on_certified_pairs(monkeypatch, entry):
     """D3 / section 5: support-stage refusals of the pp, cp and cc families stay reachable for
     certified pairs (the coincident cc strips reach cylinder_cylinder_support first)."""
@@ -420,7 +430,12 @@ def test_support_stage_refusal_is_raised_in_shadow_on_certified_pairs(monkeypatc
 
     def refuse(*args, **kwargs):
         raise GeometryError(f"injected {entry} refusal")
-    monkeypatch.setattr(bi, entry, refuse)
+    if "." in entry:
+        import importlib
+        module, name = entry.split(".")
+        monkeypatch.setattr(importlib.import_module("anygeometry." + module), name, refuse)
+    else:
+        monkeypatch.setattr(bi, entry, refuse)
     exact = _refusal(lambda: plan_intersections(model, faces, policy="connect"))
     assert exact and "injected" in exact
     assert _refusal(lambda: plan_intersections(model, faces, policy=T)) == exact
@@ -760,3 +775,49 @@ def test_cancellation_geometry_error_is_wrapped_exactly_as_in_exact_mode(monkeyp
                                                                         cancellation_check=cancellation))
     assert info.value.__cause__ is error
     assert str(info.value) == f"intersection batch face:{faces[0]}/face:{faces[1]}: host cancelled"
+
+
+@pytest.mark.parametrize("route", ["existing", "bounded"])
+def test_mode_agnostic_early_routes_are_selected_and_an_invalid_mode_is_refused(monkeypatch, route):
+    """Review R2/R2-new: the existing-material and bounded routes (spied: selected by their own
+    predicates) get no stored mode at plan time and an exact policy at apply time, under T, env-T,
+    exact and budget-forced exact; an invalid environment value at apply is refused first."""
+    import anygeometry.existing_material_preparation as em
+    import anygeometry.bounded_nurbs as bn
+    model, faces, _ = _l_joint()
+    seen = {"plan": [], "apply": []}
+    plain = plan_intersections(model, faces, policy="connect")
+
+    def fake_plan(model_, handles, policy):
+        seen["plan"].append(policy)
+        return plain
+    def fake_apply(model_, plan, policy):
+        seen["apply"].append(policy)
+        bi._validate_policy(plan, policy)
+        return "applied"
+    if route == "existing":
+        monkeypatch.setattr(em, "try_plan_existing", fake_plan)
+        monkeypatch.setattr(em, "is_existing_plan", lambda plan: True)
+        monkeypatch.setattr(em, "apply_existing", fake_apply)
+    else:
+        monkeypatch.setattr(em, "try_plan_existing", lambda *args: None)
+        monkeypatch.setattr(bn, "handles_bounded", lambda *args: True)
+        monkeypatch.setattr(bn, "plan_bounded", fake_plan)
+        monkeypatch.setattr(bn, "is_bounded_plan", lambda plan: True)
+        monkeypatch.setattr(bn, "apply_bounded", fake_apply)
+    policies = [T, IntersectionBatchPolicy(planning_mode="exact"),
+                IntersectionBatchPolicy(planning_mode="topology_certified", max_predicates=10**9)]
+    for policy in policies:
+        assert plan_intersections(model, faces, policy=policy) is plain
+        assert apply_intersections(model, plain, policy=policy) == "applied"
+    monkeypatch.setenv(bi.PLANNING_MODE_ENVIRONMENT, "topology_certified")
+    assert plan_intersections(model, faces, policy="connect") is plain
+    assert apply_intersections(model, plain, policy="connect") == "applied"
+    assert all(p.planning_mode is None for p in seen["plan"]) and len(seen["plan"]) == 4
+    assert all(p.planning_mode == "exact" for p in seen["apply"]) and len(seen["apply"]) == 4
+    monkeypatch.setenv(bi.PLANNING_MODE_ENVIRONMENT, "bogus")
+    with pytest.raises(GeometryError, match="ANYGEOMETRY_PLANNING_MODE"):
+        apply_intersections(model, plain, policy="connect")
+    with pytest.raises(GeometryError, match="ANYGEOMETRY_PLANNING_MODE"):
+        plan_intersections(model, faces, policy="connect")
+    assert len(seen["apply"]) == 4

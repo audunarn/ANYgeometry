@@ -1745,6 +1745,7 @@ def _apply_intersections(model, plan, *, policy):
     if not isinstance(plan, IntersectionPlan):
         raise TypeError("apply_intersections needs an IntersectionPlan")
     effective = _policy(policy)
+    resolve_planning_mode(effective)                # an invalid mode is refused on every route
     if isinstance(plan, TopologyCertifiedPlan):
         # A state-T plan is validated before any route dispatch (matrix rows 3-11).
         _validate_policy(plan, effective, model)
