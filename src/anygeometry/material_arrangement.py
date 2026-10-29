@@ -34,36 +34,47 @@ from . import nurbs_domain
 
 _EPS = float(np.finfo(float).eps)
 
-# Scale contract of the float ray route (T2-0 contract decision, 2026-10-29).
+# Domain of the T2-0 vertex-junction rule (contract decision, 2026-10-29).
 #
-# MaterialDomain.contains_loop's float route decides crossings near a curve end through parameter
-# windows: roots within 128 eps of an in-band end are snapped to it, and roots within 8 eps of an
-# end are junction roots. A window of w eps moves a crossing by up to w eps times the curve's
-# parametric speed, and float evaluation adds a few eps times the coordinates. When that reaches the
-# tolerance (scale * eps ~ tol: L = 1e8 for tol = 1e-9) a vertex can lie off the tolerance band yet
-# inside a window, and the route answered wrongly (reviews R2/R3 of T2-0, and the apex/spike limit).
-# Below the guard such an off-band window root cannot occur (it needs 8 eps * speed > tol), so the
-# route is trusted only when  scale * K * eps <= tol / M  with K = 128 (the widest window, which
-# contains the 8-eps junction windows) and M = 16 (margin): scale <= tol / (2048 eps), i.e. 2199 for
-# tol = 1e-9 (tripod coordinates of 10-60 m are 37x inside). Outside it the route does not answer:
-# a Plane loop of lines and elliptic arcs takes the exact rational route, anything else raises
-# GeometryError. ``scale`` is MaterialDomain._float_ray_scale (support origin, curve coordinates,
-# parametric speed).
+# MaterialDomain.contains_loop (and its exact replicas) count a ray crossing at a boundary vertex that
+# no start root owns (_unowned_junction_crossing). That rule is certified only in a narrow domain; in
+# every other case contains_loop is the parent rule (2608332) bit for bit, with no new refusal:
+#   (a) the loop's curves are LinePath or EllipticArc;
+#   (b) the support is a Cylinder (orthonormal frame by construction; its chart coordinates, angle and
+#       axial fraction, carry no cancellation) or a Plane whose chart [u v] has condition number
+#       sigma_max / sigma_min <= 16, i.e. |u|^2 + |v|^2 <= (16 + 1/16) |u x v|, which implies
+#       sin(u, v) >= 1/8.03 and |u| / |v| within [1/16, 16]; and the scale (support origin, curve
+#       coordinates and parametric speeds; exact bounds for lines and arcs) satisfies
+#       scale * K * eps <= tol / M with K = 128, M = 16: scale <= tol / (2048 eps), 2199 for tol = 1e-9
+#       (tripod coordinates of 10-60 m are 37x inside);
+#   (c) for the query, no curve has two roots in one 8-eps end window and no junction has roots strictly
+#       inside both its 8-eps windows (an apex/spike) (_window_roots_ambiguous).
+# Why: roots within 128 eps of an in-band end are snapped and roots within 8 eps of an end are junction
+# roots; a window of w eps moves a crossing by w eps times the parametric speed. Under (b) the widest
+# window moves it by at most tol / 16 and chart rounding (a few eps times the condition number times the
+# scale) stays below tol / 32, so a window root lies at an in-band vertex and the rule's location is
+# exact to the tolerance. Outside (b) the reviews found wrong answers of the rule (L = 1e8, a sampled
+# Bezier scale, an ill-conditioned chart); the parent rule's own limits there are kept and documented
+# (tests/test_material_domain_vertex_ray.py, KNOWN LIMITS).
 _FLOAT_RAY_BAND = 128
 _FLOAT_RAY_MARGIN = 16
+_CHART_CONDITION = 16
 
 
 def float_ray_scale_trusted(scale, tolerance) -> bool:
-    """Whether the float ray route is trusted at this geometric scale and world tolerance (fails closed on NaN)."""
+    """Whether ``scale`` is inside the junction rule's scale bound at this world tolerance (False on NaN)."""
     return float(scale) * (_FLOAT_RAY_BAND * _FLOAT_RAY_MARGIN * _EPS) <= float(tolerance)
 
 
-def _curve_float_scale(curve) -> float:
-    """Largest absolute world coordinate and parametric speed of a curve (the float ray route's scale).
+def _plane_chart_conditioned(u_vector, v_vector) -> bool:
+    """Whether the Plane chart [u v] has condition number <= _CHART_CONDITION (False on NaN)."""
+    u, v = np.asarray(u_vector, dtype=float), np.asarray(v_vector, dtype=float)
+    bound = _CHART_CONDITION + 1 / _CHART_CONDITION        # kappa + 1/kappa = (|u|^2 + |v|^2) / |u x v|
+    return float(u @ u + v @ v) <= bound * float(np.linalg.norm(np.cross(u, v)))
 
-    Exact bounds for lines and elliptic arcs; other curves by sampling coordinates and twice the
-    sampled derivative norm at five parameters (the guard's margin M covers the sampling).
-    """
+
+def _curve_float_scale(curve) -> float:
+    """Largest absolute world coordinate and parametric speed of a line or elliptic arc; inf otherwise."""
     if type(curve) is LinePath:
         start, end = [float(v) for v in curve.start], [float(v) for v in curve.end]
         return max(*map(abs, start), *map(abs, end), math.dist(start, end))
@@ -71,10 +82,7 @@ def _curve_float_scale(curve) -> float:
         radius = (math.hypot(*(float(v) for v in curve.u_vector))
                   + math.hypot(*(float(v) for v in curve.v_vector)))   # bounds |u cos + v sin| and its rate
         return max(max(abs(float(v)) for v in curve.center) + radius, abs(float(curve.sweep_angle)) * radius)
-    samples = (0., .25, .5, .75, 1.)
-    extent = max(float(np.max(np.abs(np.asarray(curve.evaluate(t), dtype=float)))) for t in samples)
-    speed = max(float(np.linalg.norm(np.asarray(curve.derivative(t), dtype=float))) for t in samples)
-    return max(extent, 2. * speed)
+    return math.inf
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,15 +129,28 @@ class MaterialDomain:
                                              compare=False, repr=False, metadata={"definition": False})
     _exact_boundary_cache: tuple | None = field(default=None, init=False, hash=False,
                                                 compare=False, repr=False, metadata={"definition": False})
-    # Instance-lifetime reuse of the float ray route's scale per boundary loop (_float_ray_scale).
+    # Instance-lifetime reuse of the junction rule's scale per boundary loop (_float_ray_scale).
     _float_scale_cache: tuple | None = field(default=None, init=False, hash=False,
                                              compare=False, repr=False, metadata={"definition": False})
+
+    def _junction_rule_applies(self, loop, tolerance) -> bool:
+        """Whether the T2-0 junction rule applies to ``loop`` (clauses (a) and (b) of its domain).
+
+        Otherwise ``contains_loop`` is the parent rule for this loop. Clause (c) is per query.
+        """
+        support = self.support
+        if isinstance(support, Plane):
+            if not _plane_chart_conditioned(support.u_vector, support.v_vector):
+                return False
+        elif type(support) is not Cylinder:
+            return False
+        return float_ray_scale_trusted(self._float_ray_scale(loop), tolerance)
 
     def _float_ray_scale(self, loop) -> float:
         """The scale of ``float_ray_scale_trusted`` for ``loop`` on this support (T2-0 contract).
 
-        Cached for this domain's own boundary loops (identity-checked like the exact caches); other
-        loops are measured on each call.
+        inf when a curve is not a LinePath or EllipticArc. Cached for this domain's own boundary loops
+        (identity-checked like the exact caches); other loops are measured on each call.
         """
         index = next((i for i, item in enumerate(self.boundaries) if item is loop), None)
         cache = self._float_scale_cache
@@ -486,7 +507,8 @@ class MaterialDomain:
         if isinstance(self.support, Plane) and any(isinstance(path.curve, PlaneNurbsCurve) for paths in self.boundaries for path in paths):
             if all(isinstance(path.curve, LinePath) for path in loop):
                 return _contains_loop_exact(self._exact_chart(), loop, tuple(map(Fraction, uv)), tolerance,
-                                            boundary=boundary, prepared=self._prepared_exact_boundary(loop))
+                                            boundary=boundary, prepared=self._prepared_exact_boundary(loop),
+                                            junctions=self._junction_rule_applies(loop, tolerance))
             from .plane_source_reference import contains_section_loop
             return contains_section_loop(self.support, loop, uv, tolerance, boundary=boundary)
         # Exact route (robust-predicate R1b): only for an exact (rational) query
@@ -496,16 +518,17 @@ class MaterialDomain:
             if self._exact_planar(self.boundaries) and self._exact_planar((loop,)):
                 return _contains_loop_exact(self._exact_chart(), loop, tuple(uv), tolerance,
                                             boundary=boundary,
-                                            prepared=self._prepared_exact_boundary(loop))
+                                            prepared=self._prepared_exact_boundary(loop),
+                                            junctions=self._junction_rule_applies(loop, tolerance))
             if self._exact_curved_planar(self.boundaries) and self._exact_curved_planar((loop,)):
                 # Lines and elliptic arcs (robust-predicate R1c, E4): certified replica.
                 from .planar_arcs import contains_loop_exact_curved
                 return contains_loop_exact_curved(self._exact_chart(), loop, tuple(uv),
-                                                  tolerance, boundary=boundary)
+                                                  tolerance, boundary=boundary,
+                                                  junctions=self._junction_rule_applies(loop, tolerance))
         if isinstance(self.support, NurbsSurface):        # exact level sets on the pcurves (A1e-lite)
             return nurbs_domain.contains_loop(self, loop, uv, tolerance, boundary=boundary)
-        if not float_ray_scale_trusted(self._float_ray_scale(loop), tolerance):
-            return self._contains_loop_beyond_float_scale(loop, uv, tolerance, boundary=boundary)
+        junctions = self._junction_rule_applies(loop, tolerance)
         winding = 0
         level = float(uv[1])
         window = 8*np.finfo(float).eps
@@ -561,30 +584,15 @@ class MaterialDomain:
                     winding += 1
                 elif after <= 0 < before:
                     winding -= 1
-        # Vertex junctions (T2-0). Every junction between a non-horizontal
-        # curve and the next one (across any horizontal run) is one event. Its
+        # Vertex junctions (T2-0), only inside the rule's domain (see _FLOAT_RAY_BAND). Every junction
+        # between a non-horizontal curve and the next one (across any horizontal run) is one event. Its
         # start root (t <= 8 eps) owns it above; without one, it is decided here.
-        for index in range(len(loop)):
-            winding += self._unowned_junction_crossing(loop, index, roots_at, uv, window)
+        if junctions and not _window_roots_ambiguous(
+                len(loop), roots_at, lambda i: sorted(set(min(1., max(0., float(t))) for t in roots_at(i)[0])),
+                window, _compare_numbers):
+            for index in range(len(loop)):
+                winding += self._unowned_junction_crossing(loop, index, roots_at, uv, window)
         return winding != 0
-
-    def _contains_loop_beyond_float_scale(self, loop, uv, tolerance, *, boundary):
-        """``contains_loop`` where the float ray route is not trusted (T2-0 scale contract).
-
-        A Plane loop of lines and elliptic arcs is decided by the exact rational route at the
-        query's exact value; any other loop is refused (GeometryError), never answered by floats.
-        """
-        if isinstance(self.support, Plane) and len(uv) == 2:
-            exact_uv = tuple(v if type(v) is Fraction else Fraction(float(v)) for v in uv)
-            if self._exact_planar((loop,)):
-                return _contains_loop_exact(self._exact_chart(), loop, exact_uv, tolerance, boundary=boundary,
-                                            prepared=self._prepared_exact_boundary(loop))
-            if self._exact_curved_planar((loop,)):
-                from .planar_arcs import contains_loop_exact_curved
-                return contains_loop_exact_curved(self._exact_chart(), loop, exact_uv, tolerance, boundary=boundary)
-        raise GeometryError(
-            f"material containment outside the float ray route's scale contract (scale "
-            f"{self._float_ray_scale(loop):.6g}, tolerance {float(tolerance):.6g}) and no exact route applies")
 
     def _unowned_junction_crossing(self, loop, index, roots_at, uv, window):
         """The crossing (+1, -1 or 0) at the junction after ``loop[index]`` that no start root owns.
@@ -612,13 +620,9 @@ class MaterialDomain:
         exact replicas, an arc end and the next curve's start can differ by
         such a gap).
 
-        Off-band end roots occur only outside the float route's scale contract
-        (``float_ray_scale_trusted``: they need 8 eps times the curve's speed
-        to exceed the tolerance), where ``contains_loop`` does not use this
-        route; the location rule above matters for the exact replicas. There,
-        when the next curve also has an off-band root within 8 eps of its
-        start (an apex/spike), both crossings would be decided together by the
-        two sides, so a query between them is refused (``_refuse_window_pair``).
+        Used only inside the rule's domain (``MaterialDomain._junction_rule_applies``
+        and ``_window_roots_ambiguous``), where off-band end roots cannot occur
+        (they need 8 eps times the curve's speed to exceed the tolerance).
         """
         roots = roots_at(index)[0]
         if roots is None:
@@ -1120,8 +1124,12 @@ def _exact_planar_cells(domain, chains, edges, edge_segments, tolerance, native_
     for chain, area, probe in cycles:
         if area >= 0:
             continue
-        containers = [i for i, (outer, _area, _probe) in enumerate(positive)
-                      if _contains_loop_exact(chart, straight_loop(outer), probe, tolerance, boundary=False)]
+        def contains(outer):
+            loop = straight_loop(outer)
+            return _contains_loop_exact(chart, loop, probe, tolerance, boundary=False,
+                                        junctions=domain._junction_rule_applies(loop, tolerance))
+
+        containers = [i for i, (outer, _area, _probe) in enumerate(positive) if contains(outer)]
         if not containers:
             raise GeometryError("arrangement hole has no material owner")
         owner = min(containers, key=lambda i: positive[i][1])
@@ -2252,18 +2260,31 @@ def _junction_on_ray(count, index, roots_at):
     return 0 in roots_at(following)[1] or following != (index + 1) % count
 
 
-def _refuse_window_pair():
-    """Refuse an apex/spike query of the exact replicas (T2-0 contract).
+def _compare_numbers(a, b) -> int:
+    return int(a > b) - int(a < b)
 
-    A curve's root within 8 eps of its end and the next curve's root within 8 eps of its start,
-    both strictly inside their curves (a root snapped or clamped to the vertex is not a second
-    crossing), are two crossings the ray rule decides together through the two
-    branch sides (no net crossing); a query between them would be classified as if the tip were cut
-    off at the ray. Reachable only outside the float route's scale contract (both roots would
-    otherwise snap to the vertex), so this refusal leaves trusted-scale results unchanged.
+
+def _window_roots_ambiguous(count, roots_at, parameters, window, compare) -> bool:
+    """Clause (c) of the junction rule's domain: whether this query's roots leave it.
+
+    True when a curve has two roots within 8 eps of the same end, or a curve's root strictly inside its
+    end window (``1 - 8 eps <= t < 1``) meets the following non-horizontal curve's root strictly inside
+    its start window (``0 < t <= 8 eps``): two crossings at one junction (an apex/spike). The parent
+    rule then decides the query. ``parameters(i)`` are curve ``i``'s roots clamped to [0, 1] and
+    deduplicated; ``compare(a, b)`` is their sign comparison. Shared by the float and both exact routes.
     """
-    raise GeometryError("material containment: two ray crossings within the 8-eps windows of one "
-                        "junction (apex/spike) bracket the query")
+    for index in range(count):
+        if roots_at(index)[0] is None:
+            continue
+        ts = parameters(index)
+        ends = [t for t in ts if compare(t, 1 - window) >= 0]
+        if sum(compare(t, window) <= 0 for t in ts) > 1 or len(ends) > 1:
+            return True
+        if any(compare(t, 1) < 0 for t in ends) and any(
+                compare(t, 0) > 0 and compare(t, window) <= 0
+                for t in parameters(_following_index(count, index, roots_at))):
+            return True
+    return False
 
 
 def _exact_horizontal_roots(chart, curve, level, tolerance, *, prepared=None, ends=False):
@@ -2337,13 +2358,14 @@ def _exact_point_on_segment(curve, world, tolerance) -> bool:
     return sum((a - b) ** 2 for a, b in zip(point, world)) <= tol2
 
 
-def _contains_loop_exact(chart, loop, uv, tolerance, *, boundary=True, prepared=None):
+def _contains_loop_exact(chart, loop, uv, tolerance, *, boundary=True, prepared=None, junctions=False):
     """Exact replica of ``MaterialDomain.contains_loop`` for straight loops on a Plane.
 
     The same rules as the float route (horizontal-ray roots, the world-distance
     boundary test at each crossing, horizontal edges by point membership, the
     8-eps endpoint windows and the half-open parity bookkeeping), evaluated in
     exact rational arithmetic on the stored doubles (robust-predicate R1b).
+    ``junctions``: the T2-0 junction rule applies (``MaterialDomain._junction_rule_applies``).
     """
     u_query, v_query = uv
     tol2 = Fraction(tolerance) ** 2
@@ -2426,21 +2448,17 @@ def _contains_loop_exact(chart, loop, uv, tolerance, *, boundary=True, prepared=
                 winding += 1
             elif after <= 0 < before:
                 winding -= 1
-    # Vertex junctions no start root owns (T2-0; MaterialDomain._unowned_junction_crossing).
+    # Vertex junctions no start root owns (T2-0; MaterialDomain._unowned_junction_crossing), only
+    # inside the rule's domain.
+    if not junctions or _window_roots_ambiguous(count, roots_at, lambda i: sorted(set(roots_at(i)[0])),
+                                                window, _compare_numbers):
+        return winding != 0
     for index in range(count):
         roots = roots_at(index)[0]
         if roots is None:
             continue
         following = _following_index(count, index, roots_at)
         following_roots = roots_at(following)[0]
-        # T2-0 contract: two crossings within the windows of this junction bracketing the query.
-        end_root = max((t for t in roots if 1 - window <= t < 1), default=None)
-        start_root = min((t for t in following_roots if 0 < t <= window), default=None)
-        if end_root is not None and start_root is not None:
-            u_end = station_uv(loop[index].curve, end_root)[0]
-            u_start = station_uv(loop[following].curve, start_root)[0]
-            if min(u_end, u_start) <= u_query <= max(u_end, u_start):
-                _refuse_window_pair()
         first = min(following_roots, default=Fraction(1))
         if first <= window:
             continue

@@ -368,10 +368,14 @@ def arc_point_rule(curve: EllipticArc, point, tolerance: float) -> bool:
 # ----------------------------------------------------------------------------------- containment
 
 
-def contains_loop_exact_curved(chart, loop, uv, tolerance: float, *, boundary: bool = True) -> bool:
-    """Exact replica of ``MaterialDomain.contains_loop`` for loops of lines and elliptic arcs on a Plane."""
+def contains_loop_exact_curved(chart, loop, uv, tolerance: float, *, boundary: bool = True,
+                               junctions: bool = False) -> bool:
+    """Exact replica of ``MaterialDomain.contains_loop`` for loops of lines and elliptic arcs on a Plane.
+
+    ``junctions``: the T2-0 junction rule applies (``MaterialDomain._junction_rule_applies``).
+    """
     from .material_arrangement import (_exact_horizontal_roots, _exact_point_on_segment, _following_index,
-                                       _junction_on_ray, _refuse_window_pair)
+                                       _junction_on_ray, _window_roots_ambiguous)
 
     u_query, v_query = uv
     tol2 = Fraction(tolerance) ** 2
@@ -461,7 +465,11 @@ def contains_loop_exact_curved(chart, loop, uv, tolerance: float, *, boundary: b
                 winding += 1
             elif after_sign <= 0 < before_sign:
                 winding -= 1
-    # main (T2-0): a vertex junction no start root owns (MaterialDomain._unowned_junction_crossing).
+    # main (T2-0): a vertex junction no start root owns (MaterialDomain._unowned_junction_crossing), only
+    # inside the rule's domain.
+    if not junctions or _window_roots_ambiguous(
+            count, roots_at, lambda i: [r.t for r in ordered(loop[i].curve, roots_at(i)[0])], window, compare):
+        return winding != 0
     one, zero = Num(Fraction(1)), Num(Fraction(0))
     for index in range(count):
         roots = roots_at(index)[0]
@@ -473,16 +481,6 @@ def contains_loop_exact_curved(chart, loop, uv, tolerance: float, *, boundary: b
         first = following_roots[0].t if following_roots else one
         curve = loop[index].curve
         end_roots = [r for r in ordered(curve, roots) if compare(r.t, 1 - window) >= 0]
-        # main (T2-0 contract): two crossings within the windows of this junction bracketing the query.
-        if end_roots and following_roots and compare(first, window) <= 0:
-            end_root, start_root = end_roots[-1], following_roots[0]
-            # Both strictly inside their curves: a root snapped or clamped to an end is no second crossing.
-            if compare(end_root.t, one) < 0 and compare(start_root.t, zero) > 0:
-                u_end = station_uv(curve, end_root)[0]
-                u_start = station_uv(following_curve, start_root)[0]
-                low, high = (u_end, u_start) if compare(u_end, u_start) <= 0 else (u_start, u_end)
-                if compare(low, u_query) <= 0 and compare(u_query, high) <= 0:
-                    _refuse_window_pair()
         if following_roots and compare(first, window) <= 0:
             continue
         on_ray = _junction_on_ray(count, index, roots_at)
