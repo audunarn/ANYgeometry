@@ -2176,6 +2176,33 @@ def _chart_segments_clear(first, second, shared) -> bool:
 #: the excuse and now refuses with the original conservation error; the 121-face 1082 subset never used it).
 
 
+#: Float shortcuts of the snap-fallback validators (CAP-1 R5 class rule, after Codex R4 found a subnormal
+#: discriminant). A float quantity may let a validator skip work, or feed an acceptance decision, only where its
+#: error is proven smaller than the margin it is compared with; wherever that cannot be guaranteed the shortcut
+#: is declined and the exact/certified test decides (or the fallback refuses with the original error):
+#: - a square root is enclosed by exact rational squaring of a float proposal made on an exactly normalised value
+#:   (``_root_angle_enclosures``): the enclosure holds whatever the conversion and rounding errors were;
+#: - float angles feed the turn skip only within ``|angle| <= _FLOAT_ANGLE_WINDOW`` rad (errors < 1e-12 there,
+#:   against the 1e-9 margin);
+#: - the world-box prefilter skips pairs only when every float in it is finite and its error bound is within the
+#:   tolerance each box is widened by (``_snapped_edges_clear``);
+#: - a rational converted to a float for a decision must convert faithfully (``_float_faithful``: zero or a
+#:   normal double, relative error <= 2**-53); a conversion that overflows (``OverflowError``) refuses;
+#: - the final conservation comparison is written so that NaN fails it.
+_FLOAT_ANGLE_WINDOW = 1024
+#: Error factor of the world-box prefilter (in units of eps * magnitude / sin(chart angle)); see
+#: ``_snapped_edges_clear``. The analysed bound is below 64; 256 leaves slack.
+_PREFILTER_ERROR_FACTOR = 256
+_FLOAT_NORMAL_MIN = Fraction(2) ** -1022
+_FLOAT_MAX = Fraction(np.finfo(float).max)
+
+
+def _float_faithful(value: Fraction) -> bool:
+    """``float(value)`` is finite with relative error <= 2**-53: ``value`` is zero or in the normal double range."""
+    magnitude = abs(value)
+    return magnitude == 0 or _FLOAT_NORMAL_MIN <= magnitude <= _FLOAT_MAX
+
+
 def _chart_segment_arc_clear(chart, segment, arc, shared, radius2, check=None) -> bool:
     """Certified: the chart image of the straight ``segment`` meets the arc's chart image only within
     ``sqrt(radius2)`` (world) of a shared vertex. ``shared`` lists the segment's exact end point at every
@@ -2215,7 +2242,11 @@ def _chart_segment_arc_clear(chart, segment, arc, shared, radius2, check=None) -
     lower, upper = min(start, end), max(start, end)
     turns = _turn_range(lower, upper, Fraction(0))
     angles = first_harmonic_angles(c0, c1, c2)
-    enclosures = _root_angle_enclosures(c0, c1, c2, len(angles))
+    # Float turn skip only inside the angle window (see _FLOAT_ANGLE_WINDOW): there |turn| < 170, and float(lower),
+    # float(upper) (exact: stored doubles), 2 pi turn in float (|math.pi - pi| 2 |turn| + one rounding) and the
+    # two float sums err by less than 1e-12 rad in all, far inside the 1e-9 margin.
+    enclosures = (_root_angle_enclosures(c0, c1, c2, len(angles))
+                  if max(abs(lower), abs(upper)) <= _FLOAT_ANGLE_WINDOW else None)
     lower_f, upper_f = float(lower), float(upper)
     for number, angle in enumerate(angles):
         for turn in turns:
@@ -2247,21 +2278,30 @@ def _root_angle_enclosures(c0, c1, c2, count):
     ``planar_arcs.first_harmonic_angles`` order, or None (then every root is decided by certified comparisons).
 
     The roots are ``2 atan(x)`` with ``x = (-b +- sqrt(D)) / (2 a)`` (``a = c0 - c1``, ``b = 2 c2``,
-    ``c = c0 + c1``, ``D = b^2 - 4 a c``). ``sqrt(D)`` is enclosed by its float value widened by a relative
-    1e-12, ``x`` by exact rational arithmetic on that enclosure (monotone in ``sqrt(D)``), and ``atan`` is
-    1-Lipschitz, so the float conversion and ``atan`` rounding (a few 1e-16) stay far inside the widening.
+    ``c = c0 + c1``, ``D = b^2 - 4 a c``). ``sqrt(D)`` is enclosed in ``[lo, hi]``, its float proposal widened by
+    a relative 1e-12, and the enclosure is used only when exact rational squaring certifies
+    ``lo^2 <= D <= hi^2`` (no float error is assumed; REVIEW-CAP1-R4: ``float(D)`` of a subnormal ``D`` lost
+    all relative precision). The proposal is made on ``D / 4^k`` in ``(1/2, 4)`` (exact), so it is a normal
+    double at every scale and, wherever ``float(D)`` is normal, bit-identical to ``sqrt(float(D))``. ``x`` is
+    enclosed by exact rational arithmetic on ``[lo, hi]`` (monotone in ``sqrt(D)``); ``float(x)`` errs by at most
+    ``2^-53 |x| + 2^-1075`` and ``atan`` is 1-Lipschitz, so with ``atan``'s rounding (a few 1e-16) this stays far
+    inside the 1e-12 widening; an ``x`` beyond the double range declines (None).
     """
     a, b, c = c0 - c1, 2 * c2, c0 + c1
     discriminant = b * b - 4 * a * c
     if a == 0 or discriminant <= 0 or count != 2:
         return None
-    root = math.sqrt(float(discriminant))
-    if not math.isfinite(root) or root == 0:
-        return None
-    lo_root, hi_root = Fraction(root) * (1 - Fraction(1, 10 ** 12)), Fraction(root) * (1 + Fraction(1, 10 ** 12))
+    k = (discriminant.numerator.bit_length() - discriminant.denominator.bit_length()) // 2
+    power = Fraction(2) ** k
+    root = Fraction(math.sqrt(float(discriminant / (power * power)))) * power
+    lo_root, hi_root = root * (1 - Fraction(1, 10 ** 12)), root * (1 + Fraction(1, 10 ** 12))
+    if not lo_root * lo_root <= discriminant <= hi_root * hi_root:
+        return None                                              # the proposal is not certified
     result = []
     for sign in (1, -1):
         ends = sorted(((-b + sign * value) / (2 * a)) for value in (lo_root, hi_root))
+        if not all(abs(end) <= _FLOAT_MAX for end in ends):
+            return None
         result.append((2 * math.atan(float(ends[0])) - 1e-12, 2 * math.atan(float(ends[1])) + 1e-12))
     return result
 
@@ -2273,28 +2313,54 @@ def _snapped_edges_clear(chart, edges, segments, endpoints_by_edge, moved, toler
     test (``_chart_segment_arc_clear``: only intersections within twice the residual closure bound of a
     shared vertex are excused; no touch excuse); any other curved partner refuses. Pairs whose
     world boxes, each widened by its height bound above the support plane plus tol, are separated cannot
-    meet in the chart and are skipped. ``check`` (cancellation) is polled for every pair and root.
+    meet in the chart and are skipped, provided the float prefilter is trustworthy: every float in it is finite
+    and its error bound ``_PREFILTER_ERROR_FACTOR * eps * M / sin(u, v)`` is within ``tol`` (``M`` the largest
+    magnitude among the origin, the boxes, the heights and each arc's ``(|C| + |U| + |V|) (2 + |end angles|)``;
+    ``sin(u, v)`` the chart basis angle). The bound covers the arc boxes' float evaluation (``bounds`` widens
+    by 16 eps (|C| + |U| + |V|); its angles err by eps |angle|), the float normal (error ~4 eps / sin(u, v)) times
+    the lever ``|X - O| <= 2 M``, and the float sums of the expansion and comparison; segment boxes are outward
+    by construction. Each box carries ``tol`` of margin, two per pair against the errors of two. Otherwise
+    (overflow, nan from a degenerate float normal, huge coordinates against a small tol) no pair is skipped.
+    ``check`` (cancellation) is polled for every pair and root.
     """
     count = len(edges)
     lo, hi, height = np.empty((count, 3)), np.empty((count, 3)), np.empty(count)
-    origin = np.asarray(stations.rounded(chart.origin))
-    normal = np.cross(np.asarray(stations.rounded(chart.u_vector)), np.asarray(stations.rounded(chart.v_vector)))
-    normal = normal / np.linalg.norm(normal)
-    for index, path in enumerate(edges):
-        if index in segments:
-            lo[index], hi[index] = segments[index].lo, segments[index].hi
-            height[index] = max(abs(float(normal @ (np.asarray(stations.rounded(point)) - origin)))
-                                for point in segments[index])
-        else:
-            lo[index], hi[index] = path.curve.bounds()
-            curve = path.curve
-            height[index] = (abs(float(normal @ (np.asarray(curve.center, dtype=float) - origin)))
-                             + abs(float(normal @ np.asarray(curve.u_vector, dtype=float)))
-                             + abs(float(normal @ np.asarray(curve.v_vector, dtype=float)))
-                             if type(curve) is EllipticArc else math.inf)
-    # Chart images meet only where the world points are within both edges' heights above the support.
-    expand = (height + tolerance)[:, None]
-    lo, hi = lo - expand, hi + expand
+    extent, unbounded = np.zeros(count), np.zeros(count, dtype=bool)   # unbounded: no height bound (never skipped)
+    with np.errstate(all="ignore"):                    # overflow / nan are detected below, not warned about
+        origin = np.asarray(stations.rounded(chart.origin))
+        u_float, v_float = np.asarray(stations.rounded(chart.u_vector)), np.asarray(stations.rounded(chart.v_vector))
+        normal = np.cross(u_float, v_float)
+        sine = np.linalg.norm(normal) / (np.linalg.norm(u_float) * np.linalg.norm(v_float))
+        normal = normal / np.linalg.norm(normal)
+        for index, path in enumerate(edges):
+            if index in segments:
+                lo[index], hi[index] = segments[index].lo, segments[index].hi
+                height[index] = max(abs(float(normal @ (np.asarray(stations.rounded(point)) - origin)))
+                                    for point in segments[index])
+            else:
+                lo[index], hi[index] = path.curve.bounds()
+                curve = path.curve
+                height[index] = (abs(float(normal @ (np.asarray(curve.center, dtype=float) - origin)))
+                                 + abs(float(normal @ np.asarray(curve.u_vector, dtype=float)))
+                                 + abs(float(normal @ np.asarray(curve.v_vector, dtype=float)))
+                                 if type(curve) is EllipticArc else math.inf)
+                if type(curve) is EllipticArc:
+                    extent[index] = (float(np.max(np.abs(curve.center) + np.abs(curve.u_vector)
+                                                  + np.abs(curve.v_vector)))
+                                     * (2 + max(abs(curve.start_angle), abs(curve.start_angle + curve.sweep_angle))))
+                else:
+                    unbounded[index] = True
+        # Chart images meet only where the world points are within both edges' heights above the support.
+        expand = (height + tolerance)[:, None]
+        bounded = ~unbounded
+        magnitude = max(float(np.max(np.abs(origin))), float(np.max(np.abs(lo[bounded]), initial=0.)),
+                        float(np.max(np.abs(hi[bounded]), initial=0.)), float(np.max(height[bounded], initial=0.)),
+                        float(np.max(extent, initial=0.)))
+        trusted = bool(np.isfinite(sine) and sine > 0 and np.all(np.isfinite(normal)) and math.isfinite(magnitude)
+                       and np.all(np.isfinite(lo[bounded])) and np.all(np.isfinite(hi[bounded]))
+                       and np.all(np.isfinite(height[bounded]))
+                       and _PREFILTER_ERROR_FACTOR * np.finfo(float).eps * magnitude / sine <= tolerance)
+        lo, hi = lo - expand, hi + expand
     radius2 = (2 * Fraction(tolerance) * _SNAP_RESIDUAL_GAP) ** 2
     uv = {}
 
@@ -2303,7 +2369,8 @@ def _snapped_edges_clear(chart, edges, segments, endpoints_by_edge, moved, toler
             uv[index] = tuple(chart.uv(point) for point in segments[index])
         return uv[index]
     for index in sorted(moved):
-        near = np.flatnonzero(np.all(lo <= hi[index], axis=1) & np.all(hi >= lo[index], axis=1))
+        near = (np.flatnonzero(np.all(lo <= hi[index], axis=1) & np.all(hi >= lo[index], axis=1)) if trusted
+                else range(count))
         for other in near:
             if check is not None:
                 check()
@@ -2381,6 +2448,11 @@ def _snap_fallback(domain, vertices, lookup, edges, edge_segments, endpoints_by_
                 new_entries = list(entries)
                 for index in sorted(moved):
                     check()
+                    # The float order at a vertex with a curved edge uses atan2 of this direction's floats: they
+                    # must convert faithfully (see _FLOAT_ANGLE_WINDOW's comment), else refuse.
+                    direction = chart_exact.uv_direction(tuple(b - a for a, b in zip(*new_segments[index])))
+                    if not all(_float_faithful(value) for value in direction):
+                        raise GeometryError("snapped edge direction is outside the float range")
                     new_entries[index] = _outgoing_entries(domain, chart_exact, new_segments, index, new_edges[index])
                 touched = {vertex_id: [] for index in sorted(moved) for vertex_id in endpoints_by_edge[index]}
                 for (start, end), (first_entry, second_entry) in zip(endpoints_by_edge, new_entries):
@@ -2421,9 +2493,10 @@ def _snap_fallback(domain, vertices, lookup, edges, edge_segments, endpoints_by_
                     check()
                     cells, retained, _outer, _original = _float_material_cells(domain, cycles, tolerance,
                                                                                native_area_tolerance, areas)
+                    # The unchanged conservation inequality and tolerance, written so that NaN fails it.
                     accepted = (cells == first_cells and bool(cells)
-                                and not abs(original-retained) > native_area_tolerance)
-    except GeometryError:
+                                and abs(original-retained) <= native_area_tolerance)
+    except (GeometryError, OverflowError):            # OverflowError: a rational beyond the double range
         if cancelled:
             raise
         accepted = False

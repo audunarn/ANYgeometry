@@ -473,3 +473,264 @@ def test_cancellation_during_the_final_successful_stage_is_the_cancel_error(monk
     with collect_runtime_diagnostics() as counters:
         _arrange(cancellation_check=cancel)
     assert state["calls"] == 2 and counters["arrangement_snap_fallbacks"] == 1
+
+
+# ----------------------------------------------------------------------- R4: float range of the fallback's shortcuts
+# REVIEW-CAP1-R4 P2 and its class: a float quantity may let a validator skip work only where its error is bounded by
+# the margin it is compared with. An independent oracle decides line/arc contacts at 100 digits (decimal).
+
+from decimal import Decimal, localcontext
+
+_DIGITS = 100
+_PI_CACHE = []
+
+
+def _dec(value):
+    value = Fraction(value)
+    return Decimal(value.numerator) / Decimal(value.denominator)
+
+
+def _hp_pi():
+    if not _PI_CACHE:
+        def atan_inverse(n):
+            x = Decimal(1) / n
+            term, total, k = x, x, 1
+            while True:
+                term, k = -term * x * x, k + 2
+                if abs(term / k) < Decimal(10) ** -(_DIGITS + 15):
+                    return total
+                total += term / k
+        _PI_CACHE.append(16 * atan_inverse(5) - 4 * atan_inverse(239))
+    return _PI_CACHE[0]
+
+
+def _hp_cos_sin(angle):
+    """``(cos, sin)`` of an exact angle to ~100 digits (call inside a raised-precision context)."""
+    pi = _hp_pi()
+    x = _dec(angle)
+    x -= (x / (2 * pi)).to_integral_value() * 2 * pi
+    cos, sin, term, k = Decimal(0), Decimal(0), Decimal(1), 0
+    while k < 3 or abs(term) > Decimal(10) ** -(_DIGITS + 15):
+        if k % 4 == 0:
+            cos += term
+        elif k % 4 == 1:
+            sin += term
+        elif k % 4 == 2:
+            cos -= term
+        else:
+            sin -= term
+        k += 1
+        term = term * x / k
+    return cos, sin
+
+
+def _oracle_horizontal(su, sv, start, sweep, y, xa, xb):
+    """Does the segment ``y = Y, x in [xa, xb]`` meet the arc of ``(su cos t, sv sin t)`` (``|sweep| < pi``,
+    end angle as ``_end_angle`` evaluates it)? None when a deciding quantity is within 1e-60 of zero."""
+    tiny = Decimal(10) ** -60
+    with localcontext() as context:
+        context.prec = _DIGITS + 20
+        t = _dec(y) / _dec(sv)
+        if abs(abs(t) - 1) < tiny:
+            return None
+        if abs(t) > 1:
+            return False
+        c = (1 - t * t).sqrt()
+        e0, e1 = _hp_cos_sin(Fraction(start)), _hp_cos_sin(Fraction(float(start) + float(sweep)))
+        if sweep < 0:
+            e0, e1 = e1, e0
+        lo, hi = sorted((_dec(xa), _dec(xb)))
+        hit = False
+        for px in (c, -c):
+            x = _dec(su) * px
+            values = (e0[0] * t - e0[1] * px, px * e1[1] - t * e1[0], (x - lo) / _dec(su), (hi - x) / _dec(su))
+            if any(abs(value) < tiny for value in values):
+                return None
+            hit = hit or all(value > 0 for value in values)
+        return hit
+
+
+def _clear_or_refused(chart, segment, curve, tol=1e-9):
+    """``_snapped_edges_clear`` of a moved segment and a non-incident arc; a GeometryError is a refusal (False)."""
+    edges = [ArrangementPath(ma.stations.to_line(segment)), ArrangementPath(curve)]
+    try:
+        return ma._snapped_edges_clear(chart, edges, {0: segment}, [(0, 1), (2, 3)], {0}, tol)
+    except GeometryError:
+        return False
+
+
+def test_review_r4_subnormal_discriminant_crossing_refuses():
+    # REVIEW-CAP1-R4 P2, Codex's repro: minor axis v = 2e-162, segment at y = v/2 crosses the arc at pi/6,
+    # interior to both, no shared vertex. float(D) was the subnormal 5e-324; the "enclosures" -0.438 and 2.677
+    # excluded the root 0.5236, so every turn was skipped and the pair passed (True).
+    v = 2e-162
+    curve = EllipticArc((0, 0, 0), (1, 0, 0), (0, v, 0), math.pi / 6 - .01, .02)
+    segment = ma.stations.Segment((Fraction(.5), Fraction(v / 2), Fraction(0)), (Fraction(1), Fraction(v / 2), Fraction(0)),
+                                  derived=True)
+    assert _oracle_horizontal(1, v, curve.start_angle, curve.sweep_angle, Fraction(v / 2), Fraction(.5), Fraction(1))
+    assert _clear_or_refused(_r3_chart(), segment, curve) is False
+
+
+def test_review_r4_scaled_chart_crossing_refuses():
+    # REVIEW-CAP1-R4 P2, second repro: a unit circle on a Plane whose basis vectors are scaled by 3e80 (the chart
+    # coefficients scale by 1/(3e80)^2, D underflows to a subnormal).
+    curve = EllipticArc((0, 0, 0), (1, 0, 0), (0, 1, 0), math.pi / 6 - .01, .02)
+    segment = ma.stations.Segment(_station(Fraction(.5), Fraction(.5)), _station(1, Fraction(.5)), derived=True)
+    for scale in (3e80, 1e100, 1e150):
+        chart = ma.ExactPlane.from_plane(Plane((0, 0, 0), (scale, 0, 0), (0, scale, 0)))
+        assert _clear_or_refused(chart, segment, curve) is False
+
+
+def test_root_angle_enclosures_contain_the_roots_at_every_scale():
+    # The roots of c0 + c1 cos + c2 sin do not depend on a common scale of the coefficients. At scale 1 the float
+    # route is exact to ~1e-16; at every scale the enclosure must contain those roots (or be None). Before the
+    # fix: wrong enclosures below ~1e-154 (subnormal float(D)) and an OverflowError above ~1e154.
+    base = (Fraction(1, 3), Fraction(-1, 2), Fraction(2, 7))
+    reference = ma._root_angle_enclosures(*base, 2)
+    centres = [(lo + hi) / 2 for lo, hi in reference]
+    scales = [Fraction(2) ** k for k in range(-1400, 1400, 37)] + [Fraction(10) ** k for k in range(-420, 420, 23)]
+    for scale in scales:
+        enclosures = ma._root_angle_enclosures(*(c * scale for c in base), 2)
+        assert enclosures is not None                                  # normalised: the shortcut works at any scale
+        for (lo, hi), centre in zip(enclosures, centres):
+            assert lo < centre < hi and hi - lo < 1e-9
+
+
+def test_float_angle_shortcut_declines_on_huge_angles():
+    # 2 pi turn and the angle sums in float carry absolute errors of ~1e-7 rad at angles ~1e9 (1e-2 at 1e15),
+    # beyond the 1e-9 skip margin: the turn holding a crossing just inside the sweep was skipped (each of these
+    # starts returned True before the fix, at the start side; 1.1644e15 also at the end side).
+    chart = _r3_chart()
+    for start in (1164400000.0, 1013700000000.0, 1027400000000000.1, 1164400000000000.0):
+        curve = EllipticArc((0, 0, 0), (1, 0, 0), (0, 1, 0), start, .5)
+        ends = (Fraction(start), Fraction(float(start) + .5))
+        for delta in (Fraction(3, 10 ** 9), Fraction(3, 10 ** 8), Fraction(1, 10 ** 5), Fraction(1, 10 ** 3)):
+            for angle in (ends[0] + delta, ends[1] - delta):
+                with localcontext() as context:
+                    context.prec = _DIGITS + 20
+                    cos, _sin = _hp_cos_sin(angle)
+                x = Fraction(cos)
+                segment = ma.stations.Segment(_station(x, -2), _station(x, 2), derived=True)
+                assert _clear_or_refused(chart, segment, curve) is False, (start, delta)
+
+
+def test_box_prefilter_is_not_trusted_outside_its_float_range():
+    # The float support normal of a chart with basis vectors ~1e155 overflows (inf / inf = nan): every height
+    # was nan and the box prefilter skipped every pair, so two crossing segments passed (True).
+    a = ma.stations.Segment(_station(0, 0), _station(1, 1), derived=True)
+    b = ma.stations.Segment(_station(0, 1), _station(1, 0), derived=True)
+    c = ma.stations.Segment(_station(0, 2), _station(1, 2), derived=True)
+    for scale in (1e155, 1e200):
+        chart = ma.ExactPlane.from_plane(Plane((0, 0, 0), (scale, 0, 0), (0, scale, 0)))
+        for other, clear in ((b, False), (c, True)):
+            edges = [ArrangementPath(ma.stations.to_line(x)) for x in (a, other)]
+            assert ma._snapped_edges_clear(chart, edges, {0: a, 1: other}, [(0, 1), (2, 3)], {0}, 1e-9) is clear
+
+
+def _scale_sweep(count, seed):
+    """Random arcs and horizontal segments at axis scales 1e-200..1e200 (and chart scales 1e-90..1e90), segment
+    ends and root angles placed around the roots and the sweep ends. In half the cases ``sv`` is chosen so that
+    ``sqrt(D) ~ 2 su sv |m1 + m2| / (s1 s2)`` lies where ``float(D)`` keeps only a few bits (D < ~1e-319) or
+    overflows.
+    Yields (chart, segment, curve, truth)."""
+    rng = np.random.default_rng(seed)
+    produced = 0
+    while produced < count:
+        s1, s2 = (1., 1.) if rng.integers(2) else (10.0 ** rng.uniform(-90, 90), 10.0 ** rng.uniform(-90, 90))
+        if s1 * s2 <= 1e-13:
+            continue
+        m1, m2 = (rng.choice((-1, 1)) * 10.0 ** rng.uniform(-14, 0) for _ in range(2))
+        su, sv = 10.0 ** rng.uniform(-200, 200), 10.0 ** rng.uniform(-200, 200)
+        if rng.integers(2) and m1 + m2 != 0:
+            target = rng.uniform(-163, -159.5) if rng.integers(2) else rng.uniform(154.5, 160)
+            exponent = target + math.log10(s1 * s2) - math.log10(su * abs(m1 + m2))
+            if not -200 <= exponent <= 200:
+                continue
+            sv = 10.0 ** exponent
+        if not 1e-290 < su * sv < 1e290:
+            continue
+        start, sweep = rng.uniform(-math.pi, math.pi), rng.choice((-1, 1)) * rng.uniform(.01, 3.)
+        where = rng.integers(3)
+        if where == 0:
+            fraction = rng.uniform(-.2, 1.2)
+        else:
+            fraction = (0. if where == 1 else 1.) + rng.choice((-1, 1)) * 10.0 ** rng.uniform(-13, -2)
+        theta = start + sweep * fraction
+        y = sv * math.sin(theta)
+        x0 = su * math.cos(theta)
+        xa, xb = x0 - su * m1, x0 + su * m2
+        if xa == xb or not all(map(math.isfinite, (y, xa, xb))):
+            continue
+        chart = _r3_chart() if s1 == s2 == 1. else ma.ExactPlane.from_plane(Plane((0, 0, 0), (s1, 0, 0), (0, s2, 0)))
+        try:
+            curve = EllipticArc((0, 0, 0), (su, 0, 0), (0, sv, 0), start, sweep)
+        except GeometryError:                                          # basis cross product under/overflows
+            continue
+        truth = _oracle_horizontal(su, sv, start, sweep, Fraction(y), Fraction(xa), Fraction(xb))
+        if truth is None:
+            continue
+        segment = ma.stations.Segment(_station(Fraction(xa), Fraction(y)), _station(Fraction(xb), Fraction(y)),
+                                      derived=True)
+        produced += 1
+        yield chart, segment, curve, truth
+
+
+def test_scale_sweep_has_no_false_accepts():
+    crossings = false_accepts = clear_accepted = 0
+    for chart, segment, curve, truth in _scale_sweep(400, 20261029):
+        result = _clear_or_refused(chart, segment, curve)
+        crossings += truth
+        false_accepts += truth and result
+        clear_accepted += (not truth) and result
+    assert false_accepts == 0
+    # Before the fix this seed gave 5 false accepts and 55 OverflowErrors (OverflowError aborts the loop).
+    assert crossings >= 100 and clear_accepted >= 100                 # the sweep exercises both outcomes
+
+
+def test_fallback_refuses_a_nan_area_balance(monkeypatch):
+    # A non-finite area (overflow) must fail the conservation comparison: ``not abs(x) > tol`` accepted NaN.
+    real = ma._float_material_cells
+    state = {"calls": 0}
+
+    def wrapped(*args, **kwargs):
+        cells, retained, outer, original = real(*args, **kwargs)
+        state["calls"] += 1
+        return cells, (math.nan if state["calls"] == 2 else retained), outer, original
+    monkeypatch.setattr(ma, "_float_material_cells", wrapped)
+    with collect_runtime_diagnostics() as counters:
+        with pytest.raises(GeometryError) as caught:
+            _arrange()
+    assert str(caught.value) == CONSERVATION and state["calls"] == 2
+    assert counters["arrangement_snap_fallback_refusals"] == 1
+
+
+def test_fallback_float_overflow_refuses_with_the_original_error(monkeypatch):
+    # A rational-to-float conversion that overflows (OverflowError) inside the fallback refuses; it used to
+    # escape as an OverflowError instead of the original conservation error.
+    def overflowing(*args):
+        return float(Fraction(10) ** 400) > 0
+    monkeypatch.setattr(ma, "_snapped_edges_clear", overflowing)
+    with collect_runtime_diagnostics() as counters:
+        with pytest.raises(GeometryError) as caught:
+            _arrange()
+    assert str(caught.value) == CONSERVATION and caught.value.__context__ is None
+    assert counters["arrangement_snap_fallback_refusals"] == 1
+
+
+def test_float_faithful_rule():
+    tiny = Fraction(2) ** -1022
+    for value, faithful in ((Fraction(0), True), (Fraction(1), True), (tiny, True), (-tiny, True),
+                            (tiny / 2, False), (Fraction(5e-324), False), (Fraction(10) ** 400, False),
+                            (Fraction(np.finfo(float).max), True), (-Fraction(10) ** 309, False)):
+        assert ma._float_faithful(value) is faithful
+
+
+def test_moved_edge_direction_outside_the_float_range_refuses(monkeypatch):
+    # The outgoing order at a vertex with a curved edge uses atan2 of the moved edge's float chart direction;
+    # a direction that does not convert faithfully (subnormal, overflow) refuses instead of ordering by it.
+    monkeypatch.setattr(ma, "_float_faithful", lambda value: False)
+    with collect_runtime_diagnostics() as counters:
+        with pytest.raises(GeometryError) as caught:
+            _arrange()
+    assert str(caught.value) == CONSERVATION
+    assert counters["arrangement_snap_fallback_refusals"] == 1
