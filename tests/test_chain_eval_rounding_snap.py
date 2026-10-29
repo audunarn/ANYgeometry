@@ -16,12 +16,25 @@ import anygeometry.model as model_module
 from anygeometry.model import GeometryModel, OrientedEdge
 
 EPS = float(np.finfo(float).eps)
-# The snap limit the fix must use (S0d coordinator rule: a few ulp, named constant).
-_CHAIN_LOCAL_ROUNDING_SLACK = 8.0 * EPS
 
 
-def test_snap_limit_is_the_named_eight_ulp_constant():
-    assert model_module._CHAIN_LOCAL_ROUNDING_SLACK == _CHAIN_LOCAL_ROUNDING_SLACK
+def _rounding_bound(data, index):
+    """The snap limit: the derived rounding bound of the index/local arithmetic (S0e replaced S0d's
+    blanket 8-ulp constant, which refused real rounding on chains with a short last edge)."""
+
+    chain, lengths, total, _cumulative, _edges = data
+    return float(model_module._chain_local_rounding_bound(len(chain), total, float(lengths[index])))
+
+
+def test_snap_limit_is_the_derived_bound_not_a_blanket_constant():
+    assert not hasattr(model_module, "_CHAIN_LOCAL_ROUNDING_SLACK")
+    geometry, chain = _two_arc_side()
+    data = geometry._chain_data(chain)
+    _chain, lengths, total, _cumulative, _edges = data
+    bound = _rounding_bound(data, 1)
+    # First order eps * ((n - 1) * T/L + 1) for n = 2; it covers the observed 1-ulp overshoot.
+    assert abs(bound / (EPS * (total / float(lengths[1]) + 1.0)) - 1.0) < 1e-9
+    assert _old_local(data, 1.0)[1] - 1.0 <= bound
 
 
 def _arc_side(split, *, reverse_second=False):
@@ -73,7 +86,7 @@ def test_two_arc_side_end_overshoot_is_snapped_not_refused(reverse_second):
     data = geometry._chain_data(chain)
     index, local = _old_local(data, 1.0)
     # Precondition: the arithmetic really overshoots by rounding only (else this test proves nothing).
-    assert index == 1 and 1.0 < local <= 1.0 + _CHAIN_LOCAL_ROUNDING_SLACK
+    assert index == 1 and 1.0 < local <= 1.0 + _rounding_bound(data, index)
     point, derivative = geometry._chain_point_and_derivative(chain, 1.0)
     curve = geometry.edges[chain[-1].edge].curve
     endpoint = 1.0 if chain[-1].forward else 0.0
@@ -108,10 +121,13 @@ def test_topology_face_with_two_arc_side_evaluates():
     assert np.isfinite(middle).all()
 
 
-@pytest.mark.parametrize("excursion", (1e-9, -1e-9, 16 * EPS, -16 * EPS))
+@pytest.mark.parametrize("excursion", (1e-9, -1e-9, "4bound", "-4bound"))
 def test_larger_excursion_still_refuses_with_same_error(excursion):
     geometry, chain = _two_arc_side()
     chain_items, lengths, total, cumulative, edges = geometry._chain_data(chain)
+    if isinstance(excursion, str):  # four times the derived snap limit of this chain
+        sign = -1.0 if excursion.startswith("-") else 1.0
+        excursion = sign * 4.0 * _rounding_bound(geometry._chain_data(chain), 1)
     # Fabricate chain data whose last-edge local parameter is 1 + excursion (forward edge) or
     # whose reversed-edge parameter 1 - local is -|excursion| (reverse the last item).
     if excursion > 0:
@@ -124,7 +140,8 @@ def test_larger_excursion_still_refuses_with_same_error(excursion):
     data = (items, fake_lengths, total, cumulative, edges)
     _index, local = _old_local(data, 1.0)
     parameter = local if items[-1].forward else 1.0 - local
-    assert parameter > 1.0 + _CHAIN_LOCAL_ROUNDING_SLACK or parameter < -_CHAIN_LOCAL_ROUNDING_SLACK
+    limit = _rounding_bound(data, 1)
+    assert parameter > 1.0 + limit or parameter < -limit
     with pytest.raises(GeometryError, match=r"curve parameters must be finite and in \[0, 1\]"):
         geometry._chain_eval(data, 1.0)
     with pytest.raises(GeometryError, match=r"curve parameters must be finite and in \[0, 1\]"):

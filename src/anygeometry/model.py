@@ -101,23 +101,88 @@ from .structural import (
 # GeometryError is re-exported for temporary compatibility imports.
 __all__ = ["GeometryError", "GeometryModel", "StructuralValidationDiagnostics"]
 
-# Largest excursion of a chain's local edge parameter past [0, 1] that ``_chain_eval`` attributes
-# to rounding and snaps to the nearest end (8 ulp of 1.0, about 1.8e-15).
-# Justification: the fraction is clamped to [0, 1] and the edge index brackets the target, so
-# in real arithmetic on the stored lengths the local parameter lies in [0, 1]. The computed value
-# differs from it only by the rounding of sum/cumsum, one subtraction and one division. With
-# neighbouring edges of comparable length (total/length well below ~14) that is a few ulp; the
-# observed case is 1 ulp (1.0000000000000002 at fraction 1 on a two-arc side). A larger excursion
-# (a very short edge next to a long chain) is not snapped: it keeps the old path and its error.
-_CHAIN_LOCAL_ROUNDING_SLACK = 8.0 * float(np.finfo(float).eps)
+# Unit roundoff of IEEE binary64 (u = eps/2), exact.
+_UNIT_ROUNDOFF = Fraction(1, 2**53)
+# Largest absolute error of a binary64 product or quotient that underflows (2^-1075), exact.
+_HALF_SMALLEST_SUBNORMAL = Fraction(1, 2**1075)
 
 
-def _snap_chain_local_rounding(parameter: float) -> float | None:
-    """The nearest end of [0, 1] for a rounding-level excursion past it, else ``None``."""
+def _chain_local_parameter(lengths, total, cumulative, count, fraction):
+    """Edge index and local edge parameter of a chain fraction (the ``_chain_eval`` arithmetic).
 
-    if 1.0 < parameter <= 1.0 + _CHAIN_LOCAL_ROUNDING_SLACK:
+    Same operations, in the same order, as the inline arithmetic it replaces;
+    ``_chain_local_rounding_bound`` bounds its rounding error.
+    """
+
+    target = _clamp01(fraction) * total
+    index = min(int(np.searchsorted(cumulative, target, side="right") - 1), count - 1)
+    return index, (target - cumulative[index]) / lengths[index]
+
+
+def _chain_local_rounding_bound(count: int, total: float, length: float) -> Fraction:
+    """Proven bound on the rounding error of the local edge parameter of ``_chain_local_parameter``.
+
+    Exact (rational). ``count`` = n edges in the chain, ``total`` = the computed sum T^ of the stored
+    lengths, ``length`` = the stored length L of the selected edge. To first order the bound is
+    ``eps * ((n - 1) * T^/L + 1)``.
+
+    Rounding-error analysis (binary64 with gradual underflow, round to nearest, u = eps/2,
+    h = 2^-1075 = half the smallest subnormal, gamma_m = m u / (1 - m u), gamma_0 = 0; Higham,
+    Accuracy and Stability of Numerical Algorithms, 2nd ed., sec. 2.1 and 4.2). Model of one
+    operation: fl(x + y) = (x + y)(1 + d) (an addition or subtraction is exact when it underflows);
+    fl(x * y) = x y (1 + d) + e and fl(x / y) = (x / y)(1 + d) + e, |d| <= u, |e| <= h, d e = 0.
+    The stored lengths L_0..L_{n-1} > 0 (finite T^) are the exact inputs; S = sum L_i and
+    S_k = sum_{i<k} L_i are their exact sums, so the real-arithmetic local parameter of edge k at
+    fraction c is (c S - S_k) / L_k, which lies in [0, 1] for the edge that brackets c S.
+    1. T^ = fl(sum L_i) in any summation order (NumPy uses pairwise sums): |T^ - S| <=
+       gamma_{n-1} S, hence S <= T^ / (1 - gamma_{n-1}). The cumulative sums are sequential,
+       C^_0 = 0, C^_1 = L_0 exactly, C^_k = fl(C^_{k-1} + L_{k-1}): |C^_k - S_k| <=
+       gamma_{k-1} S_k <= gamma_{n-2} S for k <= n - 1.
+    2. t = fl(c T^) with c = clamp(fraction, 0, 1) <= 1: t <= T^ (monotone rounding), and
+       |t - c S| <= (u + (1 + u) gamma_{n-1}) S + h (h: the product may underflow).
+    3. searchsorted(side="right") - 1, capped at n - 1, selects k with C^_k <= t, so
+       D = fl(t - C^_k) >= 0 and local = fl(D / L_k) >= 0: the computed parameter never falls
+       below 0 (a reversed edge's 1 - local is negative only when local > 1).
+       Overshoot past 1: if k < n - 1, t < C^_{k+1} = (C^_k + L_k)(1 + d), so
+       t - C^_k < L_k + u (1 + gamma_{n-2}) S; if k = n - 1, t - C^_k <= T^ - C^_{n-1} =
+       L_{n-1} + (T^ - S) - (C^_{n-1} - S_{n-1}) <= L_{n-1} + (gamma_{n-1} + gamma_{n-2}) S.
+       With a = gamma_{n-1} + gamma_{n-2} (>= u (1 + gamma_{n-2}) for n >= 2) and the roundings
+       of the subtraction and the division: local - 1 <= (1 + a S/L)(1 + u)^2 + h - 1
+       = a S/L + eta (1 + a S/L) + h, eta = 2u + u^2.
+    4. Error against the real-arithmetic value of the selected edge k:
+       |local - (c S - S_k)/L| <= |(t - C^_k) - (c S - S_k)|/L + eta |t - C^_k|/L + h
+       <= (u + (1 + u) gamma_{n-1} + gamma_{n-2}) S/L + h/L + eta (1 + a S/L) + h, by steps 1-3.
+    The returned bound is the step-4 expression with S/L replaced by its upper bound
+    R = T^ / ((1 - gamma_{n-1}) L); it also covers step 3. The underflow terms h/L + h are below
+    1e-290 for any L >= 1e-18. It depends on the arithmetic only, not on the curve kind, so a larger
+    excursion is not rounding of this evaluation and keeps its refusal. Inputs outside the analysis
+    (non-finite or non-positive T^ or L, n < 1, n u >= 1/2) get the bound 0, i.e. no snap.
+    """
+
+    u = _UNIT_ROUNDOFF
+    if (count < 1 or count * u >= Fraction(1, 2) or not (math.isfinite(total) and math.isfinite(length))
+            or total <= 0.0 or length <= 0.0):
+        return Fraction(0)
+
+    def gamma(m: int) -> Fraction:
+        return m * u / (1 - m * u) if m > 0 else Fraction(0)
+
+    g1, g2 = gamma(count - 1), gamma(count - 2)
+    exact_length = Fraction(length)
+    ratio = Fraction(total) / ((1 - g1) * exact_length)
+    eta = 2 * u + u * u
+    underflow = _HALF_SMALLEST_SUBNORMAL * (1 + 1 / exact_length)
+    return (u + (1 + u) * g1 + g2) * ratio + eta * (1 + (g1 + g2) * ratio) + underflow
+
+
+def _snap_chain_local_rounding(parameter: float, bound: Fraction) -> float | None:
+    """The nearest end of [0, 1] for an excursion past it within the rounding ``bound``, else ``None``."""
+
+    if not math.isfinite(parameter):
+        return None
+    if parameter > 1.0 and Fraction(parameter) - 1 <= bound:
         return 1.0
-    if -_CHAIN_LOCAL_ROUNDING_SLACK <= parameter < 0.0:
+    if parameter < 0.0 and -Fraction(parameter) <= bound:
         return 0.0
     return None
 
@@ -8016,9 +8081,7 @@ class GeometryModel:
         self, data: Tuple[Any, ...], fraction: float, *, _point_only: bool = False
     ) -> Tuple[np.ndarray, np.ndarray]:
         chain, lengths, total, cumulative, edges = data
-        target = _clamp01(fraction) * total
-        index = min(int(np.searchsorted(cumulative, target, side="right") - 1), len(chain) - 1)
-        local = (target - cumulative[index]) / lengths[index]
+        index, local = _chain_local_parameter(lengths, total, cumulative, len(chain), fraction)
         item = chain[index]
         parameter = local if item.forward else 1.0 - local
         edge = edges[index]
@@ -8030,9 +8093,11 @@ class GeometryModel:
             derivative = np.zeros(3) if _point_only else self._edge_parameter_derivative_object(edge, parameter)
         except GeometryError:
             # The unchanged evaluation runs first, so every call that worked before is
-            # bit-identical. Only a refusal at a rounding-level excursion past [0, 1] is
-            # retried at the nearest end; anything else re-raises the original error.
-            snapped = _snap_chain_local_rounding(parameter)
+            # bit-identical. Only a refusal at an excursion past [0, 1] within the proven
+            # rounding bound of the arithmetic above is retried at the nearest end; anything
+            # else re-raises the original error.
+            snapped = _snap_chain_local_rounding(
+                parameter, _chain_local_rounding_bound(len(chain), total, float(lengths[index])))
             if snapped is None:
                 raise
             parameter = snapped
