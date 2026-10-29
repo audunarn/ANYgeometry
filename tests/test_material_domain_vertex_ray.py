@@ -408,14 +408,50 @@ def _truth(vertices, curves, q):
     return winding != 0, distance
 
 
-def _route_answers(curves, q, boundary):
-    """{route: contains_loop answer} over the exact and float routes for the loop ``curves`` and query q."""
+_REFUSED = "refused"
+
+
+def _answer(domain, loop, uv, boundary):
+    """contains_loop's answer, or _REFUSED for the typed refusal (GeometryError)."""
+    from anygeometry.errors import GeometryError
+    try:
+        return domain.contains_loop(loop, uv, _TOL, boundary=boundary)
+    except GeometryError:
+        return _REFUSED
+
+
+def _trusted(domain, loop):
+    """Whether the float route's scale contract trusts this loop (T2-0 contract; True on code without it)."""
+    try:
+        from anygeometry.material_arrangement import float_ray_scale_trusted
+    except ImportError:
+        return True
+    return float_ray_scale_trusted(domain._float_ray_scale(loop), _TOL)
+
+
+def _scale_trusted(scale):
+    try:
+        from anygeometry.material_arrangement import float_ray_scale_trusted
+    except ImportError:
+        return True
+    return float_ray_scale_trusted(scale, _TOL)
+
+
+def _route_answers(curves, q, boundary, *, with_trust=False):
+    """{route: contains_loop answer or _REFUSED} over the exact and float routes for the loop ``curves``."""
     from fractions import Fraction
     loop = tuple(ArrangementPath(c) for c in curves)
     domain = MaterialDomain(0, _plane(), (loop,))
     exact = "exact-curved" if any(isinstance(c, EllipticArc) for c in curves) else "exact-straight"
-    return {exact: domain.contains_loop(loop, tuple(map(Fraction, q)), _TOL, boundary=boundary),
-            "float": domain.contains_loop(loop, tuple(map(float, q)), _TOL, boundary=boundary)}
+    answers = {exact: _answer(domain, loop, tuple(map(Fraction, q)), boundary),
+               "float": _answer(domain, loop, tuple(map(float, q)), boundary)}
+    return (answers, _trusted(domain, loop)) if with_trust else answers
+
+
+def _is_wrong(got, want, trusted):
+    """The contract: inside the trusted scale range every route answers correctly; outside it a route
+    answers correctly or refuses (typed), never a wrong answer."""
+    return got != want and not (got == _REFUSED and not trusted)
 
 
 def _check_off_band(vertices, arc_after, queries, wrong, label, margin=2*_TOL):
@@ -428,10 +464,11 @@ def _check_off_band(vertices, arc_after, queries, wrong, label, margin=2*_TOL):
             continue
         for loop in _variants(curves):
             for boundary in (False, True):
-                for route, got in _route_answers(loop, q, boundary).items():
+                answers, trusted = _route_answers(loop, q, boundary, with_trust=True)
+                for route, got in answers.items():
                     checked += 1
-                    if got != want:
-                        wrong.append((label, route, q, want, type(loop[0]).__name__, boundary))
+                    if _is_wrong(got, want, trusted):
+                        wrong.append((label, route, q, want, got, type(loop[0]).__name__, boundary))
     return checked
 
 
@@ -470,9 +507,8 @@ def test_off_band_review_repro_exact_and_float():
     assert not domain.contains_loop(loop, query, _TOL, boundary=False)
 
 
-def _spike_wrong(arc, tip):
-    """A spike: two long edges both cross the ray within 8 eps of a common apex k eps L above it (L = 1e8)."""
-    scale = 1e8
+def _spike_wrong(arc, tip, scale=1e8):
+    """A spike: two long edges both cross the ray within 8 eps of a common apex k eps L above it."""
     wrong, checked = [], 0
     for k in range(1, 10):
         apex = (0., k*_EPS*scale)
@@ -485,10 +521,11 @@ def _spike_wrong(arc, tip):
             assert distance > 2*_TOL
             for loop in _variants(curves):
                 for boundary in (False, True):
-                    for route, got in _route_answers(loop, q, boundary).items():
+                    answers, trusted = _route_answers(loop, q, boundary, with_trust=True)
+                    for route, got in answers.items():
                         checked += 1
-                        if got != want:
-                            wrong.append((k, route, x, want, type(loop[0]).__name__, boundary))
+                        if _is_wrong(got, want, trusted):
+                            wrong.append((k, route, x, want, got, type(loop[0]).__name__, boundary))
     assert checked
     return wrong
 
@@ -500,12 +537,161 @@ def test_off_band_spike_counts_both_crossings_away_from_the_tip(arc):
     assert not wrong, (len(wrong), wrong[:6])
 
 
-@pytest.mark.xfail(strict=True, reason="known limit (as before T2-0): the two off-band crossings of a spike "
-                   "within 8 eps of its apex are decided together by the junction's branch sides, so the "
-                   "tip between them (<= 8 eps of the edge lengths wide) is cut off at the ray")
-def test_off_band_spike_tip_known_limit():
-    wrong = _spike_wrong(False, tip=True)
+@pytest.mark.parametrize("arc", (False, True), ids=("lines", "arc"))
+def test_off_band_spike_tip_is_exact_or_refused(arc):
+    """T2-0 contract (review R3 P2, pre-existing): the tip between two off-band crossings within the 8-eps
+    windows of one junction (L = 1e8, outside the float scale contract). It was cut off at the ray (a
+    wrong answer on all three routes); now every route answers it exactly or refuses."""
+    wrong = _spike_wrong(arc, tip=True)
     assert not wrong, (len(wrong), wrong[:6])
+
+
+@pytest.mark.parametrize("scale", (1., 60., 500.))
+def test_spike_tip_is_a_boundary_point_inside_the_scale_contract(scale):
+    """Inside the contract the spike mechanism is unreachable: an apex k eps L (k <= 9) off the ray leaves a
+    tip narrower than the tolerance, so every tip query is a boundary point (answer = the boundary flag)."""
+    for k in range(1, 10):
+        apex = (0., k*_EPS*scale)
+        vertices = [(-scale, -scale), apex, (scale, -scale), (scale, -2*scale), (-scale, -2*scale)]
+        curves = _off_band_loop(vertices)
+        q = (0., 0.)
+        assert _truth(vertices, curves, q)[1] <= _TOL
+        for loop in _variants(curves):
+            for boundary in (False, True):
+                answers, trusted = _route_answers(loop, q, boundary, with_trust=True)
+                assert trusted and _scale_trusted(scale)
+                assert set(answers.values()) == {boundary}, (scale, k, answers)
+
+
+# --- T2-0 contract decision: a named scale guard on the float ray route -------------------------------------
+#
+# Three fix rounds each met a new float-route failure of one family: containment near a vertex where the
+# 8-eps parameter windows (and the 128-eps endpoint snapping) span more than the tolerance, L*eps >~ tol.
+# The contract: the float route answers only when scale * K * eps <= tol / M (K = 128, M = 16, i.e.
+# scale <= tol / (2048 eps), 2199 for tol = 1e-9); otherwise it takes the exact rational route (a Plane
+# with lines and elliptic arcs) or raises GeometryError. The tripod (10-60 m, tol 1e-9) is far inside.
+
+_R3_SCALE = 1.1e8
+_R3_QUERY = (0.09999989601589046, -9.769962616701378e-08)
+
+
+def _r3_vertices(scale=_R3_SCALE, x0=.1):
+    return [(-scale, -scale), (x0, 0.), (x0, 1.), (-scale-1., 1.), (-scale-1., -scale)]
+
+
+def test_r3_float_root_repro_is_exact_or_refused():
+    """Review R3 P2: the float route rejected this interior point (boundary distance 4.44e-9) on cc2a517,
+    orientation-dependently. Now: the exact answer (True) or the typed refusal, never False."""
+    from fractions import Fraction
+    vertices = _r3_vertices()
+    curves = _off_band_loop(vertices)
+    want, distance = _truth(vertices, curves, _R3_QUERY)
+    assert want and 4e-9 < distance < 5e-9
+    got = []
+    for loop in _variants(curves):
+        paths = tuple(ArrangementPath(c) for c in loop)
+        domain = MaterialDomain(0, _plane(), (paths,))
+        for boundary in (False, True):
+            got.append(_answer(domain, paths, _R3_QUERY, boundary))
+            got.append(_answer(domain, paths, tuple(map(Fraction, _R3_QUERY)), boundary))
+    assert set(got) <= {True, _REFUSED}, got
+    assert True in got                                   # the exact route answers it (no blanket refusal)
+
+
+def test_r3_clip_intervals_keeps_the_interior_semicircle():
+    """Review R3 P2 through _clip_intervals: a semicircle of radius 2e-9 around the R3 query lies inside
+    (>= 2.4e-9 from the boundary); cc2a517 discarded it. Now it is kept whole, or the clip refuses."""
+    from anygeometry.errors import GeometryError
+    from anygeometry.material_arrangement import _clip_intervals
+    loop = tuple(ArrangementPath(c) for c in _off_band_loop(_r3_vertices()))
+    domain = MaterialDomain(0, _plane(), (loop,))
+    r = 2e-9
+    arc = EllipticArc((*_R3_QUERY, 0.), (r, 0., 0.), (0., r, 0.), math.pi/2, math.pi)
+    contacts = []
+    try:
+        intervals = _clip_intervals(domain, arc, _TOL, lambda: None, isolated_contacts=contacts)
+    except GeometryError:
+        return
+    assert intervals == ((0., 1.),) and not contacts, (intervals, contacts)
+
+
+def test_r3_residual_exterior_false_positive_at_1e8():
+    """Review R3: residual exterior false positives at L = 1e8. This query lies 10 tol outside the incoming
+    edge (between its true crossing and V); the float route on cc2a517 called it inside."""
+    from fractions import Fraction
+    vertices = _r3_vertices(1e8, 1.)
+    curves = _off_band_loop(vertices)
+    query = (0.9999999807955393, -2.220446049250313e-08)
+    want, distance = _truth(vertices, curves, query)
+    assert not want and distance > 2*_TOL
+    for loop in _variants(curves):
+        paths = tuple(ArrangementPath(c) for c in loop)
+        domain = MaterialDomain(0, _plane(), (paths,))
+        for boundary in (False, True):
+            for uv in (query, tuple(map(Fraction, query))):
+                assert _answer(domain, paths, uv, boundary) in (False, _REFUSED), (loop[0], boundary, uv)
+
+
+def _sweep_queries(scale, k, x0):
+    """Queries around the junction of the R2/R3 family at ray height -k eps L: inside and outside the
+    incoming edge's true crossing at 3..100 tol, between the crossing and V, past V, and far."""
+    from fractions import Fraction
+    delta = k*_EPS*scale
+    crossing = Fraction(x0)-Fraction(delta)*(Fraction(x0)+Fraction(scale))/Fraction(scale)
+    xs = [float(crossing)+m*_TOL for m in (-100, -10, -5, -3, 3, 5, 10, 100)]
+    xs += [float((crossing+Fraction(x0))/2), x0-delta/2, x0+3*_TOL, x0+max(4*delta, 1e-7), -scale/2., 2.*abs(x0)+2.]
+    return [(x, -delta) for x in xs]
+
+
+@pytest.mark.parametrize("exponent", range(9))
+def test_scale_sweep_against_exact_oracle(exponent):
+    """Scales 1..1e8 (and 1.1e8 at the top) x ray offsets 1..9 eps x two vertex abscissae, both orientations,
+    every first curve, both boundary flags, float and exact queries: zero wrong answers where the guard
+    trusts the float route, and only exact answers or typed refusals where it does not."""
+    wrong, checked, outcomes = [], 0, {"trusted": 0, "untrusted": 0}
+    for scale in ((1e8, _R3_SCALE) if exponent == 8 else (10.**exponent,)):
+        for x0 in (1., .1):
+            vertices = _r3_vertices(scale, x0)
+            for k in range(1, 10):
+                checked += _check_off_band(vertices, None, _sweep_queries(scale, k, x0), wrong, (scale, x0, k))
+            outcomes["trusted" if _scale_trusted(scale) else "untrusted"] += 1
+    assert checked
+    assert not wrong, (len(wrong), checked, wrong[:6])
+    # The guard's boundary: 1..1e3 trusted, 1e4.. untrusted for tol = 1e-9.
+    assert (outcomes["untrusted"] == 0) == (exponent <= 3), outcomes
+
+
+def test_float_route_refuses_outside_the_scale_contract_off_the_exact_routes():
+    """A support without an exact route (a cylinder) at a scale the guard does not trust: GeometryError,
+    not a float answer; the same strip at tripod scale answers as before."""
+    from anygeometry.errors import GeometryError
+    from anygeometry.surfaces import Cylinder
+
+    def strip(radius):
+        support = Cylinder(origin=(0., 0., 0.), axis=(0., 0., 1.), radial_direction=(1., 0., 0.),
+                           radius=radius, height=52., start_angle=-.25)
+        bottom = EllipticArc((0., 0., 4.), (radius, 0., 0.), (0., radius, 0.), 0., SIX)
+        top = EllipticArc((0., 0., 45.), (radius, 0., 0.), (0., radius, 0.), SIX, -SIX)
+        up = LinePath(tuple(map(float, bottom.evaluate(1.))), tuple(map(float, top.evaluate(0.))))
+        down = LinePath(tuple(map(float, top.evaluate(1.))), tuple(map(float, bottom.evaluate(0.))))
+        return MaterialDomain(0, support, (tuple(ArrangementPath(c) for c in (bottom, up, top, down)),))
+
+    def query(radius):
+        point = (radius*math.cos(.5*SIX), radius*math.sin(.5*SIX), 20.)
+        return LinePath(point, point)
+
+    assert strip(R).contains(query(R), 0., _TOL)
+    with pytest.raises(GeometryError, match="scale contract"):
+        strip(1e7).contains(query(1e7), 0., _TOL)
+
+
+def test_scale_guard_constants():
+    """K = 128 (the 128-eps endpoint snapping band, which contains the 8-eps junction windows), M = 16."""
+    from anygeometry import material_arrangement as ma
+    assert (ma._FLOAT_RAY_BAND, ma._FLOAT_RAY_MARGIN) == (128, 16)
+    limit = 1e-9/(128*16*_EPS)
+    assert ma.float_ray_scale_trusted(limit*(1-1e-12), 1e-9) and not ma.float_ray_scale_trusted(limit*(1+1e-12), 1e-9)
+    assert ma.float_ray_scale_trusted(60., 1e-9)             # tripod coordinates, 37x inside the limit
 
 
 def _random_off_band_polygon(rng):

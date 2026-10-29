@@ -371,7 +371,7 @@ def arc_point_rule(curve: EllipticArc, point, tolerance: float) -> bool:
 def contains_loop_exact_curved(chart, loop, uv, tolerance: float, *, boundary: bool = True) -> bool:
     """Exact replica of ``MaterialDomain.contains_loop`` for loops of lines and elliptic arcs on a Plane."""
     from .material_arrangement import (_exact_horizontal_roots, _exact_point_on_segment, _following_index,
-                                       _junction_on_ray)
+                                       _junction_on_ray, _refuse_window_pair)
 
     u_query, v_query = uv
     tol2 = Fraction(tolerance) ** 2
@@ -471,10 +471,20 @@ def contains_loop_exact_curved(chart, loop, uv, tolerance: float, *, boundary: b
         following_curve = loop[following].curve
         following_roots = ordered(following_curve, roots_at(following)[0])
         first = following_roots[0].t if following_roots else one
-        if following_roots and compare(first, window) <= 0:
-            continue
         curve = loop[index].curve
         end_roots = [r for r in ordered(curve, roots) if compare(r.t, 1 - window) >= 0]
+        # main (T2-0 contract): two crossings within the windows of this junction bracketing the query.
+        if end_roots and following_roots and compare(first, window) <= 0:
+            end_root, start_root = end_roots[-1], following_roots[0]
+            # Both strictly inside their curves: a root snapped or clamped to an end is no second crossing.
+            if compare(end_root.t, one) < 0 and compare(start_root.t, zero) > 0:
+                u_end = station_uv(curve, end_root)[0]
+                u_start = station_uv(following_curve, start_root)[0]
+                low, high = (u_end, u_start) if compare(u_end, u_start) <= 0 else (u_start, u_end)
+                if compare(low, u_query) <= 0 and compare(u_query, high) <= 0:
+                    _refuse_window_pair()
+        if following_roots and compare(first, window) <= 0:
+            continue
         on_ray = _junction_on_ray(count, index, roots_at)
         if not (on_ray or end_roots):
             continue
