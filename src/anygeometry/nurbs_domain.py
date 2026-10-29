@@ -25,6 +25,7 @@ from .nurbs import CurveOnSurface, NurbsCurve, NurbsSurface, _scaled_weights
 from .reference import bspline as _reference
 from .exact_levels import event_side, has_root_in, level_set
 from fractions import Fraction
+from types import SimpleNamespace
 
 _EPS = float(np.finfo(float).eps)
 _IDENTITY = tuple(tuple(1.0 if i == j else 0.0 for j in range(4)) for i in range(4))
@@ -41,6 +42,32 @@ def pcurve_of(domain, curve) -> NurbsCurve:
         raise GeometryError("a NURBS material domain needs CurveOnSurface boundaries on its own support "
                             "(identity transform)")
     return curve.pcurve
+
+
+def _iso_fixed(pcurve):
+    """``(axis, value)`` of an iso-line pcurve's constant chart coordinate, else ``None``.
+
+    The rule of ``CurveOnSurface._iso_fixed`` (one definition): degree 1, two
+    controls sharing that coordinate, equal (or no) weights. Implicit charts
+    (sections, intersections) have none.
+    """
+    if not isinstance(pcurve, NurbsCurve):
+        return None
+    return CurveOnSurface._iso_fixed(SimpleNamespace(pcurve=pcurve))
+
+
+def _chart_points(pcurve, parameters) -> np.ndarray:
+    """Chart points exactly as ``CurveOnSurface.chart``: clipped, an iso-line's constant coordinate exact.
+
+    A raw blend ``(1 - t) c + t c`` can be an ulp off ``c``, which a narrow
+    surface knot span amplifies in the world; ordinary pcurves are unchanged.
+    """
+    values = np.clip(pcurve.evaluate(parameters), 0.0, 1.0)
+    fixed = _iso_fixed(pcurve)
+    if fixed is not None:
+        values = np.array(values, dtype=float)
+        values[..., fixed[0]] = min(1.0, max(0.0, fixed[1]))
+    return values
 
 
 def chart_curve_of(domain, curve):
@@ -128,8 +155,10 @@ def level_roots(pcurve: NurbsCurve, axis: int, value: float, chart_tolerance: fl
         found.append(float(event.t0))
         if event.run:
             found.append(float(event.t1))
+    fixed = _iso_fixed(pcurve)     # an iso-line's constant end coordinate is exact, not a raw blend
     for t in (0.0, 1.0):
-        if abs(float(pcurve.evaluate(t)[axis]) - value) <= chart_tolerance:
+        end = fixed[1] if fixed is not None and fixed[0] == axis else float(pcurve.evaluate(t)[axis])
+        if abs(end - value) <= chart_tolerance:
             found.append(t)
     return tuple(sorted(set(min(1.0, max(0.0, t)) for t in found)))
 
@@ -307,7 +336,7 @@ def area_loop(domain, loop, tolerance) -> float:
         value = magnitude = 0.0
         for pcurve in pcurves:
             nodes, weights = _span_nodes(pcurve, count)
-            q = np.clip(pcurve.evaluate(nodes), 0.0, 1.0)
+            q = _chart_points(pcurve, nodes)
             dq = pcurve.derivative(nodes)
             samples = 0.5 * (q[:, 0] * dq[:, 1] - q[:, 1] * dq[:, 0])
             value += float(weights @ samples)
@@ -416,7 +445,7 @@ def _world_area_estimate_uncached(domain, loop, tolerance) -> tuple[float, float
         value = magnitude = 0.0
         for pcurve, extra in zip(pcurves, crossings):
             nodes, weights = _span_nodes(pcurve, count, extra)
-            q = np.clip(pcurve.evaluate(nodes), 0.0, 1.0)
+            q = _chart_points(pcurve, nodes)
             # This is advisory quadrature, never the continuous Green/source
             # proof path. An implicit chart may supply a first-order witness.
             witness = getattr(pcurve,'derivative_witness',None)
@@ -489,7 +518,7 @@ def certified_chart_polyline(surface: NurbsSurface, pcurve: NurbsCurve, toleranc
         a, b = pending.pop()
         hull = pcurve._active_controls(a, b)
         ends = [tuple(Fraction(float(value)) for value in point)
-                for point in np.clip(pcurve.evaluate(np.array([a, b])), 0.0, 1.0)]
+                for point in _chart_points(pcurve, np.array([a, b]))]
         # curve -> chord: the hull's distance to the stored chord; chord -> curve: that
         # distance plus the stored ends' errors against the exact curve ends (the curve
         # runs from near one chord end to near the other; review A3b round 2).
@@ -506,4 +535,4 @@ def certified_chart_polyline(surface: NurbsSurface, pcurve: NurbsCurve, toleranc
         pending.extend(((middle, b), (a, middle)))
     accepted.sort()
     parameters = np.array([piece[0] for piece in accepted] + [1.0])
-    return np.clip(pcurve.evaluate(parameters), 0.0, 1.0), max(piece[2] for piece in accepted)
+    return _chart_points(pcurve, parameters), max(piece[2] for piece in accepted)
