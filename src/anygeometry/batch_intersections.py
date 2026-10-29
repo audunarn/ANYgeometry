@@ -3,12 +3,23 @@
 Planning completes every narrow phase and arrangement before mutation begins.
 Application journals all edge splits, canonicalization and face replacements in
 one transaction. A resource refusal never returns partially accepted topology.
+
+Planning mode (ADR-T2 v2, T2-1b; opt-in, default exact). ``IntersectionBatchPolicy.planning_mode``
+is ``None`` (the default sentinel), ``"exact"`` or ``"topology_certified"``. With the sentinel the
+environment variable ``ANYGEOMETRY_PLANNING_MODE`` may select the mode; an invalid value raises
+``GeometryError``. A host application (ANYfem) passes its project setting explicitly through this
+policy field: that is the parameter hook. Budgets (``max_predicates``/``max_candidate_pairs``) and
+non-default planning context variables force the exact mode. The effective mode is resolved once
+per planning call. Exact mode is the unchanged Tier-1 route and produces an ``IntersectionPlan``
+without any route field (plan state E). ``topology_certified`` produces a ``TopologyCertifiedPlan``
+(state T) whose ``content_checksum`` keeps its meaning and whose ``route_checksum`` binds the mode.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, fields, replace
 from itertools import combinations
 import math
+import os
 from contextlib import nullcontext
 from uuid import UUID
 
@@ -40,6 +51,15 @@ from .transactions import ChangeSet
 from .definition_binding import definition_checksum
 
 
+PLANNING_MODES = ("exact", "topology_certified")
+PLANNING_MODE_ENVIRONMENT = "ANYGEOMETRY_PLANNING_MODE"
+
+
+def _check_planning_mode_value(value):
+    if value is not None and (type(value) is not str or value not in PLANNING_MODES):
+        raise GeometryError(f"intersection planning_mode must be one of {PLANNING_MODES} or None")
+
+
 @dataclass(frozen=True, slots=True)
 class IntersectionBatchPolicy:
     intent: ConnectionIntent = ConnectionIntent.CONNECT
@@ -49,8 +69,28 @@ class IntersectionBatchPolicy:
     face_connections: bool = True
     member_connections: bool = True
     member_face_connections: bool = True
+    # ADR-T2 v2 section 1: None is the default sentinel (environment variable, else exact). The
+    # field is outside the definition expansion and, when None, outside the pickled state, so a
+    # default policy (and every exact plan holding one) serializes exactly as before T2-1b.
+    planning_mode: str | None = field(default=None, metadata={"definition": False})
+
+    def __getstate__(self):
+        values = [getattr(self, item.name) for item in fields(self)]
+        return values[:-1] if self.planning_mode is None else values
+
+    def __setstate__(self, state):
+        names = [item.name for item in fields(self)]
+        state = list(state)
+        if len(state) == len(names)-1:
+            state.append(None)
+        if len(state) != len(names):
+            raise GeometryError("intersection batch policy state is malformed")
+        for name, value in zip(names, state):
+            object.__setattr__(self, name, value)
+        _check_planning_mode_value(self.planning_mode)
 
     def __post_init__(self):
+        _check_planning_mode_value(self.planning_mode)
         object.__setattr__(self, "intent", ConnectionIntent(self.intent))
         if self.intent not in (ConnectionIntent.CONNECT,ConnectionIntent.IMPRINT,
                                ConnectionIntent.REUSE_EXISTING):
@@ -96,6 +136,139 @@ class IntersectionApplication:
     reused: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class TopologyCertifiedPlan(IntersectionPlan):
+    """Plan state T (ADR-T2 v2 section 7): a plan made in ``topology_certified`` mode.
+
+    ``content_checksum`` is the unchanged geometry identity. ``route_checksum`` binds the mode:
+    definition_checksum((content_checksum, planning_mode, certificate_version, r_max)).
+    ``r_pairs`` holds ``(first_face_id, second_face_id, r_pair)`` of every certified pair in
+    candidate order (diagnostics; validated against ``r_max``). Exact plans are never of this
+    type and carry no route field (state E). Unpickling validates the route fields.
+    """
+    planning_mode: str | None = None
+    route_checksum: str | None = None
+    certificate_version: str | None = None
+    r_max: float | None = None
+    r_pairs: tuple = ()
+
+    def __setstate__(self, state):
+        names = [item.name for item in fields(self)]
+        state = list(state)
+        if len(state) != len(names):
+            raise GeometryError("topology-certified plan state is malformed")
+        for name, value in zip(names, state):
+            object.__setattr__(self, name, value)
+        _route_state(self)
+
+
+@dataclass(frozen=True, slots=True)
+class TopologyCertifiedApplication(IntersectionApplication):
+    """Application of a state-T plan: carries the route identity of the applied plan.
+
+    ADR section 7 row 3 asks to write the mode, r_max and certificate version into the change set
+    and model metadata. ChangeSet has no metadata field and the model has no model-level metadata
+    store outside its document state; both would change exact-mode outputs or document checksums.
+    The route identity is therefore returned here (and stays on the plan of the local receipt).
+    """
+    planning_mode: str | None = None
+    r_max: float | None = None
+    certificate_version: str | None = None
+
+
+def _context_forces_exact():
+    """Whether a planning context variable is at a non-default value (exact mode is kept then)."""
+    from .arrangement_geometry import _JUNCTION_BOUNDS
+    from .cylinder_charts import _binding_budget
+    from .exact_predicates import _TRACE
+    from .curve_parameter_matching import _ACTIVE_WORK
+    return (_JUNCTION_BOUNDS.get() is not False or _binding_budget.get() is not None
+            or _TRACE.get() != () or _ACTIVE_WORK.get() is not None)
+
+
+def resolve_planning_mode(policy):
+    """The effective planning mode of ``policy`` (ADR-T2 v2 section 1), resolved once per call.
+
+    The policy field wins; with the ``None`` sentinel ``ANYGEOMETRY_PLANNING_MODE`` applies when
+    it is set (an invalid value, including an empty one, raises ``GeometryError``); otherwise
+    ``"exact"``. Budgets and non-default planning context variables give ``"exact"``.
+    """
+    policy = _policy(policy)
+    mode = policy.planning_mode
+    if mode is None:
+        raw = os.environ.get(PLANNING_MODE_ENVIRONMENT)
+        if raw is None:
+            mode = "exact"
+        elif raw in PLANNING_MODES:
+            mode = raw
+        else:
+            raise GeometryError(f"{PLANNING_MODE_ENVIRONMENT}={raw!r} is not one of {PLANNING_MODES}")
+    if mode != "exact" and (policy.max_predicates is not None or policy.max_candidate_pairs is not None
+                            or _context_forces_exact()):
+        return "exact"
+    return mode
+
+
+def _route_checksum(plan):
+    return definition_checksum((plan.content_checksum, plan.planning_mode, plan.certificate_version, plan.r_max))
+
+
+def _normal_positive_float(value):
+    return type(value) is float and math.isfinite(value) and value >= 2.2250738585072014e-308
+
+
+def _route_state(plan):
+    """``"E"`` or ``"T"``; a malformed route state raises ``GeometryError`` (ADR section 7 rows 5-11)."""
+    if not isinstance(plan, TopologyCertifiedPlan):
+        return "E"
+    mode = plan.planning_mode
+    if mode is None:
+        raise GeometryError("intersection plan carries route fields without planning_mode")
+    if type(mode) is not str or mode not in PLANNING_MODES:
+        raise GeometryError(f"intersection plan planning_mode {mode!r} is not supported")
+    if mode == "exact":
+        raise GeometryError("an exact intersection plan carries no route fields")
+    if type(plan.route_checksum) is not str or not plan.route_checksum:
+        raise GeometryError("topology-certified intersection plan has no route_checksum")
+    from .separating_plane_certificate import CERTIFICATE_VERSION
+    if type(plan.certificate_version) is not str or plan.certificate_version != CERTIFICATE_VERSION:
+        raise GeometryError("topology-certified intersection plan has an unsupported certificate_version")
+    if not _normal_positive_float(plan.r_max):
+        raise GeometryError("topology-certified intersection plan r_max is not a positive normal float")
+    if type(plan.r_pairs) is not tuple:
+        raise GeometryError("topology-certified intersection plan r_pair diagnostics are malformed")
+    for item in plan.r_pairs:
+        if (type(item) is not tuple or len(item) != 3 or type(item[0]) is not int or type(item[1]) is not int
+                or type(item[2]) is not float or not math.isfinite(item[2]) or not 0. <= item[2] <= plan.r_max):
+            raise GeometryError("topology-certified intersection plan r_pair is missing, non-finite or above r_max")
+    if plan.route_checksum != _route_checksum(plan):
+        raise GeometryError("topology-certified intersection plan route binding changed")
+    return "T"
+
+
+def _validate_route(plan, policy, model=None):
+    """Mode/state agreement (ADR section 7); with ``model``, r_max against the model tolerance."""
+    state = _route_state(plan)
+    mode = resolve_planning_mode(policy)
+    if state == "E" and mode != "exact":
+        raise GeometryError("an exact intersection plan cannot be applied in topology_certified mode")
+    if state == "T":
+        if mode != "topology_certified":
+            raise GeometryError("a topology-certified intersection plan is never applied as exact")
+        if model is not None and plan.r_max != _plan_r_max(model):
+            raise GeometryError("topology-certified intersection plan r_max is not the contract value")
+    return state
+
+
+def _plan_r_max(model):
+    """The per-plan contract bound: tol/1000 of the model length tolerance, rounded down."""
+    from .separating_plane_certificate import contract_r_max, SPRefusal
+    try:
+        return contract_r_max(model.tolerance.length)
+    except SPRefusal as exc:
+        raise GeometryError(f"topology_certified r_max is unavailable for this tolerance: {exc}") from None
+
+
 def _policy(value):
     if isinstance(value, IntersectionBatchPolicy):
         return value
@@ -111,12 +284,13 @@ def _plan_content(plan):
         plan.arrangements,plan.axes,plan.contacts,plan.face_contacts))
 
 
-def _validate_policy(plan, policy):
+def _validate_policy(plan, policy, model=None):
     if any(getattr(policy,name) != getattr(plan.policy,name) for name in (
         'intent','face_connections','member_connections','member_face_connections')):
         raise GeometryError("apply policy does not match intersection planning")
     if plan.content_checksum != _plan_content(plan):
         raise GeometryError("intersection plan analytic content binding changed")
+    _validate_route(plan, policy, model)
 
 
 def _normalise_cells(arrangement):
@@ -391,7 +565,203 @@ def _owning_tolerance(tolerance, face_tolerances):
     return min(float(tolerance), *(float(v) for v in face_tolerances))
 
 
-def _pair_paths(first, second, model, tolerance, check, *, point_contacts=None, face_tolerances=None):
+def _mark_coincident(shadow):
+    if shadow is not None:
+        shadow["coincident"] = True
+
+
+def _short_reason(reason):
+    return ":".join(str(reason).split(":")[:2])
+
+
+class _TopologyRoute:
+    """The T2b route of one topology_certified planning call (ADR-T2 v2 sections 4, 5; addendum A9).
+
+    Per candidate pair, in candidate order: the exact separating-plane certificate on records of
+    the planner's own domains (cached per domain object, never by face id); on CERTIFIED the full
+    exact support stage runs in shadow (refusal parity: the same code, arguments and point in the
+    loop, including production's coincidence test and its overlap check); the stored shared topology
+    is output only if production's coincidence decision agrees with the certificate's and, for a
+    coincident pair, the supports are identical including the radial direction and the faces have
+    equal orientation signs. Anything else returns None: the unchanged exact path for the pair.
+    """
+
+    def __init__(self, model, certificate_policy=None):
+        from .separating_plane_certificate import SPCertifier, CERTIFICATE_VERSION
+        self.model = model
+        self.tolerance = model.tolerance.length
+        self.r_max = _plan_r_max(model)
+        self.version = CERTIFICATE_VERSION
+        self.certifier = SPCertifier(certificate_policy)
+        self.r_pairs = []
+        self._records = {}
+        self._orientations = {}
+
+    # --- inputs -------------------------------------------------------------------------------
+    def _record(self, domain):
+        hit = self._records.get(id(domain))
+        if hit is not None and hit[0] is domain:
+            return hit[1]
+        from .separating_plane_certificate import face_record_from_model, SPRefusal
+        try:
+            value = face_record_from_model(self.model, domain.face_id, domain=domain)
+        except SPRefusal as exc:
+            value = "record:" + str(exc)
+        except Exception as exc:                            # no callback runs here: no cancellation
+            value = "record:" + type(exc).__name__
+        self._records[id(domain)] = (domain, value)
+        return value
+
+    def _orientation(self, domain):
+        """Production's orientation sign of a face (MaterialArrangement.orientation: the sign of the
+        outer loop's chart area from ``area_loop``), or None unless |area| exceeds the face's area
+        tolerance."""
+        hit = self._orientations.get(id(domain))
+        if hit is not None and hit[0] is domain:
+            return hit[1]
+        lo, hi = _domain_bounds(domain)
+        area_tolerance = self.model.tolerance.effective_area(float(np.linalg.norm(hi-lo)))
+        try:
+            area = float(domain.area_loop(domain.boundaries[0], area_tolerance*.05))
+        except (GeometryError, ArithmeticError, ValueError):
+            area = math.nan
+        sign = None if not math.isfinite(area) or abs(area) <= area_tolerance else (1 if area > 0 else -1)
+        self._orientations[id(domain)] = (domain, sign)
+        return sign
+
+    # --- decision -----------------------------------------------------------------------------
+    @staticmethod
+    def started():
+        _increment("planning_mode:topology_certified")
+
+    def _fallback(self, reason):
+        _increment("t2b_fallback:" + _short_reason(reason))
+        return None
+
+    def _certify(self, first, second, check):
+        _increment("t2b_pairs")
+        records = (self._record(first), self._record(second))
+        for record in records:
+            if isinstance(record, str):
+                return self._fallback(record)
+        raised = []
+
+        def guarded():
+            try:
+                check()
+            except BaseException as error:              # noqa: BLE001 - recorded, then re-raised
+                raised.append(error)
+                raise
+        try:
+            with _timed_phase('t2b_certificate'):
+                verdict = self.certifier.certify(records[0], records[1], self.tolerance, check=guarded)
+        except Exception as error:
+            if any(error is item for item in raised):
+                raise                                   # CANCELLED: the callback's exception, unchanged
+            return self._fallback("internal:" + type(error).__name__)
+        if not verdict.certified:
+            return self._fallback(verdict.reason)
+        return verdict
+
+    def _coincident_eligible(self, first, second):
+        """Section 4.4 prerequisites for coincident supports (A9 items 2-3): identical stored
+        cylinder data including the radial direction, and equal orientation signs."""
+        from .separating_plane_certificate import CylinderSupport
+        from fractions import Fraction
+        r1, r2 = self._record(first), self._record(second)
+        if isinstance(r1, str) or isinstance(r2, str):
+            return False
+        s1, s2 = r1.support, r2.support
+        if type(s1) is not CylinderSupport or type(s2) is not CylinderSupport:
+            return False
+
+        def exact(support):
+            return (tuple(map(Fraction, support.origin)), tuple(map(Fraction, support.axis)),
+                    Fraction(support.radius), tuple(map(Fraction, support.radial_direction)))
+        if exact(s1) != exact(s2):
+            return False
+        o1, o2 = self._orientation(first), self._orientation(second)
+        return o1 is not None and o1 == o2
+
+    def pair(self, first, second, model, tolerance, check, point_contacts, face_tolerances):
+        """The certified pair's traces (point contacts appended), or None for the exact path."""
+        verdict = self._certify(first, second, check)
+        if verdict is None:
+            return None
+        shadow = {}
+        with _timed_phase('t2b_support_shadow'):
+            output = _pair_paths_exact(first, second, model, tolerance, check, face_tolerances=face_tolerances,
+                                       _shadow=shadow)
+        production = shadow.get("coincident", False) is True
+        flagged = verdict.evidence.get("coincident_support") is True
+        if production != flagged:
+            _increment("t2b_coincidence_mismatch")
+        if production:
+            # Production's coincident branch returns before clipping, so the shadow has already
+            # run the exact path completely for this pair, overlap check included: its output IS
+            # the exact output and is returned unchanged (identical to exact mode, same-sheet seam
+            # rule untouched). A disagreeing certificate flag or an ineligible pair (radial
+            # direction, orientation signs) is recorded as a fallback; the output is the same.
+            if production != flagged:
+                self._fallback("coincidence_mismatch")
+            elif not self._coincident_eligible(first, second):
+                self._fallback("coincident_support_ineligible:radial_or_orientation")
+            else:
+                _increment("t2b_coincident_exact_output")
+            return tuple(output)
+        if flagged:
+            return self._fallback("coincidence_mismatch")
+        return self._emit(verdict, first, second, tolerance, point_contacts)
+
+    def _emit(self, verdict, first, second, tolerance, point_contacts):
+        """T_out: each shared edge's stored curve (in the first face's loop order) as a trace, each
+        shared vertex not on a shared edge as a point contact (ADR section 4.3, D1)."""
+        r1, r2 = self._record(first), self._record(second)
+        uses1 = [use for loop in r1.loops for use in loop]
+        shared = {use.edge for use in uses1} & {use.edge for loop in r2.loops for use in loop}
+        traces, seen, on_edges = [], set(), set()
+        for use in uses1:
+            if use.edge in shared and use.edge not in seen:
+                seen.add(use.edge)
+                on_edges.update((use.start_vertex, use.end_vertex))
+                traces.append(use.edge_curve if use.edge_curve is not None else use.curve)
+        positions1, ids2 = dict(r1.vertices), {vid for vid, _position in r2.vertices}
+        if point_contacts is not None:
+            for use in uses1:
+                vertex = use.start_vertex
+                if vertex in ids2 and vertex not in on_edges:
+                    point = tuple(float(x) for x in positions1[vertex])
+                    if not any(np.linalg.norm(np.asarray(point)-old) <= tolerance for old in point_contacts):
+                        point_contacts.append(point)
+        self.r_pairs.append((first.face_id, second.face_id, float(verdict.r_pair)))
+        _increment("t2b_certified")
+        return tuple(traces)
+
+    def seal(self, plan):
+        values = {item.name: getattr(plan, item.name) for item in fields(IntersectionPlan)}
+        sealed = TopologyCertifiedPlan(**values, planning_mode="topology_certified", route_checksum="",
+                                       certificate_version=self.version, r_max=self.r_max,
+                                       r_pairs=tuple(self.r_pairs))
+        return replace(sealed, route_checksum=_route_checksum(sealed))
+
+
+def _pair_paths(first, second, model, tolerance, check, *, point_contacts=None, face_tolerances=None, route=None):
+    """Pair-stage traces of two domains. ``route`` (topology_certified mode only) may replace the
+    clipping stage of a certified pair by its stored shared topology (ADR-T2 v2 section 4, T2b);
+    without a route this is the unchanged exact path."""
+    if route is not None:
+        traces = route.pair(first, second, model, tolerance, check, point_contacts, face_tolerances)
+        if traces is not None:
+            return traces
+    return _pair_paths_exact(first, second, model, tolerance, check, point_contacts=point_contacts,
+                             face_tolerances=face_tolerances)
+
+
+def _pair_paths_exact(first, second, model, tolerance, check, *, point_contacts=None, face_tolerances=None,
+                      _shadow=None):
+    """The exact pair stage. With ``_shadow`` (a dict) it runs only the support stage, in full and
+    with production's own coincidence test and overlap check, records ``_shadow["coincident"]``
+    and returns None before clipping (the D3 / section 5 shadow of a certified pair)."""
     a, b = first.support, second.support
     family = ('plane_plane' if isinstance(a, Plane) and isinstance(b, Plane) else
               'plane_cylinder' if isinstance(a, (Plane, Cylinder)) and isinstance(b, (Plane, Cylinder))
@@ -405,6 +775,7 @@ def _pair_paths(first, second, model, tolerance, check, *, point_contacts=None, 
         if result.kind is IntersectionKind.DISJOINT:
             return ()
         if result.kind is IntersectionKind.COINCIDENT:
+            _mark_coincident(_shadow)
             return _coplanar_traces(first, second, tolerance, check, model)
         component = result.components[0]
         point, direction = np.asarray(component.witnesses[0]), np.asarray(component.direction)
@@ -415,12 +786,14 @@ def _pair_paths(first, second, model, tolerance, check, *, point_contacts=None, 
         from .extruded_pair_supports import extruded_pair_support
         result = extruded_pair_support(a, b, tolerance=tolerance, cancellation_check=lambda: (check() or False))
         if result.coincident:
+            _mark_coincident(_shadow)
             return _coplanar_traces(first, second, tolerance, check, model)
         paths = (*result.curves, *(LinePath(start, end) for start, end in result.segments))
     elif isinstance(a, Cone) or isinstance(b, Cone):
         from .quadric_supports import cone_support
         result = cone_support(a, b, tolerance=tolerance, cancellation_check=lambda: (check() or False))
         if result.coincident:
+            _mark_coincident(_shadow)
             return _coplanar_traces(first, second, tolerance, check, model)
         paths = (*result.curves, *(LinePath(start, end) for start, end in result.segments))
     elif (isinstance(a, Plane) and isinstance(b, Cylinder)) or (isinstance(a, Cylinder) and isinstance(b, Plane)):
@@ -439,10 +812,13 @@ def _pair_paths(first, second, model, tolerance, check, *, point_contacts=None, 
     else:
         result = cylinder_cylinder_support(a, b, tolerance=tolerance, cancellation_check=lambda: (check() or False))
         if result.coincident:
+            _mark_coincident(_shadow)
             if _rectangular_cylinder(first, tolerance) and _rectangular_cylinder(second, tolerance):
                 return _coincident_cylinder_rectangles(first, second, model, tolerance)
             return _coplanar_traces(first, second, tolerance, check, model)
         paths = (*result.curves, *(LinePath(start, end) for start, end in result.segments))
+    if _shadow is not None:
+        return None
     candidates=list(getattr(result,'points',()))
     def clip(domain,curve):
         if point_contacts is None:
@@ -472,6 +848,7 @@ def plan_intersections(model, operands, *, policy):
     from .intersections import _normalize_operand
     handles = tuple(sorted(set(_normalize_operand(model, value) for value in operands)))
     effective = _policy(policy)
+    mode = resolve_planning_mode(effective)         # once per planning call (ADR-T2 v2 section 1)
     from .existing_material_preparation import try_plan_existing
     existing = try_plan_existing(model, handles, effective)
     if existing is not None:
@@ -487,7 +864,7 @@ def plan_intersections(model, operands, *, policy):
         raise GeometryError('epoch planning native support binding is unavailable')
     junction_policy = _junction_bounds_policy(False) if effective.max_predicates is not None else nullcontext()
     with root_isolation_memo(), _timed_phase('intersection_planning'), junction_policy:
-        plan=_plan_intersections(model, operands, policy=policy)
+        plan=_plan_intersections(model, operands, policy=policy, _planning_mode=mode)
     if native is not None:
         if (capture_native_supports(model)!=native or model.model_id!=plan.model_id or
                 model.revision!=plan.revision or to_dict(model)['checksum']['value']!=plan.source_checksum):
@@ -496,9 +873,18 @@ def plan_intersections(model, operands, *, policy):
     return plan
 
 
-def _plan_intersections(model, operands, *, policy):
+def _plan_intersections(model, operands, *, policy, _planning_mode="exact", _certificate_policy=None):
     from .intersections import _normalize_operand
     policy = _policy(policy)
+    route = None
+    if _planning_mode == "topology_certified":
+        route = _TopologyRoute(model, _certificate_policy)
+        route.started()
+    elif _planning_mode != "exact":
+        raise GeometryError(f"intersection planning mode {_planning_mode!r} is not supported")
+    elif policy.planning_mode is not None:
+        # State E carries no route field anywhere, including the stored policy.
+        policy = replace(policy, planning_mode=None)
     if policy.intent not in (ConnectionIntent.CONNECT, ConnectionIntent.IMPRINT, ConnectionIntent.REUSE_EXISTING):
         raise GeometryError("intersection preparation requires CONNECT, IMPRINT or REUSE_EXISTING intent")
     revision, checksum = model.revision, to_dict(model)["checksum"]["value"]
@@ -631,7 +1017,8 @@ def _plan_intersections(model, operands, *, policy):
             with _timed_phase('intersection_support_and_clipping'):
                 pair_paths = _pair_paths(first, second, model, tolerance, check,point_contacts=pair_points,
                                          face_tolerances=(model.tolerance.effective_length(lengths[first_id]),
-                                                          model.tolerance.effective_length(lengths[second_id])))
+                                                          model.tolerance.effective_length(lengths[second_id])),
+                                         route=route)
         except GeometryError as exc:
             raise GeometryError(f"intersection batch face:{first_id}/face:{second_id}: {exc}") from exc
         for curve in pair_paths:
@@ -664,7 +1051,8 @@ def _plan_intersections(model, operands, *, policy):
     axes=_synchronize_member_events(arrangements,axes,check)
     plan=IntersectionPlan(model.model_id, revision, checksum, handles, policy,
                           arrangements, axes, contacts,face_contacts=tuple(face_contacts))
-    return replace(plan,content_checksum=_plan_content(plan))
+    plan=replace(plan,content_checksum=_plan_content(plan))
+    return plan if route is None else route.seal(plan)
 
 
 def _coincident(first, second, tolerance):
@@ -916,7 +1304,7 @@ def _apply_intersections_in_place(model, plan, *, policy, _edge_preimage_draft=N
     if not isinstance(plan, IntersectionPlan):
         raise TypeError("apply_intersections needs an IntersectionPlan")
     policy = _policy(policy)
-    _validate_policy(plan,policy)
+    _validate_policy(plan,policy,model)
     if model.model_id != plan.model_id:
         raise GeometryError("intersection plan belongs to another model")
     if model.revision != plan.revision:
@@ -1321,13 +1709,21 @@ def apply_intersections(model, plan, *, policy):
     """
     junction_policy = _junction_bounds_policy(False) if _policy(policy).max_predicates is not None else nullcontext()
     with root_isolation_memo(), _timed_phase('intersection_application'), junction_policy:
-        return _apply_intersections(model, plan, policy=policy)
+        result = _apply_intersections(model, plan, policy=policy)
+    if isinstance(plan, TopologyCertifiedPlan) and type(result) is IntersectionApplication:
+        # Only reached after _validate_policy accepted the state-T plan (matrix row 3).
+        result = TopologyCertifiedApplication(result.plan, result.change_set, result.joint_edges, result.reused,
+                                              plan.planning_mode, plan.r_max, plan.certificate_version)
+    return result
 
 
 def _apply_intersections(model, plan, *, policy):
     if not isinstance(plan, IntersectionPlan):
         raise TypeError("apply_intersections needs an IntersectionPlan")
     effective = _policy(policy)
+    if isinstance(plan, TopologyCertifiedPlan):
+        # A state-T plan is validated before any route dispatch (matrix rows 3-11).
+        _validate_policy(plan, effective, model)
     from .existing_material_preparation import is_existing_plan, eligible, apply_existing
     if is_existing_plan(plan):
         return apply_existing(model, plan, effective)
@@ -1337,7 +1733,7 @@ def _apply_intersections(model, plan, *, policy):
     active_faces = all(h.kind == 'face' and h.id in model.faces for h in plan.operands)
     if is_bounded_plan(plan) or (active_faces and handles_bounded(model, plan.operands)):
         return apply_bounded(model, plan, effective)
-    _validate_policy(plan,effective)
+    _validate_policy(plan,effective,model)
     if model.model_id != plan.model_id:
         raise GeometryError("intersection plan belongs to another model")
     if model.revision != plan.revision:

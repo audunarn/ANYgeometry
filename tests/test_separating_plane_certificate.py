@@ -1365,11 +1365,16 @@ def test_longdouble_is_refused_explicitly():
         sp.degree_two_bound((np.longdouble(1), 0, 0, 0, 0))
 
 
-def test_module_is_not_wired_into_production():
+def test_module_is_wired_only_into_the_opt_in_route():
+    # T2-1b: the only production user is the topology_certified route of batch_intersections, which
+    # imports the module lazily (inside the route), so the default exact path never imports it.
     src = pathlib.Path(sp.__file__).resolve().parent
     users = [p.name for p in src.rglob("*.py") if p.name != "separating_plane_certificate.py"
              and "separating_plane_certificate" in p.read_text(encoding="utf-8", errors="replace")]
-    assert users == []
+    assert users == ["batch_intersections.py"]
+    text = (src / "batch_intersections.py").read_text(encoding="utf-8")
+    assert not any(line.startswith(("from .separating_plane_certificate", "import "))
+                   and "separating_plane_certificate" in line for line in text.splitlines())
 
 
 # ------------------------------------------------------------ randomized soundness (exact oracle)

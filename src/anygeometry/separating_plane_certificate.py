@@ -1881,12 +1881,19 @@ def certify_face_pair(first, second, tolerance, *, policy=None, check=None):
 
 # ----------------------------------------------------------------------------------- model reader
 
-def face_record_from_model(model, face_id):
-    """FaceRecord of a model face: MaterialDomain support and paths, model vertex ids (input only)."""
+def face_record_from_model(model, face_id, *, domain=None):
+    """FaceRecord of a model face: MaterialDomain support and paths, model vertex ids (input only).
+
+    ``domain`` (T2-1b) is the planner's own MaterialDomain of the face, so that the record
+    describes exactly the domain the exact path uses; by default it is built here.
+    """
     from .material_arrangement import MaterialDomain
     from .arrangement_geometry import freeze_edge
     from .surfaces import Cylinder, Plane
-    domain = MaterialDomain.from_model(model, face_id)
+    if domain is None:
+        domain = MaterialDomain.from_model(model, face_id)
+    elif domain.face_id != face_id:
+        raise _Refusal("record:domain_face")
     face = model.faces[face_id]
     support = domain.support
     def floats(values, what):
