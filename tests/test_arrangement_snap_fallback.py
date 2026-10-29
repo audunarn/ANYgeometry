@@ -36,6 +36,13 @@ CONSERVATION = "arrangement failed material conservation"
 CANCELLED = "intersection arrangement cancelled"
 
 
+@pytest.fixture
+def seam_retry_disabled(monkeypatch):
+    """Switch the OPT-S seam-rotation retry off. CAP-1's fallback runs inside each attempt (before S), so a
+    test that observes CAP-1's own refusal must not let the second-chance retry accept the case afterwards."""
+    monkeypatch.setattr(ma, "_SEAM_RETRY_ENABLED", False)
+
+
 def _fixture(data=DATA):
     record = json.loads(data.read_text())
     support = Plane(*(tuple(record["support"][key]) for key in ("origin", "u_vector", "v_vector")))
@@ -92,6 +99,7 @@ def test_reproducer_is_accepted_by_the_snap_fallback():
     assert counters["arrangement_snap_moved_edges"] >= 1
 
 
+@pytest.mark.usefixtures("seam_retry_disabled")
 def test_cap1082_wall449_needed_the_touch_excuse_and_refuses_with_the_original_error():
     # Contract decision (no touch excuse): the moved seam edge meets the wall-449 arc again 8.1e-8 m from their
     # shared vertex (near tangent, sine 6.7e-13), beyond the closure bound 2 tol / 1024 ~ 2e-12 m. Fix rounds
@@ -104,6 +112,34 @@ def test_cap1082_wall449_needed_the_touch_excuse_and_refuses_with_the_original_e
     assert counters["arrangement_snap_fallback_attempts"] == 1
     assert counters.get("arrangement_snap_fallbacks", 0) == 0
     assert counters["arrangement_snap_fallback_refusals"] == 1
+
+
+def test_cap1_refusal_is_followed_by_an_accepting_seam_rotation_retry():
+    # Integration order (CAP-1 first, OPT-S second): on cap 1082 + wall 449 the snap fallback of the first
+    # attempt refuses (no touch excuse), the refusal is the original conservation error, and the OPT-S retry
+    # with rotated seams then accepts. No CAP-1 snap is part of the accepted arrangement.
+    with collect_runtime_diagnostics() as counters:
+        arrangement = _arrange(TOUCH_DATA)
+    assert counters["arrangement_snap_fallback_attempts"] >= 1
+    assert counters["arrangement_snap_fallback_refusals"] == counters["arrangement_snap_fallback_attempts"]
+    assert counters.get("arrangement_snap_fallbacks", 0) == 0
+    assert counters["arrangement_seam_rotation_retries"] == 1
+    assert counters["arrangement_seam_rotation_accepted"] == 1
+    domain, _traces, _tolerance, area_tolerance = _fixture(TOUCH_DATA)
+    native = area_tolerance / domain.area_jacobian
+    original = abs(domain.area_loop(domain.boundaries[0], native * .05))
+
+    def loop_area(loop):
+        pieces = tuple(ArrangementPath(arrangement.paths[i].curve if forward else arrangement.paths[i].curve.subcurve(1., 0.))
+                       for i, forward in loop)
+        return domain.area_loop(pieces, native * .05)
+    assert all(loop_area(cell.outer) > 0 for cell in arrangement.cells)
+    recomputed = sum(loop_area(cell.outer) + sum(loop_area(hole) for hole in cell.holes) for cell in arrangement.cells)
+    assert abs(original - recomputed) <= native
+    assert abs(original - arrangement.area) <= native
+    assert len(arrangement.cells) == 10
+    # With the retry switched off the same input raises CAP-1's refusal (test above): acceptance comes from
+    # the retry alone.
 
 
 def test_diagnostics_record_the_fired_fallback():
@@ -139,6 +175,7 @@ def test_accepted_arrangement_never_attempts_the_fallback():
     assert records == {} and more_records == {}
 
 
+@pytest.mark.usefixtures("seam_retry_disabled")
 def test_move_beyond_the_bound_refuses_with_the_original_error(monkeypatch):
     # Test seam: the snap sees a merge tolerance 1000x smaller, so the measured moves (~1e-11 m) exceed it.
     real = ma._snap_open_vertices
@@ -370,6 +407,7 @@ def test_curved_ends_disagreeing_beyond_the_residual_bound_refuse():
             assert result[2] == {2} and result[1][2][0] == exact_vector((0., 0., 0.))
 
 
+@pytest.mark.usefixtures("seam_retry_disabled")
 def test_rejected_crossing_check_raises_the_original_error(monkeypatch):
     monkeypatch.setattr(ma, "_snapped_edges_clear", lambda *args: False)
     with collect_runtime_diagnostics() as counters:
@@ -687,6 +725,7 @@ def test_scale_sweep_has_no_false_accepts():
     assert crossings >= 100 and clear_accepted >= 100                 # the sweep exercises both outcomes
 
 
+@pytest.mark.usefixtures("seam_retry_disabled")
 def test_fallback_refuses_a_nan_area_balance(monkeypatch):
     # A non-finite area (overflow) must fail the conservation comparison: ``not abs(x) > tol`` accepted NaN.
     real = ma._float_material_cells
@@ -704,6 +743,7 @@ def test_fallback_refuses_a_nan_area_balance(monkeypatch):
     assert counters["arrangement_snap_fallback_refusals"] == 1
 
 
+@pytest.mark.usefixtures("seam_retry_disabled")
 def test_fallback_float_overflow_refuses_with_the_original_error(monkeypatch):
     # A rational-to-float conversion that overflows (OverflowError) inside the fallback refuses; it used to
     # escape as an OverflowError instead of the original conservation error.
@@ -725,6 +765,7 @@ def test_float_faithful_rule():
         assert ma._float_faithful(value) is faithful
 
 
+@pytest.mark.usefixtures("seam_retry_disabled")
 def test_moved_edge_direction_outside_the_float_range_refuses(monkeypatch):
     # The outgoing order at a vertex with a curved edge uses atan2 of the moved edge's float chart direction;
     # a direction that does not convert faithfully (subnormal, overflow) refuses instead of ordering by it.

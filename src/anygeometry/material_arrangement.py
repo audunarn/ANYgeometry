@@ -2047,6 +2047,9 @@ _SEAM_RETRY_ROTATION = (0.6, 0.8)
 #: The refusals that may stem from the seam directions (decomposition seams made tangent to a trace at its
 #: own end, two seams collinear within tol whose boundary hits are not, seam-carried conservation gaps).
 _SEAM_RETRY_REFUSALS = ("arrangement contains an unresolved bridge", "arrangement failed material conservation")
+#: Module-level switch of the OPT-S retry (default on). CAP-1's snap fallback runs inside each attempt, so it
+#: decides first and the retry is the second chance; tests set this to False to observe CAP-1's own refusals.
+_SEAM_RETRY_ENABLED = True
 
 
 def _arrange_material(domain, traces, *, tolerance, cancellation_check=None,
@@ -2069,7 +2072,8 @@ def _arrange_material(domain, traces, *, tolerance, cancellation_check=None,
     try:
         return _arrange_material_once(domain, traces, record=record, **options)
     except GeometryError as error:
-        if str(error) not in _SEAM_RETRY_REFUSALS or not record.get("seams") or max_predicates is not None:
+        if (not _SEAM_RETRY_ENABLED or str(error) not in _SEAM_RETRY_REFUSALS or not record.get("seams")
+                or max_predicates is not None):
             raise
         original = error
     from .runtime_diagnostics import _increment, _timed_phase

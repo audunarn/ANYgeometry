@@ -104,11 +104,24 @@ def test_arc_end_tangent_seam_bridge_is_accepted_after_rotation(name):
     assert _seam_directions(name, arrangement)
 
 
-def test_original_1082_subset_conservation_refusal_is_accepted_after_rotation():
+def test_original_1082_subset_conservation_refusal_is_accepted_after_rotation(monkeypatch):
+    # CAP-1's snap fallback runs first inside each attempt and accepts this subset (see the next test); make it
+    # decline so the conservation refusal reaches the retry, as on the S branch alone.
+    monkeypatch.setattr(ma, "_snap_fallback", lambda *args, **kwargs: None)
     with collect_runtime_diagnostics() as counters:
         arrangement = _arrange("original_1082_121")
     assert counters["arrangement_seam_rotation_retries"] == 1
     assert counters["arrangement_seam_rotation_accepted"] == 1
+    assert len(arrangement.cells) > 1000
+    _assert_conserved("original_1082_121", arrangement)
+
+
+def test_original_1082_subset_is_accepted_by_cap1_before_any_retry():
+    # Integration order: CAP-1 first (cheap, no layout change), OPT-S only if CAP-1 declines.
+    with collect_runtime_diagnostics() as counters:
+        arrangement = _arrange("original_1082_121")
+    assert counters["arrangement_snap_fallbacks"] == 1
+    assert counters.get("arrangement_seam_rotation_retries", 0) == 0
     assert len(arrangement.cells) > 1000
     _assert_conserved("original_1082_121", arrangement)
 
