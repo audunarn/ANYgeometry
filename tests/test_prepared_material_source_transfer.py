@@ -256,12 +256,18 @@ def test_source_transfer_edge_map_literals_cannot_be_forged_after_issue():
 def test_source_edge_transport_retains_weighted_cropped_and_reversed_native_domains(reverse):
     from fractions import Fraction as F
     from anygeometry import Plane, plan_plane_split, apply_plane_split
-    from anygeometry.nurbs import NurbsCurve
+    from anygeometry.nurbs import NurbsCurve, NurbsSurface, CurveOnSurface
     from test_mixed_source_junctions import fan_receipt
     source, _, _, _ = square_cells()
     face = source.faces[next(iter(source.faces))]
-    uv = ((0., 0.), (1., 0.), (1., 1.), (0., 1.))
+    # Keep the physical unit square but place its trim in an inset chart.
+    # The weighted, cropped carrier then has its ENTIRE control hull inside
+    # the supported chart, including controls outside the active interval.
+    support = NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.),
+        (((-1.5, -1.5, 0.), (-1.5, 2.5, 0.)), ((2.5, -1.5, 0.), (2.5, 2.5, 0.))))
+    uv = ((.375, .375), (.625, .375), (.625, .625), (.375, .625))
     with source.transaction():
+        source._put_entity('face', replace(face, surface=support))
         for index, use in enumerate(face.loop):
             first, last = uv[index], uv[(index+1)%4]
             controls = tuple(tuple(a+factor*(b-a) for a, b in zip(first, last)) for factor in (-1.25, 1.25))
@@ -270,6 +276,39 @@ def test_source_edge_transport_retains_weighted_cropped_and_reversed_native_doma
                 controls, weights, domain = controls[::-1], weights[::-1], domain[::-1]
             edge = source.edges[use.edge]
             pcurve = NurbsCurve(1, (2., 2., 6., 6.), controls, weights, domain=domain)
+            assert all(0 <= value <= 1 for point in controls for value in point)
+            source._put_entity('edge', replace(edge, curve=CurveOnSurface(support, pcurve)))
+    prepared = clone_prepared_geometry(source, new_preparation_epoch=True)
+    plan = plan_plane_split(prepared, list(prepared.faces),
+        Plane((.5, 0., 0.), (0., 1., 0.), (0., 0., 1.)))
+    apply_plane_split(prepared, plan, policy='imprint')
+    cells = tuple(fan_receipt(prepared, child) for child in prepared.faces.values())
+    transfer = query_prepared_material_source_transfer(source, prepared, cells)
+    validate_prepared_material_source_transfer_binding(source, prepared, transfer, cell_receipts=cells)
+    for edge, original, a, b in transfer.edge_parameter_maps:
+        domain = tuple(F(float(value)) for value in source.edges[original.id].curve.pcurve.domain)
+        child = tuple(F(float(value)) for value in prepared.edges[edge.id].curve.pcurve.domain)
+        assert child == tuple(domain[0]+(domain[1]-domain[0])*value for value in (a, b))
+    assert any(a != 0 or b != 1 for edge, original, a, b in transfer.edge_parameter_maps)
+
+
+@pytest.mark.parametrize('reverse', (False, True))
+def test_source_edge_transport_crops_children_of_weighted_full_chart_nonunit_domain(reverse):
+    """Separate full-source case; the inset pre-cropped-source case stays above."""
+    from fractions import Fraction as F
+    from anygeometry import Plane, plan_plane_split, apply_plane_split
+    from anygeometry.nurbs import NurbsCurve
+    from test_mixed_source_junctions import fan_receipt
+    source, _, _, _ = square_cells()
+    face = source.faces[next(iter(source.faces))]
+    uv = ((0., 0.), (1., 0.), (1., 1.), (0., 1.))
+    with source.transaction():
+        for index, use in enumerate(face.loop):
+            controls, weights, domain = (uv[index], uv[(index+1)%4]), (1., 3.), (3., 5.)
+            if reverse:
+                controls, weights, domain = controls[::-1], weights[::-1], domain[::-1]
+            edge = source.edges[use.edge]
+            pcurve = NurbsCurve(1, (3., 3., 5., 5.), controls, weights, domain=domain)
             source._put_entity('edge', replace(edge, curve=replace(edge.curve, pcurve=pcurve)))
     prepared = clone_prepared_geometry(source, new_preparation_epoch=True)
     plan = plan_plane_split(prepared, list(prepared.faces),

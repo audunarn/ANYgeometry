@@ -37,14 +37,21 @@ def test_closed_subcurve_domains_and_sweeps_remain_exact(kind):
 def test_point_queries_do_not_request_discarded_analytic_derivatives(monkeypatch):
     geometry,plane,definition,outputs=fixture('nurbs')
     face=next(iter(geometry.faces));geometry.face_point(face,.3,.4)
-    original=geometry._edge_parameter_derivative_object
+    original=geometry._topology_face_points_many
     calls=[]
-    def derivative(edge,parameter):
-        calls.append(edge.id);return original(edge,parameter)
-    monkeypatch.setattr(geometry,'_edge_parameter_derivative_object',derivative)
+    original_edge=geometry._edge_parameter_derivative_object
+    edge_calls=[]
+    def edge_derivative(edge,parameter):
+        edge_calls.append(edge.id);return original_edge(edge,parameter)
+    monkeypatch.setattr(geometry,'_edge_parameter_derivative_object',edge_derivative)
+    def derivative(face,parameters,**options):
+        if options.get('_derivatives',False):calls.append(face)
+        return original(face,parameters,**options)
+    monkeypatch.setattr(geometry,'_topology_face_points_many',derivative)
     geometry.face_point(face,.31,.42)
     geometry.evaluate_face_many(face,np.array(((.2,.3),(.7,.8))))
     assert not calls
+    assert not edge_calls
     geometry.face_derivatives_many(face,np.array(((.2,.3),(.7,.8))))
     assert calls
 

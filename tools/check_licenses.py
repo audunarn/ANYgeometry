@@ -40,10 +40,19 @@ INSTALLED_LICENSE_ALIASES = {
     },
     "mpmath": {"BSD-3-Clause", "BSD"},
     "pytest": {"MIT"},
+    "scipy": {"BSD-3-Clause"},
     "shapely": {"BSD-3-Clause", "BSD 3-Clause"},
     "setuptools": {"MIT"},
     "twine": {"Apache-2.0", "Apache Software License"},
     "wheel": {"MIT"},
+}
+
+# Reviewed SciPy 1.17.1 Windows wheel legacy metadata. This binds the complete
+# upstream BSD text AND the OpenBLAS/LAPACK/GCC runtime notices, including the
+# GCC Runtime Library Exception 3.1. It is not a general copyleft exception.
+# Review scope and primary sources: THIRD_PARTY_NOTICES.md.
+SCIPY_REVIEWED_LEGACY = {
+    ("1.17.1", "804e09cf4c9fbb3d8083685570891ccc5b20e9038623dff3e04bb3651d4dd18f"),
 }
 
 
@@ -112,7 +121,21 @@ def _license_from_metadata(distribution: importlib_metadata.Distribution) -> str
     return ""
 
 
-def _check_installed(rows: list[dict[str, object]]) -> None:
+def _installed_license(name: str, distribution: importlib_metadata.Distribution) -> str:
+    actual = _license_from_metadata(distribution)
+    legacy = distribution.metadata.get("License", "").strip()
+    if name == "scipy" and legacy and legacy.upper() != "UNKNOWN" and legacy not in INSTALLED_LICENSE_ALIASES[name]:
+        fingerprint = hashlib.sha256(legacy.replace("\r\n", "\n").encode("utf-8")).hexdigest()
+        expression = distribution.metadata.get("License-Expression", "").strip()
+        if (distribution.version, fingerprint) not in SCIPY_REVIEWED_LEGACY:
+            _fail("installed dependency 'scipy' has unreviewed composite license metadata")
+        if expression and expression != "BSD-3-Clause":
+            _fail("installed dependency 'scipy' has conflicting explicit license metadata")
+        return "BSD-3-Clause"
+    return actual
+
+
+def _check_installed(rows: list[dict[str, object]], *, installed_extras: set[str] | None = None) -> None:
     for row in rows:
         # PEP 517 build requirements run in a separate isolated environment.
         # Their exact declarations and licenses are audited statically above;
@@ -123,22 +146,34 @@ def _check_installed(rows: list[dict[str, object]]) -> None:
         try:
             distribution = importlib_metadata.distribution(name)
         except importlib_metadata.PackageNotFoundError:
+            # Explicit profiles only relax absence of unselected optionals.
+            # Present optional distributions are always audited, selected or not.
+            if (installed_extras is not None and str(row["scope"]).startswith("optional:")
+                    and str(row["scope"]).removeprefix("optional:") not in installed_extras):
+                continue
             _fail(f"declared dependency {name!r} is not installed")
-        actual = _license_from_metadata(distribution)
+        actual = _installed_license(name, distribution)
         if not actual:
             _fail(f"installed dependency {name!r} has unknown license metadata")
         if any(token in actual.upper() for token in FORBIDDEN_LICENSE_TOKENS):
             _fail(f"installed dependency {name!r} reports review-required license {actual!r}")
-        if actual not in INSTALLED_LICENSE_ALIASES[name]:
+        aliases = INSTALLED_LICENSE_ALIASES.get(name, set())
+        if actual not in aliases:
             _fail(
                 f"installed dependency {name!r} reports {actual!r}, expected one of "
-                f"{sorted(INSTALLED_LICENSE_ALIASES[name])!r}"
+                f"{sorted(aliases)!r}"
             )
 
 
-def check(*, check_installed: bool = False) -> None:
+def check(*, check_installed: bool = False, installed_extras: list[str] | None = None) -> None:
     metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     project = metadata["project"]
+    if installed_extras is not None:
+        if not check_installed:
+            _fail("--installed-extra requires --check-installed")
+        unknown = set(installed_extras) - set(project.get("optional-dependencies", {}))
+        if unknown:
+            _fail(f"unknown installed extras: {sorted(unknown)!r}")
     if project.get("license") != EXPECTED_LICENSE:
         _fail("pyproject.toml does not declare MPL-2.0")
     if project.get("license-files") != EXPECTED_LICENSE_FILES:
@@ -188,7 +223,7 @@ def check(*, check_installed: bool = False) -> None:
         if name not in notices:
             _fail(f"third-party notice is missing {name!r}")
     if check_installed:
-        _check_installed(rows)
+        _check_installed(rows, installed_extras=None if installed_extras is None else set(installed_extras))
     print(f"license check passed: {EXPECTED_LICENSE}; {len(rows)} direct dependencies")
 
 
@@ -199,8 +234,14 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="also verify installed direct-dependency license metadata",
     )
+    parser.add_argument(
+        "--installed-extra", action="append", default=None,
+        help="require this optional extra when checking installed metadata (repeatable); "
+             "runtime/dev and every present declared optional dependency are always checked; "
+             "without a profile all declared extras must be installed",
+    )
     arguments = parser.parse_args(argv)
-    check(check_installed=arguments.check_installed)
+    check(check_installed=arguments.check_installed, installed_extras=arguments.installed_extra)
     return 0
 
 

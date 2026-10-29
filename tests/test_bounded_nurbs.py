@@ -39,13 +39,24 @@ def test_public_closed_bounded_imprint_retains_both_materials_and_world_identity
 
 
 def test_bounded_batch_plan_is_source_bound_and_rejects_raw_edits():
+    from anygeometry.structural import FrozenMetadata
     model, wall, plate = fixture()
     plan = plan_intersections(model, [('face', wall), ('face', plate)], policy='imprint')
-    model.faces[plate].metadata['raw-edit'] = True
-    before = to_dict(model)
-    with pytest.raises(GeometryError, match='stale|changed'):
-        apply_intersections(model, plan, policy='imprint')
-    assert to_dict(model) == before
+    face = model.faces[plate]
+    original = face.metadata
+    before, revision = to_dict(model), model.revision
+    with pytest.raises(TypeError):
+        face.metadata['raw-edit'] = True
+    assert face.metadata is original
+    assert model.revision == revision and to_dict(model) == before
+    try:
+        object.__setattr__(face, 'metadata', FrozenMetadata({**original, 'raw-edit': True}))
+        before = to_dict(model)
+        with pytest.raises(GeometryError, match='stale|changed'):
+            apply_intersections(model, plan, policy='imprint')
+        assert model.revision == revision and to_dict(model) == before
+    finally:
+        object.__setattr__(face, 'metadata', original)
 
 
 def test_copied_bounded_plan_cannot_enter_generic_empty_arrangement_route():

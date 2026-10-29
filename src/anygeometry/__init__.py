@@ -353,6 +353,7 @@ from .surfaces import (
 )
 
 __all__ = [
+    "ClosedSolidRegion", "SolidRegionSnapshot",
     "backend_info",
     "model_to_world_points",
     "world_to_model_points",
@@ -678,6 +679,7 @@ __all__ = [
     "JunctionMemberUse",
 ]
 
+from .solid_regions import ClosedSolidRegion, SolidRegionSnapshot
 __version__ = "0.4.7"
 
 from .prepared_material_source_transfer import (PreparedMaterialSourceTransfer,
@@ -692,9 +694,10 @@ from .source_station_transport import (SourceStationTransportRow, PreparedSource
     query_prepared_source_station_transport, validate_prepared_source_station_transport_binding)
 __all__ += ["SourceStationTransportRow", "PreparedSourceStationTransport",
             "query_prepared_source_station_transport", "validate_prepared_source_station_transport_binding"]
-from .prepared_partition_relation import query_prepared_partition_disjoint_interiors
+from .prepared_partition_relation import (
+    has_current_prepared_partition_lineage, query_prepared_partition_disjoint_interiors)
 from .same_support_material_relation import query_same_support_material_disjoint_interiors
-__all__ += ["query_prepared_partition_disjoint_interiors"]
+__all__ += ["has_current_prepared_partition_lineage", "query_prepared_partition_disjoint_interiors"]
 __all__ += ["query_same_support_material_disjoint_interiors"]
 __all__ += ["PlaneSplitPlan", "PlaneSplitApplication", "plan_plane_split", "apply_plane_split"]
 from .wave_surface_clipping import SignedClip, clip_triangle_positive, clip_polygon_positive

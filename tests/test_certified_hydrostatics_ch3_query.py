@@ -93,7 +93,7 @@ PARTIAL_PLANES = [name for name in PLANES if name not in ("dry z0.25", "full z3.
 
 @lru_cache(None)
 def prepared(which):
-    from conftest import b1_full_hull_shared, b1_half_hull_shared
+    from _b1_shared_models import b1_full_hull_shared, b1_half_hull_shared
     model, faces = b1_full_hull_shared() if which == "full" else b1_half_hull_shared()
     start = time.perf_counter()
     result = prepare_certified_hydrostatics(model, list(faces.values()))
@@ -368,7 +368,7 @@ def test_the_bottom_adjacent_plane_has_a_tiny_but_positive_volume():
 
 def test_cold_preparation_and_query_times_are_recorded():
     start = time.perf_counter()
-    from conftest import b1_full_hull_shared
+    from _b1_shared_models import b1_full_hull_shared
     model, faces = b1_full_hull_shared()
     prepare_certified_hydrostatics(model, list(faces.values()))
     seconds = time.perf_counter() - start

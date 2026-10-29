@@ -223,18 +223,23 @@ def test_holes_keep_one_existing_uv_frame(monkeypatch: pytest.MonkeyPatch) -> No
     )
     punch_hole(geometry, face, (2.0, 2.0, 0.0), 0.5)
     geometry.set_face_surface(face, CoonsSurface())
-    original = model_module.closest_uv
+    original = GeometryModel._face_local_uv_rows
     calls = 0
+    projected_faces = []
 
-    def spy(*args: object, **kwargs: object) -> tuple[float, float]:
+    def spy(model, face_id, points):
         nonlocal calls
-        calls += 1
-        return original(*args, **kwargs)
+        calls += len(points)
+        projected_faces.append(face_id)
+        mapped = original(model, face_id, points)
+        # Both loops must use this physical plate's one 4-by-4 UV frame.
+        assert mapped == pytest.approx(np.asarray(points)[:, :2] / 4.)
+        return mapped
 
     def forbidden_exact(*_args: object, **_kwargs: object) -> np.ndarray:
         raise AssertionError("hole-bearing face mixed canonical and projected UV")
 
-    monkeypatch.setattr(model_module, "closest_uv", spy)
+    monkeypatch.setattr(GeometryModel, "_face_local_uv_rows", spy)
     monkeypatch.setattr(
         GeometryModel, "_topology_coons_outer_loop_uv", forbidden_exact
     )
@@ -243,6 +248,8 @@ def test_holes_keep_one_existing_uv_frame(monkeypatch: pytest.MonkeyPatch) -> No
     loops = geometry.face_trim_loops_uv(face, curve_samples=9)
 
     assert len(loops) == 2
+    assert projected_faces and set(projected_faces) == {face}
+    assert loops[0] == pytest.approx(np.asarray(((0., 0.), (1., 0.), (1., 1.), (0., 1.))))
     assert calls > len(geometry.faces[face].loop)
 
 

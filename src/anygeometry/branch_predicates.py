@@ -135,6 +135,74 @@ def _proportional(n, d, m, d1) -> bool:
     return ratio != 0 and all(Fraction(x) == ratio * y for x, y in zip(first, second))
 
 
+def _affine_quadratic_exclusion(first, second):
+    """Exact no-common-zero certificate on the closed unit parameter box.
+
+    Only an exactly affine second polynomial and an at-most-quadratic first
+    polynomial restricted to its complete clipped zero line are admitted.
+    Endpoints and any interior stationary point must have the same strict
+    sign; a crossing, double root or boundary touch is never excluded.
+    """
+    _cooperative_tick()
+    p, q = len(second)-1, len(second[0])-1
+    c = second[0][0]
+    a, b = second[-1][0]-c, second[0][-1]-c
+    if not (a or b) or any(
+            value != c + a*(Fraction(i, p) if p else 0) + b*(Fraction(j, q) if q else 0)
+            for i, row in enumerate(second) for j, value in enumerate(row)):
+        return False
+    points = set()
+    for u in (Fraction(0), Fraction(1)):
+        if b:
+            v = -(c+a*u)/b
+            if 0 <= v <= 1:
+                points.add((u, v))
+    for v in (Fraction(0), Fraction(1)):
+        if a:
+            u = -(c+b*v)/a
+            if 0 <= u <= 1:
+                points.add((u, v))
+    if not points:
+        return False
+    start, end = min(points), max(points)
+    p, q = len(first)-1, len(first[0])-1
+    if p+q > 6:
+        return False
+
+    def multiply(left, right):
+        result = [Fraction(0)]*(len(left)+len(right)-1)
+        for i, x in enumerate(left):
+            for j, y in enumerate(right):
+                result[i+j] += x*y
+        return result
+
+    def basis(degree, index, origin, step):
+        result = [Fraction(math.comb(degree, index))]
+        for _ in range(index):
+            result = multiply(result, (origin, step))
+        for _ in range(degree-index):
+            result = multiply(result, (1-origin, -step))
+        return result
+
+    us = [basis(p, i, start[0], end[0]-start[0]) for i in range(p+1)]
+    vs = [basis(q, j, start[1], end[1]-start[1]) for j in range(q+1)]
+    polynomial = [Fraction(0)]*(p+q+1)
+    for i, row in enumerate(first):
+        for j, value in enumerate(row):
+            for k, coefficient in enumerate(multiply(us[i], vs[j])):
+                polynomial[k] += value*coefficient
+    while len(polynomial) > 1 and polynomial[-1] == 0:
+        polynomial.pop()
+    if len(polynomial) > 3:
+        return False
+    values = [polynomial[0], sum(polynomial)]
+    if len(polynomial) == 3 and polynomial[2]:
+        stationary = -polynomial[1]/(2*polynomial[2])
+        if 0 < stationary < 1:
+            values.append(polynomial[0]+stationary*(polynomial[1]+stationary*polynomial[2]))
+    return all(value > 0 for value in values) or all(value < 0 for value in values)
+
+
 class _Arc:
     """One arc of the curve with the second plane's and the weight's box polynomials."""
 
@@ -568,6 +636,12 @@ def section_roots(curve: PlaneNurbsCurve, n, d, *, max_depth: int = MAX_DEPTH,
     found: list[SectionRoot] = []
 
     def classify(context: _Context) -> str:
+        view = context.view
+        if not hasattr(view, '_affine_cut_excluded'):
+            charge_box()
+            view._affine_cut_excluded = _affine_quadratic_exclusion(view.g1, view.g2)
+        if view._affine_cut_excluded:
+            return "done"
         low, high = context.g2_range()
         if low == high == 0 and context.solid():
             raise PlaneNurbsNotCertified("the second plane contains a piece of the curve (coincident)")

@@ -20,6 +20,30 @@ _LINKS = WeakKeyDictionary()
 _AUXILIARY = WeakKeyDictionary()      # model -> {edge id: complete edge definition checksum}, owner-issued
 _TRANSFERS = WeakKeyDictionary()
 _EDGE_PARTITIONS = WeakKeyDictionary()
+_PARTITION_COMMITS = WeakKeyDictionary()  # tracked model -> (complete owner-commit state, failure reason)
+
+
+def _track_partition_commit(model, state):
+    # A read or another clone must never bless raw changes on an operand
+    # already tracked by an older lineage. Only publication can advance it.
+    if model not in _PARTITION_COMMITS:
+        _PARTITION_COMMITS[model] = (state, None)
+        model._prepared_partition_lineage_tracked = True
+
+
+def _capture_partition_commit(model):
+    """Owner publication witness, captured before arbitrary consumer hooks."""
+    if model not in _PARTITION_COMMITS:
+        return
+    _PARTITION_COMMITS[model] = (None, 'committed partition state capture did not complete')
+    try:
+        state = _state(model)
+    except Exception as error:
+        # The model commit has already succeeded. Keep its behavior and make
+        # optional proof reuse unusable; qualification failure is not a seal.
+        _PARTITION_COMMITS[model] = (None, f'{type(error).__name__}: {error}')
+        return
+    _PARTITION_COMMITS[model] = (state, None)
 
 
 def _state(model):
@@ -248,10 +272,9 @@ def _qualified_auxiliary(model, edge_id):
 
 def _register_source_clone(source, prepared):
     """Called ONLY by clone_prepared_geometry after its genuine clone."""
-    from .serialization import to_dict
+    from .serialization import to_dict, _clone_content_payload
     before, copied = to_dict(source), to_dict(prepared)
-    if ({k: v for k, v in before.items() if k not in ('model_id', 'checksum')}
-            != {k: v for k, v in copied.items() if k not in ('model_id', 'checksum')}):
+    if _clone_content_payload(before) != _clone_content_payload(copied):
         raise GeometryError('immediate source clone changed complete definitions')
     source_state, prepared_state = _state(source), _state(prepared)
     if source_state[2] != prepared_state[2]:
@@ -270,6 +293,8 @@ def _register_source_clone(source, prepared):
     if _state(source) != source_state or _state(prepared) != prepared_state:
         raise GeometryError('source clone changed while issuing lineage')
     _LINKS[prepared] = tuple(routes)
+    _track_partition_commit(source, source_state)
+    _track_partition_commit(prepared, prepared_state)
     # genuine owner clone boundary: qualified auxiliary edges keep their authority only when the clone
     # reproduces each complete edge definition
     carried = {edge: signature for edge, signature in _AUXILIARY.get(source, {}).items()
@@ -305,6 +330,8 @@ def _register_source_closure(source, work, faces, edges, source_state, work_stat
     if _LINKS.get(work) == complete:
         return                  # exact same current routes: keep the existing entry (and issued receipts) intact
     _LINKS[work] = complete
+    _track_partition_commit(source, source_state)
+    _track_partition_commit(work, work_state)
 
 
 def _prepare_source_lineage(model, candidate, replacements, edge_partition=None):
@@ -356,6 +383,7 @@ def _publish_source_lineage(model, staged):
            for owner, original, current, mapping, edge_map in routes):
         raise GeometryError('source lineage source or published definitions changed')
     _LINKS[model] = routes
+    _track_partition_commit(model, now)
 
 
 def _restore_source_lineage(model, staged):
@@ -691,6 +719,54 @@ def _source_station_transport_inputs(source, prepared, transfer):
     receipts = row[2]
     validate_prepared_material_source_transfer_binding(source, prepared, transfer, cell_receipts=receipts)
     return receipts, row[4]
+
+
+def _has_current_prepared_partition_lineage(model):
+    """Select optional proof reuse without refreshing or discarding lineage."""
+    current = _state(model)
+    links = _LINKS.get(model)
+    observed = []
+    obsolete = False
+    for owner, original, bound, mapping, edge_map in links or ():
+        source = owner()
+        if source is None:
+            continue
+        children = [child for _, group in mapping for child in group]
+        if (type(mapping) is not tuple or len(children) != len(set(children))
+                or len({parent for parent, _ in mapping}) != len(mapping)
+                or any(type(parent) is not int or parent <= 0 or type(group) is not tuple or not group
+                       or any(type(child) is not int or child <= 0 for child in group)
+                       for parent, group in mapping)):
+            raise GeometryError('prepared partition complete lineage is malformed')
+        source_state = _state(source)
+        observed.append((source, source_state))
+        for operand, actual, issued in ((model, current, bound), (source, source_state, original)):
+            if actual == issued:
+                continue
+            # A normal committed edit makes an optional proof unavailable.
+            # A raw checksum/native change at the issued revision, or an
+            # invented revision without an owner ChangeSet, is still refusal.
+            change = operand.last_change_set
+            if (type(actual[0]) is not int or type(issued[0]) is not int
+                    or actual[0] <= issued[0] or change.revision_after != actual[0]
+                    or not issued[0] <= change.revision_before < change.revision_after):
+                raise GeometryError('prepared partition source lineage is stale or changed')
+            committed, failure = _PARTITION_COMMITS.get(operand, (None, 'no owner commit witness'))
+            if failure is not None or committed != actual:
+                raise GeometryError('prepared partition current content has no unchanged owner commit witness'
+                                    + (f': {failure}' if failure else ''))
+            obsolete = True
+    if (_LINKS.get(model) is not links or _state(model) != current
+            or any(_state(source) != state for source, state in observed)):
+        raise GeometryError('prepared partition lineage changed during readiness query')
+    if obsolete:
+        return False
+    # Reuse the strict complete-lineage validator; readiness is not a second
+    # way to infer partition authority from topology or historical metadata.
+    fresh, live, routes = _prepared_partition_context(model)
+    if fresh != current or live is not links:
+        raise GeometryError('prepared partition lineage changed during readiness query')
+    return bool(routes)
 
 
 def _prepared_partition_context(model):

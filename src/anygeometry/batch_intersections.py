@@ -1463,8 +1463,9 @@ def clone_prepared_geometry(model, *, new_preparation_epoch=False):
         before=to_dict(model);native=capture_native_supports(model)
         made=model.clone(preserve_identity=False)
         copied=to_dict(made)
-        source_payload={k:v for k,v in before.items() if k not in ('model_id','checksum')}
-        clone_payload={k:v for k,v in copied.items() if k not in ('model_id','checksum')}
+        from .serialization import _clone_content_payload
+        source_payload=_clone_content_payload(before)
+        clone_payload=_clone_content_payload(copied)
         if (made.model_id==model.model_id or source_payload!=clone_payload or
                 capture_native_supports(made)!=native or capture_native_supports(model)!=native or to_dict(model)!=before):
             raise GeometryError('preparation epoch clone changed source or native geometry')

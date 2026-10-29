@@ -60,6 +60,7 @@ _INCREMENTAL_ADDITIVE_FEATURES = frozenset(
         "geometry.face",
         "geometry.plate",
         "geometry.extrude",
+        "geometry.solid_prism",
         "geometry.loft",
         "geometry.sketch.extrude",
         "geometry.sketch.plane",
@@ -2039,7 +2040,9 @@ class FeatureHistory:
                     diagnostic=f"feature {record.feature_id} failed: {detail}",
                 )
 
-            if not force_new and old_outputs and _exact_outputs_equal(
+            if record.kind == "geometry.solid_prism" and old_outputs == outputs:
+                record.outputs = outputs
+            elif not force_new and old_outputs and _exact_outputs_equal(
                 old_outputs, geometry, outputs, working
             ):
                 for key in old_outputs:
@@ -2154,6 +2157,12 @@ class FeatureHistory:
 
         def remove_exact(references: Iterable[EntityRef]) -> None:
             selected = set(references)
+            for region_id, region in tuple(working.solid_regions.items()):
+                source_faces = {EntityRef("face", h.id) for h in region.face_refs}
+                if source_faces.intersection(selected):
+                    if not source_faces.issubset(selected):
+                        raise GeometryError("solid region topology conflict: partial feature retirement")
+                    working._set_solid_region(region_id, None)
             for reference in sorted(
                 selected,
                 key=lambda item: (
@@ -2375,6 +2384,30 @@ class FeatureHistory:
         working = from_dict(deepcopy(baseline))
         working.reserve_id_state(geometry.id_state())
         replayed = deepcopy(self._records)
+        def retain_prism_identity(record):
+            # Retain IDs only after this feature's dependencies and inputs are
+            # known to be active. Preloading blocked features would publish
+            # materialized solids with no active producer after full replay.
+            if record.kind != "geometry.solid_prism":
+                return
+            for region_id, region in geometry.solid_regions.items():
+                if region.provenance.get("feature_id") != record.feature_id:
+                    continue
+                if region_id in working.solid_regions:
+                    continue
+                for vertex_id in region.vertex_ids:
+                    if vertex_id in working.vertices:
+                        raise GeometryError("solid full replay vertex identity conflict")
+                    working._vertices[vertex_id] = geometry.vertices[vertex_id]
+                for handle in region.face_refs:
+                    face = geometry.faces[handle.id]
+                    if handle.id in working.faces:
+                        raise GeometryError("solid full replay face identity conflict")
+                    working._faces[handle.id] = face
+                    for use in face.loop:
+                        working._edges[use.edge] = geometry.edges[use.edge]
+                working._solid_regions[region_id] = region.rebound(working.model_id)
+                working._rebuild_incidence()
         by_id = {record.feature_id: record for record in replayed}
         results: list[FeatureResult] = []
 
@@ -2430,6 +2463,7 @@ class FeatureHistory:
             snapshot = working.topology_snapshot()
             working.begin_replacement_log()
             try:
+                retain_prism_identity(record)
                 execution = registry.execute(working, record, resolved)
                 outputs = {str(key): value for key, value in execution.outputs.items()}
                 for key, reference in outputs.items():
@@ -2624,6 +2658,33 @@ def builtin_feature_registry() -> FeatureRegistry:
         identifier = geometry.add_plate([item.id for item in vertices])
         outputs = _created_outputs(geometry, before)
         outputs["face"] = EntityRef("face", identifier)
+        return outputs
+
+    def solid_prism(geometry, feature, inputs):
+        if inputs:
+            raise GeometryError("solid prism feature accepts profile parameters, not inferred topology inputs")
+        from .solid_regions import add_prism
+        from uuid import uuid5
+        region_id = next((r.region_id for r in geometry.solid_regions.values() if r.provenance.get("feature_id") == feature.feature_id),
+                         str(uuid5(geometry.model_id, f"anygeometry.solid_prism/{feature.feature_id}")))
+        parameters = feature.parameters
+        with geometry.transaction():
+            if region_id in geometry.solid_regions:
+                geometry.regenerate_solid_prism(region_id, parameters["profile"], parameters["vector"], offset=parameters.get("offset", 0))
+            else:
+                add_prism(geometry, parameters["profile"], parameters["vector"], offset=parameters.get("offset", 0),
+                          name=feature.name, region_id=region_id, provenance={"feature_id":feature.feature_id, "feature_kind":"geometry.solid_prism"})
+        region = geometry.solid_regions[region_id]
+        if region.name != feature.name:
+            from dataclasses import replace
+            with geometry.transaction():
+                geometry._set_solid_region(region_id, replace(region, name=feature.name))
+            region = geometry.solid_regions[region_id]
+        outputs = {f"face/{key}": EntityRef("face", refs[0].id) for key, refs in region.face_groups.items()
+                   if key in ("start", "end", *(f"side_{i}" for i in range(len(region.vertex_ids)//2)))}
+        outputs.update({f"vertex/{i}":EntityRef("vertex", vertex_id) for i,vertex_id in enumerate(region.vertex_ids)})
+        edge_ids = sorted({item.edge for ref in region.face_refs for item in geometry.faces[ref.id].loop})
+        outputs.update({f"edge/{i}":EntityRef("edge", edge_id) for i,edge_id in enumerate(edge_ids)})
         return outputs
 
     def extrude(geometry, feature, inputs):
@@ -2924,6 +2985,7 @@ def builtin_feature_registry() -> FeatureRegistry:
         "geometry.face": face,
         "geometry.plate": plate,
         "geometry.extrude": extrude,
+        "geometry.solid_prism": solid_prism,
         "geometry.loft": loft,
         "geometry.sketch.extrude": sketch_extrude,
         "geometry.sketch.plane": plane_sketch,

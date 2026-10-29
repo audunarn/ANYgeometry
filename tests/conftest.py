@@ -11,6 +11,29 @@ import pytest
 from anygeometry import GeometryModel
 
 
+def _record_active_test(nodeid, phase):
+    import os
+    report = os.environ.get("ANYGEOMETRY_ACTIVE_TEST_REPORT")
+    if not report:
+        return
+    import json
+    from datetime import datetime, timezone
+    path = Path(report)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(json.dumps({"nodeid": nodeid, "phase": phase,
+        "utc": datetime.now(timezone.utc).isoformat(),
+        "shard": os.environ.get("ANYGEOMETRY_TEST_SHARD")}) + "\n", encoding="utf-8")
+    temporary.replace(path)
+
+
+def pytest_runtest_logstart(nodeid, location):
+    _record_active_test(nodeid, "started")
+
+
+def pytest_runtest_logfinish(nodeid, location):
+    _record_active_test(nodeid, "finished")
+
+
 def pytest_configure(config):
     if getattr(config.option, "basetemp", None) is None:
         root = Path(__file__).resolve().parents[1]
@@ -63,27 +86,6 @@ def pytest_collection_finish(session):
         Path(report).write_text(json.dumps({"index": index, "count": count, "selected": sorted(selected),
                                             "ran": [item.nodeid for item in keep], "slow": slow}, indent=0),
                                 encoding="utf-8")
-
-
-_B1_MODELS: dict = {}
-
-
-def b1_half_hull_shared(**options):
-    """The B1 half-hull for these options, built once per test session (CI tiers C1: each build costs
-    5-10 s). Shared: callers only read it; a test that changes its model takes ``model.clone()``."""
-    from anygeometry.b1_example import build_b1_half_hull
-    key = ("half", tuple(sorted(options.items())))
-    if key not in _B1_MODELS:
-        _B1_MODELS[key] = build_b1_half_hull(**options)
-    return _B1_MODELS[key]
-
-
-def b1_full_hull_shared():
-    """The full B1 hull, built once per test session (read-only, as ``b1_half_hull_shared``)."""
-    from anygeometry.b1_example import build_b1_hull
-    if "full" not in _B1_MODELS:
-        _B1_MODELS["full"] = build_b1_hull()
-    return _B1_MODELS["full"]
 
 
 @pytest.fixture

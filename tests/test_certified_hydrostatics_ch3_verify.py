@@ -272,7 +272,7 @@ def test_certified_crossing_order_refuses_unresolved_boxes():
 
 
 def test_half_hull_proof_cannot_substitute_full_model(honest):
-    from conftest import b1_half_hull_shared
+    from _b1_shared_models import b1_half_hull_shared
     m,f,q,_,e=honest;half,faces=b1_half_hull_shared();ids=tuple(faces.values());p=prepare_certified_hydrostatics(half,ids,policy=e['policy']);r=query_certified_hydrostatics(p,q)
     with pytest.raises(CertifiedHydrostaticsRefusal) as caught:verify_curved(m,f,q,r,e)
     assert caught.value.phase=='verify' and caught.value.category.value=='VERIFICATION_FAILED'

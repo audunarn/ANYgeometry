@@ -342,7 +342,7 @@ def test_fixture_faces_pass_c1_to_c4_with_corners_hints_and_h2(name, expected):
 
 
 def test_b1_half_hull_bow_passes_with_the_measured_corners():
-    from conftest import b1_half_hull_shared
+    from _b1_shared_models import b1_half_hull_shared
     model, faces = b1_half_hull_shared()
     result = admit(model, faces["bow"])
     k = kern()
@@ -363,7 +363,7 @@ def test_b1_half_hull_bow_passes_with_the_measured_corners():
 
 
 def test_b1_full_hull_ports_and_starboard_bows_share_corner_polynomials():
-    from conftest import b1_full_hull_shared
+    from _b1_shared_models import b1_full_hull_shared
     model, faces = b1_full_hull_shared()
     both = admit_curved_faces(model, [faces["bow"], faces["bow_port"]], Meter(POLICY.new_budget()), POLICY)
     starboard = sorted((c.poly, c.ordinal) for c in both[faces["bow"]].corners.values())
@@ -380,7 +380,7 @@ def _fresh(name, **options):
 
 
 def test_c2_straight_edge_on_the_bow_refused():
-    from conftest import b1_half_hull_shared
+    from _b1_shared_models import b1_half_hull_shared
     model, faces = b1_half_hull_shared()
     clone = model.clone()
     bow = clone.faces[faces["bow"]]
