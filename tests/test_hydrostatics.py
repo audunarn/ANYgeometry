@@ -80,7 +80,7 @@ def test_waterplanes_missing_the_box_give_nothing_or_everything():
 @pytest.fixture(scope="module")
 def b1():
     from anygeometry.b1_example import build_b1_half_hull
-    from conftest import b1_half_hull_shared
+    from _b1_shared_models import b1_half_hull_shared
     model, faces = b1_half_hull_shared()
     return model, list(faces.values())
 
@@ -155,7 +155,7 @@ def test_the_upright_b1_hull_matches_the_independent_reference(b1, draft):
     xi_f = float(wx @ (x * y)) / area
     assert result["i_longitudinal"] == pytest.approx(float(wx @ (x * x * y)) - area * xi_f ** 2, rel=1e-8)
     # the same volume as the closed shell cut at the draft (P5c)
-    from conftest import b1_half_hull_shared
+    from _b1_shared_models import b1_half_hull_shared
     cut_model, cut_faces = b1_half_hull_shared(deck=draft)
     cut = enclosed_volume(cut_model, cut_faces.values())
     assert result["volume"] == pytest.approx(cut["volume"], rel=1e-9)
@@ -556,7 +556,7 @@ def test_free_trim_gz_of_a_symmetric_box_equals_the_fixed_trim_gz():
 @pytest.fixture(scope="module")
 def b1_full():
     from anygeometry.b1_example import build_b1_hull
-    from conftest import b1_full_hull_shared
+    from _b1_shared_models import b1_full_hull_shared
     model, faces = b1_full_hull_shared()
     return model, list(faces.values())
 

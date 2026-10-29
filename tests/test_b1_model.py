@@ -14,7 +14,7 @@ from anygeometry.b1_example import build_b1_half_hull
 
 @pytest.fixture(scope="module")
 def b1():
-    from conftest import b1_half_hull_shared
+    from _b1_shared_models import b1_half_hull_shared
     return b1_half_hull_shared()
 
 
@@ -37,7 +37,7 @@ def test_the_b1_half_hull_audits_clean(b1):
 
 
 def test_a_plane_cutting_through_the_hull_is_reported():
-    from conftest import b1_half_hull_shared
+    from _b1_shared_models import b1_half_hull_shared
     model = b1_half_hull_shared()[0].clone()                    # changed below: a private copy
     level = Plane((0., 0., 2.), (1., 0., 0.), (0., 1., 0.))
     corners = [model.add_point(x, y, 2.) for x, y in ((2., 1.), (3., 1.), (3., 9.), (2., 9.))]
@@ -110,7 +110,7 @@ def test_a_flipped_face_is_inconsistent():
     from dataclasses import replace
     from anygeometry.entities import OrientedEdge
     from anygeometry.shell_volume import closed_shell
-    from conftest import b1_half_hull_shared
+    from _b1_shared_models import b1_half_hull_shared
     shared, faces = b1_half_hull_shared()
     model = shared.clone()                                      # changed below: a private copy
     deck = model.faces[faces["deck"]]

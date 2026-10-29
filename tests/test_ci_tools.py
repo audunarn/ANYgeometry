@@ -36,6 +36,25 @@ def test_the_table_reproduces_its_totals(tmp_path):
     assert ci_durations.check(table)
 
 
+def test_partial_observations_preserve_baseline_and_missing_platforms(tmp_path):
+    baseline = {"tests": {"old": {"windows": 30.}, "changed": {"windows": 4.}},
+                "rest_mean": {"windows": .1}}
+    path = tmp_path / "durations.json"
+    path.write_text(json.dumps(baseline), encoding="utf-8")
+    observed = {"changed": {"ubuntu": 40.}, "new": {"ubuntu": 15.}}
+    path.with_name("duration-observations.json").write_text(
+        json.dumps({"tests": observed}), encoding="utf-8")
+    table = ci_shards.load_table(path)
+    assert table["tests"] == baseline["tests"]
+    assert table["observations"] == observed
+    assert ci_shards.duration(table, "old") == 30.
+    assert ci_shards.duration(table, "changed") == 40.
+    assert ci_shards.duration(table, "new") == 15.
+    assert ci_shards.duration(table, "missing") == .1
+    assert ci_shards.slow_ids(table) == {"old", "changed", "new"}
+    assert ci_shards.slow_ids(table, 35.) == {"changed"}
+
+
 def test_shards_partition_the_tests_and_balance_them():
     table = {"tests": {f"t{i}": {"windows": float(i)} for i in range(1, 31)}, "rest_mean": {"windows": .1}}
     ids = [f"t{i}" for i in range(1, 31)] + [f"u{i}" for i in range(40)]
@@ -80,7 +99,10 @@ def test_the_guard_reports_unmarked_slow_tests(tmp_path):
 def test_the_slow_marks_follow_the_table():
     table = ci_shards.load_table()
     slow = ci_shards.slow_ids(table)
-    assert slow and all(table["tests"][n]["windows"] >= ci_shards.SLOW_SECONDS for n in slow)
+    assert slow and all(
+        table["tests"].get(n, {}).get("windows", 0.) >= ci_shards.SLOW_SECONDS
+        or max(table.get("observations", {}).get(n, {}).values(), default=0.) >= ci_shards.SLOW_SECONDS
+        for n in slow)
 
 
 @pytest.mark.parametrize("text", ["0/3", "4/3", "x/3"])

@@ -794,3 +794,46 @@ provider NO_GO/default guard and Workflow1 failures remain unchanged. Live
 geometry was excluded from all writes/imports. Source fixes are authorized for
 draft pushes and affected hosted checks only; no live-main merge, tags or package
 publication. Hosted outcomes are recorded separately after these exact heads run.
+
+## Remaining full-suite CI repairs — 2026-10-29
+
+The authorized continuation separates checkout-byte pinning, fixture plumbing
+and geometry predicates. Four frozen primitive hashes were Windows-CRLF hashes;
+fixed LF-canonical source hashes now accept only CRLF/LF equivalence and still
+refuse changed content, missing files, BOMs and other bytes. The old tolerance
+hash cannot be reconstructed from the authorized Git history. Its replacement
+is an explicitly reviewed current-source compatibility candidate, not evidence
+of equivalence to the missing dirty baseline or new numerical qualification.
+No tolerance.py content, numerical value or qualification limit changes.
+
+B1 builders moved to a uniquely named test helper to avoid nested conftest
+namespace collisions. UV/derivative observations now follow production batch
+routes while retaining physical assertions, and the clearance fixture supplies
+real face ownership. The invalid pre-cropped source fixture now uses a supported
+control hull; its subsequent exact section-event refusal remains unskipped and
+unresolved. A separate passing full-chart weighted/nonunit-domain case proves
+child cropping only, not equivalent pre-cropped-source coverage.
+
+The exact root predicate has a narrow no-common-zero certificate: an exactly
+affine polynomial's complete clipped zero line is restricted into the other
+polynomial, and a quadratic's rational endpoint/stationary values must all have
+one strict sign. Boundary zeros, double roots, crossings, nonaffine or higher
+degree cases do not acquire a positive exclusion. Focused controls and the
+actual near-tangent boundary-event query pass. The original public full-plan
+case remains unverified after retained bounded timeouts; no pass is inferred.
+
+Ordinary Development CI uses six shards per OS with unchanged 40-minute job
+limits, entire selected-suite coverage verification and 20-second slow-mark
+guard. Sparse passing-case timing observations supplement the complete
+historical table without zeroing unknown/cancelled measurements. Each records
+its source XML hash and actual environment; local Windows3.11 observations are
+labelled separately from hosted Windows3.13. These are scheduling data, not
+process-wall or performance acceptance. The existing public mesher integration
+test receives exact consumer bebbe206 with --no-deps, keeping candidate geometry
+authoritative. Historical consumer and qualification pins remain unchanged.
+
+Evidence, root contract decisions, exact commands, original failures, worker
+handoffs and non-author development review are retained in the existing
+ci-blockers-20261029-a1 record. Full geometry CI, the pre-cropped source predicate
+and the full near-tangent plan remain open gates. This candidate does not
+promote the provider, alter Workflow1 NO_GO or authorize merge/publication.

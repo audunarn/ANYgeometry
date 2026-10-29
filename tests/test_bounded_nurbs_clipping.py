@@ -42,6 +42,35 @@ def on_segment(model, plate, plane, curve, frame):
     return [r for r in plate_roots(model, plate, plane, frame, curve, 0, NOOP) if r.on_segment]
 
 
+@pytest.mark.parametrize('gap,expected', [(Q(1, 2**80), True), (Q(0), False), (-Q(1, 100), False)])
+def test_exact_affine_cut_exclusion_distinguishes_gap_double_root_and_crossing(gap, expected):
+    from anygeometry.branch_predicates import _affine_quadratic_exclusion
+    first = tuple((value,) for value in (Q(1, 4)+gap, -Q(1, 4)+gap, Q(1, 4)+gap))
+    assert _affine_quadratic_exclusion(first, ((Q(0), Q(-1)), (Q(1), Q(0)))) is expected
+
+
+def test_exact_affine_cut_exclusion_preserves_boundary_contacts_and_unsupported_cases():
+    from anygeometry.branch_predicates import _affine_quadratic_exclusion as exclude
+    diagonal = ((Q(0), Q(-1)), (Q(1), Q(0)))
+    assert not exclude(((Q(0),), (Q(0),), (Q(1),)), diagonal)  # double boundary root
+    corner = ((Q(0), Q(1)), (Q(1), Q(2)))
+    assert not exclude(((Q(0),), (Q(1),)), corner)  # zero line touches box only at root
+    assert exclude(((Q(1),), (Q(2),)), corner)  # the same closed endpoint is strictly nonzero
+    assert not exclude(((Q(1),), (Q(2),), (Q(3),), (Q(5),)), diagonal)  # genuine cubic
+    assert not exclude(((Q(1),),), ((Q(0), Q(-1)), (Q(1), Q(1, 10))))  # non-affine
+
+
+def test_exact_affine_cut_exclusion_observes_cooperative_cancellation(monkeypatch):
+    import anygeometry.branch_predicates as predicates
+    error = GeometryError('cancel exact affine exclusion')
+    def cancel():
+        raise error
+    monkeypatch.setattr(predicates, '_cooperative_tick', cancel)
+    with pytest.raises(GeometryError) as caught:
+        predicates._affine_quadratic_exclusion(((Q(1),),), ((Q(0), Q(-1)), (Q(1), Q(0))))
+    assert caught.value is error
+
+
 # ------------------------------------------------------------------------- exact plate roots
 
 def test_plate_roots_are_isolated_on_segment_roots_of_each_exact_edge_line():
@@ -80,10 +109,7 @@ def test_clip_path_alternates_and_the_wrap_intervals_agree_on_the_closed_circle(
     assert interval_inside(curve, frame, loops, *outside, NOOP) is False
 
 
-def test_dyadic_edge_is_now_expressed_exactly_and_the_near_tangent_circle_is_never_clipped_by_rounding():
-    """a = (1, 0), b = (2**-54, 1): the exact chart equation passes through BOTH endpoints (no rounded plane); the
-    circle stays strictly inside this edge's half-plane by about 2**-55 r, so there is no root. The legacy
-    all-inside decision cannot separate the contact at depth and the public plan refuses without mutation."""
+def _dyadic_near_tangent_fixture():
     from anygeometry.surfaces import Plane as PlaneSupport
     tiny = 2.0**-54
     model, face, plane = bowl()
@@ -92,6 +118,19 @@ def test_dyadic_edge_is_now_expressed_exactly_and_the_near_tangent_circle_is_nev
     plate = model.add_face(edges, surface=PlaneSupport((0., 0., .5), (1., 0., 0.), (0., 1., 0.)))
     curve = PlaneNurbsCurve.from_plane(plane, model.faces[face].surface, 0)
     frame = ExactPlane.from_plane(model.faces[plate].surface)
+    return model, face, plate, plane, curve, frame
+
+
+def test_exact_near_tangent_boundary_events_are_empty_without_geometry_change():
+    model, _face, plate, plane, curve, frame = _dyadic_near_tangent_fixture()
+    before = to_dict(model)
+    assert not on_segment(model, plate, plane, curve, frame)
+    assert to_dict(model) == before
+
+
+def test_dyadic_edge_is_now_expressed_exactly_and_the_near_tangent_circle_is_never_clipped_by_rounding():
+    """Exact dyadic plate edge: no rounding-created root; conservative public-plan refusal stays atomic."""
+    model, face, plate, plane, curve, frame = _dyadic_near_tangent_fixture()
     assert not on_segment(model, plate, plane, curve, frame)         # no rounding-created root
     from anygeometry.bounded_nurbs import plan_bounded
     before = to_dict(model)
@@ -868,7 +907,18 @@ def test_active_depth_limit_gives_the_same_isolated_decision_as_the_unbudgeted_r
     assert len(limited) == len(direct) and all(r.isolated for r in limited)
     token = CURRENT_WORK.set(Work(10**6, 1))                       # a genuinely too-small depth still refuses
     try:
+        # This axis cut already has a valid simple-root certificate at depth0;
+        # budget limits do not require artificial subdivision/refusal.
+        shallow = section_roots(curve, normal, offset)
+        assert len(shallow) == len(direct) and all(r.isolated for r in shallow)
+        # The oblique cut needs subdivision to certify both simple crossings.
         with pytest.raises(GeometryError):
-            section_roots(curve, normal, offset)
+            section_roots(curve, (1, 1, 0), Q(9, 10))
+    finally:
+        CURRENT_WORK.reset(token)
+    token = CURRENT_WORK.set(Work(10**6, 32))
+    try:
+        oblique = section_roots(curve, (1, 1, 0), Q(9, 10))
+        assert len(oblique) == 2 and all(r.isolated for r in oblique)
     finally:
         CURRENT_WORK.reset(token)

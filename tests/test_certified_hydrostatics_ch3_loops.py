@@ -32,7 +32,7 @@ _CACHE: dict = {}
 
 
 def half_hull():
-    from conftest import b1_half_hull_shared
+    from _b1_shared_models import b1_half_hull_shared
     return b1_half_hull_shared()
 
 

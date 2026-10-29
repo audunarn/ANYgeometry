@@ -116,20 +116,26 @@ def test_proposal_input_conversion_cannot_mutate_source(conditional):
 
 
 def test_spatial_clearance_retains_third_sheet_and_varies_on_flat_source():
-    from anygeometry.nurbs import NurbsSurface
+    from anygeometry.nurbs import NurbsSurface, NurbsCurve, CurveOnSurface
     from anygeometry._local_spatial_clearance import partition_surface_clearance
     from anygeometry._local_curvature import bound_surface_curvature
     from anygeometry._local_neighborhood import projected_hull
     from anygeometry.nurbs_surface_intersection._bernstein import bezier_piece
     knots=(0.,0.,1.,1.)
-    supports={i:NurbsSurface(1,1,knots,knots,tuple(tuple((float(u),float(v),float(z(u))) for v in range(2)) for u in range(2)))
-              for i,z in enumerate((lambda u:0,lambda u:1+u,lambda u:4))}
+    source=owner.GeometryModel();supports={}
+    uv=((0.,0.),(1.,0.),(1.,1.),(0.,1.))
+    for z in (lambda u:0,lambda u:1+u,lambda u:4):
+        support=NurbsSurface(1,1,knots,knots,tuple(tuple((float(u),float(v),float(z(u))) for v in range(2)) for u in range(2)))
+        points=source.add_points(tuple(support.evaluate(*point) for point in uv))
+        edges=[source.add_curve(points[i],points[(i+1)%4],CurveOnSurface(support,
+            NurbsCurve(1,knots,(point,uv[(i+1)%4])))) for i,point in enumerate(uv)]
+        face=source.add_face(edges,surface=support);supports[face]=support
     hulls={i:projected_hull(bezier_piece(s,s.exact_net(),(Q(0),Q(1)),(Q(0),Q(1)))) for i,s in supports.items()}
     curvatures=tuple((i,(),bound_surface_curvature(s)) for i,s in supports.items())
-    rows,contacts,_=partition_surface_clearance(None,supports,hulls,curvatures,connect_intent=False,check=lambda:None)
+    rows,contacts,_=partition_surface_clearance(source,supports,hulls,curvatures,connect_intent=False,check=lambda:None)
     assert contacts==()
-    assert len({row[3] for row in rows[0]})>1
-    assert all({other for other,_,_ in row[4]}==({0,1,2}-{face}) for face,tiles in rows.items() for row in tiles)
+    assert len({row[3] for row in rows[min(supports)]})>1
+    assert all({other for other,_,_ in row[4]}==(set(supports)-{face}) for face,tiles in rows.items() for row in tiles)
     assert all(sum((r[0][0][1]-r[0][0][0])*(r[0][1][1]-r[0][1][0]) for r in tiles)==1 for tiles in rows.values())
 
 
