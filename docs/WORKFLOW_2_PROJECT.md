@@ -749,3 +749,48 @@ match one original parent exactly (including source-pin-sensitive line endings).
 New reconciliation edits pass the scoped whitespace check. The inherited warnings
 are retained in geometry-complete-merge-whitespace.log and
 inherited-whitespace-proof.json; no unrelated normalization was performed.
+
+## Two-blocker CI repair — 2026-10-29
+
+The already-declared optional sketch SciPy dependency is now inventoried and
+noticed. Installed audits retain strict all-extra behavior by default; explicit
+Development/ordinary-CI dev+planar profiles may omit only absent unselected
+optionals, and every present declared optional is still audited. Known SciPy
+1.17.1 composite metadata recognition is exact version/fingerprint scoped;
+unknown or changed notices/SPDX remain refused. No global forbidden-license
+change, new dependency, or distribution/relink approval was made. Publish
+workflow remains unchanged. Licensing tests:32 passed; static checker9declared
+dependencies; a fresh real dev+planar environment passed, and strict default
+correctly refused missing optional mpmath. Missing local Twine evidence remains.
+
+New has_current_prepared_partition_lineage is an availability predicate for an
+optional shortcut, not a pairwise disjointness certificate. Ordinary committed
+edits select fresh classification; explicit stale proof queries remain strict.
+Only genuinely issued participants receive weak commit-state witnesses, sealed
+at all five owner publication boundaries before consumer observers. Raw/native
+mutation, malformed/forged authority and stale callback effects still refuse.
+Reads/recloning do not overwrite old witnesses; fresh clone routes do not inherit
+stale sibling groups. Untracked model commits remain inert. No extra cloning,
+epoch issuance or link clearing is used to repair optional readiness.
+
+Final focused source checks:19 exact development smoke,55 owner,10 consumer,
+20 material/native/cancellation checks passed. A broader intermediate selection
+retains two unchanged constructor-fixture failures; their CurveOnSurface domain
+and test inputs were not modified. Non-author review found an initial same-owner
+post-commit mutation gap; its failed regressions/review remain and the authentic
+commit-witness repair received a clean bounded delta review (same-family).
+
+Fresh installed wheels verified147 distinct selected cases:141passed in the
+initial run; six native-negative cases stopped at omitted test-fixture imports,
+then passed after supplying the unchanged fixture chain in a focused rerun.
+Both failed harness attempts remain. No passing cases or production assertions
+were altered to obtain coverage. Installed origins and payload hashes passed.
+These are development/integration checks, not renewed scientific qualification.
+
+Exact commands, hashes, XML, review decisions, failed evidence and cumulative
+process receipts: C:/ANYworkspaceWork/workflow2-20261027/evidence/ci-blockers-20261029-a1.
+All prior numerical limits, frozen authorities, W2-DEV-001 deviation, public
+provider NO_GO/default guard and Workflow1 failures remain unchanged. Live
+geometry was excluded from all writes/imports. Source fixes are authorized for
+draft pushes and affected hosted checks only; no live-main merge, tags or package
+publication. Hosted outcomes are recorded separately after these exact heads run.

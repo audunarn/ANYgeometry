@@ -6,9 +6,29 @@ exemption based on support identity alone.
 from .errors import GeometryError
 from .identity import EntityHandle
 from .prepared_material_curvilinear import _literal
-from .prepared_material_source_transfer import _prepared_partition_context, _chart_map, _effective
+from .prepared_material_source_transfer import (
+    _prepared_partition_context, _has_current_prepared_partition_lineage, _chart_map, _effective)
 from .surfaces import Plane
 from .nurbs import NurbsSurface
+
+
+def has_current_prepared_partition_lineage(model):
+    """Whether optional partition proof reuse has complete current live lineage.
+
+    Absent lineage or a normal committed revision advance returns False and
+    requires fresh classification. Same-revision content/native changes and
+    invalid authority refuse. This does not certify any face pair; explicit
+    partition queries retain their strict stale-proof refusal.
+    """
+    from .model import GeometryModel
+    if not isinstance(model, GeometryModel):
+        raise GeometryError('prepared partition readiness requires a geometry model')
+    try:
+        return _has_current_prepared_partition_lineage(model)
+    except (AttributeError, KeyError, TypeError, ValueError, IndexError) as error:
+        if isinstance(error, GeometryError):
+            raise
+        raise GeometryError('prepared partition lineage is malformed or changed') from error
 
 
 def query_prepared_partition_disjoint_interiors(model, first_face, second_face, *, cancellation_check=None):
