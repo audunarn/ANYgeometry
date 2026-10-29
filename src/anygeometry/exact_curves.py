@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from fractions import Fraction
+from typing import NamedTuple
 import math
 import heapq
 import numpy as np
@@ -276,6 +277,62 @@ class _CylinderSupport:
         return {name: getattr(self, name) for name in self.__dataclass_fields__}
 
 
+class _BranchConstants(NamedTuple):
+    """Angle-independent float terms of one branch chart (read-only arrays)."""
+    axis: np.ndarray
+    other_axis: np.ndarray
+    e1: np.ndarray
+    e2: np.ndarray
+    w: np.ndarray
+    a: float
+    cross: np.ndarray
+    n0: float
+    nc: float
+    ns: float
+    magnitude: float
+    remainder: float
+
+
+# Keyed by the identities of the two immutable support descriptors. Each entry
+# holds both objects, so their ids cannot be reused while the entry exists.
+_BRANCH_CONSTANTS: dict = {}
+_BRANCH_CONSTANTS_LIMIT = 4096
+
+
+def _branch_constants(curve):
+    """Terms of ``_coefficients``/``_root_at_angles``/``_root`` that do not depend on the angle.
+
+    Computed once per support pair with exactly the expressions those methods
+    evaluated on every call, so every value is bit-identical; subcurves share
+    their support objects and therefore the entry. No tolerance or decision is
+    involved, and nothing is computed that the uncached methods did not compute.
+    """
+    first, second = curve.first, curve.second
+    key = (id(first), id(second))
+    entry = _BRANCH_CONSTANTS.get(key)
+    if entry is not None and entry[0] is first and entry[1] is second:
+        return entry[2]
+    axis = np.asarray(first.axis)
+    other_axis = np.asarray(second.axis)
+    e1 = np.asarray(first.radial_direction)
+    e2 = np.cross(axis, e1)
+    w = axis-float(axis @ other_axis)*other_axis
+    a = float(w @ w)
+    cross = np.cross(first.axis, second.axis)
+    n0 = float((np.asarray(first.origin)-second.origin) @ cross)
+    nc = float(first.radius*np.asarray(first.radial_direction) @ cross)
+    ns = float(first.radius*np.cross(first.axis, first.radial_direction) @ cross)
+    magnitude = math.hypot(nc, ns)
+    remainder = math.fsum((float(cross @ cross)*second.radius**2, -magnitude**2, -n0*n0))
+    for array in (axis, other_axis, e1, e2, w, cross):
+        array.flags.writeable = False
+    constants = _BranchConstants(axis, other_axis, e1, e2, w, a, cross, n0, nc, ns, magnitude, remainder)
+    if len(_BRANCH_CONSTANTS) >= _BRANCH_CONSTANTS_LIMIT:
+        _BRANCH_CONSTANTS.clear()
+    _BRANCH_CONSTANTS[key] = (first, second, constants)
+    return constants
+
+
 @dataclass(frozen=True, slots=True)
 class CylinderIntersectionCurve:
     """One analytic quadratic-root branch of two cylinder supports.
@@ -358,10 +415,9 @@ class CylinderIntersectionCurve:
 
     def _coefficients(self, angle):
         first, second = self.first, self.second
-        axis = np.asarray(first.axis)
-        other_axis = np.asarray(second.axis)
-        e1 = np.asarray(first.radial_direction)
-        e2 = np.cross(axis, e1)
+        constants = _branch_constants(self)
+        other_axis, e1, e2, w, a = (constants.other_axis, constants.e1, constants.e2,
+                                    constants.w, constants.a)
         base = (first.origin + first.radius*(np.cos(angle)[..., None]*e1
                                              + np.sin(angle)[..., None]*e2))
         base_derivative = first.radius*(-np.sin(angle)[..., None]*e1
@@ -369,8 +425,6 @@ class CylinderIntersectionCurve:
         offset = base-second.origin
         q = offset-(offset @ other_axis)[..., None]*other_axis
         dq = base_derivative-(base_derivative @ other_axis)[..., None]*other_axis
-        w = axis-float(axis @ other_axis)*other_axis
-        a = float(w @ w)
         b = 2*(q @ w)
         c = np.sum(q*q, axis=-1)-second.radius**2
         db, dc = 2*(dq @ w), 2*np.sum(q*dq, axis=-1)
@@ -382,11 +436,8 @@ class CylinderIntersectionCurve:
         # axial quadratics. At a double transition b*b and 4*a*c can be large
         # while their difference is the square of a tiny sine. That cancellation
         # corrupts both the curve and its area integral near a branch endpoint.
-        cross = np.cross(self.first.axis,self.second.axis)
-        n0 = float((np.asarray(self.first.origin)-self.second.origin) @ cross)
-        nc = float(self.first.radius*np.asarray(self.first.radial_direction) @ cross)
-        ns = float(self.first.radius*np.cross(self.first.axis,self.first.radial_direction) @ cross)
-        magnitude = math.hypot(nc,ns)
+        constants = _branch_constants(self)
+        n0, nc, ns, magnitude = constants.n0, constants.nc, constants.ns, constants.magnitude
         # Rotate sine/cosine algebraically. Subtracting a phase near pi would
         # lose the tiny angle and turn an exact transition into a false root.
         if magnitude:
@@ -396,7 +447,7 @@ class CylinderIntersectionCurve:
             cosine,sine=np.zeros_like(angle),np.zeros_like(angle)
         # This identity preserves the exact equal-radius double-root case
         # without subtracting nearly equal cosine squares.
-        remainder = math.fsum((float(cross @ cross)*self.second.radius**2,-magnitude**2,-n0*n0))
+        remainder = constants.remainder
         disc = 4*(remainder+magnitude**2*sine*sine-2*n0*magnitude*cosine)
         if discriminant is not None:
             disc=discriminant
@@ -435,10 +486,8 @@ class CylinderIntersectionCurve:
             envelope=64*np.finfo(float).eps*(b*b+a*self.second.radius**2)
             if np.any(endpoint_root*endpoint_root>envelope):
                 raise GeometryError("regular endpoint is not a discriminant transition")
-            cross=np.cross(self.first.axis,self.second.axis)
-            n0=float((np.asarray(self.first.origin)-self.second.origin) @ cross)
-            nc=float(self.first.radius*np.asarray(self.first.radial_direction) @ cross)
-            ns=float(self.first.radius*np.cross(self.first.axis,self.first.radial_direction) @ cross)
+            constants=_branch_constants(self)
+            n0,nc,ns=constants.n0,constants.nc,constants.ns
             middle=anchor+.5*delta
             discriminant=-16*np.sin(.5*delta)*(-nc*np.sin(middle)+ns*np.cos(middle))*(
                 n0+(nc*np.cos(middle)+ns*np.sin(middle))*np.cos(.5*delta))
@@ -449,10 +498,8 @@ class CylinderIntersectionCurve:
         # rather than a floating zero. Qualify the endpoint using the stable
         # geometric discriminant and its first two derivatives; interior
         # parameters and ordinary near-transition branches are not snapped.
-        cross=np.cross(self.first.axis,self.second.axis)
-        n0=float((np.asarray(self.first.origin)-self.second.origin) @ cross)
-        nc=float(self.first.radius*np.asarray(self.first.radial_direction) @ cross)
-        ns=float(self.first.radius*np.cross(self.first.axis,self.first.radial_direction) @ cross)
+        constants=_branch_constants(self)
+        n0,nc,ns=constants.n0,constants.nc,constants.ns
         n=n0+nc*np.cos(angle)+ns*np.sin(angle)
         dn=-nc*np.sin(angle)+ns*np.cos(angle)
         ddn=-nc*np.cos(angle)-ns*np.sin(angle)
