@@ -1034,3 +1034,74 @@ def test_r5_scale_is_not_reused_after_its_coordinates_change():
     loop = tuple(ArrangementPath(c) for c in _off_band_loop(_r3_vertices(100.)))
     domain = MaterialDomain(0, _plane(), (loop,))
     assert _applies(domain, loop) and domain._float_scale_cache[2][0] is not None
+
+
+# ---- Review R6: admission never raises (P2-1) and bounds the query's level (P2-2) ----
+
+def _huge_square(size):
+    corners = ((-size, -size, 0), (size, -size, 0), (size, size, 0), (-size, size, 0))
+    return tuple(ArrangementPath(LinePath(corners[i], corners[(i+1) % 4])) for i in range(4))
+
+
+@pytest.mark.parametrize("make", (lambda: __import__("fractions").Fraction(10)**400, lambda: 10**400))
+def test_r6_unrepresentable_scale_is_outside_the_domain(make):
+    """Review R6 P2-1: a scale that does not fit a float (exact coordinates 10**400) made the admission raise
+    OverflowError before the fallback; the parent returns True for the rational centre query."""
+    from fractions import Fraction
+    loop = _huge_square(make())
+    domain = MaterialDomain(0, _plane(), (loop,))
+    assert _applies(domain, loop) is False                       # no exception: outside the domain
+    for boundary in (False, True):
+        assert _answer(domain, loop, (Fraction(0), Fraction(0)), boundary) is True    # the parent's answer
+
+
+def test_r6_admission_predicates_do_not_raise():
+    from fractions import Fraction
+    from anygeometry.material_arrangement import float_ray_scale_trusted
+    huge = Fraction(10)**400
+    assert float_ray_scale_trusted(huge, 1e-9) is False
+    assert float_ray_scale_trusted(10**400, 1e-9) is False
+    assert float_ray_scale_trusted(1., huge) is False
+    assert float_ray_scale_trusted(1., 10**400) is False
+    assert float_ray_scale_trusted(1., float("nan")) is False
+    assert float_ray_scale_trusted(float("nan"), 1e-9) is False
+    domain, _up = _strip()
+    scale = domain._float_ray_scale(domain.boundaries[0])
+    assert domain._junction_query_admitted((huge, .5), scale) is False
+    assert domain._junction_query_admitted((.045, huge), scale) is False
+    assert _applies(domain, domain.boundaries[0])                # the tripod strip stays admitted
+    # An unrepresentable tolerance or support origin is outside the domain, not an error.
+    assert domain._junction_rule_applies(domain.boundaries[0], huge) is False
+    plane_loop = _square_loop()
+    assert MaterialDomain(0, _plane(), (plane_loop,))._junction_rule_applies(plane_loop, 10**400) is False
+
+
+def test_r6_far_cylinder_level_keeps_the_parent_exception():
+    """Review R6 P2-2: the strip fixture with query v = 1e308 overflows the level offset (v * height) in the
+    parent as well (GeometryError); it must be outside the domain, not claimed by it."""
+    from anygeometry.errors import GeometryError
+    domain, _up = _strip()
+    loop = domain.boundaries[0]
+    scale = domain._float_ray_scale(loop)
+    assert not domain._junction_query_admitted((0.045, 1e308), scale)
+    with pytest.raises(GeometryError, match="invalid trigonometric root constraint"):
+        domain.contains_loop(loop, (0.045, 1e308), _TOL)
+    # The tripod's own queries stay admitted; the bound is 2**32 loop scales in world units.
+    for v in (20./52, 44./52, 4./52, 0., 1., 1e6/52):
+        assert domain._junction_query_admitted((0.045, v), scale)
+    bound = 2.**32*scale/52.
+    assert domain._junction_query_admitted((0.045, .99*bound), scale)
+    assert not domain._junction_query_admitted((0.045, 1.01*bound), scale)
+    assert not domain._junction_query_admitted((0.045, -1.01*bound), scale)
+
+
+def test_r6_far_plane_query_is_bounded_in_both_coordinates():
+    loop = _square_loop()
+    domain = MaterialDomain(0, _plane(), (loop,))
+    scale = domain._float_ray_scale(loop)
+    assert domain._junction_query_admitted((.5, .5), scale)
+    assert domain._junction_query_admitted((-1e6, .5), scale)
+    assert not domain._junction_query_admitted((.5, 1e12), scale)
+    assert not domain._junction_query_admitted((-1e12, .5), scale)
+    assert not domain._junction_query_admitted((.5, 1e308), scale)
+    assert [domain.contains_loop(loop, q, _TOL) for q in ((.5, 1e12), (-1e12, .5), (.5, 1e308))] == [False] * 3

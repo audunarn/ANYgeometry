@@ -49,7 +49,9 @@ _EPS = float(np.finfo(float).eps)
 #       origin, curve coordinates, parametric speeds and angular phases, the Cylinder's angle arithmetic;
 #       exact bounds for lines and arcs) satisfies scale * K * eps <= tol / M with K = 128, M = 16:
 #       scale <= tol / (2048 eps), 2199 for tol = 1e-9 (tripod: largest scale 105, 20.9x inside), tol in [2^-128, 2^64];
-#   (c) for the query: finite chart coordinates, on a Cylinder an angle the margin away from the cut, and
+#   (c) for the query: finite chart coordinates whose world reach (|u| |u_vector| + ..., on a Cylinder
+#       |v| |height|) is at most 2^32 loop scales (so the level offset and root constraints stay finite), on a
+#       Cylinder an angle the margin away from the cut, and
 #       no curve has two roots in one 8-eps end window and no junction has roots strictly inside both its
 #       8-eps windows (an apex/spike) (_window_roots_ambiguous).
 # Why: roots within 128 eps of an in-band end are snapped and roots within 8 eps of an end are junction
@@ -66,13 +68,18 @@ _FLOAT_RAY_MARGIN = 16
 _CHART_CONDITION = 16
 _MAGNITUDE_RANGE = (2.**-128, 2.**128)       # chart vectors, Cylinder radius and height
 _TOLERANCE_RANGE = (2.**-128, 2.**64)
+_QUERY_REACH = 2.**32                        # a query coordinate may lie this many loop scales from the origin
+_ADMISSION_ERRORS = (ArithmeticError, ValueError, TypeError)     # any of these in the admission: outside the domain
 
 
 def float_ray_scale_trusted(scale, tolerance) -> bool:
     """Whether ``scale`` is inside the junction rule's scale bound at this world tolerance (False on NaN)."""
-    tolerance = float(tolerance)
-    return (_TOLERANCE_RANGE[0] <= tolerance <= _TOLERANCE_RANGE[1]
-            and float(scale) * (_FLOAT_RAY_BAND * _FLOAT_RAY_MARGIN * _EPS) <= tolerance)
+    try:
+        tolerance = float(tolerance)
+        return bool(_TOLERANCE_RANGE[0] <= tolerance <= _TOLERANCE_RANGE[1]
+                    and float(scale) * (_FLOAT_RAY_BAND * _FLOAT_RAY_MARGIN * _EPS) <= tolerance)
+    except _ADMISSION_ERRORS:
+        return False        # unrepresentable in a float: outside the domain, never an error (review R6 P2-1)
 
 
 def _in_magnitude_range(value) -> bool:
@@ -330,6 +337,16 @@ class MaterialDomain:
         return True
 
     def _measure_float_ray_scale(self, loop) -> float:
+        """The loop's scale, inf outside the domain; any conversion, overflow or arithmetic error in the
+        measurement (exact coordinates beyond float range, ...) also means outside, never an exception."""
+        try:
+            with np.errstate(all="ignore"):
+                scale = self._measure_float_ray_scale_unguarded(loop)
+            return scale if scale == scale else math.inf       # NaN: outside
+        except _ADMISSION_ERRORS:
+            return math.inf
+
+    def _measure_float_ray_scale_unguarded(self, loop) -> float:
         support = self.support
         if type(support) is Plane:
             if not _plane_chart_conditioned(support.u_vector, support.v_vector):
@@ -354,12 +371,25 @@ class MaterialDomain:
         this (finite) scale, so it is on the chart sheet of the seam-free loop: MaterialDomain.uv shifts a
         point of a curve that crosses the cut by a period.
         """
-        if not (math.isfinite(float(uv[0])) and math.isfinite(float(uv[1]))):
+        try:
+            with np.errstate(all="ignore"):
+                u, v = float(uv[0]), float(uv[1])
+                if not (math.isfinite(u) and math.isfinite(v) and math.isfinite(scale)):
+                    return False
+                support = self.support
+                if type(support) is Cylinder:
+                    reach = (0., abs(v) * abs(float(support.height)))      # u: the window below
+                else:
+                    reach = (abs(u) * float(np.max(np.abs(np.asarray(support.u_vector, dtype=float)))),
+                             abs(v) * float(np.max(np.abs(np.asarray(support.v_vector, dtype=float)))))
+                if not all(item <= _QUERY_REACH * scale for item in reach):
+                    return False
+                if type(support) is not Cylinder:
+                    return True
+                low, high = _cylinder_chart_window(support, _cylinder_cut_margin(support, scale))
+                return bool(low <= u <= high)
+        except _ADMISSION_ERRORS:
             return False
-        if type(self.support) is not Cylinder:
-            return True
-        low, high = _cylinder_chart_window(self.support, _cylinder_cut_margin(self.support, scale))
-        return low <= float(uv[0]) <= high
 
     def _prepared_exact_boundary(self, loop):
         """Lazy exact line data, retained only for this immutable domain's edges."""
