@@ -2012,6 +2012,11 @@ def from_dict(document: Mapping[str, Any]) -> GeometryModel:
                     "extension keys must be non-empty namespaces containing ':'"
                 )
             _json_value(value)
+        if "anygeometry:intersection_planning" in extensions:
+            # Topology-certified planning record (ADR-T2 v2 section 7 row 3, matrix row 14):
+            # missing or mismatched route identity fields are rejected at load.
+            from .batch_intersections import validate_intersection_planning_record
+            validate_intersection_planning_record(extensions["anygeometry:intersection_planning"])
         geometry._serialization_extensions = deepcopy(dict(extensions))  # noqa: SLF001
     else:
         geometry = GeometryModel()
