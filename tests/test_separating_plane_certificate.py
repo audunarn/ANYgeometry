@@ -721,6 +721,78 @@ def test_cancellation_propagates_and_budget_gives_undecided():
     assert not res.certified and "budget" in res.reason
 
 
+def _exact_plates(offset):
+    """Codex R1 P1-a: perpendicular rectangles meeting along y = 1 + offset (exact rational stored
+    input); the output edge record is the line y = 1. True distance from G_A ∩ G_B to T_out ~ offset."""
+    y = 1 + offset
+    shared = LinePath((0, 1, 0), (1, 1, 0))
+    p = lambda *c: tuple(Fraction(x) for x in c)
+    support_a = sp.PlaneSupport(p(0, 0, 0), p(1, 0, 0), p(0, 1, 0))
+    support_b = sp.PlaneSupport(p(0, y, 0), p(1, 0, 0), p(0, 0, 1))
+    A = sp.FaceRecord(1, support_a, ((
+        sp.BoundaryUse(LinePath(p(0, 0, 0), p(1, 0, 0)), 11, 1, 2),
+        sp.BoundaryUse(LinePath(p(1, 0, 0), p(1, y, 0)), 12, 2, 3),
+        sp.BoundaryUse(LinePath(p(1, y, 0), p(0, y, 0)), 10, 3, 4, False, shared),
+        sp.BoundaryUse(LinePath(p(0, y, 0), p(0, 0, 0)), 13, 4, 1)),),
+        ((1, p(0, 0, 0)), (2, p(1, 0, 0)), (3, p(1, y, 0)), (4, p(0, y, 0))))
+    B = sp.FaceRecord(2, support_b, ((
+        sp.BoundaryUse(LinePath(p(0, y, 0), p(1, y, 0)), 10, 4, 3, True, shared),
+        sp.BoundaryUse(LinePath(p(1, y, 0), p(1, y, 1)), 14, 3, 5),
+        sp.BoundaryUse(LinePath(p(1, y, 1), p(0, y, 1)), 15, 5, 6),
+        sp.BoundaryUse(LinePath(p(0, y, 1), p(0, y, 0)), 16, 6, 4)),),
+        ((3, p(1, y, 0)), (4, p(0, y, 0)), (5, p(1, y, 1)), (6, p(0, y, 1))))
+    return A, B
+
+
+def test_representative_comparison_is_exact():
+    """A displacement below float resolution (2^-54) must not vanish in the record comparison."""
+    offset = Fraction(1, 1 << 54)
+    shared = LinePath((0, 1, 0), (1, 1, 0))
+    assert not sp._same_record(LinePath((Fraction(0), 1 + offset, 0), (1, 1 + offset, 0)), shared)
+    A, B = _exact_plates(offset)
+    res = sp.certify_face_pair(A, B, 1e-15)
+    if res.certified:
+        assert Fraction(res.r_pair) >= offset            # true distance to the output edge is the offset
+
+
+class _Sentinel(sp.SPRefusal):
+    pass
+
+
+def test_callback_refusal_propagates_unchanged_and_is_not_cached():
+    """Codex R1 P1-b: an exception raised by the callback - even an SPRefusal - is cancellation."""
+    A, B = _mitre()
+    sentinel = _Sentinel("cancel-original")
+
+    def always():
+        raise sentinel
+    with pytest.raises(_Sentinel) as info:
+        sp.certify_face_pair(A, B, TOL, check=always)
+    assert info.value is sentinel
+    certifier = sp.SPCertifier()
+    calls = []
+
+    def first_only():
+        calls.append(1)
+        if len(calls) == 1:
+            raise sentinel
+    with pytest.raises(_Sentinel) as info:
+        certifier.certify(A, B, TOL, check=first_only)
+    assert info.value is sentinel
+    later = certifier.certify(A, B, TOL, check=first_only)
+    assert later.certified and later.r_pair == sp.certify_face_pair(A, B, TOL).r_pair
+
+
+def test_delta_eval_window_covers_sums_of_arcs():
+    """Codex R1 P2: C + U cos(phi) can leave the N3 window even when every product is inside it."""
+    s = 2.0**-940
+    arc = _RawArc((-s, 0., 0.), (s + 2.0**-992, 0., 0.), (0., 1., 0.), 0.0, 1.0)   # EllipticArc's float check underflows
+    with pytest.raises(sp.SPRefusal, match="numeric_window:delta_eval"):
+        sp._delta_eval(arc, sp.SPCertificatePolicy())
+    ordinary = EllipticArc((0.5, 0., 0.), (1., 0., 0.), (0., 1., 0.), 0.0, 1.0)
+    assert sp._delta_eval(ordinary, sp.SPCertificatePolicy()) < Fraction(1, 10**13)
+
+
 def test_module_is_not_wired_into_production():
     src = pathlib.Path(sp.__file__).resolve().parent
     users = [p.name for p in src.rglob("*.py") if p.name != "separating_plane_certificate.py"

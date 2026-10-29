@@ -283,6 +283,19 @@ def certified_sincos(x, *, max_bits=400):
     return (s.lo, s.hi), (c.lo, c.hi)
 
 
+class _CallbackRaised(BaseException):
+    """Carrier of an exception raised by the caller's ``check`` (ADR 4.5 CANCELLED).
+
+    A BaseException outside the ``_Refusal`` hierarchy, so no refusal handler can turn a
+    cancellation into UNDECIDED (even when the callback itself raises an ``SPRefusal``);
+    ``SPCertifier.certify`` re-raises the original object.
+    """
+
+    def __init__(self, original):
+        super().__init__()
+        self.original = original
+
+
 class _Ar:
     """Outward interval arithmetic on ``_Proof`` (budget, cancellation polling), plus trig."""
 
@@ -292,7 +305,10 @@ class _Ar:
         callback = None
         if check is not None:
             def callback(phase, _check=check):
-                _check()
+                try:
+                    _check()
+                except BaseException as error:      # noqa: BLE001 - every callback exception cancels
+                    raise _CallbackRaised(error) from None
         self.p = _Proof(policy, callback)
         self.policy = policy
 
@@ -582,15 +598,27 @@ def _make_curve(curve, policy, what):
 def _same_record(a, b):
     if a is b:
         return True
+    """Exact identity of two curve records (every stored value compared as an exact rational)."""
     if type(a) is not type(b):
         return False
-    if type(a).__name__ == "LinePath":
-        return tuple(map(float, a.start)) == tuple(map(float, b.start)) and \
-            tuple(map(float, a.end)) == tuple(map(float, b.end))
-    names = ("center", "u_vector", "v_vector", "start_angle", "sweep_angle")
+    names = ("start", "end") if type(a).__name__ in ("LinePath", "_RawLine") else \
+        ("center", "u_vector", "v_vector", "start_angle", "sweep_angle")
+
+    def exact(value):
+        items = tuple(value) if isinstance(value, (tuple, list)) else (value,)
+        out = []
+        for x in items:
+            if isinstance(x, (Fraction, int)) and not isinstance(x, bool):
+                out.append(Fraction(x))
+                continue
+            x = float(x)                       # a stored binary64 (or numpy float64): exact
+            if not math.isfinite(x):
+                raise ValueError
+            out.append(Fraction(x))
+        return tuple(out)
     try:
-        return all(getattr(a, n) == getattr(b, n) for n in names)
-    except Exception:          # noqa: BLE001 - unknown record kinds are simply not identical
+        return all(exact(getattr(a, n)) == exact(getattr(b, n)) for n in names)
+    except (AttributeError, TypeError, ValueError):
         return False
 
 
@@ -1516,7 +1544,18 @@ class SPCertifier:
         return face
 
     def certify(self, first, second, tolerance, *, check=None):
-        """CERTIFIED(r_pair, evidence) or UNDECIDED(reason, evidence) for one face pair."""
+        """CERTIFIED(r_pair, evidence) or UNDECIDED(reason, evidence) for one face pair.
+
+        An exception raised by ``check`` propagates as the same object (CANCELLED, ADR 4.5);
+        it is never converted to UNDECIDED and never cached with a face preparation.
+        """
+        try:
+            return self._certify(first, second, tolerance, check)
+        except _CallbackRaised as carrier:
+            original = carrier.original
+        raise original
+
+    def _certify(self, first, second, tolerance, check):
         evidence = {"version": CERTIFICATE_VERSION, "faces": (first.face_id, second.face_id)}
         try:
             r_max = contract_r_max(tolerance)
@@ -1620,41 +1659,101 @@ def _delta_eval(curve, policy):
     to 2^-50 absolute (an assumption of this diagnostic, not used by any accept decision).
     """
     name = type(curve).__name__
-    if name == "LinePath":
-        s = tuple(_exact(x, "eval.start") for x in curve.start)
-        e = tuple(_exact(x, "eval.end") for x in curve.end)
+    if name in ("LinePath", "_RawLine"):
+        s = tuple(_binary64(x) for x in curve.start)
+        e = tuple(_binary64(x) for x in curve.end)
         total = Fraction(0)
         for i in range(3):
-            diff = e[i] - s[i]
-            if not _in_window(diff) or not _in_window(Fraction(float(s[i]) + float(diff))):
-                raise _Refusal("numeric_window:delta_eval")
-            total += 2*_UNIT*(abs(diff) + abs(e[i]))       # t = 1: s + fl(e - s); t = 0 is exact
+            # evaluate(1.0) = s + 1.0*(e - s): every operand is a known float, so each
+            # intermediate is computed exactly as IEEE does and checked (t = 0 returns s exactly).
+            diff = _float_op(s[i], e[i], lambda x, y: y - x)
+            result = _float_op(s[i], diff, lambda x, y: x + y)
+            _window_value(diff)
+            _window_value(result)
+            total += abs(result - e[i])
         return total
     if name in ("EllipticArc", "_RawArc"):
-        C, U, V = (tuple(_exact(x, "eval") for x in getattr(curve, k)) for k in
-                   ("center", "u_vector", "v_vector"))
-        start = float(curve.start_angle)
-        end_float = start + float(curve.sweep_angle)              # the float angle evaluate forms
-        end_angle = _exact(end_float, "eval.angle")
-        phase = abs(end_angle - (Fraction(start) + _exact(curve.sweep_angle, "eval.sweep")))
+        C, U, V = (tuple(_binary64(x) for x in getattr(curve, k)) for k in ("center", "u_vector", "v_vector"))
+        start, sweep = _binary64(curve.start_angle), _binary64(curve.sweep_angle)
+        end_angle = _float_op(start, sweep, lambda x, y: x + y)        # the float angle evaluate forms
+        _window_value(end_angle)
+        phase = abs(end_angle - (start + sweep))
         worst = Fraction(0)
-        for angle, shift in ((Fraction(start), Fraction(0)), (end_angle, phase)):
-            s, c = _sincos_fixed(angle, policy.trig_argument_bits)
+        for angle, shift in ((start, Fraction(0)), (end_angle, phase)):
             if angle == 0:                      # sin(0) = 0 and cos(0) = 1 exactly, in libm too
-                s, c = _I(Fraction(0), Fraction(0)), _I(Fraction(1), Fraction(1))
+                s, c = (Fraction(0),), (Fraction(1),)
+            else:
+                si, ci = _sincos_fixed(angle, policy.trig_argument_bits)
+                s = (si.lo - _LIBM_TRIG_ERROR, si.hi + _LIBM_TRIG_ERROR)
+                c = (ci.lo - _LIBM_TRIG_ERROR, ci.hi + _LIBM_TRIG_ERROR)
             total = Fraction(0)
             for i in range(3):
-                for coef, trig in ((U[i], c), (V[i], s)):
-                    if coef and trig.lo == trig.hi == 0:
-                        continue                # an exact zero product: no underflow
-                    if coef and (trig.lo <= 0 <= trig.hi or
-                                 not _in_window(coef*min(abs(trig.lo), abs(trig.hi)))):
-                        raise _Refusal("numeric_window:delta_eval")
-                trig_error = _LIBM_TRIG_ERROR + shift
-                total += (abs(U[i]) + abs(V[i]))*trig_error + 3*_UNIT*(abs(C[i]) + abs(U[i]) + abs(V[i]))*2
+                # numpy: (C + cos*U) + sin*V, in that order; every intermediate is checked.
+                p1 = _model_mul(U[i], c)
+                p2 = _model_mul(V[i], s)
+                s1 = _model_add(C[i], p1)
+                s2 = _model_add(s1, p2)
+                for item in (p1, p2, s1, s2):
+                    _window_model(item)
+                trig_error = (0 if angle == 0 else _LIBM_TRIG_ERROR) + shift
+                total += (abs(U[i]) + abs(V[i]))*trig_error + 4*_UNIT*(abs(C[i]) + abs(U[i]) + abs(V[i]))
             worst = max(worst, total)
         return worst
     raise _Refusal("unsupported_curve:" + name)
+
+
+def _binary64(value):
+    """A stored value that must be an exact binary64 inside the N3 window (the evaluate model)."""
+    made = _exact(value, "eval")
+    if Fraction(float(made)) != made:
+        raise _Refusal("numeric_window:delta_eval_not_binary64")
+    return made
+
+
+def _float_op(x, y, op):
+    result = op(float(x), float(y))
+    if not math.isfinite(result):
+        raise _Refusal("numeric_window:delta_eval")
+    return Fraction(result)
+
+
+def _window_value(value):
+    if not _in_window(value):
+        raise _Refusal("numeric_window:delta_eval")
+
+
+def _model_mul(coef, trig):
+    """Float product coef*trig: an exact float when trig is exact, else an enclosure (lo, hi)."""
+    if len(trig) == 1:
+        return ("exact", _float_op(coef, trig[0], lambda x, y: x*y))
+    if coef == 0:
+        return ("exact", Fraction(0))
+    a, b = coef*trig[0], coef*trig[1]
+    lo, hi = min(a, b), max(a, b)
+    pad = _UNIT*max(abs(lo), abs(hi))
+    return ("interval", lo - pad, hi + pad)
+
+
+def _model_add(x, y):
+    """Float sum of a known float x (or model value) and a model value y."""
+    if not isinstance(x, tuple):
+        x = ("exact", x)
+    if x[0] == "exact" and y[0] == "exact":
+        return ("exact", _float_op(x[1], y[1], lambda a, b: a + b))
+    xl, xh = (x[1], x[1]) if x[0] == "exact" else (x[1], x[2])
+    yl, yh = (y[1], y[1]) if y[0] == "exact" else (y[1], y[2])
+    lo, hi = xl + yl, xh + yh
+    pad = _UNIT*max(abs(lo), abs(hi))
+    return ("interval", lo - pad, hi + pad)
+
+
+def _window_model(item):
+    if item[0] == "exact":
+        _window_value(item[1])
+        return
+    lo, hi = item[1], item[2]
+    if lo <= 0 <= hi or min(abs(lo), abs(hi)) < _WINDOW_LO or max(abs(lo), abs(hi)) > _WINDOW_HI:
+        raise _Refusal("numeric_window:delta_eval")
 
 
 def _best_reason(failures):
