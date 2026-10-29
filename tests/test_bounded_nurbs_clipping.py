@@ -423,6 +423,7 @@ def test_native_side_and_derivatives_are_transported_from_the_canonical_joint_is
 
 
 def test_raw_line_regeneration_after_save_load_and_a_remote_endpoint_edit_is_refused():
+    import numpy as np
     from anygeometry._canonical_plate_joint import JointRefused, plate_joint
     model, face, plate, plan, result, policy = bounded_run(RECT)
     traces, auxiliary = edge_kinds(model)
@@ -441,9 +442,27 @@ def test_raw_line_regeneration_after_save_load_and_a_remote_endpoint_edit_is_ref
     item = loaded.edges[straight]
     remote = item.end if item.start == vertex else item.start
     x, y, z = (float(c) for c in loaded.vertex_position(remote))
-    loaded.move_point(remote, x, y, z + 2.0**-40)                       # tiny out-of-plane edit of the REMOTE endpoint
-    with pytest.raises(JointRefused):
-        plate_joint(loaded, vertex, edge)
+    before, revision = to_dict(loaded), loaded.revision
+    with pytest.raises(GeometryError, match='without a valid evaluable surface'):
+        loaded.move_point(remote, x, y, z + 2.0**-40)
+    assert loaded.revision == revision and to_dict(loaded) == before
+
+    # Public editing correctly refuses first. Deliberately bypass that guard to
+    # exercise regeneration from the ACTUAL raw remote endpoint, not an old
+    # projected line or a cached successful joint after save/load.
+    raw_vertex = loaded.vertices[remote]
+    original = raw_vertex.position
+    changed = np.array((x, y, z + 2.0**-40), dtype=float)
+    changed.flags.writeable = False
+    try:
+        object.__setattr__(raw_vertex, 'position', changed)
+        assert loaded.vertex_position(remote) is changed
+        assert loaded.revision == revision
+        assert float(loaded.vertex_position(remote)[2]) - z == 2.0**-40
+        with pytest.raises(JointRefused):
+            plate_joint(loaded, vertex, edge)
+    finally:
+        object.__setattr__(raw_vertex, 'position', original)
 
 
 def _joint_pairs(model):
