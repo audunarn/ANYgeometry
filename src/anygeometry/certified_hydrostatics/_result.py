@@ -73,6 +73,7 @@ class TopologyLoop:
 class Topology:
     loops: tuple         # TopologyLoop sorted by identity
     components: tuple    # (outer identity, (hole identity, ...)) sorted
+    cut_points: tuple = ()   # curved preparations: sorted (edge id, ordinal along the edge by increasing u)
 
     @property
     def outer_count(self) -> int:
@@ -111,6 +112,7 @@ class CertifiedHydrostaticsResult:
     sections: tuple                   # SectionResult: ("plane",) or ("below", "above")
     work: dict = field(compare=False)
     proof: bytes = field(default=b"", repr=False)
+    execution: dict | None = field(default=None, compare=False)   # curved queries: untrusted allocation metadata
 
     def section(self, side: str) -> SectionResult:
         for item in self.sections:
@@ -134,6 +136,8 @@ class CertifiedHydrostaticsResult:
                "volume": claim_quantity(self.volume, tick),
                "moments": {item.name: claim_quantity(item, tick) for item in self.moments},
                "sections": {item.side: _claim_section(item, tick) for item in self.sections}}
+        if self.execution is not None:
+            out["execution"] = dict(self.execution)
         if with_work:
             out["work"] = {"operations": self.work["operations"], "units": dict(self.work["units"])}
         return out
@@ -160,6 +164,8 @@ def claim_quantity(item: QuantityResult, tick=lambda: None) -> dict:
     tick()
     out: dict = {"accuracy": None if item.accuracy is None else _pair(item.accuracy),
                  "accuracy_met": item.accuracy_met}
+    if item.enclosure is not None:
+        out["enclosure"] = {"lo": _pair(item.enclosure[0]), "hi": _pair(item.enclosure[1])}
     if item.numerator is not None:
         out["exact"] = {"numerator": _pair(item.numerator),
                         "norm_squared": None if item.norm_squared is None else _pair(item.norm_squared)}
@@ -181,6 +187,8 @@ def _claim_section(item: SectionResult, tick=lambda: None) -> dict:
         for outer, holes in item.topology.components:
             tick()
             topology["components"].append({"outer": _copy(outer, tick), "holes": [_copy(h, tick) for h in holes]})
+        if item.topology.cut_points:
+            topology["cut_points"] = [[edge, ordinal] for edge, ordinal in item.topology.cut_points]
     quantities = None if item.quantities is None else {q.name: claim_quantity(q, tick) for q in item.quantities}
     return {"occupancy": item.occupancy, "section": item.section, "quantities": quantities, "topology": topology}
 
@@ -210,6 +218,16 @@ def proof_document(prepared, query: HalfSpaceQuery, claim: dict, meter=None) -> 
         "moment_order": ["A", "Mu", "Mv", "Iuu", "Ivv", "Iuv"],
         "limits": "below: n.r = d - eps, above: n.r = d + eps, eps -> 0+; V and J use the below convention",
         "loop_identity": "sorted ids of the crossed shell edges"}
+    if prepared.policy.convention_version != "1":
+        convention["curved"] = {
+            "claim": "enclosure [lo, hi] = core +- width of the core; width of the claim <= the accuracy",
+            "exact": "present only when the computation was exact (no algebraic or enclosed term)",
+            "binary64": "outward rounding of the claim", "decimal": "outward rounding of the claim",
+            "cut_point_identity": "(edge id, ordinal along the edge by increasing knot parameter u)",
+            "orientation": "model loops anticlockwise about the outward normal; V_f = -(1/3) oint F_V du; "
+                           "kept cut-graph portion directed -sign(beta) sigma_chart; cap = cut pieces reversed",
+            "events": "generic planes only: a plane through a vertex or edge, tangent, or containing a ruling "
+                      "is refused CURVED_SECTION_DEGENERACY"}
     return {"artifact": artifact, "model": model, "convention": convention,
             "preparation_policy": prepared.policy.as_dict(), "query": query.as_dict(), "result": claim}
 

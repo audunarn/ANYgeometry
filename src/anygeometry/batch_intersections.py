@@ -437,7 +437,22 @@ def plan_intersections(model, operands, *, policy):
     """Plan intersections between the complete original operand set, read-only."""
     from .preparation_epochs import _epoch_plan_required,_issue_native_plan
     from .native_support_snapshots import capture_native_supports
+    operands = tuple(operands)
+    from .bounded_nurbs import handles_bounded, plan_bounded
+    from .intersections import _normalize_operand
+    handles = tuple(sorted(set(_normalize_operand(model, value) for value in operands)))
+    effective = _policy(policy)
+    from .existing_material_preparation import try_plan_existing
+    existing = try_plan_existing(model, handles, effective)
+    if existing is not None:
+        return existing
     native=capture_native_supports(model) if _epoch_plan_required(model) else None
+    if effective.face_connections and handles_bounded(model, handles):
+        plan = plan_bounded(model, handles, effective)
+        if native is not None:
+            if capture_native_supports(model) != native:
+                raise GeometryError('bounded epoch source native geometry changed during planning')
+        return plan
     if native is not None and any(kind not in ('plane','cylinder') for _,kind,_ in native):
         raise GeometryError('epoch planning native support binding is unavailable')
     with root_isolation_memo():
@@ -1212,6 +1227,15 @@ def _apply_intersections(model, plan, *, policy):
     if not isinstance(plan, IntersectionPlan):
         raise TypeError("apply_intersections needs an IntersectionPlan")
     effective = _policy(policy)
+    from .existing_material_preparation import is_existing_plan, eligible, apply_existing
+    if is_existing_plan(plan):
+        return apply_existing(model, plan, effective)
+    if effective.face_connections and eligible(model, plan.operands):
+        raise GeometryError('same-chart material preparation plan is not owner-issued')
+    from .bounded_nurbs import is_bounded_plan, handles_bounded, apply_bounded
+    active_faces = all(h.kind == 'face' and h.id in model.faces for h in plan.operands)
+    if is_bounded_plan(plan) or (active_faces and handles_bounded(model, plan.operands)):
+        return apply_bounded(model, plan, effective)
     _validate_policy(plan,effective)
     if model.model_id != plan.model_id:
         raise GeometryError("intersection plan belongs to another model")
@@ -1439,13 +1463,16 @@ def clone_prepared_geometry(model, *, new_preparation_epoch=False):
         before=to_dict(model);native=capture_native_supports(model)
         made=model.clone(preserve_identity=False)
         copied=to_dict(made)
-        source_payload={k:v for k,v in before.items() if k not in ('model_id','checksum')}
-        clone_payload={k:v for k,v in copied.items() if k not in ('model_id','checksum')}
+        from .serialization import _clone_content_payload
+        source_payload=_clone_content_payload(before)
+        clone_payload=_clone_content_payload(copied)
         if (made.model_id==model.model_id or source_payload!=clone_payload or
                 capture_native_supports(made)!=native or capture_native_supports(model)!=native or to_dict(model)!=before):
             raise GeometryError('preparation epoch clone changed source or native geometry')
         from .preparation_epochs import _issue_epoch
         _issue_epoch(made)
+        from .prepared_material_source_transfer import _register_source_clone
+        _register_source_clone(model, made)
         return made
     prepared = has_current_intersection_preparation(model)
     receipt = getattr(model, "_intersection_preparation_receipt", None)
@@ -1460,6 +1487,8 @@ def clone_prepared_geometry(model, *, new_preparation_epoch=False):
         _copy_current_preimages(model, made)
         from .edge_subcurve_preimages import _copy_current_edge_subcurve_preimages
         _copy_current_edge_subcurve_preimages(model, made)
+    from .prepared_material_source_transfer import _register_source_clone
+    _register_source_clone(model, made)
     return made
 
 

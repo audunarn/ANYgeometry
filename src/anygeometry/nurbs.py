@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
+from ._cert_exact_runtime import fraction_kind as _fraction_kind
 import math
 from typing import Sequence
 
@@ -181,8 +182,14 @@ def _scaled_weights(weights) -> np.ndarray | None:
 # ----------------------------------------------------------------------------------- curves
 
 
+class _PreparedCurveState:
+    # Derived execution data is deliberately not part of dataclass fields,
+    # equality, asdict(), definition fingerprints or persisted curve records.
+    __slots__ = ("_prepared", "_prepared_binding", "_endpoint_values", "_point_values")
+
+
 @dataclass(frozen=True, slots=True)
-class NurbsCurve:
+class NurbsCurve(_PreparedCurveState):
     """Clamped B-spline or NURBS curve in 3D, or in a 2D chart (a pcurve).
 
     ``controls`` are 2- or 3-tuples (all the same); ``weights`` is ``None`` for
@@ -212,6 +219,32 @@ class NurbsCurve:
         object.__setattr__(self, "controls", controls)
         object.__setattr__(self, "weights", weights)
         object.__setattr__(self, "domain", domain)
+        object.__setattr__(self, "_prepared", _call(backend._prepare_bspline_curve, degree, knots, controls, weights))
+        object.__setattr__(self, "_prepared_binding", (degree, knots, controls, weights, domain))
+        object.__setattr__(self, "_endpoint_values", (None, None))
+        object.__setattr__(self, "_point_values", {})
+
+    def __getstate__(self):
+        # Private evaluated data is not a serialized definition or authority.
+        return self.degree, self.knots, self.controls, self.weights, self.domain
+
+    def __setstate__(self, state):
+        if isinstance(state, dict):
+            required = ("degree", "knots", "controls")
+            if not all(name in state for name in required):
+                raise GeometryError("invalid NURBS curve state")
+            state = tuple(state.get(name) for name in (*required, "weights", "domain"))
+        if not isinstance(state, (tuple, list)) or len(state) != 5:
+            raise GeometryError("invalid NURBS curve state")
+        for name, value in zip(("degree", "knots", "controls", "weights", "domain"), state):
+            object.__setattr__(self, name, value)
+        self.__post_init__()
+
+    def _require_prepared_binding(self):
+        degree, knots, controls, weights, domain = self._prepared_binding
+        if (self.degree != degree or self.knots is not knots or self.controls is not controls
+                or self.weights is not weights or self.domain is not domain):
+            raise GeometryError("NURBS curve definition changed after validation")
 
     @property
     def dimension(self) -> int:
@@ -234,15 +267,42 @@ class NurbsCurve:
         """
         if type(order) is not int or order not in (0, 1, 2):
             raise GeometryError("derivative order must be the integer 0, 1 or 2")
+        self._require_prepared_binding()
         s, scale = self._knot_parameters(parameters)
-        values = _call(backend.bspline_curve, self.degree, self.knots, self.controls, self.weights,
-                       np.ravel(s), order)
+        endpoint = None
+        point_key = None
+        if order == 0 and np.size(s) == 1:
+            knot = float(np.ravel(s)[0])
+            endpoint = 0 if knot == self.domain[0] else 1 if knot == self.domain[1] else None
+            # Exact float bits: no station rounding or parameter quantization.
+            point_key = np.float64(knot).tobytes()
+            cached = self._endpoint_values[endpoint] if endpoint is not None else self._point_values.get(point_key)
+            if cached is not None:
+                if not np.all(np.isfinite(cached)):
+                    raise GeometryError("NURBS derivative is not representable in float64")
+                return cached.copy().reshape(np.shape(s) + (1, self.dimension))
+        values = _call(backend._evaluate_prepared_bspline_curve, self._prepared, np.ravel(s), order)
         if order:
             self._inward_end_rows(np.ravel(s), values, order)
         for k in range(1, order + 1):                 # chain rule one factor at a time (no scale**k)
             values[:, k:, :] *= scale
         if not np.all(np.isfinite(values)):
             raise GeometryError("NURBS derivative is not representable in float64")
+        if endpoint is not None:
+            cached = np.frombuffer(values.tobytes(), dtype=values.dtype).reshape(values.shape)
+            entries = list(self._endpoint_values)
+            entries[endpoint] = cached
+            object.__setattr__(self, "_endpoint_values", tuple(entries))
+        elif point_key is not None:
+            cached = np.frombuffer(values.tobytes(), dtype=values.dtype).reshape(values.shape)
+            # Publish a replacement dictionary so concurrent readers never
+            # observe in-place eviction. Concurrent fills can lose a cache
+            # entry, never alter a point or exceed the fixed storage bound.
+            entries = dict(self._point_values)
+            if len(entries) >= 128:
+                entries.pop(next(iter(entries)))
+            entries[point_key] = cached
+            object.__setattr__(self, "_point_values", entries)
         return values.reshape(np.shape(s) + (order + 1, self.dimension))
 
     def _inward_end_rows(self, s: np.ndarray, values: np.ndarray, order: int) -> None:
@@ -596,6 +656,88 @@ class NurbsSurface:
         p, q, count_u, count_v = self.degree_u, self.degree_v, len(net), len(net[0])
         span_u, span_v = _exact_span(p, knots_u, count_u, s), _exact_span(q, knots_v, count_v, t)
         basis_u, basis_v = _exact_basis(p, knots_u, span_u, s), _exact_basis(q, knots_v, span_v, t)
+        entries = None
+        tuple_kind, list_kind = ().__class__, [].__class__
+        kind = tuple_kind.__class__
+        rational = _fraction_kind(Fraction)
+        canonical = (rational is not None and kind(net) is tuple_kind
+                and kind(basis_u) is list_kind and kind(basis_v) is list_kind
+                and 0 <= span_u - p and span_u < len(net) and 0 <= span_v - q
+                and len(basis_u) == p + 1 and len(basis_v) == q + 1)
+        if canonical:
+            for i in range(span_u - p, span_u + 1):
+                if kind(net[i]) is not tuple_kind or span_v >= len(net[i]):
+                    canonical = False
+                    break
+        if canonical:
+            for basis in (basis_u, basis_v):
+                for value in basis:
+                    if kind(value) is not rational:
+                        canonical = False
+                        break
+                if not canonical:
+                    break
+        if canonical:
+            entries = [[net[span_u - p + a][span_v - q + b]
+                        for b in range(len(basis_v))] for a in range(len(basis_u))]
+            for row in entries:
+                for entry in row:
+                    if kind(entry) is not tuple_kind or len(entry) != 4:
+                        canonical = False
+                        break
+                    for value in entry:
+                        if kind(value) is not rational:
+                            canonical = False
+                            break
+                    if not canonical:
+                        break
+                if not canonical:
+                    break
+        if canonical and '_from_coprime_ints' in rational.__dict__:
+            factory = rational._from_coprime_ints
+            # Only the active span is inspected. A single exact scale cancels
+            # in the final homogeneous quotient.
+            denominator = 1
+            for row in entries:
+                for entry in row:
+                    for value in entry:
+                        d = value._denominator
+                        x, y = denominator, d
+                        while y:
+                            x, y = y, x % y
+                        denominator = denominator // x * d
+            integer_bases = []
+            for basis in (basis_u, basis_v):
+                base_denominator = 1
+                for value in basis:
+                    d = value._denominator
+                    x, y = base_denominator, d
+                    while y:
+                        x, y = y, x % y
+                    base_denominator = base_denominator // x * d
+                integer_bases.append([value._numerator * (base_denominator // value._denominator)
+                                      for value in basis])
+            totals = [0] * 4
+            for a, nu in enumerate(integer_bases[0]):
+                for b, nv in enumerate(integer_bases[1]):
+                    factor = nu * nv
+                    for axis, value in enumerate(entries[a][b]):
+                        totals[axis] += factor * value._numerator * (denominator // value._denominator)
+            if totals[3] != 0:
+                result = []
+                for numerator in totals[:3]:
+                    denominator = totals[3]
+                    x, y = numerator, denominator
+                    while y:
+                        x, y = y, x % y
+                    if denominator < 0:
+                        # Python's remainder makes gcd negative in this case;
+                        # dividing by it normalizes the denominator's sign.
+                        if x > 0:
+                            x = -x
+                    result.append(factory(numerator // x, denominator // x))
+                return tuple(result)
+            # Keep the original division exception, including its message.
         total = [Fraction(0)] * 4
         for a, nu in enumerate(basis_u):
             for b, nv in enumerate(basis_v):
@@ -841,7 +983,7 @@ class CurveOnSurface:
 
     # ---------------------------------------------------------- model edge interface (A3b)
 
-    def _iso_world(self):
+    def _iso_world(self, *, fresh=False):
         """The exact world curve of an iso-line pcurve, or ``None``.
 
         For a degree-1 pcurve with two controls sharing one chart coordinate
@@ -851,11 +993,13 @@ class CurveOnSurface:
         over the running knot vector, and an affine map ``sigma(t)`` of the
         engine parameter onto it. ``None`` when ``F`` differs from the float
         chart map's value (the float evaluation would use another iso-curve) or
-        the pcurve is not an iso-line.
+        the pcurve is not an iso-line. ``fresh`` reconstructs from literal
+        definitions without reading or writing the shared iso cache.
         """
-        cached = _ISO_CACHE.get(self)
-        if cached is not None or self in _ISO_CACHE:
-            return cached
+        if not fresh:
+            cached = _ISO_CACHE.get(self)
+            if cached is not None or self in _ISO_CACHE:
+                return cached
         result = None
         pcurve = self.pcurve
         if (self.transform == _IDENTITY and pcurve.degree == 1 and len(pcurve.controls) == 2
@@ -909,19 +1053,20 @@ class CurveOnSurface:
                     error_chart = abs(c1 - c0) * error_ratio + 8 * eps * max(abs(c0), abs(c1), Fraction(1))
                     slack = 2 * (abs(r1 - r0) * error_chart + 4 * Fraction(math.ulp(float(max(abs(r0), abs(r1))))))
                     result = (run_degree, run_knots, points, sigma, slack, (min(r0, r1), max(r0, r1)))
-        if len(_ISO_CACHE) >= 256:
-            _ISO_CACHE.clear()
-        _ISO_CACHE[self] = result
+        if not fresh:
+            if len(_ISO_CACHE) >= 256:
+                _ISO_CACHE.clear()
+            _ISO_CACHE[self] = result
         return result
 
-    def _iso_hull(self, lower, upper, *, exact: bool = False):
+    def _iso_hull(self, lower, upper, *, exact: bool = False, fresh=False):
         """Exact world hull points of the iso-curve over ``[lower, upper]``.
 
         Widened for the float evaluation chain unless ``exact`` (certificates
         about the exact curve, ``nurbs_audit``): then the interval is the exact
         image ``sigma([lower, upper])`` and its end points are hull points.
         """
-        degree, knots, points, sigma, slack, (low_range, high_range) = self._iso_world()
+        degree, knots, points, sigma, slack, (low_range, high_range) = self._iso_world(fresh=fresh)
         low, high = (min(1.0, max(0.0, _real(value, "curve parameter"))) for value in (lower, upper))
         s0, s1 = sorted((sigma(low), sigma(high)))
         if not exact:
@@ -969,17 +1114,18 @@ class CurveOnSurface:
         matrix = [[Fraction(value) for value in row] for row in self.transform]
         return tuple(sum(matrix[i][j] * point[j] for j in range(3)) + matrix[i][3] for i in range(3))
 
-    def bounds(self, lower=0.0, upper=1.0):
+    def bounds(self, lower=0.0, upper=1.0, *, fresh=False):
         """Outward box of the curve on ``[lower, upper]``.
 
         The pcurve's box over the interval (exact hull, widened for its float
         evaluation) clipped to the chart gives a chart box; the support's
         enclosure of that box (exact sub-patch hull plus float-evaluation margin,
         slice A3a) contains the curve; a non-identity transform maps the box
-        exactly and rounds outward.
+        exactly and rounds outward. ``fresh`` bypasses iso-cache reads and
+        writes, including the eligibility decision for the non-iso fallback.
         """
-        if self._iso_world() is not None:
-            points = self._iso_hull(lower, upper)
+        if self._iso_world(fresh=fresh) is not None:
+            points = self._iso_hull(lower, upper, fresh=fresh)
             margin = self._float_margin()
             low = np.array([_float_down(min(point[k] for point in points)) for k in range(3)])
             high = np.array([_float_up(max(point[k] for point in points)) for k in range(3)])

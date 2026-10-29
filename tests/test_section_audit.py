@@ -329,7 +329,9 @@ def test_the_exclusion_descent_is_charged_to_the_qualification_budget():
     from anygeometry.section_audit import Work, _charging
     surface = NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.),
                            (((0., 0., 0.), (0., 0., 1.)), ((1., 0., 0.), (1., 0., 1.))))     # S = (u, 0, v)
-    curve = PlaneNurbsCurve.from_plane(Plane((0., 0., .3), (1., 0., 0.), (0., 1., 0.)), surface, 0)
+    # a tilted plane: the axis-aligned x = constant section is now certified by an exact identity
+    # without any exclusion descent, so it no longer exercises the charged tree
+    curve = PlaneNurbsCurve.from_plane(Plane((0., 0., .3), (1., 0., .2), (0., 1., 0.)), surface, 0)
     with _charging(Work(1, 1)):
         assert projection_monotone(curve, (1, 0, 0)) is None
     work = Work(100, 32)

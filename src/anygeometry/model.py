@@ -858,6 +858,11 @@ class GeometryModel:
             bounds.append((*tuple(lower), *tuple(upper)))
 
         support = face.support_surface
+        from .nurbs_sweep_chart import has_sweep_chart, chart_model
+        chart_owner = self
+        if has_sweep_chart(face):
+            chart_owner = chart_model(self, face.id)
+            support = chart_owner.support
         if isinstance(support, Plane):
             add_points(
                 support.evaluate(u, v)
@@ -901,9 +906,12 @@ class GeometryModel:
             # The chart box of the trim pcurves (their sound boxes, clipped to the
             # chart), enclosed by the support's exact sub-patch hull (A3a).
             from .surface_capabilities import capabilities
+            from .nurbs_intersection_curve import NurbsSurfaceIntersectionCurve
+            curves = (chart_owner.edges[item.edge].curve for loop in (face.loop,) + face.holes for item in loop)
+            curves = (curve.for_support(support) if isinstance(curve,NurbsSurfaceIntersectionCurve) else curve
+                      for curve in curves)
             boxes = [curve.chart_bounds() if hasattr(curve, "chart_bounds") else curve.pcurve.bounds()
-                     for curve in (self.edges[item.edge].curve for loop in (face.loop,) + face.holes
-                                   for item in loop)]                 # section edges: B1-P4c
+                     for curve in curves]                 # section edges: B1-P4c
             low = np.clip(np.min([box[0] for box in boxes], axis=0), 0.0, 1.0)
             high = np.clip(np.max([box[1] for box in boxes], axis=0), 0.0, 1.0)
             enclosure = capabilities(support).enclosure(((float(low[0]), float(high[0])),
@@ -4747,7 +4755,8 @@ class GeometryModel:
                                 "BezierQuadricCurve or NurbsCurve")
         from .nurbs import CurveOnSurface, NurbsCurve
         from .support_curves import PlaneNurbsCurve
-        if isinstance(curve, PlaneNurbsCurve):
+        from .nurbs_intersection_curve import NurbsSurfaceIntersectionCurve
+        if isinstance(curve, (PlaneNurbsCurve,NurbsSurfaceIntersectionCurve)):
             self._check_plane_nurbs_ends(start_point, end_point, curve)
             return self._add_edge(start, end, curve)
         if isinstance(curve, (NurbsCurve, CurveOnSurface)):
@@ -4902,6 +4911,15 @@ class GeometryModel:
         from .nurbs import CurveOnSurface, _IDENTITY
         from .support_curves import PlaneNurbsCurve
         for loop in loops:
+            from .nurbs_intersection_curve import NurbsSurfaceIntersectionCurve
+            if any(isinstance(self.edges[item.edge].curve,NurbsSurfaceIntersectionCurve) for item in loop):
+                for item in loop:
+                    curve = self.edges[item.edge].curve
+                    if isinstance(curve,NurbsSurfaceIntersectionCurve):
+                        curve.for_support(surface)
+                    elif not isinstance(curve,CurveOnSurface) or curve.support != surface or curve.transform != _IDENTITY:
+                        raise GeometryError('intersection trim loop has an unsupported boundary curve')
+                continue
             if any(isinstance(self.edges[item.edge].curve, PlaneNurbsCurve) for item in loop):
                 # loops with plane x NURBS section edges: the curves must be on this support; their
                 # chart continuity (algebraic section ends) is decided in validation (B1-P4c)
@@ -5407,7 +5425,21 @@ class GeometryModel:
         face = self.faces[face_id]
         loops = (face.loop,) + tuple(face.holes)
         from .nurbs import NurbsSurface
+        from .nurbs_sweep_chart import has_sweep_chart, chart_model
+        if has_sweep_chart(face):
+            try:
+                view = chart_model(self, face_id)
+                from .nurbs_section_faces import has_section_edges, validate_nurbs_section_face
+                if has_section_edges(view, view.faces[face_id]):
+                    return validate_nurbs_section_face(view, face_id)
+                GeometryModel._require_nurbs_face_loops(view, view.support, loops)
+                return GeometryModel._validate_nurbs_trims(view, face_id, view.support, loops)
+            except GeometryError as error:
+                return [f'face {face_id}: {error}']
         if isinstance(face.surface, NurbsSurface):
+            from .nurbs_intersection_faces import has_intersection_edges, validate_intersection_face
+            if has_intersection_edges(self,face):
+                return validate_intersection_face(self,face_id)
             # Chart polygons straight from the pcurves (no world inversion, architecture 4.6).
             from .nurbs_section_faces import has_section_edges as _nurbs_sections, validate_nurbs_section_face
             if _nurbs_sections(self, face):
@@ -5741,6 +5773,19 @@ class GeometryModel:
     # operations
     # ------------------------------------------------------------------
     @_transactional
+    def loft(self, first_edges, second_edges, *, reverse_first=False, reverse_second=False,
+             first_start=0, second_start=0, flip_normal=False, cancellation_check=None):
+        """Join ordered profiles on a canonical NURBS support, atomically.
+
+        Unsupported or uncertifiable mappings refuse without changing topology.
+        """
+        from .loft import build_loft
+        return build_loft(self, first_edges, second_edges, reverse_first=reverse_first,
+                          reverse_second=reverse_second, first_start=first_start,
+                          second_start=second_start, flip_normal=flip_normal,
+                          cancellation_check=cancellation_check)
+
+    @_transactional
     def extrude(
         self, edge_ids: Sequence[int], vector: Sequence[float]
     ) -> List[int]:
@@ -5749,6 +5794,10 @@ class GeometryModel:
         Shared points between consecutive edges produce shared swept lines, so
         extruding a chain gives a strip of faces that is conformal by
         construction rather than by coincident-node merging.
+
+        Curved profiles retain exact translated boundaries. The topology-backed
+        Coons map between a curve and its translate is exactly C(u) + v*vector;
+        no sampled ruled surface or planar corner approximation is introduced.
         """
 
         offset = np.asarray(vector, dtype=float)
@@ -6094,8 +6143,10 @@ class GeometryModel:
             first = self.add_arc(edge.start, first_via, new_vertex)
             second = self.add_arc(new_vertex, second_via, edge.end)
         elif isinstance(edge.curve, EXACT_CURVES):
-            first = self.add_curve(edge.start, new_vertex, edge.curve.subcurve(0., float(t)))
-            second = self.add_curve(new_vertex, edge.end, edge.curve.subcurve(float(t), 1.))
+            from .line_ranges import LineRange
+            parameter = t if isinstance(edge.curve, LineRange) else float(t)
+            first = self.add_curve(edge.start, new_vertex, edge.curve.subcurve(0, parameter))
+            second = self.add_curve(new_vertex, edge.end, edge.curve.subcurve(parameter, 1))
         elif isinstance(edge.curve, Spline):
             points = self._spline_points(edge)
             left, right = self._split_bezier(points, float(t))
@@ -6270,22 +6321,33 @@ class GeometryModel:
         from .nurbs import NurbsSurface
         from .nurbs_domain import certified_chart_polyline
         face = self._require_face(face_id)
+        from .nurbs_sweep_chart import has_sweep_chart, chart_model
+        owner = chart_model(self, face_id) if has_sweep_chart(face) else self
+        face = owner.faces[face_id]
         if not isinstance(face.surface, NurbsSurface):
             raise GeometryError("certified trim polylines are defined for NURBS faces")
         if not (math.isfinite(tolerance) and tolerance > 0):
             raise GeometryError("tolerance must be finite and positive")
         from .support_curves import PlaneNurbsCurve
-        if any(isinstance(self.edges[item.edge].curve, PlaneNurbsCurve)
-               for loop in (face.loop,) + tuple(face.holes) for item in loop):
-            # section edges have no pcurve; their certified chart polylines are not implemented yet
-            # (review B1-P4c round 2: a typed refusal instead of an AttributeError)
-            raise GeometryError("certified trim polylines are not available for faces with plane x NURBS "
-                                "section edges yet")
         loops, worst = [], 0.0
         for loop in (face.loop,) + tuple(face.holes):
             points = []
             for item in loop:
-                polyline, bound = certified_chart_polyline(face.surface, self.edges[item.edge].curve.pcurve, tolerance)
+                curve = owner.edges[item.edge].curve
+                from .nurbs_intersection_curve import NurbsSurfaceIntersectionCurve
+                if isinstance(curve,NurbsSurfaceIntersectionCurve):
+                    from .intersection_chart import IntersectionChart
+                    polyline,bound = IntersectionChart(curve.for_support(face.surface)).certified_polyline(tolerance)
+                    worst = max(worst,bound)
+                    points.extend((polyline if item.forward else polyline[::-1])[:-1])
+                    continue
+                if isinstance(curve, PlaneNurbsCurve):
+                    from .section_chart import SectionChart
+                    if curve.surface != face.surface:
+                        raise GeometryError('trim section belongs to another support')
+                    polyline, bound = SectionChart(curve).certified_polyline(tolerance)
+                else:
+                    polyline, bound = certified_chart_polyline(face.surface, curve.pcurve, tolerance)
                 worst = max(worst, bound)
                 points.extend((polyline if item.forward else polyline[::-1])[:-1])
             loops.append(np.asarray(points))
@@ -6882,6 +6944,9 @@ class GeometryModel:
         """Evaluate the authoritative support surface specifically."""
 
         face = self._require_face(face_id)
+        from .nurbs_sweep_chart import has_sweep_chart, chart_model
+        if has_sweep_chart(face):
+            return np.asarray(chart_model(self, face_id).support.evaluate(float(u), float(v)), dtype=float)
         if face.surface is None:
             raise GeometryError(f"face {face_id} has no authoritative support surface")
         if isinstance(face.surface, CoonsSurface) and not face.surface.has_boundaries:
@@ -6890,20 +6955,55 @@ class GeometryModel:
             return self._topology_face_point(face_id, float(u), float(v))
         return np.asarray(face.surface.evaluate(float(u), float(v)), dtype=float)
 
+    def face_boundary_uv(self, face_id: int, edge_id: int, parameters):
+        """Known boundary parameters in a qualified topology-Coons chart.
+
+        Returns ``None`` for unsupported charts. Invalid references or edge
+        parameters raise GeometryError. This uses declared edge identity,
+        never a closest-point or coordinate-based association.
+        """
+        face = self._require_face(face_id)
+        self._require_edge(edge_id)
+        if edge_id not in {use.edge for loop in (face.loop, *face.holes) for use in loop}:
+            raise GeometryError(f"edge {edge_id} is not on face {face_id} boundary")
+        values = np.asarray(parameters, dtype=float)
+        if values.ndim > 1 or not np.all(np.isfinite(values)) or np.any((values < 0.) | (values > 1.)):
+            raise GeometryError("boundary parameters must be finite and in [0, 1]")
+        from .nurbs_sweep_chart import has_sweep_chart, chart_model
+        from .nurbs import NurbsSurface
+        if isinstance(face.surface, NurbsSurface) or has_sweep_chart(face):
+            owner = chart_model(self, face_id) if has_sweep_chart(face) else self
+            from .nurbs_domain import chart_curve_of
+            from .material_arrangement import MaterialDomain
+            domain = MaterialDomain.from_model(self, face_id)
+            curve = owner.edges[edge_id].curve
+            chart_curve_of(domain, curve)
+            return np.asarray(curve.chart(values), dtype=float).reshape(values.shape+(2,))
+        from ._translational_pairs import _sweep, topology_boundary_uv
+        if _sweep(self, face_id) is None:
+            return None
+        rows = [topology_boundary_uv(self, face_id, edge_id, value) for value in values.reshape(-1)]
+        if any(row is None for row in rows):
+            return None
+        return np.asarray(rows, dtype=float).reshape(values.shape + (2,))
+
     def _topology_face_point(self, face_id: int, u: float, v: float) -> np.ndarray:
         point, _du, _dv = self._topology_face_point_and_derivatives(
-            face_id, float(u), float(v)
+            face_id, float(u), float(v), _point_only=True
         )
         return point
 
     def _topology_face_point_and_derivatives(
-        self, face_id: int, u: float, v: float
+        self, face_id: int, u: float, v: float, *, _point_only: bool = False
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Evaluate a topology Coons patch and exact chain derivatives.
 
         All blending is performed relative to the first corner. This avoids
         cancellation when a small structural patch is expressed in very large
         projected coordinates.
+
+        ``_point_only`` is internal to point evaluation: it preserves the point
+        arithmetic while leaving the two unused derivative results unspecified.
         """
 
         face = self._require_face(face_id)
@@ -6918,26 +7018,26 @@ class GeometryModel:
         cached = self._topology_corner_cache.get(int(face_id)) if committed else None
         if cached is not None and cached[0] == self._revision and cached[1] is face:
             data = cached[2]
-            point_a, derivative_a = self._chain_eval(data[0], u)
-            point_b, derivative_b = self._chain_eval(data[1], v)
-            point_c, derivative_c_raw = self._chain_eval(data[2], 1.0 - u)
-            point_d, derivative_d_raw = self._chain_eval(data[3], 1.0 - v)
+            point_a, derivative_a = self._chain_eval(data[0], u, _point_only=_point_only)
+            point_b, derivative_b = self._chain_eval(data[1], v, _point_only=_point_only)
+            point_c, derivative_c_raw = self._chain_eval(data[2], 1.0 - u, _point_only=_point_only)
+            point_d, derivative_d_raw = self._chain_eval(data[3], 1.0 - v, _point_only=_point_only)
             corners = tuple(corner.copy() for corner in cached[3])
         else:
             sides = face.sides()
             first = self._chain_data(sides[0])
-            point_a, derivative_a = self._chain_eval(first, u)
+            point_a, derivative_a = self._chain_eval(first, u, _point_only=_point_only)
             second = self._chain_data(sides[1])
-            point_b, derivative_b = self._chain_eval(second, v)
+            point_b, derivative_b = self._chain_eval(second, v, _point_only=_point_only)
             third = self._chain_data(sides[2])
-            point_c, derivative_c_raw = self._chain_eval(third, 1.0 - u)
+            point_c, derivative_c_raw = self._chain_eval(third, 1.0 - u, _point_only=_point_only)
             fourth = self._chain_data(sides[3])
-            point_d, derivative_d_raw = self._chain_eval(fourth, 1.0 - v)
+            point_d, derivative_d_raw = self._chain_eval(fourth, 1.0 - v, _point_only=_point_only)
             corners = (
-                self._chain_eval(first, 0.0)[0],
-                self._chain_eval(first, 1.0)[0],
-                self._chain_eval(third, 0.0)[0],
-                self._chain_eval(third, 1.0)[0],
+                self._chain_eval(first, 0.0, _point_only=True)[0],
+                self._chain_eval(first, 1.0, _point_only=True)[0],
+                self._chain_eval(third, 0.0, _point_only=True)[0],
+                self._chain_eval(third, 1.0, _point_only=True)[0],
             )
             if committed:
                 self._topology_corner_cache[int(face_id)] = (
@@ -7005,10 +7105,97 @@ class GeometryModel:
             not isinstance(evaluable, CoonsSurface) or evaluable.has_boundaries
         ):
             return _evaluate_surface_many(evaluable, values).reshape((-1, 3))
+        if self._batch_topology_supported(face):
+            return self._topology_face_points_many(face_id, values)
         return np.asarray(
             [self._topology_face_point(face_id, float(u), float(v)) for u, v in values],
             dtype=float,
         ).reshape((-1, 3))
+
+    def supports_topology_face_batch(self, face_id: int) -> bool:
+        """Whether committed topology has the exact scalar-equivalent batch path.
+
+        This is a computation capability, not a broader surface admission or
+        meshing guarantee. Explicit parameterizations and custom models are
+        excluded; callers must recheck after model/protocol changes.
+        """
+        face = self._require_face(face_id)
+        return bool(face.parameterization is None
+                    and (face.surface is None or
+                         (type(face.surface) is CoonsSurface and not face.surface.has_boundaries))
+                    and self._batch_topology_supported(face))
+
+    def _batch_topology_supported(self, face):
+        from .nurbs import NurbsCurve
+        return (type(self) is GeometryModel and self._transaction_journal is None
+                and len(face.corners) == 4
+                and all(len(side) == 1 and type(self.edges[side[0].edge].curve) in (NurbsCurve, Straight)
+                        for side in face.sides()))
+
+    def _topology_face_points_many(self, face_id, values, *, _derivatives=False):
+        """Same Coons point arithmetic, batching only independent chain rows."""
+        if not len(values):
+            empty = np.empty((0, 3), dtype=float)
+            return (empty, empty.copy(), empty.copy()) if _derivatives else empty
+        face = self._require_face(face_id)
+        cached = self._topology_corner_cache.get(int(face_id))
+        if cached is None or cached[0] != self._revision or cached[1] is not face:
+            self._topology_face_point(face_id, float(values[0, 0]), float(values[0, 1]))
+            cached = self._topology_corner_cache[int(face_id)]
+        data, corners = cached[2], cached[3]
+
+        def points(chain_data, fractions):
+            chain, lengths, total, cumulative, edges = chain_data
+            # The admission guard guarantees one edge per side. Keep the
+            # original multiply/subtract/divide order for identical rounding.
+            local = (np.clip(fractions, 0., 1.) * total-cumulative[0])/lengths[0]
+            parameters = local if chain[0].forward else 1.-local
+            edge = edges[0]
+            if isinstance(edge.curve, Straight):
+                made = self._sample_edge_object(edge, parameters)
+                if not _derivatives:
+                    return made
+                tangent = np.broadcast_to(
+                    self.vertices[edge.end].position-self.vertices[edge.start].position,
+                    (len(fractions), 3)).copy()
+            else:
+                # Reuse only exactly equal parameters, without quantization.
+                unique, inverse = np.unique(parameters, return_inverse=True)
+                made = self._sample_edge_object(edge, unique)[inverse]
+                if not _derivatives:
+                    return made
+                tangent = np.asarray(edge.curve.derivative(unique), dtype=float)[inverse]
+            tangent *= total/lengths[0]
+            if not chain[0].forward:
+                tangent *= -1.
+            return made, tangent
+
+        u, v = values[:, 0], values[:, 1]
+        anchor = corners[0]
+        if _derivatives:
+            (a, da), (b, db), (c, dc), (d, dd) = (
+                points(data[0], u), points(data[1], v),
+                points(data[2], 1.-u), points(data[3], 1.-v))
+            pa, pb, pc, pd = a-anchor, b-anchor, c-anchor, d-anchor
+            dc, dd = -dc, -dd
+        else:
+            pa, pb, pc, pd = (points(data[0], u)-anchor, points(data[1], v)-anchor,
+                              points(data[2], 1.-u)-anchor, points(data[3], 1.-v)-anchor)
+        c00, c10, c11, c01 = (corner-anchor for corner in corners)
+        w00, w10 = (1.-u)*(1.-v), u*(1.-v)
+        w11, w01 = u*v, (1.-u)*v
+        mu, mv = 1.-u, 1.-v
+        blend = (w00[:, None]*c00 + w10[:, None]*c10
+                 + w11[:, None]*c11 + w01[:, None]*c01)
+        point = anchor + (mv[:, None]*pa + v[:, None]*pc
+                          + mu[:, None]*pd + u[:, None]*pb - blend)
+        if not _derivatives:
+            return point
+        blend_du = (-mv[:, None]*c00 + mv[:, None]*c10 + v[:, None]*c11 - v[:, None]*c01)
+        blend_dv = (-mu[:, None]*c00 - u[:, None]*c10 + u[:, None]*c11 + mu[:, None]*c01)
+        du = mv[:, None]*da + v[:, None]*dc - pd + pb - blend_du
+        dv = -pa + pc + mu[:, None]*dd + u[:, None]*db - blend_dv
+        return point, du, dv
 
     def face_derivatives_many(
         self, face_id: int, uv: Sequence[Sequence[float]] | np.ndarray
@@ -7026,6 +7213,10 @@ class GeometryModel:
             not isinstance(evaluable, CoonsSurface) or evaluable.has_boundaries
         ):
             return _surface_derivatives_many(evaluable, values)
+
+        if self._batch_topology_supported(face):
+            _, du, dv = self._topology_face_points_many(face_id, values, _derivatives=True)
+            return du, dv
 
         derivatives = tuple(
             self._topology_face_point_and_derivatives(
@@ -7068,6 +7259,14 @@ class GeometryModel:
                 float(np.clip(local[0], 0.0, 1.0)),
                 float(np.clip(local[1], 0.0, 1.0)),
             )
+
+        if (self._batch_topology_supported(face)
+                and getattr(self.face_point, '__func__', None) is GeometryModel.face_point):
+            target = _vector3(point, "point")
+            uv = _closest_uv_many(None, target.reshape(1, 3),
+                _evaluate=lambda values: self._topology_face_points_many(face_id, values),
+                _batch_samples=True)[0]
+            return float(uv[0]), float(uv[1])
 
         model = self
 
@@ -7125,6 +7324,12 @@ class GeometryModel:
                 [_vector3(point, "point") for point in points], dtype=float
             ).reshape((-1, 3))
             return np.clip(_closest_uv_many(evaluable, targets), 0.0, 1.0)
+        if ((evaluable is None or (type(evaluable) is CoonsSurface and not evaluable.has_boundaries))
+                and self._batch_topology_supported(face)):
+            targets = np.asarray(points, dtype=float).reshape((-1, 3))
+            return _closest_uv_many(None, targets,
+                _evaluate=lambda uv: self._topology_face_points_many(face_id, uv),
+                _batch_samples=True)
         return np.asarray(
             [self.face_local_uv(face_id, point) for point in points], dtype=float,
         ).reshape((-1, 2))
@@ -7334,6 +7539,12 @@ class GeometryModel:
             )
         )
         delta = np.where((np.abs(raw) <= tolerance) | (endpoint <= tolerance), 0.0, delta)
+        if surface.sweep_angle > 0.0:
+            before = delta - period
+            delta = np.where((delta > surface.sweep_angle) & (-before < delta - surface.sweep_angle), before, delta)
+        else:
+            before = delta + period
+            delta = np.where((delta < surface.sweep_angle) & (before < surface.sweep_angle - delta), before, delta)
         return np.column_stack(
             (delta / surface.sweep_angle, axial / surface.height)
         )
@@ -7453,6 +7664,18 @@ class GeometryModel:
             return self._project_builtin_face_many(
                 face_id, evaluable, points, trim_loops
             )
+
+        if initials is None and not face.holes and self._batch_topology_supported(face):
+            uv = self.face_local_uv_many(face_id, points)
+            projected = self.evaluate_face_many(face_id, uv)
+            inside = self._points_in_face_trim(uv, trim_loops)
+            for index in np.flatnonzero(~inside):
+                # Preserve the scalar trim-boundary decision and its inverse.
+                projected[index] = self._closest_face_boundary_point(face_id, points[index])
+                uv[index] = self.face_local_uv(face_id, projected[index])
+            distances = np.asarray([float(np.linalg.norm(point-target))
+                                    for point, target in zip(projected, points)])
+            return projected, uv, distances
 
         baselines = [
             self._project_to_face_with_trim(face_id, point, trim_loops)
@@ -7779,6 +8002,8 @@ class GeometryModel:
     def _edge_parameter_derivative_object(
         self, edge: Edge, parameter: float
     ) -> np.ndarray:
+        if isinstance(edge.curve, EXACT_CURVES):
+            return np.asarray(edge.curve.derivative(float(parameter)), dtype=float)
         if isinstance(edge.curve, Arc):
             frame = self._arc_frame(edge)
             angle = float(parameter) * frame.sweep
@@ -7823,7 +8048,7 @@ class GeometryModel:
         return tuple(chain), lengths, total, cumulative, edges
 
     def _chain_eval(
-        self, data: Tuple[Any, ...], fraction: float
+        self, data: Tuple[Any, ...], fraction: float, *, _point_only: bool = False
     ) -> Tuple[np.ndarray, np.ndarray]:
         chain, lengths, total, cumulative, edges = data
         target = _clamp01(fraction) * total
@@ -7833,7 +8058,10 @@ class GeometryModel:
         parameter = local if item.forward else 1.0 - local
         edge = edges[index]
         point = self._sample_edge_object(edge, np.asarray([parameter]))[0]
-        derivative = self._edge_parameter_derivative_object(edge, parameter)
+        # Closest-point inversion requests many point samples. Those retain
+        # exactly the same point arithmetic without computing unused analytic
+        # derivatives (the inverse computes its own finite differences).
+        derivative = np.zeros(3) if _point_only else self._edge_parameter_derivative_object(edge, parameter)
         derivative *= total / lengths[index]
         if not item.forward:
             derivative *= -1.0

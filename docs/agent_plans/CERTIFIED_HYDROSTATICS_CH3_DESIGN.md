@@ -94,7 +94,7 @@ Measured on the source (`src/anygeometry/b1_example.py`, `nurbs.py`, `support_cu
 - **Algebraic corners are cheap**: a corner quadratic isolates to `2^-60` in `0.4 ms`; a crossing
   quartic (213-bit coefficients) in `< 1 ms`.
 - **Exact rational Taylor enclosures**: `int_{0.2}^{0.4} p / W^3` (degree-6 `p`): widths `8.9e-8`,
-  `6.9e-12`, `8.0e-16`, `3.1e-24`, `1.6e-32` at orders 8-32 with the complete bound of 4.3, bit lengths
+  `6.9e-12`, `8.0e-16`, `3.1e-24`, `1.6e-32` at orders 8-32 with the complete bound of 4.3 (prototype range; the policy default order is 16, see D-CH3-7), bit lengths
   701-2130, 3-52 ms; 8 pieces of `[0, 0.9]` at order 16: `1e-19` in 0.1 s. The bound exceeds the actual
   error on the review's `10^6 / (1 + u)` term (`195.3 >= 1.133`).
 - **H1 on the full B1 hull**: upright `z <= 1.5`: `V = 22.569943729716`, `A = 23.319938010999`;
@@ -399,7 +399,7 @@ Checked: `10^6 / (1 + u)`, `K = 8`: error `1.133`, `rho = 195.3`.
 intervals; its width is the sum of all `2 rho` and `2 e`. Target `tau` per quantity is split equally
 over pieces, then over terms; a bisected piece gives each child **half** of its parent's allowance;
 endpoint enclosures draw from the piece's share first. Orders start at 8 and rise to
-`max_taylor_order` before bisection; `max_pieces_per_integral`, `max_isolation_bits` bound the rest;
+`max_taylor_order` before bisection (8, 16 by default; 32 only if opted in; 2026-10-21 owner decision (a): policy default 16; 32 opt-in; reason: bit cap, ~140 bits per end-denominator bit at order 32); `max_pieces_per_integral`, `max_isolation_bits` bound the rest;
 failure refuses `ACCURACY_UNACHIEVABLE` with the achieved width.
 
 ### 4.4 Forms, bounds and the claim (D-CH3-4; revision 3: square-root allocation)
@@ -509,9 +509,26 @@ Consequences for CH3 (replacing revision 2's bulk rows):
 Policy limits bound every loop: `max_isolation_bits`, `max_taylor_order`, `max_pieces_per_integral`,
 `max_refinement_rounds`.
 
+**Known limits of the metering (owner contract decision, 2026-10-21; CH3b review round 3).** Kernel loops
+over caller-sized collections are bounded by the named policy limits and charge one unit per element. Any
+residual place where cancellation, a deadline or the budget is observed late (by up to one loop pass) is a
+known limit, not a defect; no further review rounds are spent on such places. The round-3 sweep added the
+per-element checkpoint to the coprime-basis expansion pass, the square-free factor collection, the
+duplicate-split remainder list, the Bareiss matrix copy and the integrand factor list (tests
+`test_round3_collection_loops_*`). Sites not changed: single native big-integer or `Fraction` operations (above); the sweep fixed the sites listed by the round-3 review and did not re-audit every other loop, so other short collection copies may still be observed up to one pass late (known limit).
+
 ## 8. Q08: evidence and the consumer's part (revision 3: fixtures, matrix, relations)
 
 ### 8.1 Run set and success matrix (fixed before any assessment run)
+
+**Amended 2026-10-21 (owner, from ANYstability's minimum Q08 answer): the run set is narrowed to the 12 fixed pilot
+planes on the full hull (`z` = 1.0/1.75/2.5 upright; heel +-0.1; trim +-0.1; combined +-0.1/+-0.1 through
+(2.5, 0, 1.75), `n = R^T e_z`, `R = Ry(-trim) Rx(heel)`; dry/full `z` = 0.25/3.25; bottom-adjacent `z` = 0.500001),
+the same cuts on the half hull (half/full volume relation), the +- heel reflection pair, and the independent
+references; working request accuracy 1e-9; cold preparation <= 120 s, <= 30 s per query, verification overhead
+recorded separately. The groups U, B, N, I, S, D, T below shrink to unit-test level; group M (two roots on one
+deck edge) stays a CH3c unit test; planes through a vertex or edge refuse (D-CH3-5). F-A and F-C stay as exact
+anchors.**
 
 Models: `build_b1_half_hull()` and `build_b1_hull()` (defaults); units `m`; forms `("enclosure",
 "binary64", "decimal")`; accuracies `1e-9` for every quantity. ANYstability's convention: `n = R[2]`,
@@ -636,7 +653,7 @@ Patch version bump at CH3e (`0.4.7`).
 ## 10. Open risks
 
 - Bit growth at order 32 with `k = 5` terms (measured 2130 bits on one factor); mitigation: more pieces
-  at lower order; measured in CH3b.
+  at lower order; measured in CH3b. **Resolved by 2026-10-21 owner decision (a): policy default 16; 32 opt-in; reason: bit cap, ~140 bits per end-denominator bit at order 32** (see CH3b measurements: algebraic ends exceed the cap at order 32 beyond ~27-bit ends).
 - Multi-root predicates refuse rather than resolve unrecognised true zeros.
 - Event isolation near coincident distinct events (bounded, refusable).
 - Runtime unmeasured end to end.
@@ -661,9 +678,13 @@ Patch version bump at CH3e (`0.4.7`).
   binary64 as outward rounding, default `10^-12`); square-root allocation in output units (4.4).
 - **D-CH3-5** degenerate planes: E1, E5, E6, E7 and zero-beta-outside supported by the certified event
   gap; E2, E3, E4 and zero-beta-inside refuse `CURVED_SECTION_DEGENERACY`.
+  **Amended 2026-10-21 owner decision (narrowed plan, CH3c): planes through a vertex or an edge (E1, E5, E6),
+  tangencies and ruling-in-plane planes also get a typed refusal (`CURVED_SECTION_DEGENERACY` or the matching
+  category); no event-gap support in CH3c. The gap method (section 5.2) stays a documented later extension.**
 - **D-CH3-6** kernel re-implemented inside `certified_hydrostatics` with metering; verifier has its own.
-- **D-CH3-7** policy defaults: `max_bits` 4096, `max_isolation_bits` 4096, `max_taylor_order` 32,
+- **D-CH3-7** policy defaults: `max_bits` 4096, `max_isolation_bits` 4096, `max_taylor_order` 16,
   `max_pieces_per_integral` 1024, `max_refinement_rounds` 8, `default_enclosure_width` 10^-12.
+  **Amended 2026-10-21 owner decision (a): policy default 16; 32 opt-in; reason: bit cap, ~140 bits per end-denominator bit at order 32.** (Earlier value: 32.)
 - **D-CH3-8** `mpmath` as a test-only dependency.
 - **D-CH3-9** convention version 2 for curved preparations; planar stays 1 byte for byte.
 - **D-CH3-10** verifier by a separate session, different isolation algorithm and Taylor scheme.

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ANYgeometry"
-version = "0.4.6"
+version = "0.4.7"
 description = "Lightweight deterministic structural-surface geometry kernel"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -25,7 +25,9 @@ anygeometry = "anygeometry.__main__:main"
 
 [project.optional-dependencies]
 planar = ["shapely>=2.0"]
+sketch = ["scipy>=1.13"]
 dev = ["build>=1.2", "pytest>=8", "twine>=5"]
+test = ["mpmath>=1.3"]
 
 [tool.setuptools]
 package-dir = { "" = "src" }

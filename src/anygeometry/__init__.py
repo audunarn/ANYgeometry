@@ -1,7 +1,23 @@
 """Lightweight structural-surface geometry shared by the ANY ecosystem."""
 
 from .backend import backend_info
-from .curves import Arc, ArcFrame, CurveShape, DegenerateArcError, Spline, Straight
+from .sketch_references import (
+    ReferenceLink, SketchReference, SketchReferenceError, bind_references,
+    capture_reference_link, capture_sketch_reference, reference_links_from_parameters,
+    reference_links_to_parameters, reference_source_signature, resolve_reference_source,
+    surviving_reference_links,
+)
+from .plane_split import PlaneSplitPlan, PlaneSplitApplication, plan_plane_split, apply_plane_split
+from .prepared_material_curvilinear import (
+    BoundaryChordOccurrence, MaterialBoundaryChord, PreparedMaterialBoundaryChords,
+    CurvilinearMaterialCell, PreparedMaterialCurvilinearCells,
+    query_prepared_material_boundary_chords, validate_prepared_material_boundary_chords_binding,
+    validate_prepared_material_curvilinear_cells,
+    validate_prepared_material_curvilinear_cells_binding,
+    PreparedMaterialBoundarySampling, query_prepared_material_boundary_sampling,
+    validate_prepared_material_boundary_sampling_binding,
+)
+from .curves import Arc, ArcFrame, CurveShape, DegenerateArcError, Spline, Straight, LineRange
 from .exact_curves import EllipticArc, CylinderIntersectionCurve
 from .quadric_curves import QuadricIntersectionCurve
 from .branch_curves import BezierQuadricCurve
@@ -122,6 +138,8 @@ from .cylinder_charts import (
 )
 from .closure import ModelClosure, extract_model_closure
 from .closure import model_closure_to_dict, model_closure_from_dict
+from .closure_source import qualify_model_closure_source
+from .cancellation import CancellationSignal, is_cancellation_signal
 from .component_partition import (
     IndependentComponent, ComponentMergeReason, ComponentRefusal, ComponentPartition,
     plan_independent_components, validate_component_partition_binding,
@@ -164,7 +182,7 @@ from .editing import (
     rotate_entities,
     translate_entities,
 )
-from .errors import GeometryError, GeometryTopologyError
+from .errors import GeometryError, GeometryTopologyError, SourceCellRefinementRequired, SourceCellApproximationInconclusive
 from .evaluation import (
     edge_tangent_many,
     evaluate_edge_many,
@@ -306,6 +324,10 @@ from .operations import (
     trim_face,
 )
 from .serialization import from_dict, read_geometry, to_dict, write_geometry
+from .sketch_entities import (SketchEntity, SketchWire, SketchSolveResult, upgrade_sketch,
+    solve_sketch_edit, sample_sketch_entity, sketch_entity_radius, set_sketch_radius,
+    round_sketch_corner, sketch_wire_edge_keys)
+from .sketch_cut import validate_sketch_cut, apply_sketch_cut
 from .sketch import (
     SketchConstraint,
     SketchDefinition,
@@ -506,6 +528,8 @@ __all__ = [
     "FeatureStatus",
     "FeatureTopologyRole",
     "GeometryError",
+    "SourceCellRefinementRequired",
+    "SourceCellApproximationInconclusive",
     "GeometryModel",
     "GeometryTopologyError",
     "FrozenMetadata",
@@ -553,12 +577,17 @@ __all__ = [
     "BezierDirectrix",
     "EllipseDirectrix",
     "SketchConstraint",
+    "SketchEntity", "SketchWire", "SketchSolveResult", "upgrade_sketch",
+    "solve_sketch_edit", "sample_sketch_entity", "sketch_entity_radius",
+    "set_sketch_radius", "round_sketch_corner", "sketch_wire_edge_keys",
+    "validate_sketch_cut", "apply_sketch_cut",
     "SketchDefinition",
     "SketchPlane",
     "Sheet",
     "SheetTopologyPolicy",
     "Spline",
     "Straight",
+    "LineRange",
     "Surface",
     "SurfaceProtocol",
     "TolerancePolicy",
@@ -650,6 +679,31 @@ __all__ = [
     "JunctionMemberUse",
 ]
 
-__version__ = "0.4.6"
-
 from .solid_regions import ClosedSolidRegion, SolidRegionSnapshot
+__version__ = "0.4.7"
+
+from .prepared_material_source_transfer import (PreparedMaterialSourceTransfer,
+    query_prepared_material_source_transfer, validate_prepared_material_source_transfer_binding)
+__all__ += ["ReferenceLink", "SketchReference", "SketchReferenceError", "bind_references",
+            "capture_reference_link", "capture_sketch_reference", "reference_links_from_parameters",
+            "reference_links_to_parameters", "reference_source_signature",
+            "resolve_reference_source", "surviving_reference_links"]
+__all__ += ["PreparedMaterialSourceTransfer", "query_prepared_material_source_transfer",
+            "validate_prepared_material_source_transfer_binding"]
+from .source_station_transport import (SourceStationTransportRow, PreparedSourceStationTransport,
+    query_prepared_source_station_transport, validate_prepared_source_station_transport_binding)
+__all__ += ["SourceStationTransportRow", "PreparedSourceStationTransport",
+            "query_prepared_source_station_transport", "validate_prepared_source_station_transport_binding"]
+from .prepared_partition_relation import query_prepared_partition_disjoint_interiors
+from .same_support_material_relation import query_same_support_material_disjoint_interiors
+__all__ += ["query_prepared_partition_disjoint_interiors"]
+__all__ += ["query_same_support_material_disjoint_interiors"]
+__all__ += ["PlaneSplitPlan", "PlaneSplitApplication", "plan_plane_split", "apply_plane_split"]
+from .wave_surface_clipping import SignedClip, clip_triangle_positive, clip_polygon_positive
+__all__ += ["SignedClip", "clip_triangle_positive", "clip_polygon_positive"]
+
+from .approximation_scale import (ApproximationSourceBinding, TrimEnclosureScale,
+    query_approximation_source_binding, validate_approximation_source_binding,
+    query_trim_enclosure_scale, validate_trim_enclosure_scale_binding)
+__all__ += ["ApproximationSourceBinding", "TrimEnclosureScale", "query_approximation_source_binding",
+    "validate_approximation_source_binding", "query_trim_enclosure_scale", "validate_trim_enclosure_scale_binding"]

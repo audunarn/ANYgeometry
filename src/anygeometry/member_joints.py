@@ -71,12 +71,19 @@ def declare_member_contacts(model,contacts,check,*,sheet_target_ids=(), intent=C
                         if parameter in (0.,1.))
             target=next((member,parameter) for member,parameter in sorted(parameters)
                         if member!=source[0])
-            attachments.append(model.ensure_attachment(source[0],AttachmentKind.MEMBER_ENDPOINT_ON_MEMBER,
-                AttachmentTargetKind.MEMBER,target[0],ParameterRange(source[1],source[1]),
-                (ParameterRange(target[1],target[1]),),connection_intent=intent,
-                evidence=AttachmentEvidence.EXACT,max_residual=float(np.linalg.norm(
-                    _member_point(model,*source)-_member_point(model,*target))),tolerance_used=tolerance,
-                provenance={'contract':'ANYGEOMETRY_ANALYTIC_MEMBER_JOINT_V1'}))
+            # A closed source axis contributes distinct parent occurrences 0
+            # and 1 at the same station. Retain both in attachment evidence;
+            # selecting just the first leaves the second junction use uncovered.
+            # Keep the established source member and target selection unchanged.
+            for occurrence in sorted(parameters):
+                if occurrence[0] != source[0] or occurrence[1] not in (0., 1.):
+                    continue
+                attachments.append(model.ensure_attachment(occurrence[0],AttachmentKind.MEMBER_ENDPOINT_ON_MEMBER,
+                    AttachmentTargetKind.MEMBER,target[0],ParameterRange(occurrence[1],occurrence[1]),
+                    (ParameterRange(target[1],target[1]),),connection_intent=intent,
+                    evidence=AttachmentEvidence.EXACT,max_residual=float(np.linalg.norm(
+                        _member_point(model,*occurrence)-_member_point(model,*target))),tolerance_used=tolerance,
+                    provenance={'contract':'ANYGEOMETRY_ANALYTIC_MEMBER_JOINT_V1'}))
         uses=tuple(JunctionMemberUse(member,ParameterRange(parameter,parameter)) for member,parameter in sorted(parameters))
         kind=(JunctionKind.MULTI_WAY if len(parameters)+len(sheets)>2 else
               JunctionKind.ENDPOINT if all(parameter in (0.,1.) for _member,parameter in parameters)

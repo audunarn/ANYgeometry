@@ -223,6 +223,16 @@ class MaterialDomain:
         from .intersections import _qualified_face_plane
         from .entities import EntityRef
         face = model.faces[face_id]
+        from .nurbs_sweep_chart import has_sweep_chart, chart_model
+        if has_sweep_chart(face):
+            model = chart_model(model, face_id)
+            face = model.faces[face_id]
+        else:
+            from .nurbs_sweep_chart import source_sweep_chart_model
+            source_view = source_sweep_chart_model(model, face_id)
+            if source_view is not None:
+                model = source_view
+                face = model.faces[face_id]
         support = face.surface
         if isinstance(support, NurbsSurface):              # the chart of the face's own support (A3b)
             extruded = None
@@ -395,6 +405,13 @@ class MaterialDomain:
         return self._exact_chart().uv(position)
 
     def contains_loop(self, loop, uv, tolerance, *, boundary=True):
+        from .support_curves import PlaneNurbsCurve
+        if isinstance(self.support, Plane) and any(isinstance(path.curve, PlaneNurbsCurve) for paths in self.boundaries for path in paths):
+            if all(isinstance(path.curve, LinePath) for path in loop):
+                return _contains_loop_exact(self._exact_chart(), loop, tuple(map(Fraction, uv)), tolerance,
+                                            boundary=boundary, prepared=self._prepared_exact_boundary(loop))
+            from .plane_source_reference import contains_section_loop
+            return contains_section_loop(self.support, loop, uv, tolerance, boundary=boundary)
         # Exact route (robust-predicate R1b): only for an exact (rational) query
         # point on an all-straight Plane domain. A float query point is a
         # rounded chart output, so it keeps the float route unchanged.
@@ -470,6 +487,10 @@ class MaterialDomain:
         if isinstance(self.support, NurbsSurface):        # chart area on the pcurves (A1e-lite)
             return nurbs_domain.area_loop(self, loop, tolerance)
         if isinstance(self.support,Plane):
+            from .polynomial_green import polynomial_planar_loop_area
+            exact = polynomial_planar_loop_area(self.support,loop,tolerance)
+            if exact is not None:
+                return exact
             from .planar_area import planar_loop_area
             analytic=planar_loop_area(self.support,loop,tolerance)
             if analytic is not None:

@@ -22,6 +22,7 @@ from typing import Any, Callable, Dict, Iterable, Mapping, Protocol, Sequence, T
 import numpy as np
 
 from .curves import Arc, Spline, Straight
+from .nurbs import NurbsCurve, NurbsSurface, CurveOnSurface, nurbs_record
 from .entities import Edge, EntityKind, EntityRef, Face, Vertex
 from .errors import GeometryError
 from .extrusions import BezierDirectrix
@@ -60,6 +61,7 @@ _INCREMENTAL_ADDITIVE_FEATURES = frozenset(
         "geometry.plate",
         "geometry.extrude",
         "geometry.solid_prism",
+        "geometry.loft",
         "geometry.sketch.extrude",
         "geometry.sketch.plane",
         "geometry.revolve",
@@ -79,6 +81,7 @@ _INCREMENTAL_MUTATING_FEATURES = frozenset(
         "geometry.split_face",
         "geometry.strip_face",
         "geometry.trim_hole",
+        "geometry.sketch.cut",
         "geometry.set_face_corners",
         "geometry.reverse",
     }
@@ -208,6 +211,8 @@ def _closure_surface(surface: object) -> dict[str, object] | None:
 
     if surface is None:
         return None
+    if isinstance(surface, NurbsSurface):
+        return nurbs_record(surface)
     if isinstance(surface, CoonsSurface):
         if not surface.has_boundaries:
             return {"type": "coons"}
@@ -287,6 +292,8 @@ def _closure_edge(edge: Edge) -> dict[str, object]:
             "type": "spline",
             "control_vertices": list(edge.curve.control_vertices),
         }
+    elif isinstance(edge.curve, (NurbsCurve, CurveOnSurface)):
+        curve = nurbs_record(edge.curve)
     else:  # pragma: no cover - closed public union
         raise GeometryError(f"unsupported curve type {type(edge.curve).__name__}")
     return {
@@ -345,6 +352,8 @@ def _exact_entity_payload(
                     for item in edge.curve.control_vertices
                 ],
             }
+        elif isinstance(edge.curve, (NurbsCurve, CurveOnSurface)):
+            curve = nurbs_record(edge.curve)
         else:  # pragma: no cover - closed public union
             raise GeometryError(f"unsupported curve type {type(edge.curve).__name__}")
         payload = {
@@ -585,6 +594,7 @@ def _bind_topology_roles(
     *,
     _reverse_edge: bool = False,
     _edge_directions: Dict[EntityRef, bool] | None = None,
+    _stable_face_edges: bool = False,
 ) -> None:
     """Bind two feature-output closures by their exact topological roles.
 
@@ -694,8 +704,21 @@ def _bind_topology_roles(
 
     old_face = old_geometry.faces[old.id]
     new_face = new_geometry.faces[new.id]
+    # A freshly admitted loft may change its analytic representation when its
+    # seam or radii change. This is geometric support, not a topological role.
+    # Keep the exception confined to canonical four-edge loft patches; the
+    # complete stable edge-role bijection is checked immediately below.
+    loft_support_transition = (
+        _stable_face_edges
+        and type(old_face.surface) in (CoonsSurface, Cylinder, Cone)
+        and type(new_face.surface) in (CoonsSurface, Cylinder, Cone)
+        and len(old_face.loop) == len(new_face.loop) == 4
+        and old_face.corners == new_face.corners == (0, 1, 2, 3)
+        and not old_face.holes and not new_face.holes
+        and old_face.parameterization is None and new_face.parameterization is None
+    )
     if (
-        type(old_face.surface) is not type(new_face.surface)
+        (type(old_face.surface) is not type(new_face.surface) and not loft_support_transition)
         or type(old_face.parameterization) is not type(new_face.parameterization)
         or len(old_face.loop) != len(new_face.loop)
         or len(old_face.holes) != len(new_face.holes)
@@ -706,6 +729,14 @@ def _bind_topology_roles(
         (old_face.loop,) + tuple(old_face.holes),
         (new_face.loop,) + tuple(new_face.holes),
     ):
+        if _stable_face_edges:
+            # Loft publishes explicit vertex/edge output slots before faces.
+            # A normal flip changes face uses, never those edge definitions.
+            mapped = [bindings.get(EntityRef("edge", item.edge)) for item in old_loop]
+            expected = {EntityRef("edge", item.edge) for item in new_loop}
+            if any(value is None or len(value) != 1 for value in mapped) or {value[0] for value in mapped} != expected:
+                raise GeometryError("loft face boundary no longer matches its stable edge output roles")
+            continue
         for old_item, new_item in zip(old_loop, new_loop):
             _bind_topology_roles(
                 EntityRef("edge", old_item.edge),
@@ -769,6 +800,8 @@ class FeatureTopologyRole(str, Enum):
     MODIFIER = "modifier"
 
 
+_METADATA_PARAMETERS = frozenset({"reference_links"})
+_SKETCH_FEATURE_KINDS = frozenset({"geometry.sketch.plane", "geometry.sketch.extrude"})
 _AUTHORED_FEATURE_KINDS = frozenset(
     {
         "geometry.point",
@@ -788,6 +821,7 @@ _MODIFIER_FEATURE_KINDS = frozenset(
         "geometry.split_face",
         "geometry.strip_face",
         "geometry.trim_hole",
+        "geometry.sketch.cut",
         "geometry.set_face_corners",
         "geometry.reverse",
     }
@@ -1320,6 +1354,44 @@ class FeatureHistory:
 
         self._apply_mutation(apply)
         return deepcopy(record)
+
+    def parameter_values(self, key: str) -> Dict[int, Any]:
+        """Detached copies of one optional parameter, for features that carry it.
+
+        A cheap scan for optional metadata (for example sketch reference
+        links): only matching values are copied, never whole records.
+        """
+
+        return {
+            int(record.feature_id): deepcopy(record.parameters[key])
+            for record in self._records
+            if key in record.parameters
+        }
+
+    def set_metadata_parameter(self, feature_id: int, key: str, value: Any) -> None:
+        """Replace one optional metadata parameter without invalidating output.
+
+        Only the ``reference_links`` metadata of sketch features is supported: it
+        does not influence materialization, so the feature stays up to date and
+        nothing regenerates. Any other key or feature kind is refused atomically,
+        because it could change geometry without invalidation. An empty value
+        removes the key.
+        """
+
+        record = self._get_record(feature_id)
+        if str(key) not in _METADATA_PARAMETERS or record.kind not in _SKETCH_FEATURE_KINDS:
+            raise GeometryError(
+                f"{key!r} on a {record.kind!r} feature is not metadata; "
+                "use update() so the feature is invalidated"
+            )
+
+        def apply() -> None:
+            if value is None or (isinstance(value, (list, tuple, dict)) and not value):
+                record.parameters.pop(str(key), None)
+            else:
+                record.parameters[str(key)] = deepcopy(value)
+
+        self._apply_mutation(apply)
 
     def adopt_frozen(
         self,
@@ -1919,6 +1991,9 @@ class FeatureHistory:
                     if not current:
                         blocked = f"input {port!r} cannot be resolved"
                         break
+                    if record.kind == "geometry.loft" and (len(current) != 1 or current[0].kind != "edge"):
+                        blocked = f"loft input {port!r} changed topology; reselect its profile edges"
+                        break
                     made.extend(current)
                 if blocked:
                     break
@@ -1972,7 +2047,7 @@ class FeatureHistory:
             ):
                 for key in old_outputs:
                     _bind_topology_roles(outputs[key],working,old_outputs[key],geometry,
-                                         discarded_roles)
+                                         discarded_roles, _stable_face_edges=record.kind == "geometry.loft")
                 record.outputs = old_outputs
                 for reference in outputs.values():
                     discard_new.update(_entity_closure_refs((reference,), working))
@@ -2008,6 +2083,7 @@ class FeatureHistory:
                             working,
                             transition_by_old,
                             _edge_directions=edge_directions,
+                            _stable_face_edges=new_by_id[feature_id].kind == "geometry.loft",
                         )
                 else:
                     for old in old_items:
@@ -2261,6 +2337,18 @@ class FeatureHistory:
                 # is identity/history replay, never a proximity repair.
                 force_full_replay = True
                 dirty_index = 0
+        if dirty_index > 0 and not force_full_replay and self._baseline is not None:
+            # A sketch cut may target a face authored in the exact baseline.
+            # Full replay restores that pre-cut face before executing every
+            # associative profile again. This exception is deliberately scoped
+            # to cuts; generic modifiers still require their checkpoint.
+            baseline_faces={int(item['id']) for item in self._baseline.get('faces',())}
+            modifiers=[r for r in self._records if r.outputs and not r.suppressed and not self._incremental_additive(r.kind)]
+            if modifiers and all(r.kind=='geometry.sketch.cut' for r in modifiers):
+                raw=[(name,ref) for r in modifiers for name,refs in r.inputs.items() for ref in refs if not isinstance(ref,FeatureOutputRef)]
+                if raw and all(name=='target' and ref.kind=='face' and ref.id in baseline_faces for name,ref in raw):
+                    force_full_replay=True
+                    dirty_index=0
         if dirty_index > 0 and not force_full_replay:
             return RegenerationReport(
                 False,
@@ -2357,6 +2445,9 @@ class FeatureHistory:
                     if not current:
                         blocked = f"input {port!r} cannot be resolved"
                         break
+                    if record.kind == "geometry.loft" and (len(current) != 1 or current[0].kind != "edge"):
+                        blocked = f"loft input {port!r} changed topology; reselect its profile edges"
+                        break
                     made.extend(current)
                 if blocked:
                     break
@@ -2427,6 +2518,7 @@ class FeatureHistory:
                             working,
                             transition_by_old,
                             _edge_directions=edge_directions,
+                            _stable_face_edges=new_by_id[feature_id].kind == "geometry.loft",
                         )
                 else:
                     for old in old_items:
@@ -2603,17 +2695,35 @@ def builtin_feature_registry() -> FeatureRegistry:
         geometry.extrude([item.id for item in edges], feature.parameters["vector"])
         return _created_outputs(geometry, before)
 
+    def loft(geometry, feature, inputs):
+        first, second = inputs.get("first_edges", ()), inputs.get("second_edges", ())
+        if any(len(inputs.get(port, ())) != len(feature.inputs.get(port, ()))
+               for port in ("first_edges", "second_edges")):
+            raise GeometryError("loft source topology changed; reselect the profile edges explicitly")
+        if not first or not second or any(item.kind != "edge" for item in (*first, *second)):
+            raise GeometryError("a loft feature needs two edge profiles")
+        before = _before(geometry)
+        geometry.loft([item.id for item in first], [item.id for item in second],
+                      **{key: feature.parameters[key] for key in
+                         ("reverse_first", "reverse_second", "first_start", "second_start", "flip_normal")
+                         if key in feature.parameters})
+        return _created_outputs(geometry, before)
+
     def sketch_extrude(geometry, feature, inputs):
         from .sketch import SketchDefinition, materialize_sketch
+        from .sketch_references import bind_references
 
         support = _one(inputs, "support_face", "face")
-        definition = SketchDefinition.from_parameters(feature.parameters)
+        # Reference snapshots are fixed anchors; the model is never consulted.
+        definition = bind_references(SketchDefinition.from_parameters(feature.parameters))
         return materialize_sketch(geometry, support.id, definition)
 
     def plane_sketch(geometry, feature, inputs):
         from .sketch import (
             SketchDefinition, materialize_sketch_on_plane, plane_sketch_plane,
         )
+
+        from .sketch_references import bind_references
 
         if inputs:
             raise GeometryError("a plane sketch cannot have geometry inputs")
@@ -2626,9 +2736,22 @@ def builtin_feature_registry() -> FeatureRegistry:
             )
         except KeyError as error:
             raise GeometryError(f"a plane sketch needs plane {error.args[0]}") from None
-        return materialize_sketch_on_plane(
-            geometry, plane, SketchDefinition.from_parameters(feature.parameters),
-        )
+        definition = SketchDefinition.from_parameters(feature.parameters)
+        # Reference snapshots are fixed anchors; the model is never consulted.
+        definition = bind_references(definition)
+        return materialize_sketch_on_plane(geometry, plane, definition)
+
+    def sketch_cut(geometry,feature,inputs):
+        from .sketch_cut import apply_sketch_cut
+        target=_one(inputs,'target','face')
+        profile=inputs.get('profile',())
+        sizes=tuple(int(n) for n in feature.parameters.get('wire_sizes',()))
+        if not sizes or any(n<=0 for n in sizes) or sum(sizes)!=len(profile) or any(r.kind!='edge' for r in profile):
+            raise GeometryError('cut needs complete closed sketch contour references')
+        groups=[]; offset=0
+        for n in sizes:
+            groups.append(tuple(r.id for r in profile[offset:offset+n])); offset+=n
+        return apply_sketch_cut(geometry,target.id,groups)
 
     def fragment_overlaps(geometry, feature, inputs):
         from .overlaps import OverlapOwnershipPolicy, fragment_coplanar_overlaps
@@ -2863,8 +2986,10 @@ def builtin_feature_registry() -> FeatureRegistry:
         "geometry.plate": plate,
         "geometry.extrude": extrude,
         "geometry.solid_prism": solid_prism,
+        "geometry.loft": loft,
         "geometry.sketch.extrude": sketch_extrude,
         "geometry.sketch.plane": plane_sketch,
+        "geometry.sketch.cut": sketch_cut,
         "geometry.fragment.overlaps": fragment_overlaps,
         "geometry.revolve": revolve,
         "geometry.transform": transform_feature,

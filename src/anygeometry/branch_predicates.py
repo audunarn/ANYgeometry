@@ -34,6 +34,7 @@ regular box). Undecided cases refuse (``PlaneNurbsNotCertified``).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from .curve_parameter_matching import _cooperative_tick
 from fractions import Fraction
 import math
 
@@ -153,6 +154,22 @@ class _Arc:
         u_range, v_range = self.uv(s_range, x_range)
         return _rect(coefficients, self.u_box, self.v_box, u_range, v_range)
 
+    def derivative_ranges(self, coefficients, s_range, x_range):
+        """Ambient knot derivatives restricted to a possibly degenerate box.
+
+        Differentiate before restriction: a section may be an exact isocurve,
+        whose root rectangle has zero width in one coordinate. Differentiating
+        the restricted polynomial would lose its transverse derivative.
+        """
+        p, q = len(coefficients)-1, len(coefficients[0])-1
+        u_width, v_width = self.u_box[1]-self.u_box[0], self.v_box[1]-self.v_box[0]
+        du = [[p*(coefficients[i+1][j]-coefficients[i][j])/u_width
+               for j in range(q+1)] for i in range(p)] if p else [[Fraction(0)]*(q+1)]
+        dv = [[q*(coefficients[i][j+1]-coefficients[i][j])/v_width
+               for j in range(q)] for i in range(p+1)] if q else [[Fraction(0)] for _ in range(p+1)]
+        return (_range(self.over(du, s_range, x_range)),
+                _range(self.over(dv, s_range, x_range)))
+
     def bracket(self, s, width):
         """An exact x interval (knot units) of at most ``width`` containing the arc's x at ``s``, or
         ``None`` when ``s`` lies outside the gap (an end root's region)."""
@@ -167,6 +184,7 @@ class _Arc:
             return None
         lo, hi = Fraction(0), Fraction(1)
         while (hi - lo) * (x1 - x0) > width:
+            _cooperative_tick()
             middle = (lo + hi) / 2
             value = _de_casteljau(g1, middle)
             if value == 0:
@@ -182,7 +200,7 @@ class _Arc:
         """A knot rectangle (s, x) containing ``C*`` for s in [s_lo, s_hi]; ``parent``: the x range of the
         enclosing piece (or ``None``).
 
-        Where ``G1_s`` has one sign over the piece (with the parent's x range), ``x(s)`` is monotone
+        Where ``G1_s`` is nonnegative or nonpositive over the piece (with the parent's x range), ``x(s)`` is monotone
         (``dx/ds = -G1_s / G1_x``, ``G1_x`` of one sign in a regular box): the x range is the hull of
         exact brackets at the two ends, each refined to the piece's s width. Otherwise ``_tight_x``
         (exact exclusion, ``24 + level`` halvings capped at 40). Where the piece touches an end
@@ -190,21 +208,36 @@ class _Arc:
         bracket, refined to the piece's size, is included.
         """
         x_range = None
-        if parent is not None and s_hi > s_lo:
-            u_range, v_range = self.uv((s_lo, s_hi), parent)
-            if u_range[1] > u_range[0] and v_range[1] > v_range[0]:
-                g1 = self.over(self.g1, (s_lo, s_hi), parent)
-                (g_u, g_v) = _derivative_ranges(g1, u_range[1] - u_range[0], v_range[1] - v_range[0])
-                g_s = g_u if self.slicing == 0 else g_v
-                if g_s[0] > 0 or g_s[1] < 0:
-                    width = (s_hi - s_lo) / 64
-                    first, second = self.bracket(s_lo, width), self.bracket(s_hi, width)
-                    if first is not None and second is not None:
-                        x_range = (min(first[0], second[0]), max(first[1], second[1]))
+        # Rational supports can have G1(s,x)=W(s)*(x-x0): G1_s over
+        # a nonzero-width x box straddles zero even though the exact graph
+        # is constant. This is an exact polynomial identity certificate,
+        # not a near-zero derivative or approximate factor recognition.
+        root_x = [self.curve._ordered_root_rect(self.arc, root)[1] for root in (self.arc.first, self.arc.second)]
+        if root_x[0][0] == root_x[0][1] == root_x[1][0] == root_x[1][1]:
+            x0 = root_x[0][0]
+            full_s = self.u_box if self.slicing == 0 else self.v_box
+            if parent is None or parent[0] <= x0 <= parent[1]:
+                charge_box()
+                restriction = self.over(self.g1, full_s, (x0, x0))
+                du, dv = self.derivative_ranges(self.g1, full_s, (x0, x0))
+                gx = dv if self.slicing == 0 else du
+                if all(value == 0 for row in restriction for value in row) and (gx[0] > 0 or gx[1] < 0):
+                    x_range = (x0, x0)
+        if x_range is None and parent is not None and s_hi > s_lo:
+            g_u, g_v = self.derivative_ranges(self.g1, (s_lo, s_hi), parent)
+            g_s, g_x = (g_u, g_v) if self.slicing == 0 else (g_v, g_u)
+            # The constant case G1_s == 0 is an exact isocurve, not a
+            # failure of monotonicity. Ambient differentiation also preserves
+            # G1_x when the parent's transverse enclosure has zero width.
+            if (g_s[0] >= 0 or g_s[1] <= 0) and (g_x[0] > 0 or g_x[1] < 0):
+                width = (s_hi - s_lo) / 64
+                first, second = self.bracket(s_lo, width), self.bracket(s_hi, width)
+                if first is not None and second is not None:
+                    x_range = (min(first[0], second[0]), max(first[1], second[1]))
         if x_range is None and s_hi > s_lo:
             x_range = self.curve._tight_x(self.arc, s_lo, s_hi, depth=min(24 + level, 40))
         s_range = (s_lo, s_hi)
-        target = s_hi - s_lo if s_hi > s_lo else (self.x_box[1] - self.x_box[0]) / 2 ** (60 + level)
+        target = (s_hi - s_lo)/64 if s_hi > s_lo else (self.x_box[1] - self.x_box[0]) / 2 ** (60 + level)
         for root in (self.arc.first, self.arc.second):
             (rs, _rx) = self.curve._ordered_root_rect(self.arc, root)
             if rs[1] < s_lo or rs[0] > s_hi:
@@ -257,12 +290,13 @@ class _Arc:
                 hi = middle
         return 0
 
-    def _edge(self, root):
+    def _edge(self, root, *, second=True):
         """The root's edge line: ``(g1, g2, fixed, varying_is_s, lo, hi, box_lo, box_hi)`` with ``g1``/``g2``
         restricted to the line (Bernstein in the line's local parameter) and the root's local interval."""
         (s_lo, s_hi), (x_lo, x_hi) = self.curve._ordered_root_rect(self.arc, root)
         if s_lo == s_hi:                                       # on a constant-s edge: x varies
-            g1, g2 = self.column(self.g1, s_lo), self.column(self.g2, s_lo)
+            g1 = self.column(self.g1, s_lo)
+            g2 = self.column(self.g2, s_lo) if second else None
             box_lo, box_hi = self.x_box
             fixed, varying_is_s, lo, hi = s_lo, False, x_lo, x_hi
         else:                                                  # on a constant-x edge: s varies
@@ -270,10 +304,11 @@ class _Arc:
             t = (x_lo - a) / (b - a)
             if self.slicing == 0:
                 g1 = [_de_casteljau(list(row), t) for row in self.g1]
-                g2 = [_de_casteljau(list(row), t) for row in self.g2]
+                g2 = [_de_casteljau(list(row), t) for row in self.g2] if second else None
             else:
                 g1 = [_de_casteljau([row[j] for row in self.g1], t) for j in range(len(self.g1[0]))]
-                g2 = [_de_casteljau([row[j] for row in self.g2], t) for j in range(len(self.g2[0]))]
+                g2 = ([_de_casteljau([row[j] for row in self.g2], t) for j in range(len(self.g2[0]))]
+                      if second else None)
             box_lo, box_hi = self.u_box if self.slicing == 0 else self.v_box
             fixed, varying_is_s, lo, hi = x_lo, True, s_lo, s_hi
         width = box_hi - box_lo
@@ -282,10 +317,13 @@ class _Arc:
     def root_bracket(self, root, target):
         """An ordered (s, x) rectangle containing the true end root, its isolating interval refined
         (exact bisection by the sign of G1 on the edge) to at most ``target`` in knot units."""
-        g1, _g2, fixed, varying_is_s, lo, hi, box_lo, width = self._edge(root)
+        # A graph-only reference needs no second predicate or fabricated
+        # coefficients: this enclosure uses only the original zero set G1.
+        g1, _g2, fixed, varying_is_s, lo, hi, box_lo, width = self._edge(root, second=False)
         g1_lo = _de_casteljau(g1, lo)
         steps = 0
         while lo < hi and g1_lo != 0 and (hi - lo) * width > target and steps < _SIGN_STEPS:
+            _cooperative_tick()
             middle = (lo + hi) / 2
             value = _de_casteljau(g1, middle)
             if value == 0:
@@ -328,12 +366,8 @@ class _Arc:
 
     def monotone(self, s_range, x_range) -> bool:
         """``dh/ds`` certified non-zero over the rectangle."""
-        u_range, v_range = self.uv(s_range, x_range)
-        u_width, v_width = u_range[1] - u_range[0], v_range[1] - v_range[0]
-        if u_width == 0 or v_width == 0:
-            return False
-        g1, g2 = self.over(self.g1, s_range, x_range), self.over(self.g2, s_range, x_range)
-        (g1_u, g1_v), (g2_u, g2_v) = _derivative_ranges(g1, u_width, v_width), _derivative_ranges(g2, u_width, v_width)
+        (g1_u, g1_v), (g2_u, g2_v) = (self.derivative_ranges(c, s_range, x_range)
+                                      for c in (self.g1, self.g2))
         g1_s, g1_x, g2_s, g2_x = (g1_u, g1_v, g2_u, g2_v) if self.slicing == 0 else (g1_v, g1_u, g2_v, g2_u)
         first, second = _multiply(g2_s, g1_x), _multiply(g2_x, g1_s)
         low, high = first[0] - second[1], first[1] - second[0]
@@ -347,12 +381,9 @@ class _Arc:
         - A (W_s G1_x - W_x G1_s)``, bounded by interval products of Bernstein ranges; ``G1_x`` has one
         sign over a regular box's rectangle (else ``None``).
         """
-        u_range, v_range = self.uv(s_range, x_range)
-        u_width, v_width = u_range[1] - u_range[0], v_range[1] - v_range[0]
-        if u_width == 0 or v_width == 0:
-            return None
         g1, a, w = (self.over(c, s_range, x_range) for c in (self.g1, self.g2, self.w))
-        (g1_u, g1_v), (a_u, a_v), (w_u, w_v) = (_derivative_ranges(c, u_width, v_width) for c in (g1, a, w))
+        (g1_u, g1_v), (a_u, a_v), (w_u, w_v) = (self.derivative_ranges(c, s_range, x_range)
+                                                for c in (self.g1, self.g2, self.w))
         if self.slicing == 0:
             g1_s, g1_x, a_s, a_x, w_s, w_x = g1_u, g1_v, a_u, a_v, w_u, w_v
         else:
@@ -393,6 +424,17 @@ def _pieces(curve):
     return result, count, a, b
 
 
+def _eliminate_generating_plane(n, d, m, d1):
+    """Exact ``(n', d')`` with ``n' . H - d' W = (n . H - d W) - alpha (m . H - d1 W)`` and ``n'[p] = 0`` for a
+    largest-magnitude component ``p`` of the generating normal ``m`` (exact Fractions)."""
+    mq = tuple(Fraction(x) for x in m)
+    p = max(range(3), key=lambda k: abs(mq[k]))
+    if mq[p] == 0:
+        return n, d
+    alpha = Fraction(n[p]) / mq[p]
+    return (tuple(Fraction(n[k]) - alpha * mq[k] for k in range(3)), Fraction(d) - alpha * Fraction(d1))
+
+
 def _engine(curve, n, d, classify, max_depth, patches=None):
     """Run ``classify(arc_view, s_range, x_range, world, depth, signs)`` over every arc piece of the curve
     (exact subdivision in s); ``classify`` returns "done", "split" or raises.
@@ -407,6 +449,13 @@ def _engine(curve, n, d, classify, max_depth, patches=None):
         m, d1, _mm, _limit, _l = curve._plane_slab()
         if _proportional(n, d, m, d1):
             raise PlaneNurbsNotCertified("the second plane is the curve's own plane (coincident)")
+        # Exact equality elimination (after the coincidence refusal above): with G1 = m.H - d1 W the curve's
+        # generating plane function, G2' = G2 - alpha G1 for the exact rational alpha = n[p]/m[p] (p a largest
+        # |m| component) is the second-plane function of n' = n - alpha m, d' = d - alpha d1. On the true section
+        # G1 = 0, so G2'/W = G2/W there: roots, signs and tangential derivatives are unchanged, every enclosure
+        # of the quantity on C* stays valid, and a plane parallel to the generating plane becomes the nonzero
+        # constant c W (no root, no subdivision). No approximation, tolerance or tightening is involved.
+        n, d = _eliminate_generating_plane(n, d, m, d1)
         g2_patches = _patches(surface, n, d)
         w_patches = _patches(surface, (Fraction(0),) * 3, Fraction(-1))
 
@@ -510,6 +559,12 @@ def section_roots(curve: PlaneNurbsCurve, n, d, *, max_depth: int = MAX_DEPTH,
     d = Fraction(d)
     if not any(n):
         raise PlaneNurbsNotCertified("the second plane needs a non-zero normal")
+    # The engine itself runs to the ACTIVE depth limit; the classifier's closure must use the same effective
+    # depth, otherwise it keeps asking to refine an isolated simple root past the depth the engine refuses at
+    # (and the root is lost to an 'undecided at depth' refusal although its sign/monotonicity proof stood).
+    # Every existence, monotonicity and sign proof below is unchanged, and an undecided piece at the effective
+    # depth still refuses; with no active budget ``depth_limit`` returns ``max_depth`` (behaviour unchanged).
+    max_depth = depth_limit(max_depth)
     found: list[SectionRoot] = []
 
     def classify(context: _Context) -> str:
@@ -628,7 +683,7 @@ def _prefix_within(piece, at_start: bool, p, w, tol) -> bool:
 
 
 def _exact_point3(point):
-    return [Fraction(float(value)) for value in point]
+    return [value if type(value) is Fraction else Fraction(float(value)) for value in point]
 
 
 def certify_line_section(curve: PlaneNurbsCurve, start, end, shared=(), tolerance: float = 0.0,
@@ -649,8 +704,8 @@ def certify_line_section(curve: PlaneNurbsCurve, start, end, shared=(), toleranc
     projected crossing of a segment parallel to the curve's plane is not one). A piece smaller
     than ``tolerance / 16`` that is still undecided refuses (touching at the tolerance scale).
     """
-    a = [Fraction(float(value)) for value in start]
-    b = [Fraction(float(value)) for value in end]
+    a = _exact_point3(start)
+    b = _exact_point3(end)
     e = [y - x for x, y in zip(a, b)]
     m = _plane_normal(curve)
     n = (e[1] * m[2] - e[2] * m[1], e[2] * m[0] - e[0] * m[2], e[0] * m[1] - e[1] * m[0])

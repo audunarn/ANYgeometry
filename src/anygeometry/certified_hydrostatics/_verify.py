@@ -2182,8 +2182,10 @@ class VerifiedHydrostatics:
     Nothing here is forwarded to, or references, the objects that were supplied: ``result`` and ``query`` are rebuilt
     from the checked copies, and ``exact`` holds the recomputed exact values (plain Fractions): ``V``, ``J``,
     ``occupancy``, ``generic``, ``contacts`` and per side the ``(numerator, norm_squared)`` pairs of the waterplane
-    quantities and the topology. ``volume``, ``moments``, ``sections``, ``occupancy``, ``generic`` and ``contacts`` read
-    the rebuilt ``result``."""
+    quantities and the topology. Convention-2 quantities that are not exact are recorded in ``enclosures``
+    as independently computed rational endpoint pairs, not as exact values. ``solid_volume`` always describes
+    the whole uncut solid: a Fraction when exact, or a rational endpoint pair for a curved enclosure.
+    ``volume``, ``moments``, ``sections``, ``occupancy``, ``generic`` and ``contacts`` read the rebuilt ``result``."""
 
     result: Any
     query: Any
@@ -2194,9 +2196,11 @@ class VerifiedHydrostatics:
     snapshot_digest: str
     artifact_files_sha256: str
     proof_sha256: str
-    solid_volume: Fraction
+    # Convention 2 may enclose the full solid volume instead of expressing it exactly.
+    solid_volume: Fraction | tuple[Fraction, Fraction]
     exact: dict = field(compare=False)
     work: dict = field(compare=False)
+    enclosures: dict = field(default_factory=dict, compare=False)
 
     @property
     def volume(self):
@@ -2309,6 +2313,11 @@ def verify_certified_hydrostatics(model, faces, query, result, expected, *, budg
     Raises ``CertifiedHydrostaticsRefusal`` (``VERIFICATION_FAILED`` with ``sub_reason``, ``MALFORMED_PROOF``, or a
     resource category) and never returns a partially verified object. Every value that comes from the caller is
     rebuilt from exact built-in types before it is used (see the module docstring)."""
+    if isinstance(expected, Mapping) and type(expected.get("convention_version")) is str \
+            and expected["convention_version"] == "2":
+        from ._ch3_verify import verify_curved
+        return verify_curved(model, faces, query, result, expected, budget=budget,
+                             cancellation_check=cancellation_check)
     meter = _Gauge(Meter(budget, cancellation_check))
     previous = (getattr(_ACTIVE, "gauge", None), getattr(_ACTIVE, "budget", None))
     _ACTIVE.gauge = meter

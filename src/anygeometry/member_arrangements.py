@@ -37,6 +37,19 @@ class MemberPointContact:
 
 
 def _support_roots(curve, support, tolerance, check):
+    from .nurbs import NurbsSurface, CurveOnSurface, _IDENTITY
+    from .support_curves import PlaneNurbsCurve
+    if isinstance(support, NurbsSurface):
+        check()
+        from .nurbs_intersection_curve import NurbsSurfaceIntersectionCurve
+        if isinstance(curve,NurbsSurfaceIntersectionCurve):
+            curve.for_support(support)._shape()
+            return None
+        if ((isinstance(curve, CurveOnSurface) and curve.support == support
+             and curve.transform == _IDENTITY)
+                or (isinstance(curve, PlaneNurbsCurve) and curve.surface == support)):
+            return None  # Exact declared support identity, no inverse or sampled residual.
+        raise GeometryError('curve contacts on this NURBS support are not certified')
     if isinstance(support, ExtrudedSurface):
         # No algebraic implicit form here: a curve is either on the surface (sampled residual) or unsupported.
         points = np.asarray(curve.evaluate(np.linspace(0., 1., 17)))
@@ -44,6 +57,12 @@ def _support_roots(curve, support, tolerance, check):
             return None
         raise GeometryError("a curve leaving an extruded support (a beam or axis contact) is not supported yet")
     if isinstance(support, Plane):
+        if isinstance(curve, PlaneNurbsCurve):
+            from .section_faces import _same_plane
+            check()
+            if _same_plane(support, curve):
+                return None
+            raise GeometryError('implicit section has a different declared generating plane')
         return plane_roots(curve, support.normal, float(support.normal @ support.origin),
                            tolerance=tolerance, cancellation_check=lambda: (check() or False))
     if isinstance(support, Cone) or isinstance(curve, (QuadricIntersectionCurve, BezierQuadricCurve)):

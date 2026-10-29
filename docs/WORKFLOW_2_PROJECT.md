@@ -704,3 +704,48 @@ Evidence root: ../evidence outside the source trees, with unique attempt folders
 Full records must include command, input/source hashes, environment/effective
 threads, precise process-wall duration, exit/timeout and cleanup status.
 Existing scientific tolerances and Workflow 1 NO_GO evidence remain unchanged.
+
+## Reconciliation with committed local main — 2026-10-29
+
+This development candidate combines Workflow 2 parent
+`0019c74574f95edd5460d247b41ff2e1bb1900bd` and committed local main
+`e7c2c419a57b907507554eecaf6a8e9f56937f7d` in an independent clone at
+`C:/ANYworkspaceWork/workflow2-reconcile-20261029/ANYgeometry`.
+The live checkout and its dirty work are excluded. No push or live-main merge
+is included in this reconciliation.
+
+The public exports and builtin feature registry retain both parents. Schema 8
+supports existing LineRange-only, solid-only and combined documents, with strict
+present-record validation and refusal when materialized prism history loses its
+matching region. Existing prepared-clone comparisons normalize the expected
+nested solid-owner UUID rebind while preserving every other field, native/state
+checks and source immutability; no additional full-state capture was added.
+
+Focused development evidence: final connected selection 119 passed (including
+27 new mixed-domain/negative cases), modern feature/model/serialization selection
+156 passed. Earlier successful overlapping selections are not added to a unique
+coverage total. The before-fix collection error, three ownership-refusal failures,
+and mixed discovery failure/test typo remain in evidence. Non-author source
+reviews of both repositories found no blocking integration issue; they are
+same-family reviews, not human/different-family acceptance.
+
+Fresh pure Windows CPython 3.11 wheels of both reconciled repositories passed
+87 copied installed tests outside the source trees; the controlled P1/P2 example
+entrypoint, dependency check, installed origins and wheel payload checks passed.
+No real provider ran. Exact commands, source/input hashes, JUnit, stdout/stderr,
+process-wall budgets and cleanup receipts are under
+`C:/ANYworkspaceWork/workflow2-20261027/evidence/reconcile-main-20261029-a1`;
+`checks-summary.json`, `geometry-handoff.md`, the two independent-source-review
+files and `installed-final/installed-origins.json` index the evidence.
+
+These are development integration results for new source identities, not renewed
+scientific qualification. Historical failed evidence, W2-DEV-001's exact-case
+deviation, limits, full-suite/native/platform/distribution gates and Workflow 1
+NO_GO are unchanged. Final public-provider promotion remains disabled. No native
+build, full repository suite, hosted CI, new real meshing or publication was run.
+
+The complete merge diff retains whitespace warnings in 12 paths whose index blobs
+match one original parent exactly (including source-pin-sensitive line endings).
+New reconciliation edits pass the scoped whitespace check. The inherited warnings
+are retained in geometry-complete-merge-whitespace.log and
+inherited-whitespace-proof.json; no unrelated normalization was performed.

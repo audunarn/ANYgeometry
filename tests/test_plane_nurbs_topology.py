@@ -90,13 +90,34 @@ def test_refusals():
         plane_nurbs_section(horizontal(0.), ridge((.25, -.25, .25)))
     dome = NurbsSurface(2, 2, (0., 0., 0., 1., 1., 1.), (0., 0., 0., 1., 1., 1.),
                         tuple(tuple((i / 2, j / 2, 1. if (i, j) == (1, 1) else 0.) for j in range(3)) for i in range(3)))
-    with pytest.raises(PlaneNurbsClosedSection):
-        plane_nurbs_section(horizontal(.2), dome)
+    section = plane_nurbs_section(horizontal(.2), dome)
+    assert len(section.paths) == 1 and section.paths[0].closed
+    assert section.paths[0].roots[0] == section.paths[0].roots[-1]
     # z = 1.5 is v = 1/2, but G is monotone in v over the whole patch (one regular box): no grid line, one path
     assert len(plane_nurbs_section(horizontal(1.5), cylinder()).paths) == 1
     flat = NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.),
                         (((0., 0., 0.), (0., 1., 0.)), ((1., 0., 0.), (1., 1., 0.))))
     assert plane_nurbs_section(horizontal(0.), flat).coincident
+
+
+def test_internal_circle_uses_certified_alternate_subdivision():
+    coefficients = (1., -1., 1.)
+    surface = NurbsSurface(2, 2, (0., 0., 0., 1., 1., 1.),
+                           (0., 0., 0., 1., 1., 1.),
+                           tuple(tuple((i - 1., j - 1., coefficients[i] + coefficients[j])
+                                       for j in range(3)) for i in range(3)))
+    section = plane_nurbs_section(horizontal(.5), surface)
+    assert len(section.paths) == 1 and section.paths[0].closed
+    path = section.paths[0]
+    assert len(path.arcs) >= 2
+    assert len(path.roots) == len(path.arcs) + 1
+    assert path.roots[0] == path.roots[-1]
+    assert len(set(path.arcs)) == len(path.arcs)
+    from anygeometry.support_curves import PlaneNurbsCurve
+    curve = PlaneNurbsCurve.from_plane(horizontal(.5), surface)
+    points = curve.evaluate(np.linspace(0., 1., 19))
+    assert np.allclose(points[:, 2], .5, atol=1e-10)
+    assert np.allclose(np.sum(points[:, :2] ** 2, axis=1), .5, atol=1e-10)
 
 
 def boundary_sign_changes(plane, surface, count=4001):
@@ -129,7 +150,7 @@ def test_random_wavy_patches_match_the_boundary_sign_count():
         except PlaneNurbsNotCertified:
             continue
         certified += 1
-        assert 2 * len(section.paths) == boundary_sign_changes(plane, surface)
+        assert 2 * sum(not path.closed for path in section.paths) == boundary_sign_changes(plane, surface)
         for ends in end_points(section, surface):
             assert on_plane(plane, ends[0], 1e-9) and on_plane(plane, ends[1], 1e-9)
     assert certified >= 25

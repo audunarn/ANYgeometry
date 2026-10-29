@@ -4,12 +4,20 @@ All notable user-visible changes to ANYgeometry are documented here.
 
 ## Unreleased
 
+- Prepare version 0.4.7 for bounded B1 curved-hull hydrostatics point queries,
+  including independently verified volume, body-origin first moments and raw
+  waterplane moments. Results bind the model, displacement boundary, installed
+  implementation, exact half-space and accuracy policy. Unsupported or
+  unresolved cases refuse explicitly; event intervals, equilibrium, GZ and
+  tanks remain outside this delivery. See `docs/CH3E_DELIVERY.md` for the pinned
+  delivery and verification procedure; consumer admission is a separate gate.
+
 - Add the certified-hydrostatics provider and independent verifier for closed
   planar shells (`anygeometry.certified_hydrostatics`): exact rational volume,
   first volume moments and waterplane quantities for a half-space, with
   one-sided limits at degenerate planes, binary64/decimal enclosures, canonical
-  proofs and a separate verifier. Curved faces, events and intervals are not
-  covered. Package version 0.4.6 (not yet published).
+  proofs and a separate verifier. This was the planar scope introduced in
+  version 0.4.6; bounded curved support is added by the 0.4.7 work above.
 
 - Add NURBS definitions (`anygeometry.nurbs`: `NurbsCurve` for 3D curves and 2D
   pcurves, `NurbsSurface`, `CurveOnSurface`) with validation (degree <= 7,

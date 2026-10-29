@@ -20,6 +20,9 @@ import numpy as np
 _qualified_documents = WeakKeyDictionary()
 
 from .curves import Arc, Spline, Straight
+from .line_ranges import LineRange
+from .nurbs_intersection_curve import (NurbsSurfaceIntersectionCurve,intersection_curve_record,
+                                      intersection_curve_from_record)
 from .exact_curves import EllipticArc, CylinderIntersectionCurve
 from .quadric_algebra import EllipticRuledSupport, QuadricSupport, RuledSupport
 from .branch_algebra import BezierRuledSupport
@@ -75,10 +78,13 @@ _QUADRIC_VERSION = 6
 # 2026-10-13); schema 6 keeps its meaning. A document's version is the largest
 # requirement of any record it holds, found recursively (required_version).
 _NURBS_VERSION = 7
-# Closed regions have their own top-level schema; old strict readers must not
-# receive an extra field under a version they otherwise understand.
+# The two additive version-8 records share a compatible document schema.
+# Lower-version readers must receive neither retained line ranges nor solids;
+# schema 8 alone does not imply either optional domain is present.
 _SOLID_VERSION = 8
+_LINE_RANGE_VERSION = 8
 _RECORD_VERSIONS = {
+    "line_range": _LINE_RANGE_VERSION,
     "extruded": _QUADRIC_VERSION,
     "quadric_intersection": _QUADRIC_VERSION,
     "bezier_quadric_intersection": _QUADRIC_VERSION,
@@ -106,6 +112,23 @@ def required_version(record: object) -> int:
         elif isinstance(value, (list, tuple)):
             stack.extend(value)
     return version
+
+
+def _clone_content_payload(document: Mapping[str, Any]) -> dict[str, Any]:
+    """Compare validated clone documents modulo the expected owner rebind.
+
+    A fresh model identity also rebinds each solid region's owner identity.
+    Region identity, topology, selections, provenance and every other field
+    remain part of the comparison. Callers validate both documents via to_dict.
+    """
+    payload = {key: value for key, value in document.items()
+               if key not in ("model_id", "checksum")}
+    if "solid_regions" in payload:
+        payload["solid_regions"] = [
+            {key: value for key, value in region.items() if key != "model_id"}
+            for region in payload["solid_regions"]
+        ]
+    return payload
 
 _GEOMETRY_KINDS = ("vertex", "edge", "face")
 _STRUCTURAL_KINDS = (
@@ -746,6 +769,9 @@ def _serialized_model_state(
     for edge in sorted(geometry.edges.values(), key=lambda item: item.id):
         if isinstance(edge.curve, Straight):
             curve: dict[str, object] = {"type": "straight"}
+        elif isinstance(edge.curve, LineRange):
+            curve = {'type': 'line_range', 'a': list(edge.curve.a), 'b': list(edge.curve.b),
+                     'domain': [list(pair) for pair in edge.curve.exact_domain]}
         elif isinstance(edge.curve, Arc):
             curve = {"type": "arc", "via_vertex": edge.curve.via_vertex}
         elif isinstance(edge.curve, Spline):
@@ -768,6 +794,8 @@ def _serialized_model_state(
             curve = nurbs_record(edge.curve)               # schema 7 (generality slices A2a, A3b)
         elif isinstance(edge.curve, PlaneNurbsCurve):
             curve = plane_nurbs_record(edge.curve)         # schema 7 (generality slice B1-P3)
+        elif isinstance(edge.curve,NurbsSurfaceIntersectionCurve):
+            curve = intersection_curve_record(edge.curve)
         else:  # pragma: no cover - closed public union
             raise GeometryError(f"unsupported curve type {type(edge.curve).__name__}")
         curves.append({"id": edge.id, "start": edge.start, "end": edge.end, "curve": curve})
@@ -778,13 +806,15 @@ def _serialized_model_state(
         or any(isinstance(surface, ExtrudedSurface) for face in geometry.faces.values()
                for surface in (face.surface, face.parameterization))
     )
-    needs_nurbs = (any(isinstance(edge.curve, (NurbsCurve, CurveOnSurface, PlaneNurbsCurve))
+    needs_nurbs = (any(isinstance(edge.curve, (NurbsCurve, CurveOnSurface, PlaneNurbsCurve,NurbsSurfaceIntersectionCurve))
                        for edge in geometry.edges.values())
                    or any(isinstance(surface, NurbsSurface) for face in geometry.faces.values()
                           for surface in (face.surface, face.parameterization)))
     document: dict[str, object] = {
         "schema": SCHEMA,
-        "version": _SOLID_VERSION if geometry.solid_regions else _NURBS_VERSION if needs_nurbs else _QUADRIC_VERSION if needs_quadric else VERSION,
+        "version": (_SOLID_VERSION if geometry.solid_regions
+                    else _LINE_RANGE_VERSION if any(isinstance(edge.curve, LineRange) for edge in geometry.edges.values())
+                    else _NURBS_VERSION if needs_nurbs else _QUADRIC_VERSION if needs_quadric else VERSION),
         "model_id": model_id,
         "revision": revision,
         "coordinates": {
@@ -1629,6 +1659,19 @@ def _decode_geometry_records(
             if strict:
                 _exact_fields(curve_data, required={"type"}, name="straight curve")
             curve = Straight()
+        elif curve_kind == 'line_range':
+            if schema_version < _LINE_RANGE_VERSION:
+                raise GeometryError('retained line ranges require schema 8')
+            _exact_fields(curve_data, required={'type', 'a', 'b', 'domain'}, name='line range')
+            from fractions import Fraction
+            domain = curve_data['domain']
+            if (not isinstance(domain, (list, tuple)) or len(domain) != 2
+                    or any(not isinstance(pair, (list, tuple)) or len(pair) != 2
+                           or any(type(x) is not int for x in pair) or pair[1] <= 0 for pair in domain)):
+                raise GeometryError('line range domain must contain exact integer fraction pairs')
+            curve = LineRange(_finite_array(curve_data['a'], (3,), 'line carrier a'),
+                              _finite_array(curve_data['b'], (3,), 'line carrier b'),
+                              tuple(Fraction(*pair) for pair in domain))
         elif curve_kind == "arc":
             if strict:
                 _exact_fields(
@@ -1661,6 +1704,10 @@ def _decode_geometry_records(
             if schema_version < _NURBS_VERSION:
                 raise GeometryError("plane x NURBS section curves require schema 7")
             curve = plane_nurbs_from_record(dict(curve_data))
+        elif curve_kind == 'nurbs_surface_intersection':
+            if schema_version < _NURBS_VERSION:
+                raise GeometryError('NURBS intersection curves require schema 7')
+            curve = intersection_curve_from_record(dict(curve_data))
         elif curve_kind in ("elliptic_arc", "cylinder_intersection"):
             if schema_version < 5:
                 raise GeometryError("analytic intersection curves require schema 5")
@@ -1686,7 +1733,7 @@ def _decode_geometry_records(
                 curve,
             ),
         )
-        if isinstance(curve, PlaneNurbsCurve):
+        if isinstance(curve, (PlaneNurbsCurve,NurbsSurfaceIntersectionCurve)):
             # the ends are algebraic section roots: the stored vertices must match them (B1-P3)
             ends = [geometry.vertices.get(geometry.edges[identifier].start),
                     geometry.vertices.get(geometry.edges[identifier].end)]
@@ -1877,7 +1924,8 @@ def from_dict(document: Mapping[str, Any]) -> GeometryModel:
     if document.get("schema", SCHEMA) != SCHEMA:
         raise GeometryError("not an ANYgeometry document")
     version = _integer(document.get("version", 1), "version")
-    if version not in (1, 2, 3, 4, VERSION, _QUADRIC_VERSION, _NURBS_VERSION, _SOLID_VERSION):
+    if version not in (1, 2, 3, 4, VERSION, _QUADRIC_VERSION, _NURBS_VERSION,
+                       _LINE_RANGE_VERSION, _SOLID_VERSION):
         raise GeometryError(f"unsupported ANYgeometry version {version}")
     strict_document = version >= 3
     # Schemas 4 and 5 share identity, tolerance and additive semantic fields.
@@ -2072,7 +2120,24 @@ def from_dict(document: Mapping[str, Any]) -> GeometryModel:
         keys = geometry.entity_keys()
         history_keys = geometry.replacement_history()
         registry = builtin_feature_registry()
+        solid_feature_regions: dict[int, list[object]] = {}
+        for region in geometry.solid_regions.values():
+            feature_id = region.provenance.get("feature_id")
+            if isinstance(feature_id, int) and not isinstance(feature_id, bool):
+                solid_feature_regions.setdefault(feature_id, []).append(region)
         for record in geometry.features._records:  # noqa: SLF001
+            if record.kind == "geometry.solid_prism" and record.outputs:
+                # Version 8 also holds LineRange-only documents. The schema
+                # number cannot require solids, but a materialized prism's
+                # history does require its own exact region owner.
+                regions = solid_feature_regions.get(record.feature_id, ())
+                faces = {reference for reference in record.outputs.values()
+                         if reference.kind == "face"}
+                if (len(regions) != 1 or faces != {
+                        EntityRef("face", handle.id) for handle in regions[0].face_refs}):
+                    raise GeometryError(
+                        f"solid prism feature {record.feature_id} has no matching solid region"
+                    )
             for key, reference in record.outputs.items():
                 if (
                     (reference.kind, reference.id) not in keys
@@ -2119,8 +2184,6 @@ def from_dict(document: Mapping[str, Any]) -> GeometryModel:
                 if diagnostic is None
                 else diagnostic
             )
-    if version == _SOLID_VERSION and ("solid_regions" not in document or not document["solid_regions"]):
-        raise GeometryError("schema-8 geometry document requires solid_regions")
     if strict_document:
         _verify_checksum(document)
     # The revision was assigned before content was restored.

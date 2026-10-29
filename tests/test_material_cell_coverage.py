@@ -190,7 +190,7 @@ def test_input_is_detached_before_callback_mutation_and_end_binding_rechecked():
         calls += 1
         if calls == 3:
             model.add_point(10, 10, 10)
-    with pytest.raises(GeometryError, match='stale'):
+    with pytest.raises(GeometryError, match='stale|source changed during callback'):
         validate(model, result, face, [[[1, 1], [2, 1], [1, 2]]], cancellation_check=mutate_model)
 
 

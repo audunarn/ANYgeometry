@@ -33,6 +33,15 @@ class RefusalCategory(enum.Enum):
     STALE_PREPARATION = "STALE_PREPARATION"
     MALFORMED_PROOF = "MALFORMED_PROOF"
     VERIFICATION_FAILED = "VERIFICATION_FAILED"
+    # CH3 kernel (design CERTIFIED_HYDROSTATICS_CH3_DESIGN.md sections 2.3 and 3.2)
+    UNDECIDED_PREDICATE = "UNDECIDED_PREDICATE"
+    UNSUPPORTED_TRIM = "UNSUPPORTED_TRIM"
+    # CH3a (design 2.3 C3, H1/H2): a stored vertex position or edge domain disagrees with the exact edge
+    TRIM_HINT_MISMATCH = "TRIM_HINT_MISMATCH"
+    # CH3a2: embedding of a curved face with a neighbour cannot be decided inside the supported class (2.3 check 5);
+    # a query plane meets a curved section degenerately (CH3c, reserved here with the admission categories)
+    EMBEDDING_UNDECIDED = "EMBEDDING_UNDECIDED"
+    CURVED_SECTION_DEGENERACY = "CURVED_SECTION_DEGENERACY"
 
 
 PHASES = ("prepare", "query", "verify", "check")

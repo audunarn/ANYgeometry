@@ -27,7 +27,7 @@ import math
 
 import numpy as np
 
-from .curves import Straight
+from .curves import Straight, LineRange
 from .errors import GeometryError
 from .plane_nurbs import PlaneNurbsNotCertified
 from .support_curves import PlaneNurbsCurve
@@ -65,6 +65,7 @@ class _Frame:
     (a loop vertex: far plane origins cancelled the area, review B1-P4b round 1)."""
 
     def __init__(self, plane, origin=None):
+        self.plane = plane
         normal = np.cross(plane.u_vector, plane.v_vector)
         self.normal = normal / float(np.linalg.norm(normal))
         self.first = np.asarray(plane.u_vector, dtype=float) / float(np.linalg.norm(plane.u_vector))
@@ -76,8 +77,17 @@ class _Frame:
         return np.stack((offset @ self.first, offset @ self.second), axis=-1)
 
 
-def _edge_points(model, oriented):
+def _edge_points(model, oriented, plane=None):
     edge = model.edges[oriented.edge]
+    if type(edge.curve) is LineRange:
+        from .planar_exact import ExactPlane
+        from .plane_section_plate import _line_world_endpoints
+        faces = model.faces_using_edge(oriented.edge)
+        plane = plane if plane is not None else next((model.faces[f].surface for f in faces
+                      if hasattr(model.faces[f].surface, 'normal')), None)
+        if plane is None:
+            raise GeometryError('retained plane boundary has no incident Plane support')
+        return _line_world_endpoints(model, oriented, ExactPlane.from_plane(plane))
     start, end = model.vertices[edge.start].position, model.vertices[edge.end].position
     return (start, end) if oriented.forward else (end, start)
 
@@ -148,7 +158,7 @@ def loop_area(model, loop, plane, pieces=_PIECES) -> tuple[float, float]:
             bound += piece_bound
             magnitude += piece_magnitude
         else:
-            start, end = frame.xy(np.asarray(_edge_points(model, item)))
+            start, end = frame.xy(np.asarray(_edge_points(model, item, plane)))
             first, second = float(start[0] * end[1]), float(end[0] * start[1])
             value += .5 * (first - second)
             polygon_value += .5 * (first - second)
@@ -167,9 +177,42 @@ def _pair_verdict(model, first, second, tolerance, plane_tolerance=None):
         return True                                             # certified by _sections_simple
     if isinstance(a.curve, PlaneNurbsCurve) or isinstance(b.curve, PlaneNurbsCurve):
         curve_edge, line_edge = (a, b) if isinstance(a.curve, PlaneNurbsCurve) else (b, a)
-        start, end = (model.vertices[line_edge.start].position, model.vertices[line_edge.end].position)
+        from .entities import OrientedEdge
+        start, end = _edge_points(model, OrientedEdge(line_edge.id, True), curve_edge.curve.plane)
         return certify_line_section_safe(curve_edge.curve, start, end, shared, tolerance, plane_tolerance)
     return None
+
+
+def _retained_line_pair_verdict(model, first, second, plane):
+    """Actual projected segment intersection, with only exact endpoint incidence exempted.
+
+    Shared proxy topology alone cannot certify a local joint. When its retained
+    endpoints differ, an intersection fails and a missing local proof refuses.
+    """
+    from .planar_exact import ExactPlane, _segments_cross
+    from .plane_section_plate import _line_endpoints
+    frame = ExactPlane.from_plane(plane)
+    p, q = _line_endpoints(model, first, frame)
+    r, s = _line_endpoints(model, second, frame)
+    ids_first = (model.oriented_start_vertex(first), model.oriented_end_vertex(first))
+    ids_second = (model.oriented_start_vertex(second), model.oriented_end_vertex(second))
+    shared = set(ids_first) & set(ids_second)
+    intersects = _segments_cross(p, q, r, s)
+    if not shared:
+        return not intersects
+    if len(shared) != 1:
+        return False
+    vertex = next(iter(shared))
+    a = (p, q)[ids_first.index(vertex)]
+    b = (r, s)[ids_second.index(vertex)]
+    if a != b:
+        return False if intersects else None
+    def on_segment(start, end, point):
+        return ((end[0]-start[0])*(point[1]-start[1]) == (end[1]-start[1])*(point[0]-start[0])
+                and all(min(x,y) <= z <= max(x,y) for x,y,z in zip(start,end,point)))
+    far_first = (q, p)[ids_first.index(vertex)]
+    far_second = (s, r)[ids_second.index(vertex)]
+    return not (on_segment(r,s,far_first) or on_segment(p,q,far_second))
 
 
 def _box_gap(first, second) -> float:
@@ -370,7 +413,7 @@ def _crossings(model, loop, point, direction, frame, tolerance):
                     return None
                 count += 1
         else:
-            start, end = (np.asarray(p, dtype=float) for p in _edge_points(model, item))
+            start, end = (np.asarray(p, dtype=float) for p in _edge_points(model, item, frame.plane))
             side_start, side_end = float((start - point) @ across), float((end - point) @ across)
             if abs(side_start) <= tolerance or abs(side_end) <= tolerance:
                 if float((start - point) @ direction) > -tolerance or float((end - point) @ direction) > -tolerance:
@@ -388,6 +431,14 @@ def _crossings(model, loop, point, direction, frame, tolerance):
 
 
 def _inside(model, loop, point, frame, tolerance):
+    if any(type(model.edges[item.edge].curve) is LineRange for item in loop):
+        from .planar_exact import ExactPlane
+        from .plane_section_plate import _contains
+        exact_frame = ExactPlane.from_plane(frame.plane)
+        try:
+            return _contains(model, loop, exact_frame.uv(point), exact_frame, lambda: None)
+        except GeometryError:
+            return None
     """Ray parity over a fixed sequence of directions; ``None`` when no ray decides."""
     for k in range(_RAYS):
         angle = .7390851332151607 + k * math.pi * (math.sqrt(5.) - 1.)
@@ -410,6 +461,13 @@ def validate_plane_section_face(model, face_id: int) -> list[str]:
             if isinstance(curve, PlaneNurbsCurve):
                 if not _same_plane(plane, curve):
                     result.append(f"face {face_id} edge {item.edge} is a section curve of another plane")
+            elif isinstance(curve, LineRange):
+                from .planar_exact import ExactPlane
+                try:
+                    curve.certify_plane(ExactPlane.from_plane(plane),
+                        min(1.e-8, model.tolerance.effective_curve_fit_residual(1.)))
+                except GeometryError as error:
+                    result.append(f'face {face_id} retained boundary: {error}')
             elif not isinstance(curve, Straight):
                 result.append(f"face {face_id} edge {item.edge}: only straight and plane x NURBS section edges "
                               "may trim a plane face with section edges (B1-P4b)")
@@ -441,13 +499,28 @@ def validate_plane_section_face(model, face_id: int) -> list[str]:
         if sum(a * (b - c) for a, b, c in zip(n_exact, _exact(vertex), o_exact)) ** 2 > limit:
             return [f"face {face_id} boundary is inconsistent with its explicit surface"]
     tolerance = model.tolerance.effective_length(extent)
+    from .plane_section_plate import validate_complete_path_face
+    complete = validate_complete_path_face(model, face_id)
+    if complete is not None:
+        return complete
     # pairwise trim certificates (adjacent edges share their joint vertex)
     items = [(index, position, item) for index, loop in enumerate(loops) for position, item in enumerate(loop)]
     for i in range(len(items)):
         for j in range(i + 1, len(items)):
             (loop_a, pos_a, first), (loop_b, pos_b, second) = items[i], items[j]
             a, b = model.edges[first.edge], model.edges[second.edge]
-            if isinstance(a.curve, Straight) and isinstance(b.curve, Straight):
+            if isinstance(a.curve, (Straight, LineRange)) and isinstance(b.curve, (Straight, LineRange)):
+                if isinstance(a.curve, LineRange) or isinstance(b.curve, LineRange):
+                    verdict = _retained_line_pair_verdict(model, first, second, plane)
+                    if verdict:
+                        continue
+                else:
+                    verdict = None
+            else:
+                verdict = None
+            if verdict is not None:
+                pass
+            elif isinstance(a.curve, Straight) and isinstance(b.curve, Straight):
                 count = len(loops[loop_a])
                 adjacent = loop_a == loop_b and (abs(pos_a - pos_b) == 1 or abs(pos_a - pos_b) == count - 1)
                 p, q = frame.xy(np.asarray(_edge_points(model, first)))
@@ -490,6 +563,21 @@ def validate_plane_section_face(model, face_id: int) -> list[str]:
         loop_points = frame.xy(np.asarray([model.vertices[model.oriented_start_vertex(item)].position
                                            for item in loop], dtype=float))
         loop_extent = float(np.linalg.norm(np.ptp(loop_points, axis=0)))
+        if any(type(model.edges[item.edge].curve) is LineRange for item in loop):
+            from .planar_exact import ExactPlane
+            from .plane_section_plate import loop_area as exact_loop_area
+            exact_frame = ExactPlane.from_plane(plane)
+            try:
+                low, high = exact_loop_area(model, loop, exact_frame, lambda: None)
+                norm2 = sum(x*x for x in exact_frame.normal)
+                jacobian = math.nextafter(math.sqrt(float(norm2)), -math.inf)
+                if jacobian <= 0 or Fraction(jacobian)**2 > norm2:
+                    raise GeometryError('retained boundary area scale is not certified')
+                if not (low > 0 or high < 0) or min(abs(low), abs(high))*Fraction(jacobian) <= Fraction(model.tolerance.effective_area(loop_extent)):
+                    result.append(f'face {face_id} loop {index} has zero or uncertified retained boundary area')
+            except GeometryError as error:
+                result.append(f'face {face_id} loop {index}: {error}')
+            continue
         for item in loop:
             if isinstance(model.edges[item.edge].curve, PlaneNurbsCurve):
                 low, high = model.edges[item.edge].curve.bounds()

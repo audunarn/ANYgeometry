@@ -75,6 +75,10 @@ revision, topology/design snapshots, clone and strict audit. Clones retain regio
 UUIDs while rebinding every face/group handle to the clone owner (unless cloning
 with `preserve_identity=True`). Region-bearing documents use top-level schema 8 and their `solid_regions`
 field contains explicitly versioned records covered by the document checksum.
+Schema 8 also supports retained `LineRange` records. Either domain may occur
+alone or together; a LineRange-only document does not require `solid_regions`.
+Present region records remain strict, and materialized solid-prism feature
+history must retain its own matching region and complete face ownership.
 Documents without regions keep their previous schema versions and shape; old
 schema documents remain readable. A region field under schema 5, 6 or 7 is
 rejected rather than silently changing those older contracts. Strict decoding rejects malformed records,

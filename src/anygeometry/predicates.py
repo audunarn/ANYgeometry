@@ -405,8 +405,16 @@ class IntersectionComponent:
             from .exact_curves import EllipticArc, CylinderIntersectionCurve
             from .quadric_curves import QuadricIntersectionCurve
             from .branch_curves import BezierQuadricCurve
+            from .support_curves import PlaneNurbsCurve
+            from .nurbs_intersection_curve import NurbsSurfaceIntersectionCurve
+            if isinstance(self.analytic_curve, PlaneNurbsCurve):
+                from .nurbs_runtime_binding import validate_section_runtime
+                validate_section_runtime(self.analytic_curve)
+                if quality is not IntersectionQuality.VERIFIED_APPROXIMATE or certificate is None or not certificate.complete:
+                    raise GeometryError('implicit NURBS component requires complete residual qualification')
             if not isinstance(self.analytic_curve, (LinePath, BezierPath, EllipticArc, CylinderIntersectionCurve,
-                                                     QuadricIntersectionCurve, BezierQuadricCurve)):
+                                                     QuadricIntersectionCurve, BezierQuadricCurve, PlaneNurbsCurve,
+                                                     NurbsSurfaceIntersectionCurve)):
                 raise GeometryError("component analytic_curve must be an immutable exact curve")
         object.__setattr__(self, "direction", direction)
         object.__setattr__(self, "max_residual", residual)

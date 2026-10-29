@@ -251,9 +251,16 @@ def query_material_surface_regions(model, operands=None, *, expected_revision=No
 def validate_material_surface_regions_binding(model,result,*,cancellation_check=None):
     if not isinstance(result,MaterialSurfaceRegions):
         raise GeometryError('material region binding needs a MaterialSurfaceRegions result')
+    from ._material_validation_cache import (guarded_callback, validation_epoch, singleton_face,
+                                             contains, remember, validate_evidence_native)
+    cancellation_check = guarded_callback(model, result, cancellation_check, result.source.source_checksum)
     validate_trimmed_surface_charts_binding(model,result.source,cancellation_check=cancellation_check)
     signature=(result.source.source_checksum,definition_checksum(result))
-    if signature in _validated.get(model,()):
+    epoch = validation_epoch(model, result.source.source_checksum)
+    if not validate_evidence_native(result):
+        epoch = None
+    scope = singleton_face(model, result.source)
+    if contains(_validated, model, epoch, scope, signature):
         return
     expected=_regions(model,result.source,cancellation_check)
     if definition_checksum(expected)!=definition_checksum(result.regions):
@@ -261,8 +268,26 @@ def validate_material_surface_regions_binding(model,result,*,cancellation_check=
     _check(cancellation_check,'material region binding complete')
     if _serialized_model_state(model)['checksum']['value']!=result.source.source_checksum:
         raise GeometryError('material region source changed during validation')
-    previous=tuple(item for item in _validated.get(model,()) if item[0]==signature[0])
-    _validated[model]=(*previous[-7:],signature)
+    final_epoch = validation_epoch(model, signature[0])
+    validate_evidence_native(result)
+    if (epoch is not None and final_epoch != epoch) or definition_checksum(result) != signature[1]:
+        raise GeometryError('material region native or evidence binding changed during validation')
+    remember(_validated, model, epoch, scope, signature)
+
+
+def _support_positions(support,rows):
+    """World positions of ``(n, 2)`` support parameters.
+
+    The exact owner ``NurbsSurface`` type uses its public batched kernel (same normalized chart and
+    rational semantics as the scalar ``evaluate``, no approximation or cache). Any other support, an
+    empty row set, or a batch result of unexpected shape keeps the original scalar evaluation.
+    """
+    from .nurbs import NurbsSurface
+    if type(support) is NurbsSurface and len(rows):
+        batch=np.asarray(support.evaluate_many(rows),dtype=float)
+        if batch.shape==(len(rows),3):
+            return batch.copy()
+    return np.asarray([support.evaluate(*uv) for uv in rows],dtype=float).reshape(-1,3)
 
 
 def evaluate_material_surface_region(model,result,face,parameters,*,derivatives=False,
@@ -281,7 +306,7 @@ def evaluate_material_surface_region(model,result,face,parameters,*,derivatives=
     if region is None:
         raise GeometryError('face is not selected by the material region binding')
     values,rows=_rows(parameters)
-    positions=np.asarray([region.support.evaluate(*uv) for uv in rows],dtype=float).reshape(-1,3)
+    positions=_support_positions(region.support,rows)
     if require_material:
         for point in positions:
             _check(cancellation_check,'material region membership')

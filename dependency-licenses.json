@@ -55,6 +55,14 @@
       "requirement": "wheel",
       "scope": "build",
       "upstream": "https://github.com/pypa/wheel"
+    },
+    {
+      "bundled": false,
+      "license_expression": "BSD-3-Clause",
+      "name": "mpmath",
+      "requirement": "mpmath>=1.3",
+      "scope": "optional:test",
+      "upstream": "https://mpmath.org/"
     }
   ],
   "project": "ANYgeometry",

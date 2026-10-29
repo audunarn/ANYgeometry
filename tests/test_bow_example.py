@@ -139,7 +139,9 @@ _SECTION_PLANES = {
     "side": ((0., 5.5, 0.), (1., 0., 0.), (0., 0., 1.)),             # aft side boundary (G1: tangent)
     "bottom": ((0., 0., 0.), (1., 0., 0.), (0., 1., 0.)),            # aft bottom boundary (G1: tangent)
 }
-_BOX_EDGE = "the section runs along a box edge"
+# plane_nurbs_section retries two alternate certified subdivisions before refusing, so a section
+# along a box edge now ends with the final refusal below
+_BOX_EDGE = "section contacts remain uncertified after alternate subdivision"
 # expected outcome per (plane, join), absent = certified; a string = the exact refusal message; a chart
 # point = a singular box (smaller than 1e-3) containing that chart corner
 _SECTION_OUTCOMES = {

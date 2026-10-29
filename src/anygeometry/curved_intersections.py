@@ -1968,6 +1968,14 @@ def qualified_face_face(
             diagnostics=("face_bounds_disjoint",),
             separation=separation,
         )
+    from ._translational_pairs import separated_sweep_connectors, topology_boundary_uv
+    sweep_connectors = separated_sweep_connectors(model, first.id, second.id)
+    if sweep_connectors == ():
+        return _result(
+            first, second, IntersectionKind.DISJOINT, tolerance=tolerance,
+            algorithm="exact_translational_nurbs_profiles",
+            diagnostics=("rational_profile_hulls_disjoint",),
+        )
     first_edges = {
         oriented.edge
         for loop in (model.faces[first.id].loop,) + model.faces[first.id].holes
@@ -1986,14 +1994,18 @@ def qualified_face_face(
             count = 2 if isinstance(curve, Straight) else 17
             parameters = np.linspace(0.0, 1.0, count)
             points = _edge_points(model, edge_id, parameters)
-            first_path = tuple(
-                tuple(float(value) for value in model.face_support_local_uv(first.id, point))
-                for point in points
-            )
-            second_path = tuple(
-                tuple(float(value) for value in model.face_support_local_uv(second.id, point))
-                for point in points
-            )
+            def boundary_path(face_id):
+                result = []
+                for parameter, point in zip(parameters, points):
+                    uv = (topology_boundary_uv(model, face_id, edge_id, parameter)
+                          if sweep_connectors is not None and edge_id in sweep_connectors
+                          else None)
+                    if uv is None:
+                        uv = model.face_support_local_uv(face_id, point)
+                    result.append(tuple(float(value) for value in uv))
+                return tuple(result)
+            first_path = boundary_path(first.id)
+            second_path = boundary_path(second.id)
             certificate = _certificate(
                 "shared_topology_edge",
                 tolerance,
