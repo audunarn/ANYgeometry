@@ -316,4 +316,3 @@ def decode_regions(model, records):
         if region.region_id in model.solid_regions:
             raise GeometryError("duplicate solid region identity")
         model._solid_regions[region.region_id] = region
-
