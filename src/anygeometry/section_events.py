@@ -96,6 +96,57 @@ def contract_crossing(context, *, accept=None):
     return view.uv(s_range, x_range)
 
 
+def _exact_affine_segment_event(context, chart, pcurve, axis):
+    """Independent exact witness; sign_at()==0 alone never supplies a root.
+
+    None retains the existing classifier; False certifies no crossing in the
+    active piece. A returned event proves a transverse strict-interior root.
+    """
+    from .plane_nurbs import charge_box
+    from .curve_parameter_matching import _cooperative_tick
+    _cooperative_tick()
+    charge_box()
+    def affine(net):
+        p, q = len(net)-1, len(net[0])-1
+        c = net[0][0]
+        a, b = net[-1][0]-c, net[0][-1]-c
+        if any(value != c+a*(Q(i, p) if p else 0)+b*(Q(j, q) if q else 0)
+               for i, row in enumerate(net) for j, value in enumerate(row)):
+            return None
+        return a, b, c
+    view = context.view
+    first, second = affine(view.g1), affine(view.g2)
+    if first is None or second is None:
+        return None
+    a, b, c = first
+    d, e, f = second
+    determinant = a*e-b*d
+    if not determinant or not (b if view.slicing == 0 else a):
+        return None
+    u, v = (b*f-c*e)/determinant, (c*d-a*f)/determinant
+    if not (0 <= u <= 1 and 0 <= v <= 1):
+        return False
+    u = view.u_box[0]+u*(view.u_box[1]-view.u_box[0])
+    v = view.v_box[0]+v*(view.v_box[1]-view.v_box[0])
+    s = u if view.slicing == 0 else v
+    if not min(context.s_from, context.s_to) <= s <= max(context.s_from, context.s_to):
+        return False
+    tau = (s-view.arc.s0)/(view.arc.s1-view.arc.s0)
+    parameter = ((Q(context.k)+tau)/context.count-context.a)/(context.b-context.a)
+    point = chart.point(u, v)
+    start, end = (pcurve.exact_point(t)[axis] for t in (0, 1))
+    low, high = min(start, end), max(start, end)
+    if point[axis] < low or point[axis] > high:
+        return False
+    if point[axis] in (low, high):
+        return None
+    segment_parameter = rational_segment_parameter(pcurve, axis, point[axis])
+    if not (0 < parameter < 1 and 0 < segment_parameter < 1):
+        return None  # Boundary identities retain the existing conservative path.
+    rect = ((point[0], point[0]), (point[1], point[1]))
+    return SectionSegmentEvent((parameter, parameter), (segment_parameter, segment_parameter), rect)
+
+
 def section_segment_events(section, segment, *, cancellation_check=None):
     """All transverse interior crossings; contact/tangency/coincidence refuses.
 
@@ -136,6 +187,18 @@ def section_segment_events(section, segment, *, cancellation_check=None):
     def classify(context):
         if cancellation_check is not None and cancellation_check():
             raise GeometryError('section crossing cancelled')
+        exact = _exact_affine_segment_event(context, chart, pcurve, axis)
+        if exact is False:
+            return 'done'
+        if exact is not None:
+            parameter = exact.section_interval[0]
+            previous = endpoint_events.get(parameter)
+            if previous is not None and previous != exact:
+                raise PlaneNurbsNotCertified('exact section crossing identities disagree')
+            if previous is None:
+                events.append(exact)
+                endpoint_events[parameter] = exact
+            return 'done'
         low, high = context.g2_range()
         if low > 0 or high < 0:
             return 'done'

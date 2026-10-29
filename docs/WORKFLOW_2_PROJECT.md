@@ -837,3 +837,19 @@ handoffs and non-author development review are retained in the existing
 ci-blockers-20261029-a1 record. Full geometry CI, the pre-cropped source predicate
 and the full near-tangent plan remain open gates. This candidate does not
 promote the provider, alter Workflow1 NO_GO or authorize merge/publication.
+
+### Focused pre-cropped event repair
+
+A subsequent bounded continuation resolves the valid pre-cropped regression:
+both forward/reversed production plan, split and source-transfer cases pass.
+The section event owner now proves two Bernstein polynomials exactly affine,
+solves their rational transverse intersection and retains the exact native
+section/segment parameters. Active-domain checks precede rational inversion;
+outside line extensions, poles, endpoints, coincidence and unsupported cases
+receive no new acceptance. Independent public section-enclosure checks cover
+both reversals, and cancellation/work accounting remain. Root's non-author
+review caught the required outside-domain inverse guard before integration.
+
+The earlier inset failures, partial timeout and corrected test oracle remain
+evidence. The original full near-tangent-plan verification gap and full hosted
+geometry gate remain open. No qualification limits or failed records change.
