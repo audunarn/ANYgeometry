@@ -223,18 +223,20 @@ def test_holes_keep_one_existing_uv_frame(monkeypatch: pytest.MonkeyPatch) -> No
     )
     punch_hole(geometry, face, (2.0, 2.0, 0.0), 0.5)
     geometry.set_face_surface(face, CoonsSurface())
-    original = model_module.closest_uv
+    original = GeometryModel._face_local_uv_rows
     calls = 0
 
-    def spy(*args: object, **kwargs: object) -> tuple[float, float]:
+    def spy(self, face_id, points):
         nonlocal calls
-        calls += 1
-        return original(*args, **kwargs)
+        # Count projected points through the shared inverse, whether its
+        # implementation evaluates those points individually or in batches.
+        calls += len(points)
+        return original(self, face_id, points)
 
     def forbidden_exact(*_args: object, **_kwargs: object) -> np.ndarray:
         raise AssertionError("hole-bearing face mixed canonical and projected UV")
 
-    monkeypatch.setattr(model_module, "closest_uv", spy)
+    monkeypatch.setattr(GeometryModel, "_face_local_uv_rows", spy)
     monkeypatch.setattr(
         GeometryModel, "_topology_coons_outer_loop_uv", forbidden_exact
     )

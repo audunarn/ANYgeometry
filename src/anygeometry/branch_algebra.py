@@ -416,18 +416,29 @@ class PolyFloatSystem:
     def __init__(self, plan):
         first = plan.first
         self.plan = plan
-        self.origin = np.asarray(first.origin)
+        # A plane ruled support keeps a rational chart origin: the exact algebra above received it unrounded and the
+        # evaluator rounds it once (explicit, bounded: half an ulp per coordinate).
+        float_origin = getattr(first, "float_origin", None)
+        if float_origin is None:
+            float_origin = first.origin
+        self.origin = np.asarray(float_origin, dtype=float)
         self.direction = np.asarray(first.direction)
         self.a0 = float(plan.A[0])
         self.B_forms = _bernstein_orders(plan.B)
         self.C_forms = _bernstein_orders(plan.C)
         self.D_forms = _bernstein_orders(plan.disc)
-        self.P_forms = tuple(_control_orders([Fraction(point[axis]) - Fraction(first.controls[0][axis])
-                                              for point in first.controls]) for axis in range(3))
+        relative = getattr(first, "relative_controls", None)
+        if relative is not None:
+            controls = relative()
+            self.P_forms = tuple(_control_orders([Fraction(point[axis]) for point in controls])
+                                 for axis in range(3))
+        else:
+            self.P_forms = tuple(_control_orders([Fraction(point[axis]) - Fraction(first.controls[0][axis])
+                                                  for point in first.controls]) for axis in range(3))
         self.scale = max([abs(float(v)) for poly in (plan.A, plan.B, plan.C) for v in poly] + [1e-300])
         self._hforms = {}
         self._gforms = {}
-        self.origin_tuple = tuple(float(v) for v in first.origin)
+        self.origin_tuple = tuple(float(v) for v in float_origin)
         self.direction_tuple = tuple(float(v) for v in first.direction)
 
     # -- scalars (the arrangement calls these tens of thousands of times)

@@ -19,6 +19,7 @@ import numpy as np
 
 from .branch_algebra import BezierRuledSupport, directrix_of, get_poly_plan
 from .errors import GeometryError
+from .plane_ruled import PlaneRuledSupport
 from .quadric_algebra import QuadricSupport
 from .quadric_curves import (IDENTITY, MODES, _affine, _iadd, _imul, _iscale, _unit_parameters)
 
@@ -68,8 +69,8 @@ class BezierQuadricCurve:
                               metadata={"definition": False})
 
     def __post_init__(self):
-        if not isinstance(self.first, BezierRuledSupport):
-            raise GeometryError("the first support of a Bezier quadric curve is a Bezier ruled support")
+        if not isinstance(self.first, (BezierRuledSupport, PlaneRuledSupport)):
+            raise GeometryError("the first support of a Bezier quadric curve is a Bezier or plane ruled support")
         object.__setattr__(self, "second", QuadricSupport.from_surface(self.second))
         try:
             start, sweep = float(self.start), float(self.sweep)
@@ -560,10 +561,15 @@ class BezierQuadricCurve:
         if not self._identity:
             inverse = np.linalg.inv(np.asarray(self.transform))
             return self._reference_copy().parameters_of(inverse[:3, :3] @ point + inverse[:3, 3], tolerance=tolerance)
-        directrix = directrix_of(self.first)
-        direction = np.asarray(self.first.direction)
-        s = float((point - np.asarray(directrix.origin)) @ directrix.normal / float(directrix.normal @ direction))
-        t = directrix.invert_one(point - s * direction)
+        if isinstance(self.first, PlaneRuledSupport):
+            # The stored plane inverts directly in its own (directrix, ruling) coordinates: no Bezier directrix and
+            # no least squares. A point off the plane by more than the tolerance never reaches the polish below.
+            t = float(self.first.chart_parameter(point))
+        else:
+            directrix = directrix_of(self.first)
+            direction = np.asarray(self.first.direction)
+            s = float((point - np.asarray(directrix.origin)) @ directrix.normal / float(directrix.normal @ direction))
+            t = directrix.invert_one(point - s * direction)
         lo, hi = sorted((self.start, self.start + self.sweep))
         margin = max(1e-9, tolerance)
         if not lo - margin <= t <= hi + margin:

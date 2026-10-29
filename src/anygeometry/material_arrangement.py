@@ -12,10 +12,11 @@ import functools
 import heapq
 import itertools
 import math
+from contextlib import nullcontext
 import numpy as np
 
 from .arrangement_geometry import (LinePath, BezierPath, curve_junctions,
-                                   plane_roots, point_parameters, freeze_edge)
+                                   plane_roots, point_parameters, freeze_edge, _junction_bounds_policy)
 from .exact_curves import EllipticArc, CylinderIntersectionCurve
 from .branch_curves import BezierQuadricCurve
 from .quadric_curves import QuadricIntersectionCurve
@@ -1602,6 +1603,16 @@ def _parameters(values, tolerance, curve=None):
 
 def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
                      max_predicates=None, area_tolerance=None, points=()):
+    """Return complete cells, preserving explicit predicate-budget semantics."""
+    context = _junction_bounds_policy(False) if max_predicates is not None else nullcontext()
+    with context:
+        return _arrange_material(domain, traces, tolerance=tolerance,
+                                 cancellation_check=cancellation_check, max_predicates=max_predicates,
+                                 area_tolerance=area_tolerance, points=points)
+
+
+def _arrange_material(domain, traces, *, tolerance, cancellation_check=None,
+                      max_predicates=None, area_tolerance=None, points=()):
     """Return the complete arrangement, or raise without returning partial cells.
 
     ``max_predicates`` is an explicit optional resource budget; default planning

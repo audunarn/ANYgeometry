@@ -10,9 +10,12 @@ block exits through an exception.
 Counting is strictly observational. Increments are a no-op when no collector
 is active, and counters never influence geometry decisions, validation or
 serialized output. The module holds no model state and persists nothing.
+Timing keys ending in ``_time_ns`` are inclusive wall-clock nanoseconds;
+nested phases overlap and must not be summed as exclusive phase durations.
 """
 from contextlib import contextmanager
 from contextvars import ContextVar
+from time import perf_counter_ns
 
 COUNTER_KEYS = ("attachment_clip_calls", "attachment_bounds_tests",
                 "attachment_bounds_pruned")
@@ -39,3 +42,16 @@ def _increment(key, amount=1):
         return
     for counters in collectors:
         counters[key] = counters.get(key, 0) + amount
+
+
+@contextmanager
+def _timed_phase(name):
+    """Accumulate observational nanoseconds, including failed phases."""
+    if not _COLLECTORS.get():
+        yield
+        return
+    start = perf_counter_ns()
+    try:
+        yield
+    finally:
+        _increment(name + '_time_ns', perf_counter_ns() - start)

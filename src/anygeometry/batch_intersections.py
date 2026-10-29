@@ -9,15 +9,17 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from itertools import combinations
 import math
+from contextlib import nullcontext
 from uuid import UUID
 
 import numpy as np
+from .runtime_diagnostics import _timed_phase, _increment
 
 from ._cross3 import _cross3
 from .analytic_roots import root_isolation_memo
 from .analytic_supports import plane_cylinder_support, cylinder_cylinder_support
 from .arrangement_geometry import (LinePath, BezierPath, freeze_edge,
-                                   point_parameters, curve_junctions)
+                                   point_parameters, curve_junctions, _junction_bounds_policy)
 from .entities import EntityRef, OrientedEdge
 from .curves import Straight
 from .errors import GeometryError
@@ -374,8 +376,28 @@ def _coincident_cylinder_rectangles(first, second, model, tolerance):
     return tuple(paths)
 
 
-def _pair_paths(first, second, model, tolerance, check, *, point_contacts=None):
+def _face_arrangement_tolerance(model, domain):
+    """EXACTLY the planner's per-face arrangement tolerance: ``effective_length(norm(hi - lo))`` of the domain bounds."""
+    lo, hi = _domain_bounds(domain)
+    return model.tolerance.effective_length(float(np.linalg.norm(hi - lo)))
+
+
+def _owning_tolerance(tolerance, face_tolerances):
+    """The strictest of the pair tolerance and BOTH owning faces' arrangement tolerances.
+
+    The pair tolerance is the one of the LONGER face, so it can exceed either owner's; each face's arrangement
+    later uses its own limit, so supports are qualified at the strictest.
+    """
+    return min(float(tolerance), *(float(v) for v in face_tolerances))
+
+
+def _pair_paths(first, second, model, tolerance, check, *, point_contacts=None, face_tolerances=None):
     a, b = first.support, second.support
+    family = ('plane_plane' if isinstance(a, Plane) and isinstance(b, Plane) else
+              'plane_cylinder' if isinstance(a, (Plane, Cylinder)) and isinstance(b, (Plane, Cylinder))
+              and (isinstance(a, Plane) or isinstance(b, Plane)) else
+              'cylinder_cylinder' if isinstance(a, Cylinder) and isinstance(b, Cylinder) else 'other')
+    _increment('intersection_pair_' + family)
     if isinstance(a, Plane) and isinstance(b, Plane):
         result = qualified_plane_plane(a, b, policy=model.tolerance)
         if not result.classified:
@@ -401,11 +423,18 @@ def _pair_paths(first, second, model, tolerance, check, *, point_contacts=None):
         if result.coincident:
             return _coplanar_traces(first, second, tolerance, check, model)
         paths = (*result.curves, *(LinePath(start, end) for start, end in result.segments))
-    elif isinstance(a, Plane) and isinstance(b, Cylinder):
-        result = plane_cylinder_support(a, b, tolerance=tolerance, cancellation_check=lambda: (check() or False))
-        paths = (*result.curves, *(LinePath(start, end) for start, end in result.segments))
-    elif isinstance(a, Cylinder) and isinstance(b, Plane):
-        result = plane_cylinder_support(b, a, tolerance=tolerance, cancellation_check=lambda: (check() or False))
+    elif (isinstance(a, Plane) and isinstance(b, Cylinder)) or (isinstance(a, Cylinder) and isinstance(b, Plane)):
+        plane, cylinder = (a, b) if isinstance(a, Plane) else (b, a)
+        pair = (first.face_id, second.face_id)
+        # Supports are qualified per pair, before anything is accumulated, with the STRICTEST owning-face tolerance
+        # (never larger than the pair tolerance) against the stored plane and cylinder.
+        if face_tolerances is None:
+            face_tolerances = (_face_arrangement_tolerance(model, first), _face_arrangement_tolerance(model, second))
+        strict = _owning_tolerance(tolerance, face_tolerances)
+        result = plane_cylinder_support(plane, cylinder, tolerance=strict,
+                                        cancellation_check=lambda: (check() or False), face_pair=pair)
+        from .plane_ruled import qualify_plane_cylinder_result
+        qualify_plane_cylinder_result(result, plane, cylinder, strict, pair)
         paths = (*result.curves, *(LinePath(start, end) for start, end in result.segments))
     else:
         result = cylinder_cylinder_support(a, b, tolerance=tolerance, cancellation_check=lambda: (check() or False))
@@ -420,8 +449,9 @@ def _pair_paths(first, second, model, tolerance, check, *, point_contacts=None):
             return _clip(domain,curve,tolerance,check)
         return tuple(curve.subcurve(a,b) for a,b in _clip_intervals(
             domain,curve,tolerance,check,isolated_contacts=candidates))
-    curves=tuple(part for path in paths for clipped in clip(first,path)
-                 for part in clip(second,clipped))
+    with _timed_phase('intersection_clipping'):
+        curves=tuple(part for path in paths for clipped in clip(first,path)
+                     for part in clip(second,clipped))
     if point_contacts is not None:
         for point in candidates:
             check()
@@ -455,7 +485,8 @@ def plan_intersections(model, operands, *, policy):
         return plan
     if native is not None and any(kind not in ('plane','cylinder') for _,kind,_ in native):
         raise GeometryError('epoch planning native support binding is unavailable')
-    with root_isolation_memo():
+    junction_policy = _junction_bounds_policy(False) if effective.max_predicates is not None else nullcontext()
+    with root_isolation_memo(), _timed_phase('intersection_planning'), junction_policy:
         plan=_plan_intersections(model, operands, policy=policy)
     if native is not None:
         if (capture_native_supports(model)!=native or model.model_id!=plan.model_id or
@@ -535,9 +566,59 @@ def _plan_intersections(model, operands, *, policy):
         # These compatibility surfaces have no general axis/support predicate.
         # Never silently omit a requested beam/shell relation.
         raise GeometryError("member intersections with nonplanar Coons supports are unsupported")
-    for first_id, second_id in combinations(sorted(domains), 2):
-        if not policy.face_connections:
-            break
+    from .runtime_diagnostics import _increment
+    ordered_faces = sorted(domains)
+
+    def account_skipped(count):
+        """Preserve logical predicate charges; poll cancellation in bounded chunks."""
+        nonlocal examined
+        while count > 0:
+            step = min(count, 4096)
+            examined += step
+            if policy.cancellation_check is not None and policy.cancellation_check():
+                raise GeometryError("intersection planning cancelled")
+            if policy.max_predicates is not None and examined > policy.max_predicates:
+                raise GeometryError("intersection planning predicate budget exhausted")
+            count -= step
+
+    def candidate_face_pairs():
+        """The pairs of ``combinations(sorted(domains), 2)`` that can pass the final box predicate, in that order.
+
+        A conservative sorted sweep with the WIDEST pair tolerance (the pair
+        tolerance is monotone in the longer face's length, so it never rejects a pair the exact predicate keeps).
+        Rejected pairs are charged to the logical predicate budget and the cancellation poll as before; the exact
+        per-pair predicate below is unchanged and decides every candidate, so the candidate sequence equals the
+        exhaustive one.
+        """
+        if not policy.face_connections or len(ordered_faces) < 2:
+            return
+        # Explicit ceilings retain lazy traversal and its refusal order;
+        # building a dense candidate list must not precede a small budget.
+        if policy.max_predicates is not None or policy.max_candidate_pairs is not None:
+            yield from combinations(ordered_faces, 2)
+            return
+        longest, shortest = max(lengths.values()), min(lengths.values())
+        wide = max(model.tolerance.effective_length(longest), model.tolerance.effective_length(shortest))
+        count = len(ordered_faces)
+        _increment("batch_face_pairs_total", count * (count - 1) // 2)
+        from .intersection_candidates import swept_face_pairs
+        def poll():
+            if policy.cancellation_check is not None and policy.cancellation_check():
+                raise GeometryError("intersection planning cancelled")
+        positions = {face: i for i, face in enumerate(ordered_faces)}
+        last_ordinal = -1
+        with _timed_phase('intersection_candidates'):
+            selected_pairs = swept_face_pairs(domain_bounds, wide, poll=poll)
+        for first, second in selected_pairs:
+            i, j = positions[first], positions[second]
+            ordinal = i * (2 * count - i - 1) // 2 + j - i - 1
+            account_skipped(ordinal - last_ordinal - 1)
+            last_ordinal = ordinal
+            _increment("batch_face_pairs_candidates")
+            yield first, second
+        account_skipped(count * (count - 1) // 2 - last_ordinal - 1)
+
+    for first_id, second_id in candidate_face_pairs():
         check()
         first, second = domains[first_id], domains[second_id]
         tolerance = model.tolerance.effective_length(max(lengths[first_id], lengths[second_id]))
@@ -547,7 +628,10 @@ def _plan_intersections(model, operands, *, policy):
         check_pair()
         try:
             pair_points=[]
-            pair_paths = _pair_paths(first, second, model, tolerance, check,point_contacts=pair_points)
+            with _timed_phase('intersection_support_and_clipping'):
+                pair_paths = _pair_paths(first, second, model, tolerance, check,point_contacts=pair_points,
+                                         face_tolerances=(model.tolerance.effective_length(lengths[first_id]),
+                                                          model.tolerance.effective_length(lengths[second_id])))
         except GeometryError as exc:
             raise GeometryError(f"intersection batch face:{first_id}/face:{second_id}: {exc}") from exc
         for curve in pair_paths:
@@ -565,11 +649,12 @@ def _plan_intersections(model, operands, *, policy):
         if not traces[face_id] and not points[face_id]:
             continue
         try:
-            arrangement = arrange_material(domain, traces[face_id],
-                tolerance=model.tolerance.effective_length(lengths[face_id]),
-                area_tolerance=model.tolerance.effective_area(lengths[face_id]),
-                points=points[face_id],
-                cancellation_check=lambda: (check() or False))
+            with _timed_phase('intersection_arrangements'):
+                arrangement = arrange_material(domain, traces[face_id],
+                    tolerance=model.tolerance.effective_length(lengths[face_id]),
+                    area_tolerance=model.tolerance.effective_area(lengths[face_id]),
+                    points=points[face_id],
+                    cancellation_check=lambda: (check() or False))
         except GeometryError as exc:
             raise GeometryError(f"intersection material arrangement face:{face_id}: {exc}") from exc
         arrangements.append(_normalise_cells(arrangement))
@@ -1219,7 +1304,8 @@ def apply_intersections(model, plan, *, policy):
     Failed or cancelled candidates never consume live allocator IDs. This is
     stronger than the normal edit transaction's monotonic allocation rule.
     """
-    with root_isolation_memo():
+    junction_policy = _junction_bounds_policy(False) if _policy(policy).max_predicates is not None else nullcontext()
+    with root_isolation_memo(), _timed_phase('intersection_application'), junction_policy:
         return _apply_intersections(model, plan, policy=policy)
 
 

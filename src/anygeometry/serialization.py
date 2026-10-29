@@ -27,6 +27,7 @@ from .exact_curves import EllipticArc, CylinderIntersectionCurve
 from .quadric_algebra import EllipticRuledSupport, QuadricSupport, RuledSupport
 from .branch_algebra import BezierRuledSupport
 from .branch_curves import BezierQuadricCurve
+from .plane_ruled import PlaneRuledSupport
 from .nurbs import CurveOnSurface, NurbsCurve, NurbsSurface, nurbs_from_record, nurbs_record
 from .support_curves import PlaneNurbsCurve, plane_nurbs_from_record, plane_nurbs_record
 from .quadric_curves import QuadricIntersectionCurve
@@ -1556,10 +1557,21 @@ def _decode_quadric_support(second):
 _BEZIER_CURVE_FIELDS = {"first", "second", "start", "sweep", "branch", "parameterization", "transform"}
 
 
+def _plane_ruled_first_record(first):
+    # Additive variant ``plane_ruled`` (capability ``plane_ruled_support/1``): the stored plane vectors and the
+    # window doubles; every field is a double, so the record round-trips bit-exactly. Older readers refuse the kind.
+    return {"kind": "plane_ruled", "base": list(first.base), "directrix_vector": list(first.directrix_vector),
+            "ruling": list(first.ruling), "t0": first.t0, "length": first.length}
+
+
 def _bezier_quadric_curve_record(curve):
+    if isinstance(curve.first, PlaneRuledSupport):
+        first_record = _plane_ruled_first_record(curve.first)
+    else:
+        first_record = {"kind": "bezier", "controls": [list(point) for point in curve.first.controls],
+                        "direction": list(curve.first.direction)}
     return {"type": "bezier_quadric_intersection",
-            "first": {"kind": "bezier", "controls": [list(point) for point in curve.first.controls],
-                      "direction": list(curve.first.direction)},
+            "first": first_record,
             "second": _quadric_support_record(curve.second),
             **{name: getattr(curve, name) for name in ("start", "sweep", "branch", "parameterization", "transform")}}
 
@@ -1567,6 +1579,16 @@ def _bezier_quadric_curve_record(curve):
 def _decode_bezier_quadric_curve(data):
     _exact_fields(data, required={"type", *_BEZIER_CURVE_FIELDS}, name="Bezier quadric intersection curve")
     first, second = _object(data["first"], "Bezier first support"), _object(data["second"], "quadric second support")
+    if first.get("kind") == "plane_ruled":
+        _exact_fields(first, required={"kind", "base", "directrix_vector", "ruling", "t0", "length"},
+                      name="plane ruled first support")
+        for name in ("base", "directrix_vector", "ruling"):
+            if not isinstance(first[name], (list, tuple)):
+                raise GeometryError("plane ruled support vectors must be lists")
+        ruled = PlaneRuledSupport(tuple(first["base"]), tuple(first["directrix_vector"]), tuple(first["ruling"]),
+                                  first["t0"], first["length"])
+        return BezierQuadricCurve(ruled, _decode_quadric_support(second), data["start"], data["sweep"],
+                                  data["branch"], data["parameterization"], data["transform"])
     _exact_fields(first, required={"kind", "controls", "direction"}, name="Bezier first support")
     if first["kind"] != "bezier":
         raise GeometryError("Bezier quadric first support must be a Bezier ruled support")

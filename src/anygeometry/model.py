@@ -5468,7 +5468,7 @@ class GeometryModel:
         elif len(face.corners) == 4:
             try:
                 polygons = [
-                    np.asarray([self.face_local_uv(face_id, point) for point in points])
+                    self._validation_face_local_uv_many(face_id, points)
                     for points in points_3d
                 ]
             except (ValueError, GeometryError, np.linalg.LinAlgError) as error:
@@ -7044,11 +7044,13 @@ class GeometryModel:
                          (type(face.surface) is CoonsSurface and not face.surface.has_boundaries))
                     and self._batch_topology_supported(face))
 
-    def _batch_topology_supported(self, face):
+    def _batch_topology_supported(self, face, *, _validation=False):
         from .nurbs import NurbsCurve
-        return (type(self) is GeometryModel and self._transaction_journal is None
+        from .exact_curves import EllipticArc
+        return (type(self) is GeometryModel
+                and (self._transaction_journal is None or _validation)
                 and len(face.corners) == 4
-                and all(len(side) == 1 and type(self.edges[side[0].edge].curve) in (NurbsCurve, Straight)
+                and all(len(side) == 1 and type(self.edges[side[0].edge].curve) in (NurbsCurve, Straight, EllipticArc)
                         for side in face.sides()))
 
     def _topology_face_points_many(self, face_id, values, *, _derivatives=False):
@@ -7057,11 +7059,21 @@ class GeometryModel:
             empty = np.empty((0, 3), dtype=float)
             return (empty, empty.copy(), empty.copy()) if _derivatives else empty
         face = self._require_face(face_id)
-        cached = self._topology_corner_cache.get(int(face_id))
-        if cached is None or cached[0] != self._revision or cached[1] is not face:
-            self._topology_face_point(face_id, float(values[0, 0]), float(values[0, 1]))
-            cached = self._topology_corner_cache[int(face_id)]
-        data, corners = cached[2], cached[3]
+        if self._transaction_journal is not None:
+            # Validation also runs before a transaction commits. Build only
+            # call-local data there: a revision cache cannot identify edits
+            # within the transaction, and must neither be read nor written.
+            data = tuple(self._chain_data(side) for side in face.sides())
+            corners = (self._chain_eval(data[0], 0., _point_only=True)[0],
+                       self._chain_eval(data[0], 1., _point_only=True)[0],
+                       self._chain_eval(data[2], 0., _point_only=True)[0],
+                       self._chain_eval(data[2], 1., _point_only=True)[0])
+        else:
+            cached = self._topology_corner_cache.get(int(face_id))
+            if cached is None or cached[0] != self._revision or cached[1] is not face:
+                self._topology_face_point(face_id, float(values[0, 0]), float(values[0, 1]))
+                cached = self._topology_corner_cache[int(face_id)]
+            data, corners = cached[2], cached[3]
 
         def points(chain_data, fractions):
             chain, lengths, total, cumulative, edges = chain_data
@@ -7197,6 +7209,20 @@ class GeometryModel:
                 return closest_uv(self, candidate)
 
         return closest_uv(_TopologySurface(), point)
+
+    def _validation_face_local_uv_many(self, face_id, points):
+        """Project validation samples without caching uncommitted geometry."""
+        face = self._require_face(face_id)
+        evaluable = face.parameterization if face.parameterization is not None else face.surface
+        if (self._transaction_journal is not None
+                and self._batch_topology_supported(face, _validation=True)
+                and (evaluable is None or
+                     type(evaluable) is CoonsSurface and not evaluable.has_boundaries)
+                and getattr(self.face_point, '__func__', None) is GeometryModel.face_point):
+            return _closest_uv_many(None, np.asarray(points, dtype=float),
+                _evaluate=lambda uv: self._topology_face_points_many(face_id, uv),
+                _batch_samples=True)
+        return self.face_local_uv_many(face_id, points)
 
     def face_local_uv_many(
         self, face_id: int, points: Sequence[Sequence[float]] | np.ndarray

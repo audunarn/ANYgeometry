@@ -55,7 +55,7 @@ def _inside(cylinder, point, tolerance):
     return -angular <= u <= 1+angular and -axial <= v <= 1+axial
 
 
-def plane_cylinder_support(plane, cylinder, *, tolerance=1e-10, cancellation_check=None):
+def plane_cylinder_support(plane, cylinder, *, tolerance=1e-10, cancellation_check=None, face_pair=None):
     """All exact intersections within a Cylinder's native finite rectangle."""
     if not isinstance(plane, Plane) or not isinstance(cylinder, Cylinder):
         raise GeometryError("analytic plane/cylinder intersection needs Plane and Cylinder")
@@ -65,7 +65,27 @@ def plane_cylinder_support(plane, cylinder, *, tolerance=1e-10, cancellation_che
     cosine, sine = cylinder.radius*float(e1 @ normal), cylinder.radius*float(e2 @ normal)
     axial = float(cylinder.axis @ normal)
     angle_tolerance = tolerance/max(cylinder.radius, 1.)
-    if axial == 0:
+    # Route by the EXACT determinant of the stored doubles (the rounded normal's axial coefficient can be zero when
+    # the stored plane is not parallel to the axis and nonzero when it is).
+    from .plane_ruled import elliptic_route_bound, exact_parallel
+    parallel = exact_parallel(plane, cylinder)
+    if not parallel:
+        admissible = False
+        if axial != 0:
+            with np.errstate(all="ignore"):
+                c0 = cylinder.origin-center/axial*cylinder.axis
+                u_vec = cylinder.radius*e1-cosine/axial*cylinder.axis
+                v_vec = cylinder.radius*e2-sine/axial*cylinder.axis
+            admissible = elliptic_route_bound(plane, cylinder, c0, u_vec, v_vec,
+                                              limit=.25*tolerance) <= .25*tolerance
+        from .runtime_diagnostics import _increment
+        if not admissible:
+            from .plane_ruled_support import plane_ruled_cylinder_support
+            _increment("plane_cylinder_plane_chart_routes")
+            return plane_ruled_cylinder_support(plane, cylinder, tolerance=tolerance,
+                                                cancellation_check=cancellation_check, face_pair=face_pair)
+        _increment("plane_cylinder_elliptic_routes")
+    if parallel:
         # A Cylinder's orthonormal frame is part of its support definition.
         # Expanding a tangent into independently rounded sine/cosine coefficients
         # can give their exact-rational polynomial zero or two roots instead of
