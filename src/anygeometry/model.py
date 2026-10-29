@@ -101,6 +101,26 @@ from .structural import (
 # GeometryError is re-exported for temporary compatibility imports.
 __all__ = ["GeometryError", "GeometryModel", "StructuralValidationDiagnostics"]
 
+# Largest excursion of a chain's local edge parameter past [0, 1] that ``_chain_eval`` attributes
+# to rounding and snaps to the nearest end (8 ulp of 1.0, about 1.8e-15).
+# Justification: the fraction is clamped to [0, 1] and the edge index brackets the target, so
+# in real arithmetic on the stored lengths the local parameter lies in [0, 1]. The computed value
+# differs from it only by the rounding of sum/cumsum, one subtraction and one division. With
+# neighbouring edges of comparable length (total/length well below ~14) that is a few ulp; the
+# observed case is 1 ulp (1.0000000000000002 at fraction 1 on a two-arc side). A larger excursion
+# (a very short edge next to a long chain) is not snapped: it keeps the old path and its error.
+_CHAIN_LOCAL_ROUNDING_SLACK = 8.0 * float(np.finfo(float).eps)
+
+
+def _snap_chain_local_rounding(parameter: float) -> float | None:
+    """The nearest end of [0, 1] for a rounding-level excursion past it, else ``None``."""
+
+    if 1.0 < parameter <= 1.0 + _CHAIN_LOCAL_ROUNDING_SLACK:
+        return 1.0
+    if -_CHAIN_LOCAL_ROUNDING_SLACK <= parameter < 0.0:
+        return 0.0
+    return None
+
 
 @dataclass(frozen=True, slots=True)
 class StructuralValidationDiagnostics:
@@ -8002,11 +8022,22 @@ class GeometryModel:
         item = chain[index]
         parameter = local if item.forward else 1.0 - local
         edge = edges[index]
-        point = self._sample_edge_object(edge, np.asarray([parameter]))[0]
         # Closest-point inversion requests many point samples. Those retain
         # exactly the same point arithmetic without computing unused analytic
         # derivatives (the inverse computes its own finite differences).
-        derivative = np.zeros(3) if _point_only else self._edge_parameter_derivative_object(edge, parameter)
+        try:
+            point = self._sample_edge_object(edge, np.asarray([parameter]))[0]
+            derivative = np.zeros(3) if _point_only else self._edge_parameter_derivative_object(edge, parameter)
+        except GeometryError:
+            # The unchanged evaluation runs first, so every call that worked before is
+            # bit-identical. Only a refusal at a rounding-level excursion past [0, 1] is
+            # retried at the nearest end; anything else re-raises the original error.
+            snapped = _snap_chain_local_rounding(parameter)
+            if snapped is None:
+                raise
+            parameter = snapped
+            point = self._sample_edge_object(edge, np.asarray([parameter]))[0]
+            derivative = np.zeros(3) if _point_only else self._edge_parameter_derivative_object(edge, parameter)
         derivative *= total / lengths[index]
         if not item.forward:
             derivative *= -1.0
