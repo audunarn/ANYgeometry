@@ -366,6 +366,15 @@ class MaterialDomain:
     def horizontal_roots(self, curve, value, tolerance):
         if isinstance(self.support, NurbsSurface):        # pcurve level roots (float route)
             return nurbs_domain.horizontal_roots(self, curve, value, tolerance)
+        return self._horizontal_roots_and_ends(curve, value, tolerance)[0]
+
+    def _horizontal_roots_and_ends(self, curve, value, tolerance):
+        """``horizontal_roots`` and the curve ends (0., 1.) within the scalar tolerance of the level.
+
+        The ends are the band test ``horizontal_roots`` already makes for its
+        128-eps snapping; ``contains_loop`` uses them to find vertices on the ray.
+        Not for NURBS supports (their containment has its own exact route).
+        """
         if isinstance(self.support, ExtrudedSurface):
             # The extrusion coordinate is linear in position: a level of v is a plane parallel to the profile.
             support = self.support
@@ -382,10 +391,10 @@ class MaterialDomain:
         scalar_tolerance=tolerance*np.linalg.norm(normal)
         roots=plane_roots(curve,normal,offset,tolerance=scalar_tolerance)
         if roots is None:
-            return None
+            return None, ()
         endpoints=tuple(t for t in (0.,1.) if abs(float(normal @ curve.evaluate(t))-offset)<=scalar_tolerance)
         return tuple(dict.fromkeys(next((t for t in endpoints
-            if abs(root-t)<=128*np.finfo(float).eps),root) for root in roots))
+            if abs(root-t)<=128*np.finfo(float).eps),root) for root in roots)), endpoints
 
     def _exact_planar(self, loops) -> bool:
         """Whether the exact planar route applies: a Plane support and straight loops only."""
@@ -429,9 +438,20 @@ class MaterialDomain:
         if isinstance(self.support, NurbsSurface):        # exact level sets on the pcurves (A1e-lite)
             return nurbs_domain.contains_loop(self, loop, uv, tolerance, boundary=boundary)
         winding = 0
+        level = float(uv[1])
+        window = 8*np.finfo(float).eps
+        found = {}
+
+        def roots_at(index):
+            # One root computation per curve and query (the walk-back below reuses it).
+            index %= len(loop)
+            if index not in found:
+                found[index] = self._horizontal_roots_and_ends(loop[index].curve, level, tolerance)
+            return found[index]
+
         for index, path in enumerate(loop):
             curve = path.curve
-            roots = self.horizontal_roots(curve, float(uv[1]), tolerance)
+            roots = roots_at(index)[0]
             if roots is None:
                 # A horizontal curve can contain the query but contributes no
                 # ray crossing. Exact point inversion handles its boundary.
@@ -448,28 +468,11 @@ class MaterialDomain:
                 point_uv = self.uv(curve, t)
                 if np.linalg.norm(self.world_delta(point_uv-uv, float(uv[1]), float(uv[0]))) <= tolerance:
                     return boundary
-                if point_uv[0] <= uv[0]:
+                if point_uv[0] <= uv[0] or t >= 1-window:
                     continue
-                if t >= 1-8*np.finfo(float).eps:
-                    # The vertex event belongs to the next curve's start root.
-                    # When that curve reports none (its start lies within the
-                    # tolerance band but on one side of the ray, e.g. a cap arc
-                    # 1 ulp above a generator's snapped end), the side change
-                    # from this curve's last branch to the next curve's first
-                    # branch is counted here, exactly once (T2-0).
-                    after = self._unowned_vertex_side(loop, index, uv, tolerance)
-                    if after is None:
-                        continue
-                    previous_root = roots[position-1] if position else 0.
-                    before = self.uv(curve, .5*(previous_root+t))[1]-uv[1]
-                    if before <= 0 < after:
-                        winding += 1
-                    elif after <= 0 < before:
-                        winding -= 1
-                    continue
-                if t <= 8*np.finfo(float).eps:
+                if t <= window:
                     previous = loop[index-1].curve
-                    previous_roots = self.horizontal_roots(previous, float(uv[1]), tolerance)
+                    previous_roots = roots_at(index-1)[0]
                     for distance in range(2, len(loop)+1):
                         if previous_roots is not None:
                             break
@@ -477,8 +480,8 @@ class MaterialDomain:
                         # edges must inspect the preceding non-horizontal
                         # branch. Zero alone is not a crossing sign.
                         previous = loop[index-distance].curve
-                        previous_roots = self.horizontal_roots(previous, float(uv[1]), tolerance)
-                    previous_lower = max((r for r in (previous_roots or ()) if r < 1-8*np.finfo(float).eps), default=0.)
+                        previous_roots = roots_at(index-distance)[0]
+                    previous_lower = max((r for r in (previous_roots or ()) if r < 1-window), default=0.)
                     before = self.uv(previous, .5*(previous_lower+1))[1]-uv[1]
                 else:
                     previous_root = roots[position-1] if position else 0.
@@ -489,28 +492,50 @@ class MaterialDomain:
                     winding += 1
                 elif after <= 0 < before:
                     winding -= 1
+        # Vertex junctions (T2-0). Every junction between a non-horizontal
+        # curve and the next one (across any horizontal run) is one event. Its
+        # start root (t <= 8 eps) owns it above; without one, it is decided here.
+        for index in range(len(loop)):
+            winding += self._unowned_junction_crossing(loop, index, roots_at, uv, window)
         return winding != 0
 
-    def _unowned_vertex_side(self, loop, index, uv, tolerance):
-        """The next curve's initial side of the ray when it reports no start root, else None.
+    def _unowned_junction_crossing(self, loop, index, roots_at, uv, window):
+        """The crossing (+1, -1 or 0) at the junction after ``loop[index]`` that no start root owns.
 
-        ``contains_loop`` skips a root at the end of ``loop[index]`` because the
-        next curve's root at ``t <= 8 eps`` owns the vertex event. If the next
-        curve has such a root, or lies on the ray (``None`` roots), the old
-        accounting is kept (None). Otherwise the returned value is the signed
-        chart height of the next curve's first branch, the same midpoint
-        ``contains_loop`` uses as that curve's first ``before``, so the side
-        sequence along the loop telescopes and no crossing is counted twice.
+        ``contains_loop`` skips a root at a curve end (``t >= 1 - 8 eps``) and
+        lets the start root of the next non-horizontal curve ``B`` (horizontal
+        runs on the ray are walked over) count the junction: from the last
+        branch before the junction (midpoint of the last root below
+        ``1 - 8 eps`` and 1) to ``B``'s first branch. ``B`` can report no
+        start root although the junction lies on the ray: an arc whose root
+        lies just outside its sweep, a short line whose root lies outside its
+        window. Then the same two branches are compared here, at ``B``'s
+        start, so each junction is decided exactly once whatever the number
+        of junctions, horizontal runs or the loop's first curve, and the side
+        sequence telescopes. A junction whose vertex lies outside the
+        tolerance band of the level (both band tests) and which ends no root
+        is not on the ray: its two branches lie on the vertex's side.
         """
-        following = loop[(index+1) % len(loop)].curve
-        roots = self.horizontal_roots(following, float(uv[1]), tolerance)
+        roots, ends = roots_at(index)
         if roots is None:
-            return None
-        roots = sorted(set(min(1., max(0., float(t))) for t in roots))
-        if roots and roots[0] <= 8*np.finfo(float).eps:
-            return None
-        first = roots[0] if roots else 1.
-        return self.uv(following, .5*first)[1]-uv[1]
+            return 0
+        count = len(loop)
+        following = next((index+distance) % count for distance in range(1, count+1)
+                         if roots_at(index+distance)[0] is not None)
+        following_roots, following_ends = roots_at(following)
+        first = min((min(1., max(0., float(t))) for t in following_roots), default=1.)
+        if first <= window:
+            return 0
+        if not (1. in ends or 0. in following_ends or any(t >= 1-window for t in roots)):
+            return 0
+        previous_lower = max((r for r in roots if r < 1-window), default=0.)
+        before = self.uv(loop[index].curve, .5*(previous_lower+1))[1]-uv[1]
+        after = self.uv(loop[following].curve, .5*first)[1]-uv[1]
+        if not (before <= 0 < after or after <= 0 < before):
+            return 0
+        if self.uv(loop[following].curve, 0.)[0] <= uv[0]:
+            return 0
+        return 1 if before <= 0 else -1
 
     def contains(self, curve, parameter, tolerance, *, boundary=True):
         uv = None
@@ -2096,15 +2121,21 @@ def _prepare_exact_boundary_line(chart, curve):
     )
 
 
-def _exact_horizontal_roots(chart, curve, level, tolerance, *, prepared=None):
+def _exact_horizontal_roots(chart, curve, level, tolerance, *, prepared=None, ends=False):
     """Exact replica of ``MaterialDomain.horizontal_roots`` for a LinePath on a Plane.
 
     The chart's v-level ``level`` is the world plane ``n . x = level + n . origin``
     with ``n`` the exact dual row of ``v`` (the pseudo-inverse row ``horizontal_roots``
     uses). The scalar tolerance ``tolerance * |n|`` is compared through squares.
     Returns None (coincident), or the sorted roots in [0, 1] with the 128-eps
-    endpoint snapping of the float route.
+    endpoint snapping of the float route. With ``ends``, the pair (that result,
+    the curve ends within the band of the level), as ``_horizontal_roots_and_ends``.
     """
+    roots, endpoints = _exact_horizontal_roots_and_ends(chart, curve, level, tolerance, prepared=prepared)
+    return (roots, endpoints) if ends else roots
+
+
+def _exact_horizontal_roots_and_ends(chart, curve, level, tolerance, *, prepared=None):
     if prepared is None:
         normal = tuple(value / chart._scale for value in chart._dual_v)
         offset = level + exact_dot(normal, chart.origin)
@@ -2117,9 +2148,9 @@ def _exact_horizontal_roots(chart, curve, level, tolerance, *, prepared=None):
         start = prepared.start_level - level
         delta = prepared.delta_level
     if _within(start, bound2) and _within(start + delta, bound2):
-        return None
+        return None, ()
     if delta == 0:
-        return ()
+        return (), ()
     root = -start / delta
     below = root < 0 and not _within(root, bound2)
     above = root > 1 and not _within(root - 1, bound2)
@@ -2135,7 +2166,7 @@ def _exact_horizontal_roots(chart, curve, level, tolerance, *, prepared=None):
         root = next((t for t in endpoints if (root - t) ** 2 * length2 <= tol2), root)
         if root not in snapped:
             snapped.append(root)
-    return tuple(snapped)
+    return tuple(snapped), endpoints
 
 
 def _exact_point_on_segment(curve, world, tolerance) -> bool:
@@ -2194,23 +2225,28 @@ def _contains_loop_exact(chart, loop, uv, tolerance, *, boundary=True, prepared=
 
     root_cache = {}
 
-    def horizontal_roots(curve):
+    def roots_and_ends(curve):
         if prepared is None:
-            return _exact_horizontal_roots(chart, curve, v_query, tolerance)
+            return _exact_horizontal_roots(chart, curve, v_query, tolerance, ends=True)
         key = id(curve)
         if key not in root_cache:
             root_cache[key] = _exact_horizontal_roots(
-                chart, curve, v_query, tolerance, prepared=line_data(curve))
+                chart, curve, v_query, tolerance, prepared=line_data(curve), ends=True)
         return root_cache[key]
+
+    def horizontal_roots(curve):
+        return roots_and_ends(curve)[0]
 
     def world_distance2(du, dv):
         vector = tuple(du * a + dv * b for a, b in zip(chart.u_vector, chart.v_vector))
         return exact_dot(vector, vector)
 
     winding = 0
+    found = []
     for index, path in enumerate(loop):
         curve = path.curve
-        roots = horizontal_roots(curve)
+        found.append(roots_and_ends(curve))
+        roots = found[-1][0]
         if roots is None:
             if _exact_point_on_segment(curve, chart.world(u_query, v_query), tolerance):
                 return boundary
@@ -2241,4 +2277,25 @@ def _contains_loop_exact(chart, loop, uv, tolerance, *, boundary=True, prepared=
                 winding += 1
             elif after <= 0 < before:
                 winding -= 1
+    # Vertex junctions no start root owns (T2-0; MaterialDomain._unowned_junction_crossing).
+    count = len(loop)
+    for index, (roots, ends) in enumerate(found):
+        if roots is None:
+            continue
+        following = next((index + distance) % count for distance in range(1, count + 1)
+                         if found[(index + distance) % count][0] is not None)
+        following_roots, following_ends = found[following]
+        first = min(following_roots, default=Fraction(1))
+        if first <= window:
+            continue
+        if not (Fraction(1) in ends or Fraction(0) in following_ends or any(t >= 1 - window for t in roots)):
+            continue
+        previous_lower = max((r for r in roots if r < 1 - window), default=Fraction(0))
+        before = station_uv(loop[index].curve, (previous_lower + 1) / 2)[1] - v_query
+        after = station_uv(loop[following].curve, first / 2)[1] - v_query
+        if not (before <= 0 < after or after <= 0 < before):
+            continue
+        if station_uv(loop[following].curve, Fraction(0))[0] <= u_query:
+            continue
+        winding += 1 if before <= 0 else -1
     return winding != 0
