@@ -1,11 +1,17 @@
 """CAP-1: refusal-only snap fallback of the float cell route on a Plane support.
 
-Reproducer (``data/cap1082_wall449_arrangement.json``): the AIP-Gen2 tripod cap face 1082 (a Plane with a
-rotated, degenerate chart) with the one cylinder-wall trace of face 449. The float cell route builds cell loops
-whose straight pieces end at one merged vertex but at different stations (per-path parameter merge); the open
-loops' Green areas miss the conservation tolerance and the arrangement refuses. The fallback runs only on that
-refusal: it closes the loops at their merged vertices (every straight end moves by at most the vertex-merge
-tolerance) and the unchanged conservation check and tolerance decide; otherwise the original error is raised.
+Reproducer (``data/cap1082_walls415_423_arrangement.json``): the AIP-Gen2 tripod cap face 1082 (a Plane with a
+rotated, degenerate chart) with the cylinder-wall traces of faces 415 and 423 (a minimal subset of the 121-face
+1082 capture that still needs the fallback). The float cell route builds cell loops whose straight pieces end at
+one merged vertex but at different stations (per-path parameter merge); the open loops' Green areas miss the
+conservation tolerance and the arrangement refuses. The fallback runs only on that refusal: it closes the loops
+at their merged vertices (every straight end moves by at most the vertex-merge tolerance) and the unchanged
+conservation check and tolerance decide; otherwise the original error is raised.
+
+Contract (2026-10-29, after Codex R2/R3): no shallow-touch excuse. A snapped straight edge may meet another
+edge only within the closure bound of a shared vertex. Cap 1082 with the single wall-449 trace
+(``data/cap1082_wall449_arrangement.json``) needed the excuse (a near-tangent contact 8.1e-8 m from the vertex)
+and now refuses with the original conservation error.
 """
 from fractions import Fraction
 import json
@@ -24,12 +30,14 @@ from anygeometry import runtime_diagnostics as rd
 from anygeometry.runtime_diagnostics import collect_runtime_diagnostics
 from anygeometry.surfaces import Plane
 
-DATA = pathlib.Path(__file__).resolve().parent / "data" / "cap1082_wall449_arrangement.json"
+DATA = pathlib.Path(__file__).resolve().parent / "data" / "cap1082_walls415_423_arrangement.json"
+TOUCH_DATA = pathlib.Path(__file__).resolve().parent / "data" / "cap1082_wall449_arrangement.json"
 CONSERVATION = "arrangement failed material conservation"
+CANCELLED = "intersection arrangement cancelled"
 
 
-def _fixture():
-    record = json.loads(DATA.read_text())
+def _fixture(data=DATA):
+    record = json.loads(data.read_text())
     support = Plane(*(tuple(record["support"][key]) for key in ("origin", "u_vector", "v_vector")))
     boundary = tuple(ArrangementPath(LinePath(tuple(item["start"]), tuple(item["end"])), source_edge=item["source_edge"])
                      for item in record["boundary"])
@@ -40,8 +48,8 @@ def _fixture():
     return domain, traces, record["tolerance"], record["area_tolerance"]
 
 
-def _arrange(**extra):
-    domain, traces, tolerance, area_tolerance = _fixture()
+def _arrange(data=DATA, **extra):
+    domain, traces, tolerance, area_tolerance = _fixture(data)
     return arrange_material(domain, traces, tolerance=tolerance, area_tolerance=area_tolerance, **extra)
 
 
@@ -82,6 +90,20 @@ def test_reproducer_is_accepted_by_the_snap_fallback():
     assert counters["arrangement_snap_fallback_attempts"] == 1
     assert counters["arrangement_snap_fallbacks"] == 1
     assert counters["arrangement_snap_moved_edges"] >= 1
+
+
+def test_cap1082_wall449_needed_the_touch_excuse_and_refuses_with_the_original_error():
+    # Contract decision (no touch excuse): the moved seam edge meets the wall-449 arc again 8.1e-8 m from their
+    # shared vertex (near tangent, sine 6.7e-13), beyond the closure bound 2 tol / 1024 ~ 2e-12 m. Fix rounds
+    # 1 and 2 accepted this pair through the excuse; now the original conservation error is raised.
+    with collect_runtime_diagnostics() as counters:
+        with pytest.raises(GeometryError) as caught:
+            _arrange(TOUCH_DATA)
+    assert type(caught.value) is GeometryError and str(caught.value) == CONSERVATION
+    assert caught.value.__cause__ is None and caught.value.__context__ is None
+    assert counters["arrangement_snap_fallback_attempts"] == 1
+    assert counters.get("arrangement_snap_fallbacks", 0) == 0
+    assert counters["arrangement_snap_fallback_refusals"] == 1
 
 
 def test_diagnostics_record_the_fired_fallback():
@@ -197,19 +219,17 @@ def test_snapped_line_crossing_an_arc_is_detected():
         assert ma._snapped_edges_clear(chart, edges, {0: segment}, [(0, 1), (2, 3)], {0}, tol) is clear
 
 
-def test_incident_arc_shallow_touch_is_excused_and_a_transversal_crossing_is_not():
+def test_incident_arc_contact_beyond_the_closure_bound_refuses_however_shallow():
     # A segment leaving the arc's end, turned by alpha into the circle from the tangent, meets the unit circle
-    # again after a chord 2 sin(alpha) with a dip of depth 1 - cos(alpha):
-    # - alpha = 1e-7: chord 2e-7 m (inside the 1.02e-6 m touch disc), depth 5e-15 m, sine 1e-7 (a
-    #   tolerance-level tangential touch, as on cap 1082: contact 8.1e-8 m, sine 6.7e-13) -> excused;
-    # - alpha = 1e-5: depth 5e-11 m and sine 1e-5 pass, but the contact is 2e-5 m from the vertex -> not
-    #   excused (fix 1 excused it on the depth alone);
-    # - alpha = 0.1: depth 5e-3 m, a real crossing -> not excused.
+    # again after a chord 2 sin(alpha) with a dip of depth 1 - cos(alpha). No touch excuse: every such second
+    # contact refuses, from a tolerance-level tangential touch (alpha = 1e-7: chord 2e-7 m, depth 5e-15 m, the
+    # kind fix 2 excused, as on cap 1082 + wall 449) to a real crossing (alpha = 0.1). Turned outwards
+    # (alpha < 0) the segment meets the arc only at the shared vertex and is clear.
     tol = 1e-9
     chart = ma.ExactPlane.from_plane(Plane((0, 0, 0), (1, 0, 0), (0, 1, 0)))
     arc = ArrangementPath(EllipticArc((0., 0., 0.), (1., 0., 0.), (0., 1., 0.), -0.5, 1.))
     end = np.asarray(arc.curve.evaluate(1.))
-    for alpha, clear in ((1e-7, True), (1e-5, False), (0.1, False)):
+    for alpha, clear in ((1e-7, False), (1e-5, False), (0.1, False), (-1e-7, True), (-0.1, True)):
         heading = 0.5 - 0.5 * math.pi - alpha                  # tangent towards decreasing angle, turned inwards
         far = end + 0.25 * np.array([math.cos(heading), math.sin(heading), 0.])
         segment = ma.stations.Segment(exact_vector(end), exact_vector(far), derived=True)
@@ -237,50 +257,91 @@ def test_review_r2_transversal_crossing_of_a_flat_incident_arc_refuses():
     assert ma._snapped_edges_clear(chart, new_edges, new_segments, endpoints, moved, tol) is False
 
 
-def test_each_shallow_touch_condition_is_load_bearing(monkeypatch):
+def _r3_chart():
+    return ma.ExactPlane.from_plane(Plane((0, 0, 0), (1, 0, 0), (0, 1, 0)))
+
+
+def test_review_r3_thin_ellipse_crossing_inside_the_touch_disc_refuses():
+    # REVIEW-CAP1-R3 P1, direct repro: the thin ellipse leaves P = (0, 1e-10) along -x (tangent at P) but
+    # turns sharply; the segment meets it again at Q = (-5e-7, 0), interior to both curves, at ~90 deg,
+    # 500 tol from P. Fix 2 returned True (tangent at P, inside the 1.02e-6 m disc, depth <= tol).
     tol = 1e-9
-    chart = ma.ExactPlane.from_plane(Plane((0, 0, 0), (1, 0, 0), (0, 1, 0)))
-    radius2 = (2 * Fraction(tol) * ma._SNAP_RESIDUAL_GAP) ** 2
-
-    def clear(arc, a, b, end):
-        return ma._chart_segment_arc_clear(chart, (a, b), arc, [(a, b, end)], radius2, tol)
-    # Tangency: a tiny flat ellipse (U = 1e-7, V = 5e-10) leaves its start (1e-7, 0) along +-y; the segment
-    # along -x passes the depth test (dip 5e-10 <= tol) and its second contact (-1e-7, 0) is 2e-7 m away
-    # (inside the 1.02e-6 m disc), but it meets the arc at ~90 deg: only the tangency condition refuses it.
-    flat = ArrangementPath(EllipticArc((0., 0., 0.), (1e-7, 0., 0.), (0., 5e-10, 0.), 0., 1.5 * math.pi))
-    start = exact_vector(flat.curve.evaluate(0.))
-    assert clear(flat, start, _station(-1, 0), 0) is False
-    # Confinement: on the unit circle a segment turned 1e-5 rad inwards from the tangent passes the depth
-    # (5e-11 m) and tangency (sine 1e-5 <= 1/1024) tests; its contact 2e-5 m away refuses it.
-    circle = ArrangementPath(EllipticArc((0., 0., 0.), (1., 0., 0.), (0., 1., 0.), -0.5, 1.))
-    end = np.asarray(circle.curve.evaluate(1.))
-    heading = 0.5 - 0.5 * math.pi - 1e-5
-    far = exact_vector(end + 0.25 * np.array([math.cos(heading), math.sin(heading), 0.]))
-    assert clear(circle, exact_vector(end), far, 1) is False
-    # Each refusal above is due to that one condition: relaxing it alone excuses the pair.
-    with monkeypatch.context() as patch:
-        patch.setattr(ma, "_arc_tangent_aligned", lambda *args: True)
-        assert clear(flat, start, _station(-1, 0), 0) is True
-    with monkeypatch.context() as patch:
-        patch.setattr(ma, "_SNAP_TOUCH_RADIUS", 2 ** 15)              # 3.3e-5 m disc; sine bound 3.1e-5
-        assert clear(circle, exact_vector(end), far, 1) is True
+    arc = ArrangementPath(EllipticArc((0., 0., 0.), (0., 1e-10, 0.), (-5e-7, 0., 0.), 0., 1.5 * math.pi))
+    segment = ma.stations.Segment(_station(0, Fraction(1e-10)), _station(Fraction(-1e-6), Fraction(-1e-10)),
+                                  derived=True)
+    edges = [ArrangementPath(ma.stations.to_line(segment)), arc]
+    assert ma._snapped_edges_clear(_r3_chart(), edges, {0: segment}, [(0, 1), (0, 2)], {0}, tol) is False
 
 
-def test_arc_tangent_alignment_is_certified_at_both_ends_and_both_sweep_signs():
-    bound = Fraction(1, ma._SNAP_TOUCH_RADIUS)                       # sine 9.77e-4
-    quarter = EllipticArc((0., 0., 0.), (1., 0., 0.), (0., 1., 0.), 0., .5 * math.pi)
-    backwards = EllipticArc((0., 0., 0.), (1., 0., 0.), (0., 1., 0.), 0., -.5 * math.pi)
-    cases = [
-        (quarter, 0, (Fraction(1, 10 ** 4), 1), True),                # into the arc at its start is +y
-        (quarter, 0, (Fraction(1, 100), 1), False),                   # sine 1e-2 > bound
-        (quarter, 0, (0, -1), False),                                 # opposite direction (dot < 0)
-        (quarter, 1, (1, Fraction(1, 10 ** 4)), True),                # into the arc at its end (0, 1) is +x
-        (quarter, 1, (-1, 0), False),
-        (backwards, 0, (0, -1), True),                                # negative sweep: into the arc is -y
-        (backwards, 0, (0, 1), False),
-    ]
-    for curve, end, (x, y), aligned in cases:
-        assert ma._arc_tangent_aligned(curve, end, (Fraction(x), Fraction(y), Fraction(0)), bound) is aligned
+def test_review_r3_snap_that_creates_the_thin_ellipse_crossing_refuses():
+    # REVIEW-CAP1-R3 P1 through _snap_open_vertices: both straight ends start 8e-10 above (the line misses the
+    # ellipse); an incident straight leg fixes the far representative. Snapping moves only edge 0, by exactly
+    # 8e-10, and creates the transversal crossing at (-5e-7, 0).
+    tol = 1e-9
+    lift = Fraction(8e-10)
+    arc = ArrangementPath(EllipticArc((0., 0., 0.), (0., 1e-10, 0.), (-5e-7, 0., 0.), 0., 1.5 * math.pi))
+    p, far = exact_vector(arc.curve.evaluate(0.)), _station(Fraction(-1e-6), Fraction(-1e-10))
+    straight = ma.stations.Segment((p[0], p[1] + lift, p[2]), (far[0], far[1] + lift, far[2]), derived=True)
+    leg = ma.stations.Segment(far, _station(Fraction(-1e-6), -1), derived=True)
+    edges = [ArrangementPath(ma.stations.to_line(straight)), arc, ArrangementPath(ma.stations.to_line(leg))]
+    endpoints = [(0, 1), (0, 2), (1, 3)]
+    representatives = [p, far, exact_vector(arc.curve.evaluate(1.)), leg[1]]
+    # Before the snap the straight line misses the whole ellipse.
+    assert ma._snapped_edges_clear(_r3_chart(), edges[:2], {0: straight}, endpoints[:2], {0}, tol) is True
+    new_edges, new_segments, moved, max_move2, _snapped, _open, _curved = ma._snap_open_vertices(
+        edges, {0: straight, 2: leg}, endpoints, representatives, tolerance=tol)
+    assert moved == {0} and max_move2 == lift ** 2 and new_segments[0] == (p, far)
+    assert ma._snapped_edges_clear(_r3_chart(), new_edges, new_segments, endpoints, moved, tol) is False
+
+
+def _thin_ellipse_family():
+    """The R3 96-variant family: two thin ellipses x three phases of the shared vertex (a minor-axis tip, where
+    the arc's tangent runs along the major axis) x both sweep signs x sweeps 2 and 4.8 x either shared arc end x
+    both straight-edge orientations. The segment runs from the shared vertex P through Q, the major-axis tip a
+    quarter turn into the arc, to P + 2 (Q - P): nearly tangent at P, Q within the 1.02e-6 m disc of fix 2,
+    depth <= tol, and a ~90 deg crossing at Q."""
+    ellipses = (((0., 1e-10, 0.), (-5e-7, 0., 0.)), ((2e-10, 0., 0.), (0., 8e-7, 0.)))
+    for u, v in ellipses:
+        for phase in (0., math.pi, 2 * math.pi):
+            for sign in (1, -1):
+                for magnitude in (2., 4.8):
+                    sweep = sign * magnitude
+                    for shared_end in (0, 1):
+                        start = phase if shared_end == 0 else phase - sweep
+                        curve = EllipticArc((0., 0., 0.), u, v, start, sweep)
+                        inward = sign if shared_end == 0 else -sign
+                        q_angle = phase + inward * .5 * math.pi
+                        p = exact_vector(curve.evaluate(float(shared_end)))
+                        q = exact_vector(tuple(a * math.cos(q_angle) + b * math.sin(q_angle) for a, b in zip(u, v)))
+                        far = tuple(2 * b - a for a, b in zip(p, q))
+                        for reverse in (False, True):
+                            yield curve, p, far, shared_end, reverse
+
+
+def test_review_r3_thin_ellipse_family_refuses():
+    tol = 1e-9
+    chart = _r3_chart()
+    count = 0
+    for curve, p, far, shared_end, reverse in _thin_ellipse_family():
+        segment = ma.stations.Segment(far, p, derived=True) if reverse else ma.stations.Segment(p, far, derived=True)
+        straight_ends = (1, 0) if reverse else (0, 1)                 # vertex 0 is P, vertex 1 the far end
+        arc_ends = (0, 2) if shared_end == 0 else (2, 0)
+        edges = [ArrangementPath(ma.stations.to_line(segment)), ArrangementPath(curve)]
+        assert ma._snapped_edges_clear(chart, edges, {0: segment}, [straight_ends, arc_ends], {0}, tol) is False
+        count += 1
+    assert count == 96
+
+
+def test_review_r3_major_arc_contact_refuses():
+    # REVIEW-CAP1-R3 P1, major arc: tangent at P (sine 3e-4), contact Q 7.5e-7 m away, dip 1.1e-10 m, but the
+    # arc between them is a major arc whose tip lies 1 cm from P and 1000 tol off the tangent line.
+    tol = 1e-9
+    curve = EllipticArc((0., 0., 0.), (0.005, 0., 0.), (0., 5e-9, 0.), 0.01, 2 * math.pi - 0.025)
+    p = exact_vector(curve.evaluate(0.))
+    q = exact_vector((0.005 * math.cos(0.02), -5e-9 * math.sin(0.02), 0.))
+    segment = ma.stations.Segment(p, tuple(2 * b - a for a, b in zip(p, q)), derived=True)
+    edges = [ArrangementPath(ma.stations.to_line(segment)), ArrangementPath(curve)]
+    assert ma._snapped_edges_clear(_r3_chart(), edges, {0: segment}, [(0, 1), (0, 2)], {0}, tol) is False
 
 
 def test_overlap_from_a_shared_vertex_is_a_crossing():
@@ -338,7 +399,7 @@ def test_cancellation_during_the_fallback_is_not_swallowed(monkeypatch):
     def cancel():
         calls["n"] += 1
         return calls["at_fallback"] is not None
-    with pytest.raises(GeometryError, match="intersection arrangement cancelled"):
+    with pytest.raises(GeometryError, match=CANCELLED):
         _arrange(cancellation_check=cancel)
 
 
@@ -357,7 +418,7 @@ def test_cancellation_while_validation_refuses_is_the_cancel_error(monkeypatch):
             state["polls_after"] += 1
         return state["cancel"]
     with collect_runtime_diagnostics() as counters:
-        with pytest.raises(GeometryError, match="intersection arrangement cancelled"):
+        with pytest.raises(GeometryError, match=CANCELLED):
             _arrange(cancellation_check=cancel)
     assert state["polls_after"] >= 1
     assert counters.get("arrangement_snap_fallback_refusals", 0) == 0
@@ -378,6 +439,37 @@ def test_validation_polls_the_cancellation(monkeypatch):
         finally:
             state["inside"] = False
     monkeypatch.setattr(ma, "_snapped_edges_clear", spy)
-    with pytest.raises(GeometryError, match="intersection arrangement cancelled"):
+    with pytest.raises(GeometryError, match=CANCELLED):
         _arrange(cancellation_check=lambda: state["inside"])
     assert state["raised_inside"]
+
+
+def test_cancellation_during_the_final_successful_stage_is_the_cancel_error(monkeypatch):
+    # REVIEW-CAP1-R3 P2: a cancellation requested during the fallback's final material-cell computation, whose
+    # result is then accepted, must raise the cancel error, not return the arrangement.
+    real = ma._float_material_cells
+    state = {"calls": 0, "cancel": False, "polls_after": 0, "arm": True}
+
+    def wrapped(*args, **kwargs):
+        result = real(*args, **kwargs)
+        state["calls"] += 1
+        if state["calls"] == 2 and state["arm"]:                                       # the fallback's (successful) computation
+            state["cancel"] = True
+        return result
+    monkeypatch.setattr(ma, "_float_material_cells", wrapped)
+
+    def cancel():
+        if state["cancel"]:
+            state["polls_after"] += 1
+        return state["cancel"]
+    with collect_runtime_diagnostics() as counters:
+        with pytest.raises(GeometryError, match=CANCELLED):
+            _arrange(cancellation_check=cancel)
+    assert state["calls"] == 2 and state["polls_after"] >= 1
+    assert counters.get("arrangement_snap_fallbacks", 0) == 0
+    assert counters.get("arrangement_snap_fallback_refusals", 0) == 0
+    # Without the cancellation the same run is accepted by the fallback (the stage really succeeds).
+    state.update(calls=0, cancel=False, arm=False)
+    with collect_runtime_diagnostics() as counters:
+        _arrange(cancellation_check=cancel)
+    assert state["calls"] == 2 and counters["arrangement_snap_fallbacks"] == 1

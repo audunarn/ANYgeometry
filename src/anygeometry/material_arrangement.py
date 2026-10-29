@@ -2165,90 +2165,23 @@ def _chart_segments_clear(first, second, shared) -> bool:
                 or (d3 == 0 and on(p, q, r)) or (d4 == 0 and on(p, q, s)))
 
 
-#: Shallow tangential touch of a snapped straight edge with an incident arc (``_chart_segment_arc_clear``):
-#: every contact away from the shared vertex must lie within ``tolerance * _SNAP_TOUCH_RADIUS`` (world) of
-#: it, and the sine of the angle between the segment and the arc's tangent there must be at most
-#: ``1 / _SNAP_TOUCH_RADIUS``. With the depth bound (the ellipse dips at most ``tolerance`` across the line)
-#: the excused contact is then a sliver inside that disc whose lateral extent from the arc's tangent line
-#: is at most ``tolerance`` (radius x sine): at the vertex-merge resolution the segment and the arc leave
-#: the vertex along one direction. (By convexity the depth bound is then nearly implied: the arc between
-#: the vertex and a contact at distance L stays within L tan(angle) of the chord.) 1024 x 1e-9 = 1.02e-6 m.
-#: Measured on tripod cap 1082 with the wall-449 trace (the one real touch; 50-digit roots): contact
-#: 8.1e-8 m from the vertex, sine 6.7e-13; the 121-face 1082 subset needs no touch excuse.
-_SNAP_TOUCH_RADIUS = 1024
-
-#: Absolute error allowance of ``math.sin``/``math.cos`` at a double argument (a few ulp at most for
-#: |values| <= 1 on the supported platforms; 1e-15 is about 9 ulp of 1). Only widens enclosures.
-_TRIG_ERROR = Fraction(1, 10 ** 15)
+#: No shallow-touch excuse (CAP-1 contract decision, 2026-10-29). Fix rounds 1 and 2 excused a contact of a
+#: snapped straight edge with an incident arc away from the shared vertex when it looked like a tolerance-deep
+#: tangential touch (fix 1: depth <= tol; fix 2: plus tangency at the shared vertex and confinement to a
+#: 1024 tol disc). Codex R2 and R3 broke both with transversal crossings that pass every such condition (a
+#: flat ellipse crossed at ~90 deg 2 m away; a thin ellipse turning sharply inside the disc, 96 variants; a
+#: major arc whose tip is 1 cm from the vertex and 1000 tol off the tangent line): a condition at the vertex
+#: does not certify the arc between the vertex and the contact. The fallback now fails closed: any contact
+#: beyond the closure bound of a shared vertex refuses (tripod cap 1082 with the single wall-449 trace needed
+#: the excuse and now refuses with the original conservation error; the 121-face 1082 subset never used it).
 
 
-def _interval_scale(value, lo, hi):
-    """``value * [lo, hi]`` as an exact interval."""
-    a, b = value * lo, value * hi
-    return (a, b) if a <= b else (b, a)
-
-
-def _interval_add(first, second):
-    return first[0] + second[0], first[1] + second[1]
-
-
-def _arc_tangent_aligned(curve, end, direction, sine_bound) -> bool:
-    """Certified: the straight ``direction`` (exact world vector) leaves the arc's end ``end`` (0: start,
-    1: end) on the arc's own side (positive dot with the arc's tangent pointing into the arc) and the sine
-    of the angle between them is at most ``sine_bound``.
-
-    The tangent into the arc is ``s (-U sin th + V cos th)`` with ``s = sign(sweep)`` at the start and
-    ``-sign(sweep)`` at the end; ``th`` is the exact angle ``evaluate`` uses there (start, or the float sum
-    start + sweep). ``sin``/``cos`` of ``th`` are enclosed by the float values widened by ``_TRIG_ERROR``
-    plus the exact distance of ``th`` to its double (both 1-Lipschitz); everything else is exact interval
-    arithmetic on rationals, so the decision is outward-rounded.
-    """
-    from .exact_predicates import exact
-    from .planar_arcs import _end_angle
-    theta = exact(curve.start_angle) if end == 0 else _end_angle(curve)
-    sweep = exact(curve.sweep_angle)
-    if sweep == 0:
-        return False
-    sign = (1 if sweep > 0 else -1) * (1 if end == 0 else -1)
-    theta_f = float(theta)
-    widen = _TRIG_ERROR + abs(theta - Fraction(theta_f))
-    sin_f, cos_f = Fraction(math.sin(theta_f)), Fraction(math.cos(theta_f))
-    sin_i, cos_i = (sin_f - widen, sin_f + widen), (cos_f - widen, cos_f + widen)
-    u, v = exact_vector(curve.u_vector), exact_vector(curve.v_vector)
-    tangent = [_interval_add(_interval_scale(-sign * a, *sin_i), _interval_scale(sign * b, *cos_i))
-               for a, b in zip(u, v)]
-    dot = (Fraction(0), Fraction(0))
-    for d, t in zip(direction, tangent):
-        dot = _interval_add(dot, _interval_scale(d, *t))
-    if dot[0] <= 0:
-        return False
-    cross2_upper = Fraction(0)
-    for i, j in ((1, 2), (2, 0), (0, 1)):
-        lo, hi = _interval_add(_interval_scale(direction[i], *tangent[j]),
-                               _interval_scale(-direction[j], *tangent[i]))
-        cross2_upper += max(lo * lo, hi * hi)
-    tangent2_lower = sum((Fraction(0) if lo <= 0 <= hi else min(lo * lo, hi * hi)) for lo, hi in tangent)
-    direction2 = sum(d * d for d in direction)
-    # sin^2 = |d x T|^2 / (|d|^2 |T|^2) <= bound^2, certified from the upper and lower bounds.
-    return cross2_upper <= Fraction(sine_bound) ** 2 * direction2 * tangent2_lower
-
-
-def _chart_segment_arc_clear(chart, segment, arc, excused, radius2, tolerance, check=None) -> bool:
+def _chart_segment_arc_clear(chart, segment, arc, shared, radius2, check=None) -> bool:
     """Certified: the chart image of the straight ``segment`` meets the arc's chart image only within
-    ``sqrt(radius2)`` (world) of an excused vertex, or as a certified shallow tangential touch of an
-    incident arc. ``excused`` lists ``(point, away, arc_end)`` for every vertex the two edges share:
-    the segment's end there, its other end, and which end (0/1) of the arc lies there. Empty for a
-    non-incident pair, which may not meet at all.
-
-    A contact farther than ``sqrt(radius2)`` from every shared vertex is excused only when all of these
-    hold (otherwise the pair is not clear):
-    - depth: the whole ellipse lies on one side of the segment's line except for a dip no deeper than
-      ``tolerance`` (world distance, certified with a rational lower bound of the line-normal length);
-    - confinement and tangency: the contact lies within ``tolerance * _SNAP_TOUCH_RADIUS`` of a shared
-      vertex at which the segment leaves along the arc, the sine of the angle between them being at most
-      ``1 / _SNAP_TOUCH_RADIUS`` (``_arc_tangent_aligned``, outward-rounded).
-    The depth alone is not enough: a nearly degenerate ellipse can lie within ``tolerance`` of the line
-    while the segment crosses it transversally far from the vertex.
+    ``sqrt(radius2)`` (world) of a shared vertex. ``shared`` lists the segment's exact end point at every
+    vertex the two edges share (empty for a non-incident pair, which may not meet at all). Any other
+    contact, however shallow or nearly tangential, makes the pair not clear (no touch excuse; see the
+    comment above).
 
     The segment's chart line is ``n . uv(X) = n . uv(a)``; on the arc ``X = C + U cos + V sin`` this is
     ``c0 + c1 cos + c2 sin = 0`` with exact rational coefficients. Its roots (exact tan-half-angle
@@ -2272,17 +2205,6 @@ def _chart_segment_arc_clear(chart, segment, arc, excused, radius2, tolerance, c
     c2 = exact_dot(w, exact_vector(curve.v_vector))
     if c1 * c1 + c2 * c2 < c0 * c0:
         return True                                              # the line misses the whole ellipse
-    touch = []                                                   # shared vertices where a touch is certified
-    if excused:
-        # c0 + c1 cos + c2 sin = w . X - w . a: the in-plane distance to the line is |.| / |w| (w lies in
-        # the plane). Depth across the line <= tol  <=>  sqrt(c1^2 + c2^2) <= |c0| + tol |w|.
-        w_lower = Fraction(math.sqrt(float(exact_dot(w, w)))) * (1 - Fraction(1, 10 ** 12))
-        if c1 * c1 + c2 * c2 <= (abs(c0) + Fraction(tolerance) * w_lower) ** 2:
-            touch = [point for point, away, end in excused
-                     if _arc_tangent_aligned(curve, end, tuple(q - p for p, q in zip(point, away)),
-                                             Fraction(1, _SNAP_TOUCH_RADIUS))]
-    touch2 = (Fraction(tolerance) * _SNAP_TOUCH_RADIUS) ** 2
-    shared = [x for x, _away, _end in excused]
 
     def within(point, centres, bound2):
         return any(compare(_dot(delta, delta), bound2) <= 0
@@ -2316,8 +2238,7 @@ def _chart_segment_arc_clear(chart, segment, arc, excused, radius2, tolerance, c
                 continue
             if within(point, shared, radius2):
                 continue                                         # the shared vertex itself
-            if not (touch and within(point, touch, touch2)):
-                return False
+            return False                                         # any other contact refuses (fail closed)
     return True
 
 
@@ -2349,9 +2270,8 @@ def _snapped_edges_clear(chart, edges, segments, endpoints_by_edge, moved, toler
     """Every moved straight edge meets every other edge only at a shared vertex (chart image).
 
     Straight pairs are decided exactly (``_chart_segments_clear``); straight/arc pairs by the certified root
-    test (``_chart_segment_arc_clear``: intersections within twice the residual closure bound of a shared
-    vertex are excused, and so is a certified shallow tangential touch of an incident arc: depth at most
-    tol, confined near the shared vertex, tangent there); any other curved partner refuses. Pairs whose
+    test (``_chart_segment_arc_clear``: only intersections within twice the residual closure bound of a
+    shared vertex are excused; no touch excuse); any other curved partner refuses. Pairs whose
     world boxes, each widened by its height bound above the support plane plus tol, are separated cannot
     meet in the chart and are skipped. ``check`` (cancellation) is polled for every pair and root.
     """
@@ -2395,12 +2315,9 @@ def _snapped_edges_clear(chart, edges, segments, endpoints_by_edge, moved, toler
                 if not _chart_segments_clear(chart_segment(index), chart_segment(other), bool(shared)):
                     return False
                 continue
-            # (segment end at the shared vertex, segment's other end, arc end 0/1 at that vertex)
-            excused = [(segments[index][k], segments[index][1 - k], end) for k in (0, 1)
-                       for end in (0, 1) if endpoints_by_edge[index][k] in shared
-                       and endpoints_by_edge[other][end] == endpoints_by_edge[index][k]]
-            if not _chart_segment_arc_clear(chart, segments[index], edges[other], excused, radius2, tolerance,
-                                            check):
+            # the segment's end at every vertex it shares with the arc
+            excused = [segments[index][k] for k in (0, 1) if endpoints_by_edge[index][k] in shared]
+            if not _chart_segment_arc_clear(chart, segments[index], edges[other], excused, radius2, check):
                 return False
     return True
 
@@ -2510,10 +2427,10 @@ def _snap_fallback(domain, vertices, lookup, edges, edge_segments, endpoints_by_
         if cancelled:
             raise
         accepted = False
+    # A cancellation requested while a validator was refusing (validators may not poll) or during the final
+    # material-cell computation is still a cancellation: polled before committing either outcome.
+    check()
     if not accepted:
-        # A cancellation requested while a validator was refusing (validators may not poll) is still a
-        # cancellation, not the conservation refusal.
-        check()
         _increment("arrangement_snap_fallback_refusals")
         return None
     _increment("arrangement_snap_fallbacks")
