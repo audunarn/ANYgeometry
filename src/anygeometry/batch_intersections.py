@@ -11,8 +11,12 @@ environment variable ``ANYGEOMETRY_PLANNING_MODE`` may select the mode; an inval
 policy field: that is the parameter hook. Budgets (``max_predicates``/``max_candidate_pairs``) and
 non-default planning context variables force the exact mode. The effective mode is resolved once
 per planning call. Exact mode is the unchanged Tier-1 route and produces an ``IntersectionPlan``
-without any route field (plan state E). ``topology_certified`` produces a ``TopologyCertifiedPlan``
-(state T) whose ``content_checksum`` keeps its meaning and whose ``route_checksum`` binds the mode.
+without any route field (plan state E). ``topology_certified`` is
+topology-certified planning (experimental): it produces a ``TopologyCertifiedPlan`` (state T) whose
+``content_checksum`` keeps its meaning and whose ``route_checksum`` binds the mode. Applying a state-T plan persists its route
+identity (mode, r_max, certificate version, tolerance, both checksums) in a
+``TopologyCertifiedChangeSet`` and in the model document record ``anygeometry:intersection_planning``;
+exact applications write neither.
 """
 from __future__ import annotations
 
@@ -172,14 +176,170 @@ class TopologyCertifiedPlan(IntersectionPlan):
 class TopologyCertifiedApplication(IntersectionApplication):
     """Application of a state-T plan: carries the route identity of the applied plan.
 
-    ADR section 7 row 3 asks to write the mode, r_max and certificate version into the change set
-    and model metadata. ChangeSet has no metadata field and the model has no model-level metadata
-    store outside its document state; both would change exact-mode outputs or document checksums.
-    The route identity is therefore returned here (and stays on the plan of the local receipt).
+    ADR section 7 row 3: the mode, r_max and certificate version are also written into the change
+    set (``change_set`` is a ``TopologyCertifiedChangeSet``, the same object that
+    ``model.last_change_set`` holds and change hooks receive) and into the model document record
+    (``intersection_planning_record``).
     """
     planning_mode: str | None = None
     r_max: float | None = None
     certificate_version: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TopologyCertifiedChangeSet(ChangeSet):
+    """The ChangeSet of a topology-certified application (ADR section 7 row 3, matrix row 14).
+
+    Exact applications keep the plain ``ChangeSet`` (byte-identical pickles). The route identity is
+    checked at construction and at unpickling by the same section-7 row checks as a state-T plan
+    (rows 11, 10, 5, 7, 8, 6): missing or mismatched fields are rejected.
+    """
+    planning_mode: str | None = None
+    certificate_version: str | None = None
+    r_max: float | None = None
+    route_tolerance: float | None = None
+    content_checksum: str | None = None
+    route_checksum: str | None = None
+
+    def __post_init__(self):
+        _check_route_identity(self)
+
+    def __setstate__(self, state):
+        names = [item.name for item in fields(self)]
+        state = list(state)
+        if len(state) != len(names):
+            raise GeometryError("topology-certified change set state is malformed")
+        for name, value in zip(names, state):
+            object.__setattr__(self, name, value)
+        _check_route_identity(self)
+
+
+@dataclass(frozen=True, slots=True)
+class _RouteIdentity:
+    """The route identity of one entry of the model record, checked like a state-T plan."""
+    planning_mode: object
+    certificate_version: object
+    r_max: object
+    route_tolerance: object
+    content_checksum: object
+    route_checksum: object
+
+
+INTERSECTION_PLANNING_EXTENSION = "anygeometry:intersection_planning"
+_RECORD_FORMAT = 1
+_ROUTE_IDENTITY_FIELDS = ("planning_mode", "certificate_version", "r_max", "route_tolerance", "content_checksum",
+                          "route_checksum")
+_RECORD_FIELDS = frozenset((*_ROUTE_IDENTITY_FIELDS, "source_revision", "source_checksum"))
+
+
+def _record_fields(entry):
+    """Matrix row 14, entry structure: exactly the record fields, the source binding typed."""
+    if not isinstance(entry, dict) or set(entry) != _RECORD_FIELDS:
+        raise GeometryError("an entry does not have exactly the record fields")
+    revision = entry["source_revision"]
+    if type(revision) is not int or revision < 0:
+        raise GeometryError("an entry source_revision is not a non-negative integer")
+    for name in ("source_checksum", "content_checksum"):
+        if type(entry[name]) is not str or not entry[name]:
+            raise GeometryError(f"an entry {name} is not a non-empty string")
+
+
+def _record_entry(entry):
+    _record_fields(entry)
+    _check_route_identity(_RouteIdentity(*(entry.get(name) for name in _ROUTE_IDENTITY_FIELDS)))
+    return entry
+
+
+def validate_intersection_planning_record(value):
+    """Load check of the model document record (matrix row 14); returns the entries, or raises
+    ``GeometryError``. Called by ``from_dict`` whenever the record is present."""
+    try:
+        if not isinstance(value, dict) or set(value) != {"format", "publications"}:
+            raise GeometryError("the record must have exactly 'format' and 'publications'")
+        if type(value["format"]) is not int or value["format"] != _RECORD_FORMAT:
+            raise GeometryError(f"the record format must be {_RECORD_FORMAT}")
+        publications = value["publications"]
+        if type(publications) is not list or not publications:
+            raise GeometryError("the record must list at least one publication")
+        return tuple(_record_entry(entry) for entry in publications)
+    except GeometryError as exc:
+        raise GeometryError(f"intersection planning record: {exc}") from None
+
+
+def intersection_planning_record(model):
+    """The validated topology-certified publications recorded on ``model`` (oldest first), or ``()``.
+
+    Each entry holds the route identity of one applied state-T plan (planning_mode, certificate_version,
+    r_max, route_tolerance, content_checksum, route_checksum) and its source binding (source_revision,
+    source_checksum). Exact applications never write an entry."""
+    extensions = getattr(model, "_serialization_extensions", {})
+    if INTERSECTION_PLANNING_EXTENSION not in extensions:
+        return ()
+    return tuple(dict(entry) for entry in validate_intersection_planning_record(
+        extensions[INTERSECTION_PLANNING_EXTENSION]))
+
+
+def _record_publication(model, plan):
+    """Append the route identity of the applied state-T ``plan`` to the model document record."""
+    extensions = getattr(model, "_serialization_extensions", {})
+    if not isinstance(extensions, dict):
+        raise GeometryError("model document extensions are malformed")
+    previous = (validate_intersection_planning_record(extensions[INTERSECTION_PLANNING_EXTENSION])
+                if INTERSECTION_PLANNING_EXTENSION in extensions else ())
+    entry = {name: getattr(plan, name) for name in _ROUTE_IDENTITY_FIELDS}
+    entry.update(source_revision=plan.revision, source_checksum=plan.source_checksum)
+    _record_entry(entry)
+    made = dict(extensions)
+    made[INTERSECTION_PLANNING_EXTENSION] = {"format": _RECORD_FORMAT,
+                                             "publications": [*(dict(item) for item in previous), entry]}
+    model._serialization_extensions = made
+
+
+def _certified_change_set(change_set, plan):
+    if isinstance(change_set, TopologyCertifiedChangeSet):
+        return change_set
+    values = {item.name: getattr(change_set, item.name) for item in fields(ChangeSet)}
+    return TopologyCertifiedChangeSet(**values, **{name: getattr(plan, name) for name in _ROUTE_IDENTITY_FIELDS})
+
+
+def _refuse_journaled_route(plan):
+    """A state-T plan is applied only through the committed owner path: its route record is document
+    state outside the topology journal, so a rolled-back caller transaction would keep a record of a
+    publication that never happened."""
+    if isinstance(plan, TopologyCertifiedPlan):
+        raise GeometryError("a topology-certified intersection plan is applied only through the committed owner "
+                            "path (its route record cannot join the caller's transaction)")
+
+
+def _publish_topology(model, snapshot, plan):
+    """``model.restore_topology(snapshot)``; for a state-T plan the route record is written and the
+    committed change set is a ``TopologyCertifiedChangeSet`` (stored and sent to the change hooks)."""
+    if not isinstance(plan, TopologyCertifiedPlan):
+        model.restore_topology(snapshot)
+        return
+    # As GeometryModel.restore_design: collect the committed change set, complete the publication,
+    # then notify the owner's hooks once with the final change set.
+    events = []
+    hooks = model._change_hooks
+    model._change_hooks = [events.append]
+    try:
+        model.restore_topology(snapshot)
+    finally:
+        model._change_hooks = hooks
+    _record_publication(model, plan)
+    if not events:
+        return
+    change_set = _certified_change_set(events[0], plan)
+    model._last_change_set = change_set
+    model._notifying_hooks = True
+    try:
+        for hook in tuple(hooks):
+            try:
+                hook(change_set)
+            except Exception:
+                continue
+    finally:
+        model._notifying_hooks = False
 
 
 def _context_forces_exact():
@@ -229,35 +389,90 @@ def _normal_positive_float(value):
     return type(value) is float and math.isfinite(value) and value >= 2.2250738585072014e-308
 
 
-def _route_state(plan):
-    """``"E"`` or ``"T"``; a malformed route state raises ``GeometryError`` (ADR section 7 rows 5-11)."""
-    if not isinstance(plan, TopologyCertifiedPlan):
-        return "E"
+# ADR section 7 matrix: one function per row, each with its own unsound test double (review R5).
+# They are looked up by name at call time, in this order (the order of the checks before fix
+# round 4, so the first failing row and its message are unchanged).
+
+def _route_row_11(plan):
+    """Row 11: route fields without planning_mode, or planning_mode = "exact" stored explicitly."""
     mode = plan.planning_mode
     if mode is None:
         raise GeometryError("intersection plan carries route fields without planning_mode")
+    if type(mode) is str and mode == "exact":
+        raise GeometryError("an exact intersection plan carries no route fields")
+
+
+def _route_row_10(plan):
+    """Row 10: planning_mode with any other value."""
+    mode = plan.planning_mode
     if type(mode) is not str or mode not in PLANNING_MODES:
         raise GeometryError(f"intersection plan planning_mode {mode!r} is not supported")
-    if mode == "exact":
-        raise GeometryError("an exact intersection plan carries no route fields")
+
+
+def _route_row_5(plan):
+    """Row 5: route_checksum missing or empty."""
     if type(plan.route_checksum) is not str or not plan.route_checksum:
         raise GeometryError("topology-certified intersection plan has no route_checksum")
+
+
+def _route_row_7(plan):
+    """Row 7: certificate_version missing or not in the supported set."""
     from .separating_plane_certificate import CERTIFICATE_VERSION
     if type(plan.certificate_version) is not str or plan.certificate_version != CERTIFICATE_VERSION:
         raise GeometryError("topology-certified intersection plan has an unsupported certificate_version")
+
+
+def _route_row_8(plan):
+    """Row 8 (load side): r_max a positive normal float, bit-equal to the contract value of the
+    stored route tolerance (tol/1000 rounded down)."""
     if not _normal_positive_float(plan.r_max):
         raise GeometryError("topology-certified intersection plan r_max is not a positive normal float")
     if not _normal_positive_float(plan.route_tolerance) or plan.r_max != _contract_r_max(plan.route_tolerance):
         raise GeometryError("topology-certified intersection plan r_max is not the contract value")
+
+
+def _route_row_8_model(plan, model):
+    """Row 8 (apply side): the route tolerance is the model's length tolerance and r_max its
+    contract value (addendum A13: r_max is per plan)."""
+    if plan.route_tolerance != model.tolerance.length or plan.r_max != _plan_r_max(model):
+        raise GeometryError("topology-certified intersection plan r_max is not the contract value")
+
+
+def _route_row_9(plan):
+    """Row 9: every recorded r_pair present, finite and <= r_max (exact float comparison)."""
     if type(plan.r_pairs) is not tuple:
         raise GeometryError("topology-certified intersection plan r_pair diagnostics are malformed")
     for item in plan.r_pairs:
         if (type(item) is not tuple or len(item) != 3 or type(item[0]) is not int or type(item[1]) is not int
                 or type(item[2]) is not float or not math.isfinite(item[2]) or not 0. <= item[2] <= plan.r_max):
             raise GeometryError("topology-certified intersection plan r_pair is missing, non-finite or above r_max")
+
+
+def _route_row_6(plan):
+    """Row 6: the route checksum recomputes from (content_checksum, mode, version, r_max)."""
     if plan.route_checksum != _route_checksum(plan):
         raise GeometryError("topology-certified intersection plan route binding changed")
+
+
+_PLAN_ROWS = (11, 10, 5, 7, 8, 9, 6)
+_IDENTITY_ROWS = (11, 10, 5, 7, 8, 6)          # persisted route identities carry no r_pairs
+
+
+def _route_state(plan):
+    """``"E"`` or ``"T"``; a malformed route state raises ``GeometryError`` (ADR section 7 rows 5-11)."""
+    if not isinstance(plan, TopologyCertifiedPlan):
+        return "E"
+    checks = globals()
+    for row in _PLAN_ROWS:
+        checks[f"_route_row_{row}"](plan)
     return "T"
+
+
+def _check_route_identity(identity):
+    """A persisted route identity (change set, model record entry) passes the plan's row checks."""
+    checks = globals()
+    for row in _IDENTITY_ROWS:
+        checks[f"_route_row_{row}"](identity)
 
 
 def _validate_route(plan, policy, model=None):
@@ -269,9 +484,8 @@ def _validate_route(plan, policy, model=None):
     if state == "T":
         if mode != "topology_certified":
             raise GeometryError("a topology-certified intersection plan is never applied as exact")
-        if model is not None and (plan.route_tolerance != model.tolerance.length
-                                  or plan.r_max != _plan_r_max(model)):
-            raise GeometryError("topology-certified intersection plan r_max is not the contract value")
+        if model is not None:
+            _route_row_8_model(plan, model)
     return state
 
 
@@ -1735,8 +1949,10 @@ def apply_intersections(model, plan, *, policy):
     with root_isolation_memo(), _timed_phase('intersection_application'), junction_policy:
         result = _apply_intersections(model, plan, policy=policy)
     if isinstance(plan, TopologyCertifiedPlan) and type(result) is IntersectionApplication:
-        # Only reached after _validate_policy accepted the state-T plan (matrix row 3).
-        result = TopologyCertifiedApplication(result.plan, result.change_set, result.joint_edges, result.reused,
+        # Only reached after _validate_policy accepted the state-T plan (matrix row 3). A committed
+        # publication already carries a TopologyCertifiedChangeSet; an unchanged or cached one gets it here.
+        result = TopologyCertifiedApplication(result.plan, _certified_change_set(result.change_set, plan),
+                                              result.joint_edges, result.reused,
                                               plan.planning_mode, plan.r_max, plan.certificate_version)
     return result
 
@@ -1802,6 +2018,7 @@ def _apply_intersections(model, plan, *, policy):
         if capture_native_supports(model)!=_native_plan_supports(plan):
             raise GeometryError('epoch intersection plan native support binding changed')
     if model._transaction_journal is not None:
+        _refuse_journaled_route(plan)
         from .preparation_epochs import _has_epoch_permit
         if _has_epoch_permit(model):
             raise GeometryError('first preparation of a new epoch requires the committed owner path')
@@ -1838,6 +2055,12 @@ def _apply_intersections(model, plan, *, policy):
     try:
         outcome = _apply_intersections_in_place(candidate, plan, policy=policy,
             _edge_preimage_draft=edge_draft)
+        recorded = isinstance(plan, TopologyCertifiedPlan) and candidate.revision != plan.revision
+        if recorded:
+            # Row 3: the route record is part of the sealed candidate document; _publish_topology
+            # writes the same record on the owner, so both documents stay equal. An application that
+            # changes nothing publishes nothing and records nothing.
+            _record_publication(candidate, plan)
         finished_sources=_finish_attachment_draft(candidate)
         attachment_sources,derived_sources=finished_sources if finished_sources is not None else (None,None)
     finally:
@@ -1893,7 +2116,7 @@ def _apply_intersections(model, plan, *, policy):
         from .preparation_epochs import _seals
         saved_seal=_seals.get(model)
     try:
-        model.restore_topology(candidate.topology_snapshot())
+        _publish_topology(model, candidate.topology_snapshot(), plan if recorded else None)
         result = IntersectionApplication(plan,
             model.last_change_set if model.revision != before else ChangeSet(before, before),
             tuple(model.handle("edge", edge.id) for edge in outcome.joint_edges), model.revision == before)

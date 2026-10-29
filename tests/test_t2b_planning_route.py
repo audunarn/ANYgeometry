@@ -9,9 +9,13 @@ from dataclasses import fields, replace
 import numpy as np
 import pytest
 
-from anygeometry import GeometryModel, GeometryError, to_dict
+from anygeometry import GeometryModel, GeometryError, from_dict, to_dict
+from anygeometry import analytic_supports
 from anygeometry import batch_intersections as bi
 from anygeometry import separating_plane_certificate as sp
+from anygeometry.exact_curves import EllipticArc
+from anygeometry.serialization import _checksum
+from anygeometry.transactions import ChangeSet
 from anygeometry.batch_intersections import (IntersectionBatchPolicy, IntersectionPlan, TopologyCertifiedPlan,
                                              apply_intersections, plan_intersections)
 from anygeometry.definition_binding import definition_value
@@ -273,7 +277,12 @@ def test_matrix_rows_1_and_3_accept_and_apply_identically(plans):
     assert type(applied_t) is bi.TopologyCertifiedApplication
     assert (applied_t.planning_mode, applied_t.r_max, applied_t.certificate_version) == (
         "topology_certified", certified.r_max, sp.CERTIFICATE_VERSION)
-    assert to_dict(left) == to_dict(right)              # equal geometry checksums: identical models
+    # Equal geometry checksums: identical models, except the row-3 route record of the T application
+    # (fix round 4: the record lives in the document extensions, so the document checksum differs).
+    document_e, document_t = to_dict(left), to_dict(right)
+    assert document_e["extensions"] == {} and set(document_t["extensions"]) == {bi.INTERSECTION_PLANNING_EXTENSION}
+    strip = lambda document: {k: v for k, v in document.items() if k not in ("extensions", "checksum")}
+    assert strip(document_e) == strip(document_t)
 
 
 @pytest.mark.parametrize("row", [2, 4])
@@ -294,8 +303,7 @@ def _tampered(certified, row):
     if row == 7:
         return [_resealed(certified, certificate_version=value) for value in (None, "sp-exact-t2-1a-0", 1)]
     if row == 8:
-        tol = 1e-9
-        values = [None, math.nan, math.inf, 5e-324, 0., -certified.r_max, 1e-12, "1e-12"]
+        values = [None, math.nan, math.inf, 5e-324, 0., -certified.r_max, 1e-12, "1e-12", 2*certified.r_max]
         return [_resealed(certified, r_max=value) for value in values
                 if not (value == certified.r_max and type(value) is float)]
     if row == 9:
@@ -322,15 +330,72 @@ def test_matrix_malformed_route_rows_are_rejected_at_apply_and_load(plans, row, 
             pickle.loads(pickle.dumps(plan))                  # plan load
         assert _only_this_field_is_wrong(plan, certified)
     assert to_dict(model) == before
-    # Unsound double: no route-state validation. The malformed plans whose r_max/tolerance are intact
-    # (row 8 has a second, model-side check) then APPLY in topology_certified mode.
-    monkeypatch.setattr(bi, "_route_state", lambda plan: "T" if isinstance(plan, TopologyCertifiedPlan) else "E")
-    accepted = 0
-    for plan in _tampered(certified, row):
-        if repr(plan.r_max) == repr(certified.r_max) and plan.route_tolerance == certified.route_tolerance:
-            apply_intersections(model.clone(preserve_identity=True), plan, policy=T)
-            accepted += 1
-    assert accepted or row == 8
+
+
+_ROW_MESSAGES = {5: "no route_checksum", 6: "route binding changed", 7: "unsupported certificate_version",
+                 8: "r_max is not", 9: "r_pair", 10: "is not supported",
+                 11: "without planning_mode|carries no route fields"}
+
+
+def _disable_row(monkeypatch, row):
+    """The unsound double of ONE section-7 check: that row's check (for row 8 both its load-side and
+    its model-side half) is removed; every other check stays active."""
+    monkeypatch.setattr(bi, f"_route_row_{row}", lambda plan: None)
+    if row == 8:
+        monkeypatch.setattr(bi, "_route_row_8_model", lambda plan, model: None)
+
+
+def _load_and_apply(model, plan):
+    """``None`` if the plan loads and applies in topology_certified mode, else the refusal."""
+    try:
+        loaded = pickle.loads(pickle.dumps(plan))
+        apply_intersections(model.clone(preserve_identity=True), loaded, policy=T)
+    except Exception as exc:                             # noqa: BLE001 - the outcome is compared
+        return f"{type(exc).__name__}: {exc}"
+    return None
+
+
+@pytest.mark.parametrize("row", [5, 6, 7, 8, 9, 10, 11])
+def test_matrix_row_checks_each_have_their_own_unsound_double(plans, row, monkeypatch):
+    """Review R5 (fix round 4): one double per check, not one global double. For every tampered plan
+    of a row, that row's check rejects it on its own; with ONLY that check removed, at least one
+    tampered plan of the row loads (pickle) and applies, and every other one is refused by another
+    row's check (different reason). Row 8 is not exempt: its double removes both halves of the row
+    (the contract value at load and the model tolerance at apply), and the self-consistent r_max
+    values that are not the contract value then load and apply.
+
+    Row 5 is the one row whose double cannot reach acceptance: a missing or empty route_checksum can
+    never equal the recomputed definition_checksum (a non-empty hex digest), so the row-6 binding
+    check rejects every row-5 plan as well. Its double is discriminated by the reason: with row 5
+    removed, every row-5 plan is refused with the row-6 reason instead of the row-5 reason."""
+    model, _exact, certified = plans
+    tampered = _tampered(certified, row)
+    for plan in tampered:
+        with pytest.raises(GeometryError, match=_ROW_MESSAGES[row]):
+            getattr(bi, f"_route_row_{row}")(plan)
+    real = [_load_and_apply(model, plan) for plan in tampered]
+    assert all(outcome is not None for outcome in real)
+    _disable_row(monkeypatch, row)
+    double = [_load_and_apply(model, plan) for plan in tampered]
+    accepted = sum(outcome is None for outcome in double)
+    import re
+    for outcome in double:
+        assert outcome is None or not re.search(_ROW_MESSAGES[row], outcome), outcome
+    if row == 5:
+        assert accepted == 0 and all(_ROW_MESSAGES[6] in outcome for outcome in double)
+    else:
+        assert accepted >= 1, double
+
+
+def test_matrix_row_8_model_side_check_has_its_own_double(plans, monkeypatch):
+    """Row 8 at apply: a self-consistent plan for ANOTHER tolerance passes the load-side half and is
+    refused only by the model-side half; removing that half alone applies it."""
+    model, _exact, certified = plans
+    other = _resealed(certified, route_tolerance=2e-9, r_max=sp.contract_r_max(2e-9), r_pairs=())
+    assert bi._route_row_8(other) is None
+    assert "contract value" in _load_and_apply(model, other)
+    monkeypatch.setattr(bi, "_route_row_8_model", lambda plan, model: None)
+    assert _load_and_apply(model, other) is None
 
 
 def test_matrix_row_8_rejects_a_wrong_contract_value_at_load_and_apply(plans):
@@ -821,3 +886,363 @@ def test_mode_agnostic_early_routes_are_selected_and_an_invalid_mode_is_refused(
     with pytest.raises(GeometryError, match="ANYGEOMETRY_PLANNING_MODE"):
         plan_intersections(model, faces, policy="connect")
     assert len(seen["apply"]) == 4
+
+
+# ----------------------------------------------------------------------------------- fix round 4 (R4): row 3 persisted
+
+_IDENTITY = ("planning_mode", "certificate_version", "r_max", "route_tolerance", "content_checksum", "route_checksum")
+
+
+def test_row_3_persists_the_route_identity_in_change_set_hooks_and_model_record(plans):
+    """Review R4 / parent decision (a): a topology-certified application writes the mode, r_max and
+    certificate version (with the tolerance and both checksums that bind them) into the change set
+    that the application returns, that model.last_change_set holds and that change hooks receive,
+    and into the model document's ``anygeometry:intersection_planning`` record, which survives
+    to_dict/from_dict. Fails on 2736b9e (no persisted metadata)."""
+    model, exact, certified = plans
+    model_e = model.clone(preserve_identity=True)
+    seen = []
+    model.add_change_hook(seen.append)
+    applied = apply_intersections(model, certified, policy=T)
+    change_set = applied.change_set
+    assert type(change_set) is bi.TopologyCertifiedChangeSet and isinstance(change_set, ChangeSet)
+    assert {name: getattr(change_set, name) for name in _IDENTITY} == {
+        name: getattr(certified, name) for name in _IDENTITY}
+    assert change_set.revision_after == model.revision
+    exact_set = apply_intersections(model_e, exact, policy="connect").change_set   # the same publication, exact
+    assert type(exact_set) is ChangeSet and all(
+        getattr(change_set, item.name) == getattr(exact_set, item.name) for item in fields(ChangeSet))
+    assert model.last_change_set is change_set and seen == [change_set]
+    assert pickle.loads(pickle.dumps(change_set)) == change_set
+    record = bi.intersection_planning_record(model)
+    assert len(record) == 1
+    entry = record[0]
+    assert {name: entry[name] for name in _IDENTITY} == {name: getattr(certified, name) for name in _IDENTITY}
+    assert (entry["source_revision"], entry["source_checksum"]) == (certified.revision, certified.source_checksum)
+    document = to_dict(model)
+    assert document["extensions"][bi.INTERSECTION_PLANNING_EXTENSION]["publications"] == [dict(entry)]
+    loaded = from_dict(document)
+    assert bi.intersection_planning_record(loaded) == record and to_dict(loaded) == document
+
+
+def test_row_1_exact_application_writes_no_route_metadata(plans):
+    """Exact plans carry none: an exact application returns and stores a plain ChangeSet, writes no
+    document extension and no record (default outputs unchanged)."""
+    model, exact, _certified = plans
+    seen = []
+    model.add_change_hook(seen.append)
+    applied = apply_intersections(model, exact, policy="connect")
+    assert type(applied.change_set) is ChangeSet and type(model.last_change_set) is ChangeSet
+    assert [type(item) for item in seen] == [ChangeSet]
+    assert to_dict(model)["extensions"] == {} and bi.intersection_planning_record(model) == ()
+    for marker in (b"planning_mode", b"route_checksum", b"TopologyCertified", b"topology_certified"):
+        assert marker not in pickle.dumps(applied.change_set)
+
+
+def test_second_topology_application_appends_and_an_exact_one_leaves_the_record(plans):
+    model, _exact, certified = plans
+    apply_intersections(model, certified, policy=T)
+    first = bi.intersection_planning_record(model)
+    replanned = plan_intersections(model, tuple(model.faces), policy=T)
+    apply_intersections(model, replanned, policy=T)
+    after_t = bi.intersection_planning_record(model)
+    assert after_t[:1] == first and len(after_t) in (1, 2)
+    if type(replanned) is TopologyCertifiedPlan and len(after_t) == 2:
+        assert after_t[1]["route_checksum"] == replanned.route_checksum
+    exact = plan_intersections(model, tuple(model.faces), policy="connect")
+    apply_intersections(model, exact, policy="connect")
+    assert bi.intersection_planning_record(model) == after_t          # exact writes nothing
+
+
+def _record_document(plans):
+    model, _exact, certified = plans
+    apply_intersections(model, certified, policy=T)
+    return to_dict(model)
+
+
+def _reseal_entry(entry):
+    entry["route_checksum"] = bi.definition_checksum((entry["content_checksum"], entry["planning_mode"],
+                                                      entry["certificate_version"], entry["r_max"]))
+
+
+# tamper id -> (mutation of one publication entry, reseal the route checksum, the check whose removal
+# alone makes the record load, or None when another check also rejects it)
+_RECORD_TAMPERS = {
+    "extra_field": (lambda e: e.update(note=1), False, "_record_fields"),
+    "missing_version": (lambda e: e.pop("certificate_version"), False, None),
+    "mode_exact": (lambda e: e.update(planning_mode="exact"), True, "_route_row_11"),
+    "mode_other": (lambda e: e.update(planning_mode="topology"), True, "_route_row_10"),
+    "version_unsupported": (lambda e: e.update(certificate_version="sp-exact-t2-1a-0"), True, "_route_row_7"),
+    "r_max_not_contract": (lambda e: e.update(r_max=2*e["r_max"]), True, "_route_row_8"),
+    "route_checksum_mismatch": (lambda e: e.update(route_checksum="0"*64), False, "_route_row_6"),
+    "route_checksum_empty": (lambda e: e.update(route_checksum=""), False, None),
+    "source_revision_bool": (lambda e: e.update(source_revision=True), False, "_record_fields"),
+}
+
+
+@pytest.mark.parametrize("tamper", sorted(_RECORD_TAMPERS))
+def test_row_14_model_record_load_check_and_per_check_double(plans, tamper, monkeypatch):
+    """New matrix row 14 (fix round 4): a model document whose topology-certified record has a
+    missing, extra or mismatched field is rejected at load (from_dict), with a correct document
+    checksum. The double of the named check alone (the same section-7 row functions as for plans,
+    plus the record's field check) makes the document load; tampers rejected by two checks are
+    discriminated by the reason only."""
+    document = _record_document(plans)
+    assert from_dict(document) is not None                          # the untampered record loads
+    mutate, reseal, check = _RECORD_TAMPERS[tamper]
+    entry = document["extensions"][bi.INTERSECTION_PLANNING_EXTENSION]["publications"][0]
+    mutate(entry)
+    if reseal:
+        _reseal_entry(entry)
+    document["checksum"] = _checksum(document)
+    with pytest.raises(GeometryError, match="intersection planning record") as info:
+        from_dict(document)
+    if check is None:
+        return
+    monkeypatch.setattr(bi, check, (lambda value: None))
+    if check == "_route_row_8":
+        monkeypatch.setattr(bi, "_route_row_8_model", lambda plan, model: None)
+    assert from_dict(document) is not None, info.value
+
+
+@pytest.mark.parametrize("record", [[], {"format": 1}, {"format": 2, "publications": []},
+                                    {"format": 1, "publications": []}, "x"])
+def test_row_14_malformed_record_container_is_rejected(plans, record):
+    document = _record_document(plans)
+    document["extensions"][bi.INTERSECTION_PLANNING_EXTENSION] = record
+    document["checksum"] = _checksum(document)
+    with pytest.raises(GeometryError, match="intersection planning record"):
+        from_dict(document)
+
+
+_CHANGE_SET_TAMPERS = {
+    "mode_exact": ({"planning_mode": "exact"}, True, "_route_row_11"),
+    "mode_none": ({"planning_mode": None}, True, None),
+    "mode_other": ({"planning_mode": "topology"}, True, "_route_row_10"),
+    "version_unsupported": ({"certificate_version": "sp-exact-t2-1a-0"}, True, "_route_row_7"),
+    "version_missing": ({"certificate_version": None}, True, "_route_row_7"),
+    "r_max_not_contract": ({"r_max": 2e-12}, True, "_route_row_8"),
+    "r_max_missing": ({"r_max": None}, True, "_route_row_8"),
+    "route_checksum_mismatch": ({"route_checksum": "0"*64}, False, "_route_row_6"),
+    "route_checksum_missing": ({"route_checksum": None}, False, None),
+}
+
+
+@pytest.mark.parametrize("tamper", sorted(_CHANGE_SET_TAMPERS))
+def test_row_14_change_set_metadata_is_checked_at_construction_and_load(plans, tamper, monkeypatch):
+    model, _exact, certified = plans
+    change_set = apply_intersections(model, certified, policy=T).change_set
+    changes, reseal, check = _CHANGE_SET_TAMPERS[tamper]
+    values = {item.name: getattr(change_set, item.name) for item in fields(change_set)}
+    values.update(changes)
+    if reseal:
+        values["route_checksum"] = bi.definition_checksum((values["content_checksum"], values["planning_mode"],
+                                                           values["certificate_version"], values["r_max"]))
+    with pytest.raises(GeometryError):
+        bi.TopologyCertifiedChangeSet(**values)
+    forged = object.__new__(bi.TopologyCertifiedChangeSet)
+    for name, value in values.items():
+        object.__setattr__(forged, name, value)
+    blob = pickle.dumps(forged)
+    with pytest.raises(GeometryError):
+        pickle.loads(blob)
+    if check is None:
+        return
+    monkeypatch.setattr(bi, check, (lambda value: None))
+    assert pickle.loads(blob) == forged
+
+
+def test_topology_certified_plan_is_refused_inside_a_caller_transaction(plans, monkeypatch):
+    """The route record cannot join the caller's journal (a rollback would keep a record of a
+    publication that never happened), so a state-T plan is applied only through the committed owner
+    path; exact plans still join the caller's transaction. The double without this refusal applies
+    the T plan inside the transaction and leaves the model WITHOUT its row-3 record."""
+    model, exact, certified = plans
+    before = to_dict(model)
+    with pytest.raises(GeometryError, match="committed owner path"):
+        with model.transaction():
+            apply_intersections(model, certified, policy=T)
+    assert to_dict(model) == before
+    other = model.clone(preserve_identity=True)
+    with other.transaction():
+        apply_intersections(other, exact, policy="connect")
+    assert other.revision == model.revision + 1
+    monkeypatch.setattr(bi, "_refuse_journaled_route", lambda plan: None)
+    with model.transaction():
+        apply_intersections(model, certified, policy=T)
+    assert model.revision == certified.revision + 1 and bi.intersection_planning_record(model) == ()
+
+
+# ----------------------------------------------------------------------------------- fix round 4 (R5): cc_cross
+
+def _mitre(beta=0.35, half=0.3):
+    """Two equal-radius cylinder strips with NONPARALLEL axes (angle 2*beta) meeting on the mitre
+    plane z = tan(beta)*x: the shared edge is an ellipse arc (theta in [-half, half], away from the
+    two double points at theta = +-pi/2). The exact path reaches the nonparallel branch of
+    cylinder_cylinder_support (cc_cross); the real certificate certifies the pair."""
+    model = GeometryModel()
+    t = math.tan(beta)
+    n = (-math.sin(beta), 0., math.cos(beta))
+
+    def reflect(p):
+        d = sum(p[i]*n[i] for i in range(3))
+        return tuple(p[i]-2*d*n[i] for i in range(3))
+    P = lambda th: (math.cos(th), math.sin(th), t*math.cos(th))
+    Q = lambda th: (math.cos(th), math.sin(th), -1.)
+    p0, p1 = model.add_point(*P(-half)), model.add_point(*P(half))
+    q0, q1 = model.add_point(*Q(-half)), model.add_point(*Q(half))
+    ellipse = model.add_curve(p0, p1, EllipticArc((0., 0., 0.), (1., 0., t), (0., 1., 0.), -half, 2*half))
+    bottom = model.add_arc(q1, model.add_point(*Q(0.)), q0)
+    first = model.add_face_from_loop(
+        (OrientedEdge(ellipse, True), OrientedEdge(model.add_line(p1, q1), True), OrientedEdge(bottom, True),
+         OrientedEdge(model.add_line(q0, p0), True)),
+        surface=Cylinder(radius=1., origin=(0., 0., -1.), axis=(0., 0., 1.), radial_direction=(1., 0., 0.),
+                         height=1+t, start_angle=-half, sweep_angle=2*half))
+    r0, r1 = model.add_point(*reflect(Q(-half))), model.add_point(*reflect(Q(half)))
+    bottom2 = model.add_arc(r0, model.add_point(*reflect(Q(0.))), r1)
+    origin = reflect((0., 0., -1.))
+    second = model.add_face_from_loop(
+        (OrientedEdge(ellipse, False), OrientedEdge(model.add_line(p0, r0), True), OrientedEdge(bottom2, True),
+         OrientedEdge(model.add_line(r1, p1), True)),
+        surface=Cylinder(radius=1., origin=origin, axis=tuple(-2*n[i]*n[2] + (i == 2) for i in range(3)),
+                         radial_direction=tuple((i == 0) - 2*n[i]*n[0] for i in range(3)), height=1+t,
+                         start_angle=-half, sweep_angle=2*half))
+    return model, (first, second)
+
+
+class _NoShadow(bi._TopologyRoute):
+    """Double: certified pairs skip the support shadow."""
+
+    def pair(self, first, second, model, tolerance, check, point_contacts, face_tolerances):
+        verdict = self._certify(first, second, check)
+        return None if verdict is None else self._emit(verdict, first, second, tolerance, point_contacts)
+
+
+def test_cc_cross_mitre_is_certified_and_its_nonparallel_support_runs_in_shadow(monkeypatch):
+    model, faces = _mitre()
+    calls = []
+    original = bi.cylinder_cylinder_support
+
+    def spy(first, second, **kwargs):
+        calls.append(float(np.linalg.norm(np.cross(first.axis, second.axis))))
+        return original(first, second, **kwargs)
+    monkeypatch.setattr(bi, "cylinder_cylinder_support", spy)
+    plan_intersections(model, faces, policy="connect")
+    assert len(calls) == 1 and calls[0] > .5                         # exact path: nonparallel branch
+    calls.clear()
+    plan, counters = _counters(lambda: plan_intersections(model, faces, policy=T))
+    assert counters["t2b_certified"] == 1 and [item[:2] for item in plan.r_pairs] == [tuple(faces)]
+    assert len(calls) == 1 and calls[0] > .5                         # the same call, in shadow
+    calls.clear()
+    monkeypatch.setattr(bi, "_TopologyRoute", _NoShadow)
+    plan_intersections(model, faces, policy=T)
+    assert calls == []                                               # the double never reaches it
+
+
+class _InjectedZero(Exception):
+    pass
+
+
+def _cc_injections():
+    """The nonparallel cc support stage, analytic_supports.cylinder_cylinder_support (line refs at
+    t21b fix round 4), and every refusal it can raise:
+      L162-163  type guard (two Cylinders): unreachable for certified pairs (records exist only for
+                Plane/Cylinder supports and the family dispatch sends Cylinder/Cylinder here); the
+                shadow runs it anyway.
+      L166-167  parallel axes -> _parallel (L220-252): not cc_cross (|a1 x a2| != 0 here).
+      L174-176  transition events: _linear_events -> _events (L28-35) -> analytic_roots.
+                trigonometric_roots: GeometryError (invalid constraint/interval, zero divisor,
+                inconsistent division/isolation, cancellation "analytic root isolation cancelled").
+      L179-190  cap and seam plane events: _plane_branch_events (L144-157) -> _events/_linear_events:
+                the same root-isolation refusals and cancellation.
+      L203-205  CylinderIntersectionCurve(...) (exact_curves.py:337): GeometryError (branch,
+                parameterization, parallel axes, chart not split at a discriminant transition) and
+                its evaluate(.5).
+      L212      float division by w.w: ZeroDivisionError if w.w rounds to 0 (not a GeometryError;
+                injected as a non-GeometryError stand-in at the curve constructor).
+      Any exception of the callback (cancellation) raised through cancellation_check.
+    batch_intersections cc branch (_pair_paths_exact, L1048-1054 at fix round 4): result.coincident is
+    False on the nonparallel branch, so the coincident sub-branch is unreachable; segments is always ()
+    there, so no LinePath is built.
+    Parity argument: on a certified pair the route calls _pair_paths_exact(_shadow=...) which makes
+    the identical call (same supports, tolerance and cancellation callback) at the same point of the
+    pair loop with no handler interposed, so every exception above propagates exactly as in exact
+    mode. Each family is injected below (the type guard by replacing the whole entry point)."""
+    def raising(error):
+        def refuse(*args, **kwargs):
+            raise error
+        return refuse
+    return {
+        "entry": (bi, "cylinder_cylinder_support", raising(GeometryError("injected cc entry refusal"))),
+        "transition_events": (analytic_supports, "_linear_events",
+                              raising(GeometryError("injected transition root refusal"))),
+        "plane_branch_events": (analytic_supports, "_plane_branch_events",
+                                raising(GeometryError("injected plane-branch root refusal"))),
+        "root_isolation": (analytic_supports, "trigonometric_roots",
+                           raising(GeometryError("analytic root isolation cancelled"))),
+        "branch_curve": (analytic_supports, "CylinderIntersectionCurve",
+                         raising(GeometryError("intersection branch chart must split at every discriminant "
+                                               "transition"))),
+        "zero_division": (analytic_supports, "CylinderIntersectionCurve", raising(_InjectedZero("w.w == 0"))),
+    }
+
+
+@pytest.mark.parametrize("family", sorted(_cc_injections()))
+def test_cc_cross_support_refusals_are_raised_in_shadow_on_a_certified_pair(monkeypatch, family):
+    """Review R5: each enumerated cc_cross refusal family, injected inside the nonparallel support of
+    the certified mitre pair, is raised in topology_certified mode exactly as in exact mode (same
+    type and text); the double without the shadow does not raise it."""
+    model, faces = _mitre()
+    module, name, replacement = _cc_injections()[family]
+    monkeypatch.setattr(module, name, replacement)
+
+    def outcome(policy):
+        try:
+            plan_intersections(model, faces, policy=policy)
+        except Exception as exc:                         # noqa: BLE001 - compared below
+            return type(exc), str(exc)
+        return None
+    exact = outcome("connect")
+    assert exact is not None and ("injected" in exact[1] or exact[1].endswith(("cancelled", "transition", "w.w == 0")))
+    assert outcome(T) == exact
+    monkeypatch.setattr(bi, "_TopologyRoute", _NoShadow)
+    assert outcome(T) != exact
+
+
+def test_cc_cross_cancellation_inside_the_nonparallel_support_propagates_unchanged(monkeypatch):
+    model, faces = _mitre()
+    sentinel = _Cancel("stop inside cc support")
+    inside = []
+    original = analytic_supports._plane_branch_events
+
+    def polling(first, second, normal, offset, tolerance, cancellation_check):
+        inside.append(1)
+        cancellation_check()
+        return original(first, second, normal, offset, tolerance, cancellation_check)
+    monkeypatch.setattr(analytic_supports, "_plane_branch_events", polling)
+
+    def cancellation():
+        if inside:
+            raise sentinel
+        return False
+    for mode in (None, "topology_certified"):
+        inside.clear()
+        with pytest.raises(_Cancel) as info:
+            plan_intersections(model, faces, policy=IntersectionBatchPolicy(planning_mode=mode,
+                                                                            cancellation_check=cancellation))
+        assert info.value is sentinel
+    inside.clear()
+    monkeypatch.setattr(bi, "_TopologyRoute", _NoShadow)
+    plan = plan_intersections(model, faces, policy=IntersectionBatchPolicy(planning_mode="topology_certified",
+                                                                           cancellation_check=cancellation))
+    assert type(plan) is TopologyCertifiedPlan and not inside
+
+
+# ----------------------------------------------------------------------------------- naming
+
+def test_on_is_described_as_experimental_topology_certified_planning_not_as_equivalent():
+    import pathlib
+    texts = [pathlib.Path(bi.__file__).read_text(encoding="utf-8"), pathlib.Path(__file__).read_text(encoding="utf-8")]
+    assert "topology-certified planning (experimental)" in texts[0]
+    forbidden = "certified" + "-equivalent"
+    assert all(forbidden not in text.lower() for text in texts)
