@@ -54,9 +54,9 @@ def test_refinement_error_is_strict_control_signal_with_original_full_error():
 
 def test_adopted_error_and_fresh_cos_pins_and_other_primitives_still_match():
     from anygeometry.nurbs_surface_intersection._dependencies import PINS,verify_dependencies
-    assert dict(PINS)['errors.py']=='a6da540fff83f27e8f4fc5cc2b187f8413da6d2d3460461fa64b820429e04c89'
+    assert dict(PINS)['errors.py']=='8dd49f04145b15f5d6bde5a91458b0df13d1c889a7dd760f04092dfcd064b2bd'
     assert dict(PINS)['nurbs.py']=='53310819017985a2bd6153a3449f27b24d087ecee713eb9c379f1eb021f21b77'
-    assert dict(PINS)['_cert_exact_runtime.py']=='68427a0294a160c10c32af712fb374eb4ac95d249fc719940f629e2a798c4afa'
+    assert dict(PINS)['_cert_exact_runtime.py']=='5b600f1be3d641fe1f6f4feee05542ef72b665f946c160aa745bd296e38e7725'
     assert dict(PINS)['plane_nurbs.py']=='f60c8b6d80ab2c652af2db32df3adfd0817af467b2aac20d775281991aa21db2'
     assert dict(PINS)['tolerance.py']=='f7709e89d2294dab1b71aecdb6a6a92f212a42905531e21ace78e89f1e0ab7f5'
     verify_dependencies()
