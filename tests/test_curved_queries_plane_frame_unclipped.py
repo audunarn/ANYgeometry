@@ -308,6 +308,72 @@ def test_exact_trims_on_a_rotated_covering_frame_keep_the_bounded_chart():
     assert not _plane_chart(model, face).unbounded
 
 
+def _far_line_range_face(origin_x):
+    """Codex S0g-R3 P1: a LineRange rectangle one ulp left of a Plane frame's origin at large x.
+
+    The face is ``[x, O + 0.2] x [0, 1]`` (z = 0) with ``x = nextafter(O, -inf)``;
+    the frame is ``(O, 0, 0) / (0.3, 0, 0) / (0, 1, 0)``, so the exact support u
+    of the left edge is ``(x - O) / 0.3 < 0``.
+    """
+
+    from anygeometry.line_ranges import LineRange
+
+    left = float(np.nextafter(origin_x, -np.inf))
+    corners = ((left, 0.0, 0.0), (origin_x + 0.2, 0.0, 0.0), (origin_x + 0.2, 1.0, 0.0), (left, 1.0, 0.0))
+    model = GeometryModel()
+    vertices = model.add_points(corners)
+    edges = tuple(
+        model.add_curve(vertices[index], vertices[(index + 1) % 4], LineRange(corners[index], corners[(index + 1) % 4]))
+        for index in range(4)
+    )
+    face = model.add_face(edges)
+    model.set_face_surface(face, Plane((origin_x, 0.0, 0.0), (0.3, 0.0, 0.0), (0.0, 1.0, 0.0)))
+    # The query arc lies in the plane x = left and crosses z = 0 on the face's left edge.
+    edge = model.add_arc(*model.add_points(((left, 0.4, -0.1), (left, 0.5, 0.0), (left, 0.4, 0.1))))
+    return model, face, edge, left
+
+
+def _exact_left_u(origin_x, left):
+    from fractions import Fraction
+
+    return (Fraction(left) - Fraction(origin_x)) / Fraction(0.3)
+
+
+def test_rounding_does_not_prove_coverage_of_a_far_face():
+    """Codex S0g-R3 P1: at about 1e8 m, rounded transformed bounds proved coverage and the touch came back DISJOINT."""
+
+    from anygeometry.curved_intersections import _plane_chart
+
+    origin_x = 100000000.2
+    model, face, edge, left = _far_line_range_face(origin_x)
+    assert model.validate_topology() == ()
+    slack = 1.0e-3 * model.tolerance.length / 0.3
+    assert _exact_left_u(origin_x, left) < -slack  # the frame does not cover the face
+    assert _plane_chart(model, face).unbounded
+    result = query_intersection(model, model.handle("edge", edge), model.handle("face", face))
+    assert result.kind is not IntersectionKind.DISJOINT, result.diagnostics
+
+
+@pytest.mark.parametrize("exponent", range(2, 13))
+def test_coverage_decision_is_fail_closed_across_coordinate_scales(exponent):
+    """Scale sweep 1e2 .. 1e12 m: never a covering claim the exact values refute, never a DISJOINT touch."""
+
+    from anygeometry.curved_intersections import _plane_chart
+    from anygeometry.errors import GeometryError
+
+    origin_x = 10.0 ** exponent + 0.2
+    model, face, edge, left = _far_line_range_face(origin_x)
+    slack = 1.0e-3 * model.tolerance.length / 0.3
+    chart = _plane_chart(model, face)
+    if _exact_left_u(origin_x, left) < -slack:
+        assert chart.unbounded
+    try:
+        result = query_intersection(model, model.handle("edge", edge), model.handle("face", face))
+    except GeometryError:
+        return  # a typed refusal is fail-closed
+    assert result.kind is not IntersectionKind.DISJOINT, (exponent, result.diagnostics)
+
+
 # ---------------------------------------------------------------- bit identity
 
 _UUID = re.compile(r"UUID\('[0-9a-f-]+'\)")

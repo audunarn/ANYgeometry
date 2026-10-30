@@ -13,6 +13,7 @@ never becomes an empty intersection; it becomes ``UNCLASSIFIED``.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from fractions import Fraction
 from math import atan2, ceil, comb, floor, pi
 import heapq
 from typing import Iterable, Sequence
@@ -22,6 +23,8 @@ import numpy as np
 from .curves import Arc, Spline, Straight
 from .errors import GeometryError
 from .exact_curves import EXACT_CURVES, EllipticArc, CylinderIntersectionCurve
+from .line_ranges import LineRange
+from .nurbs import CurveOnSurface, NurbsCurve
 from .identity import EntityHandle
 from .predicates import (
     DEFAULT_INTERSECTION_QUALIFICATION_POLICY,
@@ -765,6 +768,68 @@ _BOUNDED_CHART = _PlaneChart(False)
 
 _COVER_PIECE_BUDGET = 4096
 _COVER_MAX_DEPTH = 48
+# Rounding pads of the covering test (S0g round 4, Codex R3 P1).
+_UNIT_ROUNDOFF = 2.0 ** -53
+_PAD_GAMMA = 16.0 * _UNIT_ROUNDOFF
+_PAD_SAFETY = 2.0
+_PAD_MEANINGFUL = 0.25
+
+
+def _round_up(value: Fraction) -> float:
+    """The smallest double not below a non-negative rational."""
+
+    result = float(value)
+    if Fraction(result) < value:
+        result = float(np.nextafter(result, np.inf))
+    return result
+
+
+class _ExactPlaneUV:
+    """The exact support uv of a ``Plane``: ``uv(p) = R p - c`` over the rationals.
+
+    ``R = (A^T A)^-1 A^T`` with ``A = [u_vector, v_vector]`` and ``c = R origin``
+    is the least-squares ``Plane.local_uv`` evaluated without rounding on the
+    stored doubles.  ``rows`` / ``offset`` are ``R`` / ``c`` rounded to nearest
+    once (relative error at most the unit roundoff per entry).
+    """
+
+    __slots__ = ("exact_rows", "exact_offset", "rows", "offset", "abs_rows", "abs_offset")
+
+    def __init__(self, plane: Plane) -> None:
+        u = tuple(Fraction(float(x)) for x in plane.u_vector)
+        v = tuple(Fraction(float(x)) for x in plane.v_vector)
+        o = tuple(Fraction(float(x)) for x in plane.origin)
+        uu = sum(a * a for a in u)
+        uv = sum(a * b for a, b in zip(u, v))
+        vv = sum(b * b for b in v)
+        det = uu * vv - uv * uv
+        if det <= 0:
+            raise GeometryError("plane frame is degenerate")
+        first = tuple((vv * a - uv * b) / det for a, b in zip(u, v))
+        second = tuple((uu * b - uv * a) / det for a, b in zip(u, v))
+        self.exact_rows = (first, second)
+        self.exact_offset = tuple(sum(r * x for r, x in zip(row, o)) for row in self.exact_rows)
+        self.rows = np.asarray([[float(r) for r in row] for row in self.exact_rows], dtype=float)
+        self.offset = np.asarray([float(c) for c in self.exact_offset], dtype=float)
+        self.abs_rows = np.abs(self.rows)
+        self.abs_offset = np.abs(self.offset)
+
+    def exact_uv(self, point) -> tuple[Fraction, Fraction]:
+        p = tuple(x if isinstance(x, Fraction) else Fraction(float(x)) for x in point)
+        return tuple(
+            sum(r * x for r, x in zip(row, p)) - c for row, c in zip(self.exact_rows, self.exact_offset)
+        )
+
+    def exactly_inside(self, points, lower_limit, upper_limit) -> bool:
+        """Exact test that every point's uv lies in the (double) limits."""
+
+        lows = tuple(Fraction(float(x)) for x in lower_limit)
+        highs = tuple(Fraction(float(x)) for x in upper_limit)
+        for point in points:
+            for value, low, high in zip(self.exact_uv(point), lows, highs):
+                if not low <= value <= high:
+                    return False
+        return True
 
 
 def _plane_face_uv_extent(model, face_id: int, plane: Plane, slack: np.ndarray):
@@ -781,24 +846,96 @@ def _plane_face_uv_extent(model, face_id: int, plane: Plane, slack: np.ndarray):
     outside it, or the piece budget is spent.  Returns ``(box, covers)``:
     ``box`` is ``None`` for a curve type without conservative bounds;
     ``covers`` is True only when coverage is proven.
+
+    Rounding (S0g round 4).  "Proven" refers to the exact uv of the stored
+    doubles (``_ExactPlaneUV``), never to rounded values: every floating uv
+    bound below carries an outward pad ``E_k`` (k = u, v) that bounds its
+    rounding error, and coverage is claimed only when the padded bound lies
+    inside the limits or an exact rational test of exact data proves it.
+    With ``g = 16 u`` (u = 2^-53 the unit roundoff), ``|R~_k|`` the absolute
+    row k of the rounded ``R``, ``|c~_k|`` its offset and ``P`` a point:
+
+    * points evaluated as ``R~ p - c~``: ``E_k(p) = g (|R~_k| |p| + |c~_k|)``
+      (the rounding of ``R`` and ``c`` to nearest, a three-term dot product
+      and one subtraction need at most ``5 u (1 + u)``);
+    * arc points ``q~ = c + r (cos t e1 + sin t e2)`` add the world error
+      ``g (|c| + r (|e1| + |e2|))`` mapped by ``|R~_k|``, plus
+      ``r a_k d^2 / 2`` for the extremum missed by an angle error ``d``;
+    * de Casteljau pieces at depth ``m`` of a degree-``n`` spline add the
+      world error ``m n u max|P|`` (each midpoint is one rounding; averaging
+      does not amplify earlier errors) mapped by ``|R~_k|``;
+    * exact curves bounded in the frame (``curve.transformed(to_frame)``, the
+      route Codex R3 P1 broke at 1e8 m): the transformed data differ from the
+      exact uv of the original data by ``dM_k |P| + dt_k + g (|T_k| |P| +
+      |t_k|)`` per datum, where ``dM_k = ||T_k - R_k||_1`` and ``dt_k =
+      |t_k + c_k|`` are measured exactly between the float ``to_frame`` rows
+      ``(T_k, t_k)`` and ``(R_k, -c_k)``; a curve point is a combination of
+      its data with absolute coefficient sum at most ``L`` (1 for NURBS
+      curves and curves on NURBS supports, convex hull with positive weights,
+      and for line ranges; 1 + sqrt 2 < 3 for elliptic arcs).  Curves stored
+      as a 4x4 ``transform`` of a reference chart instead use ``|C~_k - (T
+      M)_k| |x_ref| + dM_k |w| + dt_k`` with the composed-matrix error
+      measured exactly, ``|x_ref|`` from the reference chart's bounds and
+      ``|w|`` from the curve's world bounds.  Other exact curves use the
+      world-box route, padded by ``E_k`` of its centre plus the rounding of
+      ``|R~| half``.
+
+    All pads are multiplied by ``_PAD_SAFETY`` = 2 for the rounding of their
+    own evaluation; the returned box is padded too.  A pad that is not
+    finite or exceeds ``_PAD_MEANINGFUL`` (the bound no longer means
+    anything at this coordinate scale) never proves coverage: the face takes
+    the fail-closed unbounded path.  Exact data are tested exactly (straight
+    edge vertices, a spline's own control polygon, a line range's exact end
+    points, a NURBS curve's control points), so exact-fit frames keep their
+    covering decision at every scale.
     """
 
     face = model.faces[face_id]
-    inverse = np.linalg.pinv(np.column_stack((plane.u_vector, plane.v_vector)))
-    linear = np.abs(inverse)
+    try:
+        exact = _ExactPlaneUV(plane)
+    except (GeometryError, ZeroDivisionError, ValueError, OverflowError):
+        return None, False
+    rows, offset, abs_rows, abs_offset = exact.rows, exact.offset, exact.abs_rows, exact.abs_offset
+    if not (np.all(np.isfinite(rows)) and np.all(np.isfinite(offset))):
+        return None, False
     # World -> (u, v, n) affine map; the normal is orthogonal to the frame, so
     # its first two coordinates are the least-squares Plane.local_uv.
     to_frame = np.eye(4)
     to_frame[:3, :3] = np.linalg.inv(np.column_stack((plane.u_vector, plane.v_vector, plane.normal)))
     to_frame[:3, 3] = -to_frame[:3, :3] @ np.asarray(plane.origin, dtype=float)
+    if not np.all(np.isfinite(to_frame)):
+        return None, False
+    # Exact distance of the float frame map's uv rows from (R, -c).
+    frame_rows = tuple(tuple(Fraction(float(x)) for x in to_frame[k]) for k in range(2))
+    frame_dm = np.asarray(
+        [
+            _round_up(sum(abs(t - r) for t, r in zip(frame_rows[k][:3], exact.exact_rows[k])))
+            for k in range(2)
+        ],
+        dtype=float,
+    )
+    frame_dt = np.asarray(
+        [_round_up(abs(frame_rows[k][3] + exact.exact_offset[k])) for k in range(2)], dtype=float
+    )
+    frame_abs = np.abs(to_frame[:2, :3]).sum(axis=1)
+    frame_abs_t = np.abs(to_frame[:2, 3])
     lower_limit = -slack
     upper_limit = 1.0 + slack
     state = {"lower": np.full(2, np.inf), "upper": np.full(2, -np.inf), "covers": True, "pieces": 0}
 
     def uv_of(point) -> np.ndarray:
-        return np.asarray(plane.local_uv(point), dtype=float)
+        return rows @ np.asarray(point, dtype=float) - offset
 
-    def inside(lower, upper) -> bool:
+    def point_pad(point) -> np.ndarray:
+        return _PAD_GAMMA * (abs_rows @ np.abs(np.asarray(point, dtype=float)) + abs_offset)
+
+    def padded(lower, upper, pad):
+        pad = _PAD_SAFETY * np.asarray(pad, dtype=float)
+        return lower - pad, upper + pad, pad
+
+    def inside(lower, upper, pad) -> bool:
+        if not (np.all(np.isfinite(pad)) and np.all(pad <= _PAD_MEANINGFUL)):
+            return False
         return bool(np.all(lower >= lower_limit) and np.all(upper <= upper_limit))
 
     def outside(uv) -> bool:
@@ -808,20 +945,34 @@ def _plane_face_uv_extent(model, face_id: int, plane: Plane, slack: np.ndarray):
         state["lower"] = np.minimum(state["lower"], lower)
         state["upper"] = np.maximum(state["upper"], upper)
 
-    def include_points(points) -> None:
+    def include_points(points, world_pads=None, extra=None, exact_points=None) -> None:
+        points = [np.asarray(point, dtype=float) for point in points]
         values = np.asarray([uv_of(point) for point in points], dtype=float)
-        lower, upper = values.min(axis=0), values.max(axis=0)
+        pads = np.asarray([point_pad(point) for point in points], dtype=float)
+        if world_pads is not None:
+            pads = pads + np.asarray([abs_rows @ item for item in world_pads], dtype=float)
+        if extra is not None:
+            pads = pads + extra
+        pad = pads.max(axis=0)
+        lower, upper, pad = padded(values.min(axis=0), values.max(axis=0), pad)
         include(lower, upper)
-        if not inside(lower, upper):
-            state["covers"] = False
+        if inside(lower, upper, pad):
+            return
+        if exact_points is not None and exact.exactly_inside(exact_points, lower_limit, upper_limit):
+            return
+        state["covers"] = False
 
-    def refine(pieces, hull, on_curve, split) -> None:
-        # pieces: list of (piece, depth); hull(piece) -> uv box; on_curve(piece)
-        # -> uv of points that lie on the curve; split(piece) -> two pieces.
+    def refine(pieces, hull, on_curve, split, exact_proof=None) -> None:
+        # pieces: list of (piece, depth); hull(piece, depth) -> padded uv box
+        # (lower, upper, pad); on_curve(piece) -> uv of points on the curve;
+        # split(piece) -> two pieces; exact_proof(piece, depth) -> True when
+        # exact data prove the piece inside.
         while pieces:
             piece, depth = pieces.pop()
-            lower, upper = hull(piece)
-            if inside(lower, upper):
+            lower, upper, pad = hull(piece, depth)
+            if inside(lower, upper, pad) or (
+                exact_proof is not None and exact_proof(piece, depth)
+            ):
                 include(lower, upper)
                 continue
             state["pieces"] += 1
@@ -838,35 +989,120 @@ def _plane_face_uv_extent(model, face_id: int, plane: Plane, slack: np.ndarray):
             first, second = split(piece)
             pieces.extend(((second, depth + 1), (first, depth + 1)))
 
+    def local_pad(curve, local_curve):
+        """Pad of the frame-local bounds of an exact curve, or None (world route)."""
+
+        if local_curve is None:
+            return None
+        transform = getattr(curve, "transform", None)
+        local_transform = getattr(local_curve, "transform", None)
+        if isinstance(curve, CurveOnSurface):
+            if not np.array_equal(np.asarray(local_transform, dtype=float), np.eye(4)) or not np.array_equal(
+                np.asarray(transform, dtype=float), np.eye(4)
+            ):
+                return None
+            data, coefficient = np.asarray(curve.support.controls, dtype=float), 1.0
+        elif isinstance(curve, NurbsCurve):
+            data, coefficient = np.asarray(curve.controls, dtype=float), 1.0
+        elif isinstance(curve, LineRange):
+            data, coefficient = np.asarray((curve.a, curve.b), dtype=float), 1.0
+        elif isinstance(curve, EllipticArc):
+            data, coefficient = np.asarray((curve.center, curve.u_vector, curve.v_vector), dtype=float), 3.0
+        elif transform is not None and local_transform is not None:
+            original = np.asarray(transform, dtype=float)
+            composed = np.asarray(local_transform, dtype=float)
+            if (
+                original.shape != (4, 4)
+                or composed.shape != (4, 4)
+                or not np.array_equal(original[3], (0.0, 0.0, 0.0, 1.0))
+                or not np.all(np.isfinite(composed))
+            ):
+                return None
+            error = np.zeros((2, 4))
+            for k in range(2):
+                for i in range(4):
+                    product = sum(frame_rows[k][j] * Fraction(float(original[j, i])) for j in range(3))
+                    if i == 3:
+                        product += frame_rows[k][3]
+                    error[k, i] = _round_up(abs(Fraction(float(composed[k, i])) - product))
+            try:
+                world_lower, world_upper = curve.bounds(0.0, 1.0)
+                world = float(np.max(np.abs(np.concatenate((world_lower, world_upper)))))
+                if np.any(error[:, :3]):
+                    reference = getattr(curve, "_reference_copy", None)
+                    if reference is None:
+                        return None
+                    ref_lower, ref_upper = reference().bounds(0.0, 1.0)
+                    scale = float(np.max(np.abs(np.concatenate((ref_lower, ref_upper)))))
+                else:
+                    scale = 0.0
+            except (GeometryError, ValueError, TypeError, AttributeError, np.linalg.LinAlgError):
+                return None
+            return error[:, :3].sum(axis=1) * scale + error[:, 3] + frame_dm * world + frame_dt
+        else:
+            return None
+        scale = float(np.max(np.abs(data))) if data.size else 0.0
+        return coefficient * (
+            frame_dm * scale + frame_dt + _PAD_GAMMA * (frame_abs * scale + frame_abs_t)
+        )
+
     for loop in (face.loop,) + face.holes:
         for oriented in loop:
             edge = model.edges[oriented.edge]
             curve = edge.curve
             if isinstance(curve, Straight):
-                include_points((model.vertex_position(edge.start), model.vertex_position(edge.end)))
+                ends = (model.vertex_position(edge.start), model.vertex_position(edge.end))
+                include_points(ends, exact_points=ends)
             elif isinstance(curve, Arc):
                 frame = model.arc_frame(oriented.edge)
-                angles = [0.0, float(frame.sweep)]
-                for row in inverse:
-                    phase = float(np.arctan2(float(row @ frame.e2), float(row @ frame.e1)))
+                center = np.asarray(frame.center, dtype=float)
+                e1 = np.asarray(frame.e1, dtype=float)
+                e2 = np.asarray(frame.e2, dtype=float)
+                radius = float(frame.radius)
+                sweep = float(frame.sweep)
+                spread = abs_rows @ (np.abs(e1) + np.abs(e2))
+                amplitude = np.hypot(rows @ e1, rows @ e2)
+                # Angle error of each computed extremum: the phase from R~
+                # rows (dot products of relative error g), arctan2 and the
+                # sweep-membership test.
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    phase_error = np.where(
+                        amplitude > 1.0e3 * _PAD_GAMMA * spread,
+                        4.0 * _PAD_GAMMA * spread / amplitude + 4.0 * _UNIT_ROUNDOFF,
+                        np.pi,
+                    )
+                angle_error = phase_error + 8.0 * _UNIT_ROUNDOFF * (1.0 + abs(sweep))
+                extremum = radius * (amplitude + _PAD_GAMMA * spread) * angle_error**2 / 2.0
+                angles = [0.0, sweep]
+                for row in rows:
+                    phase = float(np.arctan2(float(row @ e2), float(row @ e1)))
                     for candidate in (phase, phase + np.pi):
                         if model._angle_on_arc_sweep(candidate, frame.sweep):  # noqa: SLF001
                             angles.append(candidate)
+                world_pad = _PAD_GAMMA * (np.abs(center) + radius * (np.abs(e1) + np.abs(e2)))
                 include_points(
-                    frame.center
-                    + frame.radius * (np.cos(angle) * frame.e1 + np.sin(angle) * frame.e2)
-                    for angle in angles
+                    [center + radius * (np.cos(angle) * e1 + np.sin(angle) * e2) for angle in angles],
+                    world_pads=[world_pad] * len(angles),
+                    extra=extremum,
                 )
             elif isinstance(curve, Spline):
-                def spline_hull(points):
+                control = np.asarray(model._spline_points(edge), dtype=float)  # noqa: SLF001
+                degree = len(control) - 1
+                magnitude = np.max(np.abs(control), axis=0)
+
+                def spline_hull(points, depth, degree=degree, magnitude=magnitude):
                     values = np.asarray([uv_of(point) for point in points], dtype=float)
-                    return values.min(axis=0), values.max(axis=0)
+                    pad = np.max([point_pad(point) for point in points], axis=0)
+                    pad = pad + abs_rows @ (depth * degree * _UNIT_ROUNDOFF * 1.01 * magnitude)
+                    return padded(values.min(axis=0), values.max(axis=0), pad)
 
                 refine(
-                    [(np.asarray(model._spline_points(edge), dtype=float), 0)],  # noqa: SLF001
+                    [(control, 0)],
                     spline_hull,
                     lambda points: (uv_of(points[0]), uv_of(points[-1])),
                     lambda points: model._split_bezier(points, 0.5),  # noqa: SLF001
+                    lambda points, depth: depth == 0
+                    and exact.exactly_inside(points, lower_limit, upper_limit),
                 )
             elif isinstance(curve, EXACT_CURVES):
                 # Bound the curve in the frame's own (u, v, n) coordinates when
@@ -877,27 +1113,50 @@ def _plane_face_uv_extent(model, face_id: int, plane: Plane, slack: np.ndarray):
                     local_curve = curve.transformed(to_frame)
                 except (GeometryError, ValueError, TypeError, AttributeError, np.linalg.LinAlgError):
                     local_curve = None
+                try:
+                    curve_pad = local_pad(curve, local_curve)
+                except (GeometryError, ValueError, TypeError, AttributeError, ZeroDivisionError, OverflowError):
+                    curve_pad = None
+                if curve_pad is not None and not np.all(np.isfinite(curve_pad)):
+                    curve_pad = None
 
-                def exact_hull(interval, curve=curve, local_curve=local_curve):
-                    if local_curve is not None:
+                def exact_hull(interval, depth, curve=curve, local_curve=local_curve, curve_pad=curve_pad):
+                    if curve_pad is not None:
                         try:
                             box_lower, box_upper = local_curve.bounds(*interval)
                         except (GeometryError, ValueError, np.linalg.LinAlgError):
                             pass
                         else:
-                            return (
+                            return padded(
                                 np.asarray(box_lower, dtype=float)[:2],
                                 np.asarray(box_upper, dtype=float)[:2],
+                                curve_pad,
                             )
                     box_lower, box_upper = curve.bounds(*interval)
                     box_lower = np.asarray(box_lower, dtype=float)
                     box_upper = np.asarray(box_upper, dtype=float)
-                    center = uv_of(0.5 * (box_lower + box_upper))
-                    radius = linear @ (0.5 * (box_upper - box_lower))
-                    return center - radius, center + radius
+                    middle = 0.5 * (box_lower + box_upper)
+                    # The box lies in middle +- half (each difference rounded
+                    # once); |R| <= |R~| (1 + u) and the dot product adds g.
+                    half = np.maximum(box_upper - middle, middle - box_lower) * (1.0 + 4.0 * _UNIT_ROUNDOFF)
+                    radius = (abs_rows @ half) * (1.0 + _PAD_GAMMA)
+                    center = uv_of(middle)
+                    return padded(center - radius, center + radius, point_pad(middle))
 
                 def exact_points(interval, edge_id=oriented.edge):
                     return tuple(uv_of(point) for point in _edge_points(model, edge_id, interval))
+
+                def exact_proof(interval, depth, curve=curve):
+                    if depth != 0:
+                        return False
+                    if isinstance(curve, LineRange):
+                        ends = (curve.exact_point(0), curve.exact_point(1))
+                        return exact.exactly_inside(ends, lower_limit, upper_limit)
+                    if isinstance(curve, NurbsCurve) and len(curve.controls[0]) == 3:
+                        # Positive weights (validated): the curve lies in the
+                        # convex hull of its control points.
+                        return exact.exactly_inside(curve.controls, lower_limit, upper_limit)
+                    return False
 
                 refine(
                     [((0.0, 1.0), 0)],
@@ -907,6 +1166,7 @@ def _plane_face_uv_extent(model, face_id: int, plane: Plane, slack: np.ndarray):
                         (interval[0], 0.5 * (interval[0] + interval[1])),
                         (0.5 * (interval[0] + interval[1]), interval[1]),
                     ),
+                    exact_proof,
                 )
             else:
                 return None, False
