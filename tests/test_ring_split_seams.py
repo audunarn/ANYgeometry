@@ -377,3 +377,36 @@ def test_r1_p2_arc_prefilter_bounds_the_angular_phase_error():
     geometry = ma._RingSplitGeometry(domain, paths, segments, len(paths), [], tol, lambda: None)
     a, b = ma.exact_vector((-2e6, 0., 0.)), ma.exact_vector((2e6, 0., 0.))
     assert not geometry.arc_clear(len(paths) - 1, a, b, False, False)
+
+
+def test_new_boundary_vertices_count_accepted_boundary_changes(monkeypatch):
+    # Radial extensions hit existing vertices of a diamond, adding no boundary vertex.
+    domain, traces = cap(count=4)
+    corners = ((10., 0., 0.), (0., 10., 0.), (-10., 0., 0.), (0., -10., 0.))
+    boundary = tuple(ArrangementPath(LinePath(a, b), source_edge=k + 1)
+                     for k, (a, b) in enumerate(zip(corners, corners[1:] + corners[:1])))
+    domain = MaterialDomain(domain.face_id, domain.support, (boundary,))
+    with collect_runtime_records() as records, collect_runtime_diagnostics() as counters:
+        result = arrange(domain, traces, "ring_split")
+    assert counters["ring_split_accepted"] == 1 and counters["ring_split_extensions"] == 2
+    assert not any(cell.holes for cell in result.cells)
+    (item,) = records["ring_split"]
+    assert item["new_boundary_vertices"] == 0
+
+    # Edge-interior hits really create two vertices.
+    domain, traces = cap()
+    with collect_runtime_records() as records:
+        arrange(domain, traces, "ring_split")
+    assert records["ring_split"][0]["new_boundary_vertices"] == 2
+
+    # A refused candidate must not publish an accepted-layout metric.
+    once = ma._arrange_material_once
+    def refuse(*args, **kwargs):
+        result = once(*args, **kwargs)
+        if kwargs.get("seam_policy") == "ring_split":
+            raise GeometryError("arrangement contains an unresolved bridge")
+        return result
+    monkeypatch.setattr(ma, "_arrange_material_once", refuse)
+    with collect_runtime_records() as records:
+        arrange(domain, traces, "ring_split")
+    assert not any("new_boundary_vertices" in row for row in records.get("ring_split", ()))
