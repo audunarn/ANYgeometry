@@ -1209,6 +1209,7 @@ def _add_exact_planar_seams(domain, boundaries, paths, segments, points, toleran
         item = (exact_vector(point.position), np.asarray(point.position))
         if not on_boundary(*item):
             endpoints.append(item)
+    point_ends = len(endpoints)                       # ring_split: the first ends are arrangement points
     traces = range(len(boundaries), len(paths))
     for index in traces:
         for t in (0, 1):
@@ -1268,12 +1269,18 @@ def _add_exact_planar_seams(domain, boundaries, paths, segments, points, toleran
     # on it); the seam passes exactly through the station.
     offsets = [exact_vector(extent*direction) for direction in (authored, np.cross(normal, authored))]
     if seam_policy == "ring_split" and endpoints:
+        # RING-SPLIT: selection only; a decline (or any non-cancellation GeometryError of the selection, which
+        # mutates nothing before its last step) leaves paths/segments untouched and main's seams follow.
+        from .runtime_diagnostics import _increment
         try:
             _ring_split_seams(domain, boundaries, paths, segments, endpoints, tolerance, check, deferred=deferred,
-                              sources=sources, record=record)
+                              sources=sources, record=record, point_ends=point_ends, extent=extent)
         except _RingSplitDecline as decline:
-            from .runtime_diagnostics import _increment
             _increment(f"ring_split_declined:{decline.reason}")
+        except GeometryError as error:
+            if str(error).endswith("cancelled"):
+                raise
+            _increment("ring_split_declined:selection_error")
         else:
             return len(endpoints)
     for station, position in sorted(endpoints, key=lambda item: tuple(item[1])):   # main's (stable) order
@@ -1297,10 +1304,444 @@ class _RingSplitDecline(Exception):
         self.reason = reason
 
 
+#: Half-width (in tol) of the certified clearance box around a ring_split seam (see ``_RingSplitGeometry.clear``).
+_RING_SPLIT_BOX = 2
+#: Length (in tol) along a seam at a shared end that the clearance box leaves to the shared vertex.
+_RING_SPLIT_END = 4
+#: Relative float error bound of the arc prefilter (far above the few-ulp evaluation error it covers).
+_RING_SPLIT_FLOAT = 1e-12
+
+
+def _rational_lower_sqrt(value: Fraction) -> Fraction:
+    """A positive rational ``r <= sqrt(value)`` (``value > 0``), certified by exact squaring."""
+    root = Fraction(math.sqrt(float(value))) * (1 - Fraction(1, 10 ** 9))
+    while root * root > value:
+        root /= 2
+    return root
+
+
+def _rational_upper_sqrt(value: Fraction) -> Fraction:
+    root = Fraction(math.sqrt(float(value))) * (1 + Fraction(1, 10 ** 9)) + Fraction(1, 2 ** 60)
+    while root * root < value:
+        root *= 2
+    return root
+
+
+class _RingSplitGeometry:
+    """Certified predicates of one ring_split face (RING-SPLIT production brief section 2).
+
+    Exact for straight pieces (the arrangement's own exact station predicates); line/arc by the CAP-1 certified
+    first-harmonic roots (``_chart_segment_arc_clear``); containment by the exact ``contains_loop`` route.
+    Floats only skip work where their error bound is proven far below the margin (``arc_far``).
+    """
+
+    def __init__(self, domain, paths, segments, limit, ends, tolerance, check):
+        self.domain, self.paths, self.segments, self.limit = domain, paths, segments, limit
+        self.ends, self.tolerance, self.check = ends, tolerance, check
+        self.tol = Fraction(tolerance)
+        self.tol2 = self.tol * self.tol
+        self.chart = ExactPlane.from_plane(domain.support)
+        self.normal = self.chart.normal
+        self.normal2 = exact_dot(self.normal, self.normal)
+
+    # --- incidence -------------------------------------------------------------------------------------------
+    def near(self, index, point, segment=None):
+        """``point`` (exact) within tol of path ``index`` (or of ``segment``): the arrangement's own rule."""
+        self.check()
+        if segment is not None or index in self.segments:
+            return bool(stations.point_parameters(segment if segment is not None else self.segments[index], point,
+                                                  self.tolerance))
+        return bool(point_parameters(self.paths[index].curve, stations.rounded(point), tolerance=self.tolerance))
+
+    def arc_end_at(self, index, point):
+        """An end of the arc ``index`` lies within tol of ``point`` (exact distance to its evaluated end)."""
+        curve = self.paths[index].curve
+        return any(stations.distance2(exact_vector(curve.evaluate(t)), point) <= self.tol2 for t in (0., 1.))
+
+    # --- clearance -------------------------------------------------------------------------------------------
+    def _guard(self, call):
+        """Run a certified test; an undecidable case (GeometryError, overflow) is not clear. A cancellation
+        propagates."""
+        try:
+            return bool(call())
+        except GeometryError as error:
+            if str(error).endswith("cancelled"):
+                raise
+            return False
+        except (OverflowError, ZeroDivisionError, ValueError):
+            return False
+
+    def _frame(self, a, b):
+        """In-plane seam frame: projected direction d', perpendicular n = N x d, and rational lower bounds of
+        their lengths."""
+        d = tuple(q - p for p, q in zip(a, b))
+        dn = exact_dot(d, self.normal)
+        dp = tuple(x - dn * y / self.normal2 for x, y in zip(d, self.normal))
+        n = stations._cross(self.normal, d)
+        dp2, n2 = exact_dot(dp, dp), exact_dot(n, n)
+        if dp2 == 0 or n2 == 0:
+            return None
+        return dp, n, dp2, n2, _rational_lower_sqrt(dp2), _rational_lower_sqrt(n2)
+
+    def arc_far(self, curve, a, frame, s_lo, s_hi, t_h):
+        """Float prefilter, valid by its error bound: the arc's sweep range along each seam-frame axis lies
+        outside the clearance box by more than tol plus ``_RING_SPLIT_FLOAT`` times the magnitudes involved (the
+        float evaluation errs by a few ulps of them). Only then True: the arc misses the box, no certified test
+        is needed. Otherwise (including any non-finite value) False and the certified test decides."""
+        dp, n, _dp2, _n2, _dl, _nl = frame
+        with np.errstate(all="ignore"):
+            origin = np.asarray(stations.rounded(a))
+            centre = np.asarray(curve.center, dtype=float) - origin
+            u, v = np.asarray(curve.u_vector, dtype=float), np.asarray(curve.v_vector, dtype=float)
+            magnitude = float(np.max(np.abs(origin)) + np.max(np.abs(np.asarray(curve.center, dtype=float)))
+                              + np.max(np.abs(u)) + np.max(np.abs(v)))
+            start, sweep = float(curve.start_angle), float(curve.sweep_angle)
+            lo, hi = min(start, start + sweep), max(start, start + sweep)
+            for axis, low, high in ((n, -t_h, t_h), (dp, s_lo, s_hi)):
+                vector = np.asarray(stations.rounded(axis))
+                length = float(np.linalg.norm(vector))
+                if not (math.isfinite(length) and length > 0 and math.isfinite(magnitude)):
+                    return False
+                unit = vector / length
+                c0, c1, c2 = float(unit @ centre), float(unit @ u), float(unit @ v)
+                peak = math.atan2(c2, c1)
+                angles = [lo, hi]
+                for k in range(math.floor((lo - peak) / math.pi), math.ceil((hi - peak) / math.pi) + 1):
+                    if lo < peak + k * math.pi < hi:
+                        angles.append(peak + k * math.pi)
+                values = [c0 + c1 * math.cos(t) + c2 * math.sin(t) for t in angles]
+                world_low, world_high = float(low) * length, float(high) * length
+                margin = (float(self.tol) + _RING_SPLIT_FLOAT * (magnitude + abs(world_low) + abs(world_high)))
+                if not all(math.isfinite(x) for x in (*values, world_low, world_high, margin)):
+                    return False
+                if min(values) > world_high + margin or max(values) < world_low - margin:
+                    return True
+        return False
+
+    def arc_clear(self, index, a, b, at_a, at_b):
+        """Certified: the arc ``index`` stays more than ``_RING_SPLIT_BOX`` tol (in the support plane) from the seam
+        ``a``-``b``, except within ``_RING_SPLIT_END`` tol of an end it is incident to (``at_a``/``at_b``), where it
+        meets the seam at most within 2 tol of that end. The box {s in [s_lo, s_hi], |t| <= t_h} in the seam frame
+        (s along d', t along n) contains the tube; the arc meets none of its four sides (certified roots), an arc
+        end lies certainly outside it, so the connected arc lies outside the box."""
+        path = self.paths[index]
+        curve = path.curve
+        frame = self._frame(a, b)
+        if frame is None:
+            return False
+        dp, n, dp2, n2, dl, nl = frame
+        h, e = _RING_SPLIT_BOX * self.tol, _RING_SPLIT_END * self.tol
+        t_h = h / nl
+        s_lo = e / dl if at_a else -h / dl
+        s_hi = 1 - e / dl if at_b else 1 + h / dl
+        # s is measured in units of |d'|^2: s = (X - a) . d' / |d'|^2; the box parameter range is [s_lo, s_hi].
+        if not s_lo < s_hi:
+            return False
+        if self.arc_far(curve, a, frame, s_lo, s_hi, t_h):
+            return True
+
+        def corner(s, t):
+            return tuple(p + s * x + t * y for p, x, y in zip(a, dp, n))
+        corners = (corner(s_lo, -t_h), corner(s_hi, -t_h), corner(s_hi, t_h), corner(s_lo, t_h))
+        for k in range(4):
+            side = stations.Segment(corners[k], corners[(k + 1) % 4], derived=True)
+            if not self._guard(lambda: _chart_segment_arc_clear(self.chart, side, path, (), Fraction(0), self.check)):
+                return False
+        shared = [point for point, flag in ((a, at_a), (b, at_b)) if flag]
+        if shared:
+            seam = stations.Segment(a, b, derived=True)
+            if not self._guard(lambda: _chart_segment_arc_clear(self.chart, seam, path, shared,
+                                                                (2 * self.tol) ** 2, self.check)):
+                return False
+        magnitude = Fraction(float(np.max(np.abs(curve.center)) + np.max(np.abs(curve.u_vector))
+                                   + np.max(np.abs(curve.v_vector))))
+        margin = 64 * _EPS_EXACT * magnitude + Fraction(2) ** -1070
+        for t in (0., 1.):
+            x = exact_vector(curve.evaluate(t))
+            offset = tuple(p - q for p, q in zip(x, a))
+            s_x, t_x = exact_dot(offset, dp) / dp2, exact_dot(offset, n) / n2
+            if (s_x < s_lo - margin / dl or s_x > s_hi + margin / dl
+                    or t_x > t_h + margin / nl or t_x < -t_h - margin / nl):
+                return True
+        return False
+
+    def clear(self, a, b, excused_a, excused_b, extra=(), skip_ends=()):
+        """Certified visibility of the seam ``a``-``b`` (exact points): longer than the excused end lengths; no
+        junction with a boundary, trace or ``extra`` segment except, within tol of an end, with the paths
+        incident there (``excused_*``: path indices, or ``("extra", k)``); every arc certified clear
+        (``arc_clear``); no free end other than ``skip_ends`` within tol of it; its midpoint in the material
+        (exact ``contains_loop``)."""
+        seam = stations.Segment(a, b, derived=True)
+        length2 = seam.length2()
+        if length2 <= (2 * (_RING_SPLIT_END + _RING_SPLIT_BOX) * self.tol) ** 2:
+            return False
+
+        def excused(a_param, key):
+            return ((a_param * a_param * length2 <= self.tol2 and key in excused_a)
+                    or ((1 - a_param) ** 2 * length2 <= self.tol2 and key in excused_b))
+        items = [(index, self.segments.get(index)) for index in range(self.limit)]
+        items += [(("extra", k), segment) for k, segment in enumerate(extra)]
+        for key, segment in items:
+            self.check()
+            if segment is not None:
+                if stations.boxes_separated(seam, segment, self.tolerance):
+                    continue
+                for a_param, _b in stations.junctions(seam, segment, self.tolerance):
+                    if not excused(a_param, key):
+                        return False
+            elif not self.arc_clear(key, a, b, key in excused_a, key in excused_b):
+                return False
+        for k, end in enumerate(self.ends):
+            self.check()
+            if k in skip_ends:
+                continue
+            if stations.point_parameters(seam, end["point"], self.tolerance):
+                return False
+        middle = stations.at(seam, Fraction(1, 2))
+        uv = self.domain._exact_chart().uv(middle)
+        return self._guard(lambda: self.domain.contains_loop(self.domain.boundaries[0], uv, self.tolerance))
+
+    # --- junctions between pieces (components) -----------------------------------------------------------------
+    def meets(self, first, second):
+        """The arrangement's own junction rule between two pieces: exact for straight pairs, main's float rule
+        with a straight piece or arcs. ``first``/``second`` are (segment or None, curve)."""
+        (s1, c1), (s2, c2) = first, second
+        self.check()
+        if s1 is not None and s2 is not None:
+            return (not stations.boxes_separated(s1, s2, self.tolerance)
+                    and bool(stations.junctions(s1, s2, self.tolerance)))
+        lo1, hi1 = c1.bounds()
+        lo2, hi2 = c2.bounds()
+        if np.any(hi1 < lo2 - self.tolerance) or np.any(hi2 < lo1 - self.tolerance):
+            return False
+        for short, other in ((s1, c2), (s2, c1)):
+            if short is not None and short.length2() <= self.tol2:
+                return any(point_parameters(other, stations.rounded(point), tolerance=self.tolerance)
+                           for point in short)
+        return bool(curve_junctions(c1, c2, tolerance=self.tolerance, cancellation_check=lambda: (self.check() or False)))
+
+
 def _ring_split_seams(domain, boundaries, paths, segments, endpoints, tolerance, check, *, deferred, sources,
-                      record):
-    """RS-0 placeholder: the ring_split algorithm lands in RS-1; until then every face declines."""
-    raise _RingSplitDecline("not_implemented")
+                      record, point_ends, extent):
+    """The ring_split seams of a Plane face (RING-SPLIT production brief section 2, owner YES 2026-10-30).
+
+    Free ends (``endpoints``, main's collection: interior trace ends and interior arrangement points) are joined
+    by straight chords: the union over all ends of each end's 2 nearest certified-visible candidates (exact
+    squared distances; never the two ends of one input trace or of one path). Every trace+chord component that
+    reaches no boundary is split by 2 seams from existing straight-trace vertices of degree >= 2, outward along
+    the trace to the first boundary hit. Declines (``_RingSplitDecline``, the face then runs main's seams
+    unchanged) on: inner domain loops, other curve kinds, an exact tie between ranks 2 and 3, an end without a
+    chord, crossing seams, fewer than 2 split candidates, a seam that does not clip to itself. Only
+    seam endpoints are selected here; every seam is an exact segment clipped by ``_clip_line_exact`` and marked
+    ``decomposition=True``, and every downstream check is unchanged. Mutates ``paths``/``segments`` only after
+    every decision succeeded.
+    """
+    decline = _RingSplitDecline
+    boundary_count, limit = len(boundaries), len(paths)
+    if len(domain.boundaries) != 1:
+        raise decline("domain_holes")
+    if not domain._exact_curved_planar(domain.boundaries):
+        raise decline("boundary_kind")
+    for index in range(limit):
+        kind = type(paths[index].curve)
+        if (kind is LinePath and index not in segments) or kind not in (LinePath, EllipticArc):
+            raise decline("curve_kind")
+    tol2 = Fraction(tolerance) ** 2
+    ends = []
+    for k, (station, position) in enumerate(endpoints):
+        point = station if station is not None else exact_vector(position)
+        kind = "point" if k < point_ends else ("straight" if station is not None else "curved")
+        ends.append({"point": point, "kind": kind})
+    for i in range(len(ends)):
+        for j in range(i + 1, len(ends)):
+            check()
+            if stations.distance2(ends[i]["point"], ends[j]["point"]) <= tol2:
+                raise decline("ends_within_tolerance")
+    geometry = _RingSplitGeometry(domain, paths, segments, limit, ends, tolerance, check)
+    traces = range(boundary_count, limit)
+    for end in ends:
+        end["incident"] = [index for index in traces if geometry.near(index, end["point"])]
+        end["sources"] = {sources.get(index, -1 - index) for index in end["incident"]}
+
+    # 1. ranking with the same-trace rule; 2. certified visibility; 3. order-free selection
+    visible = {}
+
+    def is_visible(i, j):
+        key = (min(i, j), max(i, j))
+        if key not in visible:
+            a, b = ends[key[0]], ends[key[1]]
+            visible[key] = geometry.clear(a["point"], b["point"], set(a["incident"]), set(b["incident"]),
+                                          skip_ends=key)
+        return visible[key]
+
+    chords = set()
+    for i, end in enumerate(ends):
+        candidates = []
+        for j, other in enumerate(ends):
+            check()
+            if j == i or end["sources"] & other["sources"]:
+                continue                                 # same input trace or one path: never chorded
+            candidates.append((stations.distance2(end["point"], other["point"]), j))
+        candidates.sort()
+        chosen = []
+        for distance2, j in candidates:
+            check()
+            if len(chosen) == 2 and distance2 > chosen[1][0]:
+                break
+            if not is_visible(i, j):
+                continue
+            if len(chosen) == 2:
+                raise decline("tie")                     # an exact tie between ranks 2 and 3
+            chosen.append((distance2, j))
+        if not chosen:
+            raise decline("end_without_chord")
+        chords.update((min(i, j), max(i, j)) for _d, j in chosen)
+    chords = sorted(chords)
+    chord_segments = [stations.Segment(ends[i]["point"], ends[j]["point"], derived=True) for i, j in chords]
+    for x in range(len(chords)):
+        for y in range(x + 1, len(chords)):
+            check()
+            if not _seams_meet_only_at_shared_ends(chord_segments[x], chord_segments[y],
+                                                   set(chords[x]) & set(chords[y]), tolerance):
+                raise decline("chord_crossing")
+
+    # 4. crossing-aware components (boundary, clipped traces, chords; the arrangement's own junctions)
+    pieces = [(segments.get(index), paths[index].curve) for index in traces]
+    pieces += [(segment, stations.to_line(segment)) for segment in chord_segments]
+    parent = list(range(len(pieces)))
+
+    def find(k):
+        while parent[k] != k:
+            parent[k] = parent[parent[k]]
+            k = parent[k]
+        return k
+    boundary_pieces = [(segments.get(index), paths[index].curve) for index in range(boundary_count)]
+    touching = [False] * len(pieces)
+    try:
+        for x in range(len(pieces)):
+            touching[x] = any(geometry.meets(pieces[x], boundary) for boundary in boundary_pieces)
+            for y in range(x + 1, len(pieces)):
+                if find(x) != find(y) and geometry.meets(pieces[x], pieces[y]):
+                    parent[max(find(x), find(y))] = min(find(x), find(y))
+    except GeometryError as error:
+        if str(error).endswith("cancelled"):
+            raise
+        raise decline("component_junction") from None
+    roots = sorted({find(k) for k in range(len(pieces))})
+    reaching = {find(k) for k in range(len(pieces)) if touching[k]}
+
+    # 5. split every component that reaches no boundary with exactly 2 seams
+    point_stations = [end["point"] for end in ends if end["kind"] == "point"]
+    extensions = []
+    for root in roots:
+        if root in reaching:
+            continue
+        members = [k for k in range(len(pieces)) if find(k) == root]
+        candidates = []
+        for k in members:
+            if k >= len(traces) or pieces[k][0] is None:
+                continue                                 # chords and curved traces are never sources
+            index = boundary_count + k
+            segment = segments[index]
+            for t in (0, 1):
+                check()
+                vertex, other = segment[t], segment[1 - t]
+                if any(stations.distance2(vertex, point) <= tol2 for point in point_stations):
+                    continue
+                degree = sum(1 for m in members if (geometry.near(boundary_count + m, vertex) if m < len(traces)
+                                                    else geometry.near(None, vertex, pieces[m][0])))
+                if degree < 2:
+                    continue
+                hit = _ring_split_extension(geometry, boundaries, segments, vertex, other, members, traces,
+                                            boundary_count, chord_segments, extent)
+                if hit is not None:
+                    candidates.append((stations.distance2(vertex, hit), len(candidates), vertex, hit))
+        if not candidates:
+            raise decline("split_candidates")
+        first = min(candidates, key=lambda item: (item[0], item[1]))
+        others = [item for item in candidates if stations.distance2(item[2], first[2]) > tol2]
+        if not others:
+            raise decline("split_candidates")
+        second = min(others, key=lambda item: (-stations.distance2(item[2], first[2]), item[1]))
+        extensions.extend((first, second))
+    extension_segments = [stations.Segment(vertex, hit, derived=True) for _d, _o, vertex, hit in extensions]
+    for x in range(len(extension_segments)):
+        for y in range(x + 1, len(extension_segments)):
+            check()
+            if not _seams_meet_only_at_shared_ends(extension_segments[x], extension_segments[y], set(), tolerance):
+                raise decline("extension_crossing")
+
+    # 6. clip every seam (exactly one piece, itself) before any mutation
+    made = []
+    for seam in (*chord_segments, *extension_segments):
+        clipped = _clip_line_exact(domain, stations.to_line(seam), tolerance, check, segment=seam, deferred=deferred)
+        if (len(clipped) != 1 or clipped[0][0] != seam[0]
+                or stations.distance2(clipped[0][1], seam[1]) > tol2):
+            raise decline("clip")
+        made.append(clipped[0])
+    for piece in made:
+        segments[len(paths)] = piece
+        paths.append(ArrangementPath(stations.to_line(piece), decomposition=True))
+    from .runtime_diagnostics import _increment, _record
+    _increment("ring_split_applied")
+    _increment("ring_split_chords", len(chord_segments))
+    _increment("ring_split_extensions", len(extension_segments))
+    shortest = min(piece.length2() for piece in made)
+    _record("ring_split", {"face_id": domain.face_id, "free_ends": len(ends), "chords": len(chord_segments),
+                           "split_components": len(extension_segments) // 2,
+                           "new_boundary_vertices": len(extension_segments),
+                           "shortest_seam": math.sqrt(float(shortest))})
+    if record is not None:
+        record["ring_split"] = True
+
+
+def _seams_meet_only_at_shared_ends(first, second, shared, tolerance):
+    """Exact: two seams have no junction except, when they share an end (``shared`` non-empty), within tol of it on
+    both."""
+    if stations.boxes_separated(first, second, tolerance):
+        return True
+    tol2 = Fraction(tolerance) ** 2
+    l1, l2 = first.length2(), second.length2()
+    common = [(s, t) for s in (0, 1) for t in (0, 1) if shared and first[s] == second[t]]
+    for a, b in stations.junctions(first, second, tolerance):
+        if not any((a - s) ** 2 * l1 <= tol2 and (b - t) ** 2 * l2 <= tol2 for s, t in common):
+            return False
+    return True
+
+
+def _ring_split_extension(geometry, boundaries, segments, vertex, other, members, traces, boundary_count,
+                          chord_segments, extent):
+    """The seam from ``vertex`` outward along its straight trace (away from ``other``) to the first straight
+    boundary hit, if that seam is certified clear (``clear``: every path, every chord, every arc; incident
+    pieces excused at ``vertex``, the hit boundary paths at the hit). None otherwise."""
+    tolerance, tol2 = geometry.tolerance, geometry.tol2
+    direction = tuple(p - q for p, q in zip(vertex, other))
+    length2 = exact_dot(direction, direction)
+    if length2 == 0:
+        return None
+    scale = 2 * Fraction(extent) / _rational_lower_sqrt(length2)
+    ray = stations.Segment(vertex, tuple(p + scale * d for p, d in zip(vertex, direction)), derived=True)
+    ray_length2 = ray.length2()
+    best = None
+    for index in range(len(boundaries)):
+        geometry.check()
+        segment = segments.get(index)
+        if segment is None or stations.boxes_separated(ray, segment, tolerance):
+            continue
+        for a, _b in stations.junctions(ray, segment, tolerance):
+            if a * a * ray_length2 > tol2 and (best is None or a < best):
+                best = a
+    if best is None:
+        return None
+    hit = stations.at(ray, best)
+    excused_vertex = {boundary_count + m for m in members if m < len(traces)
+                      and geometry.near(boundary_count + m, vertex)}
+    excused_vertex |= {("extra", k) for k, segment in enumerate(chord_segments)
+                       if geometry.near(None, vertex, segment)}
+    excused_hit = {index for index in range(len(boundaries)) if geometry.near(index, hit)}
+    if not geometry.clear(vertex, hit, excused_vertex, excused_hit, extra=chord_segments):
+        return None
+    return hit
 
 
 def _exact_outgoing_direction(chart, edge_segments, item):
