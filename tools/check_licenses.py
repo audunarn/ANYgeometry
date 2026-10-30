@@ -32,6 +32,7 @@ ALLOWED_EXPRESSIONS = {
     "MIT",
 }
 FORBIDDEN_LICENSE_TOKENS = ("AGPL", "GPL", "SSPL")
+FORBIDDEN_CLASSIFIER_TOKENS = FORBIDDEN_LICENSE_TOKENS + ("AFFERO", "GENERAL PUBLIC LICENSE")
 INSTALLED_LICENSE_ALIASES = {
     "build": {"MIT"},
     "numpy": {
@@ -139,9 +140,13 @@ def _check_reviewed_record(row: dict[str, object]) -> dict[str, object]:
         _fail(f"dependency {name!r} has a malformed reviewed_installed_license record")
     if set(record) != REVIEWED_RECORD_KEYS:
         _fail(f"dependency {name!r} reviewed_installed_license has the wrong keys")
-    if record["package"] != name:
+    if not all(isinstance(record[key], str) for key in REVIEWED_RECORD_KEYS - {"components"}):
+        _fail(f"dependency {name!r} reviewed_installed_license has a non-text field")
+    if _normalized_name(str(record["package"])) != _normalized_name(name):
         _fail(f"dependency {name!r} reviewed_installed_license is recorded for {record['package']!r}")
-    if not re.fullmatch(r"[0-9a-f]{64}", str(record["metadata_sha256"])):
+    if not str(row.get("scope", "")).startswith("optional:"):
+        _fail(f"dependency {name!r} has a reviewed_installed_license but is not an optional dependency scope")
+    if not re.fullmatch(r"[0-9a-f]{64}", record["metadata_sha256"]):
         _fail(f"dependency {name!r} reviewed_installed_license has a malformed hash")
     if record["project_license"] != row.get("license_expression"):
         _fail(f"dependency {name!r} reviewed project license differs from the inventory license")
@@ -152,7 +157,7 @@ def _check_reviewed_record(row: dict[str, object]) -> dict[str, object]:
         and all(isinstance(c, list) and len(c) == 2 and all(isinstance(x, str) for x in c) for c in components)
     ):
         _fail(f"dependency {name!r} reviewed_installed_license components are malformed")
-    if not str(record["rationale"]).strip() or not str(record["version"]).strip():
+    if not record["rationale"].strip() or not record["version"].strip():
         _fail(f"dependency {name!r} reviewed_installed_license needs a version and rationale")
     return record
 
@@ -160,17 +165,33 @@ def _check_reviewed_record(row: dict[str, object]) -> dict[str, object]:
 def _accept_reviewed_installed_license(
     row: dict[str, object], distribution: importlib_metadata.Distribution
 ) -> None:
-    """Accept only the exact, previously reviewed installed license text of one package."""
+    """Pin one package to its exact reviewed installed metadata; always runs for such a package.
+
+    This adds acceptance of the reviewed legacy ``License`` text only. The caller still applies the
+    expression, classifier and forbidden-token checks, which the pin never bypasses.
+    """
     name = str(row["name"])
     record = _check_reviewed_record(row)
     again = f"installed dependency {name!r} differs from its reviewed license record; re-review the license text"
-    if distribution.version != record["version"]:
+    candidates = [d for d in importlib_metadata.distributions() if _distribution_name(d) == _normalized_name(name)]
+    if len({(d.version, str(d.metadata.get("License"))) for d in candidates}) > 1:
+        _fail(f"{again} (several distinct installed distributions)")
+    if _distribution_name(distribution) != _normalized_name(name):
+        _fail(f"{again} (installed distribution is named {_distribution_name(distribution)!r})")
+    if not distribution.version or distribution.version != record["version"]:
         _fail(f"{again} (installed {distribution.version}, reviewed {record['version']})")
-    text = _normalized_license_text(str(distribution.metadata.get("License") or ""))
+    legacy = distribution.metadata.get("License")
+    if not legacy or not str(legacy).strip() or str(legacy).strip().upper() == "UNKNOWN":
+        _fail(f"{again} (the legacy License text is absent)")
+    text = _normalized_license_text(str(legacy))
     if hashlib.sha256(text.encode("utf-8")).hexdigest() != record["metadata_sha256"]:
         _fail(f"{again} (metadata hash changed)")
     if _bundled_components(text) != record["components"]:
         _fail(f"{again} (bundled components changed)")
+
+
+def _distribution_name(distribution: importlib_metadata.Distribution) -> str:
+    return _normalized_name(str(distribution.metadata.get("Name") or ""))
 
 
 def _check_installed(rows: list[dict[str, object]]) -> None:
@@ -185,12 +206,21 @@ def _check_installed(rows: list[dict[str, object]]) -> None:
             distribution = importlib_metadata.distribution(name)
         except importlib_metadata.PackageNotFoundError:
             _fail(f"declared dependency {name!r} is not installed")
+        pinned = "reviewed_installed_license" in row
+        if pinned:
+            _accept_reviewed_installed_license(row, distribution)
+            for classifier in distribution.metadata.get_all("Classifier", []):
+                if classifier.startswith("License ::") and any(
+                    token in classifier.upper() for token in FORBIDDEN_CLASSIFIER_TOKENS
+                ):
+                    _fail(f"installed dependency {name!r} has review-required license classifier {classifier!r}")
+        expression = (distribution.metadata.get("License-Expression") or "").strip()
+        if pinned and not expression:
+            # The pin accepted the reviewed legacy text; there is no other expression to check.
+            continue
         actual = _license_from_metadata(distribution)
         if not actual:
             _fail(f"installed dependency {name!r} has unknown license metadata")
-        if "reviewed_installed_license" in row and actual not in INSTALLED_LICENSE_ALIASES.get(name, set()):
-            _accept_reviewed_installed_license(row, distribution)
-            continue
         if any(token in actual.upper() for token in FORBIDDEN_LICENSE_TOKENS):
             _fail(f"installed dependency {name!r} reports review-required license {actual!r}")
         if actual not in INSTALLED_LICENSE_ALIASES[name]:
@@ -243,6 +273,8 @@ def check(*, check_installed: bool = False) -> None:
             _fail(f"dependency {name!r} has unknown or review-required license {expression!r}")
         if any(token in expression.upper() for token in FORBIDDEN_LICENSE_TOKENS):
             _fail(f"dependency {name!r} has a forbidden strong-copyleft license")
+        if "reviewed_installed_license" in row:
+            _check_reviewed_record(row)
         recorded[name] = (str(row.get("requirement", "")), str(row.get("scope", "")))
     if recorded != declared:
         _fail(f"dependency inventory mismatch: recorded={recorded!r}, declared={declared!r}")

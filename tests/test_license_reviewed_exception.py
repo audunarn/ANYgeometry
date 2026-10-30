@@ -36,10 +36,24 @@ REVIEWED_TEXT = (
 
 
 class _FakeDistribution:
-    def __init__(self, text: str, version: str = "1.18.1") -> None:
+    def __init__(
+        self,
+        text: str | None,
+        version: str | None = "1.18.1",
+        *,
+        name: str = "scipy",
+        expression: str | None = None,
+        classifiers: tuple[str, ...] = ("License :: OSI Approved :: BSD License",),
+    ) -> None:
         self.version = version
         self.metadata = Message()
-        self.metadata["License"] = text
+        self.metadata["Name"] = name
+        if text is not None:
+            self.metadata["License"] = text
+        if expression is not None:
+            self.metadata["License-Expression"] = expression
+        for classifier in classifiers:
+            self.metadata["Classifier"] = classifier
 
 
 def _sha(text: str) -> str:
@@ -66,17 +80,23 @@ def _row(name: str = "scipy", text: str = REVIEWED_TEXT, with_record: bool = Tru
     return row
 
 
-def _run(monkeypatch: pytest.MonkeyPatch, row: dict[str, object], installed: str, version: str = "1.18.1") -> None:
-    monkeypatch.setattr(
-        check_licenses.importlib_metadata,
-        "distribution",
-        lambda name: _FakeDistribution(installed, version),
-    )
+def _run(
+    monkeypatch: pytest.MonkeyPatch,
+    row: dict[str, object],
+    installed: str | None,
+    version: str | None = "1.18.1",
+    *,
+    extra: tuple[_FakeDistribution, ...] = (),
+    **fields: object,
+) -> None:
+    primary = _FakeDistribution(installed, version, name=str(fields.pop("name", row["name"])), **fields)  # type: ignore[arg-type]
+    monkeypatch.setattr(check_licenses.importlib_metadata, "distribution", lambda name: primary)
+    monkeypatch.setattr(check_licenses.importlib_metadata, "distributions", lambda **kw: [primary, *extra])
     monkeypatch.setitem(check_licenses.INSTALLED_LICENSE_ALIASES, str(row["name"]), {"BSD-3-Clause"})
     check_licenses._check_installed([row])
 
 
-def _rejected(monkeypatch: pytest.MonkeyPatch, row: dict[str, object], installed: str, **kw: str) -> str:
+def _rejected(monkeypatch: pytest.MonkeyPatch, row: dict[str, object], installed: str | None, **kw: object) -> str:
     with pytest.raises(SystemExit) as caught:
         _run(monkeypatch, row, installed, **kw)
     return str(caught.value)
@@ -117,6 +137,97 @@ def test_record_components_must_match_the_text(monkeypatch: pytest.MonkeyPatch) 
     row = _row()
     row["reviewed_installed_license"]["components"] = COMPONENTS[:2]  # type: ignore[index]
     assert "re-review" in _rejected(monkeypatch, row, REVIEWED_TEXT)
+
+
+def test_pin_runs_even_when_the_expression_is_an_allowed_alias(monkeypatch: pytest.MonkeyPatch) -> None:
+    _run(monkeypatch, _row(), REVIEWED_TEXT, expression="BSD-3-Clause")
+    assert "re-review" in _rejected(monkeypatch, _row(), REVIEWED_TEXT + " tampered\n", expression="BSD-3-Clause")
+    extra = REVIEWED_TEXT + "\n Name: libnew\n Files: y\n Description: z\n License: GPL-2.0-only\n"
+    assert "re-review" in _rejected(monkeypatch, _row(), extra, expression="BSD-3-Clause")
+    assert "re-review" in _rejected(monkeypatch, _row(), REVIEWED_TEXT, version="1.19.0", expression="BSD-3-Clause")
+
+
+def test_absent_or_empty_legacy_text_fails_re_review_for_a_pinned_package(monkeypatch: pytest.MonkeyPatch) -> None:
+    for text in (None, "", "UNKNOWN"):
+        assert "re-review" in _rejected(monkeypatch, _row(), text, expression="BSD-3-Clause")
+    assert "re-review" in _rejected(monkeypatch, _row(), None)
+
+
+@pytest.mark.parametrize("expression", ["GPL-3.0-only", "AGPL-3.0-only", "LGPL-2.1-or-later", "MIT"])
+def test_expression_checks_still_run_for_a_pinned_package(monkeypatch: pytest.MonkeyPatch, expression: str) -> None:
+    message = _rejected(monkeypatch, _row(), REVIEWED_TEXT, expression=expression)
+    assert "license" in message and "re-review" not in message
+
+
+@pytest.mark.parametrize(
+    "classifier",
+    ["License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+     "License :: OSI Approved :: GNU Affero General Public License v3"],
+)
+def test_forbidden_classifier_is_rejected_for_a_pinned_package(monkeypatch: pytest.MonkeyPatch, classifier: str) -> None:
+    assert "classifier" in _rejected(monkeypatch, _row(), REVIEWED_TEXT, classifiers=(classifier,))
+
+
+@pytest.mark.parametrize("version", [None, "", "1.18.1+local"])
+def test_missing_or_different_version_is_rejected(monkeypatch: pytest.MonkeyPatch, version: str | None) -> None:
+    assert "re-review" in _rejected(monkeypatch, _row(), REVIEWED_TEXT, version=version)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda r: r.pop("rationale"),
+        lambda r: r.update(extra="x"),
+        lambda r: r.update(metadata_sha256="ABC"),
+        lambda r: r.update(metadata_sha256=None),
+        lambda r: r.update(version=None),
+        lambda r: r.update(version=""),
+        lambda r: r.update(version=1),
+        lambda r: r.update(rationale=" "),
+        lambda r: r.update(project_license="MIT"),
+        lambda r: r.update(components=[]),
+        lambda r: r.update(components="x"),
+        lambda r: r.update(components=[["only-one"]]),
+        lambda r: r.update(components=COMPONENTS + [["libextra", "LGPL-2.1-or-later"]]),
+    ],
+)
+def test_malformed_or_mismatched_record_fields_are_rejected(monkeypatch: pytest.MonkeyPatch, mutate: object) -> None:
+    row = _row()
+    mutate(row["reviewed_installed_license"])  # type: ignore[operator,index]
+    _rejected(monkeypatch, row, REVIEWED_TEXT)
+
+
+@pytest.mark.parametrize("index", [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
+def test_shape_malformed_records_fail_the_static_check_too(index: int) -> None:
+    mutations = [
+        lambda r: r.pop("rationale"), lambda r: r.update(extra="x"), lambda r: r.update(metadata_sha256="ABC"),
+        lambda r: r.update(metadata_sha256=None), lambda r: r.update(version=None), lambda r: r.update(version=""),
+        lambda r: r.update(version=1), lambda r: r.update(rationale=" "), lambda r: r.update(project_license="MIT"),
+        lambda r: r.update(components=[]), lambda r: r.update(components="x"), lambda r: r.update(components=[["a"]]),
+    ]
+    row = _row()
+    mutations[index](row["reviewed_installed_license"])  # type: ignore[index]
+    with pytest.raises(SystemExit):
+        check_licenses._check_reviewed_record(row)
+
+
+def test_name_case_and_separator_normalisation(monkeypatch: pytest.MonkeyPatch) -> None:
+    row = _row("My_Pkg")
+    _run(monkeypatch, row, REVIEWED_TEXT, name="my-pkg")
+    assert "re-review" in _rejected(monkeypatch, row, REVIEWED_TEXT, name="other-pkg")
+
+
+def test_duplicate_distinct_distributions_are_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    other = _FakeDistribution(REVIEWED_TEXT + " other\n", "1.17.0")
+    assert "re-review" in _rejected(monkeypatch, _row(), REVIEWED_TEXT, extra=(other,))
+    same = _FakeDistribution(REVIEWED_TEXT)
+    _run(monkeypatch, _row(), REVIEWED_TEXT, extra=(same,))
+
+
+def test_runtime_scope_cannot_carry_a_reviewed_record(monkeypatch: pytest.MonkeyPatch) -> None:
+    row = _row()
+    row["scope"] = "runtime"
+    assert "scope" in _rejected(monkeypatch, row, REVIEWED_TEXT)
 
 
 def test_repository_inventory_records_scipy_review_and_static_check_passes() -> None:
