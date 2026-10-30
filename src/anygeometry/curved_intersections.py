@@ -738,18 +738,136 @@ def _surface_point_derivatives(model, face_id: int, uv: Sequence[float]):
     return point, du[0], dv[0]
 
 
-def _support_projection(model, face_id: int, point: np.ndarray, seeds: Sequence[Sequence[float]] = ()):
+class _PlaneChart:
+    """How the support uv of one face may be treated by this module.
+
+    A ``Plane`` is an unbounded affine chart: its stored frame is free and
+    need not cover the face (the ANYfem webs store frames whose unit square
+    misses most of the face).  Clipping such uv to ``[0, 1]^2`` evaluates the
+    support metres away from the queried point and certifies real crossings
+    as disjoint.  ``unbounded`` is True only for an exact ``Plane`` support
+    whose frame is not proven to cover the face; every other support, and a
+    Plane whose frame provably covers the face, keeps the historical bounded
+    treatment bit for bit.  ``box`` is the face's conservative support-uv
+    box ``((u_min, v_min), (u_max, v_max))`` or ``None`` when no conservative
+    box is available for its trim curves.
+    """
+
+    __slots__ = ("unbounded", "box")
+
+    def __init__(self, unbounded: bool, box: np.ndarray | None = None) -> None:
+        self.unbounded = unbounded
+        self.box = box
+
+
+_BOUNDED_CHART = _PlaneChart(False)
+
+
+def _plane_face_uv_box(model, face_id: int, plane: Plane) -> np.ndarray | None:
+    """Conservative support-uv box of a face on an exact ``Plane`` support.
+
+    ``Plane.local_uv`` is affine, so the uv image of the face lies in the
+    convex hull of the uv images of its trim curves.  Straight edges map to
+    their endpoints, arcs to their exact angular extrema (as in the model's
+    spatial bounds), Bezier splines to their control polygon and exact curves
+    to the interval image of their conservative 3D box.  Any other curve gives
+    ``None`` (no box: the caller must not rely on one).
+    """
+
+    face = model.faces[face_id]
+    inverse = np.linalg.pinv(np.column_stack((plane.u_vector, plane.v_vector)))
+    linear = np.abs(inverse)
+    lower = np.full(2, np.inf)
+    upper = np.full(2, -np.inf)
+
+    def include(points) -> None:
+        nonlocal lower, upper
+        for point in points:
+            uv = np.asarray(plane.local_uv(point), dtype=float)
+            lower = np.minimum(lower, uv)
+            upper = np.maximum(upper, uv)
+
+    for loop in (face.loop,) + face.holes:
+        for oriented in loop:
+            edge = model.edges[oriented.edge]
+            curve = edge.curve
+            if isinstance(curve, Straight):
+                include((model.vertex_position(edge.start), model.vertex_position(edge.end)))
+            elif isinstance(curve, Arc):
+                frame = model.arc_frame(oriented.edge)
+                angles = [0.0, float(frame.sweep)]
+                for row in inverse:
+                    phase = float(np.arctan2(float(row @ frame.e2), float(row @ frame.e1)))
+                    for candidate in (phase, phase + np.pi):
+                        if model._angle_on_arc_sweep(candidate, frame.sweep):  # noqa: SLF001
+                            angles.append(candidate)
+                include(
+                    frame.center
+                    + frame.radius * (np.cos(angle) * frame.e1 + np.sin(angle) * frame.e2)
+                    for angle in angles
+                )
+            elif isinstance(curve, Spline):
+                include(model._spline_points(edge))  # noqa: SLF001
+            elif isinstance(curve, EXACT_CURVES):
+                box_lower, box_upper = curve.bounds()
+                box_lower = np.asarray(box_lower, dtype=float)
+                box_upper = np.asarray(box_upper, dtype=float)
+                center = np.asarray(plane.local_uv(0.5 * (box_lower + box_upper)), dtype=float)
+                radius = linear @ (0.5 * (box_upper - box_lower))
+                lower = np.minimum(lower, center - radius)
+                upper = np.maximum(upper, center + radius)
+            else:
+                return None
+    if not (np.all(np.isfinite(lower)) and np.all(np.isfinite(upper))):
+        return None
+    return np.vstack((lower, upper))
+
+
+def _plane_chart(model, face_id: int) -> _PlaneChart:
+    """Classify a face's support chart (see ``_PlaneChart``)."""
+
+    face = model.faces[face_id]
+    plane = face.surface
+    if type(plane) is not Plane:
+        return _BOUNDED_CHART
+    from .nurbs_sweep_chart import has_sweep_chart
+    if has_sweep_chart(face):
+        return _BOUNDED_CHART
+    box = _plane_face_uv_box(model, face_id, plane)
+    if box is not None:
+        # Covering is decided with a slack far below the length tolerance:
+        # clipping inside it moves a point by at most 1e-3 * tolerance.length.
+        slack = 1.0e-3 * model.tolerance.length / np.asarray(
+            (np.linalg.norm(plane.u_vector), np.linalg.norm(plane.v_vector)), dtype=float
+        )
+        if np.all(box[0] >= -slack) and np.all(box[1] <= 1.0 + slack):
+            return _BOUNDED_CHART
+    return _PlaneChart(True, box)
+
+
+def _support_projection(
+    model,
+    face_id: int,
+    point: np.ndarray,
+    seeds: Sequence[Sequence[float]] = (),
+    chart: _PlaneChart | None = None,
+):
     face = model.faces[face_id]
     surface = face.surface
     if surface is None:
         raise GeometryError(f"face {face_id} has no authoritative support")
+    if chart is None:
+        chart = _plane_chart(model, face_id)
+    # An unbounded Plane chart is never clipped: the exact orthogonal
+    # projection is the answer wherever the frame happens to lie.
+    bound = (lambda uv: uv) if chart.unbounded else (lambda uv: np.clip(uv, 0.0, 1.0))
     candidates: list[np.ndarray] = []
     try:
         local = model.face_support_local_uv(face_id, point)
-        candidates.append(np.clip(np.asarray(local, dtype=float), 0.0, 1.0))
+        candidates.append(bound(np.asarray(local, dtype=float)))
     except (GeometryError, ValueError, np.linalg.LinAlgError):
         pass
-    candidates.extend(np.clip(np.asarray(item, dtype=float), 0.0, 1.0) for item in seeds)
+    candidates.extend(bound(np.asarray(item, dtype=float)) for item in seeds)
     if not isinstance(surface, (Plane, Cylinder, Cone)):
         candidates.extend(
             np.asarray(item, dtype=float)
@@ -764,7 +882,7 @@ def _support_projection(model, face_id: int, point: np.ndarray, seeds: Sequence[
             if not np.all(np.isfinite(jacobian)) or np.linalg.matrix_rank(jacobian) < 2:
                 break
             delta, *_ = np.linalg.lstsq(jacobian, point - current, rcond=None)
-            next_uv = np.clip(uv + delta, 0.0, 1.0)
+            next_uv = bound(uv + delta)
             if float(np.linalg.norm(next_uv - uv)) <= model.tolerance.parameter:
                 uv = next_uv
                 break
@@ -839,14 +957,16 @@ def _inside_face(model, face_id: int, uv: np.ndarray, loops: tuple[np.ndarray, .
     return not any(_point_in_polygon(uv, hole) for hole in polygons[1:])
 
 
-def _curve_surface_samples(model, edge_id: int, face_id: int, count: int):
+def _curve_surface_samples(model, edge_id: int, face_id: int, count: int, chart: _PlaneChart | None = None):
     parameters = np.linspace(0.0, 1.0, count)
     points = _edge_points(model, edge_id, parameters)
     records = []
     seed = None
+    if chart is None:
+        chart = _plane_chart(model, face_id)
     for parameter, point in zip(parameters, points):
         seeds = () if seed is None else (seed,)
-        projected, uv, residual, normal = _support_projection(model, face_id, point, seeds)
+        projected, uv, residual, normal = _support_projection(model, face_id, point, seeds, chart)
         seed = uv
         signed = float((point - projected) @ normal)
         records.append((float(parameter), point, uv, residual, signed))
@@ -986,15 +1106,25 @@ def _curve_exactly_on_support(
     return expected_radius >= -tolerance and abs(frame.radius - expected_radius) <= tolerance
 
 
-def _refine_curve_surface_root(model, edge_id: int, face_id: int, lower: float, upper: float, policy):
+def _refine_curve_surface_root(
+    model,
+    edge_id: int,
+    face_id: int,
+    lower: float,
+    upper: float,
+    policy,
+    chart: _PlaneChart | None = None,
+):
+    if chart is None:
+        chart = _plane_chart(model, face_id)
     left_point = _edge_points(model, edge_id, (lower,))[0]
-    _projected, left_uv, _residual, normal = _support_projection(model, face_id, left_point)
+    _projected, left_uv, _residual, normal = _support_projection(model, face_id, left_point, (), chart)
     left_value = float((left_point - _projected) @ normal)
     best = None
     for _ in range(max(24, policy.max_newton_iterations * 2)):
         middle = 0.5 * (lower + upper)
         point = _edge_points(model, edge_id, (middle,))[0]
-        projected, uv, residual, normal = _support_projection(model, face_id, point, (left_uv,))
+        projected, uv, residual, normal = _support_projection(model, face_id, point, (left_uv,), chart)
         value = float((point - projected) @ normal)
         candidate = (residual, middle, point, uv)
         if best is None or candidate[:2] < best[:2]:
@@ -1059,11 +1189,12 @@ def qualified_curve_face(
         model, edge.id, face.id, tolerance
     )
     try:
+        chart = _plane_chart(model, face.id)
         trim_loops = _support_trim_loops(model, face.id)
         samples = (
             []
             if exact_on_support
-            else _curve_surface_samples(model, edge.id, face.id, count)
+            else _curve_surface_samples(model, edge.id, face.id, count, chart)
         )
     except (GeometryError, ValueError, np.linalg.LinAlgError) as error:
         return _result(
@@ -1114,7 +1245,7 @@ def qualified_curve_face(
                 residual = 0.0
             else:
                 _projected, middle_uv, residual, _normal = _support_projection(
-                    model, face.id, middle_point
+                    model, face.id, middle_point, (), chart
                 )
             if not _inside_face(model, face.id, middle_uv, trim_loops):
                 continue
@@ -1128,7 +1259,7 @@ def qualified_curve_face(
                 endpoint_residuals = (0.0, 0.0)
             else:
                 projected_endpoints = tuple(
-                    _support_projection(model, face.id, point) for point in points
+                    _support_projection(model, face.id, point, (), chart) for point in points
                 )
                 uvs = tuple(item[1] for item in projected_endpoints)
                 endpoint_residuals = tuple(float(item[2]) for item in projected_endpoints)
@@ -1192,7 +1323,9 @@ def qualified_curve_face(
         near = min(previous[3], current[3]) <= tolerance
         if not sign_change and not near:
             continue
-        candidates.append(_refine_curve_surface_root(model, edge.id, face.id, previous[0], current[0], policy))
+        candidates.append(
+            _refine_curve_surface_root(model, edge.id, face.id, previous[0], current[0], policy, chart)
+        )
     for before, current, after in zip(samples, samples[1:], samples[2:]):
         if current[3] <= tolerance and current[3] <= before[3] and current[3] <= after[3]:
             candidates.append((current[0], current[1], current[2], current[3]))
@@ -1811,14 +1944,18 @@ def _supports_coincident(model, first_id: int, second_id: int, tolerance: float)
             for left, right in zip(first_boundaries, second_boundaries)
         ):
             return True
-    parameters = np.asarray(
-        tuple((float(u), float(v)) for u in np.linspace(0.0, 1.0, 17) for v in np.linspace(0.0, 1.0, 17)),
-        dtype=float,
-    )
+    charts = {first_id: _plane_chart(model, first_id), second_id: _plane_chart(model, second_id)}
     for source, target in ((first_id, second_id), (second_id, first_id)):
+        u_values, v_values = _chart_axes(charts[source], 17)
+        parameters = np.asarray(
+            tuple((float(u), float(v)) for u in u_values for v in v_values),
+            dtype=float,
+        )
         for uv in parameters:
             point, source_du, source_dv = _surface_point_derivatives(model, source, uv)
-            projected, _target_uv, residual, target_normal = _support_projection(model, target, point)
+            projected, _target_uv, residual, target_normal = _support_projection(
+                model, target, point, (), charts[target]
+            )
             if residual > tolerance:
                 return False
             source_normal = np.cross(source_du, source_dv)
@@ -1833,9 +1970,26 @@ def _supports_coincident(model, first_id: int, second_id: int, tolerance: float)
     return True
 
 
-def _surface_grid(model, face_id: int, count: int):
-    parameters = np.linspace(0.0, 1.0, count)
-    uv = np.asarray(tuple((float(u), float(v)) for v in parameters for u in parameters), dtype=float)
+def _chart_axes(chart: _PlaneChart, count: int) -> tuple[np.ndarray, np.ndarray]:
+    """Sample axes of a support chart: the unit square, or the face's uv box."""
+
+    if not chart.unbounded:
+        parameters = np.linspace(0.0, 1.0, count)
+        return parameters, parameters
+    if chart.box is None:
+        # Fail closed: without a conservative box the face is not covered.
+        raise GeometryError("plane support chart has no conservative face uv box")
+    return (
+        np.linspace(float(chart.box[0][0]), float(chart.box[1][0]), count),
+        np.linspace(float(chart.box[0][1]), float(chart.box[1][1]), count),
+    )
+
+
+def _surface_grid(model, face_id: int, count: int, chart: _PlaneChart | None = None):
+    if chart is None:
+        chart = _plane_chart(model, face_id)
+    u_values, v_values = _chart_axes(chart, count)
+    uv = np.asarray(tuple((float(u), float(v)) for v in v_values for u in u_values), dtype=float)
     points = np.asarray(
         [model.face_support_point(face_id, float(item[0]), float(item[1])) for item in uv],
         dtype=float,
@@ -1862,9 +2016,29 @@ def _contour_crossing(
     return first_uv + fraction * (second_uv - first_uv)
 
 
-def _refine_surface_pair(model, first_id: int, second_id: int, first_uv, second_uv, policy):
-    first_parameters = np.clip(np.asarray(first_uv, dtype=float), 0.0, 1.0)
-    second_parameters = np.clip(np.asarray(second_uv, dtype=float), 0.0, 1.0)
+def _refine_surface_pair(
+    model,
+    first_id: int,
+    second_id: int,
+    first_uv,
+    second_uv,
+    policy,
+    first_chart: _PlaneChart | None = None,
+    second_chart: _PlaneChart | None = None,
+):
+    if first_chart is None:
+        first_chart = _plane_chart(model, first_id)
+    if second_chart is None:
+        second_chart = _plane_chart(model, second_id)
+
+    def first_bound(uv):
+        return uv if first_chart.unbounded else np.clip(uv, 0.0, 1.0)
+
+    def second_bound(uv):
+        return uv if second_chart.unbounded else np.clip(uv, 0.0, 1.0)
+
+    first_parameters = first_bound(np.asarray(first_uv, dtype=float))
+    second_parameters = second_bound(np.asarray(second_uv, dtype=float))
     for _ in range(policy.max_newton_iterations):
         first_point, first_du, first_dv = _surface_point_derivatives(
             model, first_id, first_parameters
@@ -1879,8 +2053,8 @@ def _refine_surface_pair(model, first_id: int, second_id: int, first_uv, second_
         if not np.all(np.isfinite(jacobian)) or np.linalg.matrix_rank(jacobian) < 3:
             break
         delta, *_ = np.linalg.lstsq(jacobian, -difference, rcond=None)
-        next_first = np.clip(first_parameters + delta[:2], 0.0, 1.0)
-        next_second = np.clip(second_parameters + delta[2:], 0.0, 1.0)
+        next_first = first_bound(first_parameters + delta[:2])
+        next_second = second_bound(second_parameters + delta[2:])
         if max(
             float(np.linalg.norm(next_first - first_parameters)),
             float(np.linalg.norm(next_second - second_parameters)),
@@ -2074,8 +2248,27 @@ def qualified_face_face(
         )
 
     count = min(33, max(9, int(np.sqrt(policy.max_trace_segments)) // 8 + 1))
-    first_uv_grid, first_points = _surface_grid(model, first.id, count)
-    second_seed_uv, second_seed_points = _surface_grid(model, second.id, 9)
+    try:
+        first_chart = _plane_chart(model, first.id)
+        second_chart = _plane_chart(model, second.id)
+    except (GeometryError, ValueError, np.linalg.LinAlgError) as error:
+        return _result(
+            first, second, IntersectionKind.UNCLASSIFIED,
+            tolerance=tolerance,
+            algorithm="surface_surface_subdivision",
+            diagnostics=(f"plane_support_chart_failed:{error}",),
+        )
+    if any(chart.unbounded and chart.box is None for chart in (first_chart, second_chart)):
+        return _result(
+            first, second, IntersectionKind.UNCLASSIFIED,
+            tolerance=tolerance,
+            algorithm="surface_surface_subdivision",
+            diagnostics=("plane_support_chart_has_no_conservative_face_uv_box",),
+        )
+    # An unbounded Plane is sampled over its face's uv box, not over the
+    # unit square of an arbitrary stored frame.
+    first_uv_grid, first_points = _surface_grid(model, first.id, count, first_chart)
+    second_seed_uv, second_seed_points = _surface_grid(model, second.id, 9, second_chart)
     flat_seeds = second_seed_uv.reshape((-1, 2))
     flat_seed_points = second_seed_points.reshape((-1, 3))
     signed = np.empty((count, count), dtype=float)
@@ -2087,7 +2280,7 @@ def qualified_face_face(
                 point = first_points[row, column]
                 nearest = int(np.argmin(np.linalg.norm(flat_seed_points - point, axis=1)))
                 projected, uv, residual, normal = _support_projection(
-                    model, second.id, point, (flat_seeds[nearest],)
+                    model, second.id, point, (flat_seeds[nearest],), second_chart
                 )
                 signed[row, column] = float((point - projected) @ normal)
                 residuals[row, column] = residual
@@ -2123,7 +2316,9 @@ def qualified_face_face(
                 )
                 if crossing is not None:
                     point = model.face_support_point(first.id, float(crossing[0]), float(crossing[1]))
-                    projected, uv_second, residual, _normal = _support_projection(model, second.id, point)
+                    projected, uv_second, residual, _normal = _support_projection(
+                        model, second.id, point, (), second_chart
+                    )
                     world, crossing, uv_second, residual = _refine_surface_pair(
                         model,
                         first.id,
@@ -2131,6 +2326,8 @@ def qualified_face_face(
                         crossing,
                         uv_second,
                         policy,
+                        first_chart,
+                        second_chart,
                     )
                     if residual <= tolerance:
                         crossings.append((world, crossing, uv_second, residual))
