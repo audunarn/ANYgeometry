@@ -220,7 +220,8 @@ def test_exact_plans_carry_no_route_field_under_every_serialization():
     for blob in (pickle.dumps(default), pickle.dumps(default.policy)):
         for marker in (b"planning_mode", b"route_checksum", b"TopologyCertified", b"topology_certified"):
             assert marker not in blob
-    assert len(IntersectionBatchPolicy().__getstate__()) == len(fields(IntersectionBatchPolicy)) - 1
+    # RS-0: the unset planning_mode and seam_policy are both omitted (the pre-T2-1b state)
+    assert len(IntersectionBatchPolicy().__getstate__()) == len(fields(IntersectionBatchPolicy)) - 2
     assert "planning_mode" not in definition_value(IntersectionBatchPolicy())["fields"]
     assert pickle.loads(pickle.dumps(default)).content_checksum == default.content_checksum
     restored = pickle.loads(pickle.dumps(T))
@@ -321,7 +322,11 @@ def _tampered(certified, row):
     if row == 10:
         return [_resealed(certified, planning_mode=value) for value in ("topology", "", 3)]
     if row == 11:
-        return [_resealed(certified, planning_mode=None), _resealed(certified, planning_mode="exact")]
+        # RS-0: the last one is an exact-mode route without certificate fields but with baseline seams:
+        # only row 11 refuses it (an exact-mode route carrier exists only for a non-baseline seam policy).
+        return [_resealed(certified, planning_mode=None), _resealed(certified, planning_mode="exact"),
+                _resealed(certified, planning_mode="exact", certificate_version=None, r_max=None,
+                          route_tolerance=None, r_pairs=())]
     if row == 12:                       # fix round 5: the content checksum's form and binding (R6)
         return [_resealed(certified, content_checksum=value) for value in ("0"*64, None, "", 123, "0"*63)]
     if row == 14:                       # fix round 5: every other field has its exact type and form
@@ -363,11 +368,20 @@ def _disable_row(monkeypatch, row):
         monkeypatch.setattr(bi, "_route_row_8_model", lambda plan, model: None)
 
 
+def _matching_policy(plan):
+    """The apply policy whose axes are the plan's own (topology_certified unless the plan names a supported
+    mode; RS-0: its seam policy when supported), so a double that lets a tampered plan through is seen."""
+    mode = plan.planning_mode if type(plan.planning_mode) is str and plan.planning_mode in bi.PLANNING_MODES \
+        else "topology_certified"
+    seam = plan.seam_policy if type(plan.seam_policy) is str and plan.seam_policy in bi.SEAM_POLICIES else None
+    return IntersectionBatchPolicy(planning_mode=mode, seam_policy=seam)
+
+
 def _load_and_apply(model, plan):
-    """``None`` if the plan loads and applies in topology_certified mode, else the refusal."""
+    """``None`` if the plan loads and applies under its own axes (``_matching_policy``), else the refusal."""
     try:
         loaded = pickle.loads(pickle.dumps(plan))
-        apply_intersections(model.clone(preserve_identity=True), loaded, policy=T)
+        apply_intersections(model.clone(preserve_identity=True), loaded, policy=_matching_policy(plan))
     except Exception as exc:                             # noqa: BLE001 - the outcome is compared
         return f"{type(exc).__name__}: {exc}"
     return None
@@ -459,7 +473,8 @@ def test_matrix_row_13_stripped_plan_is_an_exact_plan(plans):
 def test_route_checksum_binds_mode_version_and_r_max(plans):
     _model, _exact, certified = plans
     expected = bi.definition_checksum((certified.content_checksum, "topology_certified",
-                                       sp.CERTIFICATE_VERSION, certified.r_max))
+                                       sp.CERTIFICATE_VERSION, certified.r_max,
+                                       "baseline", bi.SEAM_POLICY_VERSIONS["baseline"]))
     assert certified.route_checksum == expected
     assert certified.r_max == sp.contract_r_max(1e-9)
 
@@ -914,7 +929,8 @@ def test_mode_agnostic_early_routes_are_selected_and_an_invalid_mode_is_refused(
 
 # ----------------------------------------------------------------------------------- fix round 4 (R4): row 3 persisted
 
-_IDENTITY = ("planning_mode", "certificate_version", "r_max", "route_tolerance", "content_checksum", "route_checksum")
+_IDENTITY = ("planning_mode", "certificate_version", "r_max", "route_tolerance", "content_checksum", "route_checksum",
+             "seam_policy", "seam_policy_version")
 
 
 def test_row_3_persists_the_route_identity_in_change_set_hooks_and_model_record(plans):
@@ -986,7 +1002,8 @@ def _record_document(plans):
 
 def _reseal_entry(entry):
     entry["route_checksum"] = bi.definition_checksum((entry["content_checksum"], entry["planning_mode"],
-                                                      entry["certificate_version"], entry["r_max"]))
+                                                      entry["certificate_version"], entry["r_max"],
+                                                      entry["seam_policy"], entry["seam_policy_version"]))
 
 
 # tamper id -> (mutation of one publication entry, reseal the route checksum, the check whose removal
@@ -994,7 +1011,12 @@ def _reseal_entry(entry):
 _RECORD_TAMPERS = {
     "extra_field": (lambda e: e.update(note=1), False, "_record_fields"),
     "missing_version": (lambda e: e.pop("certificate_version"), False, None),
-    "mode_exact": (lambda e: e.update(planning_mode="exact"), True, "_route_row_11"),
+    "mode_exact": (lambda e: e.update(planning_mode="exact"), True, None),
+    "exact_route_baseline_seams": (lambda e: e.update(planning_mode="exact", certificate_version=None, r_max=None,
+                                                      route_tolerance=None), True, "_route_row_11"),
+    "seam_unknown": (lambda e: e.update(seam_policy="ring"), True, "_route_row_15"),
+    "seam_version_other": (lambda e: e.update(seam_policy_version=bi.SEAM_POLICY_VERSIONS["ring_split"]), True,
+                           "_route_row_15"),
     "mode_other": (lambda e: e.update(planning_mode="topology"), True, "_route_row_10"),
     "version_unsupported": (lambda e: e.update(certificate_version="sp-exact-t2-1a-0"), True, "_route_row_7"),
     "r_max_not_contract": (lambda e: e.update(r_max=2*e["r_max"]), True, "_route_row_8"),
@@ -1044,7 +1066,11 @@ def test_row_14_malformed_record_container_is_rejected(plans, record):
 
 
 _CHANGE_SET_TAMPERS = {
-    "mode_exact": ({"planning_mode": "exact"}, True, "_route_row_11"),
+    "mode_exact": ({"planning_mode": "exact"}, True, None),
+    "exact_route_baseline_seams": ({"planning_mode": "exact", "certificate_version": None, "r_max": None,
+                                    "route_tolerance": None}, True, "_route_row_11"),
+    "seam_missing": ({"seam_policy": None}, True, "_route_row_15"),
+    "seam_version_missing": ({"seam_policy_version": None}, True, "_route_row_15"),
     "mode_none": ({"planning_mode": None}, True, None),
     "mode_other": ({"planning_mode": "topology"}, True, "_route_row_10"),
     "version_unsupported": ({"certificate_version": "sp-exact-t2-1a-0"}, True, "_route_row_7"),
@@ -1070,7 +1096,8 @@ def test_row_14_change_set_metadata_is_checked_at_construction_and_load(plans, t
     values.update(changes)
     if reseal:
         values["route_checksum"] = bi.definition_checksum((values["content_checksum"], values["planning_mode"],
-                                                           values["certificate_version"], values["r_max"]))
+                                                           values["certificate_version"], values["r_max"],
+                                                           values["seam_policy"], values["seam_policy_version"]))
     with pytest.raises(GeometryError):
         bi.TopologyCertifiedChangeSet(**values)
     forged = object.__new__(bi.TopologyCertifiedChangeSet)
@@ -1119,7 +1146,8 @@ class _PolicySubclass(IntersectionBatchPolicy):           # equal values, not th
 
 
 _IDENTITY_KINDS = {"planning_mode": "mode", "certificate_version": "version", "r_max": "r_max",
-                   "route_tolerance": "tolerance", "content_checksum": "checksum", "route_checksum": "checksum"}
+                   "route_tolerance": "tolerance", "content_checksum": "checksum", "route_checksum": "checksum",
+                   "seam_policy": "seam", "seam_policy_version": "seam_version"}
 _KEY_FIELDS = ("added", "removed", "modified", "ownership_changes", "member_changes", "attachment_changes",
                "tag_changes", "invalidated_caches", "spatial_updates")
 _CARRIER_KINDS = {
@@ -1131,7 +1159,8 @@ _CARRIER_KINDS = {
                    "document_settings_changed": "bool", **{name: "tuple" for name in _KEY_FIELDS}, **_IDENTITY_KINDS},
     "record": {"source_revision": "revision", "source_checksum": "checksum", **_IDENTITY_KINDS},
     "application": {"plan": "plan", "change_set": "change_set", "joint_edges": "tuple", "reused": "bool",
-                    "planning_mode": "mode", "r_max": "r_max", "certificate_version": "version"},
+                    "planning_mode": "mode", "r_max": "r_max", "certificate_version": "version",
+                    "seam_policy": "seam", "seam_policy_version": "seam_version"},
 }
 _COMMON_BAD = (None, "", 123, True, math.nan, math.inf, -1, -1.0, [], {})
 
@@ -1145,6 +1174,9 @@ def _bad_values(kind, valid, exact):
         "checksum": lambda: ["0"*63, "0"*65, "A"*64, "g"*64, ("0"*64,)],
         "mode": lambda: ["exact", "topology", "TOPOLOGY_CERTIFIED", ("topology_certified",)],
         "version": lambda: ["sp-exact-t2-1a-0", sp.CERTIFICATE_VERSION.upper()],
+        # RS-0: an unknown policy, a wrong case, another policy (its version then mismatches), a wrapper
+        "seam": lambda: ["ring", "BASELINE", "ring_split", ("baseline",)],
+        "seam_version": lambda: ["seam-baseline-0", bi.SEAM_POLICY_VERSIONS["ring_split"], valid.upper()],
         "r_max": lambda: [0., 5e-324, -valid, 2*valid, math.nextafter(valid, math.inf), np.float64(valid)],
         "tolerance": lambda: [0., 5e-324, -valid, 2*valid, np.float64(valid)],
         "revision": lambda: [-5, 1.0, np.int64(valid)],
@@ -1202,8 +1234,7 @@ def _record_paths(document, entry_changes, model):
             entry.pop(name)
         else:
             entry[name] = value
-    if "route_checksum" not in entry_changes and all(n in entry for n in ("content_checksum", "planning_mode",
-                                                                          "certificate_version", "r_max")):
+    if "route_checksum" not in entry_changes and all(n in entry for n in _BOUND_FIELDS):
         try:
             _reseal_entry(entry)
         except (ValueError, TypeError):
@@ -1223,12 +1254,14 @@ def _record_paths(document, entry_changes, model):
 _MISSING = object()
 
 
+_BOUND_FIELDS = ("content_checksum", "planning_mode", "certificate_version", "r_max", "seam_policy",
+                 "seam_policy_version")       # RS-0: the route checksum binds the seam axis too
+
+
 def _route_resealed(values):
-    if all(name in values for name in ("content_checksum", "planning_mode", "certificate_version", "r_max")) \
-            and "route_checksum" in values:
+    if all(name in values for name in _BOUND_FIELDS) and "route_checksum" in values:
         try:
-            values["route_checksum"] = bi.definition_checksum((values["content_checksum"], values["planning_mode"],
-                                                               values["certificate_version"], values["r_max"]))
+            values["route_checksum"] = bi.definition_checksum(tuple(values[name] for name in _BOUND_FIELDS))
         except (ValueError, TypeError):
             pass
     return values

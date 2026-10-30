@@ -1171,7 +1171,7 @@ def _same_ray(first, second) -> bool:
 
 
 def _add_exact_planar_seams(domain, boundaries, paths, segments, points, tolerance, check, *, deferred=True,
-                            rotation=None):
+                            rotation=None, seam_policy=None, record=None, sources=None):
     """Decomposition seams on a Plane support through exact stations (R1b step 2b, D6/D7).
 
     Returns the number of seam ends. ``rotation`` (cosine, sine) turns both seam directions in the
@@ -1267,6 +1267,15 @@ def _add_exact_planar_seams(domain, boundaries, paths, segments, points, toleran
     # same parameterization is kept (clipping's 32-eps parameter windows depend
     # on it); the seam passes exactly through the station.
     offsets = [exact_vector(extent*direction) for direction in (authored, np.cross(normal, authored))]
+    if seam_policy == "ring_split" and endpoints:
+        try:
+            _ring_split_seams(domain, boundaries, paths, segments, endpoints, tolerance, check, deferred=deferred,
+                              sources=sources, record=record)
+        except _RingSplitDecline as decline:
+            from .runtime_diagnostics import _increment
+            _increment(f"ring_split_declined:{decline.reason}")
+        else:
+            return len(endpoints)
     for station, position in sorted(endpoints, key=lambda item: tuple(item[1])):   # main's (stable) order
         point = station if station is not None else exact_vector(position)
         for offset in offsets:
@@ -1277,6 +1286,21 @@ def _add_exact_planar_seams(domain, boundaries, paths, segments, points, toleran
                 segments[len(paths)] = piece
                 paths.append(ArrangementPath(stations.to_line(piece), decomposition=True))
     return len(endpoints)
+
+
+class _RingSplitDecline(Exception):
+    """The ring_split policy declines a face (a precondition or certificate failed); not a GeometryError, so it
+    can never be confused with (or swallow) a cancellation. ``reason`` names the rule."""
+
+    def __init__(self, reason):
+        super().__init__(reason)
+        self.reason = reason
+
+
+def _ring_split_seams(domain, boundaries, paths, segments, endpoints, tolerance, check, *, deferred, sources,
+                      record):
+    """RS-0 placeholder: the ring_split algorithm lands in RS-1; until then every face declines."""
+    raise _RingSplitDecline("not_implemented")
 
 
 def _exact_outgoing_direction(chart, edge_segments, item):
@@ -2030,14 +2054,28 @@ def _parameters(values, tolerance, curve=None):
     return result
 
 
+#: Seam policies of :func:`arrange_material` (RING-SPLIT RS-0). ``None`` and ``"baseline"`` are main's seams.
+ARRANGEMENT_SEAM_POLICIES = (None, "baseline", "ring_split")
+
+
 def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
-                     max_predicates=None, area_tolerance=None, points=()):
-    """Return complete cells, preserving explicit predicate-budget semantics."""
+                     max_predicates=None, area_tolerance=None, points=(), seam_policy=None):
+    """Return complete cells, preserving explicit predicate-budget semantics.
+
+    ``seam_policy`` (RING-SPLIT, opt-in): ``None``/``"baseline"`` keeps main's decomposition seams;
+    ``"ring_split"`` asks for the ring_split seams on an exact planar face (see
+    :func:`_arrange_material`); an explicit ``max_predicates`` budget keeps baseline. No environment
+    variable is read here: the planner resolves the policy once per planning call.
+    """
+    if not any(seam_policy is value or (type(seam_policy) is str and seam_policy == value)
+               for value in ARRANGEMENT_SEAM_POLICIES):
+        raise GeometryError(f"arrangement seam_policy must be one of {ARRANGEMENT_SEAM_POLICIES}")
     context = _junction_bounds_policy(False) if max_predicates is not None else nullcontext()
+    options = {} if seam_policy in (None, "baseline") else {"seam_policy": seam_policy}
     with context:
         return _arrange_material(domain, traces, tolerance=tolerance,
                                  cancellation_check=cancellation_check, max_predicates=max_predicates,
-                                 area_tolerance=area_tolerance, points=points)
+                                 area_tolerance=area_tolerance, points=points, **options)
 
 
 #: OPT-S refusal-only retry: (cosine, sine) of the seam-direction rotation, the nearest doubles to the
@@ -2053,7 +2091,7 @@ _SEAM_RETRY_ENABLED = True
 
 
 def _arrange_material(domain, traces, *, tolerance, cancellation_check=None,
-                      max_predicates=None, area_tolerance=None, points=()):
+                      max_predicates=None, area_tolerance=None, points=(), seam_policy=None):
     """Return the complete arrangement, or raise without returning partial cells.
 
     ``max_predicates`` is an explicit optional resource budget; default planning
@@ -2064,10 +2102,20 @@ def _arrange_material(domain, traces, *, tolerance, cancellation_check=None,
     :data:`_SEAM_RETRY_ROTATION`; every check and tolerance is unchanged. If the retry fails too, the
     original error is raised (a cancellation during the retry propagates). Accepted first attempts are
     returned unchanged. No retry under an explicit ``max_predicates`` budget.
+
+    RING-SPLIT (``seam_policy="ring_split"``, never under a budget): one attempt with the ring_split
+    seams first (:func:`_ring_split_attempt`). It returns only an arrangement whose ring_split layout
+    passed every unchanged check and the postconditions; otherwise (the policy declined, or a check
+    refused its layout) this face runs the unchanged baseline chain below from the start, so a
+    declined or refused face is bit-identical to baseline. A cancellation always propagates.
     """
     traces = tuple(traces)
     options = dict(tolerance=tolerance, cancellation_check=cancellation_check, max_predicates=max_predicates,
                    area_tolerance=area_tolerance, points=points)
+    if seam_policy == "ring_split" and max_predicates is None:
+        arrangement = _ring_split_attempt(domain, traces, options)
+        if arrangement is not None:
+            return arrangement
     record = {}
     try:
         return _arrange_material_once(domain, traces, record=record, **options)
@@ -2097,10 +2145,48 @@ def _arrange_material(domain, traces, *, tolerance, cancellation_check=None,
     return arrangement
 
 
+def _ring_split_attempt(domain, traces, options):
+    """The ring_split attempt of :func:`_arrange_material`: its arrangement, or None for the baseline chain.
+
+    Where the policy declined (or the face has no free end, or is not an exact planar face) no layout
+    change was made, so this attempt IS the baseline chain's first attempt: an accepted one is returned
+    as is (bit-identical), a refused one gives None and the chain repeats it from the start (including
+    the OPT-S retry decision). Where the ring_split seams were used, None when an unchanged downstream
+    check refused that layout (``ring_split_refused``) or a postcondition failed. A cancellation --
+    raised by a check, or requested while a check refused -- propagates as the cancellation error.
+    """
+    from .runtime_diagnostics import _increment
+    cancellation_check = options["cancellation_check"]
+    record = {}
+    try:
+        arrangement = _arrange_material_once(domain, traces, seam_policy="ring_split", record=record, **options)
+    except GeometryError as error:
+        if str(error).endswith("cancelled"):
+            raise
+        if cancellation_check is not None and cancellation_check():
+            raise GeometryError("intersection arrangement cancelled") from None
+        if not record.get("ring_split"):
+            # Declined before any layout change: this attempt WAS the baseline first attempt; the chain
+            # repeats it from the start (bit-identical, including the OPT-S retry decision).
+            return None
+        _increment("ring_split_refused")
+        return None
+    if not record.get("ring_split"):
+        return arrangement                           # no layout change: the baseline first attempt itself
+    if any(cell.holes for cell in arrangement.cells):
+        _increment("ring_split_declined:postcondition_holed_cell")
+        return None
+    _increment("ring_split_accepted")
+    return arrangement
+
+
 def _arrange_material_once(domain, traces, *, tolerance, cancellation_check=None,
-                           max_predicates=None, area_tolerance=None, points=(), seam_rotation=None, record=None):
+                           max_predicates=None, area_tolerance=None, points=(), seam_rotation=None, record=None,
+                           seam_policy=None):
     """One arrangement attempt; ``seam_rotation`` and ``record`` (receives ``seams``, the number of
-    Plane seam ends) serve the retry of :func:`_arrange_material`."""
+    Plane seam ends) serve the retry of :func:`_arrange_material`. ``seam_policy="ring_split"`` asks
+    :func:`_add_exact_planar_seams` for the ring_split seams (``record["ring_split"]`` is then True
+    only when they replaced the baseline seams)."""
     native_area_tolerance = (tolerance if area_tolerance is None else area_tolerance/domain.area_jacobian)
     examined = 0
     def check():
@@ -2135,6 +2221,8 @@ def _arrange_material_once(domain, traces, *, tolerance, cancellation_check=None
         else:
             paths.extend(replace(path, curve=piece) for piece in _clip(domain, curve, tolerance, check))
 
+    # RING-SPLIT: the input trace of every clipped piece (its same-trace rule); only in that mode.
+    sources = {} if seam_policy == "ring_split" else None
     if deferred:
         # S9: every input station -- boundary and trace ends as given, arrangement points -- lies on
         # the support within tol, checked before clipping or identification can drop or absorb it.
@@ -2142,12 +2230,17 @@ def _arrange_material_once(domain, traces, *, tolerance, cancellation_check=None
                                 for point in stations.segment_of(path.curve)]
                        + [point for trace in traces for point in stations.segment_of(trace.curve)]
                        + [exact_vector(item.position) for item in points], tolerance)
-    for trace in traces:
+    for ordinal, trace in enumerate(traces):
+        first_piece = len(paths)
         add_clipped(trace, trace.curve)
+        if sources is not None:
+            sources.update((index, ordinal) for index in range(first_piece, len(paths)))
 
     if exact:
+        policy_options = ({} if seam_policy is None else
+                          {"seam_policy": seam_policy, "record": record, "sources": sources})
         seams = _add_exact_planar_seams(domain, boundaries, paths, segments, points, tolerance, check,
-                                        deferred=deferred, rotation=seam_rotation)
+                                        deferred=deferred, rotation=seam_rotation, **policy_options)
         if record is not None:
             record["seams"] = seams
     else:
