@@ -1677,7 +1677,9 @@ def _face_contact_residual(model, face, point, uv):
         support_uv=np.clip(support_uv,0.,1.)
     # A Plane is unbounded and its stored frame need not cover the face (the tripod web
     # planes), so its uv are NOT clipped: the term is the distance to the plane itself.
-    # Containment in the face is the face_point term's job.
+    # It is an on-support check only. The face_point term at the clipped uv rejects
+    # stations outside the parameterization's patch; trim holes inside the patch are
+    # not checked here (as before S0f) and rest on the planned contact itself.
     return max(
         float(np.linalg.norm(model.face_point(face,*uv)-point)),
         float(np.linalg.norm(target.surface.evaluate(
