@@ -217,11 +217,29 @@ def test_name_case_and_separator_normalisation(monkeypatch: pytest.MonkeyPatch) 
     assert "re-review" in _rejected(monkeypatch, row, REVIEWED_TEXT, name="other-pkg")
 
 
-def test_duplicate_distinct_distributions_are_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
-    other = _FakeDistribution(REVIEWED_TEXT + " other\n", "1.17.0")
-    assert "re-review" in _rejected(monkeypatch, _row(), REVIEWED_TEXT, extra=(other,))
-    same = _FakeDistribution(REVIEWED_TEXT)
-    _run(monkeypatch, _row(), REVIEWED_TEXT, extra=(same,))
+@pytest.mark.parametrize(
+    "duplicate",
+    [
+        _FakeDistribution(REVIEWED_TEXT, expression="GPL-3.0-only"),
+        _FakeDistribution(REVIEWED_TEXT, expression="BSD-3-Clause"),
+        _FakeDistribution(REVIEWED_TEXT, classifiers=("License :: OSI Approved :: GNU General Public License v3 (GPLv3)",)),
+        _FakeDistribution(REVIEWED_TEXT, "1.17.0"),
+        _FakeDistribution(REVIEWED_TEXT + " other\n", "1.17.0"),
+        _FakeDistribution(REVIEWED_TEXT),
+    ],
+)
+def test_any_second_distribution_of_a_pinned_package_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, duplicate: _FakeDistribution
+) -> None:
+    assert "re-review" in _rejected(monkeypatch, _row(), REVIEWED_TEXT, extra=(duplicate,))
+    assert "re-review" in _rejected(monkeypatch, _row(), REVIEWED_TEXT, extra=(duplicate,), expression="BSD-3-Clause")
+
+
+def test_a_single_distribution_still_passes_and_other_packages_do_not_count(monkeypatch: pytest.MonkeyPatch) -> None:
+    _run(monkeypatch, _row(), REVIEWED_TEXT)
+    _run(monkeypatch, _row(), REVIEWED_TEXT, expression="BSD-3-Clause")
+    unrelated = _FakeDistribution("MIT", name="unrelated")
+    _run(monkeypatch, _row(), REVIEWED_TEXT, extra=(unrelated,))
 
 
 def test_runtime_scope_cannot_carry_a_reviewed_record(monkeypatch: pytest.MonkeyPatch) -> None:

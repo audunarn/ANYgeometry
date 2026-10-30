@@ -173,9 +173,6 @@ def _accept_reviewed_installed_license(
     name = str(row["name"])
     record = _check_reviewed_record(row)
     again = f"installed dependency {name!r} differs from its reviewed license record; re-review the license text"
-    candidates = [d for d in importlib_metadata.distributions() if _distribution_name(d) == _normalized_name(name)]
-    if len({(d.version, str(d.metadata.get("License"))) for d in candidates}) > 1:
-        _fail(f"{again} (several distinct installed distributions)")
     if _distribution_name(distribution) != _normalized_name(name):
         _fail(f"{again} (installed distribution is named {_distribution_name(distribution)!r})")
     if not distribution.version or distribution.version != record["version"]:
@@ -190,6 +187,18 @@ def _accept_reviewed_installed_license(
         _fail(f"{again} (bundled components changed)")
 
 
+def _single_installed_distribution(name: str) -> importlib_metadata.Distribution:
+    """Return the only installed distribution of a pinned package; any second one fails closed."""
+    wanted = _normalized_name(name)
+    found = [d for d in importlib_metadata.distributions() if _distribution_name(d) == wanted]
+    if len(found) != 1:
+        _fail(
+            f"installed dependency {name!r} has {len(found)} installed distributions, expected exactly one; "
+            "re-review the installed environment"
+        )
+    return found[0]
+
+
 def _distribution_name(distribution: importlib_metadata.Distribution) -> str:
     return _normalized_name(str(distribution.metadata.get("Name") or ""))
 
@@ -202,11 +211,13 @@ def _check_installed(rows: list[dict[str, object]]) -> None:
         if row["scope"] == "build":
             continue
         name = str(row["name"])
+        pinned = "reviewed_installed_license" in row
         try:
-            distribution = importlib_metadata.distribution(name)
+            distribution = (
+                _single_installed_distribution(name) if pinned else importlib_metadata.distribution(name)
+            )
         except importlib_metadata.PackageNotFoundError:
             _fail(f"declared dependency {name!r} is not installed")
-        pinned = "reviewed_installed_license" in row
         if pinned:
             _accept_reviewed_installed_license(row, distribution)
             for classifier in distribution.metadata.get_all("Classifier", []):
@@ -215,19 +226,19 @@ def _check_installed(rows: list[dict[str, object]]) -> None:
                 ):
                     _fail(f"installed dependency {name!r} has review-required license classifier {classifier!r}")
         expression = (distribution.metadata.get("License-Expression") or "").strip()
-        if pinned and not expression:
-            # The pin accepted the reviewed legacy text; there is no other expression to check.
-            continue
-        actual = _license_from_metadata(distribution)
-        if not actual:
-            _fail(f"installed dependency {name!r} has unknown license metadata")
-        if any(token in actual.upper() for token in FORBIDDEN_LICENSE_TOKENS):
-            _fail(f"installed dependency {name!r} reports review-required license {actual!r}")
-        if actual not in INSTALLED_LICENSE_ALIASES[name]:
-            _fail(
-                f"installed dependency {name!r} reports {actual!r}, expected one of "
-                f"{sorted(INSTALLED_LICENSE_ALIASES[name])!r}"
-            )
+        # A pinned package without an expression is covered by the pin of its legacy text above;
+        # every other case, and any expression on a pinned package, takes the ordinary checks.
+        if not pinned or expression:
+            actual = _license_from_metadata(distribution)
+            if not actual:
+                _fail(f"installed dependency {name!r} has unknown license metadata")
+            if any(token in actual.upper() for token in FORBIDDEN_LICENSE_TOKENS):
+                _fail(f"installed dependency {name!r} reports review-required license {actual!r}")
+            if actual not in INSTALLED_LICENSE_ALIASES[name]:
+                _fail(
+                    f"installed dependency {name!r} reports {actual!r}, expected one of "
+                    f"{sorted(INSTALLED_LICENSE_ALIASES[name])!r}"
+                )
 
 
 def check(*, check_installed: bool = False) -> None:
