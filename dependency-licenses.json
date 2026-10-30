@@ -34,6 +34,14 @@
     },
     {
       "bundled": false,
+      "license_expression": "BSD-3-Clause",
+      "name": "scipy",
+      "requirement": "scipy>=1.13",
+      "scope": "optional:sketch",
+      "upstream": "https://scipy.org/"
+    },
+    {
+      "bundled": false,
       "license_expression": "MIT",
       "name": "setuptools",
       "requirement": "setuptools>=77.0.3",

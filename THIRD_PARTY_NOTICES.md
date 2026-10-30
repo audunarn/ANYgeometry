@@ -9,6 +9,7 @@ are maintained in [dependency-licenses.json](dependency-licenses.json).
 |---|---|---|---|---|---|
 | NumPy | `numpy>=1.26` | Runtime numerical arrays | https://numpy.org/ | BSD-3-Clause and permissive component licenses | No |
 | Shapely | `shapely>=2.0` | Optional planar operations | https://shapely.readthedocs.io/ | BSD-3-Clause | No |
+| SciPy | `scipy>=1.13` | Optional sketch extra (sketch solving) | https://scipy.org/ | BSD-3-Clause | No |
 | mpmath | `mpmath>=1.3` | Optional test extra (CH3 reference values; never a runtime dependency) | https://mpmath.org/ | BSD-3-Clause | No |
 | setuptools | `setuptools>=77.0.3` | Build backend | https://github.com/pypa/setuptools | MIT | No |
 | wheel | `wheel` | Wheel build support | https://github.com/pypa/wheel | MIT | No |
