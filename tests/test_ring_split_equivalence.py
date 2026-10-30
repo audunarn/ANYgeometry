@@ -271,3 +271,47 @@ def test_regions_reject_equal_areas_with_different_boundaries():
     assert _regions(baseline) == _regions(broken) == [2., 2.]
     with pytest.raises(AssertionError):
         _assert_equivalent(baseline, broken)
+
+
+def test_boundary_sync_neighbor_only_splits_boundary_point_sets():
+    from dataclasses import replace
+    from anygeometry.batch_intersections import _synchronize_boundary_events
+    from anygeometry.definition_binding import definition_checksum
+    from anygeometry.material_arrangement import ArrangementCell
+    from anygeometry.runtime_diagnostics import collect_runtime_diagnostics
+
+    domain, traces = cap(count=4)
+    corners = ((10., -10., 0.), (20., -10., 0.), (20., 10., 0.), (10., 10., 0.))
+    edges = (101, 102, 103, 2)  # left edge shares the cap's right physical boundary
+    boundary = tuple(ArrangementPath(LinePath(a, b), source_edge=edge)
+                     for a, b, edge in zip(corners, corners[1:] + corners[:1], edges))
+    neighbor = MaterialDomain(8, domain.support, (boundary,))
+    layouts = {}
+    before = []
+    for policy in ("baseline", "ring_split"):
+        cap_layout = arrange_material(domain, traces, tolerance=TOL, area_tolerance=AREA_TOL, seam_policy=policy)
+        with collect_runtime_diagnostics() as counters:
+            neighbor_layout = arrange_material(neighbor, (), tolerance=TOL, area_tolerance=AREA_TOL,
+                                               seam_policy=policy)
+        assert not counters.get("ring_split_applied")
+        before.append(definition_checksum(neighbor_layout))
+        _cap, layouts[policy] = _synchronize_boundary_events((cap_layout, neighbor_layout), lambda: None)
+    assert before[0] == before[1]  # no local layout change before synchronization
+    baseline, ring_split = layouts["baseline"], layouts["ring_split"]
+    assert definition_checksum(baseline) != definition_checksum(ring_split)
+    assert len(baseline.paths) != len(ring_split.paths)
+    assert len(baseline.cells) == len(ring_split.cells) == 1
+    assert not any(path.decomposition for layout in layouts.values() for path in layout.paths)
+    _assert_equivalent(baseline, ring_split)
+
+    # A counterfeit equal-area cell can retain all original physical paths unused.
+    # The old inventory/area-only oracle accepts this; the per-region boundary check must refuse.
+    shifted = tuple((x + 30., y, z) for x, y, z in corners)
+    added = tuple(ArrangementPath(LinePath(a, b), decomposition=True)
+                  for a, b in zip(shifted, shifted[1:] + shifted[:1]))
+    start = len(ring_split.paths)
+    wrong = replace(ring_split, paths=ring_split.paths + added,
+                    cells=(ArrangementCell(tuple((start + i, True) for i in range(4)), ()),))
+    assert _regions(baseline) == _regions(wrong) == [200.]
+    with pytest.raises(AssertionError, match="dissolved region boundary"):
+        _assert_equivalent(baseline, wrong)
