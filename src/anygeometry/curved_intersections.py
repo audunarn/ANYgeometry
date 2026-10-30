@@ -786,6 +786,11 @@ def _plane_face_uv_extent(model, face_id: int, plane: Plane, slack: np.ndarray):
     face = model.faces[face_id]
     inverse = np.linalg.pinv(np.column_stack((plane.u_vector, plane.v_vector)))
     linear = np.abs(inverse)
+    # World -> (u, v, n) affine map; the normal is orthogonal to the frame, so
+    # its first two coordinates are the least-squares Plane.local_uv.
+    to_frame = np.eye(4)
+    to_frame[:3, :3] = np.linalg.inv(np.column_stack((plane.u_vector, plane.v_vector, plane.normal)))
+    to_frame[:3, 3] = -to_frame[:3, :3] @ np.asarray(plane.origin, dtype=float)
     lower_limit = -slack
     upper_limit = 1.0 + slack
     state = {"lower": np.full(2, np.inf), "upper": np.full(2, -np.inf), "covers": True, "pieces": 0}
@@ -864,7 +869,26 @@ def _plane_face_uv_extent(model, face_id: int, plane: Plane, slack: np.ndarray):
                     lambda points: model._split_bezier(points, 0.5),  # noqa: SLF001
                 )
             elif isinstance(curve, EXACT_CURVES):
-                def exact_hull(interval, curve=curve):
+                # Bound the curve in the frame's own (u, v, n) coordinates when
+                # it supports an affine transform, so the uv box keeps the
+                # correlation of the coordinates (a world box mapped by |pinv|
+                # does not); otherwise map its world box conservatively.
+                try:
+                    local_curve = curve.transformed(to_frame)
+                except (GeometryError, ValueError, TypeError, AttributeError, np.linalg.LinAlgError):
+                    local_curve = None
+
+                def exact_hull(interval, curve=curve, local_curve=local_curve):
+                    if local_curve is not None:
+                        try:
+                            box_lower, box_upper = local_curve.bounds(*interval)
+                        except (GeometryError, ValueError, np.linalg.LinAlgError):
+                            pass
+                        else:
+                            return (
+                                np.asarray(box_lower, dtype=float)[:2],
+                                np.asarray(box_upper, dtype=float)[:2],
+                            )
                     box_lower, box_upper = curve.bounds(*interval)
                     box_lower = np.asarray(box_lower, dtype=float)
                     box_upper = np.asarray(box_upper, dtype=float)

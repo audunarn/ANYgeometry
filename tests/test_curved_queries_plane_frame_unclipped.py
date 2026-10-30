@@ -281,6 +281,33 @@ def test_spline_trimmed_face_inside_its_frame_keeps_the_bounded_chart():
     assert not _plane_chart(model, face).unbounded
 
 
+def _rotated_line_range_face(model):
+    """Codex S0g-R2: Plane P(u, v) = (u - v, u + v, 0) whose unit square is the face, LineRange trims."""
+
+    from anygeometry.line_ranges import LineRange
+
+    corners = ((0.0, 0.0, 0.0), (1.0, 1.0, 0.0), (0.0, 2.0, 0.0), (-1.0, 1.0, 0.0))
+    vertices = model.add_points(corners)
+    edges = tuple(
+        model.add_curve(vertices[index], vertices[(index + 1) % 4], LineRange(corners[index], corners[(index + 1) % 4]))
+        for index in range(4)
+    )
+    face = model.add_face(edges)
+    model.set_face_surface(face, Plane((0, 0, 0), (1, 1, 0), (-1, 1, 0)))
+    return face
+
+
+def test_exact_trims_on_a_rotated_covering_frame_keep_the_bounded_chart():
+    """Codex S0g-R2: world boxes mapped to uv lose the coordinate correlation."""
+
+    from anygeometry.curved_intersections import _plane_chart
+
+    model = GeometryModel()
+    face = _rotated_line_range_face(model)
+    assert model.validate_topology() == ()
+    assert not _plane_chart(model, face).unbounded
+
+
 # ---------------------------------------------------------------- bit identity
 
 _UUID = re.compile(r"UUID\('[0-9a-f-]+'\)")
@@ -341,6 +368,17 @@ def sample_digests() -> dict[str, str]:
     )):
         edge = model.add_arc(*model.add_points((start, via, end)))
         digests[f"spline/e{index}"] = _digest(
+            query_intersection(model, model.handle("edge", edge), model.handle("face", face))
+        )
+    # Codex S0g-R2: LineRange trims on a rotated covering frame.
+    model = GeometryModel()
+    face = _rotated_line_range_face(model)
+    for index, (start, via, end) in enumerate((
+        ((1.0, 1.4, 0.0), (0.7, 1.7, 0.3), (0.4, 2.0, 0.0)),
+        ((0.3, 0.9, -0.2), (0.0, 1.0, 0.1), (-0.3, 1.1, -0.2)),
+    )):
+        edge = model.add_arc(*model.add_points((start, via, end)))
+        digests[f"linerange/e{index}"] = _digest(
             query_intersection(model, model.handle("edge", edge), model.handle("face", face))
         )
     # Small cylinder against a large plate whose frame covers it.
