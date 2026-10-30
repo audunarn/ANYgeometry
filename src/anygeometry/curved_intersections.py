@@ -20,7 +20,7 @@ from typing import Iterable, Sequence
 
 import numpy as np
 
-from .curves import Arc, Spline, Straight
+from .curves import Arc, Spline, Straight, _wrapped_angle
 from .errors import GeometryError
 from .exact_curves import EXACT_CURVES, EllipticArc, CylinderIntersectionCurve
 from .line_ranges import LineRange
@@ -832,6 +832,155 @@ class _ExactPlaneUV:
         return True
 
 
+_ARC_MAX_SCALE = 1.0e5
+
+
+def _sqrt_bounds(value: Fraction) -> tuple[float, float]:
+    """Doubles ``lo <= sqrt(value) <= hi`` for a non-negative rational."""
+
+    root = float(np.sqrt(float(value)))
+    lo = hi = root
+    while lo > 0.0 and Fraction(lo) * Fraction(lo) > value:
+        lo = float(np.nextafter(lo, 0.0))
+    while Fraction(hi) * Fraction(hi) < value:
+        hi = float(np.nextafter(hi, np.inf))
+    return lo, hi
+
+
+def _fraction_cross(a, b):
+    return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+
+
+def _exact_circumcircle(points):
+    """Exact circle through three stored points (the same formula as ``arc_frame``, in rationals).
+
+    Returns ``(h, a - h, r^2, n, |n|^2)`` with ``n = ab x ac``, or ``None`` for
+    collinear points.
+    """
+
+    a, b, c = (tuple(Fraction(float(x)) for x in point) for point in points)
+    ab = tuple(q - p for p, q in zip(a, b))
+    ac = tuple(q - p for p, q in zip(a, c))
+    normal = _fraction_cross(ab, ac)
+    normal_sq = sum(x * x for x in normal)
+    if normal_sq == 0:
+        return None
+    ab_sq = sum(x * x for x in ab)
+    ac_sq = sum(x * x for x in ac)
+    first = _fraction_cross(ac, normal)
+    second = _fraction_cross(normal, ab)
+    h = tuple(p + (ab_sq * f + ac_sq * s) / (2 * normal_sq) for p, f, s in zip(a, first, second))
+    radial = tuple(p - q for p, q in zip(a, h))
+    return h, radial, sum(x * x for x in radial), normal, normal_sq
+
+
+def _exact_arc_disc(points, exact):
+    """Conservative uv box of the exact circle through three stored points, or ``None``.
+
+    ``uv_k(X) = uv_k(h) + R_k (X - h)`` and ``|R_k (X - h)| <= |R_k|_2 r``.
+    """
+
+    if not all(np.all(np.isfinite(np.asarray(point, dtype=float))) for point in points):
+        return None
+    circle = _exact_circumcircle(points)
+    if circle is None:
+        return None
+    h, _radial, radius_sq, _normal, _normal_sq = circle
+    _r_lo, r_hi = _sqrt_bounds(radius_sq)
+    centre = exact.exact_uv(h)
+    lower, upper = np.zeros(2), np.zeros(2)
+    for k in range(2):
+        _n_lo, n_hi = _sqrt_bounds(sum(x * x for x in exact.exact_rows[k]))
+        reach = Fraction(r_hi) * Fraction(n_hi)
+        lower[k] = -_round_up(reach - centre[k])
+        upper[k] = _round_up(centre[k] + reach)
+    if not (np.all(np.isfinite(lower)) and np.all(np.isfinite(upper))):
+        return None
+    return lower, upper
+
+
+def _arc_construction_bound(start, via, end, frame):
+    """How far the rounded ``arc_frame`` can sit from the exact arc of its stored points.
+
+    The arc's definition is the exact circle through the stored doubles
+    ``a`` (start), ``b`` (via) and ``c`` (end), from ``a`` through ``b`` to
+    ``c``; ``model.arc_frame`` is a rounded construction of it (centre ``c~``,
+    radius ``rho``, axes ``e1, e2``, sweep ``s~``).  With the exact centre ``h``
+    and exact axes ``r e1^ = a - h``, ``r e2^ = n^ x (a - h)`` (``n = ab x ac``),
+    the exact arc point ``X(t) = h + r (cos t e1^ + sin t e2^)`` and the frame
+    point ``F(t) = c~ + rho (cos t e1 + sin t e2)`` differ componentwise by at
+    most ``dev = |h - c~| + |r e1^ - rho e1| + |r e2^ - rho e2|``; every term is
+    measured in rationals from the stored points (``|n|`` enclosed by
+    outward-rounded square roots) and rounded up, so this is an a-posteriori
+    bound of the construction error rather than an a-priori conditioning
+    estimate.  The exact sweep ``S`` differs from ``s~``: an angle of a point
+    ``p`` on the circle (p = b, c) moves by at most ``(pi/2) sqrt2 eps / r``
+    with ``eps = 3 |dev|_1 + 8 u rho + 8 u (|p|_1 + |c~|_1)`` (centre, axis and
+    radius deviations plus the rounding of the frame's own dot products),
+    plus ``128 u`` for arctan2 and the wrap.  Returns ``(dev, sweep_error)``,
+    or ``None`` (decline: the caller does not prove coverage) when the arc is
+    ill-conditioned: a non-finite intermediate, collinear points, radius
+    above 1e5 m, ``sqrt2 eps > r / 2``, ``|dev|_1 > r / 10``, or when the via
+    or end angle lies within its error of the wrap or of each other (the
+    frame might then sweep the complementary arc).
+    """
+
+    points = [np.asarray(item, dtype=float) for item in (start, via, end)]
+    center = np.asarray(frame.center, dtype=float)
+    e1 = np.asarray(frame.e1, dtype=float)
+    e2 = np.asarray(frame.e2, dtype=float)
+    rho = float(frame.radius)
+    values = np.concatenate(points + [center, e1, e2, np.asarray((rho, float(frame.sweep)))])
+    if not np.all(np.isfinite(values)) or not 0.0 < rho <= _ARC_MAX_SCALE:
+        return None
+    circle = _exact_circumcircle(points)
+    if circle is None:
+        return None
+    h, radial, radius_sq, normal, normal_sq = circle
+    r_lo, r_hi = _sqrt_bounds(radius_sq)
+    if not (0.0 < r_lo and r_hi <= _ARC_MAX_SCALE):
+        return None
+    n_lo, n_hi = _sqrt_bounds(normal_sq)
+    if not n_lo > 0.0:
+        return None
+    axis = _fraction_cross(normal, radial)
+    deviation = np.zeros(3)
+    for j in range(3):
+        rho_e1 = Fraction(rho) * Fraction(float(e1[j]))
+        rho_e2 = Fraction(rho) * Fraction(float(e2[j]))
+        ends = (axis[j] / Fraction(n_hi), axis[j] / Fraction(n_lo))
+        deviation[j] = (
+            _round_up(abs(h[j] - Fraction(float(center[j]))))
+            + _round_up(abs(radial[j] - rho_e1))
+            + _round_up(max(abs(end - rho_e2) for end in ends))
+        )
+    deviation = deviation * (1.0 + 4.0 * _UNIT_ROUNDOFF)
+    total = float(deviation.sum())
+    if not (np.isfinite(total) and total <= 0.1 * r_lo):
+        return None
+
+    def angle_error(point):
+        eps = 3.0 * total + 8.0 * _UNIT_ROUNDOFF * (rho + float(np.abs(point).sum()) + float(np.abs(center).sum()))
+        if not np.sqrt(2.0) * eps <= 0.5 * r_lo:
+            return None
+        return (np.pi / 2.0) * np.sqrt(2.0) * eps / r_lo * (1.0 + 1.0e-6) + 128.0 * _UNIT_ROUNDOFF
+
+    via_error = angle_error(points[1])
+    end_error = angle_error(points[2])
+    if via_error is None or end_error is None:
+        return None
+    theta_via = _wrapped_angle(points[1] - center, e1, e2)
+    theta_end = _wrapped_angle(points[2] - center, e1, e2)
+    period = 2.0 * np.pi
+    if not (
+        via_error < theta_via < period - via_error
+        and end_error < theta_end < period - end_error
+        and abs(theta_via - theta_end) > via_error + end_error
+    ):
+        return None
+    return deviation, end_error + 64.0 * _UNIT_ROUNDOFF
+
+
 def _plane_face_uv_extent(model, face_id: int, plane: Plane, slack: np.ndarray):
     """Conservative support-uv box of a face on an exact ``Plane`` support,
     and whether the stored frame provably covers the face.
@@ -860,7 +1009,14 @@ def _plane_face_uv_extent(model, face_id: int, plane: Plane, slack: np.ndarray):
       and one subtraction need at most ``5 u (1 + u)``);
     * arc points ``q~ = c + r (cos t e1 + sin t e2)`` add the world error
       ``g (|c| + r (|e1| + |e2|))`` mapped by ``|R~_k|``, plus
-      ``r a_k d^2 / 2`` for the extremum missed by an angle error ``d``;
+      ``r a_k d^2 / 2`` for the extremum missed by an angle error ``d``.
+      The arc is the exact circle through its stored start/via/end points,
+      not the rounded ``model.arc_frame`` (S0g round 5, Codex R4 P2): the
+      construction deviation ``dev`` and sweep error of
+      ``_arc_construction_bound`` add ``2 |R~_k| dev`` and enter ``d``, and
+      the exact end vertices join the candidates.  An ill-conditioned arc
+      (no meaningful bound, radius above 1e5 m) or a frame vector above
+      1e5 m never proves coverage; such an arc is boxed by its exact disc;
     * de Casteljau pieces at depth ``m`` of a degree-``n`` spline add the
       world error ``m n u max|P|`` (each midpoint is one rounding; averaging
       does not amplify earlier errors) mapped by ``|R~_k|``;
@@ -921,6 +1077,7 @@ def _plane_face_uv_extent(model, face_id: int, plane: Plane, slack: np.ndarray):
     frame_abs_t = np.abs(to_frame[:2, 3])
     lower_limit = -slack
     upper_limit = 1.0 + slack
+    frame_scale = float(max(np.linalg.norm(plane.u_vector), np.linalg.norm(plane.v_vector)))
     state = {"lower": np.full(2, np.inf), "upper": np.full(2, -np.inf), "covers": True, "pieces": 0}
 
     def uv_of(point) -> np.ndarray:
@@ -1071,8 +1228,35 @@ def _plane_face_uv_extent(model, face_id: int, plane: Plane, slack: np.ndarray):
                         4.0 * _PAD_GAMMA * spread / amplitude + 4.0 * _UNIT_ROUNDOFF,
                         np.pi,
                     )
-                angle_error = phase_error + 8.0 * _UNIT_ROUNDOFF * (1.0 + abs(sweep))
+                ends = (
+                    model.vertex_position(edge.start),
+                    model.vertex_position(edge.curve.via_vertex),
+                    model.vertex_position(edge.end),
+                )
+                try:
+                    construction = _arc_construction_bound(*ends, frame)
+                except (ValueError, OverflowError, ZeroDivisionError, FloatingPointError):
+                    construction = None
+                if construction is None:
+                    # Ill-conditioned arc (or no rigorous bound): never prove
+                    # coverage; box the exact circle by its full disc.
+                    try:
+                        disc = _exact_arc_disc(ends, exact)
+                    except (ValueError, OverflowError, ZeroDivisionError):
+                        disc = None
+                    if disc is None:
+                        return None, False
+                    include(*disc)
+                    state["covers"] = False
+                    continue
+                deviation, sweep_error = construction
+                # The exact arc's extremum may sit within the sweep error of
+                # an end the frame excludes (flat there: quadratic term); the
+                # frame and exact arcs differ by `deviation` at equal angles,
+                # once for the curve and once for the exact end vertices.
+                angle_error = phase_error + sweep_error + 8.0 * _UNIT_ROUNDOFF * (1.0 + abs(sweep))
                 extremum = radius * (amplitude + _PAD_GAMMA * spread) * angle_error**2 / 2.0
+                extremum = extremum + 2.0 * (abs_rows @ deviation) * (1.0 + _PAD_GAMMA)
                 angles = [0.0, sweep]
                 for row in rows:
                     phase = float(np.arctan2(float(row @ e2), float(row @ e1)))
@@ -1081,10 +1265,14 @@ def _plane_face_uv_extent(model, face_id: int, plane: Plane, slack: np.ndarray):
                             angles.append(candidate)
                 world_pad = _PAD_GAMMA * (np.abs(center) + radius * (np.abs(e1) + np.abs(e2)))
                 include_points(
-                    [center + radius * (np.cos(angle) * e1 + np.sin(angle) * e2) for angle in angles],
-                    world_pads=[world_pad] * len(angles),
+                    [center + radius * (np.cos(angle) * e1 + np.sin(angle) * e2) for angle in angles]
+                    + [ends[0], ends[2]],
+                    world_pads=[world_pad] * len(angles) + [np.zeros(3), np.zeros(3)],
                     extra=extremum,
                 )
+                if frame_scale > _ARC_MAX_SCALE:
+                    # Fail closed on frames above 1e5 m (owner rule, S0g round 5).
+                    state["covers"] = False
             elif isinstance(curve, Spline):
                 control = np.asarray(model._spline_points(edge), dtype=float)  # noqa: SLF001
                 degree = len(control) - 1

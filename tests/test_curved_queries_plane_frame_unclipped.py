@@ -374,6 +374,84 @@ def test_coverage_decision_is_fail_closed_across_coordinate_scales(exponent):
     assert result.kind is not IntersectionKind.DISJOINT, (exponent, result.diagnostics)
 
 
+def _codex_r4_arc_face():
+    """Codex S0g-R4: nearly collinear arc points, exact circle radius about 327 km, frame about 650 km."""
+
+    model = GeometryModel()
+    a, b, c, d = model.add_points(((0.1, 0.3, 0.0), (2.2, 2.40001, 0.0), (1.1, 1.3, 0.0), (0.6, 0.8, 0.0)))
+    face = model.add_face((model.add_arc(a, b, c), model.add_line(c, d), model.add_line(d, a)))
+    plane = Plane(
+        (-557686.5956591003, -95683.19565212693, 0.0), (653371.1913112272, 0.0, 0.0), (0.0, 653371.1913112272, 0.0)
+    )
+    model.set_face_surface(face, plane)
+    return model, face, plane
+
+
+def test_arc_construction_error_does_not_prove_coverage():
+    """Codex S0g-R4 P2: the exact circle through the stored arc points leaves the frame by 2.75e-12."""
+
+    from fractions import Fraction as Q
+
+    from anygeometry.curved_intersections import _plane_chart, _plane_face_uv_extent
+
+    model, face, plane = _codex_r4_arc_face()
+    assert model.validate_topology() == ()
+    slack = 1.0e-3 * model.tolerance.length / np.array((np.linalg.norm(plane.u_vector), np.linalg.norm(plane.v_vector)))
+    # Exact circumcentre (h, k) of the stored arc points: the circle crosses u = 1 + slack.
+    x, y = Q(0.1), Q(0.3)
+    bx, by = Q(2.2) - x, Q(2.40001) - y
+    cx, cy = Q(1.1) - x, Q(1.3) - y
+    big_b, big_c, big_d = bx * bx + by * by, cx * cx + cy * cy, 2 * (bx * cy - by * cx)
+    h, k = x + (big_b * cy - big_c * by) / big_d, y + (bx * big_c - cx * big_b) / big_d
+    right = Q(float(plane.origin[0])) + Q(float(plane.u_vector[0])) * (1 + Q(float(slack[0])))
+    assert h < right and (h - x) ** 2 + (k - y) ** 2 > (right - h) ** 2
+    assert not _plane_face_uv_extent(model, face, plane, slack)[1]
+    assert _plane_chart(model, face).unbounded
+
+
+def _quarter_arc_face(frame):
+    """Line (0,0)-(2,0), arc (2,0) via (1+sqrt2, 1) to (2,2) about (1,1), line back to the origin."""
+
+    model = GeometryModel()
+    a, b, via, c = model.add_points(((0.0, 0.0, 0.0), (2.0, 0.0, 0.0), (1.0 + np.sqrt(2.0), 1.0, 0.0), (2.0, 2.0, 0.0)))
+    face = model.add_face((model.add_line(a, b), model.add_arc(b, via, c), model.add_line(c, a)))
+    model.set_face_surface(face, Plane(*frame))
+    return model, face
+
+
+def test_arc_on_a_huge_covering_frame_declines_to_the_unbounded_path():
+    """A well-covered arc on a frame above 1e5 m is declined (fail closed); the crossing is still found."""
+
+    from anygeometry.curved_intersections import _plane_chart
+
+    results = {}
+    for name, frame in (
+        ("huge", ((-1.0e5, -1.0e5, 0.0), (3.0e5, 0.0, 0.0), (0.0, 3.0e5, 0.0))),
+        ("covering", ((-1.0, -1.0, 0.0), (5.0, 0.0, 0.0), (0.0, 5.0, 0.0))),
+    ):
+        model, face = _quarter_arc_face(frame)
+        assert model.validate_topology() == ()
+        assert _plane_chart(model, face).unbounded is (name == "huge")
+        edge = model.add_arc(*model.add_points(((1.2, 0.4, -0.5), (1.2, 0.6, 0.0), (1.2, 0.4, 0.5))))
+        results[name] = query_intersection(model, model.handle("edge", edge), model.handle("face", face))
+    assert results["covering"].kind is IntersectionKind.CROSS, results["covering"].diagnostics
+    assert results["huge"].kind is results["covering"].kind
+    _assert_same_points(_points(results["huge"]), _points(results["covering"]))
+
+
+def test_arc_exactly_touching_its_frame_at_tripod_scale_keeps_the_bounded_chart():
+    """A semicircle (radius 10 m, centre 20/30 m) whose frame is exactly its bounding box still proves coverage."""
+
+    from anygeometry.curved_intersections import _plane_chart
+
+    model = GeometryModel()
+    a, top, c, middle = model.add_points(((30.0, 30.0, 0.0), (20.0, 40.0, 0.0), (10.0, 30.0, 0.0), (20.0, 30.0, 0.0)))
+    face = model.add_face((model.add_arc(a, top, c), model.add_line(c, middle), model.add_line(middle, a)))
+    model.set_face_surface(face, Plane((10.0, 30.0, 0.0), (20.0, 0.0, 0.0), (0.0, 10.0, 0.0)))
+    assert model.validate_topology() == ()
+    assert not _plane_chart(model, face).unbounded
+
+
 # ---------------------------------------------------------------- bit identity
 
 _UUID = re.compile(r"UUID\('[0-9a-f-]+'\)")
