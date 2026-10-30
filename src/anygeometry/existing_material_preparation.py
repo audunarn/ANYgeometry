@@ -88,8 +88,12 @@ def _ownership(model, handles, shared, intent):
         raise GeometryError('existing material reference remapping is not qualified')
 
 
-def try_plan_existing(model, handles, policy):
-    """Return an issued plan, or None only outside this strict native family."""
+def try_plan_existing(model, handles, policy, *, stored_policy=None):
+    """Return an issued plan, or None only outside this strict native family.
+
+    ``policy`` is the caller's object, pinned and called back through; ``stored_policy`` (default
+    ``policy``) is only what the issued plan stores."""
+    stored_policy = policy if stored_policy is None else stored_policy
     policy_pin = _policy_pin(policy)
     if not policy.face_connections:
         return None
@@ -141,7 +145,7 @@ def try_plan_existing(model, handles, policy):
         check()
         if candidate_state != initial:
             raise GeometryError('existing material clone changed complete geometry or native supports')
-        plan = IntersectionPlan(model.model_id, model.revision, initial[1], tuple(handles), policy, ())
+        plan = IntersectionPlan(model.model_id, model.revision, initial[1], tuple(handles), stored_policy, ())
         plan = replace(plan, content_checksum=_plan_content(plan))
         # Detached immutable tuples contain the complete pair/contact ledger;
         # no mutable self-carried digest can replace its external issuance pin.
@@ -156,8 +160,11 @@ def try_plan_existing(model, handles, policy):
             CURRENT_WORK.reset(token)
 
 
-def apply_existing(model, plan, policy):
-    """No topology change; atomic publication of normal current owner proof."""
+def apply_existing(model, plan, policy, *, planning_mode=None):
+    """No topology change; atomic publication of normal current owner proof.
+
+    ``policy`` must be the caller's object itself (its pin detects a change made during the apply);
+    ``planning_mode`` is the separate mode override handed to ``_validate_policy``."""
     from .batch_intersections import IntersectionApplication, _validate_policy
     from .translational_imprint import _publish_qualified
     from .transactions import ChangeSet
@@ -171,7 +178,7 @@ def apply_existing(model, plan, policy):
     entry = _entry(plan)
     if entry is None or entry[1]() is not model or _signature(plan) != entry[2]:
         raise GeometryError('existing material plan was not issued for this unchanged owner')
-    _validate_policy(plan, policy)
+    _validate_policy(plan, policy, planning_mode=planning_mode)
     _, _, _, initial, candidate, candidate_state, ledger, shared = entry
     policy_pin = _policy_pin(policy)
     predicates = [0]

@@ -159,14 +159,17 @@ def _candidate(model, handles, policy, qualification, *, require_cells):
         CURRENT_WORK.reset(token)
 
 
-def plan_bounded(model, handles, policy, qualification=None):
+def plan_bounded(model, handles, policy, qualification=None, *, stored_policy=None):
+    # ``policy`` is the caller's object (pinned in _candidate); ``stored_policy`` (default the same)
+    # is only what the issued plan stores.
     from .batch_intersections import IntersectionPlan, _plan_content, _policy
     policy = _policy(policy)
+    stored_policy = policy if stored_policy is None else stored_policy
     if policy.intent not in (ConnectionIntent.CONNECT, ConnectionIntent.IMPRINT):
         raise GeometryError('bounded section planning requires explicit CONNECT or IMPRINT')
     candidate, traces, mappings, faces, edges, native, qualification, edge_partition, auxiliary = _candidate(
         model, handles, policy, qualification, require_cells=True)
-    plan = IntersectionPlan(model.model_id, model.revision, _checksum(model), tuple(handles), policy, ())
+    plan = IntersectionPlan(model.model_id, model.revision, _checksum(model), tuple(handles), stored_policy, ())
     plan = replace(plan, content_checksum=_plan_content(plan))
     data = (ref(model), _signature(plan), candidate, _checksum(candidate), traces,
             mappings, faces, edges, native, capture_native_supports(candidate), qualification, edge_partition,
@@ -183,16 +186,20 @@ def is_bounded_plan(plan):
     return _entry(plan) is not None
 
 
-def apply_bounded(model, plan, policy):
-    from .batch_intersections import IntersectionApplication, _validate_policy
+def apply_bounded(model, plan, policy, *, planning_mode=None):
+    # ``policy`` is the caller's object itself; ``planning_mode`` is the separate mode override.
+    from .batch_intersections import IntersectionApplication, _validate_policy, _check_policy_in_place
     from .transactions import ChangeSet
     from .preparation_epochs import (_seals, _permits, _consume_epoch, _epoch_plan_required, _native_plan_supports)
     from .prepared_face_preimages import _publish_application_preimages
     from .edge_subcurve_preimages import _publish_edge_subcurve_preimages
+    # The caller's object is validated in place (no copy): this route has no policy pin of its own,
+    # and _validate_policy compares only four fields, by equality (1 == True).
+    _check_policy_in_place(policy)
     row = _entry(plan)
     if row is None or row[0]() is not model or _signature(plan) != row[1]:
         raise GeometryError('bounded intersection plan was copied, changed or belongs to another model')
-    _validate_policy(plan, policy)
+    _validate_policy(plan, policy, planning_mode=planning_mode)
     (candidate, checksum, traces, mappings, faces, edges, native, candidate_native, _qualification,
      edge_partition, auxiliary) = row[2:]
     if model.revision != plan.revision or _checksum(model) != plan.source_checksum or capture_native_supports(model) != native:

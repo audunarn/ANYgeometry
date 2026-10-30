@@ -96,19 +96,36 @@ class IntersectionBatchPolicy:
     def __post_init__(self):
         _check_planning_mode_value(self.planning_mode)
         object.__setattr__(self, "intent", ConnectionIntent(self.intent))
-        if self.intent not in (ConnectionIntent.CONNECT,ConnectionIntent.IMPRINT,
-                               ConnectionIntent.REUSE_EXISTING):
-            raise GeometryError("batch preparation requires connect, imprint or reuse_existing intent")
-        if self.max_predicates is not None and (type(self.max_predicates) is not int or self.max_predicates < 1):
-            raise GeometryError("intersection predicate budget must be a positive integer")
-        if self.max_candidate_pairs is not None and (
-                type(self.max_candidate_pairs) is not int or self.max_candidate_pairs < 1):
-            raise GeometryError("intersection candidate pair budget must be a positive integer")
-        if self.cancellation_check is not None and not callable(self.cancellation_check):
-            raise GeometryError("intersection cancellation check must be callable")
-        for name in ("face_connections", "member_connections", "member_face_connections"):
-            if type(getattr(self,name)) is not bool:
-                raise GeometryError(f"intersection {name} policy must be boolean")
+        _check_policy_fields(self)
+
+
+def _check_policy_fields(policy):
+    """The field checks of ``IntersectionBatchPolicy.__post_init__`` after its intent coercion."""
+    if policy.intent not in (ConnectionIntent.CONNECT,ConnectionIntent.IMPRINT,
+                             ConnectionIntent.REUSE_EXISTING):
+        raise GeometryError("batch preparation requires connect, imprint or reuse_existing intent")
+    if policy.max_predicates is not None and (type(policy.max_predicates) is not int or policy.max_predicates < 1):
+        raise GeometryError("intersection predicate budget must be a positive integer")
+    if policy.max_candidate_pairs is not None and (
+            type(policy.max_candidate_pairs) is not int or policy.max_candidate_pairs < 1):
+        raise GeometryError("intersection candidate pair budget must be a positive integer")
+    if policy.cancellation_check is not None and not callable(policy.cancellation_check):
+        raise GeometryError("intersection cancellation check must be callable")
+    for name in ("face_connections", "member_connections", "member_face_connections"):
+        if type(getattr(policy,name)) is not bool:
+            raise GeometryError(f"intersection {name} policy must be boolean")
+
+
+def _check_policy_in_place(policy):
+    """Every ``__post_init__`` check on an existing policy object, without copying or coercing it.
+
+    For routes that must keep the caller's object (identity) yet may receive one changed after
+    construction (``object.__setattr__``, or a state restored by ``__setstate__``, which checks only
+    the mode): a noncanonical intent is refused here instead of being normalised by a copy."""
+    _check_planning_mode_value(policy.planning_mode)
+    if type(policy.intent) is not ConnectionIntent:
+        raise GeometryError("intersection policy intent is noncanonical (not a ConnectionIntent)")
+    _check_policy_fields(policy)
 
 
 @dataclass(frozen=True, slots=True)
@@ -371,8 +388,11 @@ def resolve_planning_mode(policy):
 
 
 def _mode_agnostic(policy):
-    """The policy as the mode-agnostic routes (existing-material, bounded) see it: no mode stored
-    in their plans; validated as exact (an explicit "exact" also overrides the environment)."""
+    """The policy the mode-agnostic routes (existing-material, bounded) STORE in their plans: no
+    mode. It is never the object those routes check or call back through: they receive the
+    caller's policy itself (identity preserved, so their policy pins see a change made during the
+    call) and this copy only as ``stored_policy``. On apply they validate with the separate
+    ``planning_mode="exact"`` override (an explicit "exact" also overrides the environment)."""
     return policy if policy.planning_mode is None else replace(policy, planning_mode=None)
 
 
@@ -601,10 +621,16 @@ def _route_state(plan):
     return "T"
 
 
-def _validate_route(plan, state, policy, model=None):
+def _validate_route(plan, state, policy, model=None, *, planning_mode=None):
     """Mode/state agreement (ADR section 7) for a plan of ``state`` (from ``_route_state``); with
-    ``model``, r_max against the model tolerance."""
-    mode = resolve_planning_mode(policy)
+    ``model``, r_max against the model tolerance. ``planning_mode`` (internal: the mode-agnostic
+    routes pass "exact") replaces the policy's resolved mode without copying the policy."""
+    if planning_mode is None:
+        mode = resolve_planning_mode(policy)
+    elif type(planning_mode) is str and planning_mode in PLANNING_MODES:
+        mode = planning_mode
+    else:
+        raise GeometryError(f"intersection planning_mode override must be one of {PLANNING_MODES}")
     if state == "E" and mode != "exact":
         raise GeometryError("an exact intersection plan cannot be applied in topology_certified mode")
     if state == "T":
@@ -643,16 +669,18 @@ def _plan_content(plan):
         plan.arrangements,plan.axes,plan.contacts,plan.face_contacts))
 
 
-def _validate_policy(plan, policy, model=None):
+def _validate_policy(plan, policy, model=None, *, planning_mode=None):
     # A state-T plan is first validated field by field by the route-carrier validator (row 12 is its
     # content binding), so the comparisons below read validated fields; a state-E plan does no work here.
+    # ``planning_mode`` is the mode-agnostic routes' explicit override (see _validate_route): the
+    # caller's policy object itself is validated, never a copy of it.
     state = _route_state(plan)
     if any(getattr(policy,name) != getattr(plan.policy,name) for name in (
         'intent','face_connections','member_connections','member_face_connections')):
         raise GeometryError("apply policy does not match intersection planning")
     if state == "E" and plan.content_checksum != _plan_content(plan):
         raise GeometryError("intersection plan analytic content binding changed")
-    _validate_route(plan, state, policy, model)
+    _validate_route(plan, state, policy, model, planning_mode=planning_mode)
 
 
 def _normalise_cells(arrangement):
@@ -1215,14 +1243,16 @@ def plan_intersections(model, operands, *, policy):
     mode = resolve_planning_mode(effective)         # once per planning call (ADR-T2 v2 section 1)
     # The existing-material and bounded routes are mode-agnostic: they plan (and apply) exactly as
     # in exact mode and return state-E plans without any mode in their stored policy.
-    early = _mode_agnostic(effective)
+    # They check and call back through the caller's policy object (identity preserved); only the
+    # plan they store gets the mode-free copy.
+    stored = _mode_agnostic(effective)
     from .existing_material_preparation import try_plan_existing
-    existing = try_plan_existing(model, handles, early)
+    existing = try_plan_existing(model, handles, effective, stored_policy=stored)
     if existing is not None:
         return existing
     native=capture_native_supports(model) if _epoch_plan_required(model) else None
     if effective.face_connections and handles_bounded(model, handles):
-        plan = plan_bounded(model, handles, early)
+        plan = plan_bounded(model, handles, effective, stored_policy=stored)
         if native is not None:
             if capture_native_supports(model) != native:
                 raise GeometryError('bounded epoch source native geometry changed during planning')
@@ -2095,14 +2125,16 @@ def _apply_intersections(model, plan, *, policy):
         # A state-T plan is validated before any route dispatch (matrix rows 3-11).
         _validate_policy(plan, effective, model)
     from .existing_material_preparation import is_existing_plan, eligible, apply_existing
+    # Mode-agnostic routes: the caller's policy object is passed through unchanged (their policy
+    # pins and callbacks must see a change made during the apply); the mode is a separate override.
     if is_existing_plan(plan):
-        return apply_existing(model, plan, replace(effective, planning_mode="exact"))   # mode-agnostic route
+        return apply_existing(model, plan, effective, planning_mode="exact")
     if effective.face_connections and eligible(model, plan.operands):
         raise GeometryError('same-chart material preparation plan is not owner-issued')
     from .bounded_nurbs import is_bounded_plan, handles_bounded, apply_bounded
     active_faces = all(h.kind == 'face' and h.id in model.faces for h in plan.operands)
     if is_bounded_plan(plan) or (active_faces and handles_bounded(model, plan.operands)):
-        return apply_bounded(model, plan, replace(effective, planning_mode="exact"))    # mode-agnostic route
+        return apply_bounded(model, plan, effective, planning_mode="exact")
     _validate_policy(plan,effective,model)
     if model.model_id != plan.model_id:
         raise GeometryError("intersection plan belongs to another model")

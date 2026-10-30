@@ -863,27 +863,29 @@ def test_cancellation_geometry_error_is_wrapped_exactly_as_in_exact_mode(monkeyp
 @pytest.mark.parametrize("route", ["existing", "bounded"])
 def test_mode_agnostic_early_routes_are_selected_and_an_invalid_mode_is_refused(monkeypatch, route):
     """Review R2/R2-new: the existing-material and bounded routes (spied: selected by their own
-    predicates) get no stored mode at plan time and an exact policy at apply time, under T, env-T,
-    exact and budget-forced exact; an invalid environment value at apply is refused first."""
+    predicates) get no stored mode at plan time and an exact validation at apply time, under T,
+    env-T, exact and budget-forced exact; an invalid environment value at apply is refused first.
+    Fix round 6: they are handed the caller's policy object itself (identity preserved), the
+    mode-free copy only as ``stored_policy`` and the exact mode only as ``planning_mode``."""
     import anygeometry.existing_material_preparation as em
     import anygeometry.bounded_nurbs as bn
     model, faces, _ = _l_joint()
     seen = {"plan": [], "apply": []}
     plain = plan_intersections(model, faces, policy="connect")
 
-    def fake_plan(model_, handles, policy):
-        seen["plan"].append(policy)
+    def fake_plan(model_, handles, policy, *, stored_policy):
+        seen["plan"].append((policy, stored_policy))
         return plain
-    def fake_apply(model_, plan, policy):
-        seen["apply"].append(policy)
-        bi._validate_policy(plan, policy)
+    def fake_apply(model_, plan, policy, *, planning_mode):
+        seen["apply"].append((policy, planning_mode))
+        bi._validate_policy(plan, policy, planning_mode=planning_mode)
         return "applied"
     if route == "existing":
         monkeypatch.setattr(em, "try_plan_existing", fake_plan)
         monkeypatch.setattr(em, "is_existing_plan", lambda plan: True)
         monkeypatch.setattr(em, "apply_existing", fake_apply)
     else:
-        monkeypatch.setattr(em, "try_plan_existing", lambda *args: None)
+        monkeypatch.setattr(em, "try_plan_existing", lambda *args, **kwargs: None)
         monkeypatch.setattr(bn, "handles_bounded", lambda *args: True)
         monkeypatch.setattr(bn, "plan_bounded", fake_plan)
         monkeypatch.setattr(bn, "is_bounded_plan", lambda plan: True)
@@ -893,11 +895,15 @@ def test_mode_agnostic_early_routes_are_selected_and_an_invalid_mode_is_refused(
     for policy in policies:
         assert plan_intersections(model, faces, policy=policy) is plain
         assert apply_intersections(model, plain, policy=policy) == "applied"
+        assert seen["plan"][-1][0] is policy and seen["apply"][-1][0] is policy
+        assert seen["plan"][-1][1] == replace(policy, planning_mode=None)
+    with pytest.raises(GeometryError, match="cannot be applied in topology_certified mode"):
+        bi._validate_policy(plain, T)             # without the override the T policy is refused
     monkeypatch.setenv(bi.PLANNING_MODE_ENVIRONMENT, "topology_certified")
     assert plan_intersections(model, faces, policy="connect") is plain
     assert apply_intersections(model, plain, policy="connect") == "applied"
-    assert all(p.planning_mode is None for p in seen["plan"]) and len(seen["plan"]) == 4
-    assert all(p.planning_mode == "exact" for p in seen["apply"]) and len(seen["apply"]) == 4
+    assert all(s.planning_mode is None for _, s in seen["plan"]) and len(seen["plan"]) == 4
+    assert all(m == "exact" for _, m in seen["apply"]) and len(seen["apply"]) == 4
     monkeypatch.setenv(bi.PLANNING_MODE_ENVIRONMENT, "bogus")
     with pytest.raises(GeometryError, match="ANYGEOMETRY_PLANNING_MODE"):
         apply_intersections(model, plain, policy="connect")
