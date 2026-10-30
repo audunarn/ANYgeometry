@@ -96,19 +96,36 @@ class IntersectionBatchPolicy:
     def __post_init__(self):
         _check_planning_mode_value(self.planning_mode)
         object.__setattr__(self, "intent", ConnectionIntent(self.intent))
-        if self.intent not in (ConnectionIntent.CONNECT,ConnectionIntent.IMPRINT,
-                               ConnectionIntent.REUSE_EXISTING):
-            raise GeometryError("batch preparation requires connect, imprint or reuse_existing intent")
-        if self.max_predicates is not None and (type(self.max_predicates) is not int or self.max_predicates < 1):
-            raise GeometryError("intersection predicate budget must be a positive integer")
-        if self.max_candidate_pairs is not None and (
-                type(self.max_candidate_pairs) is not int or self.max_candidate_pairs < 1):
-            raise GeometryError("intersection candidate pair budget must be a positive integer")
-        if self.cancellation_check is not None and not callable(self.cancellation_check):
-            raise GeometryError("intersection cancellation check must be callable")
-        for name in ("face_connections", "member_connections", "member_face_connections"):
-            if type(getattr(self,name)) is not bool:
-                raise GeometryError(f"intersection {name} policy must be boolean")
+        _check_policy_fields(self)
+
+
+def _check_policy_fields(policy):
+    """The field checks of ``IntersectionBatchPolicy.__post_init__`` after its intent coercion."""
+    if policy.intent not in (ConnectionIntent.CONNECT,ConnectionIntent.IMPRINT,
+                             ConnectionIntent.REUSE_EXISTING):
+        raise GeometryError("batch preparation requires connect, imprint or reuse_existing intent")
+    if policy.max_predicates is not None and (type(policy.max_predicates) is not int or policy.max_predicates < 1):
+        raise GeometryError("intersection predicate budget must be a positive integer")
+    if policy.max_candidate_pairs is not None and (
+            type(policy.max_candidate_pairs) is not int or policy.max_candidate_pairs < 1):
+        raise GeometryError("intersection candidate pair budget must be a positive integer")
+    if policy.cancellation_check is not None and not callable(policy.cancellation_check):
+        raise GeometryError("intersection cancellation check must be callable")
+    for name in ("face_connections", "member_connections", "member_face_connections"):
+        if type(getattr(policy,name)) is not bool:
+            raise GeometryError(f"intersection {name} policy must be boolean")
+
+
+def _check_policy_in_place(policy):
+    """Every ``__post_init__`` check on an existing policy object, without copying or coercing it.
+
+    For routes that must keep the caller's object (identity) yet may receive one changed after
+    construction (``object.__setattr__``, or a state restored by ``__setstate__``, which checks only
+    the mode): a noncanonical intent is refused here instead of being normalised by a copy."""
+    _check_planning_mode_value(policy.planning_mode)
+    if type(policy.intent) is not ConnectionIntent:
+        raise GeometryError("intersection policy intent is noncanonical (not a ConnectionIntent)")
+    _check_policy_fields(policy)
 
 
 @dataclass(frozen=True, slots=True)

@@ -188,11 +188,14 @@ def is_bounded_plan(plan):
 
 def apply_bounded(model, plan, policy, *, planning_mode=None):
     # ``policy`` is the caller's object itself; ``planning_mode`` is the separate mode override.
-    from .batch_intersections import IntersectionApplication, _validate_policy
+    from .batch_intersections import IntersectionApplication, _validate_policy, _check_policy_in_place
     from .transactions import ChangeSet
     from .preparation_epochs import (_seals, _permits, _consume_epoch, _epoch_plan_required, _native_plan_supports)
     from .prepared_face_preimages import _publish_application_preimages
     from .edge_subcurve_preimages import _publish_edge_subcurve_preimages
+    # The caller's object is validated in place (no copy): this route has no policy pin of its own,
+    # and _validate_policy compares only four fields, by equality (1 == True).
+    _check_policy_in_place(policy)
     row = _entry(plan)
     if row is None or row[0]() is not model or _signature(plan) != row[1]:
         raise GeometryError('bounded intersection plan was copied, changed or belongs to another model')

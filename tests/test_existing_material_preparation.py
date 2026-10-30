@@ -230,6 +230,53 @@ def test_mode_agnostic_routes_receive_the_callers_policy_object(flat_cut, monkey
             assert kw['stored_policy'] == replace(policy, planning_mode=None)
 
 
+# Every field IntersectionBatchPolicy.__post_init__ checks, set after construction (object.__setattr__).
+MALFORMED_POLICY_FIELDS = (
+    ('max_predicates', 0, 'predicate budget must be a positive integer'),
+    ('face_connections', 1, 'face_connections policy must be boolean'),
+    ('max_candidate_pairs', 0, 'candidate pair budget must be a positive integer'),
+    ('member_connections', 1, 'member_connections policy must be boolean'),
+    ('member_face_connections', 1, 'member_face_connections policy must be boolean'),
+    ('cancellation_check', 1, 'cancellation check must be callable'),
+    ('intent', 'imprint', 'noncanonical'),
+    ('planning_mode', 'bogus', 'planning_mode must be one of'),
+)
+
+
+def test_bounded_apply_refuses_a_malformed_caller_policy_in_place():
+    # Review T2-1b R7 (Codex P2 on e0646dd): the real bounded route (plan_intersections ->
+    # plan_bounded, apply_intersections -> apply_bounded). Without the copy that ran __post_init__,
+    # apply_bounded validated nothing itself (_validate_policy compares four fields, 1 == True), so
+    # a malformed caller policy reached publication. It is now validated in place, never copied.
+    from test_plane_split import bowl
+    from anygeometry.bounded_nurbs import is_bounded_plan
+    model, face, _plane = bowl()
+    plate = model.add_plate([model.add_point(x, y, .5) for x, y in ((-2., -2.), (2., -2.), (2., 2.), (-2., 2.))])
+    plan = plan_intersections(model, (model.handle('face', face), model.handle('face', plate)), policy=imprint())
+    assert is_bounded_plan(plan)
+    before = to_dict(model)
+    for name, value, message in MALFORMED_POLICY_FIELDS:
+        actual = imprint(); object.__setattr__(actual, name, value)
+        with pytest.raises(GeometryError, match=message):
+            apply_intersections(model, plan, policy=actual)
+        assert model.revision == plan.revision and to_dict(model) == before, name
+    result = apply_intersections(model, plan, policy=imprint())       # the plan itself still applies
+    assert not result.reused and model.revision != plan.revision
+
+
+@pytest.mark.parametrize('name, value', [c[:2] for c in MALFORMED_POLICY_FIELDS[:7]],
+                         ids=[c[0] for c in MALFORMED_POLICY_FIELDS[:7]])
+def test_existing_apply_refuses_a_malformed_caller_policy_through_its_pin(flat_cut, name, value):
+    # Class check for R7: the existing-material apply also lost the copy in e0646dd; its own
+    # _policy_pin covers every such field (the planning_mode field was overwritten by that copy, so
+    # it was never checked on this route and is not part of this contract).
+    model = flat_cut[0].clone(); plan = plan_intersections(model, handles(model), policy=imprint())
+    actual = imprint(); object.__setattr__(actual, name, value)
+    with pytest.raises(GeometryError, match='noncanonical|malformed|not callable'):
+        apply_intersections(model, plan, policy=actual)
+    assert not has_current_intersection_preparation(model)
+
+
 def test_shared_work_and_policy_pair_caps_are_not_renewed(flat_cut):
     model = flat_cut[0].clone()
     token = CURRENT_WORK.set(Work(0, 12))
