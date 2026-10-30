@@ -40,10 +40,21 @@ INSTALLED_LICENSE_ALIASES = {
     },
     "mpmath": {"BSD-3-Clause", "BSD"},
     "pytest": {"MIT"},
+    "scipy": {"BSD-3-Clause"},
     "shapely": {"BSD-3-Clause", "BSD 3-Clause"},
     "setuptools": {"MIT"},
     "twine": {"Apache-2.0", "Apache Software License"},
     "wheel": {"MIT"},
+}
+
+
+REVIEWED_RECORD_KEYS = {
+    "components",
+    "metadata_sha256",
+    "package",
+    "project_license",
+    "rationale",
+    "version",
 }
 
 
@@ -112,6 +123,56 @@ def _license_from_metadata(distribution: importlib_metadata.Distribution) -> str
     return ""
 
 
+def _normalized_license_text(text: str) -> str:
+    return text.replace("\r\n", "\n")
+
+
+def _bundled_components(text: str) -> list[list[str]]:
+    pattern = r"^[ \t]*Name:[ \t]*(.+?)[ \t]*\n(?:[^\n]*\n){0,4}?[ \t]*License:[ \t]*(.+?)[ \t]*$"
+    return [[name, expression] for name, expression in re.findall(pattern, text, re.MULTILINE)]
+
+
+def _check_reviewed_record(row: dict[str, object]) -> dict[str, object]:
+    name = str(row["name"])
+    record = row["reviewed_installed_license"]
+    if not isinstance(record, dict):
+        _fail(f"dependency {name!r} has a malformed reviewed_installed_license record")
+    if set(record) != REVIEWED_RECORD_KEYS:
+        _fail(f"dependency {name!r} reviewed_installed_license has the wrong keys")
+    if record["package"] != name:
+        _fail(f"dependency {name!r} reviewed_installed_license is recorded for {record['package']!r}")
+    if not re.fullmatch(r"[0-9a-f]{64}", str(record["metadata_sha256"])):
+        _fail(f"dependency {name!r} reviewed_installed_license has a malformed hash")
+    if record["project_license"] != row.get("license_expression"):
+        _fail(f"dependency {name!r} reviewed project license differs from the inventory license")
+    components = record["components"]
+    if not (
+        isinstance(components, list)
+        and components
+        and all(isinstance(c, list) and len(c) == 2 and all(isinstance(x, str) for x in c) for c in components)
+    ):
+        _fail(f"dependency {name!r} reviewed_installed_license components are malformed")
+    if not str(record["rationale"]).strip() or not str(record["version"]).strip():
+        _fail(f"dependency {name!r} reviewed_installed_license needs a version and rationale")
+    return record
+
+
+def _accept_reviewed_installed_license(
+    row: dict[str, object], distribution: importlib_metadata.Distribution
+) -> None:
+    """Accept only the exact, previously reviewed installed license text of one package."""
+    name = str(row["name"])
+    record = _check_reviewed_record(row)
+    again = f"installed dependency {name!r} differs from its reviewed license record; re-review the license text"
+    if distribution.version != record["version"]:
+        _fail(f"{again} (installed {distribution.version}, reviewed {record['version']})")
+    text = _normalized_license_text(str(distribution.metadata.get("License") or ""))
+    if hashlib.sha256(text.encode("utf-8")).hexdigest() != record["metadata_sha256"]:
+        _fail(f"{again} (metadata hash changed)")
+    if _bundled_components(text) != record["components"]:
+        _fail(f"{again} (bundled components changed)")
+
+
 def _check_installed(rows: list[dict[str, object]]) -> None:
     for row in rows:
         # PEP 517 build requirements run in a separate isolated environment.
@@ -127,6 +188,9 @@ def _check_installed(rows: list[dict[str, object]]) -> None:
         actual = _license_from_metadata(distribution)
         if not actual:
             _fail(f"installed dependency {name!r} has unknown license metadata")
+        if "reviewed_installed_license" in row and actual not in INSTALLED_LICENSE_ALIASES.get(name, set()):
+            _accept_reviewed_installed_license(row, distribution)
+            continue
         if any(token in actual.upper() for token in FORBIDDEN_LICENSE_TOKENS):
             _fail(f"installed dependency {name!r} reports review-required license {actual!r}")
         if actual not in INSTALLED_LICENSE_ALIASES[name]:
