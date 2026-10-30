@@ -763,36 +763,82 @@ class _PlaneChart:
 _BOUNDED_CHART = _PlaneChart(False)
 
 
-def _plane_face_uv_box(model, face_id: int, plane: Plane) -> np.ndarray | None:
-    """Conservative support-uv box of a face on an exact ``Plane`` support.
+_COVER_PIECE_BUDGET = 4096
+_COVER_MAX_DEPTH = 48
+
+
+def _plane_face_uv_extent(model, face_id: int, plane: Plane, slack: np.ndarray):
+    """Conservative support-uv box of a face on an exact ``Plane`` support,
+    and whether the stored frame provably covers the face.
 
     ``Plane.local_uv`` is affine, so the uv image of the face lies in the
     convex hull of the uv images of its trim curves.  Straight edges map to
-    their endpoints, arcs to their exact angular extrema (as in the model's
-    spatial bounds), Bezier splines to their control polygon and exact curves
-    to the interval image of their conservative 3D box.  Any other curve gives
-    ``None`` (no box: the caller must not rely on one).
+    their endpoints and arcs to their exact angular extrema (as in the model's
+    spatial bounds).  Bezier splines are bounded by their control polygons and
+    exact curves by the interval image of their conservative ``bounds``; both
+    are subdivided adaptively (de Casteljau / parameter halving) until every
+    piece is proven inside ``[-slack, 1 + slack]^2``, a curve point is found
+    outside it, or the piece budget is spent.  Returns ``(box, covers)``:
+    ``box`` is ``None`` for a curve type without conservative bounds;
+    ``covers`` is True only when coverage is proven.
     """
 
     face = model.faces[face_id]
     inverse = np.linalg.pinv(np.column_stack((plane.u_vector, plane.v_vector)))
     linear = np.abs(inverse)
-    lower = np.full(2, np.inf)
-    upper = np.full(2, -np.inf)
+    lower_limit = -slack
+    upper_limit = 1.0 + slack
+    state = {"lower": np.full(2, np.inf), "upper": np.full(2, -np.inf), "covers": True, "pieces": 0}
 
-    def include(points) -> None:
-        nonlocal lower, upper
-        for point in points:
-            uv = np.asarray(plane.local_uv(point), dtype=float)
-            lower = np.minimum(lower, uv)
-            upper = np.maximum(upper, uv)
+    def uv_of(point) -> np.ndarray:
+        return np.asarray(plane.local_uv(point), dtype=float)
+
+    def inside(lower, upper) -> bool:
+        return bool(np.all(lower >= lower_limit) and np.all(upper <= upper_limit))
+
+    def outside(uv) -> bool:
+        return bool(np.any(uv < lower_limit) or np.any(uv > upper_limit))
+
+    def include(lower, upper) -> None:
+        state["lower"] = np.minimum(state["lower"], lower)
+        state["upper"] = np.maximum(state["upper"], upper)
+
+    def include_points(points) -> None:
+        values = np.asarray([uv_of(point) for point in points], dtype=float)
+        lower, upper = values.min(axis=0), values.max(axis=0)
+        include(lower, upper)
+        if not inside(lower, upper):
+            state["covers"] = False
+
+    def refine(pieces, hull, on_curve, split) -> None:
+        # pieces: list of (piece, depth); hull(piece) -> uv box; on_curve(piece)
+        # -> uv of points that lie on the curve; split(piece) -> two pieces.
+        while pieces:
+            piece, depth = pieces.pop()
+            lower, upper = hull(piece)
+            if inside(lower, upper):
+                include(lower, upper)
+                continue
+            state["pieces"] += 1
+            if (
+                not state["covers"]
+                or depth >= _COVER_MAX_DEPTH
+                or state["pieces"] > _COVER_PIECE_BUDGET
+                or any(outside(uv) for uv in on_curve(piece))
+            ):
+                # Not proven inside: keep the conservative hull, stop refining.
+                state["covers"] = False
+                include(lower, upper)
+                continue
+            first, second = split(piece)
+            pieces.extend(((second, depth + 1), (first, depth + 1)))
 
     for loop in (face.loop,) + face.holes:
         for oriented in loop:
             edge = model.edges[oriented.edge]
             curve = edge.curve
             if isinstance(curve, Straight):
-                include((model.vertex_position(edge.start), model.vertex_position(edge.end)))
+                include_points((model.vertex_position(edge.start), model.vertex_position(edge.end)))
             elif isinstance(curve, Arc):
                 frame = model.arc_frame(oriented.edge)
                 angles = [0.0, float(frame.sweep)]
@@ -801,26 +847,49 @@ def _plane_face_uv_box(model, face_id: int, plane: Plane) -> np.ndarray | None:
                     for candidate in (phase, phase + np.pi):
                         if model._angle_on_arc_sweep(candidate, frame.sweep):  # noqa: SLF001
                             angles.append(candidate)
-                include(
+                include_points(
                     frame.center
                     + frame.radius * (np.cos(angle) * frame.e1 + np.sin(angle) * frame.e2)
                     for angle in angles
                 )
             elif isinstance(curve, Spline):
-                include(model._spline_points(edge))  # noqa: SLF001
+                def spline_hull(points):
+                    values = np.asarray([uv_of(point) for point in points], dtype=float)
+                    return values.min(axis=0), values.max(axis=0)
+
+                refine(
+                    [(np.asarray(model._spline_points(edge), dtype=float), 0)],  # noqa: SLF001
+                    spline_hull,
+                    lambda points: (uv_of(points[0]), uv_of(points[-1])),
+                    lambda points: model._split_bezier(points, 0.5),  # noqa: SLF001
+                )
             elif isinstance(curve, EXACT_CURVES):
-                box_lower, box_upper = curve.bounds()
-                box_lower = np.asarray(box_lower, dtype=float)
-                box_upper = np.asarray(box_upper, dtype=float)
-                center = np.asarray(plane.local_uv(0.5 * (box_lower + box_upper)), dtype=float)
-                radius = linear @ (0.5 * (box_upper - box_lower))
-                lower = np.minimum(lower, center - radius)
-                upper = np.maximum(upper, center + radius)
+                def exact_hull(interval, curve=curve):
+                    box_lower, box_upper = curve.bounds(*interval)
+                    box_lower = np.asarray(box_lower, dtype=float)
+                    box_upper = np.asarray(box_upper, dtype=float)
+                    center = uv_of(0.5 * (box_lower + box_upper))
+                    radius = linear @ (0.5 * (box_upper - box_lower))
+                    return center - radius, center + radius
+
+                def exact_points(interval, edge_id=oriented.edge):
+                    return tuple(uv_of(point) for point in _edge_points(model, edge_id, interval))
+
+                refine(
+                    [((0.0, 1.0), 0)],
+                    exact_hull,
+                    exact_points,
+                    lambda interval: (
+                        (interval[0], 0.5 * (interval[0] + interval[1])),
+                        (0.5 * (interval[0] + interval[1]), interval[1]),
+                    ),
+                )
             else:
-                return None
+                return None, False
+    lower, upper = state["lower"], state["upper"]
     if not (np.all(np.isfinite(lower)) and np.all(np.isfinite(upper))):
-        return None
-    return np.vstack((lower, upper))
+        return None, False
+    return np.vstack((lower, upper)), bool(state["covers"])
 
 
 def _plane_chart(model, face_id: int) -> _PlaneChart:
@@ -833,15 +902,14 @@ def _plane_chart(model, face_id: int) -> _PlaneChart:
     from .nurbs_sweep_chart import has_sweep_chart
     if has_sweep_chart(face):
         return _BOUNDED_CHART
-    box = _plane_face_uv_box(model, face_id, plane)
-    if box is not None:
-        # Covering is decided with a slack far below the length tolerance:
-        # clipping inside it moves a point by at most 1e-3 * tolerance.length.
-        slack = 1.0e-3 * model.tolerance.length / np.asarray(
-            (np.linalg.norm(plane.u_vector), np.linalg.norm(plane.v_vector)), dtype=float
-        )
-        if np.all(box[0] >= -slack) and np.all(box[1] <= 1.0 + slack):
-            return _BOUNDED_CHART
+    # Covering is decided with a slack far below the length tolerance:
+    # clipping inside it moves a point by at most 1e-3 * tolerance.length.
+    slack = 1.0e-3 * model.tolerance.length / np.asarray(
+        (np.linalg.norm(plane.u_vector), np.linalg.norm(plane.v_vector)), dtype=float
+    )
+    box, covers = _plane_face_uv_extent(model, face_id, plane, slack)
+    if covers:
+        return _BOUNDED_CHART
     return _PlaneChart(True, box)
 
 
@@ -1945,6 +2013,18 @@ def _supports_coincident(model, first_id: int, second_id: int, tolerance: float)
         ):
             return True
     charts = {first_id: _plane_chart(model, first_id), second_id: _plane_chart(model, second_id)}
+    projection_charts = charts
+    if any(chart.unbounded for chart in charts.values()):
+        # An unbounded Plane is sampled over its whole face; a covering Plane
+        # target is then projected unclipped too, because those samples may
+        # leave the target's own face (pairs of two covering frames keep the
+        # historical clipped check bit for bit).
+        projection_charts = {
+            face_id: (
+                _PlaneChart(True, chart.box) if type(model.faces[face_id].surface) is Plane else chart
+            )
+            for face_id, chart in charts.items()
+        }
     for source, target in ((first_id, second_id), (second_id, first_id)):
         u_values, v_values = _chart_axes(charts[source], 17)
         parameters = np.asarray(
@@ -1954,7 +2034,7 @@ def _supports_coincident(model, first_id: int, second_id: int, tolerance: float)
         for uv in parameters:
             point, source_du, source_dv = _surface_point_derivatives(model, source, uv)
             projected, _target_uv, residual, target_normal = _support_projection(
-                model, target, point, (), charts[target]
+                model, target, point, (), projection_charts[target]
             )
             if residual > tolerance:
                 return False
@@ -2031,21 +2111,43 @@ def _refine_surface_pair(
     if second_chart is None:
         second_chart = _plane_chart(model, second_id)
 
-    def first_bound(uv):
-        return uv if first_chart.unbounded else np.clip(uv, 0.0, 1.0)
+    # A bounded chart is refined in its own parameters, clipped to the unit
+    # square, exactly as before.  An unbounded Plane is refined unclipped in
+    # its face-box chart (uv = lower + w * (upper - lower)), so the
+    # minimum-norm Newton steps do not depend on the stored frame's scale.
+    def chart_map(chart):
+        if not chart.unbounded:
+            return None
+        if chart.box is None:
+            return np.zeros(2), np.ones(2)
+        span = np.asarray(chart.box[1] - chart.box[0], dtype=float)
+        span = np.where(span > 0.0, span, 1.0)
+        return np.asarray(chart.box[0], dtype=float), span
 
-    def second_bound(uv):
-        return uv if second_chart.unbounded else np.clip(uv, 0.0, 1.0)
+    first_map = chart_map(first_chart)
+    second_map = chart_map(second_chart)
 
-    first_parameters = first_bound(np.asarray(first_uv, dtype=float))
-    second_parameters = second_bound(np.asarray(second_uv, dtype=float))
+    def to_work(mapping, uv):
+        uv = np.asarray(uv, dtype=float)
+        return np.clip(uv, 0.0, 1.0) if mapping is None else (uv - mapping[0]) / mapping[1]
+
+    def to_uv(mapping, work):
+        return work if mapping is None else mapping[0] + work * mapping[1]
+
+    def bound(mapping, work):
+        return np.clip(work, 0.0, 1.0) if mapping is None else work
+
+    def derivatives(face_id, mapping, work):
+        point, du, dv = _surface_point_derivatives(model, face_id, to_uv(mapping, work))
+        if mapping is not None:
+            du, dv = du * mapping[1][0], dv * mapping[1][1]
+        return point, du, dv
+
+    first_parameters = to_work(first_map, first_uv)
+    second_parameters = to_work(second_map, second_uv)
     for _ in range(policy.max_newton_iterations):
-        first_point, first_du, first_dv = _surface_point_derivatives(
-            model, first_id, first_parameters
-        )
-        second_point, second_du, second_dv = _surface_point_derivatives(
-            model, second_id, second_parameters
-        )
+        first_point, first_du, first_dv = derivatives(first_id, first_map, first_parameters)
+        second_point, second_du, second_dv = derivatives(second_id, second_map, second_parameters)
         difference = first_point - second_point
         jacobian = np.column_stack(
             (first_du, first_dv, -second_du, -second_dv)
@@ -2053,8 +2155,8 @@ def _refine_surface_pair(
         if not np.all(np.isfinite(jacobian)) or np.linalg.matrix_rank(jacobian) < 3:
             break
         delta, *_ = np.linalg.lstsq(jacobian, -difference, rcond=None)
-        next_first = first_bound(first_parameters + delta[:2])
-        next_second = second_bound(second_parameters + delta[2:])
+        next_first = bound(first_map, first_parameters + delta[:2])
+        next_second = bound(second_map, second_parameters + delta[2:])
         if max(
             float(np.linalg.norm(next_first - first_parameters)),
             float(np.linalg.norm(next_second - second_parameters)),
@@ -2062,6 +2164,8 @@ def _refine_surface_pair(
             first_parameters, second_parameters = next_first, next_second
             break
         first_parameters, second_parameters = next_first, next_second
+    first_parameters = to_uv(first_map, first_parameters)
+    second_parameters = to_uv(second_map, second_parameters)
     first_point, _du, _dv = _surface_point_derivatives(model, first_id, first_parameters)
     second_point, _du, _dv = _surface_point_derivatives(model, second_id, second_parameters)
     return (

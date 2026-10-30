@@ -217,6 +217,70 @@ def test_coplanar_plates_with_partial_frames_overlap_in_a_region():
     )
 
 
+def test_mixed_covering_and_partial_coplanar_frames_overlap_in_a_region():
+    """Codex S0g-R1 finding 5: the covering target was still projected clipped."""
+
+    for order in (0, 1):
+        model = GeometryModel()
+        first = model.add_plate(model.add_points(((0, 0, 0), (2, 0, 0), (2, 1, 0), (0, 1, 0))))
+        second = model.add_plate(model.add_points(((1, 0, 0), (3, 0, 0), (3, 1, 0), (1, 1, 0))))
+        model.set_face_surface(first, Plane((0, 0, 0), (2, 0, 0), (0, 1, 0)))
+        model.set_face_surface(second, Plane((5, 3, 0), (0.5, 0, 0), (0, 0.5, 0)))
+        handles = [model.handle("face", first), model.handle("face", second)]
+        result = qualified_face_face(model, *(handles[::-1] if order else handles))
+        assert result.kind is IntersectionKind.OVERLAP_REGION, (order, result.diagnostics)
+        _assert_same_points(
+            [np.asarray(point) for point in result.components[0].boundary_paths[0]],
+            [np.array(point, dtype=float) for point in ((1, 0, 0), (2, 0, 0), (2, 1, 0), (1, 1, 0))],
+        )
+
+
+def _small_cylinder_large_plate(frame):
+    model = cylinder(0.1, 1.0, circumferential_segments=4, origin=(0.7, 0.7, 0.0))
+    plate = model.add_plate(model.add_points(((-10, -10, 0.5), (10, -10, 0.5), (10, 10, 0.5), (-10, 10, 0.5))))
+    model.set_face_surface(plate, Plane(*frame))
+    return model, plate
+
+
+def test_face_face_fallback_on_unbounded_plane_does_not_depend_on_frame_scale():
+    """Codex S0g-R1 finding 1: refinement ran in the stored frame's scale.
+
+    The unbounded Plane is refined in its face-box chart, so a remote tiny
+    frame gives the result of a frame spanning the face (the sampled
+    fallback's completeness itself is a separate, pre-existing limit).
+    """
+
+    reference, reference_plate = _small_cylinder_large_plate(((-10, -10, 0.5), (20, 0, 0), (0, 20, 0)))
+    model, plate = _small_cylinder_large_plate(((30, 30, 0.5), (0.1, 0, 0), (0, 0.1, 0)))
+    for fid in _cylinder_faces(model, plate):
+        for swap in (False, True):
+            pair = (plate, fid)[::-1] if swap else (plate, fid)
+            reference_pair = (reference_plate, fid)[::-1] if swap else (reference_plate, fid)
+            expected = query_intersection(reference, *(reference.handle("face", item) for item in reference_pair))
+            result = query_intersection(model, *(model.handle("face", item) for item in pair))
+            assert expected.kind is IntersectionKind.CROSS
+            assert result.kind is expected.kind, (fid, swap, result.diagnostics)
+
+
+def _spline_topped_face(model):
+    a, b, c, control, d = model.add_points(((0, 0, 0), (1, 0, 0), (1, 0.2, 0), (0.5, 1.7, 0), (0, 0.2, 0)))
+    edges = (model.add_line(a, b), model.add_line(b, c), model.add_spline(c, (control,), d), model.add_line(d, a))
+    face = model.add_face(edges)
+    model.set_face_surface(face, Plane((0, 0, 0), (1, 0, 0), (0, 1, 0)))
+    return face
+
+
+def test_spline_trimmed_face_inside_its_frame_keeps_the_bounded_chart():
+    """Codex S0g-R1 finding 4: the control polygon (y up to 1.7) is not the curve (y up to 0.95)."""
+
+    from anygeometry.curved_intersections import _plane_chart
+
+    model = GeometryModel()
+    face = _spline_topped_face(model)
+    assert model.validate_topology() == ()
+    assert not _plane_chart(model, face).unbounded
+
+
 # ---------------------------------------------------------------- bit identity
 
 _UUID = re.compile(r"UUID\('[0-9a-f-]+'\)")
@@ -267,6 +331,25 @@ def sample_digests() -> dict[str, str]:
         digests[f"plates/f{pair[0]}/f{pair[1]}"] = _digest(
             qualified_face_face(model, model.handle("face", pair[0]), model.handle("face", pair[1]))
         )
+    # Codex S0g-R1 finding 4: spline-trimmed face inside its frame, curved queries.
+    model = GeometryModel()
+    face = _spline_topped_face(model)
+    for index, (start, via, end) in enumerate((
+        ((0.2, 1.5, 0.0), (0.5, 1.5, 0.3), (0.8, 1.5, 0.0)),
+        ((0.2, 0.5, -0.2), (0.5, 0.5, 0.1), (0.8, 0.5, -0.2)),
+        ((0.3, 0.9, -0.2), (0.5, 0.9, 0.1), (0.7, 0.9, -0.2)),
+    )):
+        edge = model.add_arc(*model.add_points((start, via, end)))
+        digests[f"spline/e{index}"] = _digest(
+            query_intersection(model, model.handle("edge", edge), model.handle("face", face))
+        )
+    # Small cylinder against a large plate whose frame covers it.
+    model, plate = _small_cylinder_large_plate(((-10, -10, 0.5), (20, 0, 0), (0, 20, 0)))
+    for fid in _cylinder_faces(model, plate):
+        for pair in ((plate, fid), (fid, plate)):
+            digests[f"large/f{pair[0]}/f{pair[1]}"] = _digest(
+                query_intersection(model, model.handle("face", pair[0]), model.handle("face", pair[1]))
+            )
     return digests
 
 

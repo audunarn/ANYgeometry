@@ -161,6 +161,14 @@
  "cyl/f2/f3": "d14fc4dce36bf90c",
  "cyl/f2/f4": "fdbc8309ea035459",
  "cyl/f3/f4": "a4e35137920dbd42",
+ "large/f1/f5": "59f7ff67b6418c32",
+ "large/f2/f5": "cbc19daa24cc1ff5",
+ "large/f3/f5": "6cb6e69d203f2477",
+ "large/f4/f5": "83bb4a5fccfd9b0e",
+ "large/f5/f1": "23fe8519bc9aa844",
+ "large/f5/f2": "4540cdf679ac4669",
+ "large/f5/f3": "a92a4453c22a3f47",
+ "large/f5/f4": "288dba4d0aebce62",
  "margin/e1/f1": "3e5e813e03fef5c8",
  "margin/e1/f2": "ebc2364f55670f9e",
  "margin/e1/f3": "d9297a7972b4e60d",
@@ -378,5 +386,8 @@
  "rotated/q/f1": "a4f019a56723ee1b",
  "rotated/q/f2": "2c0e0478413f1bb2",
  "rotated/q/f3": "a6ffe393473808bf",
- "rotated/q/f4": "ff94ea94c3acdd03"
+ "rotated/q/f4": "ff94ea94c3acdd03",
+ "spline/e0": "4254e1c30ff71a27",
+ "spline/e1": "2ca129a58aafc088",
+ "spline/e2": "6e573da78603ddf9"
 }
