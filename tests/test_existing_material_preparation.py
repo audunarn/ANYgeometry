@@ -142,6 +142,94 @@ def test_effective_apply_policy_is_independently_pinned_and_budgeted(flat_cut):
     assert not has_current_intersection_preparation(model)
 
 
+def _planning_switch(monkeypatch, switch):
+    """T2-1b planning-mode switch: off, explicit field, or the environment variable."""
+    from anygeometry.batch_intersections import PLANNING_MODE_ENVIRONMENT
+    monkeypatch.delenv(PLANNING_MODE_ENVIRONMENT, raising=False)
+    if switch == 'environment':
+        monkeypatch.setenv(PLANNING_MODE_ENVIRONMENT, 'topology_certified')
+        return {}
+    return {} if switch == 'off' else {'planning_mode': switch}
+
+
+@pytest.mark.parametrize('switch', ('topology_certified', 'environment', 'exact'))
+def test_effective_apply_policy_is_pinned_with_planning_mode_set(flat_cut, monkeypatch, switch):
+    # T2-1b ON (field or environment) and explicit exact: the mode-agnostic existing-material
+    # route still pins the caller's own policy object, and the state-E plan still applies.
+    on = _planning_switch(monkeypatch, switch)
+    model = flat_cut[0].clone(); plan = plan_intersections(model, handles(model), policy=imprint(**on))
+    assert plan.policy.planning_mode is None and not hasattr(plan, 'route_checksum')
+    actual = imprint(**on)
+    def mutate(): object.__setattr__(actual, 'max_predicates', 10**9)    # canonical type, new value
+    object.__setattr__(actual, 'cancellation_check', mutate)
+    with pytest.raises(GeometryError, match='policy or operands changed'):
+        apply_intersections(model, plan, policy=actual)
+    assert not has_current_intersection_preparation(model)
+    apply_intersections(model, plan, policy=imprint(**on))
+    assert has_current_intersection_preparation(model)
+
+
+@pytest.mark.parametrize('switch', ('topology_certified', 'environment', 'exact'))
+def test_planning_policy_change_is_detected_with_planning_mode_set(flat_cut, monkeypatch, switch):
+    on = _planning_switch(monkeypatch, switch)
+    model = flat_cut[0].clone(); policy = imprint(**on)
+    def mutate(): object.__setattr__(policy, 'max_predicates', 10**9)    # canonical type, new value
+    object.__setattr__(policy, 'cancellation_check', mutate)
+    with pytest.raises(GeometryError, match='policy changed during planning'):
+        plan_intersections(model, handles(model), policy=policy)
+    assert not has_current_intersection_preparation(model)
+
+
+@pytest.mark.parametrize('switch', ('off', 'topology_certified', 'environment', 'exact'))
+def test_noncanonical_apply_policy_is_not_laundered_by_a_copy(flat_cut, monkeypatch, switch):
+    on = _planning_switch(monkeypatch, switch)
+    model = flat_cut[0].clone(); plan = plan_intersections(model, handles(model), policy=imprint(**on))
+    actual = imprint(**on); object.__setattr__(actual, 'intent', 'imprint')     # equal value, str type
+    with pytest.raises(GeometryError, match='noncanonical'): apply_intersections(model, plan, policy=actual)
+    assert not has_current_intersection_preparation(model)
+
+
+@pytest.mark.parametrize('switch', ('off', 'topology_certified', 'environment', 'exact'))
+def test_mode_agnostic_routes_receive_the_callers_policy_object(flat_cut, monkeypatch, switch):
+    # Identity contract: both mode-agnostic routes are handed the caller's policy object itself
+    # on planning and on apply; the mode-free copy is only the stored policy, the mode a keyword.
+    import anygeometry.existing_material_preparation as emp
+    import anygeometry.bounded_nurbs as bn
+    on = _planning_switch(monkeypatch, switch)
+    model = flat_cut[0].clone(); policy = imprint(**on); seen = []
+    real_try, real_apply = emp.try_plan_existing, emp.apply_existing
+    def spy_try(model_, handles_, given, **kw):
+        seen.append(('try_plan_existing', given, kw)); return real_try(model_, handles_, given, **kw)
+    def spy_apply(model_, plan_, given, **kw):
+        seen.append(('apply_existing', given, kw)); return real_apply(model_, plan_, given, **kw)
+    monkeypatch.setattr(emp, 'try_plan_existing', spy_try)
+    monkeypatch.setattr(emp, 'apply_existing', spy_apply)
+    plan = plan_intersections(model, handles(model), policy=policy)
+    assert plan.policy.planning_mode is None and (plan.policy is policy) == (switch in ('off', 'environment'))
+    apply_intersections(model, plan, policy=policy)
+    # The bounded route, reached with spies only (no bounded geometry work runs).
+    monkeypatch.setattr(emp, 'try_plan_existing', lambda *a, **kw: None)
+    monkeypatch.setattr(bn, 'handles_bounded', lambda *a: True)
+    monkeypatch.setattr(bn, 'plan_bounded',
+                        lambda model_, handles_, given, **kw: seen.append(('plan_bounded', given, kw)) or plan)
+    assert plan_intersections(model, handles(model), policy=policy) is plan
+    monkeypatch.setattr(emp, 'is_existing_plan', lambda plan_: False)
+    monkeypatch.setattr(emp, 'eligible', lambda *a: False)
+    monkeypatch.setattr(bn, 'is_bounded_plan', lambda plan_: True)
+    monkeypatch.setattr(bn, 'apply_bounded',
+                        lambda model_, plan_, given, **kw: seen.append(('apply_bounded', given, kw)) or 'sentinel')
+    assert apply_intersections(model, plan, policy=policy) == 'sentinel'
+    assert [name for name, _, _ in seen] == ['try_plan_existing', 'apply_existing', 'plan_bounded', 'apply_bounded']
+    assert all(given is policy for _, given, _ in seen)
+    for name, _, kw in seen:
+        if name.startswith('apply'):
+            assert kw == {'planning_mode': 'exact'}
+        else:
+            assert set(kw) == {'stored_policy'} and kw['stored_policy'].planning_mode is None
+            assert (kw['stored_policy'] is policy) == (switch in ('off', 'environment'))
+            assert kw['stored_policy'] == replace(policy, planning_mode=None)
+
+
 def test_shared_work_and_policy_pair_caps_are_not_renewed(flat_cut):
     model = flat_cut[0].clone()
     token = CURRENT_WORK.set(Work(0, 12))
