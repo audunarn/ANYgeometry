@@ -1692,17 +1692,39 @@ def _ring_split_seams(domain, boundaries, paths, segments, endpoints, tolerance,
     for piece in made:
         segments[len(paths)] = piece
         paths.append(ArrangementPath(stations.to_line(piece), decomposition=True))
-    from .runtime_diagnostics import _increment, _record
+    from .runtime_diagnostics import _increment
     _increment("ring_split_applied")
     _increment("ring_split_chords", len(chord_segments))
     _increment("ring_split_extensions", len(extension_segments))
     shortest = min(piece.length2() for piece in made)
-    _record("ring_split", {"face_id": domain.face_id, "free_ends": len(ends), "chords": len(chord_segments),
-                           "split_components": len(extension_segments) // 2,
-                           "new_boundary_vertices": len(extension_segments),
-                           "shortest_seam": math.sqrt(float(shortest))})
     if record is not None:
         record["ring_split"] = True
+        record["ring_split_stats"] = {"face_id": domain.face_id, "free_ends": len(ends),
+                                      "chords": len(chord_segments),
+                                      "split_components": len(extension_segments) // 2,
+                                      "shortest_seam": math.sqrt(float(shortest))}
+
+
+def _ring_split_new_boundary_vertices(domain, arrangement, tolerance, cancellation_check):
+    """Count accepted boundary vertices absent from the input boundary, with main's vertex rule."""
+    boundary = [path.curve for loop in domain.boundaries for path in loop]
+    seen = [exact_vector(curve.evaluate(t)) for curve in boundary for t in (0., 1.)]
+    straight = {i: stations.segment_of(curve) for i, curve in enumerate(boundary) if type(curve) is LinePath}
+    tol2 = Fraction(tolerance) ** 2
+    count = 0
+    for path in arrangement.paths:
+        for t in (0., 1.):
+            if cancellation_check is not None and cancellation_check():
+                raise GeometryError("intersection arrangement cancelled")
+            point = exact_vector(path.curve.evaluate(t))
+            if any(stations.distance2(point, old) <= tol2 for old in seen):
+                continue
+            if any(stations.point_parameters(straight[i], point, tolerance) if i in straight
+                   else point_parameters(curve, stations.rounded(point), tolerance=tolerance)
+                   for i, curve in enumerate(boundary)):
+                seen.append(point)
+                count += 1
+    return count
 
 
 def _seams_meet_only_at_shared_ends(first, second, shared, tolerance):
@@ -2627,6 +2649,11 @@ def _ring_split_attempt(domain, traces, options):
     if any(cell.holes for cell in arrangement.cells):
         _increment("ring_split_declined:postcondition_holed_cell")
         return None
+    stats = dict(record["ring_split_stats"])
+    stats["new_boundary_vertices"] = _ring_split_new_boundary_vertices(
+        domain, arrangement, options["tolerance"], cancellation_check)
+    from .runtime_diagnostics import _record
+    _record("ring_split", stats)
     _increment("ring_split_accepted")
     return arrangement
 
