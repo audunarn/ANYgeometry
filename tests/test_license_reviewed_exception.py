@@ -35,6 +35,32 @@ REVIEWED_TEXT = (
 )
 
 
+WINDOWS_TEXT = (
+    "Copyright (c) SciPy Developers. BSD-3-Clause terms.\n\n"
+    " Name: OpenBLAS\n Files: x\\libopenblas*.dll\n Description: bundled\n"
+    " Availability: https://example.invalid/\n License: BSD-3-Clause\n\n"
+    " Name: GCC runtime library\n Files: x\\libopenblas*.dll\n Description: statically linked\n"
+    " License: GPL-3.0-or-later WITH GCC-exception-3.1\n"
+)
+
+
+def _record(text: str, components: list[list[str]], package: str = "scipy") -> dict[str, object]:
+    return {
+        "components": components,
+        "metadata_sha256": _sha(text),
+        "package": package,
+        "project_license": "BSD-3-Clause",
+        "rationale": "test record",
+        "version": "1.18.1",
+    }
+
+
+def _multi_row() -> dict[str, object]:
+    row = _row()
+    row["additional_reviewed_installed_licenses"] = [_record(WINDOWS_TEXT, [COMPONENTS[0], COMPONENTS[1]])]
+    return row
+
+
 class _FakeDistribution:
     def __init__(
         self,
@@ -240,6 +266,65 @@ def test_a_single_distribution_still_passes_and_other_packages_do_not_count(monk
     _run(monkeypatch, _row(), REVIEWED_TEXT, expression="BSD-3-Clause")
     unrelated = _FakeDistribution("MIT", name="unrelated")
     _run(monkeypatch, _row(), REVIEWED_TEXT, extra=(unrelated,))
+
+
+def test_each_reviewed_platform_text_is_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
+    _run(monkeypatch, _multi_row(), REVIEWED_TEXT)
+    _run(monkeypatch, _multi_row(), WINDOWS_TEXT)
+    _run(monkeypatch, _multi_row(), WINDOWS_TEXT.replace("\n", "\r\n"))
+    _run(monkeypatch, _multi_row(), WINDOWS_TEXT, expression="BSD-3-Clause")
+
+
+def test_modified_or_unmatched_platform_text_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert "re-review" in _rejected(monkeypatch, _multi_row(), WINDOWS_TEXT + " tampered\n")
+    assert "re-review" in _rejected(monkeypatch, _multi_row(), "Name: x\n License: MIT\n")
+    assert "re-review" in _rejected(monkeypatch, _multi_row(), WINDOWS_TEXT, version="1.19.0")
+    assert "re-review" in _rejected(monkeypatch, _row(), WINDOWS_TEXT)  # no Windows record on a plain row
+
+
+def test_a_record_with_an_unreviewed_copyleft_component_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    bad_text = WINDOWS_TEXT + "\n Name: libnew\n Files: y\n Description: z\n License: GPL-2.0-only\n"
+    row = _row()
+    row["additional_reviewed_installed_licenses"] = [
+        _record(bad_text, [COMPONENTS[0], COMPONENTS[1], ["libnew", "GPL-2.0-only"]])
+    ]
+    assert "copyleft" in _rejected(monkeypatch, row, bad_text)
+    with pytest.raises(SystemExit):
+        check_licenses._check_reviewed_record(row)
+    swapped = _row()
+    swapped["additional_reviewed_installed_licenses"] = [
+        _record(WINDOWS_TEXT, [COMPONENTS[0], ["GCC runtime library", "GPL-2.0-only"]])
+    ]
+    with pytest.raises(SystemExit):
+        check_licenses._check_reviewed_record(swapped)
+
+
+def test_additional_records_are_validated_and_must_be_distinct(monkeypatch: pytest.MonkeyPatch) -> None:
+    row = _row()
+    row["additional_reviewed_installed_licenses"] = [_record(REVIEWED_TEXT, COMPONENTS)]
+    assert "re-review" in _rejected(monkeypatch, row, REVIEWED_TEXT)  # same hash twice is ambiguous
+    other = _row()
+    other["additional_reviewed_installed_licenses"] = [_record(WINDOWS_TEXT, COMPONENTS[:2], package="other")]
+    with pytest.raises(SystemExit):
+        check_licenses._check_reviewed_record(other)
+    broken = _row()
+    broken["additional_reviewed_installed_licenses"] = "x"
+    with pytest.raises(SystemExit):
+        check_licenses._check_reviewed_record(broken)
+
+
+def test_repository_inventory_records_all_reviewed_scipy_platforms() -> None:
+    inventory = json.loads((ROOT / "dependency-licenses.json").read_text(encoding="utf-8"))
+    (scipy,) = [r for r in inventory["dependencies"] if r["name"] == "scipy"]
+    records = [scipy["reviewed_installed_license"], *scipy["additional_reviewed_installed_licenses"]]
+    assert sorted(r["metadata_sha256"] for r in records) == sorted(
+        [
+            "2a463073ea6816d22b763c8e2f03886f4e8bf4f2a234f3c9267401d688588d17",
+            "7f2f9e131a09f25323e392aac37fb2e263c600bb9d1ffc7c3b6ca3e1d017573e",
+            "c85f6c4154a28ccb2a49fe9a1cbcacb17939c14ffad7a2f63d32655610652bb7",
+        ]
+    )
+    assert all(r["version"] == "1.18.1" and r["package"] == "scipy" for r in records)
 
 
 def test_runtime_scope_cannot_carry_a_reviewed_record(monkeypatch: pytest.MonkeyPatch) -> None:

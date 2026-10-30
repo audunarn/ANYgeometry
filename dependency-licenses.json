@@ -33,6 +33,54 @@
       "upstream": "https://shapely.readthedocs.io/"
     },
     {
+      "additional_reviewed_installed_licenses": [
+        {
+          "components": [
+            [
+              "OpenBLAS",
+              "BSD-3-Clause"
+            ],
+            [
+              "LAPACK",
+              "BSD-3-Clause-Open-MPI"
+            ],
+            [
+              "GCC runtime library",
+              "GPL-3.0-or-later WITH GCC-exception-3.1"
+            ]
+          ],
+          "metadata_sha256": "7f2f9e131a09f25323e392aac37fb2e263c600bb9d1ffc7c3b6ca3e1d017573e",
+          "package": "scipy",
+          "project_license": "BSD-3-Clause",
+          "rationale": "Owner decision 2026-10-30 (accepted component set: OpenBLAS BSD-3-Clause, LAPACK BSD-3-Clause-Open-MPI, libgfortran GPL-3.0-or-later WITH GCC-exception-3.1, libquadmath LGPL-2.1-or-later), reviewed for the Windows (win_amd64) scipy 1.18.1 cp313 wheel metadata. The GCC runtime library is statically linked into the OpenBLAS DLL (GPL-3.0-or-later WITH GCC-exception-3.1, GCC Runtime Library Exception); libquadmath is not listed. No component beyond that set appears. SciPy's own code is BSD-3-Clause; scipy is an optional extra not bundled or redistributed by ANYgeometry (bundled=false).",
+          "version": "1.18.1"
+        },
+        {
+          "components": [
+            [
+              "OpenBLAS",
+              "BSD-3-Clause"
+            ],
+            [
+              "LAPACK",
+              "BSD-3-Clause-Open-MPI"
+            ],
+            [
+              "GCC runtime library",
+              "GPL-3.0-or-later WITH GCC-exception-3.1"
+            ],
+            [
+              "libquadmath",
+              "LGPL-2.1-or-later"
+            ]
+          ],
+          "metadata_sha256": "c85f6c4154a28ccb2a49fe9a1cbcacb17939c14ffad7a2f63d32655610652bb7",
+          "package": "scipy",
+          "project_license": "BSD-3-Clause",
+          "rationale": "Owner decision 2026-10-30 (accepted component set: OpenBLAS BSD-3-Clause, LAPACK BSD-3-Clause-Open-MPI, libgfortran GPL-3.0-or-later WITH GCC-exception-3.1, libquadmath LGPL-2.1-or-later), reviewed for the macOS (macosx arm64) scipy 1.18.1 cp313 wheel metadata. Dynamic libraries scipy/.dylibs: the GCC runtime library (libgfortran, libgcc) under the GCC exception and libquadmath under LGPL-2.1-or-later (not covered by the GCC exception). No component beyond that set appears. SciPy's own code is BSD-3-Clause; scipy is an optional extra not bundled or redistributed by ANYgeometry (bundled=false).",
+          "version": "1.18.1"
+        }
+      ],
       "bundled": false,
       "license_expression": "BSD-3-Clause",
       "name": "scipy",
@@ -59,7 +107,7 @@
         "metadata_sha256": "2a463073ea6816d22b763c8e2f03886f4e8bf4f2a234f3c9267401d688588d17",
         "package": "scipy",
         "project_license": "BSD-3-Clause",
-        "rationale": "Owner decision 2026-10-30: accept. SciPy's own code is BSD-3-Clause. Its binary wheel metadata 'License' field also reproduces the licenses of bundled third-party libraries: OpenBLAS (BSD-3-Clause), LAPACK (BSD-3-Clause-Open-MPI), libgfortran (GPL-3.0-or-later WITH GCC-exception-3.1, GCC Runtime Library Exception) and libquadmath (LGPL-2.1-or-later, which is not covered by the GCC exception). They are dynamically linked inside the third-party scipy wheel; scipy is an optional extra that ANYgeometry neither bundles nor redistributes (bundled=false). Any other text, version or component requires re-review.",
+        "rationale": "Owner decision 2026-10-30: accept. SciPy's own code is BSD-3-Clause. Its binary wheel metadata 'License' field also reproduces the licenses of bundled third-party libraries: OpenBLAS (BSD-3-Clause), LAPACK (BSD-3-Clause-Open-MPI), libgfortran (GPL-3.0-or-later WITH GCC-exception-3.1, GCC Runtime Library Exception) and libquadmath (LGPL-2.1-or-later, which is not covered by the GCC exception). They are dynamically linked inside the third-party scipy wheel; scipy is an optional extra that ANYgeometry neither bundles nor redistributes (bundled=false). Any other text, version or component requires re-review. Applies to the Linux (manylinux x86_64) wheel; other platforms have their own records.",
         "version": "1.18.1"
       },
       "scope": "optional:sketch",
