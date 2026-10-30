@@ -1688,6 +1688,34 @@ def _child_support(model, face, outer, holes, tolerance):
     return outer,support,None,None
 
 
+def _face_contact_residual(model, face, point, uv):
+    """Residual of a canonical face-point contact station on ``face`` at its stored ``uv``.
+
+    ``uv`` comes from ``model.face_local_uv`` (bounded to [0, 1]).
+    """
+    target=model.faces[face]
+    if target.parameterization is None:
+        # Unchanged: uv is in the support's own frame.
+        return float(np.linalg.norm(target.surface.evaluate(*uv)-point))
+    # face_local_uv inverted the parameterization, so the stored uv is checked with
+    # face_point in that frame. That residual alone can be self-confirming (a topology
+    # Coons map contains its own merged boundary stations), so the station must ALSO lie
+    # on the authoritative support, measured with the support's own inverse and evaluator.
+    support_uv=target.surface.local_uv(point)
+    if type(target.surface) is not Plane:
+        # Bounded charts: the fix1 formula, clipped to the unit square, bit for bit.
+        support_uv=np.clip(support_uv,0.,1.)
+    # A Plane is unbounded and its stored frame need not cover the face (the tripod web
+    # planes), so its uv are NOT clipped: the term is the distance to the plane itself.
+    # It is an on-support check only. The face_point term at the clipped uv rejects
+    # stations outside the parameterization's patch; trim holes inside the patch are
+    # not checked here (as before S0f) and rest on the planned contact itself.
+    return max(
+        float(np.linalg.norm(model.face_point(face,*uv)-point)),
+        float(np.linalg.norm(target.surface.evaluate(
+            float(support_uv[0]),float(support_uv[1]))-point)))
+
+
 def _apply_intersections_in_place(model, plan, *, policy, _edge_preimage_draft=None):
     """Atomically apply a model/revision-bound material arrangement."""
     from .intersections import _merge_vertex
@@ -2038,22 +2066,7 @@ def _apply_intersections_in_place(model, plan, *, policy, _edge_preimage_draft=N
                                        if ref.id in incident):
                         point=model.vertex_position(station)
                         uv=model.face_local_uv(face,point)
-                        target=model.faces[face]
-                        if target.parameterization is None:
-                            # Unchanged: uv is in the support's own frame.
-                            residual=float(np.linalg.norm(target.surface.evaluate(*uv)-point))
-                        else:
-                            # face_local_uv inverted the parameterization, so the stored uv
-                            # is checked with face_point in that frame. That residual alone
-                            # can be self-confirming (a topology Coons map contains its own
-                            # merged boundary stations), so the station must ALSO lie on the
-                            # authoritative support, measured with the support's own inverse
-                            # and evaluator exactly as for an unparameterized face.
-                            support_uv=np.clip(target.surface.local_uv(point),0.,1.)
-                            residual=max(
-                                float(np.linalg.norm(model.face_point(face,*uv)-point)),
-                                float(np.linalg.norm(target.surface.evaluate(
-                                    float(support_uv[0]),float(support_uv[1]))-point)))
+                        residual=_face_contact_residual(model,face,point,uv)
                         if residual>tolerance:
                             raise GeometryError('canonical face contact exceeds its qualified tolerance')
                         model.ensure_attachment(None,AttachmentKind.VERTEX_ON_FACE,
