@@ -185,8 +185,9 @@ def test_planner_passes_the_resolved_policy_to_the_main_arrangement_loop(monkeyp
         return original(*args, **kwargs)
     monkeypatch.setattr(bi, "arrange_material", spy)
     model, faces = _l_joint()
-    for policy, expected in (("connect", "baseline"), (RS, "ring_split"), (TRS, "ring_split"),
-                             (IntersectionBatchPolicy(seam_policy="ring_split", max_predicates=10**9), "baseline")):
+    # baseline: no keyword at all (the pre-RS call, Codex RS R1 P3)
+    for policy, expected in (("connect", None), (RS, "ring_split"), (TRS, "ring_split"),
+                             (IntersectionBatchPolicy(seam_policy="ring_split", max_predicates=10**9), None)):
         seen.clear()
         plan_intersections(model, faces, policy=policy)
         assert seen and set(seen) == {expected}, (policy, seen)
@@ -340,3 +341,17 @@ def test_route_carriers_with_seam_fields_round_trip(plans):
             assert pickle.dumps(rebuilt) == pickle.dumps(carrier)
             once = pickle.dumps(pickle.loads(pickle.dumps(carrier)))
             assert pickle.dumps(pickle.loads(once)) == once
+
+
+def test_r1_p3_default_planning_keeps_the_previous_arrange_material_call(monkeypatch):
+    # Codex R1 finding 3: a wrapper with the pre-RS keyword signature must keep working in default planning
+    # (no seam_policy keyword unless the policy is non-baseline).
+    original = bi.arrange_material
+
+    def legacy(domain, traces, *, tolerance, cancellation_check=None, max_predicates=None, area_tolerance=None,
+               points=()):
+        return original(domain, traces, tolerance=tolerance, cancellation_check=cancellation_check,
+                        max_predicates=max_predicates, area_tolerance=area_tolerance, points=points)
+    monkeypatch.setattr(bi, "arrange_material", legacy)
+    model, faces = _l_joint()
+    assert type(plan_intersections(model, faces, policy="connect")) is IntersectionPlan

@@ -340,3 +340,40 @@ def test_seams_are_exact_clipped_decomposition_segments():
     ends = {tuple(np.round(t.curve.evaluate(0.), 12)) for t in traces if type(t.curve) is LinePath}
     chords = [p for p in seams if {tuple(np.round(p.curve.evaluate(s), 12)) for s in (0., 1.)} <= ends]
     assert len(chords) == N                                  # chords join existing free ends exactly
+
+
+# ----------------------------------------------------------------------------------- Codex RS R1 findings (fix round 1)
+
+def _geometry(tol, ends=()):
+    domain = MaterialDomain(7, plane(), (square(10. if tol < 1e-3 else 5e6),))
+    paths = list(domain.boundaries[0])
+    segments = {k: ma.stations.segment_of(p.curve) for k, p in enumerate(paths)}
+    return domain, paths, segments
+
+
+def test_r1_p2_shared_end_root_check_is_not_skipped_by_the_prefilter():
+    # Codex R1 finding 1: a small incident arc crosses the seam at x = 3 tol; arc_far's box test (the box starts
+    # 4 tol from the shared end) must not skip the shared-end certified contact test.
+    tol = 1e-6
+    domain, paths, segments = _geometry(tol)
+    arc = ArrangementPath(EllipticArc((1.5 * tol, 0., 0.), (1.5 * tol, 0., 0.), (0., 1.5 * tol, 0.), math.pi,
+                                      -1.5 * math.pi), owners=(1,))
+    paths.append(arc)
+    index = len(paths) - 1
+    geometry = ma._RingSplitGeometry(domain, paths, segments, len(paths), [], tol, lambda: None)
+    a, b = ma.exact_vector((0., 0., 0.)), ma.exact_vector((30 * tol, 0., 0.))
+    assert not geometry.arc_clear(index, a, b, True, False)
+    assert not geometry.clear(a, b, {index}, set())
+
+
+def test_r1_p2_arc_prefilter_bounds_the_angular_phase_error():
+    # Codex R1 finding 2: an admitted but unnormalised phase (2**40 rad) makes the float extremum miss the arc's
+    # top by ~4e-4 m; the prefilter must decline (certified test decides: the arc crosses the seam).
+    tol = 1e-9
+    domain, paths, segments = _geometry(tol)
+    arc = ArrangementPath(EllipticArc((0., -999999.9996237048, 0.), (1e6, 0., 0.), (0., 1e6, 0.), float(2 ** 40),
+                                      2 * math.pi), owners=(1,))
+    paths.append(arc)
+    geometry = ma._RingSplitGeometry(domain, paths, segments, len(paths), [], tol, lambda: None)
+    a, b = ma.exact_vector((-2e6, 0., 0.)), ma.exact_vector((2e6, 0., 0.))
+    assert not geometry.arc_clear(len(paths) - 1, a, b, False, False)

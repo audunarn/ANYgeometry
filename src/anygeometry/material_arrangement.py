@@ -1397,6 +1397,11 @@ class _RingSplitGeometry:
                               + np.max(np.abs(u)) + np.max(np.abs(v)))
             start, sweep = float(curve.start_angle), float(curve.sweep_angle)
             lo, hi = min(start, start + sweep), max(start, start + sweep)
+            if not (math.isfinite(lo) and math.isfinite(hi)) or max(abs(lo), abs(hi)) > _FLOAT_ANGLE_WINDOW:
+                return False                    # Codex RS R1 P2: no float shortcut outside the angle window
+            # Angle error of every float angle below (sums, peak + k pi, the cos/sin arguments): a few ulps of the
+            # largest angle involved; its effect on a value is at most amplitude * (delta + delta^2 / 2).
+            delta = 16 * np.finfo(float).eps * (max(abs(lo), abs(hi)) + 4 * math.pi)
             for axis, low, high in ((n, -t_h, t_h), (dp, s_lo, s_hi)):
                 vector = np.asarray(stations.rounded(axis))
                 length = float(np.linalg.norm(vector))
@@ -1411,7 +1416,9 @@ class _RingSplitGeometry:
                         angles.append(peak + k * math.pi)
                 values = [c0 + c1 * math.cos(t) + c2 * math.sin(t) for t in angles]
                 world_low, world_high = float(low) * length, float(high) * length
-                margin = (float(self.tol) + _RING_SPLIT_FLOAT * (magnitude + abs(world_low) + abs(world_high)))
+                amplitude = abs(c1) + abs(c2)
+                margin = (float(self.tol) + _RING_SPLIT_FLOAT * (magnitude + abs(world_low) + abs(world_high))
+                          + 2 * amplitude * (delta + delta * delta))
                 if not all(math.isfinite(x) for x in (*values, world_low, world_high, margin)):
                     return False
                 if min(values) > world_high + margin or max(values) < world_low - margin:
@@ -1437,6 +1444,15 @@ class _RingSplitGeometry:
         # s is measured in units of |d'|^2: s = (X - a) . d' / |d'|^2; the box parameter range is [s_lo, s_hi].
         if not s_lo < s_hi:
             return False
+        shared = [point for point, flag in ((a, at_a), (b, at_b)) if flag]
+        if shared:
+            # The box leaves the first _RING_SPLIT_END tol at a shared end to the shared vertex; contacts there are
+            # decided by the certified roots on the seam itself, always (Codex RS R1 P2: never skipped by the
+            # prefilter, which only knows the box).
+            seam = stations.Segment(a, b, derived=True)
+            if not self._guard(lambda: _chart_segment_arc_clear(self.chart, seam, path, shared,
+                                                                (2 * self.tol) ** 2, self.check)):
+                return False
         if self.arc_far(curve, a, frame, s_lo, s_hi, t_h):
             return True
 
@@ -1446,12 +1462,6 @@ class _RingSplitGeometry:
         for k in range(4):
             side = stations.Segment(corners[k], corners[(k + 1) % 4], derived=True)
             if not self._guard(lambda: _chart_segment_arc_clear(self.chart, side, path, (), Fraction(0), self.check)):
-                return False
-        shared = [point for point, flag in ((a, at_a), (b, at_b)) if flag]
-        if shared:
-            seam = stations.Segment(a, b, derived=True)
-            if not self._guard(lambda: _chart_segment_arc_clear(self.chart, seam, path, shared,
-                                                                (2 * self.tol) ** 2, self.check)):
                 return False
         magnitude = Fraction(float(np.max(np.abs(curve.center)) + np.max(np.abs(curve.u_vector))
                                    + np.max(np.abs(curve.v_vector))))

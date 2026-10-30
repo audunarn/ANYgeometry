@@ -1552,6 +1552,8 @@ def _plan_intersections(model, operands, *, policy, _planning_mode="exact", _cer
         include_axis_axis=policy.member_connections, include_axis_face=policy.member_face_connections,
         check_pair=check_pair, domain_bounds=domain_bounds)
     arrangements = []
+    # RS-0 (Codex RS R1 P3): the default call is unchanged; the keyword only for a non-baseline policy
+    seam_options = {} if _seam_policy == "baseline" else {"seam_policy": _seam_policy}
     for face_id, domain in domains.items():
         if not traces[face_id] and not points[face_id]:
             continue
@@ -1561,7 +1563,7 @@ def _plan_intersections(model, operands, *, policy, _planning_mode="exact", _cer
                     tolerance=model.tolerance.effective_length(lengths[face_id]),
                     area_tolerance=model.tolerance.effective_area(lengths[face_id]),
                     points=points[face_id],
-                    cancellation_check=lambda: (check() or False), seam_policy=_seam_policy)
+                    cancellation_check=lambda: (check() or False), **seam_options)
         except GeometryError as exc:
             raise GeometryError(f"intersection material arrangement face:{face_id}: {exc}") from exc
         arrangements.append(_normalise_cells(arrangement))
