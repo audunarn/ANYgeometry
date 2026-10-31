@@ -1,4 +1,4 @@
-# PP1h — risk-accepted qualification, not a purity proof
+# PP1h â€” risk-accepted qualification, not a purity proof
 
 Eighth release, parent ba746b2f, claude/pp1-purity-20261031. No remote or whole-model
 run. No certified numerical source-pin guard may be refreshed or changed.
