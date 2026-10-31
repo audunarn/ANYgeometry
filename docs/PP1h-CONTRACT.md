@@ -16,7 +16,9 @@ before/after-each-task heavy-check cadence; version/CPU discovery remains startu
 The final partial chunk's post-check is the mandatory worker-end boundary; an empty
 assignment still checks an end boundary. No assignment results escape before that
 end check. A failure clears the entire candidate assignment and reports the current
-unverified batch count, then raises a qualification decline for PP1g serial fallback.
+unverified batch count, then re-raises the original exception. QualificationDecline
+selects PP1g's serial fallback after cleanup. Genuine task errors retain their
+original exception and do not replay; PP3 owns serial-equivalent error attribution.
 Cancellation also clears staged results and propagates. Only one assignment per
 startup is allowed, preventing accidental omission of the final boundary.
 
@@ -27,7 +29,8 @@ this is the explicitly accepted batch risk, not a purity claim. No tolerance cha
 certified-source pin refresh, or relaxation of legacy per-task tests is permitted.
 
 
-Measured finite workload: 200 small real kernel tasks per K, 100 pair and 100 face,
+Measured finite workload: the two startup canaries repeated as 200 small real
+kernel tasks per K (100 pair-canary and 100 face-canary repetitions),
 with one admitted child per run; every result matched the serial parent and the
 unchanged canary goldens. K=16: average assignment cost 101.246 ms/task versus serial
 11.343 ms/task; K=64: 38.202 versus 9.392 ms/task. These include amortized boundary
@@ -43,3 +46,13 @@ plus 200 tasks). The final partial chunk passed its mandatory end check. The per
 path does no environment/source/store census/hash work; the existing task-payload
 checksum check remains mandatory. Default K=64 is configurable; production selection,
 N2c performance, transport/backpressure and independent reviews remain open.
+
+PP1i cadence clarification: K equal to the whole nonempty assignment makes FOUR
+heavy checks per worker: two at startup and two around the assignment. Full
+environment discovery is separate. Existing default cadence and K=1 regression
+checks are preserved. An explicit coalesce_boundaries=True shares the preceding
+post-check with the next chunk's pre-check: no external code runs between them.
+For B nonempty chunks this makes B+3 checks including startup (15 for N=200,K=16).
+It still performs the mandatory final post-check, stages the whole assignment,
+and retains the accepted risk of mutation undone between checks. This reduction
+was counter-tested; no timing improvement was measured in PP1i.

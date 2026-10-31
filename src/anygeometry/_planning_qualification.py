@@ -24,6 +24,14 @@ import weakref
 
 from .errors import GeometryError
 
+# The opt-in selector chooses host dispatch, not numerical task semantics. A
+# captured worker baseline is valid before/after enabling that selector. Actual
+# mode, seam, worker setting and native thread variables remain pinned.
+NUMERICAL_SETTINGS = (
+    'ANYGEOMETRY_PLANNING_MODE', 'ANYGEOMETRY_SEAM_POLICY', 'ANYGEOMETRY_PLANNING_WORKERS',
+    'OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS', 'BLIS_NUM_THREADS',
+    'VECLIB_MAXIMUM_THREADS', 'NUMEXPR_NUM_THREADS')
+
 
 class QualificationDecline(GeometryError):
     """Reject acceleration; the original serial path retains its own authority."""
@@ -177,11 +185,7 @@ def capture_environment(*, generated_modules=(), declined_stores=None, trusted_i
         modules[name]['providers'] = providers
     files[str(Path(sys.executable).resolve())] = _hash(sys.executable)
     files.update(runtime)
-    settings = {k: os.environ.get(k) for k in (
-        'ANYGEOMETRY_PLANNING_MODE', 'ANYGEOMETRY_SEAM_POLICY', 'ANYGEOMETRY_PLANNING_WORKERS',
-        'ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING',
-        'OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS', 'BLIS_NUM_THREADS',
-        'VECLIB_MAXIMUM_THREADS', 'NUMEXPR_NUM_THREADS')}
+    settings = {k: os.environ.get(k) for k in NUMERICAL_SETTINGS}
     if len(sys.modules) != len(loaded) or any(sys.modules.get(n) is not m for n, m in loaded):
         raise QualificationDecline('module closure changed during snapshot')
     result = dict(schema='PP1b-v1', modules=modules, files=files, versions=versions,
@@ -197,7 +201,7 @@ def capture_environment(*, generated_modules=(), declined_stores=None, trusted_i
 
 def trusted_runtime_record(pin):
     """Risk-accepted qualification, not a purity proof or in-memory-page hash."""
-    from ._planning_ledger import _TRUSTED_IMAGE_STORES
+    from ._planning_ledger import trusted_store_identities
     try:
         binaries, runtime = {}, {}
         families = set()
@@ -226,8 +230,7 @@ def trusted_runtime_record(pin):
         return dict(qualification='RISK-ACCEPTED QUALIFICATION, not a purity proof',
             versions=dict(pin['versions']), python=dict(pin['python']),
             binary_hashes=dict(sorted(binaries.items())),
-            stores=[dict(path=path, basis='trusted runtime image, pinned by versions and binary hashes, not purity-proven')
-                    for path in _TRUSTED_IMAGE_STORES])
+            stores=trusted_store_identities())
     except (KeyError, TypeError, AttributeError) as exc:
         raise QualificationDecline('malformed trusted runtime image') from exc
 

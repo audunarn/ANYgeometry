@@ -48,13 +48,16 @@ def verify_boundary(expected, registered):
 
 class BatchWorkerGate(q.WorkerGate):
     """Risk-accepted finite assignment, not a purity proof; K=1 heavy cadence compatible."""
-    def __init__(self, *args, batch_size=64, **kwargs):
+    def __init__(self, *args, batch_size=64, coalesce_boundaries=False, **kwargs):
         if type(batch_size) is not int or batch_size < 1:
             raise q.QualificationDecline('batch size must be a positive integer')
+        if type(coalesce_boundaries) is not bool:
+            raise q.QualificationDecline('coalescing selection must be bool')
         super().__init__(*args, **kwargs)
         if self.ledger is None:
             raise q.QualificationDecline('batch gate requires the live ledger')
         self._batch_size = batch_size
+        self.coalesce_boundaries = coalesce_boundaries
         self._registered = {}
         self._pending = []
         self.closed = False
@@ -125,7 +128,10 @@ class BatchWorkerGate(q.WorkerGate):
             if not tasks:
                 self._boundary()
             for offset in range(0, len(tasks), self.batch_size):
-                self._boundary()
+                # No external code runs between the prior post-check and this
+                # pre-check. Preserve legacy cadence unless explicitly selected.
+                if not self.coalesce_boundaries or offset == 0:
+                    self._boundary()
                 for task, payload, digest in tasks[offset:offset + self.batch_size]:
                     started = time.perf_counter()
                     self._pending.append(self._execute(task, payload, digest))

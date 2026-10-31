@@ -94,10 +94,83 @@ _DECLINED_RUNTIME_PATHS = (
 )
 
 
-# Owner-accepted trusted runtime image, pinned by versions and binary hashes,
-# not purity-proven. Exact canonical inventory paths, no prefix admission.
+# Owner-accepted opaque runtime risk with exact namespace/owner checks. The owned
+# annotation dictionary additionally has a structural digest and source provenance.
 _TRUSTED_IMAGE_STORES = _DECLINED_RUNTIME_PATHS + (
     'anygeometry.exact_curves._BranchConstants.__annotate_func__.cell[0]',)
+
+
+def _trusted_store_values():
+    from . import backend, exact_curves
+    return (backend._RUNTIME_PYTHON_GLOBALS['__builtins__'],
+            backend._RUNTIME_TRUSTED_NUMPY[12][1]._finfo_cache,
+            *(backend._RUNTIME_POINT_EDGES[index][0] for index in (3, 33, 52, 61)),
+            exact_curves._BranchConstants.__annotate_func__.__closure__[0].cell_contents)
+
+
+def trusted_store_identity(path, value):
+    """Exact live namespace/owner binding, not a path-plus-dict assertion."""
+    if path not in _TRUSTED_IMAGE_STORES or type(value) is not dict:
+        raise QualificationDecline('unknown trusted store identity')
+    index = _TRUSTED_IMAGE_STORES.index(path)
+    if value is not _trusted_store_values()[index]:
+        raise QualificationDecline('trusted store owner binding changed: ' + path)
+    namespaces = ('builtins', 'numpy.finfo._finfo_cache', 'numpy._core.fromnumeric',
+                  'numpy._core.shape_base', 'numpy._core.einsumfunc', 'numpy._core._asarray',
+                  'anygeometry.exact_curves._BranchConstants annotations')
+    namespace = namespaces[index]
+    if index in (0, 2, 3, 4, 5):
+        module = _registered_namespace(value)
+        if module is None or module.__name__ != namespace:
+            raise QualificationDecline('trusted namespace identity mismatch: ' + path)
+    elif index == 1:
+        import numpy as np
+        from . import backend
+        if backend._RUNTIME_TRUSTED_NUMPY[12][1] is not np.finfo or value is not np.finfo._finfo_cache:
+            raise QualificationDecline('trusted finfo owner mismatch')
+    basis = ('source-pinned owned annotation dictionary with structural boundary digest; not purity-proven'
+             if index == 6 else
+             'exact runtime owner/namespace plus source/runtime binary provenance; contents not purity-proven')
+    return dict(path=path, namespace=namespace, basis=basis,
+                content_check='structural' if index == 6 else 'risk-accepted opaque contents')
+
+
+def trusted_store_identities():
+    return [trusted_store_identity(path, value)
+            for path, value in zip(_TRUSTED_IMAGE_STORES, _trusted_store_values())]
+
+
+def trusted_annotation_digest(value):
+    """Structural check only; never evaluates a ForwardRef or traverses globals.
+
+    Protect keys, exact reference class, reference identity, expression/flags and
+    referenced opaque object identities. Underlying globals/native contents are
+    still risk-accepted, not proved transitively immutable.
+    """
+    import annotationlib
+    if type(value) is not dict:
+        raise QualificationDecline('annotation store is not an exact dict')
+    rows = []
+    for key, item in value.items():
+        if type(key) is not str or type(item) is not annotationlib.ForwardRef:
+            raise QualificationDecline('annotation store schema changed')
+        values = []
+        for name in ('__arg__', '__forward_is_argument__', '__forward_is_class__', '__forward_module__'):
+            part = object.__getattribute__(item, name)
+            if type(part) not in (str, bool, type(None)):
+                raise QualificationDecline('annotation reference scalar changed')
+            values.append(part)
+        opaque = []
+        for name in ('__globals__', '__extra_names__', '__code__', '__ast_node__', '__cell__', '__owner__',
+                     '__stringifier_dict__'):
+            try:
+                part = object.__getattribute__(item, name)
+            except AttributeError:
+                opaque.append((name, 'absent'))
+            else:
+                opaque.append((name, id(part)))
+        rows.append((key, id(item), tuple(values), tuple(opaque)))
+    return content_digest(tuple(rows))
 
 
 def _registered_namespace(value):
@@ -272,8 +345,18 @@ class Ledger:
         self.digests = {}
         self.live_digests = {}
         self.live_references = {}
+        self.trusted_identities = {}
+        self.trusted_digests = {}
         for path, row in rows.items():
-            if row['action'] == 'require-live-binding' and path == _LIVE_NAMESPACE_PATH:
+            if row['action'] == 'trusted-runtime-image':
+                identity = trusted_store_identity(path, objects[path])
+                self.trusted_identities[path] = identity
+                row.update(identity=identity, reason=identity['basis'])
+                if path == _TRUSTED_IMAGE_STORES[-1]:
+                    self.trusted_digests[path] = trusted_annotation_digest(objects[path])
+                    # Hold references: process-local identity cannot be recycled.
+                    self.live_references[path] = tuple(objects[path].items())
+            elif row['action'] == 'require-live-binding' and path == _LIVE_NAMESPACE_PATH:
                 try:
                     value = objects[path]
                     # ID equality is meaningful only while every attested object
@@ -321,6 +404,12 @@ class Ledger:
         for path, expected in self.live_digests.items():
             if live_namespace_snapshot(objects[path])[0] != expected:
                 raise QualificationDecline('live binding/code changed: ' + path)
+        for path, expected in self.trusted_identities.items():
+            if trusted_store_identity(path, objects[path]) != expected:
+                raise QualificationDecline('trusted namespace changed: ' + path)
+        for path, expected in self.trusted_digests.items():
+            if trusted_annotation_digest(objects[path]) != expected:
+                raise QualificationDecline('trusted annotation content changed: ' + path)
         self.census_costs.append(time.perf_counter() - started)
         return objects
 
@@ -434,7 +523,7 @@ def build_ledger(report, objects, *, modules=None, trusted_image=False):
         if action == 'reset':
             reset_roots.append(path)
         rows[path] = dict(path=path, kind=row.kind, action=action,
-                         reason=('trusted runtime image, pinned by versions and binary hashes, not purity-proven'
+                         reason=('exact trusted namespace/owner check pending; not purity-proven'
                                  if action == 'trusted-runtime-image' else
                                  'PP1f explicit opaque runtime decline; transitive mutable state not qualified'
                                  if path in _DECLINED_RUNTIME_PATHS and action == 'decline' else
