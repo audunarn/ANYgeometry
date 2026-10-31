@@ -291,8 +291,10 @@ def check_types(value, pin, *, limit=100000):
                 state = object.__getattribute__(item, '__dict__')
                 # Constructor-defined schema; no runtime instance can extend it.
                 pristine = GeometryModel(model_id='00000000-0000-0000-0000-000000000001')
-                if set(state) != set(object.__getattribute__(pristine, '__dict__')):
+                constructor_keys = set(object.__getattribute__(pristine, '__dict__'))
+                if set(state) not in (constructor_keys, constructor_keys | {'_serialization_extensions'}):
                     raise QualificationDecline('non-field model instance state')
+                model_extension_record(item)
                 for name in ('_arc_cache', '_edge_length_cache', '_trim_loops_cache',
                              '_topology_corner_cache', '_chain_arrays', '_change_hooks'):
                     if type(state[name]) not in (dict, list) or len(state[name]):
@@ -321,6 +323,67 @@ def check_types(value, pin, *, limit=100000):
                         pending.append(part)
                 continue
             raise QualificationDecline('unsupported pinned type adapter: ' + _type_name(typ))
+
+
+def model_extension_record(model):
+    """PP2 exact decoder-owned JSON state, without stripping or evaluating it.
+
+    Extension containers must form a tree: no cycles/repeated container aliases,
+    and no shared container with other declarative model state. JSON scalars are
+    exact builtin None/bool/int/finite float/str; objects/subclasses refuse. The
+    digest is transport evidence, not a replacement for the original live gate.
+    """
+    import math
+    from dataclasses import fields, is_dataclass
+    from .model import GeometryModel
+    if type(model) is not GeometryModel:
+        raise QualificationDecline('extension adapter requires exact model type')
+    state = object.__getattribute__(model, '__dict__')
+    if '_serialization_extensions' not in state:
+        return dict(present=False, sha256=None)
+    extension = state['_serialization_extensions']
+    if type(extension) is not dict:
+        raise QualificationDecline('extension state must be a plain dict')
+    containers = set()
+    pending = [(extension, 0)]
+    nodes = 0
+    while pending:
+        item, depth = pending.pop(); nodes += 1
+        if depth > 40 or nodes > 100000:
+            raise QualificationDecline('extension schema exceeds bound')
+        typ = type(item)
+        if typ in (dict, list):
+            if id(item) in containers:
+                raise QualificationDecline('extension container alias/cycle')
+            containers.add(id(item))
+            if typ is dict:
+                if any(type(key) is not str for key in item):
+                    raise QualificationDecline('extension key must be an exact string')
+                pending.extend((part, depth+1) for part in item.values())
+            else:
+                pending.extend((part, depth+1) for part in item)
+        elif typ not in (type(None), bool, int, float, str) or (typ is float and not math.isfinite(item)):
+            raise QualificationDecline('unknown/nonfinite extension value')
+    pending = [v for k,v in state.items() if k != '_serialization_extensions']
+    seen = set()
+    while pending:
+        item = pending.pop()
+        if id(item) in containers:
+            raise QualificationDecline('extension alias into model state')
+        if id(item) in seen:
+            continue
+        seen.add(id(item))
+        if len(seen)>100000:
+            raise QualificationDecline('extension alias walk exceeds bound')
+        typ = type(item)
+        if typ is dict:
+            pending.extend(item.keys()); pending.extend(item.values())
+        elif typ in (tuple, list, set, frozenset):
+            pending.extend(item)
+        elif not isinstance(item, type) and is_dataclass(item):
+            pending.extend(object.__getattribute__(item,f.name) for f in fields(item))
+    payload = json.dumps(extension, sort_keys=True, separators=(',', ':'), allow_nan=False).encode('utf-8')
+    return dict(present=True, sha256=hashlib.sha256(payload).hexdigest())
 
 
 def _check_model_record_state(state):
