@@ -11,6 +11,7 @@ import enum
 import functools
 import gc
 import hashlib
+import marshal
 import struct
 import sys
 import time
@@ -73,7 +74,60 @@ _RUNTIME_EMPTY_PATHS = (
     'anygeometry.nurbs_surface_intersection._topology._PLANE.__dict__',
     'anygeometry.surfaces._LSTSQ_GUFUNC.__dict__',
 )
-_ACTIONS = frozenset(('reset', 'covered-by-reset', 'pinned-definition', 'require-empty', 'decline'))
+_ACTIONS = frozenset(('reset', 'covered-by-reset', 'pinned-definition', 'require-live-binding', 'require-empty', 'decline'))
+
+
+# Exact reviewed constant stores. Their contents, not just root identities, are
+# checked before/after tasks. No path-prefix or arbitrary opaque-object adapter.
+_LIVE_CONTENT_PATHS = tuple(path for path in _RUNTIME_EMPTY_PATHS if path.endswith((
+    '.__all__', '.keywords', '.einsum_symbols_set', '.POSSIBLE_FLAGS',
+    '._PLANE.__dict__')) or (path.endswith('.__dict__') and
+    ('_RUNTIME_TRUSTED_NUMPY' in path or '.matmul.' in path or '.multiply.' in path)))
+_LIVE_NAMESPACE_PATH = 'anygeometry.backend._RUNTIME_PYTHON_GLOBALS'
+_DECLINED_RUNTIME_PATHS = (
+    'anygeometry.backend._RUNTIME_PYTHON_GLOBALS.__builtins__',
+    'anygeometry.backend._RUNTIME_TRUSTED_NUMPY[12][1]._finfo_cache',
+    'anygeometry.backend._RUNTIME_POINT_EDGES[3][0]',
+    'anygeometry.backend._RUNTIME_POINT_EDGES[33][0]',
+    'anygeometry.backend._RUNTIME_POINT_EDGES[52][0]',
+    'anygeometry.backend._RUNTIME_POINT_EDGES[61][0]',
+)
+
+
+def _registered_namespace(value):
+    if type(value) is not dict or type(value.get('__name__')) is not str:
+        return None
+    module = sys.modules.get(value['__name__'])
+    return module if type(module) is types.ModuleType and vars(module) is value else None
+
+
+def live_namespace_snapshot(value):
+    """Binding-only attestation, plus actual function/code identities and hashes.
+
+    This does not certify the transitive state of imported modules, builtins,
+    loaders or specs. Those remain independently pinned/declined by the ledger
+    and worker environment. Code bytes are reference measurements, not a proof
+    that an in-memory function was compiled from the source file.
+    """
+    from ._planning_qualification import pin_module
+    module = _registered_namespace(value)
+    if module is None or any(type(name) is not str for name in value):
+        raise QualificationDecline('live namespace has no exact registered module')
+    source_pin = pin_module(module)
+    bindings, pins = [], {}
+    for name, item in sorted(value.items()):
+        binding = [name, id(item), id(type(item))]
+        if type(item) is types.FunctionType:
+            if item.__globals__ is not value or item.__module__ != module.__name__:
+                raise QualificationDecline('foreign live function globals/module: ' + name)
+            code_hash = hashlib.sha256(marshal.dumps(item.__code__)).hexdigest()
+            binding.extend((id(item.__code__), id(item.__globals__), code_hash))
+            pins[name] = dict(module=module.__name__, qualname=item.__qualname__,
+                              sha256=code_hash, source=source_pin)
+        bindings.append(tuple(binding))
+    if not pins:
+        raise QualificationDecline('live namespace has no pinned Python implementation')
+    return content_digest((id(module), bindings)), pins
 
 
 def check_coverage(report, rows):
@@ -209,12 +263,29 @@ class Ledger:
         self.costs = []
         self.census_costs = []
         self.digests = {}
+        self.live_digests = {}
+        self.live_references = {}
         for path, row in rows.items():
-            if row['action'] == 'pinned-definition':
+            if row['action'] == 'require-live-binding' and path == _LIVE_NAMESPACE_PATH:
+                try:
+                    value = objects[path]
+                    # ID equality is meaningful only while every attested object
+                    # remains alive, including code replaced on a live function.
+                    self.live_references[path] = (_registered_namespace(value),
+                        tuple(value.items()), tuple(item.__code__ for item in value.values()
+                                                   if type(item) is types.FunctionType))
+                    self.live_digests[path] = live_namespace_snapshot(value)[0]
+                except QualificationDecline as exc:
+                    row.update(action='decline', reason=str(exc))
+            elif row['action'] in ('pinned-definition', 'require-live-binding'):
                 try:
                     self.digests[path] = content_digest(objects[path])
                 except QualificationDecline as exc:
                     row.update(action='decline', reason=str(exc))
+
+    def live_code_pins(self):
+        return {path: live_namespace_snapshot(self.objects[path])[1]
+                for path in self.live_digests}
 
     def validate(self):
         started = time.perf_counter()
@@ -240,6 +311,9 @@ class Ledger:
         for path, expected in self.digests.items():
             if content_digest(objects[path]) != expected:
                 raise QualificationDecline('protected store content changed: ' + path)
+        for path, expected in self.live_digests.items():
+            if live_namespace_snapshot(objects[path])[0] != expected:
+                raise QualificationDecline('live binding/code changed: ' + path)
         self.census_costs.append(time.perf_counter() - started)
         return objects
 
@@ -273,7 +347,8 @@ class Ledger:
     def record(self):
         return dict(stores=list(self.rows.values()), aliases=list(self.report.aliases),
                     unknowns=list(self.report.unknowns), truncated=self.report.truncated,
-                    reset_seconds=list(self.costs), census_seconds=list(self.census_costs))
+                    reset_seconds=list(self.costs), census_seconds=list(self.census_costs),
+                    live_code_pins=self.live_code_pins())
 
 
 def build_ledger(report, objects, *, modules=None):
@@ -320,6 +395,12 @@ def build_ledger(report, objects, *, modules=None):
         elif (any(path == m.__name__ + '.' + parts[-1] for m in modules)
               and parts[-1] in _NUMERICAL_ROOTS and kind in (dict, list, set)):
             action = 'reset'
+        elif path == _LIVE_NAMESPACE_PATH and _registered_namespace(value) is not None:
+            action = 'require-live-binding'
+        elif path in _LIVE_CONTENT_PATHS:
+            action = 'require-live-binding'
+        elif path in _DECLINED_RUNTIME_PATHS and len(value):
+            action = 'decline'
         elif (path in _RUNTIME_EMPTY_PATHS or kind is contextvars.ContextVar or
               '.__repr__.cell[' in path or '.deepcopy.__defaults__' in path):
             action = 'require-empty'
@@ -330,7 +411,9 @@ def build_ledger(report, objects, *, modules=None):
         if action == 'reset':
             reset_roots.append(path)
         rows[path] = dict(path=path, kind=row.kind, action=action,
-                         reason='PP1e exact static role/container or explicit empty-runtime policy; unknowns refuse')
+                         reason=('PP1f explicit opaque runtime decline; transitive mutable state not qualified'
+                                 if path in _DECLINED_RUNTIME_PATHS and action == 'decline' else
+                                 'PP1f exact binding/content guard; prior reset/static/empty policy retained'))
     for path, row in rows.items():
         for parent in reset_roots:
             if path != parent and (path.startswith(parent + '.') or path.startswith(parent + '[')):

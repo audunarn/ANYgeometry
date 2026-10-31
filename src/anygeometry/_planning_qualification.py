@@ -365,6 +365,8 @@ class WorkerGate:
         if ledger is not None and (set(ledger.resets) != set(self.stores) or
                 any(ledger.resets[n] is not v for n, v in self.stores.items())):
             raise QualificationDecline('ledger reset binding differs from worker registry')
+        if ledger is not None and self.expected.get('live_code_pins', {}) != ledger.live_code_pins():
+            raise QualificationDecline('reference live code pins are missing or differ')
         self.observe = observe or (lambda: capture_environment(
             generated_modules=generated_modules, declined_stores=self.stores))
         self.ready = False
@@ -375,6 +377,8 @@ class WorkerGate:
     def _verify(self):
         started = time.perf_counter()
         verify_environment(self.expected, self.observe())
+        if self.ledger is not None and self.expected.get('live_code_pins', {}) != self.ledger.live_code_pins():
+            raise QualificationDecline('reference live code pins changed')
         self.verification_seconds.append(time.perf_counter() - started)
 
     def _after(self):
