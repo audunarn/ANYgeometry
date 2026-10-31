@@ -1,4 +1,4 @@
-"""PP1b engineering controls for a fresh owned worker; serial remains untouched.
+"""PP1g risk-accepted qualification, not a purity proof; serial remains untouched.
 
 Pins and canary references must come from an independently qualified baseline.
 Never capture a failing candidate as its own expected reference. Current-file
@@ -117,7 +117,7 @@ def input_type_names():
     return sorted(_type_name(t) for t in _input_types())
 
 
-def capture_environment(*, generated_modules=(), declined_stores=None):
+def capture_environment(*, generated_modules=(), declined_stores=None, trusted_image=False):
     """Record the actual loaded closure after declared eager imports.
 
     Must run at the fresh-worker boundary and again after each task. All loaded
@@ -179,16 +179,57 @@ def capture_environment(*, generated_modules=(), declined_stores=None):
     files.update(runtime)
     settings = {k: os.environ.get(k) for k in (
         'ANYGEOMETRY_PLANNING_MODE', 'ANYGEOMETRY_SEAM_POLICY', 'ANYGEOMETRY_PLANNING_WORKERS',
+        'ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING',
         'OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS', 'BLIS_NUM_THREADS',
         'VECLIB_MAXIMUM_THREADS', 'NUMEXPR_NUM_THREADS')}
     if len(sys.modules) != len(loaded) or any(sys.modules.get(n) is not m for n, m in loaded):
         raise QualificationDecline('module closure changed during snapshot')
-    return dict(schema='PP1b-v1', modules=modules, files=files, versions=versions,
+    result = dict(schema='PP1b-v1', modules=modules, files=files, versions=versions,
                 python=dict(version=sys.version, executable=str(Path(sys.executable).resolve()),
                             implementation=sys.implementation.name, platform=sys.platform),
                 cpu=cpu, blas=sorted(blas, key=lambda x: x['filepath']),
                 types=allowed_input_names, settings=settings,
                 reset_registry={n: _type_name(type(v)) for n, v in (declined_stores or {}).items()})
+    if trusted_image:
+        result['trusted_runtime_image'] = trusted_runtime_record(result)
+    return result
+
+
+def trusted_runtime_record(pin):
+    """Risk-accepted qualification, not a purity proof or in-memory-page hash."""
+    from ._planning_ledger import _TRUSTED_IMAGE_STORES
+    try:
+        binaries, runtime = {}, {}
+        families = set()
+        for name, module in pin['modules'].items():
+            runtime.update(module.get('runtime_files', {}))
+            if module['kind'] == 'native':
+                binaries[module['path']] = module['sha256']
+                if name.startswith('numpy.'):
+                    families.add('numpy')
+                if name.startswith('scipy.'):
+                    families.add('scipy')
+        if families != {'numpy', 'scipy'} or not runtime:
+            raise QualificationDecline('trusted runtime binary families/interpreter images missing')
+        binaries.update(runtime)
+        executable = pin['python']['executable']
+        binaries[executable] = pin['files'][executable]
+        for pool in pin['blas']:
+            binaries[pool['filepath']] = pool['sha256']
+        if any(type(value) is not str or not value for value in
+               (pin['versions']['numpy'], pin['versions']['scipy'], pin['python']['version'])):
+            raise QualificationDecline('trusted runtime versions missing')
+        for path, digest in binaries.items():
+            if (type(digest) is not str or len(digest) != 64 or
+                    any(char not in '0123456789abcdef' for char in digest) or pin['files'].get(path) != digest):
+                raise QualificationDecline('trusted runtime binary hash missing/inconsistent')
+        return dict(qualification='RISK-ACCEPTED QUALIFICATION, not a purity proof',
+            versions=dict(pin['versions']), python=dict(pin['python']),
+            binary_hashes=dict(sorted(binaries.items())),
+            stores=[dict(path=path, basis='trusted runtime image, pinned by versions and binary hashes, not purity-proven')
+                    for path in _TRUSTED_IMAGE_STORES])
+    except (KeyError, TypeError, AttributeError) as exc:
+        raise QualificationDecline('malformed trusted runtime image') from exc
 
 
 def verify_environment(expected, observed):
@@ -203,6 +244,11 @@ def verify_environment(expected, observed):
             raise QualificationDecline('unpinned/missing module')
         if expected['files'] != observed['files'] or expected['modules'] != observed['modules']:
             raise QualificationDecline('code/native hash or module identity mismatch')
+        if expected.get('trusted_runtime_image') != observed.get('trusted_runtime_image'):
+            raise QualificationDecline('trusted runtime image pin mismatch')
+        for pin in (expected, observed):
+            if 'trusted_runtime_image' in pin and pin['trusted_runtime_image'] != trusted_runtime_record(pin):
+                raise QualificationDecline('invalid trusted runtime image record')
         for key in ('cpu', 'blas', 'versions', 'python', 'types', 'settings', 'reset_registry'):
             if expected[key] != observed[key]:
                 raise QualificationDecline(key + ' pin mismatch')
@@ -350,7 +396,7 @@ def reset_declined(stores, *, owned_worker):
 
 
 class WorkerGate:
-    """Unwired owned-worker lifecycle gate; no result before all controls pass."""
+    """Risk-accepted qualification, not a purity proof; no result before controls pass."""
     def __init__(self, expected, *, stores, owned_worker, observe=None, generated_modules=(), ledger=None):
         if ledger is None and observe is None:
             raise QualificationDecline('real worker gate requires a complete live ledger')
@@ -367,8 +413,11 @@ class WorkerGate:
             raise QualificationDecline('ledger reset binding differs from worker registry')
         if ledger is not None and self.expected.get('live_code_pins', {}) != ledger.live_code_pins():
             raise QualificationDecline('reference live code pins are missing or differ')
+        trusted = ledger is not None and ledger.trusted_image
+        if trusted and self.expected.get('trusted_runtime_image') != trusted_runtime_record(self.expected):
+            raise QualificationDecline('trusted-image ledger lacks its reference record')
         self.observe = observe or (lambda: capture_environment(
-            generated_modules=generated_modules, declined_stores=self.stores))
+            generated_modules=generated_modules, declined_stores=self.stores, trusted_image=trusted))
         self.ready = False
         self.poisoned = False
         self.reset_counts = {}

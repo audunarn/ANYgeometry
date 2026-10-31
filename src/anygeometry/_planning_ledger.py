@@ -1,4 +1,4 @@
-"""Full loaded-store coverage for the PP1c engineering boundary.
+"""PP1g risk-accepted qualification, not a purity proof; strict mode retained.
 
 Definition metadata is protected, not cleared. Reviewed numerical cache roots
 are disposable only inside a fresh owned worker, before fresh task input creation.
@@ -74,7 +74,7 @@ _RUNTIME_EMPTY_PATHS = (
     'anygeometry.nurbs_surface_intersection._topology._PLANE.__dict__',
     'anygeometry.surfaces._LSTSQ_GUFUNC.__dict__',
 )
-_ACTIONS = frozenset(('reset', 'covered-by-reset', 'pinned-definition', 'require-live-binding', 'require-empty', 'decline'))
+_ACTIONS = frozenset(('reset', 'covered-by-reset', 'pinned-definition', 'require-live-binding', 'trusted-runtime-image', 'require-empty', 'decline'))
 
 
 # Exact reviewed constant stores. Their contents, not just root identities, are
@@ -92,6 +92,12 @@ _DECLINED_RUNTIME_PATHS = (
     'anygeometry.backend._RUNTIME_POINT_EDGES[52][0]',
     'anygeometry.backend._RUNTIME_POINT_EDGES[61][0]',
 )
+
+
+# Owner-accepted trusted runtime image, pinned by versions and binary hashes,
+# not purity-proven. Exact canonical inventory paths, no prefix admission.
+_TRUSTED_IMAGE_STORES = _DECLINED_RUNTIME_PATHS + (
+    'anygeometry.exact_curves._BranchConstants.__annotate_func__.cell[0]',)
 
 
 def _registered_namespace(value):
@@ -254,10 +260,11 @@ def content_digest(value):
 
 
 class Ledger:
-    def __init__(self, report, objects, rows, modules):
+    def __init__(self, report, objects, rows, modules, *, trusted_image=False):
         check_coverage(report, rows)
         self.report, self.objects, self.rows = report, objects, rows
         self.modules = modules
+        self.trusted_image = trusted_image
         self.registered = {m.__name__: m for m in modules if sys.modules.get(m.__name__) is m}
         self.resets = {p: objects[p] for p, row in rows.items() if row['action'] == 'reset'}
         self.costs = []
@@ -351,7 +358,9 @@ class Ledger:
                     live_code_pins=self.live_code_pins())
 
 
-def build_ledger(report, objects, *, modules=None):
+def build_ledger(report, objects, *, modules=None, trusted_image=False):
+    if type(trusted_image) is not bool:
+        raise QualificationDecline('trusted-image selection must be explicit bool')
     if set(objects) != {r.path for r in report.stores}:
         raise QualificationDecline('ledger handle coverage mismatch')
     if modules is None:
@@ -389,7 +398,9 @@ def build_ledger(report, objects, *, modules=None):
         path, value = row.path, objects[row.path]
         parts = path.split('.')
         kind = type(value)
-        if kind in (functools._lru_cache_wrapper, weakref.WeakKeyDictionary,
+        if trusted_image and path in _TRUSTED_IMAGE_STORES and kind is dict:
+            action = 'trusted-runtime-image'
+        elif kind in (functools._lru_cache_wrapper, weakref.WeakKeyDictionary,
                       weakref.WeakValueDictionary, weakref.WeakSet):
             action = 'reset'
         elif (any(path == m.__name__ + '.' + parts[-1] for m in modules)
@@ -411,7 +422,9 @@ def build_ledger(report, objects, *, modules=None):
         if action == 'reset':
             reset_roots.append(path)
         rows[path] = dict(path=path, kind=row.kind, action=action,
-                         reason=('PP1f explicit opaque runtime decline; transitive mutable state not qualified'
+                         reason=('trusted runtime image, pinned by versions and binary hashes, not purity-proven'
+                                 if action == 'trusted-runtime-image' else
+                                 'PP1f explicit opaque runtime decline; transitive mutable state not qualified'
                                  if path in _DECLINED_RUNTIME_PATHS and action == 'decline' else
                                  'PP1f exact binding/content guard; prior reset/static/empty policy retained'))
     for path, row in rows.items():
@@ -419,12 +432,12 @@ def build_ledger(report, objects, *, modules=None):
             if path != parent and (path.startswith(parent + '.') or path.startswith(parent + '[')):
                 row.update(action='covered-by-reset', parent=parent)
                 break
-    return Ledger(report, objects, rows, modules)
+    return Ledger(report, objects, rows, modules, trusted_image=trusted_image)
 
 
-def loaded_geometry_ledger():
+def loaded_geometry_ledger(*, trusted_image=False):
     modules = tuple(m for name, m in sorted(sys.modules.items())
                     if name == 'anygeometry' or name.startswith('anygeometry.'))
     objects = {}
     report = inventory(modules, store_objects=objects)
-    return build_ledger(report, objects, modules=modules)
+    return build_ledger(report, objects, modules=modules, trusted_image=trusted_image)
