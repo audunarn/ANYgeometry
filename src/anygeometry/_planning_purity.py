@@ -22,6 +22,7 @@ import struct
 import sys
 import threading
 import types
+import typing
 import weakref
 
 from .errors import GeometryError
@@ -159,7 +160,34 @@ def inventory(modules, *, max_nodes=80000, max_depth=24, store_objects=None, def
         elif typ is type:
             # A native mappingproxy over an actual type dictionary, not an
             # arbitrary MappingProxyType whose backing mapping may run code.
-            for name, item in type.__getattribute__(value, '__dict__').items():
+            class_ns = type.__getattribute__(value, '__dict__')
+            annotate = class_ns.get('__annotate_func__')
+            if type(annotate) is types.FunctionType and annotate.__closure__:
+                eager = typing._make_eager_annotate
+                eager_code = any(part is annotate.__code__ for part in eager.__code__.co_consts)
+                for key, cell in zip(annotate.__code__.co_freevars, annotate.__closure__):
+                    if (eager_code and annotate.__globals__ is vars(typing)
+                            and key in ('checked_types', 'types')):
+                        try:
+                            body = cell.cell_contents
+                        except ValueError:
+                            continue
+                        if type(body) is dict and set(body) == set(class_ns.get('_fields', ())):
+                            definition(body, path + '.__annotate_func__.' + key)
+                    if key != '__classdict__':
+                        continue
+                    try:
+                        body = cell.cell_contents
+                    except ValueError:
+                        continue
+                    if (type(body) is dict and body.get('__annotate_func__') is annotate
+                            and body.get('__module__') == class_ns.get('__module__')
+                            and ((body.get('__dataclass_fields__') is not None and
+                                  body['__dataclass_fields__'] is class_ns.get('__dataclass_fields__'))
+                                 or all(key in class_ns and part is class_ns[key]
+                                        for key, part in body.items()))):
+                        definition(body, path + '.__annotate_func__.__classdict__')
+            for name, item in class_ns.items():
                 if name not in ('__dict__', '__weakref__', '__doc__', '__module__'):
                     if name in ('__annotations__', '__annotations_cache__', '__dataclass_fields__',
                                 '__conditional_annotations__', '_field_defaults'):
@@ -197,7 +225,7 @@ def inventory(modules, *, max_nodes=80000, max_depth=24, store_objects=None, def
         name = mapping.get('__name__')
         if type(name) is not str:
             raise PurityDecline('invalid module name')
-        for key in ('__all__', '__annotations__'):
+        for key in ('__all__', '__annotations__', '__conditional_annotations__'):
             if key in mapping:
                 definition(mapping[key], name + '.' + key)
         namespace(mapping, name, 0, metadata=True)

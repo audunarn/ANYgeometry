@@ -6,12 +6,16 @@ Unknown stores and active contexts decline before any mutation. This policy is
 bound to the pinned source/runtime and finite canaries, not a universal proof.
 """
 import contextvars
+import dataclasses
+import enum
 import functools
+import gc
 import hashlib
 import struct
 import sys
 import time
 import types
+import typing
 import weakref
 
 from ._planning_purity import inventory
@@ -22,6 +26,7 @@ _NUMERICAL_ROOTS = frozenset((
     '_SECTION_CANONICAL', '_ISSUED_CONTEXTS', '_SECTIONS', '_NETS', '_ABSOLUTE',
     '_SCALED', '_MEMO', '_FIRST_CHOICE', '_PATCHES', '_BRANCH_POLYNOMIALS'))
 _FIXED_ROOTS = (
+    'anygeometry.backend._TRUE',
     'anygeometry.batch_intersections.SEAM_POLICY_VERSIONS',
     'anygeometry.batch_intersections._CARRIER_FIELDS', 'anygeometry.batch_intersections._CARRIER_ROWS',
     'anygeometry.identity._ENTITY_KIND_ORDER', 'anygeometry.nurbs._CURVE_FIELDS',
@@ -37,6 +42,37 @@ _FIXED_ROOTS = (
     'anygeometry.support_curves._PLANE_FIELDS', 'anygeometry.surfaces._LSTSQ_GUFUNC',
     'anygeometry._planning_qualification._CLEAR',
 )
+_CONTAINER_CONSTANT_ROOTS = (
+    'anygeometry.quadric_algebra._ONE_PLUS_X2',
+    'anygeometry.batch_intersections._CARRIER_FIELDS',
+)
+# Exact observed runtime stores; never erase implementation bindings to admit a task.
+_RUNTIME_EMPTY_PATHS = (
+    'anygeometry.backend._RUNTIME_PYTHON_GLOBALS',
+    'anygeometry.backend._RUNTIME_PYTHON_GLOBALS.__builtins__',
+    'anygeometry.backend._RUNTIME_TRUSTED_NUMPY[0][1].__dict__',
+    'anygeometry.backend._RUNTIME_TRUSTED_NUMPY[12][1]._finfo_cache',
+    'anygeometry.backend._RUNTIME_TRUSTED_NUMPY[14][1].__dict__',
+    'anygeometry.backend._RUNTIME_TRUSTED_NUMPY[18][1].__dict__',
+    'anygeometry.backend._RUNTIME_TRUSTED_NUMPY[19][1].__dict__',
+    'anygeometry.backend._RUNTIME_POINT_EDGES[3][0]',
+    'anygeometry.backend._RUNTIME_POINT_EDGES[3][0].__all__',
+    'anygeometry.backend._RUNTIME_POINT_EDGES[3][0].array_function_dispatch.keywords',
+    'anygeometry.backend._RUNTIME_POINT_EDGES[33][0]',
+    'anygeometry.backend._RUNTIME_POINT_EDGES[33][0].__all__',
+    'anygeometry.backend._RUNTIME_POINT_EDGES[33][0].array_function_dispatch.keywords',
+    'anygeometry.backend._RUNTIME_POINT_EDGES[33][0]._block_check_depths_match.__defaults__[0]',
+    'anygeometry.backend._RUNTIME_POINT_EDGES[52][0]',
+    'anygeometry.backend._RUNTIME_POINT_EDGES[52][0].matmul.__dict__',
+    'anygeometry.backend._RUNTIME_POINT_EDGES[52][0].multiply.__dict__',
+    'anygeometry.backend._RUNTIME_POINT_EDGES[52][0].__all__',
+    'anygeometry.backend._RUNTIME_POINT_EDGES[52][0].einsum_symbols_set',
+    'anygeometry.backend._RUNTIME_POINT_EDGES[61][0]',
+    'anygeometry.backend._RUNTIME_POINT_EDGES[61][0].__all__',
+    'anygeometry.backend._RUNTIME_POINT_EDGES[61][0].POSSIBLE_FLAGS',
+    'anygeometry.nurbs_surface_intersection._topology._PLANE.__dict__',
+    'anygeometry.surfaces._LSTSQ_GUFUNC.__dict__',
+)
 _ACTIONS = frozenset(('reset', 'covered-by-reset', 'pinned-definition', 'require-empty', 'decline'))
 
 
@@ -49,13 +85,64 @@ def check_coverage(report, rows):
             raise QualificationDecline('ledger coverage/type decision mismatch: ' + path)
 
 
+def _metadata_parts(item):
+    """Explicit static metadata schemas only; never a general instance adapter."""
+    import numpy as np
+    from .transactions import _MISSING
+    from .tolerance import TolerancePolicy
+    from .audit import AuditMetrics
+    from .predicates import IntersectionQualificationPolicy
+    from .structural import FrozenMetadata, ParameterRange, SheetTopologyPolicy
+    from fractions import Fraction
+    typ = type(item)
+    sentinels = (('dataclasses.MISSING', dataclasses.MISSING),
+                 ('numpy._NoValue', np._NoValue), ('transactions._MISSING', _MISSING),
+                 ('dataclasses._FIELD', dataclasses._FIELD),
+                 ('dataclasses._FIELD_CLASSVAR', dataclasses._FIELD_CLASSVAR),
+                 ('dataclasses._FIELD_INITVAR', dataclasses._FIELD_INITVAR))
+    for name, sentinel in sentinels:
+        if item is sentinel:
+            try:
+                state = object.__getattribute__(item, '__dict__')
+            except AttributeError:
+                state = None
+            return (name, state)
+    if typ is dataclasses.Field or typ is dataclasses._DataclassParams:
+        return tuple((name, types.MemberDescriptorType.__get__(
+            type.__getattribute__(typ, '__dict__')[name], item, typ)) for name in typ.__slots__)
+    if typ is types.MappingProxyType:
+        backing = gc.get_referents(item)
+        if len(backing) != 1 or type(backing[0]) is not dict:
+            raise QualificationDecline('metadata mappingproxy backing is not a plain dictionary')
+        return (backing[0],)
+    if typ is types.GenericAlias:
+        return (item.__origin__, item.__args__, item.__parameters__)
+    if typ is types.UnionType:
+        return (item.__args__,)
+    if typ is property:
+        return (item.fget, item.fset, item.fdel, item.__doc__)
+    if typ is Fraction:
+        return (object.__getattribute__(item, '_numerator'),
+                object.__getattribute__(item, '_denominator'))
+    if any(typ is candidate for candidate in (type(typing.List[int]), type(typing.List),
+            type(typing.Callable[[int], str]), type(typing.Annotated[int, 'metadata']))):
+        return (object.__getattribute__(item, '__dict__'),)
+    if any(base is enum.Enum for base in type.__getattribute__(typ, '__mro__')):
+        return (typ, object.__getattribute__(item, '__dict__'))
+    if any(typ is candidate for candidate in (TolerancePolicy, AuditMetrics,
+            IntersectionQualificationPolicy, FrozenMetadata, ParameterRange, SheetTopologyPolicy)):
+        return tuple((field.name, object.__getattribute__(item, field.name))
+                     for field in dataclasses.fields(typ))
+    return None
+
+
 def content_digest(value):
     """Bounded, typed content encoding. Unsupported mutable/native leaves refuse.
 
     Symbol identities are process-local references, not a bytecode attestation.
     Their implementation provenance remains the file pin (F7 remains open).
     """
-    seen, chunks = {}, []
+    seen, chunks, held = {}, [], []
 
     def emit(raw):
         chunks.append(len(raw).to_bytes(8, 'big') + raw)
@@ -72,8 +159,10 @@ def content_digest(value):
             emit(item if typ is bytes else str(item).encode('utf-8', 'surrogatepass'))
         elif typ in (float, complex):
             emit(struct.pack('>d', item) if typ is float else struct.pack('>dd', item.real, item.imag))
-        elif typ in (types.FunctionType, types.BuiltinFunctionType, type,
-                     types.MethodDescriptorType, types.WrapperDescriptorType):
+        elif (any(base is type for base in type.__getattribute__(typ, '__mro__')) or
+              typ in (types.FunctionType, types.BuiltinFunctionType,
+                      types.MethodDescriptorType, types.WrapperDescriptorType,
+                      types.GetSetDescriptorType, types.MemberDescriptorType)):
             emit(str(id(item)).encode())
             if typ is types.FunctionType:
                 emit(str(id(item.__code__)).encode())
@@ -95,7 +184,17 @@ def content_digest(value):
                 for part in item:
                     visit(part, depth + 1)
         else:
-            raise QualificationDecline('unsupported protected content: ' + type.__getattribute__(typ, '__name__'))
+            parts = _metadata_parts(item)
+            if parts is None:
+                raise QualificationDecline('unsupported protected content: ' + type.__getattribute__(typ, '__name__'))
+            if id(item) in seen:
+                emit(b'ref' + str(seen[id(item)]).encode())
+                return
+            seen[id(item)] = len(seen)
+            # The structural tuples are temporary. Retain them until encoding
+            # ends so CPython cannot recycle an ID already in the alias table.
+            held.append(parts)
+            visit(parts, depth + 1)
     visit(value)
     return hashlib.sha256(b''.join(chunks)).hexdigest()
 
@@ -194,6 +293,19 @@ def build_ledger(report, objects, *, modules=None):
     census = inventory(modules, store_objects=fresh, definition_objects=definitions)
     if census.truncated or set(fresh) != set(objects) or any(fresh[p] is not v for p, v in objects.items()):
         raise QualificationDecline('ledger creation live coverage mismatch')
+    # Two source-reviewed constant container trees. Record actual container IDs,
+    # not a path prefix; callables/classes and their defaults are not traversed.
+    constant_ids = set()
+    def constant_containers(value):
+        if type(value) not in (dict, list, tuple, set, frozenset) or id(value) in constant_ids:
+            return
+        constant_ids.add(id(value))
+        items = tuple(value.keys()) + tuple(value.values()) if type(value) is dict else value
+        for item in items:
+            constant_containers(item)
+    for path in _CONTAINER_CONSTANT_ROOTS:
+        if path in objects:
+            constant_containers(objects[path])
     rows = {}
     reset_roots = []
     # First choose concrete cache roots. Nested weak-store implementation dicts
@@ -208,16 +320,17 @@ def build_ledger(report, objects, *, modules=None):
         elif (any(path == m.__name__ + '.' + parts[-1] for m in modules)
               and parts[-1] in _NUMERICAL_ROOTS and kind in (dict, list, set)):
             action = 'reset'
-        elif kind is contextvars.ContextVar or '.__repr__.cell[' in path or '.deepcopy.__defaults__' in path:
+        elif (path in _RUNTIME_EMPTY_PATHS or kind is contextvars.ContextVar or
+              '.__repr__.cell[' in path or '.deepcopy.__defaults__' in path):
             action = 'require-empty'
-        elif id(value) in definitions or path in _FIXED_ROOTS:
+        elif id(value) in definitions or id(value) in constant_ids or path in _FIXED_ROOTS:
             action = 'pinned-definition'
         else:
             action = 'decline'
         if action == 'reset':
             reset_roots.append(path)
         rows[path] = dict(path=path, kind=row.kind, action=action,
-                         reason='PP1d exact object role/root; unknowns refuse')
+                         reason='PP1e exact static role/container or explicit empty-runtime policy; unknowns refuse')
     for path, row in rows.items():
         for parent in reset_roots:
             if path != parent and (path.startswith(parent + '.') or path.startswith(parent + '[')):
