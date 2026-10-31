@@ -64,6 +64,22 @@ def _type_name(typ):
     return module + '.' + name
 
 
+def _input_types():
+    # Deliberate adapter list, not discovery of every export in native modules.
+    import numpy as np
+    from .model import GeometryModel
+    from .material_arrangement import MaterialDomain, ArrangementPath
+    from .arrangement_geometry import LinePath
+    from .surfaces import Plane
+    return (type(None), bool, int, float, complex, str, bytes, tuple, list, dict,
+            set, frozenset, np.ndarray, np.float64, np.int64, GeometryModel,
+            MaterialDomain, ArrangementPath, LinePath, Plane)
+
+
+def input_type_names():
+    return sorted(_type_name(t) for t in _input_types())
+
+
 def capture_environment(*, generated_modules=(), declined_stores=None):
     """Record the actual loaded closure after declared eager imports.
 
@@ -91,7 +107,7 @@ def capture_environment(*, generated_modules=(), declined_stores=None):
     generated = frozenset(generated_modules)
     if any(type(n) is not str for n in generated):
         raise QualificationDecline('invalid generated module allowlist')
-    types_seen = set()
+    allowed_input_names = input_type_names()
     loaded = tuple(sorted(sys.modules.items()))
     for name, module in loaded:
         if module is None:
@@ -103,21 +119,13 @@ def capture_environment(*, generated_modules=(), declined_stores=None):
             if namespace.get('__file__') or namespace.get('__spec__') is not None:
                 raise QualificationDecline('generated module origin changed')
             pin = dict(kind='explicit-generated-native',
-                       members=sorted((key, type.__getattribute__(type(value), '__name__'))
+                       members=sorted([key, type.__getattribute__(type(value), '__name__')]
                                       for key, value in namespace.items()))
         else:
             pin = pin_module(module)
         modules[name] = pin
         if 'path' in pin:
             files[pin['path']] = pin['sha256']
-        for value in types.ModuleType.__getattribute__(module, '__dict__').values():
-            if type(value) is type:
-                types_seen.add(_type_name(value))
-    # Include exact primitive types even if the interpreter exposes no module
-    # binding for NoneType. This is an explicit adapter set, not wildcard types.
-    for typ in (type(None), bool, int, float, complex, str, bytes, tuple, list, dict,
-                set, frozenset, numpy.ndarray):
-        types_seen.add(_type_name(typ))
     for p in blas:
         files[str(Path(p['filepath']).resolve())] = p['sha256']
     if not generated.issubset(modules):
@@ -140,7 +148,7 @@ def capture_environment(*, generated_modules=(), declined_stores=None):
                 python=dict(version=sys.version, executable=str(Path(sys.executable).resolve()),
                             implementation=sys.implementation.name, platform=sys.platform),
                 cpu=cpu, blas=sorted(blas, key=lambda x: x['filepath']),
-                types=sorted(types_seen), settings=settings,
+                types=allowed_input_names, settings=settings,
                 reset_registry={n: _type_name(type(v)) for n, v in (declined_stores or {}).items()})
 
 
@@ -166,11 +174,12 @@ def verify_environment(expected, observed):
 def check_types(value, pin, *, limit=100000):
     """Typed task-input adapter: opaque objects require a future explicit codec."""
     allowed = frozenset(pin['types'])
+    exact_types = _input_types()
     seen, pending = set(), [value]
     while pending:
         item = pending.pop()
         typ = type(item)
-        if _type_name(typ) not in allowed:
+        if not any(typ is candidate for candidate in exact_types) or _type_name(typ) not in allowed:
             raise QualificationDecline('unpinned input type: ' + _type_name(typ))
         if typ in (type(None), bool, int, float, complex, str, bytes):
             continue
@@ -186,6 +195,23 @@ def check_types(value, pin, *, limit=100000):
         else:
             import numpy as np
             if typ is np.ndarray and not item.dtype.hasobject:
+                continue
+            if typ in (np.float64, np.int64):
+                continue
+            from .model import GeometryModel
+            if typ is GeometryModel:
+                from .serialization import to_dict
+                pending.append(to_dict(item))
+                continue
+            from dataclasses import fields, is_dataclass
+            if is_dataclass(item):
+                for field in fields(item):
+                    part = getattr(item, field.name)
+                    if field.metadata.get('definition') is False:
+                        if part is not None:
+                            raise QualificationDecline('warm input instance cache is not admitted')
+                    else:
+                        pending.append(part)
                 continue
             raise QualificationDecline('unsupported pinned type adapter: ' + _type_name(typ))
 
@@ -232,7 +258,7 @@ def reset_declined(stores, *, owned_worker):
 
 class WorkerGate:
     """Unwired owned-worker lifecycle gate; no result before all controls pass."""
-    def __init__(self, expected, *, stores, owned_worker, observe=None, generated_modules=()):
+    def __init__(self, expected, *, stores, owned_worker, observe=None, generated_modules=(), ledger=None):
         # Snapshot the expected reference so later caller mutation cannot bless
         # a failing candidate. Injection of observe is for isolated unit tests.
         self.expected = json.loads(json.dumps(expected, allow_nan=False))
@@ -240,6 +266,10 @@ class WorkerGate:
         if self.expected.get('reset_registry') != {n: _type_name(type(v)) for n, v in self.stores.items()}:
             raise QualificationDecline('reset registry does not cover the pinned declined stores')
         self.owned_worker = owned_worker
+        self.ledger = ledger
+        if ledger is not None and (set(ledger.resets) != set(self.stores) or
+                any(ledger.resets[n] is not v for n, v in self.stores.items())):
+            raise QualificationDecline('ledger reset binding differs from worker registry')
         self.observe = observe or (lambda: capture_environment(
             generated_modules=generated_modules, declined_stores=self.stores))
         self.ready = False
@@ -256,7 +286,8 @@ class WorkerGate:
         if (task.__module__ not in self.expected['modules'] or module is None or
                 pin_module(module) != self.expected['modules'][task.__module__]):
             raise QualificationDecline('unpinned task callable module/hash')
-        self.reset_counts = reset_declined(self.stores, owned_worker=self.owned_worker)
+        self.reset_counts = (self.ledger.prepare(owned_worker=self.owned_worker) if self.ledger is not None
+                             else reset_declined(self.stores, owned_worker=self.owned_worker))
 
     def start(self, canaries, expected_digests):
         if self.ready or self.poisoned:

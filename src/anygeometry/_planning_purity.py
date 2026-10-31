@@ -62,7 +62,7 @@ def _namespace(module):
     return types.ModuleType.__getattribute__(module, '__dict__')
 
 
-def inventory(modules, *, max_nodes=80000, max_depth=24):
+def inventory(modules, *, max_nodes=80000, max_depth=24, store_objects=None):
     """Bounded actual-type walk; no user descriptors, iterators or repr calls.
 
     Module metadata is excluded from numerical stores, not from loader safety.
@@ -71,6 +71,8 @@ def inventory(modules, *, max_nodes=80000, max_depth=24):
     """
     if type(modules) is not tuple or max_nodes < 1 or max_depth < 1:
         raise PurityDecline('invalid inventory bounds/modules')
+    if store_objects is not None and (type(store_objects) is not dict or store_objects):
+        raise PurityDecline('store handle output must be an empty dictionary')
     namespaces = [(m, _namespace(m)) for m in modules]
     included = {id(m) for m, _ in namespaces}
     stores, unknowns, aliases, seen = [], [], [], {}
@@ -111,6 +113,8 @@ def inventory(modules, *, max_nodes=80000, max_depth=24):
                       if typ is functools._lru_cache_wrapper else
                       'state/key/value/authority and observable-work semantics unproved')
             stores.append(Store(path, kind, 'declined', reason))
+            if store_objects is not None:
+                store_objects[path] = value
         if typ in (dict, OrderedDict):
             items = dict.items(value) if typ is dict else OrderedDict.items(value)
             for i, (key, item) in enumerate(items):
