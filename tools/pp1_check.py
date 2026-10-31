@@ -1,5 +1,6 @@
 """Bounded PP1 evidence runner; only the child and its Windows Job are owned."""
 import ctypes
+import hashlib
 import importlib.util
 import json
 import os
@@ -27,6 +28,11 @@ spec.loader.exec_module(helper)
 job = helper.WindowsJob()
 record = dict(command=command, cwd=str(ROOT), cap_seconds=110,
               environment_overrides={k: env[k] for k in ('PYTHONDONTWRITEBYTECODE', 'TEMP', 'TMP')})
+identity_paths = set((ROOT/'src/anygeometry').rglob('*.py'))
+identity_paths.add(Path(__file__).resolve())
+identity_paths.update(ROOT/a for a in arguments if (ROOT/a).is_file())
+record['input_sha256'] = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
+                          for p in sorted(identity_paths)}
 start = time.perf_counter()
 code = None
 status = 'startup_failed'
@@ -68,6 +74,10 @@ finally:
         status = 'cleanup_failed'
     record.update(status=status, exit_code=code, process_wall_seconds=time.perf_counter()-start,
                   cleanup=cleanup)
+    record['inputs_unchanged'] = all(p.is_file() and hashlib.sha256(p.read_bytes()).hexdigest() ==
+        record['input_sha256'][str(p.relative_to(ROOT))] for p in identity_paths)
+    if not record['inputs_unchanged']:
+        record['status'] = status = 'inputs_changed'
     (folder / 'result.json').write_text(json.dumps(record, indent=2), encoding='utf-8')
     print(json.dumps(dict(status=status, exit_code=code, cleanup=cleanup, evidence=str(folder))))
     print((folder / 'stdout.txt').read_text(errors='replace')[-1600:])
