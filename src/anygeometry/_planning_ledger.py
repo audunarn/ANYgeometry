@@ -327,6 +327,18 @@ class Ledger:
     def prepare(self, *, owned_worker):
         check_coverage(self.report, self.rows)
         objects = self.validate()
+        return self._reset_checked_handles(objects, owned_worker=owned_worker)
+
+    def reset_for_batch(self, *, owned_worker):
+        """Risk-accepted batch reset, not purity-proven; no census/hash here.
+
+        Handles were validated at the preceding boundary. Rebindings detected at
+        the next boundary invalidate every staged result in that assignment.
+        """
+        check_coverage(self.report, self.rows)
+        return self._reset_checked_handles(self.objects, owned_worker=owned_worker)
+
+    def _reset_checked_handles(self, objects, *, owned_worker):
         # Refusal checks precede all mutations, including independent caches.
         for path, row in self.rows.items():
             if row['action'] == 'decline':
