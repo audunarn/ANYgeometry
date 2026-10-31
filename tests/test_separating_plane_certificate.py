@@ -43,7 +43,13 @@ class _RawLine:
 
 
 def mp(x):
-    x = Fraction(x)
+    if isinstance(x, mpmath.mpf):
+        # Fraction() does not accept an mpf on this Python; convert its exact binary value.
+        assert mpmath.isfinite(x)
+        sign, man, exp, _bc = x._mpf_   # exact value (-1)**sign * man * 2**exp
+        x = (-1) ** sign * Fraction(man) * Fraction(2) ** exp
+    else:
+        x = Fraction(x)
     return mpmath.mpf(x.numerator)/x.denominator
 
 

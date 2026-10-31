@@ -63,7 +63,7 @@ jobs:
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[dev,planar]"
+          python -m pip install -e ".[dev,planar,sketch,test]"
       - name: Run tests
         shell: bash
         env:
@@ -175,7 +175,7 @@ jobs:
         id: contract
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[dev,planar]"
+          python -m pip install -e ".[dev,planar,sketch,test]"
           python tools/check_licenses.py --check-installed
           python - <<'PY'
           import re

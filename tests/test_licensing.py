@@ -52,6 +52,7 @@ def test_dependency_inventory_is_canonical_and_complete() -> None:
         "mpmath",
         "numpy",
         "pytest",
+        "scipy",
         "setuptools",
         "shapely",
         "twine",
