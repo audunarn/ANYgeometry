@@ -62,7 +62,7 @@ def _namespace(module):
     return types.ModuleType.__getattribute__(module, '__dict__')
 
 
-def inventory(modules, *, max_nodes=80000, max_depth=24, store_objects=None):
+def inventory(modules, *, max_nodes=80000, max_depth=24, store_objects=None, definition_objects=None):
     """Bounded actual-type walk; no user descriptors, iterators or repr calls.
 
     Module metadata is excluded from numerical stores, not from loader safety.
@@ -73,11 +73,18 @@ def inventory(modules, *, max_nodes=80000, max_depth=24, store_objects=None):
         raise PurityDecline('invalid inventory bounds/modules')
     if store_objects is not None and (type(store_objects) is not dict or store_objects):
         raise PurityDecline('store handle output must be an empty dictionary')
+    if definition_objects is not None and (type(definition_objects) is not dict or definition_objects):
+        raise PurityDecline('definition output must be an empty dictionary')
     namespaces = [(m, _namespace(m)) for m in modules]
     included = {id(m) for m, _ in namespaces}
     stores, unknowns, aliases, seen = [], [], [], {}
     count = 0
     truncated = False
+
+    def definition(value, path):
+        # Register the metadata object itself, never all descendants of a path.
+        if definition_objects is not None and type(value) in _STORES:
+            definition_objects.setdefault(id(value), []).append(path)
 
     def unknown(path, reason):
         unknowns.append((path, reason))
@@ -133,6 +140,7 @@ def inventory(modules, *, max_nodes=80000, max_depth=24, store_objects=None):
             namespace(value.__dict__, path + '.__dict__', depth)
             visit(value.__defaults__, path + '.__defaults__', depth + 1)
             if value.__kwdefaults__:
+                definition(value.__kwdefaults__, path + '.__kwdefaults__')
                 visit(value.__kwdefaults__, path + '.__kwdefaults__', depth + 1)
             if value.__closure__:
                 for i, cell in enumerate(value.__closure__):
@@ -153,6 +161,9 @@ def inventory(modules, *, max_nodes=80000, max_depth=24, store_objects=None):
             # arbitrary MappingProxyType whose backing mapping may run code.
             for name, item in type.__getattribute__(value, '__dict__').items():
                 if name not in ('__dict__', '__weakref__', '__doc__', '__module__'):
+                    if name in ('__annotations__', '__annotations_cache__', '__dataclass_fields__',
+                                '__conditional_annotations__', '_field_defaults'):
+                        definition(item, path + '.' + name)
                     visit(item, path + '.' + name, depth + 1)
                     if truncated:
                         break
@@ -186,6 +197,9 @@ def inventory(modules, *, max_nodes=80000, max_depth=24, store_objects=None):
         name = mapping.get('__name__')
         if type(name) is not str:
             raise PurityDecline('invalid module name')
+        for key in ('__all__', '__annotations__'):
+            if key in mapping:
+                definition(mapping[key], name + '.' + key)
         namespace(mapping, name, 0, metadata=True)
         if truncated:
             break

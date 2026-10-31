@@ -7,9 +7,11 @@ bound to the pinned source/runtime and finite canaries, not a universal proof.
 """
 import contextvars
 import functools
-import json
+import hashlib
+import struct
 import sys
 import time
+import types
 import weakref
 
 from ._planning_purity import inventory
@@ -20,7 +22,6 @@ _NUMERICAL_ROOTS = frozenset((
     '_SECTION_CANONICAL', '_ISSUED_CONTEXTS', '_SECTIONS', '_NETS', '_ABSOLUTE',
     '_SCALED', '_MEMO', '_FIRST_CHOICE', '_PATCHES', '_BRANCH_POLYNOMIALS'))
 _FIXED_ROOTS = (
-    'anygeometry.backend._RUNTIME_', 'anygeometry.backend._TRUE',
     'anygeometry.batch_intersections.SEAM_POLICY_VERSIONS',
     'anygeometry.batch_intersections._CARRIER_FIELDS', 'anygeometry.batch_intersections._CARRIER_ROWS',
     'anygeometry.identity._ENTITY_KIND_ORDER', 'anygeometry.nurbs._CURVE_FIELDS',
@@ -34,11 +35,8 @@ _FIXED_ROOTS = (
     'anygeometry.serialization._QUADRIC_CURVE_FIELDS', 'anygeometry.serialization._BEZIER_CURVE_FIELDS',
     'anygeometry.support_curves._RECORD_FIELDS', 'anygeometry.support_curves._BRANCH_FIELDS',
     'anygeometry.support_curves._PLANE_FIELDS', 'anygeometry.surfaces._LSTSQ_GUFUNC',
-    'anygeometry._planning_',
+    'anygeometry._planning_qualification._CLEAR',
 )
-_DEFINITION_PARTS = ('__annotations__', '__annotations_cache__', '__dataclass_fields__',
-                     '__annotate_func__', '__kwdefaults__', '__all__', '__conditional_annotations__',
-                     '_field_defaults')
 _ACTIONS = frozenset(('reset', 'covered-by-reset', 'pinned-definition', 'require-empty', 'decline'))
 
 
@@ -51,22 +49,110 @@ def check_coverage(report, rows):
             raise QualificationDecline('ledger coverage/type decision mismatch: ' + path)
 
 
+def content_digest(value):
+    """Bounded, typed content encoding. Unsupported mutable/native leaves refuse.
+
+    Symbol identities are process-local references, not a bytecode attestation.
+    Their implementation provenance remains the file pin (F7 remains open).
+    """
+    seen, chunks = {}, []
+
+    def emit(raw):
+        chunks.append(len(raw).to_bytes(8, 'big') + raw)
+
+    def visit(item, depth=0):
+        if depth > 40 or len(chunks) > 100000:
+            raise QualificationDecline('protected digest exceeds bound')
+        typ = type(item)
+        emit((type.__getattribute__(typ, '__module__') + '.' +
+              type.__getattribute__(typ, '__qualname__')).encode())
+        if item is None or item is Ellipsis or item is NotImplemented:
+            return
+        if typ in (str, bytes, int, bool):
+            emit(item if typ is bytes else str(item).encode('utf-8', 'surrogatepass'))
+        elif typ in (float, complex):
+            emit(struct.pack('>d', item) if typ is float else struct.pack('>dd', item.real, item.imag))
+        elif typ in (types.FunctionType, types.BuiltinFunctionType, type,
+                     types.MethodDescriptorType, types.WrapperDescriptorType):
+            emit(str(id(item)).encode())
+            if typ is types.FunctionType:
+                emit(str(id(item.__code__)).encode())
+                emit(str(id(item.__globals__)).encode())
+        elif typ in (dict, list, tuple, set, frozenset):
+            if id(item) in seen:
+                emit(b'ref' + str(seen[id(item)]).encode())
+                return
+            seen[id(item)] = len(seen)
+            emit(str(len(item)).encode())
+            if typ is dict:
+                for key, part in dict.items(item):
+                    visit(key, depth + 1); visit(part, depth + 1)
+            elif typ in (set, frozenset):
+                # Separate bounded encodings avoid relying on hash iteration order.
+                for digest in sorted(content_digest(part) for part in item):
+                    emit(digest.encode())
+            else:
+                for part in item:
+                    visit(part, depth + 1)
+        else:
+            raise QualificationDecline('unsupported protected content: ' + type.__getattribute__(typ, '__name__'))
+    visit(value)
+    return hashlib.sha256(b''.join(chunks)).hexdigest()
+
+
 class Ledger:
-    def __init__(self, report, objects, rows):
+    def __init__(self, report, objects, rows, modules):
         check_coverage(report, rows)
         self.report, self.objects, self.rows = report, objects, rows
+        self.modules = modules
+        self.registered = {m.__name__: m for m in modules if sys.modules.get(m.__name__) is m}
         self.resets = {p: objects[p] for p, row in rows.items() if row['action'] == 'reset'}
         self.costs = []
+        self.census_costs = []
+        self.digests = {}
+        for path, row in rows.items():
+            if row['action'] == 'pinned-definition':
+                try:
+                    self.digests[path] = content_digest(objects[path])
+                except QualificationDecline as exc:
+                    row.update(action='decline', reason=str(exc))
+
+    def validate(self):
+        started = time.perf_counter()
+        if any(sys.modules.get(name) is not module for name, module in self.registered.items()):
+            raise QualificationDecline('ledger module binding changed')
+        objects = {}
+        report = inventory(self.modules, store_objects=objects)
+        if report.truncated:
+            raise QualificationDecline('live census truncated')
+        roots = tuple(self.resets)
+        def beneath_reset(path):
+            return any(path.startswith(root + '.') or path.startswith(root + '[') for root in roots)
+        for alias, target in report.aliases:
+            if beneath_reset(target) and not beneath_reset(alias):
+                raise QualificationDecline('reset descendant has external alias: ' + alias)
+        before = {path for path in self.objects if not beneath_reset(path)}
+        after = {path for path in objects if not beneath_reset(path)}
+        if before != after:
+            raise QualificationDecline('live store set changed: ' + str(sorted(before ^ after)[:3]))
+        for path in before:
+            if objects[path] is not self.objects[path] or type(objects[path]) is not type(self.objects[path]):
+                raise QualificationDecline('live store rebound: ' + path)
+        for path, expected in self.digests.items():
+            if content_digest(objects[path]) != expected:
+                raise QualificationDecline('protected store content changed: ' + path)
+        self.census_costs.append(time.perf_counter() - started)
+        return objects
 
     def prepare(self, *, owned_worker):
-        start = time.perf_counter()
         check_coverage(self.report, self.rows)
+        objects = self.validate()
         # Refusal checks precede all mutations, including independent caches.
         for path, row in self.rows.items():
             if row['action'] == 'decline':
                 raise QualificationDecline('declined ledger store: ' + path)
             if row['action'] == 'require-empty':
-                value = self.objects[path]
+                value = objects[path]
                 if type(value) is contextvars.ContextVar:
                     try:
                         value = value.get()
@@ -80,19 +166,34 @@ class Ledger:
                         raise QualificationDecline('active context declines: ' + path)
                 elif len(value):
                     raise QualificationDecline('active recursion/default state declines: ' + path)
-        counts = reset_declined(self.resets, owned_worker=owned_worker)
+        start = time.perf_counter()
+        counts = reset_declined({p: objects[p] for p in self.resets}, owned_worker=owned_worker)
         self.costs.append(time.perf_counter() - start)
         return counts
 
     def record(self):
         return dict(stores=list(self.rows.values()), aliases=list(self.report.aliases),
                     unknowns=list(self.report.unknowns), truncated=self.report.truncated,
-                    reset_seconds=list(self.costs))
+                    reset_seconds=list(self.costs), census_seconds=list(self.census_costs))
 
 
-def build_ledger(report, objects):
+def build_ledger(report, objects, *, modules=None):
     if set(objects) != {r.path for r in report.stores}:
         raise QualificationDecline('ledger handle coverage mismatch')
+    if modules is None:
+        names = set()
+        for path in objects:
+            matches = [name for name, module in sys.modules.items()
+                       if type(module) is types.ModuleType and path.startswith(name + '.')]
+            if matches:
+                names.add(max(matches, key=len))
+        modules = tuple(sys.modules[name] for name in sorted(names))
+    if not modules:
+        raise QualificationDecline('ledger requires explicit live module roots')
+    definitions, fresh = {}, {}
+    census = inventory(modules, store_objects=fresh, definition_objects=definitions)
+    if census.truncated or set(fresh) != set(objects) or any(fresh[p] is not v for p, v in objects.items()):
+        raise QualificationDecline('ledger creation live coverage mismatch')
     rows = {}
     reset_roots = []
     # First choose concrete cache roots. Nested weak-store implementation dicts
@@ -101,29 +202,28 @@ def build_ledger(report, objects):
         path, value = row.path, objects[row.path]
         parts = path.split('.')
         kind = type(value)
-        if path.startswith('anygeometry._planning_'):
-            action = 'pinned-definition'
-        elif kind in (functools._lru_cache_wrapper, weakref.WeakKeyDictionary,
+        if kind in (functools._lru_cache_wrapper, weakref.WeakKeyDictionary,
                       weakref.WeakValueDictionary, weakref.WeakSet):
             action = 'reset'
-        elif parts[-1] in _NUMERICAL_ROOTS and kind in (dict, list, set):
+        elif (any(path == m.__name__ + '.' + parts[-1] for m in modules)
+              and parts[-1] in _NUMERICAL_ROOTS and kind in (dict, list, set)):
             action = 'reset'
         elif kind is contextvars.ContextVar or '.__repr__.cell[' in path or '.deepcopy.__defaults__' in path:
             action = 'require-empty'
-        elif any(part in _DEFINITION_PARTS for part in parts) or path.startswith(_FIXED_ROOTS):
+        elif id(value) in definitions or path in _FIXED_ROOTS:
             action = 'pinned-definition'
         else:
             action = 'decline'
         if action == 'reset':
             reset_roots.append(path)
         rows[path] = dict(path=path, kind=row.kind, action=action,
-                         reason='PP1c reviewed source/runtime policy; unknowns refuse')
+                         reason='PP1d exact object role/root; unknowns refuse')
     for path, row in rows.items():
         for parent in reset_roots:
             if path != parent and (path.startswith(parent + '.') or path.startswith(parent + '[')):
                 row.update(action='covered-by-reset', parent=parent)
                 break
-    return Ledger(report, objects, rows)
+    return Ledger(report, objects, rows, modules)
 
 
 def loaded_geometry_ledger():
@@ -131,4 +231,4 @@ def loaded_geometry_ledger():
                     if name == 'anygeometry' or name.startswith('anygeometry.'))
     objects = {}
     report = inventory(modules, store_objects=objects)
-    return build_ledger(report, objects)
+    return build_ledger(report, objects, modules=modules)

@@ -18,6 +18,7 @@ from pathlib import Path
 import platform
 import sys
 import threading
+import time
 import types
 import weakref
 
@@ -36,7 +37,43 @@ def _hash(path):
         raise QualificationDecline('unreadable pinned hash: ' + str(path)) from exc
 
 
-def pin_module(module):
+def runtime_files():
+    """Pin this process's interpreter/runtime images, never another process.
+
+    Windows builtin/frozen code lives in the DLL at sys.dllhandle. Resolve loaded
+    VCRuntime/limited-ABI images by handle too; do not guess from the launcher.
+    Non-Windows runtime provenance needs a separate reviewed adapter.
+    """
+    import sys as runtime_sys
+    import ctypes
+    if runtime_sys.platform != 'win32':
+        raise QualificationDecline('interpreter runtime adapter is Windows-only')
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    get_handle = kernel.GetModuleHandleW
+    get_handle.argtypes, get_handle.restype = [ctypes.c_wchar_p], ctypes.c_void_p
+    get_path = kernel.GetModuleFileNameW
+    get_path.argtypes, get_path.restype = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint32], ctypes.c_uint32
+    handles = [runtime_sys.dllhandle]
+    crt = 0
+    for name in ('python3.dll', 'vcruntime140.dll', 'vcruntime140_1.dll'):
+        handle = get_handle(name)
+        if handle:
+            handles.append(handle)
+            crt += name.startswith('vcruntime')
+    if not crt:
+        raise QualificationDecline('loaded VCRuntime DLL is missing')
+    result = {}
+    for handle in handles:
+        buffer = ctypes.create_unicode_buffer(32768)
+        size = get_path(handle, buffer, len(buffer))
+        if not size or size >= len(buffer):
+            raise QualificationDecline('runtime DLL path is unresolved/truncated')
+        path = str(Path(buffer.value).resolve())
+        result[path] = _hash(path)
+    return result
+
+
+def pin_module(module, *, runtime=None):
     if type(module) is not types.ModuleType:
         raise QualificationDecline('unpinned custom module type')
     ns = types.ModuleType.__getattribute__(module, '__dict__')
@@ -50,7 +87,7 @@ def pin_module(module):
         return dict(kind=kind, path=str(path), sha256=_hash(path))
     spec = ns.get('__spec__')
     if spec is not None and spec.origin in ('built-in', 'frozen'):
-        return dict(kind=spec.origin, sha256=_hash(sys.executable))
+        return dict(kind=spec.origin, runtime_files=runtime_files() if runtime is None else runtime)
     if spec is not None and spec.origin is None and ns.get('__path__') is not None:
         return dict(kind='namespace', paths=sorted(map(str, ns['__path__'])))
     raise QualificationDecline('module has no qualified origin: ' + str(ns.get('__name__')))
@@ -108,6 +145,7 @@ def capture_environment(*, generated_modules=(), declined_stores=None):
     if any(type(n) is not str for n in generated):
         raise QualificationDecline('invalid generated module allowlist')
     allowed_input_names = input_type_names()
+    runtime = runtime_files()
     loaded = tuple(sorted(sys.modules.items()))
     for name, module in loaded:
         if module is None:
@@ -122,7 +160,7 @@ def capture_environment(*, generated_modules=(), declined_stores=None):
                        members=sorted([key, type.__getattribute__(type(value), '__name__')]
                                       for key, value in namespace.items()))
         else:
-            pin = pin_module(module)
+            pin = pin_module(module, runtime=runtime)
         modules[name] = pin
         if 'path' in pin:
             files[pin['path']] = pin['sha256']
@@ -138,6 +176,7 @@ def capture_environment(*, generated_modules=(), declined_stores=None):
         # does not assert which image created a previously loaded Cython object.
         modules[name]['providers'] = providers
     files[str(Path(sys.executable).resolve())] = _hash(sys.executable)
+    files.update(runtime)
     settings = {k: os.environ.get(k) for k in (
         'ANYGEOMETRY_PLANNING_MODE', 'ANYGEOMETRY_SEAM_POLICY', 'ANYGEOMETRY_PLANNING_WORKERS',
         'OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS', 'BLIS_NUM_THREADS',
@@ -200,12 +239,31 @@ def check_types(value, pin, *, limit=100000):
                 continue
             from .model import GeometryModel
             if typ is GeometryModel:
+                state = object.__getattribute__(item, '__dict__')
+                # Constructor-defined schema; no runtime instance can extend it.
+                pristine = GeometryModel(model_id='00000000-0000-0000-0000-000000000001')
+                if set(state) != set(object.__getattribute__(pristine, '__dict__')):
+                    raise QualificationDecline('non-field model instance state')
+                for name in ('_arc_cache', '_edge_length_cache', '_trim_loops_cache',
+                             '_topology_corner_cache', '_chain_arrays', '_change_hooks'):
+                    if type(state[name]) not in (dict, list) or len(state[name]):
+                        raise QualificationDecline('warm model instance cache: ' + name)
+                if state['_spatial_index'] is not None or state['_transaction_journal'] is not None:
+                    raise QualificationDecline('active model instance state')
+                _check_model_record_state(state)
                 from .serialization import to_dict
                 pending.append(to_dict(item))
                 continue
             from dataclasses import fields, is_dataclass
             if is_dataclass(item):
-                for field in fields(item):
+                fields_here = fields(item)
+                try:
+                    state = object.__getattribute__(item, '__dict__')
+                except AttributeError:
+                    state = {}
+                if set(state) - {field.name for field in fields_here}:
+                    raise QualificationDecline('non-field input instance state')
+                for field in fields_here:
                     part = getattr(item, field.name)
                     if field.metadata.get('definition') is False:
                         if part is not None:
@@ -214,6 +272,41 @@ def check_types(value, pin, *, limit=100000):
                         pending.append(part)
                 continue
             raise QualificationDecline('unsupported pinned type adapter: ' + _type_name(typ))
+
+
+def _check_model_record_state(state):
+    """Audit original records before serialization can omit instance extras.
+
+    This is an adapter check, not a model transport. The runtime payload boundary
+    still admits only JSON data, never a pre-existing GeometryModel instance.
+    """
+    from dataclasses import fields, is_dataclass
+    pending, seen = [state], set()
+    while pending:
+        item = pending.pop()
+        if id(item) in seen:
+            continue
+        seen.add(id(item))
+        if len(seen) > 100000:
+            raise QualificationDecline('model record-state walk truncated')
+        typ = type(item)
+        if typ is dict:
+            pending.extend(item.keys()); pending.extend(item.values())
+        elif typ in (tuple, list, set, frozenset):
+            pending.extend(item)
+        elif not isinstance(item, type) and is_dataclass(item):
+            declared = fields(item)
+            try:
+                values = object.__getattribute__(item, '__dict__')
+            except AttributeError:
+                values = {}
+            if set(values) - {field.name for field in declared}:
+                raise QualificationDecline('non-field model record instance state')
+            for field in declared:
+                part = getattr(item, field.name)
+                if field.metadata.get('definition') is False and part is not None:
+                    raise QualificationDecline('warm model record instance cache')
+                pending.append(part)
 
 
 _CLEAR = {dict: dict.clear, list: list.clear, set: set.clear,
@@ -259,6 +352,8 @@ def reset_declined(stores, *, owned_worker):
 class WorkerGate:
     """Unwired owned-worker lifecycle gate; no result before all controls pass."""
     def __init__(self, expected, *, stores, owned_worker, observe=None, generated_modules=(), ledger=None):
+        if ledger is None and observe is None:
+            raise QualificationDecline('real worker gate requires a complete live ledger')
         # Snapshot the expected reference so later caller mutation cannot bless
         # a failing candidate. Injection of observe is for isolated unit tests.
         self.expected = json.loads(json.dumps(expected, allow_nan=False))
@@ -275,17 +370,31 @@ class WorkerGate:
         self.ready = False
         self.poisoned = False
         self.reset_counts = {}
+        self.verification_seconds = []
+
+    def _verify(self):
+        started = time.perf_counter()
+        verify_environment(self.expected, self.observe())
+        self.verification_seconds.append(time.perf_counter() - started)
+
+    def _after(self):
+        self._verify()
+        if self.ledger is not None:
+            self.ledger.validate()
 
     def _before(self, task):
         if self.poisoned:
             raise QualificationDecline('worker gate is poisoned')
-        verify_environment(self.expected, self.observe())
+        self._verify()
         if type(task) is not types.FunctionType:
             raise QualificationDecline('unpinned task callable type')
         module = sys.modules.get(task.__module__)
         if (task.__module__ not in self.expected['modules'] or module is None or
                 pin_module(module) != self.expected['modules'][task.__module__]):
             raise QualificationDecline('unpinned task callable module/hash')
+        if ('.' in task.__qualname__ or module.__dict__.get(task.__qualname__) is not task
+                or task.__globals__ is not module.__dict__ or task.__closure__ is not None):
+            raise QualificationDecline('task binding/globals are not the pinned top-level function')
         self.reset_counts = (self.ledger.prepare(owned_worker=self.owned_worker) if self.ledger is not None
                              else reset_declined(self.stores, owned_worker=self.owned_worker))
 
@@ -301,25 +410,59 @@ class WorkerGate:
                 actual = task()
                 if type(actual) is not str or not actual or actual != expected_digests[name]:
                     raise QualificationDecline('canary mismatch: ' + name)
-                verify_environment(self.expected, self.observe())
+                self._after()
             self.ready = True
         except BaseException as exc:
             self.poisoned = True
             raise QualificationDecline('startup canary/admission declined: ' + str(exc)) from exc
 
     def run(self, task, *args, **kwargs):
+        # Retained no-input entry point. Live instances can contain pre-reset
+        # state; arguments must cross run_json instead.
+        if args or kwargs:
+            self.ready, self.poisoned = False, True
+            raise QualificationDecline('live inputs forbidden; use checksum-verified payload')
+        return self.run_json(task, b'{"args":[],"kwargs":{}}',
+                             hashlib.sha256(b'{"args":[],"kwargs":{}}').hexdigest())
+
+    def run_json(self, task, payload, sha256):
         if not self.ready or self.poisoned:
             raise QualificationDecline('startup canary not qualified')
         try:
             self._before(task)
+            args, kwargs = decode_task_payload(payload, sha256)
             check_types((args, kwargs), self.expected)
             result = task(*args, **kwargs)
-            verify_environment(self.expected, self.observe())
+            self._after()
             return result
         except BaseException:
             self.poisoned = True
             self.ready = False
             raise
+
+
+def decode_task_payload(payload, sha256):
+    """Narrow JSON values only; PP2 owns any future model/array transport codec."""
+    if (type(payload) is not bytes or len(payload) > 4_000_000 or type(sha256) is not str
+            or hashlib.sha256(payload).hexdigest() != sha256):
+        raise QualificationDecline('payload type/size/checksum mismatch')
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise QualificationDecline('duplicate payload key')
+            result[key] = value
+        return result
+    def constant(value):
+        raise QualificationDecline('nonfinite JSON constant')
+    try:
+        record = json.loads(payload, object_pairs_hook=pairs, parse_constant=constant)
+    except (ValueError, RecursionError, UnicodeError) as exc:
+        raise QualificationDecline('invalid task payload') from exc
+    if (type(record) is not dict or set(record) != {'args', 'kwargs'} or
+            type(record['args']) is not list or type(record['kwargs']) is not dict):
+        raise QualificationDecline('invalid task payload schema')
+    return tuple(record['args']), record['kwargs']
 
 
 def check_ci_equality(serial, parallel):

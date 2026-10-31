@@ -98,37 +98,55 @@ def test_signed_zero_lrus_reset_between_tasks():
             cache.cache_clear()
 
 
+def _bound_wrong():
+    return 'wrong'
+
+
+def _bound_face():
+    return 'face'
+
+
 def test_canary_mismatch_poisoned_gate_never_executes_task():
     p = api()
     calls = []
     gate = p.WorkerGate(pin(), observe=pin, stores={}, owned_worker=True)
-    with pytest.raises(p.QualificationDecline, match='canary'):
-        gate.start({'pair': lambda: 'wrong', 'face': lambda: 'face'},
+    with pytest.raises(p.QualificationDecline, match='canary mismatch'):
+        gate.start({'pair': _bound_wrong, 'face': _bound_face},
                    {'pair': 'expected', 'face': 'face'})
     with pytest.raises(p.QualificationDecline):
         gate.run(lambda: calls.append(1))
     assert calls == []
 
 
-def test_every_task_is_reset_and_postcheck_failure_discards_result():
+def _bound_ok():
+    return 'ok'
+
+
+def _bound_reset_task():
+    assert _test_cache == {}
+    _test_cache['new'] = 2
+    return 7
+
+
+def _bound_altered_task():
+    _test_observation['files']['m.py'] = 'f'*64
+    return 'must not escape'
+
+
+def test_every_task_is_reset_and_postcheck_failure_discards_result(monkeypatch):
     p = api()
     cache = {'old': 1}
     observation = pin()
     observation['reset_registry'] = {'cache': 'builtins.dict'}
+    monkeypatch.setitem(globals(), '_test_cache', cache)
+    monkeypatch.setitem(globals(), '_test_observation', observation)
     gate = p.WorkerGate(deepcopy(observation), observe=lambda: deepcopy(observation),
                         stores={'cache': cache}, owned_worker=True)
-    gate.start({'pair': lambda: 'ok', 'face': lambda: 'ok'}, {'pair': 'ok', 'face': 'ok'})
-    def task():
-        assert cache == {}
-        cache['new'] = 2
-        return 7
-    assert gate.run(task) == 7
-    assert gate.run(task) == 7
-    def altered():
-        observation['files']['m.py'] = 'f'*64
-        return 'must not escape'
+    gate.start({'pair': _bound_ok, 'face': _bound_ok}, {'pair': 'ok', 'face': 'ok'})
+    assert gate.run(_bound_reset_task) == 7
+    assert gate.run(_bound_reset_task) == 7
     with pytest.raises(p.QualificationDecline, match='hash'):
-        gate.run(altered)
+        gate.run(_bound_altered_task)
 
 
 def test_ci_control_requires_both_plan_and_applied_digests():

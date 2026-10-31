@@ -81,7 +81,7 @@ def test_inventory_handles_are_complete_and_ledger_omission_refuses():
     objects = {}
     report = p.inventory((module,), store_objects=objects)
     assert set(objects) == {r.path for r in report.stores}
-    ledger = ledger_api().build_ledger(report, objects)
+    ledger = ledger_api().build_ledger(report, objects, modules=(module,))
     assert set(ledger.rows) == set(objects)
     with pytest.raises(q.QualificationDecline, match='declined'):
         ledger.prepare(owned_worker=True)
@@ -97,7 +97,7 @@ def test_reviewed_cache_reset_preserves_definition_metadata():
     module.__all__ = ['public_name']
     objects = {}
     report = p.inventory((module,), store_objects=objects)
-    ledger = ledger_api().build_ledger(report, objects)
+    ledger = ledger_api().build_ledger(report, objects, modules=(module,))
     ledger.prepare(owned_worker=True)
     assert module._MEMO == {} and module.__all__ == ['public_name']
 
@@ -110,7 +110,7 @@ def test_active_context_declines_before_any_cache_is_reset():
     try:
         objects = {}
         report = p.inventory((module,), store_objects=objects)
-        ledger = ledger_api().build_ledger(report, objects)
+        ledger = ledger_api().build_ledger(report, objects, modules=(module,))
         with pytest.raises(q.QualificationDecline, match='context|declined'):
             ledger.prepare(owned_worker=True)
         assert module._MEMO == {'preserved': 1}
@@ -124,7 +124,7 @@ def test_junction_switch_uses_its_declared_inactive_value(enabled):
     module._JUNCTION_BOUNDS = contextvars.ContextVar('junction-switch', default=enabled)
     objects = {}
     report = p.inventory((module,), store_objects=objects)
-    ledger = ledger_api().build_ledger(report, objects)
+    ledger = ledger_api().build_ledger(report, objects, modules=(module,))
     if enabled:
         with pytest.raises(q.QualificationDecline, match='context'):
             ledger.prepare(owned_worker=True)
