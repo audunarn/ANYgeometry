@@ -1335,3 +1335,76 @@ cover direct propagation. _planning_child.py:156 and _planning_session.py:245 us
 OwnedTree.spawn for W. This does not establish all numerical-handler interleaves;
 remaining PP3 terminal propagation and sidecar-write-failure cases need checks.
 Commit this tested snapshot with these limits; no full qualification/default-on.
+
+W0H plan after local342c92a: (1) baseline-red closed/NULL-Job and malformed-key
+refusals before native creation; add explicit guards without changing admitted
+ordinary launches. (2) baseline-red repeated failure evidence and all-child
+cleanup retry; preserve the first sidecar and append each later failure, never
+revive acceptance. (3) state/test wrapper retry semantics and sidecar-write failure
+propagation; retain existing source/cancel/memory gates. Focused native tests and
+relevant real ownership paths must pass before a separate local commit. S2 is
+not resolved by moving a Python assignment across CloseHandle: failure/interrupt
+uncertainty can leak or close a reused handle. Keep that risk explicit while
+designing a stronger ownership transition. Full programme remains OPEN.
+
+W0H findings:6baseline failures/1pass establish closed/NULL-Job,empty-key,
+all-child-retry and repeated-failure-evidence cases. After guards and exclusive
+numbered error receipts,63focused tests pass. A strengthened sidecar-disk-failure
+test passed on the base and still passes: original handle failure survives with
+the artifact-write exception as cause. Existing failed evidence is retained.
+8actual-kernel baseline failures showed terminal poll exceptions being caught and
+reissued,not acceptance of a wrong plan. A first fix broke1existing direct-bridge
+deadline test(131pass); limiting the carrier to numerical callbacks restored all
+132focused cases. No existing test or tolerance changed.2additional baseline
+failures show real child.main serializing planner cleanup/receipt failure as
+declined. Wrapping this finally with PlannerCleanupError yields62pass,including
+the actual wire-status tests. Those2tests inject the planner state machine and
+do not prove native process retirement. Next:source-bound focused/native lifecycle
+checks and3OFF observers,then reconcile review disposition. S2 stays explicitly
+unresolved; S4 wrapper close remains terminal with tree-only cleanup retry.
+The completed Opus review applies to342c92a,not these follow-up edits;its single
+600s exception is consumed. No new reviewer invocation or numerical cap granted.
+
+W0H continuation: session cleanup receipt replacement had the same terminal-status
+gap. First expanded fixture failed too early at a reference-file write;fault
+injection was narrowed to cleanup.json,then1meaningful red/3pass established the
+session receipt defect. Moving that replacement inside the existing cleanup-error
+wrapper produced284focused passes. A combined16-case native batch hit its bound
+after partial output;cleanup verified0,and the batch is excluded,not counted as
+passing. A separate6-case native memory group passed on this pre-retirement-flag
+source. No timeout was extended or failed evidence removed.
+
+Supplemental independent review was launched through the previously authorized
+Vibe route;not an extension/retry of the one600s Opus review. First launch failed
+before inference on sandbox profile logging. The resumed invocation used GLM5.3,
+not a Mistral model;it is excluded from the selected Mistral review. Historical W0
+Vibe logs also name GLM5.3: earlier descriptions inferred Mistral from the runner
+and were inaccurate. Original logs/reports remain preserved;Opus review is valid.
+A fresh invocation explicitly pinned Mistral medium3.5(provider mistral,
+model mistral-vibe-cli-latest) with a model-return guard.1early GLM lookup was
+refused before return;70allowed lookups used the selected model. Final advice
+completed with0tools/tests,unchanged source,cleanup0;no persistent config edits.
+
+Mistral's2blockers are disputed and adjudicated in W0H-REVIEW-RECONCILIATION.md:
+successful child-handle close clears its field; a real-child cleanup retry test
+passes on the reviewed source and sees only the Job handle closed on retry.
+Converting failed cleanup/receipt writes into terminal wire status is the intended
+repair,not an ordinary-success change or a claim that cleanup.json proves handle
+closure. The original failure remains the local cause. S2 remains unresolved.
+Separately,2baseline tests prove a retained Job after failed close could reach a
+new launch. A monotone retirement flag now refuses all new spawn attempts once
+close begins,while permitting cleanup retry.287focused tests pass on this source;
+8real planner and2reused-worker tests also pass. The small retirement-state delta
+was verified/adjudicated by Astra after the frozen review,not rerun by a reviewer.
+Final prospective inventory:287focused,8real,2session,9lifecycle,15seam/signal,
+5legacy cancellation;3OFF observers. Only source-bound final receipts count in
+W0H-VERIFICATION.json;the earlier6native cases remain supplementary pre-flag evidence.
+
+W0H final seal:326distinct cases/29disjoint files PASS against the same284production
+source hashes;3OFF observer identities exactly equal W0/PP4b. All final inputs
+unchanged;all owned cleanup verified0. Reports distinguish implementation,testing,
+independent review/adjudication and publication. S2,loaded-H admission,remaining
+PP3/full-model/performance/mesher/UI gates remain OPEN. No full-suite,universal
+bit-identity,default-on or release claim. Local scoped implementation commit only.
+See W0H-QUALIFICATION.md,W0H-VERIFICATION.json,W0H-REVIEW-RECONCILIATION.md,
+W0H-COMMANDS.txt,W0H-CHANGES.json and the separately recorded commit/outbox receipt.

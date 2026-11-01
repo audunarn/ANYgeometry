@@ -125,7 +125,7 @@ class WindowsChild:
             # An explicit executable plus a writable command line avoids ambiguous
             # Windows executable parsing. The child receives an exact Unicode block.
             command = ctypes.create_unicode_buffer(subprocess.list2cmdline(self.args))
-            if any(type(k) is not str or type(v) is not str or '\0' in k + v or '=' in k
+            if any(type(k) is not str or type(v) is not str or not k or '\0' in k + v or '=' in k
                    for k, v in environment.items()):
                 raise QualificationDecline('unsupported owned process environment')
             block = ctypes.create_unicode_buffer('\0'.join(k + '=' + v for k, v in
@@ -143,6 +143,8 @@ class WindowsChild:
                 self._close_duplicates()
 
     def resume(self, job):
+        if not job:
+            raise QualificationDecline('owned Job is closed before resume')
         member = W.BOOL()
         if not self.api.IsProcessInJob(self.info.process, job, ctypes.byref(member)):
             raise _error('IsProcessInJob before resume')

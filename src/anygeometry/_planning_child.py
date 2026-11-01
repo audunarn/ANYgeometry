@@ -164,8 +164,11 @@ def planner(folder, deadline, canaries, goldens, ready_at, binding, limits):
                 raise q.QualificationDecline('worker model binding mismatch')
             reports.append(report)
     finally:
-        tree.close()
-        (folder/'cleanup.json').replace(folder/'workers-cleanup.json')
+        try:
+            tree.close()
+            (folder/'cleanup.json').replace(folder/'workers-cleanup.json')
+        except Exception as exc:
+            raise PlannerCleanupError('planner worker cleanup failed') from exc
     rows = [row for report in reports for row in report['rows']]
     reduce_results(rows, len(tasks))
     verify_sources(request['sources'])

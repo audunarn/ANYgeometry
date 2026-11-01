@@ -45,6 +45,8 @@ class OwnedTree:
         self._memory_observation=None
         self.children = []
         self.commands = []
+        self._handle_error_sequence = 0
+        self._retiring = False
         self.api = ctypes.WinDLL('kernel32', use_last_error=True)
         for name, args, result in (
             ('CreateJobObjectW', [ctypes.c_void_p, W.LPCWSTR], W.HANDLE),
@@ -110,6 +112,8 @@ class OwnedTree:
         return report
 
     def spawn(self, role, directory, timeout):
+        if self._retiring or not self.handle:
+            raise QualificationDecline('owned Job is retiring or closed')
         self.memory_snapshot()
         if role not in ('planner','worker','session-planner','session-worker'):
             raise QualificationDecline('unsupported owned process role')
@@ -192,10 +196,38 @@ class OwnedTree:
         executable = Path(command[0].removeprefix('\\??\\')).resolve()
         return executable == (Path(buffer.value)/'conhost.exe').resolve()
 
+    def _close_child_handles(self):
+        errors=[]
+        for child in self.children:
+            if hasattr(child,'close_handles'):
+                try:child.close_handles()
+                except Exception as error:errors.append(error)
+        return errors
+
+    def _raise_handle_errors(self,errors):
+        if not errors:return
+        self._handle_error_sequence+=1
+        failure=dict(verified=False,job_handle_retained=self.handle is not None,
+            attempt=self._handle_error_sequence,
+            errors=[dict(operation=getattr(error,'job_operation',None),
+                         winerror=getattr(error,'winerror',None),error=str(error)) for error in errors])
+        payload=json.dumps(failure,indent=2)
+        try:
+            # Exclusive creation preserves every failure, including retries.
+            history=self.directory/f'handle-cleanup-error-{self._handle_error_sequence:06d}.json'
+            with history.open('x',encoding='utf-8') as stream:stream.write(payload)
+            try:
+                with (self.directory/'handle-cleanup-error.json').open('x',encoding='utf-8') as stream:
+                    stream.write(payload)
+            except FileExistsError:
+                pass  # The first failure remains the canonical terminal record.
+        except OSError as artifact_error:raise errors[0] from artifact_error
+        raise errors[0]
+
     def close(self):
+        self._retiring = True
         if self.handle is None:
-            for child in self.children:
-                if hasattr(child,'close_handles'):child.close_handles()
+            self._raise_handle_errors(self._close_child_handles())
             return
         checked = []
         try:
@@ -256,18 +288,8 @@ class OwnedTree:
             (self.directory/'cleanup.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
             if memory_error is not None:raise memory_error
         finally:
-            handle_errors=[]
-            for child in self.children:
-                if hasattr(child,'close_handles'):
-                    try:child.close_handles()
-                    except Exception as error:handle_errors.append(error)
+            handle_errors=self._close_child_handles()
             if self.api.CloseHandle(self.handle):
                 self.handle = None
             else:handle_errors.append(_windows_error('CloseHandle owned Job'))
-            if handle_errors:
-                failure=dict(verified=False,job_handle_retained=self.handle is not None,
-                    errors=[dict(operation=getattr(error,'job_operation',None),
-                                 winerror=getattr(error,'winerror',None),error=str(error)) for error in handle_errors])
-                try:(self.directory/'handle-cleanup-error.json').write_text(json.dumps(failure,indent=2),encoding='utf-8')
-                except OSError as artifact_error:raise handle_errors[0] from artifact_error
-                raise handle_errors[0]
+            self._raise_handle_errors(handle_errors)

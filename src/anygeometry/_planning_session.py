@@ -352,9 +352,10 @@ def session_planner(folder,deadline,canaries,goldens,binding,limits,generated):
                 if body['stage']=='finish':
                     reports=report['worker_reports'];break
     finally:
-        try:tree.close()
+        try:
+            tree.close()
+            (folder/'cleanup.json').replace(folder/'workers-cleanup.json')
         except Exception as exc:raise PlannerCleanupError('session worker cleanup failed') from exc
-        (folder/'cleanup.json').replace(folder/'workers-cleanup.json')
     verify_sources(setup['sources'])
     return dict(status='passed',session_sha256=session,request_sha256=request,stages=list(seen),
                 stage_requests=stage_requests,worker_reports=reports,prepared_entries=entries,preparation_sha256=plan_sha)

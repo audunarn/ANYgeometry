@@ -50,13 +50,16 @@ class Bridge:
         self.tree_options=control.tree_options()
 
     def check_deadline(self):
-        if time.monotonic()>=self.deadline:raise PlannerDeadline('stage planning deadline consumed')
-        try:self.poll()
-        except PlannerMemoryExceeded as error:
+        try:
+            if time.monotonic()>=self.deadline:raise PlannerDeadline('stage planning deadline consumed')
+            self.poll()
+            if time.monotonic()>=self.deadline:raise PlannerDeadline('stage planning deadline consumed')
+        except (PlannerCancelled,PlannerDeadline,PlannerSourceChanged,PlannerCleanupError,PlannerMemoryExceeded) as error:
             # Kernel numerical retry handlers catch GeometryError. Resource
             # failure must cross them intact, then unwrap at qualified_plan.
-            raise _CallbackFailed(error) from error
-        if time.monotonic()>=self.deadline:raise PlannerDeadline('stage planning deadline consumed')
+            if isinstance(error,PlannerMemoryExceeded) or getattr(self,'_inside_numerical_call',False):
+                raise _CallbackFailed(error) from error
+            raise
 
     def run(self,kind,tasks,serial_task):
         if not tasks:return ()
@@ -235,6 +238,13 @@ def _qualified_plan(model,control,serial,parallel,*,policy,mode,eligible=True,pr
     if type(control) is not StageControl:
         _increment('parallel_planning_decline:mandatory_ci');return serial()
     bridge=None;before=None;poll=lambda:None
+    def invoke_parallel(active):
+        # Preserve direct bridge-call exception types. Only a numerical callback
+        # needs the carrier that crosses its GeometryError retry handlers.
+        previous=getattr(active,'_inside_numerical_call',False)
+        active._inside_numerical_call=True
+        try:return parallel(active)
+        finally:active._inside_numerical_call=previous
     def check_cancel():
         try:
             cancelled=policy.cancellation_check is not None and bool(policy.cancellation_check())
@@ -279,18 +289,18 @@ def _qualified_plan(model,control,serial,parallel,*,policy,mode,eligible=True,pr
         bridge.check_deadline()
         if isinstance(bridge,_PreparingBridge):
             try:
-                candidate=parallel(bridge)
+                candidate=invoke_parallel(bridge)
             except _PreparedTranscript as prepared:
                 bridge.check_deadline()
                 if source_bytes()!=before:raise PlannerSourceChanged('source changed during preparation')
                 replay=_TranscriptBridge(packet,control,prepared.entries,sources=prepared.sources,poll=poll)
                 replay.deadline=bridge.deadline;bridge=replay
-                candidate=parallel(bridge)
+                candidate=invoke_parallel(bridge)
                 bridge.finish()
         elif control.reuse_workers:
             try:
                 try:
-                    candidate=parallel(bridge)
+                    candidate=invoke_parallel(bridge)
                 except (PlannerCancelled,PlannerDeadline,PlannerCleanupError,PlannerSourceChanged,PlannerMemoryExceeded,QualificationDecline):
                     raise
                 except Exception as exc:
@@ -303,7 +313,7 @@ def _qualified_plan(model,control,serial,parallel,*,policy,mode,eligible=True,pr
                 bridge.close()
             bridge.verify_pending()
         else:
-            candidate=parallel(bridge)
+            candidate=invoke_parallel(bridge)
         bridge.check_deadline()
         check_ci_equality(control.expected_ci,control.observed_ci(candidate))
         bridge.check_deadline()
