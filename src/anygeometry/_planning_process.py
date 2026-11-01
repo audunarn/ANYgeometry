@@ -9,6 +9,9 @@ import sys
 import time
 import psutil
 from ._planning_qualification import QualificationDecline
+if os.name == 'nt':
+    # P and W must see the same launch closure before admission capture.
+    from ._planning_windows_launch import WindowsChild
 
 
 def validate_memory_limit(value):
@@ -108,7 +111,11 @@ class OwnedTree:
 
     def spawn(self, role, directory, timeout):
         self.memory_snapshot()
+        if role not in ('planner','worker','session-planner','session-worker'):
+            raise QualificationDecline('unsupported owned process role')
         directory = Path(directory).resolve()
+        if not directory.is_relative_to(self.directory.resolve()):
+            raise QualificationDecline('owned process directory escapes tree')
         directory.mkdir(parents=True, exist_ok=True)
         script = Path(__file__).with_name('_planning_child.py').resolve()
         command = [sys.executable, '-B', '-u', str(script), role, str(directory), str(timeout)]
@@ -119,26 +126,22 @@ class OwnedTree:
             env[name] = '1'
         # Explicit numerical mode is not overridden. Unsupported options are not
         # silently converted into the canary diagnostic contract.
-        with (directory/'stdout.txt').open('wb') as out, (directory/'stderr.txt').open('wb') as err:
-            child = subprocess.Popen(command, cwd=directory, env=env, stdout=out, stderr=err,
-                                     creationflags=subprocess.CREATE_NO_WINDOW | 4)
+        child=WindowsChild(self.api,command)
+        # Register preallocated native output storage before CreateProcessW can
+        # write any process/thread handle, including interrupted creation.
         self.children.append(child)
         self.commands.append(command)
         try:
-            if not self.api.AssignProcessToJobObject(self.handle, W.HANDLE(int(child._handle))):
-                raise _windows_error('AssignProcessToJobObject')
-            native = ctypes.WinDLL('ntdll')
-            native.NtResumeProcess.argtypes = [W.HANDLE]
-            native.NtResumeProcess.restype = W.LONG
-            if native.NtResumeProcess(W.HANDLE(int(child._handle))) != 0:
-                raise RuntimeError('owned process resume failed')
+            with (directory/'stdout.txt').open('wb') as out, (directory/'stderr.txt').open('wb') as err:
+                child.create(self.handle,directory,env,out,err)
+            child.resume(self.handle)
         except BaseException:
-            # Our suspended child may not yet belong to the job.
-            if child.poll() is None:
-                if psutil.Process(child.pid).cmdline() != command:
-                    raise RuntimeError('owned suspended command changed')
-                child.kill()
-                child.wait(timeout=5)
+            # Job-list assignment is part of native creation, never a later
+            # Popen assignment window. Retire the entire tentative tree on error.
+            try:self.close()
+            except Exception as cleanup:
+                from ._planning_executor import PlannerCleanupError
+                raise PlannerCleanupError('owned launch rollback failed') from cleanup
             raise
         return child
 
@@ -191,6 +194,8 @@ class OwnedTree:
 
     def close(self):
         if self.handle is None:
+            for child in self.children:
+                if hasattr(child,'close_handles'):child.close_handles()
             return
         checked = []
         try:
@@ -251,5 +256,18 @@ class OwnedTree:
             (self.directory/'cleanup.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
             if memory_error is not None:raise memory_error
         finally:
-            self.api.CloseHandle(self.handle)
-            self.handle = None
+            handle_errors=[]
+            for child in self.children:
+                if hasattr(child,'close_handles'):
+                    try:child.close_handles()
+                    except Exception as error:handle_errors.append(error)
+            if self.api.CloseHandle(self.handle):
+                self.handle = None
+            else:handle_errors.append(_windows_error('CloseHandle owned Job'))
+            if handle_errors:
+                failure=dict(verified=False,job_handle_retained=self.handle is not None,
+                    errors=[dict(operation=getattr(error,'job_operation',None),
+                                 winerror=getattr(error,'winerror',None),error=str(error)) for error in handle_errors])
+                try:(self.directory/'handle-cleanup-error.json').write_text(json.dumps(failure,indent=2),encoding='utf-8')
+                except OSError as artifact_error:raise handle_errors[0] from artifact_error
+                raise handle_errors[0]

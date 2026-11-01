@@ -1265,3 +1265,73 @@ accepted for a local commit; full PP4/programme qualification remains OPEN.
 No push. Next bounded milestone is the W0 launch transaction described above.
 Latest owner policy confirms restored Mistral Vibe allowance; two successful
 bounded payload reviews establish this review route. No Batch API or Claude used.
+
+W0 checkpoint (implementation under verification):7initial transaction tests red
+on39556a7,then7green. Explicit CreateProcessW with STARTUPINFOEX JOB_LIST and
+HANDLE_LIST now replaces Popen/NtResumeProcess; retains primary thread, verifies
+membership then requires ResumeThread previous-count1. Native output storage is
+registered before creation. All spawned roles/directories stay inside the owned
+allowlist/tree. P/W import the same launch module before admission capture.
+2real small-fixture geometry/memory paths pass before the later handle-error
+receipt addition. No model/cap/tolerance expansion. New fake-creator-death cases
+(after-native-create-return,before-resume,after-resume) retire the recorded child;
+this is not every possible mid-API kernel interleaving.
+W0 fault expansion first18pass/2fail:missing handle-error receipt (implementation
+gap) and the handle-isolation test did not yet handle this machine's exact invalid
+handle status0xc0000008 (harness gap). Add explicit failure receipt; retain failed
+handles for cleanup and report failure. The isolation test now records only the
+specific invalid-handle responses as negative evidence,still rejects inherited
+access to the unique target file. Then45pass including25existing memory tests.
+Additional child-I/O/thread/process CloseHandle failure coverage and fake-host
+execution/retirement receipts are in the next group. Review and broader final
+candidate checks pending. Mistral remains the owner's selected reviewer; optional
+Antigravity availability does not replace that explicit choice. Batch service402
+is cached; no Batch probe or Claude use. No W0 acceptance/commit yet.
+
+W0 review reconciliation: Mistral found no concrete implementation blockers and
+requested paired process-retirement/handle-error receipts, explicit cleanup retry,
+incomplete native creation record, malformed environment and never-created child
+poll/wait coverage. Added all. Expanded run55pass/1test teardown failure: the test
+restored an already closed handle after its explicit successful retry. Preserve
+that receipt; corrected teardown gives56pass including25existing memory tests.
+One PATH Python3.11 launch failed importing psutil before any test child launched;
+the startup-failure receipt records this and unavailable precise shell timing.
+Use the existing explicit C:\Python\Python314\python.exe thereafter.
+Final disjoint inventory is788cases/48files:56launch+memory,196other focused,
+257ledger,234geometry,6native,8existing real,2session real,15seam/signal,
+9lifecycle,5legacy cancellation. Acceptance requires all284production-source
+hashes and each selected test file to match the final receipts,zero owned
+processes,and3unchanged OFF identities. Native stderr includes the same pre-W0
+pyreadline3 Console destructor invalid-handle diagnostic; this is preserved,
+not claimed as a clean-stderr run or silently repaired in a third-party package.
+The finite three fake-creator-death boundaries do not prove every mid-kernel
+CreateProcessW interleaving. No universal handle-isolation/OS-atomicity claim.
+See W0-VERIFICATION.json,W0-QUALIFICATION.md and W0-COMMANDS.txt for final state.
+
+Owner-requested Antigravity Opus5.5/high review completed on this frozen source.
+Two launches were stopped because custom-agent tool lists did not constrain the
+advertised catalogue. A tested temporary PreToolUse gate denies every nonfinal
+tool; the runtime denied-read probe proves that path executes.16gate tests pass.
+The first scope-verified review hit its100s wait cap. Owner then authorised exactly
+one600s review-only process tree; that invocation completed,cleanup0,source hashes
+unchanged,and temporary agent/hooks removed. No numerical authority was added.
+Review: .pp1-evidence/w0-opus-review-r4/REVIEW.md; validation records model
+claude-opus-5-5-high and --effort high. Reviewer ran0tests; it found no blockers
+within its packet,not full-programme acceptance.788tests/48files and3OFF identities
+are locally sealed evidence,not independently executed by either reviewer.
+
+Opus follow-ups remain OPEN: S1 refuse closed/NULL Jobs before native calls;
+S2 asynchronous Python interruption between a native handle operation and Python
+bookkeeping can leave a stale/reused handle or untracked duplicate (not covered
+by the finite creator-death tests);S3 try all retained child handles and preserve
+repeated failure history;S4 wrapper close() remains terminal,so only tree.close()
+currently retries retained handles;S5 empty-key validation and unsupported Windows
+drive-environment entries. This runtime observed88environment keys,0empty,0with=,
+0non-ASCII;that is not proof for other hosts. Do not treat S2 as resolved or clear
+handle slots before calls without addressing failure/uncertainty ownership.
+The packet omitted acceptance callers and nested-worker launch code. Actual
+_planning_host.py:75,126,213 wraps cleanup failures; preparation terminal tests
+cover direct propagation. _planning_child.py:156 and _planning_session.py:245 use
+OwnedTree.spawn for W. This does not establish all numerical-handler interleaves;
+remaining PP3 terminal propagation and sidecar-write-failure cases need checks.
+Commit this tested snapshot with these limits; no full qualification/default-on.
