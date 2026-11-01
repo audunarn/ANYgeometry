@@ -1383,6 +1383,7 @@ def plan_intersections(model, operands, *, policy, _parallel_control=None):
                 lambda:_plan_intersections(model,operands,policy=policy,_planning_mode=mode,_seam_policy=seam),
                 lambda stages:_plan_intersections(model,operands,policy=policy,_planning_mode=mode,_seam_policy=seam,_stages=stages),
                 policy=effective,mode=mode,eligible=native is None,
+                serial_replay=lambda poll:_plan_intersections(model,operands,policy=policy,_planning_mode=mode,_seam_policy=seam,_replay_poll=poll),
                 preparation=lambda:dict(operands=[list(h.key) for h in handles],seam=seam,
                     policy={name:(effective.intent.value if name=='intent' else getattr(effective,name))
                         for name in ('intent','face_connections','member_connections','member_face_connections','planning_mode','seam_policy')}))
@@ -1397,7 +1398,7 @@ def plan_intersections(model, operands, *, policy, _parallel_control=None):
 
 
 def _plan_intersections(model, operands, *, policy, _planning_mode="exact", _certificate_policy=None,
-                        _seam_policy="baseline", _stages=None):
+                        _seam_policy="baseline", _stages=None, _replay_poll=None):
     from .intersections import _normalize_operand
     policy = _policy(policy)
     if type(_seam_policy) is not str or _seam_policy not in SEAM_POLICIES:
@@ -1446,6 +1447,10 @@ def _plan_intersections(model, operands, *, policy, _planning_mode="exact", _cer
             # Host-only polling wraps caller errors so they cannot become a
             # qualification refusal/serial replay. The policy itself is retained.
             _stages.check_deadline()
+        elif _replay_poll is not None:
+            # Host fallback retains its original absolute deadline and passive
+            # signal; numerical counters and the caller policy are unchanged.
+            _replay_poll()
         elif policy.cancellation_check is not None and policy.cancellation_check():
             raise GeometryError("intersection planning cancelled")
     def check_pair():

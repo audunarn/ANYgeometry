@@ -706,3 +706,93 @@ No performance acceptance, default enabling, merge, remote, push or PR. Local co
 will preserve a reviewed experimental candidate, not claim PP5e/programme completion.
 All changes and line starts: PP5E-DELIVERY-CHANGES.json; verbatim execution commands
 and terminal receipts: PP5E-DELIVERY-COMMANDS.json. All paths above under.pp1-evidence.
+
+### PP3b active slice: inherited deadline during host fallback
+
+Owner continuation "Proceed", base97e85611b3533256d30f7fa657f042d66b79e25c,
+same worktree/branch. PP5e capacity remains blocked; no new whole-model authority.
+DESIGN-v3:103-104,532-539 require no fresh deadline on replay and polling around
+serial replay/publication. Observed gap: qualified_plan checks before serial()
+then returns its result without deadline/source/cancellation recheck; public serial
+kernel polls only the caller signal, so admitted replay loses the bridge deadline.
+
+Plan/acceptance: (1) red fake-clock regressions on this base for deadline expiration
+inside public fallback and late final return/cancel/source mutation; preserve typed
+original serial errors and ordinary OFF execution. (2) add host-only private replay
+poll adapter at existing serial check_cancellation locations, same policy/counters/
+operand ordering and exact original deadline; no transport or gate changes. Fail
+terminal before publication after late return, even if no kernel poll occurs.
+Unsupported policies still take the original serial path with no new callback or
+budget. (3) focused host/lifecycle plus public integration checks, required regression
+and OFF identity groups after final edits; Mistral independent code/evidence review.
+No r7 reuse retry, no speedup claim. Cooperative polling cannot interrupt a single
+unpolled native call or guarantee hard real-time behavior; supervisor remains bound.
+Astra retains implementation because this is a tightly coupled reserved deadline/
+error-precedence contract repair; Mistral remains the independent reviewer requested
+by the owner. One owned heavy tree, default118s max; existing100s supervisor; unique
+basetemps. No reset of prior PP5e failed-attempt counts. Stop after3 failed repairs.
+
+PP3b checkpoint: baseline7 failed/4 passed; repaired suite79 passed (20 new
+regressions plus59 existing host/cancellation cases). Public tests exercise BOTH
+per-stage and session refusal with original numerical kernel, fake absolute clock,
+retirement before replay, exact-boundary expiry, cancellation and preserved errors.
+No timing sleeps or source-pin updates. Mistral review pp3b-replay-review/REVIEW.md:
+no new material defect in supplied scope;0 tests executed by reviewer. Astra checked
+its omitted-counter assumption against git diff: check()/check_pair() increments and
+budget guards are unchanged, only check_cancellation dispatch gains replay polling.
+Do NOT adopt its assertion that pre-bridge admission time is negligible: unmeasured,
+and this repair only preserves the deadline once an admitted Bridge exists.
+No global pre-admission timeout or hard-real-time guarantee is claimed. Packet's
+truncated kernel excerpts are presentation slices; actual source compiles/tests.
+Final run matrix PP3B-RUN-MATRIX.json covers674 distinct tests in12 disjoint-file
+groups, reusing the current-source79 pass receipt; no repeated passed files needed.
+
+### PP3b completion: inherited host-replay deadline verified
+
+Implemented only in _planning_host.py and batch_intersections.py. After an admitted
+bridge declines and retires its pool, public serial replay uses a host-only poll
+at existing check_cancellation sites. Original policy/operands/settings, predicate
+and candidate counters, serial geometry logic and error wrappers remain unchanged.
+Poll failures use the existing private BaseException carrier so numerical wrappers
+cannot misattribute executor cancellation/deadline as a face-pair geometry error.
+Successful replay must pass deadline/cancellation, source-identity, then deadline/
+cancellation again before publication. Terminal failures mark StageControl terminal;
+genuine kernel GeometryError/OSError/QualificationDecline keep serial attribution.
+Pre-bridge refusals, arbitrary callbacks, budget policies and OFF retain original
+serial behavior; no worker eligibility, limit, gate or tolerance is loosened.
+
+Test-first evidence: pp3b-replay-red on97e8561 had7 expected failures and4 passes.
+Final20 new tests plus existing654 =674 distinct passes in12 disjoint-file groups:
+79,65,257,177,57,14,8,2,1,4,5,5. Three pre-existing focused NumPy overflow warnings.
+No failed implementation repair attempt; expected baseline reds preserved. Public
+fixture replay produces identical plan checksum AND full applied-model document.
+Real process groups verify per-stage/session completion, cancellation/read failures,
+worker loss, phase omission and cleanup; all owned trees verified0 remaining.
+Audit PP3B-VERIFICATION.json checks exact counts, full282-file source inventory,
+all recorded source/test input hashes, review source hashes and receipt statuses:
+0 mismatches. Commands/cwd/statuses in PP3B-COMMANDS.json; raw receipts retained.
+
+Final OFF checks (pool mode0 effective) preserve face200 canonical SHA
+2ab517de9f4bc32af5f0aada85b234084282f982c313a73224f5bedda400c51f;
+sector60 plan1078d6bf9c5b9c33f84e0d68954fbf89f52e677368b23c5f7641b8c9323df153,
+97faces applied; r7 plan160166d64deb7b576e6c18bc5fa4dcea5e394b5fc1de896890629b183b1e0e70,
+240faces applied. Existing golden checks assert OFF imports no purity module.
+These finite exact canonical/hash checks support ordinary-output identity on the
+named cases only; SHA-256 comparisons retain the collision-resistance assumption.
+
+Argument: D=bridge creation monotonic time+admitted timeout is captured once.
+Replay polls the SAME bridge; it never constructs D'=replay start+timeout. Each
+observed t>=D is terminal, including t==D. A successful return requires both final
+polls to observe t<D and unchanged canonical source. No geometric approximation or
+numeric error allowance is introduced. This proves the checked cooperative boundary,
+not a hard-real-time limit between polls, pre-bridge admission time, or interruption
+of a single unpolled native call. External process supervision remains necessary.
+
+Reviewed independently by Mistral on frozen affected code/test packet; no material
+defect in scope; reviewer executed0 tests. Astra reconciled counter/precedence and
+receipt evidence. No acceptance based solely on agreement. NOT CHECKED: real r7
+reuse capacity/performance (prior failure remains open, no retry); whole-model/N2c,
+mesher/UI, PP4 loaded-host/native/memory admission, remaining PP3 policy routes and
+programme release. No new scheduling, remote, push, merge, PR or default enabling.
+This closes PP3b only; it does not close PP5e or the programme. All evidence paths
+above are within .pp1-evidence; failed PP5e receipts remain unchanged.

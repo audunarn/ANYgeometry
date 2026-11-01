@@ -200,20 +200,20 @@ class _PreparingBridge(Bridge):
         raise _PreparedTranscript(entries,sources)
 
 
-def qualified_plan(model,control,serial,parallel,*,policy,mode,eligible=True,preparation=None):
+def qualified_plan(model,control,serial,parallel,*,policy,mode,eligible=True,preparation=None,serial_replay=None):
     owned_control=type(control) is StageControl
     if owned_control:
         if control.mode!='not-run':raise GeometryError('stage control already used')
         control.mode='running'
     try:
-        return _qualified_plan(model,control,serial,parallel,policy=policy,mode=mode,eligible=eligible,preparation=preparation)
+        return _qualified_plan(model,control,serial,parallel,policy=policy,mode=mode,eligible=eligible,preparation=preparation,serial_replay=serial_replay)
     except _CallbackFailed as failure:
         raise failure.error
     finally:
         if owned_control and control.mode=='running':control.mode='terminal'
 
 
-def _qualified_plan(model,control,serial,parallel,*,policy,mode,eligible=True,preparation=None):
+def _qualified_plan(model,control,serial,parallel,*,policy,mode,eligible=True,preparation=None,serial_replay=None):
     if type(control) is not StageControl:
         _increment('parallel_planning_decline:mandatory_ci');return serial()
     bridge=None;before=None;poll=lambda:None
@@ -288,4 +288,19 @@ def _qualified_plan(model,control,serial,parallel,*,policy,mode,eligible=True,pr
             raise PlannerSourceChanged('source changed before serial fallback') from exc
         control.mode='serial';control.decline_reason=type(exc).__name__+': '+str(exc)
         _increment('parallel_planning_decline:'+str(exc))
-        return serial()
+        if bridge is None:return serial()
+        def replay_poll():
+            # GeometryError wrappers in the original kernel must not turn an
+            # executor deadline/cancellation into a face-pair numerical error.
+            try:bridge.check_deadline()
+            except _CallbackFailed:raise
+            except BaseException as error:raise _CallbackFailed(error) from error
+        try:
+            result=serial() if serial_replay is None else serial_replay(replay_poll)
+            bridge.check_deadline()
+            if source_bytes()!=before:raise PlannerSourceChanged('source changed during serial fallback')
+            bridge.check_deadline()
+            return result
+        except (_CallbackFailed,PlannerCancelled,PlannerDeadline,PlannerCleanupError,PlannerSourceChanged):
+            control.mode='terminal'
+            raise
