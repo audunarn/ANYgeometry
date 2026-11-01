@@ -17,7 +17,14 @@ _EMPTY = b'{"args":[],"kwargs":{}}'
 def verify_boundary(expected, registered):
     """Risk-accepted boundary hash/census support, not full environment discovery."""
     if set(sys.modules) != set(registered) or any(sys.modules.get(n) is not m for n, m in registered.items()):
-        raise q.QualificationDecline('batch module closure/binding changed')
+        added = sorted(set(sys.modules) - set(registered))
+        removed = sorted(set(registered) - set(sys.modules))
+        rebound = sorted(n for n, m in registered.items()
+                         if n in sys.modules and sys.modules[n] is not m)
+        # Diagnostics only: retain the same exact closure/identity predicate.
+        raise q.QualificationDecline('batch module closure/binding changed: '
+            f'added={added[:20]!r} ({len(added)}); removed={removed[:20]!r} ({len(removed)}); '
+            f'rebound={rebound[:20]!r} ({len(rebound)})')
     runtime = q.runtime_files()
     observed = {}
     generated = []

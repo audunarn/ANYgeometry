@@ -71,6 +71,25 @@ def runtime_files():
             crt += name.startswith('vcruntime')
     if not crt:
         raise QualificationDecline('loaded VCRuntime DLL is missing')
+    if 'shapely.lib' in sys.modules:
+        # Pin the loaded GEOS dependency DLLs as well as Shapely's Python/PYD
+        # modules. A wheel path alone does not prove which DLL is loaded.
+        distribution = importlib.metadata.distribution('shapely')
+        dependencies = [Path(distribution.locate_file(p)).resolve()
+                        for p in (distribution.files or ())
+                        if str(p).replace('\\', '/').startswith('shapely.libs/')
+                        and str(p).lower().endswith('.dll')]
+        if len([p for p in dependencies if p.name.startswith('geos')]) != 2:
+            raise QualificationDecline('Shapely GEOS runtime dependency inventory missing')
+        for path in dependencies:
+            handle = get_handle(str(path))
+            if not handle:
+                raise QualificationDecline('Shapely dependency DLL not loaded: ' + path.name)
+            buffer = ctypes.create_unicode_buffer(32768)
+            count = get_path(handle, buffer, len(buffer))
+            if not count or count >= len(buffer) or Path(buffer.value).resolve() != path:
+                raise QualificationDecline('Shapely dependency DLL origin mismatch: ' + path.name)
+            handles.append(handle)
     result = {}
     for handle in handles:
         buffer = ctypes.create_unicode_buffer(32768)
@@ -383,7 +402,12 @@ def model_extension_record(model, *, limit=100000):
             pending.extend(item)
         elif not isinstance(item, type) and is_dataclass(item):
             pending.extend(object.__getattribute__(item,f.name) for f in fields(item))
-    payload = json.dumps(extension, sort_keys=True, separators=(',', ':'), allow_nan=False).encode('utf-8')
+    try:
+        payload = json.dumps(extension, sort_keys=True, separators=(',', ':'), allow_nan=False).encode('utf-8')
+    except (ValueError, TypeError, OverflowError) as exc:
+        # Runtime codec limits are admission refusals, not numerical task errors.
+        # Preserve the interpreter's integer-digit bound and the source extension.
+        raise QualificationDecline('extension encoding refused: ' + type(exc).__name__) from exc
     return dict(present=True, sha256=hashlib.sha256(payload).hexdigest())
 
 

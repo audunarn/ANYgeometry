@@ -31,6 +31,12 @@ from anygeometry._planning_tasks import model_task
 from anygeometry._planning_stages import WorkerModel,stage_task,dispatch
 # Real sector60 import census: close these exact lazy kernel edges before admission.
 from anygeometry import branch_supports,plane_ruled_support,quadric_supports,quadric_curve_events
+from anygeometry import branch_events,quadric_events,branch_wall_events
+# Planar overlap is an existing real-pair route. Import its exact dependency
+# closure before capture; later additions/rebindings remain forbidden.
+from shapely.geometry import Polygon
+from shapely.ops import unary_union
+_GENERATED_MODULES = ('cython_runtime', '_cython_3_2_4', '_cython_3_1_4')
 
 
 def load():
@@ -84,7 +90,7 @@ def worker(folder, deadline, canaries, goldens, limits):
     expected = request['expected']
     ledger = ledger_api.loaded_geometry_ledger(trusted_image=True)
     gate = BatchWorkerGate(expected, stores=ledger.resets, owned_worker=True, ledger=ledger,
-        generated_modules=('cython_runtime', '_cython_3_2_4'),
+        generated_modules=_GENERATED_MODULES,
         batch_size=assignment_size(request['batch_size'], len(request['tasks'])), coalesce_boundaries=True)
     before = load()
     started = time.perf_counter()
@@ -131,7 +137,7 @@ def planner(folder, deadline, canaries, goldens, ready_at, binding, limits):
     count = len(assignments)
     ledger = ledger_api.loaded_geometry_ledger(trusted_image=True)
     ledger.prepare(owned_worker=True)
-    expected = q.capture_environment(generated_modules=('cython_runtime', '_cython_3_2_4'),
+    expected = q.capture_environment(generated_modules=_GENERATED_MODULES,
                                     declined_stores=ledger.resets, trusted_image=True)
     expected['live_code_pins'] = ledger.live_code_pins()
     write_packet(folder/'reference.json', pack(expected, 'reference'))

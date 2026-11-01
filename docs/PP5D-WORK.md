@@ -1,0 +1,146 @@
+# PP5d sole-worker completion record
+
+Fresh owner authorization in this chat follows the completion plan on 2026-11-01.
+Base ad8aa076f37ccf91130badee146d9643777a92d7; existing PP5 worktree and branch.
+Work directly: owner states allfader is alone; no coordinator or delegation.
+No scheduling, remote/Git history changes, publication or whole-model execution.
+Prior PP5c failures and consumed budget remain historical, not overwritten.
+
+## Current slice and acceptance
+
+1. Reproduce the F-11 integer codec refusal and repair its typed boundary. Preserve
+   interpreter digit settings, original model and retirement-before-serial behavior.
+2. Diagnose PP5 module closure: competing explanations are a missing deterministic
+   startup import, binding mutation, or a late dependency in the real assignment.
+   Add names to the unchanged refusal predicate first. Run one bounded sector60
+   attempt to distinguish them; use its evidence to choose repair or refusal.
+3. Establish real sector60 then r7 parallel plan/apply identity, required regressions
+   and OFF identities, followed by PP3/PP4 safeguards as the completion plan states.
+
+Use tools/pp1_check.py, unique pp5d-* evidence directories, 110-second supervised
+child cap within 118 seconds, one owned heavy tree at a time, at most three failed
+repair attempts per problem. Tests' expected preimplementation reds are recorded
+separately from failed repair attempts. No new whole-model authority inferred.
+Independent review and final acceptance remain outstanding. Part 1's 471 passes
+belong to e26e4ab, not the current candidate. Exact commands/hashes remain in receipts.
+
+Owner clarification: independent reviewer must be Mistral, not Claude. Check its
+availability at review time; no silent family/provider substitution.
+Boundary regressions on base: pp5d-boundaries-red, 6 failed as intended (three
+integer-codec boundary cases and three missing refusal diagnostics), cleanup zero.
+
+Boundary repair: 68 focused tests pass. First sector diagnostic identifies 37 late
+Shapely/Cython modules; second attempt closes pair stage (298 tasks, 16 samples)
+but finds branch_events/quadric_events late in the face stage. Explicitly preload
+these and branch_wall_events, its directly referenced lazy dependency. New startup
+regressions failed before each import repair. No predicate or canary pin weakened.
+Shapely's generated Cython namespace uses the existing explicit generated-module
+schema; its native providers and loaded GEOS DLL paths/hashes are now captured.
+Third complete sector closure attempt is next; two failed closure attempts used.
+
+## Verified checkpoint
+
+Third sector closure attempt PASSED; no further closure retry required. Both stages
+admitted, 298 pair/78 face tasks, 32 serial samples, actual plan/applied-model CI.
+R7 serial and parallel PASSED: 1175 pair/240 face tasks, 80 samples. Original plan
+hashes 1078d6bf... / 160166d6... unchanged; apply hashes d6b136d9... / 4c35d81b....
+All these receipts record unchanged sources and zero owned processes after cleanup.
+Performance is NOT accepted: sector parallel plan 67.65820710000116 s, apply
+2.957505200000014 s, pre-plan load 2 Python processes/0.0% CPU; r7 parallel plan
+87.85556220001308 s, apply 4.482777199998964 s, load 2/2.5%. Parallel plan includes
+shadow-apply CI (5.098984800017206 s / 5.630766599992057 s). R7 serial plan
+50.28581889998168 s, apply 4.474018000008073 s, load 2/2.0%. 32 logical CPUs.
+Two fresh pools and full admission/gate work dominate these cases. No speedup claim.
+
+Mistral review1: owner-requested Read-only patch review, MaxTurns=8, 110-second
+process-tree cap. Temporary Vibe state stayed in this worktree. TIMEOUT before
+any model findings/tool results; log is empty, stdout only launcher/brief. No
+specific authentication/quota/provider diagnosis is established. No retry or
+Claude substitution. Owned Job cleanup verified zero, source hashes unchanged.
+Independent assessment is UNMET, including any change to native trust closure.
+
+Current final-source checks: pp5d-final-unit 279 passed; pp5d-final-real 8 passed
+(real subprocess transport, nested cancellation, stage decode and public CI).
+Remaining prescribed regression/identity groups are running sequentially.
+
+## Final repair verification and remaining gate
+
+Implemented and tested; independent acceptance remains BLOCKED by the incomplete
+Mistral review. Programme implementation after this slice is not declared complete.
+The next review must inspect the actual preserved candidate. No Claude substitution.
+No independent numerical verification or whole-model execution was performed here.
+
+| Final group | Passed | Failed |
+|---|---:|---:|
+| Unit, transport, admission, codec, scheduling, limits | 279 | 0 |
+| Actual subprocess and public stage integration | 8 | 0 |
+| T2b and ring | 177 | 0 |
+| Seam | 14 | 0 |
+| Focused batch/contact/snap | 57 | 0 |
+| Total unique pytest cases | 535 | 0 |
+
+Three existing NumPy overflow warnings occur in focused negative cases. pyreadline3
+shutdown WinError messages are retained in stderr; child exits and test counts are
+reported separately. Every final receipt records unchanged inputs and verified zero
+owned active processes. PP5D-FINAL-AUDIT.json compares eleven passing receipts to
+current source/argument hashes: zero mismatches. No intermediate-pass relabelling.
+
+OFF identity checks:
+- pp5d-off-sector60: 1078d6bf9c5b9c33f84e0d68954fbf89f52e677368b23c5f7641b8c9323df153; applied.
+- pp5d-r7-serial: 160166d64deb7b576e6c18bc5fa4dcea5e394b5fc1de896890629b183b1e0e70; applied.
+- pp5d-off-face200: 2ab517de9f4bc32af5f0aada85b234084282f982c313a73224f5bedda400c51f; area 4.218529952235817.
+The r7 serial control already ran pool OFF on the final source and checked the exact
+existing golden, so it is reused as the r7 OFF evidence instead of repeating it.
+Real parallel comparisons match both respective plan and applied-model hashes:
+sector60 apply d6b136d97cb57a20d1c80e6c15450d61432480d9b5129ff39231d2a0aacf1122;
+r7 apply 4c35d81bd633f9a1bafb9d19d0d3f4edc2263578405e565d64032d6ba48e944a.
+
+### Claim and error terms
+
+The numerical kernels, scientific tolerances, certified source pins and canary
+references were not edited. Equality is observed for the stated checksum domains,
+with SHA256 collision resistance assumed; no universal numerical-identity proof is
+claimed. Module admission still requires exactly the same module set and object
+bindings at each checked boundary. The change only reports the difference and
+loads named existing task dependencies before the reference capture.
+The large-int repair classifies only serialization ValueError/TypeError/OverflowError
+at the extension JSON encoder as a typed admission refusal. Tests preserve the
+interpreter digit limit, source value identity and retirement-before-original-serial.
+No numerical exception catch was widened.
+
+Native provenance is a loaded-path check plus disk-file hashing, NOT in-memory-page
+attestation. The two GEOS DLLs and other DLLs listed by the installed Shapely wheel
+must be loaded at those exact paths; missing/inconsistent inventory refuses. Native
+PYD modules and the explicitly named generated Cython namespace retain the existing
+module/provider pin checks. This enlarges the instantiated dependency closure and
+therefore requires independent assessment; it is not a proof of third-party purity.
+The Part 1 bounded-alias contract and raw-native-view residual risk remain unchanged.
+
+### Preserved failures and commands
+
+pp5d-boundaries-red: 6 expected base failures. pp5d-prewarm-red and
+pp5d-face-prewarm-red: missing startup imports demonstrated before their fixes.
+Sector closure attempts 1 and 2 failed; attempt 3 passed, resolving that blocker
+within its three-attempt budget. No failed run was erased or counted as a pass.
+Mistral review1 timed out without findings; no inference/auth/quota diagnosis is
+asserted. Its temporary profile, full launcher output and owned-command cleanup
+record are under .pp1-evidence/pp5d-mistral-review1. All process caps respected.
+
+Exact supervised command argv/cwd, source and argument hashes, exit status, cleanup,
+load and timings: .pp1-evidence/PP5D-COMMANDS.json. Full logs remain in each receipt
+folder. Final successful-source audit: PP5D-FINAL-AUDIT.json. Changed file:line map
+and hashes: PP5D-CHANGES.json. Git commands: PP5D-GIT-COMMANDS.json. This note is the
+living task record; append-only outbox contains the delivered commit identity.
+
+### NOT CHECKED / next work
+
+- Independent Mistral findings and final review acceptance: timed out, still required.
+- Speed target: NOT met. Two fresh stage pools duplicate startup/qualification;
+  optimize the critical path only while retaining gates and equality controls.
+- PP3 full error/cancellation/global-budget integration and PP4 memory/loaded-host
+  admission remain unfinished; existing unsupported policies still use serial.
+- 16-worker end-to-end qualification, whole N2c preparation, complete mesh, UI flow,
+  supported settings/default enablement, DET integration/performance disposition:
+  not performed by this repair slice. No whole-model authority inferred.
+- Full programme independent assessment, merge, push, PR, release: not performed.
+No new standing configuration or schedule created; the hourly schedule stays deleted.
