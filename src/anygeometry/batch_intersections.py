@@ -1438,6 +1438,13 @@ def _plan_intersections(model, operands, *, policy, _planning_mode="exact", _cer
     face_contacts=[]
     examined = 0
     candidate_pairs = 0
+    def check_cancellation():
+        if _stages is not None:
+            # Host-only polling wraps caller errors so they cannot become a
+            # qualification refusal/serial replay. The policy itself is retained.
+            _stages.check_deadline()
+        elif policy.cancellation_check is not None and policy.cancellation_check():
+            raise GeometryError("intersection planning cancelled")
     def check_pair():
         nonlocal candidate_pairs
         check()
@@ -1448,8 +1455,7 @@ def _plan_intersections(model, operands, *, policy, _planning_mode="exact", _cer
     def check():
         nonlocal examined
         examined += 1
-        if policy.cancellation_check is not None and policy.cancellation_check():
-            raise GeometryError("intersection planning cancelled")
+        check_cancellation()
         if policy.max_predicates is not None and examined > policy.max_predicates:
             raise GeometryError("intersection planning predicate budget exhausted")
     domain_bounds = {face_id: _domain_bounds(domain) for face_id, domain in domains.items()}
@@ -1488,8 +1494,7 @@ def _plan_intersections(model, operands, *, policy, _planning_mode="exact", _cer
         while count > 0:
             step = min(count, 4096)
             examined += step
-            if policy.cancellation_check is not None and policy.cancellation_check():
-                raise GeometryError("intersection planning cancelled")
+            check_cancellation()
             if policy.max_predicates is not None and examined > policy.max_predicates:
                 raise GeometryError("intersection planning predicate budget exhausted")
             count -= step
@@ -1516,8 +1521,7 @@ def _plan_intersections(model, operands, *, policy, _planning_mode="exact", _cer
         _increment("batch_face_pairs_total", count * (count - 1) // 2)
         from .intersection_candidates import swept_face_pairs
         def poll():
-            if policy.cancellation_check is not None and policy.cancellation_check():
-                raise GeometryError("intersection planning cancelled")
+            check_cancellation()
         positions = {face: i for i, face in enumerate(ordered_faces)}
         last_ordinal = -1
         with _timed_phase('intersection_candidates'):

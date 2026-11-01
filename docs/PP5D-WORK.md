@@ -207,3 +207,109 @@ Changes and preservation commands: PP5D-REVIEWED-CHANGES.json and
 PP5D-REVIEWED-GIT-COMMANDS.json. Review-fix reds and failed launcher evidence remain
 untouched. The original PP5d BLOCKED entry is superseded only for its review blocker,
 not for programme acceptance or any unperformed check.
+
+## PP3a active slice — public cancellation and owned retirement
+
+Owner renewed programme execution after reviewed d1c15e2. This slice implements
+host-only public-policy cancellation during owned stage waits, after results,
+before sampling/CI/publication and before serial fallback. Arbitrary callbacks
+never cross process transport. Retire owned trees on every terminal path; callback
+exceptions preserve identity and cannot be reclassified as infrastructure decline.
+Cleanup failure is terminal even if its exception is QualificationDecline.
+Global numerical budgets remain serial, preserving their existing charges/order.
+No promise of identical callback counts or cooperative in-kernel polling; cancellation
+interrupts the owned process tree. Source mutation never permits replay/publication.
+
+Plan: write injected lifecycle and real public-route tests first, demonstrate reds;
+implement the host/executor wait contract; verify real nested cleanup, successful
+callback-enabled plan/apply CI, focused regression groups and OFF identities;
+obtain bounded Mistral review, reconcile, commit only on the existing branch.
+Acceptance: no result/replay after cancellation, original callback exceptions,
+zero owned processes after real cancellation, successful CI and unchanged source
+for false callback, budgets still serial, no source pins/tolerances changed.
+Risks: callback/refusal and result/exit races, callback mutation, cleanup masking,
+latency during synchronous host work. Host callbacks remain caller code; no hard
+response deadline while an arbitrary callback itself blocks.
+Direct Astra implementation: this slice sets the governing host/executor cancellation
+contract across existing ownership boundaries; Mistral remains independent reviewer.
+All checks <=118 s per owned process, serial heavy execution, unique evidence/temp.
+The speed goal, PP3 numerical attribution/budgets and PP4 remain open.
+
+
+### PP3a contract reconciliation (before acceptance)
+
+DESIGN-v3:87-90,123-124 restricts first-release delegated calls to owner-issued
+passive tokens. The initial exploratory callback adapter and tests are preserved
+in .pp1-evidence/pp3a-exploratory-callbacks; its successful observations are NOT
+production acceptance. Final code requires the existing owner's exact/live
+CancellationSignal check; arbitrary callbacks and forged signals take the original
+serial route without an adapter poll. No cancellation registry or signal identity
+is transported. The same policy/signal remains on the returned plan.
+
+Fault-injected Event reads retain the exception/cleanup defenses without claiming
+qualification of altered tokens. Real cancellation uses a watcher that calls
+CancellationSignal.cancel after owned worker admission. Both pair and face stages
+are included. Cleanup failure has precedence over signal-read errors, whose original
+object remains in the exception chain. Unsupported routes keep their original
+GeometryError cancellation semantics; admitted routes use its PlannerCancelled
+subclass. Signal polling has no numerical predicate charge; budget policies remain
+serial. PP4 loaded-host attestation is still required for production acceptance.
+
+Original 282-test admission group passes. Combining the new host-test imports in
+that process produced 3 census-cap refusals / 296 passes; no cap or test weakened.
+Existing host/process separation is retained; no all-suite single-process pass
+claimed. Mistral accepted that scoped grouping with an unresolved census fragility.
+Its broader-candidate review is superseded by a requested final passive-signal review.
+
+
+### PP3a final review disposition
+
+Final scope is passive owner signals, superseding the earlier exploratory callback
+scope above. Mistral's narrowed verdict found no contract-breaking defect and
+flagged reusable controls after terminal failure. A new test reproduced that;
+qualified_plan now consumes the control before entry, marks terminal on failure,
+and refuses reuse before polling/start/replay. Same-reviewer repair check: correct,
+no new material defect. Reports: .pp1-evidence/pp3a-passive-verdict/REVIEW.md and
+.pp1-evidence/pp3a-review-fix/REVIEW.md. Its initial 7-turn narrowed pass inspected
+source but lacked a final answer; the same session continued to a substantive
+verdict. A zero exit was not counted as review completion. No reviewer numerical
+execution or different-family verify-by-running claim.
+
+Limits accepted for this bounded slice: private StageControl is single-owner,
+not a concurrent-use primitive; cancellation linearizes at explicit polls, not
+at an atomic lock spanning publication; synchronous host/native work and event
+reads are not forcibly interrupted. Cancellation can take precedence over a
+concurrent source-mutation diagnostic, but both prevent publication/replay.
+Deep kernels may preserve only GeometryError base semantics if they re-wrap a
+cancellation subtype; no uniform subtype through uninspected kernels is claimed.
+An owner signal is intentionally non-serializable; retaining it on a host plan
+matches serial policy behavior and does not grant plan-pickling support.
+No certified error bound or performance improvement is introduced. OFF identity
+claims remain limited to the observed golden checksum domains (SHA256 collision
+resistance assumed); no universal numerical-equivalence proof is claimed.
+
+
+### PP3a verified handoff
+
+Final source: 282 admission + 21 lifecycle + 8 existing real-process/public +
+5 passive-signal real-process + 177 planning/ring + 14 seam + 57 focused =
+564 passed / 0 failed. Three existing NumPy overflow warnings remain in diagnostics.
+All three OFF goldens were rerun and match (full hashes in this note above):
+sector60 97 faces applied; r7 240 faces applied; face200 1 cell, area
+4.218529952235817. No full-model run or performance acceptance attempted.
+Ten final check receipts match current source/argument hashes, zero mismatches;
+all show verified zero owned processes. PP3A-FINAL-AUDIT.json binds receipts;
+PP3A-FINAL-COMMANDS.json stores exact argv/cwd/runtime overrides and full-log paths.
+PP3A-ALL-COMMANDS.json also preserves exploratory passes, expected test-first reds,
+and the combined-process census failures. No test/gate/tolerance/pin was weakened.
+New fault-injection tests target owner signal reads; altered signals are not a
+qualified production domain. Generic callbacks remain serial by contract.
+
+Implemented/tested/reviewed: PP3a bounded host passive-signal lifecycle only.
+NOT CHECKED: independent numerical verify-by-running; complete PP3 error/budget/
+back-pressure qualification; PP4 host/native/memory admission; worker reuse or
+speed target; 16-worker/whole N2c; mesher-entry/full mesh; live UI; publication.
+No source pin refresh, branch change, remote, push, merge, PR, or scheduling.
+Next implementation target: per-plan startup reuse with unchanged gate predicates,
+finite pair/face transactions, all-owned retirement before serial verification,
+mandatory plan/apply CI and source binding. No cross-plan persistent workers.

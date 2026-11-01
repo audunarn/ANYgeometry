@@ -83,12 +83,25 @@ class OwnedTree:
             raise
         return child
 
-    def wait(self, child, deadline):
-        try:
-            code = child.wait(timeout=max(.001, deadline-time.monotonic()))
-        except subprocess.TimeoutExpired as exc:
-            from ._planning_executor import PlannerDeadline
-            raise PlannerDeadline('owned process deadline') from exc
+    def wait(self, child, deadline, *, poll=None):
+        while True:
+            remaining=deadline-time.monotonic()
+            if remaining<=0:
+                from ._planning_executor import PlannerDeadline
+                raise PlannerDeadline('owned process deadline')
+            if poll is not None:poll()
+            remaining=deadline-time.monotonic()
+            if remaining<=0:
+                from ._planning_executor import PlannerDeadline
+                raise PlannerDeadline('owned process deadline')
+            try:
+                code = child.wait(timeout=min(.05,remaining) if poll is not None else remaining)
+                break
+            except subprocess.TimeoutExpired as exc:
+                if poll is not None:continue
+                from ._planning_executor import PlannerDeadline
+                raise PlannerDeadline('owned process deadline') from exc
+        if poll is not None:poll()
         if code != 0:
             raise QualificationDecline('owned process exit: ' + str(code))
 

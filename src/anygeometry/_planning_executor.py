@@ -235,10 +235,10 @@ class OwnedPlanner:
     def submit(self, model, tasks):
         return self._submit(model,tasks)
 
-    def submit_stage(self, packet, tasks):
-        return self._submit(None,tasks,stage_packet=packet)
+    def submit_stage(self, packet, tasks, *, poll=None):
+        return self._submit(None,tasks,stage_packet=packet,poll=poll)
 
-    def _submit(self, model, tasks, *, stage_packet=None):
+    def _submit(self, model, tasks, *, stage_packet=None, poll=None):
         if self.closed or self.used:
             raise QualificationDecline('planner already used or closed')
         self.used = True
@@ -252,10 +252,12 @@ class OwnedPlanner:
         request = dict(model=packet, tasks=tasks, workers=self.workers,
                        batch_size=self.batch_size, sources=sources, stage=stage)
         request_packet = pack(request, 'request',limit=limits['payload_limit'])
+        if poll is not None:poll()
         write_packet(self.directory/'request.json', request_packet)
         submitted = time.perf_counter()
         path = self.directory/'result.json'
         while not path.exists():
+            if poll is not None:poll()
             if (self.directory/'cancel.flag').exists():
                 raise PlannerCancelled('owned planner cancelled')
             if self.child.poll() is not None:
@@ -265,11 +267,16 @@ class OwnedPlanner:
             if time.monotonic() >= self.deadline:
                 raise PlannerDeadline('owned planner deadline consumed')
             time.sleep(.01)
+        if poll is not None:poll()
         result = read_packet(path, 'result',limit=limits['payload_limit'])
         if (self.directory/'cancel.flag').exists():
             raise PlannerCancelled('owned planner cancelled')
         # The producer must finish before either results or serial replay escape.
-        self.tree.wait(self.child, self.deadline)
+        if poll is None:self.tree.wait(self.child, self.deadline)
+        else:self.tree.wait(self.child, self.deadline,poll=poll)
+        if poll is not None:poll()
+        if (self.directory/'cancel.flag').exists():
+            raise PlannerCancelled('owned planner cancelled')
         check_result_status(result)
         if result.get('request_sha256') != request_packet['sha256']:
             raise QualificationDecline('result request binding mismatch')
