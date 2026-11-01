@@ -71,7 +71,11 @@ def runtime_files():
             crt += name.startswith('vcruntime')
     if not crt:
         raise QualificationDecline('loaded VCRuntime DLL is missing')
-    if 'shapely.lib' in sys.modules:
+    if any(name == 'shapely' or name.startswith('shapely.') for name in sys.modules):
+        native = sys.modules.get('shapely.lib')
+        if (type(native) is not types.ModuleType or
+                not str(vars(native).get('__file__', '')).lower().endswith('.pyd')):
+            raise QualificationDecline('Shapely native module layout is not qualified')
         # Pin the loaded GEOS dependency DLLs as well as Shapely's Python/PYD
         # modules. A wheel path alone does not prove which DLL is loaded.
         distribution = importlib.metadata.distribution('shapely')

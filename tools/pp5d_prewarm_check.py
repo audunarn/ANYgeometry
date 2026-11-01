@@ -17,6 +17,7 @@ from shapely.ops import unary_union
 from anygeometry import branch_events, quadric_events, branch_wall_events
 assert set(sys.modules)==before, sorted(set(sys.modules)-before)
 assert unary_union([Polygon([(0.,0.),(1.,0.),(0.,1.)])]).area==0.5
+assert set(sys.modules)==before, sorted(set(sys.modules)-before)
 q=child['q']
 pins=q.runtime_files()
 assert len([p for p in pins if pathlib.Path(p).name.startswith('geos')])==2

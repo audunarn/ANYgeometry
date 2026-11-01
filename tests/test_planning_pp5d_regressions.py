@@ -8,6 +8,7 @@ from anygeometry import _planning_batch as batch
 from anygeometry import _planning_executor as executor
 from anygeometry import _planning_qualification as qualification
 from anygeometry.model import GeometryModel
+from anygeometry.errors import GeometryError
 
 
 def huge_integer_model():
@@ -67,3 +68,27 @@ def test_module_boundary_refusal_identifies_change(kind, monkeypatch):
     assert 'batch module closure/binding changed' in str(error.value)
     assert kind + '=' in str(error.value)
     assert changed in str(error.value)
+
+
+@pytest.mark.parametrize('name', ['shapely', 'shapely._different_native_layout'])
+def test_unqualified_shapely_layout_cannot_silently_omit_geos(name, monkeypatch):
+    monkeypatch.setattr(qualification, 'sys', SimpleNamespace(modules={name: object()}))
+    with pytest.raises(qualification.QualificationDecline, match='Shapely native module layout'):
+        qualification.runtime_files()
+
+
+def test_numerical_error_is_retired_and_propagated_without_serial_replay(tmp_path):
+    events = []
+    original = GeometryError('numerical failure: bridge attribution')
+
+    class FailingPlanner:
+        def submit(self, model, tasks):
+            raise original
+
+        def close(self):
+            events.append('retired')
+
+    with pytest.raises(GeometryError) as error:
+        executor.execute(None, ('pair',), lambda task: events.append('serial'),
+                         directory=tmp_path / 'unused', planner=FailingPlanner(), opt_in=True)
+    assert error.value is original and events == ['retired']

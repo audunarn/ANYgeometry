@@ -144,3 +144,66 @@ living task record; append-only outbox contains the delivered commit identity.
   not performed by this repair slice. No whole-model authority inferred.
 - Full programme independent assessment, merge, push, PR, release: not performed.
 No new standing configuration or schedule created; the hourly schedule stays deleted.
+
+## Owner-approved Mistral review continuation
+
+Owner authorized the existing Mistral profile/runtime files and a 300-second
+review-only cap. Configured mistral-medium-3.5 / mistral provider; no Claude used.
+Normal-profile startup initially failed on sandbox log permissions before inference;
+the same authorized review then ran with the required filesystem permission. It
+successfully read code but a shell read was cancelled by its permission layer.
+Continuation of the SAME session 74bfa348-69a9-0074-953a-ee364198477e exposed only
+read_file/grep and returned a substantive report, not a zero-exit acceptance claim.
+Evidence: .pp1-evidence/pp5d-mistral-review2-continuation/REVIEW.md.
+
+Mistral found no weakened gate or incorrect codec fallback, but reported:
+1. Probe did not check module closure after actual unary_union exercise (MEDIUM).
+2. GEOS provenance could silently skip a different Shapely native layout (LOW).
+3. Missing regression for propagation of a numerical submit error (LOW).
+All three are addressed in the current candidate: post-exercise closure assertion;
+any loaded Shapely namespace requires the qualified native module layout or refuses;
+original GeometryError identity and retirement/no-replay test. No new support for
+unknown Shapely layouts was added. Tests first: layout red 2 fail/7 pass; mutation
+probe red demonstrates its false late_modules=0 report on the old tool. Green:
+66 focused tests pass; the injected late import now refuses. Numerical-error test
+already passes on the parent, so no implementation red is claimed for that case.
+A narrow same-session Mistral repair check is in progress inside the remaining
+original review budget. Old 535-test/subset evidence remains bound to a8380df;
+post-repair verification is separate and not yet complete.
+
+## Reviewed repair completion
+
+Mistral's same-session repair check: ALL THREE FINDINGS RESOLVED; no new defect
+within its bounded code-review scope. Full report:
+.pp1-evidence/pp5d-mistral-review2-fixcheck/REVIEW.md. It inspected the actual source
+changes and mutation probe, but executed no numerical tests. Independent numerical
+verification is not claimed. PP5D-MISTRAL-REVIEW-AUDIT.json records routing, session,
+20 unique successful tool outcomes, one cancelled shell read, unchanged sources,
+zero owned processes, and 153.51263530002325 seconds cumulative supervised process
+execution (including the sandbox startup failure), within the owner's 300-second
+review budget. This is one continued review, not a provider substitution.
+
+Post-fix full verification: 282 unit + 8 real subprocess/public stage + 177 T2b/ring
++ 14 seam + 57 focused = 538 passed / 0 failed. Existing warning/finalizer diagnostics
+remain retained. Unmutated startup and late-import mutation probes both pass.
+All three OFF identities rerun after the source guard change: sector60 1078d6bf...,
+r7 160166d6..., face200 2ab517de... (full hashes above). Both subsets applied.
+Ten final receipts match current source/argument hashes with zero mismatches and
+verified zero owned active processes. Exact commands and audit:
+PP5D-REVIEWED-COMMANDS.json, PP5D-REVIEWED-AUDIT.json.
+
+Sector60/r7 full parallel benchmark evidence remains bound to a8380df. It was not
+rerun or relabelled: the repair changes only a formerly silent unsupported-layout
+path and the diagnostic probe, leaving the qualified current-layout pin body,
+startup module closure, dispatch and kernels unchanged. Fresh unmutated prewarm
+and eight real-process/public stage tests exercise that current environment. The
+Mistral repair review accepts this limited applicability argument; it does not
+turn historical timings into new measurements or satisfy the overall speed goal.
+
+Implemented/tested/reviewed: this bounded repair slice. Pushed: no. Programme
+completion, independent numerical verification, performance acceptance, PP3/PP4,
+whole-model/mesh/UI qualification and publication remain OPEN. Scheduling stays off.
+Changes and preservation commands: PP5D-REVIEWED-CHANGES.json and
+PP5D-REVIEWED-GIT-COMMANDS.json. Review-fix reds and failed launcher evidence remain
+untouched. The original PP5d BLOCKED entry is superseded only for its review blocker,
+not for programme acceptance or any unperformed check.
