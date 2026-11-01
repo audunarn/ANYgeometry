@@ -258,6 +258,17 @@ def session_planner(folder,deadline,canaries,goldens,binding,limits,generated):
                 packet=pack(command,'session-worker-command',limit=limits['payload_limit'])
                 write_packet(_path(item['folder'],'command',len(seen)),packet)
                 sent.append(packet['sha256'])
+                if kind!='finish':
+                    # Stagger full gate startup, whose transient allocations can
+                    # overlap across reused workers. Tasks may still overlap;
+                    # every worker retains its complete startup/canary checks.
+                    admitted=_path(item['folder'],'admitted',len(seen))
+                    _wait_file(admitted,deadline-3,child=item['child'],folder=item['folder'],result_kind='worker-result')
+                    ready=read_packet(admitted,'admitted',limit=limits['payload_limit'])
+                    if (type(ready) is not dict or set(ready)!={'stage','sequence'} or
+                            type(ready['stage']) is not str or ready['stage']!=kind or
+                            type(ready['sequence']) is not int or ready['sequence']!=len(seen)):
+                        raise QualificationDecline('session worker admission binding')
             reports=[]
             for index,item in enumerate(workers):
                 if kind=='finish':

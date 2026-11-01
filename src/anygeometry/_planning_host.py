@@ -19,12 +19,19 @@ from .errors import GeometryError
 
 
 class StageControl:
-    def __init__(self,directory,*,expected_ci,observed_ci,workers=8,timeout=100,admission=None,payload_limit=4_000_000,walk_limit=100000,reuse_workers=False):
+    def __init__(self,directory,*,expected_ci,observed_ci,workers=8,timeout=100,admission=None,payload_limit=4_000_000,walk_limit=100000,reuse_workers=False,tree_memory_limit=None):
         self.directory=Path(directory);self.expected_ci=expected_ci;self.observed_ci=observed_ci
         self.workers=workers;self.timeout=timeout;self.admission=admission
         self.reuse_workers=reuse_workers
+        self.tree_memory_limit=tree_memory_limit
         self.limits=dict(payload_limit=payload_limit,walk_limit=walk_limit)
         self.reports=[];self.mode='not-run';self.decline_reason=None;self.ci_verified=False
+
+    def tree_options(self):
+        if self.tree_memory_limit is None:return {}
+        from ._planning_process import validate_memory_limit
+        validate_memory_limit(self.tree_memory_limit)
+        return dict(tree_memory_limit=self.tree_memory_limit)
 
 
 class _CallbackFailed(BaseException):
@@ -37,6 +44,7 @@ class Bridge:
     def __init__(self,packet,control,poll=lambda:None):
         self.packet=packet;self.control=control;self.deadline=time.monotonic()+control.timeout
         self.poll=poll
+        self.tree_options=control.tree_options()
 
     def check_deadline(self):
         if time.monotonic()>=self.deadline:raise PlannerDeadline('stage planning deadline consumed')
@@ -49,7 +57,7 @@ class Bridge:
         try:
             try:
                 planner=OwnedPlanner(self.control.directory/kind,workers=self.control.workers,
-                    timeout=min(110,self.deadline-time.monotonic()),**self.control.limits)
+                    timeout=min(110,self.deadline-time.monotonic()),**self.control.limits,**self.tree_options)
                 candidate=planner.submit_stage(self.packet,tasks,poll=self.check_deadline)
             except (OSError,psutil.AccessDenied) as exc:
                 raise QualificationDecline('stage infrastructure '+type(exc).__name__+': '+str(exc)) from exc
@@ -92,7 +100,7 @@ class _SessionBridge(Bridge):
         try:
             if self.session is None:
                 self.session=OwnedSession(self.control.directory/'session',workers=self.control.workers,
-                    timeout=min(110,self.deadline-time.monotonic()),**self.control.limits)
+                    timeout=min(110,self.deadline-time.monotonic()),**self.control.limits,**self.tree_options)
             candidate=self.session.submit_stage(kind,self.packet,tasks,poll=self.check_deadline)
         except (OSError,psutil.AccessDenied) as exc:
             raise QualificationDecline('session infrastructure '+type(exc).__name__+': '+str(exc)) from exc
@@ -187,7 +195,7 @@ class _PreparingBridge(Bridge):
         try:
             try:
                 owned=OwnedSession(self.control.directory/'session',workers=self.control.workers,
-                    timeout=min(110,self.deadline-time.monotonic()),**self.control.limits)
+                    timeout=min(110,self.deadline-time.monotonic()),**self.control.limits,**self.tree_options)
                 entries=owned.prepare_plan(self.packet,self.descriptor,poll=self.check_deadline)
                 sources=owned.sources
             except (OSError,psutil.AccessDenied) as exc:

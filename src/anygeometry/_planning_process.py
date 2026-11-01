@@ -11,11 +11,35 @@ import psutil
 from ._planning_qualification import QualificationDecline
 
 
+def validate_memory_limit(value):
+    if value is not None and (type(value) is not int or not 0<value<2**(8*ctypes.sizeof(ctypes.c_size_t))):
+        raise QualificationDecline('invalid owned-tree committed-memory limit')
+
+
+def _windows_error(operation):
+    # WinDLL(use_last_error=True) swaps a ctypes thread-local copy. WinError()
+    # without this explicit code reads the native slot after it was restored.
+    code=ctypes.get_last_error()
+    error=ctypes.WinError(code)
+    error.job_operation=operation
+    return error
+
+
+def _memory_failure(error,requested):
+    return dict(operation=getattr(error,'job_operation',None),
+                winerror=getattr(error,'winerror',None),requested_bytes=requested)
+
+
 class OwnedTree:
-    def __init__(self, directory):
+    def __init__(self, directory, *, memory_limit_bytes=None):
+        validate_memory_limit(memory_limit_bytes)
+        self.memory_limit_bytes=memory_limit_bytes
         if os.name != 'nt':
             raise QualificationDecline('owned planner requires Windows Job containment')
         self.directory = Path(directory)
+        if memory_limit_bytes is not None and not self.directory.is_dir():
+            raise QualificationDecline('capped owned-tree directory must already exist')
+        self._memory_observation=None
         self.children = []
         self.commands = []
         self.api = ctypes.WinDLL('kernel32', use_last_error=True)
@@ -30,7 +54,7 @@ class OwnedTree:
             function.argtypes, function.restype = args, result
         self.handle = self.api.CreateJobObjectW(None, None)
         if not self.handle:
-            raise ctypes.WinError()
+            raise _windows_error('CreateJobObjectW')
         class Basic(ctypes.Structure):
             _fields_ = [('process_time', ctypes.c_int64), ('job_time', ctypes.c_int64),
                         ('flags', W.DWORD), ('min_ws', ctypes.c_size_t), ('max_ws', ctypes.c_size_t),
@@ -41,14 +65,49 @@ class OwnedTree:
         class Limits(ctypes.Structure):
             _fields_ = [('basic', Basic), ('io', IO), ('pm', ctypes.c_size_t),
                         ('jm', ctypes.c_size_t), ('ppm', ctypes.c_size_t), ('pjm', ctypes.c_size_t)]
+        self._limits_type=Limits
         limits = Limits()
         limits.basic.flags = 0x2000  # KILL_ON_JOB_CLOSE, no breakaway permission.
-        if not self.api.SetInformationJobObject(self.handle, 9, ctypes.byref(limits), ctypes.sizeof(limits)):
-            self.api.CloseHandle(self.handle)
-            self.handle = None
-            raise ctypes.WinError()
+        if memory_limit_bytes is not None:
+            limits.basic.flags|=0x200  # JOB_MEMORY: sum of committed memory, not RSS.
+            limits.jm=memory_limit_bytes
+        try:
+            if not self.api.SetInformationJobObject(self.handle, 9, ctypes.byref(limits), ctypes.sizeof(limits)):
+                raise _windows_error('SetInformationJobObject')
+            if memory_limit_bytes is not None:
+                report=self.memory_snapshot()
+                (self.directory/'memory-limit.json').write_text(json.dumps(report,indent=2),encoding='utf-8')
+        except BaseException as exc:
+            failure=_memory_failure(exc,memory_limit_bytes)
+            closed=bool(self.api.CloseHandle(self.handle))
+            close_error=None if closed else _windows_error('CloseHandle')
+            if closed:self.handle = None
+            if memory_limit_bytes is not None and closed:
+                # No child can have been created before constructor admission.
+                report=dict(verified=True,active_processes=0,checked=[],commands=[],
+                            memory_error=type(exc).__name__+': '+str(exc),started_children=0,
+                            memory_observation=self._memory_observation,memory_failure=failure)
+                try:(self.directory/'cleanup.json').write_text(json.dumps(report,indent=2),encoding='utf-8')
+                except OSError:pass  # Preserve the original failed admission.
+            if not closed:raise close_error from exc
+            raise
+
+    def memory_snapshot(self):
+        self._memory_observation=None
+        if self.memory_limit_bytes is None:return None
+        if self.handle is None:raise QualificationDecline('owned-tree memory enforcement unavailable')
+        limits=self._limits_type()
+        if not self.api.QueryInformationJobObject(self.handle,9,ctypes.byref(limits),ctypes.sizeof(limits),None):
+            raise _windows_error('QueryInformationJobObject')
+        report=dict(requested_bytes=self.memory_limit_bytes,limit_bytes=int(limits.jm),flags=int(limits.basic.flags),
+                    peak_job_bytes=int(limits.pjm),peak_process_bytes=int(limits.ppm))
+        self._memory_observation=report
+        if limits.basic.flags!=0x2200 or limits.jm!=self.memory_limit_bytes or limits.pjm>self.memory_limit_bytes:
+            raise QualificationDecline('owned-tree memory enforcement differs from request: '+str(report))
+        return report
 
     def spawn(self, role, directory, timeout):
+        self.memory_snapshot()
         directory = Path(directory).resolve()
         directory.mkdir(parents=True, exist_ok=True)
         script = Path(__file__).with_name('_planning_child.py').resolve()
@@ -67,7 +126,7 @@ class OwnedTree:
         self.commands.append(command)
         try:
             if not self.api.AssignProcessToJobObject(self.handle, W.HANDLE(int(child._handle))):
-                raise ctypes.WinError()
+                raise _windows_error('AssignProcessToJobObject')
             native = ctypes.WinDLL('ntdll')
             native.NtResumeProcess.argtypes = [W.HANDLE]
             native.NtResumeProcess.restype = W.LONG
@@ -108,7 +167,7 @@ class OwnedTree:
     def _pids(self):
         buffer = ctypes.create_string_buffer(8 + 64*ctypes.sizeof(ctypes.c_void_p))
         if not self.api.QueryInformationJobObject(self.handle, 3, buffer, len(buffer), None):
-            raise ctypes.WinError()
+            raise _windows_error('QueryInformationJobObject')
         count = ctypes.c_uint32.from_buffer(buffer, 4).value
         if count > 64:
             raise RuntimeError('owned process list overflow')
@@ -135,6 +194,18 @@ class OwnedTree:
             return
         checked = []
         try:
+            memory=None;memory_error=None;self._memory_observation=None
+            try:memory=self.memory_snapshot()
+            except BaseException as exc:memory_error=exc
+            if self.memory_limit_bytes is not None:
+                # Keep unverified accounting even if later containment cleanup
+                # fails. This record never claims zero remaining processes.
+                observation=dict(phase='before_cleanup',memory_observation=self._memory_observation,
+                    memory_error=None if memory_error is None else type(memory_error).__name__+': '+str(memory_error),
+                    memory_failure=None if memory_error is None else _memory_failure(memory_error,self.memory_limit_bytes))
+                try:(self.directory/'memory-retirement.json').write_text(json.dumps(observation,indent=2),encoding='utf-8')
+                except BaseException as exc:
+                    if memory_error is None:memory_error=exc
             for pid in self._pids():
                 try:
                     command = psutil.Process(pid).cmdline()
@@ -154,7 +225,7 @@ class OwnedTree:
                         or not Path(command[5]).resolve().is_relative_to(self.directory.resolve())):
                     raise RuntimeError('unexpected owned process command; see cleanup-preflight.json')
             if not self.api.TerminateJobObject(self.handle, 1):
-                raise ctypes.WinError()
+                raise _windows_error('TerminateJobObject')
             end = time.monotonic()+5
             while self._pids() and time.monotonic() < end:
                 time.sleep(.02)
@@ -162,8 +233,23 @@ class OwnedTree:
                 raise RuntimeError('owned processes remain')
             for child in self.children:
                 child.wait(timeout=1)
+            if self.memory_limit_bytes is not None:
+                # The pre-cleanup sample is evidence, not the final verdict:
+                # live children can commit between that sample and retirement.
+                # Query again after verified zero while the Job handle is live.
+                memory=None
+                try:memory=self.memory_snapshot()
+                except BaseException as exc:
+                    if memory_error is None:memory_error=exc
             report = dict(verified=True, active_processes=0, checked=checked, commands=self.commands)
+            if memory is not None:report['memory']=memory
+            if memory_error is not None:report['memory_error']=type(memory_error).__name__+': '+str(memory_error)
+            if memory_error is not None:report['memory_failure']=_memory_failure(memory_error,self.memory_limit_bytes)
+            if self.memory_limit_bytes is not None:
+                report['memory_observation']=self._memory_observation
+                report['memory_phase']='after_cleanup'
             (self.directory/'cleanup.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
+            if memory_error is not None:raise memory_error
         finally:
             self.api.CloseHandle(self.handle)
             self.handle = None

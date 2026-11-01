@@ -796,3 +796,350 @@ mesher/UI, PP4 loaded-host/native/memory admission, remaining PP3 policy routes 
 programme release. No new scheduling, remote, push, merge, PR or default enabling.
 This closes PP3b only; it does not close PP5e or the programme. All evidence paths
 above are within .pp1-evidence; failed PP5e receipts remain unchanged.
+
+### PP4a qualification slice: owned-tree committed-memory enforcement
+
+Owner "Proceed tow qualifying", base29042a8467a8ead68b726803ae7e8c1cf4f82c3f,
+same branch/worktree. Narrow M0 prerequisite: enforce/read back an explicitly
+selected cap on P+descendant committed memory via the existing Windows Job, before
+resume; preserve KILL_ON_JOB_CLOSE/no breakaway and all cleanup predicates. Wire
+private StageControl -> OwnedPlanner/OwnedSession -> outer OwnedTree. Default None
+retains the explicitly unqualified prototype path; it is NOT memory admission.
+No implicit 8GiB grant: DESIGN-v3 ceiling is proposed/release-dependent. No whole
+model, host memory estimate, RAM grant or general memory qualification follows.
+
+Plan before implementation: tests first for strict cap types/range/readback,
+constructor cleanup and propagation; real small owned-process denial under tiny
+cap plus positive2-worker3-face case with bounded512MiB tree cap, membership and
+queried cap evidence; no more than one heavy tree,100s supervisor,118s maximum.
+If a bounded pressure helper is needed it is task-local,<=128MiB committed demand,
+owned PID checked before termination. Never identify/stop unrelated processes.
+Final Mistral review and applicable regression/OFF checks after final source edits.
+No payload/walk limit, numerical tolerance, pin, warning or scientific gate change.
+
+Microsoft API contract (read-only official docs consulted): JOB_OBJECT_LIMIT_JOB_MEMORY
+0x200 bounds job-wide committed memory; a commit exceeding it fails. It is not RSS
+or total host+worker memory. Readback verifies the requested limit and no-breakaway
+flags before spawn and at retirement. Memory-query failure still requires owned
+cleanup; no successful acceptance on missing enforcement evidence.
+Sources: https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_basic_limit_information
+and https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_extended_limit_information.
+The complete PP4 gate remains OPEN: loaded-host identity/native provenance,
+preflight estimate incl H buffers with25% headroom, released ceiling/free-RAM
+fraction, worker cache/model peaks and full bridge accounting. This slice does not
+adopt the proposed8GiB ceiling or claim every swallowed allocation failure is
+observed. Astra owns this OS containment/contract integration; Mistral independent
+review, no Claude. Prior PP5e failure counts/evidence remain consumed and unchanged.
+
+PP4a checkpoint:16 new tests red on29042a8; initial76 passes. Added freeze/interruption
+negatives2red17pass, repaired79pass. Pressure evidence preserved: first2 tests fail
+normal-success expectations; diagnostic second pressure attempt shows OS denied
+128MiB allocation under64MiB cap but peak reports145879040bytes with exact unchanged
+67108864 cap/flags8704. Strict production peak guard refuses; cleanup verified0.
+Tiny cap1 reads back0 and constructor refuses before children; cleanup receipt now
+records started_children0 after handle close. No guard or test yet loosened.
+Independent Mistral adjudication pending on requiring terminal refusal instead of
+normal success in these deliberate-pressure tests.2 failed pressure attempts used,
+1 remains; no remaining-failure reset. Full PP4/H-memory/native qualification open.
+
+### PP4a STOP: three failed pressure-verification runs; NOT qualified
+
+STOP at owner retry bound. No further code/test edits or execution after this
+failure; preserve current uncommitted candidate. Last verified commit29042a8.
+Attempt1 pp4a-memory-pressure:2failed (normal-success/receipt expectations).
+Attempt2 pp4a-pressure-diagnosis:1failed,3deselected; actual denied128MiB request
+under64MiB cap but peak145879040 >67108864, flags8704, exact configured cap.
+Attempt3 pp4a-pressure-final:22passed,1failed,2deselected. This includes verified
+pressure REFUSAL plus cleanup0, not a successful compliant-peak acceptance.
+Remaining failure: tiny cap1 stops in constructor before any Popen, cleanup reports
+verifiedtrue,active0,started_children0, memory_observation=null and
+OSError:[WinError0] The operation completed successfully. Test assumed a populated
+observation; it cannot infer which API failed from this receipt. No positive
+512MiB geometry case ran. No wider cap or different model attempted.
+
+CORRECTION: earlier checkpoint/review prompt claimed cap1 read back as0. That was
+an unsupported inference from constructor refusal, NOT an observed readback. The
+actual receipt is null observation. Retract that claim and Mistral's corresponding
+universal claim about OS limit1 storage. Likewise peak behavior is observed on this
+runtime, not proved universal. Original prompt, review and failures remain preserved.
+
+Mistral pressure review permitted replacing normal-success assumptions with required
+terminal refusal while retaining ALL numeric/flags/readback gates. Those gates were
+kept, including strict peak<=cap on accepted runs. The test now requires over-cap
+pressure to raise QualificationDecline and retain offending values/cleanup0.
+Review also identified evidence loss on later cleanup failure: current candidate
+persists unverified memory-retirement.json before cleanup and structured accounting
+in failure receipts; a failed cleanup never claims verified0. Constructor close
+failure already chains original error; no evidence of successful cleanup follows
+if CloseHandle fails. Existing suspended-child cleanup failure paths remain terminal,
+not a successful containment proof. Final source has NOT had a final independent
+review, full regressions or OFF goldens. Previous79 unit passes precede these final
+receipt changes; current source receipt is22pass/1fail only.
+
+Next proposed bounded repair (requires renewed failed-attempt authority): record
+which WinAPI failed and capture ctypes.get_last_error immediately; keep exact cap/
+flags/peak guards. Reject unknown readback before spawn, with explicit requested
+cap, setup phase, error code, closed-handle/zero-child evidence. Correct the tiny
+negative to require that refusal evidence, never invent an observed cap. Then run
+the retained pressure and512MiB two-worker positive/membership tests and required
+regressions/OFF goldens plus final Mistral review. Do not claim full memory admission:
+H buffers, measured estimate+25% headroom, released ceiling/free-RAM fraction,
+loaded-host/native identity and production performance remain OPEN. No new 8GiB
+allocation, whole-model run, remote/push/PR/default enabling or scheduling.
+Current file hashes/line starts, command receipts and restart: PP4A-CHANGES.json,
+PP4A-COMMANDS.json,PP4A-CURRENT.json under.pp1-evidence. PP5e blocker unchanged.
+
+### PP4a second release: distinguish refused setup from mismatched readback
+
+Owner: "If possible, approach the problem in a different manner. If not, keep trying."
+Renewed bounded continuation of the same six-file candidate, base29042a8; previous
+three failed attempts remain preserved. New counter starts0; no changed resource,
+size, peak, flags or scientific tolerance. No whole-model/8GiB allocation authority.
+Different approach: explicit failure-state evidence. Installation API failure has
+NO readback and must never be labelled a readback mismatch. Capture ctypes' private
+last-error immediately after a use_last_error=True WinDLL call, preserving operation,
+requested cap and native error before cleanup calls. Require unknown admission to
+refuse before spawn with verified zero children. Keep strict equality/peak checks
+for actual observations and pressure refusal. Existing tiny test assumed an
+observation existed; replace that assumption with the stricter refused-install
+state contract, not a fictitious numeric observation. Write regression first.
+Then retained bounded pressure/512MiB positive geometry tests, final independent
+Mistral source/evidence review and required regression/OFF checks; commit only if
+this limited enforcement prerequisite is verified. Full PP4 remains open.
+
+PP4a release2 discriminating evidence: new native-error and refused-install tests
+2red on prior candidate. Explicit ctypes.get_last_error() -> WinError(code) fixes
+the diagnostic: actual SetInformationJobObject error87 (invalid parameter), not
+readback0 and not successful OS execution. Refused-install receipt records exact
+operation/request/error and null observation, verifiedzero children.24negative/
+accounting tests pass; no gate or cap changed. Prior3 failed runs preserved; this
+release has0 failed repair attempts.512MiB positive geometry checks now running.
+
+Release2 positive verification failures preserved: attempt1 instrumentation wrongly
+expected PID in admitted.json and the reused route to emit that legacy file;
+per-stage interrupted, session numerics/CI passed but membership count0. Attempt2
+correctly enumerated only owned-job PIDs but wrongly demanded every transient
+member be a worker; platform cmd.exe /c ver helper triggered early failure and
+original strict cleanup refused that live command. No cleanup allowlist broadened.
+Corrected observer selects only owned worker commands, checks their exact path,
+queries IsProcessInJob and requires final report PID equality/counts. It neither
+accepts unknown workers nor waits for/stops unrelated processes. Third positive
+attempt running;2 failed qualification attempts used this release. All failed
+supervisors verified cleanup0; receipts retained. Never infer production success
+from a partly passing test.512MiB unchanged; no wider cap or tolerance.
+
+### PP4a second-release stop: diagnosis fixed, positive qualification still BLOCKED
+
+Native-error repair is substantiated: injected error87 formerly surfaced0 (red);
+now real SetInformationJobObject(cap1) reports ERROR_INVALID_PARAMETER87, null
+observation, requested1, started_children0, verifiedzero.24 refusal/accounting checks
+passed on current production source (before observer-only test edits). No cap or
+peak/readback guard changed. No unsupported readback0 interpretation remains.
+
+Three positive-verification runs this release failed; STOP at standing retry cap.
+Attempt1 metadata assumptions (legacy admitted packet has no PID; session emits no
+legacy admitted file). Attempt2 observer demanded all transient owned members be
+workers; owned cmd.exe /c ver helper caused assertion and existing cleanup guard
+refused. Attempt3 observes only worker-role members in the owned Job, requires
+IsProcessInJob and count/source equality; failures now:
+- Per-stage geometry/mandatory CI and unchanged source passed; four worker membership
+  observations/count passed. Final verifier then wrongly read w['pid'] from legacy
+  stage report, which has no such field. Thus the TEST failed; no completed positive
+  qualification claim. Pair peak449290240,face peak438202368 under cap536870912;
+  both retired with verifiedzero. Correct binding should use actual legacy report
+  schema/worker index + exact owned directory/command, not an invented PID field.
+- Reuse peak537575424 >536870912 (704512bytes above cap), flags8704 and exact cap
+  readback; strict peak guard correctly refused after verifiedzero cleanup and
+  host propagated PlannerCleanupError. Reported peak can include denied allocation;
+  neither physical peak compliance nor a near-miss acceptance is claimed. Do NOT
+  increase cap, discard peak field, or change this failing gate to pass.
+All three external supervisors verifiedzero; no owned activity remains.
+
+Options for a subsequent authorised slice: qualify original per-stage route after
+repairing schema-aware membership evidence while retaining all gates; separately
+reduce reused P/W allocation/retention before a bounded retry under the SAME cap.
+Measure/verify any proposed reduction, do not claim savings from a guessed cause.
+Full regressions/OFF and final Mistral review remain NOT RUN on this candidate;
+these are prerequisites before any commit or qualification. Current6 files remain
+uncommitted; stable verified baseline29042a8 untouched. No test/gate deleted or
+numeric limit widened. Old attempted-review provenance and all failures retained.
+No whole-model/8GiB allocation, release/default enabling, push/merge/PR or schedule.
+
+### PP4a third release: ten-run qualification allowance
+
+Owner grants10 runs. Count every new supervised test/check OR Mistral review
+invocation, successes and failures, before launch in PP4A-R3-BUDGET.json. No spent
+run is refunded; no automatic retries. Previous failures remain consumed/history.
+Existing100s supervisor/110s process-tree cap and one owned heavy tree remain.
+No whole-model or8GiB allocation; strict512MiB peak/readback cap unchanged.
+
+First qualify the ORIGINAL PER-STAGE route; reuse is separately unqualified under
+this cap and its retained positive test remains OPEN, not deleted/waived. Correct
+legacy evidence using actual schema: legacy worker report has no PID/index field;
+bind each ordered worker report to its checksum-validated owned worker-N result
+file and independently observed exact command/directory + Windows Job membership.
+Require exact folder/count coverage; retain PID equality for reuse reports that
+actually contain PID. Do not invent metadata or alter cleanup's process allowlist.
+
+Planned budget:1 corrected per-stage/negative memory checks;2 independent Mistral
+complete affected-slice review;3 existing non-process PP1/planning/T2b/ring/focused
+regressions;4 seam;5 existing real processes+passive-session signal;6 session phase/
+loss+cancel;7-9 OFF face200/sector60/r7;10 reserve for a required repair recheck or
+extra real lifecycle coverage. Review findings must be resolved; if necessary checks
+cannot fit remaining allowance, preserve candidate and report unmet gate. Full PP4
+host/memory/headroom/native admission and reuse performance remain OPEN. This is a
+limited enforcement-prerequisite qualification, not production release approval.
+
+Release3 run1:25pass perstage/refusal checks. Run2 Mistral fresh frozen52KiB
+review timed out without advice; cleanup0, preserved. Own inspection found initial
+peak sample preceded retirement. Run3 native latepeak/limitdrift/queryfailure all3
+RED, demonstrating stale successful receipts. Repair now queries after zero Job
+members and child waits, retains any prior refusal, labels pre/final phases. No
+guard loosened. Run4 combines28 memory/refusal/perstage cases and635 regressions.
+Final scoped Mistral review will use smaller complete-core packet, existing session,
+and count as run5. Remaining five runs prioritize seam+passive session signal,
+three OFF goldens, and session cancellation/phase/loss. Required missing current
+real-process groups will be explicit unmet checks; no full674-rerun claim or
+qualification/commit based on omitted gates. Direct Astra repair retained because
+retirement evidence and scientific qualification acceptance are coupled reserved
+decisions; Mistral is the explicitly selected independent reviewer.
+
+Run4 result:660pass,3fail,3known numerical overflow warnings. All28 memory
+cases passed, including the3new retirement regressions. Failures in review_i,
+admission and live_bindings arise at strict live-ledger census truncated/coverage
+refusal after broad grouping; do not widen inventory bound or refresh pins. Run5
+restores prior17-file ledger group then adds seam/signal checks (272expected).
+This investigates isolation without clearing stores or changing production gates.
+Review shifts to run6; OFF checks7-9 and session lifecycle group10 remain planned.
+
+### PP4a release3 ten-run outcome: evidence improved, qualification remains BLOCKED
+
+All10invocations consumed; no further runs.25pass initial perstage/negative checks;
+review timeout retained;3red native retirement faults; repaired core660pass/3ledger
+failures; former ledger grouping+seam+passive signal272pass; completed Mistral
+review;3OFF goldens match; session cancellation/phase/loss9pass.687distinct tests
+have a pass on FINAL production source:659 prior cases+28memory cases. Repeated
+passes are not counted twice. The3 grouping failures remain, not waived. All10
+external supervisors report verifiedzero owned processes; final source identical
+across runs4-10. Mistral finds no concrete blocker in the limited reviewed slice.
+
+Final memory query now occurs after verifiedzero/child waits, with exact native
+flags/limit/peak checks and no tolerance. Latepeak, drift, unknown final readback
+refuse. Perstage final peaks:pair445546496,face438444032 bytes<=536870912; this
+is finite native accounting evidence, not proof of H+P+W physical memory. Positive
+fixture also checks exact serial plan/applied checksum, untouched source and4
+worker memberships. OFF face200 canonical hash/area and97/240-face plan hashes
+match, applied=True; subset observers do not compare final applied model hashes.
+
+No commit or qualification acceptance:15 existing real-process cases still need
+current-source coverage; reuse positive remains a retained failure; fullPP4 and
+programme gates remain open. Previous verified HEAD29042a8 unchanged. No pin,
+scientific tolerance, process allowlist, memory cap, peak guard or test was relaxed.
+Review residuals/adjudication, exact commands, source bindings, changed file:line
+map, unmet gates and restart state are in PP4A-R3-QUALIFICATION.md and companion
+JSON files under .pp1-evidence. Preserve all prior releases/failures; no schedules,
+remote, push, PR, whole-model run or unrecorded qualification invocation.
+
+### PP4a fourth release: ten additional supervised invocations
+
+Owner authorizes10more. Preserve prior source/evidence/review; existing authority
+no whole-model,100s wait/110s process cap,one heavy owned tree,512MiB unchanged.
+Runs1-3: close remaining15process cases (8existing,2session,5legacy signals),
+acceptance allpass and identical production source to release3. Then inspect the
+retained reused-tree failure. Question: is the extra committed memory retained
+per-worker state, parent transcript/geometry retention, or transient buffering?
+Use a bounded small-fixture observation of owned Job members only, if needed;
+choose a source-backed repair rather than increasing a cap or blindly rerunning.
+Reserve remaining invocations for discriminating regression, connected repair,
+focused verification and independent Mistral review. No inferred fullPP4 release.
+Current scope and scientific contracts remain unchanged under ecosystem policy
+2026-09-24.2; no procedural change renews previously consumed runs.
+
+Diagnostic question before run4: prior reused512MiB run produced both stage
+replies/finish reports despite over-cap peak at retirement. Candidate causes are
+parent preparation working set, worker per-stage gate/state lifetime, or transient
+allocation peaks. Observe only members returned by the capped Job's PID query,
+record exact roles/commands/phase-file names and psutil memory fields plus native
+Job peak. No worker instrumentation, gates or limits changed. The retained actual
+reuse-positive test still determines pass/refusal. This diagnostic is not ordinary
+production-path qualification; an uninstrumented positive is required if it passes.
+A source-backed change requires a discriminating failing regression first and
+independent Mistral review within the remaining allowance.
+
+Runs1-3 closed all15missing process cases, same production source as release3.
+Run4 diagnostic still failed retained reuse test; native peak537665536>536870912.
+1193owned-job samples show worker private peaks196804608/203063296 during second
+stage command1 before admitted1, while parent maximum136265728. These are sampled
+observations, not allocation-stack attribution or a universal memory bound.
+
+Selected compatible repair: planner sends each stage command then waits for that
+worker's existing checksum-validated admitted-stage marker before dispatching the
+next worker. All per-worker startup/canary/boundary checks and task concurrency
+remain; only admissions serialize. No new numerical oracle or changed task layout,
+sample rule, memory cap or deadline. Finish has no admission marker and must bypass
+this wait. Validate exact marker schema/types/stage/sequence; stale/malformed,
+deadline and cleanup failure must prevent further dispatch. Eight direct planner
+regressions are written before implementation (run5). The retained real reuse
+positive is the independent memory/geometry discriminator in run6. No performance
+improvement is claimed. Direct small integration change stays with Astra because
+it resolves the resource-admission contract; Mistral supplies final independent
+review. Planned remaining6invocations:5red,6focused/core+memory green,7session
+real/signal,8session cancellation/loss,9three sequential OFF checks under one
+bounded supervisor,10Mistral review. No extra authority and all failures preserved.
+
+### PP4a fourth-release result and implementation disposition
+
+All10new invocations consumed. Runs1-3 closed the15 outstanding process cases
+on the release3 candidate (8+2+5pass): that candidate had702distinct passes.
+Run4 owned-only telemetry retained the strict reuse refusal:537665536>536870912.
+Run5 eight direct session-planner admission tests RED. Only new production change
+after those checks is _planning_session.py: stagger stage admission using the
+existing per-worker marker, with strict keys/types/stage/sequence and unchanged
+absolute deadline. Finish bypasses the wait. No task, layout, sample, canary,
+boundary, result binding, cap, peak predicate, source pin or tolerance weakened.
+
+Run6 final candidate669pass/3merged-ledger failures/3known warnings. All29memory
+and8new dispatch tests pass. Crucially UNINSTRUMENTED reuse=True now passes its
+retained positive test:exact plan/applied checksums, source unchanged, same2PIDs,
+final peak512417792<=536870912,flags8704,cleanup0. Original perstage pair/face
+peaks445116416/438722560; both pass. This is a finite configuration observation,
+not universal capacity or a controlled performance/savings measurement.
+
+Run7 restored isolated ledger grouping plus2real legacy/reuse comparisons:259pass,
+including all3 merged failures. Current-source task layout, sample digest/indices,
+warm/cold support bytes, one decode, gate/boundary counts and finish checked.
+Run8 cancellation/phase/loss9pass. Run9 sequential face200/sector60/r7 OFF checks
+all match prior hashes under exact/workers0/experimental0. One bounded supervisor
+contained all3 sequential observer children. Run10 Mistral final review completed,
+no blockers for a LIMITED IMPLEMENTATION COMMIT. Tests were not executed by the
+reviewer. Read-only review source hashes match; no further production edits.
+
+683distinct cases pass directly on FINAL source (635core+29memory+8new+2session
++9lifecycle).28existing cases have prior-source evidence only:14seam,8legacy real,
+5legacy cancellation,1false passive signal. They are NOT counted as final-source
+passes. Grouping-sensitive census refusals remain, with no cleared stores or
+increased bound. Full same-candidate qualification inventory remains incomplete.
+
+Conditional ordering argument: fixed worker code writes admission only after full
+gate.start and before tasks; P waits for that validated marker before sending the
+next stage command. Therefore startup intervals do not overlap under this protocol;
+tasks may overlap. Marker is only a scheduling hint, not a numerical acceptance
+oracle. A malformed marker can REFUSE; forged early valid markers are not disproved
+and cap/peak/result gates remain backstops. No new logical circular wait is introduced
+for conforming workers, but universal freedom from OS/worker hangs is not claimed.
+All waits retain deadlines and loss cleanup. All integer predicates have zero
+rounding/error allowance; no numerical approximation introduced.
+
+Mistral residuals retained: no new dedicated process-exit-before-admission test;
+atomic marker publication and trusted fixed worker code assumptions inherited;
+unchanged BatchWorkerGate/OwnedSession internals not independently re-reviewed.
+Do not adopt universal wording such as cannot deadlock or marker cannot influence
+acceptance: the narrower conditional statements above govern the claim.
+
+Astra accepts a local implementation checkpoint, NOT formal PP4/programme release.
+Eight owned files may be committed on the existing branch after staged-diff checks.
+Full H+P+W memory,25percent preflight headroom/free-RAM,host/native identity,larger
+model reuse capacity/performance and remaining programme gates stay OPEN. No
+whole-model run,default enable,remote,push,PR or schedule. Exact commands, source
+bindings, final revision and restart state are recorded in PP4A-R4 artifacts and
+the append-only outbox. No authority remains for further release4 invocations.

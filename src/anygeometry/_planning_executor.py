@@ -205,7 +205,7 @@ class OwnedPlanner:
     Directory must be a new caller-owned evidence/scratch directory. close() is
     mandatory, including if an early-start planner is never submitted.
     """
-    def __init__(self, directory, *, workers=8, batch_size=None, timeout=100,payload_limit=4_000_000,walk_limit=100000,_role='planner'):
+    def __init__(self, directory, *, workers=8, batch_size=None, timeout=100,payload_limit=4_000_000,walk_limit=100000,_role='planner',tree_memory_limit=None):
         if _role not in ('planner','session-planner'):
             raise QualificationDecline('unsupported owned planner role')
         if type(workers) is not int or workers not in (1, 2, 8, 16):
@@ -213,7 +213,8 @@ class OwnedPlanner:
         assignment_size(batch_size, 0)
         if type(timeout) not in (int, float) or not 0 < timeout <= 110:
             raise QualificationDecline('invalid owned process deadline='+str(timeout)+' cap=110')
-        from ._planning_process import OwnedTree
+        from ._planning_process import OwnedTree,validate_memory_limit
+        validate_memory_limit(tree_memory_limit)
         self.directory = Path(directory).resolve()
         self.directory.mkdir(parents=True, exist_ok=False)
         if any(type(v) is not int or v<1 for v in (payload_limit,walk_limit)):
@@ -223,7 +224,7 @@ class OwnedPlanner:
         self.workers, self.batch_size = workers, batch_size
         self.started = time.perf_counter()
         self.deadline = time.monotonic() + timeout
-        self.tree = OwnedTree(self.directory)
+        self.tree = OwnedTree(self.directory,**({} if tree_memory_limit is None else dict(memory_limit_bytes=tree_memory_limit)))
         self.child = None
         self.closed = False
         self.used = False
