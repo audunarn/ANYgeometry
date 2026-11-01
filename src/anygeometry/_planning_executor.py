@@ -61,6 +61,8 @@ def check_result_status(result):
         raise PlannerDeadline(str(result.get('reason', 'owned deadline consumed')))
     if result.get('status') == 'cancelled':
         raise PlannerCancelled(str(result.get('reason', 'owned cancellation')))
+    if result.get('status') == 'cleanup_error':
+        raise PlannerCleanupError(str(result.get('reason', 'owned cleanup failed')))
     if result.get('status') != 'passed':
         raise QualificationDecline(str(result.get('reason', 'planner refused')))
 
@@ -203,7 +205,9 @@ class OwnedPlanner:
     Directory must be a new caller-owned evidence/scratch directory. close() is
     mandatory, including if an early-start planner is never submitted.
     """
-    def __init__(self, directory, *, workers=8, batch_size=None, timeout=100,payload_limit=4_000_000,walk_limit=100000):
+    def __init__(self, directory, *, workers=8, batch_size=None, timeout=100,payload_limit=4_000_000,walk_limit=100000,_role='planner'):
+        if _role not in ('planner','session-planner'):
+            raise QualificationDecline('unsupported owned planner role')
         if type(workers) is not int or workers not in (1, 2, 8, 16):
             raise QualificationDecline('unsupported worker count')
         assignment_size(batch_size, 0)
@@ -224,7 +228,7 @@ class OwnedPlanner:
         self.closed = False
         self.used = False
         try:
-            self.child = self.tree.spawn('planner', self.directory, timeout)
+            self.child = self.tree.spawn(_role, self.directory, timeout)
         except BaseException:
             try:
                 self.close()

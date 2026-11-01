@@ -25,7 +25,7 @@ from anygeometry._planning_batch import BatchWorkerGate
 from anygeometry._planning_canaries import startup_canaries
 from anygeometry._planning_executor import (pack, unpack, read_packet, write_packet, thaw_model,
     assignment_size, verify_threads, verify_sources, reduce_results, freeze_model,
-    PlannerDeadline, PlannerCancelled, check_result_status)
+    PlannerDeadline, PlannerCancelled, PlannerCleanupError, check_result_status)
 from anygeometry._planning_process import OwnedTree
 from anygeometry._planning_tasks import model_task
 from anygeometry._planning_stages import WorkerModel,stage_task,dispatch
@@ -177,6 +177,9 @@ def planner(folder, deadline, canaries, goldens, ready_at, binding, limits):
 
 def main():
     role, location, seconds = sys.argv[1:]
+    # Import the complete optional session closure before any reference capture.
+    if role in ('session-planner','session-worker'):
+        from anygeometry._planning_session import session_planner, session_worker
     folder = Path(location)
     deadline = time.monotonic()+min(float(seconds), 110)
     started = time.perf_counter()
@@ -194,17 +197,22 @@ def main():
                 result = planner(folder, deadline, canaries, goldens, time.perf_counter(), binding, limits)
             elif role == 'worker':
                 result = worker(folder, deadline, canaries, goldens, limits)
+            elif role == 'session-planner':
+                result = session_planner(folder,deadline,canaries,goldens,binding,limits,_GENERATED_MODULES)
+            elif role == 'session-worker':
+                result = session_worker(folder,deadline,canaries,goldens,binding,limits,_GENERATED_MODULES)
             else:
                 raise q.QualificationDecline('unknown child role')
             result['status'] = 'passed'
     except Exception as exc:
         traceback.print_exc()
         status = ('deadline' if isinstance(exc, PlannerDeadline) else
-                  'cancelled' if isinstance(exc, PlannerCancelled) else 'declined')
+                  'cancelled' if isinstance(exc, PlannerCancelled) else
+                  'cleanup_error' if isinstance(exc, PlannerCleanupError) else 'declined')
         result = dict(status=status, reason=type(exc).__name__+': '+str(exc), **binding)
     finally:
         result['process_seconds'] = time.perf_counter()-started
-        write_packet(folder/'result.json', pack(result, 'result' if role == 'planner' else 'worker-result',limit=limits['payload_limit']))
+        write_packet(folder/'result.json', pack(result, 'result' if role in ('planner','session-planner') else 'worker-result',limit=limits['payload_limit']))
 
 
 if __name__ == '__main__':

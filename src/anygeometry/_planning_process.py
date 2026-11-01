@@ -150,7 +150,7 @@ class OwnedTree:
                 # exact executable/script and task-owned descendant directories.
                 script = str(Path(__file__).with_name('_planning_child.py').resolve())
                 if (len(command) != 7 or command[:4] != [sys.executable, '-B', '-u', script]
-                        or command[4] not in ('planner', 'worker')
+                        or command[4] not in ('planner', 'worker', 'session-planner', 'session-worker')
                         or not Path(command[5]).resolve().is_relative_to(self.directory.resolve())):
                     raise RuntimeError('unexpected owned process command; see cleanup-preflight.json')
             if not self.api.TerminateJobObject(self.handle, 1):
