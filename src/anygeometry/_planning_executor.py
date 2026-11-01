@@ -96,17 +96,24 @@ def freeze_model(model):
     if type(model) is not GeometryModel:
         raise QualificationDecline('unsupported model type')
     check_types(model, {'types': input_type_names()})
-    return pack(dict(document=to_dict(model), extension_record=model_extension_record(model)), 'model')
+    from ._planning_constructor import audit
+    body = dict(document=to_dict(model), extension_record=model_extension_record(model))
+    rows = audit(vars(model))
+    if rows:
+        body['constructor_state'] = rows
+    return pack(body, 'model')
 
 
 def thaw_model(packet):
     from .serialization import from_dict, to_dict
     decoded = unpack(packet, 'model')
-    if type(decoded) is not dict or set(decoded) != {'document', 'extension_record'}:
+    if type(decoded) is not dict or set(decoded) not in ({'document', 'extension_record'}, {'document', 'extension_record', 'constructor_state'}):
         raise QualificationDecline('model wrapper schema mismatch')
     document = decoded['document']
     try:
         model = from_dict(document)
+        from ._planning_constructor import audit
+        audit(vars(model), restore=decoded.get('constructor_state', []))
         actual = model_extension_record(model)
         recorded = decoded['extension_record']
         if recorded == dict(present=False, sha256=None):

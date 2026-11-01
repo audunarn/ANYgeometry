@@ -392,33 +392,8 @@ def _check_model_record_state(state):
     This is an adapter check, not a model transport. The runtime payload boundary
     still admits only JSON data, never a pre-existing GeometryModel instance.
     """
-    from dataclasses import fields, is_dataclass
-    pending, seen = [state], set()
-    while pending:
-        item = pending.pop()
-        if id(item) in seen:
-            continue
-        seen.add(id(item))
-        if len(seen) > 100000:
-            raise QualificationDecline('model record-state walk truncated')
-        typ = type(item)
-        if typ is dict:
-            pending.extend(item.keys()); pending.extend(item.values())
-        elif typ in (tuple, list, set, frozenset):
-            pending.extend(item)
-        elif not isinstance(item, type) and is_dataclass(item):
-            declared = fields(item)
-            try:
-                values = object.__getattribute__(item, '__dict__')
-            except AttributeError:
-                values = {}
-            if set(values) - {field.name for field in declared}:
-                raise QualificationDecline('non-field model record instance state')
-            for field in declared:
-                part = getattr(item, field.name)
-                if field.metadata.get('definition') is False and part is not None:
-                    raise QualificationDecline('warm model record instance cache')
-                pending.append(part)
+    from ._planning_constructor import audit
+    return audit(state)
 
 
 _CLEAR = {dict: dict.clear, list: list.clear, set: set.clear,
