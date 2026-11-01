@@ -10,6 +10,7 @@ import sys
 import time
 
 import psutil
+from pp5_runner_guard import console_command
 
 ROOT = Path(__file__).resolve().parents[1]
 label, *arguments = sys.argv[1:]
@@ -30,9 +31,11 @@ record = dict(command=command, cwd=str(ROOT), cap_seconds=110,
               environment_overrides={k: env[k] for k in ('PYTHONDONTWRITEBYTECODE', 'TEMP', 'TMP')})
 identity_paths = set((ROOT/'src/anygeometry').rglob('*.py'))
 identity_paths.add(Path(__file__).resolve())
+identity_paths.add(Path(__file__).with_name("pp5_runner_guard.py").resolve())
 identity_paths.update(ROOT/a for a in arguments if (ROOT/a).is_file())
 record['input_sha256'] = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
                           for p in sorted(identity_paths)}
+record['load_before']=dict(python_process_count=sum(1 for p in psutil.process_iter(['name'],ad_value='') if (p.info['name'] or '').lower() in ('python.exe','pythonw.exe','python','python3')),cpu_percent=psutil.cpu_percent(interval=.1),logical_cpus=os.cpu_count())
 start = time.perf_counter()
 code = None
 status = 'startup_failed'
@@ -62,11 +65,22 @@ finally:
                 cmd = psutil.Process(pid).cmdline()
             except psutil.NoSuchProcess:
                 continue
+            checked.append(dict(pid=pid, command=cmd))
+            record['checked_before_cleanup']=checked
+            (folder/'cleanup-preflight.json').write_text(json.dumps(checked,indent=2),encoding='utf-8')
+            from ctypes import wintypes as W
+            job.api.GetSystemDirectoryW.argtypes=[W.LPWSTR,W.UINT]
+            job.api.GetSystemDirectoryW.restype=W.UINT
+            system=ctypes.create_unicode_buffer(32768)
+            count_system=job.api.GetSystemDirectoryW(system,len(system))
+            if not 0<count_system<len(system):raise ctypes.WinError()
+            if console_command(cmd,system.value):
+                checked[-1]['kind']='owned-system-console'
+                continue
             if not cmd or Path(cmd[0]).resolve() != Path(sys.executable).resolve():
                 raise RuntimeError('unexpected owned executable')
             if cmd != command:
                 raise RuntimeError('unexpected owned command')
-            checked.append(dict(pid=pid, command=cmd))
         record['checked_before_cleanup'] = checked
         cleanup = job.cleanup()
     except Exception as exc:

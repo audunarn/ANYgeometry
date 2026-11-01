@@ -1346,7 +1346,7 @@ def _pair_paths_exact(first, second, model, tolerance, check, *, point_contacts=
     return curves
 
 
-def plan_intersections(model, operands, *, policy):
+def plan_intersections(model, operands, *, policy, _parallel_control=None):
     """Plan intersections between the complete original operand set, read-only."""
     from .preparation_epochs import _epoch_plan_required,_issue_native_plan
     from .native_support_snapshots import capture_native_supports
@@ -1377,7 +1377,14 @@ def plan_intersections(model, operands, *, policy):
         raise GeometryError('epoch planning native support binding is unavailable')
     junction_policy = _junction_bounds_policy(False) if effective.max_predicates is not None else nullcontext()
     with root_isolation_memo(), _timed_phase('intersection_planning'), junction_policy:
-        plan=_plan_intersections(model, operands, policy=policy, _planning_mode=mode, _seam_policy=seam)
+        if os.environ.get('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING') == '1':
+            from ._planning_host import qualified_plan
+            plan=qualified_plan(model,_parallel_control,
+                lambda:_plan_intersections(model,operands,policy=policy,_planning_mode=mode,_seam_policy=seam),
+                lambda stages:_plan_intersections(model,operands,policy=policy,_planning_mode=mode,_seam_policy=seam,_stages=stages),
+                policy=effective,mode=mode,eligible=native is None)
+        else:
+            plan=_plan_intersections(model, operands, policy=policy, _planning_mode=mode, _seam_policy=seam)
     if native is not None:
         if (capture_native_supports(model)!=native or model.model_id!=plan.model_id or
                 model.revision!=plan.revision or to_dict(model)['checksum']['value']!=plan.source_checksum):
@@ -1387,7 +1394,7 @@ def plan_intersections(model, operands, *, policy):
 
 
 def _plan_intersections(model, operands, *, policy, _planning_mode="exact", _certificate_policy=None,
-                        _seam_policy="baseline"):
+                        _seam_policy="baseline", _stages=None):
     from .intersections import _normalize_operand
     policy = _policy(policy)
     if type(_seam_policy) is not str or _seam_policy not in SEAM_POLICIES:
@@ -1524,6 +1531,7 @@ def _plan_intersections(model, operands, *, policy, _planning_mode="exact", _cer
             yield first, second
         account_skipped(count * (count - 1) // 2 - last_ordinal - 1)
 
+    stage_pairs=[]
     for first_id, second_id in candidate_face_pairs():
         check()
         first, second = domains[first_id], domains[second_id]
@@ -1532,6 +1540,11 @@ def _plan_intersections(model, operands, *, policy, _planning_mode="exact", _cer
         if np.any(hi1 < lo2-tolerance) or np.any(hi2 < lo1-tolerance):
             continue
         check_pair()
+        if _stages is not None:
+            stage_pairs.append(dict(kind='pair',first=first_id,second=second_id,tolerance=tolerance,
+                face_tolerances=[model.tolerance.effective_length(lengths[first_id]),model.tolerance.effective_length(lengths[second_id])],
+                cost=float(1+sum(map(len,first.boundaries))*sum(map(len,second.boundaries)))))
+            continue
         try:
             pair_points=[]
             with _timed_phase('intersection_support_and_clipping'):
@@ -1548,14 +1561,36 @@ def _plan_intersections(model, operands, *, policy, _planning_mode="exact", _cer
             face_contacts.append(FacePointContact((first_id,second_id),point,tolerance))
             for face_id in (first_id,second_id):
                 points[face_id].append(ArrangementPoint(point))
+    if _stages is not None:
+        def serial_pair(task):
+            found=[]
+            paths=_pair_paths(domains[task['first']],domains[task['second']],model,task['tolerance'],check,
+                point_contacts=found,face_tolerances=tuple(task['face_tolerances']),route=route)
+            return paths,found
+        for task,(paths,found) in zip(stage_pairs,_stages.run('pair',stage_pairs,serial_pair)):
+            first_id,second_id=task['first'],task['second'];tolerance=task['tolerance']
+            for curve in paths:
+                path=ArrangementPath(curve,owners=(first_id,second_id))
+                traces[first_id].append(path);traces[second_id].append(path)
+            for point in found:
+                face_contacts.append(FacePointContact((first_id,second_id),point,tolerance))
+                for face_id in (first_id,second_id):points[face_id].append(ArrangementPoint(point))
     axes, contacts = plan_member_arrangements(model, members, domains, traces, points, check,
         include_axis_axis=policy.member_connections, include_axis_face=policy.member_face_connections,
         check_pair=check_pair, domain_bounds=domain_bounds)
     arrangements = []
     # RS-0 (Codex RS R1 P3): the default call is unchanged; the keyword only for a non-baseline policy
     seam_options = {} if _seam_policy == "baseline" else {"seam_policy": _seam_policy}
+    stage_faces=[]
     for face_id, domain in domains.items():
         if not traces[face_id] and not points[face_id]:
+            continue
+        if _stages is not None:
+            from ._planning_values import encode_value
+            stage_faces.append(dict(kind='face',face=face_id,inputs=encode_value((traces[face_id],points[face_id])),support=encode_value(domain.support),
+                tolerance=model.tolerance.effective_length(lengths[face_id]),
+                area_tolerance=model.tolerance.effective_area(lengths[face_id]),seam=_seam_policy,
+                cost=float(len(traces[face_id])**2+len(points[face_id])+1)))
             continue
         try:
             with _timed_phase('intersection_arrangements'):
@@ -1567,6 +1602,13 @@ def _plan_intersections(model, operands, *, policy, _planning_mode="exact", _cer
         except GeometryError as exc:
             raise GeometryError(f"intersection material arrangement face:{face_id}: {exc}") from exc
         arrangements.append(_normalise_cells(arrangement))
+    if _stages is not None:
+        def serial_face(task):
+            face_id=task['face']
+            return arrange_material(domains[face_id],traces[face_id],points=points[face_id],
+                tolerance=task['tolerance'],area_tolerance=task['area_tolerance'],
+                cancellation_check=lambda:(check() or False),**seam_options)
+        arrangements.extend(_normalise_cells(value) for value in _stages.run('face',stage_faces,serial_face))
     if model.revision != revision or _qualified_model_state(model)["checksum"]["value"] != checksum:
         raise GeometryError("geometry changed during intersection planning")
     arrangements=_synchronize_boundary_events(arrangements,check)

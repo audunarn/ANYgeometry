@@ -6,6 +6,8 @@ The checksum detects corruption; it is not an authenticity or purity proof.
 """
 import hashlib
 import json
+import math
+import psutil
 import os
 from pathlib import Path
 import sys
@@ -22,6 +24,10 @@ class PlannerCancelled(GeometryError):
 
 class PlannerDeadline(GeometryError):
     """Consumed owned deadline is terminal, not a fresh serial budget."""
+
+
+class PlannerCleanupError(GeometryError):
+    """Failed containment cleanup cannot grant a serial replay."""
 
 
 class PlannerSourceChanged(GeometryError):
@@ -41,28 +47,47 @@ def _constant(value):
     raise QualificationDecline('nonfinite transport value')
 
 
-def pack(value, kind):
+def _finite_float(value):
+    result = float(value)
+    if not math.isfinite(result):
+        raise QualificationDecline('nonfinite transport value')
+    return result
+
+
+def check_result_status(result):
+    if type(result) is not dict:
+        raise QualificationDecline('non-dict owned result')
+    if result.get('status') == 'deadline':
+        raise PlannerDeadline(str(result.get('reason', 'owned deadline consumed')))
+    if result.get('status') == 'cancelled':
+        raise PlannerCancelled(str(result.get('reason', 'owned cancellation')))
+    if result.get('status') != 'passed':
+        raise QualificationDecline(str(result.get('reason', 'planner refused')))
+
+
+def pack(value, kind, *, limit=4_000_000):
+    if type(limit) is not int or limit < 1:raise QualificationDecline("invalid payload limit="+str(limit))
     try:
         payload = json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False)
     except (TypeError, ValueError, RecursionError) as exc:
         raise QualificationDecline('unsupported transport value') from exc
-    if len(payload.encode('utf-8')) > 4_000_000:
-        raise QualificationDecline('transport size limit')
+    if len(payload.encode('utf-8')) > limit:
+        raise QualificationDecline('transport size limit='+str(limit))
     return dict(schema='PP2-v1', kind=kind, payload=payload,
                 sha256=hashlib.sha256(payload.encode('utf-8')).hexdigest())
 
 
-def unpack(packet, kind):
+def unpack(packet, kind, *, limit=4_000_000):
     if (type(packet) is not dict or set(packet) != {'schema', 'kind', 'payload', 'sha256'}
             or packet['schema'] != 'PP2-v1' or packet['kind'] != kind):
         raise QualificationDecline('transport schema/kind mismatch')
     payload = packet['payload']
-    if (type(payload) is not str or len(payload.encode('utf-8')) > 4_000_000
+    if (type(payload) is not str or len(payload.encode('utf-8')) > limit
             or type(packet['sha256']) is not str
             or hashlib.sha256(payload.encode('utf-8')).hexdigest() != packet['sha256']):
-        raise QualificationDecline('transport checksum/size mismatch')
+        raise QualificationDecline('transport checksum/size mismatch limit='+str(limit))
     try:
-        return json.loads(payload, object_pairs_hook=_pairs, parse_constant=_constant)
+        return json.loads(payload, object_pairs_hook=_pairs, parse_constant=_constant, parse_float=_finite_float)
     except QualificationDecline:
         raise
     except (ValueError, RecursionError, UnicodeError) as exc:
@@ -76,52 +101,56 @@ def write_packet(path, packet):
     temporary.replace(path)
 
 
-def read_packet(path, kind):
+def read_packet(path, kind, *, with_digest=False, limit=4_000_000):
     path = Path(path)
-    if path.stat().st_size > 8_100_000:
-        raise QualificationDecline('transport envelope size limit')
+    if path.stat().st_size > 2*limit+100000:
+        raise QualificationDecline('transport envelope size limit='+str(2*limit+100000))
     try:
-        packet = json.loads(path.read_text(encoding='utf-8'), object_pairs_hook=_pairs,
-                            parse_constant=_constant)
+        text = path.read_text(encoding='utf-8')
+        if len(text.encode('utf-8')) > 2*limit+100000:
+            raise QualificationDecline('transport envelope size limit='+str(2*limit+100000))
+        packet = json.loads(text, object_pairs_hook=_pairs,
+                            parse_constant=_constant, parse_float=_finite_float)
     except QualificationDecline:
         raise
     except (ValueError, RecursionError, UnicodeError) as exc:
         raise QualificationDecline('invalid transport envelope') from exc
-    return unpack(packet, kind)
+    value = unpack(packet, kind,limit=limit)
+    return (value, packet['sha256']) if with_digest else value
 
 
-def freeze_model(model):
+def freeze_model(model, *, payload_limit=4_000_000,walk_limit=100000):
     from .model import GeometryModel
     from .serialization import to_dict
     if type(model) is not GeometryModel:
         raise QualificationDecline('unsupported model type')
-    check_types(model, {'types': input_type_names()})
+    check_types(model, {'types': input_type_names()},limit=walk_limit)
     from ._planning_constructor import audit
-    body = dict(document=to_dict(model), extension_record=model_extension_record(model))
-    rows = audit(vars(model))
+    body = dict(document=to_dict(model), extension_record=model_extension_record(model,limit=walk_limit))
+    rows = audit(vars(model),limit=walk_limit)
     if rows:
         body['constructor_state'] = rows
-    return pack(body, 'model')
+    return pack(body, 'model',limit=payload_limit)
 
 
-def thaw_model(packet):
+def thaw_model(packet, *, payload_limit=4_000_000,walk_limit=100000):
     from .serialization import from_dict, to_dict
-    decoded = unpack(packet, 'model')
+    decoded = unpack(packet, 'model',limit=payload_limit)
     if type(decoded) is not dict or set(decoded) not in ({'document', 'extension_record'}, {'document', 'extension_record', 'constructor_state'}):
         raise QualificationDecline('model wrapper schema mismatch')
     document = decoded['document']
     try:
         model = from_dict(document)
         from ._planning_constructor import audit
-        audit(vars(model), restore=decoded.get('constructor_state', []))
-        actual = model_extension_record(model)
+        audit(vars(model), restore=decoded.get('constructor_state', []),limit=walk_limit)
+        actual = model_extension_record(model,limit=walk_limit)
         recorded = decoded['extension_record']
         if recorded == dict(present=False, sha256=None):
             if model._serialization_extensions != {}:
                 raise QualificationDecline('absent source extension decoded nonempty')
         elif recorded != actual:
             raise QualificationDecline('model extension structural digest mismatch')
-        if pack(to_dict(model), 'model-document') != pack(document, 'model-document'):
+        if pack(to_dict(model), 'model-document',limit=payload_limit) != pack(document, 'model-document',limit=payload_limit):
             raise QualificationDecline('model transport changed values')
         return model
     except QualificationDecline:
@@ -144,6 +173,7 @@ def assignment_size(batch_size, count):
 
 
 def reduce_results(rows, count):
+    if type(rows) not in (tuple,list):raise QualificationDecline('result rows must be a sequence')
     result = {}
     for row in rows:
         if (type(row) not in (tuple, list) or len(row) != 2 or type(row[0]) is not int
@@ -173,15 +203,19 @@ class OwnedPlanner:
     Directory must be a new caller-owned evidence/scratch directory. close() is
     mandatory, including if an early-start planner is never submitted.
     """
-    def __init__(self, directory, *, workers=8, batch_size=None, timeout=100):
+    def __init__(self, directory, *, workers=8, batch_size=None, timeout=100,payload_limit=4_000_000,walk_limit=100000):
         if type(workers) is not int or workers not in (1, 2, 8, 16):
             raise QualificationDecline('unsupported worker count')
         assignment_size(batch_size, 0)
-        if type(timeout) not in (int, float) or not 0 < timeout <= 100:
-            raise QualificationDecline('invalid owned process deadline')
+        if type(timeout) not in (int, float) or not 0 < timeout <= 110:
+            raise QualificationDecline('invalid owned process deadline='+str(timeout)+' cap=110')
         from ._planning_process import OwnedTree
         self.directory = Path(directory).resolve()
         self.directory.mkdir(parents=True, exist_ok=False)
+        if any(type(v) is not int or v<1 for v in (payload_limit,walk_limit)):
+            raise QualificationDecline('invalid payload/walk limit')
+        self.limits=dict(payload_limit=payload_limit,walk_limit=walk_limit)
+        write_packet(self.directory/'limits.json',pack(self.limits,'limits'))
         self.workers, self.batch_size = workers, batch_size
         self.started = time.perf_counter()
         self.deadline = time.monotonic() + timeout
@@ -192,21 +226,32 @@ class OwnedPlanner:
         try:
             self.child = self.tree.spawn('planner', self.directory, timeout)
         except BaseException:
-            self.close()
+            try:
+                self.close()
+            except Exception as cleanup:
+                raise PlannerCleanupError('owned planner constructor cleanup failed') from cleanup
             raise
 
     def submit(self, model, tasks):
+        return self._submit(model,tasks)
+
+    def submit_stage(self, packet, tasks):
+        return self._submit(None,tasks,stage_packet=packet)
+
+    def _submit(self, model, tasks, *, stage_packet=None):
         if self.closed or self.used:
             raise QualificationDecline('planner already used or closed')
         self.used = True
         tasks = tuple(tasks)
-        if any(type(t) is not str or t not in ('pair', 'face') for t in tasks):
+        limits=getattr(self,"limits",dict(payload_limit=4_000_000,walk_limit=100000))
+        stage = stage_packet is not None
+        if not stage and any(type(t) is not str or t not in ('pair', 'face') for t in tasks):
             raise QualificationDecline('unsupported task descriptor')
-        packet = freeze_model(model)
+        packet = stage_packet if stage else freeze_model(model,**limits)
         sources = source_files()
         request = dict(model=packet, tasks=tasks, workers=self.workers,
-                       batch_size=self.batch_size, sources=sources)
-        request_packet = pack(request, 'request')
+                       batch_size=self.batch_size, sources=sources, stage=stage)
+        request_packet = pack(request, 'request',limit=limits['payload_limit'])
         write_packet(self.directory/'request.json', request_packet)
         submitted = time.perf_counter()
         path = self.directory/'result.json'
@@ -214,21 +259,22 @@ class OwnedPlanner:
             if (self.directory/'cancel.flag').exists():
                 raise PlannerCancelled('owned planner cancelled')
             if self.child.poll() is not None:
+                if path.exists():
+                    break
                 raise QualificationDecline('planner exit before result')
             if time.monotonic() >= self.deadline:
                 raise PlannerDeadline('owned planner deadline consumed')
             time.sleep(.01)
-        result = read_packet(path, 'result')
+        result = read_packet(path, 'result',limit=limits['payload_limit'])
         if (self.directory/'cancel.flag').exists():
             raise PlannerCancelled('owned planner cancelled')
         # The producer must finish before either results or serial replay escape.
         self.tree.wait(self.child, self.deadline)
+        check_result_status(result)
         if result.get('request_sha256') != request_packet['sha256']:
             raise QualificationDecline('result request binding mismatch')
-        if result.get('status') != 'passed':
-            raise QualificationDecline(result.get('reason', 'planner refused'))
         verify_sources(sources)
-        if freeze_model(model) != packet:
+        if not stage and freeze_model(model,**limits) != packet:
             raise PlannerSourceChanged('source model changed while planning')
         result['results'] = reduce_results(result.pop('rows'), len(tasks))
         result['host_timing'] = dict(start_to_submit_seconds=submitted-self.started,
@@ -266,12 +312,13 @@ def execute(model, tasks, serial_task, *, directory, opt_in=None, workers=8,
                 if owned is None:
                     owned = OwnedPlanner(directory, workers=workers, batch_size=batch_size)
                 candidate = owned.submit(model, tasks)
-            finally:
-                if owned is not None:
-                    owned.close()
-        except QualificationDecline as exc:
-            reason = type(exc).__name__ + ': ' + str(exc)
-        else:
+            except (QualificationDecline, OSError, psutil.AccessDenied) as exc:
+                reason = type(exc).__name__ + ': ' + str(exc)
+        finally:
+            # Cleanup failure is terminal even when it is an infrastructure error.
+            if owned is not None:
+                owned.close()
+        if reason is None:
             # Processes are already retired. PP1i owns sampling and mandatory
             # two-component CI acceptance. The caller supplies the meaning of
             # the CI digests; diagnostic checks are not PP6 plan publication.

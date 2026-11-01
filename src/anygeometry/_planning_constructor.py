@@ -138,7 +138,7 @@ def audit(state, *, restore=None, limit=100000):
             continue
         seen.add(id(item))
         if len(seen) > limit:
-            raise QualificationDecline('model record-state walk truncated')
+            raise QualificationDecline('model record-state walk truncated limit='+str(limit))
         typ = type(item)
         if typ is dict:
             pending.extend((v,path+'['+repr(k)+']') for k,v in item.items())

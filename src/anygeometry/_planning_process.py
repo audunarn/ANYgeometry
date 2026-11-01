@@ -87,7 +87,8 @@ class OwnedTree:
         try:
             code = child.wait(timeout=max(.001, deadline-time.monotonic()))
         except subprocess.TimeoutExpired as exc:
-            raise QualificationDecline('owned process deadline') from exc
+            from ._planning_executor import PlannerDeadline
+            raise PlannerDeadline('owned process deadline') from exc
         if code != 0:
             raise QualificationDecline('owned process exit: ' + str(code))
 

@@ -13,6 +13,7 @@ import functools
 import hashlib
 import importlib.metadata
 import json
+import math
 import os
 from pathlib import Path
 import platform
@@ -275,7 +276,7 @@ def check_types(value, pin, *, limit=100000):
             continue
         seen.add(id(item))
         if len(seen) > limit:
-            raise QualificationDecline('task type walk truncated')
+            raise QualificationDecline('task type walk truncated limit='+str(limit))
         if typ in (tuple, list, set, frozenset):
             pending.extend(item)
         elif typ is dict:
@@ -294,14 +295,14 @@ def check_types(value, pin, *, limit=100000):
                 constructor_keys = set(object.__getattribute__(pristine, '__dict__'))
                 if set(state) not in (constructor_keys, constructor_keys | {'_serialization_extensions'}):
                     raise QualificationDecline('non-field model instance state')
-                model_extension_record(item)
+                model_extension_record(item,limit=limit)
                 for name in ('_arc_cache', '_edge_length_cache', '_trim_loops_cache',
                              '_topology_corner_cache', '_chain_arrays', '_change_hooks'):
                     if type(state[name]) not in (dict, list) or len(state[name]):
                         raise QualificationDecline('warm model instance cache: ' + name)
                 if state['_spatial_index'] is not None or state['_transaction_journal'] is not None:
                     raise QualificationDecline('active model instance state')
-                _check_model_record_state(state)
+                _check_model_record_state(state,limit=limit)
                 from .serialization import to_dict
                 pending.append(to_dict(item))
                 continue
@@ -325,7 +326,7 @@ def check_types(value, pin, *, limit=100000):
             raise QualificationDecline('unsupported pinned type adapter: ' + _type_name(typ))
 
 
-def model_extension_record(model):
+def model_extension_record(model, *, limit=100000):
     """PP2 exact decoder-owned JSON state, without stripping or evaluating it.
 
     Extension containers must form a tree: no cycles/repeated container aliases,
@@ -349,8 +350,8 @@ def model_extension_record(model):
     nodes = 0
     while pending:
         item, depth = pending.pop(); nodes += 1
-        if depth > 40 or nodes > 100000:
-            raise QualificationDecline('extension schema exceeds bound')
+        if depth > 40 or nodes > limit:
+            raise QualificationDecline('extension schema exceeds bound depth=40 limit='+str(limit))
         typ = type(item)
         if typ in (dict, list):
             if id(item) in containers:
@@ -373,8 +374,8 @@ def model_extension_record(model):
         if id(item) in seen:
             continue
         seen.add(id(item))
-        if len(seen)>100000:
-            raise QualificationDecline('extension alias walk exceeds bound')
+        if len(seen)>limit:
+            raise QualificationDecline('extension alias walk exceeds bound limit='+str(limit))
         typ = type(item)
         if typ is dict:
             pending.extend(item.keys()); pending.extend(item.values())
@@ -386,14 +387,14 @@ def model_extension_record(model):
     return dict(present=True, sha256=hashlib.sha256(payload).hexdigest())
 
 
-def _check_model_record_state(state):
+def _check_model_record_state(state, *, limit=100000):
     """Audit original records before serialization can omit instance extras.
 
     This is an adapter check, not a model transport. The runtime payload boundary
     still admits only JSON data, never a pre-existing GeometryModel instance.
     """
     from ._planning_constructor import audit
-    return audit(state)
+    return audit(state,limit=limit)
 
 
 _CLEAR = {dict: dict.clear, list: list.clear, set: set.clear,
@@ -535,11 +536,11 @@ class WorkerGate:
             raise
 
 
-def decode_task_payload(payload, sha256):
+def decode_task_payload(payload, sha256, *, limit=4_000_000):
     """Narrow JSON values only; PP2 owns any future model/array transport codec."""
-    if (type(payload) is not bytes or len(payload) > 4_000_000 or type(sha256) is not str
+    if (type(payload) is not bytes or len(payload) > limit or type(sha256) is not str
             or hashlib.sha256(payload).hexdigest() != sha256):
-        raise QualificationDecline('payload type/size/checksum mismatch')
+        raise QualificationDecline('payload type/size/checksum mismatch limit='+str(limit))
     def pairs(items):
         result = {}
         for key, value in items:
@@ -550,7 +551,8 @@ def decode_task_payload(payload, sha256):
     def constant(value):
         raise QualificationDecline('nonfinite JSON constant')
     try:
-        record = json.loads(payload, object_pairs_hook=pairs, parse_constant=constant)
+        record = json.loads(payload, object_pairs_hook=pairs, parse_constant=constant,
+                            parse_float=lambda value: float(value) if math.isfinite(float(value)) else constant(value))
     except (ValueError, RecursionError, UnicodeError) as exc:
         raise QualificationDecline('invalid task payload') from exc
     if (type(record) is not dict or set(record) != {'args', 'kwargs'} or

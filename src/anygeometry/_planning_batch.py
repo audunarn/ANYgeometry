@@ -84,7 +84,7 @@ class BatchWorkerGate(q.WorkerGate):
         finally:
             self.boundary_seconds.append(time.perf_counter() - started)
 
-    def _execute(self, task, payload, digest):
+    def _execute(self, task, payload, digest, context=None):
         if type(task) is not types.FunctionType:
             raise q.QualificationDecline('batch task callable type')
         module = self._registered.get(task.__module__)
@@ -93,8 +93,13 @@ class BatchWorkerGate(q.WorkerGate):
                 task.__globals__ is not vars(module) or task.__closure__ is not None):
             raise q.QualificationDecline('batch task binding/globals changed')
         self.reset_counts = self.ledger.reset_for_batch(owned_worker=self.owned_worker)
-        args, kwargs = q.decode_task_payload(payload, digest)
-        q.check_types((args, kwargs), self.expected)
+        args, kwargs = q.decode_task_payload(payload, digest,limit=context.limits['payload_limit']) if context is not None else q.decode_task_payload(payload,digest)
+        q.check_types((args, kwargs), self.expected,limit=context.limits['walk_limit'] if context is not None else 100000)
+        if context is not None:
+            from ._planning_stages import WorkerModel,stage_task
+            if type(context) is not WorkerModel or task is not stage_task or self.owned_worker is not True:
+                raise q.QualificationDecline('unqualified worker model context')
+            return task(context,*args,**kwargs)
         return task(*args, **kwargs)
 
     def start(self, canaries, expected_digests):
@@ -118,13 +123,18 @@ class BatchWorkerGate(q.WorkerGate):
             self.poisoned = True
             raise
 
-    def run_tasks(self, tasks):
+    def run_tasks(self, tasks, *, context=None):
         """Risk-accepted assignment; final chunk post-check is worker-end check."""
         if not self.ready or self.poisoned or self.closed:
             raise q.QualificationDecline('batch worker is not admitted or already ended')
         completed = []
         try:
             tasks = tuple(tasks)
+            if context is not None:
+                from ._planning_stages import WorkerModel
+                if type(context) is not WorkerModel or self.owned_worker is not True:
+                    raise q.QualificationDecline('unqualified worker model context')
+                WorkerModel.verify(context)
             if not tasks:
                 self._boundary()
             for offset in range(0, len(tasks), self.batch_size):
@@ -134,11 +144,14 @@ class BatchWorkerGate(q.WorkerGate):
                     self._boundary()
                 for task, payload, digest in tasks[offset:offset + self.batch_size]:
                     started = time.perf_counter()
-                    self._pending.append(self._execute(task, payload, digest))
+                    self._pending.append(self._execute(task, payload, digest) if context is None else
+                                         self._execute(task, payload, digest, context))
                     self.task_seconds.append(time.perf_counter() - started)
                 self._boundary()
                 completed.extend(self._pending)
                 self._pending.clear()
+            if context is not None:
+                WorkerModel.verify(context)
             self.closed = True
             self.ready = False
             return tuple(completed)

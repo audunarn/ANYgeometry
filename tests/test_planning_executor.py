@@ -71,9 +71,18 @@ def test_refusal_retires_then_original_serial(reason, monkeypatch, tmp_path):
     events = []
     class Fake:
         def __init__(self, *args, **kwargs): events.append('start')
-        def submit(self, *args, **kwargs): raise QualificationDecline(reason)
+        def submit(self, *args, **kwargs):
+            if reason == 'deadline':
+                raise a.PlannerDeadline(reason)
+            raise QualificationDecline(reason)
         def close(self): events.append('close')
     monkeypatch.setattr(a, 'OwnedPlanner', Fake)
+    if reason == 'deadline':
+        with pytest.raises(a.PlannerDeadline):
+            a.execute(object(), ('pair',), lambda t: pytest.fail('deadline replay'),
+                      directory=tmp_path/'run', opt_in=True)
+        assert events == ['start', 'close']
+        return
     result = a.execute(object(), ('pair',), lambda t: events.append('serial') or 's',
                        directory=tmp_path/'run', opt_in=True)
     assert events == ['start', 'close', 'serial']
