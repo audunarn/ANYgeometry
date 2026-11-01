@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 import psutil
 from ._planning_executor import (OwnedPlanner,PlannerDeadline,PlannerSourceChanged,
-    PlannerCancelled,PlannerCleanupError,freeze_model,pack,verify_sources)
+    PlannerCancelled,PlannerCleanupError,PlannerMemoryExceeded,freeze_model,pack,verify_sources)
 from ._planning_qualification import QualificationDecline,check_ci_equality
 from ._planning_admission import stratified_samples
 from ._planning_values import encode_value,decode_value
@@ -19,15 +19,18 @@ from .errors import GeometryError
 
 
 class StageControl:
-    def __init__(self,directory,*,expected_ci,observed_ci,workers=8,timeout=100,admission=None,payload_limit=4_000_000,walk_limit=100000,reuse_workers=False,tree_memory_limit=None):
+    def __init__(self,directory,*,expected_ci,observed_ci,workers=8,timeout=100,admission=None,payload_limit=4_000_000,walk_limit=100000,reuse_workers=False,tree_memory_limit=None,memory_budget=None):
         self.directory=Path(directory);self.expected_ci=expected_ci;self.observed_ci=observed_ci
         self.workers=workers;self.timeout=timeout;self.admission=admission
         self.reuse_workers=reuse_workers
         self.tree_memory_limit=tree_memory_limit
+        self.memory_budget=memory_budget;self._memory_lease=None;self.memory_report=None
         self.limits=dict(payload_limit=payload_limit,walk_limit=walk_limit)
         self.reports=[];self.mode='not-run';self.decline_reason=None;self.ci_verified=False
 
     def tree_options(self):
+        if self._memory_lease is not None:
+            return dict(tree_memory_limit=self._memory_lease.tree_limit_bytes)
         if self.tree_memory_limit is None:return {}
         from ._planning_process import validate_memory_limit
         validate_memory_limit(self.tree_memory_limit)
@@ -48,7 +51,11 @@ class Bridge:
 
     def check_deadline(self):
         if time.monotonic()>=self.deadline:raise PlannerDeadline('stage planning deadline consumed')
-        self.poll()
+        try:self.poll()
+        except PlannerMemoryExceeded as error:
+            # Kernel numerical retry handlers catch GeometryError. Resource
+            # failure must cross them intact, then unwrap at qualified_plan.
+            raise _CallbackFailed(error) from error
         if time.monotonic()>=self.deadline:raise PlannerDeadline('stage planning deadline consumed')
 
     def run(self,kind,tasks,serial_task):
@@ -219,6 +226,9 @@ def qualified_plan(model,control,serial,parallel,*,policy,mode,eligible=True,pre
         raise failure.error
     finally:
         if owned_control and control.mode=='running':control.mode='terminal'
+        if owned_control and control._memory_lease is not None:
+            control.memory_report=control._memory_lease.report()
+            control.memory_report['outcome']=control.mode
 
 
 def _qualified_plan(model,control,serial,parallel,*,policy,mode,eligible=True,preparation=None,serial_replay=None):
@@ -246,7 +256,20 @@ def _qualified_plan(model,control,serial,parallel,*,policy,mode,eligible=True,pr
         check_ci_equality(control.expected_ci,control.expected_ci)
         if not callable(control.observed_ci):raise QualificationDecline('mandatory applied-model CI callback missing')
         if type(control.timeout) not in (int,float) or not 0<control.timeout<=110:raise QualificationDecline('stage timeout must be in (0,110]')
-        packet=freeze_model(model,**control.limits);before=source_bytes()
+        if control.memory_budget is not None:
+            from ._planning_memory import MemoryBudget
+            if type(control.memory_budget) is not MemoryBudget:raise QualificationDecline('unknown host memory budget')
+            if control.tree_memory_limit is not None:
+                control.tree_options()
+                if control.tree_memory_limit!=control.memory_budget.tree_limit_bytes:
+                    raise QualificationDecline('conflicting tree memory caps')
+            check_cancel()
+            lease=control.memory_budget.begin();control._memory_lease=lease
+            def poll():
+                check_cancel()
+                lease.check()
+        packet=freeze_model(model,**control.limits)
+        poll();before=source_bytes()
         poll()
         if control.admission is not None and control.admission(model,policy) is not True:
             raise QualificationDecline('PP4 host/memory admission refused')
@@ -268,7 +291,7 @@ def _qualified_plan(model,control,serial,parallel,*,policy,mode,eligible=True,pr
             try:
                 try:
                     candidate=parallel(bridge)
-                except (PlannerCancelled,PlannerDeadline,PlannerCleanupError,PlannerSourceChanged,QualificationDecline):
+                except (PlannerCancelled,PlannerDeadline,PlannerCleanupError,PlannerSourceChanged,PlannerMemoryExceeded,QualificationDecline):
                     raise
                 except Exception as exc:
                     # Unverified provisional values cannot dictate public error
@@ -285,6 +308,7 @@ def _qualified_plan(model,control,serial,parallel,*,policy,mode,eligible=True,pr
         check_ci_equality(control.expected_ci,control.observed_ci(candidate))
         bridge.check_deadline()
         if source_bytes()!=before:raise PlannerSourceChanged('source changed during stage planning/CI')
+        bridge.check_deadline()
         control.mode='parallel';control.ci_verified=True
         return candidate
     except QualificationDecline as exc:
@@ -296,19 +320,20 @@ def _qualified_plan(model,control,serial,parallel,*,policy,mode,eligible=True,pr
             raise PlannerSourceChanged('source changed before serial fallback') from exc
         control.mode='serial';control.decline_reason=type(exc).__name__+': '+str(exc)
         _increment('parallel_planning_decline:'+str(exc))
-        if bridge is None:return serial()
+        if bridge is None and control._memory_lease is None:return serial()
+        check_replay=bridge.check_deadline if bridge is not None else poll
         def replay_poll():
             # GeometryError wrappers in the original kernel must not turn an
             # executor deadline/cancellation into a face-pair numerical error.
-            try:bridge.check_deadline()
+            try:check_replay()
             except _CallbackFailed:raise
             except BaseException as error:raise _CallbackFailed(error) from error
         try:
             result=serial() if serial_replay is None else serial_replay(replay_poll)
-            bridge.check_deadline()
-            if source_bytes()!=before:raise PlannerSourceChanged('source changed during serial fallback')
-            bridge.check_deadline()
+            check_replay()
+            if before is not None and source_bytes()!=before:raise PlannerSourceChanged('source changed during serial fallback')
+            check_replay()
             return result
-        except (_CallbackFailed,PlannerCancelled,PlannerDeadline,PlannerCleanupError,PlannerSourceChanged):
+        except (_CallbackFailed,PlannerCancelled,PlannerDeadline,PlannerCleanupError,PlannerSourceChanged,PlannerMemoryExceeded):
             control.mode='terminal'
             raise

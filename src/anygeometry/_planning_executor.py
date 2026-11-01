@@ -34,6 +34,10 @@ class PlannerSourceChanged(GeometryError):
     """A changed caller source is not silently resnapshotted for fallback."""
 
 
+class PlannerMemoryExceeded(GeometryError):
+    """An admitted host memory overrun cannot grant serial replay."""
+
+
 def _pairs(items):
     result = {}
     for key, value in items:

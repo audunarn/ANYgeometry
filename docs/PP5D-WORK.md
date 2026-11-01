@@ -1143,3 +1143,125 @@ model reuse capacity/performance and remaining programme gates stay OPEN. No
 whole-model run,default enable,remote,push,PR or schedule. Exact commands, source
 bindings, final revision and restart state are recorded in PP4A-R4 artifacts and
 the append-only outbox. No authority remains for further release4 invocations.
+
+### Continuous qualification continuation (owner instruction2026-11-01)
+
+Owner directs continued work until full qualification. Finite ten-run batches are
+complete history, not renewed. New continuous ledger records every scoped check
+and review without an aggregate run count;100s wait/110s cap,one owned heavy tree,
+existing worktree/branch and all scientific/whole-model/publication limits remain.
+First close28missing exact-candidate cases on e3bf0f6 (14seam+1false-signal,8legacy
+real,5legacy cancellation); acceptance711distinct current-source tests with preserved
+grouping failures/reviews/OFF identities. Then reconcile actual programme acceptance
+contracts, PP3/PP4/PP5/PP6/PP7 and external prerequisites. Implement/refuse from the
+registered gates rather than promoting a smallfixture pass to full qualification.
+Tests before behavior changes, targeted checks and independent Mistral review remain.
+Concrete ungranted whole-model/other-repository authority is not inferred.
+
+Continuation checkpoint:28remaining cases pass(15+8+5), yielding711distinct
+same-production-source passes on e3bf0f6. All282source hashes match R4 evidence;
+new receipts cleanup0. QUALIFICATION-711-CHECKPOINT.json binds exact commands,
+counts and hashes. Formal programme qualification still requires the distinct
+PP3/PP4/PP6/native/memory/whole-model/mesher gates; no universal or grouped-suite
+claim follows from this finite inventory.
+
+Next PP4b slice: explicit host-inclusive memory budget. Before snapshot allocation
+require known positive host-peak estimate and enforceable P/W cap,25percent
+headroom under caller-selected aggregate/free-RAM limits. Observe only the current
+H process's Windows private-commit lifetime peak and aggregate available RAM;
+never enumerate/control unrelated processes or put GUI H in our Job. Missing
+estimates/native counters refuse. At later bridge polls/CI/return, overrun or
+unknown accounting is terminal, not a serial replay under pressure. Freeze the
+budget for one plan; keep tree cap exact. This is an explicit estimate plus
+observed-peak acceptance policy, not an allocation guarantee for H. No default
+8GiB or free-RAM fraction is adopted by this slice. Full preparation/apply and
+loaded-native/source attestation remain separate gates.
+Tests first: exact rational headroom/freeRAM boundaries, bad types/unknowns,
+no-spawn preflight refusal, frozen fields, late pressure and unavailable accounting
+terminality, source/cancellation precedence, real smallfixture with recorded
+estimate/counters. Existing prototype None policy stays explicitly unqualified.
+Astra retains this coupled resource/acceptance boundary design; Mistral reviews
+complete implementation and evidence independently before any acceptance claim.
+
+PP4b implementation checkpoint:39 initial host-memory tests pass after one
+snapshot-refusal regression fix;2 real small fixtures pass (perstage/reuse,
+2workers,unchanged512MiB cap,raw plan/apply identity,source unchanged,cleanup0).
+Mistral PP4b review completed and requested discrimination of GeometryError
+interception plus preparation/transcript/pre-existing-pressure tests. The first
+kernel test mistakenly erased all pair traces: two failed receipts are harness
+failures, not B1 evidence. Corrected baseline produces2red cases because the real
+ring-split wrapper catches/reissues the terminal memory exception (2instances).
+Bridge now carries PlannerMemoryExceeded across numerical handlers using the
+existing private BaseException carrier, unwrapping the exact original object after
+cleanup. Corrected focused group221pass including44new host memory cases. No
+wrong-plan acceptance was demonstrated by B1; error interception/reissue was.
+Final native/OFF/ledger/kernel regressions and independent delta review pending.
+All failures preserved; no guard/tolerance/source pin changed.
+
+Contract reconciliation: PP1b/c/g/h/i explicitly superseded a full native purity
+proof with risk-accepted pinned trusted-image engineering qualification, named
+opaque-runtime residuals,canaries,batch boundaries,sampled serial checks and CI.
+Do not silently resurrect the superseded universal proof as a new release gate.
+Specific H code-token/loaded-host admission and Windows launch transaction gaps
+must still be checked against current released requirements and evidence.
+
+Prospective next slice after PP4b acceptance: W0 launch/retirement transaction.
+Replace plain Popen(CREATE_SUSPENDED)+NtResumeProcess with an explicit documented
+CreateProcessW transaction retaining the primary thread handle, preferably atomic
+STARTUPINFOEX Job-list assignment plus an explicit inherited-I/O handle list.
+Acceptance: no user code before owned containment; no unsupported silent fallback;
+only declared stdin/stdout/stderr handles inherited; typed refusal/terminal cleanup
+on create/attribute/resume/receipt/close failures; exact PID/command ownership and
+zero owned processes proven in real small fixtures; existing positive/cancel/loss/
+cap/OFF checks unchanged. Preserve caps,roles,command allowlist and evidence.
+Risk/decision: atomic Job-list support and nested Job behavior must be demonstrated
+on this Windows runtime; retain primary thread handle and explicit cleanup state.
+Astra owns this high-consequence containment contract; Mistral reviews the complete
+implementation. No other worktree,whole-model run,8GiB grant or remote is implied.
+
+Independent review:pp4b-final-review/REVIEW.md accepts the scoped B1 repair and
+new refusal/preparation/transcript coverage. Astra rejects its statement that
+PlannerMemoryExceeded is the only GeometryError-derived terminal: existing
+PlannerCancelled/PlannerDeadline/PlannerSourceChanged/PlannerCleanupError also
+inherit GeometryError. No broad 'old terminal errors cross handlers uncaught'
+claim is adopted. Current repair addresses introduced host-memory polling only;
+existing deadline/cancellation/source contracts retain their measured tests.
+Review is advice, not execution or full programme acceptance.
+
+Conditional arithmetic: let E be the declared H peak and J the exact enforced
+P/W cap. Require ceil(5(E+J)/4) <= min(T,floor(A*n/d)); all quantities are exact
+nonnegative integers, with no floating rounding term. On accepted samples
+p_H<=E and the separate retirement gate p_PW<=J, so reported sum<=E+J. If real
+peaks differ by unbounded counter errors e_H,e_PW, true sum is bounded only by
+E+J+e_H+e_PW; no finite counter-error bound, physical-RAM guarantee, memory
+reservation or prevention of H allocation is asserted. The lifetime H peak is
+conservative across earlier work, and the admission snapshot free-RAM fraction
+is not reapplied to RAM consumed by this same run. Full subsequent apply/prepare
+accounting and model-specific estimate qualification remain OPEN.
+
+PP4b final qualifying inventory is explicitly disjoint by test file:221focused,
+257ledger,234geometry,6native memory,8legacy real,2session-real,15seam/signal,
+9session lifecycle,5legacy cancellation=757expected distinct cases. Exact-source
+receipts must all pass and bind current283Python files before claiming757.
+3harness guard tests are separate. Reused previous711 evidence is historical only.
+The two overlapped supervisor receipts are excluded despite passing; sequential
+replacement receipts are pp4b-sequential-geometry and pp4b-sequential-native.
+
+W0 API references checked prospectively (public Microsoft documentation):
+https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-updateprocthreadattribute
+specifies JOB_LIST on Windows10+/Server2016+, HANDLE_LIST with inheritable handles
+and bInheritHandles=True, and attribute-value storage lifetime through deletion.
+https://learn.microsoft.com/en-us/windows/desktop/api/processthreadsapi/nf-processthreadsapi-createprocessw
+requires writable Unicode command-line storage; explicit lpApplicationName avoids
+ambiguous executable selection. Documentation is not proof of every creator-death
+interleaving; qualify the finite runtime/negative cases and retain that limitation.
+
+PP4b final disposition:757distinct tests/46disjoint files PASS on the same283-source
+inventory,plus3harness tests PASS;3OFF identities unchanged. Final receipts,
+commands,changed locations,review reconciliation,error terms and NOT CHECKED are
+.pp1-evidence/PP4B-QUALIFICATION.md,PP4B-VERIFICATION.json,PP4B-COMMANDS.txt and
+PP4B-CHANGES.json. Independent Mistral review reconciled. Scoped implementation
+accepted for a local commit; full PP4/programme qualification remains OPEN.
+No push. Next bounded milestone is the W0 launch transaction described above.
+Latest owner policy confirms restored Mistral Vibe allowance; two successful
+bounded payload reviews establish this review route. No Batch API or Claude used.
