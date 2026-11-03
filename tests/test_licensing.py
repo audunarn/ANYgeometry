@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from email.message import Message
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import subprocess
 import sys
 import tomllib
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -51,10 +55,12 @@ def test_dependency_inventory_is_canonical_and_complete() -> None:
         "build",
         "mpmath",
         "numpy",
+        "psutil",
         "pytest",
         "scipy",
         "setuptools",
         "shapely",
+        "threadpoolctl",
         "twine",
         "wheel",
     }
@@ -71,3 +77,26 @@ def test_static_license_checker_accepts_repository() -> None:
     )
     assert completed.returncode == 0, completed.stderr
     assert "license check passed" in completed.stdout
+
+
+@pytest.mark.parametrize("name", ["psutil", "threadpoolctl"])
+@pytest.mark.parametrize("field", ["License", "License-Expression"])
+@pytest.mark.parametrize("license_text", ["BSD-3-Clause", "MIT", "BSD", "GPL-3.0", ""])
+def test_runtime_monitoring_licenses_accept_only_verified_expression(
+    monkeypatch: pytest.MonkeyPatch, name: str, field: str, license_text: str
+) -> None:
+    spec = importlib.util.spec_from_file_location("check_runtime_licenses", ROOT / "tools" / "check_licenses.py")
+    assert spec is not None and spec.loader is not None
+    checker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(checker)
+    metadata = Message()
+    metadata[field] = license_text
+    distribution = type("Distribution", (), {"metadata": metadata})()
+    monkeypatch.setattr(checker.importlib_metadata, "distribution", lambda _: distribution)
+    rows = [{"name": name, "scope": "runtime"}]
+
+    if license_text == "BSD-3-Clause":
+        checker._check_installed(rows)
+    else:
+        with pytest.raises(SystemExit, match="license check failed"):
+            checker._check_installed(rows)

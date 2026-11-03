@@ -2,7 +2,6 @@
 import ctypes
 from ctypes import wintypes as W
 import json
-import msvcrt
 import os
 from pathlib import Path
 import subprocess
@@ -16,6 +15,11 @@ from anygeometry import _planning_process as process
 
 
 def test_only_declared_stdio_handles_cross_into_fake_child(tmp_path,monkeypatch):
+    if os.name != 'nt':
+        with pytest.raises(process.QualificationDecline, match='requires Windows Job containment'):
+            process.OwnedTree(tmp_path)
+        return
+    import msvcrt
     fake=tmp_path/'fake source';fake.mkdir()
     script=fake/'_planning_child.py'
     script.write_text('''import ctypes,json,os,sys
@@ -52,6 +56,10 @@ print('owned stderr',file=sys.stderr,flush=True)
 
 @pytest.mark.parametrize('phase',['after-native-create','before-resume','after-resume'])
 def test_fake_creator_death_retires_its_owned_child(tmp_path,phase):
+    if os.name != 'nt':
+        with pytest.raises(process.QualificationDecline, match='requires Windows Job containment'):
+            process.OwnedTree(tmp_path)
+        return
     fake=tmp_path/'fake';fake.mkdir()
     (fake/'_planning_child.py').write_text('import time\ntime.sleep(30)\n')
     host=tmp_path/'fake_host.py'

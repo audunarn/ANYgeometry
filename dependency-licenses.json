@@ -18,6 +18,14 @@
     },
     {
       "bundled": false,
+      "license_expression": "BSD-3-Clause",
+      "name": "psutil",
+      "requirement": "psutil>=5.9",
+      "scope": "runtime",
+      "upstream": "https://github.com/giampaolo/psutil"
+    },
+    {
+      "bundled": false,
       "license_expression": "MIT",
       "name": "pytest",
       "requirement": "pytest>=8",
@@ -120,6 +128,14 @@
       "requirement": "setuptools>=77.0.3",
       "scope": "build",
       "upstream": "https://github.com/pypa/setuptools"
+    },
+    {
+      "bundled": false,
+      "license_expression": "BSD-3-Clause",
+      "name": "threadpoolctl",
+      "requirement": "threadpoolctl>=3.1",
+      "scope": "runtime",
+      "upstream": "https://github.com/joblib/threadpoolctl"
     },
     {
       "bundled": false,

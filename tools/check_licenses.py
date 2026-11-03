@@ -46,10 +46,12 @@ INSTALLED_LICENSE_ALIASES = {
         "BSD-3-Clause",
     },
     "mpmath": {"BSD-3-Clause", "BSD"},
+    "psutil": {"BSD-3-Clause"},
     "pytest": {"MIT"},
     "scipy": {"BSD-3-Clause"},
     "shapely": {"BSD-3-Clause", "BSD 3-Clause"},
     "setuptools": {"MIT"},
+    "threadpoolctl": {"BSD-3-Clause"},
     "twine": {"Apache-2.0", "Apache Software License"},
     "wheel": {"MIT"},
 }
