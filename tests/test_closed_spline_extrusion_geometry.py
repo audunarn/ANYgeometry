@@ -35,6 +35,7 @@ def test_closed_subcurve_domains_and_sweeps_remain_exact(kind):
 
 
 def test_point_queries_do_not_request_discarded_analytic_derivatives(monkeypatch):
+    from anygeometry.nurbs import NurbsCurve
     geometry,plane,definition,outputs=fixture('nurbs')
     face=next(iter(geometry.faces));geometry.face_point(face,.3,.4)
     original=geometry._edge_parameter_derivative_object
@@ -42,6 +43,12 @@ def test_point_queries_do_not_request_discarded_analytic_derivatives(monkeypatch
     def derivative(edge,parameter):
         calls.append(edge.id);return original(edge,parameter)
     monkeypatch.setattr(geometry,'_edge_parameter_derivative_object',derivative)
+    # The topology batch path calls the curve owner directly rather than the
+    # scalar edge adapter. Observe both without changing either calculation.
+    curve_original=NurbsCurve.derivative
+    def curve_derivative(curve,parameters):
+        calls.append(id(curve));return curve_original(curve,parameters)
+    monkeypatch.setattr(NurbsCurve,'derivative',curve_derivative)
     geometry.face_point(face,.31,.42)
     geometry.evaluate_face_many(face,np.array(((.2,.3),(.7,.8))))
     assert not calls
