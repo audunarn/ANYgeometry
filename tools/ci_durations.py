@@ -25,6 +25,10 @@ TABLE = ROOT / "reports" / "ci" / "durations.json"
 
 
 def node_id(classname: str, name: str) -> str:
+    if not classname:
+        # pytest collection-error cases carry the file node in name, without
+        # a class. Keep that evidence instead of constructing Path('.').
+        return name
     parts = classname.split(".")
     for split in range(len(parts), 0, -1):
         module = Path(*parts[:split]).with_suffix(".py")

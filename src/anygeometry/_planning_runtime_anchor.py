@@ -33,7 +33,12 @@ def _metadata(value,remaining=512):
 
 
 def _functions(value):
-    from numpy._core._multiarray_umath import _ArrayFunctionDispatcher
+    try:
+        from numpy._core._multiarray_umath import _ArrayFunctionDispatcher
+    except ModuleNotFoundError as error:
+        if error.name not in ('numpy._core', 'numpy._core._multiarray_umath'):
+            raise
+        from numpy.core._multiarray_umath import _ArrayFunctionDispatcher
     pending=[value];seen=set();result=[];edges=[]
     while pending:
         function=pending.pop()
