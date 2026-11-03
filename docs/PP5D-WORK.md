@@ -1408,3 +1408,269 @@ PP3/full-model/performance/mesher/UI gates remain OPEN. No full-suite,universal
 bit-identity,default-on or release claim. Local scoped implementation commit only.
 See W0H-QUALIFICATION.md,W0H-VERIFICATION.json,W0H-REVIEW-RECONCILIATION.md,
 W0H-COMMANDS.txt,W0H-CHANGES.json and the separately recorded commit/outbox receipt.
+
+PPQ implementation authorized by owner after revised-plan audit. Baseline f645523.
+Sequence:2A declarative/warm host admission;2B optional native resource ownership;
+2C production controller/caller alignment/deadlines;2D session overhead/payload;
+full disjoint inventory,independent review,then separately authorized N2c gates.
+OpenAI authors;Opus5.5/high reviews. Pre-DET-1 frozen. No pin/tolerance/default changes.
+Prepared authority requests: .pp1-evidence/PPQ-AUTHORITY-REQUESTS.md. Caller branches,
+fresh600s review and full-model execution remain prerequisites. Native work may
+proceed independently of caller assignment; at most one owned heavy tree,100s wait/
+110s tree per normal check,unique evidence and no concurrent source changes during
+source-bound verification. Existing programme ledger supervises all checks.
+
+### PPQ snapshot sub-slice checkpoint
+Implemented explicit derived-state projection across check_types, freeze/thaw and constructor audit. The registry contains five GeometryModel dict stores, the exact AABBTree spatial cache, three MaterialDomain tuple caches, and BezierQuadricCurve inversion dict. Metadata definition=False alone is not eligibility. Hooks, transactions, unknown fields, malformed cache types, constructor extras and extension aliases retain refusal checks. H is not cleared.
+Tests (bounded runner, inputs unchanged, verified active owned processes=0):
+- `C:\Python\Python314\python.exe -B .pp1-evidence/programme_run.py check ppq-warm-baseline-01 -m pytest -q tests/test_planning_warm_state.py`: 5 failed, 6 passed; four intended warm-admission reds and an existing empty-list cache type acceptance defect.
+- `C:\Python\Python314\python.exe -B .pp1-evidence/programme_run.py check ppq-warm-focused-01 -m pytest -q tests/test_planning_warm_state.py tests/test_planning_constructor_state.py`: 36 passed.
+These are focused adapter tests, not full Slice 2A acceptance: loaded-host manifest, both positive worker lifecycles, settings drift, native image binding and final full inventory remain open. No performance/certified numerical claim; no pin changed; not independently reviewed, committed or pushed.
+Caller scope assigned under owner instruction: ppq-callers/ANYfem on codex/ppq-caller-fem-20261101 at f81da499ac19e6ae10aab48fd17815767831fcb4; ppq-callers/ANYmesh on codex/ppq-caller-mesh-20261101 at aa19c0fa6b796a0d7cb1793a87840f52899dfa24. OpenAI owns connected implementation as expressly required by the approved plan; this preserves different-family final review by Opus (or Mistral max if Opus usage is exhausted).
+
+### PPQ terminal-source and caller checkpoint
+Source rechecks now raise PlannerSourceChanged on drift or loss of readability. All four child roles serialize source_changed and the host decodes it as terminal; serial fallback cannot mask a captured-source change. Load observations use aggregate CPU/RAM/CPU count only, explicitly recording Python process count as unavailable (null).
+- `C:\Python\Python314\python.exe -B .pp1-evidence/programme_run.py check ppq-source-baseline-01 -m pytest -q tests/test_planning_source_terminal.py tests/test_planning_warm_state.py`: 9 failed, 12 passed. Eight intended new terminal/load reds, one newly exposed inversion-cache None type rejection case.
+- `C:\Python\Python314\python.exe -B .pp1-evidence/programme_run.py check ppq-source-focused-01 -m pytest -q tests/test_planning_source_terminal.py tests/test_planning_warm_state.py tests/test_planning_constructor_state.py tests/test_planning_child_cleanup_status.py tests/test_planning_executor.py tests/test_planning_terminal_kernel.py tests/test_planning_replay_deadline.py`: 104 passed; cleanup verified0 and inputs unchanged.
+Caller implementation inspected by Astra: weak process-local preparation obligation, explicit private transport bit, successful-owner-only clearing. Caller receipts independently inspected: FEM25 and mesh6 passes; actual process transport included. Environment/commands/full logs in ppq-callers/{ANYfem,ANYmesh}/.ppq-evidence/TASK.md and run receipts. Mesh production source unchanged. Opt-in remains OFF for these caller tests, so they do not prove parallel admission.
+Next host prerequisite: bounded registered-cache census with explicit module roots; new tests prepared but not yet executed. Native owner and payload/startup workers retain their scoped assignments. No full freeze, different-family final review, N2c runs, commit or publication yet.
+
+### PPQ bounded host-cache census and payload checkpoint
+Added explicit-module host census with registered cache payload omission. Ordinary worker census/reset behavior remains the default. validate_host checks unknown/active state and bindings without resetting H. Omitted cache roots cannot alias protected definitions, including nested annotations/fixed roots. Node bound remains 80000. Evidence groups: ppq-host-cache-red-01 10 expected missing-interface failures; ppq-host-cache-green-01 40 passed; new adversarial direct-root alias baseline 1failed/11passed; nested-definition alias baseline 2failed/12passed; final ppq-host-cache-final-02 82 passed, cleanup0/inputsstable. These synthetic/adapter checks do not establish the full loaded-host code manifest.
+Payload worker handoff inspected: ppq-payload-final-02 150 passed, cleanup0/inputsstable. Commands and all preserved failures in .pp1-evidence/ppq-payload-handoff.json. Compact ordinary stage evidence now validates result/order/digests immediately, and retained evidence binds to final PID/gate/model state. Direct ordinary OwnedSession actual-process selector is still pending; actual compact diagnostic Preparation and legacy/session comparisons passed. No r7 byte projection or N2c timing claim.
+Native artifact/install receipts inspected: ppq-native-owner-03 85 passed; OFF/ON/sdist/GIL-refusal checks and pip --no-index --no-deps isolated target OFF/ON installs passed. They bind the retained wheel/source snapshot. Further native Python adapter repair is in progress for interruption between thread-local routing assignment and try/finally; prior artifact evidence is not promoted to a final-source claim. Frozen binary/commands and exclusions in ppq-native-handoff.json; installed receipt ppq-native-installed-01.
+Host-manifest next decision: determine whether the explicit static numerical import closure plus registered-cache census admits a real headless host without clearing warm caches. Probe01 failed before geometry execution because standalone Python resolved another installed checkout; preserve it, add explicit W/src import precedence, and rerun once. This is harness discovery, not numerical qualification or source-pin renewal. A successful census would only establish store-adapter feasibility, not code/global/runtime admission.
+
+Owner granted all relevant authorizations to complete the approved plan. See PPQ-AUTHORITY-REQUESTS.md update; missing permissions are no longer a blocker within that scope. Scientific/runtime prerequisites, unchanged bounds and explicit per-run registration remain necessary.
+
+
+PPQ continuation checkpoint: historical disjoint inventory union confirmed52 files;
+10 current additions yield62 prepared files, not yet collected/executed. Native
+slot-token focused91, direct-session process3, final-source memory4 and three OFF
+observers passed on their recorded snapshots. Host/controller source now changing;
+no combined final freeze claim. Fresh callable-admission cycle has consumed2/3
+failed repairs (external ABC-registry refusal, Python3.14 import decoding defect).
+Owner /root/caller_alignment holds source/heavy slot; root performed no concurrent
+numerical runs.
+
+Offline retained-r7 packet arithmetic: ppq-historical-payload-projection.json.
+Removing nested worker row echoes yields845473 pair payload bytes/1175 tasks and
+847518 face bytes/240tasks. Linear N2c scenarios3697776/1981074bytes; observed-max-row
+scenarios25432237/2629515bytes. These are unbounded extrapolations, not current
+session measurements, not certified N2c bounds and not freeze approval. The initial
+analysis harness incorrectly assumed interleaved worker rows were globally ordered;
+failed script and failure receipt retained, repaired to check exact index coverage
+and equality independently of worker ordering. No original packet altered.
+
+PPQ prospective transition 2026-11-02T05:25:34.1792495+00:00: owner approved finite-registry/runtime-contract repair and fresh3-failure cycle. Same OpenAI worker retains loaded-host/production ownership. First checkpoint must specify executable dispatch coverage and external contracts before broad capture; no opaque-prefix exemption or expanded bound. Parent owns adoption/acceptance and preserves native/caller/payload work.
+
+PPQ finite-registry architecture adoption: root inspected backend.py184-276 and
+ledger.py99-140. Existing numerical owner anchors exact NumPy wrapper identities
+and exposed implementation/wrapped/code/default/live global edges at definition/load,
+not lazy validator capture. The hidden NumPy C dispatch pointer is not exposed by
+the installed NumPy2 adapter. Root adopts the same explicitly limited native-image
+provenance boundary for a finite enumerated list of additional required operations,
+through one minimal owner-load import and an immutable strong-reference anchor module.
+This is an engineering runtime contract, not hidden-pointer or universal purity proof.
+No numerical algorithm, NumPy namespace, source pin or tolerance is to be altered.
+Unanchored older hosts initially decline until normal restart; no validator rebaseline.
+Unknown operations/providers/types remain refusals. Postcapture source/code/binding
+mutation remains terminal. Final independent review must explicitly assess this delta.
+One failed adapter repair consumed in this cycle; two remain. Expected red tests5
+are separate. Root continues offline payload analysis only, no numerical processes.
+
+Offline payload stratification (no geometry imports/execution):
+C:\Python\Python314\python.exe -B .pp1-evidence/ppq_payload_class_projection.py
+passed all packet hashes/index coverage/task-count assertions. Historical N2c keys
+are3094 plane/plane,2000 cylinder/plane,45 cylinder/cylinder pairs. Applying retained
+r7 per-class row means gives2251958bytes; per-class observed maxima5471246bytes,
+excluding packet/report/manifest overhead. Face projections1667691/1720374bytes.
+No bounded error term exists for unseen geometry complexity; neither is an upper
+bound or current-candidate feasibility evidence. Full inputs/hashes/limitations in
+.pp1-evidence/ppq-payload-class-projection.json. Historical pickle byte counts are
+a different representation/source and are not a current encoding measurement.
+
+PPQ finite focused receipt parent-inspected: ppq-finite-anchor-green-01 has15 passed,
+exit0, cleanup verified0 and unchanged inputs. This predates subsequent OFF-safe
+capture/infrastructure adjustments and is not a final-source pass. No full host
+capture or production entry yet. Root found eager getattr/cell access could execute
+foreign replacement hooks during ordinary import: unknown adapters must record
+incomplete admission without triggering hooks or changing OFF behavior. Exact anchor
+infrastructure may be excluded from the numerical-store graph only after its own
+mandatory identity/type/source/code/registry verification at each boundary. Owner
+must retain the original module strongly; a primitive version marker cannot establish
+load-point authority. Deletion/reload/reimport must not rebaseline. Failed-repair
+allowance remains1 consumed/2 remaining. Same owner got30 continuation turns for
+observed progress, without renewing repair authority.
+
+Final review questions to retain (not acceptance findings yet):
+- Does each new named-operation anchor preserve owner-load provenance and reject
+  deletion/reload/reimport, including before a late manifest capture?
+- Are unsupported custom replacement hooks and empty closure cells inert on OFF
+  imports, with incomplete anchors causing only opt-in refusal?
+- Does exact infrastructure classification preserve independent actual code,
+  defaults/closures/global/store identity checks rather than exempting them?
+- Are ABC fixed predicate checks sufficient for the admitted exact input domain,
+  and is the hidden NumPy C-link limitation scoped honestly to named operations?
+- Does common effective behavior include mutable NumPy geterr/geterrcall state
+  wherever it influences admitted operations, in addition to environment/BLAS,
+  seam/retry/tolerances/diagnostics? No answer or coverage claim recorded yet.
+- Does ANYfem clear transport obligation only after the intended owner-success
+  boundary, including any report-building failure after geometry application?
+
+PPQ finite-registry cycle STOP: final ppq-finite-dispatch-green-01 is44 passed,
+2 failed,2 deselected; cleanup0/inputsstable, final13file hashes parent-rechecked
+without mismatches. Failed implementation repairs3/3; separate fixture-isolation
+failure1 was preserved and corrected. Current failures: unused authoring-method
+replacement still invalidates finite manifest; unknown callable type module None
+causes TypeError in refusal formatting. No full cold/warm capture attempted this
+cycle, no production wiring or actual P/W lifecycle, no final review. Next bounded
+cycle should repair these exact failures then realcapture. All current details,
+commands/line maps/hashes/NOTCHECKED in ppq-finite-registry-HANDOFF.json and
+PPQ-CURRENT-HANDOFF.md. No further source repair/check after cap.
+
+PPQ fourth-cycle transition 2026-11-02T06:25:44.1318850+00:00: owner Proceed renews3 failed implementation repairs for the two retained regressions and then real admission. Same OpenAI owner continues; no rebaselining or architecture expansion inferred. Parent retains integration/acceptance; final production/qualification plan remains open.
+
+### PPQ fourth-cycle integration checkpoint — 2026-11-02
+
+Fourth release remains active: one implementation repair failure consumed, two
+remaining. The retained marshal/typed-refusal defects pass focused checks
+(54 passed, 2 deselected); canonical-code follow-up passes 13. Existing real
+pair-session regression passes 1 with two workers including an empty assignment.
+Receipts: `ppq-finite-r4-focused-01`, `ppq-finite-r4-code-green-02`,
+`ppq-finite-r4-worker-01`; all are under `.pp1-evidence`. These are not loaded-H
+admission or programme qualification. Real capture01 refused at 80001 nodes /402
+entries; subsequent source changes have not been measured by another full capture.
+
+The prepared disjoint inventory now includes 70 files (52 historical,18 new),
+recorded in `.pp1-evidence/PPQ-FULL-INVENTORY-PREPARED-R4.json`. No cases were
+collected/executed for this update; final collection determines the case total.
+Caller tests remain separately inventoried.
+
+Parent read inspection of native ownership confirms the intended ordering:
+`wait_process` releases its borrower under the native lock before restoring the
+GIL and checking signals; `close_slot` marks closure and waits for borrowers;
+child close/resume carry immutable slot identity. This is inspection, not a
+replacement for the required different-family review or final installed-wheel
+checks. The final adapter repair postdates earlier installed-wheel evidence.
+
+Replay remains an implementation gap: `_planning_host.py` uses the parallel
+bridge deadline at refusal/replay. `IntersectionBatchPolicy` has no public wall
+budget field. The later repair must preserve existing host callback/caller-budget
+semantics, separate a harness overall deadline from the parallel allowance, and
+prove >110-second replay using simulated time. It must not invent or widen a
+public numerical-policy budget. Cancellation/source/cleanup remain terminal.
+
+The same implementation owner retains the loaded-host source and heavy slot.
+Completed branch guards must be connected before new capture; unsupported
+reachable variants still refuse. No numerical kernels, guarded pins, tolerance,
+80,000-node cap, publication, default-OFF or DET-1 boundaries changed.
+
+PPQ fourth-cycle delta: profile integration receipt
+`ppq-finite-r4-profile-guards-green-01` records34passed/16failed, all at an
+incorrect JSON immutable-type assumption. Implementation2/3 consumed. The
+read-only `ppq-finite-r4-json-interface-01/interface.json` establishes the actual
+mutable `_json.Encoder` heap type and eight native member descriptors. Adopted
+correction binds the exact native schema, bases/MRO, owner-load identity and
+image; later namespace changes still refuse. No blanket native-type exemption.
+
+Supporting read-only OpenAI lookup (not different-family review, no executions):
+Plane/EllipticArc inversions require lstsq A(3,2)/b(3,), rcond=None
+(surfaces.py89; predicates.py955; arrangement_geometry.py294;
+material_arrangement.py652/681). Planar fallback area requires A(3,2)/B(3,n),
+n=16,32,64,128,256,512 or adaptive24 at material_arrangement.py984/1001–1033.
+EllipticArc pinv3x2 at arrangement_geometry.py379/389/406 and
+batch_intersections.py1653 reaches SVD(full_matrices=False,hermitian=False);
+SVD therefore cannot be globally excluded for Plane/Cylinder planning.
+Bezier coincidence axis1 norms at material_arrangement.py2899 and
+batch_intersections.py1663 require freeze/decode control-array provenance.
+Finite coordinates do not prove finite intermediate differences/derivatives.
+These are adopted finite contract targets, not completed admission or runtime
+coverage. Unknown shapes/variants/stores remain refusals; rank/error behavior,
+exact kwargs/defaults, live callbacks and native identities remain bound.
+
+## Programme continuation checkpoint — native exports and replay budgets
+
+OpenAI implementation; current branch claude/pp5-stage-partition-20261031,
+HEAD f645523c8006efe61e94678a5056fba3c9a6a39d. Local dirty candidate; no commit,
+push, publication, scheduling or whole-model execution in this continuation.
+
+Implemented/focused verified:
+- Native helper export admission: all17exports checked before invocation, native
+  entry image provenance and portable offsets, strong references and retained
+  cleanup exports.8baseline failures ->122passing ownership/admission cases.
+  Files:src/anygeometry/_planning_native.py:33;
+  tests/test_planning_native_admission.py:1. Binary unchanged. Exact commands,
+  hashes and line map:ppq-native-export-snapshot/handoff.json. Parent independently
+  checked2file hashes/4receipts:0mismatches, all cleanup0/inputsstable.
+- Private caller/replay budget: optional absolute overall_deadline, unchanged
+  bounded parallel allowance, eligible replay using remaining caller budget,
+  terminal explicit timeout/cancel/source/cleanup/memory failures. Final caller
+  poll precedes source serialization; callback-free clock AND memory checks
+  remain afterward.149distinct final tests passed. Initial21expected red failures
+  retained;2memory-preservation failures on first candidate consumed1/3 replay
+  repairs before correction. Original rejection assertions preserved with explicit
+  absolute deadline. Files:src/anygeometry/_planning_host.py:22;
+  tests/test_planning_replay_deadline.py:13;tests/test_planning_replay_budget.py:1.
+  Exact10commands/receipts, hashes and full line map:ppq-replay-budget-HANDOFF.json.
+  Parent checked3file hashes/10receipts:0mismatches, all cleanup0/inputsstable.
+- Caller post-apply context repair remains32passing cases in the assigned ANYfem
+  worktree, including report failure and completion interruption. Evidence:
+  ../../ppq-callers/ANYfem/.ppq-evidence/postapply-HANDOFF.json.
+
+Reviewed: parent source/receipt inspection. Antigravity architecture advice failed
+at authentication before inference (cached, not called quota exhaustion). Authorized
+Mistral-max artifact-only fallback completed with0tools, source-stable and cleanup0;
+its filters-only warning fix was rejected against actual source. This is NOT the
+final independent review. Final600-second candidate review remains unconsumed.
+See PPQ-ADVICE-ADJUDICATION.md and ppq-advice-mistral-02/adjudication.json.
+
+Source investigation distinguished actual CPython3.14.2/NumPy2.4.6 native warning
+entry from Python fallback. Two ordinary redirected interpreter observations kept
+cp1252/backslashreplace stderr and default NumPy warn flags. A read-only GC-referent
+probe exposed the actual encoder receiver. No flags/caches/stdio were changed.
+Evidence and exact source links:PPQ-NATIVE-WARNING-PATH-DELTA.md;
+ppq-stdio-observation-01;ppq-stdio-referents-01. These are observations/proof inputs,
+not loaded-host admission or numerical qualification. No new certified
+mathematical claim, approximation or numerical error bound is introduced.
+
+NOT CHECKED: real loaded-H cold/warm admission; full common H/P/W code/settings
+manifest; public production controller; ordinary closure callback admission;
+final-adapter installed wheels; final full disjoint suite; raw ordinary output
+identity on final candidate; N2c preparation/meshing/UI. Reasons: prerequisite
+admission remains open and source is evolving. Existing replay fixture checks
+cover plan checksum and applied-document equality, not a universal bit-identity
+claim. The prepared disjoint file union is now76(52historical+24additional), with
+0missing files; no new collection/execution was performed for this inventory.
+Final frozen-candidate collection determines authoritative case count.
+
+Next owned milestone: workload-scoped default-H three-Plane pair+face admission,
+closing actual constructor/codec/NumPy/warning dependencies. Same OpenAI owner;
+R4 remains2/3 failed repairs with1remaining. No known-refusing broad capture, no
+reset, no H normalization or generic runtime trust waiver. Native and caller
+sources are frozen while that owner has the sole source/check slot.
+
+
+PROGRAMME STATE: PAUSED 2026-11-02T10:16:44.0700276Z
+Owner requested pause for restart. Restart: pp5/ANYgeometry/.pp1-evidence/PPQ-RESTART.md; component: PPQ-RUNTIME-INSPECTOR-PAUSE.md. No active owned process/session, programme lock absent per worker. Partial implementation retained; inspector baseline 3 expected failures/1 pass, no build/corrective check. Host R4 2/3 used, one remaining. Not qualified, independently reviewed, committed or pushed. No new runs authorized by this checkpoint.
+
+
+
+PROGRAMME partial slice 2026-11-02T10:45:42.9599579Z: passive codec inspector implemented; final focused23passed, four packaging checks passed. Six receipts cleanup verified/active0/inputsstable. Parent8sourcehashes checked0mismatch. Handoff .pp1-evidence/ppq-runtime-inspector-snapshot/HANDOFF.md. Independentreview/loadedhost/qualification NOT established; stderr pyreadline destructor diagnostic retained. Host R4 remains2/3, one remaining. Connected host owner now host_connected; no publication or fullmodelruns.
+
+
+
+PROGRAMME partial slice 2026-11-02T11:06:46.1922224Z: audit-aware passive inspector final29passed and affected installedONwheel passed; parent9sourcehashes0mismatch. Handoff .pp1-evidence/ppq-runtime-audit-snapshot/HANDOFF.md. Ordering regression RED was retrospective, NOT test-first compliance; failure evidence preserved. No owned native process remains. R4 still2/3. Connected owner now repairing GC census __class__ dispatch while preserving ndarray aliases. Qualification/independentreview NOT complete; no publication/fullmodel.
+
+
+
+PROGRAMME STATE: BLOCKED 2026-11-02T11:17:44.1943460Z
+Host R4 third corrective failure: ppq-host-connected-plane-cache-green-01,49passed/1failed; cleanup verified,active0,inputsstable. Candidate preserved; no more runs or source/test edits. Failure is decoded-model raw packet equality (extension_record absent versus present-empty); no reclassification/relaxation. Warm-vs-cold packet assertions before it passed; later assertions not executed. Final handoff .pp1-evidence/ppq-host-connected-constructor-HANDOFF.json; restart/options .pp1-evidence/PPQ-R4-STOP.md. Native audit29pass/installedwheel and census27pass evidence retained, independentreview/qualification incomplete. No active owned processes, commits, pushes or wholemodelruns. New bounded cycle requires owner renewal.
+
+
+
+## R9 non-speed default closeout — 2026-11-03T11:50:13.155336+00:00
+
+Default ON is implemented and accepted in the candidate checkout after all final impact checks. Explicit0 retains serial. The one-line ANYmesh selector is aligned and independently reviewed. All6 N2c matrix rows pass correctness; all3 opt-in rows use verified initial serial fallback, so N2c parallel andspeed remain unqualified. Eightprocesses/elevenpreparations include2retained failedcontrols. Final checks:14pytest passes/0failures,2actualcallers,2installedpublic configurations,OFF/ON/sdist builds and current privateinstallation; verifiedzeroownedprocesses.
+
+Complete scope, exactsource lines/hashes, mathematical/equivalence limits, commands, failed evidence, review, NOTCHECKED andbranch/HEADs: `.pp1-evidence/R9-CLOSEOUT.md`, `R9-CLOSEOUT.json`, `R9-CLOSEOUT-COMMANDS.json`. This does not close fullmeshing/liveUI/originaltripod gates. No Git delivery, publication or scheduling.

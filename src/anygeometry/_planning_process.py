@@ -47,7 +47,8 @@ class OwnedTree:
         self.commands = []
         self._handle_error_sequence = 0
         self._retiring = False
-        self.api = ctypes.WinDLL('kernel32', use_last_error=True)
+        from ._planning_native import NativeAPI
+        self.api = NativeAPI()
         for name, args, result in (
             ('CreateJobObjectW', [ctypes.c_void_p, W.LPCWSTR], W.HANDLE),
             ('AssignProcessToJobObject', [W.HANDLE, W.HANDLE], W.BOOL),
@@ -136,8 +137,7 @@ class OwnedTree:
         self.children.append(child)
         self.commands.append(command)
         try:
-            with (directory/'stdout.txt').open('wb') as out, (directory/'stderr.txt').open('wb') as err:
-                child.create(self.handle,directory,env,out,err)
+            child.create(self.handle,directory,env,directory/'stdout.txt',directory/'stderr.txt')
             child.resume(self.handle)
         except BaseException:
             # Job-list assignment is part of native creation, never a later
@@ -148,6 +148,17 @@ class OwnedTree:
                 raise PlannerCleanupError('owned launch rollback failed') from cleanup
             raise
         return child
+
+    @property
+    def handle(self):
+        # Native storage is authoritative even when a signal interrupted the
+        # Python caller immediately after acquisition or close returned.
+        return self.api.state()['job'] or None
+
+    @handle.setter
+    def handle(self, value):
+        if value != (self.api.state()['job'] or None):
+            raise RuntimeError('cannot overwrite native Job ownership')
 
     def wait(self, child, deadline, *, poll=None):
         while True:

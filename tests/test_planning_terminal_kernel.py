@@ -1,4 +1,9 @@
-"""Terminal ownership errors must cross actual numerical retry handlers intact."""
+"""Injected terminal faults cross actual retry handlers; admission is isolated.
+
+The modified numerical body is not admissible production code. Real unmodified
+package counterparts are test_planning_cancellation_process and the public
+canary in test_planning_r8_integration, with source/native drift tests separate.
+"""
 import pytest
 
 from anygeometry import _planning_host as host, _planning_executor as executor
@@ -9,6 +14,7 @@ from anygeometry._planning_canaries import _fixture
 @pytest.mark.parametrize('reuse',[False,True])
 @pytest.mark.parametrize('kind',['PlannerCancelled','PlannerDeadline','PlannerSourceChanged','PlannerCleanupError'])
 def test_actual_ring_split_does_not_reissue_or_replay_terminal(tmp_path,monkeypatch,reuse,kind):
+    monkeypatch.setattr(host,'_admit_stage_package',lambda *a,**k:lambda:None)
     model,_=_fixture();events=[];hits=[];owner=[];error=getattr(executor,kind)('injected terminal boundary')
     control=host.StageControl(tmp_path,expected_ci=('p','a'),observed_ci=lambda _:pytest.fail('CI after terminal'),reuse_workers=reuse)
     def run(self,stage,tasks,serial_task):

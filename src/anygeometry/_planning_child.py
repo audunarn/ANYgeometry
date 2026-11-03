@@ -25,7 +25,7 @@ from anygeometry._planning_batch import BatchWorkerGate
 from anygeometry._planning_canaries import startup_canaries
 from anygeometry._planning_executor import (pack, unpack, read_packet, write_packet, thaw_model,
     assignment_size, verify_threads, verify_sources, reduce_results, freeze_model,
-    PlannerDeadline, PlannerCancelled, PlannerCleanupError, check_result_status)
+    PlannerDeadline, PlannerCancelled, PlannerCleanupError, PlannerSourceChanged, check_result_status)
 from anygeometry._planning_process import OwnedTree
 from anygeometry._planning_tasks import model_task
 from anygeometry._planning_stages import WorkerModel,stage_task,dispatch
@@ -40,19 +40,24 @@ _GENERATED_MODULES = ('cython_runtime', '_cython_3_2_4', '_cython_3_1_4')
 
 
 def load():
-    # Requested anonymous machine-load totals; never unrelated command/PID data.
-    count = sum(1 for p in psutil.process_iter(['name'], ad_value='')
-                if (p.info['name'] or '').lower() in ('python.exe', 'pythonw.exe', 'python', 'python3'))
-    return dict(python_process_count=count, cpu_percent=psutil.cpu_percent(interval=.1),
+    # Aggregate counters only: counting Python processes would enumerate other
+    # owners' processes. Explicit unavailable is not a measured zero.
+    return dict(python_process_count=None, cpu_percent=psutil.cpu_percent(interval=.1),
+                available_memory_bytes=psutil.virtual_memory().available,
                 logical_cpus=os.cpu_count())
 
 
-def prepare():
+def prepare(*,production=False):
     if any(value != '1' for name, value in _BOOT_THREAD_ENV):
         raise q.QualificationDecline('native thread environment was not one before import')
     verify_threads(threadpool_info())
     canaries = startup_canaries()
-    goldens = json.loads((Path(__file__).resolve().parents[2]/'tests/data/pp1b-canaries.json').read_text())
+    # Fixed PP1b baseline, also checked against tests/data/pp1b-canaries.json.
+    # Installed wheels carry this source; they do not carry checkout fixtures.
+    goldens = {
+        'pair': 'eddf551cfc6a929265e6147e81f711539fef97a42e67c3c6b810b7dbabc80785',
+        'face': 'db97f6a31b9c34dfcafdb2c66f1f17fa07034c24fa9e90b51b43786e8bde409b',
+    }
     if {name: task() for name, task in canaries.items()} != goldens:
         raise q.QualificationDecline('planner prewarm canary mismatch')
     # Warm the transport/task path too, before ledger closure freezes imports.
@@ -71,6 +76,10 @@ def prepare():
         stage_task(context,dict(kind='pair',first=faces[0],second=face,
             tolerance=tolerance,face_tolerances=[tolerance,tolerance]))
     context.verify()
+    # Resolve the same finite numerical lazy imports in both fresh roles.
+    if production:
+        from anygeometry._planning_manifest import prepare_interfaces
+        prepare_interfaces()
     return canaries, goldens
 
 
@@ -186,7 +195,7 @@ def main():
     folder = Path(location)
     deadline = time.monotonic()+min(float(seconds), 110)
     started = time.perf_counter()
-    result = {}
+    result = {};production=False
     binding = {}
     limits = dict(payload_limit=4_000_000,walk_limit=100000)
     try:
@@ -195,7 +204,23 @@ def main():
         if type(limits) is not dict or set(limits)!={'payload_limit','walk_limit'} or any(type(v) is not int or v<1 for v in limits.values()):
             raise q.QualificationDecline('invalid child limits')
         with threadpool_limits(limits=1):
-            canaries, goldens = prepare()
+            production=(folder/'admission.json').exists()
+            if production:
+                admission=read_packet(folder/'admission.json','package-admission',limit=4096)
+                if (role not in ('session-planner','session-worker') or type(admission) is not dict or
+                        set(admission)!={'common','constructor','host','infrastructure_host','resource','value_codec'} or
+                        any(type(admission[name]) is not str or len(admission[name])!=64 or any(c not in '0123456789abcdef' for c in admission[name])
+                            for name in ('common','constructor','host','infrastructure_host'))):
+                    raise q.QualificationDecline('invalid production admission marker')
+                from anygeometry._planning_values import verify_value_codec_contract
+                verify_value_codec_contract(admission['value_codec'])
+                q.resource_file_pin(admission['resource'])
+                if role=='session-worker':q.verify_worker_resource_absence()
+            prepare_started=time.perf_counter()
+            canaries, goldens = prepare(production=production)
+            if production:
+                from anygeometry._planning_session import _record_initialization
+                _record_initialization(folder,'child_prepare',prepare_started)
             if role == 'planner':
                 result = planner(folder, deadline, canaries, goldens, time.perf_counter(), binding, limits)
             elif role == 'worker':
@@ -211,10 +236,17 @@ def main():
         traceback.print_exc()
         status = ('deadline' if isinstance(exc, PlannerDeadline) else
                   'cancelled' if isinstance(exc, PlannerCancelled) else
+                  'source_changed' if isinstance(exc, PlannerSourceChanged) else
                   'cleanup_error' if isinstance(exc, PlannerCleanupError) else 'declined')
         result = dict(status=status, reason=type(exc).__name__+': '+str(exc), **binding)
     finally:
         result['process_seconds'] = time.perf_counter()-started
+        if production:
+            try:
+                from anygeometry._planning_session import _record_initialization
+                _record_initialization(folder,'child_process_total',started)
+            except Exception as evidence_error:
+                result['initialization_evidence_error']=type(evidence_error).__name__+': '+str(evidence_error)
         write_packet(folder/'result.json', pack(result, 'result' if role in ('planner','session-planner') else 'worker-result',limit=limits['payload_limit']))
 
 

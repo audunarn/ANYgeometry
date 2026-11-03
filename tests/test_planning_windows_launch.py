@@ -101,21 +101,14 @@ def test_failed_job_handle_close_is_not_silently_accepted(tmp_path,monkeypatch):
 def test_native_creation_faults_fail_closed(tmp_path,monkeypatch,operation):
     tree=OwnedTree(tmp_path)
     def fail(*a):ctypes.set_last_error(5);return 0
-    if operation=='duplicate':monkeypatch.setattr(tree.api,'DuplicateHandle',fail)
-    elif operation in ('size','initialize'):
-        actual=tree.api.InitializeProcThreadAttributeList
-        actual.argtypes=[ctypes.c_void_p,W.DWORD,W.DWORD,ctypes.POINTER(ctypes.c_size_t)];actual.restype=W.BOOL
-        def initialize(buffer,*a):
-            if (operation=='size' and buffer is None) or (operation=='initialize' and buffer is not None):return fail()
-            return actual(buffer,*a)
-        monkeypatch.setattr(tree.api,'InitializeProcThreadAttributeList',initialize)
-    elif operation in ('job-attribute','handle-attribute'):
-        actual=tree.api.UpdateProcThreadAttribute
-        actual.argtypes=[ctypes.c_void_p,W.DWORD,ctypes.c_size_t,ctypes.c_void_p,ctypes.c_size_t,ctypes.c_void_p,ctypes.c_void_p];actual.restype=W.BOOL
-        def update(buffer,flags,kind,*a):
-            if kind==(0x2000d if operation=='job-attribute' else 0x20002):return fail()
-            return actual(buffer,flags,kind,*a)
-        monkeypatch.setattr(tree.api,'UpdateProcThreadAttribute',update)
+    # File acquisition and attribute setup are one native transaction. Inject
+    # before the named native operation; no Python callback can split ownership.
+    if operation in ('duplicate','size','initialize','job-attribute','handle-attribute'):
+        tree.api.inject_fault({'duplicate':'CreateFileW stdin',
+            'size':'InitializeProcThreadAttributeList size',
+            'initialize':'InitializeProcThreadAttributeList',
+            'job-attribute':'UpdateProcThreadAttribute job',
+            'handle-attribute':'UpdateProcThreadAttribute handles'}[operation])
     elif operation=='membership-query':monkeypatch.setattr(tree.api,'IsProcessInJob',fail)
     else:
         def absent(process,job,member):ctypes.cast(member,ctypes.POINTER(W.BOOL))[0]=False;return 1
@@ -202,3 +195,4 @@ def test_never_created_child_poll_wait_and_close_are_safe(tmp_path):
     try:
         assert child.pid is None and child.poll() is None and child.wait(timeout=0) is None
     finally:zero(tree,tmp_path)
+

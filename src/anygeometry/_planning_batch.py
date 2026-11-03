@@ -65,6 +65,7 @@ class BatchWorkerGate(q.WorkerGate):
             raise q.QualificationDecline('batch gate requires the live ledger')
         self._batch_size = batch_size
         self.coalesce_boundaries = coalesce_boundaries
+        self.task_diagnostics=[]
         self._registered = {}
         self._pending = []
         self.closed = False
@@ -84,6 +85,8 @@ class BatchWorkerGate(q.WorkerGate):
     def _boundary(self):
         started = time.perf_counter()
         try:
+            if hasattr(self.ledger,'manifest') and self.ledger.live_code_pins()!=self.expected.get('numerical_manifest'):
+                raise q.QualificationDecline('P/W common/constructor manifest mismatch')
             verify_boundary(self.expected, self._registered)
             if self.expected.get('live_code_pins', {}) != self.ledger.live_code_pins():
                 raise q.QualificationDecline('batch live code pins changed')
@@ -106,7 +109,11 @@ class BatchWorkerGate(q.WorkerGate):
             from ._planning_stages import WorkerModel,stage_task
             if type(context) is not WorkerModel or task is not stage_task or self.owned_worker is not True:
                 raise q.QualificationDecline('unqualified worker model context')
-            return task(context,*args,**kwargs)
+            from .runtime_diagnostics import _planning_transaction
+            with _planning_transaction() as diagnostics:
+                result=task(context,*args,**kwargs)
+            self.task_diagnostics.append(diagnostics)
+            return result
         return task(*args, **kwargs)
 
     def start(self, canaries, expected_digests):

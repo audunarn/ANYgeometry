@@ -13,8 +13,10 @@ import sys
 import weakref
 from dataclasses import fields, is_dataclass
 import numpy as np
-from .surfaces import Cylinder
+from .surfaces import Cylinder, Plane
 from ._planning_qualification import QualificationDecline
+
+_NDARRAY_TYPE = np.ndarray
 
 
 def _array_equal(a, b):
@@ -32,6 +34,51 @@ def _owner_counts(record):
         raise QualificationDecline('derived array type')
     base = array.base
     return sys.getrefcount(array), None if base is None else sys.getrefcount(base)
+
+
+def _plane_normal_count(record):
+    array = object.__getattribute__(record, '__dict__')['normal']
+    return sys.getrefcount(array)
+
+
+def _plane_normal_cache(record, tracked):
+    """Validate the existing H cache; never populate or transport that cache."""
+    names = ('origin', 'u_vector', 'v_vector')
+    namespace = object.__getattribute__(record, '__dict__')
+    if type(record) is not Plane or set(namespace) != {*names, 'normal'}:
+        raise QualificationDecline('unregistered Plane cache schema')
+    for name in names:
+        value = namespace[name]
+        if (type(value) is not _NDARRAY_TYPE or value.dtype != np.dtype(float)
+                or not value.dtype.isnative or value.shape != (3,)
+                or not value.flags.c_contiguous or value.flags.writeable
+                or not np.all(np.isfinite(value))):
+            raise QualificationDecline('unqualified Plane declared field')
+    fresh = Plane(**{name: namespace[name] for name in names})
+    fresh.normal
+    if any(not _array_equal(namespace[name], vars(fresh)[name]) for name in names):
+        raise QualificationDecline('Plane reconstruction changed declared bits')
+    if _plane_normal_count(record) != _plane_normal_count(fresh):
+        raise QualificationDecline('Plane normal owner-reference alias')
+    actual = namespace['normal']
+    canonical = vars(fresh)['normal']
+    if (type(actual) is not _NDARRAY_TYPE or actual.base is not None
+            or not actual.flags.owndata or not actual.flags.c_contiguous
+            or not actual.flags.aligned or actual.flags.writeable
+            or canonical.base is not None or not canonical.flags.owndata
+            or not canonical.flags.c_contiguous or not canonical.flags.aligned
+            or canonical.flags.writeable or not _array_equal(actual, canonical)):
+        raise QualificationDecline('Plane normal canonical bytes/layout/flags mismatch')
+    if weakref.getweakrefcount(actual):
+        raise QualificationDecline('Plane normal weak-reference alias')
+    for other in tracked:
+        if other is actual:
+            continue
+        try:
+            if np.shares_memory(actual, np.ndarray.view(other, type=np.ndarray), max_work=1000):
+                raise QualificationDecline('Plane normal GC-census alias')
+        except np.exceptions.TooHardError as exc:
+            raise QualificationDecline('Plane normal GC alias query exceeded bound') from exc
 
 
 def _extra(record, path, tracked, expected):
@@ -128,9 +175,14 @@ def audit(state, *, restore=None, limit=100000):
             raise QualificationDecline('duplicate constructor-state path')
     else:
         expected = None
-    # Include tracked ndarray subclasses, but inspect memory through the base C
-    # view method so no external __array_function__ override runs.
-    tracked = [obj for obj in gc.get_objects() if isinstance(obj, np.ndarray)]
+    # Bind the exact native target before scanning unrelated host objects.
+    # CPython's isinstance fallback reads an object's user-defined __class__;
+    # issubclass(real_type, exact_type_target) uses native subtype checks instead.
+    # Actual ndarray subclasses still enter the alias census below, whose base C
+    # view method avoids their __array_function__ overrides.
+    if np.ndarray is not _NDARRAY_TYPE or type(_NDARRAY_TYPE) is not type:
+        raise QualificationDecline('constructor ndarray type binding changed')
+    tracked = [obj for obj in gc.get_objects() if issubclass(type(obj), _NDARRAY_TYPE)]
     pending, seen, rows = [(state, 'model')], set(), []
     while pending:
         item, path = pending.pop()
@@ -152,10 +204,15 @@ def audit(state, *, restore=None, limit=100000):
             except AttributeError:
                 namespace = {}
             extra = set(namespace)-{f.name for f in declared}
-            if extra or typ is Cylinder:
+            if typ is Plane and extra:
+                _plane_normal_cache(item, tracked)
+            elif extra or typ is Cylinder:
                 rows.append(_extra(item,path,tracked,expected))
             for f in declared:
                 part = getattr(item,f.name)
+                from ._planning_model_state import registered_record_cache
+                if registered_record_cache(item, f, part):
+                    continue
                 if f.metadata.get('definition') is False and part is not None:
                     raise QualificationDecline('warm model record instance cache')
                 pending.append((part,path+'.'+f.name))

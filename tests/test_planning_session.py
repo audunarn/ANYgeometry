@@ -83,3 +83,124 @@ def test_child_cleanup_failure_status_is_terminal():
     from anygeometry._planning_executor import check_result_status, PlannerCleanupError
     with pytest.raises(PlannerCleanupError):
         check_result_status(dict(status='cleanup_error',reason='owned cleanup failed'))
+def test_packet_byte_observation_reports_actual_bounded_envelope(tmp_path):
+    from anygeometry._planning_session import _packet_bytes
+    from anygeometry._planning_executor import pack,write_packet
+    from anygeometry._planning_qualification import QualificationDecline
+    path=tmp_path/'packet.json';packet=pack({'value':'\u00e9'},'bytes')
+    write_packet(path,packet)
+    observed=_packet_bytes(path,'bytes',1000)
+    assert observed==dict(payload_utf8_bytes=len(packet['payload'].encode('utf-8')),envelope_bytes=path.stat().st_size)
+    with pytest.raises(QualificationDecline):_packet_bytes(path,'bytes',1)
+
+
+def test_initialization_phase_evidence_is_bounded_owned_and_accumulative(tmp_path,monkeypatch):
+    import os
+    module=api();monkeypatch.setattr(module.time,'perf_counter',lambda:12.)
+    module._record_initialization(tmp_path,'child_prepare',10.)
+    module._record_initialization(tmp_path,'model_context',11.)
+    row=module._read_initialization(tmp_path,os.getpid())
+    assert row['phases']=={'child_prepare':2.,'model_context':1.}
+    assert not (tmp_path/'initialization-phases.tmp').exists()
+    with pytest.raises(QualificationDecline):module._read_initialization(tmp_path,os.getpid()+1)
+
+
+@pytest.mark.parametrize('bad',[{'unknown':1.},{'child_prepare':-1.},{'child_prepare':float('nan')},{'child_prepare':True}])
+def test_initialization_phase_evidence_refuses_invalid_rows(tmp_path,bad):
+    import json,os
+    (tmp_path/'initialization-phases.json').write_text(json.dumps({'pid':os.getpid(),'phases':bad}))
+    with pytest.raises(QualificationDecline):api()._read_initialization(tmp_path,os.getpid())
+
+
+def test_initialization_phase_evidence_refuses_oversized_file(tmp_path):
+    import os
+    (tmp_path/'initialization-phases.json').write_text(' '*8193)
+    with pytest.raises(QualificationDecline):api()._read_initialization(tmp_path,os.getpid())
+
+
+def test_finish_wait_sidecar_retains_pending_then_completed_clock(tmp_path,monkeypatch):
+    import os
+    module=api();clock=[12.]
+    monkeypatch.setattr(module.time,'perf_counter',lambda:clock[0])
+    module._record_initialization(tmp_path,'finish_wait_0',10.,pending=True)
+    row=module._read_initialization(tmp_path,os.getpid())
+    assert 'finish_wait_0' not in row['phases']
+    assert row['events']['finish_wait_0']=={'started':10.,'ended':None}
+    clock[0]=15.
+    module._record_initialization(tmp_path,'finish_wait_0',10.)
+    row=module._read_initialization(tmp_path,os.getpid())
+    assert row['phases']['finish_wait_0']==5.
+    assert row['events']['finish_wait_0']=={'started':10.,'ended':15.}
+    with pytest.raises(QualificationDecline):module._record_initialization(tmp_path,'finish_wait_0',10.,pending=True)
+
+
+@pytest.mark.parametrize('event,phases',[
+    ({'started':True,'ended':None},{}),
+    ({'started':10.,'ended':9.},{}),
+    ({'started':10.,'ended':float('inf')},{}),
+    ({'started':10.,'ended':None},{'finish_wait_0':0.}),
+    ({'started':10.,'ended':12.},{'finish_wait_0':1.}),
+    ({'started':10.,'ended':12.,'unknown':0},{'finish_wait_0':2.}),
+])
+def test_finish_event_schema_refuses_inconsistent_or_unknown_state(tmp_path,event,phases):
+    import json,os
+    row=dict(pid=os.getpid(),phases=phases,events={'finish_wait_0':event})
+    (tmp_path/'initialization-phases.json').write_text(json.dumps(row))
+    with pytest.raises(QualificationDecline):api()._read_initialization(tmp_path,os.getpid())
+
+
+@pytest.mark.parametrize('failure',['start','end','close','prior'])
+def test_finish_trace_never_skips_containment_or_masks_close(tmp_path,monkeypatch,failure):
+    module=api();events=[];trace_error=OSError('original trace failure');close_error=RuntimeError('original close failure')
+    def trace(*args,**kwargs):
+        events.append('start' if kwargs.get('pending') else 'end')
+        if failure in ('start','close','prior') and kwargs.get('pending') or failure=='end' and not kwargs.get('pending'):raise trace_error
+    class Tree:
+        def close(self):
+            events.append('close')
+            if failure=='close':raise close_error
+            (tmp_path/'cleanup.json').write_text('{}')
+    monkeypatch.setattr(module,'_record_initialization',trace)
+    if failure=='prior':
+        module._retire_session_tree(Tree(),tmp_path,production=True,prior_error=RuntimeError('pending primary'))
+    else:
+        from anygeometry._planning_executor import PlannerCleanupError
+        with pytest.raises(PlannerCleanupError) as caught:module._retire_session_tree(Tree(),tmp_path,production=True)
+        assert caught.value.__cause__ is (close_error if failure=='close' else trace_error)
+    assert events.count('close')==1
+    if failure!='close':assert (tmp_path/'workers-cleanup.json').exists()
+
+
+@pytest.mark.parametrize('scenario',['transient','permanent','deadline','callback','cancel','corrupt'])
+def test_published_packet_permission_retry_is_narrow_and_bounded(tmp_path,monkeypatch,scenario):
+    from anygeometry._planning_executor import PlannerDeadline,PlannerCancelled
+    import json
+    module=api();path=tmp_path/'reply-1.json';path.write_text('{}')
+    clock=[0.];calls=[];polls=[];original=PermissionError(13,'original access denial',str(path))
+    callback_error=RuntimeError('original callback')
+    def read(*args,**kwargs):
+        calls.append(1)
+        if scenario=='cancel':(tmp_path/'cancel.flag').write_text('cancel')
+        if scenario=='corrupt':raise QualificationDecline('checksum mismatch')
+        if len(calls)==1 or scenario in ('permanent','deadline','callback'):raise original
+        return {'validated':True}
+    def poll():
+        polls.append(1)
+        if scenario=='callback' and len(polls)==2:raise callback_error
+    monkeypatch.setattr(module,'read_packet',read)
+    monkeypatch.setattr(module.time,'monotonic',lambda:clock[0])
+    monkeypatch.setattr(module.time,'sleep',lambda seconds:clock.__setitem__(0,clock[0]+seconds))
+    if scenario=='transient':assert module._read_published_packet(path,'reply',1.,poll=poll)=={'validated':True}
+    else:
+        expected=PlannerCancelled if scenario=='cancel' else PlannerDeadline if scenario=='deadline' else RuntimeError if scenario=='callback' else QualificationDecline if scenario=='corrupt' else PermissionError
+        with pytest.raises(expected) as caught:module._read_published_packet(path,'reply',.005 if scenario=='deadline' else 1.,poll=poll,cancel_folder=tmp_path)
+        if scenario=='callback':assert caught.value is callback_error
+        if scenario=='permanent':assert caught.value is original
+    assert clock[0]<=.25 and len(calls)<=32
+    if scenario=='corrupt':assert len(calls)==1 and not list(tmp_path.glob('packet-read-*.json'))
+    else:
+        rows=[json.loads(file.read_text()) for file in tmp_path.glob('packet-read-*.json')]
+        assert len(rows)==1 and rows[0]['errno']==13 and rows[0]['winerror'] is None
+        assert rows[0]['attempts']==len(calls)
+        if scenario=='transient':assert rows[0]['status']=='recovered'
+

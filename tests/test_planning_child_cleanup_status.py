@@ -17,6 +17,7 @@ def test_planner_cleanup_failure_is_terminal_on_wire(tmp_path,monkeypatch,failur
     (tmp_path/'request.json').touch()
     class Ledger:
         resets={}
+        trusted_image=True
         def prepare(self,**k):pass
         def live_code_pins(self):return {}
     class Tree:
@@ -26,7 +27,10 @@ def test_planner_cleanup_failure_is_terminal_on_wire(tmp_path,monkeypatch,failur
             if failure=='close':raise OSError('owned worker close failed')
             (tmp_path/'cleanup.json').write_text('{}')
     monkeypatch.setattr(child,'OwnedTree',Tree)
-    monkeypatch.setattr(child,'prepare',lambda:({},{}))
+    def prepare(*,production=False):
+        assert production is False
+        return {},{}
+    monkeypatch.setattr(child,'prepare',prepare)
     monkeypatch.setattr(child,'load',lambda:{})
     monkeypatch.setattr(child,'threadpool_limits',lambda **k:contextlib.nullcontext())
     monkeypatch.setattr(child,'verify_sources',lambda *a:None)

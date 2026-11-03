@@ -1,4 +1,10 @@
-"""Inherited replay deadline; fake clocks avoid sleeps and numerical budget changes."""
+"""Replay units: fake clocks and injected kernels isolate package admission.
+
+These do not qualify mutated kernels. Actual unmodified-kernel counterparts are
+test_planning_cancellation_process, test_planning_session_cancellation_process,
+and the public canary in test_planning_r8_integration; source/native mutation
+and retirement guards also remain covered by their dedicated test files.
+"""
 import pytest
 from anygeometry import _planning_host as host
 from anygeometry import _planning_executor as executor
@@ -12,9 +18,12 @@ from anygeometry.serialization import from_dict,to_dict
 
 def setup(tmp_path,monkeypatch,*,reuse=False):
     original,_=_fixture();model=from_dict(to_dict(original));clock=[0.]
+    # Deliberate fault-injection units must reach the replay lifecycle rather
+    # than decline earlier because the test replaced a protected kernel body.
+    monkeypatch.setattr(host,'_admit_stage_package',lambda *a,**k:lambda:None)
     monkeypatch.setattr(host.time,'monotonic',lambda:clock[0])
     signal=CancellationSignal();policy=bi.IntersectionBatchPolicy(cancellation_check=signal)
-    control=host.StageControl(tmp_path/'owned',expected_ci=('p','a'),observed_ci=lambda _:pytest.fail('refusal ran CI'),timeout=10,reuse_workers=reuse)
+    control=host.StageControl(tmp_path/'owned',expected_ci=('p','a'),observed_ci=lambda _:pytest.fail('refusal ran CI'),timeout=10,reuse_workers=reuse,overall_deadline=10.)
     return model,clock,signal,policy,control
 
 
@@ -73,7 +82,8 @@ def test_public_unexpired_fallback_preserves_plan_and_apply(tmp_path,monkeypatch
         def __init__(self,*a,**k):pass
         def submit_stage(self,*a,**k):raise QualificationDecline('refusal')
         def close(self):events.append('retired')
-    monkeypatch.setattr(host,'OwnedPlanner',Refuse);monkeypatch.setenv('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING','1')
+    monkeypatch.setattr(host,'OwnedPlanner',Refuse);monkeypatch.setattr(session,'OwnedSession',Refuse)
+    monkeypatch.setenv('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING','1')
     actual=bi.plan_intersections(model,tuple(model.faces),policy=policy,_parallel_control=control)
     assert actual.content_checksum==original.content_checksum and to_dict(model)==doc
     bi.apply_intersections(model,actual,policy=policy)
@@ -102,7 +112,8 @@ def test_public_replay_poll_error_keeps_identity(tmp_path,monkeypatch,error):
         def fail():raise error
         _event(signal).is_set=fail
         return original(*a,**k)
-    monkeypatch.setattr(host,'OwnedPlanner',Refuse);monkeypatch.setattr(bi,'_pair_paths',pair)
+    monkeypatch.setattr(host,'OwnedPlanner',Refuse);monkeypatch.setattr(session,'OwnedSession',Refuse)
+    monkeypatch.setattr(bi,'_pair_paths',pair)
     monkeypatch.setenv('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING','1')
     with pytest.raises(type(error)) as caught:bi.plan_intersections(model,tuple(model.faces),policy=policy,_parallel_control=control)
     assert caught.value is error and control.mode=='terminal'
@@ -119,7 +130,8 @@ def test_public_serial_error_wrapper_is_identical(tmp_path,monkeypatch,error):
         def __init__(self,*a,**k):pass
         def submit_stage(self,*a,**k):raise QualificationDecline('refusal')
         def close(self):pass
-    monkeypatch.setattr(host,'OwnedPlanner',Refuse);monkeypatch.setenv('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING','1')
+    monkeypatch.setattr(host,'OwnedPlanner',Refuse);monkeypatch.setattr(session,'OwnedSession',Refuse)
+    monkeypatch.setenv('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING','1')
     with pytest.raises(type(error)) as replay:bi.plan_intersections(model,tuple(model.faces),policy=policy,_parallel_control=control)
     assert str(replay.value)==str(original.value) and replay.value.__cause__ is original.value.__cause__
     assert control.mode=='serial'

@@ -63,7 +63,8 @@ def _namespace(module):
     return types.ModuleType.__getattribute__(module, '__dict__')
 
 
-def inventory(modules, *, max_nodes=80000, max_depth=24, store_objects=None, definition_objects=None):
+def inventory(modules, *, max_nodes=80000, max_depth=24, store_objects=None, definition_objects=None,
+              store_boundary=None, infrastructure_boundary=None):
     """Bounded actual-type walk; no user descriptors, iterators or repr calls.
 
     Module metadata is excluded from numerical stores, not from loader safety.
@@ -110,6 +111,8 @@ def inventory(modules, *, max_nodes=80000, max_depth=24, store_objects=None, def
         typ = type(value)
         if typ in _ATOMS:
             return
+        if infrastructure_boundary is not None and infrastructure_boundary(value,path):
+            return
         identity = id(value)
         if identity in seen:
             aliases.append((path, seen[identity]))
@@ -123,6 +126,11 @@ def inventory(modules, *, max_nodes=80000, max_depth=24, store_objects=None, def
             stores.append(Store(path, kind, 'declined', reason))
             if store_objects is not None:
                 store_objects[path] = value
+            # The caller's explicit registry may stop only store payload walks.
+            # The store itself and all externally visible aliases/definitions
+            # remain in the census; the ledger must validate the registry choice.
+            if store_boundary is not None and store_boundary(value, path):
+                return
         if typ in (dict, OrderedDict):
             items = dict.items(value) if typ is dict else OrderedDict.items(value)
             for i, (key, item) in enumerate(items):

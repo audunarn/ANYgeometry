@@ -18,7 +18,10 @@ from .batch_intersections import _pair_paths,_domain_bounds
 
 
 class WorkerModel:
-    def __init__(self,packet,*,payload_limit=4_000_000,walk_limit=100000):
+    def __init__(self,packet,*,payload_limit=4_000_000,walk_limit=100000,value_codec=None):
+        from ._planning_values import _value_codec
+        _value_codec(value_codec)
+        self.value_codec=value_codec;self._value_codec_binding=value_codec
         self.limits=dict(payload_limit=payload_limit,walk_limit=walk_limit)
         self.model=thaw_model(packet,**self.limits)
         self.packet=packet
@@ -27,6 +30,7 @@ class WorkerModel:
 
     def verify(self):
         if self.pid!=os.getpid():raise QualificationDecline('worker model ownership changed')
+        if self.value_codec is not self._value_codec_binding:raise QualificationDecline('worker value codec changed')
         actual=unpack(freeze_model(self.model,**self.limits),'model',limit=self.limits['payload_limit']);recorded=unpack(self.packet,'model',limit=self.limits['payload_limit'])
         if recorded['extension_record']==dict(present=False,sha256=None):
             if self.model._serialization_extensions!={}:raise QualificationDecline('worker extension changed')
@@ -71,15 +75,15 @@ def stage_task(context,task):
         domain=MaterialDomain.from_model(model,task['face'])
         _domain_bounds(domain)
         if 'support' in task:
-            support=decode_value(task['support'],limit=context.limits['walk_limit'])
+            support=decode_value(task['support'],limit=context.limits['walk_limit'],codec=context.value_codec,payload_limit=context.limits['payload_limit'])
             if not same(support,domain.support):raise QualificationDecline('face support definition mismatch')
             domain=replace(domain,support=support)
-        traces,points=decode_value(task['inputs'],limit=context.limits['walk_limit'])
+        traces,points=decode_value(task['inputs'],limit=context.limits['walk_limit'],codec=context.value_codec,payload_limit=context.limits['payload_limit'])
         seam={} if task['seam']=='baseline' else {'seam_policy':task['seam']}
         result=arrange_material(domain,traces,points=points,tolerance=task['tolerance'],
             area_tolerance=task['area_tolerance'],cancellation_check=lambda:False,**seam)
     else:raise QualificationDecline('unknown stage task')
-    return json.dumps(encode_value(result,limit=context.limits['walk_limit']),sort_keys=True,separators=(',',':'),allow_nan=False)
+    return json.dumps(encode_value(result,limit=context.limits['walk_limit'],codec=context.value_codec,payload_limit=context.limits['payload_limit']),sort_keys=True,separators=(',',':'),allow_nan=False)
 
 
 def dispatch(tasks,workers):

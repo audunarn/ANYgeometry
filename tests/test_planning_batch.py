@@ -55,24 +55,45 @@ def test_per_task_path_has_no_census_or_hash_between_boundaries(monkeypatch):
     before=dict(counts);censuses=len(ledger.census_costs);resets=len(ledger.costs)
     observed=[];execute=gate._execute
     hashes={'files':0,'stores':0};file_hash=q._hash;store_hash=l.content_digest
+    phase={'boundary':False};boundary_hashes=[];file_paths=[]
+    boundary=gate._boundary
+    def counted_boundary():
+        assert not phase['boundary']
+        phase['boundary']=True
+        initial=hashes['files']
+        try:
+            return boundary()
+        finally:
+            boundary_hashes.append(hashes['files']-initial)
+            phase['boundary']=False
     def counted_file(*args,**kwargs):
+        assert phase['boundary'], 'file hashing escaped the batch boundary'
         hashes['files']+=1
+        file_paths.append(str(args[0]))
         return file_hash(*args,**kwargs)
     def counted_store(*args,**kwargs):
         hashes['stores']+=1
         return store_hash(*args,**kwargs)
     monkeypatch.setattr(q,'_hash',counted_file)
     monkeypatch.setattr(l,'content_digest',counted_store)
+    monkeypatch.setattr(gate,'_boundary',counted_boundary)
     store_observed=[]
     def record(*args):
         observed.append((counts['boundary']-before['boundary'],len(ledger.census_costs)-censuses))
         store_observed.append(hashes['stores'])
-        return execute(*args)
+        initial=dict(hashes)
+        try:
+            return execute(*args)
+        finally:
+            assert hashes==initial, 'hashing occurred during reset/payload/task execution'
     monkeypatch.setattr(gate,'_execute',record)
     assert gate.run_tasks(tasks(m,5))==('1','2','3','4','5')
     assert observed==[(1,1),(1,1),(1,1),(3,3),(3,3)]
     assert counts['boundary']-before['boundary']==4
-    assert hashes['files']==0
+    # The retained diagnostic ledger pins its anchor/JSON/runtime files at
+    # boundaries. Only hashing between those boundaries is forbidden.
+    assert len(boundary_hashes)==4 and all(count>0 for count in boundary_hashes)
+    assert sum(boundary_hashes)==hashes['files']==len(file_paths)
     assert store_observed==[1,1,1,3,3] and hashes['stores']==4
     assert counts['environment']==1
     assert len(ledger.costs)-resets==5

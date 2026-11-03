@@ -6,7 +6,7 @@ import pytest
 
 from anygeometry import batch_intersections as bi
 from anygeometry._planning_host import StageControl
-from anygeometry._planning_executor import PlannerCancelled
+from anygeometry._planning_executor import PlannerCancelled, read_packet
 from anygeometry._planning_canaries import _fixture
 from anygeometry.serialization import from_dict, to_dict
 from anygeometry.cancellation import CancellationSignal, _event
@@ -33,7 +33,9 @@ def test_public_callback_after_worker_admission_retires_tree(tmp_path, monkeypat
     def cancel_after_admission():
         deadline = time.monotonic()+90
         while not stop.wait(.01) and time.monotonic()<deadline:
-            if (folder/stage/'worker-0/admitted.json').exists():
+            admitted=folder/stage/'worker-0/admitted-0.json'
+            if admitted.exists():
+                assert read_packet(admitted,'admitted')=={'stage':stage,'sequence':0}
                 seen.append('admitted')
                 signal.cancel()
                 return
@@ -58,10 +60,12 @@ def test_public_callback_after_worker_admission_retires_tree(tmp_path, monkeypat
     assert to_dict(model) == document
     cleanup = json.loads((folder/stage/'cleanup.json').read_text())
     assert cleanup['verified'] and cleanup['active_processes'] == 0
-    assert any('worker' in row['command'] for row in cleanup['checked'])
+    assert any(len(row['command'])==7 and row['command'][4]=='session-worker' for row in cleanup['checked'])
 
 
 def test_false_public_callback_retains_policy_plan_apply_and_source(tmp_path, monkeypatch):
+    from dataclasses import replace
+    from anygeometry._planning_code import exact_numerical_record
     model, _ = _fixture()
     document = to_dict(model)
     model = from_dict(document)
@@ -70,9 +74,13 @@ def test_false_public_callback_retains_policy_plan_apply_and_source(tmp_path, mo
     serial = bi.plan_intersections(reference, tuple(reference.faces), policy='connect')
     bi.apply_intersections(reference, serial, policy='connect')
     expected = (serial.content_checksum, to_dict(reference)['checksum']['value'])
+    ci_calls=[]
     def observed(plan):
         candidate = from_dict(document)
         bi.apply_intersections(candidate, plan, policy='connect')
+        assert json.dumps(to_dict(candidate),sort_keys=True,separators=(',',':'),allow_nan=False)==json.dumps(
+            to_dict(reference),sort_keys=True,separators=(',',':'),allow_nan=False)
+        ci_calls.append(plan)
         return plan.content_checksum, to_dict(candidate)['checksum']['value']
     signal = CancellationSignal()
     policy = bi.IntersectionBatchPolicy(cancellation_check=signal)
@@ -81,8 +89,17 @@ def test_false_public_callback_retains_policy_plan_apply_and_source(tmp_path, mo
     plan = bi.plan_intersections(model, tuple(model.faces), policy=policy, _parallel_control=control)
     assert control.mode == 'parallel' and control.ci_verified and not signal.cancelled
     assert plan.policy.cancellation_check is signal
+    # The passive H cancellation signal is the sole nonnumerical policy field
+    # excluded from exact declared-plan comparison; no numerical field changes.
+    assert exact_numerical_record(replace(plan,policy=replace(plan.policy,cancellation_check=None)))==exact_numerical_record(serial)
+    assert ci_calls==[plan] and control.package_stages and not getattr(control,'production',False)
     assert plan.content_checksum == serial.content_checksum and to_dict(model) == document
     assert [r['stage'] for r in control.reports] == ['pair', 'face']
+    for report in control.reports:
+        assert report['actual_workers']==2
+        for worker in report['worker_reports']:
+            assert all(worker['resource_guard'][name] is False for name in
+                ('controller_loaded','native_adapter_loaded','native_core_loaded'))
     for kind in ('pair', 'face'):
         cleanup = json.loads((control.directory/kind/'cleanup.json').read_text())
         assert cleanup['verified'] and cleanup['active_processes'] == 0

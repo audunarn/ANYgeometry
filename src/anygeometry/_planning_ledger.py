@@ -11,6 +11,7 @@ import enum
 import functools
 import gc
 import hashlib
+import json
 import marshal
 import struct
 import sys
@@ -229,6 +230,7 @@ def _metadata_parts(item):
     from fractions import Fraction
     typ = type(item)
     sentinels = (('dataclasses.MISSING', dataclasses.MISSING),
+                 ('dataclasses._HAS_DEFAULT_FACTORY', dataclasses._HAS_DEFAULT_FACTORY),
                  ('numpy._NoValue', np._NoValue), ('transactions._MISSING', _MISSING),
                  ('dataclasses._FIELD', dataclasses._FIELD),
                  ('dataclasses._FIELD_CLASSVAR', dataclasses._FIELD_CLASSVAR),
@@ -332,12 +334,72 @@ def content_digest(value):
     return hashlib.sha256(b''.join(chunks)).hexdigest()
 
 
+def runtime_infrastructure():
+    """Verify only the exact owner-load provenance handle; never a store waiver."""
+    owner=sys.modules.get('anygeometry.model')
+    handle=None if owner is None else vars(owner).get('_RUNTIME_OPERATION_OWNER')
+    if type(handle) is not tuple or len(handle)!=4:
+        raise QualificationDecline('missing owner-load runtime infrastructure')
+    module,verifier,code,seal=handle
+    if (type(module) is not types.ModuleType or type(verifier) is not types.FunctionType or
+            verifier.__code__ is not code or type(seal) is not tuple or
+            sys.modules.get('anygeometry._planning_runtime_anchor') is not module or
+            vars(module).get('OWNER') is not handle or vars(module).get('verify_owner') is not verifier):
+        raise QualificationDecline('runtime infrastructure binding changed')
+    verifier(owner)
+    from ._planning_qualification import pin_module
+    native,encoder,rows,complete=vars(module)['JSON_ANCHOR']
+    return handle,dict(anchor=pin_module(module),json_native=pin_module(native),json_encoder=pin_module(encoder))
+
+
+def _census(modules, objects, *, omit_cache_payloads=False, definitions=None):
+    """Keep the existing bound while treating registered H stores as opaque.
+
+    LRU wrappers still expose their wrapped callable/defaults to the ordinary
+    walker. Their C cache entries were never traversed by inventory. This is a
+    content exemption only for the existing reset registry, not new eligibility.
+    """
+    definitions = {} if definitions is None else definitions
+    infrastructure,_=runtime_infrastructure()
+    modules=tuple(module for module in modules if module is not infrastructure[0])
+    def infrastructure_boundary(value,path):
+        return ((path=='anygeometry.model._RUNTIME_OPERATION_OWNER' and value is infrastructure) or
+                (path=='anygeometry._planning_runtime_anchor' and value is infrastructure[0]))
+    omitted = {}
+    roots = {vars(module)['__name__'] + '.' + name: value
+             for module in modules for name, value in vars(module).items()
+             if name in _NUMERICAL_ROOTS and type(value) in (dict, list, set)}
+
+    def boundary(value, path):
+        if (roots.get(path) is value or type(value) in (
+                weakref.WeakKeyDictionary, weakref.WeakValueDictionary, weakref.WeakSet)):
+            omitted[path] = value
+            return True
+        return False
+
+    report = inventory(modules, store_objects=objects, definition_objects=definitions,
+                       store_boundary=boundary if omit_cache_payloads else None,
+                       infrastructure_boundary=infrastructure_boundary)
+    if any(id(value) in definitions for value in omitted.values()):
+        raise QualificationDecline('registered cache aliases protected definition')
+    protected = (*_FIXED_ROOTS, *_LIVE_CONTENT_PATHS, _LIVE_NAMESPACE_PATH, *_TRUSTED_IMAGE_STORES,
+                 *(path for paths in definitions.values() for path in paths))
+    if any(target in omitted and any(alias == path or alias.startswith(path + '.') or
+                                     alias.startswith(path + '[') for path in protected)
+           for alias, target in report.aliases):
+        raise QualificationDecline('registered cache aliases protected root')
+    return report, omitted
+
+
 class Ledger:
-    def __init__(self, report, objects, rows, modules, *, trusted_image=False):
+    def __init__(self, report, objects, rows, modules, *, trusted_image=False,
+                 omit_cache_payloads=False):
         check_coverage(report, rows)
         self.report, self.objects, self.rows = report, objects, rows
         self.modules = modules
+        self.infrastructure,self.infrastructure_pin=runtime_infrastructure()
         self.trusted_image = trusted_image
+        self.omit_cache_payloads = omit_cache_payloads
         self.registered = {m.__name__: m for m in modules if sys.modules.get(m.__name__) is m}
         self.resets = {p: objects[p] for p, row in rows.items() if row['action'] == 'reset'}
         self.costs = []
@@ -379,12 +441,17 @@ class Ledger:
 
     def validate(self):
         started = time.perf_counter()
+        infrastructure,pin=runtime_infrastructure()
+        if infrastructure is not self.infrastructure or pin!=self.infrastructure_pin:
+            raise QualificationDecline('runtime infrastructure source/binding changed')
         if any(sys.modules.get(name) is not module for name, module in self.registered.items()):
             raise QualificationDecline('ledger module binding changed')
         objects = {}
-        report = inventory(self.modules, store_objects=objects)
+        report, omitted = _census(self.modules, objects, omit_cache_payloads=self.omit_cache_payloads)
         if report.truncated:
             raise QualificationDecline('live census truncated')
+        if any(self.rows.get(path, {}).get('action') != 'reset' for path in omitted):
+            raise QualificationDecline('host cache registry decision changed')
         roots = tuple(self.resets)
         def beneath_reset(path):
             return any(path.startswith(root + '.') or path.startswith(root + '[') for root in roots)
@@ -397,7 +464,7 @@ class Ledger:
             raise QualificationDecline('live store set changed: ' + str(sorted(before ^ after)[:3]))
         for path in before:
             if objects[path] is not self.objects[path] or type(objects[path]) is not type(self.objects[path]):
-                raise QualificationDecline('live store rebound: ' + path)
+                raise QualificationDecline('live store binding rebound: ' + path)
         for path, expected in self.digests.items():
             if content_digest(objects[path]) != expected:
                 raise QualificationDecline('protected store content changed: ' + path)
@@ -429,6 +496,20 @@ class Ledger:
 
     def _reset_checked_handles(self, objects, *, owned_worker):
         # Refusal checks precede all mutations, including independent caches.
+        self._check_live_state(objects)
+        start = time.perf_counter()
+        counts = reset_declined({p: objects[p] for p in self.resets}, owned_worker=owned_worker)
+        self.costs.append(time.perf_counter() - start)
+        return counts
+
+    def validate_host(self):
+        """Admit existing H store state without clearing or replacing any store."""
+        check_coverage(self.report, self.rows)
+        objects = self.validate()
+        self._check_live_state(objects)
+        return objects
+
+    def _check_live_state(self, objects):
         for path, row in self.rows.items():
             if row['action'] == 'decline':
                 raise QualificationDecline('declined ledger store: ' + path)
@@ -447,10 +528,6 @@ class Ledger:
                         raise QualificationDecline('active context declines: ' + path)
                 elif len(value):
                     raise QualificationDecline('active recursion/default state declines: ' + path)
-        start = time.perf_counter()
-        counts = reset_declined({p: objects[p] for p in self.resets}, owned_worker=owned_worker)
-        self.costs.append(time.perf_counter() - start)
-        return counts
 
     def record(self):
         return dict(stores=list(self.rows.values()), aliases=list(self.report.aliases),
@@ -459,7 +536,7 @@ class Ledger:
                     live_code_pins=self.live_code_pins())
 
 
-def build_ledger(report, objects, *, modules=None, trusted_image=False):
+def build_ledger(report, objects, *, modules=None, trusted_image=False, omit_cache_payloads=False):
     if type(trusted_image) is not bool:
         raise QualificationDecline('trusted-image selection must be explicit bool')
     if set(objects) != {r.path for r in report.stores}:
@@ -475,7 +552,8 @@ def build_ledger(report, objects, *, modules=None, trusted_image=False):
     if not modules:
         raise QualificationDecline('ledger requires explicit live module roots')
     definitions, fresh = {}, {}
-    census = inventory(modules, store_objects=fresh, definition_objects=definitions)
+    census, omitted = _census(modules, fresh, definitions=definitions,
+                             omit_cache_payloads=omit_cache_payloads)
     if census.truncated or set(fresh) != set(objects) or any(fresh[p] is not v for p, v in objects.items()):
         raise QualificationDecline('ledger creation live coverage mismatch')
     # Two source-reviewed constant container trees. Record actual container IDs,
@@ -533,12 +611,131 @@ def build_ledger(report, objects, *, modules=None, trusted_image=False):
             if path != parent and (path.startswith(parent + '.') or path.startswith(parent + '[')):
                 row.update(action='covered-by-reset', parent=parent)
                 break
-    return Ledger(report, objects, rows, modules, trusted_image=trusted_image)
+    if any(rows[path]['action'] != 'reset' for path in omitted):
+        raise QualificationDecline('host cache omission is not a registered store')
+    return Ledger(report, objects, rows, modules, trusted_image=trusted_image,
+                  omit_cache_payloads=omit_cache_payloads)
 
 
-def loaded_geometry_ledger(*, trusted_image=False):
-    modules = tuple(m for name, m in sorted(sys.modules.items())
-                    if name == 'anygeometry' or name.startswith('anygeometry.'))
+def loaded_geometry_ledger(*, trusted_image=False, modules=None, omit_cache_payloads=False):
+    if type(omit_cache_payloads) is not bool:
+        raise QualificationDecline('host census selection must be explicit bool')
+    if modules is None:
+        if omit_cache_payloads:
+            raise QualificationDecline('host census requires explicit numerical module roots')
+        modules = tuple(m for name, m in sorted(sys.modules.items())
+                        if name == 'anygeometry' or name.startswith('anygeometry.'))
+    if type(modules) is not tuple or not modules or any(type(m) is not types.ModuleType for m in modules):
+        raise QualificationDecline('invalid explicit numerical module roots')
     objects = {}
-    report = inventory(modules, store_objects=objects)
-    return build_ledger(report, objects, modules=modules, trusted_image=trusted_image)
+    report, _ = _census(modules, objects, omit_cache_payloads=omit_cache_payloads)
+    return build_ledger(report, objects, modules=modules, trusted_image=trusted_image,
+                        omit_cache_payloads=omit_cache_payloads)
+
+class PackageWorkerLedger:
+    """Production package closure with explicit owned-worker reset authority.
+
+    The diagnostic interpreter ledger above remains unchanged. This route uses
+    the common/constructor graph and pinned external interfaces, never the
+    diagnostic external-internals anchor.
+    """
+    trusted_image=False
+
+    def __init__(self,model,*,resource_pin=None,role=None):
+        from ._planning_manifest import LoadedManifest
+        from ._planning_qualification import verify_resource_file_pin,verify_worker_resource_absence
+        if role not in (None,'planner','worker') or role is not None and resource_pin is None:
+            raise QualificationDecline('package resource role binding')
+        self.role=role
+        self.resource_pin=None if resource_pin is None else json.loads(json.dumps(resource_pin,allow_nan=False))
+        self._resource_binding=self.resource_pin
+        self._resource_token=json.dumps(self.resource_pin,sort_keys=True,allow_nan=False)
+        if resource_pin is not None:verify_resource_file_pin(self.resource_pin)
+        if role=='worker':verify_worker_resource_absence()
+        self.manifest=LoadedManifest(model=model,include_host=False)
+        self.costs=[];self.census_costs=[]
+        self.store_bindings=dict(self.manifest.callables.registered_stores)
+        self.objects={path:row[2] for path,row in self.store_bindings.items()}
+        self.resets={path:value for path,value in self.objects.items() if type(value) is not contextvars.ContextVar}
+        self.rows={path:dict(path=path,kind=type(value).__module__+'.'+type(value).__name__,
+            action='require-empty' if type(value) is contextvars.ContextVar else 'reset') for path,value in self.objects.items()}
+        self._references=tuple(value for part in (self.manifest.callables,*self.manifest.roles.values()) for value in part.strong_references)
+        self._contexts=tuple({id(value):value for value in self._references if type(value) is contextvars.ContextVar}.values())
+        self._check_live_state()
+
+    def live_code_pins(self):
+        return dict(common=self.manifest.callables.digest,constructor=self.manifest.roles['constructor'].digest)
+
+    def _check_live_state(self):
+        from ._planning_manifest import context_state,cancellation_registry
+        from ._planning_qualification import verify_worker_resource_absence
+        if self.role=='worker':verify_worker_resource_absence()
+        if self.resource_pin is not self._resource_binding or json.dumps(self.resource_pin,sort_keys=True,allow_nan=False)!=self._resource_token:
+            raise QualificationDecline('package resource pin changed')
+        cancellation_registry(worker=True)
+        for variable in self._contexts:
+            context_state(variable,variable.name,role='worker')
+        for path,(owner,name,value,kind) in self.store_bindings.items():
+            if type(value) is not kind or (owner is not None and (sys.modules.get(owner.__name__) is not owner or vars(owner).get(name) is not value)):
+                raise QualificationDecline('registered worker store rebound: '+path)
+        # Cache payloads are disposable, but cannot own an alias to protected
+        # mutable definitions. Inspect data referents only, never execute hooks.
+        from ._planning_manifest import _is_type
+        leaves=(str,bytes,int,float,bool,complex,type(None),type(Ellipsis),type(NotImplemented),
+                types.ModuleType,types.FunctionType,types.CodeType,types.BuiltinFunctionType)
+        protected={id(value) for value in self._references if type(value) not in leaves and not _is_type(value)}-set(map(id,self.resets.values()))
+        pending=[]
+        for path,value in self.resets.items():
+            if type(value) is functools._lru_cache_wrapper:continue # native LRU entries expose no Python traversal API
+            if type(value) in (weakref.WeakKeyDictionary,weakref.WeakValueDictionary):children=value.values()
+            elif type(value) is weakref.WeakSet:children=value
+            else:children=gc.get_referents(value)
+            pending.extend((path+'.payload',item) for item in children)
+        seen=set()
+        while pending:
+            path,value=pending.pop();identity=id(value)
+            if identity in seen:continue
+            seen.add(identity)
+            if len(seen)>80000:raise QualificationDecline('worker cache alias walk bound exceeded')
+            # CPython shares this immutable leaf across numerical empty results
+            # and definition metadata. It has no descendants or mutable storage.
+            if type(value) is tuple and len(value)==0:continue
+            if identity in protected:
+                bindings=[row[0] for part in (self.manifest.callables,*self.manifest.roles.values())
+                    for row in part._identities if len(row)>1 and row[1]==identity]
+                kind=type.__getattribute__(type(value),'__module__')+'.'+type.__getattribute__(type(value),'__qualname__')
+                error=QualificationDecline('registered cache descendant aliases protected definition: '+path+' -> '+kind+' / '+str(bindings[:3]))
+                error.alias_details=dict(cache_path=path,type=kind,bindings=bindings,visited=len(seen),
+                    tuple_length=len(value) if type(value) is tuple else None)
+                raise error
+            if type(value) in leaves or type(value) is weakref.ReferenceType or _is_type(value):continue
+            pending.extend((path+'.referent'+str(index),item) for index,item in enumerate(gc.get_referents(value)) if not _is_type(item))
+
+    def validate(self):
+        started=time.perf_counter()
+        if self.resource_pin is not None:
+            from ._planning_qualification import verify_resource_file_pin
+            verify_resource_file_pin(self.resource_pin)
+        self._check_live_state();self.manifest.verify()
+        self.census_costs.append(time.perf_counter()-started)
+        return self.objects
+
+    def reset_for_batch(self,*,owned_worker):
+        self._check_live_state()
+        started=time.perf_counter()
+        counts=reset_declined(self.resets,owned_worker=owned_worker)
+        self.costs.append(time.perf_counter()-started)
+        return counts
+
+    def prepare(self,*,owned_worker):
+        self.validate()
+        return self.reset_for_batch(owned_worker=owned_worker)
+
+    def record(self):
+        return dict(stores=list(self.rows.values()),reset_seconds=list(self.costs),
+            census_seconds=list(self.census_costs),live_code_pins=self.live_code_pins(),
+            nodes=self.manifest.nodes,policy='package-worker-v1')
+
+
+def package_worker_ledger(model,*,resource_pin=None,role=None):
+    return PackageWorkerLedger(model,resource_pin=resource_pin,role=role)

@@ -1,0 +1,385 @@
+"""R8 full admission and production integration regressions."""
+import dataclasses
+import pytest
+from anygeometry import _planning_manifest as manifest
+from anygeometry._planning_executor import PlannerSourceChanged
+from anygeometry.tolerance import TolerancePolicy
+
+
+def test_dataclass_field_metadata_value_and_aliases_remain_bound(monkeypatch):
+    field=dataclasses.fields(TolerancePolicy)[0]
+    shared=[1]
+    monkeypatch.setattr(field,'metadata',{'first':shared,'second':shared})
+    captured=manifest.capture_callable_manifest((TolerancePolicy,))
+    captured.verify()
+    shared[0]=2
+    with pytest.raises(PlannerSourceChanged):captured.verify()
+
+
+def test_dataclass_field_flags_remain_bound(monkeypatch):
+    field=dataclasses.fields(TolerancePolicy)[0]
+    captured=manifest.capture_callable_manifest((TolerancePolicy,))
+    monkeypatch.setattr(field,'repr',not field.repr)
+    with pytest.raises(PlannerSourceChanged):captured.verify()
+
+
+def test_registered_default_factory_definition_remains_bound(monkeypatch):
+    from anygeometry._canonical_curve_runtime import _Bank
+    field=next(field for field in dataclasses.fields(_Bank) if field.name=='declarations')
+    captured=manifest.capture_callable_manifest((_Bank,))
+    monkeypatch.setattr(field,'default_factory',list)
+    with pytest.raises(PlannerSourceChanged):captured.verify()
+
+
+def test_direct_slot_edges_equal_existing_diagnostic_metadata():
+    from anygeometry import _planning_ledger as ledger
+    values=(*dataclasses.fields(TolerancePolicy),vars(TolerancePolicy)['__dataclass_params__'])
+    for value in values:
+        before=ledger._metadata_parts(value)
+        after=tuple((name,part) for name,descriptor,part in manifest._dataclass_slot_values(value))
+        assert len(before)==len(after)
+        assert all(a==b and first is second for (a,first),(b,second) in zip(before,after))
+
+
+@pytest.mark.parametrize('change',['schema','descriptor'])
+def test_dataclass_slot_schema_or_descriptor_substitution_refuses(monkeypatch,change):
+    from anygeometry._planning_qualification import QualificationDecline
+    field=dataclasses.fields(TolerancePolicy)[0]
+    if change=='schema':monkeypatch.setattr(dataclasses.Field,'__slots__',dataclasses.Field.__slots__+('unknown',))
+    else:monkeypatch.setattr(dataclasses.Field,'default',property(lambda self:pytest.fail('descriptor hook executed')))
+    with pytest.raises(QualificationDecline):list(manifest._dataclass_slot_values(field))
+
+
+def test_interface_preparation_only_materializes_exact_empty_class_metadata(monkeypatch):
+    from anygeometry import nurbs
+    from anygeometry._planning_canaries import _fixture
+    model,_=_fixture();cache=model._arc_cache;cache[991]=object()
+    contents=dict(cache)
+    monkeypatch.delattr(nurbs._PreparedCurveState,'__annotations_cache__',raising=False)
+    manifest.prepare_interfaces()
+    metadata=vars(nurbs._PreparedCurveState)['__annotations_cache__']
+    assert type(metadata) is dict and not metadata
+    manifest.prepare_interfaces()
+    assert vars(nurbs._PreparedCurveState)['__annotations_cache__'] is metadata
+    assert model._arc_cache is cache and cache==contents
+
+
+@pytest.mark.parametrize('change',['nonempty','producer','class','source'])
+def test_interface_preparation_rejects_annotation_authority_changes(monkeypatch,change):
+    from anygeometry import nurbs
+    from anygeometry._planning_qualification import QualificationDecline
+    from pathlib import Path
+    cls=nurbs._PreparedCurveState
+    if change=='nonempty':monkeypatch.setattr(cls,'__annotations_cache__',{'field':int},raising=False)
+    elif change=='producer':monkeypatch.setattr(cls,'__annotate_func__',lambda *args:pytest.fail('annotation producer executed'),raising=False)
+    elif change=='class':monkeypatch.setattr(nurbs,'_PreparedCurveState',type('Other',(),{}))
+    else:
+        original=Path.read_bytes
+        monkeypatch.setattr(Path,'read_bytes',lambda path:original(path).replace(b'class _PreparedCurveState:',b'class ChangedPreparedCurveState:'))
+    with pytest.raises(QualificationDecline):manifest.prepare_interfaces()
+
+
+def test_prepared_annotation_cache_replacement_is_terminal(monkeypatch):
+    from anygeometry import nurbs
+    manifest.prepare_interfaces()
+    captured=manifest.capture_callable_manifest((nurbs._PreparedCurveState,))
+    monkeypatch.setattr(nurbs._PreparedCurveState,'__annotations_cache__',{})
+    with pytest.raises(PlannerSourceChanged):captured.verify()
+
+def test_production_ledger_has_strict_contexts_and_no_external_anchor(monkeypatch):
+    from anygeometry import _planning_ledger as ledger,analytic_roots
+    from anygeometry._planning_canaries import _fixture
+    from anygeometry._planning_executor import freeze_model,thaw_model
+    from anygeometry._planning_qualification import QualificationDecline
+    model,_=_fixture();model=thaw_model(freeze_model(model))
+    monkeypatch.setattr(ledger,'runtime_infrastructure',lambda:pytest.fail('legacy external-internals gate used'))
+    owned=ledger.package_worker_ledger(model)
+    assert owned.manifest.roles.keys()=={'constructor'}
+    owned.prepare(owned_worker=True)
+    token=analytic_roots._ROOT_MEMO.set({})
+    try:
+        with pytest.raises(QualificationDecline):owned.reset_for_batch(owned_worker=True)
+    finally:analytic_roots._ROOT_MEMO.reset(token)
+    owned.validate()
+
+def test_package_numpy_context_retains_getter_identity_without_anchor(monkeypatch):
+    import types,numpy as np
+    from anygeometry import _planning_ledger as ledger
+    from anygeometry._planning_numpy_context import capture_numpy_context
+    monkeypatch.setattr(ledger,'runtime_infrastructure',lambda:pytest.fail('external-internals anchor used'))
+    captured=capture_numpy_context(package_only=True)
+    captured.verify()
+    original=np.geterr
+    replacement=types.FunctionType(original.__code__,original.__globals__,original.__name__)
+    replacement.__module__=original.__module__
+    monkeypatch.setattr(np,'geterr',replacement)
+    monkeypatch.setattr(__import__('sys').modules[original.__module__],'geterr',replacement)
+    with pytest.raises(PlannerSourceChanged):captured.verify()
+
+@pytest.mark.parametrize('warm',[False,True])
+def test_public_eight_worker_canary_matches_serial(monkeypatch,tmp_path,warm):
+    import os,json,psutil
+    from pathlib import Path
+    memory=psutil.virtual_memory()
+    Path(os.environ['TASK_EVIDENCE_DIRECTORY'],f'load-before-canary-{warm}.json').write_text(json.dumps(dict(
+        cpu_percent=psutil.cpu_percent(interval=.1),available_bytes=memory.available,total_bytes=memory.total,
+        logical_cpus=os.cpu_count(),python_process_count=None)))
+    from anygeometry import batch_intersections as bi,query_trimmed_surface_charts
+    from anygeometry._planning_canaries import _fixture
+    from anygeometry.serialization import to_dict,from_dict
+    from anygeometry.runtime_diagnostics import collect_runtime_records,collect_runtime_diagnostics
+    model,_=_fixture();document=to_dict(model)
+    source=from_dict(document);reference=from_dict(document);faces=tuple(source.faces)
+    if warm:query_trimmed_surface_charts(source,faces)
+    monkeypatch.setenv('ANYGEOMETRY_PLANNING_SCRATCH_ROOT',str(tmp_path/'production'))
+    monkeypatch.setenv('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING','1')
+    with collect_runtime_records() as records,collect_runtime_diagnostics() as parallel_counts:
+        with collect_runtime_diagnostics() as nested_counts:
+            plan=bi.plan_intersections(source,faces,policy='connect',_parallel_control=None)
+    assert parallel_counts==nested_counts
+    receipt=records['parallel_planning'][-1]
+    assert receipt['disposition']=='parallel',receipt
+    assert receipt['workers']==receipt['startup_concurrency']==8
+    assert receipt['retired'] is True and receipt['ci_verified'] is False
+    assert [stage['stage'] for stage in receipt['stages']]==['pair','face']
+    assert all(stage['accepted']==stage['total'] and stage['total']>0 for stage in receipt['stages'])
+    from anygeometry._planning_values import value_codec_contract
+    codec=value_codec_contract()
+    resource=receipt['stages'][0]['infrastructure']['resource']
+    for stage in receipt['stages']:
+        assert stage['infrastructure']['resource']==resource
+        assert stage['infrastructure']['value_codec']==codec
+        assert stage['infrastructure']['planner_reference']!=stage['infrastructure']['worker_reference']
+    for stage in receipt['costs']['infrastructure']:
+        assert len(stage['workers'])==8
+        assert all(worker['value_codec']==codec for worker in stage['workers'])
+        assert all(worker['resource_guard']==dict(controller_loaded=False,native_adapter_loaded=False,
+            native_core_loaded=False,binary_sha256=resource['binary_sha256']) for worker in stage['workers'])
+    from anygeometry._planning_code import exact_numerical_record
+    import json
+    parallel_record=exact_numerical_record(plan)
+    monkeypatch.setenv('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING','0')
+    with collect_runtime_diagnostics() as serial_counts:
+        serial=bi.plan_intersections(reference,faces,policy='connect')
+    assert parallel_record==exact_numerical_record(serial)
+    assert plan.content_checksum==serial.content_checksum==receipt['plan_checksum']
+    with collect_runtime_diagnostics() as parallel_apply:
+        bi.apply_intersections(source,plan,policy='connect')
+    with collect_runtime_diagnostics() as serial_apply:
+        bi.apply_intersections(reference,serial,policy='connect')
+    prefixes=('batch_face_pairs_','intersection_pair_','t2b_','planning_mode:',
+        'ring_split_','arrangement_snap_','arrangement_seam_')
+    def outcomes(data):return {key:value for key,value in data.items() if key.startswith(prefixes) and not key.endswith('_time_ns')}
+    Path(os.environ['TASK_EVIDENCE_DIRECTORY'],f'diagnostics-canary-{warm}.json').write_text(json.dumps(dict(
+        parallel=parallel_counts,serial=serial_counts,parallel_apply=parallel_apply,serial_apply=serial_apply,
+        classification='named deterministic outcomes compared; timing/work/cache counters retained separately')))
+    assert outcomes(parallel_counts)==outcomes(serial_counts)
+    assert outcomes(parallel_apply)==outcomes(serial_apply)
+    assert json.dumps(to_dict(source),sort_keys=True,separators=(',',':'),allow_nan=False)==json.dumps(to_dict(reference),sort_keys=True,separators=(',',':'),allow_nan=False)
+
+def test_slot_metadata_native_schema_inheritance_and_mangling():
+    class _Base:__slots__='__secret'
+    class Child(_Base):__slots__=('value','__weakref__')
+    assert manifest._slot_names(Child)==['value','_Base__secret']
+
+
+@pytest.mark.parametrize('change',['delete','replace','corrupt'])
+def test_slot_metadata_recheck_is_binding_sensitive(monkeypatch,change):
+    from anygeometry import nurbs
+    cls=nurbs._PreparedCurveState
+    manifest.prepare_interfaces()
+    captured=manifest.capture_callable_manifest((cls,))
+    original=vars(cls)['__slotnames__'];expected=list(original)
+    captured.verify();assert vars(cls)['__slotnames__'] is original
+    if change=='delete':monkeypatch.delattr(cls,'__slotnames__')
+    elif change=='replace':monkeypatch.setattr(cls,'__slotnames__',list(expected))
+    else:monkeypatch.setattr(cls,'__slotnames__',expected+['foreign'])
+    with pytest.raises(PlannerSourceChanged):captured.verify()
+
+
+def test_cached_immutable_code_rejects_equivalent_live_code_replacement(monkeypatch):
+    from anygeometry import _planning_code
+    captured=manifest.capture_callable_manifest((_planning_code.passive_data,))
+    captured.verify()
+    monkeypatch.setattr(_planning_code.passive_data,'__code__',_planning_code.passive_data.__code__.replace())
+    with pytest.raises(PlannerSourceChanged):captured.verify()
+
+
+def test_exact_numerical_evidence_distinguishes_signed_zero_and_array_types():
+    import numpy as np
+    from anygeometry._planning_code import exact_numerical_record as record
+    assert record(0.)!=record(-0.)
+    assert record(np.array([0.]))!=record(np.array([-0.]))
+    assert record(np.array([1.],dtype='float32'))!=record(np.array([1.],dtype='float64'))
+    assert record((1,))!=record([1])
+
+@pytest.mark.parametrize('change',['global','default','closure','array'])
+def test_retained_and_full_verifiers_agree_on_protected_mutation(monkeypatch,change):
+    from anygeometry import _planning_code,runtime_diagnostics,surface_capabilities
+    if change in ('global','default'):
+        captured=manifest.capture_callable_manifest((_planning_code.passive_data,))
+        if change=='global':monkeypatch.setattr(_planning_code,'_encode',lambda value:b'changed')
+        else:monkeypatch.setitem(_planning_code.passive_data.__kwdefaults__,'key',True)
+    elif change=='closure':
+        function=runtime_diagnostics.collect_runtime_records
+        captured=manifest.capture_callable_manifest((function,))
+        monkeypatch.setattr(function.__closure__[0],'cell_contents',lambda:None)
+    else:
+        value=surface_capabilities._SEEDS
+        captured=manifest.capture_callable_manifest((value,))
+        before=value.copy();value.flat[0]+=1.
+    try:
+        with pytest.raises(PlannerSourceChanged):captured.verify()
+        with pytest.raises(PlannerSourceChanged):captured.verify(full=True)
+    finally:
+        if change=='array':value[:]=before
+
+@pytest.mark.parametrize('change',['controller','bridge','ctypes','native_image'])
+def test_infrastructure_loaded_code_and_imported_interfaces_are_terminal(monkeypatch,change):
+    import ctypes
+    from pathlib import Path
+    from anygeometry._planning_code import InfrastructurePin
+    from anygeometry import _planning_controller as controller,_planning_host as host,_planning_native as native
+    captured=InfrastructurePin('host');captured.verify()
+    if change=='controller':monkeypatch.setattr(controller.run,'__code__',controller.run.__code__.replace())
+    elif change=='bridge':monkeypatch.setattr(host._SessionBridge.run,'__code__',host._SessionBridge.run.__code__.replace())
+    elif change=='ctypes':monkeypatch.setattr(ctypes,'WinDLL',lambda *a,**k:pytest.fail('changed ctypes interface invoked'))
+    else:
+        image=Path(native.load().__file__).resolve();original=Path.read_bytes
+        monkeypatch.setattr(Path,'read_bytes',lambda path:b'changed image' if path.resolve()==image else original(path))
+    with pytest.raises(PlannerSourceChanged):captured.verify()
+
+
+def test_retained_annotation_equal_copy_and_type_parameters_are_terminal(monkeypatch):
+    from anygeometry import _planning_code
+    function=_planning_code.passive_data
+    captured=manifest.capture_callable_manifest((function,))
+    monkeypatch.setattr(function,'__annotations__',dict(function.__annotations__))
+    with pytest.raises(PlannerSourceChanged):captured.verify()
+    with pytest.raises(PlannerSourceChanged):captured.verify(full=True)
+
+@pytest.mark.parametrize('phase',['initial','retained'])
+def test_infrastructure_generated_dataclass_code_skew_refuses(monkeypatch,phase):
+    from anygeometry._planning_code import InfrastructurePin
+    from anygeometry._planning_memory import MemoryBudget
+    from anygeometry._planning_qualification import QualificationDecline
+    captured=InfrastructurePin('host') if phase=='retained' else None
+    function=MemoryBudget.__init__
+    monkeypatch.setattr(function,'__code__',function.__code__.replace(co_consts=(*function.__code__.co_consts,'forged')))
+    if captured is None:
+        with pytest.raises(QualificationDecline):InfrastructurePin('host')
+    else:
+        with pytest.raises(PlannerSourceChanged):captured.verify()
+
+@pytest.mark.parametrize('kind',['empty_tuple','dict','array','wrapped_dict'])
+def test_worker_cache_alias_retains_mutable_protection(kind):
+    import numpy as np
+    from types import SimpleNamespace
+    from anygeometry._planning_ledger import PackageWorkerLedger
+    from anygeometry._planning_qualification import QualificationDecline
+    protected=() if kind=='empty_tuple' else np.zeros(2) if kind=='array' else {}
+    cache={'entry':(protected,) if kind=='wrapped_dict' else protected}
+    ledger=PackageWorkerLedger.__new__(PackageWorkerLedger)
+    ledger.role=None;ledger.resource_pin=None;ledger._resource_binding=None;ledger._resource_token="null"
+    ledger._contexts=();ledger._references=(protected,)
+    ledger.store_bindings={'fixture':(None,'fixture',cache,dict)}
+    ledger.resets={'fixture':cache}
+    ledger.manifest=SimpleNamespace(callables=SimpleNamespace(_identities=(('protected',id(protected)),)),roles={})
+    if kind=='empty_tuple':ledger._check_live_state()
+    else:
+        with pytest.raises(QualificationDecline,match='aliases protected definition'):ledger._check_live_state()
+
+
+def test_released_source_trees_keep_compiled_identity_and_refuse_drift_before_parse(monkeypatch):
+    import ast
+    from pathlib import Path
+    from anygeometry import _planning_code
+    from anygeometry._planning_qualification import QualificationDecline
+    evidence=manifest._ImmutableEvidence();filename=_planning_code.__file__
+    first=evidence.source(_planning_code,filename);codes=first[3]
+    ids=tuple(map(id,codes.values()))
+    released=evidence.release_parsing()
+    assert released['source_trees']==1 and released['ast_node_visits']>0
+    second=evidence.source(_planning_code,filename)
+    assert second[3] is codes and tuple(map(id,codes.values()))==ids
+    evidence.release_parsing();evidence.begin()
+    original=Path.read_bytes;target=Path(filename).resolve()
+    monkeypatch.setattr(Path,'read_bytes',lambda path:original(path)+b'\n' if path.resolve()==target else original(path))
+    monkeypatch.setattr(ast,'parse',lambda *a,**k:pytest.fail('changed source reparsed'))
+    with pytest.raises(QualificationDecline,match='immutable source evidence changed'):
+        evidence.source(_planning_code,filename)
+    assert tuple(map(id,codes.values()))==ids
+
+
+def test_capture_instruction_cache_uses_exact_code_and_releases_epoch():
+    from anygeometry._planning_code import exact_numerical_record
+    evidence=manifest._ImmutableEvidence(cache_traversal=True)
+    code=exact_numerical_record.__code__
+    first=evidence.instructions(code)
+    assert first==tuple(manifest._instructions(code)) and evidence.instructions(code) is first
+    changed=code.replace()
+    assert evidence.instructions(changed) is not first
+    evidence.release_parsing()
+    assert not evidence.instruction_cache and not evidence.path_cache
+    assert evidence.instructions(code)==first and evidence.instructions(code) is not first
+
+
+def test_capture_path_cache_rechecks_resolution_before_acceptance(tmp_path,monkeypatch):
+    from pathlib import Path
+    from anygeometry._planning_qualification import QualificationDecline
+    first=tmp_path/'first.py';second=tmp_path/'second.py'
+    first.write_text('same');second.write_text('same')
+    key=str(first);original=Path.resolve;target=[first];calls=[]
+    def resolve(path,*args,**kwargs):
+        if str(path)==key:calls.append(1);return original(target[0])
+        return original(path,*args,**kwargs)
+    monkeypatch.setattr(Path,'resolve',resolve)
+    evidence=manifest._ImmutableEvidence(cache_traversal=True)
+    assert evidence.resolve(key)==first and evidence.resolve(key)==first and len(calls)==1
+    target[0]=second
+    with pytest.raises(QualificationDecline,match='resolution changed'):evidence.verify_paths()
+    evidence.release_parsing();evidence.begin()
+    assert evidence.resolve(key)==second
+
+
+def test_cached_and_uncached_complete_role_graphs_are_identical():
+    from anygeometry._planning_canaries import _fixture
+    from anygeometry._planning_executor import freeze_model
+    model,_=_fixture();freeze_model(model)
+    uncached=manifest.LoadedManifest(model=model,include_host=False,_cache_traversal=False)
+    cached=manifest.LoadedManifest(model=model,include_host=False,_cache_traversal=True)
+    assert cached.nodes==uncached.nodes and cached.wire==uncached.wire
+    assert cached.callables._reference_tokens==uncached.callables._reference_tokens
+    assert cached.roles['constructor']._reference_tokens==uncached.roles['constructor']._reference_tokens
+    assert not cached.callables._immutable_evidence.path_cache
+    assert not cached.callables._immutable_evidence.instruction_cache
+    cached.verify();cached.verify(full=True);uncached.verify()
+
+
+@pytest.mark.parametrize('full',[False,True])
+def test_capture_path_retarget_after_capture_is_terminal(tmp_path,monkeypatch,full):
+    from pathlib import Path
+    from anygeometry import _planning_code
+    captured=manifest.capture_callable_manifest((_planning_code.passive_data,))
+    origin=Path(_planning_code.__file__);other=tmp_path/origin.name
+    other.write_bytes(origin.read_bytes())
+    resolve=Path.resolve
+    def retarget(path,*args,**kwargs):
+        return resolve(other) if path==origin else resolve(path,*args,**kwargs)
+    monkeypatch.setattr(Path,'resolve',retarget)
+    with pytest.raises(PlannerSourceChanged):captured.verify(full=full)
+
+
+def test_instruction_memo_has_one_assembly_budget_and_releases_it():
+    evidence=manifest._ImmutableEvidence(cache_traversal=True)
+    large=compile('\n'.join('value='+str(i) for i in range(3000)),'<large-evidence>','exec')
+    assert evidence.instructions(large)==tuple(manifest._instructions(large))
+    assert sum(len(ops) for code,ops in evidence.instruction_cache.values())<=4096
+    assert not any(code is large for code,ops in evidence.instruction_cache.values())
+    for i in range(80):
+        code=compile('\n'.join('value='+str(j+i) for j in range(40)),'<small-evidence>','exec')
+        assert evidence.instructions(code)==tuple(manifest._instructions(code))
+    assert sum(len(ops) for code,ops in evidence.instruction_cache.values())<=4096
+    assert evidence.instruction_slots==sum(len(ops) for code,ops in evidence.instruction_cache.values())
+    evidence.release_parsing()
+    assert evidence.instruction_slots==0 and not evidence.instruction_cache

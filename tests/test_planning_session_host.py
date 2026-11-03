@@ -1,4 +1,9 @@
-"""Session host transaction tests; injected sessions do not prove real cleanup."""
+"""Session transaction units with dummy v1 tasks and isolated admission.
+
+These units do not prove package admission or real cleanup. Actual counterparts
+are test_planning_session_cancellation_process and the public eight-worker canary
+in test_planning_r8_integration, with unmodified kernels and real owned sessions.
+"""
 import importlib
 import json
 
@@ -14,6 +19,9 @@ from anygeometry.serialization import from_dict, to_dict
 
 def setup(tmp_path, monkeypatch, *, corrupt=False):
     module=importlib.import_module('anygeometry._planning_session')
+    # Dummy task/reply fixtures exercise lifecycle ordering, not the package
+    # input grammar. Leave the default package_stages=False at this unit seam.
+    monkeypatch.setattr(host,'_admit_stage_package',lambda *a,**k:lambda:None)
     events=[]
     class Fake:
         def __init__(self,*args,**kw):events.append('start')
@@ -92,3 +100,63 @@ def test_finite_budget_never_constructs_session_or_samples(tmp_path,monkeypatch,
     result=host.qualified_plan(model,control,lambda:'serial',parallel,
                               policy=bi.IntersectionBatchPolicy(**{field:1}),mode='exact')
     assert result=='serial' and events==[]
+
+
+@pytest.mark.parametrize('error_type',[executor.PlannerDeadline,executor.PlannerCancelled,
+    executor.PlannerSourceChanged,executor.PlannerCleanupError,executor.PlannerMemoryExceeded])
+@pytest.mark.parametrize('prior',[False,True])
+def test_serial_sample_terminal_crosses_kernel_retry_handler(tmp_path,error_type,prior):
+    control=host.StageControl(tmp_path,expected_ci=('p','a'),observed_ci=lambda _:('p','a'),reuse_workers=True)
+    error=error_type('original sample terminal');armed=[False];events=[]
+    def poll():
+        if armed[0]:raise error
+    bridge=host.Bridge({},control,poll);bridge._inside_numerical_call=prior
+    candidate=dict(sampling_sha256='c'*64,task_layout=((0,0,'pair'),),results=[json.dumps(encode_value(None))])
+    def kernel(task):
+        armed[0]=True
+        try:
+            try:bridge.check_deadline()
+            except bi.GeometryError:events.append('swallowed');return None
+        finally:armed[0]=False
+    with pytest.raises(host._CallbackFailed) as caught:
+        bridge.verify_candidate('pair',[{'kind':'pair'}],kernel,candidate)
+    assert caught.value.error is error and events==[]
+    assert bridge._inside_numerical_call is prior and control.reports==[]
+
+
+@pytest.mark.parametrize('prior',['absent',False,True])
+def test_serial_sample_restores_flag_after_original_exception(tmp_path,prior):
+    control=host.StageControl(tmp_path,expected_ci=('p','a'),observed_ci=lambda _:('p','a'),reuse_workers=True)
+    bridge=host.Bridge({},control)
+    if prior!='absent':bridge._inside_numerical_call=prior
+    error=RuntimeError('original sample exception')
+    candidate=dict(sampling_sha256='c'*64,task_layout=((0,0,'pair'),),results=[])
+    def kernel(task):
+        assert bridge._inside_numerical_call is True
+        raise error
+    with pytest.raises(RuntimeError) as caught:bridge.verify_candidate('pair',[{}],kernel,candidate)
+    assert caught.value is error
+    if prior=='absent':assert not hasattr(bridge,'_inside_numerical_call')
+    else:assert bridge._inside_numerical_call is prior
+
+
+def test_serial_sample_releases_temporary_before_comparison(tmp_path,monkeypatch):
+    import weakref
+    control=host.StageControl(tmp_path,expected_ci=('p','a'),observed_ci=lambda _:('p','a'),reuse_workers=True)
+    bridge=host.Bridge({},control);references=[]
+    class Temporary:pass
+    def kernel(task):
+        assert bridge._inside_numerical_call is True
+        value=Temporary();references.append(weakref.ref(value));return value
+    def encode(value,**kwargs):
+        assert not hasattr(bridge,'_inside_numerical_call')
+        return encode_value(None)
+    comparison=host.comparison_packet
+    def compare(*args,**kwargs):
+        assert references and references[-1]() is None
+        return comparison(*args,**kwargs)
+    monkeypatch.setattr(host,'encode_value',encode)
+    monkeypatch.setattr(host,'comparison_packet',compare)
+    candidate=dict(sampling_sha256='c'*64,task_layout=((0,0,'pair'),),results=[json.dumps(encode_value(None))])
+    assert bridge.verify_candidate('pair',[{}],kernel,candidate)==(None,)
+    assert not hasattr(bridge,'_inside_numerical_call')

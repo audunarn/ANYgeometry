@@ -105,10 +105,121 @@ def runtime_files():
     return result
 
 
-def pin_module(module, *, runtime=None):
-    if type(module) is not types.ModuleType:
+def _observer_shape(module):
+    """Classify only the registered external write observer, without calling it."""
+    cls=type(module)
+    if cls is types.ModuleType:return None
+    if type(cls) is not type or type.__getattribute__(cls,'__mro__')!=(cls,types.ModuleType,object):
+        raise QualificationDecline('unsupported package module class')
+    namespace=types.ModuleType.__dict__['__dict__'].__get__(module,cls)
+    if str(namespace.get('__name__','')).startswith('anygeometry.'):
+        raise QualificationDecline('owned package module observer is unsupported')
+    owner=sys.modules.get('anysolver._qualified_authority_epoch')
+    if type(owner) is not types.ModuleType or vars(cls).get('__module__')!=owner.__name__:
+        raise QualificationDecline('unregistered external module observer')
+    allowed={'__module__','__setattr__','__delattr__','__static_attributes__','__doc__'}
+    if (set(vars(cls))!=allowed or vars(cls)['__static_attributes__']!=() or vars(cls)['__doc__'] is not None or
+            type.__getattribute__(cls,'__name__')!='_AuthorityTrackedmodule' or
+            type.__getattribute__(cls,'__qualname__')!='_AuthorityTrackedmodule'):
+        raise QualificationDecline('external observer namespace/read hook changed')
+    watch=vars(owner).get('_WATCH_MODULE')
+    if type(watch) is not types.FunctionType or watch.__globals__ is not vars(owner):
+        raise QualificationDecline('external observer registry owner')
+    cells=dict(zip(watch.__code__.co_freevars,(cell.cell_contents for cell in watch.__closure__ or ())))
+    registry=cells.get('tracked_module_types')
+    if (type(registry) is not dict or
+            next((value for key,value in dict.items(registry) if key is types.ModuleType),None) is not cls):
+        raise QualificationDecline('external observer class registration')
+    return owner,cls,namespace,watch,cells,registry
+
+
+def is_package_module(value):
+    """Classification is followed by source admission in pin_module/ModuleObserver."""
+    if type(value) is types.ModuleType:return True
+    if types.ModuleType not in type.__getattribute__(type(value),'__mro__'):return False
+    _observer_shape(value)
+    return True
+
+
+class ModuleObserver:
+    """H-local source/identity proof for the installed external write observer.
+
+    Subscriber callback payloads are not numerical read dependencies. No external
+    class is changed, and no observer is imported or installed in P/W.
+    """
+    def __init__(self,module):
+        from ._planning_manifest import _RetainedChecks,_ImmutableEvidence
+        owner,cls,namespace,watch,cells,registry=_observer_shape(module)
+        self.module=module;self.cls=cls;self.namespace=namespace;self.owner=owner
+        self.name=namespace['__name__'];self.checks=_RetainedChecks();self.evidence=_ImmutableEvidence()
+        self.pin=pin_module(owner);self.references=[module,cls,owner,watch,registry]
+        package=sys.modules.get('anysolver')
+        if (type(package) is not types.ModuleType or Path(self.pin['path']).name!='_qualified_authority_epoch.py' or
+                Path(self.pin['path']).parent!=Path(vars(package).get('__file__','')).resolve().parent):
+            raise QualificationDecline('external observer provider origin')
+        _,_,_,codes=self.evidence.source(owner,self.pin['path'])
+        functions=[vars(owner).get('_make_attribute_registry'),watch,cells.get('tracked_module_type')]
+        callbacks=None
+        for name in ('__setattr__','__delattr__'):
+            function=vars(cls)[name]
+            if type(function) is not types.FunctionType:raise QualificationDecline('external observer method type')
+            closure=dict(zip(function.__code__.co_freevars,(cell.cell_contents for cell in function.__closure__ or ())))
+            if (set(closure)!={'original','lock','module_callbacks_locked'} or closure.get('original') is not types.ModuleType or
+                    closure.get('lock') is not cells.get('lock')):
+                raise QualificationDecline('external observer method closure')
+            current=closure.get('module_callbacks_locked')
+            if callbacks is not None and current is not callbacks:raise QualificationDecline('external observer callback interface')
+            callbacks=current;functions.append(function)
+        if type(callbacks) is not types.FunctionType:raise QualificationDecline('external observer callback owner')
+        callback_cells=dict(zip(callbacks.__code__.co_freevars,(cell.cell_contents for cell in callbacks.__closure__ or ())))
+        if callback_cells.get('module_subscribers') is not cells.get('module_subscribers'):
+            raise QualificationDecline('external observer subscription registry binding')
+        functions.append(callbacks)
+        producer_cells=dict(zip(functions[2].__code__.co_freevars,(cell.cell_contents for cell in functions[2].__closure__ or ()))) if type(functions[2]) is types.FunctionType else {}
+        if (producer_cells.get('tracked_module_types') is not registry or producer_cells.get('lock') is not cells.get('lock') or
+                producer_cells.get('module_callbacks_locked') is not callbacks):
+            raise QualificationDecline('external observer class factory closure')
+        for function in functions:
+            if type(function) is not types.FunctionType or function.__globals__ is not vars(owner):
+                raise QualificationDecline('external observer producer owner')
+            code=function.__code__;expected=codes.get((code.co_qualname,code.co_firstlineno))
+            if expected is None or self.evidence.digest(code)!=self.evidence.digest(expected):
+                raise QualificationDecline('external observer source/code mismatch')
+            if function.__defaults__ is not None or function.__kwdefaults__ is not None:
+                raise QualificationDecline('external observer producer defaults')
+            self.references.extend((function,code,*(cell.cell_contents for cell in function.__closure__ or ())))
+            self.checks.add(function.__qualname__,lambda function=function:(id(function.__code__),id(function.__globals__),
+                id(function.__defaults__),id(function.__kwdefaults__),id(function.__closure__),
+                tuple(id(cell.cell_contents) for cell in function.__closure__ or ())),[code],early=True)
+            self.checks.mapping(function.__qualname__+'.attributes',vars(function))
+        self.checks.binding('observer factory',vars(owner),'_make_attribute_registry')
+        self.checks.binding('observer registry',vars(owner),'_WATCH_MODULE')
+        self.checks.binding('observer class',registry,types.ModuleType)
+        self.checks.mapping('observer class namespace',vars(cls))
+        self.checks.add('observer MRO',lambda:tuple(map(id,type.__getattribute__(cls,'__mro__'))),[cls],early=True)
+        self.read_descriptor=types.ModuleType.__dict__['__dict__']
+        self.checks.binding('native module read',vars(types.ModuleType),'__getattribute__')
+        self.checks.binding('native module namespace',vars(types.ModuleType),'__dict__')
+        self.parsing_release=self.evidence.release_parsing()
+
+    def verify(self):
+        # Class identity is checked before any potentially replaced attribute path.
+        if (type(self.module) is not self.cls or sys.modules.get(self.name) is not self.module or
+                sys.modules.get('anysolver._qualified_authority_epoch') is not self.owner):
+            raise QualificationDecline('external observer module/type binding changed')
+        self.checks.verify()
+        if self.read_descriptor.__get__(self.module,self.cls) is not self.namespace:
+            raise QualificationDecline('external observer native namespace changed')
+        if pin_module(self.owner)!=self.pin:raise QualificationDecline('external observer source changed')
+
+
+def pin_module(module, *, runtime=None, package_only=False, observer=None):
+    if type(module) is not types.ModuleType and not package_only:
         raise QualificationDecline('unpinned custom module type')
-    ns = types.ModuleType.__getattribute__(module, '__dict__')
+    if type(module) is not types.ModuleType:
+        if observer is None:observer=ModuleObserver(module)
+        observer.verify()
+    ns = types.ModuleType.__dict__['__dict__'].__get__(module,type(module))
     path = ns.get('__file__')
     if path:
         path = Path(path).resolve()
@@ -149,7 +260,73 @@ def input_type_names():
     return sorted(_type_name(t) for t in _input_types())
 
 
-def capture_environment(*, generated_modules=(), declined_stores=None, trusted_image=False):
+def resource_file_pin(identity):
+    """Bind H/P-attested ownership metadata without loading that helper in W."""
+    from importlib.machinery import EXTENSION_SUFFIXES
+    root=Path(__file__).resolve().parent
+    images=[root/('_planning_native_core'+suffix) for suffix in EXTENSION_SUFFIXES
+            if (root/('_planning_native_core'+suffix)).is_file()]
+    if len(images)!=1:raise QualificationDecline('resource file image missing/ambiguous')
+    pin=dict(identity=json.loads(json.dumps(identity,allow_nan=False)),
+        files={str(root/'_planning_native.py'):_hash(root/'_planning_native.py'),str(images[0]):identity.get('binary_sha256')})
+    verify_resource_file_pin(pin)
+    return pin
+
+
+def verify_resource_file_pin(pin):
+    from importlib.machinery import EXTENSION_SUFFIXES
+    if type(pin) is not dict or set(pin)!={'identity','files'} or type(pin['identity']) is not dict or type(pin['files']) is not dict:
+        raise QualificationDecline('resource file pin schema')
+    identity=pin['identity'];root=Path(__file__).resolve().parent
+    keys={'abi','resource_abi','build','module','binary_sha256','exports_schema','module_type','export_type','exports'}
+    if (set(identity)!=keys or identity['abi']!='cp311-abi3' or type(identity['resource_abi']) is not int or identity['resource_abi']!=1 or
+            type(identity['build']) is not str or not 0<len(identity['build'])<=200 or identity['module']!='anygeometry._planning_native_core' or
+            type(identity['exports_schema']) is not int or identity['exports_schema']!=1 or identity['module_type']!='builtins.module' or
+            identity['export_type']!='builtins.builtin_function_or_method' or type(identity['exports']) is not list or
+            not 1<=len(identity['exports'])<=64 or any(type(row) is not dict or set(row)!={'name','image_offset'} or
+                type(row['name']) is not str or not 0<len(row['name'])<=100 or type(row['image_offset']) is not int or row['image_offset']<0
+                for row in identity['exports'])):
+        raise QualificationDecline('resource file ABI metadata')
+    files=pin['files'];adapter=str(root/'_planning_native.py')
+    binaries=[str(root/('_planning_native_core'+suffix)) for suffix in EXTENSION_SUFFIXES]
+    if len(files)!=2 or adapter not in files or len(set(files)&set(binaries))!=1:
+        raise QualificationDecline('resource file path binding')
+    binary=next(path for path in files if path!=adapter)
+    if files[binary]!=identity['binary_sha256']:raise QualificationDecline('resource file identity binding')
+    for path,digest in files.items():
+        if type(digest) is not str or len(digest)!=64 or any(c not in '0123456789abcdef' for c in digest) or _hash(path)!=digest:
+            raise QualificationDecline('resource file hash changed')
+
+
+def verify_worker_resource_absence():
+    forbidden=('anygeometry._planning_controller','anygeometry._planning_native','anygeometry._planning_native_core')
+    package=sys.modules.get('anygeometry')
+    if (type(package) is not types.ModuleType or any(name in sys.modules for name in forbidden) or
+            any(name.rsplit('.',1)[-1] in vars(package) for name in forbidden)):
+        raise QualificationDecline('worker ownership/controller import forbidden')
+
+
+def worker_environment_reference(reference):
+    """Only the two documented ownership modules differ between P and W."""
+    verify_resource_file_pin(reference.get('resource_pin'))
+    result=json.loads(json.dumps(reference,allow_nan=False))
+    excluded=('anygeometry._planning_native','anygeometry._planning_native_core')
+    if any(name not in result['modules'] for name in excluded):raise QualificationDecline('planner ownership reference missing')
+    for name,kind in zip(excluded,('python','native')):
+        pin=result['modules'][name]
+        if (type(pin) is not dict or set(pin)!={'kind','path','sha256'} or pin['kind']!=kind or
+                result['resource_pin']['files'].get(pin['path'])!=pin['sha256'] or result['files'].get(pin['path'])!=pin['sha256']):
+            raise QualificationDecline('planner ownership reference/file mismatch')
+    native=result['modules'][excluded[1]]
+    for name in excluded:del result['modules'][name]
+    for pin in result['modules'].values():
+        if pin['kind']=='explicit-generated-native':
+            if pin['providers'].get(excluded[1])!=native:raise QualificationDecline('planner generated provider resource mismatch')
+            pin['providers']={name:value for name,value in pin['providers'].items() if name not in excluded}
+    return result
+
+
+def capture_environment(*, generated_modules=(), declined_stores=None, trusted_image=False,numerical_manifest=None,resource_pin=None):
     """Record the actual loaded closure after declared eager imports.
 
     Must run at the fresh-worker boundary and again after each task. All loaded
@@ -218,6 +395,11 @@ def capture_environment(*, generated_modules=(), declined_stores=None, trusted_i
                 cpu=cpu, blas=sorted(blas, key=lambda x: x['filepath']),
                 types=allowed_input_names, settings=settings,
                 reset_registry={n: _type_name(type(v)) for n, v in (declined_stores or {}).items()})
+    if numerical_manifest is not None:result['numerical_manifest']=dict(numerical_manifest)
+    if resource_pin is not None:
+        verify_resource_file_pin(resource_pin)
+        result['resource_pin']=json.loads(json.dumps(resource_pin,allow_nan=False))
+        result['files'].update(resource_pin['files'])
     if trusted_image:
         result['trusted_runtime_image'] = trusted_runtime_record(result)
     return result
@@ -276,6 +458,10 @@ def verify_environment(expected, observed):
         for pin in (expected, observed):
             if 'trusted_runtime_image' in pin and pin['trusted_runtime_image'] != trusted_runtime_record(pin):
                 raise QualificationDecline('invalid trusted runtime image record')
+        if expected.get('numerical_manifest')!=observed.get('numerical_manifest'):
+            raise QualificationDecline('numerical manifest mismatch')
+        if expected.get('resource_pin')!=observed.get('resource_pin'):
+            raise QualificationDecline('resource file reference mismatch')
         for key in ('cpu', 'blas', 'versions', 'python', 'types', 'settings', 'reset_registry'):
             if expected[key] != observed[key]:
                 raise QualificationDecline(key + ' pin mismatch')
@@ -312,19 +498,9 @@ def check_types(value, pin, *, limit=100000):
                 continue
             from .model import GeometryModel
             if typ is GeometryModel:
-                state = object.__getattribute__(item, '__dict__')
-                # Constructor-defined schema; no runtime instance can extend it.
-                pristine = GeometryModel(model_id='00000000-0000-0000-0000-000000000001')
-                constructor_keys = set(object.__getattribute__(pristine, '__dict__'))
-                if set(state) not in (constructor_keys, constructor_keys | {'_serialization_extensions'}):
-                    raise QualificationDecline('non-field model instance state')
+                from ._planning_model_state import declarative_state
+                state = declarative_state(item)
                 model_extension_record(item,limit=limit)
-                for name in ('_arc_cache', '_edge_length_cache', '_trim_loops_cache',
-                             '_topology_corner_cache', '_chain_arrays', '_change_hooks'):
-                    if type(state[name]) not in (dict, list) or len(state[name]):
-                        raise QualificationDecline('warm model instance cache: ' + name)
-                if state['_spatial_index'] is not None or state['_transaction_journal'] is not None:
-                    raise QualificationDecline('active model instance state')
                 _check_model_record_state(state,limit=limit)
                 from .serialization import to_dict
                 pending.append(to_dict(item))
@@ -340,6 +516,9 @@ def check_types(value, pin, *, limit=100000):
                     raise QualificationDecline('non-field input instance state')
                 for field in fields_here:
                     part = getattr(item, field.name)
+                    from ._planning_model_state import registered_record_cache
+                    if registered_record_cache(item, field, part):
+                        continue
                     if field.metadata.get('definition') is False:
                         if part is not None:
                             raise QualificationDecline('warm input instance cache is not admitted')
@@ -487,7 +666,9 @@ class WorkerGate:
         if trusted and self.expected.get('trusted_runtime_image') != trusted_runtime_record(self.expected):
             raise QualificationDecline('trusted-image ledger lacks its reference record')
         self.observe = observe or (lambda: capture_environment(
-            generated_modules=generated_modules, declined_stores=self.stores, trusted_image=trusted))
+            generated_modules=generated_modules, declined_stores=self.stores, trusted_image=trusted,
+            numerical_manifest=ledger.live_code_pins() if ledger is not None and hasattr(ledger,'manifest') else None,
+            resource_pin=getattr(ledger,'resource_pin',None)))
         self.ready = False
         self.poisoned = False
         self.reset_counts = {}

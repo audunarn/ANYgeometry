@@ -11,8 +11,11 @@ def run_dispatch(tmp_path,monkeypatch,admission='valid'):
     events=[];limits={'payload_limit':4_000_000,'walk_limit':100000};session='a'*64
     setup={'workers':2,'batch_size':1,'model':{'sha256':'b'*64},'sources':{}}
     monkeypatch.setattr(s,'_setup',lambda *a,**k:(setup,session))
-    ledger=SimpleNamespace(resets={},prepare=lambda **k:None,live_code_pins=lambda:{})
-    monkeypatch.setattr(s.ledger_api,'loaded_geometry_ledger',lambda **k:ledger)
+    ledger=SimpleNamespace(resets={},trusted_image=True,prepare=lambda **k:None,live_code_pins=lambda:{})
+    def loaded_ledger(*,trusted_image):
+        assert trusted_image is True
+        return ledger
+    monkeypatch.setattr(s.ledger_api,'loaded_geometry_ledger',loaded_ledger)
     monkeypatch.setattr(s.q,'capture_environment',lambda **k:{})
     monkeypatch.setattr(s,'verify_sources',lambda *a:None)
     monkeypatch.setattr(s,'dispatch',lambda *a:([[0],[1]],[[0],[1]]))

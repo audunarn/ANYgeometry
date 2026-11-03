@@ -4,6 +4,7 @@ from anygeometry.model import GeometryModel
 from anygeometry._planning_host import StageControl
 from anygeometry._planning_executor import read_packet
 from anygeometry.serialization import to_dict,from_dict
+from test_planning_session_process import _compare_stage_streams
 
 
 def test_disjoint_pairs_replay_sample_dependent_support_state(tmp_path,monkeypatch):
@@ -34,11 +35,13 @@ def test_disjoint_pairs_replay_sample_dependent_support_state(tmp_path,monkeypat
         controls.append(control)
     old,new=controls
     assert len(new.reports[0]['sampling']['indices'])<len(new.reports[0]['results'])==8
-    for a,b in zip(old.reports,new.reports):
-        assert a['request_sha256']==b['sampling_sha256']
-        assert a['sampling']['indices']==b['sampling']['indices']
-    legacy=read_packet(old.directory/'face/request.json','request')['tasks']
-    reused=read_packet(new.directory/'session/command-1.json','session-command')['tasks']
-    assert legacy==reused
+    compared=[_compare_stage_streams(old,new,a,b,index)
+              for index,(a,b) in enumerate(zip(old.reports,new.reports))]
+    # Pair wire is identical; face v2 changes bytes/seed but not support state.
+    assert compared[0][0]['wire']==compared[0][1]['wire']
+    assert compared[0][0]['samples']['indices']==compared[0][1]['samples']['indices']
+    legacy,reused=(row['tasks'] for row in compared[1])
+    assert len(compared[1][0]['samples']['indices'])==len(compared[1][1]['samples']['indices'])==4
+    assert len(legacy)==len(reused)==16
     lengths=[len(task['support'][4]) for task in reused]
     assert set(lengths)=={0,1},'fixture must exercise both sampled warm and unsampled cold supports'

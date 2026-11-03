@@ -15,6 +15,124 @@ def budget(**changes):
 def sample(peak=100,available=2000):return dict(host_peak_bytes=peak,host_private_bytes=min(90,peak),available_bytes=available)
 
 
+def test_available_native_schema_export_and_fresh_observations(monkeypatch):
+    import ctypes
+    m=api();identity=m.available_memory_identity()
+    assert identity['abi']=='MEMORYSTATUSEX-v1' and identity['size']==64
+    assert identity['offsets']==[0,4,8,16,24,32,40,48,56]
+    assert identity['export']=='GlobalMemoryStatusEx' and identity['image_offset']>=0
+    assert identity['image_path'].lower().endswith(('kernel32.dll','kernelbase.dll'))
+    assert len(identity['image_sha256'])==64
+    values=[2000,0];calls=[]
+    def available():calls.append('available');return values.pop(0)
+    class Process:
+        def __init__(self):calls.append('process')
+        def memory_info(self):calls.append('private');return SimpleNamespace(peak_pagefile=100,private=90)
+    monkeypatch.setattr(m,'_available_bytes',available)
+    monkeypatch.setattr(m.psutil,'Process',Process)
+    monkeypatch.setattr(m.psutil,'virtual_memory',lambda:pytest.fail('broad aggregate query'))
+    assert m._sample()==(100,90,2000) and m._sample()==(100,90,0)
+    assert calls==['process','private','available']*2
+
+
+@pytest.mark.parametrize('field',['_fields_','class'])
+def test_available_native_initial_layout_skew_refuses(monkeypatch,field):
+    m=api()
+    if field=='class':
+        monkeypatch.setattr(m,'_MemoryStatus',object)
+        with pytest.raises(QualificationDecline):m.available_memory_identity()
+    else:
+        fields=m._MemoryStatus._fields_;original=fields[:]
+        try:
+            fields.clear()
+            with pytest.raises(QualificationDecline):m.available_memory_identity()
+        finally:fields[:]=original
+
+
+@pytest.mark.parametrize('change',['fields','descriptor','provider','image','signature','library','handle'])
+def test_available_native_host_binding_mutation_is_terminal(monkeypatch,change):
+    import ctypes
+    from pathlib import Path
+    from anygeometry._planning_code import InfrastructurePin
+    m=api();captured=InfrastructurePin('host');captured.verify()
+    original_fields=m._MemoryStatus._fields_[:]
+    try:
+        if change=='fields':m._MemoryStatus._fields_.reverse()
+        elif change=='descriptor':monkeypatch.setattr(m._MemoryStatus,'ullAvailPhys',None)
+        elif change=='provider':
+            monkeypatch.setattr(ctypes.CDLL,'__getattr__',lambda *args:pytest.fail('changed provider invoked'))
+        elif change=='signature':monkeypatch.setattr(m._AvailablePrototype,'_argtypes_',())
+        elif change=='library':monkeypatch.setattr(ctypes.windll,'kernel32',object())
+        elif change=='handle':monkeypatch.setattr(m._memory_kernel(),'_handle',1)
+        else:
+            target=Path(captured.available_memory['image_path']);original=Path.read_bytes
+            monkeypatch.setattr(Path,'read_bytes',lambda path:b'changed native image' if path==target else original(path))
+        with pytest.raises(executor.PlannerSourceChanged):captured.verify()
+    finally:m._MemoryStatus._fields_[:]=original_fields
+
+
+@pytest.mark.parametrize('field',['errcheck','argtypes','restype'])
+def test_available_native_initial_signature_hook_refuses_without_call(monkeypatch,field):
+    import ctypes
+    m=api();called=[]
+    if field=='errcheck':monkeypatch.setattr(m._AvailablePrototype,'__call__',lambda *args:called.append('invoked'))
+    elif field=='argtypes':monkeypatch.setattr(m._AvailablePrototype,'_argtypes_',(ctypes.c_void_p,))
+    else:monkeypatch.setattr(m._AvailablePrototype,'_restype_',ctypes.c_void_p)
+    with pytest.raises(QualificationDecline):m._available_bytes()
+    assert called==[]
+
+
+def test_available_native_reuses_only_library_and_signature_types(monkeypatch):
+    import ctypes,weakref,gc
+    m=api();m.available_memory_identity();kernel=m._memory_kernel()
+    pointers=ctypes.POINTER(m._MemoryStatus);prototype=m._AvailablePrototype;refs=[]
+    original=m._memory_binding
+    def binding():
+        library,query,address=original()
+        assert library is kernel and type(query) is prototype
+        refs.append(weakref.ref(query));return library,query,address
+    monkeypatch.setattr(m,'_memory_binding',binding)
+    monkeypatch.setattr(ctypes,'_LoadLibrary',lambda *args:pytest.fail('extra native load reference'))
+    monkeypatch.setattr(ctypes,'WINFUNCTYPE',lambda *args,**kwargs:pytest.fail('new signature type'))
+    for _ in range(100):assert type(m._available_bytes()) is int
+    # CPython3.14 PyCFuncPtr_FromDll deliberately retains self->callable=self.
+    # Prove collectability in this isolated test, never force GC in production.
+    gc.collect()
+    assert all(ref() is None for ref in refs)
+    assert ctypes.POINTER(m._MemoryStatus) is pointers
+
+
+def test_available_native_does_not_use_or_mutate_cached_export_signature(monkeypatch):
+    import ctypes
+    m=api();kernel=m._memory_kernel();cached=kernel.GlobalMemoryStatusEx;called=[]
+    monkeypatch.setattr(cached,'argtypes',(ctypes.c_void_p,))
+    original=cached.errcheck;cached.errcheck=lambda *args:called.append('cached hook')
+    try:
+        before=(cached.argtypes,cached.restype,cached.errcheck)
+        assert type(m._available_bytes()) is int
+        assert (cached.argtypes,cached.restype,cached.errcheck)==before and called==[]
+    finally:
+        if original is None:del cached.errcheck
+        else:cached.errcheck=original
+
+
+@pytest.mark.parametrize('phase',['initial','admitted'])
+def test_available_native_failure_keeps_admission_classification(monkeypatch,phase):
+    m=api();failure=OSError('original available query failed')
+    monkeypatch.setattr(m.psutil,'Process',lambda:SimpleNamespace(memory_info=lambda:SimpleNamespace(peak_pagefile=100,private=90)))
+    monkeypatch.setattr(m,'_available_bytes',lambda:2000)
+    lease=budget().begin() if phase=='admitted' else None
+    def fail():raise failure
+    monkeypatch.setattr(m,'_available_bytes',fail)
+    if lease is None:
+        with pytest.raises(QualificationDecline) as caught:budget().begin()
+    else:
+        with pytest.raises(executor.PlannerMemoryExceeded) as caught:lease.check()
+        monkeypatch.setattr(m,'_available_bytes',lambda:2000)
+        with pytest.raises(executor.PlannerMemoryExceeded):lease.check()
+    assert caught.value.__cause__ is failure
+
+
 @pytest.mark.parametrize('total,available,accept',[(5,10,True),(4,10,False),(5,9,False),(5,11,True)])
 def test_exact_headroom_and_available_ram_boundary(monkeypatch,total,available,accept):
     m=api();monkeypatch.setattr(m,'observe_memory',lambda:sample(1,available))
@@ -63,6 +181,26 @@ def test_lifetime_peak_cannot_decrease(monkeypatch):
     m=api();value=sample();monkeypatch.setattr(m,'observe_memory',lambda:value);lease=budget().begin()
     value['host_peak_bytes']=99
     with pytest.raises(executor.PlannerMemoryExceeded):lease.check()
+
+
+def test_phase_memory_records_initial_host_and_whole_job_upper_bound(monkeypatch):
+    m=api();value=sample();monkeypatch.setattr(m,'observe_memory',lambda:value)
+    lease=budget().begin();value['host_private_bytes']=80
+    job=dict(requested_bytes=400,limit_bytes=400,flags=0x2200,peak_job_bytes=250,peak_process_bytes=200)
+    lease.observe_phase('pair-returned',job);job['peak_job_bytes']=1
+    report=lease.report();phase=report['phases'][-1]
+    assert report['initial_host_private_bytes']==90 and report['initial_host_peak_bytes']==100
+    assert phase['host_private_bytes']==80
+    assert phase['job']['startup_peak_upper_bound_bytes']==250
+    assert phase['job']['peak_process_bytes']==200
+    assert phase['job']['isolated_startup_peak_measured'] is False
+    with pytest.raises(executor.PlannerMemoryExceeded):lease.observe_phase('pair-returned')
+
+
+def test_phase_memory_cannot_accept_unenforced_job(monkeypatch):
+    m=api();monkeypatch.setattr(m,'observe_memory',lambda:sample());lease=budget().begin()
+    with pytest.raises(executor.PlannerMemoryExceeded):
+        lease.observe_phase('pair-returned',dict(requested_bytes=400,limit_bytes=400,flags=0,peak_job_bytes=250,peak_process_bytes=200))
 
 
 def call(model,control,serial,parallel,policy=None):
@@ -211,8 +349,25 @@ def test_peak_already_above_estimate_refuses_before_snapshot(tmp_path,monkeypatc
 
 @pytest.mark.parametrize('reuse',[False,True])
 def test_actual_kernel_ring_split_cannot_intercept_memory_terminal(tmp_path,monkeypatch,reuse):
+    import sys
     from anygeometry import batch_intersections as bi, material_arrangement as ma
-    m=api();value=sample();monkeypatch.setattr(m,'observe_memory',lambda:value);model,_=_fixture();errors=[];events=[]
+    m=api();value=sample();model,_=_fixture();errors=[];events=[]
+    ring_code=ma._ring_split_attempt.__code__
+    once_code=ma._arrange_material_once.__code__
+    def observe():
+        # Inject pressure through the memory observation, not through a replaced
+        # numerical function that package admission must correctly refuse.
+        frame=sys._getframe(1);inside_once=False;inside_ring=False
+        try:
+            while frame is not None:
+                inside_once |= frame.f_code is once_code
+                inside_ring |= frame.f_code is ring_code
+                frame=frame.f_back
+        finally:del frame
+        if inside_once and inside_ring and value['host_peak_bytes']==100:
+            events.append('inside-ring-split');value['host_peak_bytes']=101
+        return value
+    monkeypatch.setattr(m,'observe_memory',observe)
     original_check=m.MemoryLease.check
     def check(self):
         try:return original_check(self)
@@ -226,16 +381,13 @@ def test_actual_kernel_ring_split_cannot_intercept_memory_terminal(tmp_path,monk
         events.append(kind)
         return tuple(serial_task(task) for task in tasks)
     monkeypatch.setattr(host.Bridge,'run',run);monkeypatch.setattr(host._SessionBridge,'run',run)
-    def once(*a,cancellation_check,**k):
-        events.append('inside-ring-split');value['host_peak_bytes']=101;cancellation_check()
-        pytest.fail('terminal memory poll returned')
-    monkeypatch.setattr(ma,'_arrange_material_once',once)
     policy=bi.IntersectionBatchPolicy()
     def parallel(bridge):return bi._plan_intersections(model,tuple(model.faces),policy=policy,_planning_mode='exact',_seam_policy='ring_split',_stages=bridge)
     with pytest.raises(executor.PlannerMemoryExceeded) as caught:
         host.qualified_plan(model,control,lambda:pytest.fail('serial fallback'),parallel,policy=policy,mode='exact')
     assert events==['pair','face','inside-ring-split']
     assert len(errors)==1 and caught.value is errors[0]
+    assert ma._ring_split_attempt.__code__ is ring_code and ma._arrange_material_once.__code__ is once_code
     assert control.mode=='terminal' and control.decline_reason is None and control.memory_report['terminal_reason']
 
 

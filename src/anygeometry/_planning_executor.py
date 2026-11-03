@@ -67,6 +67,8 @@ def check_result_status(result):
         raise PlannerCancelled(str(result.get('reason', 'owned cancellation')))
     if result.get('status') == 'cleanup_error':
         raise PlannerCleanupError(str(result.get('reason', 'owned cleanup failed')))
+    if result.get('status') == 'source_changed':
+        raise PlannerSourceChanged(str(result.get('reason', 'captured source changed')))
     if result.get('status') != 'passed':
         raise QualificationDecline(str(result.get('reason', 'planner refused')))
 
@@ -132,8 +134,9 @@ def freeze_model(model, *, payload_limit=4_000_000,walk_limit=100000):
         raise QualificationDecline('unsupported model type')
     check_types(model, {'types': input_type_names()},limit=walk_limit)
     from ._planning_constructor import audit
+    from ._planning_model_state import declarative_state
     body = dict(document=to_dict(model), extension_record=model_extension_record(model,limit=walk_limit))
-    rows = audit(vars(model),limit=walk_limit)
+    rows = audit(declarative_state(model),limit=walk_limit)
     if rows:
         body['constructor_state'] = rows
     return pack(body, 'model',limit=payload_limit)
@@ -148,7 +151,8 @@ def thaw_model(packet, *, payload_limit=4_000_000,walk_limit=100000):
     try:
         model = from_dict(document)
         from ._planning_constructor import audit
-        audit(vars(model), restore=decoded.get('constructor_state', []),limit=walk_limit)
+        from ._planning_model_state import declarative_state
+        audit(declarative_state(model), restore=decoded.get('constructor_state', []),limit=walk_limit)
         actual = model_extension_record(model,limit=walk_limit)
         recorded = decoded['extension_record']
         if recorded == dict(present=False, sha256=None):
@@ -199,8 +203,14 @@ def source_files():
 
 
 def verify_sources(expected):
-    if source_files() != expected:
-        raise QualificationDecline('source file identity changed')
+    # This is always a recheck against an already captured manifest. Failure to
+    # read that source is loss of the binding, never eligibility for serial replay.
+    try:
+        actual = source_files()
+    except OSError as exc:
+        raise PlannerSourceChanged('captured source file unavailable') from exc
+    if actual != expected:
+        raise PlannerSourceChanged('source file identity changed')
 
 
 class OwnedPlanner:
@@ -209,7 +219,7 @@ class OwnedPlanner:
     Directory must be a new caller-owned evidence/scratch directory. close() is
     mandatory, including if an early-start planner is never submitted.
     """
-    def __init__(self, directory, *, workers=8, batch_size=None, timeout=100,payload_limit=4_000_000,walk_limit=100000,_role='planner',tree_memory_limit=None):
+    def __init__(self, directory, *, workers=8, batch_size=None, timeout=100,payload_limit=4_000_000,walk_limit=100000,_role='planner',tree_memory_limit=None,_package_admission=None):
         if _role not in ('planner','session-planner'):
             raise QualificationDecline('unsupported owned planner role')
         if type(workers) is not int or workers not in (1, 2, 8, 16):
@@ -225,6 +235,8 @@ class OwnedPlanner:
             raise QualificationDecline('invalid payload/walk limit')
         self.limits=dict(payload_limit=payload_limit,walk_limit=walk_limit)
         write_packet(self.directory/'limits.json',pack(self.limits,'limits'))
+        if _package_admission is not None:
+            write_packet(self.directory/'admission.json',pack(_package_admission,'package-admission'))
         self.workers, self.batch_size = workers, batch_size
         self.started = time.perf_counter()
         self.deadline = time.monotonic() + timeout

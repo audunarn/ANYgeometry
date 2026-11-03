@@ -74,6 +74,25 @@ def _record(key, item):
 
 
 @contextmanager
+def _planning_transaction():
+    """Isolate provisional/sample work and restore every caller collector."""
+    counters,records={},{}
+    counter_token=_COLLECTORS.set((counters,))
+    record_token=_RECORD_COLLECTORS.set((records,))
+    try:
+        yield dict(counters=counters,records=records)
+    finally:
+        _RECORD_COLLECTORS.reset(record_token)
+        _COLLECTORS.reset(counter_token)
+
+
+def _publish_planning(data):
+    for key,value in data['counters'].items():_increment(key,value)
+    for key,values in data['records'].items():
+        for value in values:_record(key,value)
+
+
+@contextmanager
 def _timed_phase(name):
     """Accumulate observational nanoseconds, including failed phases."""
     if not _COLLECTORS.get():
