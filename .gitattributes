@@ -1,0 +1,12 @@
+
+# Preserve qualified admission source bytes, including mixed line endings.
+src/anygeometry/_planning_codec_registry.py -text
+src/anygeometry/_planning_ledger.py -text
+src/anygeometry/_planning_memory.py -text
+src/anygeometry/_planning_model_state.py -text
+src/anygeometry/_planning_native.py -text
+src/anygeometry/_planning_numpy_context.py -text
+src/anygeometry/_planning_profiles.py -text
+src/anygeometry/_planning_runtime.py -text
+src/anygeometry/_planning_runtime_anchor.py -text
+src/anygeometry/_planning_windows_launch.py -text
