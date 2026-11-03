@@ -317,14 +317,37 @@ def test_repository_inventory_records_all_reviewed_scipy_platforms() -> None:
     inventory = json.loads((ROOT / "dependency-licenses.json").read_text(encoding="utf-8"))
     (scipy,) = [r for r in inventory["dependencies"] if r["name"] == "scipy"]
     records = [scipy["reviewed_installed_license"], *scipy["additional_reviewed_installed_licenses"]]
-    assert sorted(r["metadata_sha256"] for r in records) == sorted(
+    original_records = [r for r in records if r["version"] == "1.18.1"]
+    assert sorted(r["metadata_sha256"] for r in original_records) == sorted(
         [
             "2a463073ea6816d22b763c8e2f03886f4e8bf4f2a234f3c9267401d688588d17",
             "7f2f9e131a09f25323e392aac37fb2e263c600bb9d1ffc7c3b6ca3e1d017573e",
             "c85f6c4154a28ccb2a49fe9a1cbcacb17939c14ffad7a2f63d32655610652bb7",
         ]
     )
-    assert all(r["version"] == "1.18.1" and r["package"] == "scipy" for r in records)
+    assert all(r["package"] == "scipy" for r in records)
+    assert len(records) == 6
+    records_1171 = {r["metadata_sha256"]: r for r in records if r["version"] == "1.17.1"}
+    assert set(records_1171) == {
+        "66fe93ccd5c416dc86656e53a65c6ffb7bc66a1e821e892654fd0dc4da494d55",
+        "f5322e8eb7c9d0155475f23c903dc68d59a62ff146eb0d41acef061cd7fef874",
+        "df5b1c48487cb0bb40b8de21cdde51ceead6b28a6175285f2c0bca3caf40bb29",
+    }
+    windows_1171 = records[3]
+    assert windows_1171["metadata_sha256"] == "66fe93ccd5c416dc86656e53a65c6ffb7bc66a1e821e892654fd0dc4da494d55"
+    assert windows_1171["project_license"] == "BSD-3-Clause"
+    assert windows_1171["components"] == [
+        ["OpenBLAS", "BSD-3-Clause"],
+        ["LAPACK", "BSD-3-Clause-Open-MPI"],
+        ["GCC runtime library", "GPL-3.0-or-later WITH GCC-exception-3.1"],
+    ]
+    for digest in (
+        "f5322e8eb7c9d0155475f23c903dc68d59a62ff146eb0d41acef061cd7fef874",
+        "df5b1c48487cb0bb40b8de21cdde51ceead6b28a6175285f2c0bca3caf40bb29",
+    ):
+        record = records_1171[digest]
+        assert record["project_license"] == "BSD-3-Clause"
+        assert record["components"] == windows_1171["components"] + [["libquadmath", "LGPL-2.1-or-later"]]
 
 
 def test_runtime_scope_cannot_carry_a_reviewed_record(monkeypatch: pytest.MonkeyPatch) -> None:

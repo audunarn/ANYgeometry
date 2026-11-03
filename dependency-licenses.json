@@ -87,6 +87,77 @@
           "project_license": "BSD-3-Clause",
           "rationale": "Owner decision 2026-10-30 (accepted component set: OpenBLAS BSD-3-Clause, LAPACK BSD-3-Clause-Open-MPI, libgfortran GPL-3.0-or-later WITH GCC-exception-3.1, libquadmath LGPL-2.1-or-later), reviewed for the macOS (macosx arm64) scipy 1.18.1 cp313 wheel metadata. Dynamic libraries scipy/.dylibs: the GCC runtime library (libgfortran, libgcc) under the GCC exception and libquadmath under LGPL-2.1-or-later (not covered by the GCC exception). No component beyond that set appears. SciPy's own code is BSD-3-Clause; scipy is an optional extra not bundled or redistributed by ANYgeometry (bundled=false).",
           "version": "1.18.1"
+        },
+        {
+          "components": [
+            [
+              "OpenBLAS",
+              "BSD-3-Clause"
+            ],
+            [
+              "LAPACK",
+              "BSD-3-Clause-Open-MPI"
+            ],
+            [
+              "GCC runtime library",
+              "GPL-3.0-or-later WITH GCC-exception-3.1"
+            ]
+          ],
+          "metadata_sha256": "66fe93ccd5c416dc86656e53a65c6ffb7bc66a1e821e892654fd0dc4da494d55",
+          "package": "scipy",
+          "project_license": "BSD-3-Clause",
+          "rationale": "Existing owner decision 2026-10-30 accepts the component set OpenBLAS BSD-3-Clause, LAPACK BSD-3-Clause-Open-MPI, GCC runtime library GPL-3.0-or-later WITH GCC-exception-3.1 and libquadmath LGPL-2.1-or-later. Reviewed 2026-11-03 for installed Windows (win_amd64) scipy 1.17.1 cp314 wheel metadata. Its legacy License text lists OpenBLAS and LAPACK in the OpenBLAS DLL and the GCC runtime library statically linked into that DLL; libquadmath is not listed. Every listed component is in the existing accepted set. SciPy itself is BSD-3-Clause and remains an optional extra not bundled or redistributed by ANYgeometry (bundled=false). Acceptance is restricted to this exact version, normalized metadata hash and component list; other metadata requires review.",
+          "version": "1.17.1"
+        },
+        {
+          "components": [
+            [
+              "OpenBLAS",
+              "BSD-3-Clause"
+            ],
+            [
+              "LAPACK",
+              "BSD-3-Clause-Open-MPI"
+            ],
+            [
+              "GCC runtime library",
+              "GPL-3.0-or-later WITH GCC-exception-3.1"
+            ],
+            [
+              "libquadmath",
+              "LGPL-2.1-or-later"
+            ]
+          ],
+          "metadata_sha256": "f5322e8eb7c9d0155475f23c903dc68d59a62ff146eb0d41acef061cd7fef874",
+          "package": "scipy",
+          "project_license": "BSD-3-Clause",
+          "rationale": "Existing owner decision 2026-10-30 accepts the component set OpenBLAS BSD-3-Clause, LAPACK BSD-3-Clause-Open-MPI, GCC runtime library GPL-3.0-or-later WITH GCC-exception-3.1 and libquadmath LGPL-2.1-or-later. Reviewed 2026-11-03 for scipy 1.17.1 Linux manylinux x86_64 cp311 wheel metadata: https://files.pythonhosted.org/packages/09/7d/af933f0f6e0767995b4e2d705a0665e454d1c19402aa7e895de3951ebb04/scipy-1.17.1-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl.metadata (raw METADATA SHA256 7cdd5544eb610b86e000b6f0a21e86f84423faf0aacbb99990f3d41f25e1f314). The stdlib importlib.metadata.PathDistribution adapter supplies the legacy License text hashed here after CRLF-to-LF normalization. All four listed components match the accepted set; GCC runtime and libquadmath are dynamically linked, and libquadmath retains its separate LGPL license without the GCC exception. SciPy itself is BSD-3-Clause and remains an optional extra not bundled or redistributed by ANYgeometry (bundled=false). Other versions, hashes or components require review.",
+          "version": "1.17.1"
+        },
+        {
+          "components": [
+            [
+              "OpenBLAS",
+              "BSD-3-Clause"
+            ],
+            [
+              "LAPACK",
+              "BSD-3-Clause-Open-MPI"
+            ],
+            [
+              "GCC runtime library",
+              "GPL-3.0-or-later WITH GCC-exception-3.1"
+            ],
+            [
+              "libquadmath",
+              "LGPL-2.1-or-later"
+            ]
+          ],
+          "metadata_sha256": "df5b1c48487cb0bb40b8de21cdde51ceead6b28a6175285f2c0bca3caf40bb29",
+          "package": "scipy",
+          "project_license": "BSD-3-Clause",
+          "rationale": "Existing owner decision 2026-10-30 accepts the component set OpenBLAS BSD-3-Clause, LAPACK BSD-3-Clause-Open-MPI, GCC runtime library GPL-3.0-or-later WITH GCC-exception-3.1 and libquadmath LGPL-2.1-or-later. Reviewed 2026-11-03 for scipy 1.17.1 macOS x86_64 cp311 wheel metadata: https://files.pythonhosted.org/packages/df/75/b4ce781849931fef6fd529afa6b63711d5a733065722d0c3e2724af9e40a/scipy-1.17.1-cp311-cp311-macosx_10_14_x86_64.whl.metadata (raw METADATA SHA256 b1cd2c784f6e003c6c71af4c5ee57f6370ee467d17b656250d9fd38cf579d7d0). The stdlib importlib.metadata.PathDistribution adapter supplies the legacy License text hashed here after CRLF-to-LF normalization. All four listed components match the accepted set; GCC runtime and libquadmath are dynamically linked, and libquadmath retains its separate LGPL license without the GCC exception. SciPy itself is BSD-3-Clause and remains an optional extra not bundled or redistributed by ANYgeometry (bundled=false). Other versions, hashes or components require review.",
+          "version": "1.17.1"
         }
       ],
       "bundled": false,
