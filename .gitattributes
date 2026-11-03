@@ -10,3 +10,10 @@ src/anygeometry/_planning_profiles.py -text
 src/anygeometry/_planning_runtime.py -text
 src/anygeometry/_planning_runtime_anchor.py -text
 src/anygeometry/_planning_windows_launch.py -text
+
+# Retain exact guarded diagnostic profile and archived original test bytes.
+/native/runtime_inspector_profile.json -text
+/docs/historical-planning-tests/*.py.txt -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+
+# Certified numerical sources are hashed as bytes, on every checkout platform.
+/src/anygeometry/**/*.py -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

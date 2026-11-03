@@ -40,3 +40,27 @@ else:
     result=subprocess.run([sys.executable,'-B','-c',code],capture_output=True,text=True,timeout=20,
         env=dict(os.environ,PYTHONPATH=str(Path(__file__).resolve().parents[1]/'src')))
     assert result.returncode==0,result.stderr
+
+
+def test_missing_dispatcher_namespace_is_a_typed_initial_decline():
+    code = """import builtins
+import anygeometry
+from anygeometry._planning_manifest import capture_callable_manifest
+from anygeometry._planning_qualification import QualificationDecline
+from anygeometry.tolerance import TolerancePolicy
+original=builtins.__import__
+def legacy(name,*args,**kwargs):
+    if name == 'numpy._core._multiarray_umath':
+        raise ModuleNotFoundError('NumPy2 namespace absent',name='numpy._core')
+    return original(name,*args,**kwargs)
+builtins.__import__=legacy
+try:
+    capture_callable_manifest((TolerancePolicy,))
+except QualificationDecline as error:
+    assert str(error)=='NumPy array dispatcher interface unavailable'
+else:
+    raise AssertionError('unsupported runtime admitted')
+"""
+    result=subprocess.run([sys.executable,'-B','-c',code],capture_output=True,text=True,timeout=20,
+        env=dict(os.environ,PYTHONPATH=str(Path(__file__).resolve().parents[1]/'src')))
+    assert result.returncode==0,result.stderr

@@ -706,7 +706,12 @@ class CallableManifest:
         if "immutable_epoch" not in shared:
             evidence.begin();shared["immutable_epoch"]=evidence
         if self.role is not None:verify_operation_registry(self.role,cache=evidence)
-        from numpy._core._multiarray_umath import _ArrayFunctionDispatcher
+        try:
+            from numpy._core._multiarray_umath import _ArrayFunctionDispatcher
+        except ModuleNotFoundError as error:
+            if error.name not in ('numpy._core', 'numpy._core._multiarray_umath'):
+                raise
+            raise QualificationDecline('NumPy array dispatcher interface unavailable') from error
         if self.branch_profile is not None:
             if (sys.modules.get(self.branch_module.__name__) is not self.branch_module or
                     hashlib.sha256(Path(self.branch_module.__file__).read_bytes()).hexdigest()!=self.branch_source or
