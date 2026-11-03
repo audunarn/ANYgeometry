@@ -1,4 +1,6 @@
 """PP2 real owned subprocess checks, separate from injected unit lifecycles."""
+from _planning_numpy_profile_contract import numpy_profile_test
+from _planning_platform_contract import windows_owned_test
 import json
 import time
 from pathlib import Path
@@ -10,6 +12,8 @@ from anygeometry.definition_binding import definition_checksum
 from test_planning_transport_schema import cold_model
 
 
+@windows_owned_test
+@numpy_profile_test
 def test_real_two_workers_transport_sampling_ci_cleanup(tmp_path):
     model = cold_model(); packet = a.freeze_model(model)
     tasks = ('pair', 'face') * 4
@@ -27,6 +31,8 @@ def test_real_two_workers_transport_sampling_ci_cleanup(tmp_path):
     assert json.loads((folder/'workers-cleanup.json').read_text())['active_processes'] == 0
 
 
+@windows_owned_test
+@numpy_profile_test
 def test_real_nested_cancellation_never_replays_serial(tmp_path):
     model = cold_model(); folder=tmp_path/'cancel'
     signal = folder/'cancel.flag'

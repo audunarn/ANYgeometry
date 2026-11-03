@@ -1,4 +1,6 @@
 """Real partial pair-sample coverage: cold supports must stay cold where legacy does."""
+from _planning_numpy_profile_contract import numpy_profile_test
+from _planning_platform_contract import windows_owned_test
 from anygeometry import batch_intersections as bi
 from anygeometry.model import GeometryModel
 from anygeometry._planning_host import StageControl
@@ -7,6 +9,8 @@ from anygeometry.serialization import to_dict,from_dict
 from test_planning_session_process import _compare_stage_streams
 
 
+@windows_owned_test
+@numpy_profile_test
 def test_disjoint_pairs_replay_sample_dependent_support_state(tmp_path,monkeypatch):
     model=GeometryModel(model_id='132c674e-c5a8-41a9-973c-6e87a8b71092')
     for i in range(8):

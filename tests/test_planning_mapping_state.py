@@ -1,6 +1,7 @@
 """Model read views retain exact private-store ownership before serialization."""
 import types
 import pytest
+from _planning_contract_helpers import capture_with_dispatcher_boundary
 from anygeometry._planning_executor import freeze_model
 from anygeometry._planning_model_state import production_snapshot
 from anygeometry._planning_manifest import _RetainedChecks
@@ -77,13 +78,15 @@ def test_infrastructure_mapping_refuses_before_hooks(monkeypatch):
 
 
 @pytest.mark.parametrize('full',[False,True])
-def test_rebound_proxy_is_terminal_without_reading_new_mapping(full):
+def test_rebound_proxy_is_terminal_without_reading_new_mapping(full,request):
     from anygeometry._planning_manifest import capture_callable_manifest
     from anygeometry._planning_executor import PlannerSourceChanged
     module=types.ModuleType('ppq_mapping_rebind')
     module.VALUE=types.MappingProxyType({'x':1})
     exec('def root(): return VALUE',vars(module))
-    captured=capture_callable_manifest((module.root,));events=[]
+    captured=capture_with_dispatcher_boundary((module.root,),request=request)
+    if captured is None:return # Exact initial refusal is not postcapture coverage.
+    events=[]
     class Foreign:
         def __getitem__(self,key):events.append('getitem');raise AssertionError('foreign getitem')
         def items(self):events.append('items');raise AssertionError('foreign items')

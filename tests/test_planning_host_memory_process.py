@@ -1,4 +1,6 @@
 """Small real host+owned-tree admission, raw identity, and cleanup checks."""
+from _planning_numpy_profile_contract import numpy_profile_test
+from _planning_platform_contract import windows_owned_test, observe_plan_calls, assert_unsupported512_terminal
 import json
 import sys
 
@@ -11,11 +13,13 @@ from anygeometry._planning_memory import MemoryBudget, observe_memory
 from anygeometry.serialization import from_dict, to_dict
 
 
-pytestmark = pytest.mark.skipif(sys.platform != 'win32', reason='Windows memory accounting')
+
 
 
 @pytest.mark.parametrize('reuse', [False, True])
-def test_real_host_and_tree_budget_preserves_small_fixture(tmp_path, monkeypatch, reuse):
+@windows_owned_test
+@numpy_profile_test
+def test_real_host_and_tree_budget_preserves_small_fixture(tmp_path, monkeypatch, reuse, request):
     original, _ = _fixture()
     doc = to_dict(original)
     reference = from_dict(doc)
@@ -42,7 +46,16 @@ def test_real_host_and_tree_budget_preserves_small_fixture(tmp_path, monkeypatch
     control = StageControl(tmp_path/'geometry', expected_ci=expected, observed_ci=observed,
                            workers=2, timeout=80, reuse_workers=reuse, memory_budget=budget)
     monkeypatch.setenv('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING', '1')
-    plan = bi.plan_intersections(source, tuple(source.faces), policy='connect', _parallel_control=control)
+    from anygeometry._planning_executor import PlannerCleanupError
+    with observe_plan_calls(enabled=not reuse) as calls:
+        try:
+            plan = bi.plan_intersections(source, tuple(source.faces), policy='connect', _parallel_control=control)
+        except PlannerCleanupError as error:
+            if reuse:
+                raise
+            assert_unsupported512_terminal(error, reuse=reuse, control=control, source=source,
+                                           document=doc, calls=calls, request=request)
+            return
     assert control.mode == 'parallel' and control.ci_verified
     assert plan.content_checksum == expected[0] and to_dict(source) == doc
     assert observed(plan) == expected
@@ -64,3 +77,6 @@ def test_real_host_and_tree_budget_preserves_small_fixture(tmp_path, monkeypatch
     (tmp_path/'host-memory-evidence.json').write_text(json.dumps(dict(
         admission=report, retirement=receipts, expected_ci=expected,
         actual_ci=observed(plan), input_unchanged=to_dict(source) == doc), indent=2))
+
+    if not reuse:
+        request.node.user_properties.append(('resource_configuration', 'unsupported512-safe-fit-observation'))

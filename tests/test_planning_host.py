@@ -1,10 +1,14 @@
 """Public-route PP5 controls must compare actual plan and applied-model content."""
+from _planning_numpy_profile_contract import numpy_profile_test
+from _planning_platform_contract import windows_owned_test
 import importlib
 import pytest
 from anygeometry import batch_intersections as bi
 from anygeometry._planning_canaries import _fixture
 from anygeometry.serialization import from_dict,to_dict
 
+@windows_owned_test
+@numpy_profile_test
 def test_public_real_pair_and_face_stages_and_apply_ci(monkeypatch,tmp_path):
     module=importlib.import_module('anygeometry._planning_host')
     model,_=_fixture();doc=to_dict(model);source=from_dict(doc);ref=from_dict(doc)

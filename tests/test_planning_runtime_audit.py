@@ -1,66 +1,80 @@
-"""Actual hooks only in disposable subprocesses; no removal or callback probing."""
+"""External interfaces are pinned; no whole-interpreter audit-absence claim."""
+import hashlib
+import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 import pytest
+from _planning_contract_helpers import capture_with_runtime_boundary
+from anygeometry._planning_executor import PlannerSourceChanged
+from anygeometry._planning_qualification import pin_module
 
-CHILD=r'''
-import sys,json
-import _audit_fixture as fixture
-from anygeometry import _planning_codec_registry as adapter
-from anygeometry import _planning_runtime_inspector as native
-mode=sys.argv[1]
+
+def test_imported_external_module_is_bound_to_its_actual_source_image():
+    pin = pin_module(json)
+    assert pin['kind'] == 'python'
+    assert pin['path'] == str(Path(json.__file__).resolve())
+    assert pin['sha256'] == hashlib.sha256(Path(json.__file__).read_bytes()).hexdigest()
+
+
+@pytest.mark.parametrize('change', ['symbol', 'module'])
+def test_owned_caller_imported_numpy_binding_drift_is_terminal(monkeypatch, change):
+    from anygeometry import tolerance
+    captured = capture_with_runtime_boundary((tolerance._positive_finite,))
+    if captured is None:
+        return
+    captured.verify()
+    if change == 'symbol':
+        monkeypatch.setattr(tolerance.np, 'isfinite', lambda *args: True)
+    else:
+        monkeypatch.setattr(tolerance, 'np', object())
+    with pytest.raises(PlannerSourceChanged):
+        captured.verify()
+
+
+def test_unrelated_interpreter_module_is_not_a_package_owned_definition(monkeypatch):
+    import types
+    from anygeometry.tolerance import TolerancePolicy
+    captured = capture_with_runtime_boundary((TolerancePolicy,))
+    if captured is None:
+        return
+    foreign = types.ModuleType('r10_unrelated_interpreter_state')
+    foreign.value = object()
+    monkeypatch.setitem(sys.modules, foreign.__name__, foreign)
+    captured.verify()
+    foreign.value = object()
+    captured.verify()
+
+
+@pytest.mark.parametrize('when', ['before', 'after'])
+def test_benign_python_audit_observer_does_not_imply_a_purity_claim(tmp_path, when):
+    # Audit hooks cannot be removed, so exercise the trust boundary in a child.
+    script = '''
+import json,sys
+import numpy as numpy_interface
+from anygeometry._planning_manifest import capture_callable_manifest
 calls=[]
-token=native.snapshot()[0]
-value=adapter.snapshot()
-if mode=='allocation_python':
-    def wire_zip(names,values):
-        if values is adapter._ANCHOR[8]:
-            sys.addaudithook(lambda *args:calls.append(args[0]))
-        return zip(names,values)
-    adapter.zip=wire_zip
-    try: adapter.identity()
-    except RuntimeError as error: assert 'audit' in str(error)
-    else: raise AssertionError('wire construction published stale absence')
-    assert not calls,calls
-    print(json.dumps(dict(mode=mode,callbacks=0,refused=True)))
+def observer(event,args):calls.append(event)
+if sys.argv[1]=='before':sys.addaudithook(observer)
+from _planning_contract_helpers import capture_with_runtime_boundary
+captured=capture_with_runtime_boundary((numpy_interface.geterr,))
+if captured is None:
+    print(json.dumps(dict(initial_refused=True,verified=False)))
     sys.exit(0)
-if mode.endswith('python'):
-    sys.addaudithook(lambda *args:calls.append(args[0]))
-else:
-    fixture.install()
-fixture.reset();calls.clear()
-if mode.startswith('post'):
-    assert native.matches(token) is False,'native matches accepted new hook'
-    assert value.matches() is False,'adapter matches accepted new hook'
-else:
-    for function in (native.snapshot,native.identity,adapter.snapshot,adapter.identity):
-        try: function()
-        except RuntimeError as error:
-            assert 'audit' in str(error),str(error)
-        else: raise AssertionError('hook presence was accepted')
-assert not calls,calls
-assert fixture.count()==0,'inspector emitted an audit event'
-print(json.dumps(dict(mode=mode,callbacks=0,refused=True)))
+if sys.argv[1]=='after':sys.addaudithook(observer)
+captured.verify()
+# We deliberately make no callback-count/absence or native-audit-list claim.
+print(json.dumps(dict(verified=True,observer_installed=True)))
 '''
-
-@pytest.mark.parametrize('mode',['initial_python','post_python','initial_native','post_native','allocation_python'])
-def test_actual_audit_hooks_refuse_without_invocation(mode,tmp_path):
     import anygeometry
-    import _audit_fixture
-    paths=[str(Path(anygeometry.__file__).resolve().parent.parent),str(Path(_audit_fixture.__file__).resolve().parent)]
-    env=dict(os.environ,PYTHONPATH=os.pathsep.join(paths))
-    result=subprocess.run([sys.executable,'-B','-c',CHILD,mode],cwd=tmp_path,env=env,capture_output=True,text=True,timeout=15)
-    (tmp_path/'stdout.txt').write_text(result.stdout)
-    (tmp_path/'stderr.txt').write_text(result.stderr)
-    assert result.returncode==0,result.stderr
-
-def test_absence_and_audit_layout_are_bound():
-    from anygeometry._planning_codec_registry import snapshot
-    value=snapshot()
-    assert value.profile['audit_hooks_absent'] is True
-    assert value.profile['schema']==2
-    assert value.profile['interpreter_audit_offset']>value.profile['interpreter_codecs_offset']
-    assert value.profile['runtime_audit_head_offset']>value.profile['runtime_audit_mutex_offset']
-    assert value.matches()
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join((str(Path(anygeometry.__file__).resolve().parent.parent), str(Path(__file__).resolve().parent))))
+    result = subprocess.run([sys.executable, '-B', '-c', script, when], cwd=tmp_path,
+                            env=env, capture_output=True, text=True, timeout=20)
+    (tmp_path / 'stdout.txt').write_text(result.stdout)
+    (tmp_path / 'stderr.txt').write_text(result.stderr)
+    assert result.returncode == 0, result.stderr
+    from _planning_contract_helpers import runtime_boundary_refusal
+    expected = (dict(initial_refused=True, verified=False) if runtime_boundary_refusal()
+                else dict(verified=True, observer_installed=True))
+    assert json.loads(result.stdout) == expected

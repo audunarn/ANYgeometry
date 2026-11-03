@@ -92,7 +92,11 @@ def test_available_native_reuses_only_library_and_signature_types(monkeypatch):
         assert library is kernel and type(query) is prototype
         refs.append(weakref.ref(query));return library,query,address
     monkeypatch.setattr(m,'_memory_binding',binding)
-    monkeypatch.setattr(ctypes,'_LoadLibrary',lambda *args:pytest.fail('extra native load reference'))
+    # CPython 3.13 calls _dlopen; 3.14's Windows loader calls _LoadLibrary.
+    # Poison the real factory alias only: do not create an unused ctypes API.
+    loader_alias='_LoadLibrary' if hasattr(ctypes,'_LoadLibrary') else '_dlopen'
+    assert callable(getattr(ctypes,loader_alias))
+    monkeypatch.setattr(ctypes,loader_alias,lambda *args:pytest.fail('extra native load reference'))
     monkeypatch.setattr(ctypes,'WINFUNCTYPE',lambda *args,**kwargs:pytest.fail('new signature type'))
     for _ in range(100):assert type(m._available_bytes()) is int
     # CPython3.14 PyCFuncPtr_FromDll deliberately retains self->callable=self.
@@ -307,6 +311,9 @@ def test_pressure_during_final_serialization_is_terminal(tmp_path,monkeypatch):
 
 
 def test_reused_session_does_not_convert_memory_error_to_refusal(tmp_path,monkeypatch):
+    # This callback checks host pressure without dispatching a worker. Package
+    # qualification belongs to the separate real admission/integration tests.
+    monkeypatch.setattr(host,'_admit_stage_package',lambda *args:lambda:None)
     m=api();value=sample();monkeypatch.setattr(m,'observe_memory',lambda:value);model,_=_fixture()
     control=host.StageControl(tmp_path,expected_ci=('p','a'),observed_ci=lambda _:('p','a'),memory_budget=budget(),reuse_workers=True)
     def parallel(bridge):value['host_peak_bytes']=101;bridge.check_deadline()
@@ -375,8 +382,10 @@ def test_actual_kernel_ring_split_cannot_intercept_memory_terminal(tmp_path,monk
     monkeypatch.setattr(m.MemoryLease,'check',check)
     control=host.StageControl(tmp_path,expected_ci=('p','a'),observed_ci=lambda _:pytest.fail('CI after pressure'),
                               memory_budget=budget(),reuse_workers=reuse)
-    # Only worker execution is replaced. Actual kernel constructs tasks and the
-    # actual face sampler calls arrange_material/_ring_split_attempt below.
+    # Worker execution and its package-admission prerequisite are isolated.
+    # The actual kernel still constructs tasks and the actual face sampler calls
+    # arrange_material/_ring_split_attempt below, with real pressure checks.
+    monkeypatch.setattr(host,'_admit_stage_package',lambda *args:lambda:None)
     def run(self,kind,tasks,serial_task):
         events.append(kind)
         return tuple(serial_task(task) for task in tasks)

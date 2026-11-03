@@ -1,6 +1,7 @@
 """Real default-H loaded workload acceptance; no toy callable-root substitution."""
 import numpy as np
 import pytest
+from _planning_numpy_profile_contract import numpy_profile_test
 from anygeometry import _planning_manifest as manifest
 from anygeometry._planning_canaries import _fixture
 from anygeometry._planning_executor import freeze_model
@@ -12,6 +13,7 @@ from anygeometry import query_trimmed_surface_charts
 
 
 @pytest.mark.parametrize('warm',[False,True])
+@numpy_profile_test
 def test_actual_plane_pair_face_workload_under_unchanged_default_host(warm):
     # R5 trusts the pinned external runtime interfaces; pytest is not a root.
     # The former Plane-only branch-profile assertion is explicitly superseded

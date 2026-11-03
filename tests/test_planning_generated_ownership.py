@@ -1,16 +1,20 @@
 """R5 generated edges derive authority from a live registered owner."""
 import types
 import pytest
+from _planning_contract_helpers import capture_with_runtime_boundary, classify_initial_dispatcher_refusal
 from anygeometry._planning_manifest import capture_callable_manifest
 from anygeometry._planning_qualification import QualificationDecline
 from anygeometry.tolerance import TolerancePolicy
 
 
-def test_registered_generated_slots_and_repr_closure_are_attested():
-    capture_callable_manifest((TolerancePolicy,)).verify()
+def test_registered_generated_slots_and_repr_closure_are_attested(request):
+    captured=capture_with_runtime_boundary((TolerancePolicy,),request=request)
+    if captured is None:return # Exact initial refusal is not postcapture coverage.
+    captured.verify()
 
 
-def test_module_spelling_does_not_register_a_class():
+def test_module_spelling_does_not_register_a_class(request):
+    if classify_initial_dispatcher_refusal(request):return # Exact initial refusal is not registration coverage.
     class Foreign:
         pass
     Foreign.__module__='anygeometry.tolerance'

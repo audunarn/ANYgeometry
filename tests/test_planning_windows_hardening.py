@@ -1,4 +1,5 @@
 """Opus W0 follow-ups: fail before native side effects, retain failed evidence."""
+from _planning_platform_contract import windows_owned_test
 import ctypes
 import json
 from pathlib import Path
@@ -10,6 +11,7 @@ from anygeometry._planning_windows_launch import WindowsChild
 from anygeometry._planning_qualification import QualificationDecline
 
 
+@windows_owned_test
 def test_closed_uncapped_tree_refuses_before_directory_or_native_create(tmp_path,monkeypatch):
     tree=OwnedTree(tmp_path);tree.close()
     monkeypatch.setattr(tree.api,'CreateProcessW',lambda *a:pytest.fail('closed Job reached native creation'))
@@ -18,6 +20,7 @@ def test_closed_uncapped_tree_refuses_before_directory_or_native_create(tmp_path
 
 
 @pytest.mark.parametrize('job',[None,0])
+@windows_owned_test
 def test_null_job_refuses_before_membership_or_resume(tmp_path,monkeypatch,job):
     tree=OwnedTree(tmp_path);child=WindowsChild(tree.api,['uncreated'])
     monkeypatch.setattr(tree.api,'IsProcessInJob',lambda *a:pytest.fail('NULL Job queried any-Job membership'))
@@ -26,6 +29,7 @@ def test_null_job_refuses_before_membership_or_resume(tmp_path,monkeypatch,job):
     finally:tree.close()
 
 
+@windows_owned_test
 def test_empty_environment_key_refuses_before_native_create(tmp_path,monkeypatch):
     tree=OwnedTree(tmp_path);actual=WindowsChild.create
     monkeypatch.setattr(tree.api,'CreateProcessW',lambda *a:pytest.fail('empty environment key reached native creation'))
@@ -35,6 +39,7 @@ def test_empty_environment_key_refuses_before_native_create(tmp_path,monkeypatch
     finally:tree.close()
 
 
+@windows_owned_test
 def test_closed_job_retry_attempts_all_retained_children_and_records_error(tmp_path):
     tree=OwnedTree(tmp_path);tree.close();seen=[]
     class Child:
@@ -50,6 +55,7 @@ def test_closed_job_retry_attempts_all_retained_children_and_records_error(tmp_p
     tree.children=[]
 
 
+@windows_owned_test
 def test_repeated_job_close_failures_preserve_first_record(tmp_path,monkeypatch):
     tree=OwnedTree(tmp_path);real=tree.api.CloseHandle;target=tree.handle;code=[5]
     def fail(value):
@@ -70,6 +76,7 @@ def test_repeated_job_close_failures_preserve_first_record(tmp_path,monkeypatch)
         monkeypatch.setattr(tree.api,'CloseHandle',real);tree.close()
 
 
+@windows_owned_test
 def test_sidecar_write_failure_still_raises_the_handle_error(tmp_path,monkeypatch):
     tree=OwnedTree(tmp_path);real=tree.api.CloseHandle;open_file=Path.open;target=tree.handle
     def fail(value):

@@ -1,4 +1,5 @@
 """W0 real Windows transaction negatives; no model execution."""
+from _planning_platform_contract import windows_owned_test
 import ctypes
 from ctypes import wintypes as W
 import json
@@ -19,6 +20,7 @@ def zero(tree, folder):
         assert child.info.process is None and child.info.thread is None and not child._duplicates
 
 
+@windows_owned_test
 def test_launch_uses_explicit_win32_transaction_not_popen(tmp_path,monkeypatch):
     tree=OwnedTree(tmp_path)
     monkeypatch.setattr(subprocess,'Popen',lambda *a,**k:pytest.fail('plain Popen launch'))
@@ -28,6 +30,7 @@ def test_launch_uses_explicit_win32_transaction_not_popen(tmp_path,monkeypatch):
     finally:zero(tree,tmp_path)
 
 
+@windows_owned_test
 def test_owned_job_membership_precedes_primary_thread_resume(tmp_path,monkeypatch):
     tree=OwnedTree(tmp_path);events=[];resume=tree.api.ResumeThread
     resume.argtypes=[W.HANDLE];resume.restype=W.DWORD
@@ -46,6 +49,7 @@ def test_owned_job_membership_precedes_primary_thread_resume(tmp_path,monkeypatc
     finally:zero(tree,tmp_path)
 
 
+@windows_owned_test
 def test_create_failure_cannot_publish_or_leave_child(tmp_path,monkeypatch):
     tree=OwnedTree(tmp_path)
     def fail(*a):ctypes.set_last_error(5);return 0
@@ -57,6 +61,7 @@ def test_create_failure_cannot_publish_or_leave_child(tmp_path,monkeypatch):
 
 
 @pytest.mark.parametrize('returned',[0xffffffff,0,2])
+@windows_owned_test
 def test_resume_failure_or_unexpected_suspend_count_retires(tmp_path,monkeypatch,returned):
     tree=OwnedTree(tmp_path)
     def fail(*a):ctypes.set_last_error(5);return returned
@@ -67,6 +72,7 @@ def test_resume_failure_or_unexpected_suspend_count_retires(tmp_path,monkeypatch
     finally:zero(tree,tmp_path)
 
 
+@windows_owned_test
 def test_failed_job_handle_close_is_not_silently_accepted(tmp_path,monkeypatch):
     tree=OwnedTree(tmp_path);real=tree.api.CloseHandle;handle=tree.handle
     retried=False
@@ -98,6 +104,7 @@ def test_failed_job_handle_close_is_not_silently_accepted(tmp_path,monkeypatch):
 
 
 @pytest.mark.parametrize('operation',['duplicate','size','initialize','job-attribute','handle-attribute','membership-query','membership-false'])
+@windows_owned_test
 def test_native_creation_faults_fail_closed(tmp_path,monkeypatch,operation):
     tree=OwnedTree(tmp_path)
     def fail(*a):ctypes.set_last_error(5);return 0
@@ -119,6 +126,7 @@ def test_native_creation_faults_fail_closed(tmp_path,monkeypatch,operation):
 
 
 @pytest.mark.parametrize('which',['role','directory'])
+@windows_owned_test
 def test_unknown_role_or_directory_refuses_before_creation(tmp_path,monkeypatch,which):
     root=tmp_path/'owned';root.mkdir();tree=OwnedTree(root)
     monkeypatch.setattr(tree.api,'CreateProcessW',lambda *a:pytest.fail('invalid request created a child'))
@@ -130,6 +138,7 @@ def test_unknown_role_or_directory_refuses_before_creation(tmp_path,monkeypatch,
 
 
 @pytest.mark.parametrize('kind',['io','thread','process'])
+@windows_owned_test
 def test_failed_child_handle_cleanup_retains_handle_and_error_evidence(tmp_path,monkeypatch,kind):
     tree=OwnedTree(tmp_path);real=tree.api.CloseHandle;failed=[]
     def close(value):
@@ -161,6 +170,7 @@ def test_failed_child_handle_cleanup_retains_handle_and_error_evidence(tmp_path,
 
 
 @pytest.mark.parametrize('environment',[{1:'x'},{'X':1},{'X':'a\0b'},{'a=b':'x'},{'a\0b':'x'}])
+@windows_owned_test
 def test_invalid_environment_cannot_reach_native_creation(tmp_path,monkeypatch,environment):
     from anygeometry._planning_windows_launch import WindowsChild
     tree=OwnedTree(tmp_path);actual=WindowsChild.create
@@ -173,6 +183,7 @@ def test_invalid_environment_cannot_reach_native_creation(tmp_path,monkeypatch,e
 
 
 @pytest.mark.parametrize('kind',['all-zero','missing-pid'])
+@windows_owned_test
 def test_incomplete_native_creation_record_refuses_and_retires(tmp_path,monkeypatch,kind):
     from anygeometry._planning_windows_launch import _bind,ProcessInfo
     tree=OwnedTree(tmp_path);_bind(tree.api);actual=tree.api.CreateProcessW
@@ -188,6 +199,7 @@ def test_incomplete_native_creation_record_refuses_and_retires(tmp_path,monkeypa
     finally:zero(tree,tmp_path)
 
 
+@windows_owned_test
 def test_never_created_child_poll_wait_and_close_are_safe(tmp_path):
     from anygeometry._planning_windows_launch import WindowsChild
     tree=OwnedTree(tmp_path);child=WindowsChild(tree.api,['never-created'])

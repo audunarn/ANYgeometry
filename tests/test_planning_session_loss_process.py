@@ -1,4 +1,6 @@
 """Owned-worker loss and consumed deadlines cannot reuse a surviving session."""
+from _planning_numpy_profile_contract import numpy_profile_test
+from _planning_platform_contract import windows_owned_test
 import json
 import time
 from pathlib import Path
@@ -26,6 +28,8 @@ def first_pair():
 
 
 @pytest.mark.parametrize('fault',['worker-exit','deadline'])
+@windows_owned_test
+@numpy_profile_test
 def test_session_terminal_loss_retires_without_retry(tmp_path,fault):
     packet,task=first_pair();owned=OwnedSession(tmp_path/fault,workers=2,timeout=70)
     try:

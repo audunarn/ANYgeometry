@@ -146,6 +146,22 @@ def stage_cost_vector(kind,tasks):
     digest=hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
     return dict(payload,sha256=digest,count=len(rows),total_weight=total)
 
+def _ctypes_field_type():
+    """Canonical native descriptor, including interpreters without a CField export."""
+    import ctypes, _ctypes
+    if ctypes.Structure is not _ctypes.Structure:
+        raise QualificationDecline('ctypes structure binding changed')
+    class Scalar(_ctypes._SimpleCData):
+        _type_ = 'b'
+    class Probe(_ctypes.Structure):
+        _fields_ = [('value', Scalar)]
+    descriptor_type = type(vars(Probe)['value'])
+    for module in (ctypes, _ctypes):
+        if 'CField' in vars(module) and vars(module)['CField'] is not descriptor_type:
+            raise QualificationDecline('ctypes field export binding changed')
+    return descriptor_type
+
+
 class InfrastructurePin:
     """Finite H/P resource-code identity, separate from numerical execution roots.
 
@@ -160,12 +176,18 @@ class InfrastructurePin:
         from ._planning_manifest import _RetainedChecks,_ImmutableEvidence,_is_type,_dataclass_slot_values,_prepare_slot_metadata
         from ._planning_qualification import pin_module,is_package_module,ModuleObserver
         from . import _planning_native
+        field_type=_ctypes_field_type()
         if role not in ('host','planner'):raise QualificationDecline('infrastructure role')
         names=('_planning_code','_planning_manifest','_planning_ledger','_planning_qualification',
             '_planning_executor','_planning_session','_planning_process','_planning_windows_launch',
             '_planning_native','_planning_numpy_context','_planning_batch','_planning_values','_planning_model_state')
         if role=='host':names+=('_planning_host','_planning_controller','_planning_memory')
         self.modules={};self.checks=_RetainedChecks();self.source=_ImmutableEvidence()
+        # Retain imported native interfaces, including an optional export's
+        # absence. Rebinding after capture is terminal, not fresh admission.
+        for provider in (ctypes,sys.modules['_ctypes']):
+            for symbol in ('Structure','_SimpleCData','CField'):
+                self.checks.binding('native-field-interface.'+provider.__name__+'.'+symbol,vars(provider),symbol)
         self.references=[];self.nodes=0;self.rows=[];seen=set();pending=[];generated={}
         modules=[importlib.import_module('anygeometry.'+name) for name in names]
         if role=='planner':
@@ -206,11 +228,12 @@ class InfrastructurePin:
                 if (type(field) is not dataclasses.Field or field.type is not annotation or
                         field.default is not dataclasses.MISSING or field.default_factory is not dataclasses.MISSING or
                         field.init is not True or field.repr is not True or field.compare is not True or
-                        field.hash is not None or field.kw_only is not False or dict(field.metadata) or field.doc is not None):
+                        field.hash is not None or field.kw_only is not False or dict(field.metadata) or (sys.version_info >= (3,14) and field.doc is not None)):
                     raise QualificationDecline('resource dataclass declaration changed')
             flags={name:item for name,_,item in _dataclass_slot_values(vars(cls)['__dataclass_params__'])}
-            if flags!=dict(init=True,repr=True,eq=True,order=False,unsafe_hash=False,frozen=True,
-                    match_args=True,kw_only=False,slots=False,weakref_slot=False):
+            expected_flags=dict(init=True,repr=True,eq=True,order=False,unsafe_hash=False,frozen=True)
+            if sys.version_info >= (3,12):expected_flags.update(match_args=True,kw_only=False,slots=False,weakref_slot=False)
+            if flags!=expected_flags:
                 raise QualificationDecline('resource dataclass producer flags changed')
             if cls not in generated:
                 pin(dataclasses)
@@ -342,7 +365,7 @@ class InfrastructurePin:
                 self.checks.add(path,lambda value=value:tuple((name,id(descriptor),self.checks.atom(item)) for name,descriptor,item in _dataclass_slot_values(value)))
                 for name,descriptor,item in _dataclass_slot_values(value):put(path+'.'+name,item,cls)
             elif is_package_module(value):pin(value)
-            elif typ is ctypes.CField and ctypes.CField is vars(sys.modules['_ctypes']).get('CField'):
+            elif typ is field_type:
                 pin(sys.modules['ctypes']);pin(sys.modules['_ctypes'])
             else:
                 # Finite imported native/provider objects (ctypes field/type,

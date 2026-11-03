@@ -1,4 +1,6 @@
 """Real public planner callback/Job integration; tiny three-face fixture only."""
+from _planning_numpy_profile_contract import numpy_profile_test
+from _planning_platform_contract import windows_owned_test
 import json
 import threading
 import time
@@ -14,6 +16,8 @@ from anygeometry.cancellation import CancellationSignal, _event
 
 @pytest.mark.parametrize('failure', ['cancel', 'callback-error'])
 @pytest.mark.parametrize('stage', ['pair', 'face'])
+@windows_owned_test
+@numpy_profile_test
 def test_public_callback_after_worker_admission_retires_tree(tmp_path, monkeypatch, failure, stage):
     model, _ = _fixture()
     document = to_dict(model)
@@ -63,6 +67,8 @@ def test_public_callback_after_worker_admission_retires_tree(tmp_path, monkeypat
     assert any(len(row['command'])==7 and row['command'][4]=='session-worker' for row in cleanup['checked'])
 
 
+@windows_owned_test
+@numpy_profile_test
 def test_false_public_callback_retains_policy_plan_apply_and_source(tmp_path, monkeypatch):
     from dataclasses import replace
     from anygeometry._planning_code import exact_numerical_record

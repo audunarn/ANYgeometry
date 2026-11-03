@@ -142,11 +142,16 @@ def test_real_gate_requires_complete_live_ledger():
 
 
 def test_builtin_pin_is_runtime_not_launcher():
+    if sys.platform != 'win32':
+        with pytest.raises(q.QualificationDecline, match='^interpreter runtime adapter is Windows-only$'):
+            q.pin_module(sys)
+        return
     pin = q.pin_module(sys)
     assert 'runtime_files' in pin, 'builtin was pinned to launcher only'
     names = {__import__('pathlib').Path(path).name.lower() for path in pin['runtime_files']}
     if sys.platform == 'win32':
-        assert 'python314.dll' in names
+        runtime_name = f'python{sys.version_info.major}{sys.version_info.minor}{getattr(sys, "abiflags", "")}.dll'
+        assert runtime_name in names
         assert any(name.startswith('vcruntime140') for name in names)
     assert pin.get('sha256') != hashlib.sha256(open(sys.executable, 'rb').read()).hexdigest()
 

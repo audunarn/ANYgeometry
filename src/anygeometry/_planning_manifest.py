@@ -112,9 +112,10 @@ def _dataclass_slot_values(value):
     typ=type(value)
     if typ is dataclasses.Field:
         names=('name','type','default','default_factory','repr','hash','init','compare',
-               'metadata','kw_only','doc','_field_type')
+               'metadata','kw_only',*(('doc',) if sys.version_info >= (3,14) else ()), '_field_type')
     elif typ is dataclasses._DataclassParams:
-        names=('init','repr','eq','order','unsafe_hash','frozen','match_args','kw_only','slots','weakref_slot')
+        names=('init','repr','eq','order','unsafe_hash','frozen',
+               *(('match_args','kw_only','slots','weakref_slot') if sys.version_info >= (3,12) else ()))
     else:raise QualificationDecline('unregistered dataclass metadata type')
     slots=type.__getattribute__(typ,'__slots__')
     if type(slots) is not tuple or any(type(name) is not str for name in slots) or slots!=names:
@@ -515,16 +516,18 @@ def prepare_interfaces():
             ast.literal_eval(declaration.body[0].value)!=slots):
         raise QualificationDecline('prepared-curve annotation-free source changed')
     namespace=vars(cls)
-    allowed={'__module__','__firstlineno__','__slots__','__static_attributes__','__doc__','__annotations_cache__','__annotate_func__','__slotnames__',*slots}
-    if (set(namespace)-allowed or namespace.get('__slots__')!=slots or namespace.get('__firstlineno__')!=declaration.lineno
+    annotation_name='__annotations_cache__' if sys.version_info >= (3,14) else '__annotations__'
+    allowed={'__module__','__slots__','__static_attributes__','__doc__',annotation_name,'__annotate_func__','__slotnames__',*slots}
+    if sys.version_info >= (3,13):allowed.add('__firstlineno__')
+    if (set(namespace)-allowed or namespace.get('__slots__')!=slots or (sys.version_info >= (3,13) and namespace.get('__firstlineno__')!=declaration.lineno)
             or namespace.get('__annotate_func__') is not None):
         raise QualificationDecline('prepared-curve metadata namespace changed')
     for name in slots:
         descriptor=namespace.get(name)
         if type(descriptor) is not types.MemberDescriptorType or descriptor.__objclass__ is not cls or descriptor.__name__!=name:
             raise QualificationDecline('prepared-curve metadata slot changed')
-    prior=namespace.get('__annotations_cache__')
-    if '__annotations_cache__' in namespace and (type(prior) is not dict or prior):
+    prior=namespace.get(annotation_name)
+    if annotation_name in namespace and (type(prior) is not dict or prior):
         raise QualificationDecline('prepared-curve annotation cache is not empty metadata')
     # Native type metadata read, with no annotation producer or caller hook.
     annotations=type.__getattribute__(cls,'__annotations__')
@@ -1268,7 +1271,8 @@ class CallableManifest:
                 elif typ is types.MethodType:
                     put(path+'.function',value.__func__,True,execute=execute);put(path+'.self',value.__self__,True)
                 else:
-                    import _collections,annotationlib,_abc
+                    import _collections,_abc
+                    if sys.version_info >= (3,14):import annotationlib
                     if typ in (dataclasses.Field,dataclasses._DataclassParams):
                         checks.add(path,lambda value=value:tuple((name,id(descriptor),checks.atom(part)) for name,descriptor,part in _dataclass_slot_values(value)))
                         metadata_kinds[kind]=metadata_kinds.get(kind,0)+1
@@ -1284,7 +1288,7 @@ class CallableManifest:
                             raise QualificationDecline('tuple field descriptor schema')
                         emit((path,'tuple-field',args,module_pin(sys.modules['_collections'])))
                         continue
-                    if typ is annotationlib.ForwardRef:
+                    if sys.version_info >= (3,14) and typ is annotationlib.ForwardRef:
                         def forward_state(value=value,typ=typ):
                             rows=[]
                             for field in type.__getattribute__(typ,'__slots__'):
@@ -1322,6 +1326,8 @@ class CallableManifest:
                     lock=next(((owner,key) for owner,key in locks if owner in sys.modules and vars(sys.modules[owner]).get(key) is value),None)
                     if lock is not None:
                         import _thread
+                        if typ is _thread.RLock and 'locked' not in vars(_thread.RLock):
+                            raise QualificationDecline('runtime RLock state interface unavailable')
                         if typ not in (_thread.LockType,_thread.RLock) or value.locked():
                             raise QualificationDecline('registered lock state/type')
                         checks.add(path,lambda value=value:value.locked())

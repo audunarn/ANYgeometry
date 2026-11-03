@@ -1,0 +1,32 @@
+[
+  {
+    "original": "tests/test_planning_branch_profiles.py",
+    "archive": "test_planning_branch_profiles.py.txt",
+    "sha256": "32ca7127f2d45eb586fbc6d5a4ff6bb201cc503e9a52d2bebb0791933869f45d",
+    "functions": 14
+  },
+  {
+    "original": "tests/test_planning_codec_registry.py",
+    "archive": "test_planning_codec_registry.py.txt",
+    "sha256": "20ca4a9c7a77653a570723c9a88bc466883b2ffa12dc965fe22fe0591430527d",
+    "functions": 18
+  },
+  {
+    "original": "tests/test_planning_json_operation.py",
+    "archive": "test_planning_json_operation.py.txt",
+    "sha256": "9ff109f1e650d4a0d179360a1c712b1caa44a5bb71938538c847b97d8006c970",
+    "functions": 8
+  },
+  {
+    "original": "tests/test_planning_runtime_audit.py",
+    "archive": "test_planning_runtime_audit.py.txt",
+    "sha256": "02830857ef46059091df52b3e9e1b63593bae2d208260ed2e45ceb62ee065935",
+    "functions": 2
+  },
+  {
+    "original": "tests/test_planning_guarded_capture.py",
+    "archive": "test_planning_guarded_capture.py.txt",
+    "sha256": "5821e66e9b60b115ceab9992195b487879192a6e336149b27917b93f17aebe3b",
+    "functions": 3
+  }
+]

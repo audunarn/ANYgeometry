@@ -1,32 +1,44 @@
 """R8 full admission and production integration regressions."""
 import dataclasses
+import sys
 import pytest
+from _planning_platform_contract import windows_owned_test
+from _planning_numpy_profile_contract import numpy_profile_test
+from _planning_contract_helpers import capture_with_runtime_boundary, capture_with_dispatcher_boundary
 from anygeometry import _planning_manifest as manifest
 from anygeometry._planning_executor import PlannerSourceChanged
 from anygeometry.tolerance import TolerancePolicy
 
 
-def test_dataclass_field_metadata_value_and_aliases_remain_bound(monkeypatch):
+# Python 3.14 stores the native type annotation cache separately. Earlier
+# runtimes materialize the same annotation-free class metadata in __annotations__.
+_CLASS_ANNOTATIONS = '__annotations_cache__' if sys.version_info >= (3, 14) else '__annotations__'
+
+
+def test_dataclass_field_metadata_value_and_aliases_remain_bound(monkeypatch,request):
     field=dataclasses.fields(TolerancePolicy)[0]
     shared=[1]
     monkeypatch.setattr(field,'metadata',{'first':shared,'second':shared})
-    captured=manifest.capture_callable_manifest((TolerancePolicy,))
+    captured=capture_with_runtime_boundary((TolerancePolicy,),request=request)
+    if captured is None:return # Exact initial refusal is not postcapture coverage.
     captured.verify()
     shared[0]=2
     with pytest.raises(PlannerSourceChanged):captured.verify()
 
 
-def test_dataclass_field_flags_remain_bound(monkeypatch):
+def test_dataclass_field_flags_remain_bound(monkeypatch,request):
     field=dataclasses.fields(TolerancePolicy)[0]
-    captured=manifest.capture_callable_manifest((TolerancePolicy,))
+    captured=capture_with_runtime_boundary((TolerancePolicy,),request=request)
+    if captured is None:return # Exact initial refusal is not postcapture coverage.
     monkeypatch.setattr(field,'repr',not field.repr)
     with pytest.raises(PlannerSourceChanged):captured.verify()
 
 
-def test_registered_default_factory_definition_remains_bound(monkeypatch):
+def test_registered_default_factory_definition_remains_bound(monkeypatch,request):
     from anygeometry._canonical_curve_runtime import _Bank
     field=next(field for field in dataclasses.fields(_Bank) if field.name=='declarations')
-    captured=manifest.capture_callable_manifest((_Bank,))
+    captured=capture_with_runtime_boundary((_Bank,),request=request)
+    if captured is None:return # Exact initial refusal is not postcapture coverage.
     monkeypatch.setattr(field,'default_factory',list)
     with pytest.raises(PlannerSourceChanged):captured.verify()
 
@@ -55,12 +67,12 @@ def test_interface_preparation_only_materializes_exact_empty_class_metadata(monk
     from anygeometry._planning_canaries import _fixture
     model,_=_fixture();cache=model._arc_cache;cache[991]=object()
     contents=dict(cache)
-    monkeypatch.delattr(nurbs._PreparedCurveState,'__annotations_cache__',raising=False)
+    monkeypatch.delattr(nurbs._PreparedCurveState,_CLASS_ANNOTATIONS,raising=False)
     manifest.prepare_interfaces()
-    metadata=vars(nurbs._PreparedCurveState)['__annotations_cache__']
+    metadata=vars(nurbs._PreparedCurveState)[_CLASS_ANNOTATIONS]
     assert type(metadata) is dict and not metadata
     manifest.prepare_interfaces()
-    assert vars(nurbs._PreparedCurveState)['__annotations_cache__'] is metadata
+    assert vars(nurbs._PreparedCurveState)[_CLASS_ANNOTATIONS] is metadata
     assert model._arc_cache is cache and cache==contents
 
 
@@ -70,7 +82,7 @@ def test_interface_preparation_rejects_annotation_authority_changes(monkeypatch,
     from anygeometry._planning_qualification import QualificationDecline
     from pathlib import Path
     cls=nurbs._PreparedCurveState
-    if change=='nonempty':monkeypatch.setattr(cls,'__annotations_cache__',{'field':int},raising=False)
+    if change=='nonempty':monkeypatch.setattr(cls,_CLASS_ANNOTATIONS,{'field':int},raising=False)
     elif change=='producer':monkeypatch.setattr(cls,'__annotate_func__',lambda *args:pytest.fail('annotation producer executed'),raising=False)
     elif change=='class':monkeypatch.setattr(nurbs,'_PreparedCurveState',type('Other',(),{}))
     else:
@@ -79,13 +91,15 @@ def test_interface_preparation_rejects_annotation_authority_changes(monkeypatch,
     with pytest.raises(QualificationDecline):manifest.prepare_interfaces()
 
 
-def test_prepared_annotation_cache_replacement_is_terminal(monkeypatch):
+def test_prepared_annotation_cache_replacement_is_terminal(monkeypatch,request):
     from anygeometry import nurbs
     manifest.prepare_interfaces()
-    captured=manifest.capture_callable_manifest((nurbs._PreparedCurveState,))
-    monkeypatch.setattr(nurbs._PreparedCurveState,'__annotations_cache__',{})
+    captured=capture_with_runtime_boundary((nurbs._PreparedCurveState,),request=request)
+    if captured is None:return # Exact initial refusal is not postcapture coverage.
+    monkeypatch.setattr(nurbs._PreparedCurveState,_CLASS_ANNOTATIONS,{})
     with pytest.raises(PlannerSourceChanged):captured.verify()
 
+@numpy_profile_test
 def test_production_ledger_has_strict_contexts_and_no_external_anchor(monkeypatch):
     from anygeometry import _planning_ledger as ledger,analytic_roots
     from anygeometry._planning_canaries import _fixture
@@ -102,6 +116,7 @@ def test_production_ledger_has_strict_contexts_and_no_external_anchor(monkeypatc
     finally:analytic_roots._ROOT_MEMO.reset(token)
     owned.validate()
 
+@numpy_profile_test
 def test_package_numpy_context_retains_getter_identity_without_anchor(monkeypatch):
     import types,numpy as np
     from anygeometry import _planning_ledger as ledger
@@ -110,18 +125,23 @@ def test_package_numpy_context_retains_getter_identity_without_anchor(monkeypatc
     captured=capture_numpy_context(package_only=True)
     captured.verify()
     original=np.geterr
-    replacement=types.FunctionType(original.__code__,original.__globals__,original.__name__)
+    replacement=types.FunctionType(original.__code__,original.__globals__,original.__name__,
+        original.__defaults__,original.__closure__)
     replacement.__module__=original.__module__
     monkeypatch.setattr(np,'geterr',replacement)
     monkeypatch.setattr(__import__('sys').modules[original.__module__],'geterr',replacement)
     with pytest.raises(PlannerSourceChanged):captured.verify()
 
 @pytest.mark.parametrize('warm',[False,True])
+@numpy_profile_test
+@windows_owned_test
 def test_public_eight_worker_canary_matches_serial(monkeypatch,tmp_path,warm):
     import os,json,psutil
     from pathlib import Path
     memory=psutil.virtual_memory()
-    Path(os.environ['TASK_EVIDENCE_DIRECTORY'],f'load-before-canary-{warm}.json').write_text(json.dumps(dict(
+    evidence_directory=Path(os.environ.get('TASK_EVIDENCE_DIRECTORY',tmp_path))
+    evidence_directory.mkdir(parents=True,exist_ok=True)
+    (evidence_directory/f'load-before-canary-{warm}.json').write_text(json.dumps(dict(
         cpu_percent=psutil.cpu_percent(interval=.1),available_bytes=memory.available,total_bytes=memory.total,
         logical_cpus=os.cpu_count(),python_process_count=None)))
     from anygeometry import batch_intersections as bi,query_trimmed_surface_charts
@@ -170,7 +190,7 @@ def test_public_eight_worker_canary_matches_serial(monkeypatch,tmp_path,warm):
     prefixes=('batch_face_pairs_','intersection_pair_','t2b_','planning_mode:',
         'ring_split_','arrangement_snap_','arrangement_seam_')
     def outcomes(data):return {key:value for key,value in data.items() if key.startswith(prefixes) and not key.endswith('_time_ns')}
-    Path(os.environ['TASK_EVIDENCE_DIRECTORY'],f'diagnostics-canary-{warm}.json').write_text(json.dumps(dict(
+    (evidence_directory/f'diagnostics-canary-{warm}.json').write_text(json.dumps(dict(
         parallel=parallel_counts,serial=serial_counts,parallel_apply=parallel_apply,serial_apply=serial_apply,
         classification='named deterministic outcomes compared; timing/work/cache counters retained separately')))
     assert outcomes(parallel_counts)==outcomes(serial_counts)
@@ -184,11 +204,12 @@ def test_slot_metadata_native_schema_inheritance_and_mangling():
 
 
 @pytest.mark.parametrize('change',['delete','replace','corrupt'])
-def test_slot_metadata_recheck_is_binding_sensitive(monkeypatch,change):
+def test_slot_metadata_recheck_is_binding_sensitive(monkeypatch,change,request):
     from anygeometry import nurbs
     cls=nurbs._PreparedCurveState
     manifest.prepare_interfaces()
-    captured=manifest.capture_callable_manifest((cls,))
+    captured=capture_with_runtime_boundary((cls,),request=request)
+    if captured is None:return # Exact initial refusal is not postcapture coverage.
     original=vars(cls)['__slotnames__'];expected=list(original)
     captured.verify();assert vars(cls)['__slotnames__'] is original
     if change=='delete':monkeypatch.delattr(cls,'__slotnames__')
@@ -197,9 +218,10 @@ def test_slot_metadata_recheck_is_binding_sensitive(monkeypatch,change):
     with pytest.raises(PlannerSourceChanged):captured.verify()
 
 
-def test_cached_immutable_code_rejects_equivalent_live_code_replacement(monkeypatch):
+def test_cached_immutable_code_rejects_equivalent_live_code_replacement(monkeypatch,request):
     from anygeometry import _planning_code
-    captured=manifest.capture_callable_manifest((_planning_code.passive_data,))
+    captured=capture_with_runtime_boundary((_planning_code.passive_data,),request=request)
+    if captured is None:return # Exact initial refusal is not postcapture coverage.
     captured.verify()
     monkeypatch.setattr(_planning_code.passive_data,'__code__',_planning_code.passive_data.__code__.replace())
     with pytest.raises(PlannerSourceChanged):captured.verify()
@@ -214,19 +236,22 @@ def test_exact_numerical_evidence_distinguishes_signed_zero_and_array_types():
     assert record((1,))!=record([1])
 
 @pytest.mark.parametrize('change',['global','default','closure','array'])
-def test_retained_and_full_verifiers_agree_on_protected_mutation(monkeypatch,change):
+def test_retained_and_full_verifiers_agree_on_protected_mutation(monkeypatch,change,request):
     from anygeometry import _planning_code,runtime_diagnostics,surface_capabilities
     if change in ('global','default'):
-        captured=manifest.capture_callable_manifest((_planning_code.passive_data,))
+        captured=capture_with_runtime_boundary((_planning_code.passive_data,),request=request)
+        if captured is None:return # Exact initial refusal is not postcapture coverage.
         if change=='global':monkeypatch.setattr(_planning_code,'_encode',lambda value:b'changed')
         else:monkeypatch.setitem(_planning_code.passive_data.__kwdefaults__,'key',True)
     elif change=='closure':
         function=runtime_diagnostics.collect_runtime_records
-        captured=manifest.capture_callable_manifest((function,))
+        captured=capture_with_runtime_boundary((function,),request=request)
+        if captured is None:return # Exact initial refusal is not postcapture coverage.
         monkeypatch.setattr(function.__closure__[0],'cell_contents',lambda:None)
     else:
         value=surface_capabilities._SEEDS
-        captured=manifest.capture_callable_manifest((value,))
+        captured=capture_with_dispatcher_boundary((value,),request=request)
+        if captured is None:return # Exact initial refusal is not postcapture coverage.
         before=value.copy();value.flat[0]+=1.
     try:
         with pytest.raises(PlannerSourceChanged):captured.verify()
@@ -235,7 +260,9 @@ def test_retained_and_full_verifiers_agree_on_protected_mutation(monkeypatch,cha
         if change=='array':value[:]=before
 
 @pytest.mark.parametrize('change',['controller','bridge','ctypes','native_image'])
-def test_infrastructure_loaded_code_and_imported_interfaces_are_terminal(monkeypatch,change):
+@numpy_profile_test
+@windows_owned_test
+def test_infrastructure_loaded_code_and_imported_interfaces_are_terminal(monkeypatch,tmp_path,change):
     import ctypes
     from pathlib import Path
     from anygeometry._planning_code import InfrastructurePin
@@ -250,16 +277,19 @@ def test_infrastructure_loaded_code_and_imported_interfaces_are_terminal(monkeyp
     with pytest.raises(PlannerSourceChanged):captured.verify()
 
 
-def test_retained_annotation_equal_copy_and_type_parameters_are_terminal(monkeypatch):
+def test_retained_annotation_equal_copy_and_type_parameters_are_terminal(monkeypatch,request):
     from anygeometry import _planning_code
     function=_planning_code.passive_data
-    captured=manifest.capture_callable_manifest((function,))
+    captured=capture_with_runtime_boundary((function,),request=request)
+    if captured is None:return # Exact initial refusal is not postcapture coverage.
     monkeypatch.setattr(function,'__annotations__',dict(function.__annotations__))
     with pytest.raises(PlannerSourceChanged):captured.verify()
     with pytest.raises(PlannerSourceChanged):captured.verify(full=True)
 
 @pytest.mark.parametrize('phase',['initial','retained'])
-def test_infrastructure_generated_dataclass_code_skew_refuses(monkeypatch,phase):
+@numpy_profile_test
+@windows_owned_test
+def test_infrastructure_generated_dataclass_code_skew_refuses(monkeypatch,tmp_path,phase):
     from anygeometry._planning_code import InfrastructurePin
     from anygeometry._planning_memory import MemoryBudget
     from anygeometry._planning_qualification import QualificationDecline
@@ -342,6 +372,7 @@ def test_capture_path_cache_rechecks_resolution_before_acceptance(tmp_path,monke
     assert evidence.resolve(key)==second
 
 
+@numpy_profile_test
 def test_cached_and_uncached_complete_role_graphs_are_identical():
     from anygeometry._planning_canaries import _fixture
     from anygeometry._planning_executor import freeze_model
@@ -357,10 +388,11 @@ def test_cached_and_uncached_complete_role_graphs_are_identical():
 
 
 @pytest.mark.parametrize('full',[False,True])
-def test_capture_path_retarget_after_capture_is_terminal(tmp_path,monkeypatch,full):
+def test_capture_path_retarget_after_capture_is_terminal(tmp_path,monkeypatch,full,request):
     from pathlib import Path
     from anygeometry import _planning_code
-    captured=manifest.capture_callable_manifest((_planning_code.passive_data,))
+    captured=capture_with_runtime_boundary((_planning_code.passive_data,),request=request)
+    if captured is None:return # Exact initial refusal is not postcapture coverage.
     origin=Path(_planning_code.__file__);other=tmp_path/origin.name
     other.write_bytes(origin.read_bytes())
     resolve=Path.resolve

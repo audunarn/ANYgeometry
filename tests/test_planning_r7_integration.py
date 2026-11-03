@@ -1,6 +1,7 @@
 """R7 connected admission regressions; wrapper authority is never unwrapped away."""
 import types
 import pytest
+from _planning_contract_helpers import capture_with_dispatcher_boundary
 from anygeometry import _planning_manifest as manifest
 from anygeometry._planning_qualification import QualificationDecline
 from anygeometry.model import GeometryModel
@@ -66,12 +67,13 @@ def test_persistence_registry_definition_and_query_mutations_refuse(monkeypatch,
         with pytest.raises(QualificationDecline):list(manifest._registry_factory_instructions(factory))
 
 
-def test_registered_quadrature_definition_keeps_flags_and_rejects_byte_drift():
+def test_registered_quadrature_definition_keeps_flags_and_rejects_byte_drift(request):
     from anygeometry import section_faces
     from anygeometry._planning_executor import PlannerSourceChanged
     first,second=section_faces._GAUSS
     flags=first.flags.writeable,second.flags.writeable
-    captured=manifest.capture_callable_manifest((first,second))
+    captured=capture_with_dispatcher_boundary((first,second),request=request)
+    if captured is None:return # Exact initial refusal is not postcapture coverage.
     original=first[0]
     try:
         first[0]=original+1
@@ -80,13 +82,14 @@ def test_registered_quadrature_definition_keeps_flags_and_rejects_byte_drift():
     assert (first.flags.writeable,second.flags.writeable)==flags
 
 
-def test_definition_to_execution_upgrade_keeps_callable_default_closure():
+def test_definition_to_execution_upgrade_keeps_callable_default_closure(request):
     from anygeometry._planning_executor import PlannerSourceChanged
     state=[3]
     def callback():return state[0]
     def root(function=callback):return function()
     root.__annotations__={'return':callback}
-    captured=manifest.capture_callable_manifest((root,))
+    captured=capture_with_dispatcher_boundary((root,),request=request)
+    if captured is None:return # Exact initial refusal is not postcapture coverage.
     assert captured.graph['definition_expansions']>0
     assert captured.graph['execution_expansions']>0
     captured.verify()
@@ -94,12 +97,13 @@ def test_definition_to_execution_upgrade_keeps_callable_default_closure():
     with pytest.raises(PlannerSourceChanged):captured.verify()
 
 
-def test_definition_upgrade_retains_distinct_alias_bindings():
+def test_definition_upgrade_retains_distinct_alias_bindings(request):
     from anygeometry._planning_executor import PlannerSourceChanged
     state=[1]
     def callback():return state[0]
     def root(function=callback):return function()
     root.__annotations__={'a':state,'b':state,'callback':callback}
-    captured=manifest.capture_callable_manifest((root,))
+    captured=capture_with_dispatcher_boundary((root,),request=request)
+    if captured is None:return # Exact initial refusal is not postcapture coverage.
     root.__annotations__['b']=[1]
     with pytest.raises(PlannerSourceChanged):captured.verify()

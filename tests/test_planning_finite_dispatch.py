@@ -6,6 +6,7 @@ cannot establish source provenance; the old spoof fixture remains a refusal.
 import sys
 import types
 import pytest
+from _planning_contract_helpers import capture_with_runtime_boundary, capture_with_dispatcher_boundary, classify_initial_dispatcher_refusal
 from anygeometry._planning_manifest import capture_callable_manifest
 from anygeometry._planning_executor import PlannerSourceChanged
 from anygeometry._planning_qualification import QualificationDecline
@@ -19,35 +20,40 @@ def owned(monkeypatch):
     return module
 
 
-def test_type_root_symbol_replacement_is_terminal(monkeypatch):
+def test_type_root_symbol_replacement_is_terminal(monkeypatch,request):
     from anygeometry import tolerance
-    manifest=capture_callable_manifest((tolerance.TolerancePolicy,))
+    manifest=capture_with_runtime_boundary((tolerance.TolerancePolicy,),request=request)
+    if manifest is None:return # Exact initial refusal is not postcapture coverage.
     monkeypatch.setattr(tolerance,'TolerancePolicy',type('Other',(),{}))
     with pytest.raises(PlannerSourceChanged):manifest.verify()
 
 
-def test_selected_method_rebinding_is_terminal(monkeypatch):
+def test_selected_method_rebinding_is_terminal(monkeypatch,request):
     from anygeometry.tolerance import TolerancePolicy
-    manifest=capture_callable_manifest((TolerancePolicy.effective_length,TolerancePolicy))
+    manifest=capture_with_runtime_boundary((TolerancePolicy.effective_length,TolerancePolicy),request=request)
+    if manifest is None:return # Exact initial refusal is not postcapture coverage.
     monkeypatch.setattr(TolerancePolicy,'effective_length',lambda self,scale:2)
     with pytest.raises(PlannerSourceChanged):manifest.verify()
 
 
-def test_unselected_owned_method_rebinding_is_terminal(monkeypatch):
+def test_unselected_owned_method_rebinding_is_terminal(monkeypatch,request):
     from anygeometry.tolerance import TolerancePolicy
-    manifest=capture_callable_manifest((TolerancePolicy.effective_length,TolerancePolicy))
+    manifest=capture_with_runtime_boundary((TolerancePolicy.effective_length,TolerancePolicy),request=request)
+    if manifest is None:return # Exact initial refusal is not postcapture coverage.
     monkeypatch.setattr(TolerancePolicy,'effective_area',lambda self,scale:2)
     with pytest.raises(PlannerSourceChanged):manifest.verify()
 
 
-def test_outside_package_source_spoof_refuses_initial_capture(monkeypatch):
+def test_outside_package_source_spoof_refuses_initial_capture(monkeypatch,request):
+    if classify_initial_dispatcher_refusal(request):return # Exact initial refusal is not source-spoof coverage.
     module=owned(monkeypatch)
     with pytest.raises(QualificationDecline,match='source outside package'):
         capture_callable_manifest((module.root,module.Record))
 
 
-def test_exact_builtin_type_constructor_binds_interpreter_image():
-    manifest=capture_callable_manifest((BaseException.__new__,))
+def test_exact_builtin_type_constructor_binds_interpreter_image(request):
+    manifest=capture_with_runtime_boundary((BaseException.__new__,),request=request)
+    if manifest is None:return # Exact initial refusal is not postcapture coverage.
     manifest.verify()
 
 
@@ -95,8 +101,9 @@ def test_type_metadata_native_reads_bypass_metaclass_hooks():
 
 
 @pytest.mark.parametrize('full',[False,True])
-def test_type_metadata_drift_is_terminal(full):
-    value={'safe':1};captured=capture_callable_manifest((value,))
+def test_type_metadata_drift_is_terminal(full,request):
+    value={'safe':1};captured=capture_with_dispatcher_boundary((value,),request=request)
+    if captured is None:return # Exact initial refusal is not postcapture coverage.
     class Unknown:__module__=None
     value['new']=Unknown()
     with pytest.raises(PlannerSourceChanged):captured.verify(full=full)

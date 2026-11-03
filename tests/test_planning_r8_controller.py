@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 from anygeometry import _planning_controller as controller
 from anygeometry.runtime_diagnostics import collect_runtime_records
+from _planning_numpy_profile_contract import numpy_profile_test
 
 
 def _finalization_fixture(monkeypatch,tmp_path):
@@ -190,6 +191,7 @@ def test_production_diagnostics_publish_only_final_path_once(monkeypatch,tmp_pat
 
 
 @pytest.mark.parametrize('action',['model','code','exception','cancel'])
+@numpy_profile_test
 def test_real_public_callback_after_capture_is_terminal(monkeypatch,tmp_path,action):
     from anygeometry import batch_intersections as bi,_planning_values
     from anygeometry._planning_canaries import _fixture

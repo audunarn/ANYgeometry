@@ -1,4 +1,6 @@
 """Real compact preparation, admitted startup, retirement and transcript replay."""
+from _planning_numpy_profile_contract import numpy_profile_test
+from _planning_platform_contract import windows_owned_test
 import json
 from anygeometry import batch_intersections as bi
 from anygeometry._planning_canaries import _fixture
@@ -7,6 +9,8 @@ from anygeometry._planning_executor import read_packet
 from anygeometry.serialization import from_dict,to_dict
 
 
+@windows_owned_test
+@numpy_profile_test
 def test_real_compact_preparation_with_memory_bounded_startup(tmp_path,monkeypatch):
     model,_=_fixture();document=to_dict(model)
     monkeypatch.setenv('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING','0')

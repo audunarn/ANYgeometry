@@ -65,6 +65,11 @@ def test_mandatory_ci_and_stratified_success():
 def test_own_trusted_annotation_dict_mutation_is_checked():
     ledger = l.loaded_geometry_ledger(trusted_image=True)
     store = ledger.objects[l._TRUSTED_IMAGE_STORES[-1]]
+    from anygeometry.exact_curves import _BranchConstants
+    if sys.version_info < (3, 14):
+        assert store is vars(_BranchConstants)['__annotations__']
+    else:
+        assert store is _BranchConstants.__annotate_func__.__closure__[0].cell_contents
     store['pp1i_extra'] = int
     try:
         with pytest.raises(q.QualificationDecline): ledger.validate()

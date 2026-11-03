@@ -1,4 +1,6 @@
 """Explicit verification controls use package admission without production policy."""
+from _planning_numpy_profile_contract import numpy_profile_test
+from _planning_platform_contract import windows_owned_test
 import json
 import types
 import pytest
@@ -95,6 +97,8 @@ def test_replaced_public_descriptor_owner_never_executes_hooks(monkeypatch):
     with pytest.raises(QualificationDecline):host._stage_descriptor(prepared,model,policy)
 
 
+@windows_owned_test
+@numpy_profile_test
 def test_admitted_package_capability_and_manifest_skew_are_terminal(tmp_path):
     from anygeometry._planning_canaries import _fixture
     from anygeometry._planning_executor import freeze_model,PlannerSourceChanged

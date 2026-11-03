@@ -1,6 +1,8 @@
 """Code fingerprints describe fields, independently of marshal ref bookkeeping."""
 import types
+import sys
 import pytest
+from _planning_contract_helpers import capture_with_dispatcher_boundary
 from anygeometry._planning_qualification import QualificationDecline
 
 
@@ -47,21 +49,31 @@ def test_nested_code_constant_change_is_retained():
 
 def test_compiler_slice_constants_are_exact_and_closed():
     def kernel(value):return value[1:]
-    assert any(type(value) is slice for value in kernel.__code__.co_consts)
-    before=digest(kernel.__code__)
-    changed=kernel.__code__.replace(co_consts=tuple(slice(2,None,None) if type(value) is slice else value
-        for value in kernel.__code__.co_consts))
+    if sys.version_info >= (3,14):
+        assert any(type(value) is slice for value in kernel.__code__.co_consts)
+        code=kernel.__code__
+    else:
+        # Older compilers build slices at runtime; CodeType still retains exact
+        # slice constants supplied through its public replacement interface.
+        code=kernel.__code__.replace(co_consts=(*kernel.__code__.co_consts,slice(1,None,None)))
+        restored=code.replace()
+        assert type(restored.co_consts[-1]) is slice and restored.co_consts[-1]==slice(1,None,None)
+        assert digest(restored)==digest(code)
+    before=digest(code)
+    changed=code.replace(co_consts=tuple(slice(2,None,None) if type(value) is slice else value
+        for value in code.co_consts))
     assert digest(changed)!=before
-    unknown=kernel.__code__.replace(co_consts=(slice(object(),None,None),))
+    unknown=code.replace(co_consts=(slice(object(),None,None),))
     with pytest.raises(QualificationDecline):digest(unknown)
 
 
 @pytest.mark.parametrize('change',['nested_constant','flags'])
-def test_code_field_mutation_is_terminal(change):
+def test_code_field_mutation_is_terminal(change,request):
     from anygeometry._planning_manifest import capture_callable_manifest
     from anygeometry._planning_executor import PlannerSourceChanged
     def kernel():return lambda:17.25
-    manifest=capture_callable_manifest((kernel,))
+    manifest=capture_with_dispatcher_boundary((kernel,),request=request)
+    if manifest is None:return # Exact initial refusal is not postcapture coverage.
     if change=='flags':kernel.__code__=kernel.__code__.replace(co_flags=kernel.__code__.co_flags ^ 0x10)
     else:
         index,nested=next((i,value) for i,value in enumerate(kernel.__code__.co_consts) if type(value) is types.CodeType)

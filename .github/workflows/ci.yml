@@ -30,6 +30,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     # CI tiers C5 (owner D-CI4 a): every lane keeps the full suite, in three duration-balanced shards
     timeout-minutes: 30
+    env:
+      ANYGEOMETRY_REQUIRE_QUALIFIED_PLANNING_TESTS: ${{ matrix.os == 'windows-latest' && matrix.python-version == '3.14' && '1' || '0' }}
     strategy:
       fail-fast: false
       matrix:
@@ -52,7 +54,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: ${{ matrix.os == 'windows-latest' && matrix.python-version == '3.14' && '3.14.2' || matrix.python-version }}
           cache: pip
       - name: Verify the requested Mac architecture
         if: runner.os == 'macOS'
@@ -65,7 +67,13 @@ jobs:
           ANYGEOMETRY_REQUIRE_PLANNING_NATIVE: ${{ runner.os == 'Windows' && '1' || '0' }}
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[dev,planar,sketch,test]"
+          python -m pip install -e ".[dev,planar,sketch,test]" "setuptools>=77.0.3"
+      - name: Install the qualified planner numerical profile
+        if: matrix.os == 'windows-latest' && matrix.python-version == '3.14'
+        run: python -m pip install 'numpy==2.4.6' 'scipy==1.17.1'
+      - name: Require the frozen positive planner runtime
+        if: matrix.os == 'windows-latest' && matrix.python-version == '3.14'
+        run: python tools/ci_planning_profile.py --preflight --report planning-profile.json
       - name: Run tests
         shell: bash
         env:
@@ -80,7 +88,7 @@ jobs:
         run: python tools/ci_durations.py summary kernel-results.xml >> "$GITHUB_STEP_SUMMARY" || true
       - name: Verify package import and CLI version
         run: |
-          python -c "import anygeometry; assert anygeometry.__version__ == '0.4.6'"
+          python -c "import anygeometry, importlib.metadata, pathlib, tomllib; expected=tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version']; assert anygeometry.__version__ == importlib.metadata.version('ANYgeometry') == expected"
           python -m anygeometry --version
       - name: Retain effective runtime evidence
         if: always()
@@ -90,6 +98,7 @@ jobs:
           path: |
             *-runtime.json
             kernel-results.xml
+            planning-profile.json
             shard-*.json
           if-no-files-found: warn
 
@@ -125,6 +134,7 @@ jobs:
             done
           done
           python tools/ci_shards.py verify lanes/minimum-dependencies-runtime-*/shard-*.json
+          python tools/ci_planning_profile.py lanes/kernel-runtime-windows-latest-3.14-*/kernel-results.xml
 
   planar-absence:
     name: pytest (planar backend absent)
@@ -276,7 +286,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.11'
-      - run: python -m pip install -e '.[dev,planar,test]' 'numpy==1.26.0' 'shapely==2.0.0'
+      - run: python -m pip install -e '.[dev,planar,test]' 'setuptools>=77.0.3' 'numpy==1.26.0' 'shapely==2.0.0'
       - run: python -m pytest --durations=20 --junitxml=kernel-results.xml
         env:
           ANYGEOMETRY_TEST_SHARD: ${{ matrix.shard }}/3

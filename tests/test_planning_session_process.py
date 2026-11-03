@@ -4,6 +4,8 @@ The old v1 non-session request digest aliased its sampling seed. Package session
 commands have a separate chain digest; face v2 bytes intentionally change the
 sampling seed while preserving canonical task data and the same sampling rule.
 """
+from _planning_numpy_profile_contract import numpy_profile_test
+from _planning_platform_contract import windows_owned_test
 import json
 
 from anygeometry import batch_intersections as bi
@@ -73,6 +75,8 @@ def _compare_stage_streams(old,new,first,second,index):
     return left,right
 
 
+@windows_owned_test
+@numpy_profile_test
 def test_public_session_reuses_workers_with_same_samples_and_plan_apply(tmp_path,monkeypatch):
     model,_=_fixture();document=to_dict(model)
     reference=from_dict(document)

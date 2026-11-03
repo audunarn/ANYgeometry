@@ -121,6 +121,9 @@ def test_decline_retires_before_long_replay_without_reusing_parallel_clock(tmp_p
         def submit_stage(self,*args,**kwargs):raise QualificationDecline('owned refusal')
         def close(self):events.append('retired');clock[0]=11.
     monkeypatch.setattr(host,'OwnedPlanner',Refuse);monkeypatch.setattr(session,'OwnedSession',Refuse)
+    # Both worker implementations are fake here; exercise retirement/replay,
+    # independently of whether this interpreter admits real package workers.
+    monkeypatch.setattr(host,'_admit_stage_package',lambda *args:lambda:None)
     def parallel(bridge):return bridge.run('pair',[dict(kind='pair',cost=1.)],lambda _:pytest.fail('sampled'))
     def replay(poll):
         assert events==['start','retired'];events.append('replay')

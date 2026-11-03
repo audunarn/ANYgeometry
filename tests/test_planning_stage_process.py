@@ -1,4 +1,6 @@
 """Real owned stage subprocesses, distinct from host/control injection tests."""
+from _planning_numpy_profile_contract import numpy_profile_test
+from _planning_platform_contract import windows_owned_test
 import json
 from anygeometry import _planning_executor as a
 from anygeometry._planning_stages import WorkerModel,stage_task
@@ -6,6 +8,8 @@ from anygeometry._planning_canaries import _fixture
 from anygeometry.serialization import from_dict,to_dict
 
 
+@windows_owned_test
+@numpy_profile_test
 def test_owned_stage_workers_decode_once_and_match_serial(tmp_path):
     model,_=_fixture();packet=a.freeze_model(from_dict(to_dict(model)));context=WorkerModel(packet)
     faces=list(context.model.faces);tol=context.model.tolerance.effective_length(5.)
@@ -18,6 +22,8 @@ def test_owned_stage_workers_decode_once_and_match_serial(tmp_path):
     assert all(row['model_sha256']==packet['sha256'] for row in report['worker_reports'])
     assert json.loads((tmp_path/'stages/cleanup.json').read_text())['active_processes']==0
 
+@windows_owned_test
+@numpy_profile_test
 def test_real_requested_payload_limit_exceeds_default(tmp_path):
     model,_=_fixture();model=from_dict(to_dict(model));model._serialization_extensions={'pp5:padding':{'value':'x'*4100000}}
     limits=dict(payload_limit=6000000,walk_limit=200000)

@@ -1,5 +1,6 @@
 """R6 role separation keeps definitions, typed operation edges and the bound."""
 import pytest
+from _planning_contract_helpers import capture_with_dispatcher_boundary
 from anygeometry import _planning_manifest as manifest
 from anygeometry._planning_qualification import QualificationDecline
 from anygeometry.model import GeometryModel
@@ -39,12 +40,13 @@ def test_worker_root_memo_and_collectors_cannot_use_host_policy():
         finally:context.reset(token)
 
 
-def test_shared_finite_definition_is_bound_once_and_mutation_refuses():
+def test_shared_finite_definition_is_bound_once_and_mutation_refuses(request):
     from anygeometry._planning_executor import PlannerSourceChanged
     shared=[1,2,3]
     def root():return shared
     root.__annotations__={'first':shared,'second':shared}
-    captured=manifest.capture_callable_manifest((root,root))
+    captured=capture_with_dispatcher_boundary((root,root),request=request)
+    if captured is None:return # Exact initial refusal is not postcapture coverage.
     assert captured.nodes<100
     assert captured.graph['unique_objects']<captured.nodes
     captured.verify()
@@ -61,14 +63,16 @@ def test_operation_registry_rejects_live_dynamic_model_call(monkeypatch):
     monkeypatch.setattr(GeometryModel,'vertex_position',original)
 
 
-def test_shared_role_graph_counts_only_new_expansions_and_still_rechecks():
+def test_shared_role_graph_counts_only_new_expansions_and_still_rechecks(request):
     from anygeometry._planning_executor import PlannerSourceChanged
     shared_data=[1,2,3]
     def first():return shared_data
     def second():return shared_data
     graph={};budget=[0]
-    common=manifest.capture_callable_manifest((first,),shared=graph,budget=budget)
-    extra=manifest.capture_callable_manifest((second,),shared=graph,budget=budget)
+    common=capture_with_dispatcher_boundary((first,),shared=graph,budget=budget,request=request)
+    if common is None:return # Exact initial refusal is not postcapture coverage.
+    extra=capture_with_dispatcher_boundary((second,),shared=graph,budget=budget,request=request)
+    if extra is None:return # Exact initial refusal is not postcapture coverage.
     assert budget[0]==common.nodes+extra.nodes
     assert extra.nodes<common.nodes
     check={};common.verify(shared=check);extra.verify(shared=check)

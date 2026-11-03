@@ -1,4 +1,6 @@
 """Finite one-stage sessions, empty assignments, and public no-work planning."""
+from _planning_numpy_profile_contract import numpy_profile_test
+from _planning_platform_contract import windows_owned_test
 import json
 import pytest
 from anygeometry import batch_intersections as bi
@@ -11,6 +13,8 @@ from anygeometry.serialization import from_dict,to_dict
 
 
 @pytest.mark.parametrize('kind',['pair','face'])
+@windows_owned_test
+@numpy_profile_test
 def test_one_stage_finishes_with_empty_second_worker(tmp_path,kind):
     original,_=_fixture();model=from_dict(to_dict(original));packet=freeze_model(model);captured={}
     class Capture:

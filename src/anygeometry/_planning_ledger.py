@@ -98,7 +98,8 @@ _DECLINED_RUNTIME_PATHS = (
 # Owner-accepted opaque runtime risk with exact namespace/owner checks. The owned
 # annotation dictionary additionally has a structural digest and source provenance.
 _TRUSTED_IMAGE_STORES = _DECLINED_RUNTIME_PATHS + (
-    'anygeometry.exact_curves._BranchConstants.__annotate_func__.cell[0]',)
+    ('anygeometry.exact_curves._BranchConstants.__annotate_func__.cell[0]'
+     if sys.version_info >= (3,14) else 'anygeometry.exact_curves._BranchConstants.__annotations__'),)
 
 
 def _trusted_store_values():
@@ -106,7 +107,8 @@ def _trusted_store_values():
     return (backend._RUNTIME_PYTHON_GLOBALS['__builtins__'],
             backend._RUNTIME_TRUSTED_NUMPY[12][1]._finfo_cache,
             *(backend._RUNTIME_POINT_EDGES[index][0] for index in (3, 33, 52, 61)),
-            exact_curves._BranchConstants.__annotate_func__.__closure__[0].cell_contents)
+            (exact_curves._BranchConstants.__annotate_func__.__closure__[0].cell_contents
+             if sys.version_info >= (3,14) else exact_curves._BranchConstants.__annotations__))
 
 
 def trusted_store_identity(path, value):
@@ -148,22 +150,28 @@ def trusted_annotation_digest(value):
     referenced opaque object identities. Underlying globals/native contents are
     still risk-accepted, not proved transitively immutable.
     """
-    import annotationlib
+    if sys.version_info >= (3,14):
+        from annotationlib import ForwardRef
+        scalar_fields=('__arg__','__forward_is_argument__','__forward_is_class__','__forward_module__')
+        opaque_fields=('__globals__','__extra_names__','__code__','__ast_node__','__cell__','__owner__','__stringifier_dict__')
+    else:
+        from typing import ForwardRef
+        scalar_fields=('__forward_arg__','__forward_is_argument__','__forward_is_class__','__forward_module__','__forward_evaluated__')
+        opaque_fields=('__forward_code__','__forward_value__')
     if type(value) is not dict:
         raise QualificationDecline('annotation store is not an exact dict')
     rows = []
     for key, item in value.items():
-        if type(key) is not str or type(item) is not annotationlib.ForwardRef:
+        if type(key) is not str or type(item) is not ForwardRef:
             raise QualificationDecline('annotation store schema changed')
         values = []
-        for name in ('__arg__', '__forward_is_argument__', '__forward_is_class__', '__forward_module__'):
+        for name in scalar_fields:
             part = object.__getattribute__(item, name)
             if type(part) not in (str, bool, type(None)):
                 raise QualificationDecline('annotation reference scalar changed')
             values.append(part)
         opaque = []
-        for name in ('__globals__', '__extra_names__', '__code__', '__ast_node__', '__cell__', '__owner__',
-                     '__stringifier_dict__'):
+        for name in opaque_fields:
             try:
                 part = object.__getattribute__(item, name)
             except AttributeError:

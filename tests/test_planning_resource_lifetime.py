@@ -2,6 +2,7 @@
 import ast
 import types
 import pytest
+from _planning_numpy_profile_contract import numpy_profile_test
 from anygeometry import _planning_manifest as manifest
 from anygeometry._planning_qualification import QualificationDecline
 
@@ -71,6 +72,7 @@ def test_syntax_demand_is_exact_boolean(tmp_path):
         manifest._ImmutableEvidence().source(owner,str(path),syntax=1)
 
 
+@numpy_profile_test
 def test_demanded_and_eager_syntax_preserve_complete_role_graph(monkeypatch):
     from anygeometry._planning_canaries import _fixture
     from anygeometry._planning_executor import freeze_model

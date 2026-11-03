@@ -91,6 +91,10 @@ def _storage():
 
 
 def run(model,serial,parallel,*,policy,mode,eligible=True,preparation=None,serial_replay=None):
+    # Unsupported routes never enter the parallel transaction or adapt caller
+    # callbacks. Preserve the original serial error and work-budget contracts.
+    if not eligible or mode!='exact' or policy.max_predicates is not None or policy.max_candidate_pairs is not None:
+        return serial()
     from ._planning_manifest import capture_loaded_manifest,prepare_interfaces
     from .serialization import to_dict
     from ._planning_model_state import production_snapshot
