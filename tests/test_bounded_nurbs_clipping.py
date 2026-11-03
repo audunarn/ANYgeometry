@@ -141,6 +141,23 @@ def test_dyadic_edge_is_now_expressed_exactly_and_the_near_tangent_circle_is_nev
     assert to_dict(model) == before
 
 
+def test_near_tangent_plate_trace_walk_is_capped_and_refuses_without_cancellation():
+    """The plate-trace bisection stops at its own box cap; a watchdog counting checks must never fire first."""
+    from anygeometry.bounded_nurbs import plan_bounded
+    model, face, plate, plane, curve, frame = _dyadic_near_tangent_fixture()
+    before = to_dict(model)
+    handles = (model.handle('face', face), model.handle('face', plate))
+    calls = [0]
+
+    def watchdog():
+        calls[0] += 1
+        return calls[0] > 4000
+    with pytest.raises(PlateBoundaryCrossingRequired):
+        plan_bounded(model, handles, policy_for(cancellation_check=watchdog))
+    assert calls[0] <= 4000
+    assert to_dict(model) == before
+
+
 def test_keep_hook_default_none_is_the_legacy_route_and_a_rejecting_hook_creates_no_trace():
     from anygeometry.plane_split import _stage_plane_split
     from anygeometry.predicates import DEFAULT_INTERSECTION_QUALIFICATION_POLICY as POLICY

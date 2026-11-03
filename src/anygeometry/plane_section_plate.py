@@ -79,12 +79,21 @@ def _line_box_clear(a, b, box):
     return min(values) > 0 or max(values) < 0
 
 
+# Boxes one trace walk may examine before it refuses; ordinary traces certify in a handful (the depth-32 walk
+# along a near-tangent plate contact is otherwise exponential, with exact-rational cost growing per box).
+MAX_TRACE_WALK_BOXES = 2000
+
+
 def trace_in_plate(model, edge, frame, loops, check):
     statuses, pending = set(), [(Q(0), Q(1), 0)]
     segments = [(a, b) for loop in loops for a, b in zip(loop, loop[1:]+loop[:1])]
+    walked = 0
     from .nurbs import _float_down, _float_up
     while pending:
         check()
+        walked += 1
+        if walked > MAX_TRACE_WALK_BOXES:
+            raise PlateBoundaryCrossingRequired('trace/plate boundary contact is not certified within the box cap')
         a, b, depth = pending.pop()
         box = _curve_box(model, edge, frame, _float_down(a), _float_up(b))
         if all(_line_box_clear(p, q, box) for p, q in segments):
