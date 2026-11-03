@@ -402,7 +402,23 @@ def test_raw_line_regeneration_after_save_load_and_a_remote_endpoint_edit_is_ref
     item = loaded.edges[straight]
     remote = item.end if item.start == vertex else item.start
     x, y, z = (float(c) for c in loaded.vertex_position(remote))
-    loaded.move_point(remote, x, y, z + 2.0**-40)                       # tiny out-of-plane edit of the REMOTE endpoint
+    before = to_dict(loaded)
+    try:
+        loaded.move_point(remote, x, y, z + 2.0**-40)
+    except GeometryError as error:
+        # Public edits may reject a non-evaluable incident face even before the
+        # raw-definition guard is reached. This refusal must be atomic.
+        assert "without a valid evaluable surface" in str(error)
+        assert to_dict(loaded) == before
+    else:
+        with pytest.raises(JointRefused):
+            plate_joint(loaded, vertex, edge)
+    # Exercise the original corruption boundary on every runtime, independently
+    # of whether the public editor can preserve all incident surface contracts.
+    loaded = from_dict(before)
+    position = loaded.vertex_position(remote).copy()
+    position[2] = z + 2.0**-40
+    loaded._vertices[remote] = replace(loaded.vertices[remote], position=position)
     with pytest.raises(JointRefused):
         plate_joint(loaded, vertex, edge)
 
@@ -866,9 +882,14 @@ def test_active_depth_limit_gives_the_same_isolated_decision_as_the_unbudgeted_r
     finally:
         CURRENT_WORK.reset(token)
     assert len(limited) == len(direct) and all(r.isolated for r in limited)
+    # This near-tangent line has TWO simple roots in one coarse arc region;
+    # the original selected straight-edge root may already isolate at depth 1.
+    difficult_normal, difficult_offset = (1, 1, 0), Q(999, 1000)
+    difficult = section_roots(curve, difficult_normal, difficult_offset)
+    assert len(difficult) == 2 and all(root.isolated for root in difficult)
     token = CURRENT_WORK.set(Work(10**6, 1))                       # a genuinely too-small depth still refuses
     try:
         with pytest.raises(GeometryError):
-            section_roots(curve, normal, offset)
+            section_roots(curve, difficult_normal, difficult_offset)
     finally:
         CURRENT_WORK.reset(token)

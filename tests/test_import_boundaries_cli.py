@@ -77,7 +77,7 @@ def test_core_and_optional_dependencies_match_release_metadata() -> None:
         "project"
     ]
 
-    assert project["dependencies"] == ["numpy>=1.26"]
+    assert project["dependencies"] == ["numpy>=1.26", "psutil>=5.9", "threadpoolctl>=3.1"]
     assert project["optional-dependencies"]["planar"] == ["shapely>=2.0"]
     assert project["scripts"] == {"anygeometry": "anygeometry.__main__:main"}
     assert (PACKAGE / "py.typed").is_file()

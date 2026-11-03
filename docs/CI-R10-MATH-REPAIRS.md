@@ -72,3 +72,13 @@ conservation/crossing/closure validation, cancellation and refusal assertions
 remain real. The unforced control validates the returned geometry independently.
 Original test files are retained byte-for-byte under
 `historical-planning-tests/r10-cpu-fixtures/`; failed attempts remain evidence.
+
+## Runtime-independent negative-test preconditions
+
+The remote-endpoint joint regression now checks both public-edit atomic refusal
+and the original exact `2**-40` corrupted-definition refusal. A public editor's
+stronger surface-validity check must not prevent testing the lower-level guard.
+The depth regression retains the depth-32 positive and depth-1 refusal, using
+`x + y = 999/1000` on `x² + y² = 1/2` for the latter. Its two distinct roots
+satisfy `(x-y)² = 1999/10⁶ > 0`; an easy already-isolated root does not establish
+a depth exhaustion precondition. Production algorithms and limits are unchanged.
