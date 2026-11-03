@@ -1,0 +1,2488 @@
+{
+  "provenance": {
+    "meaning": "Actual complete synthetic inputs captured once from the original qualified scan; not universal producer bits.",
+    "python": "3.14.2 (tags/v3.14.2:df79316, Dec  5 2025, 17:18:21) [MSC v.1944 64 bit (AMD64)]",
+    "numpy": "2.4.6",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "threadpools": [
+      {
+        "user_api": "blas",
+        "internal_api": "openblas",
+        "num_threads": 1,
+        "prefix": "libscipy_openblas",
+        "filepath": "C:\\Python\\Python314\\Lib\\site-packages\\numpy.libs\\libscipy_openblas64_-63c857e738469261263c764a36be9436.dll",
+        "version": "0.3.31.188.0",
+        "threading_layer": "pthreads",
+        "architecture": "SkylakeX"
+      }
+    ],
+    "scan_seed": 20261029,
+    "maximum_trials_per_orientation": 4000,
+    "source_test": "C:\\ANYworkspaceWork\\anyfem-aip-startup-20261029\\pp5\\ANYgeometry\\.pp1-evidence\\r10-fixture-contract-proposal-v2c\\tests\\test_chain_eval_derived_slack.py",
+    "source_test_sha256": "14080705a4f9f8419dde7bc7916ff4fc208bc840fc437ba463d361fb784514a9",
+    "original_test_sha256": "c2160f3e1661ac1fd0e9465360789e963597978f0a2b8c0a9194a94d5b1f25e8",
+    "capture_helper_sha256": "9b9d2ab0e8b7a9481fdd2dc0452ec997b6e8a0feef2a57e101e85f09ae30ba03",
+    "source_hashes": {
+      "src\\anygeometry\\model.py": "606bafa49bd5ff280f7d9694de1b312e19c61ce61a907c3ce4e06a94d53bd250",
+      "src\\anygeometry\\exact_curves.py": "8d012123816465740f548308f93dd5256d1d22ab6868996ec5ceaf7b7af30fd2",
+      "src\\anygeometry\\serialization.py": "641c0ebbc2c27d4e22ad99eec51617e3d9c2e85040b54d6f883a8e38ceeb3154"
+    },
+    "geometry_origin": "C:\\ANYworkspaceWork\\anyfem-aip-startup-20261029\\pp5\\ANYgeometry\\src\\anygeometry\\model.py"
+  },
+  "records": [
+    {
+      "reverse_last": false,
+      "ordinal": 0,
+      "geometry": {
+        "schema": "anygeometry",
+        "version": 5,
+        "model_id": "c4580d4f-20ef-450a-8080-790947a538d3",
+        "revision": 9,
+        "coordinates": {
+          "units": "m",
+          "local_origin": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "coordinate_transform": null,
+          "crs": {}
+        },
+        "tolerance": {
+          "length": 1e-09,
+          "merge_length": 1e-07,
+          "coincidence": 1e-09,
+          "healing": 1e-07,
+          "angular": 1e-10,
+          "parameter": 1e-10,
+          "area": 1e-18,
+          "surface_residual": 1e-08,
+          "curve_fit_residual": 1e-08,
+          "aabb_padding": 1e-09,
+          "relative_length": 1e-12,
+          "relative_area": 1e-14
+        },
+        "id_state": {
+          "vertex": 10,
+          "edge": 9,
+          "face": 1,
+          "part": 1,
+          "sheet": 1,
+          "face_use": 1,
+          "coedge": 1,
+          "member": 1,
+          "member_edge_use": 1,
+          "attachment": 1,
+          "junction": 1
+        },
+        "vertices": [
+          {
+            "id": 1,
+            "position": [
+              52.65516836574702,
+              5.932965611693387,
+              -17.5
+            ]
+          },
+          {
+            "id": 2,
+            "position": [
+              52.60053806528496,
+              5.957113543571582,
+              -17.5
+            ]
+          },
+          {
+            "id": 3,
+            "position": [
+              52.58162820354868,
+              5.965332833852778,
+              -17.5
+            ]
+          },
+          {
+            "id": 4,
+            "position": [
+              52.375564672694566,
+              6.050346476512363,
+              -17.5
+            ]
+          },
+          {
+            "id": 5,
+            "position": [
+              52.29601691867199,
+              6.080979058438862,
+              -17.5
+            ]
+          },
+          {
+            "id": 6,
+            "position": [
+              52.202399963701815,
+              6.11550769763936,
+              -17.5
+            ]
+          },
+          {
+            "id": 7,
+            "position": [
+              52.19106099790951,
+              6.11957937308111,
+              -17.5
+            ]
+          },
+          {
+            "id": 8,
+            "position": [
+              52.02354714631371,
+              6.1769941676065745,
+              -17.5
+            ]
+          },
+          {
+            "id": 9,
+            "position": [
+              52.01872786405979,
+              6.178570855049619,
+              -17.5
+            ]
+          }
+        ],
+        "edges": [
+          {
+            "id": 1,
+            "start": 1,
+            "end": 2,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.15,
+              "sweep_angle": 0.009189159353772958
+            }
+          },
+          {
+            "id": 2,
+            "start": 2,
+            "end": 3,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.1591891593537729,
+              "sweep_angle": 0.0031721419046011334
+            }
+          },
+          {
+            "id": 3,
+            "start": 3,
+            "end": 4,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.162361301258374,
+              "sweep_angle": 0.034295744336815925
+            }
+          },
+          {
+            "id": 4,
+            "start": 4,
+            "end": 5,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.19665704559519,
+              "sweep_angle": 0.013114249339825967
+            }
+          },
+          {
+            "id": 5,
+            "start": 5,
+            "end": 6,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.209771294935016,
+              "sweep_angle": 0.015351161095598309
+            }
+          },
+          {
+            "id": 6,
+            "start": 6,
+            "end": 7,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.2251224560306142,
+              "sweep_angle": 0.001853515627717739
+            }
+          },
+          {
+            "id": 7,
+            "start": 7,
+            "end": 8,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.226975971658332,
+              "sweep_angle": 0.02724392933354003
+            }
+          },
+          {
+            "id": 8,
+            "start": 8,
+            "end": 9,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.254219900991872,
+              "sweep_angle": 0.0007800990081279213
+            }
+          }
+        ],
+        "faces": [],
+        "structural": {
+          "parts": [],
+          "sheets": [],
+          "face_uses": [],
+          "coedges": [],
+          "members": [],
+          "member_edge_uses": [],
+          "attachments": [],
+          "junctions": []
+        },
+        "groups": {},
+        "tags": [],
+        "replacement_history": [],
+        "structural_replacement_history": [],
+        "construction_vertices": [],
+        "extensions": {},
+        "features": {
+          "version": 1,
+          "next_id": 1,
+          "baseline": null,
+          "records": []
+        },
+        "checksum": {
+          "algorithm": "sha256",
+          "value": "81a5e188697f35668ed323709a78c9b965312e3d7eb343cd9bd1174267f0bf68"
+        }
+      },
+      "chain": [
+        {
+          "edge": 1,
+          "forward": true
+        },
+        {
+          "edge": 2,
+          "forward": true
+        },
+        {
+          "edge": 3,
+          "forward": true
+        },
+        {
+          "edge": 4,
+          "forward": true
+        },
+        {
+          "edge": 5,
+          "forward": true
+        },
+        {
+          "edge": 6,
+          "forward": true
+        },
+        {
+          "edge": 7,
+          "forward": true
+        },
+        {
+          "edge": 8,
+          "forward": true
+        }
+      ],
+      "lengths": [
+        "0x1.e94dea5ba7abep-5",
+        "0x1.51d207533ad00p-6",
+        "0x1.c88b81c091396p-3",
+        "0x1.5d275dc2b8020p-4",
+        "0x1.98b59589912e8p-4",
+        "0x1.8ac8b4430e3bfp-7",
+        "0x1.6aabd2ee1bd0cp-3",
+        "0x1.4c4f483aa5480p-8"
+      ],
+      "total": "0x1.5d70a3d70a3d6p-1",
+      "cumulative": [
+        "0x0.0p+0",
+        "0x1.e94dea5ba7abep-5",
+        "0x1.491b7702a289fp-4",
+        "0x1.368c9ea0f13f3p-2",
+        "0x1.8dd676119f3fbp-2",
+        "0x1.f403db74038b5p-2",
+        "0x1.002d108b0dfe9p-1",
+        "0x1.5ad8054694f2cp-1",
+        "0x1.5d70a3d70a3d5p-1"
+      ],
+      "old_index": 7,
+      "old_local": "0x1.0000000000063p+0",
+      "overshoot_eps": 99.0
+    },
+    {
+      "reverse_last": false,
+      "ordinal": 1,
+      "geometry": {
+        "schema": "anygeometry",
+        "version": 5,
+        "model_id": "4df4d41b-f935-4a3e-b208-bdc2b657273e",
+        "revision": 9,
+        "coordinates": {
+          "units": "m",
+          "local_origin": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "coordinate_transform": null,
+          "crs": {}
+        },
+        "tolerance": {
+          "length": 1e-09,
+          "merge_length": 1e-07,
+          "coincidence": 1e-09,
+          "healing": 1e-07,
+          "angular": 1e-10,
+          "parameter": 1e-10,
+          "area": 1e-18,
+          "surface_residual": 1e-08,
+          "curve_fit_residual": 1e-08,
+          "aabb_padding": 1e-09,
+          "relative_length": 1e-12,
+          "relative_area": 1e-14
+        },
+        "id_state": {
+          "vertex": 10,
+          "edge": 9,
+          "face": 1,
+          "part": 1,
+          "sheet": 1,
+          "face_use": 1,
+          "coedge": 1,
+          "member": 1,
+          "member_edge_use": 1,
+          "attachment": 1,
+          "junction": 1
+        },
+        "vertices": [
+          {
+            "id": 1,
+            "position": [
+              52.65516836574702,
+              5.932965611693387,
+              -17.5
+            ]
+          },
+          {
+            "id": 2,
+            "position": [
+              52.61173774679301,
+              5.952211852914558,
+              -17.5
+            ]
+          },
+          {
+            "id": 3,
+            "position": [
+              52.58278379077509,
+              5.964832595313088,
+              -17.5
+            ]
+          },
+          {
+            "id": 4,
+            "position": [
+              52.56541302551334,
+              5.97232417141991,
+              -17.5
+            ]
+          },
+          {
+            "id": 5,
+            "position": [
+              52.54635990157563,
+              5.98047249401314,
+              -17.5
+            ]
+          },
+          {
+            "id": 6,
+            "position": [
+              52.50122583713136,
+              5.9994890875529165,
+              -17.5
+            ]
+          },
+          {
+            "id": 7,
+            "position": [
+              52.113798650847215,
+              6.146694661659751,
+              -17.5
+            ]
+          },
+          {
+            "id": 8,
+            "position": [
+              52.03998618653765,
+              6.171584590584138,
+              -17.5
+            ]
+          },
+          {
+            "id": 9,
+            "position": [
+              52.01872786405979,
+              6.178570855049619,
+              -17.5
+            ]
+          }
+        ],
+        "edges": [
+          {
+            "id": 1,
+            "start": 1,
+            "end": 2,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.15,
+              "sweep_angle": 0.007308334397930327
+            }
+          },
+          {
+            "id": 2,
+            "start": 2,
+            "end": 3,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.1573083343979302,
+              "sweep_angle": 0.004859241596589792
+            }
+          },
+          {
+            "id": 3,
+            "start": 3,
+            "end": 4,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.16216757599452,
+              "sweep_angle": 0.0029103669056191883
+            }
+          },
+          {
+            "id": 4,
+            "start": 4,
+            "end": 5,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.1650779429001392,
+              "sweep_angle": 0.0031880585495540625
+            }
+          },
+          {
+            "id": 5,
+            "start": 5,
+            "end": 6,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.1682660014496933,
+              "sweep_angle": 0.007534890758674084
+            }
+          },
+          {
+            "id": 6,
+            "start": 6,
+            "end": 7,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.1758008922083674,
+              "sweep_angle": 0.06377243787982967
+            }
+          },
+          {
+            "id": 7,
+            "start": 7,
+            "end": 8,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.239573330088197,
+              "sweep_angle": 0.011984073326483546
+            }
+          },
+          {
+            "id": 8,
+            "start": 8,
+            "end": 9,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.2515574034146806,
+              "sweep_angle": 0.003442596585319313
+            }
+          }
+        ],
+        "faces": [],
+        "structural": {
+          "parts": [],
+          "sheets": [],
+          "face_uses": [],
+          "coedges": [],
+          "members": [],
+          "member_edge_uses": [],
+          "attachments": [],
+          "junctions": []
+        },
+        "groups": {},
+        "tags": [],
+        "replacement_history": [],
+        "structural_replacement_history": [],
+        "construction_vertices": [],
+        "extensions": {},
+        "features": {
+          "version": 1,
+          "next_id": 1,
+          "baseline": null,
+          "records": []
+        },
+        "checksum": {
+          "algorithm": "sha256",
+          "value": "5232ab8dab0735f984fa2534486193a6448c8248c20cf1bfe19b820f7935d84c"
+        }
+      },
+      "chain": [
+        {
+          "edge": 1,
+          "forward": true
+        },
+        {
+          "edge": 2,
+          "forward": true
+        },
+        {
+          "edge": 3,
+          "forward": true
+        },
+        {
+          "edge": 4,
+          "forward": true
+        },
+        {
+          "edge": 5,
+          "forward": true
+        },
+        {
+          "edge": 6,
+          "forward": true
+        },
+        {
+          "edge": 7,
+          "forward": true
+        },
+        {
+          "edge": 8,
+          "forward": true
+        }
+      ],
+      "lengths": [
+        "0x1.852778ff498a0p-5",
+        "0x1.02beb18a11a50p-5",
+        "0x1.35f1435a76440p-6",
+        "0x1.5383f6b68e660p-6",
+        "0x1.9137c5e0964a0p-5",
+        "0x1.a878271814e11p-2",
+        "0x1.3f1060390d3e0p-4",
+        "0x1.6e9f6d96dd060p-6"
+      ],
+      "total": "0x1.5d70a3d70a3d6p-1",
+      "cumulative": [
+        "0x0.0p+0",
+        "0x1.852778ff498a0p-5",
+        "0x1.43f31544ad978p-4",
+        "0x1.916f661b4b288p-4",
+        "0x1.e65063c8eec20p-4",
+        "0x1.5776235c9cf38p-3",
+        "0x1.2a199c6331ad6p-1",
+        "0x1.51fba86a53552p-1",
+        "0x1.5d70a3d70a3d5p-1"
+      ],
+      "old_index": 7,
+      "old_local": "0x1.0000000000016p+0",
+      "overshoot_eps": 22.0
+    },
+    {
+      "reverse_last": false,
+      "ordinal": 2,
+      "geometry": {
+        "schema": "anygeometry",
+        "version": 5,
+        "model_id": "236f8279-a03a-4381-8e21-0acd772bf65e",
+        "revision": 9,
+        "coordinates": {
+          "units": "m",
+          "local_origin": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "coordinate_transform": null,
+          "crs": {}
+        },
+        "tolerance": {
+          "length": 1e-09,
+          "merge_length": 1e-07,
+          "coincidence": 1e-09,
+          "healing": 1e-07,
+          "angular": 1e-10,
+          "parameter": 1e-10,
+          "area": 1e-18,
+          "surface_residual": 1e-08,
+          "curve_fit_residual": 1e-08,
+          "aabb_padding": 1e-09,
+          "relative_length": 1e-12,
+          "relative_area": 1e-14
+        },
+        "id_state": {
+          "vertex": 10,
+          "edge": 9,
+          "face": 1,
+          "part": 1,
+          "sheet": 1,
+          "face_use": 1,
+          "coedge": 1,
+          "member": 1,
+          "member_edge_use": 1,
+          "attachment": 1,
+          "junction": 1
+        },
+        "vertices": [
+          {
+            "id": 1,
+            "position": [
+              52.65516836574702,
+              5.932965611693387,
+              -17.5
+            ]
+          },
+          {
+            "id": 2,
+            "position": [
+              52.43769433646344,
+              6.025582654148399,
+              -17.5
+            ]
+          },
+          {
+            "id": 3,
+            "position": [
+              52.337480029654365,
+              6.065161754724027,
+              -17.5
+            ]
+          },
+          {
+            "id": 4,
+            "position": [
+              52.28817502754213,
+              6.083934174802729,
+              -17.5
+            ]
+          },
+          {
+            "id": 5,
+            "position": [
+              52.21404629620507,
+              6.111300925192656,
+              -17.5
+            ]
+          },
+          {
+            "id": 6,
+            "position": [
+              52.08930498073836,
+              6.15506333821691,
+              -17.5
+            ]
+          },
+          {
+            "id": 7,
+            "position": [
+              52.0588064788811,
+              6.165331773920784,
+              -17.5
+            ]
+          },
+          {
+            "id": 8,
+            "position": [
+              52.03432108876403,
+              6.173454276805646,
+              -17.5
+            ]
+          },
+          {
+            "id": 9,
+            "position": [
+              52.01872786405979,
+              6.178570855049619,
+              -17.5
+            ]
+          }
+        ],
+        "edges": [
+          {
+            "id": 1,
+            "start": 1,
+            "end": 2,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.15,
+              "sweep_angle": 0.03636730061393245
+            }
+          },
+          {
+            "id": 2,
+            "start": 2,
+            "end": 3,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.1863673006139324,
+              "sweep_angle": 0.016576648819121687
+            }
+          },
+          {
+            "id": 3,
+            "start": 3,
+            "end": 4,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.202943949433054,
+              "sweep_angle": 0.008116609123208773
+            }
+          },
+          {
+            "id": 4,
+            "start": 4,
+            "end": 5,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.2110605585562628,
+              "sweep_angle": 0.012156849421294691
+            }
+          },
+          {
+            "id": 5,
+            "start": 5,
+            "end": 6,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.2232174079775575,
+              "sweep_angle": 0.020338058280432003
+            }
+          },
+          {
+            "id": 6,
+            "start": 6,
+            "end": 7,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.2435554662579895,
+              "sweep_angle": 0.0049508866043990185
+            }
+          },
+          {
+            "id": 7,
+            "start": 7,
+            "end": 8,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.2485063528623885,
+              "sweep_angle": 0.003968843916380527
+            }
+          },
+          {
+            "id": 8,
+            "start": 8,
+            "end": 9,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.252475196778769,
+              "sweep_angle": 0.0025248032212308313
+            }
+          }
+        ],
+        "faces": [],
+        "structural": {
+          "parts": [],
+          "sheets": [],
+          "face_uses": [],
+          "coedges": [],
+          "members": [],
+          "member_edge_uses": [],
+          "attachments": [],
+          "junctions": []
+        },
+        "groups": {},
+        "tags": [],
+        "replacement_history": [],
+        "structural_replacement_history": [],
+        "construction_vertices": [],
+        "extensions": {},
+        "features": {
+          "version": 1,
+          "next_id": 1,
+          "baseline": null,
+          "records": []
+        },
+        "checksum": {
+          "algorithm": "sha256",
+          "value": "9e477b25d70cd05cc8d11b047e1e8da50e216c82e74665730943739d982bc82d"
+        }
+      },
+      "chain": [
+        {
+          "edge": 1,
+          "forward": true
+        },
+        {
+          "edge": 2,
+          "forward": true
+        },
+        {
+          "edge": 3,
+          "forward": true
+        },
+        {
+          "edge": 4,
+          "forward": true
+        },
+        {
+          "edge": 5,
+          "forward": true
+        },
+        {
+          "edge": 6,
+          "forward": true
+        },
+        {
+          "edge": 7,
+          "forward": true
+        },
+        {
+          "edge": 8,
+          "forward": true
+        }
+      ],
+      "lengths": [
+        "0x1.e41f1b0097e32p-3",
+        "0x1.b95631d9c3180p-4",
+        "0x1.b03175b9a0cf0p-5",
+        "0x1.43a9f9376ee30p-4",
+        "0x1.0ebd7fd5497d4p-3",
+        "0x1.079ff38ad6210p-5",
+        "0x1.a6aa7f16b1960p-6",
+        "0x1.0ce1a64dd5460p-6"
+      ],
+      "total": "0x1.5d70a3d70a3d6p-1",
+      "cumulative": [
+        "0x0.0p+0",
+        "0x1.e41f1b0097e32p-3",
+        "0x1.606519f6bcb79p-2",
+        "0x1.966b48adf0d17p-2",
+        "0x1.e755c6fbcc8a3p-2",
+        "0x1.375a437338a46p-1",
+        "0x1.47d442abe6067p-1",
+        "0x1.550996a49b932p-1",
+        "0x1.5d70a3d70a3d5p-1"
+      ],
+      "old_index": 7,
+      "old_local": "0x1.000000000001ep+0",
+      "overshoot_eps": 30.0
+    },
+    {
+      "reverse_last": true,
+      "ordinal": 0,
+      "geometry": {
+        "schema": "anygeometry",
+        "version": 5,
+        "model_id": "d08d0b9a-bb7d-4e01-bfb2-e4ca5713f0bf",
+        "revision": 9,
+        "coordinates": {
+          "units": "m",
+          "local_origin": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "coordinate_transform": null,
+          "crs": {}
+        },
+        "tolerance": {
+          "length": 1e-09,
+          "merge_length": 1e-07,
+          "coincidence": 1e-09,
+          "healing": 1e-07,
+          "angular": 1e-10,
+          "parameter": 1e-10,
+          "area": 1e-18,
+          "surface_residual": 1e-08,
+          "curve_fit_residual": 1e-08,
+          "aabb_padding": 1e-09,
+          "relative_length": 1e-12,
+          "relative_area": 1e-14
+        },
+        "id_state": {
+          "vertex": 10,
+          "edge": 9,
+          "face": 1,
+          "part": 1,
+          "sheet": 1,
+          "face_use": 1,
+          "coedge": 1,
+          "member": 1,
+          "member_edge_use": 1,
+          "attachment": 1,
+          "junction": 1
+        },
+        "vertices": [
+          {
+            "id": 1,
+            "position": [
+              52.65516836574702,
+              5.932965611693387,
+              -17.5
+            ]
+          },
+          {
+            "id": 2,
+            "position": [
+              52.60053806528496,
+              5.957113543571582,
+              -17.5
+            ]
+          },
+          {
+            "id": 3,
+            "position": [
+              52.58162820354868,
+              5.965332833852778,
+              -17.5
+            ]
+          },
+          {
+            "id": 4,
+            "position": [
+              52.375564672694566,
+              6.050346476512363,
+              -17.5
+            ]
+          },
+          {
+            "id": 5,
+            "position": [
+              52.29601691867199,
+              6.080979058438862,
+              -17.5
+            ]
+          },
+          {
+            "id": 6,
+            "position": [
+              52.202399963701815,
+              6.11550769763936,
+              -17.5
+            ]
+          },
+          {
+            "id": 7,
+            "position": [
+              52.19106099790951,
+              6.11957937308111,
+              -17.5
+            ]
+          },
+          {
+            "id": 8,
+            "position": [
+              52.02354714631371,
+              6.1769941676065745,
+              -17.5
+            ]
+          },
+          {
+            "id": 9,
+            "position": [
+              52.01872786405979,
+              6.178570855049619,
+              -17.5
+            ]
+          }
+        ],
+        "edges": [
+          {
+            "id": 1,
+            "start": 1,
+            "end": 2,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.15,
+              "sweep_angle": 0.009189159353772958
+            }
+          },
+          {
+            "id": 2,
+            "start": 2,
+            "end": 3,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.1591891593537729,
+              "sweep_angle": 0.0031721419046011334
+            }
+          },
+          {
+            "id": 3,
+            "start": 3,
+            "end": 4,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.162361301258374,
+              "sweep_angle": 0.034295744336815925
+            }
+          },
+          {
+            "id": 4,
+            "start": 4,
+            "end": 5,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.19665704559519,
+              "sweep_angle": 0.013114249339825967
+            }
+          },
+          {
+            "id": 5,
+            "start": 5,
+            "end": 6,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.209771294935016,
+              "sweep_angle": 0.015351161095598309
+            }
+          },
+          {
+            "id": 6,
+            "start": 6,
+            "end": 7,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.2251224560306142,
+              "sweep_angle": 0.001853515627717739
+            }
+          },
+          {
+            "id": 7,
+            "start": 7,
+            "end": 8,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.226975971658332,
+              "sweep_angle": 0.02724392933354003
+            }
+          },
+          {
+            "id": 8,
+            "start": 9,
+            "end": 8,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.255,
+              "sweep_angle": -0.0007800990081279213
+            }
+          }
+        ],
+        "faces": [],
+        "structural": {
+          "parts": [],
+          "sheets": [],
+          "face_uses": [],
+          "coedges": [],
+          "members": [],
+          "member_edge_uses": [],
+          "attachments": [],
+          "junctions": []
+        },
+        "groups": {},
+        "tags": [],
+        "replacement_history": [],
+        "structural_replacement_history": [],
+        "construction_vertices": [],
+        "extensions": {},
+        "features": {
+          "version": 1,
+          "next_id": 1,
+          "baseline": null,
+          "records": []
+        },
+        "checksum": {
+          "algorithm": "sha256",
+          "value": "9cd6288bc8841b33d36a911c4ea5b2e4e7c8f68f048eb480ba04ef24579f06c1"
+        }
+      },
+      "chain": [
+        {
+          "edge": 1,
+          "forward": true
+        },
+        {
+          "edge": 2,
+          "forward": true
+        },
+        {
+          "edge": 3,
+          "forward": true
+        },
+        {
+          "edge": 4,
+          "forward": true
+        },
+        {
+          "edge": 5,
+          "forward": true
+        },
+        {
+          "edge": 6,
+          "forward": true
+        },
+        {
+          "edge": 7,
+          "forward": true
+        },
+        {
+          "edge": 8,
+          "forward": false
+        }
+      ],
+      "lengths": [
+        "0x1.e94dea5ba7abep-5",
+        "0x1.51d207533ad00p-6",
+        "0x1.c88b81c091396p-3",
+        "0x1.5d275dc2b8020p-4",
+        "0x1.98b59589912e8p-4",
+        "0x1.8ac8b4430e3bfp-7",
+        "0x1.6aabd2ee1bd0cp-3",
+        "0x1.4c4f483aa5480p-8"
+      ],
+      "total": "0x1.5d70a3d70a3d6p-1",
+      "cumulative": [
+        "0x0.0p+0",
+        "0x1.e94dea5ba7abep-5",
+        "0x1.491b7702a289fp-4",
+        "0x1.368c9ea0f13f3p-2",
+        "0x1.8dd676119f3fbp-2",
+        "0x1.f403db74038b5p-2",
+        "0x1.002d108b0dfe9p-1",
+        "0x1.5ad8054694f2cp-1",
+        "0x1.5d70a3d70a3d5p-1"
+      ],
+      "old_index": 7,
+      "old_local": "0x1.0000000000063p+0",
+      "overshoot_eps": 99.0
+    },
+    {
+      "reverse_last": true,
+      "ordinal": 1,
+      "geometry": {
+        "schema": "anygeometry",
+        "version": 5,
+        "model_id": "6ff406f4-6cbd-4a9c-bc7f-ffdae95db47c",
+        "revision": 9,
+        "coordinates": {
+          "units": "m",
+          "local_origin": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "coordinate_transform": null,
+          "crs": {}
+        },
+        "tolerance": {
+          "length": 1e-09,
+          "merge_length": 1e-07,
+          "coincidence": 1e-09,
+          "healing": 1e-07,
+          "angular": 1e-10,
+          "parameter": 1e-10,
+          "area": 1e-18,
+          "surface_residual": 1e-08,
+          "curve_fit_residual": 1e-08,
+          "aabb_padding": 1e-09,
+          "relative_length": 1e-12,
+          "relative_area": 1e-14
+        },
+        "id_state": {
+          "vertex": 10,
+          "edge": 9,
+          "face": 1,
+          "part": 1,
+          "sheet": 1,
+          "face_use": 1,
+          "coedge": 1,
+          "member": 1,
+          "member_edge_use": 1,
+          "attachment": 1,
+          "junction": 1
+        },
+        "vertices": [
+          {
+            "id": 1,
+            "position": [
+              52.65516836574702,
+              5.932965611693387,
+              -17.5
+            ]
+          },
+          {
+            "id": 2,
+            "position": [
+              52.61173774679301,
+              5.952211852914558,
+              -17.5
+            ]
+          },
+          {
+            "id": 3,
+            "position": [
+              52.58278379077509,
+              5.964832595313088,
+              -17.5
+            ]
+          },
+          {
+            "id": 4,
+            "position": [
+              52.56541302551334,
+              5.97232417141991,
+              -17.5
+            ]
+          },
+          {
+            "id": 5,
+            "position": [
+              52.54635990157563,
+              5.98047249401314,
+              -17.5
+            ]
+          },
+          {
+            "id": 6,
+            "position": [
+              52.50122583713136,
+              5.9994890875529165,
+              -17.5
+            ]
+          },
+          {
+            "id": 7,
+            "position": [
+              52.113798650847215,
+              6.146694661659751,
+              -17.5
+            ]
+          },
+          {
+            "id": 8,
+            "position": [
+              52.03998618653765,
+              6.171584590584138,
+              -17.5
+            ]
+          },
+          {
+            "id": 9,
+            "position": [
+              52.01872786405979,
+              6.178570855049619,
+              -17.5
+            ]
+          }
+        ],
+        "edges": [
+          {
+            "id": 1,
+            "start": 1,
+            "end": 2,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.15,
+              "sweep_angle": 0.007308334397930327
+            }
+          },
+          {
+            "id": 2,
+            "start": 2,
+            "end": 3,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.1573083343979302,
+              "sweep_angle": 0.004859241596589792
+            }
+          },
+          {
+            "id": 3,
+            "start": 3,
+            "end": 4,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.16216757599452,
+              "sweep_angle": 0.0029103669056191883
+            }
+          },
+          {
+            "id": 4,
+            "start": 4,
+            "end": 5,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.1650779429001392,
+              "sweep_angle": 0.0031880585495540625
+            }
+          },
+          {
+            "id": 5,
+            "start": 5,
+            "end": 6,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.1682660014496933,
+              "sweep_angle": 0.007534890758674084
+            }
+          },
+          {
+            "id": 6,
+            "start": 6,
+            "end": 7,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.1758008922083674,
+              "sweep_angle": 0.06377243787982967
+            }
+          },
+          {
+            "id": 7,
+            "start": 7,
+            "end": 8,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.239573330088197,
+              "sweep_angle": 0.011984073326483546
+            }
+          },
+          {
+            "id": 8,
+            "start": 9,
+            "end": 8,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.255,
+              "sweep_angle": -0.003442596585319313
+            }
+          }
+        ],
+        "faces": [],
+        "structural": {
+          "parts": [],
+          "sheets": [],
+          "face_uses": [],
+          "coedges": [],
+          "members": [],
+          "member_edge_uses": [],
+          "attachments": [],
+          "junctions": []
+        },
+        "groups": {},
+        "tags": [],
+        "replacement_history": [],
+        "structural_replacement_history": [],
+        "construction_vertices": [],
+        "extensions": {},
+        "features": {
+          "version": 1,
+          "next_id": 1,
+          "baseline": null,
+          "records": []
+        },
+        "checksum": {
+          "algorithm": "sha256",
+          "value": "2c18eb98ab70699f87564a8cec2c2e60b49a8dedc730035985790cfaf58ac979"
+        }
+      },
+      "chain": [
+        {
+          "edge": 1,
+          "forward": true
+        },
+        {
+          "edge": 2,
+          "forward": true
+        },
+        {
+          "edge": 3,
+          "forward": true
+        },
+        {
+          "edge": 4,
+          "forward": true
+        },
+        {
+          "edge": 5,
+          "forward": true
+        },
+        {
+          "edge": 6,
+          "forward": true
+        },
+        {
+          "edge": 7,
+          "forward": true
+        },
+        {
+          "edge": 8,
+          "forward": false
+        }
+      ],
+      "lengths": [
+        "0x1.852778ff498a0p-5",
+        "0x1.02beb18a11a50p-5",
+        "0x1.35f1435a76440p-6",
+        "0x1.5383f6b68e660p-6",
+        "0x1.9137c5e0964a0p-5",
+        "0x1.a878271814e11p-2",
+        "0x1.3f1060390d3e0p-4",
+        "0x1.6e9f6d96dd060p-6"
+      ],
+      "total": "0x1.5d70a3d70a3d6p-1",
+      "cumulative": [
+        "0x0.0p+0",
+        "0x1.852778ff498a0p-5",
+        "0x1.43f31544ad978p-4",
+        "0x1.916f661b4b288p-4",
+        "0x1.e65063c8eec20p-4",
+        "0x1.5776235c9cf38p-3",
+        "0x1.2a199c6331ad6p-1",
+        "0x1.51fba86a53552p-1",
+        "0x1.5d70a3d70a3d5p-1"
+      ],
+      "old_index": 7,
+      "old_local": "0x1.0000000000016p+0",
+      "overshoot_eps": 22.0
+    },
+    {
+      "reverse_last": true,
+      "ordinal": 2,
+      "geometry": {
+        "schema": "anygeometry",
+        "version": 5,
+        "model_id": "3c436e69-7e60-4016-83bd-b16f4e1e31b0",
+        "revision": 9,
+        "coordinates": {
+          "units": "m",
+          "local_origin": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "coordinate_transform": null,
+          "crs": {}
+        },
+        "tolerance": {
+          "length": 1e-09,
+          "merge_length": 1e-07,
+          "coincidence": 1e-09,
+          "healing": 1e-07,
+          "angular": 1e-10,
+          "parameter": 1e-10,
+          "area": 1e-18,
+          "surface_residual": 1e-08,
+          "curve_fit_residual": 1e-08,
+          "aabb_padding": 1e-09,
+          "relative_length": 1e-12,
+          "relative_area": 1e-14
+        },
+        "id_state": {
+          "vertex": 10,
+          "edge": 9,
+          "face": 1,
+          "part": 1,
+          "sheet": 1,
+          "face_use": 1,
+          "coedge": 1,
+          "member": 1,
+          "member_edge_use": 1,
+          "attachment": 1,
+          "junction": 1
+        },
+        "vertices": [
+          {
+            "id": 1,
+            "position": [
+              52.65516836574702,
+              5.932965611693387,
+              -17.5
+            ]
+          },
+          {
+            "id": 2,
+            "position": [
+              52.43769433646344,
+              6.025582654148399,
+              -17.5
+            ]
+          },
+          {
+            "id": 3,
+            "position": [
+              52.337480029654365,
+              6.065161754724027,
+              -17.5
+            ]
+          },
+          {
+            "id": 4,
+            "position": [
+              52.28817502754213,
+              6.083934174802729,
+              -17.5
+            ]
+          },
+          {
+            "id": 5,
+            "position": [
+              52.21404629620507,
+              6.111300925192656,
+              -17.5
+            ]
+          },
+          {
+            "id": 6,
+            "position": [
+              52.08930498073836,
+              6.15506333821691,
+              -17.5
+            ]
+          },
+          {
+            "id": 7,
+            "position": [
+              52.0588064788811,
+              6.165331773920784,
+              -17.5
+            ]
+          },
+          {
+            "id": 8,
+            "position": [
+              52.03432108876403,
+              6.173454276805646,
+              -17.5
+            ]
+          },
+          {
+            "id": 9,
+            "position": [
+              52.01872786405979,
+              6.178570855049619,
+              -17.5
+            ]
+          }
+        ],
+        "edges": [
+          {
+            "id": 1,
+            "start": 1,
+            "end": 2,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.15,
+              "sweep_angle": 0.03636730061393245
+            }
+          },
+          {
+            "id": 2,
+            "start": 2,
+            "end": 3,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.1863673006139324,
+              "sweep_angle": 0.016576648819121687
+            }
+          },
+          {
+            "id": 3,
+            "start": 3,
+            "end": 4,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.202943949433054,
+              "sweep_angle": 0.008116609123208773
+            }
+          },
+          {
+            "id": 4,
+            "start": 4,
+            "end": 5,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.2110605585562628,
+              "sweep_angle": 0.012156849421294691
+            }
+          },
+          {
+            "id": 5,
+            "start": 5,
+            "end": 6,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.2232174079775575,
+              "sweep_angle": 0.020338058280432003
+            }
+          },
+          {
+            "id": 6,
+            "start": 6,
+            "end": 7,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.2435554662579895,
+              "sweep_angle": 0.0049508866043990185
+            }
+          },
+          {
+            "id": 7,
+            "start": 7,
+            "end": 8,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.2485063528623885,
+              "sweep_angle": 0.003968843916380527
+            }
+          },
+          {
+            "id": 8,
+            "start": 9,
+            "end": 8,
+            "curve": {
+              "type": "elliptic_arc",
+              "center": [
+                50.0,
+                0.0,
+                -17.5
+              ],
+              "u_vector": [
+                6.5,
+                0.0,
+                0.0
+              ],
+              "v_vector": [
+                0.0,
+                6.5,
+                0.0
+              ],
+              "start_angle": 1.255,
+              "sweep_angle": -0.0025248032212308313
+            }
+          }
+        ],
+        "faces": [],
+        "structural": {
+          "parts": [],
+          "sheets": [],
+          "face_uses": [],
+          "coedges": [],
+          "members": [],
+          "member_edge_uses": [],
+          "attachments": [],
+          "junctions": []
+        },
+        "groups": {},
+        "tags": [],
+        "replacement_history": [],
+        "structural_replacement_history": [],
+        "construction_vertices": [],
+        "extensions": {},
+        "features": {
+          "version": 1,
+          "next_id": 1,
+          "baseline": null,
+          "records": []
+        },
+        "checksum": {
+          "algorithm": "sha256",
+          "value": "93e9402778298bbecab00acd727da1e267312318c990bcb621720f4aac18ff20"
+        }
+      },
+      "chain": [
+        {
+          "edge": 1,
+          "forward": true
+        },
+        {
+          "edge": 2,
+          "forward": true
+        },
+        {
+          "edge": 3,
+          "forward": true
+        },
+        {
+          "edge": 4,
+          "forward": true
+        },
+        {
+          "edge": 5,
+          "forward": true
+        },
+        {
+          "edge": 6,
+          "forward": true
+        },
+        {
+          "edge": 7,
+          "forward": true
+        },
+        {
+          "edge": 8,
+          "forward": false
+        }
+      ],
+      "lengths": [
+        "0x1.e41f1b0097e32p-3",
+        "0x1.b95631d9c3180p-4",
+        "0x1.b03175b9a0cf0p-5",
+        "0x1.43a9f9376ee30p-4",
+        "0x1.0ebd7fd5497d4p-3",
+        "0x1.079ff38ad6210p-5",
+        "0x1.a6aa7f16b1960p-6",
+        "0x1.0ce1a64dd5460p-6"
+      ],
+      "total": "0x1.5d70a3d70a3d6p-1",
+      "cumulative": [
+        "0x0.0p+0",
+        "0x1.e41f1b0097e32p-3",
+        "0x1.606519f6bcb79p-2",
+        "0x1.966b48adf0d17p-2",
+        "0x1.e755c6fbcc8a3p-2",
+        "0x1.375a437338a46p-1",
+        "0x1.47d442abe6067p-1",
+        "0x1.550996a49b932p-1",
+        "0x1.5d70a3d70a3d5p-1"
+      ],
+      "old_index": 7,
+      "old_local": "0x1.000000000001ep+0",
+      "overshoot_eps": 30.0
+    }
+  ]
+}

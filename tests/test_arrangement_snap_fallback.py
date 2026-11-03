@@ -2,11 +2,14 @@
 
 Reproducer (``data/cap1082_walls415_423_arrangement.json``): the AIP-Gen2 tripod cap face 1082 (a Plane with a
 rotated, degenerate chart) with the cylinder-wall traces of faces 415 and 423 (a minimal subset of the 121-face
-1082 capture that still needs the fallback). The float cell route builds cell loops whose straight pieces end at
+1082 capture that historically needed the fallback). The float cell route builds cell loops whose straight pieces end at
 one merged vertex but at different stations (per-path parameter merge); the open loops' Green areas miss the
 conservation tolerance and the arrangement refuses. The fallback runs only on that refusal: it closes the loops
 at their merged vertices (every straight end moves by at most the vertex-merge tolerance) and the unchanged
 conservation check and tolerance decide; otherwise the original error is raised.
+
+Fallback unit tests below explicitly establish the preliminary conservation refusal;
+CPU/BLAS-dependent initial acceptance is covered separately by an unforced real-input positive control.
 
 Contract (2026-10-29, after Codex R2/R3): no shallow-touch excuse. A snapped straight edge may meet another
 edge only within the closure bound of a shared vertex. Cap 1082 with the single wall-449 trace
@@ -55,7 +58,40 @@ def _fixture(data=DATA):
     return domain, traces, record["tolerance"], record["area_tolerance"]
 
 
-def _arrange(data=DATA, **extra):
+def _arrange(data=DATA, *, force_initial_refusal=False, **extra):
+    """CAP-1 route fixture: fault only an initially accepted preliminary retained sum.
+
+    These fallback unit tests require the refusal precondition explicitly. The
+    captured input may already conserve on another CPU/BLAS implementation.
+    All cell geometry, original/outer areas, later calls and acceptance checks
+    stay real. Already-refusing/nonfinite first results are left unchanged.
+    """
+    if not force_initial_refusal:
+        return _arrange_unforced(data, **extra)
+    real = ma._float_material_cells
+    calls = 0
+
+    def first_only(*args, **kwargs):
+        nonlocal calls
+        cells, retained, outer, area = real(*args, **kwargs)
+        calls += 1
+        if (calls == 1 and cells and math.isfinite(retained)
+                and math.isfinite(area) and abs(area - retained) <= args[3]):
+            bad = area + 2 * max(1., abs(area))
+            assert math.isfinite(bad) and abs(area - bad) > args[3]
+            retained = bad
+        return cells, retained, outer, area
+
+    try:
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(ma, "_float_material_cells", first_only)
+            return _arrange_unforced(data, **extra)
+    finally:
+        # Also restore an outer test's own wrapper after refusal/cancellation.
+        assert ma._float_material_cells is real
+
+
+def _arrange_unforced(data=DATA, **extra):
     domain, traces, tolerance, area_tolerance = _fixture(data)
     return arrange_material(domain, traces, tolerance=tolerance, area_tolerance=area_tolerance, **extra)
 
@@ -77,7 +113,7 @@ def _loop_gaps(arrangement):
 
 def test_reproducer_is_accepted_by_the_snap_fallback():
     with collect_runtime_diagnostics() as counters:
-        arrangement = _arrange()
+        arrangement = _arrange(force_initial_refusal=True)
     domain, _traces, tolerance, area_tolerance = _fixture()
     native = area_tolerance / domain.area_jacobian
     original = abs(domain.area_loop(domain.boundaries[0], native * .05))
@@ -106,7 +142,7 @@ def test_cap1082_wall449_needed_the_touch_excuse_and_refuses_with_the_original_e
     # 1 and 2 accepted this pair through the excuse; now the original conservation error is raised.
     with collect_runtime_diagnostics() as counters:
         with pytest.raises(GeometryError) as caught:
-            _arrange(TOUCH_DATA)
+            _arrange(TOUCH_DATA, force_initial_refusal=True)
     assert type(caught.value) is GeometryError and str(caught.value) == CONSERVATION
     assert caught.value.__cause__ is None and caught.value.__context__ is None
     assert counters["arrangement_snap_fallback_attempts"] == 1
@@ -119,7 +155,7 @@ def test_cap1_refusal_is_followed_by_an_accepting_seam_rotation_retry():
     # attempt refuses (no touch excuse), the refusal is the original conservation error, and the OPT-S retry
     # with rotated seams then accepts. No CAP-1 snap is part of the accepted arrangement.
     with collect_runtime_diagnostics() as counters:
-        arrangement = _arrange(TOUCH_DATA)
+        arrangement = _arrange(TOUCH_DATA, force_initial_refusal=True)
     assert counters["arrangement_snap_fallback_attempts"] >= 1
     assert counters["arrangement_snap_fallback_refusals"] == counters["arrangement_snap_fallback_attempts"]
     assert counters.get("arrangement_snap_fallbacks", 0) == 0
@@ -144,7 +180,7 @@ def test_cap1_refusal_is_followed_by_an_accepting_seam_rotation_retry():
 
 def test_diagnostics_record_the_fired_fallback():
     with collect_runtime_diagnostics() as counters, rd.collect_runtime_records() as collected:
-        _arrange()
+        _arrange(force_initial_refusal=True)
     assert all(type(value) is int for value in counters.values())   # the counter contract stays integer
     records = collected["arrangement_snap_fallback"]
     assert len(records) == 1
@@ -183,7 +219,7 @@ def test_move_beyond_the_bound_refuses_with_the_original_error(monkeypatch):
                         lambda *args, tolerance: real(*args, tolerance=tolerance * 1e-3))
     with collect_runtime_diagnostics() as counters:
         with pytest.raises(GeometryError) as caught:
-            _arrange()
+            _arrange(force_initial_refusal=True)
     assert type(caught.value) is GeometryError and str(caught.value) == CONSERVATION
     assert caught.value.__cause__ is None and caught.value.__context__ is None
     assert counters["arrangement_snap_fallback_attempts"] == 1
@@ -412,7 +448,7 @@ def test_rejected_crossing_check_raises_the_original_error(monkeypatch):
     monkeypatch.setattr(ma, "_snapped_edges_clear", lambda *args: False)
     with collect_runtime_diagnostics() as counters:
         with pytest.raises(GeometryError) as caught:
-            _arrange()
+            _arrange(force_initial_refusal=True)
     assert str(caught.value) == CONSERVATION and caught.value.__context__ is None
     assert counters["arrangement_snap_fallback_refusals"] == 1
 
@@ -420,7 +456,7 @@ def test_rejected_crossing_check_raises_the_original_error(monkeypatch):
 def test_explicit_predicate_budget_keeps_the_original_refusal():
     with collect_runtime_diagnostics() as counters:
         with pytest.raises(GeometryError, match=CONSERVATION):
-            _arrange(max_predicates=10 ** 9)
+            _arrange(max_predicates=10 ** 9, force_initial_refusal=True)
     assert counters.get("arrangement_snap_fallback_attempts", 0) == 0
 
 
@@ -438,7 +474,7 @@ def test_cancellation_during_the_fallback_is_not_swallowed(monkeypatch):
         calls["n"] += 1
         return calls["at_fallback"] is not None
     with pytest.raises(GeometryError, match=CANCELLED):
-        _arrange(cancellation_check=cancel)
+        _arrange(cancellation_check=cancel, force_initial_refusal=True)
 
 
 def test_cancellation_while_validation_refuses_is_the_cancel_error(monkeypatch):
@@ -457,7 +493,7 @@ def test_cancellation_while_validation_refuses_is_the_cancel_error(monkeypatch):
         return state["cancel"]
     with collect_runtime_diagnostics() as counters:
         with pytest.raises(GeometryError, match=CANCELLED):
-            _arrange(cancellation_check=cancel)
+            _arrange(cancellation_check=cancel, force_initial_refusal=True)
     assert state["polls_after"] >= 1
     assert counters.get("arrangement_snap_fallback_refusals", 0) == 0
 
@@ -478,7 +514,7 @@ def test_validation_polls_the_cancellation(monkeypatch):
             state["inside"] = False
     monkeypatch.setattr(ma, "_snapped_edges_clear", spy)
     with pytest.raises(GeometryError, match=CANCELLED):
-        _arrange(cancellation_check=lambda: state["inside"])
+        _arrange(cancellation_check=lambda: state["inside"], force_initial_refusal=True)
     assert state["raised_inside"]
 
 
@@ -502,14 +538,14 @@ def test_cancellation_during_the_final_successful_stage_is_the_cancel_error(monk
         return state["cancel"]
     with collect_runtime_diagnostics() as counters:
         with pytest.raises(GeometryError, match=CANCELLED):
-            _arrange(cancellation_check=cancel)
+            _arrange(cancellation_check=cancel, force_initial_refusal=True)
     assert state["calls"] == 2 and state["polls_after"] >= 1
     assert counters.get("arrangement_snap_fallbacks", 0) == 0
     assert counters.get("arrangement_snap_fallback_refusals", 0) == 0
     # Without the cancellation the same run is accepted by the fallback (the stage really succeeds).
     state.update(calls=0, cancel=False, arm=False)
     with collect_runtime_diagnostics() as counters:
-        _arrange(cancellation_check=cancel)
+        _arrange(cancellation_check=cancel, force_initial_refusal=True)
     assert state["calls"] == 2 and counters["arrangement_snap_fallbacks"] == 1
 
 
@@ -738,7 +774,7 @@ def test_fallback_refuses_a_nan_area_balance(monkeypatch):
     monkeypatch.setattr(ma, "_float_material_cells", wrapped)
     with collect_runtime_diagnostics() as counters:
         with pytest.raises(GeometryError) as caught:
-            _arrange()
+            _arrange(force_initial_refusal=True)
     assert str(caught.value) == CONSERVATION and state["calls"] == 2
     assert counters["arrangement_snap_fallback_refusals"] == 1
 
@@ -752,7 +788,7 @@ def test_fallback_float_overflow_refuses_with_the_original_error(monkeypatch):
     monkeypatch.setattr(ma, "_snapped_edges_clear", overflowing)
     with collect_runtime_diagnostics() as counters:
         with pytest.raises(GeometryError) as caught:
-            _arrange()
+            _arrange(force_initial_refusal=True)
     assert str(caught.value) == CONSERVATION and caught.value.__context__ is None
     assert counters["arrangement_snap_fallback_refusals"] == 1
 
@@ -772,6 +808,28 @@ def test_moved_edge_direction_outside_the_float_range_refuses(monkeypatch):
     monkeypatch.setattr(ma, "_float_faithful", lambda value: False)
     with collect_runtime_diagnostics() as counters:
         with pytest.raises(GeometryError) as caught:
-            _arrange()
+            _arrange(force_initial_refusal=True)
     assert str(caught.value) == CONSERVATION
     assert counters["arrangement_snap_fallback_refusals"] == 1
+
+
+def test_unforced_touch_fixture_still_publishes_conserved_real_geometry():
+    """Real-input positive control with no preliminary fault or fallback requirement."""
+    arrangement = _arrange(TOUCH_DATA, force_initial_refusal=False)
+    domain, _traces, _tolerance, area_tolerance = _fixture(TOUCH_DATA)
+    native = area_tolerance / domain.area_jacobian
+
+    def loop_area(loop):
+        pieces = tuple(ArrangementPath(
+            arrangement.paths[i].curve if forward else
+            arrangement.paths[i].curve.subcurve(1., 0.)) for i, forward in loop)
+        return domain.area_loop(pieces, native * .05)
+
+    expected = abs(domain.area_loop(domain.boundaries[0], native * .05))
+    recomputed = sum(loop_area(c.outer) + sum(loop_area(h) for h in c.holes)
+                     for c in arrangement.cells)
+    assert len(arrangement.cells) == 10
+    assert all(loop_area(c.outer) > 0 for c in arrangement.cells)
+    assert abs(expected - recomputed) <= native
+    assert abs(expected - arrangement.area) <= native
+    assert arrangement.native_area_tolerance == native

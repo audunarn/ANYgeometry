@@ -13,7 +13,7 @@ def test_public_real_pair_and_face_stages_and_apply_ci(monkeypatch,tmp_path):
     module=importlib.import_module('anygeometry._planning_host')
     model,_=_fixture();doc=to_dict(model);source=from_dict(doc);ref=from_dict(doc)
     faces=tuple(source.faces)
-    monkeypatch.delenv('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING',raising=False)
+    monkeypatch.setenv('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING','0')
     serial=bi.plan_intersections(ref,faces,policy='connect')
     bi.apply_intersections(ref,serial,policy='connect')
     expected=(serial.content_checksum,to_dict(ref)['checksum']['value'])

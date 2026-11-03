@@ -15,7 +15,7 @@ from threadpoolctl import threadpool_info
 from ._planning_executor import (OwnedPlanner, PlannerCancelled, PlannerDeadline,
     PlannerCleanupError, pack, unpack, read_packet, write_packet, check_result_status,
     source_files, verify_sources, verify_threads, reduce_results, thaw_model,
-    assignment_size)
+    assignment_size, _private_packet_io, _atomic_private_text)
 from ._planning_qualification import QualificationDecline
 from . import _planning_qualification as q
 from . import _planning_ledger as ledger_api
@@ -35,7 +35,9 @@ _INITIALIZATION_PHASES=frozenset(('child_prepare','setup_and_initial_thaw','infr
 
 
 def _read_initialization(folder,pid):
-    with (folder/'initialization-phases.json').open('rb') as stream:raw=stream.read(8193)
+    def read():
+        with (folder/'initialization-phases.json').open('rb') as stream:return stream.read(8193)
+    raw=_private_packet_io(read)
     if len(raw)>8192:raise QualificationDecline('initialization evidence size')
     try:row=json.loads(raw)
     except (ValueError,UnicodeError) as exc:raise QualificationDecline('initialization evidence JSON') from exc
@@ -83,7 +85,7 @@ def _record_initialization(folder,name,started,*,pending=False):
     if not pending:row['phases'][name]=duration
     encoded=json.dumps(row,allow_nan=False)
     if len(encoded.encode('utf-8'))>8192:raise QualificationDecline('initialization evidence size')
-    temporary=path.with_suffix('.tmp');temporary.write_text(encoded,encoding='utf-8');temporary.replace(path)
+    _atomic_private_text(path,encoded,temporary=path.with_suffix('.tmp'))
 
 
 def _retire_session_tree(tree,folder,*,production,prior_error=None):
@@ -111,54 +113,50 @@ def _read_published_packet(path,kind,deadline,*,poll=None,cancel_folder=None,**k
     repeated unchanged. A retained sidecar records every permission episode;
     callback and deadline errors retain their original terminal precedence.
     """
-    started=time.monotonic();end=min(deadline,started+.25);attempts=0;first=None;event=None
+    first=None;event=None
     def save():
         target=path.with_name('packet-read-'+str(os.getpid())+'-'+path.name)
         temporary=target.with_suffix(target.suffix+'.tmp')
         temporary.write_text(json.dumps(event,allow_nan=False),encoding='utf-8');temporary.replace(target)
+    def retry_poll():
+        if cancel_folder is not None and (cancel_folder/'cancel.flag').exists():
+            raise PlannerCancelled('owned session cancelled during packet read')
+        if poll is not None:poll()
+    def denied(error,attempt,started):
+        nonlocal first,event
+        if first is None:first=error
+        event=dict(packet=path.name,kind=kind,pid=os.getpid(),attempts=attempt,status='retrying',
+            errno=error.errno,winerror=getattr(error,'winerror',None),
+            first_errno=first.errno,first_winerror=getattr(first,'winerror',None),
+            elapsed_seconds=time.monotonic()-started,maximum_retry_seconds=.05)
+        save()
+    def recovered(attempt,started):
+        event.update(attempts=attempt,status='recovered',elapsed_seconds=time.monotonic()-started);save()
+    def io(operation):
+        return _private_packet_io(operation,deadline=deadline,poll=retry_poll,
+            on_denial=denied,on_recovery=recovered)
     try:
-        while True:
-            if first is not None and cancel_folder is not None and (cancel_folder/'cancel.flag').exists():
-                raise PlannerCancelled('owned session cancelled during packet read')
-            if first is not None and poll is not None:poll()
-            now=time.monotonic()
-            if now>=deadline:raise PlannerDeadline('session deadline consumed during packet read')
-            if first is not None and (now>=end or attempts>=32):raise first
-            attempts+=1
-            try:value=read_packet(path,kind,**kwargs)
-            except PermissionError as error:
-                if type(error) is not PermissionError:raise
-                if first is None:first=error
-                event=dict(packet=path.name,kind=kind,pid=os.getpid(),attempts=attempts,status='retrying',
-                    errno=error.errno,winerror=getattr(error,'winerror',None),
-                    first_errno=first.errno,first_winerror=getattr(first,'winerror',None),
-                    elapsed_seconds=time.monotonic()-started,maximum_retry_seconds=.25)
-                save()
-                delay=min(.01,end-time.monotonic(),deadline-time.monotonic())
-                if delay>0:time.sleep(delay)
-                continue
-            if event is not None:
-                if time.monotonic()>=deadline:raise PlannerDeadline('session deadline consumed during packet read')
-                if time.monotonic()>end:raise first
-                event.update(attempts=attempts,status='recovered',elapsed_seconds=time.monotonic()-started);save()
-            return value
+        return read_packet(path,kind,_io=io,**kwargs)
     except BaseException as error:
         if event is not None:
-            event.update(attempts=attempts,status=type(error).__name__,elapsed_seconds=time.monotonic()-started)
+            event.update(status=type(error).__name__)
             try:save()
             except OSError:pass  # Preserve the original terminal exception; prior episode record remains.
         raise
+
 
 
 def _packet_read_evidence(folder):
     rows=[]
     for path in folder.rglob('packet-read-*.json'):
         if len(rows)>=128:raise QualificationDecline('packet retry evidence count')
-        with path.open('rb') as stream:raw=stream.read(8193)
+        def read():
+            with path.open('rb') as stream:return stream.read(8193)
+        raw=_private_packet_io(read)
         if len(raw)>8192:raise QualificationDecline('packet retry evidence size')
         row=json.loads(raw)
-        if (type(row) is not dict or type(row.get('attempts')) is not int or not 1<=row['attempts']<=32 or
-                type(row.get('status')) is not str or len(row['status'])>200 or row.get('maximum_retry_seconds')!=.25):
+        if (type(row) is not dict or type(row.get('attempts')) is not int or not 1<=row['attempts']<=8 or
+                type(row.get('status')) is not str or len(row['status'])>200 or row.get('maximum_retry_seconds')!=.05):
             raise QualificationDecline('packet retry evidence schema')
         rows.append(dict(path=str(path.relative_to(folder)),event=row))
     return sorted(rows,key=lambda row:row['path'])
@@ -166,9 +164,11 @@ def _packet_read_evidence(folder):
 
 def _packet_bytes(path,kind,limit):
     """Actual bounded envelope/payload bytes, not an inferred compression ratio."""
-    size=path.stat().st_size
-    if size>2*limit+100000:raise QualificationDecline('transport observation envelope bound')
-    raw=path.read_bytes()
+    def read():
+        size=path.stat().st_size
+        if size>2*limit+100000:raise QualificationDecline('transport observation envelope bound')
+        return size,path.read_bytes()
+    size,raw=_private_packet_io(read)
     if len(raw)!=size or len(raw)>2*limit+100000:
         raise QualificationDecline('transport observation changed envelope')
     packet=json.loads(raw)
@@ -311,6 +311,7 @@ class OwnedSession(OwnedPlanner):
         self._transport_setup=None
 
     def _verify_infrastructure(self,report):
+        check_result_status(report)
         if self.numerical_manifest is None:return
         value=report.get('infrastructure')
         if (type(value) is not dict or set(value)!={'host','planner','planner_nodes','resource','planner_reference','worker_reference','value_codec'} or

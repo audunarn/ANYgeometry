@@ -89,3 +89,32 @@ def test_failed_command_keeps_diagnostics_and_nonzero_status(tmp_path):
         runner.run([sys.executable, "-I", "-c", "import sys; print('failure evidence'); sys.exit(7)"])
     assert runner.commands[0]["exit_code"] == 7
     assert "failure evidence" in (tmp_path / runner.commands[0]["log"]).read_text()
+
+
+@pytest.mark.parametrize("present", [False, True])
+def test_wheel_lane_keeps_required_dependencies(tmp_path, present):
+    runner = _load("check_compatibility")
+    wheels = []
+    for name in ("numpy", "psutil", "threadpoolctl", "shapely"):
+        path = tmp_path / f"{name}.whl"
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr(f"{name}-1.dist-info/METADATA", f"Name: {name}\nVersion: 1\n")
+        wheels.append(path)
+    selected = runner.lane_dependencies(wheels, planar=present)
+    assert [runner.wheel_metadata(path)[0] for path in selected] == (
+        ["numpy", "psutil", "threadpoolctl", "shapely"] if present
+        else ["numpy", "psutil", "threadpoolctl"])
+    assert wheels == [tmp_path / f"{name}.whl" for name in ("numpy", "psutil", "threadpoolctl", "shapely")]
+
+
+def test_intersection_candidate_version_tracks_project_but_baseline_stays_frozen(monkeypatch):
+    import sys
+    import tomllib
+    monkeypatch.setitem(sys.modules, "check_compatibility", _load("check_compatibility"))
+    runner = _load("check_general_intersections")
+    project = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    version = tomllib.loads(project.read_text(encoding="utf-8"))["project"]["version"]
+    assert runner.expected_artifact_versions(baseline=False) == {
+        "geometry": version, "mesher": "0.5.1", "fem": "0.4.1"}
+    assert runner.expected_artifact_versions(baseline=True) == {
+        "geometry": "0.4.3", "mesher": "0.5.0", "fem": "0.4.1"}

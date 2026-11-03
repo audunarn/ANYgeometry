@@ -3,10 +3,14 @@
 The pytest side lives in ``tests/conftest.py``: it marks the tests that the duration table
 (``reports/ci/durations.json``) records as slow, and with ``ANYGEOMETRY_TEST_SHARD=k/N`` keeps only
 shard ``k`` of the tests selected for the run (after ``-m``/``-k`` deselection). Every collected test
-goes to exactly one shard: longest first (Windows durations, unknown tests at the table's mean) onto
+goes to exactly one shard: longest first (the maximum of historical Windows cost and passed
+observations across separately retained runtimes, unknown tests at the historical mean) onto
 the shard with the least total, ties by node id; each shard runs its tests in collection order.
 With ``ANYGEOMETRY_SHARD_REPORT=<path>`` a shard writes the ids it ran, all selected ids and the slow
 ids to that JSON file.
+
+Costs are scheduling policy estimates from incomplete historical observations. They are neither
+measured full-suite job durations nor a guarantee that a shard fits its job cap.
 
 ``verify`` checks the reports of one run: identical selections, the union of the shards' ids equals
 the selection and no id runs twice. ``guard`` checks JUnit results against the slow marks: a test that
@@ -33,15 +37,18 @@ def load_table(path: Path = TABLE) -> dict:
 
 
 def slow_ids(table: dict, threshold: float = SLOW_SECONDS) -> set[str]:
-    return {name for name, times in table.get("tests", {}).items()
-            if times.get(BALANCE_PLATFORM, max(times.values(), default=0.0)) >= threshold}
+    names = set(table.get("tests", {})) | set(table.get("scheduling", {}).get("tests", {}))
+    return {name for name in names if duration(table, name) >= threshold}
 
 
 def duration(table: dict, name: str) -> float:
     times = table.get("tests", {}).get(name)
     if times:
-        return times.get(BALANCE_PLATFORM, max(times.values()))
-    return table.get("rest_mean", {}).get(BALANCE_PLATFORM, .1) or .1
+        historical = times.get(BALANCE_PLATFORM, max(times.values()))
+    else:
+        historical = table.get("rest_mean", {}).get(BALANCE_PLATFORM, .1) or .1
+    observed = table.get("scheduling", {}).get("tests", {}).get(name, {})
+    return max(historical, max((bucket["maximum_seconds"] for bucket in observed.values()), default=0.0))
 
 
 def assign(ids: list[str], count: int, table: dict) -> dict[str, int]:

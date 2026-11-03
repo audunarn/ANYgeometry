@@ -420,6 +420,10 @@ def _contains(model, loop, point, frame, check):
                         continue
                     s = (w[0]*e[1] - w[1]*e[0])/den
                     r = (w[0]*direction[1] - w[1]*direction[0])/den
+                    # An intersection with the supporting-line extension is
+                    # not a hit on this finite segment, even when s == 0.
+                    if r < 0 or r > 1:
+                        continue
                     if r == 0 or r == 1 or s == 0:
                         raise _UndecidedRay()               # vertex or start contact: try another slope
                     if 0 < r < 1 and s > 0:

@@ -94,7 +94,7 @@ def test_tiny_cap_refuses_real_planner_and_cleans(tmp_path,monkeypatch):
 @numpy_profile_test
 def test_two_worker_geometry_under_explicit_tree_cap(tmp_path,monkeypatch,reuse,request):
     original,_=_fixture();doc=to_dict(original);reference=from_dict(doc)
-    monkeypatch.delenv('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING',raising=False)
+    monkeypatch.setenv('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING','0')
     serial=bi.plan_intersections(reference,tuple(reference.faces),policy='connect');bi.apply_intersections(reference,serial,policy='connect')
     expected=(serial.content_checksum,to_dict(reference)['checksum']['value']);members=[]
     def observed(plan):

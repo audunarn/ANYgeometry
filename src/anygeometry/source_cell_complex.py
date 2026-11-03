@@ -211,8 +211,11 @@ def _row(values, size):
 
 
 def _support_owner(model, face):
-    from .nurbs_sweep_chart import has_sweep_chart, chart_model
-    return chart_model(model, face) if has_sweep_chart(model.faces[face]) else model
+    from .nurbs_sweep_chart import has_sweep_chart, chart_model, source_sweep_chart_model
+    if has_sweep_chart(model.faces[face]):
+        return chart_model(model, face)
+    source_view = source_sweep_chart_model(model, face)
+    return source_view if source_view is not None else model
 
 
 def _rational_loop_area(owner, loop, reference):

@@ -80,10 +80,93 @@ def test_the_guard_reports_unmarked_slow_tests(tmp_path):
 def test_the_slow_marks_follow_the_table():
     table = ci_shards.load_table()
     slow = ci_shards.slow_ids(table)
-    assert slow and all(table["tests"][n]["windows"] >= ci_shards.SLOW_SECONDS for n in slow)
+    assert slow and all(ci_shards.duration(table, n) >= ci_shards.SLOW_SECONDS for n in slow)
 
 
 @pytest.mark.parametrize("text", ["0/3", "4/3", "x/3"])
 def test_bad_shard_specifications_are_refused(text):
     with pytest.raises(ValueError):
         ci_shards.parse_shard(text)
+
+
+def _observation(node, seconds, outcome="passed", runtime="generic"):
+    return {"node": node, "seconds": seconds, "outcome": outcome, "runtime": runtime,
+            "artifact": "artifact-1", "source_run": "run", "head_sha": "head"}
+
+
+def test_positive_refresh_preserves_history_and_separate_runtime_evidence():
+    table = {"tests": {"old": {"windows": 12.}}, "totals": {"windows": {"tests": 1, "seconds": 12.}},
+             "rest_mean": {"windows": .1}}
+    records = [_observation("new", 20.), _observation("new", 2.),
+               _observation("new", 40., runtime="qualified"),
+               _observation("old", 1.), _observation("failed", 999., "failed"),
+               _observation("skipped", 999., "skipped"), _observation("setup_error", 999., "error")]
+    refreshed = ci_durations.refresh(table, records, {"run": "run", "head_sha": "head"})
+    assert refreshed["tests"] == table["tests"]
+    assert refreshed["totals"] == table["totals"]
+    assert "scheduling" not in table
+    evidence = refreshed["scheduling"]["tests"]
+    assert set(evidence) == {"new", "old"}
+    assert evidence["new"]["generic"] == {"minimum_seconds": 2., "maximum_seconds": 20.,
+                                          "observations": 2, "artifacts": ["artifact-1"]}
+    assert evidence["new"]["qualified"]["maximum_seconds"] == 40.
+    assert ci_shards.duration(refreshed, "new") == 40.
+    assert ci_shards.duration(refreshed, "old") == 12.
+    assert ci_shards.duration(refreshed, "unknown") == .1
+    assert "new" in ci_shards.slow_ids(refreshed)
+    assert ci_durations.check(refreshed) == []
+
+
+@pytest.mark.parametrize("change", [{"seconds": -1.}, {"seconds": float("nan")},
+                                    {"source_run": "other"}, {"head_sha": "other"}])
+def test_positive_refresh_rejects_invalid_or_mismatched_evidence(change):
+    record = dict(_observation("new", 1.), **change)
+    with pytest.raises(ValueError):
+        ci_durations.refresh({"tests": {}}, [record], {"run": "run", "head_sha": "head"})
+
+
+def test_runtime_parameter_aliases_remain_distinct_in_five_shards():
+    ids = [f"tests/test_m.py::test_x[{value}]" for value in ("True", "np.True_", "int|str", "Union[int,str]")]
+    ids += [f"unknown-{index}" for index in range(30)]
+    table = {"tests": {ids[0]: {"windows": 20.}}, "rest_mean": {"windows": .1}}
+    assignment = ci_shards.assign(ids, 5, table)
+    partitions = [{name for name in ids if assignment[name] == index} for index in range(1, 6)]
+    assert set.union(*partitions) == set(ids)
+    assert sum(map(len, partitions)) == len(ids)
+    assert all(not left & right for i, left in enumerate(partitions) for right in partitions[i+1:])
+    assert ci_shards.assign(list(reversed(ids)), 5, table) == assignment
+
+
+def test_full_ci_keeps_every_runtime_and_five_shards_under_original_caps():
+    text = (TOOLS.parent / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    regular = text.split("\n  pytest:\n", 1)[1].split("\n  pytest-shards:\n", 1)[0]
+    minimum = text.split("\n  minimum-dependencies:\n", 1)[1].split("\n  wheel-smoke:\n", 1)[0]
+    assert "os: [windows-latest, ubuntu-latest, macos-15, macos-15-intel]" in regular
+    assert 'python-version: ["3.11", "3.12", "3.13", "3.14"]' in regular
+    assert "python-version: '3.11'" in minimum and "runs-on: ubuntu-latest" in minimum
+    for job in (regular, minimum):
+        assert "shard: [1, 2, 3, 4, 5]" in job
+        assert "exclude:" not in job
+        assert "timeout-minutes: 30" in job
+        assert "ANYGEOMETRY_TEST_SHARD: ${{ matrix.shard }}/5" in job
+        assert "--junitxml=kernel-results.xml" in job
+    gate = text.split("\n  pytest-shards:\n", 1)[1].split("\n  planar-absence:\n", 1)[0]
+    assert "needs: [pytest, minimum-dependencies]" in gate
+    assert 'if [ "$PYTEST_RESULT" != success ]' in gate
+    assert 'if [ "$MINIMUM_RESULT" != success ]' in gate
+    assert "python tools/ci_shards.py verify lanes/kernel-runtime-$os-$py-*/shard-*.json" in gate
+    assert "python tools/ci_shards.py verify lanes/minimum-dependencies-runtime-*/shard-*.json" in gate
+
+
+def test_five_partition_reports_still_require_every_assigned_junit_result(tmp_path):
+    ids = [f"tests/test_m.py::t{i}" for i in range(5)]
+    reports = []
+    for index, node in enumerate(ids, 1):
+        folder = tmp_path / str(index); folder.mkdir()
+        path = folder / f"shard-{index}.json"
+        path.write_text(json.dumps(dict(index=index, count=5, selected=ids, ran=[node], slow=[])))
+        _junit(folder / "kernel-results.xml", {f"test_m::t{index-1}": .1})
+        reports.append(path)
+    assert ci_shards.verify(reports) == []
+    _junit(reports[-1].parent / "kernel-results.xml", {})
+    assert any("assigned tests have no result" in problem for problem in ci_shards.verify(reports))

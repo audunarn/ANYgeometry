@@ -40,6 +40,11 @@ def wheel_metadata(path):
     return info["Name"].lower().replace("_", "-"), info["Version"]
 
 
+def lane_dependencies(wheels, *, planar):
+    """Keep required dependencies in both lanes; omit only the planar backend."""
+    return [path for path in wheels if planar or wheel_metadata(path)[0] != "shapely"]
+
+
 def classification(candidate, baseline):
     if candidate == "passed" and baseline == "passed":
         return "passed"
@@ -159,7 +164,7 @@ def main():
                 environment, executable = runner.environment(label + "-venv")
                 work = root / label
                 work.mkdir()
-                selected = dependencies if present else [p for p in dependencies if wheel_metadata(p)[0] == "numpy"]
+                selected = lane_dependencies(dependencies, planar=present)
                 runner.run([executable, "-I", "-m", "pip", "--isolated", "install", "--no-index",
                             "--report", work / "install.json", str(wheel), *selected])
                 modules = dict(BASE_MODULES)

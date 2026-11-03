@@ -8,10 +8,14 @@ the rounding of the index/local arithmetic; a larger excursion keeps the origina
 """
 
 from fractions import Fraction
+import math
+import json
+from pathlib import Path
 
 import numpy as np
 import pytest
 
+from anygeometry import from_dict, to_dict
 from anygeometry.errors import GeometryError
 from anygeometry.exact_curves import EllipticArc
 import anygeometry.model as model_module
@@ -56,6 +60,52 @@ _CAPTURED_RAILS = {
 _CAPTURED_OVERSHOOT_EPS = {23: 12, 63: 10, 89: 9}
 
 
+# Full arithmetic inputs reconstructed from the historical per-edge length bits on
+# Python 3.14.2 / NumPy 2.4.6, OpenBLAS SkylakeX. This is not an original full
+# execution trace or a claim of cross-platform producer bit identity. Keeping
+# total and cumulative bits explicit separates the old arithmetic counterexample
+# from today's platform-dependent edge-length and reduction implementations.
+_CAPTURED_CHAIN_INPUTS = {23: {'lengths': ['0x1.f4017e2ed5020p-6',
+                  '0x1.d4f0afd88cbfap-2',
+                  '0x1.7f135aa809278p-3',
+                  '0x1.52536ac5d4070p-8'],
+      'total': '0x1.5c81e15d4af9dp-1',
+      'cumulative': ['0x0.0p+0',
+                     '0x1.f4017e2ed5020p-6',
+                     '0x1.f430c7bb7a0fcp-2',
+                     '0x1.59dd3a87bf51cp-1',
+                     '0x1.5c81e15d4af9dp-1'],
+      'overshoot_eps': 12.0},
+ 63: {'lengths': ['0x1.9702f75ccbdc0p-6',
+                  '0x1.1132891a72ef8p-3',
+                  '0x1.18bcb67c07108p-3',
+                  '0x1.78bae554f42e0p-3',
+                  '0x1.f703208d8557fp-6',
+                  '0x1.3749d2876f7c0p-3',
+                  '0x1.3296582820b54p-6'],
+      'total': '0x1.5c81e15d4af9dp-1',
+      'cumulative': ['0x0.0p+0',
+                     '0x1.9702f75ccbdc0p-6',
+                     '0x1.4412e8060c6b0p-3',
+                     '0x1.2e67cf4109bdcp-2',
+                     '0x1.eac541eb83d4cp-2',
+                     '0x1.051ab9fa2e152p-1',
+                     '0x1.52ed2e9c09f42p-1',
+                     '0x1.5c81e15d4af9dp-1'],
+      'overshoot_eps': 10.0},
+ 89: {'lengths': ['0x1.83db4cafa0eafp-2',
+                  '0x1.7d0806d1d6d90p-3',
+                  '0x1.6c9c4eafe3bc0p-4',
+                  '0x1.b7d5ef610ad30p-6'],
+      'total': '0x1.5c81e15d4af9ep-1',
+      'cumulative': ['0x0.0p+0',
+                     '0x1.83db4cafa0eafp-2',
+                     '0x1.212fa80c462bcp-1',
+                     '0x1.4ec331e242a34p-1',
+                     '0x1.5c81e15d4af9ep-1'],
+      'overshoot_eps': 9.0}}
+
+
 def _hex3(values):
     return tuple(float.fromhex(x) for x in values)
 
@@ -82,6 +132,35 @@ def _captured_rail(face):
     return geometry, tuple(chain), stored
 
 
+def _captured_chain_data(geometry, chain, stored, face):
+    """Use live edge objects with the complete frozen arithmetic counterexample."""
+    captured = _CAPTURED_CHAIN_INPUTS[face]
+    lengths = np.asarray([float.fromhex(x) for x in captured["lengths"]])
+    total = float.fromhex(captured["total"])
+    cumulative = np.asarray([float.fromhex(x) for x in captured["cumulative"]])
+    assert lengths.tolist() == stored
+    # Bind the geometric fixture exactly, without requiring a CPU-dependent
+    # quadrature implementation to reproduce historical rounding bits.
+    rows = _CAPTURED_RAILS[face]
+    for item, row in zip(chain, rows[1:], strict=True):
+        edge = geometry.edges[item.edge]
+        curve = edge.curve
+        assert item.forward and type(curve) is EllipticArc
+        assert (curve.center, curve.u_vector, curve.v_vector) == (_CENTER, _U, _V)
+        assert curve.start_angle == float.fromhex(row[0])
+        assert curve.sweep_angle == float.fromhex(row[1])
+        assert np.array_equal(geometry.vertex_position(edge.end), _hex3(row[3]))
+        # Orthogonal radius-13/2 circle: exact mathematical length is r*sweep.
+        # The immutable historical approximation has a checked <=1-ulp error;
+        # this is an error term for these inputs, not a production tolerance.
+        exact_length = Fraction(13, 2) * abs(Fraction(curve.sweep_angle))
+        historical = float.fromhex(row[2])
+        assert abs(Fraction(historical) - exact_length) <= Fraction(math.ulp(historical))
+    assert np.array_equal(geometry.vertex_position(geometry.edges[chain[0].edge].start), _hex3(rows[0]))
+    live = geometry._chain_data(chain)
+    return live[0], lengths, total, cumulative, live[4]
+
+
 def _assert_end_snapped(geometry, chain, data):
     point, derivative = geometry._chain_eval(data, 1.0)
     point_only, _zero = geometry._chain_eval(data, 1.0, _point_only=True)
@@ -99,13 +178,24 @@ def _assert_end_snapped(geometry, chain, data):
 @pytest.mark.parametrize("face", sorted(_CAPTURED_RAILS))
 def test_captured_cap_rail_end_overshoot_is_snapped(face):
     geometry, chain, stored = _captured_rail(face)
-    # Preconditions: the rebuilt rail has the captured lengths bit for bit, and the unchanged
-    # arithmetic overshoots by the captured amount, beyond S0d's 8 eps (else this proves nothing).
-    assert [geometry.edge_length(item.edge) for item in chain] == stored
-    data = geometry._chain_data(chain)
+    # Historical arithmetic regression: freeze every numeric input, including the
+    # reduction outputs; a live producer need not reproduce historical length bits.
+    data = _captured_chain_data(geometry, chain, stored, face)
     index, local = _old_local(data, 1.0)
     assert index == len(chain) - 1
     assert (local - 1.0) / EPS == _CAPTURED_OVERSHOOT_EPS[face] > 8
+    _assert_end_snapped(geometry, chain, data)
+
+
+@pytest.mark.parametrize("face", sorted(_CAPTURED_RAILS))
+def test_live_cap_rail_producer_and_endpoint_are_self_consistent(face):
+    """Exercise today's real producer separately from the frozen counterexample."""
+    geometry, chain, _stored = _captured_rail(face)
+    data = geometry._chain_data(chain)
+    assert data[1].tolist() == [geometry.edge_length(item.edge) for item in chain]
+    assert np.isfinite(data[1]).all() and (data[1] > 0).all()
+    assert np.isfinite(data[2]) and data[2] > 0
+    assert np.isfinite(data[3]).all()
     _assert_end_snapped(geometry, chain, data)
 
 
@@ -158,8 +248,10 @@ def _split_rail(cuts, *, reverse_last=False):
     return geometry, tuple(chain)
 
 
-def _synthetic_overshooting_rails(reverse_last):
-    """Deterministic scan: rails split at 1-7 interior angles with a last sub-arc under 4 % of the sweep
+def _diagnostic_synthetic_overshooting_rails(reverse_last):
+    """Diagnostic only: this unchanged random search need not find a case on every runtime.
+
+    Deterministic scan: rails split at 1-7 interior angles with a last sub-arc under 4 % of the sweep
     whose fraction-1 overshoot exceeds S0d's 8 eps."""
 
     rng = np.random.default_rng(20261029)
@@ -181,6 +273,34 @@ def _synthetic_overshooting_rails(reverse_last):
     return found
 
 
+def _synthetic_overshooting_rails(reverse_last):
+    """Replay complete real qualified counterexamples; never search for test premises."""
+    path = Path(__file__).resolve().parent / "data" / "synthetic-chain-inputs.json"
+    records = json.loads(path.read_text())["records"]
+    chosen = [row for row in records if row["reverse_last"] == reverse_last]
+    assert len(chosen) == 3
+    found = []
+    for row in chosen:
+        geometry = from_dict(row["geometry"])
+        # Normalize tuple/list JSON containers only; numbers/checksum stay exact.
+        assert json.loads(json.dumps(to_dict(geometry))) == row["geometry"]
+        chain = tuple(OrientedEdge(item["edge"], item["forward"]) for item in row["chain"])
+        assert chain[-1].forward is not reverse_last
+        live = geometry._chain_data(chain)
+        lengths = np.asarray([float.fromhex(v) for v in row["lengths"]])
+        total = float.fromhex(row["total"])
+        cumulative = np.asarray([float.fromhex(v) for v in row["cumulative"]])
+        assert len(lengths) == len(chain) and len(cumulative) == len(chain) + 1
+        data = (live[0], lengths, total, cumulative, live[4])
+        index, local = _old_local(data, 1.0)
+        assert index == row["old_index"] == len(chain) - 1
+        assert float(local).hex() == row["old_local"]
+        assert (local - 1.0) / EPS == row["overshoot_eps"] > 8
+        assert Fraction(float(local)) - 1 <= _bound(len(chain), total, float(lengths[-1]))
+        found.append((geometry, chain, data))
+    return found
+
+
 @pytest.mark.parametrize("reverse_last", (False, True))
 def test_synthetic_split_rail_end_overshoot_is_snapped(reverse_last):
     for geometry, chain, data in _synthetic_overshooting_rails(reverse_last):
@@ -193,8 +313,8 @@ def _bound(count, total, length):
 
 @pytest.mark.parametrize("face", sorted(_CAPTURED_RAILS))
 def test_captured_overshoot_lies_within_the_derived_bound(face):
-    geometry, chain, _stored = _captured_rail(face)
-    chain_items, lengths, total, cumulative, _edges = geometry._chain_data(chain)
+    geometry, chain, stored = _captured_rail(face)
+    chain_items, lengths, total, cumulative, _edges = _captured_chain_data(geometry, chain, stored, face)
     bound = _bound(len(chain), total, float(lengths[-1]))
     overshoot = Fraction(_CAPTURED_OVERSHOOT_EPS[face]) * Fraction(EPS)
     assert overshoot <= bound
@@ -308,3 +428,15 @@ def test_bound_is_never_exceeded_against_exact_rational_evaluation():
             fractions += [b, float(np.nextafter(b, 0.0)), float(np.nextafter(b, 2.0))]
         worst = max(worst, _exact_check(lengths, fractions))
     assert worst <= 1.0
+
+
+@pytest.mark.parametrize("reverse_last", (False, True))
+def test_live_synthetic_geometries_keep_producer_and_endpoint_consistent(reverse_last):
+    """Real producer coverage is separate from immutable arithmetic counterexamples."""
+    for geometry, chain, _captured in _synthetic_overshooting_rails(reverse_last):
+        live = geometry._chain_data(chain)
+        assert live[1].tolist() == [geometry.edge_length(item.edge) for item in chain]
+        assert np.isfinite(live[1]).all() and (live[1] > 0).all()
+        assert np.isfinite(live[2]) and live[2] > 0
+        assert np.isfinite(live[3]).all()
+        _assert_end_snapped(geometry, chain, live)

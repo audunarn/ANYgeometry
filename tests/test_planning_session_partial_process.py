@@ -19,7 +19,7 @@ def test_disjoint_pairs_replay_sample_dependent_support_state(tmp_path,monkeypat
                        ((x,2.5,-2.5),(x+5.,2.5,-2.5),(x+5.,2.5,2.5),(x,2.5,2.5))):
             model.add_plate(model.add_points(points))
     document=to_dict(model);reference=from_dict(document)
-    monkeypatch.delenv('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING',raising=False)
+    monkeypatch.setenv('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING','0')
     serial=bi.plan_intersections(reference,tuple(reference.faces),policy='connect')
     bi.apply_intersections(reference,serial,policy='connect')
     expected=(serial.content_checksum,to_dict(reference)['checksum']['value'])

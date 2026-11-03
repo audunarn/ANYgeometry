@@ -80,7 +80,7 @@ def _compare_stage_streams(old,new,first,second,index):
 def test_public_session_reuses_workers_with_same_samples_and_plan_apply(tmp_path,monkeypatch):
     model,_=_fixture();document=to_dict(model)
     reference=from_dict(document)
-    monkeypatch.delenv('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING',raising=False)
+    monkeypatch.setenv('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING','0')
     serial=bi.plan_intersections(reference,tuple(reference.faces),policy='connect')
     bi.apply_intersections(reference,serial,policy='connect')
     expected=(serial.content_checksum,to_dict(reference)['checksum']['value'])

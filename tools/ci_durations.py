@@ -15,7 +15,9 @@ Node ids follow pytest: ``tests/<module>.py::<name>`` (JUnit ``classname`` ``tes
 from __future__ import annotations
 
 import argparse
+import copy
 import json
+import math
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -44,6 +46,44 @@ def read_junit(path: Path) -> dict[str, float]:
     result: dict[str, float] = {}
     for case in root.iter("testcase"):
         result[node_id(case.get("classname", ""), case.get("name", ""))] = float(case.get("time", 0) or 0)
+    return result
+
+
+def refresh(table: dict, records: list[dict], provenance: dict) -> dict:
+    """Add passed-only historical scheduling evidence without rewriting measured totals.
+
+    Runtime buckets remain distinct. Their maxima supply conservative scheduling
+    policy inputs, not predictions or upper bounds for a complete future suite.
+    """
+    result = copy.deepcopy(table)
+    tests = {}
+    for record in records:
+        if record["outcome"] != "passed":
+            continue
+        if (str(record["source_run"]) != str(provenance["run"])
+                or record["head_sha"] != provenance["head_sha"]):
+            raise ValueError("duration observation source does not match provenance")
+        seconds = float(record["seconds"])
+        if not math.isfinite(seconds) or seconds < 0:
+            raise ValueError("duration must be finite and nonnegative")
+        bucket = tests.setdefault(record["node"], {}).setdefault(record["runtime"], {
+            "minimum_seconds": seconds, "maximum_seconds": seconds,
+            "observations": 0, "artifacts": []})
+        bucket["minimum_seconds"] = min(bucket["minimum_seconds"], seconds)
+        bucket["maximum_seconds"] = max(bucket["maximum_seconds"], seconds)
+        bucket["observations"] += 1
+        if record["artifact"] not in bucket["artifacts"]:
+            bucket["artifacts"].append(record["artifact"])
+    for runtimes in tests.values():
+        for bucket in runtimes.values():
+            bucket["artifacts"].sort()
+    result["scheduling"] = {
+        "provenance": copy.deepcopy(provenance),
+        "policy": "maximum of historical Windows cost and passed observed runtime maxima; not a fit guarantee",
+        "unknown_policy": "historical rest_mean fallback is policy for unmeasured nodes, not their measured cost",
+        "timing_semantics": "JUnit testcase elapsed, including fixture costs; not process-wall or qualification budget",
+        "censoring": "first-failure prefixes; missing outcomes remain unmeasured",
+        "tests": tests}
     return result
 
 

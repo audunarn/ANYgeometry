@@ -102,19 +102,55 @@ def unpack(packet, kind, *, limit=4_000_000):
         raise QualificationDecline('invalid transport JSON') from exc
 
 
+def _private_packet_io(operation,*,deadline=None,poll=None,on_denial=None,on_recovery=None):
+    """One bounded Windows private-file episode; validation is never retried."""
+    started=time.monotonic();end=started+.05;last=None
+    if deadline is not None:end=min(end,deadline)
+    for attempt in range(1,9):
+        if last is not None and poll is not None:poll()
+        now=time.monotonic()
+        if deadline is not None and now>=deadline:raise PlannerDeadline('session deadline consumed during packet read')
+        if last is not None and now>=end:raise last
+        try:value=operation()
+        except PermissionError as error:
+            code=getattr(error,'winerror',None)
+            if os.name!='nt' or not (code in (5,32,33) or code is None and error.errno==13):raise
+            last=error
+            if on_denial is not None:on_denial(error,attempt,started)
+            remaining=end-time.monotonic()
+            if attempt==8 or remaining<=0:raise
+            time.sleep(min(.002*attempt,.010,remaining))
+            continue
+        if deadline is not None and time.monotonic()>=deadline:
+            raise PlannerDeadline('session deadline consumed during packet read')
+        if last is not None and on_recovery is not None:on_recovery(attempt,started)
+        return value
+
+
+def _atomic_private_text(path,text,*,temporary=None):
+    path = Path(path)
+    if temporary is None:temporary=path.with_suffix(path.suffix+'.tmp')
+    def publish():
+        temporary.write_text(text,encoding='utf-8')
+        temporary.replace(path)
+    _private_packet_io(publish)
+
+
 def write_packet(path, packet):
-    path = Path(path)
-    temporary = path.with_suffix(path.suffix + '.tmp')
-    temporary.write_text(json.dumps(packet, allow_nan=False), encoding='utf-8')
-    temporary.replace(path)
+    _atomic_private_text(path,json.dumps(packet,allow_nan=False))
 
 
-def read_packet(path, kind, *, with_digest=False, limit=4_000_000):
+def read_packet(path, kind, *, with_digest=False, limit=4_000_000,_io=None):
     path = Path(path)
-    if path.stat().st_size > 2*limit+100000:
-        raise QualificationDecline('transport envelope size limit='+str(2*limit+100000))
+    def read():
+        if path.stat().st_size > 2*limit+100000:
+            raise QualificationDecline('transport envelope size limit='+str(2*limit+100000))
+        return path.read_text(encoding='utf-8')
+    try:text = (_private_packet_io if _io is None else _io)(read)
+    except UnicodeError as exc:raise QualificationDecline('invalid transport envelope') from exc
+    # IO callbacks can raise terminal GeometryError/ValueError subclasses;
+    # keep them outside the JSON decoder's ValueError normalization.
     try:
-        text = path.read_text(encoding='utf-8')
         if len(text.encode('utf-8')) > 2*limit+100000:
             raise QualificationDecline('transport envelope size limit='+str(2*limit+100000))
         packet = json.loads(text, object_pairs_hook=_pairs,

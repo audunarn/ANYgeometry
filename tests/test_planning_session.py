@@ -176,18 +176,26 @@ def test_published_packet_permission_retry_is_narrow_and_bounded(tmp_path,monkey
     from anygeometry._planning_executor import PlannerDeadline,PlannerCancelled
     import json
     module=api();path=tmp_path/'reply-1.json';path.write_text('{}')
+    from pathlib import Path
+    from types import SimpleNamespace
+    from anygeometry import _planning_executor as executor
+    import os
     clock=[0.];calls=[];polls=[];original=PermissionError(13,'original access denial',str(path))
+    path.write_text(json.dumps(executor.pack({'validated':True},'reply')))
+    monkeypatch.setattr(executor,'os',SimpleNamespace(name='nt',getpid=os.getpid))
+    actual_read=Path.read_text
     callback_error=RuntimeError('original callback')
-    def read(*args,**kwargs):
+    def read(self,*args,**kwargs):
+        if self!=path:return actual_read(self,*args,**kwargs)
         calls.append(1)
         if scenario=='cancel':(tmp_path/'cancel.flag').write_text('cancel')
         if scenario=='corrupt':raise QualificationDecline('checksum mismatch')
         if len(calls)==1 or scenario in ('permanent','deadline','callback'):raise original
-        return {'validated':True}
+        return actual_read(self,*args,**kwargs)
     def poll():
         polls.append(1)
         if scenario=='callback' and len(polls)==2:raise callback_error
-    monkeypatch.setattr(module,'read_packet',read)
+    monkeypatch.setattr(Path,'read_text',read)
     monkeypatch.setattr(module.time,'monotonic',lambda:clock[0])
     monkeypatch.setattr(module.time,'sleep',lambda seconds:clock.__setitem__(0,clock[0]+seconds))
     if scenario=='transient':assert module._read_published_packet(path,'reply',1.,poll=poll)=={'validated':True}
@@ -196,7 +204,7 @@ def test_published_packet_permission_retry_is_narrow_and_bounded(tmp_path,monkey
         with pytest.raises(expected) as caught:module._read_published_packet(path,'reply',.005 if scenario=='deadline' else 1.,poll=poll,cancel_folder=tmp_path)
         if scenario=='callback':assert caught.value is callback_error
         if scenario=='permanent':assert caught.value is original
-    assert clock[0]<=.25 and len(calls)<=32
+    assert clock[0]<=.05 and len(calls)<=8
     if scenario=='corrupt':assert len(calls)==1 and not list(tmp_path.glob('packet-read-*.json'))
     else:
         rows=[json.loads(file.read_text()) for file in tmp_path.glob('packet-read-*.json')]

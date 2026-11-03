@@ -21,7 +21,7 @@ def test_session_false_signal_retains_policy_plan_apply_and_source(tmp_path, mon
     document = to_dict(model)
     model = from_dict(document)
     reference = from_dict(document)
-    monkeypatch.delenv('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING', raising=False)
+    monkeypatch.setenv('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING','0')
     serial = bi.plan_intersections(reference, tuple(reference.faces), policy='connect')
     bi.apply_intersections(reference, serial, policy='connect')
     expected = (serial.content_checksum, to_dict(reference)['checksum']['value'])

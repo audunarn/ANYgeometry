@@ -74,7 +74,7 @@ def test_original_serial_error_identity_survives(tmp_path,monkeypatch,error):
 
 def test_public_unexpired_fallback_preserves_plan_and_apply(tmp_path,monkeypatch):
     model,clock,signal,policy,control=setup(tmp_path,monkeypatch);doc=to_dict(model);events=[]
-    monkeypatch.delenv('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING',raising=False)
+    monkeypatch.setenv('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING','0')
     original=bi.plan_intersections(model,tuple(model.faces),policy=policy)
     bi.apply_intersections(model,original,policy=policy);expected=to_dict(model)
     model=from_dict(doc)
@@ -124,7 +124,7 @@ def test_public_serial_error_wrapper_is_identical(tmp_path,monkeypatch,error):
     model,clock,signal,policy,control=setup(tmp_path,monkeypatch)
     def fail(*a,**k):raise error
     monkeypatch.setattr(bi,'_pair_paths',fail)
-    monkeypatch.delenv('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING',raising=False)
+    monkeypatch.setenv('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING','0')
     with pytest.raises(type(error)) as original:bi.plan_intersections(model,tuple(model.faces),policy=policy)
     class Refuse:
         def __init__(self,*a,**k):pass

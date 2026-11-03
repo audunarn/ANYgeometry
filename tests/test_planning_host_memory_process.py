@@ -23,7 +23,7 @@ def test_real_host_and_tree_budget_preserves_small_fixture(tmp_path, monkeypatch
     original, _ = _fixture()
     doc = to_dict(original)
     reference = from_dict(doc)
-    monkeypatch.delenv('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING', raising=False)
+    monkeypatch.setenv('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING','0')
     serial = bi.plan_intersections(reference, tuple(reference.faces), policy='connect')
     bi.apply_intersections(reference, serial, policy='connect')
     expected = (serial.content_checksum, to_dict(reference)['checksum']['value'])

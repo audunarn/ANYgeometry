@@ -919,7 +919,6 @@ def _query_boundary_chords(model, regions, edge_intervals, *, expected_revision=
             if face_id not in source_faces:
                 continue
             chart = source_faces[face_id]
-            from .nurbs_sweep_chart import has_sweep_chart
             occurrence_key = (face_id,handle.id)
             if occurrence_key not in occurrence_curves:
                 reference = plane_references[face_id]
@@ -928,7 +927,7 @@ def _query_boundary_chords(model, regions, edge_intervals, *, expected_revision=
                 # every sweep connector for every accepted dyadic interval.
                 owner = reference.owner if hasattr(reference,'owner') else reference.model
                 occurrence_curves[occurrence_key] = (owner.edges[handle.id].curve
-                    if has_sweep_chart(model.faces[face_id]) else curve)
+                    if owner is not model else curve)
             occurrence_curve = occurrence_curves[occurrence_key]
             uses = [use for loop in (model.faces[face_id].loop, *model.faces[face_id].holes)
                     for use in loop if use.edge == handle.id]

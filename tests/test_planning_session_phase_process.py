@@ -41,7 +41,7 @@ def test_one_stage_finishes_with_empty_second_worker(tmp_path,kind):
 
 def test_public_empty_plan_creates_no_owned_session(tmp_path,monkeypatch):
     original,_=_fixture();document=to_dict(original);source=from_dict(document)
-    monkeypatch.delenv('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING',raising=False)
+    monkeypatch.setenv('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING','0')
     serial=bi.plan_intersections(source,(next(iter(source.faces)),),policy='connect')
     bi.apply_intersections(source,serial,policy='connect')
     expected=(serial.content_checksum,to_dict(source)['checksum']['value'])
