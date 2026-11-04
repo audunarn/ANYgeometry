@@ -9,6 +9,45 @@ def capture(provider,name):
     return capture_operation(provider,name)
 
 
+def test_dispatcher_namespace_absence_is_typed(monkeypatch):
+    from types import SimpleNamespace
+    from anygeometry import _planning_runtime as runtime
+    calls=[]
+    def missing(name):
+        calls.append(name)
+        raise ModuleNotFoundError('missing selected namespace', name=name)
+    monkeypatch.setattr(runtime,'importlib',SimpleNamespace(import_module=missing))
+    with pytest.raises(QualificationDecline,match='NumPy array dispatcher interface unavailable'):
+        runtime.dispatcher_edges(object())
+    assert calls==['numpy._core._multiarray_umath','numpy.core._multiarray_umath']
+
+
+def test_dispatcher_unrelated_import_error_keeps_identity(monkeypatch):
+    from types import SimpleNamespace
+    from anygeometry import _planning_runtime as runtime
+    error=ModuleNotFoundError('unrelated dependency missing',name='unrelated_dependency')
+    def broken(name):
+        raise error
+    monkeypatch.setattr(runtime,'importlib',SimpleNamespace(import_module=broken))
+    with pytest.raises(ModuleNotFoundError) as caught:
+        runtime.dispatcher_edges(object())
+    assert caught.value is error
+
+
+def test_present_dispatcher_namespace_without_export_refuses_before_alias(monkeypatch):
+    from types import ModuleType,SimpleNamespace
+    from anygeometry import _planning_runtime as runtime
+    calls=[]
+    def module_without_export(name):
+        calls.append(name)
+        assert name=='numpy._core._multiarray_umath'
+        return ModuleType(name)
+    monkeypatch.setattr(runtime,'importlib',SimpleNamespace(import_module=module_without_export))
+    with pytest.raises(QualificationDecline,match='NumPy array dispatcher interface unavailable'):
+        runtime.dispatcher_edges(object())
+    assert calls==['numpy._core._multiarray_umath']
+
+
 def test_numpy_dispatcher_has_live_python_adapter_binding(monkeypatch):
     import numpy as np
     binding=capture('numpy','einsum')

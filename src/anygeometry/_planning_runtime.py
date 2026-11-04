@@ -59,7 +59,22 @@ def operation(provider,name):
 
 
 def dispatcher_edges(value):
-    from numpy._core._multiarray_umath import _ArrayFunctionDispatcher
+    # NumPy 1 uses core; NumPy 2 uses _core. This named diagnostic adapter
+    # does not change the production planner's separate image admission.
+    for name in ('numpy._core._multiarray_umath','numpy.core._multiarray_umath'):
+        try:
+            module=importlib.import_module(name)
+        except ModuleNotFoundError as error:
+            if error.name not in (name,name.rsplit('.',1)[0]):raise
+            continue
+        if type(module) is not types.ModuleType:
+            raise QualificationDecline('unknown array dispatch module')
+        _ArrayFunctionDispatcher=vars(module).get('_ArrayFunctionDispatcher')
+        if _ArrayFunctionDispatcher is None:
+            raise QualificationDecline('NumPy array dispatcher interface unavailable')
+        break
+    else:
+        raise QualificationDecline('NumPy array dispatcher interface unavailable')
     if type(value) is not _ArrayFunctionDispatcher:
         raise QualificationDecline('unknown array dispatch adapter')
     from ._planning_ledger import runtime_infrastructure
