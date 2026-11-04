@@ -74,7 +74,7 @@ jobs:
           ANYGEOMETRY_SHARD_REPORT: shard-${{ matrix.shard }}.json
         run: |
           python tools/check_licenses.py --check-installed
-          python -m pytest --maxfail=1 --durations=20 --junitxml=kernel-results.xml
+          python tools/ci_isolated_tests.py --maxfail=1 --durations=20 --junitxml=kernel-results.xml
       - name: Slowest tests
         if: always()
         shell: bash
@@ -93,6 +93,7 @@ jobs:
             kernel-results.xml
             planning-profile.json
             shard-*.json
+            ci-isolation/
           if-no-files-found: warn
 
   pytest-shards:
@@ -280,7 +281,7 @@ jobs:
         with:
           python-version: '3.11'
       - run: python -m pip install -e '.[dev,planar,test]' 'setuptools>=77.0.3' 'numpy==1.26.0' 'shapely==2.0.0'
-      - run: python -m pytest --maxfail=1 --durations=20 --junitxml=kernel-results.xml
+      - run: python tools/ci_isolated_tests.py --maxfail=1 --durations=20 --junitxml=kernel-results.xml
         env:
           ANYGEOMETRY_TEST_SHARD: ${{ matrix.shard }}/5
           ANYGEOMETRY_SHARD_REPORT: shard-${{ matrix.shard }}.json
@@ -293,6 +294,7 @@ jobs:
             *-runtime.json
             kernel-results.xml
             shard-*.json
+            ci-isolation/
           if-no-files-found: warn
 
   wheel-smoke:

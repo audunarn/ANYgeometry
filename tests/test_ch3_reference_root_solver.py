@@ -102,6 +102,7 @@ def test_zero_polynomial_is_not_a_finite_complete_root_set():
 
 @pytest.mark.parametrize('dps', [15, 30, 100])
 def test_working_precision_uses_old_sixty_guard_bits_and_is_restored(monkeypatch, dps):
+    ambient_precision = mp.mp.prec
     with mp.workdps(dps):
         precision = mp.mp.prec
         original = mp.sqrt
@@ -113,7 +114,7 @@ def test_working_precision_uses_old_sixty_guard_bits_and_is_restored(monkeypatch
         reference._quadratic_roots(1, 0, 1)
         assert observed == [precision + 60]
         assert mp.mp.prec == precision
-    assert mp.mp.dps == 30
+    assert mp.mp.prec == ambient_precision
 
 
 def test_precision_is_restored_after_conversion_and_arithmetic_errors(monkeypatch):

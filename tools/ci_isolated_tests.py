@@ -1,0 +1,277 @@
+"""Preserve original shard assignment; execute oracle and core in fresh interpreters.
+
+Collection may import mpmath but executes no tests. Core import attempts fail
+closed with RuntimeError, never ImportError/pytest.importorskip. No ABC resets.
+"""
+from __future__ import annotations
+import argparse
+import ast
+import copy
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import xml.etree.ElementTree as ET
+
+ROOT=Path(__file__).resolve().parents[1]
+MAX_NODES=50000
+MAX_JSON_BYTES=32*1024*1024
+MAX_NODE_CHARS=16384
+
+
+def validate_nodes(nodes,root=None):
+    if type(nodes) is not list or not 0<len(nodes)<=MAX_NODES:
+        raise ValueError('node inventory count/type')
+    seen=set()
+    for node in nodes:
+        if type(node) is not str or len(node)>MAX_NODE_CHARS or node in seen or '::' not in node:
+            raise ValueError('duplicate/malformed node ID')
+        file=node.split('::',1)[0];path=Path(file)
+        if not file.startswith('tests/') or '\\' in file or '..' in path.parts or not file.endswith('.py'):
+            raise ValueError('node outside tests: '+file)
+        if root is not None and (not (root/path).is_file() or not (root/path).resolve().is_relative_to(root.resolve())):
+            raise ValueError('node file missing/outside root: '+file)
+        seen.add(node)
+    return nodes
+
+
+def classify_nodes(root,nodes):
+    root=Path(root);validate_nodes(nodes,root)
+    files=sorted({p for folder in ('tests','tools','src','examples') for p in (root/folder).rglob('*.py')})
+    if len(files)>10000:raise ValueError('module inventory bound')
+    aliases={};names={};trees={}
+    for path in files:
+        rel=path.relative_to(root);parts=list(rel.with_suffix('').parts)
+        if parts[0]=='src':parts=parts[1:]
+        if parts[-1]=='__init__':parts=parts[:-1]
+        name='.'.join(parts);names[path]=name
+        variants={name}
+        if rel.parts[0] in ('tests','tools'):
+            variants.add('.'.join(parts[1:]));variants.add(parts[-1])
+        for variant in variants:aliases.setdefault(variant,set()).add(path)
+        if path.stat().st_size>2*1024*1024:raise ValueError('module source bound: '+str(rel))
+        trees[path]=ast.parse(path.read_text(encoding='utf-8-sig'),filename=str(rel))
+    edges={p:set() for p in files};seeds=set();unknown=[]
+    for path,tree in trees.items():
+        package=names[path].split('.') if path.name=='__init__.py' else names[path].split('.')[:-1]
+        dynamic_names={'import_module','__import__','importorskip'}
+        for declaration in ast.walk(tree):
+            if isinstance(declaration,ast.ImportFrom) and declaration.module in ('importlib','pytest'):
+                dynamic_names.update(alias.asname or alias.name for alias in declaration.names
+                                     if alias.name in ('import_module','importorskip'))
+        imports=[]
+        for node in ast.walk(tree):
+            if isinstance(node,ast.Import):imports.extend(a.name for a in node.names)
+            elif isinstance(node,ast.ImportFrom):
+                base=node.module or ''
+                if node.level:base='.'.join(package[:len(package)-node.level+1]+([base] if base else []))
+                imports.append(base);imports.extend(base+'.'+a.name for a in node.names)
+            elif isinstance(node,ast.Call):
+                method=node.func.id if isinstance(node.func,ast.Name) else node.func.attr if isinstance(node.func,ast.Attribute) else ''
+                if method in dynamic_names:
+                    if node.args and isinstance(node.args[0],ast.Constant) and isinstance(node.args[0].value,str):
+                        imports.append(node.args[0].value)
+                    else:unknown.append([path.relative_to(root).as_posix(),node.lineno,method])
+        for name in imports:
+            if name=='mpmath' or name.startswith('mpmath.') or name.split('.')[-1]=='ch3_reference':seeds.add(path)
+            edges[path].update(aliases.get(name,()))
+        if path.name=='ch3_reference.py':seeds.add(path)
+        if path.is_relative_to(root/'tests'):
+            for parent in path.parents:
+                if not parent.is_relative_to(root/'tests'):break
+                fixture=parent/'conftest.py'
+                if fixture in edges and fixture!=path:edges[path].add(fixture)
+    oracle=set(seeds)
+    while True:
+        added={p for p,dependencies in edges.items() if dependencies&oracle}-oracle
+        if not added:break
+        oracle.update(added)
+    groups={'core':[],'oracle':[]}
+    for node in nodes:groups['oracle' if root/node.split('::',1)[0] in oracle else 'core'].append(node)
+    # Qualified planning assertions must retain their clean original cohort.
+    from ci_planning_profile import REQUIRED_PROFILE_CASES
+    for node in groups['oracle']:
+        file,*rest=node.split('::');key=Path(file).stem+'::'+'::'.join(rest)
+        if key in REQUIRED_PROFILE_CASES:raise ValueError('required planning positive classified as oracle: '+node)
+    return groups,dict(oracle_modules=sorted(p.relative_to(root).as_posix() for p in oracle),
+        unresolved_dynamic_imports=unknown,module_sha256={p.relative_to(root).as_posix():hashlib.sha256(p.read_bytes()).hexdigest() for p in files})
+
+
+def merge_junit(paths,expected,output):
+    from ci_durations import node_id
+    validate_nodes(expected);combined=ET.Element('testsuites');seen=[]
+    for path in paths:
+        root=ET.parse(path).getroot()
+        suites=[root] if root.tag=='testsuite' else list(root)
+        for suite in suites:
+            if suite.tag!='testsuite':raise ValueError('unexpected JUnit root child')
+            combined.append(copy.deepcopy(suite))
+            seen.extend(node_id(c.get('classname',''),c.get('name','')) for c in suite.iter('testcase'))
+    ET.ElementTree(combined).write(output,encoding='utf-8',xml_declaration=True)
+    if len(seen)!=len(set(seen)) or set(seen)!=set(expected):
+        raise ValueError('JUnit union differs: missing='+str(sorted(set(expected)-set(seen))[:5])+
+                         ' unknown='+str(sorted(set(seen)-set(expected))[:5])+' duplicate='+str(len(seen)-len(set(seen))))
+
+
+def install_core_guard():
+    import importlib.abc
+    def forbidden(name):return type(name) is str and (name=='mpmath' or name.startswith('mpmath.'))
+    def check():
+        if any(forbidden(name) for name in sys.modules):raise RuntimeError('mpmath loaded in core interpreter')
+    check()
+    def audit(event,args):
+        if event=='import' and args and forbidden(args[0]):raise RuntimeError('mpmath import attempted in core interpreter')
+    class RejectOracle(importlib.abc.MetaPathFinder):
+        def find_spec(self,fullname,path=None,target=None):
+            if forbidden(fullname):raise RuntimeError('mpmath import attempted in core interpreter')
+    sys.addaudithook(audit);sys.meta_path.insert(0,RejectOracle())
+    return check
+
+
+def read_json(path):
+    path=Path(path)
+    if path.stat().st_size>MAX_JSON_BYTES:raise ValueError('JSON input bound')
+    return json.loads(path.read_text(encoding='utf-8'))
+
+
+def select_manifest_ids(collected,assigned,inventory):
+    """Selection only, never shard assignment; reject source/param drift first."""
+    validate_nodes(assigned);validate_nodes(inventory)
+    if len(collected)!=len(set(collected)) or set(collected)!=set(inventory):
+        raise RuntimeError('module inventory changed: missing='+str(sorted(set(inventory)-set(collected))[:3])+
+                           ' unknown='+str(sorted(set(collected)-set(inventory))[:3]))
+    if not set(assigned)<=set(inventory):raise RuntimeError('assigned IDs missing from module inventory')
+    return list(assigned)
+
+
+def child(config):
+    row=read_json(config);root=Path(row['root']);os.chdir(root)
+    # Match python -m pytest: the checkout root remains importable (examples,
+    # tools and namespace packages) as well as pyproject's candidate src path.
+    sys.path.insert(0,str(root));sys.path.insert(0,str(root/'src'))
+    check=install_core_guard() if row['mode']=='core' else lambda:None
+    import pytest
+    expected=row.get('nodes');manifest=Path(row['manifest']);raw_inventory=[]
+    if expected is not None:validate_nodes(expected,root)
+    module_names=(list(dict.fromkeys(node.split('::',1)[0] for node in expected))
+                  if expected is not None else row.get('allowed_modules'))
+    allowed=None if module_names is None else {(root/name).resolve() for name in module_names}
+    class ExactCollection:
+        @pytest.hookimpl(tryfirst=True)
+        def pytest_ignore_collect(self,collection_path):
+            if allowed is None:return None
+            path=collection_path.resolve()
+            if path.is_dir() and not any(module.is_relative_to(path) for module in allowed):return True
+            if path.suffix=='.py' and path.name!='conftest.py' and path not in allowed:return True
+            return None
+        @pytest.hookimpl(tryfirst=True)
+        def pytest_runtestloop(self,session):
+            actual=[item.nodeid for item in session.items]
+            check()
+            manifest.write_text(json.dumps(dict(nodes=raw_inventory if row['mode']=='inventory' else actual,
+                mode=row['mode'],mpmath_loaded='mpmath' in sys.modules,
+                collection_mode='original' if allowed is None else 'directory-walk'),indent=2),encoding='utf-8')
+            if expected is not None and (len(actual)!=len(expected) or set(actual)!=set(expected)):
+                raise RuntimeError('cohort actual collected set/count differs from assigned JSON IDs')
+        @pytest.hookimpl(tryfirst=True)
+        def pytest_collection_modifyitems(self,config,items):
+            raw_inventory[:]=[item.nodeid for item in items]
+            if expected is not None:
+                selected=select_manifest_ids(raw_inventory,expected,row['inventory'])
+                wanted=set(selected);lookup={item.nodeid:item for item in items}
+                dropped=[item for item in items if item.nodeid not in wanted]
+                if dropped:config.hook.pytest_deselected(items=dropped)
+                items[:]=[lookup[node] for node in selected]
+            if row['mode']!='collect':
+                for item in items:item.user_properties.append(('ci_interpreter_cohort',row['mode']))
+        def pytest_runtest_teardown(self):check()
+        def pytest_sessionfinish(self):check()
+    args=list(row['args'])
+    if expected is not None:args=['tests']+args
+    return int(pytest.main(args,plugins=[ExactCollection()]))
+
+
+def run_phase(root,folder,name,config,env):
+    path=folder/(name+'-config.json');path.write_text(json.dumps(config,indent=2),encoding='utf-8')
+    with (folder/(name+'-stdout.txt')).open('w',encoding='utf-8') as stdout,(folder/(name+'-stderr.txt')).open('w',encoding='utf-8') as stderr:
+        result=subprocess.run([sys.executable,str(Path(__file__).resolve()),'--child',str(path)],cwd=root,env=env,stdout=stdout,stderr=stderr)
+    (folder/(name+'-result.json')).write_text(json.dumps(dict(returncode=result.returncode),indent=2),encoding='utf-8')
+    return result.returncode
+
+
+def main(argv=None):
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--child',type=Path)
+    parser.add_argument('--root',type=Path,default=ROOT)
+    parser.add_argument('--evidence-dir',type=Path,default=Path('ci-isolation'))
+    parser.add_argument('--junitxml',type=Path,default=Path('kernel-results.xml'))
+    parser.add_argument('--select',action='append',default=[])
+    parser.add_argument('-k',default='');parser.add_argument('-m',default='')
+    parser.add_argument('--maxfail',type=int,default=1);parser.add_argument('--durations',type=int,default=20)
+    parser.add_argument('--collect-only',action='store_true')
+    args=parser.parse_args(argv)
+    if args.child:return child(args.child)
+    root=args.root.resolve();folder=(root/args.evidence_dir).resolve()
+    if folder.exists() and any(folder.iterdir()):raise ValueError('evidence directory must be fresh')
+    folder.mkdir(parents=True,exist_ok=True)
+    report=Path(os.environ.get('ANYGEOMETRY_SHARD_REPORT',str(folder/'original-shard.json')))
+    if not report.is_absolute():report=root/report
+    env=dict(os.environ);env['ANYGEOMETRY_SHARD_REPORT']=str(report)
+    common=['--rootdir='+str(root),'--maxfail='+str(args.maxfail),'--durations='+str(args.durations)]
+    if args.k:common+=['-k',args.k]
+    if args.m:common+=['-m',args.m]
+    collection=dict(root=str(root),mode='collect',manifest=str(folder/'collection.json'),
+                    args=(args.select or ['tests'])+common+['--collect-only','-q'])
+    code=run_phase(root,folder,'collection',collection,env)
+    if code:raise RuntimeError('original collection failed; retained phase evidence')
+    shard=read_json(report);assigned=validate_nodes(shard['ran'],root)
+    selected=validate_nodes(shard['selected'],root)
+    if not set(assigned)<=set(selected) or not set(shard['slow'])<=set(selected):raise ValueError('invalid original shard report')
+    if read_json(folder/'collection.json')['nodes']!=assigned:raise ValueError('original report differs from actual shard collection')
+    env.pop('ANYGEOMETRY_TEST_SHARD',None);env.pop('ANYGEOMETRY_SHARD_REPORT',None)
+    # Default CI already collected the complete global inventory. A partial
+    # local selector needs its modules' full inventory, via the same directory
+    # traversal/allowlist mechanism, never hundreds of positional selectors.
+    if args.select or args.k or args.m or os.environ.get('PYTEST_ADDOPTS'):
+        modules=list(dict.fromkeys(node.split('::',1)[0] for node in assigned))
+        inventory_config=dict(root=str(root),mode='inventory',manifest=str(folder/'inventory.json'),
+            allowed_modules=modules,args=['tests','--rootdir='+str(root),'--collect-only','-q'])
+        if run_phase(root,folder,'inventory',inventory_config,env):raise RuntimeError('module inventory collection failed')
+        inventory=validate_nodes(read_json(folder/'inventory.json')['nodes'],root)
+    else:inventory=selected
+    if not set(assigned)<=set(inventory):raise ValueError('assigned IDs changed before module inventory')
+    groups,closure=classify_nodes(root,assigned)
+    plan=dict(shard_report=str(report),shard_report_sha256=hashlib.sha256(report.read_bytes()).hexdigest(),
+              index=shard['index'],count=shard['count'],assigned=assigned,groups=groups,
+              module_inventory=inventory,closure=closure)
+    (folder/'plan.json').write_text(json.dumps(plan,indent=2),encoding='utf-8')
+    results=[];codes=[]
+    for group,nodes in groups.items():
+        if not nodes:continue
+        junit=folder/(group+'.xml')
+        options=common+(['--collect-only','-q'] if args.collect_only else ['--junitxml='+str(junit)])
+        files={node.split('::',1)[0] for node in nodes}
+        config=dict(root=str(root),mode=group,nodes=nodes,
+            inventory=[node for node in inventory if node.split('::',1)[0] in files],
+            manifest=str(folder/(group+'-collection.json')),args=options)
+        codes.append(run_phase(root,folder,group,config,env))
+        if not args.collect_only and junit.exists():results.append(junit)
+    if hashfile(report)!=plan['shard_report_sha256']:raise ValueError('original shard report changed')
+    if args.collect_only:
+        if any(codes):raise RuntimeError('cohort collection guard failed')
+    else:
+        output=args.junitxml if args.junitxml.is_absolute() else root/args.junitxml
+        merge_junit(results,assigned,output)
+        if any(codes):raise RuntimeError('cohort failed; retained real combined JUnit')
+    (folder/'complete.json').write_text(json.dumps(dict(status='collection-verified' if args.collect_only else 'complete',
+        assigned=len(assigned),core=len(groups['core']),oracle=len(groups['oracle'])),indent=2),encoding='utf-8')
+    print(json.dumps(dict(assigned=len(assigned),core=len(groups['core']),oracle=len(groups['oracle']),collect_only=args.collect_only)))
+    return 0
+
+
+def hashfile(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+if __name__=='__main__':raise SystemExit(main())
