@@ -15,20 +15,27 @@ REASON='unsupported frozen collections.abc implementation alias'
 
 
 def test_actual_infrastructure_keeps_alias_unsupported(request):
+    from _planning_contract_helpers import classify_initial_runtime_refusal
     implementation=sys.modules['_collections_abc']
     value=collections.abc.MutableMapping.clear
     alias=(value.__globals__ is vars(implementation) and
            value.__globals__ is not vars(sys.modules['collections.abc']))
-    if alias:
-        with pytest.raises(QualificationDecline,match='^'+REASON+'$'):
-            code.InfrastructurePin('host')
+    try:
+        captured=code.InfrastructurePin('host')
+    except QualificationDecline as error:
+        if classify_initial_runtime_refusal(error,request=request):
+            return
+        if not alias:
+            raise
+        assert type(error) is QualificationDecline and error.args==(REASON,)
         request.node.user_properties.extend((('execution_scope','initial-alias-refusal'),
             ('postcapture_qualification',False)))
     else:
         # The qualified runtime does not have the divergent implementation alias.
-        captured=code.InfrastructurePin('host')
+        assert not alias, 'the actual divergent alias must remain unsupported'
         assert captured.wire['role']=='host'
         request.node.user_properties.append(('execution_scope','metadata-infrastructure-capture'))
+    request.node.user_properties.append(('original_test_body_executed',True))
 
 
 def test_canonical_interface_is_precisely_attributed():
@@ -90,13 +97,22 @@ def test_untrusted_metadata_does_not_invoke_equality(monkeypatch):
     assert called==[]
 
 
-def test_actual_copied_globals_reset_retains_generic_refusal(monkeypatch):
+def test_actual_copied_globals_reset_retains_generic_refusal(monkeypatch,request):
     from anygeometry import _planning_qualification as qualification
+    from _planning_contract_helpers import classify_initial_runtime_refusal
     original=collections.abc.MutableMapping.clear
     value=types.FunctionType(original.__code__,dict(original.__globals__),'clear')
     value.__module__='collections.abc';value.__qualname__='MutableMapping.clear'
     for key,member in qualification._CLEAR.items():
         if member is original:monkeypatch.setitem(qualification._CLEAR,key,value)
     monkeypatch.setattr(collections.abc.MutableMapping,'clear',value)
-    with pytest.raises(QualificationDecline,match='^infrastructure function global owner$'):
+    with pytest.raises(QualificationDecline) as caught:
         code.InfrastructurePin('host')
+    # An actual source-proven initial image refusal does not exercise the
+    # copied-globals predicate; the mandatory qualified lane forbids this branch.
+    if classify_initial_runtime_refusal(caught.value,request=request):
+        return
+    assert type(caught.value) is QualificationDecline
+    assert caught.value.args == ('infrastructure function global owner',)
+    request.node.user_properties.extend((('execution_scope','original-copied-globals-owner-refusal'),
+        ('original_test_body_executed',True),('postcapture_qualification',False)))
