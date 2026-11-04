@@ -100,8 +100,7 @@ def test_prepared_annotation_cache_replacement_is_terminal(monkeypatch,request):
     monkeypatch.setattr(nurbs._PreparedCurveState,_CLASS_ANNOTATIONS,{})
     with pytest.raises(PlannerSourceChanged):captured.verify()
 
-@numpy_profile_test
-def test_production_ledger_has_strict_contexts_and_no_external_anchor(monkeypatch):
+def _production_ledger_context_body(monkeypatch):
     from anygeometry import _planning_ledger as ledger,analytic_roots
     from anygeometry._planning_canaries import _fixture
     from anygeometry._planning_executor import freeze_model,thaw_model
@@ -116,6 +115,12 @@ def test_production_ledger_has_strict_contexts_and_no_external_anchor(monkeypatc
         with pytest.raises(QualificationDecline):owned.reset_for_batch(owned_worker=True)
     finally:analytic_roots._ROOT_MEMO.reset(token)
     owned.validate()
+
+
+@numpy_profile_test
+def test_production_ledger_has_strict_contexts_and_no_external_anchor(tmp_path,request):
+    _run_worker_cache_child(tmp_path,request,'production_context')
+
 
 @numpy_profile_test
 def test_package_numpy_context_retains_getter_identity_without_anchor(monkeypatch):
@@ -302,8 +307,7 @@ def test_infrastructure_generated_dataclass_code_skew_refuses(monkeypatch,tmp_pa
     else:
         with pytest.raises(PlannerSourceChanged):captured.verify()
 
-@pytest.mark.parametrize('kind',['empty_tuple','dict','array','wrapped_dict'])
-def test_worker_cache_alias_retains_mutable_protection(kind):
+def _worker_cache_alias_body(kind):
     import numpy as np
     from types import SimpleNamespace
     from anygeometry._planning_ledger import PackageWorkerLedger
@@ -319,6 +323,100 @@ def test_worker_cache_alias_retains_mutable_protection(kind):
     if kind=='empty_tuple':ledger._check_live_state()
     else:
         with pytest.raises(QualificationDecline,match='aliases protected definition'):ledger._check_live_state()
+
+
+_WORKER_CACHE_CHILD=r'''
+import json,sys
+from pathlib import Path
+sys.path[:0]=[sys.argv[2],sys.argv[3]]
+import anygeometry,numpy
+import test_planning_r8_integration as contract
+from anygeometry import cancellation,_planning_ledger
+from anygeometry._planning_manifest import cancellation_registry
+from anygeometry._planning_qualification import QualificationDecline
+source=Path(sys.argv[2]).resolve()
+assert Path(anygeometry.__file__).resolve().is_relative_to(source)
+assert Path(_planning_ledger.__file__).resolve().is_relative_to(source)
+assert Path(contract.__file__).resolve()==Path(sys.argv[3]).resolve()/'test_planning_r8_integration.py'
+owner,lock,registry,rows=cancellation_registry(worker=True)
+assert not rows
+contract._worker_cache_alias_body('empty_tuple')
+report=dict(scope='clean-child-worker-cache-alias-unit',scenario=sys.argv[1],
+    executable=sys.executable,version=sys.version,numpy=numpy.__version__,
+    anygeometry_origin=anygeometry.__file__,ledger_origin=_planning_ledger.__file__,
+    contract_origin=contract.__file__,worker_positive_baseline_passed=True)
+if sys.argv[1]=='signal':
+    signal=cancellation.CancellationSignal()
+    issued=cancellation_registry()[3]
+    assert len(issued)==1 and issued[0][0] is signal
+    try:contract._worker_cache_alias_body('empty_tuple')
+    except QualificationDecline as error:
+        assert str(error)=='worker cancellation authority is not empty'
+        report['reason']=str(error)
+    else:raise AssertionError('worker accepted live cancellation authority')
+elif sys.argv[1]=='production_context':
+    with contract.pytest.MonkeyPatch.context() as patch:
+        contract._production_ledger_context_body(patch)
+    assert cancellation_registry(worker=True)[3]==()
+else:
+    contract._worker_cache_alias_body(sys.argv[1])
+    assert cancellation_registry(worker=True)[3]==()
+assert cancellation._EVENTS is registry and cancellation._LOCK is lock
+report['original_contract_body_executed']=True
+print(json.dumps(report))
+'''
+
+
+def _run_worker_cache_child(tmp_path,request,scenario):
+    """Worker-only unit preconditions in a fresh child; never reset host authority."""
+    import json
+    from pathlib import Path
+    import subprocess
+    from anygeometry import cancellation
+    from anygeometry._planning_qualification import QualificationDecline
+    root=Path(__file__).resolve().parents[1]
+    # A genuine live host token makes isolation discriminating even in a small run.
+    signal=cancellation.CancellationSignal()
+    owner,lock,registry,rows=manifest.cancellation_registry()
+    event=next(event for token,event in rows if token is signal)
+    with pytest.raises(QualificationDecline,match='^worker cancellation authority is not empty$'):
+        manifest.cancellation_registry(worker=True)
+    command=[sys.executable,'-B','-c',_WORKER_CACHE_CHILD,scenario,str(root/'src'),str(root/'tests')]
+    try:
+        result=subprocess.run(command,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=15)
+    except subprocess.TimeoutExpired as error:
+        for name,value in (('stdout',error.stdout),('stderr',error.stderr)):
+            text=value.decode('utf-8','replace') if isinstance(value,bytes) else value or ''
+            (tmp_path/(name+'.txt')).write_text(text,encoding='utf-8')
+        raise
+    finally:
+        current_owner,current_lock,current_registry,current_rows=manifest.cancellation_registry()
+        assert current_owner is owner and current_lock is lock and current_registry is registry
+        assert next(value for token,value in current_rows if token is signal) is event
+        assert current_rows==rows
+    (tmp_path/'stdout.txt').write_text(result.stdout,encoding='utf-8')
+    (tmp_path/'stderr.txt').write_text(result.stderr,encoding='utf-8')
+    assert result.returncode==0,result.stdout+result.stderr
+    report=json.loads(result.stdout)
+    assert report['scenario']==scenario and report['worker_positive_baseline_passed'] is True
+    assert report['original_contract_body_executed'] is True
+    (tmp_path/'report.json').write_text(json.dumps(report,indent=2),encoding='utf-8')
+    request.node.user_properties.extend((('execution_scope',report['scope']),
+        ('worker_positive_baseline_passed',True),('host_cancellation_authority_preserved',True),
+        ('original_test_body_executed',True),
+        ('parallel_qualified',False),('child_numpy',report['numpy']),
+        ('child_anygeometry',report['anygeometry_origin'])))
+    return report
+
+
+@pytest.mark.parametrize('kind',['empty_tuple','dict','array','wrapped_dict'])
+def test_worker_cache_alias_retains_mutable_protection(kind,tmp_path,request):
+    _run_worker_cache_child(tmp_path,request,kind)
+
+
+def test_worker_cache_child_refuses_actual_cancellation_authority(tmp_path,request):
+    report=_run_worker_cache_child(tmp_path,request,'signal')
+    assert report['reason']=='worker cancellation authority is not empty'
 
 
 def test_released_source_trees_keep_compiled_identity_and_refuse_drift_before_parse(monkeypatch):

@@ -92,7 +92,8 @@ def capture_with_legacy_dataclass_boundary(roots,*,request=None):
     if evidence is None:return capture_with_dispatcher_boundary(roots,request=request)
     reason=evidence['reason'];require_qualified_planning_lane(reason)
     with pytest.raises(QualificationDecline) as caught:manifest.capture_callable_manifest(roots)
-    assert type(caught.value) is QualificationDecline and str(caught.value)==reason
+    assert type(caught.value) is QualificationDecline and str(caught.value)==reason, (
+        'exact legacy refusal differs',reason,type(caught.value).__name__,str(caught.value),evidence)
     if request is not None:
         request.node.user_properties.extend((('execution_scope','initial-legacy-dataclass-wrapper-refusal'),
             ('runtime_refusal',reason),('original_test_body_executed',False),
