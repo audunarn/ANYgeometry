@@ -63,8 +63,14 @@ def test_mandatory_ci_and_stratified_success():
 
 
 def test_own_trusted_annotation_dict_mutation_is_checked():
-    ledger = l.loaded_geometry_ledger(trusted_image=True)
+    from anygeometry import exact_curves
+    # Unit scope: the genuine annotation owner, not all unrelated loaded hosts.
+    ledger = l.loaded_geometry_ledger(trusted_image=True, modules=(exact_curves,))
+    ledger.validate()
     store = ledger.objects[l._TRUSTED_IMAGE_STORES[-1]]
+    assert ledger.rows[l._TRUSTED_IMAGE_STORES[-1]]['action'] == 'trusted-runtime-image'
+    identity = l.trusted_store_identity(l._TRUSTED_IMAGE_STORES[-1], store)
+    assert identity['content_check'] == 'structural' and 'source' in identity['basis']
     from anygeometry.exact_curves import _BranchConstants
     if sys.version_info < (3, 14):
         assert store is vars(_BranchConstants)['__annotations__']

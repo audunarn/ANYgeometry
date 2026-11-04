@@ -4,6 +4,7 @@ from pathlib import Path
 import runpy
 import sys
 import pytest
+from _planning_platform_contract import windows_owned_test
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -17,10 +18,14 @@ def setup_config(monkeypatch, **flags):
     runpy.run_path(str(ROOT/'setup.py'))
     return captured
 
-@pytest.mark.skipif(sys.platform!='win32', reason='Windows ownership helper')
 def test_helper_only_is_stable_abi_and_does_not_enable_numerics(monkeypatch):
     config=setup_config(monkeypatch, BUILD_PLANNING_NATIVE='1')
     extensions=config['ext_modules']
+    if sys.platform != 'win32':
+        assert extensions == []
+        with pytest.raises(RuntimeError, match='^the planning resource helper requires Windows$'):
+            setup_config(monkeypatch, REQUIRE_PLANNING_NATIVE='1')
+        return
     assert [e.name for e in extensions]==['anygeometry._planning_native_core']
     assert extensions[0].py_limited_api
     assert ('Py_LIMITED_API','0x030B0000') in extensions[0].define_macros
@@ -28,7 +33,8 @@ def test_helper_only_is_stable_abi_and_does_not_enable_numerics(monkeypatch):
 def test_helper_off_keeps_pure_build(monkeypatch):
     assert setup_config(monkeypatch)['ext_modules']==[]
 
-def test_native_loader_exports_binding_identity():
+@windows_owned_test
+def test_native_loader_exports_binding_identity(tmp_path):
     from anygeometry._planning_native import identity
     result=identity()
     assert result['abi']=='cp311-abi3'
@@ -36,6 +42,7 @@ def test_native_loader_exports_binding_identity():
     assert len(result['binary_sha256'])==64
     assert result['module']=='anygeometry._planning_native_core'
 
+@windows_owned_test
 def test_missing_helper_refuses_before_resource_acquisition(tmp_path, monkeypatch):
     from anygeometry import _planning_native as native
     from anygeometry._planning_process import OwnedTree
@@ -47,6 +54,7 @@ def test_missing_helper_refuses_before_resource_acquisition(tmp_path, monkeypatc
     assert list(tmp_path.iterdir()) == []
 
 @pytest.mark.parametrize('operation', ['CreateFileW stdin','CreateFileW stdout','CreateFileW stderr'])
+@windows_owned_test
 def test_partial_native_stdio_acquisition_retires(tmp_path, operation):
     from anygeometry._planning_process import OwnedTree
     tree=OwnedTree(tmp_path)
@@ -57,6 +65,7 @@ def test_partial_native_stdio_acquisition_retires(tmp_path, operation):
     assert tree.children[0].info.process is None
 
 
+@windows_owned_test
 def test_signal_after_native_close_cannot_restore_handle(tmp_path, monkeypatch):
     from anygeometry._planning_process import OwnedTree
     tree=OwnedTree(tmp_path);actual=tree.api.CloseHandle;target=tree.handle
@@ -71,6 +80,7 @@ def test_signal_after_native_close_cannot_restore_handle(tmp_path, monkeypatch):
     tree.close()
 
 
+@windows_owned_test
 def test_uncertain_native_close_is_poisoned_and_never_retried(tmp_path):
     import ctypes
     from anygeometry._planning_process import OwnedTree
@@ -101,6 +111,7 @@ def _sleeping_child(tmp_path,monkeypatch,seconds='.15'):
     return tree,tree.spawn('worker',tmp_path/'child',5)
 
 
+@windows_owned_test
 def test_native_wait_close_synchronizes_without_gil_deadlock(tmp_path,monkeypatch):
     import threading,time
     tree,child=_sleeping_child(tmp_path,monkeypatch)
@@ -121,6 +132,7 @@ def test_native_wait_close_synchronizes_without_gil_deadlock(tmp_path,monkeypatc
         thread.join(timeout=3);tree.close()
 
 
+@windows_owned_test
 def test_wait_releases_borrower_before_delivering_python_signal(tmp_path,monkeypatch):
     import _thread,threading,time
     tree,child=_sleeping_child(tmp_path,monkeypatch)
@@ -150,17 +162,24 @@ def test_planning_helper_disable_overrides_request(monkeypatch):
 
 def test_both_extensions_are_independent_limited_abi(monkeypatch):
     config=setup_config(monkeypatch,BUILD_NATIVE='1',BUILD_PLANNING_NATIVE='1')
+    if sys.platform != 'win32':
+        # Setup intentionally omits the Windows resource helper on POSIX.
+        assert {e.name for e in config['ext_modules']} == {'anygeometry._core'}
+        assert all(e.py_limited_api for e in config['ext_modules'])
+        return
     assert {e.name for e in config['ext_modules']}=={'anygeometry._core','anygeometry._planning_native_core'}
     assert all(e.py_limited_api for e in config['ext_modules'])
 
 
-def test_binary_identity_matches_loaded_resource_helper():
+@windows_owned_test
+def test_binary_identity_matches_loaded_resource_helper(tmp_path):
     import hashlib
     from anygeometry._planning_native import identity,load
     info=identity();native=load()
     assert info['binary_sha256']==hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()
     assert 'limited=0x030B0000' in info['build'] and 'gil=required' in info['build']
 
+@windows_owned_test
 def test_poisoned_owner_refuses_new_native_acquisitions(tmp_path):
     from anygeometry._planning_process import OwnedTree
     tree=OwnedTree(tmp_path)
@@ -177,6 +196,7 @@ def test_poisoned_owner_refuses_new_native_acquisitions(tmp_path):
     assert not (tmp_path/'never-out').exists() and not (tmp_path/'never-err').exists()
 
 
+@windows_owned_test
 def test_owned_member_observation_handle_is_registered(tmp_path,monkeypatch):
     import ctypes
     from ctypes import wintypes as W
@@ -192,6 +212,7 @@ def test_owned_member_observation_handle_is_registered(tmp_path,monkeypatch):
         if handle: tree.api.CloseHandle(handle)
         tree.close()
 
+@windows_owned_test
 def test_child_poison_is_sticky_on_native_owner(tmp_path,monkeypatch):
     tree,child=_sleeping_child(tmp_path,monkeypatch,'.3')
     tree.api.inject_fault('CloseHandle',6,after=True)
@@ -204,6 +225,7 @@ def test_child_poison_is_sticky_on_native_owner(tmp_path,monkeypatch):
     assert tree.handle is None and not (tmp_path/'no-out').exists()
 
 
+@windows_owned_test
 def test_closed_slot_key_cannot_close_another_childs_reused_value(tmp_path,monkeypatch):
     tree,first=_sleeping_child(tmp_path,monkeypatch,'.3')
     second=tree.spawn('worker',tmp_path/'second',5)
@@ -217,6 +239,7 @@ def test_closed_slot_key_cannot_close_another_childs_reused_value(tmp_path,monke
     finally: tree.close()
 
 @pytest.mark.parametrize('phase',['io','thread'])
+@windows_owned_test
 def test_reentrant_retirement_during_child_close_has_no_ambient_slot(tmp_path,monkeypatch,phase):
     from anygeometry._planning_process import OwnedTree
     tree=OwnedTree(tmp_path);actual=tree.api.CloseHandle;triggered=[]
@@ -248,6 +271,7 @@ def test_reentrant_retirement_during_child_close_has_no_ambient_slot(tmp_path,mo
 
 
 @pytest.mark.parametrize('method,attribute',[('close_child','slot'),('resume_child','resume_index')])
+@windows_owned_test
 def test_interrupt_at_previous_routing_assignment_does_not_taint_retirement(tmp_path,monkeypatch,method,attribute):
     import inspect,sys
     from anygeometry._planning_process import OwnedTree
@@ -298,6 +322,7 @@ def test_slot_token_is_immutable_and_preserves_native_identity():
     with pytest.raises(TypeError):token[1]=8
 
 
+@windows_owned_test
 def test_reentrant_retirement_from_resume_preserves_job_identity(tmp_path,monkeypatch):
     from anygeometry._planning_process import OwnedTree
     tree=OwnedTree(tmp_path);actual=tree.api.ResumeThread;seen=[]
@@ -314,3 +339,37 @@ def test_reentrant_retirement_from_resume_preserves_job_identity(tmp_path,monkey
         assert tree.handle is None and tree.children[0].info.process is None
     finally:
         monkeypatch.setattr(tree.api,'ResumeThread',actual);tree.close()
+
+
+def test_platform_adapter_initial_refusal_is_real_and_resource_free(tmp_path, monkeypatch, request):
+    """Scoped POSIX-branch unit; this does not claim an actual POSIX run."""
+    from types import SimpleNamespace
+    import _planning_platform_contract as contract
+    from anygeometry import _planning_process as process
+    shim = SimpleNamespace(name='posix', environ={})
+    monkeypatch.setattr(contract, 'os', shim)
+    monkeypatch.setattr(process, 'os', shim)
+    calls = []
+    @windows_owned_test
+    def original(tmp_path):
+        calls.append('original')
+        pytest.fail('unsupported host entered the native positive body')
+    node = SimpleNamespace(user_properties=[])
+    original(tmp_path=tmp_path, request=SimpleNamespace(node=node))
+    assert calls == [] and tuple(tmp_path.iterdir()) == ()
+    assert node.user_properties == [('execution_scope', 'unsupported-platform-refusal')]
+    request.node.user_properties.append(('execution_scope', 'simulated-POSIX-adapter-unit'))
+
+
+def test_platform_adapter_required_lane_cannot_classify_refusal(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import _planning_platform_contract as contract
+    monkeypatch.setattr(contract, 'os', SimpleNamespace(name='posix', environ={
+        'ANYGEOMETRY_REQUIRE_QUALIFIED_PLANNING_TESTS': '1'}))
+    @windows_owned_test
+    def original(tmp_path):
+        pytest.fail('unsupported host entered the native positive body')
+    node = SimpleNamespace(user_properties=[])
+    with pytest.raises(pytest.fail.Exception, match='^qualified planning test lane requires original Windows assertions$'):
+        original(tmp_path=tmp_path, request=SimpleNamespace(node=node))
+    assert node.user_properties == [] and tuple(tmp_path.iterdir()) == ()

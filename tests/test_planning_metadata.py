@@ -1,6 +1,7 @@
 import dataclasses
 import enum
 import types
+import sys
 import typing
 
 import pytest
@@ -126,10 +127,21 @@ def test_namedtuple_annotation_closure_is_bound_and_guarded():
     module = types.ModuleType('anygeometry.pp1e_namedtuple_fixture')
     module.C = typing.NamedTuple('Probe', [('x', int)])
     registry = make_ledger(module)
-    cells = [cell.cell_contents for cell in vars(module.C)['__annotate_func__'].__closure__]
-    paths = [path for path, obj in registry.objects.items() if any(obj is cell for cell in cells)]
-    assert len(paths) == 2
-    assert all(registry.rows[path]['action'] == 'pinned-definition' for path in paths)
+    if sys.version_info >= (3, 14):
+        cells = [cell.cell_contents for cell in vars(module.C)['__annotate_func__'].__closure__]
+        paths = [path for path, obj in registry.objects.items() if any(obj is cell for cell in cells)]
+        assert len(paths) == 2
+        assert all(registry.rows[path]['action'] == 'pinned-definition' for path in paths)
+    else:
+        # Before deferred annotations, the actual class-owned metadata is the
+        # annotation dictionary; there is no producer or producer closure.
+        assert '__annotate_func__' not in vars(module.C)
+        cells = [vars(module.C)['__annotations__']]
+        paths = [path for path, obj in registry.objects.items() if obj is cells[0]]
+        assert len(paths) == 1
+        assert registry.rows[paths[0]]['action'] == 'pinned-definition'
+        assert cells[0] is module.C.__annotations__ and cells[0] == {'x': int}
+    registry.prepare(owned_worker=True)  # The unmodified metadata must be admitted.
     cells[0]['x'] = str
     with pytest.raises(q.QualificationDecline, match='protected'):
         registry.prepare(owned_worker=True)

@@ -3,7 +3,7 @@ import sys
 import types
 import pytest
 from _planning_numpy_profile_contract import numpy_profile_test
-from _planning_contract_helpers import capture_with_runtime_boundary, capture_with_dispatcher_boundary, classify_initial_dispatcher_refusal
+from _planning_contract_helpers import capture_with_dispatcher_boundary, classify_initial_dispatcher_refusal
 from anygeometry._planning_executor import PlannerSourceChanged
 from anygeometry._planning_qualification import QualificationDecline
 
@@ -97,7 +97,7 @@ def test_foreign_cache_name_never_gains_content_exemption():
 
 def test_owned_function_annotation_state_is_bound(request):
     module=fixture();module.root.__annotations__={'return':int}
-    manifest=capture_with_runtime_boundary((module.root,),request=request)
+    manifest=capture_with_dispatcher_boundary((module.root,),request=request)
     if manifest is None:return # Exact initial refusal is not postcapture coverage.
     module.root.__annotations__['return']=str
     with pytest.raises(PlannerSourceChanged):manifest.verify()
@@ -107,7 +107,7 @@ def test_static_relative_import_under_python314_is_resolved(request):
     module=types.ModuleType('anygeometry.ppq_manifest_fixture')
     module.__package__='anygeometry'
     exec('def root():\n from .errors import GeometryError\n return GeometryError\n',vars(module))
-    captured=capture_with_runtime_boundary((module.root,),request=request)
+    captured=capture_with_dispatcher_boundary((module.root,),request=request)
     if captured is None:return # Exact initial refusal is not postcapture coverage.
     captured.verify()
 
@@ -154,7 +154,7 @@ def test_declared_polynomial_interface_rebinding_is_terminal(monkeypatch,edge,re
     import numpy as np
     from anygeometry import _cross3 as kernel
     api().prepare_interfaces()
-    captured=capture_with_runtime_boundary((kernel._gauss_legendre,),request=request)
+    captured=capture_with_dispatcher_boundary((kernel._gauss_legendre,),request=request)
     if captured is None:return # Exact initial refusal is not postcapture coverage.
     owner={'polynomial':np,'legendre':vars(np)['polynomial'],
            'leggauss':vars(vars(np)['polynomial'])['legendre']}[edge]
