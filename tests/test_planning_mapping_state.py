@@ -1,6 +1,7 @@
 """Model read views retain exact private-store ownership before serialization."""
 import types
 import pytest
+from _planning_numpy_profile_contract import numpy_profile_test
 from _planning_contract_helpers import capture_with_dispatcher_boundary
 from anygeometry._planning_executor import freeze_model
 from anygeometry._planning_model_state import production_snapshot
@@ -62,6 +63,7 @@ def test_retained_dict_subclass_refuses_before_items(proxy):
     assert events==[]
 
 
+@numpy_profile_test
 def test_infrastructure_mapping_refuses_before_hooks(monkeypatch):
     from anygeometry import _planning_code as code
     events=[]

@@ -1,5 +1,6 @@
 """Explicit task-scoped size/walk limits, preserving all existing defaults."""
 import pytest
+from _planning_contract_helpers import require_qualified_planning_lane
 from anygeometry import _planning_executor as a
 from anygeometry._planning_qualification import QualificationDecline
 from anygeometry._planning_canaries import _fixture
@@ -22,6 +23,31 @@ def test_model_walk_limit_is_explicit_and_configurable():
     assert to_dict(a.thaw_model(packet,walk_limit=100000))==to_dict(model)
 
 
-def test_planner_records_requested_limits(tmp_path):
+def test_planner_records_requested_limits(tmp_path,request):
+    from anygeometry import _planning_process as process
+    if process.os.name!='nt':
+        require_qualified_planning_lane('owned planner requires Windows Job containment')
+        with pytest.raises(QualificationDecline,match='^owned planner requires Windows Job containment$'):
+            a.OwnedPlanner(tmp_path/'p',payload_limit=6000000,walk_limit=200000)
+        assert a.read_packet(tmp_path/'p/limits.json','limits')==dict(payload_limit=6000000,walk_limit=200000)
+        request.node.user_properties.extend((('execution_scope','initial-Windows-Job-refusal'),
+            ('postcapture_qualification',False),('original_test_body_executed',False)))
+        return
+    request.node.user_properties.append(('original_test_body_executed',True))
     with a.OwnedPlanner(tmp_path/'p',payload_limit=6000000,walk_limit=200000) as planner:
         assert a.read_packet(tmp_path/'p/limits.json','limits')==dict(payload_limit=6000000,walk_limit=200000)
+
+
+def test_requested_limits_component_with_owned_fake_tree(tmp_path,monkeypatch,request):
+    from anygeometry import _planning_process as process
+    events=[]
+    class Tree:
+        def __init__(self,directory):events.append('create')
+        def spawn(self,role,directory,timeout):events.append(('spawn',role));return object()
+        def close(self):events.append('close')
+    monkeypatch.setattr(process,'OwnedTree',Tree)
+    with a.OwnedPlanner(tmp_path/'component',payload_limit=6000000,walk_limit=200000):
+        assert a.read_packet(tmp_path/'component/limits.json','limits')==dict(payload_limit=6000000,walk_limit=200000)
+    assert events==['create',('spawn','planner'),'close']
+    request.node.user_properties.extend((('execution_scope','owned-fake-tree-limit-recording-unit'),
+                                       ('native_process_qualification',False)))

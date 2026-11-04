@@ -191,11 +191,16 @@ def test_available_native_does_not_use_or_mutate_cached_export_signature(monkeyp
 
 
 @pytest.mark.parametrize('phase',['initial','admitted'])
-def test_available_native_failure_keeps_admission_classification(monkeypatch,phase):
+def test_available_native_failure_keeps_admission_classification(monkeypatch,phase,request):
     m=api();failure=OSError('original available query failed')
-    monkeypatch.setattr(m.psutil,'Process',lambda:SimpleNamespace(memory_info=lambda:SimpleNamespace(peak_pagefile=100,private=90)))
+    def observe():
+        value=sample();value['available_bytes']=m._available_bytes();return value
+    monkeypatch.setattr(m,'observe_memory',observe)
     monkeypatch.setattr(m,'_available_bytes',lambda:2000)
-    lease=budget().begin() if phase=='admitted' else None
+    valid=budget().begin();valid.check()
+    lease=valid if phase=='admitted' else None
+    request.node.user_properties.extend((('execution_scope','injected-native-observation-component'),
+                                       ('native_memory_qualification',False)))
     def fail():raise failure
     monkeypatch.setattr(m,'_available_bytes',fail)
     if lease is None:

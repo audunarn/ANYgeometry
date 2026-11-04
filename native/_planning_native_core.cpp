@@ -149,8 +149,11 @@ PyObject* query(PyObject*,PyObject* args){
     if(code)return error("QueryInformationJobObject",code);return PyBytes_FromStringAndSize(data.data(),size);
 }
 PyObject* configure(PyObject*,PyObject* args){
-    PyObject* p;int kind;const char* data;Py_ssize_t size;
-    if(!PyArg_ParseTuple(args,"Oiy#",&p,&kind,&data,&size))return nullptr;
+    PyObject* p;PyObject* payload;int kind;char* raw;Py_ssize_t size;
+    if(!PyArg_ParseTuple(args,"OiO",&p,&kind,&payload))return nullptr;
+    if(PyBytes_AsStringAndSize(payload,&raw,&size)<0)return nullptr;
+    // args pin the capsule and immutable payload throughout the GIL-held transaction.
+    const char* data=raw;
     Owner* o=owner(p);if(!o)return nullptr;DWORD code=0;
     {Guard g(o);if(!usable(&o->job)||!SetInformationJobObject(o->job.value,(JOBOBJECTINFOCLASS)kind,(void*)data,(DWORD)size))code=GetLastError();}
     if(code)return error("SetInformationJobObject",code);Py_RETURN_NONE;

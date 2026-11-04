@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 import types
 import pytest
+from _planning_contract_helpers import require_qualified_planning_lane
 
 from anygeometry import _planning_qualification as q
 from anygeometry import _planning_purity as p
@@ -14,7 +15,23 @@ def ledger_api():
     return _planning_ledger
 
 
-def test_native_exports_do_not_define_task_input_types(monkeypatch):
+def _native_runtime_initial_refusal(request):
+    reason=None if sys.platform=='win32' else 'interpreter runtime adapter is Windows-only'
+    require_qualified_planning_lane(reason)
+    if reason is None:
+        request.node.user_properties.extend((('execution_scope','original-native-runtime-metadata-assertions'),
+                                             ('original_test_body_executed',True)))
+        return False
+    with pytest.raises(q.QualificationDecline,match='^interpreter runtime adapter is Windows-only$') as caught:
+        q.runtime_files()
+    assert type(caught.value) is q.QualificationDecline
+    request.node.user_properties.extend((('execution_scope','initial-native-runtime-refusal'),
+        ('postcapture_qualification',False),('original_test_body_executed',False)))
+    return True
+
+
+def test_native_exports_do_not_define_task_input_types(monkeypatch,request):
+    if _native_runtime_initial_refusal(request):return
     import threadpoolctl
     class NativeExport:
         __module__ = property(lambda self: 'not a static module string')
@@ -32,7 +49,8 @@ def test_native_exports_do_not_define_task_input_types(monkeypatch):
         q.check_types(NativeExport(), observed)
 
 
-def test_generated_native_pin_survives_json_transport(monkeypatch, tmp_path):
+def test_generated_native_pin_survives_json_transport(monkeypatch, tmp_path,request):
+    if _native_runtime_initial_refusal(request):return
     import threadpoolctl
     path = tmp_path/'provider.pyd'
     path.write_bytes(b'controlled test file; not loaded as executable')
@@ -130,3 +148,26 @@ def test_junction_switch_uses_its_declared_inactive_value(enabled):
             ledger.prepare(owned_worker=True)
     else:
         ledger.prepare(owned_worker=True)
+
+
+def test_bounded_generated_provider_record_is_portable_without_runtime_authority(tmp_path,monkeypatch,request):
+    import threadpoolctl
+    path=tmp_path/'bounded-provider.pyd'
+    path.write_bytes(b'controlled metadata fixture; never loaded as executable')
+    class NativeExport:
+        __module__=property(lambda self:'not a static module string')
+    provider=types.ModuleType('provider');provider.__file__=str(path);provider.native=NativeExport
+    runtime=types.ModuleType('cython_runtime')
+    monkeypatch.setattr(q,'sys',types.SimpleNamespace(modules={'provider':provider,'cython_runtime':runtime},
+        executable=sys.executable,version=sys.version,platform=sys.platform,implementation=sys.implementation))
+    monkeypatch.setattr(threadpoolctl,'threadpool_info',lambda:[dict(
+        filepath=str(path),num_threads=1,internal_api='controlled-test')])
+    monkeypatch.setattr(q,'runtime_files',lambda:{str(path):q._hash(path)})
+    observed=q.capture_environment(generated_modules=('cython_runtime',))
+    assert observed['modules']['cython_runtime']['kind']=='explicit-generated-native'
+    assert observed['modules']['cython_runtime']['providers']=={'provider':observed['modules']['provider']}
+    assert all('NativeExport' not in name for name in observed['types'])
+    with pytest.raises(q.QualificationDecline,match='type'):q.check_types(NativeExport(),observed)
+    q.verify_environment(json.loads(json.dumps(observed)),observed)
+    request.node.user_properties.extend((('execution_scope','bounded-provider-metadata-component'),
+                                         ('loaded_runtime_qualification',False)))

@@ -47,8 +47,11 @@ def test_certified_curved_field_has_distinct_limits_and_crossing_infimum():
 
 
 def test_real_cell_receipt_binds_complete_fan_footprints_and_reuse():
-    _,prepared,face,_,regions,allocation=fixture()
+    import gc
+    # Issued allocations retain weak owners; this consumer owns the lifetime.
+    source,prepared,face,field,regions,allocation=fixture()
     _,_,_,template=square_cells()
+    gc.collect()
     cells=tuple(replace(cell,face=prepared.handle('face',face)) for cell in template)
     edges=tuple(use.edge for use in prepared.faces[face].loop)
     chords=owner.query_prepared_material_boundary_chords(prepared,regions,
@@ -91,14 +94,16 @@ def test_spatial_failure_budget_is_issued_for_exact_operands(monkeypatch):
 def test_detached_numerical_view_composes_nonidentity_child_map(monkeypatch):
     # Isolated affine-map arithmetic test, deliberately not an authority test.
     import anygeometry.local_approximation_field as module
-    _,prepared,face,field,_,allocation=fixture()
+    import gc
+    source,prepared,face,field,regions,allocation=fixture()
     stored=module._ALLOCATIONS[allocation]
     identity=((Q(1),Q(0),Q(0)),(Q(0),Q(1),Q(0)))
     swapped=((Q(0),Q(1),Q(0)),(Q(-1),Q(0),Q(1)))
     synthetic=replace(field,face_tiles=tuple((f,identity,rows) for f,m,rows in field.face_tiles))
     transport=replace(stored[3],footprints=tuple(replace(row,source_from_child=swapped) for row in stored[3].footprints))
-    monkeypatch.setitem(module._ALLOCATIONS,allocation,(*stored[:2],synthetic,transport,stored[4]))
+    monkeypatch.setitem(module._ALLOCATIONS,allocation,(*stored[:2],synthetic,transport,*stored[4:]))
     monkeypatch.setattr(module,'validate_local_approximation_allocation',lambda *a,**k:None)
+    gc.collect()
     query=module.prepare_local_cell_limit_query(prepared,allocation)
     _,record=query(face,(((Q(1,8),Q(1,4)),(Q(1,2),Q(3,4))),))
     assert record==('intersected_tiles',(((Q(1,2),Q(3,4)),(Q(3,4),Q(7,8))),))

@@ -150,6 +150,12 @@ def test_full_ci_keeps_every_runtime_and_sixteen_shards_under_original_caps():
     assert '-m pip install -e ".[dev]"' in absence
     assert "[dev,planar" not in absence and "[dev,sketch" not in absence
     for job in (regular, minimum):
+        # One existing public consumer integration case remains in the full
+        # inventory; expose its immutable source only to these test jobs.
+        assert "repository: audunarn/ANYmesh" in job
+        assert "ref: 2ef01d47e29fb461da1cf1ece73913c1708d4e49" in job
+        assert "path: .worktrees/ci-mesher-consumer" in job
+        assert "PYTHONPATH: ${{ github.workspace }}/.worktrees/ci-mesher-consumer/src" in job
         assert "shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]" in job
         assert "exclude:" not in job
         assert "timeout-minutes: 30" in job

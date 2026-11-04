@@ -58,7 +58,12 @@ def test_live_binding_mutation_refuses_before_reset(monkeypatch, mutation):
 
 
 def test_named_plane_state_is_preserved_and_guarded(monkeypatch):
-    ledger = l.loaded_geometry_ledger()
+    from anygeometry.nurbs_surface_intersection import _topology
+    from pathlib import Path
+    assert sys.modules[_topology.__name__] is _topology
+    assert Path(_topology.__file__).resolve()==Path(l.__file__).resolve().parent/'nurbs_surface_intersection/_topology.py'
+    ledger = l.loaded_geometry_ledger(modules=(_topology,))
+    assert not ledger.report.truncated
     key = 'anygeometry.nurbs_surface_intersection._topology._PLANE.__dict__'
     assert ledger.rows[key]['action'] == 'require-live-binding'
     value = ledger.objects[key]
