@@ -34,8 +34,9 @@ def _section_literal(value):
 def _section_runtime(curve):
     from .support_curves import _surface_net, _absolute_box, _scaled_float_coefficients
     arcs = curve._arcs()
-    return _section_literal((arcs, curve._plane_slab(), curve._world_bound(), _surface_net(curve.surface),
+    literal = _section_literal((arcs, curve._plane_slab(), curve._world_bound(), _surface_net(curve.surface),
         tuple((_absolute_box(arc.box), _scaled_float_coefficients(arc.box)) for arc in arcs)))
+    return literal, arcs
 
 
 def validate_section_runtime(curve):
@@ -44,6 +45,8 @@ def validate_section_runtime(curve):
     Isolated rederivation retains the current qualification Work context.
     Canonical signatures contain no live Box/Root/array objects, and are
     retained only under the complete validated public source definition.
+    Return strong references to the actual arcs compared with that oracle;
+    deriving slab/bound entries may evict their shared cache entry.
     """
     from .support_curves import PlaneNurbsCurve, _RUNTIME_CACHE_BANK, _plane_record
     from .nurbs import NurbsSurface
@@ -62,18 +65,19 @@ def validate_section_runtime(curve):
     if canonical is None:
         token = _RUNTIME_CACHE_BANK.set({})
         try:
-            canonical = _section_runtime(declared)
+            canonical, _ = _section_runtime(declared)
         finally:
             _RUNTIME_CACHE_BANK.reset(token)
         if len(_SECTION_CANONICAL) >= 64:
             _SECTION_CANONICAL.clear()
         _SECTION_CANONICAL[key] = canonical
     try:
-        actual = _section_runtime(curve)
+        actual, arcs = _section_runtime(curve)
     except (ValueError, TypeError, AttributeError, IndexError, ZeroDivisionError) as cause:
         raise GeometryError('plane NURBS evaluated runtime cache is invalid') from cause
     if actual != canonical:
         raise GeometryError('plane NURBS evaluated runtime cache differs from its public definition')
+    return arcs
 
 
 def validate_curve_runtime(curve):
