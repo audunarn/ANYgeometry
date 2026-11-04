@@ -829,7 +829,7 @@ def _query_boundary_chords(model, regions, edge_intervals, *, expected_revision=
     source_faces = {chart.face.id: chart for region in regions.regions for chart in region.sources}
     if references is None:
         references = _sampling_references(model, regions)
-    chart_boxes = _sampling_chart_boxes(model, regions, check)
+    chart_boxes = None
     plane_references = {face: pair[1] for face, pair in references.items()}
     frozen_curves = {} if frozen_curves is None else frozen_curves
     occurrence_curves = {}
@@ -934,7 +934,15 @@ def _query_boundary_chords(model, regions, edge_intervals, *, expected_revision=
                     for use in loop if use.edge == handle.id]
             if len(uses) != 1:
                 raise GeometryError('source boundary edge has ambiguous face occurrence')
-            boxes = tuple(chart_boxes(face_id, handle.id, t) for t in (a, b))
+            if type(chart.support) is Plane and type(occurrence_curve) in (PlaneNurbsCurve,NurbsCurve,LinePath):
+                if chart_boxes is None:
+                    chart_boxes = _sampling_chart_boxes(model, regions, check)
+                boxes = tuple(chart_boxes(face_id, handle.id, t) for t in (a, b))
+            else:
+                # Preserve the original occurrence operands for families outside
+                # chart reuse. Entering the producer would construct a second
+                # reference set without reusing any arithmetic for these paths.
+                boxes = tuple(_uv_box(chart.support, occurrence_curve, t) for t in (a, b))
             from .regular_source_reference import source_node
             uv = []
             for t in (a, b):
