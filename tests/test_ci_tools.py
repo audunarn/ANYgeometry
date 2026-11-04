@@ -125,19 +125,19 @@ def test_positive_refresh_rejects_invalid_or_mismatched_evidence(change):
         ci_durations.refresh({"tests": {}}, [record], {"run": "run", "head_sha": "head"})
 
 
-def test_runtime_parameter_aliases_remain_distinct_in_five_shards():
+def test_runtime_parameter_aliases_remain_distinct_in_sixteen_shards():
     ids = [f"tests/test_m.py::test_x[{value}]" for value in ("True", "np.True_", "int|str", "Union[int,str]")]
     ids += [f"unknown-{index}" for index in range(30)]
     table = {"tests": {ids[0]: {"windows": 20.}}, "rest_mean": {"windows": .1}}
-    assignment = ci_shards.assign(ids, 5, table)
-    partitions = [{name for name in ids if assignment[name] == index} for index in range(1, 6)]
+    assignment = ci_shards.assign(ids, 16, table)
+    partitions = [{name for name in ids if assignment[name] == index} for index in range(1, 17)]
     assert set.union(*partitions) == set(ids)
     assert sum(map(len, partitions)) == len(ids)
     assert all(not left & right for i, left in enumerate(partitions) for right in partitions[i+1:])
-    assert ci_shards.assign(list(reversed(ids)), 5, table) == assignment
+    assert ci_shards.assign(list(reversed(ids)), 16, table) == assignment
 
 
-def test_full_ci_keeps_every_runtime_and_five_shards_under_original_caps():
+def test_full_ci_keeps_every_runtime_and_sixteen_shards_under_original_caps():
     text = (TOOLS.parent / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     regular = text.split("\n  pytest:\n", 1)[1].split("\n  pytest-shards:\n", 1)[0]
     minimum = text.split("\n  minimum-dependencies:\n", 1)[1].split("\n  wheel-smoke:\n", 1)[0]
@@ -145,10 +145,10 @@ def test_full_ci_keeps_every_runtime_and_five_shards_under_original_caps():
     assert 'python-version: ["3.11", "3.12", "3.13", "3.14"]' in regular
     assert "python-version: '3.11'" in minimum and "runs-on: ubuntu-latest" in minimum
     for job in (regular, minimum):
-        assert "shard: [1, 2, 3, 4, 5]" in job
+        assert "shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]" in job
         assert "exclude:" not in job
         assert "timeout-minutes: 30" in job
-        assert "ANYGEOMETRY_TEST_SHARD: ${{ matrix.shard }}/5" in job
+        assert "ANYGEOMETRY_TEST_SHARD: ${{ matrix.shard }}/16" in job
         assert "--junitxml=kernel-results.xml" in job
     gate = text.split("\n  pytest-shards:\n", 1)[1].split("\n  planar-absence:\n", 1)[0]
     assert "needs: [pytest, minimum-dependencies]" in gate
@@ -158,13 +158,13 @@ def test_full_ci_keeps_every_runtime_and_five_shards_under_original_caps():
     assert "python tools/ci_shards.py verify lanes/minimum-dependencies-runtime-*/shard-*.json" in gate
 
 
-def test_five_partition_reports_still_require_every_assigned_junit_result(tmp_path):
-    ids = [f"tests/test_m.py::t{i}" for i in range(5)]
+def test_sixteen_partition_reports_still_require_every_assigned_junit_result(tmp_path):
+    ids = [f"tests/test_m.py::t{i}" for i in range(16)]
     reports = []
     for index, node in enumerate(ids, 1):
         folder = tmp_path / str(index); folder.mkdir()
         path = folder / f"shard-{index}.json"
-        path.write_text(json.dumps(dict(index=index, count=5, selected=ids, ran=[node], slow=[])))
+        path.write_text(json.dumps(dict(index=index, count=16, selected=ids, ran=[node], slow=[])))
         _junit(folder / "kernel-results.xml", {f"test_m::t{index-1}": .1})
         reports.append(path)
     assert ci_shards.verify(reports) == []

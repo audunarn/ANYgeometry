@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 import xml.etree.ElementTree as ET
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -146,6 +147,66 @@ def select_manifest_ids(collected,assigned,inventory):
     return list(assigned)
 
 
+class PhaseProgress:
+    """Flushed observations only; never a replacement for actual JUnit results."""
+    def __init__(self,path,mode,nodes,binding):
+        validate_nodes(nodes)
+        if type(binding) is not str or len(binding)!=64 or any(c not in '0123456789abcdef' for c in binding):
+            raise ValueError('progress configuration binding')
+        self.mode=mode;self.binding=binding;self.indices={node:i for i,node in enumerate(nodes)}
+        self.completed=0;self.finished=set();self.active=None;self.reports={}
+        # Tests may monkeypatch the time/os/path modules; retain real observer
+        # services before fixtures, without changing any calculator or source.
+        self.clock=time.monotonic;self.pid=os.getpid()
+        self.encode=json.JSONEncoder(sort_keys=True,allow_nan=False).iterencode
+        self.stream=Path(path).open('w',encoding='utf-8')
+        try:self._write('phase_start',None)
+        except BaseException as error:
+            try:self.stream.close()
+            except BaseException as cleanup:error.add_note('progress constructor cleanup failed: '+str(cleanup))
+            raise
+
+    def _write(self,event,node,**details):
+        row=dict(schema='ci-phase-progress-v1',cohort=self.mode,event=event,nodeid=node,
+            config_sha256=self.binding,pid=self.pid,monotonic_seconds=self.clock(),
+            assigned_total=len(self.indices),assigned_index=self.indices.get(node),
+            completed_count=self.completed,**details)
+        # Encoder-anchor tests deliberately poison c_make_encoder. Evidence
+        # uses the prebound stdlib Python path, not the service under test.
+        self.stream.write(''.join(self.encode(row,_one_shot=False))+'\n')
+        self.stream.flush()
+
+    def start(self,node):
+        if node not in self.indices or self.active is not None or node in self.finished:
+            raise RuntimeError('progress start outside exact assignment/protocol')
+        self.active=node;self.reports={};self._write('start',node)
+
+    def report(self,node,phase,outcome):
+        if node!=self.active or phase not in ('setup','call','teardown') or outcome not in ('passed','failed','skipped'):
+            raise RuntimeError('progress report outside active protocol')
+        prior=tuple(self.reports)
+        required=() if phase=='setup' else ('setup',) if phase=='call' or self.reports.get('setup')!='passed' else ('setup','call')
+        if phase in self.reports or prior!=required or (phase=='call' and self.reports.get('setup')!='passed'):
+            raise RuntimeError('progress report outside legal phase ordering')
+        self.reports[phase]=outcome;self._write('report',node,phase=phase,outcome=outcome)
+
+    def finish(self,node,*,interrupted=None):
+        if node!=self.active:raise RuntimeError('progress end outside active protocol')
+        complete=interrupted is None
+        required=('setup','call','teardown') if self.reports.get('setup')=='passed' else ('setup','teardown')
+        if complete and tuple(self.reports)!=required:raise RuntimeError('protocol ended without complete actual phase reports')
+        if not complete:outcome='interrupted'
+        elif any(self.reports.get(p)=='failed' for p in ('setup','teardown')):outcome='error'
+        elif self.reports.get('call')=='failed':outcome='failed'
+        elif 'skipped' in self.reports.values():outcome='skipped'
+        else:outcome='passed'
+        if complete:self.completed+=1
+        self._write('end',node,outcome=outcome,protocol_complete=complete,error_type=interrupted)
+        self.finished.add(node);self.active=None;self.reports={}
+
+    def close(self):self.stream.close()
+
+
 def child(config):
     row=read_json(config);root=Path(row['root']);os.chdir(root)
     # Match python -m pytest: the checkout root remains importable (examples,
@@ -158,7 +219,21 @@ def child(config):
     module_names=(list(dict.fromkeys(node.split('::',1)[0] for node in expected))
                   if expected is not None else row.get('allowed_modules'))
     allowed=None if module_names is None else {(root/name).resolve() for name in module_names}
+    progress=(PhaseProgress(manifest.with_name(row['mode']+'-progress.jsonl'),row['mode'],expected,hashfile(config))
+              if expected is not None and row['mode'] in ('core','oracle') else None)
     class ExactCollection:
+        @pytest.hookimpl(wrapper=True)
+        def pytest_runtest_protocol(self,item):
+            if progress is not None:progress.start(item.nodeid)
+            try:result=yield
+            except BaseException as error:
+                if progress is not None:progress.finish(item.nodeid,interrupted=type(error).__name__)
+                raise
+            else:
+                if progress is not None:progress.finish(item.nodeid)
+                return result
+        def pytest_runtest_logreport(self,report):
+            if progress is not None:progress.report(report.nodeid,report.when,report.outcome)
         @pytest.hookimpl(tryfirst=True)
         def pytest_ignore_collect(self,collection_path):
             if allowed is None:return None
@@ -190,7 +265,9 @@ def child(config):
         def pytest_sessionfinish(self):check()
     args=list(row['args'])
     if expected is not None:args=['tests']+args
-    return int(pytest.main(args,plugins=[ExactCollection()]))
+    try:return int(pytest.main(args,plugins=[ExactCollection()]))
+    finally:
+        if progress is not None:progress.close()
 
 
 def run_phase(root,folder,name,config,env):

@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 import xml.etree.ElementTree as ET
 import pytest
@@ -118,6 +119,11 @@ def test_real_selected_cases_keep_shard_assignment_and_complete_actual_union(tmp
     assert json.loads((evidence/'inventory.json').read_text())['collection_mode']=='directory-walk'
     assert json.loads((evidence/'oracle-collection.json').read_text())['mpmath_loaded'] is True
     assert ci_shards.verify([report])==[]
+    for group,node in [('core',nodes[0]),('oracle',nodes[1])]:
+        progress=[json.loads(line) for line in (evidence/(group+'-progress.jsonl')).read_text().splitlines()]
+        assert [r['nodeid'] for r in progress if r['event']=='start']==[node]
+        assert progress[-1]['event']=='end' and progress[-1]['outcome']=='passed'
+        assert progress[-1]['completed_count']==1
 
 
 def test_actual_collection_cannot_silently_deselect_an_assigned_id(tmp_path):
@@ -193,3 +199,167 @@ def pytest_collection_finish(session):
     actual=json.loads((root/'phases/core-collection.json').read_text())
     assert actual['nodes']==plan['assigned'] and actual['mpmath_loaded'] is False
     assert len(ET.parse(root/'results.xml').getroot().findall('.//testcase'))==1
+
+
+def test_progress_is_flushed_bound_to_assignment_and_counts_only_finished_protocol(tmp_path):
+    node='tests/test_a.py::test_a';path=tmp_path/'progress.jsonl'
+    journal=ci.PhaseProgress(path,'core',[node],'a'*64)
+    journal.start(node)
+    rows=[json.loads(line) for line in path.read_text().splitlines()]
+    assert rows[-1]['event']=='start' and rows[-1]['nodeid']==node
+    assert rows[-1]['completed_count']==0 and rows[-1]['config_sha256']=='a'*64
+    journal.report(node,'setup','passed');journal.report(node,'call','passed')
+    assert json.loads(path.read_text().splitlines()[-1])['completed_count']==0
+    journal.report(node,'teardown','passed');journal.finish(node)
+    row=json.loads(path.read_text().splitlines()[-1])
+    assert row['event']=='end' and row['outcome']=='passed' and row['completed_count']==1
+    assert row['protocol_complete'] is True and row['assigned_total']==1
+
+
+@pytest.mark.parametrize('close_error',[False,True])
+def test_progress_first_write_failure_closes_stream_and_preserves_primary(tmp_path,monkeypatch,close_error):
+    from io import StringIO
+    primary=OSError('first progress write failed');closed=[]
+    class BrokenStream(StringIO):
+        def write(self,value):raise primary
+        def close(self):
+            if self.closed:return
+            closed.append(1);super().close()
+            if close_error:raise OSError('secondary progress close failed')
+    stream=BrokenStream();target=tmp_path/'progress.jsonl';original=Path.open
+    def opening(path,*args,**kwargs):
+        return stream if path==target else original(path,*args,**kwargs)
+    monkeypatch.setattr(Path,'open',opening)
+    with pytest.raises(OSError) as caught:
+        ci.PhaseProgress(target,'core',['tests/test_a.py::test_a'],'a'*64)
+    assert caught.value is primary and closed==[1] and stream.closed
+    if close_error:assert any('secondary progress close failed' in note for note in primary.__notes__)
+
+
+def test_progress_preserves_failure_interruption_and_rejects_unassigned(tmp_path):
+    a,b=['tests/test_a.py::'+name for name in ('a','b')];path=tmp_path/'progress.jsonl'
+    journal=ci.PhaseProgress(path,'core',[a,b],'b'*64)
+    with pytest.raises(RuntimeError):journal.start('tests/test_other.py::other')
+    journal.start(a)
+    for phase,outcome in [('setup','passed'),('call','failed'),('teardown','passed')]:journal.report(a,phase,outcome)
+    journal.finish(a)
+    assert json.loads(path.read_text().splitlines()[-1])['outcome']=='failed'
+    journal.start(b);journal.report(b,'setup','passed');journal.finish(b,interrupted='KeyboardInterrupt')
+    row=json.loads(path.read_text().splitlines()[-1])
+    assert row['outcome']=='interrupted' and row['completed_count']==1
+    assert row['protocol_complete'] is False and row['error_type']=='KeyboardInterrupt'
+
+
+def test_progress_avoids_the_native_json_encoder_deliberately_poisoned_by_tests(tmp_path,monkeypatch):
+    node='tests/test_a.py::test_a';path=tmp_path/'progress.jsonl'
+    journal=ci.PhaseProgress(path,'core',[node],'a'*64)
+    def poison(*args):raise AssertionError('encoder under test entered by observer')
+    monkeypatch.setattr(json.encoder,'c_make_encoder',poison)
+    journal.start(node)
+    for phase in ('setup','call','teardown'):journal.report(node,phase,'passed')
+    journal.finish(node);journal.close()
+    assert json.loads(path.read_text().splitlines()[-1])['completed_count']==1
+
+
+def _progress_child_fixture(root,body):
+    put(root,'pytest.ini','[pytest]\n')
+    put(root,'tests/test_observed.py',body)
+    node='tests/test_observed.py::test_observed';config=root/'config.json'
+    config.write_text(json.dumps(dict(root=str(root),mode='core',nodes=[node],inventory=[node],
+        manifest=str(root/'collection.json'),args=['--rootdir='+str(root),'--junitxml='+str(root/'actual.xml')]),indent=2))
+    env=dict(os.environ);env.pop('ANYGEOMETRY_TEST_SHARD',None);env.pop('ANYGEOMETRY_SHARD_REPORT',None)
+    return [sys.executable,'-B',str(ci.__file__),'--child',str(config)],env
+
+
+def test_actual_failed_protocol_journal_and_junit_remain_failed(tmp_path):
+    command,env=_progress_child_fixture(tmp_path,'def test_observed(): assert False, "original failure"\n')
+    result=subprocess.run(command,cwd=tmp_path,env=env,capture_output=True,text=True,timeout=20)
+    (tmp_path/'stdout.txt').write_text(result.stdout);(tmp_path/'stderr.txt').write_text(result.stderr)
+    assert result.returncode!=0
+    rows=[json.loads(line) for line in (tmp_path/'core-progress.jsonl').read_text().splitlines()]
+    assert rows[-1]['event']=='end' and rows[-1]['outcome']=='failed' and rows[-1]['completed_count']==1
+    assert ET.parse(tmp_path/'actual.xml').getroot().find('.//testcase/failure') is not None
+
+
+def test_killed_protocol_retains_flushed_active_node_without_completion_or_junit(tmp_path):
+    command,env=_progress_child_fixture(tmp_path,'import time\ndef test_observed(): time.sleep(30)\n')
+    stdout=(tmp_path/'stdout.txt').open('w');stderr=(tmp_path/'stderr.txt').open('w')
+    process=subprocess.Popen(command,cwd=tmp_path,env=env,stdout=stdout,stderr=stderr)
+    rows=[];deadline=time.monotonic()+15
+    try:
+        while time.monotonic()<deadline:
+            path=tmp_path/'core-progress.jsonl'
+            if path.exists():
+                text=path.read_text();complete=text[:text.rfind('\n')+1]
+                rows=[json.loads(line) for line in complete.splitlines()]
+                if any(row['event']=='start' for row in rows):break
+            time.sleep(.02)
+        assert any(row['event']=='start' for row in rows)
+    finally:
+        if process.poll() is None:
+            import psutil
+            actual_command=psutil.Process(process.pid).cmdline()
+            (tmp_path/'owned-process.json').write_text(json.dumps(dict(pid=process.pid,expected=command,actual=actual_command)))
+            assert actual_command==command
+            process.kill()
+        process.wait(timeout=5);stdout.close();stderr.close()
+    text=(tmp_path/'core-progress.jsonl').read_text()
+    rows=[json.loads(line) for line in text[:text.rfind('\n')+1].splitlines()]
+    assert any(row['event']=='start' and row['nodeid']=='tests/test_observed.py::test_observed' for row in rows)
+    assert not any(row['event']=='end' for row in rows)
+    assert all(row['completed_count']==0 for row in rows)
+    assert not (tmp_path/'actual.xml').exists()
+
+
+@pytest.fixture
+def state_journal(tmp_path):
+    journal=ci.PhaseProgress(tmp_path/'state.jsonl','core',['tests/test_state.py::test_state'],'c'*64)
+    journal.start('tests/test_state.py::test_state')
+    try:yield journal
+    finally:journal.close()
+
+
+@pytest.mark.parametrize('setup',[None,'passed'])
+def test_progress_cannot_pass_teardown_without_actual_setup_and_call(state_journal,setup):
+    node='tests/test_state.py::test_state'
+    if setup is not None:state_journal.report(node,'setup',setup)
+    with pytest.raises(RuntimeError):
+        state_journal.report(node,'teardown','passed')
+        state_journal.finish(node)
+
+
+def test_progress_failed_call_cannot_be_overwritten_into_pass(state_journal,tmp_path):
+    node='tests/test_state.py::test_state'
+    state_journal.report(node,'setup','passed');state_journal.report(node,'call','failed')
+    with pytest.raises(RuntimeError):
+        state_journal.report(node,'call','passed')
+        state_journal.report(node,'teardown','passed');state_journal.finish(node)
+    assert json.loads((tmp_path/'state.jsonl').read_text().splitlines()[-1])['outcome']=='failed'
+
+
+@pytest.mark.parametrize('setup',[None,'failed','skipped'])
+def test_progress_call_requires_successful_setup(state_journal,setup):
+    node='tests/test_state.py::test_state'
+    if setup is not None:state_journal.report(node,'setup',setup)
+    with pytest.raises(RuntimeError):state_journal.report(node,'call','passed')
+
+
+@pytest.mark.parametrize('phase',['setup','call','teardown'])
+def test_progress_rejects_duplicate_phase(state_journal,phase):
+    node='tests/test_state.py::test_state';state_journal.report(node,'setup','passed')
+    if phase in ('call','teardown'):state_journal.report(node,'call','failed')
+    if phase=='teardown':state_journal.report(node,'teardown','failed')
+    with pytest.raises(RuntimeError):state_journal.report(node,phase,'passed')
+
+
+@pytest.mark.parametrize('setup,call,teardown,outcome',[
+    ('failed',None,'passed','error'),('skipped',None,'passed','skipped'),
+    ('passed','failed','passed','failed'),('passed','skipped','passed','skipped'),
+    ('passed','passed','passed','passed'),('passed','passed','failed','error'),
+])
+def test_progress_retains_legal_failed_skipped_and_passed_protocols(state_journal,tmp_path,setup,call,teardown,outcome):
+    node='tests/test_state.py::test_state';state_journal.report(node,'setup',setup)
+    if call is not None:state_journal.report(node,'call',call)
+    state_journal.report(node,'teardown',teardown);state_journal.finish(node)
+    row=json.loads((tmp_path/'state.jsonl').read_text().splitlines()[-1])
+    assert row['outcome']==outcome and row['completed_count']==1 and row['protocol_complete'] is True
