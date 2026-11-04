@@ -162,6 +162,62 @@ def _ctypes_field_type():
     return descriptor_type
 
 
+def _unsupported_frozen_collections_alias(path,value):
+    """Attribute one unsupported reset interface; never confer admission.
+
+    CPython can publish collections.abc from a different module dictionary
+    than its frozen implementation. Unknown aliases keep the generic refusal.
+    Only two shallow, named code-constant selections inspect frozen code; no
+    implementation is executed and no stdlib object graph is traversed.
+    """
+    import sys
+    if (type(path) is not str or path!='anygeometry._planning_qualification._CLEAR.value'
+            or type(value) is not types.FunctionType):return False
+    public=sys.modules.get('collections.abc');implementation=sys.modules.get('_collections_abc')
+    bootstrap=sys.modules.get('_frozen_importlib')
+    machinery=sys.modules.get('importlib.machinery')
+    if any(type(module) is not types.ModuleType for module in (public,implementation,bootstrap,machinery)):return False
+    public_ns=vars(public);implementation_ns=vars(implementation);bootstrap_ns=vars(bootstrap)
+    FrozenImporter=vars(machinery).get('FrozenImporter');ModuleSpec=vars(machinery).get('ModuleSpec')
+    package=sys.modules.get('collections');abc=sys.modules.get('abc')
+    if (type(package) is not types.ModuleType or vars(package).get('abc') is not public
+            or type(abc) is not types.ModuleType):return False
+    if (any(type(namespace.get('__name__')) is not str for namespace in (public_ns,implementation_ns))
+            or public_ns is implementation_ns or value.__globals__ is not implementation_ns
+            or public_ns.get('__name__')!='collections.abc'
+            or implementation_ns.get('__name__')!='collections.abc'
+            or bootstrap_ns.get('FrozenImporter') is not FrozenImporter):return False
+    # Use the registered trusted frozen importer interface, not an arbitrary
+    # module get_code hook or a class/instance descriptor supplied by a caller.
+    if (type(FrozenImporter) is not type or type(ModuleSpec) is not type
+            or bootstrap_ns.get('ModuleSpec') is not ModuleSpec):return False
+    descriptor=vars(FrozenImporter).get('get_code')
+    if (type(descriptor) is not classmethod or type(descriptor.__func__) is not types.FunctionType
+            or descriptor.__func__.__globals__ is not bootstrap_ns
+            or descriptor.__func__.__code__.co_filename!='<frozen importlib._bootstrap>'):return False
+    cls=implementation_ns.get('MutableMapping')
+    if (type(cls) is not vars(abc).get('ABCMeta') or public_ns.get('MutableMapping') is not cls
+            or type.__getattribute__(cls,'__dict__').get('clear') is not value
+            or type(value.__module__) is not str
+            or value.__name__!='clear' or value.__qualname__!='MutableMapping.clear'
+            or value.__module__!='collections.abc' or value.__defaults__ is not None
+            or value.__kwdefaults__ is not None or value.__closure__ is not None):return False
+    spec=implementation_ns.get('__spec__')
+    if (type(spec) is not ModuleSpec
+            or any(type(vars(spec).get(name)) is not str for name in ('name','origin'))
+            or vars(spec).get('name')!='_collections_abc'
+            or vars(spec).get('origin')!='frozen' or vars(spec).get('loader') is not FrozenImporter):return False
+    try:
+        root=FrozenImporter.get_code('_collections_abc')
+        if type(root) is not types.CodeType:return False
+        classes=[item for item in root.co_consts if type(item) is types.CodeType and item.co_name=='MutableMapping']
+        if len(classes)!=1:return False
+        methods=[item for item in classes[0].co_consts if type(item) is types.CodeType and item.co_name=='clear']
+        return len(methods)==1 and code_digest(value.__code__)==code_digest(methods[0])
+    except (ImportError,TypeError,ValueError,QualificationDecline):
+        return False
+
+
 class InfrastructurePin:
     """Finite H/P resource-code identity, separate from numerical execution roots.
 
@@ -290,6 +346,8 @@ class InfrastructurePin:
             if typ is types.FunctionType:
                 actual=sys.modules.get(value.__globals__.get('__name__'))
                 if not is_package_module(actual) or vars(actual) is not value.__globals__:
+                    if _unsupported_frozen_collections_alias(path,value):
+                        raise QualificationDecline('unsupported frozen collections.abc implementation alias')
                     raise QualificationDecline('infrastructure function global owner')
                 pin(actual)
                 filename=value.__code__.co_filename
