@@ -82,7 +82,8 @@ def test_documented_limitation_raw_native_view_is_not_detected():
     raw=(ctypes.c_double*3).from_address(value._circumferential.ctypes.data)
     external=np.ctypeslib.as_array(raw)
     assert np.shares_memory(external,value._circumferential)
-    assert refs==sys.getrefcount(value._circumferential)
+    observed_refs=sys.getrefcount(value._circumferential)
+    assert refs==observed_refs
     q._check_model_record_state({'surface':value})
     # Explicit ACCEPTED RESIDUAL RISK, not a pass claim for absence of aliases.
     external[1]=2.

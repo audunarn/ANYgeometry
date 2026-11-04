@@ -6,6 +6,7 @@ cannot establish source provenance; the old spoof fixture remains a refusal.
 import sys
 import types
 import pytest
+from _planning_numpy_profile_contract import numpy_profile_test
 from _planning_contract_helpers import capture_with_runtime_boundary, capture_with_dispatcher_boundary, classify_initial_dispatcher_refusal
 from anygeometry._planning_manifest import capture_callable_manifest
 from anygeometry._planning_executor import PlannerSourceChanged
@@ -20,6 +21,7 @@ def owned(monkeypatch):
     return module
 
 
+@numpy_profile_test
 def test_type_root_symbol_replacement_is_terminal(monkeypatch,request):
     from anygeometry import tolerance
     manifest=capture_with_runtime_boundary((tolerance.TolerancePolicy,),request=request)
@@ -28,6 +30,7 @@ def test_type_root_symbol_replacement_is_terminal(monkeypatch,request):
     with pytest.raises(PlannerSourceChanged):manifest.verify()
 
 
+@numpy_profile_test
 def test_selected_method_rebinding_is_terminal(monkeypatch,request):
     from anygeometry.tolerance import TolerancePolicy
     manifest=capture_with_runtime_boundary((TolerancePolicy.effective_length,TolerancePolicy),request=request)
@@ -36,6 +39,7 @@ def test_selected_method_rebinding_is_terminal(monkeypatch,request):
     with pytest.raises(PlannerSourceChanged):manifest.verify()
 
 
+@numpy_profile_test
 def test_unselected_owned_method_rebinding_is_terminal(monkeypatch,request):
     from anygeometry.tolerance import TolerancePolicy
     manifest=capture_with_runtime_boundary((TolerancePolicy.effective_length,TolerancePolicy),request=request)
@@ -107,3 +111,46 @@ def test_type_metadata_drift_is_terminal(full,request):
     class Unknown:__module__=None
     value['new']=Unknown()
     with pytest.raises(PlannerSourceChanged):captured.verify(full=full)
+
+
+@numpy_profile_test
+def test_bounded_real_owned_class_binding_replacement_is_terminal(monkeypatch,request):
+    from anygeometry.errors import GeometryError
+    captured=capture_callable_manifest((GeometryError,))
+    captured.verify()
+    monkeypatch.setattr(GeometryError,'__str__',lambda self:'changed')
+    with pytest.raises(PlannerSourceChanged):captured.verify()
+
+
+def test_real_tolerance_dataclass_wrapper_boundary_is_explicit(request):
+    import dataclasses
+    from pathlib import Path
+    from _planning_contract_helpers import (dispatcher_boundary_refusal,
+        require_qualified_planning_lane)
+    from anygeometry import tolerance
+    roots=(tolerance.TolerancePolicy.effective_length,tolerance.TolerancePolicy)
+    if dispatcher_boundary_refusal() is not None:
+        captured=capture_with_runtime_boundary(roots,request=request)
+        assert captured is None
+        return
+    wrapper=tolerance.TolerancePolicy.__dict__['__repr__']
+    factory=vars(dataclasses).get('_recursive_repr')
+    legacy=(type(factory) is types.FunctionType and type(wrapper) is types.FunctionType
+        and wrapper.__globals__ is vars(dataclasses)
+        and wrapper.__code__ in factory.__code__.co_consts
+        and Path(wrapper.__code__.co_filename).resolve()==Path(dataclasses.__file__).resolve()
+        and wrapper.__module__==tolerance.__name__
+        and wrapper.__qualname__=='TolerancePolicy.__repr__')
+    if legacy:
+        reason="callable closure refused: ['anygeometry.tolerance.TolerancePolicy@pre-slots.__repr__: owned function namespace/origin mismatch']"
+        require_qualified_planning_lane(reason)
+        original=tolerance.TolerancePolicy
+        method=original.effective_area
+        with pytest.raises(QualificationDecline) as caught:capture_callable_manifest(roots)
+        assert type(caught.value) is QualificationDecline and str(caught.value)==reason
+        assert tolerance.TolerancePolicy is original and original.effective_area is method
+        request.node.user_properties.extend((('execution_scope','initial-legacy-dataclass-wrapper-refusal'),
+            ('runtime_refusal',reason),('original_test_body_executed',False),('postcapture_qualification',False)))
+        return
+    captured=capture_with_runtime_boundary(roots,request=request)
+    if captured is not None:captured.verify()
