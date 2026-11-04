@@ -139,7 +139,8 @@ def test_runtime_parameter_aliases_remain_distinct_in_sixteen_shards():
 
 def test_full_ci_keeps_every_runtime_and_sixteen_shards_under_original_caps():
     text = (TOOLS.parent / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    regular = text.split("\n  pytest:\n", 1)[1].split("\n  pytest-shards:\n", 1)[0]
+    regular = text.split("\n  pytest:\n", 1)[1].split("\n  pytest-qualified:\n", 1)[0]
+    qualified = text.split("\n  pytest-qualified:\n", 1)[1].split("\n  pytest-shards:\n", 1)[0]
     minimum = text.split("\n  minimum-dependencies:\n", 1)[1].split("\n  wheel-smoke:\n", 1)[0]
     assert "os: [windows-latest, ubuntu-latest, macos-15, macos-15-intel]" in regular
     assert 'python-version: ["3.11", "3.12", "3.13", "3.14"]' in regular
@@ -157,13 +158,21 @@ def test_full_ci_keeps_every_runtime_and_sixteen_shards_under_original_caps():
         assert "path: .worktrees/ci-mesher-consumer" in job
         assert "PYTHONPATH: ${{ github.workspace }}/.worktrees/ci-mesher-consumer/src" in job
         assert "shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]" in job
-        assert "exclude:" not in job
         assert "timeout-minutes: 30" in job
         assert "ANYGEOMETRY_TEST_SHARD: ${{ matrix.shard }}/16" in job
         assert "--junitxml=kernel-results.xml" in job
+    assert "exclude:" not in minimum
+    assert 'exclude:\n          - os: windows-latest\n            python-version: "3.14"' in regular
+    assert 'os: [windows-latest]' in qualified and 'python-version: ["3.14"]' in qualified
+    assert 'timeout-minutes: 30' in qualified
+    assert 'ANYGEOMETRY_TEST_SHARD: ${{ matrix.shard }}/64' in qualified
+    # The distinct lane retains exactly the same consumer, commands, pins,
+    # preflight and artifacts; only its shard denominator changes.
+    assert qualified.split('    steps:\n', 1)[1].replace('/64', '/16') == regular.split('    steps:\n', 1)[1]
     gate = text.split("\n  pytest-shards:\n", 1)[1].split("\n  planar-absence:\n", 1)[0]
-    assert "needs: [pytest, minimum-dependencies]" in gate
+    assert "needs: [pytest, pytest-qualified, minimum-dependencies]" in gate
     assert 'if [ "$PYTEST_RESULT" != success ]' in gate
+    assert 'if [ "$QUALIFIED_RESULT" != success ]' in gate
     assert 'if [ "$MINIMUM_RESULT" != success ]' in gate
     assert "python tools/ci_shards.py verify lanes/kernel-runtime-$os-$py-*/shard-*.json" in gate
     assert "python tools/ci_shards.py verify lanes/minimum-dependencies-runtime-*/shard-*.json" in gate
