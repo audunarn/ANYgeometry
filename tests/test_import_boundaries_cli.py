@@ -33,7 +33,6 @@ FORBIDDEN = {
     "anytk3d",
     "gmsh",
     "meshio",
-    "scipy",
     "tkinter",
 }
 
@@ -60,16 +59,27 @@ def test_public_owner_exports_use_one_geometry_and_reference_type() -> None:
 
 def test_source_import_graph_has_no_forbidden_or_undeclared_dependency() -> None:
     external_imports: set[str] = set()
+    scipy_sources: set[str] = set()
     for path in PACKAGE.rglob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        source_imports: set[str] = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
-                external_imports.update(alias.name.split(".", 1)[0] for alias in node.names)
+                source_imports.update(alias.name.split(".", 1)[0] for alias in node.names)
             elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-                external_imports.add(node.module.split(".", 1)[0])
+                source_imports.add(node.module.split(".", 1)[0])
+        source_imports.discard(PACKAGE.name)  # Absolute imports of the owner itself.
+        external_imports.update(source_imports)
+        if "scipy" in source_imports:
+            scipy_sources.add(path.relative_to(PACKAGE).as_posix())
 
     assert not (external_imports & FORBIDDEN)
-    assert external_imports <= set(sys.stdlib_module_names) | {"numpy", "shapely"}
+    # The adopted planner attests SciPy at its trusted runtime interface;
+    # it remains optional and cannot leak into ordinary geometry modules.
+    assert scipy_sources <= {"_planning_child.py", "_planning_qualification.py"}
+    assert external_imports <= set(sys.stdlib_module_names) | {
+        "numpy", "shapely", "psutil", "threadpoolctl", "scipy"
+    }
 
 
 def test_core_and_optional_dependencies_match_release_metadata() -> None:

@@ -225,6 +225,16 @@ def test_inventory_anchors_are_detected(report, file, function, subkind, invento
     assert _has(report, file, function, subkind, inventory_id)
 
 
+@pytest.mark.parametrize("file, function, inventory_id", [
+    ("batch_intersections.py", "_pair_paths_exact", "A7"),
+    ("material_arrangement.py", "_arrange_material_once", "D7"),
+    ("material_arrangement.py", "_arrange_material_once", "D8"),
+])
+def test_extracted_numerical_bodies_retain_inventory_coverage(report, file, function, inventory_id):
+    assert any(site["file"].endswith(file) and site["function"] == function
+               and inventory_id in site["inventory_ids"] for site in report["sites"])
+
+
 def test_certified_planar_query_route_has_no_library_predicates(report):
     # R1a replaced Plane.local_uv + Shapely covers/boundary.covers (the R.0 tangency flip,
     # inventory A1/E4) on the planar line-clipping route with exact predicates.

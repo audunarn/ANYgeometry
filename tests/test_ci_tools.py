@@ -144,6 +144,11 @@ def test_full_ci_keeps_every_runtime_and_sixteen_shards_under_original_caps():
     assert "os: [windows-latest, ubuntu-latest, macos-15, macos-15-intel]" in regular
     assert 'python-version: ["3.11", "3.12", "3.13", "3.14"]' in regular
     assert "python-version: '3.11'" in minimum and "runs-on: ubuntu-latest" in minimum
+    assert ".[dev,planar,sketch,test]" in minimum and "'scipy==1.13.0'" in minimum
+    assert "'numpy==1.26.0'" in minimum and "'shapely==2.0.0'" in minimum
+    absence = text.split("\n  planar-absence:\n", 1)[1].split("\n  wheel:\n", 1)[0]
+    assert '-m pip install -e ".[dev]"' in absence
+    assert "[dev,planar" not in absence and "[dev,sketch" not in absence
     for job in (regular, minimum):
         assert "shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]" in job
         assert "exclude:" not in job

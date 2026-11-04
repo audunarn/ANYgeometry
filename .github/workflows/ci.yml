@@ -281,7 +281,9 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.11'
-      - run: python -m pip install -e '.[dev,planar,test]' 'setuptools>=77.0.3' 'numpy==1.26.0' 'shapely==2.0.0'
+      # Full private planner tests exercise the declared SciPy runtime too.
+      # The separate optional-capability-absence job keeps its minimal install.
+      - run: python -m pip install -e '.[dev,planar,sketch,test]' 'setuptools>=77.0.3' 'numpy==1.26.0' 'shapely==2.0.0' 'scipy==1.13.0'
       - run: python tools/ci_isolated_tests.py --maxfail=1 --durations=20 --junitxml=kernel-results.xml
         env:
           ANYGEOMETRY_TEST_SHARD: ${{ matrix.shard }}/16
