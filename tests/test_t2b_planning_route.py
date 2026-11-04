@@ -270,7 +270,8 @@ def _only_this_field_is_wrong(plan, certified):
     """Discrimination check (the double for every row is a validator that ignores the tampered
     field): restoring the tampered fields, and only them, makes the plan valid again."""
     changed = {item.name: getattr(certified, item.name) for item in fields(certified)
-               if repr(getattr(plan, item.name)) != repr(getattr(certified, item.name))}
+               if (type(getattr(plan, item.name)) is not type(getattr(certified, item.name))
+                   or repr(getattr(plan, item.name)) != repr(getattr(certified, item.name)))}
     assert changed, "the tampered plan must differ in a field"
     restored = replace(plan, **changed)
     return bi._route_state(restored) == "T"
@@ -1532,3 +1533,14 @@ def test_on_is_described_as_experimental_topology_certified_planning_not_as_equi
     assert "topology-certified planning (experimental)" in texts[0]
     forbidden = "certified" + "-equivalent"
     assert all(forbidden not in text.lower() for text in texts)
+
+
+def test_route_discriminator_observes_same_repr_exact_type_attack(plans):
+    class SameReprInt(int):
+        pass
+    _model, _exact, certified = plans
+    revision = SameReprInt(certified.revision)
+    assert type(revision) is not type(certified.revision)
+    assert repr(revision) == repr(certified.revision)
+    changed = _forge(certified, revision=revision)
+    assert _only_this_field_is_wrong(changed, certified)

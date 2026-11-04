@@ -1,8 +1,10 @@
 """Owner-authorized PP5d regressions; no relaxation of admission predicates."""
 import sys
+import builtins
+import ctypes
 import hashlib
 import json
-from types import SimpleNamespace
+from types import FunctionType, SimpleNamespace
 
 import pytest
 
@@ -100,11 +102,51 @@ def test_module_boundary_refusal_identifies_change(kind, monkeypatch):
     assert changed in str(error.value)
 
 
+def _isolated_windows_runtime_files(modules, *, crt=True):
+    """Same owner code; isolated dependency prerequisites, never native evidence."""
+    original = qualification.runtime_files
+    calls = []
+    real_import = builtins.__import__
+    def get_handle(name):
+        calls.append(('GetModuleHandleW', name))
+        return 202 if crt and name == 'vcruntime140.dll' else 0
+    def get_path(*args):
+        raise AssertionError('layout refusal must precede runtime DLL path access')
+    kernel = SimpleNamespace(GetModuleHandleW=get_handle, GetModuleFileNameW=get_path)
+    def win_dll(name, *, use_last_error):
+        calls.append(('WinDLL', name, use_last_error))
+        assert name == 'kernel32' and use_last_error is True
+        return kernel
+    ctypes_view = SimpleNamespace(WinDLL=win_dll, c_wchar_p=ctypes.c_wchar_p,
+        c_void_p=ctypes.c_void_p, c_uint32=ctypes.c_uint32)
+    runtime_sys = SimpleNamespace(platform='win32', dllhandle=101)
+    def local_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name in ('sys', 'ctypes'):
+            assert level == 0
+            calls.append(('import', name))
+            return runtime_sys if name == 'sys' else ctypes_view
+        return real_import(name, globals, locals, fromlist, level)
+    namespace = dict(original.__globals__)
+    namespace['sys'] = SimpleNamespace(modules=dict(modules))
+    namespace['__builtins__'] = dict(vars(builtins), __import__=local_import)
+    clone = FunctionType(original.__code__, namespace, original.__name__,
+                         original.__defaults__, original.__closure__)
+    assert clone.__code__ is original.__code__
+    assert clone.__globals__ is not original.__globals__
+    assert clone.__globals__['QualificationDecline'] is qualification.QualificationDecline
+    return clone, calls
+
+
 @pytest.mark.parametrize('name', ['shapely', 'shapely._different_native_layout'])
-def test_unqualified_shapely_layout_cannot_silently_omit_geos(name, monkeypatch):
-    monkeypatch.setattr(qualification, 'sys', SimpleNamespace(modules={name: object()}))
+def test_unqualified_shapely_layout_cannot_silently_omit_geos(name, monkeypatch, request):
+    runtime, calls = _isolated_windows_runtime_files({name: object()})
     with pytest.raises(qualification.QualificationDecline, match='Shapely native module layout'):
-        qualification.runtime_files()
+        runtime()
+    assert calls == [('import', 'sys'), ('import', 'ctypes'), ('WinDLL', 'kernel32', True),
+                     ('GetModuleHandleW', 'python3.dll'), ('GetModuleHandleW', 'vcruntime140.dll'),
+                     ('GetModuleHandleW', 'vcruntime140_1.dll')]
+    request.node.user_properties.extend((('execution_scope', 'dependency-isolated-Shapely-layout-unit'),
+        ('native_runtime_qualification', False), ('Shapely_layout_predicate_exercised', True)))
 
 
 def test_numerical_error_is_retired_and_propagated_without_serial_replay(tmp_path):
@@ -170,3 +212,23 @@ def test_actual_huge_integer_encoder_outcome_matches_owner_raw_identity(request)
     assert model._serialization_extensions is extension and extension['pp2:data'] is value
     assert set(vars(model)) == set(before)
     assert all(vars(model)[key] is item for key, item in before.items())
+
+
+def test_shapely_runtime_fixture_preserves_global_code_imports_and_platform():
+    original = qualification.runtime_files
+    importer, platform, modules = builtins.__import__, sys.platform, sys.modules
+    owner_sys = qualification.sys
+    runtime, _calls = _isolated_windows_runtime_files({'shapely': object()})
+    assert runtime.__code__ is original.__code__
+    with pytest.raises(qualification.QualificationDecline, match='Shapely native module layout'):
+        runtime()
+    assert qualification.runtime_files is original and qualification.sys is owner_sys
+    assert builtins.__import__ is importer and sys.platform == platform and sys.modules is modules
+
+
+def test_shapely_runtime_fixture_cannot_hide_missing_crt():
+    runtime, calls = _isolated_windows_runtime_files({'shapely': object()}, crt=False)
+    with pytest.raises(qualification.QualificationDecline, match='^loaded VCRuntime DLL is missing$'):
+        runtime()
+    assert calls[-3:] == [('GetModuleHandleW', 'python3.dll'),
+                          ('GetModuleHandleW', 'vcruntime140.dll'), ('GetModuleHandleW', 'vcruntime140_1.dll')]
