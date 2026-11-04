@@ -6,6 +6,7 @@ cannot establish source provenance; the old spoof fixture remains a refusal.
 import sys
 import types
 import pytest
+from _planning_legacy_contract import capture_with_legacy_dataclass_boundary
 from _planning_numpy_profile_contract import numpy_profile_test
 from _planning_contract_helpers import capture_with_runtime_boundary, capture_with_dispatcher_boundary, classify_initial_dispatcher_refusal
 from anygeometry._planning_manifest import capture_callable_manifest
@@ -21,28 +22,25 @@ def owned(monkeypatch):
     return module
 
 
-@numpy_profile_test
 def test_type_root_symbol_replacement_is_terminal(monkeypatch,request):
     from anygeometry import tolerance
-    manifest=capture_with_runtime_boundary((tolerance.TolerancePolicy,),request=request)
+    manifest=capture_with_legacy_dataclass_boundary((tolerance.TolerancePolicy,),request=request)
     if manifest is None:return # Exact initial refusal is not postcapture coverage.
     monkeypatch.setattr(tolerance,'TolerancePolicy',type('Other',(),{}))
     with pytest.raises(PlannerSourceChanged):manifest.verify()
 
 
-@numpy_profile_test
 def test_selected_method_rebinding_is_terminal(monkeypatch,request):
     from anygeometry.tolerance import TolerancePolicy
-    manifest=capture_with_runtime_boundary((TolerancePolicy.effective_length,TolerancePolicy),request=request)
+    manifest=capture_with_legacy_dataclass_boundary((TolerancePolicy.effective_length,TolerancePolicy),request=request)
     if manifest is None:return # Exact initial refusal is not postcapture coverage.
     monkeypatch.setattr(TolerancePolicy,'effective_length',lambda self,scale:2)
     with pytest.raises(PlannerSourceChanged):manifest.verify()
 
 
-@numpy_profile_test
 def test_unselected_owned_method_rebinding_is_terminal(monkeypatch,request):
     from anygeometry.tolerance import TolerancePolicy
-    manifest=capture_with_runtime_boundary((TolerancePolicy.effective_length,TolerancePolicy),request=request)
+    manifest=capture_with_legacy_dataclass_boundary((TolerancePolicy.effective_length,TolerancePolicy),request=request)
     if manifest is None:return # Exact initial refusal is not postcapture coverage.
     monkeypatch.setattr(TolerancePolicy,'effective_area',lambda self,scale:2)
     with pytest.raises(PlannerSourceChanged):manifest.verify()

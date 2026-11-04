@@ -3,7 +3,8 @@ import hashlib
 from pathlib import Path
 import numpy as np
 import pytest
-from _planning_contract_helpers import capture_with_runtime_boundary
+from _planning_legacy_contract import capture_with_legacy_dataclass_boundary
+from _planning_contract_helpers import capture_with_runtime_boundary, capture_with_dispatcher_boundary
 from anygeometry._planning_executor import PlannerSourceChanged, freeze_model
 from anygeometry._planning_qualification import QualificationDecline
 from anygeometry._planning_values import encode_value, decode_value, same
@@ -62,9 +63,9 @@ def test_non_native_endian_nan_is_not_admitted_as_finite_native_bytes():
 
 
 @pytest.mark.parametrize('method', ['effective_length', 'effective_area'])
-def test_all_owned_methods_remain_bound_even_when_unselected(monkeypatch, method):
+def test_all_owned_methods_remain_bound_even_when_unselected(monkeypatch, method, request):
     from anygeometry.tolerance import TolerancePolicy
-    captured = capture_with_runtime_boundary((TolerancePolicy.effective_length, TolerancePolicy))
+    captured = capture_with_legacy_dataclass_boundary((TolerancePolicy.effective_length, TolerancePolicy), request=request)
     if captured is None:
         return
     captured.verify()
@@ -73,9 +74,9 @@ def test_all_owned_methods_remain_bound_even_when_unselected(monkeypatch, method
         captured.verify()
 
 
-def test_owned_code_identity_change_is_terminal_even_for_equal_behavior(monkeypatch):
+def test_owned_code_identity_change_is_terminal_even_for_equal_behavior(monkeypatch, request):
     from anygeometry.tolerance import TolerancePolicy
-    captured = capture_with_runtime_boundary((TolerancePolicy.effective_length,))
+    captured = capture_with_dispatcher_boundary((TolerancePolicy.effective_length,), request=request)
     if captured is None:
         return
     function = TolerancePolicy.effective_length

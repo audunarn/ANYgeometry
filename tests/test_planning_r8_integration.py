@@ -2,6 +2,7 @@
 import dataclasses
 import sys
 import pytest
+from _planning_legacy_contract import capture_with_legacy_dataclass_boundary
 from _planning_platform_contract import windows_owned_test
 from _planning_numpy_profile_contract import numpy_profile_test
 from _planning_contract_helpers import capture_with_runtime_boundary, capture_with_dispatcher_boundary
@@ -19,7 +20,7 @@ def test_dataclass_field_metadata_value_and_aliases_remain_bound(monkeypatch,req
     field=dataclasses.fields(TolerancePolicy)[0]
     shared=[1]
     monkeypatch.setattr(field,'metadata',{'first':shared,'second':shared})
-    captured=capture_with_runtime_boundary((TolerancePolicy,),request=request)
+    captured=capture_with_legacy_dataclass_boundary((TolerancePolicy,),request=request)
     if captured is None:return # Exact initial refusal is not postcapture coverage.
     captured.verify()
     shared[0]=2
@@ -28,7 +29,7 @@ def test_dataclass_field_metadata_value_and_aliases_remain_bound(monkeypatch,req
 
 def test_dataclass_field_flags_remain_bound(monkeypatch,request):
     field=dataclasses.fields(TolerancePolicy)[0]
-    captured=capture_with_runtime_boundary((TolerancePolicy,),request=request)
+    captured=capture_with_legacy_dataclass_boundary((TolerancePolicy,),request=request)
     if captured is None:return # Exact initial refusal is not postcapture coverage.
     monkeypatch.setattr(field,'repr',not field.repr)
     with pytest.raises(PlannerSourceChanged):captured.verify()
@@ -37,7 +38,7 @@ def test_dataclass_field_flags_remain_bound(monkeypatch,request):
 def test_registered_default_factory_definition_remains_bound(monkeypatch,request):
     from anygeometry._canonical_curve_runtime import _Bank
     field=next(field for field in dataclasses.fields(_Bank) if field.name=='declarations')
-    captured=capture_with_runtime_boundary((_Bank,),request=request)
+    captured=capture_with_legacy_dataclass_boundary((_Bank,),request=request)
     if captured is None:return # Exact initial refusal is not postcapture coverage.
     monkeypatch.setattr(field,'default_factory',list)
     with pytest.raises(PlannerSourceChanged):captured.verify()

@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import pytest
+from _planning_legacy_contract import capture_with_legacy_dataclass_boundary
 from _planning_contract_helpers import capture_with_runtime_boundary
 from anygeometry._planning_executor import PlannerSourceChanged
 from anygeometry._planning_qualification import pin_module
@@ -33,10 +34,10 @@ def test_owned_caller_imported_numpy_binding_drift_is_terminal(monkeypatch, chan
         captured.verify()
 
 
-def test_unrelated_interpreter_module_is_not_a_package_owned_definition(monkeypatch):
+def test_unrelated_interpreter_module_is_not_a_package_owned_definition(monkeypatch, request):
     import types
     from anygeometry.tolerance import TolerancePolicy
-    captured = capture_with_runtime_boundary((TolerancePolicy,))
+    captured = capture_with_legacy_dataclass_boundary((TolerancePolicy,), request=request)
     if captured is None:
         return
     foreign = types.ModuleType('r10_unrelated_interpreter_state')

@@ -3,6 +3,7 @@ import ctypes
 import sys
 
 import pytest
+from _planning_legacy_contract import capture_with_legacy_dataclass_boundary
 from _planning_numpy_profile_contract import numpy_profile_test
 from _planning_contract_helpers import capture_with_runtime_boundary, classify_initial_dispatcher_refusal
 
@@ -35,7 +36,7 @@ def test_source_owned_slot_metadata_on_this_interpreter():
 
 def test_real_owned_callable_without_external_annotation_module_assumption(request):
     from anygeometry.tolerance import TolerancePolicy
-    captured = capture_with_runtime_boundary((TolerancePolicy,), request=request)
+    captured = capture_with_legacy_dataclass_boundary((TolerancePolicy,), request=request)
     if captured is None:
         return # Exact initial refusal is not postcapture coverage.
     captured.verify()
