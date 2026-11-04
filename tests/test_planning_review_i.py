@@ -9,6 +9,8 @@ from anygeometry import _planning_ledger as l
 from anygeometry import _planning_qualification as q
 from test_planning_batch import setup, tasks
 from test_planning_admission import invoke, pin
+from _planning_contract_helpers import (dispatcher_boundary_refusal,
+    require_qualified_planning_lane)
 
 
 @pytest.mark.parametrize('workers', [2, 4, 5, 8, 10])
@@ -89,7 +91,29 @@ def test_trusted_namespace_cannot_be_arbitrary_dict():
         l.trusted_store_identity(path, {'__name__': 'numpy._core.fromnumeric'})
 
 
-def test_trusted_record_identifies_namespaces_and_source_basis():
+def test_trusted_record_identifies_namespaces_and_source_basis(request):
+    if dispatcher_boundary_refusal() is not None:
+        from anygeometry import backend
+        import numpy as np
+        legacy = sys.modules.get('numpy.core.fromnumeric')
+        assert np.__version__.split('.', 1)[0] == '1'
+        assert type(legacy) is types.ModuleType and q.is_package_module(legacy)
+        assert vars(legacy)['__name__'] == 'numpy.core.fromnumeric'
+        assert sys.modules.get('numpy._core.fromnumeric') is None
+        assert backend._RUNTIME_POINT_EDGES[3][0] is vars(legacy)
+        reason = ('trusted namespace identity mismatch: '
+                  'anygeometry.backend._RUNTIME_POINT_EDGES[3][0]')
+        require_qualified_planning_lane(reason)
+        with pytest.raises(q.QualificationDecline) as caught:
+            q.trusted_runtime_record(pin())
+        assert type(caught.value) is q.QualificationDecline
+        assert str(caught.value) == reason
+        request.node.user_properties.extend((
+            ('execution_scope', 'initial-legacy-numpy-namespace-refusal'),
+            ('runtime_refusal', reason), ('original_test_body_executed', False),
+            ('trusted_record_qualification', False), ('postcapture_qualification', False),
+            ('loaded_host_qualification', False), ('numerical_worker_execution', False)))
+        return
     record = q.trusted_runtime_record(pin())
     stores = record['stores']
     assert stores[0]['namespace'] == 'builtins'

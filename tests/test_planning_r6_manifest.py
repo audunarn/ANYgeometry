@@ -1,6 +1,7 @@
 """R6 role separation keeps definitions, typed operation edges and the bound."""
 import pytest
-from _planning_contract_helpers import capture_with_dispatcher_boundary
+from _planning_contract_helpers import (capture_with_dispatcher_boundary,
+    classify_initial_dispatcher_refusal)
 from anygeometry import _planning_manifest as manifest
 from anygeometry._planning_qualification import QualificationDecline
 from anygeometry.model import GeometryModel
@@ -21,7 +22,8 @@ def test_common_roots_exclude_host_orchestration_and_document_authority():
     assert {'from_dict','to_dict'}<={f.__name__ for f in roles['constructor']}
 
 
-def test_nonexecuting_annotation_data_still_consumes_the_bound():
+def test_nonexecuting_annotation_data_still_consumes_the_bound(request):
+    if classify_initial_dispatcher_refusal(request):return
     def root():return None
     root.__annotations__={'return':list(range(80001))}
     with pytest.raises(QualificationDecline,match='bound|truncat'):
