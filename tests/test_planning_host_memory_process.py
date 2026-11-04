@@ -47,12 +47,10 @@ def test_real_host_and_tree_budget_preserves_small_fixture(tmp_path, monkeypatch
                            workers=2, timeout=80, reuse_workers=reuse, memory_budget=budget)
     monkeypatch.setenv('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING', '1')
     from anygeometry._planning_executor import PlannerCleanupError
-    with observe_plan_calls(enabled=not reuse) as calls:
+    with observe_plan_calls(enabled=True) as calls:
         try:
             plan = bi.plan_intersections(source, tuple(source.faces), policy='connect', _parallel_control=control)
         except PlannerCleanupError as error:
-            if reuse:
-                raise
             assert_unsupported512_terminal(error, reuse=reuse, control=control, source=source,
                                            document=doc, calls=calls, request=request)
             return
@@ -78,5 +76,7 @@ def test_real_host_and_tree_budget_preserves_small_fixture(tmp_path, monkeypatch
         admission=report, retirement=receipts, expected_ci=expected,
         actual_ci=observed(plan), input_unchanged=to_dict(source) == doc), indent=2))
 
-    if not reuse:
-        request.node.user_properties.append(('resource_configuration', 'unsupported512-safe-fit-observation'))
+    request.node.user_properties[:]=[(key,value) for key,value in request.node.user_properties if key!='execution_scope']
+    request.node.user_properties.extend((('execution_scope','unsupported512-single-fit-observation'),
+        ('resource_configuration','unsupported512-safe-fit-observation'),('reuse_workers',reuse),
+        ('parallel_qualified',False),('memory_capacity_qualified',False)))

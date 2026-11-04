@@ -140,12 +140,10 @@ def test_two_worker_geometry_under_explicit_tree_cap(tmp_path,monkeypatch,reuse,
     monkeypatch.setenv('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING','1');source=from_dict(doc);cap=512*1024**2
     control=host.StageControl(tmp_path/'geometry',expected_ci=expected,observed_ci=observed,workers=2,timeout=80,reuse_workers=reuse,tree_memory_limit=cap)
     from anygeometry._planning_executor import PlannerCleanupError
-    with observe_plan_calls(enabled=not reuse) as calls:
+    with observe_plan_calls(enabled=True) as calls:
         try:
             plan=bi.plan_intersections(source,tuple(source.faces),policy='connect',_parallel_control=control)
         except PlannerCleanupError as error:
-            if reuse:
-                raise
             assert_unsupported512_terminal(error, reuse=reuse, control=control, source=source,
                                            document=doc, calls=calls, request=request)
             return
@@ -171,12 +169,15 @@ def test_two_worker_geometry_under_explicit_tree_cap(tmp_path,monkeypatch,reuse,
         assert report['verified'] and report['active_processes']==0 and report['memory']['limit_bytes']==cap
         assert 0<report['memory']['peak_job_bytes']<=cap
 
-    if not reuse:
-        request.node.user_properties.append(('resource_configuration', 'unsupported512-safe-fit-observation'))
+    request.node.user_properties[:]=[(key,value) for key,value in request.node.user_properties if key!='execution_scope']
+    request.node.user_properties.extend((('execution_scope','unsupported512-single-fit-observation'),
+        ('resource_configuration','unsupported512-safe-fit-observation'),('reuse_workers',reuse),
+        ('parallel_qualified',False),('memory_capacity_qualified',False)))
 
 
+@pytest.mark.parametrize('reuse', [False, True])
 @pytest.mark.parametrize('fault', ['valid', 'source', 'callback', 'cleanup', 'context', 'flags', 'limit', 'peak', 'active', 'verified'])
-def test_strict_unsupported512_evidence_rejects_nonresource_failures(fault, request):
+def test_strict_unsupported512_evidence_rejects_nonresource_failures(fault, request, reuse):
     # Portable validation-unit fixtures, not native execution or cap enforcement.
     from copy import deepcopy
     from _planning_platform_contract import _strict_memory_failure
@@ -186,7 +187,7 @@ def test_strict_unsupported512_evidence_rejects_nonresource_failures(fault, requ
     observation = dict(requested_bytes=cap, limit_bytes=cap, flags=0x2200,
                        peak_job_bytes=cap + 4096, peak_process_bytes=cap // 2)
     cause = QualificationDecline('owned-tree memory enforcement differs from request: ' + str(observation))
-    error = PlannerCleanupError('session planner cleanup failed')
+    error = PlannerCleanupError('preparation cleanup failed' if reuse else 'session planner cleanup failed')
     error.__cause__ = cause
     cleanup = dict(verified=True, active_processes=0, memory_observation=deepcopy(observation),
                    memory_phase='after_cleanup', memory_error='QualificationDecline: ' + str(cause),
@@ -202,7 +203,118 @@ def test_strict_unsupported512_evidence_rejects_nonresource_failures(fault, requ
     elif fault == 'active': cleanup['active_processes'] = 1
     elif fault == 'verified': cleanup['verified'] = False
     if fault == 'valid':
-        assert _strict_memory_failure(error, cleanup, admission) == observation
+        assert _strict_memory_failure(error, cleanup, admission, reuse=reuse) == observation
     else:
         with pytest.raises(AssertionError):
-            _strict_memory_failure(error, cleanup, admission)
+            _strict_memory_failure(error, cleanup, admission, reuse=reuse)
+
+
+def _controlled_terminal512(tmp_path, monkeypatch, reuse):
+    """Checksum-valid metadata fixtures only, not measured native resource evidence."""
+    from types import SimpleNamespace
+    monkeypatch.delenv('CI', raising=False)
+    cap=512*1024**2;source=__import__('anygeometry').GeometryModel()
+    document=to_dict(source);directory=tmp_path/'geometry';folder=directory/('session' if reuse else 'pair');folder.mkdir(parents=True)
+    observation=dict(requested_bytes=cap,limit_bytes=cap,flags=0x2200,peak_job_bytes=cap+4096,peak_process_bytes=cap//2)
+    cause=QualificationDecline('owned-tree memory enforcement differs from request: '+str(observation))
+    error=executor.PlannerCleanupError('preparation cleanup failed' if reuse else 'session planner cleanup failed');error.__cause__=cause
+    cause.__context__=QualificationDecline('QualificationDecline: MemoryError: ')
+    cleanup=dict(verified=True,active_processes=0,memory_observation=observation,memory_phase='after_cleanup',memory_error='QualificationDecline: '+str(cause),memory_failure=dict(operation=None,winerror=None,requested_bytes=cap))
+    for name,value in [('cleanup.json',cleanup),('workers-cleanup.json',dict(verified=True,active_processes=0)),('memory-limit.json',dict(observation,peak_job_bytes=0,peak_process_bytes=0))]:(folder/name).write_text(json.dumps(value))
+    setup=dict(model=executor.freeze_model(source),sources={},workers=2,batch_size=None,limits=dict(payload_limit=4_000_000,walk_limit=100000))
+    session_packet=executor.pack(setup,'session');executor.write_packet(folder/'session.json',session_packet)
+    body=dict(session=session_packet['sha256'],sequence=0,previous=session_packet['sha256'],stage='pair',tasks=[dict(kind='pair')])
+    command=executor.pack(body,'session-command');executor.write_packet(folder/'command-0.json',command)
+    result=dict(status='declined',reason='QualificationDecline: MemoryError: ',session_sha256=session_packet['sha256'],request_sha256=command['sha256'])
+    executor.write_packet(folder/'result.json',executor.pack(result,'result'))
+    control=SimpleNamespace(directory=directory,reuse_workers=reuse,tree_memory_limit=cap,workers=2,mode='terminal',ci_verified=False)
+    def fixture(name):
+        assert name=='tmp_path'
+        return tmp_path
+    request=SimpleNamespace(node=SimpleNamespace(user_properties=[],nodeid='controlled-validation'),
+        config=SimpleNamespace(option=SimpleNamespace(basetemp=None)),getfixturevalue=fixture)
+    return error,control,source,document,request
+
+
+def test_reuse512_terminal_lifecycle_has_exact_resource_proof(tmp_path,monkeypatch,request):
+    error,control,source,document,isolated=_controlled_terminal512(tmp_path,monkeypatch,True)
+    assert_unsupported512_terminal(error,reuse=True,control=control,source=source,document=document,calls=['candidate'],request=isolated)
+    summary=json.loads((control.directory/'unsupported512-terminal.json').read_text())
+    assert summary['reuse_workers'] is True and summary['parallel_qualified'] is False
+    request.node.user_properties.append(('execution_scope','resource-evidence-validation-unit'))
+
+
+@pytest.mark.parametrize('reuse',[False,True])
+@pytest.mark.parametrize('route',['direct','budget','consistent','unknown','wrong-budget-cap','conflict','missing','bool-budget-cap'])
+def test_unsupported512_budget_cap_is_exact(tmp_path,monkeypatch,request,reuse,route):
+    from types import SimpleNamespace
+    from anygeometry._planning_memory import MemoryBudget
+    error,control,source,document,isolated=_controlled_terminal512(tmp_path,monkeypatch,reuse)
+    cap=512*1024**2
+    if route!='direct':
+        control.memory_budget=MemoryBudget(cap,cap,cap*3,(1,1))
+    if route in ('budget','unknown','wrong-budget-cap','missing','bool-budget-cap'):
+        control.tree_memory_limit=None
+    if route=='unknown':control.memory_budget=SimpleNamespace(tree_limit_bytes=cap)
+    elif route=='wrong-budget-cap':control.memory_budget=MemoryBudget(cap,cap*2,cap*4,(1,1))
+    elif route=='conflict':control.tree_memory_limit=cap*2
+    elif route=='missing':control.memory_budget=None
+    elif route=='bool-budget-cap':object.__setattr__(control.memory_budget,'tree_limit_bytes',True)
+    if route in ('direct','budget','consistent'):
+        assert_unsupported512_terminal(error,reuse=reuse,control=control,source=source,document=document,calls=['candidate'],request=isolated)
+    else:
+        with pytest.raises(AssertionError):
+            assert_unsupported512_terminal(error,reuse=reuse,control=control,source=source,document=document,calls=['candidate'],request=isolated)
+    request.node.user_properties.append(('execution_scope','resource-evidence-validation-unit'))
+
+
+@pytest.mark.parametrize('reuse',[False,True])
+@pytest.mark.parametrize('fault',['valid','folder','flag','reuse-type','message','context','serial','session','command','result','handle','workers'])
+def test_unsupported512_lifecycle_binding_is_strict(tmp_path,monkeypatch,request,reuse,fault):
+    error,control,source,document,isolated=_controlled_terminal512(tmp_path,monkeypatch,reuse)
+    folder=control.directory/('session' if reuse else 'pair');calls=['candidate']
+    if fault=='folder':folder.rename(control.directory/('pair' if reuse else 'session'))
+    elif fault=='flag':control.reuse_workers=not reuse
+    elif fault=='reuse-type':control.reuse_workers=int(reuse)
+    elif fault=='message':error.args=('session planner cleanup failed' if reuse else 'preparation cleanup failed',)
+    elif fault=='context':error.__context__=executor.PlannerCancelled('cancelled')
+    elif fault=='serial':calls.append('serial')
+    elif fault=='session':
+        body=executor.read_packet(folder/'session.json','session');body['workers']=3;executor.write_packet(folder/'session.json',executor.pack(body,'session'))
+    elif fault=='command':
+        body=executor.read_packet(folder/'command-0.json','session-command');body['sequence']=1;executor.write_packet(folder/'command-0.json',executor.pack(body,'session-command'))
+    elif fault=='result':
+        body=executor.read_packet(folder/'result.json','result');body['request_sha256']='0'*64;executor.write_packet(folder/'result.json',executor.pack(body,'result'))
+    elif fault=='handle':(folder/'handle-cleanup-error-1.json').write_text('{}')
+    elif fault=='workers':(folder/'workers-cleanup.json').write_text(json.dumps(dict(verified=True,active_processes=1)))
+    if fault=='valid':
+        assert_unsupported512_terminal(error,reuse=reuse,control=control,source=source,document=document,calls=calls,request=isolated)
+    else:
+        with pytest.raises((AssertionError,QualificationDecline)):
+            assert_unsupported512_terminal(error,reuse=reuse,control=control,source=source,document=document,calls=calls,request=isolated)
+    request.node.user_properties.append(('execution_scope','resource-evidence-validation-unit'))
+
+
+@pytest.mark.parametrize('wrong_base',[False,True])
+def test_unsupported512_ci_copy_is_fixed_bounded_and_private_free(tmp_path,monkeypatch,request,wrong_base):
+    import _planning_platform_contract as contract
+    error,control,source,document,isolated=_controlled_terminal512(tmp_path,monkeypatch,True)
+    assert_unsupported512_terminal(error,reuse=True,control=control,source=source,document=document,calls=['candidate'],request=isolated)
+    summary=json.loads((control.directory/'unsupported512-terminal.json').read_text())
+    root=tmp_path/'checkout';(root/'tests').mkdir(parents=True)
+    monkeypatch.setattr(contract,'__file__',str(root/'tests/_planning_platform_contract.py'))
+    monkeypatch.setenv('CI','true')
+    folder=control.directory/'session';(folder/'private-unrelated.txt').write_text('never retained')
+    assert isolated.config.option.basetemp is None
+    if wrong_base:
+        isolated.getfixturevalue=lambda name:tmp_path/'another-test'
+        with pytest.raises(AssertionError):
+            contract._retain_unsupported512_evidence(summary,[folder],isolated)
+        assert not list((root/'ci-isolation').rglob('cleanup.json'))
+        return
+    target=contract._retain_unsupported512_evidence(summary,[folder],isolated)
+    assert target.is_relative_to(root/'ci-isolation/unsupported512')
+    assert {p.name for p in target.iterdir()}=={'session','summary.json'}
+    assert {p.name for p in (target/'session').iterdir()}=={'cleanup.json','workers-cleanup.json','memory-limit.json','session.json','command-0.json','result.json'}
+    retained=json.loads((target/'summary.json').read_text());assert len(retained['retained_files'])==6
+    request.node.user_properties.append(('execution_scope','resource-evidence-validation-unit'))
