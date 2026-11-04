@@ -326,6 +326,29 @@ def worker_environment_reference(reference):
     return result
 
 
+# Curated Cython runtime interfaces observed in the supported external images.
+# Selection is not creator provenance: capture_environment still binds members,
+# every native provider image, and the complete loaded module key set.
+_GENERATED_VERSION_MODULES = ('_cython_3_2_4', '_cython_3_1_4', '_cython_3_3_0')
+
+
+def generated_runtime_modules(reference=None):
+    """Select exact present interfaces after common preparation, never a prefix."""
+    if 'cython_runtime' not in sys.modules:
+        raise QualificationDecline('mandatory generated module missing: cython_runtime')
+    selected=('cython_runtime',)+tuple(name for name in _GENERATED_VERSION_MODULES if name in sys.modules)
+    if reference is not None:
+        if type(reference) is not dict or type(reference.get('modules')) is not dict:
+            raise QualificationDecline('generated module reference schema')
+        modules=reference['modules']
+        if any(type(name) is not str or type(pin) is not dict for name,pin in modules.items()):
+            raise QualificationDecline('generated module reference schema')
+        expected={name for name,pin in modules.items() if pin.get('kind')=='explicit-generated-native'}
+        if set(selected)!=expected:
+            raise QualificationDecline('generated module selection differs from reference')
+    return selected
+
+
 def capture_environment(*, generated_modules=(), declined_stores=None, trusted_image=False,numerical_manifest=None,resource_pin=None):
     """Record the actual loaded closure after declared eager imports.
 

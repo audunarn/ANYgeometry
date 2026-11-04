@@ -36,7 +36,6 @@ from anygeometry import branch_events,quadric_events,branch_wall_events
 # closure before capture; later additions/rebindings remain forbidden.
 from shapely.geometry import Polygon
 from shapely.ops import unary_union
-_GENERATED_MODULES = ('cython_runtime', '_cython_3_2_4', '_cython_3_1_4')
 
 
 def load():
@@ -83,7 +82,7 @@ def prepare(*,production=False):
     return canaries, goldens
 
 
-def worker(folder, deadline, canaries, goldens, limits):
+def worker(folder, deadline, canaries, goldens, limits, generated):
     request = read_packet(folder/'request.json', 'assignment',limit=limits['payload_limit'])
     context = WorkerModel(request['model'],**limits) if request.get('stage') is True else None
     decoded = context.model if context is not None else thaw_model(request['model'],**limits)
@@ -97,9 +96,11 @@ def worker(folder, deadline, canaries, goldens, limits):
     if model_sha != request['model']['sha256']:
         raise q.QualificationDecline('worker reconstructed model hash mismatch')
     expected = request['expected']
+    if generated != q.generated_runtime_modules(reference=expected):
+        raise q.QualificationDecline('generated module selection changed after preparation')
     ledger = ledger_api.loaded_geometry_ledger(trusted_image=True)
     gate = BatchWorkerGate(expected, stores=ledger.resets, owned_worker=True, ledger=ledger,
-        generated_modules=_GENERATED_MODULES,
+        generated_modules=generated,
         batch_size=assignment_size(request['batch_size'], len(request['tasks'])), coalesce_boundaries=True)
     before = load()
     started = time.perf_counter()
@@ -125,7 +126,7 @@ def worker(folder, deadline, canaries, goldens, limits):
         full_environment_checks=len(gate.verification_seconds), blas_threads=threadpool_info())
 
 
-def planner(folder, deadline, canaries, goldens, ready_at, binding, limits):
+def planner(folder, deadline, canaries, goldens, ready_at, binding, limits, generated):
     write_packet(folder/'ready.json', pack(dict(ready_at=ready_at, load_before=load()), 'ready'))
     path = folder/'request.json'
     while not path.exists():
@@ -146,7 +147,9 @@ def planner(folder, deadline, canaries, goldens, ready_at, binding, limits):
     count = len(assignments)
     ledger = ledger_api.loaded_geometry_ledger(trusted_image=True)
     ledger.prepare(owned_worker=True)
-    expected = q.capture_environment(generated_modules=_GENERATED_MODULES,
+    if generated != q.generated_runtime_modules():
+        raise q.QualificationDecline('generated module selection changed after preparation')
+    expected = q.capture_environment(generated_modules=generated,
                                     declined_stores=ledger.resets, trusted_image=True)
     expected['live_code_pins'] = ledger.live_code_pins()
     write_packet(folder/'reference.json', pack(expected, 'reference'))
@@ -218,17 +221,18 @@ def main():
                 if role=='session-worker':q.verify_worker_resource_absence()
             prepare_started=time.perf_counter()
             canaries, goldens = prepare(production=production)
+            generated = q.generated_runtime_modules()
             if production:
                 from anygeometry._planning_session import _record_initialization
                 _record_initialization(folder,'child_prepare',prepare_started)
             if role == 'planner':
-                result = planner(folder, deadline, canaries, goldens, time.perf_counter(), binding, limits)
+                result = planner(folder, deadline, canaries, goldens, time.perf_counter(), binding, limits, generated)
             elif role == 'worker':
-                result = worker(folder, deadline, canaries, goldens, limits)
+                result = worker(folder, deadline, canaries, goldens, limits, generated)
             elif role == 'session-planner':
-                result = session_planner(folder,deadline,canaries,goldens,binding,limits,_GENERATED_MODULES)
+                result = session_planner(folder,deadline,canaries,goldens,binding,limits,generated)
             elif role == 'session-worker':
-                result = session_worker(folder,deadline,canaries,goldens,binding,limits,_GENERATED_MODULES)
+                result = session_worker(folder,deadline,canaries,goldens,binding,limits,generated)
             else:
                 raise q.QualificationDecline('unknown child role')
             result['status'] = 'passed'

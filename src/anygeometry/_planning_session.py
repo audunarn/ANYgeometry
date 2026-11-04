@@ -548,6 +548,8 @@ def session_planner(folder,deadline,canaries,goldens,binding,limits,generated):
             raise QualificationDecline('H/P common/constructor manifest mismatch')
     else:ledger=ledger_api.loaded_geometry_ledger(trusted_image=True)
     stamp=time.perf_counter();ledger.prepare(owned_worker=True)
+    if generated != q.generated_runtime_modules():
+        raise QualificationDecline('generated module selection changed after preparation')
     expected=q.capture_environment(generated_modules=generated,declined_stores=ledger.resets,trusted_image=ledger.trusted_image,
         numerical_manifest=ledger.live_code_pins() if 'numerical_manifest' in setup else None,
         resource_pin=getattr(ledger,'resource_pin',None))
@@ -743,6 +745,8 @@ def session_worker(folder,deadline,canaries,goldens,binding,limits,generated):
             raise QualificationDecline('H/W common/constructor manifest mismatch')
     else:ledger=ledger_api.loaded_geometry_ledger(trusted_image=True)
     expected=setup['expected']
+    if generated != q.generated_runtime_modules(reference=expected):
+        raise QualificationDecline('generated module selection changed after preparation')
     seen=();previous=setup_sha;parent_previous=session;gate=None
     while True:
         path=_path(folder,'command',len(seen));_wait_file(path,deadline)
