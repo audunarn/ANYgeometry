@@ -60,6 +60,7 @@ def test_real_nested_cancellation_never_replays_serial(tmp_path):
     assert any('worker' in row['command'] for row in cleanup['checked'])
 
 
+@windows_owned_test
 def test_real_planner_corrupt_transport_declines_and_cleans(tmp_path):
     folder=tmp_path/'corrupt'
     with a.OwnedPlanner(folder,workers=2) as planner:
@@ -72,6 +73,7 @@ def test_real_planner_corrupt_transport_declines_and_cleans(tmp_path):
     assert json.loads((folder/'cleanup.json').read_text())['active_processes']==0
 
 
+@windows_owned_test
 def test_real_started_planner_fallback_uses_original_source(tmp_path):
     folder=tmp_path/'fallback'; model=object(); seen=[]
     result=a.execute(model,('pair','face'),lambda name:seen.append((model,name)) or name,

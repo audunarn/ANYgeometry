@@ -3,12 +3,14 @@ import ctypes
 import json
 
 import pytest
+from _planning_platform_contract import windows_owned_test
 
 from anygeometry._planning_process import OwnedTree
 from anygeometry._planning_qualification import QualificationDecline
 
 
 @pytest.mark.parametrize('terminate_fails',[False,True])
+@windows_owned_test
 def test_retained_job_after_failed_close_cannot_launch(tmp_path,monkeypatch,terminate_fails):
     tree=OwnedTree(tmp_path)
     close=tree.api.CloseHandle;terminate=tree.api.TerminateJobObject;target=tree.handle
@@ -33,6 +35,7 @@ def test_retained_job_after_failed_close_cannot_launch(tmp_path,monkeypatch,term
     assert json.loads((tmp_path/'cleanup.json').read_text())['active_processes']==0
 
 
+@windows_owned_test
 def test_successfully_closed_child_handles_are_not_reclosed_on_job_retry(tmp_path,monkeypatch):
     tree=OwnedTree(tmp_path);child=tree.spawn('worker',tmp_path/'worker',10)
     process_handle=child.info.process;job_handle=tree.handle;real=tree.api.CloseHandle

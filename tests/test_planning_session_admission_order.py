@@ -17,6 +17,13 @@ def run_dispatch(tmp_path,monkeypatch,admission='valid'):
         return ledger
     monkeypatch.setattr(s.ledger_api,'loaded_geometry_ledger',loaded_ledger)
     monkeypatch.setattr(s.q,'capture_environment',lambda **k:{})
+    # This dispatch-order unit already declares a fake empty environment.
+    # Its generated selection must match that context, not the loaded host.
+    declared_generated=()
+    def select_generated(reference=None):
+        assert reference is None  # P capture; no W reference is used by this unit.
+        return declared_generated
+    monkeypatch.setattr(s.q,'generated_runtime_modules',select_generated)
     monkeypatch.setattr(s,'verify_sources',lambda *a:None)
     monkeypatch.setattr(s,'dispatch',lambda *a:([[0],[1]],[[0],[1]]))
     class Tree:
@@ -42,7 +49,7 @@ def run_dispatch(tmp_path,monkeypatch,admission='valid'):
             write(path,s.pack(body,'admitted'));return
         raise RepliesReached()
     monkeypatch.setattr(s,'_wait_file',wait)
-    return events,lambda:s.session_planner(tmp_path,time.monotonic()+30,{}, {},{},limits,())
+    return events,lambda:s.session_planner(tmp_path,time.monotonic()+30,{}, {},{},limits,declared_generated)
 
 
 def test_next_worker_stage_waits_for_previous_admission(tmp_path,monkeypatch):
