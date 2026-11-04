@@ -12,7 +12,7 @@ src/anygeometry/_planning_runtime_anchor.py -text
 src/anygeometry/_planning_windows_launch.py -text
 
 # Retain exact guarded diagnostic profile and archived original test bytes.
-/native/runtime_inspector_profile.json -text
+/native/runtime_inspector_profile.json -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 /docs/historical-planning-tests/*.py.txt -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 /docs/historical-planning-tests/r10-cpu-fixtures/*.py.txt -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 
