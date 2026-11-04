@@ -281,10 +281,49 @@ def test_actual_failed_protocol_journal_and_junit_remain_failed(tmp_path):
     assert ET.parse(tmp_path/'actual.xml').getroot().find('.//testcase/failure') is not None
 
 
+def _assert_owned_progress_child(process,command,owner,created):
+    """Authenticate the retained child; framework launchers may change argv0."""
+    assert process.poll() is None
+    assert owner.pid==process.pid and owner.is_running()
+    assert owner.create_time()==created and owner.ppid()==os.getpid()
+    actual=owner.cmdline();image=owner.exe()
+    assert type(actual) is list and len(actual)==len(command)
+    assert all(type(part) is str for part in actual) and type(image) is str
+    assert actual[1:]==command[1:]
+    assert os.path.samefile(actual[0],image)
+    return actual
+
+
+@pytest.mark.parametrize('fault',('none','parent','args','image','pid','creation','exited'))
+def test_owned_progress_child_authentication_metadata(tmp_path,fault):
+    """Synthetic launcher/image identity control, not actual macOS coverage."""
+    launcher=tmp_path/'bin-python';launcher.write_text('distinct launcher')
+    image=tmp_path/'Python.app-image';image.write_text('actual image')
+    other=tmp_path/'foreign-image';other.write_text('foreign')
+    command=[str(launcher),'-B','owned-script','--child','unique-config']
+    class Process:
+        pid=12345
+        def poll(self):return 0 if fault=='exited' else None
+    class Owner:
+        pid=12346 if fault=='pid' else 12345
+        def is_running(self):return True
+        def create_time(self):return 1.5 if fault=='creation' else 1.
+        def ppid(self):return os.getpid()+1 if fault=='parent' else os.getpid()
+        def cmdline(self):return [str(image),*command[1:],*(['foreign'] if fault=='args' else [])]
+        def exe(self):return str(other if fault=='image' else image)
+    if fault=='none':
+        assert not os.path.samefile(launcher,image)
+        assert _assert_owned_progress_child(Process(),command,Owner(),1.)==[str(image),*command[1:]]
+    else:
+        with pytest.raises(AssertionError):_assert_owned_progress_child(Process(),command,Owner(),1.)
+
+
 def test_killed_protocol_retains_flushed_active_node_without_completion_or_junit(tmp_path):
     command,env=_progress_child_fixture(tmp_path,'import time\ndef test_observed(): time.sleep(30)\n')
     stdout=(tmp_path/'stdout.txt').open('w');stderr=(tmp_path/'stderr.txt').open('w')
     process=subprocess.Popen(command,cwd=tmp_path,env=env,stdout=stdout,stderr=stderr)
+    import psutil
+    owner=psutil.Process(process.pid);created=owner.create_time()
     rows=[];deadline=time.monotonic()+15
     try:
         while time.monotonic()<deadline:
@@ -296,13 +335,16 @@ def test_killed_protocol_retains_flushed_active_node_without_completion_or_junit
             time.sleep(.02)
         assert any(row['event']=='start' for row in rows)
     finally:
-        if process.poll() is None:
-            import psutil
-            actual_command=psutil.Process(process.pid).cmdline()
-            (tmp_path/'owned-process.json').write_text(json.dumps(dict(pid=process.pid,expected=command,actual=actual_command)))
-            assert actual_command==command
-            process.kill()
-        process.wait(timeout=5);stdout.close();stderr.close()
+        try:
+            if process.poll() is None:
+                actual_command=owner.cmdline()
+                (tmp_path/'owned-process.json').write_text(json.dumps(dict(pid=process.pid,
+                    created=created,expected=command,actual=actual_command,ppid=owner.ppid(),image=owner.exe())))
+                assert _assert_owned_progress_child(process,command,owner,created)==actual_command
+                process.kill()
+            process.wait(timeout=5)
+        finally:
+            stdout.close();stderr.close()
     text=(tmp_path/'core-progress.jsonl').read_text()
     rows=[json.loads(line) for line in text[:text.rfind('\n')+1].splitlines()]
     assert any(row['event']=='start' and row['nodeid']=='tests/test_observed.py::test_observed' for row in rows)

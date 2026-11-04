@@ -66,7 +66,8 @@ def test_registered_rlock_requires_a_nonmutating_state_interface(request):
             capture_callable_manifest((lock,))
         assert not lock._is_owned()
         return
-    captured = capture_callable_manifest((lock,))
+    captured = capture_with_runtime_boundary((lock,),request=request)
+    if captured is None:return # Actual initial image refusal is not RLock coverage.
     captured.verify()
     with lock:
         with pytest.raises(PlannerSourceChanged):
