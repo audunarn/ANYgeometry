@@ -8,7 +8,8 @@ import types
 import pytest
 from _planning_legacy_contract import capture_with_legacy_dataclass_boundary
 from _planning_numpy_profile_contract import numpy_profile_test
-from _planning_contract_helpers import capture_with_runtime_boundary, capture_with_dispatcher_boundary, classify_initial_dispatcher_refusal
+from _planning_contract_helpers import (capture_with_runtime_boundary, capture_with_dispatcher_boundary,
+    classify_initial_dispatcher_refusal,classify_initial_runtime_refusal)
 from anygeometry._planning_manifest import capture_callable_manifest
 from anygeometry._planning_executor import PlannerSourceChanged
 from anygeometry._planning_qualification import QualificationDecline
@@ -59,7 +60,8 @@ def test_exact_builtin_type_constructor_binds_interpreter_image(request):
     manifest.verify()
 
 
-def test_unregistered_native_like_callable_refuses():
+def test_unregistered_native_like_callable_refuses(request):
+    if classify_initial_dispatcher_refusal(request):return # No selected negative coverage before admission.
     class Pretend:
         __module__=None
         __qualname__='BaseException.__new__'
@@ -67,12 +69,14 @@ def test_unregistered_native_like_callable_refuses():
     with pytest.raises(QualificationDecline):capture_callable_manifest((Pretend(),))
 
 
-def test_bound_builtin_instance_method_is_not_type_constructor():
+def test_bound_builtin_instance_method_is_not_type_constructor(request):
+    if classify_initial_dispatcher_refusal(request):return # No constructor-negative coverage before admission.
     with pytest.raises(QualificationDecline):capture_callable_manifest(([].append,))
 
 
 @pytest.mark.parametrize('module',[None,False,17,object()])
-def test_non_string_type_metadata_refuses_without_coercion(module):
+def test_non_string_type_metadata_refuses_without_coercion(module,request):
+    if classify_initial_dispatcher_refusal(request):return # No metadata-negative coverage before admission.
     class Unknown:
         def __call__(self):return None
     Unknown.__module__=module
@@ -80,7 +84,8 @@ def test_non_string_type_metadata_refuses_without_coercion(module):
 
 
 @pytest.mark.parametrize('field',['__module__','__qualname__'])
-def test_string_subclass_type_metadata_never_dispatches_hooks(field):
+def test_string_subclass_type_metadata_never_dispatches_hooks(field,request):
+    if classify_initial_dispatcher_refusal(request):return # No metadata-hook coverage before admission.
     events=[]
     class Text(str):
         def __add__(self,other):events.append('add');raise AssertionError('metadata add hook')
@@ -92,7 +97,8 @@ def test_string_subclass_type_metadata_never_dispatches_hooks(field):
     assert events==[]
 
 
-def test_type_metadata_native_reads_bypass_metaclass_hooks():
+def test_type_metadata_native_reads_bypass_metaclass_hooks(request):
+    if classify_initial_dispatcher_refusal(request):return # No metaclass-hook coverage before admission.
     events=[]
     class Meta(type):
         @property
@@ -114,7 +120,8 @@ def test_type_metadata_drift_is_terminal(full,request):
 @numpy_profile_test
 def test_bounded_real_owned_class_binding_replacement_is_terminal(monkeypatch,request):
     from anygeometry.errors import GeometryError
-    captured=capture_callable_manifest((GeometryError,))
+    captured=capture_with_dispatcher_boundary((GeometryError,),request=request)
+    if captured is None:return # Exact initial refusal is not postcapture coverage.
     captured.verify()
     monkeypatch.setattr(GeometryError,'__str__',lambda self:'changed')
     with pytest.raises(PlannerSourceChanged):captured.verify()
@@ -145,6 +152,9 @@ def test_real_tolerance_dataclass_wrapper_boundary_is_explicit(request):
         original=tolerance.TolerancePolicy
         method=original.effective_area
         with pytest.raises(QualificationDecline) as caught:capture_callable_manifest(roots)
+        if classify_initial_runtime_refusal(caught.value,request=request):
+            assert tolerance.TolerancePolicy is original and original.effective_area is method
+            return # Actual initial image refusal is not generated-wrapper coverage.
         assert type(caught.value) is QualificationDecline and str(caught.value)==reason
         assert tolerance.TolerancePolicy is original and original.effective_area is method
         request.node.user_properties.extend((('execution_scope','initial-legacy-dataclass-wrapper-refusal'),

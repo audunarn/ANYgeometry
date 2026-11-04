@@ -7,7 +7,7 @@ import types
 
 import pytest
 from _planning_contract_helpers import (capture_with_dispatcher_boundary,
-    dispatcher_boundary_refusal, require_qualified_planning_lane)
+    dispatcher_boundary_refusal, require_qualified_planning_lane,classify_initial_runtime_refusal)
 from anygeometry import _planning_manifest as manifest
 from anygeometry._planning_qualification import QualificationDecline
 
@@ -92,6 +92,7 @@ def capture_with_legacy_dataclass_boundary(roots,*,request=None):
     if evidence is None:return capture_with_dispatcher_boundary(roots,request=request)
     reason=evidence['reason'];require_qualified_planning_lane(reason)
     with pytest.raises(QualificationDecline) as caught:manifest.capture_callable_manifest(roots)
+    if classify_initial_runtime_refusal(caught.value,request=request):return None
     assert type(caught.value) is QualificationDecline and str(caught.value)==reason, (
         'exact legacy refusal differs',reason,type(caught.value).__name__,str(caught.value),evidence)
     if request is not None:

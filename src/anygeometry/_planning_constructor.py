@@ -41,12 +41,10 @@ def _plane_normal_count(record):
     return sys.getrefcount(array)
 
 
-def _plane_normal_cache(record, tracked):
-    """Validate the existing H cache; never populate or transport that cache."""
+def _plane_declared_fields(record):
+    """Apply the declared-field admission contract before a cache can warm."""
     names = ('origin', 'u_vector', 'v_vector')
     namespace = object.__getattribute__(record, '__dict__')
-    if type(record) is not Plane or set(namespace) != {*names, 'normal'}:
-        raise QualificationDecline('unregistered Plane cache schema')
     for name in names:
         value = namespace[name]
         if (type(value) is not _NDARRAY_TYPE or value.dtype != np.dtype(float)
@@ -54,6 +52,15 @@ def _plane_normal_cache(record, tracked):
                 or not value.flags.c_contiguous or value.flags.writeable
                 or not np.all(np.isfinite(value))):
             raise QualificationDecline('unqualified Plane declared field')
+
+
+def _plane_normal_cache(record, tracked):
+    """Validate the existing H cache; never populate or transport that cache."""
+    names = ('origin', 'u_vector', 'v_vector')
+    namespace = object.__getattribute__(record, '__dict__')
+    if type(record) is not Plane or set(namespace) != {*names, 'normal'}:
+        raise QualificationDecline('unregistered Plane cache schema')
+    _plane_declared_fields(record)
     fresh = Plane(**{name: namespace[name] for name in names})
     fresh.normal
     if any(not _array_equal(namespace[name], vars(fresh)[name]) for name in names):
@@ -206,6 +213,8 @@ def audit(state, *, restore=None, limit=100000):
             extra = set(namespace)-{f.name for f in declared}
             if typ is Plane and extra:
                 _plane_normal_cache(item, tracked)
+            elif typ is Plane:
+                _plane_declared_fields(item)
             elif extra or typ is Cylinder:
                 rows.append(_extra(item,path,tracked,expected))
             for f in declared:

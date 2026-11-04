@@ -17,7 +17,7 @@ def test_plain_owned_slot_class_mutations_have_admitted_baseline(monkeypatch,req
     cls=native._SlotHandle
     method=cls.__int__
     captured=capture_with_dispatcher_boundary((method,cls),request=request)
-    if captured is None:return # Only exact missing dispatcher, not mutation coverage.
+    if captured is None:return # Exact initial refusal is not mutation coverage.
     captured.verify();captured.verify(full=True)  # cold and retained warm baseline
     assert native._SlotHandle is cls and cls.__int__ is method
     if change=='selected':monkeypatch.setattr(cls,'__int__',lambda self:9)
