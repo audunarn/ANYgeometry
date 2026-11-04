@@ -2,6 +2,7 @@
 from copy import deepcopy
 import importlib
 import pytest
+from _planning_numpy_profile_contract import numpy_profile_test
 from anygeometry import _planning_ledger as l
 from anygeometry import _planning_qualification as q
 
@@ -34,6 +35,7 @@ def invoke(**changes):
     arguments.update(changes)
     return api().run_qualified(**arguments)
 
+@numpy_profile_test
 def test_trusted_image_lists_exact_stores_and_limit():
     record=q.trusted_runtime_record(pin())
     assert tuple(item['path'] for item in record['stores'])==STORES
@@ -42,9 +44,22 @@ def test_trusted_image_lists_exact_stores_and_limit():
     assert record['binary_hashes']['numpy.pyd']=='a'*64
 
 
-def test_trusted_ledger_is_explicit_and_has_no_seven_declines():
-    strict=l.loaded_geometry_ledger()
-    accepted=l.loaded_geometry_ledger(trusted_image=True)
+@numpy_profile_test
+def test_trusted_ledger_is_explicit_and_has_no_seven_declines(request):
+    from pathlib import Path
+    import sys
+    from anygeometry import backend,exact_curves
+    roots=(backend,exact_curves)
+    package=Path(l.__file__).resolve().parent
+    for module in roots:
+        assert sys.modules[module.__name__] is module
+        assert Path(module.__file__).resolve()==package/(module.__name__.rsplit('.',1)[-1]+'.py')
+    strict=l.loaded_geometry_ledger(modules=roots)
+    accepted=l.loaded_geometry_ledger(trusted_image=True,modules=roots)
+    assert set(STORES)<=strict.rows.keys() and set(STORES)<=accepted.rows.keys()
+    assert not strict.report.truncated and not accepted.report.truncated
+    request.node.user_properties.extend((('execution_scope','bounded-owner-ledger-component'),
+                                         ('loaded_host_qualification',False)))
     assert all(strict.rows[path]['action']=='decline' for path in STORES)
     assert all(accepted.rows[path]['action']=='trusted-runtime-image' for path in STORES)
     assert accepted.resets.keys()==strict.resets.keys()
@@ -141,9 +156,25 @@ def test_effective_environment_opt_in(monkeypatch,value,mode):
     assert starts==([1] if mode=='parallel' else [])
 
 
+@numpy_profile_test
 def test_trusted_record_cannot_omit_owner_named_stores():
     reference=pin()
     reference['trusted_runtime_image']=q.trusted_runtime_record(reference)
     reference['trusted_runtime_image']['stores'].pop()
     with pytest.raises(q.QualificationDecline,match='trusted runtime'):
         q.verify_environment(reference,deepcopy(reference))
+
+
+def test_matching_pins_cannot_omit_a_bounded_owner_store_record(monkeypatch,request):
+    # Isolate only the record-comparison protocol. This synthetic producer does
+    # not qualify any loaded interpreter, native image, or live owner store.
+    issued={'stores':[{'path':'bounded.owner.first'},{'path':'bounded.owner.second'}]}
+    monkeypatch.setattr(q,'trusted_runtime_record',lambda _pin:deepcopy(issued))
+    reference=pin();reference['trusted_runtime_image']=deepcopy(issued)
+    q.verify_environment(reference,deepcopy(reference))
+    reference['trusted_runtime_image']['stores'].pop()
+    with pytest.raises(q.QualificationDecline,match='^invalid trusted runtime image record$'):
+        q.verify_environment(reference,deepcopy(reference))
+    assert len(issued['stores'])==2
+    request.node.user_properties.extend((('execution_scope','bounded-record-comparison-unit'),
+                                         ('loaded_runtime_qualification',False)))

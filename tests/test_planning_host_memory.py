@@ -14,10 +14,70 @@ def budget(**changes):
     values.update(changes);return api().MemoryBudget(**values)
 def sample(peak=100,available=2000):return dict(host_peak_bytes=peak,host_private_bytes=min(90,peak),available_bytes=available)
 
+def _native_memory_case(monkeypatch, record_property):
+    """Exercise the real initial refusal when this platform has no Windows ABI."""
+    import sys
+    m=api()
+    if sys.platform=='win32':
+        record_property('execution_scope','windows-native-memory-contract')
+        return m
+    assert m._WIN_DLL_TYPE is None
+    assert all(getattr(m,name) is None for name in (
+        '_AvailablePrototype','_ResolvePrototype','_ContainingPrototype',
+        '_FilenamePrototype','_DirectoryPrototype'))
+    def forbidden_kernel():
+        pytest.fail('unsupported platform entered native memory kernel')
+    monkeypatch.setattr(m,'_memory_kernel',forbidden_kernel)
+    for query in (m._available_bytes,m.available_memory_identity):
+        with pytest.raises(QualificationDecline,match='^available memory ABI/schema changed$'):
+            query()
+    record_property('execution_scope','unsupported-native-memory-initial-refusal')
+    record_property('native_memory_mutation_qualification',False)
+    return None
 
-def test_available_native_schema_export_and_fresh_observations(monkeypatch):
+
+def _native_memory_profile_test(function):
+    """Keep the native ABI refusal ahead of the host image profile on non-Windows."""
+    from functools import wraps
+    import inspect
+    import sys
+    from _planning_numpy_profile_contract import numpy_profile_test
+    positive=numpy_profile_test(function)
+    @wraps(function)
+    def invoke(*args,**kwargs):
+        request=kwargs['request']
+        if sys.platform!='win32':
+            record=lambda key,value:request.node.user_properties.append((key,value))
+            assert _native_memory_case(kwargs['monkeypatch'],record) is None
+            request.node.user_properties.append(('original_test_body_executed',False))
+            return
+        return positive(*args,**kwargs)
+    invoke.__signature__=inspect.signature(positive)
+    return invoke
+
+
+def test_nonwindows_native_memory_contract_checks_before_kernel(monkeypatch):
+    # Simulate only the source-declared unavailable initialization metadata;
+    # actual _available_bytes/_memory_layout still decide the refusal.
+    m=api();properties=[]
+    with monkeypatch.context() as unavailable:
+        unavailable.setattr(m.sys,'platform','unsupported-test-platform')
+        for name in ('_WIN_DLL_TYPE','_AvailablePrototype','_ResolvePrototype',
+                     '_ContainingPrototype','_FilenamePrototype','_DirectoryPrototype'):
+            unavailable.setattr(m,name,None)
+        assert _native_memory_case(unavailable,lambda *row:properties.append(row)) is None
+        assert ('native_memory_mutation_qualification',False) in properties
+        unavailable.setattr(m,'_available_bytes',lambda:m._memory_kernel())
+        with pytest.raises(pytest.fail.Exception,match='unsupported platform entered native memory kernel'):
+            _native_memory_case(unavailable,lambda *row:None)
+
+
+
+def test_available_native_schema_export_and_fresh_observations(monkeypatch,record_property):
     import ctypes
-    m=api();identity=m.available_memory_identity()
+    m=_native_memory_case(monkeypatch,record_property)
+    if m is None:return
+    identity=m.available_memory_identity()
     assert identity['abi']=='MEMORYSTATUSEX-v1' and identity['size']==64
     assert identity['offsets']==[0,4,8,16,24,32,40,48,56]
     assert identity['export']=='GlobalMemoryStatusEx' and identity['image_offset']>=0
@@ -36,8 +96,9 @@ def test_available_native_schema_export_and_fresh_observations(monkeypatch):
 
 
 @pytest.mark.parametrize('field',['_fields_','class'])
-def test_available_native_initial_layout_skew_refuses(monkeypatch,field):
-    m=api()
+def test_available_native_initial_layout_skew_refuses(monkeypatch,field,record_property):
+    m=_native_memory_case(monkeypatch,record_property)
+    if m is None:return
     if field=='class':
         monkeypatch.setattr(m,'_MemoryStatus',object)
         with pytest.raises(QualificationDecline):m.available_memory_identity()
@@ -50,11 +111,14 @@ def test_available_native_initial_layout_skew_refuses(monkeypatch,field):
 
 
 @pytest.mark.parametrize('change',['fields','descriptor','provider','image','signature','library','handle'])
-def test_available_native_host_binding_mutation_is_terminal(monkeypatch,change):
+@_native_memory_profile_test
+def test_available_native_host_binding_mutation_is_terminal(monkeypatch,change,record_property):
     import ctypes
     from pathlib import Path
     from anygeometry._planning_code import InfrastructurePin
-    m=api();captured=InfrastructurePin('host');captured.verify()
+    m=_native_memory_case(monkeypatch,record_property)
+    if m is None:return
+    captured=InfrastructurePin('host');captured.verify()
     original_fields=m._MemoryStatus._fields_[:]
     try:
         if change=='fields':m._MemoryStatus._fields_.reverse()
@@ -72,9 +136,11 @@ def test_available_native_host_binding_mutation_is_terminal(monkeypatch,change):
 
 
 @pytest.mark.parametrize('field',['errcheck','argtypes','restype'])
-def test_available_native_initial_signature_hook_refuses_without_call(monkeypatch,field):
+def test_available_native_initial_signature_hook_refuses_without_call(monkeypatch,field,record_property):
     import ctypes
-    m=api();called=[]
+    m=_native_memory_case(monkeypatch,record_property)
+    if m is None:return
+    called=[]
     if field=='errcheck':monkeypatch.setattr(m._AvailablePrototype,'__call__',lambda *args:called.append('invoked'))
     elif field=='argtypes':monkeypatch.setattr(m._AvailablePrototype,'_argtypes_',(ctypes.c_void_p,))
     else:monkeypatch.setattr(m._AvailablePrototype,'_restype_',ctypes.c_void_p)
@@ -82,9 +148,11 @@ def test_available_native_initial_signature_hook_refuses_without_call(monkeypatc
     assert called==[]
 
 
-def test_available_native_reuses_only_library_and_signature_types(monkeypatch):
+def test_available_native_reuses_only_library_and_signature_types(monkeypatch,record_property):
     import ctypes,weakref,gc
-    m=api();m.available_memory_identity();kernel=m._memory_kernel()
+    m=_native_memory_case(monkeypatch,record_property)
+    if m is None:return
+    m.available_memory_identity();kernel=m._memory_kernel()
     pointers=ctypes.POINTER(m._MemoryStatus);prototype=m._AvailablePrototype;refs=[]
     original=m._memory_binding
     def binding():
@@ -106,9 +174,11 @@ def test_available_native_reuses_only_library_and_signature_types(monkeypatch):
     assert ctypes.POINTER(m._MemoryStatus) is pointers
 
 
-def test_available_native_does_not_use_or_mutate_cached_export_signature(monkeypatch):
+def test_available_native_does_not_use_or_mutate_cached_export_signature(monkeypatch,record_property):
     import ctypes
-    m=api();kernel=m._memory_kernel();cached=kernel.GlobalMemoryStatusEx;called=[]
+    m=_native_memory_case(monkeypatch,record_property)
+    if m is None:return
+    kernel=m._memory_kernel();cached=kernel.GlobalMemoryStatusEx;called=[]
     monkeypatch.setattr(cached,'argtypes',(ctypes.c_void_p,))
     original=cached.errcheck;cached.errcheck=lambda *args:called.append('cached hook')
     try:
