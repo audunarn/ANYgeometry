@@ -203,6 +203,8 @@ def test_default_planning_never_imports_the_certificate():
             "b=m.add_plate(m.add_points(((0,.5,-1),(1,.5,-1),(1,.5,1),(0,.5,1)))); p(m,(a,b),policy='connect');"
             "print('anygeometry.separating_plane_certificate' in sys.modules)")
     env = {k: v for k, v in os.environ.items() if k != bi.PLANNING_MODE_ENVIRONMENT}
+    # Historical serial-default no-import contract; production ON is observed separately.
+    env["ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING"] = "0"
     env["PYTHONPATH"] = str(src)
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, timeout=300)
     assert out.stdout.strip().splitlines()[-1] == "False", out.stderr[-2000:]
@@ -1546,3 +1548,111 @@ def test_route_discriminator_observes_same_repr_exact_type_attack(plans):
     assert repr(revision) == repr(certified.revision)
     changed = _forge(certified, revision=revision)
     assert _only_this_field_is_wrong(changed, certified)
+
+
+def test_default_parallel_exact_planning_does_not_execute_the_certificate(record_property):
+    import json, os, pathlib, subprocess, sys
+    src = pathlib.Path(bi.__file__).resolve().parents[1]
+    code = r'''
+"""Prospective passive HOST call-entry observer; requires explicit owner amendment."""
+import json,os,sys,types
+from pathlib import Path
+
+CERT='anygeometry.separating_plane_certificate'
+WATCH_CERT=('SPCertifier.__init__','SPCertifier.certify','SPCertifier._certify','SPCertifier._face',
+    'certify_face_pair','face_record_from_model','contract_r_max','certified_sincos',
+    'first_harmonic_range','degree_two_bound','vertex_separation_bound')
+WATCH_IMPORT=('_pi_fixed','_arctan_inverse')
+
+def member(module,path):
+    current=module
+    for name in path.split('.'):
+        if type(current) not in (types.ModuleType,type):return None
+        current=vars(current).get(name)
+    return current if type(current) is types.FunctionType else None
+
+def main():
+    from anygeometry import GeometryModel
+    from anygeometry import batch_intersections as bi
+    from anygeometry.runtime_diagnostics import collect_runtime_records,collect_runtime_diagnostics
+    assert 'ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING' not in os.environ
+    assert bi.resolve_planning_mode(bi.IntersectionBatchPolicy())=='exact'
+    assert CERT not in sys.modules
+    counts={name:0 for name in ('_TopologyRoute.__init__',*WATCH_CERT)}
+    initialization={name:0 for name in WATCH_IMPORT}
+    previous=sys.getprofile()
+    assert previous is None,'fresh probe must not replace an ambient observer'
+    def observe(frame,event,arg):
+        if event!='call':return
+        owner=frame.f_globals.get('__name__')
+        if owner==bi.__name__ and frame.f_globals is vars(bi):
+            function=member(bi,'_TopologyRoute.__init__')
+            if function is not None and frame.f_code is function.__code__:counts['_TopologyRoute.__init__']+=1
+        elif owner==CERT:
+            module=sys.modules.get(CERT)
+            if type(module) is not types.ModuleType or frame.f_globals is not vars(module):return
+            for name in (*WATCH_CERT,*WATCH_IMPORT):
+                function=member(module,name)
+                if function is not None and frame.f_code is function.__code__:
+                    target=initialization if name in initialization else counts
+                    target[name]+=1
+    def require_owned_function(module,path):
+        function=member(module,path)
+        assert type(function) is types.FunctionType,(module.__name__,path,'plain function missing')
+        assert function.__globals__ is vars(module),(module.__name__,path,'globals owner changed')
+        assert function.__module__==module.__name__ and function.__qualname__==path,(module.__name__,path,'aliased target')
+        return function
+    topology_constructor=require_owned_function(bi,'_TopologyRoute.__init__')
+    model=GeometryModel()
+    a=model.add_plate(model.add_points(((0,0,0),(1,0,0),(1,1,0),(0,1,0))))
+    b=model.add_plate(model.add_points(((0,.5,-1),(1,.5,-1),(1,.5,1),(0,.5,1))))
+    sys.setprofile(observe)
+    try:
+        with collect_runtime_records() as records,collect_runtime_diagnostics() as counters:
+            plan=bi.plan_intersections(model,(a,b),policy='connect')
+        assert sys.getprofile() is observe,'passive observer was replaced during planning'
+    finally:sys.setprofile(previous)
+    assert require_owned_function(bi,'_TopologyRoute.__init__') is topology_constructor,'route constructor replaced'
+    validated_targets=[]
+    if CERT in sys.modules:
+        module=sys.modules[CERT]
+        assert type(module) is types.ModuleType,'certificate module identity changed'
+        for path in (*WATCH_CERT,*WATCH_IMPORT):
+            require_owned_function(module,path)
+            validated_targets.append(path)
+    receipt=records.get('parallel_planning',[None])[-1]
+    summary=None if receipt is None else dict(disposition=receipt.get('disposition'),
+        workers=receipt.get('workers'),retired=receipt.get('retired'),
+        abandoned=receipt.get('costs',{}).get('abandoned'),
+        stages=[dict(stage=s.get('stage'),accepted=s.get('accepted'),total=s.get('total'),
+                     startup=s.get('startup')) for s in receipt.get('stages',[])])
+    result=dict(scope='host exact live-code entry observations; workers not dynamically profiled',
+        python=sys.version,origin=bi.__file__,mode=bi.resolve_planning_mode(bi.IntersectionBatchPolicy()),
+        plan_type=type(plan).__name__,optional_imported=CERT in sys.modules,
+        route_and_query_calls=counts,import_initialization_calls=initialization,
+        t2b_mode_counter=counters.get('planning_mode:topology_certified',0),receipt=summary,
+        validated_certificate_targets=validated_targets,observer_preserved=True,topology_constructor_bound=True)
+    print(json.dumps(result,sort_keys=True),flush=True)
+    assert type(plan) is bi.IntersectionPlan and result['mode']=='exact'
+    assert not any(counts.values()) and result['t2b_mode_counter']==0,result
+    if os.environ.get('ANYGEOMETRY_REQUIRE_QUALIFIED_PLANNING_TESTS')=='1':
+        assert summary is not None and summary['disposition']=='parallel',result
+        assert summary['workers']==8 and summary['retired'] is True and not summary['abandoned'],result
+        assert summary['stages'] and all(s['accepted']==s['total'] and s['total']>0 for s in summary['stages']),result
+        assert all(s['startup']['ready_workers']==8 for s in summary['stages']),result
+    return 0
+
+if __name__=='__main__':raise SystemExit(main())
+'''
+    env = dict(os.environ)
+    env.pop(bi.PLANNING_MODE_ENVIRONMENT, None)
+    env.pop('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING', None)
+    env['PYTHONPATH'] = str(src)
+    out = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, env=env, timeout=300)
+    assert out.returncode == 0, out.stdout[-12000:] + out.stderr[-2000:]
+    observed = json.loads(out.stdout.strip().splitlines()[-1])
+    record_property('execution_scope', 'host-exact-route-entry-observation')
+    record_property('parallel_disposition', (observed['receipt'] or {}).get('disposition', 'no-receipt'))
+    assert observed['mode'] == 'exact' and observed['plan_type'] == 'IntersectionPlan'
+    assert not any(observed['route_and_query_calls'].values())
+    assert observed['t2b_mode_counter'] == 0
