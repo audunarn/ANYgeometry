@@ -178,7 +178,7 @@ def _retain_unvalidated512_attempt(control, *, reuse, request):
     (destination/'summary.json').write_text(json.dumps(summary,indent=2),encoding='utf-8')
     names=('cleanup.json','workers-cleanup.json','memory-limit.json','session.json',
            'command-0.json','result.json','plan.json','command-1.json','command-2.json')
-    copied=[];missing=[];total=0
+    copied=[];missing=[];worker_missing=[];total=0
     for name in (('session',) if reuse else ('pair','face')):
         folder=control.directory/name
         assert not folder.is_symlink()
@@ -204,7 +204,31 @@ def _retain_unvalidated512_attempt(control, *, reuse, request):
             raw=path.read_bytes();assert len(raw)==size
             (target/filename).write_bytes(raw);total+=size
             copied.append(dict(path=name+'/'+filename,bytes=size,sha256=hashlib.sha256(raw).hexdigest()))
-    summary.update(copy_complete=True,retained_files=copied,missing_files=missing)
+        # Fixed two-worker supporting bytes only: never interpret logs as cause.
+        worker_names=('stdout.txt','stderr.txt','result.json','session.json','request.json','limits.json',
+                      'command-0.json','command-1.json','command-2.json')
+        for index in range(2):
+            worker=folder/('worker-'+str(index));relative=name+'/'+worker.name
+            assert not worker.is_symlink()
+            assert worker.resolve().is_relative_to(base) and worker.resolve().parent==folder.resolve()
+            if not worker.exists():
+                worker_missing.append(relative+'/');continue
+            assert worker.is_dir()
+            worker_target=target/worker.name;worker_target.mkdir()
+            for filename in worker_names:
+                path=worker/filename
+                assert not path.is_symlink()
+                if not path.exists():
+                    worker_missing.append(relative+'/'+filename);continue
+                assert path.is_file() and path.resolve().parent==worker.resolve()
+                size=path.stat().st_size
+                # Empty log files are actual evidence; packets remain nonempty.
+                assert (size>=0 if filename in ('stdout.txt','stderr.txt') else size>0)
+                assert size<=2*4_000_000+100000 and total+size<=32_000_000
+                raw=path.read_bytes();assert len(raw)==size
+                (worker_target/filename).write_bytes(raw);total+=size
+                copied.append(dict(path=relative+'/'+filename,bytes=size,sha256=hashlib.sha256(raw).hexdigest()))
+    summary.update(copy_complete=True,retained_files=copied,missing_files=missing,worker_missing_files=worker_missing)
     (destination/'summary.json').write_text(json.dumps(summary,indent=2),encoding='utf-8')
     return destination
 

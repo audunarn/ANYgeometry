@@ -1,4 +1,5 @@
 """Production-controller refusals preserve original serial behavior."""
+from _planning_runtime_observation import capture_witness,retain_observation
 from types import SimpleNamespace
 from pathlib import Path
 import pytest
@@ -192,24 +193,27 @@ def test_production_diagnostics_publish_only_final_path_once(monkeypatch,tmp_pat
 
 @pytest.mark.parametrize('action',['model','code','exception','cancel'])
 @numpy_profile_test
-def test_real_public_callback_after_capture_is_terminal(monkeypatch,tmp_path,action):
+def test_real_public_callback_after_capture_is_terminal(monkeypatch,tmp_path,action,request):
     from anygeometry import batch_intersections as bi,_planning_values
     from anygeometry._planning_canaries import _fixture
     from anygeometry._planning_executor import PlannerCancelled,PlannerSourceChanged
-    model,_=_fixture();calls=[];original=RuntimeError('original callback exception')
+    model,_=_fixture();calls=[];witness=[];original=RuntimeError('original callback exception')
     monkeypatch.setenv('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING','1')
     monkeypatch.setenv('ANYGEOMETRY_PLANNING_SCRATCH_ROOT',str(tmp_path/'production'))
     def callback():
         calls.append(None)
-        if len(calls)<2:return False
+        phase=capture_witness();witness.append(phase)
+        if not phase['captured']:return False
         if action=='model':model.unknown_callback_authority=True
         elif action=='code':monkeypatch.setattr(_planning_values.encode_value,'__code__',_planning_values.encode_value.__code__.replace())
         elif action=='exception':raise original
         else:return True
         return False
     expected=RuntimeError if action=='exception' else PlannerCancelled if action=='cancel' else PlannerSourceChanged
-    with collect_runtime_records() as records,pytest.raises(expected) as caught:
+    with collect_runtime_records() as records,retain_observation(request,records,
+            label='callback-'+action,witness=witness),pytest.raises(expected) as caught:
         bi.plan_intersections(model,tuple(model.faces),policy=bi.IntersectionBatchPolicy(cancellation_check=callback),_parallel_control=None)
+    assert any(phase['captured'] for phase in witness),witness
     if action=='exception':assert caught.value is original
     receipt=records['parallel_planning'][-1]
     assert len(calls)==2 and receipt['manifest_sha256']

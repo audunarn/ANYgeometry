@@ -1,4 +1,5 @@
 """R8 full admission and production integration regressions."""
+from _planning_runtime_observation import retain_observation
 import dataclasses
 import sys
 import pytest
@@ -141,7 +142,7 @@ def test_package_numpy_context_retains_getter_identity_without_anchor(monkeypatc
 @pytest.mark.parametrize('warm',[False,True])
 @numpy_profile_test
 @windows_owned_test
-def test_public_eight_worker_canary_matches_serial(monkeypatch,tmp_path,warm):
+def test_public_eight_worker_canary_matches_serial(monkeypatch,tmp_path,warm,request):
     import os,json,psutil
     from pathlib import Path
     memory=psutil.virtual_memory()
@@ -159,7 +160,8 @@ def test_public_eight_worker_canary_matches_serial(monkeypatch,tmp_path,warm):
     if warm:query_trimmed_surface_charts(source,faces)
     monkeypatch.setenv('ANYGEOMETRY_PLANNING_SCRATCH_ROOT',str(tmp_path/'production'))
     monkeypatch.setenv('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING','1')
-    with collect_runtime_records() as records,collect_runtime_diagnostics() as parallel_counts:
+    with collect_runtime_records() as records,retain_observation(request,records,
+            label='warm8-warm' if warm else 'warm8-cold'),collect_runtime_diagnostics() as parallel_counts:
         with collect_runtime_diagnostics() as nested_counts:
             plan=bi.plan_intersections(source,faces,policy='connect',_parallel_control=None)
     assert parallel_counts==nested_counts
