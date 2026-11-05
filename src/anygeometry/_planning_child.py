@@ -190,6 +190,21 @@ def planner(folder, deadline, canaries, goldens, ready_at, binding, limits, gene
                 ready_at=ready_at, model_sha256=request['model']['sha256'])
 
 
+def _publish_memory_failure(error,publication,binding):
+    """Activate only an already-written, current-command primary OOM result."""
+    if type(error) is not MemoryError or error.args!=():return False
+    if type(publication) is not list or len(publication)!=1:return False
+    capsule=publication[0]
+    if type(capsule) is not tuple or len(capsule)!=7 or type(binding) is not dict:return False
+    if type(capsule[6]) is not int or not 0<=capsule[6]<=2:return False
+    if (binding.get('session_sha256')!=capsule[2] or binding.get('worker')!=capsule[3] or
+            binding.get('worker_setup_sha256')!=capsule[4] or binding.get('request_sha256')!=capsule[5]):
+        return False
+    publication[0]=None
+    os.replace(capsule[0],capsule[1])
+    return True
+
+
 def main():
     role, location, seconds = sys.argv[1:]
     # Import the complete optional session closure before any reference capture.
@@ -200,6 +215,7 @@ def main():
     started = time.perf_counter()
     result = {};production=False
     binding = {}
+    emergency=[None];emergency_path=False
     limits = dict(payload_limit=4_000_000,walk_limit=100000)
     try:
         if (folder/'limits.json').exists():
@@ -232,26 +248,33 @@ def main():
             elif role == 'session-planner':
                 result = session_planner(folder,deadline,canaries,goldens,binding,limits,generated)
             elif role == 'session-worker':
-                result = session_worker(folder,deadline,canaries,goldens,binding,limits,generated)
+                result = session_worker(folder,deadline,canaries,goldens,binding,limits,generated,emergency=emergency)
             else:
                 raise q.QualificationDecline('unknown child role')
             result['status'] = 'passed'
     except Exception as exc:
-        traceback.print_exc()
-        status = ('deadline' if isinstance(exc, PlannerDeadline) else
-                  'cancelled' if isinstance(exc, PlannerCancelled) else
-                  'source_changed' if isinstance(exc, PlannerSourceChanged) else
-                  'cleanup_error' if isinstance(exc, PlannerCleanupError) else 'declined')
-        result = dict(status=status, reason=type(exc).__name__+': '+str(exc), **binding)
+        if role=='session-worker' and type(exc) is MemoryError and exc.args==():
+            # No traceback, JSON, text stream, or initialization publication on this path.
+            emergency_path=True
+            if not _publish_memory_failure(exc,emergency,binding):raise
+        else:
+            traceback.print_exc()
+            status = ('deadline' if isinstance(exc, PlannerDeadline) else
+                      'cancelled' if isinstance(exc, PlannerCancelled) else
+                      'source_changed' if isinstance(exc, PlannerSourceChanged) else
+                      'cleanup_error' if isinstance(exc, PlannerCleanupError) else 'declined')
+            result = dict(status=status, reason=type(exc).__name__+': '+str(exc), **binding)
     finally:
-        result['process_seconds'] = time.perf_counter()-started
-        if production:
-            try:
-                from anygeometry._planning_session import _record_initialization
-                _record_initialization(folder,'child_process_total',started)
-            except Exception as evidence_error:
-                result['initialization_evidence_error']=type(evidence_error).__name__+': '+str(evidence_error)
-        write_packet(folder/'result.json', pack(result, 'result' if role in ('planner','session-planner') else 'worker-result',limit=limits['payload_limit']))
+        if not emergency_path:
+            result['process_seconds'] = time.perf_counter()-started
+            if production:
+                try:
+                    from anygeometry._planning_session import _record_initialization
+                    _record_initialization(folder,'child_process_total',started)
+                except Exception as evidence_error:
+                    result['initialization_evidence_error']=type(evidence_error).__name__+': '+str(evidence_error)
+            write_packet(folder/'result.json', pack(result, 'result' if role in ('planner','session-planner') else 'worker-result',limit=limits['payload_limit']))
+
 
 
 if __name__ == '__main__':

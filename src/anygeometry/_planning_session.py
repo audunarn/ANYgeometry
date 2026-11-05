@@ -274,14 +274,48 @@ def _path(folder,kind,sequence):
     return Path(folder)/(kind+'-'+str(sequence)+'.json')
 
 
-def _wait_file(path,deadline,*,poll=None,child=None,folder=None,result_kind=None):
+def _arm_memory_failure_reply(folder,binding,sequence,publication,*,payload_limit):
+    """Prewrite one failure-only result after the current command is validated."""
+    if type(publication) is not list or len(publication)!=1:
+        raise QualificationDecline('worker memory publication context')
+    publication[0]=None
+    names=('session_sha256','worker','worker_setup_sha256','request_sha256')
+    if (type(binding) is not dict or set(binding)!=set(names) or
+            type(sequence) is not int or not 0<=sequence<=2 or
+            type(binding['worker']) is not int or binding['worker']<0 or
+            any(type(binding[name]) is not str or len(binding[name])!=64 or
+                any(c not in '0123456789abcdef' for c in binding[name])
+                for name in (names[0],names[2],names[3]))):
+        raise QualificationDecline('worker memory failure binding')
+    pending=str(folder/'memory-error.pending.json');destination=str(folder/'result.json')
+    report=dict(binding,status='declined',reason='MemoryError: ',sequence=sequence,
+                memory_failure='armed-command-v1')
+    write_packet(Path(pending),pack(report,'worker-result',limit=payload_limit))
+    publication[0]=(pending,destination,binding['session_sha256'],binding['worker'],
+                    binding['worker_setup_sha256'],binding['request_sha256'],sequence)
+
+
+def _check_worker_memory_failure(report,session,request,worker,setup,sequence):
+    """Check the armed failure binding before the generic status propagator."""
+    if type(report) is dict and report.get('status')=='declined' and report.get('reason')=='MemoryError: ':
+        if (report.get('memory_failure')!='armed-command-v1' or
+                type(report.get('sequence')) is not int or report['sequence']!=sequence or
+                type(report.get('worker')) is not int or report['worker']!=worker or
+                report.get('session_sha256')!=session or report.get('request_sha256')!=request or
+                report.get('worker_setup_sha256')!=setup):
+            raise QualificationDecline('worker memory failure binding')
+
+
+def _wait_file(path,deadline,*,poll=None,child=None,folder=None,result_kind=None,memory_binding=None):
     while not path.exists():
         if poll is not None:poll()
         if time.monotonic()>=deadline:raise PlannerDeadline('session deadline consumed')
         if child is not None and child.poll() is not None:
             if path.exists():break
             if folder is not None and (folder/'result.json').exists():
-                check_result_status(read_packet(folder/'result.json',result_kind))
+                report=read_packet(folder/'result.json',result_kind)
+                if memory_binding is not None:_check_worker_memory_failure(report,*memory_binding)
+                check_result_status(report)
             raise QualificationDecline('session child ended before reply')
         time.sleep(.01)
     if poll is not None:poll()
@@ -603,7 +637,8 @@ def session_planner(folder,deadline,canaries,goldens,binding,limits,generated):
                 max_inflight=max(max_inflight,len(batch))
                 for index,item in batch:
                     admitted=_path(item['folder'],'admitted',len(seen))
-                    _wait_file(admitted,deadline-3,child=item['child'],folder=item['folder'],result_kind='worker-result')
+                    _wait_file(admitted,deadline-3,child=item['child'],folder=item['folder'],result_kind='worker-result',
+                        memory_binding=(session,sent[index],index,item['setup'],len(seen)))
                     ready=(_read_published_packet(admitted,'admitted',deadline-3,cancel_folder=folder,limit=limits['payload_limit'])
                         if production else read_packet(admitted,'admitted',limit=limits['payload_limit']))
                     if (type(ready) is not dict or set(ready)!={'stage','sequence'} or
@@ -622,9 +657,11 @@ def session_planner(folder,deadline,canaries,goldens,binding,limits,generated):
                         if production else read_packet(item['folder']/'result.json','worker-result',limit=limits['payload_limit']))
                 else:
                     response=_path(item['folder'],'reply',len(seen))
-                    _wait_file(response,deadline-3,child=item['child'],folder=item['folder'],result_kind='worker-result')
+                    _wait_file(response,deadline-3,child=item['child'],folder=item['folder'],result_kind='worker-result',
+                        memory_binding=(session,sent[index],index,item['setup'],len(seen)))
                     report=(_read_published_packet(response,'session-worker-reply',deadline-3,cancel_folder=folder,limit=limits['payload_limit'])
                         if production else read_packet(response,'session-worker-reply',limit=limits['payload_limit']))
+                _check_worker_memory_failure(report,session,sent[index],index,item['setup'],len(seen))
                 _reply_binding(report,session,sent[index])
                 if (report.get('worker_setup_sha256')!=item['setup'] or type(report.get('worker')) is not int or
                         report['worker']!=index or report.get('model_sha256')!=setup['model']['sha256']):
@@ -718,7 +755,10 @@ def session_planner(folder,deadline,canaries,goldens,binding,limits,generated):
                 stage_requests=stage_requests,worker_reports=reports,prepared_entries=entries,preparation_sha256=plan_sha)
 
 
-def session_worker(folder,deadline,canaries,goldens,binding,limits,generated):
+def session_worker(folder,deadline,canaries,goldens,binding,limits,generated,*,emergency=None):
+    if emergency is not None and (type(emergency) is not list or len(emergency)!=1):
+        raise QualificationDecline('worker memory publication context')
+    if emergency is not None:emergency[0]=None
     stamp=time.perf_counter()
     setup,setup_sha=read_packet(folder/'session.json','session-worker',with_digest=True,limit=limits['payload_limit'])
     if type(setup) is not dict or set(setup)!={'session_sha256','worker','model','sources','expected','workers','batch_size'}:
@@ -749,6 +789,7 @@ def session_worker(folder,deadline,canaries,goldens,binding,limits,generated):
         raise QualificationDecline('generated module selection changed after preparation')
     seen=();previous=setup_sha;parent_previous=session;gate=None
     while True:
+        if emergency is not None:emergency[0]=None
         path=_path(folder,'command',len(seen));_wait_file(path,deadline)
         body,request=read_packet(path,'session-worker-command',with_digest=True,limit=limits['payload_limit'])
         binding['request_sha256']=request
@@ -763,6 +804,8 @@ def session_worker(folder,deadline,canaries,goldens,binding,limits,generated):
         if pack(body['tasks'],'tasks',limit=limits['payload_limit'])!=pack(assigned,'tasks',limit=limits['payload_limit']):
             raise QualificationDecline('worker assignment differs from parent dispatch')
         verify_sources(setup['sources'])
+        if emergency is not None:
+            _arm_memory_failure_reply(folder,binding,len(seen),emergency,payload_limit=limits['payload_limit'])
         if kind=='finish':
             stamp=time.perf_counter()
             if gate is None or not gate.closed or gate.poisoned:raise QualificationDecline('unfinished session gate')
