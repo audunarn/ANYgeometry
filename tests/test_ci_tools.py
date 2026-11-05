@@ -138,6 +138,7 @@ def test_runtime_parameter_aliases_remain_distinct_in_sixteen_shards():
 
 
 def test_full_ci_keeps_every_runtime_and_sixteen_shards_under_original_caps():
+    import re
     text = (TOOLS.parent / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     regular = text.split("\n  pytest:\n", 1)[1].split("\n  pytest-qualified:\n", 1)[0]
     qualified = text.split("\n  pytest-qualified:\n", 1)[1].split("\n  pytest-shards:\n", 1)[0]
@@ -165,10 +166,13 @@ def test_full_ci_keeps_every_runtime_and_sixteen_shards_under_original_caps():
     assert 'exclude:\n          - os: windows-latest\n            python-version: "3.14"' in regular
     assert 'os: [windows-latest]' in qualified and 'python-version: ["3.14"]' in qualified
     assert 'timeout-minutes: 30' in qualified
-    assert 'ANYGEOMETRY_TEST_SHARD: ${{ matrix.shard }}/64' in qualified
+    qualified_shards = re.search(r"(?m)^        shard: \[([0-9, ]+)\]$", qualified)
+    assert qualified_shards is not None
+    assert [int(value) for value in qualified_shards.group(1).split(",")] == list(range(1, 129))
+    assert 'ANYGEOMETRY_TEST_SHARD: ${{ matrix.shard }}/128' in qualified
     # The distinct lane retains exactly the same consumer, commands, pins,
     # preflight and artifacts; only its shard denominator changes.
-    assert qualified.split('    steps:\n', 1)[1].replace('/64', '/16') == regular.split('    steps:\n', 1)[1]
+    assert qualified.split('    steps:\n', 1)[1].replace('/128', '/16') == regular.split('    steps:\n', 1)[1]
     gate = text.split("\n  pytest-shards:\n", 1)[1].split("\n  planar-absence:\n", 1)[0]
     assert "needs: [pytest, pytest-qualified, minimum-dependencies]" in gate
     assert 'if [ "$PYTEST_RESULT" != success ]' in gate

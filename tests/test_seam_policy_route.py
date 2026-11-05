@@ -177,6 +177,8 @@ def test_environment_selects_ring_split_at_planning(monkeypatch):
 
 
 def test_planner_passes_the_resolved_policy_to_the_main_arrangement_loop(monkeypatch):
+    # Observe full numerical seam forwarding in serial, independent of parallel-admission state.
+    monkeypatch.setenv("ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING", "0")
     seen = []
     original = bi.arrange_material
 

@@ -1406,6 +1406,8 @@ class _NoShadow(bi._TopologyRoute):
 
 
 def test_cc_cross_mitre_is_certified_and_its_nonparallel_support_runs_in_shadow(monkeypatch):
+    # This numerical shadow spy mutates captured state; it is not a parallel-admission fixture.
+    monkeypatch.setenv("ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING", "0")
     model, faces = _mitre()
     calls = []
     original = bi.cylinder_cylinder_support

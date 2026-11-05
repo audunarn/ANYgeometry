@@ -24,7 +24,9 @@ def test_centered_bezier_split_preserves_original_endpoints():
     assert all(point[2] == 7. for child in (left, right) for point in child.controls)
 
 
-def test_bounded_runner_exercises_chart_cancellation_signature(builders, tmp_path):
+def test_bounded_runner_exercises_chart_cancellation_signature(builders, tmp_path, monkeypatch):
+    # Keep the 30s chart-signature component deadline independent of parallel startup.
+    monkeypatch.setenv("ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING", "0")
     import json
     from types import SimpleNamespace
     from check_large_connected import run
