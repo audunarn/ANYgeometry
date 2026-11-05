@@ -1,11 +1,7 @@
-name: Tests
-
+name: DIAGNOSTIC ONLY native-domain Mac reproduction
+run-name: DIAGNOSTIC ONLY native-domain Mac (${{ github.ref_name }})
 on:
   workflow_dispatch:
-  # CI tiers C6 (owner D-CI3 a): the final path also runs weekly on main (Monday 03:00 UTC)
-  schedule:
-    - cron: '0 3 * * 1'
-
 permissions:
   contents: read
 
@@ -20,13 +16,9 @@ env:
   NATIVE_ARC_RUNTIME_EVIDENCE: arc-runtime.json
   NATIVE_ARC_STATION_RUNTIME_EVIDENCE: station-runtime.json
 
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
 jobs:
   pytest:
-    name: pytest (${{ matrix.os }}, Python ${{ matrix.python-version }}, shard ${{ matrix.shard }}/16)
+    name: DIAGNOSTIC ONLY native-domain (${{ matrix.history }})
     runs-on: ${{ matrix.os }}
     # The other fifteen runtime combinations retain sixteen balanced shards; unknown costs
     # remain uncertain and a single overlong case can still exceed the job cap.
@@ -37,17 +29,25 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-15, macos-15-intel]
-        python-version: ["3.11", "3.12", "3.13", "3.14"]
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
-        exclude:
-          - os: windows-latest
-            python-version: "3.14"
+        os: [macos-15]
+        python-version: ["3.11"]
+        shard: [13]
+        history: [standalone, original-shard13]
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: 68098b042e2e5d421dc5d62891b32c47b2e44e80
           persist-credentials: false
+      - name: Check out diagnostic tool separately
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          path: .diagnostic
+          persist-credentials: false
+      - name: Copy only the external diagnostic pytest plugin
+        shell: bash
+        run: cp .diagnostic/tools/native_domain_probe.py tools/native_domain_probe.py
       - name: Check out the source-only test consumer
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -58,7 +58,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: ${{ matrix.os == 'windows-latest' && matrix.python-version == '3.14' && '3.14.2' || matrix.python-version }}
+          python-version: '3.11.9'
           cache: pip
       - name: Verify the requested Mac architecture
         if: runner.os == 'macOS'
@@ -72,6 +72,25 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev,planar,sketch,test]" "setuptools>=77.0.3"
+      - name: Freeze diagnostic Mac runtime
+        run: |
+          python -m pip install 'numpy==2.4.6' 'scipy==1.17.1' 'pytest==9.2.0'
+          python -c "import platform,sys,numpy,scipy; assert platform.machine()=='arm64'; assert sys.version_info[:3]==(3,11,9); assert numpy.__version__=='2.4.6'; assert scipy.__version__=='1.17.1'"
+      - name: Record all original source and test bytes before execution
+        shell: bash
+        run: |
+          mkdir -p diagnostic/${{ matrix.history }}
+          git diff --exit-code 68098b042e2e5d421dc5d62891b32c47b2e44e80 -- src tests .github/workflows/ci.yml tools
+          python - <<'PY'
+          import hashlib,json,pathlib,subprocess,os
+          root=pathlib.Path.cwd()
+          names=subprocess.check_output(['git','ls-files','-z','--','src','tests','.github/workflows/ci.yml','tools']).decode().split('\0')
+          files={name:hashlib.sha256((root/name).read_bytes()).hexdigest() for name in names if name}
+          head=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
+          assert head=='68098b042e2e5d421dc5d62891b32c47b2e44e80'
+          path=root/'diagnostic'/'${{ matrix.history }}'/'source-baseline.json'
+          path.write_text(json.dumps(dict(source_head=head,workflow_sha=os.environ['GITHUB_SHA'],diagnostic_only=True,files=files),indent=2))
+          PY
       - name: Install the qualified planner numerical profile
         if: matrix.os == 'windows-latest' && matrix.python-version == '3.14'
         run: python -m pip install 'numpy==2.4.6' 'scipy==1.17.1'
@@ -85,10 +104,30 @@ jobs:
           CI_MESHER_SOURCE_ROOT: ${{ github.workspace }}/.worktrees/ci-mesher-consumer/src
           ANYGEOMETRY_TEST_SHARD: ${{ matrix.shard }}/16
           ANYGEOMETRY_SHARD_REPORT: shard-${{ matrix.shard }}.json
+          NATIVE_DOMAIN_HISTORY: ${{ matrix.history }}
+          NATIVE_DOMAIN_PROBE_OUT: diagnostic/${{ matrix.history }}/native-domain-probe.json
+          NATIVE_DOMAIN_SOURCE_BASELINE: diagnostic/${{ matrix.history }}/source-baseline.json
         run: |
           python -c "import os,pathlib,json,sys,anygeometry,anymesher; consumer=pathlib.Path(os.environ['CI_MESHER_SOURCE_ROOT']).resolve(); assert pathlib.Path(anymesher.__file__).resolve().is_relative_to(consumer); assert pathlib.Path(anygeometry.__file__).resolve().is_relative_to(pathlib.Path('src').resolve()); pathlib.Path('consumer-runtime.json').write_text(json.dumps(dict(consumer_ref='2ef01d47e29fb461da1cf1ece73913c1708d4e49',consumer_origin=anymesher.__file__,geometry_origin=anygeometry.__file__,mpmath_loaded='mpmath' in sys.modules)),encoding='utf-8')"
           python tools/check_licenses.py --check-installed
-          python tools/ci_isolated_tests.py --maxfail=1 --durations=20 --junitxml=kernel-results.xml
+          export PYTEST_PLUGINS="${PYTEST_PLUGINS:+${PYTEST_PLUGINS},}tools.native_domain_probe"
+          if [ '${{ matrix.history }}' = standalone ]; then
+            python tools/native_domain_probe.py --standalone
+          else
+            python tools/ci_isolated_tests.py --maxfail=1 --durations=20 --junitxml=kernel-results.xml
+          fi
+      - name: Verify all original bytes after execution
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import hashlib,json,pathlib
+          path=pathlib.Path('diagnostic/${{ matrix.history }}/source-baseline.json')
+          before=json.loads(path.read_text());actual={n:hashlib.sha256(pathlib.Path(n).read_bytes()).hexdigest() for n in before['files']}
+          equal=actual==before['files']
+          path.with_name('source-after.json').write_text(json.dumps(dict(diagnostic_only=True,match=equal,files=actual),indent=2))
+          assert equal
+          PY
       - name: Slowest tests
         if: always()
         shell: bash
@@ -101,563 +140,13 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: kernel-runtime-${{ matrix.os }}-${{ matrix.python-version }}-${{ matrix.shard }}
+          name: DIAGNOSTIC-native-domain-${{ matrix.history }}
           path: |
             *-runtime.json
             kernel-results.xml
             planning-profile.json
             shard-*.json
             ci-isolation/
+            diagnostic/
           if-no-files-found: warn
 
-  pytest-qualified:
-    name: pytest qualified (${{ matrix.os }}, Python ${{ matrix.python-version }}, shard ${{ matrix.shard }}/128)
-    runs-on: ${{ matrix.os }}
-    # Qualified Windows has one hundred twenty-eight shards; partial observed costs
-    # are censored and do not establish measured fit under the unchanged cap.
-    # Partial JUnit observations guide scheduling; they do not establish 30-minute fit.
-    timeout-minutes: 30
-    env:
-      ANYGEOMETRY_REQUIRE_QUALIFIED_PLANNING_TESTS: ${{ matrix.os == 'windows-latest' && matrix.python-version == '3.14' && '1' || '0' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest]
-        python-version: ["3.14"]
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128]
-    steps:
-      - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Check out the source-only test consumer
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: audunarn/ANYmesh
-          ref: 2ef01d47e29fb461da1cf1ece73913c1708d4e49
-          path: .worktrees/ci-mesher-consumer
-          persist-credentials: false
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: ${{ matrix.os == 'windows-latest' && matrix.python-version == '3.14' && '3.14.2' || matrix.python-version }}
-          cache: pip
-      - name: Verify the requested Mac architecture
-        if: runner.os == 'macOS'
-        env:
-          MAC_LABEL: ${{ matrix.os }}
-        run: >-
-          python -c "import os, platform; expected = 'x86_64' if os.environ['MAC_LABEL'] == 'macos-15-intel' else 'arm64'; assert platform.machine() == expected, (platform.machine(), expected)"
-      - name: Install test dependencies
-        env:
-          ANYGEOMETRY_REQUIRE_PLANNING_NATIVE: ${{ runner.os == 'Windows' && '1' || '0' }}
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev,planar,sketch,test]" "setuptools>=77.0.3"
-      - name: Install the qualified planner numerical profile
-        if: matrix.os == 'windows-latest' && matrix.python-version == '3.14'
-        run: python -m pip install 'numpy==2.4.6' 'scipy==1.17.1'
-      - name: Require the frozen positive planner runtime
-        if: matrix.os == 'windows-latest' && matrix.python-version == '3.14'
-        run: python tools/ci_planning_profile.py --preflight --report planning-profile.json
-      - name: Run tests
-        shell: bash
-        env:
-          PYTHONPATH: ${{ github.workspace }}/.worktrees/ci-mesher-consumer/src
-          CI_MESHER_SOURCE_ROOT: ${{ github.workspace }}/.worktrees/ci-mesher-consumer/src
-          ANYGEOMETRY_TEST_SHARD: ${{ matrix.shard }}/128
-          ANYGEOMETRY_SHARD_REPORT: shard-${{ matrix.shard }}.json
-        run: |
-          python -c "import os,pathlib,json,sys,anygeometry,anymesher; consumer=pathlib.Path(os.environ['CI_MESHER_SOURCE_ROOT']).resolve(); assert pathlib.Path(anymesher.__file__).resolve().is_relative_to(consumer); assert pathlib.Path(anygeometry.__file__).resolve().is_relative_to(pathlib.Path('src').resolve()); pathlib.Path('consumer-runtime.json').write_text(json.dumps(dict(consumer_ref='2ef01d47e29fb461da1cf1ece73913c1708d4e49',consumer_origin=anymesher.__file__,geometry_origin=anygeometry.__file__,mpmath_loaded='mpmath' in sys.modules)),encoding='utf-8')"
-          python tools/check_licenses.py --check-installed
-          python tools/ci_isolated_tests.py --maxfail=1 --durations=20 --junitxml=kernel-results.xml
-      - name: Slowest tests
-        if: always()
-        shell: bash
-        run: python tools/ci_durations.py summary kernel-results.xml >> "$GITHUB_STEP_SUMMARY" || true
-      - name: Verify package import and CLI version
-        run: |
-          python -c "import anygeometry, importlib.metadata, pathlib, tomllib; expected=tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version']; assert anygeometry.__version__ == importlib.metadata.version('ANYgeometry') == expected"
-          python -m anygeometry --version
-      - name: Retain effective runtime evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: kernel-runtime-${{ matrix.os }}-${{ matrix.python-version }}-${{ matrix.shard }}
-          path: |
-            *-runtime.json
-            kernel-results.xml
-            planning-profile.json
-            shard-*.json
-            ci-isolation/
-          if-no-files-found: warn
-
-  pytest-shards:
-    name: pytest shards complete
-    needs: [pytest, pytest-qualified, minimum-dependencies]
-    if: always()
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.13'
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          path: lanes
-          pattern: '*runtime-*'
-      - name: Every lane ran every test exactly once
-        shell: bash
-        env:
-          PYTEST_RESULT: ${{ needs.pytest.result }}
-          QUALIFIED_RESULT: ${{ needs.pytest-qualified.result }}
-          MINIMUM_RESULT: ${{ needs.minimum-dependencies.result }}
-        run: |
-          # explicit exits: under `set -e` a failing command inside an && list does not stop the step
-          if [ "$PYTEST_RESULT" != success ]; then echo "pytest lanes: $PYTEST_RESULT"; exit 1; fi
-          if [ "$QUALIFIED_RESULT" != success ]; then echo "qualified pytest lanes: $QUALIFIED_RESULT"; exit 1; fi
-          if [ "$MINIMUM_RESULT" != success ]; then echo "minimum dependencies: $MINIMUM_RESULT"; exit 1; fi
-          for os in windows-latest ubuntu-latest macos-15 macos-15-intel; do
-            for py in 3.11 3.12 3.13 3.14; do
-              python tools/ci_shards.py verify lanes/kernel-runtime-$os-$py-*/shard-*.json
-            done
-          done
-          python tools/ci_shards.py verify lanes/minimum-dependencies-runtime-*/shard-*.json
-          python tools/ci_planning_profile.py lanes/kernel-runtime-windows-latest-3.14-*/kernel-results.xml
-
-  planar-absence:
-    name: pytest (planar backend absent)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.13"
-          cache: pip
-      - name: Create isolated environment without the planar extra
-        env:
-          ABSENCE_VENV: ${{ runner.temp }}/anygeometry-planar-absence
-        run: |
-          python -m venv --copies "$ABSENCE_VENV"
-          "$ABSENCE_VENV/bin/python" -m pip install --upgrade pip
-          "$ABSENCE_VENV/bin/python" -m pip install -e ".[dev]"
-          "$ABSENCE_VENV/bin/python" tools/check_licenses.py
-      - name: Verify the typed missing-capability contract
-        env:
-          ABSENCE_VENV: ${{ runner.temp }}/anygeometry-planar-absence
-        run: |
-          "$ABSENCE_VENV/bin/python" - <<'PY'
-          import importlib.util
-
-          assert importlib.util.find_spec("shapely") is None
-          PY
-          "$ABSENCE_VENV/bin/python" -m pytest tests/test_intersection_workflow.py::test_planar_backend_absence_is_typed_capability_missing
-
-  wheel:
-    name: Build and verify wheel
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.13"
-          cache: pip
-      - name: Build distributions
-        id: contract
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev,planar,sketch,test]"
-          python tools/check_licenses.py --check-installed
-          python - <<'PY'
-          import re
-          import tomllib
-          from pathlib import Path
-
-          metadata = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
-          version = metadata["project"]["version"]
-          init_text = Path("src/anygeometry/__init__.py").read_text(encoding="utf-8")
-          match = re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']', init_text, re.MULTILINE)
-          assert match is not None and match.group(1) == version, (match, version)
-          with open(Path(__import__("os").environ["GITHUB_OUTPUT"]), "a", encoding="utf-8") as output:
-              print(f"version={version}", file=output)
-          PY
-          python -m build
-          python -m twine check dist/*
-      - name: Require one wheel and one source distribution
-        env:
-          PACKAGE_VERSION: ${{ steps.contract.outputs.version }}
-        run: |
-          python - <<'PY'
-          import email
-          import os
-          import tarfile
-          import zipfile
-          from pathlib import Path
-
-          version = os.environ["PACKAGE_VERSION"]
-          wheels = sorted(Path("dist").glob("*.whl"))
-          sdists = sorted(Path("dist").glob("*.tar.gz"))
-          assert len(wheels) == 1, wheels
-          assert len(sdists) == 1, sdists
-          assert wheels[0].name == f"anygeometry-{version}-py3-none-any.whl", wheels[0]
-          assert sdists[0].name == f"anygeometry-{version}.tar.gz", sdists[0]
-
-          with zipfile.ZipFile(wheels[0]) as archive:
-              names = archive.namelist()
-              assert "anygeometry/py.typed" in names
-              metadata_name, = [name for name in names if name.endswith(".dist-info/METADATA")]
-              wheel_metadata = email.message_from_bytes(archive.read(metadata_name))
-              assert wheel_metadata["Name"] == "ANYgeometry"
-              assert wheel_metadata["Version"] == version
-              assert wheel_metadata["License-Expression"] == "MPL-2.0"
-              license_root = metadata_name.rsplit("/", 1)[0] + "/licenses/"
-              expected_licenses = {
-                  license_root + relative
-                  for relative in (
-                      "LICENSE",
-                      "NOTICE",
-                      "THIRD_PARTY_NOTICES.md",
-                      "dependency-licenses.json",
-                      "docs/LICENSE.md",
-                  )
-              }
-              assert expected_licenses <= set(names), (expected_licenses - set(names))
-
-          with tarfile.open(sdists[0], "r:gz") as archive:
-              members = {member.name: member for member in archive.getmembers()}
-              root = f"anygeometry-{version}"
-              assert f"{root}/src/anygeometry/py.typed" in members
-              for relative in (
-                  "LICENSE",
-                  "NOTICE",
-                  "THIRD_PARTY_NOTICES.md",
-                  "dependency-licenses.json",
-                  "docs/LICENSE.md",
-              ):
-                  assert f"{root}/{relative}" in members, relative
-              package_info = archive.extractfile(members[f"{root}/PKG-INFO"])
-              assert package_info is not None
-              sdist_metadata = email.message_from_binary_file(package_info)
-              assert sdist_metadata["Name"] == "ANYgeometry"
-              assert sdist_metadata["Version"] == version
-              assert sdist_metadata["License-Expression"] == "MPL-2.0"
-          PY
-      - name: Retain the single candidate build
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: anygeometry-candidate
-          path: dist/*
-          if-no-files-found: error
-          retention-days: 30
-
-  minimum-dependencies:
-    name: Minimum dependencies (Linux, Python 3.11, shard ${{ matrix.shard }}/16)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Check out the source-only test consumer
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: audunarn/ANYmesh
-          ref: 2ef01d47e29fb461da1cf1ece73913c1708d4e49
-          path: .worktrees/ci-mesher-consumer
-          persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.11'
-      # Full private planner tests exercise the declared SciPy runtime too.
-      # The separate optional-capability-absence job keeps its minimal install.
-      - run: python -m pip install -e '.[dev,planar,sketch,test]' 'setuptools>=77.0.3' 'numpy==1.26.0' 'shapely==2.0.0' 'scipy==1.13.0'
-      - run: |
-          python -c "import os,pathlib,json,sys,anygeometry,anymesher; consumer=pathlib.Path(os.environ['CI_MESHER_SOURCE_ROOT']).resolve(); assert pathlib.Path(anymesher.__file__).resolve().is_relative_to(consumer); assert pathlib.Path(anygeometry.__file__).resolve().is_relative_to(pathlib.Path('src').resolve()); pathlib.Path('consumer-runtime.json').write_text(json.dumps(dict(consumer_ref='2ef01d47e29fb461da1cf1ece73913c1708d4e49',consumer_origin=anymesher.__file__,geometry_origin=anygeometry.__file__,mpmath_loaded='mpmath' in sys.modules)),encoding='utf-8')"
-          python tools/ci_isolated_tests.py --maxfail=1 --durations=20 --junitxml=kernel-results.xml
-        env:
-          PYTHONPATH: ${{ github.workspace }}/.worktrees/ci-mesher-consumer/src
-          CI_MESHER_SOURCE_ROOT: ${{ github.workspace }}/.worktrees/ci-mesher-consumer/src
-          ANYGEOMETRY_TEST_SHARD: ${{ matrix.shard }}/16
-          ANYGEOMETRY_SHARD_REPORT: shard-${{ matrix.shard }}.json
-      - name: Retain effective runtime evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: minimum-dependencies-runtime-${{ matrix.shard }}
-          path: |
-            *-runtime.json
-            kernel-results.xml
-            shard-*.json
-            ci-isolation/
-          if-no-files-found: warn
-
-  wheel-smoke:
-    name: Installed wheel (${{ matrix.os }})
-    needs: wheel
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, ubuntu-latest, macos-15, macos-15-intel]
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.13'
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: anygeometry-candidate
-          path: candidate
-      - name: Verify the artifact in isolated base and planar environments
-        run: >-
-          python tools/check_compatibility.py wheel
-          --candidate candidate/*.whl
-          --expected-machine "${{ matrix.os == 'macos-15-intel' && 'x86_64' || matrix.os == 'macos-15' && 'arm64' || '' }}"
-          --output "$RUNNER_TEMP/geometry-wheel-smoke"
-      - name: Preserve complete smoke evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: wheel-smoke-${{ matrix.os }}
-          retention-days: 30
-          if-no-files-found: error
-          path: |
-            ${{ runner.temp }}/geometry-wheel-smoke/report.json
-            ${{ runner.temp }}/geometry-wheel-smoke/command-*.log
-            ${{ runner.temp }}/geometry-wheel-smoke/without-planar/*.json
-            ${{ runner.temp }}/geometry-wheel-smoke/with-planar/*.json
-
-  consumers:
-    name: Installed public consumers (${{ matrix.os }}, ${{ matrix.profile }})
-    needs: wheel
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            profile: public
-          - os: ubuntu-latest
-            profile: public
-          - os: macos-15
-            profile: mesher
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.13'
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: anygeometry-candidate
-          path: candidate
-      - name: Compare installed candidate and released geometry
-        run: >-
-          python tools/check_compatibility.py consumers
-          --candidate candidate/*.whl
-          --profile ${{ matrix.profile }}
-          --expected-machine "${{ matrix.os == 'macos-15' && 'arm64' || '' }}"
-          --output "$RUNNER_TEMP/geometry-consumers"
-      - name: Preserve complete consumer comparison evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: consumers-${{ matrix.os }}
-          retention-days: 30
-          if-no-files-found: error
-          path: |
-            ${{ runner.temp }}/geometry-consumers/report.json
-            ${{ runner.temp }}/geometry-consumers/command-*.log
-            ${{ runner.temp }}/geometry-consumers/candidate/*.json
-            ${{ runner.temp }}/geometry-consumers/baseline/*.json
-
-  mcp-consumers:
-    name: Installed MCP consumer (${{ matrix.os }})
-    needs: wheel
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, ubuntu-latest, macos-15]
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.13'
-      - name: Require explicitly scoped access to the private adapter
-        env:
-          HAS_MCP_ACCESS: ${{ secrets.ANYGEOMETRY_MCP_READ_TOKEN != '' }}
-        run: |
-          python - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-          if os.environ['HAS_MCP_ACCESS'] != 'true':
-              root = Path(os.environ['RUNNER_TEMP']) / 'geometry-mcp'
-              root.mkdir()
-              report = {'status': 'blocked', 'reason': 'ANYGEOMETRY_MCP_READ_TOKEN is not configured; Contents: read access to audunarn/ANYgeometry-mcp is required.'}
-              (root / 'report.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
-              print('::error::' + report['reason'])
-              raise SystemExit(1)
-          PY
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: audunarn/ANYgeometry-mcp
-          ref: 4253c001b07263fa2e9015082cf4950db65cd2d3
-          path: .ecosystem/ANYgeometry-mcp
-          token: ${{ secrets.ANYGEOMETRY_MCP_READ_TOKEN }}
-          persist-credentials: false
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: anygeometry-candidate
-          path: candidate
-      - run: python -m pip install 'setuptools>=77.0.3' wheel
-      - name: Compare installed MCP consumers
-        run: >-
-          python tools/check_compatibility.py consumers
-          --candidate candidate/*.whl
-          --mcp-source .ecosystem/ANYgeometry-mcp
-          --profile mcp
-          --expected-machine "${{ matrix.os == 'macos-15' && 'arm64' || '' }}"
-          --output "$RUNNER_TEMP/geometry-mcp"
-      - name: Record setup failures without losing the access diagnosis
-        if: always()
-        run: |
-          python - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-          root = Path(os.environ['RUNNER_TEMP']) / 'geometry-mcp'
-          if not (root / 'report.json').exists():
-              root.mkdir(exist_ok=True)
-              (root / 'report.json').write_text(json.dumps({'status': 'failed', 'reason': 'Adapter checkout or job setup failed before the probe; see job logs.'}), encoding='utf-8')
-          PY
-      - name: Preserve MCP comparison or blocked-prerequisite evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: mcp-consumers-${{ matrix.os }}
-          retention-days: 30
-          if-no-files-found: error
-          path: |
-            ${{ runner.temp }}/geometry-mcp/report.json
-            ${{ runner.temp }}/geometry-mcp/command-*.log
-            ${{ runner.temp }}/geometry-mcp/candidate/*.json
-            ${{ runner.temp }}/geometry-mcp/baseline/*.json
-
-  general-intersection-consumers:
-    name: General intersections in installed ANYfem (${{ matrix.os }})
-    needs: wheel
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 75
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, ubuntu-latest, macos-15]
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.13'
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: audunarn/ANYmesh
-          ref: e21c0fc93662776762430e14450d54ac9192e2e8
-          path: .ecosystem/ANYmesh
-          persist-credentials: false
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: audunarn/ANYfem
-          ref: 83f3d6c81e405ca45f5b7edd7cb7c2afd32804c4
-          path: .ecosystem/ANYfem
-          persist-credentials: false
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: anygeometry-candidate
-          path: candidate
-      - name: Build pinned native mesher and FEM candidates
-        env:
-          ANYMESHER_REQUIRE_NATIVE: '1'
-        run: |
-          python -m pip install build 'setuptools>=77.0.3' wheel
-          python -m build .ecosystem/ANYmesh --wheel --no-isolation --outdir candidate
-          python -m build .ecosystem/ANYfem --wheel --no-isolation --outdir candidate
-          python - <<'PY'
-          import json, os, subprocess
-          from pathlib import Path
-          commits = {'ANYgeometry': os.environ['GITHUB_SHA']}
-          for owner in ('ANYmesh', 'ANYfem'):
-              commits[owner] = subprocess.check_output(['git','-C','.ecosystem/'+owner,'rev-parse','HEAD'],text=True).strip()
-          Path('candidate/source-commits.json').write_text(json.dumps(commits,indent=2))
-          PY
-      - name: Require accepted default-policy replay, cylinder joints and material fixtures
-        run: >-
-          python tools/check_general_intersections.py
-          --geometry candidate/anygeometry-*.whl
-          --mesher candidate/anymesher-*.whl
-          --fem candidate/anyfem-*.whl
-          --expected-machine "${{ matrix.os == 'macos-15' && 'arm64' || '' }}"
-          --output "$RUNNER_TEMP/general-intersection-consumers"
-      - name: Record unavailable setup explicitly
-        if: always()
-        run: |
-          python - <<'PY'
-          import json, os
-          from pathlib import Path
-          root = Path(os.environ['RUNNER_TEMP'])/'general-intersection-consumers'
-          if not (root/'general-intersections-report.json').exists():
-              root.mkdir(exist_ok=True)
-              (root/'general-intersections-report.json').write_text(json.dumps({
-                  'status':'failed','reason':'Candidate checkout/build or consumer setup failed; see job logs.'},indent=2))
-          PY
-      - name: Preserve artifacts, identities and complete acceptance evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: general-intersections-${{ matrix.os }}
-          retention-days: 30
-          if-no-files-found: error
-          path: |
-            candidate/*.whl
-            candidate/source-commits.json
-            ${{ runner.temp }}/general-intersection-consumers/*.json
-            ${{ runner.temp }}/general-intersection-consumers/command-*.log
