@@ -295,8 +295,37 @@ def _arm_memory_failure_reply(folder,binding,sequence,publication,*,payload_limi
                     binding['worker_setup_sha256'],binding['request_sha256'],sequence)
 
 
-def _check_worker_memory_failure(report,session,request,worker,setup,sequence):
+def _arm_setup_memory_failure_reply(folder,binding,publication,*,payload_limit):
+    """Failure-only setup ownership, without any current-command assertion."""
+    if type(publication) is not list or len(publication)!=1:
+        raise QualificationDecline('worker memory publication context')
+    publication[0]=None
+    if (type(binding) is not dict or set(binding)!={'session_sha256','worker','worker_setup_sha256'}
+            or type(binding['worker']) is not int or binding['worker']<0
+            or any(type(binding[name]) is not str or len(binding[name])!=64 or
+                   any(c not in '0123456789abcdef' for c in binding[name])
+                   for name in ('session_sha256','worker_setup_sha256'))):
+        raise QualificationDecline('worker memory failure binding')
+    pending=str(folder/'memory-error.pending.json');destination=str(folder/'result.json')
+    report=dict(binding,status='declined',reason='MemoryError: ',memory_failure='armed-setup-v1')
+    write_packet(Path(pending),pack(report,'worker-result',limit=payload_limit))
+    publication[0]=(pending,destination,binding['session_sha256'],binding['worker'],
+                    binding['worker_setup_sha256'],'armed-setup-v1')
+
+
+def _check_worker_memory_failure(report,session,request,worker,setup,sequence,admitted=True):
     """Check the armed failure binding before the generic status propagator."""
+    # These original terminal statuses are propagated by the unchanged caller.
+    if type(report) is dict and report.get('status') in ('source_changed','cancelled','deadline','cleanup_error'):
+        return
+    if type(report) is dict and report.get('memory_failure')=='armed-setup-v1':
+        if (set(report)!={'status','reason','memory_failure','session_sha256','worker','worker_setup_sha256'}
+                or type(sequence) is not int or sequence!=0 or admitted is not False
+                or report.get('status')!='declined' or report.get('reason')!='MemoryError: '
+                or type(report.get('worker')) is not int or report['worker']!=worker
+                or report.get('session_sha256')!=session or report.get('worker_setup_sha256')!=setup):
+            raise QualificationDecline('worker memory failure binding')
+        return
     if type(report) is dict and report.get('status')=='declined' and report.get('reason')=='MemoryError: ':
         if (report.get('memory_failure')!='armed-command-v1' or
                 type(report.get('sequence')) is not int or report['sequence']!=sequence or
@@ -638,7 +667,7 @@ def session_planner(folder,deadline,canaries,goldens,binding,limits,generated):
                 for index,item in batch:
                     admitted=_path(item['folder'],'admitted',len(seen))
                     _wait_file(admitted,deadline-3,child=item['child'],folder=item['folder'],result_kind='worker-result',
-                        memory_binding=(session,sent[index],index,item['setup'],len(seen)))
+                        memory_binding=(session,sent[index],index,item['setup'],len(seen),False))
                     ready=(_read_published_packet(admitted,'admitted',deadline-3,cancel_folder=folder,limit=limits['payload_limit'])
                         if production else read_packet(admitted,'admitted',limit=limits['payload_limit']))
                     if (type(ready) is not dict or set(ready)!={'stage','sequence'} or
@@ -772,6 +801,8 @@ def session_worker(folder,deadline,canaries,goldens,binding,limits,generated,*,e
             setup['sources']!=root['sources'] or setup['model']!=root['model']):
         raise QualificationDecline('worker session setup binding')
     binding.update(session_sha256=session,worker=index,worker_setup_sha256=setup_sha)
+    if emergency is not None:
+        _arm_setup_memory_failure_reply(folder,binding,emergency,payload_limit=limits['payload_limit'])
     stamp=time.perf_counter();context=WorkerModel(setup['model'],value_codec='v2' if production else None,**limits)
     if production:_record_initialization(folder,'model_context',stamp)
     if 'numerical_manifest' in root:

@@ -195,6 +195,21 @@ def _publish_memory_failure(error,publication,binding):
     if type(error) is not MemoryError or error.args!=():return False
     if type(publication) is not list or len(publication)!=1:return False
     capsule=publication[0]
+    if type(capsule) is tuple and len(capsule)==6:
+        if (type(binding) is not dict or len(binding)!=3
+                or type(capsule[0]) is not str or type(capsule[1]) is not str
+                or type(capsule[2]) is not str or type(capsule[3]) is not int
+                or type(capsule[4]) is not str or type(capsule[5]) is not str
+                or capsule[5]!='armed-setup-v1'
+                or type(binding.get('session_sha256')) is not str
+                or type(binding.get('worker')) is not int
+                or type(binding.get('worker_setup_sha256')) is not str
+                or binding['session_sha256']!=capsule[2] or binding['worker']!=capsule[3]
+                or binding['worker_setup_sha256']!=capsule[4]):
+            return False
+        publication[0]=None
+        os.replace(capsule[0],capsule[1])
+        return True
     if type(capsule) is not tuple or len(capsule)!=7 or type(binding) is not dict:return False
     if type(capsule[6]) is not int or not 0<=capsule[6]<=2:return False
     if (binding.get('session_sha256')!=capsule[2] or binding.get('worker')!=capsule[3] or
