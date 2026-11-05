@@ -154,6 +154,73 @@ class ProfileTests(unittest.TestCase):
 
 
 class SchedulingTests(unittest.TestCase):
+    def artifact_fixture(self, folder):
+        import hashlib
+        phase = folder/'ci-isolation'
+        phase.mkdir()
+        nodes = ['tests/test_plain.py::test_pass', 'tests/test_plain.py::test_skip', 'tests/test_plain.py::test_active']
+        config = phase/'core-config.json'
+        config.write_text(json.dumps(dict(mode='core', nodes=nodes)))
+        binding = hashlib.sha256(config.read_bytes()).hexdigest()
+        rows = []
+        def event(kind, index, clock, count, **details):
+            rows.append(dict(schema='ci-phase-progress-v1', cohort='core', event=kind,
+                nodeid=None if index is None else nodes[index], config_sha256=binding, pid=2556,
+                monotonic_seconds=clock, assigned_total=3, assigned_index=index,
+                completed_count=count, **details))
+        event('phase_start', None, 10., 0)
+        event('start', 0, 11., 0)
+        for offset, name in enumerate(('setup', 'call', 'teardown'), 1):
+            event('report', 0, 11.+offset, 0, phase=name, outcome='passed')
+        event('end', 0, 15., 1, outcome='passed', protocol_complete=True, error_type=None)
+        event('start', 1, 16., 1)
+        event('report', 1, 17., 1, phase='setup', outcome='skipped')
+        event('report', 1, 18., 1, phase='teardown', outcome='passed')
+        event('end', 1, 19., 2, outcome='skipped', protocol_complete=True, error_type=None)
+        event('start', 2, 20., 2)
+        event('report', 2, 21., 2, phase='setup', outcome='passed')
+        (phase/'core-progress.jsonl').write_text(''.join(json.dumps(row)+'\n' for row in rows))
+        (phase/'core.xml').write_text('<testsuite><testcase classname="tests.test_plain" name="test_pass" time="3.5"/>'
+                                    '<testcase classname="tests.test_plain" name="test_skip" time="1"><skipped/></testcase></testsuite>')
+        (folder/'arc-runtime.json').write_text(json.dumps(dict(python_version='3.11.9 (Clang)', pytest_version='9.2.0')))
+        return phase
+
+    def test_mac_artifact_shape_keeps_passed_clocks_and_censored_active_case_separate(self):
+        from ci_schedule_observations import artifact_records
+        with tempfile.TemporaryDirectory() as temp:
+            folder = Path(temp)
+            self.artifact_fixture(folder)
+            result = artifact_records(folder, runtime='macos-15-intel/python3.11/x86_64', artifact_id=13443466657)
+            self.assertEqual(len(result['protocol']), 1)
+            self.assertEqual(result['protocol'][0]['seconds'], 4.)
+            self.assertEqual(len(result['junit']), 1)
+            self.assertEqual(result['junit'][0]['seconds'], 3.5)
+            self.assertEqual(result['censored'][0]['node'], 'tests/test_plain.py::test_active')
+            self.assertEqual(result['censored'][0]['observed_lower_bound_seconds'], 1.)
+            self.assertNotIn('seconds', result['censored'][0])
+            self.assertEqual(result['outcomes'], {'passed': 1, 'skipped': 1})
+            self.assertEqual(result['protocol'][0]['runtime'], 'macos-15-intel/python3.11/x86_64')
+
+    def test_mac_artifact_import_refuses_runtime_or_bound_config_drift(self):
+        from ci_schedule_observations import artifact_records
+        with tempfile.TemporaryDirectory() as temp:
+            folder = Path(temp)
+            phase = self.artifact_fixture(folder)
+            with self.assertRaises(ValueError):
+                artifact_records(folder, runtime='macos-15-intel/python3.11/arm64', artifact_id=13443466657)
+            with self.assertRaises(ValueError):
+                artifact_records(folder, runtime='macos-15-intel/python3.12/x86_64', artifact_id=13443466657)
+            runtime_path = folder/'arc-runtime.json'
+            runtime_text = runtime_path.read_text()
+            runtime_path.unlink()
+            with self.assertRaises(ValueError):
+                artifact_records(folder, runtime='macos-15-intel/python3.11/x86_64', artifact_id=13443466657)
+            runtime_path.write_text(runtime_text)
+            config = phase/'core-config.json'
+            config.write_text(config.read_text()+' ')
+            with self.assertRaises(ValueError):
+                artifact_records(folder, runtime='macos-15-intel/python3.11/x86_64', artifact_id=13443466657)
+
     def test_retained_unstarted_cohort_schema_is_censored_without_fabricated_completion(self):
         from ci_schedule_observations import retained_records
         with tempfile.TemporaryDirectory() as temp:
