@@ -38,23 +38,23 @@ def test_qualified_matrix_is_separate_and_preserves_all_runtime_assignments():
     assert exclusion.group(1).strip() == '- os: windows-latest\n            python-version: "3.14"'
     assert axis(qualified, 'os') == ['windows-latest']
     assert axis(qualified, 'python-version') == ['3.14']
-    assert axis(qualified, 'shard') == list(range(1, 65))
+    assert axis(qualified, 'shard') == list(range(1, 129))
     assert 'exclude:' not in qualified
     rows = [(system, version, shard) for system in systems for version in versions
             for shard in range(1, 17) if (system, version) != ('windows-latest', '3.14')]
-    qrows = [('windows-latest', '3.14', shard) for shard in range(1, 65)]
-    assert len(rows) == 240 and len(qrows) == 64
+    qrows = [('windows-latest', '3.14', shard) for shard in range(1, 129)]
+    assert len(rows) == 240 and len(qrows) == 128
     assert max(len(rows), len(qrows)) <= 256
-    assert len(set(rows + qrows)) == 304
+    assert len(set(rows + qrows)) == 368
     counts = Counter((system, version) for system, version, _ in rows + qrows)
     assert set(counts) == {(system, version) for system in systems for version in versions}
-    assert all(value == (64 if pair == ('windows-latest', '3.14') else 16) for pair, value in counts.items())
+    assert all(value == (128 if pair == ('windows-latest', '3.14') else 16) for pair, value in counts.items())
 
 
 def test_qualified_setup_test_and_artifact_steps_are_an_inverse_only_count_change():
     text = WORKFLOW.read_text(encoding='utf-8')
     regular, qualified = job(text, 'pytest'), job(text, 'pytest-qualified')
-    assert regular.split('    steps:\n', 1)[1].strip() == qualified.split('    steps:\n', 1)[1].replace('/64', '/16').strip()
+    assert regular.split('    steps:\n', 1)[1].strip() == qualified.split('    steps:\n', 1)[1].replace('/128', '/16').strip()
     for block in (regular, qualified):
         assert 'timeout-minutes: 30' in block
         assert 'fail-fast: false' in block
@@ -64,7 +64,7 @@ def test_qualified_setup_test_and_artifact_steps_are_an_inverse_only_count_chang
         assert 'python tools/ci_isolated_tests.py --maxfail=1 --durations=20 --junitxml=kernel-results.xml' in block
         assert 'name: kernel-runtime-${{ matrix.os }}-${{ matrix.python-version }}-${{ matrix.shard }}' in block
         assert 'planning-profile.json' in block and 'ci-isolation/' in block
-    assert 'ANYGEOMETRY_TEST_SHARD: ${{ matrix.shard }}/64' in qualified
+    assert 'ANYGEOMETRY_TEST_SHARD: ${{ matrix.shard }}/128' in qualified
 
 
 def test_aggregate_requires_both_matrices_and_original_exact_coverage_and_profile_gate():
