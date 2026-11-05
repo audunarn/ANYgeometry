@@ -32,11 +32,26 @@ def _section_literal(value):
 
 
 def _section_runtime(curve):
+    from contextvars import ContextVar
+    from . import support_curves as owner
     from .support_curves import _surface_net, _absolute_box, _scaled_float_coefficients
+    variable, shared = owner._RUNTIME_CACHE_BANK, owner._SECTIONS
+    if type(variable) is not ContextVar or type(shared) is not dict:
+        raise GeometryError('plane NURBS runtime cache bank is invalid')
+    active = variable.get()
+    if active is not None and type(active) is not dict:
+        raise GeometryError('plane NURBS runtime cache context is invalid')
+    fields = curve.plane_record, curve.surface, curve.path, curve.domain
+    key = fields[:3]
     arcs = curve._arcs()
+    cache = shared if active is None else dict.get(active, 'sections')
+    if type(cache) is not dict or dict.get(cache, key) is not arcs:
+        raise GeometryError('plane NURBS runtime cache arc owner changed')
     literal = _section_literal((arcs, curve._plane_slab(), curve._world_bound(), _surface_net(curve.surface),
         tuple((_absolute_box(arc.box), _scaled_float_coefficients(arc.box)) for arc in arcs)))
-    return literal, arcs
+    keys = key, ('slab', fields[0], fields[1]), ('bound', fields[1], fields[0])
+    rows = tuple((name, dict.__contains__(cache, name), dict.get(cache, name)) for name in keys)
+    return literal, arcs, (owner, variable, shared, active, cache, fields, key, len(cache), rows)
 
 
 def validate_section_runtime(curve):
@@ -65,18 +80,38 @@ def validate_section_runtime(curve):
     if canonical is None:
         token = _RUNTIME_CACHE_BANK.set({})
         try:
-            canonical, _ = _section_runtime(declared)
+            canonical, actual_arcs, observed = _section_runtime(declared)
+            del actual_arcs, observed  # canonical cache retains detached literals only
         finally:
             _RUNTIME_CACHE_BANK.reset(token)
         if len(_SECTION_CANONICAL) >= 64:
             _SECTION_CANONICAL.clear()
         _SECTION_CANONICAL[key] = canonical
     try:
-        actual, arcs = _section_runtime(curve)
+        actual, arcs, observed = _section_runtime(curve)
     except (ValueError, TypeError, AttributeError, IndexError, ZeroDivisionError) as cause:
         raise GeometryError('plane NURBS evaluated runtime cache is invalid') from cause
     if actual != canonical:
         raise GeometryError('plane NURBS evaluated runtime cache differs from its public definition')
+    owner, variable, shared, active, cache, fields, key, count, rows = observed
+    if (owner._RUNTIME_CACHE_BANK is not variable or variable.get() is not active
+            or owner._SECTIONS is not shared
+            or (shared if active is None else dict.get(active, 'sections')) is not cache
+            or any(current is not original for current, original in zip(
+                (curve.plane_record, curve.surface, curve.path, curve.domain), fields))
+            or len(cache) != count or any(dict.__contains__(cache, name) is not present
+                or (present and dict.get(cache, name) is not value) for name, present, value in rows)
+            or _section_literal(arcs) != actual[1][0]):
+        raise GeometryError('plane NURBS runtime cache binding changed during validation')
+    if dict.__contains__(cache, key):
+        if dict.__getitem__(cache, key) is not arcs:
+            raise GeometryError('plane NURBS runtime cache has conflicting native arcs')
+    else:
+        # Only this call's actual, fully validated tuple may survive its own
+        # auxiliary-cache eviction. Never seed from a side or overwrite a row.
+        if len(cache) >= 64:
+            raise GeometryError('plane NURBS runtime cache has no bounded arc slot')
+        dict.__setitem__(cache, key, arcs)
     return arcs
 
 
