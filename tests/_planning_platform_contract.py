@@ -132,12 +132,15 @@ def _retain_unsupported512_evidence(summary, folders, request):
     base=Path(request.getfixturevalue('tmp_path')).resolve()
     copied=[];total=0
     fixed=('cleanup.json','workers-cleanup.json','memory-limit.json','session.json','command-0.json','result.json')
+    optional=('plan.json','command-1.json','command-2.json')
     for folder in folders:
         assert not folder.is_symlink() and folder.resolve().is_relative_to(base)
         assert not any(part in folder.parts for part in ('.pp1-evidence','.ppq-evidence'))
         target=destination/folder.name;target.mkdir()
-        for name in fixed:
+        for name in fixed+optional:
             path=folder/name
+            assert not path.is_symlink()
+            if name in optional and not path.exists():continue
             assert path.is_file() and not path.is_symlink()
             assert path.resolve().parent==folder.resolve()
             size=path.stat().st_size
@@ -150,7 +153,113 @@ def _retain_unsupported512_evidence(summary, folders, request):
     return destination
 
 
+def _retain_unvalidated512_attempt(control, *, reuse, request):
+    """Fixed owned CI bytes only; none of their safety/protocol claims are accepted."""
+    if os.environ.get('CI') != 'true':return None
+    import hashlib
+    from pathlib import Path
+    import uuid
+    assert type(reuse) is bool
+    root=Path(__file__).resolve().parents[1]
+    assert not any(part in root.parts for part in ('.pp1-evidence','.ppq-evidence'))
+    raw_base=Path(request.getfixturevalue('tmp_path'))
+    assert not raw_base.is_symlink()
+    base=raw_base.resolve()
+    destination=root/'ci-isolation'/'unsupported512'
+    for path in (root/'ci-isolation',destination):
+        assert not path.is_symlink()
+        path.mkdir(exist_ok=True)
+        assert path.resolve().is_relative_to(root)
+    destination=destination/('UNVALIDATED-'+('reuse-' if reuse else 'nonreuse-')+uuid.uuid4().hex)
+    destination.mkdir(exist_ok=False)
+    summary=dict(schema='unsupported512-unvalidated-attempt-v1',status='UNVALIDATED',
+        parallel_qualified=False,memory_capacity_qualified=False,cleanup_verified=None,
+        requested_reuse_workers=reuse,copy_complete=False,retained_files=[],missing_files=[])
+    (destination/'summary.json').write_text(json.dumps(summary,indent=2),encoding='utf-8')
+    names=('cleanup.json','workers-cleanup.json','memory-limit.json','session.json',
+           'command-0.json','result.json','plan.json','command-1.json','command-2.json')
+    copied=[];missing=[];total=0
+    for name in (('session',) if reuse else ('pair','face')):
+        folder=control.directory/name
+        assert not folder.is_symlink()
+        assert folder.resolve().is_relative_to(base)
+        assert not any(part in folder.parts for part in ('.pp1-evidence','.ppq-evidence'))
+        parent=folder
+        while parent!=raw_base:
+            assert not parent.is_symlink()
+            assert parent.parent!=parent
+            parent=parent.parent
+        if not folder.exists():
+            missing.append(name+'/');continue
+        assert folder.is_dir()
+        target=destination/name;target.mkdir()
+        for filename in names:
+            path=folder/filename
+            assert not path.is_symlink()
+            if not path.exists():
+                missing.append(name+'/'+filename);continue
+            assert path.is_file() and path.resolve().parent==folder.resolve()
+            size=path.stat().st_size
+            assert 0<size<=2*4_000_000+100000 and total+size<=32_000_000
+            raw=path.read_bytes();assert len(raw)==size
+            (target/filename).write_bytes(raw);total+=size
+            copied.append(dict(path=name+'/'+filename,bytes=size,sha256=hashlib.sha256(raw).hexdigest()))
+    summary.update(copy_complete=True,retained_files=copied,missing_files=missing)
+    (destination/'summary.json').write_text(json.dumps(summary,indent=2),encoding='utf-8')
+    return destination
+
+
 def assert_unsupported512_terminal(error, *, reuse, control, source, document, calls, request):
+    """Preserve first-failure bytes without changing any strict acceptance assertion."""
+    retention_error=None
+    try:
+        _retain_unvalidated512_attempt(control,reuse=reuse,request=request)
+    except Exception as failure:
+        retention_error=failure
+    try:
+        _assert_unsupported512_terminal(error,reuse=reuse,control=control,source=source,
+                                       document=document,calls=calls,request=request)
+    except BaseException as failure:
+        if retention_error is not None:
+            BaseException.add_note(failure,'UNVALIDATED attempt retention failed; original strict failure preserved')
+        raise
+    if retention_error is not None:
+        raise retention_error
+
+
+def _unsupported512_command_chain(folder, *, session, reuse):
+    """Validate the entire finite published prefix, never any matching old digest."""
+    from anygeometry._planning_executor import read_packet
+    from anygeometry._planning_session import validate_command
+    canonical=tuple(f'command-{i}.json' for i in range(3))
+    present={}
+    for path in folder.iterdir():
+        if not path.name.casefold().startswith('command'):continue
+        assert path.name in canonical, 'noncanonical or excess command filename'
+        assert not path.is_symlink() and path.is_file()
+        assert path.resolve().parent==folder.resolve()
+        present[path.name]=path
+    indices=[i for i,name in enumerate(canonical) if name in present]
+    assert indices and indices==list(range(len(indices))), 'missing command prefix'
+    first=None;seen=();previous=session;chain=[]
+    for sequence in indices:
+        path=present[canonical[sequence]]
+        assert 0<path.stat().st_size<=2*4_000_000+100000
+        body,digest=read_packet(path,'session-command',with_digest=True)
+        kind=validate_command(body,session=session,sequence=sequence,previous=previous,seen=seen)
+        if sequence==0:first=body
+        elif not reuse:assert kind=='finish', 'nonreuse lifecycle has only one data stage'
+        if kind=='finish':
+            assert sequence==indices[-1], 'finish must be the last published command'
+        else:
+            assert body['tasks'], 'published data stage must be nonempty'
+            seen+=kind,
+        chain.append(dict(sequence=sequence,stage=kind,sha256=digest))
+        previous=digest
+    return first,previous,chain
+
+
+def _assert_unsupported512_terminal(error, *, reuse, control, source, document, calls, request):
     """Measured safe terminal for either withdrawn diagnostic512 capacity claim."""
     from anygeometry._planning_executor import read_packet
     from anygeometry._planning_session import validate_command
@@ -194,7 +303,7 @@ def assert_unsupported512_terminal(error, *, reuse, control, source, document, c
         observed=_strict_memory_failure(error,cleanup,admission,reuse=reuse)
         result,result_digest=read_packet(folder/'result.json','result',with_digest=True)
         setup,session=read_packet(folder/'session.json','session',with_digest=True)
-        command_body,command=read_packet(folder/'command-0.json','session-command',with_digest=True)
+        command_body,command,chain=_unsupported512_command_chain(folder,session=session,reuse=reuse)
         assert type(setup) is dict and type(setup.get('workers')) is int and setup['workers']==control.workers
         expected_stage='pair' if reuse else folder.name
         assert validate_command(command_body,session=session,sequence=0,previous=session,seen=())==expected_stage
@@ -202,7 +311,7 @@ def assert_unsupported512_terminal(error, *, reuse, control, source, document, c
         assert result['status']=='declined' and result['reason']=='QualificationDecline: MemoryError: '
         assert result['session_sha256']==session and result['request_sha256']==command
         failures.append(dict(stage=folder.name,observation=observed,session_sha256=session,
-                             command_sha256=command,result_sha256=result_digest))
+                             command_sha256=command,result_sha256=result_digest,command_chain=chain))
     assert len(failures)==1
     request.node.user_properties[:]=[(key,value) for key,value in request.node.user_properties if key!='execution_scope']
     request.node.user_properties.extend((('execution_scope','unsupported512-resource-safety'),
