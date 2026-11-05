@@ -66,6 +66,22 @@ def _affine_parent_joint_bound(model, face, surface, edges):
     return bbox, tolerance*tolerance
 
 
+def _staged_joint_widths_bounded(positions, bbox):
+    """Binary64 widths only; caller proves the full vertex set and parent scale >= 1."""
+    import numpy as np
+    values = np.asarray(positions, dtype=np.float64)
+    limits = np.asarray(bbox, dtype=np.float64)
+    if (values.ndim != 2 or values.shape[1] != 3 or not len(values)
+            or limits.shape != (3, 2) or not np.all(np.isfinite(values))
+            or not np.all(np.isfinite(limits)) or np.any(limits[:, 0] > limits[:, 1])):
+        return False
+    with np.errstate(over='ignore', invalid='ignore'):
+        widths = np.ptp(values, axis=0)
+        original = np.ptp(limits, axis=1)
+    return bool(np.all(np.isfinite(widths)) and np.all(np.isfinite(original))
+                and np.all(widths <= original))
+
+
 def _refused_trim_station(section, event, joint, bound):
     """Repair an exact affine crossing only after the old represented joint already fails."""
     ordinary = sum(event.section_interval)/2
@@ -281,9 +297,21 @@ def fragment_nurbs_plane(model, parent, plane, section, *, source_context=None, 
         bbox = joint_bound[0]
         if any(not all(low <= Q(float(value)) <= high for value, (low, high) in zip(model.vertex_position(vertex), bbox))
                for vertex in vertices.values()):
-            joint_bound = None
-    # Single-arc rectangular cuts introduce no internal trace vertices: every
-    # child vertex is an existing boundary vertex inside the original bbox.
+            joint_path = section.paths[0] if len(section.paths) == 1 else None
+            joint_entries = events_by_path[0] if joint_path is not None else ()
+            # Only the material interval between two interior boundary crossings
+            # can survive on this single open arc of a rectangular affine face.
+            # There are no breaks or plate stations to create later vertices.
+            closed_vertices = (not plate_stations and joint_path is not None
+                and not joint_path.closed and len(joint_path.arcs) == 1 and len(joint_entries) == 2
+                and joint_entries[0][0] != joint_entries[1][0]
+                and all(key in vertices and 0 < event.section_interval[0]
+                        <= event.section_interval[1] < 1 for key, event in joint_entries))
+            if (not closed_vertices or not _staged_joint_widths_bounded(
+                    [model.vertex_position(vertex) for vertex in vertices.values()], bbox)):
+                joint_bound = None
+    # The original inside-bbox path is unchanged. The escaped fallback retains
+    # only its binary64 width bound; it makes no exact-world-coordinate claim.
     source_positive = _area(model, model.faces[parent].loop, surface)[0] > 0
     for loop_index, loop in enumerate(original):
         directed = []
