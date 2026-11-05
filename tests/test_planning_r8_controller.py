@@ -34,7 +34,7 @@ def _finalization_fixture(monkeypatch,tmp_path):
         def close(self):pass
         def verify_pending(self):pass
         def check_clock(self):pass
-    monkeypatch.setattr(controller,'_SessionBridge',Bridge)
+    monkeypatch.setattr(controller,'_ProductionBridge',Bridge)
     policy=SimpleNamespace(cancellation_check=None,max_predicates=None,max_candidate_pairs=None)
     return work,plan,policy
 
@@ -46,7 +46,7 @@ def test_production_sample_terminal_preserves_original_after_retirement(monkeypa
     from anygeometry._planning_values import encode_value
     from anygeometry.errors import GeometryError
     work,plan,policy=_finalization_fixture(monkeypatch,tmp_path)
-    monkeypatch.setattr(controller,'_SessionBridge',host._SessionBridge)
+    monkeypatch.setattr(controller,'_ProductionBridge',host._SessionBridge)
     error=getattr(executor,name)('original production sample terminal');seen=[];armed=[False]
     def parallel(bridge):
         seen.append(bridge);original=bridge.poll
@@ -107,7 +107,7 @@ def test_cleanup_failure_does_not_replace_primary_exception(monkeypatch,tmp_path
     def close(self):
         self.retired=False;self._retirement_error=cleanup
         raise cleanup
-    monkeypatch.setattr(controller._SessionBridge,'close',close)
+    monkeypatch.setattr(controller._ProductionBridge,'close',close)
     def parallel(bridge):raise primary
     with collect_runtime_records() as records,pytest.raises(RuntimeError) as caught:
         controller.run(None,lambda:pytest.fail('replay'),parallel,policy=policy,mode='exact')
@@ -177,7 +177,7 @@ def test_production_diagnostics_publish_only_final_path_once(monkeypatch,tmp_pat
     def verify(self):
         emit('sample',19)
         if fallback:raise QualificationDecline('sample mismatch')
-    monkeypatch.setattr(controller._SessionBridge,'verify_pending',verify)
+    monkeypatch.setattr(controller._ProductionBridge,'verify_pending',verify)
     def serial():emit('serial',5);return 'serial'
     with diagnostics.collect_runtime_diagnostics() as outer,collect_runtime_records() as records:
         with diagnostics.collect_runtime_diagnostics() as inner:

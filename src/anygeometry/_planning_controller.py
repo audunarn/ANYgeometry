@@ -90,6 +90,16 @@ def _storage():
         raise QualificationDecline('planning storage unavailable: '+type(error).__name__) from error
 
 
+class _ProductionAllowanceExpired(BaseException):
+    """Only the internal production attempt expired; caller limits still apply."""
+
+
+class _ProductionBridge(_SessionBridge):
+    def check_clock(self):
+        if time.monotonic()>=self.deadline:
+            raise _ProductionAllowanceExpired('internal production allowance consumed')
+
+
 def run(model,serial,parallel,*,policy,mode,eligible=True,preparation=None,serial_replay=None):
     # Unsupported routes never enter the parallel transaction or adapt caller
     # callbacks. Preserve the original serial error and work-budget contracts.
@@ -207,7 +217,7 @@ def run(model,serial,parallel,*,policy,mode,eligible=True,preparation=None,seria
         receipt['infrastructure']=dict(host=infrastructure.digest,host_nodes=infrastructure.nodes)
         receipt['costs']['released_parser_scaffolding']=dict(numerical=manifest.parsing_release,infrastructure=infrastructure.parsing_release)
         control=_ProductionControl(work,lease,manifest,infrastructure)
-        bridge=_SessionBridge(packet,control,poll=poll)
+        bridge=_ProductionBridge(packet,control,poll=poll)
         with transaction() as provisional:
             try:
                 bridge._inside_numerical_call=True
@@ -243,7 +253,7 @@ def run(model,serial,parallel,*,policy,mode,eligible=True,preparation=None,seria
         receipt['costs']['infrastructure']=[dict(stage=kind,host=report.get('host_timing'),
             workers=[{key:worker.get(key) for key in ('startup_seconds','assignment_seconds','task_seconds','boundary_seconds','resource_guard','value_codec')}
                 for worker in report.get('worker_reports',[])]) for kind,tasks,serial_task,report in bridge.pending]
-    except QualificationDecline as error:
+    except (QualificationDecline,_ProductionAllowanceExpired) as error:
         failure=error;receipt['reason']=str(error);receipt['disposition']='serial'
         receipt['costs']['abandoned']=locals().get('provisional',{})
         if bridge is not None:bridge.close()

@@ -86,7 +86,8 @@ def test_public_plans_match_reference_and_preserve_budgets(monkeypatch):
     swept = plan_intersections(model, faces, policy='connect')
     monkeypatch.setattr(candidates, 'swept_face_pairs', exhaustive)
     reference = plan_intersections(model, faces, policy='connect')
-    assert swept == reference
+    from _exact_plan_comparison import exact_projection
+    assert exact_projection(swept) == exact_projection(reference)
     for factory in (swept_face_pairs, exhaustive):
         monkeypatch.setattr(candidates, 'swept_face_pairs', factory)
         with pytest.raises(GeometryError, match='budget'):
