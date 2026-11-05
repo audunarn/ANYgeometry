@@ -1,0 +1,9 @@
+# Required planner positives use fresh host interpreters
+
+With ANYGEOMETRY_REQUIRE_QUALIFIED_PLANNING_TESTS=1, the CI driver moves only exact selected IDs from ci_planning_profile.REQUIRED_PROFILE_CASES into individual fresh-H pytest processes. Each case keeps its original ID, module, fixtures, cold/warm cache setup, assertions and immutable runtime profile. No fixture cache is cleared. This establishes that case's declared host context; it does not assert capacity in an arbitrary previously loaded mixed-test host. Other tests, including loaded-host resource refusals, remain in the core/oracle cohorts.
+
+The original precollection and shard assignment are unchanged. The plan records disjoint core/oracle/positive lists before fixtures. Positive children retain the core mpmath guard, exact module inventory and single assigned-ID checks, plus exact runtime/source/helper preflight. Initial declines, skipped cases, missing assertions and invalid positive properties fail. Each child writes separate real JUnit and progress evidence; original exact union and full22-case verification remain mandatory. No tests are duplicated.
+
+Memory policy is unchanged: host estimate plus512MiB,4GiB P/W,8GiB aggregate,25percent headroom and half of availableRAM. Fresh hosts must still admit or fail; no automatic resource increase. The source model and its warm-cache setup are not replaced.
+
+GitHub's30-minute whole-job deadline remains authoritative and starts before the driver. A single secondary1800-second DRIVER budget starts before precollection, guards later phase launches and records actual phase/cumulative/remaining-driver time. It never resets per case and does not claim to know remaining whole-job setup time. No new kill service or per-phase30-minute grant is introduced. Job timeouts retain incomplete evidence and fail the existing union gate.

@@ -100,6 +100,74 @@ def classify_nodes(root,nodes):
         unresolved_dynamic_imports=unknown,module_sha256={p.relative_to(root).as_posix():hashlib.sha256(p.read_bytes()).hexdigest() for p in files})
 
 
+def required_positive_key(node):
+    file,*rest=node.split('::')
+    module=Path(file).stem
+    return module+'::'+'::'.join(rest) if file=='tests/'+module+'.py' else None
+
+
+def split_required_positives(groups,*,required):
+    from ci_planning_profile import REQUIRED_PROFILE_CASES
+    if type(required) is not bool or set(groups)!={'core','oracle'}:
+        raise ValueError('invalid positive phase partition')
+    flat=[node for names in groups.values() for node in names]
+    validate_nodes(flat)
+    if any(required_positive_key(node) in REQUIRED_PROFILE_CASES for node in groups['oracle']):
+        raise ValueError('required planning positive classified as oracle')
+    result={name:list(nodes) for name,nodes in groups.items()}
+    if required:
+        positive=[node for node in result['core'] if required_positive_key(node) in REQUIRED_PROFILE_CASES]
+        chosen=set(positive)
+        result['core']=[node for node in result['core'] if node not in chosen]
+        if positive:result['planning_positive']=positive
+    union=[node for names in result.values() for node in names]
+    if len(union)!=len(set(union)) or set(union)!=set(flat):
+        raise ValueError('positive partition changed assigned node union')
+    return result
+
+
+def execution_phases(groups):
+    phases=[dict(name=name,mode=name,nodes=groups[name],positive=None)
+            for name in ('core','oracle') if groups[name]]
+    phases.extend(dict(name='positive-'+str(index).zfill(3),mode='core',nodes=[node],positive=node)
+                  for index,node in enumerate(groups.get('planning_positive',[])))
+    return phases
+
+
+def verify_positive_junit(path,node):
+    from ci_planning_profile import REQUIRED_PROFILE_CASES,CONTRACT
+    from ci_durations import node_id
+    key=required_positive_key(node)
+    cases=list(ET.parse(path).iter('testcase'))
+    if key not in REQUIRED_PROFILE_CASES or len(cases)!=1:
+        raise ValueError('positive phase must contain exactly its authoritative case')
+    case=cases[0]
+    actual=case.get('classname','').rsplit('.',1)[-1]+'::'+case.get('name','')
+    properties=[(p.get('name'),p.get('value')) for p in case.findall('./properties/property')]
+    if (actual!=key or node_id(case.get('classname',''),case.get('name',''))!=node
+            or any(case.find(kind) is not None for kind in ('failure','error','skipped'))
+            or ('numpy_profile_contract',CONTRACT) not in properties
+            or ('execution_scope','original-profile-assertions') not in properties
+            or any(name=='postcapture_qualification' and value.lower()=='false' for name,value in properties)
+            or any(name=='execution_scope' and value.endswith('refusal') for name,value in properties)):
+        raise ValueError('required positive phase did not execute original passed assertions')
+
+
+class PhaseBudget:
+    """Secondary DRIVER budget; earlier GitHub30min whole-job cap stays stronger."""
+    def __init__(self,seconds=1800):
+        if type(seconds) is not int or not 0<seconds<=1800:raise ValueError('invalid CI driver budget')
+        self.seconds=seconds;self.started=time.monotonic();self.deadline=self.started+seconds
+    def remaining(self):
+        remaining=self.deadline-time.monotonic()
+        if remaining<=0:raise TimeoutError('shared CI driver budget exhausted')
+        return remaining
+    def report(self):
+        now=time.monotonic()
+        return dict(scope='driver-only; GitHub whole-job deadline starts earlier',limit_seconds=self.seconds,
+            elapsed_seconds=now-self.started,remaining_driver_seconds=max(0.,self.deadline-now))
+
+
 def merge_junit(paths,expected,output):
     from ci_durations import node_id
     validate_nodes(expected);combined=ET.Element('testsuites');seen=[]
@@ -216,6 +284,16 @@ def child(config):
     import pytest
     expected=row.get('nodes');manifest=Path(row['manifest']);raw_inventory=[]
     if expected is not None:validate_nodes(expected,root)
+    positive=row.get('positive')
+    if positive is not None:
+        from ci_planning_profile import REQUIRED_PROFILE_CASES,preflight
+        if (row['mode']!='core' or expected!=[positive]
+                or required_positive_key(positive) not in REQUIRED_PROFILE_CASES
+                or os.environ.get('ANYGEOMETRY_REQUIRE_QUALIFIED_PLANNING_TESTS')!='1'):
+            raise ValueError('invalid required positive child configuration')
+        profile=preflight()
+        profile.update(host_scope='fresh-H-single-authoritative-case',nodeid=positive,pid=os.getpid())
+        (manifest.parent/'positive-profile.json').write_text(json.dumps(profile,indent=2),encoding='utf-8')
     module_names=(list(dict.fromkeys(node.split('::',1)[0] for node in expected))
                   if expected is not None else row.get('allowed_modules'))
     allowed=None if module_names is None else {(root/name).resolve() for name in module_names}
@@ -247,7 +325,8 @@ def child(config):
             check()
             manifest.write_text(json.dumps(dict(nodes=raw_inventory if row['mode']=='inventory' else actual,
                 mode=row['mode'],mpmath_loaded='mpmath' in sys.modules,
-                collection_mode='original' if allowed is None else 'directory-walk'),indent=2),encoding='utf-8')
+                collection_mode='original' if allowed is None else 'directory-walk',pid=os.getpid(),
+                positive_host_scope='fresh-H-single-authoritative-case' if positive is not None else None),indent=2),encoding='utf-8')
             if expected is not None and (len(actual)!=len(expected) or set(actual)!=set(expected)):
                 raise RuntimeError('cohort actual collected set/count differs from assigned JSON IDs')
         @pytest.hookimpl(tryfirst=True)
@@ -260,7 +339,9 @@ def child(config):
                 if dropped:config.hook.pytest_deselected(items=dropped)
                 items[:]=[lookup[node] for node in selected]
             if row['mode']!='collect':
-                for item in items:item.user_properties.append(('ci_interpreter_cohort',row['mode']))
+                for item in items:
+                    item.user_properties.append(('ci_interpreter_cohort',row['mode']))
+                    if positive is not None:item.user_properties.append(('ci_positive_host_scope','fresh-H-single-authoritative-case'))
         def pytest_runtest_teardown(self):check()
         def pytest_sessionfinish(self):check()
     args=list(row['args'])
@@ -270,11 +351,16 @@ def child(config):
         if progress is not None:progress.close()
 
 
-def run_phase(root,folder,name,config,env):
+def run_phase(root,folder,name,config,env,*,budget=None):
+    remaining=None if budget is None else budget.remaining()
     path=folder/(name+'-config.json');path.write_text(json.dumps(config,indent=2),encoding='utf-8')
+    stamp=time.monotonic()
     with (folder/(name+'-stdout.txt')).open('w',encoding='utf-8') as stdout,(folder/(name+'-stderr.txt')).open('w',encoding='utf-8') as stderr:
         result=subprocess.run([sys.executable,str(Path(__file__).resolve()),'--child',str(path)],cwd=root,env=env,stdout=stdout,stderr=stderr)
-    (folder/(name+'-result.json')).write_text(json.dumps(dict(returncode=result.returncode),indent=2),encoding='utf-8')
+    record=dict(returncode=result.returncode,process_wall_seconds=time.monotonic()-stamp,
+        remaining_driver_seconds_at_start=remaining,driver_budget=None if budget is None else budget.report())
+    (folder/(name+'-result.json')).write_text(json.dumps(record,indent=2),encoding='utf-8')
+    if budget is not None:budget.remaining()
     return result.returncode
 
 
@@ -290,6 +376,7 @@ def main(argv=None):
     parser.add_argument('--collect-only',action='store_true')
     args=parser.parse_args(argv)
     if args.child:return child(args.child)
+    budget=PhaseBudget()
     root=args.root.resolve();folder=(root/args.evidence_dir).resolve()
     if folder.exists() and any(folder.iterdir()):raise ValueError('evidence directory must be fresh')
     folder.mkdir(parents=True,exist_ok=True)
@@ -301,7 +388,7 @@ def main(argv=None):
     if args.m:common+=['-m',args.m]
     collection=dict(root=str(root),mode='collect',manifest=str(folder/'collection.json'),
                     args=(args.select or ['tests'])+common+['--collect-only','-q'])
-    code=run_phase(root,folder,'collection',collection,env)
+    code=run_phase(root,folder,'collection',collection,env,budget=budget)
     if code:raise RuntimeError('original collection failed; retained phase evidence')
     shard=read_json(report);assigned=validate_nodes(shard['ran'],root)
     selected=validate_nodes(shard['selected'],root)
@@ -315,26 +402,36 @@ def main(argv=None):
         modules=list(dict.fromkeys(node.split('::',1)[0] for node in assigned))
         inventory_config=dict(root=str(root),mode='inventory',manifest=str(folder/'inventory.json'),
             allowed_modules=modules,args=['tests','--rootdir='+str(root),'--collect-only','-q'])
-        if run_phase(root,folder,'inventory',inventory_config,env):raise RuntimeError('module inventory collection failed')
+        if run_phase(root,folder,'inventory',inventory_config,env,budget=budget):raise RuntimeError('module inventory collection failed')
         inventory=validate_nodes(read_json(folder/'inventory.json')['nodes'],root)
     else:inventory=selected
     if not set(assigned)<=set(inventory):raise ValueError('assigned IDs changed before module inventory')
     groups,closure=classify_nodes(root,assigned)
+    groups=split_required_positives(groups,required=env.get('ANYGEOMETRY_REQUIRE_QUALIFIED_PLANNING_TESTS')=='1')
     plan=dict(shard_report=str(report),shard_report_sha256=hashlib.sha256(report.read_bytes()).hexdigest(),
               index=shard['index'],count=shard['count'],assigned=assigned,groups=groups,
               module_inventory=inventory,closure=closure)
     (folder/'plan.json').write_text(json.dumps(plan,indent=2),encoding='utf-8')
     results=[];codes=[]
-    for group,nodes in groups.items():
-        if not nodes:continue
-        junit=folder/(group+'.xml')
+    for phase in execution_phases(groups):
+        group,nodes=phase['mode'],phase['nodes']
+        location=folder/phase['name'] if phase['positive'] is not None else folder
+        location.mkdir(exist_ok=True)
+        junit=location/(group+'.xml')
         options=common+(['--collect-only','-q'] if args.collect_only else ['--junitxml='+str(junit)])
         files={node.split('::',1)[0] for node in nodes}
-        config=dict(root=str(root),mode=group,nodes=nodes,
+        config=dict(root=str(root),mode=group,nodes=nodes,positive=phase['positive'],
             inventory=[node for node in inventory if node.split('::',1)[0] in files],
-            manifest=str(folder/(group+'-collection.json')),args=options)
-        codes.append(run_phase(root,folder,group,config,env))
-        if not args.collect_only and junit.exists():results.append(junit)
+            manifest=str(location/(group+'-collection.json')),args=options)
+        code=run_phase(root,location,group,config,env,budget=budget)
+        if not args.collect_only:
+            if junit.exists():results.append(junit)
+            if phase['positive'] is not None:
+                try:verify_positive_junit(junit,phase['positive'])
+                except (ValueError,OSError,ET.ParseError) as error:
+                    (location/'positive-validation-error.txt').write_text(str(error),encoding='utf-8')
+                    code=code or 1
+        codes.append(code)
     if hashfile(report)!=plan['shard_report_sha256']:raise ValueError('original shard report changed')
     if args.collect_only:
         if any(codes):raise RuntimeError('cohort collection guard failed')
@@ -343,8 +440,9 @@ def main(argv=None):
         merge_junit(results,assigned,output)
         if any(codes):raise RuntimeError('cohort failed; retained real combined JUnit')
     (folder/'complete.json').write_text(json.dumps(dict(status='collection-verified' if args.collect_only else 'complete',
-        assigned=len(assigned),core=len(groups['core']),oracle=len(groups['oracle'])),indent=2),encoding='utf-8')
-    print(json.dumps(dict(assigned=len(assigned),core=len(groups['core']),oracle=len(groups['oracle']),collect_only=args.collect_only)))
+        assigned=len(assigned),core=len(groups['core']),oracle=len(groups['oracle']),
+        planning_positive=len(groups.get('planning_positive',[])),driver_budget=budget.report()),indent=2),encoding='utf-8')
+    print(json.dumps(dict(assigned=len(assigned),core=len(groups['core']),oracle=len(groups['oracle']),planning_positive=len(groups.get('planning_positive',[])),collect_only=args.collect_only)))
     return 0
 
 
