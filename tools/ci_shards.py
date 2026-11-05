@@ -37,7 +37,8 @@ def load_table(path: Path = TABLE) -> dict:
 
 
 def slow_ids(table: dict, threshold: float = SLOW_SECONDS) -> set[str]:
-    names = set(table.get("tests", {})) | set(table.get("scheduling", {}).get("tests", {}))
+    names = (set(table.get("tests", {})) | set(table.get("scheduling", {}).get("tests", {}))
+             | set(table.get("scheduling", {}).get("protocol_tests", {})))
     return {name for name in names if duration(table, name) >= threshold}
 
 
@@ -48,7 +49,9 @@ def duration(table: dict, name: str) -> float:
     else:
         historical = table.get("rest_mean", {}).get(BALANCE_PLATFORM, .1) or .1
     observed = table.get("scheduling", {}).get("tests", {}).get(name, {})
-    return max(historical, max((bucket["maximum_seconds"] for bucket in observed.values()), default=0.0))
+    protocols = table.get("scheduling", {}).get("protocol_tests", {}).get(name, {})
+    return max(historical, max((bucket["maximum_seconds"] for bucket in observed.values()), default=0.0),
+               max((bucket["maximum_seconds"] for bucket in protocols.values()), default=0.0))
 
 
 def assign(ids: list[str], count: int, table: dict) -> dict[str, int]:
@@ -60,6 +63,29 @@ def assign(ids: list[str], count: int, table: dict) -> dict[str, int]:
         loads[index] += duration(table, name)
         result[name] = index + 1
     return result
+
+
+def scheduling_receipt(ids: list[str], count: int, table: dict, *, setup_reserve_seconds=180, cap_seconds=1800):
+    """Policy estimates plus explicit setup/collection/phase/artifact reserve.
+
+    Reserve is a planning allowance, not a measured bound. A passing estimate
+    cannot establish actual fit, especially while individual cases are unknown.
+    """
+    if type(count) is not int or count < 1 or not 0 <= setup_reserve_seconds < cap_seconds <= 1800:
+        raise ValueError('invalid scheduling envelope')
+    if not ids or len(ids) != len(set(ids)):
+        raise ValueError('invalid scheduling inventory')
+    owner = assign(ids, count, table)
+    loads = [sum(duration(table, node) for node in ids if owner[node] == index) for index in range(1, count+1)]
+    known = (set(table.get('tests', {})) | set(table.get('scheduling', {}).get('tests', {}))
+             | set(table.get('scheduling', {}).get('protocol_tests', {})))
+    return dict(schema='ci-scheduling-estimate-v1', scope='policy-estimate-only-not-measured-fit',
+        cap_seconds=cap_seconds, setup_reserve_seconds=setup_reserve_seconds,
+        reserve_scope='setup, collection, serial interpreter startup and artifact allowance',
+        estimated_test_seconds=loads,
+        estimated_with_reserve_seconds=[cost+setup_reserve_seconds for cost in loads],
+        over_estimate_shards=[index for index, cost in enumerate(loads, 1) if cost+setup_reserve_seconds > cap_seconds],
+        unobserved_count=sum(node not in known for node in ids), measured_fit=False, release_acceptance=False)
 
 
 def parse_shard(text: str) -> tuple[int, int]:

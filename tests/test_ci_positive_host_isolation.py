@@ -73,6 +73,8 @@ def mini_root(root,fault=None):
     def put(name,text):
         path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(text);return path
     put('tools/ci_isolated_tests.py',Path(ci.__file__).read_text())
+    put('tools/ci_test_profiles.py',(TOOLS/'ci_test_profiles.py').read_text())
+    put('tools/ci_shards.py',(TOOLS/'ci_shards.py').read_text())
     put('tools/ci_durations.py',(TOOLS/'ci_durations.py').read_text())
     put('tools/ci_planning_profile.py',
         'import os\nREQUIRED_PROFILE_CASES='+repr(REQUIRED_PROFILE_CASES)+'\nCONTRACT='+repr(CONTRACT)+

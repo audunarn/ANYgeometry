@@ -374,12 +374,23 @@ def main(argv=None):
     parser.add_argument('-k',default='');parser.add_argument('-m',default='')
     parser.add_argument('--maxfail',type=int,default=1);parser.add_argument('--durations',type=int,default=20)
     parser.add_argument('--collect-only',action='store_true')
+    from ci_test_profiles import PROFILES,module_manifest,node_receipt,validate_selection
+    parser.add_argument('--profile',choices=PROFILES,default=None,
+                        help='full preserves the release inventory; other profiles are partial development selections')
     args=parser.parse_args(argv)
     if args.child:return child(args.child)
+    focused=args.profile is None and bool(args.select or args.k or args.m or os.environ.get('PYTEST_ADDOPTS'))
+    args.profile=args.profile or 'full'
+    validate_selection('unit' if focused else args.profile,args.select,args.k,args.m,os.environ)
     budget=PhaseBudget()
     root=args.root.resolve();folder=(root/args.evidence_dir).resolve()
     if folder.exists() and any(folder.iterdir()):raise ValueError('evidence directory must be fresh')
     folder.mkdir(parents=True,exist_ok=True)
+    profile=module_manifest(root,args.profile)
+    if focused:profile.update(profile='legacy-focused',scope='partial-development-only')
+    if args.profile!='full' and any(selector.split('::',1)[0] not in profile['selected_modules'] for selector in args.select):
+        raise ValueError('explicit selector outside requested profile modules')
+    (folder/'profile-modules.json').write_text(json.dumps(profile,indent=2),encoding='utf-8')
     report=Path(os.environ.get('ANYGEOMETRY_SHARD_REPORT',str(folder/'original-shard.json')))
     if not report.is_absolute():report=root/report
     env=dict(os.environ);env['ANYGEOMETRY_SHARD_REPORT']=str(report)
@@ -388,10 +399,19 @@ def main(argv=None):
     if args.m:common+=['-m',args.m]
     collection=dict(root=str(root),mode='collect',manifest=str(folder/'collection.json'),
                     args=(args.select or ['tests'])+common+['--collect-only','-q'])
+    if args.profile!='full':collection['allowed_modules']=profile['selected_modules']
     code=run_phase(root,folder,'collection',collection,env,budget=budget)
     if code:raise RuntimeError('original collection failed; retained phase evidence')
     shard=read_json(report);assigned=validate_nodes(shard['ran'],root)
     selected=validate_nodes(shard['selected'],root)
+    from ci_shards import load_table,scheduling_receipt
+    schedule=scheduling_receipt(selected,shard['count'],load_table(root/'reports/ci/durations.json'))
+    (folder/'schedule-receipt.json').write_text(json.dumps(schedule,indent=2),encoding='utf-8')
+    receipt=node_receipt(selected,args.profile)
+    if focused:receipt.update(profile='legacy-focused',scope='partial-development-only')
+    if receipt['selected']!=selected:raise ValueError('collected nodes escaped requested test profile')
+    receipt['module_manifest_sha256']=hashfile(folder/'profile-modules.json')
+    (folder/'profile-receipt.json').write_text(json.dumps(receipt,indent=2),encoding='utf-8')
     if not set(assigned)<=set(selected) or not set(shard['slow'])<=set(selected):raise ValueError('invalid original shard report')
     if read_json(folder/'collection.json')['nodes']!=assigned:raise ValueError('original report differs from actual shard collection')
     env.pop('ANYGEOMETRY_TEST_SHARD',None);env.pop('ANYGEOMETRY_SHARD_REPORT',None)
@@ -410,7 +430,8 @@ def main(argv=None):
     groups=split_required_positives(groups,required=env.get('ANYGEOMETRY_REQUIRE_QUALIFIED_PLANNING_TESTS')=='1')
     plan=dict(shard_report=str(report),shard_report_sha256=hashlib.sha256(report.read_bytes()).hexdigest(),
               index=shard['index'],count=shard['count'],assigned=assigned,groups=groups,
-              module_inventory=inventory,closure=closure)
+              module_inventory=inventory,closure=closure,profile_receipt_sha256=hashfile(folder/'profile-receipt.json'),
+              schedule_receipt_sha256=hashfile(folder/'schedule-receipt.json'))
     (folder/'plan.json').write_text(json.dumps(plan,indent=2),encoding='utf-8')
     results=[];codes=[]
     for phase in execution_phases(groups):

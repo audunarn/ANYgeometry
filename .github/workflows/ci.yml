@@ -88,7 +88,7 @@ jobs:
         run: |
           python -c "import os,pathlib,json,sys,anygeometry,anymesher; consumer=pathlib.Path(os.environ['CI_MESHER_SOURCE_ROOT']).resolve(); assert pathlib.Path(anymesher.__file__).resolve().is_relative_to(consumer); assert pathlib.Path(anygeometry.__file__).resolve().is_relative_to(pathlib.Path('src').resolve()); pathlib.Path('consumer-runtime.json').write_text(json.dumps(dict(consumer_ref='2ef01d47e29fb461da1cf1ece73913c1708d4e49',consumer_origin=anymesher.__file__,geometry_origin=anygeometry.__file__,mpmath_loaded='mpmath' in sys.modules)),encoding='utf-8')"
           python tools/check_licenses.py --check-installed
-          python tools/ci_isolated_tests.py --maxfail=1 --durations=20 --junitxml=kernel-results.xml
+          python tools/ci_isolated_tests.py --profile full --maxfail=1 --durations=20 --junitxml=kernel-results.xml
       - name: Slowest tests
         if: always()
         shell: bash
@@ -170,7 +170,7 @@ jobs:
         run: |
           python -c "import os,pathlib,json,sys,anygeometry,anymesher; consumer=pathlib.Path(os.environ['CI_MESHER_SOURCE_ROOT']).resolve(); assert pathlib.Path(anymesher.__file__).resolve().is_relative_to(consumer); assert pathlib.Path(anygeometry.__file__).resolve().is_relative_to(pathlib.Path('src').resolve()); pathlib.Path('consumer-runtime.json').write_text(json.dumps(dict(consumer_ref='2ef01d47e29fb461da1cf1ece73913c1708d4e49',consumer_origin=anymesher.__file__,geometry_origin=anygeometry.__file__,mpmath_loaded='mpmath' in sys.modules)),encoding='utf-8')"
           python tools/check_licenses.py --check-installed
-          python tools/ci_isolated_tests.py --maxfail=1 --durations=20 --junitxml=kernel-results.xml
+          python tools/ci_isolated_tests.py --profile full --maxfail=1 --durations=20 --junitxml=kernel-results.xml
       - name: Slowest tests
         if: always()
         shell: bash
@@ -390,7 +390,7 @@ jobs:
       - run: python -m pip install -e '.[dev,planar,sketch,test]' 'setuptools>=77.0.3' 'numpy==1.26.0' 'shapely==2.0.0' 'scipy==1.13.0'
       - run: |
           python -c "import os,pathlib,json,sys,anygeometry,anymesher; consumer=pathlib.Path(os.environ['CI_MESHER_SOURCE_ROOT']).resolve(); assert pathlib.Path(anymesher.__file__).resolve().is_relative_to(consumer); assert pathlib.Path(anygeometry.__file__).resolve().is_relative_to(pathlib.Path('src').resolve()); pathlib.Path('consumer-runtime.json').write_text(json.dumps(dict(consumer_ref='2ef01d47e29fb461da1cf1ece73913c1708d4e49',consumer_origin=anymesher.__file__,geometry_origin=anygeometry.__file__,mpmath_loaded='mpmath' in sys.modules)),encoding='utf-8')"
-          python tools/ci_isolated_tests.py --maxfail=1 --durations=20 --junitxml=kernel-results.xml
+          python tools/ci_isolated_tests.py --profile full --maxfail=1 --durations=20 --junitxml=kernel-results.xml
         env:
           PYTHONPATH: ${{ github.workspace }}/.worktrees/ci-mesher-consumer/src
           CI_MESHER_SOURCE_ROOT: ${{ github.workspace }}/.worktrees/ci-mesher-consumer/src
@@ -661,3 +661,10 @@ jobs:
             candidate/source-commits.json
             ${{ runner.temp }}/general-intersection-consumers/*.json
             ${{ runner.temp }}/general-intersection-consumers/command-*.log
+
+  integration:
+    name: Required existing integration and installed artifact gates
+    uses: ./.github/workflows/integration.yml
+    permissions:
+      contents: read
+      actions: read

@@ -1,0 +1,78 @@
+name: Selected test profile (not release acceptance)
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Partial development selection; use Tests workflow for full release gates
+        required: true
+        default: unit
+        type: choice
+        options: [unit, integration, qualification]
+
+permissions:
+  contents: read
+
+env:
+  OMP_NUM_THREADS: '1'
+  OPENBLAS_NUM_THREADS: '1'
+  MKL_NUM_THREADS: '1'
+
+jobs:
+  selected:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(inputs.profile == 'unit' && '[1]' || '[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16]') }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: audunarn/ANYmesh
+          ref: 2ef01d47e29fb461da1cf1ece73913c1708d4e49
+          path: .worktrees/ci-mesher-consumer
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.13'
+          cache: pip
+      - run: python -m pip install -e '.[dev,planar,sketch,test]'
+      - name: Run explicit partial profile
+        env:
+          TEST_PROFILE: ${{ inputs.profile }}
+          ANYGEOMETRY_TEST_SHARD: ${{ matrix.shard }}/${{ inputs.profile == 'unit' && '1' || '16' }}
+          PYTHONPATH: ${{ github.workspace }}/.worktrees/ci-mesher-consumer/src
+        run: python tools/ci_isolated_tests.py --profile "$TEST_PROFILE" --evidence-dir profile-evidence --junitxml profile-evidence/kernel-results.xml
+      - name: Retain partial profile receipts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: selected-profile-${{ matrix.shard }}
+          path: profile-evidence/
+          if-no-files-found: warn
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: always()
+    needs: selected
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: selected-profile-*
+          path: profile-artifacts
+      - name: Require actual selected-job success and complete shard coverage
+        env:
+          SELECTED_RESULT: ${{ needs.selected.result }}
+        run: |
+          test "$SELECTED_RESULT" = success
+          python tools/ci_shards.py verify profile-artifacts/*/original-shard.json --results kernel-results.xml

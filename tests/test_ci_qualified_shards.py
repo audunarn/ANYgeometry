@@ -61,7 +61,7 @@ def test_qualified_setup_test_and_artifact_steps_are_an_inverse_only_count_chang
         assert "ANYGEOMETRY_REQUIRE_QUALIFIED_PLANNING_TESTS: ${{ matrix.os == 'windows-latest' && matrix.python-version == '3.14' && '1' || '0' }}" in block
         assert "'numpy==2.4.6' 'scipy==1.17.1'" in block
         assert 'python tools/ci_planning_profile.py --preflight --report planning-profile.json' in block
-        assert 'python tools/ci_isolated_tests.py --maxfail=1 --durations=20 --junitxml=kernel-results.xml' in block
+        assert 'python tools/ci_isolated_tests.py --profile full --maxfail=1 --durations=20 --junitxml=kernel-results.xml' in block
         assert 'name: kernel-runtime-${{ matrix.os }}-${{ matrix.python-version }}-${{ matrix.shard }}' in block
         assert 'planning-profile.json' in block and 'ci-isolation/' in block
     assert 'ANYGEOMETRY_TEST_SHARD: ${{ matrix.shard }}/128' in qualified
