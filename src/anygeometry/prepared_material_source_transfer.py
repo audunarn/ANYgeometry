@@ -318,7 +318,7 @@ def _prepare_source_lineage(model, candidate, replacements, edge_partition=None)
             for parent, children in changes.items())
             or {child for parent in model.faces for child in changes.get(parent, (parent,))} != set(candidate.faces)):
         raise GeometryError('source lineage publication omits or invents material descendants')
-    routes = []
+    routes, owners = [], []
     parts = _validate_edge_partition(edge_partition, model, candidate) if edge_partition is not None else None
     from .serialization import to_dict
     old_edges = {row["id"]: row for row in to_dict(model)["edges"]}
@@ -342,15 +342,21 @@ def _prepare_source_lineage(model, candidate, replacements, edge_partition=None)
                               previous[edge][1]+(previous[edge][2]-previous[edge][1])*b)
                              for child, edge, a, b, signature in parts if edge in previous)
         routes.append((owner, original, future, descendants, retained))
-    return old, tuple(routes)
+        # This live owner passed the complete admission above. Keep it alive
+        # across publication/rollback; persistent routes themselves stay weak.
+        owners.append(source)
+    return old, tuple(routes), tuple(owners)
 
 
 def _publish_source_lineage(model, staged):
     if staged is None:
         return
-    old, routes = staged
+    old, routes, owners = staged
     if _LINKS.get(model) is not old:
         raise GeometryError('source lineage changed during publication')
+    if len(owners) != len(routes) or any(owner() is not source
+            for (owner, original, current, mapping, edge_map), source in zip(routes, owners)):
+        raise GeometryError('source lineage source or published definitions changed')
     now = _state(model)
     if any(current != now or owner() is None or _state(owner()) != original
            for owner, original, current, mapping, edge_map in routes):
