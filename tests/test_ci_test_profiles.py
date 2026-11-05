@@ -13,6 +13,9 @@ sys.path.insert(0, str(ROOT / 'tools'))
 
 
 class ProfileTests(unittest.TestCase):
+    # Use ordinary iterations: pytest reports successful unittest subtests as
+    # additional call reports, whereas the isolated driver records one exact
+    # setup/call/teardown protocol per collected test case.
     def profiles(self):
         return importlib.import_module('ci_test_profiles')
 
@@ -32,17 +35,17 @@ class ProfileTests(unittest.TestCase):
     def test_duplicate_or_malformed_inventory_refused(self):
         p = self.profiles()
         for nodes in (['tests/test_a.py::a'] * 2, ['../test_a.py::a'], ['tests/test_a.py'], [1], []):
-            with self.subTest(nodes=nodes), self.assertRaises(ValueError):
+            with self.assertRaises(ValueError, msg=repr(nodes)):
                 p.partition(nodes)
 
     def test_full_selector_refuses_inherited_narrowing(self):
         p = self.profiles()
         for env in ({'PYTEST_ADDOPTS': '-k easy'}, {'ANYGEOMETRY_TEST_PROFILE': 'unit'},
                     {'ANYGEOMETRY_TEST_TIER': 'unit'}):
-            with self.subTest(env=env), self.assertRaises(ValueError):
+            with self.assertRaises(ValueError, msg=repr(env)):
                 p.validate_selection('full', [], '', '', env)
         for flag in ('select', 'k', 'm'):
-            with self.subTest(flag=flag), self.assertRaises(ValueError):
+            with self.assertRaises(ValueError, msg=flag):
                 p.validate_selection('full', ['tests/test_a.py'] if flag == 'select' else [],
                                      'easy' if flag == 'k' else '', 'slow' if flag == 'm' else '', {})
         p.validate_selection('full', [], '', '', {'ANYGEOMETRY_TEST_SHARD': '1/16'})
@@ -80,7 +83,7 @@ class ProfileTests(unittest.TestCase):
         for flags, expected_profile, allowed in ((['--profile', 'unit'], 'unit', True),
                                                   (['--select', 'tests/test_ci_test_profiles.py'], 'legacy-focused', False),
                                                   (['--profile', 'full'], 'full', False)):
-            with self.subTest(flags=flags), tempfile.TemporaryDirectory() as temp:
+            with tempfile.TemporaryDirectory() as temp:
                 root = Path(temp)
                 path = root / 'tests/test_ci_test_profiles.py'
                 path.parent.mkdir()
@@ -207,7 +210,7 @@ class SchedulingTests(unittest.TestCase):
         refreshed = merge({}, [record], provenance, semantics='progress-protocol')
         self.assertEqual(refreshed['scheduling']['protocol_tests'], {})
         for seconds in (-1., float('nan'), float('inf')):
-            with self.subTest(seconds=seconds), self.assertRaises(ValueError):
+            with self.assertRaises(ValueError, msg=repr(seconds)):
                 merge({}, [dict(record, outcome='passed', seconds=seconds)], provenance, semantics='progress-protocol')
 
 
