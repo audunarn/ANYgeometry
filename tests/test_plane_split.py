@@ -146,6 +146,7 @@ def test_regular_section_crosses_a_rectangular_chart_hole(points):
     assert not model.validate_topology()
 
 
+@pytest.mark.slow
 def test_second_nonparallel_cut_reuses_original_shared_event_vertices():
     model, parent, plane = bowl()
     first = plan_plane_split(model, [parent], plane)

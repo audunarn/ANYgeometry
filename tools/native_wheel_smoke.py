@@ -20,6 +20,12 @@ def main() -> None:
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--require-native", action="store_true")
     group.add_argument("--expect-python", action="store_true")
+    planning = parser.add_mutually_exclusive_group()
+    planning.add_argument("--require-planning-native", action="store_true")
+    planning.add_argument("--expect-no-planning-native", action="store_true")
+    inspector = parser.add_mutually_exclusive_group()
+    inspector.add_argument('--require-runtime-inspector', action='store_true')
+    inspector.add_argument('--expect-no-runtime-inspector', action='store_true')
     args = parser.parse_args()
 
     import numpy as np
@@ -35,6 +41,23 @@ def main() -> None:
     expected = "native" if args.require_native else "python"
     if info["backend"] != expected:
         sys.exit(f"backend is {info['backend']} ({info['reason']}), expected {expected}")
+    if args.require_planning_native:
+        from anygeometry._planning_native import identity
+        print(json.dumps({"planning_resource_helper": identity()}))
+    if args.expect_no_planning_native:
+        import importlib.util
+        if importlib.util.find_spec("anygeometry._planning_native_core") is not None:
+            sys.exit("unexpected planning resource helper in helper-OFF distribution")
+    if args.require_runtime_inspector:
+        from anygeometry._planning_codec_registry import identity, snapshot
+        value = snapshot()
+        if not value.matches():
+            sys.exit('passive runtime inspection changed during smoke')
+        print(json.dumps({'runtime_inspector': identity()}))
+    if args.expect_no_runtime_inspector:
+        import importlib.util
+        if importlib.util.find_spec('anygeometry._planning_runtime_inspector') is not None:
+            sys.exit('unexpected runtime inspector in inspector-OFF distribution')
 
     rng = np.random.default_rng(7)
     frame, uv = rng.standard_normal(9), rng.uniform(-1.0, 2.0, size=(257, 2))

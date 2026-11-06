@@ -18,6 +18,69 @@ from .exact_curves import EXACT_CURVES, EllipticArc, CylinderIntersectionCurve
 from .branch_curves import BezierQuadricCurve
 from .quadric_curves import QuadricIntersectionCurve
 from .surfaces import Cylinder, Plane
+from contextvars import ContextVar
+from contextlib import contextmanager
+
+# Retained for controlled experiments; full-case benefit is not established.
+_JUNCTION_BOUNDS = ContextVar('junction_bounds', default=False)
+
+
+@contextmanager
+def _junction_bounds_policy(enabled):
+    token = _JUNCTION_BOUNDS.set(enabled)
+    try:
+        yield
+    finally:
+        _JUNCTION_BOUNDS.reset(token)
+
+
+def _separated_line_pair(first, second, tolerance):
+    """Conservative rejection within the existing line/analytic admission.
+
+    Parameter tolerances for lines and ellipses are deliberately included in
+    world bounds. Unsupported or transformed-reference predicates retain the
+    original route. This does not certify an intersection or skip clipping.
+    """
+    if not _JUNCTION_BOUNDS.get():
+        return False
+    if type(first) is LinePath:
+        line, other = first, second
+    elif type(second) is LinePath:
+        line, other = second, first
+    else:
+        return False
+    if type(other) not in (LinePath, EllipticArc, CylinderIntersectionCurve, BezierQuadricCurve, BezierPath):
+        return False
+    if type(other) is BezierQuadricCurve and not other._identity:
+        return False
+    direction = np.asarray(line.end) - line.start
+    if np.linalg.norm(direction) <= tolerance:
+        raise GeometryError('degenerate arrangement line')
+    if type(other) is LinePath and float(np.dot(np.asarray(other.end)-other.start,
+                                               np.asarray(other.end)-other.start)) == 0:
+        raise GeometryError('degenerate arrangement line')
+
+    def envelope(curve):
+        try:
+            lo, hi = curve.bounds()
+        except (GeometryError, ArithmeticError, ValueError):
+            return None
+        lo, hi = np.asarray(lo), np.asarray(hi)
+        if not np.all(np.isfinite(lo)) or not np.all(np.isfinite(hi)):
+            return None
+        factor = 1.
+        if type(curve) is LinePath:
+            factor += float(np.linalg.norm(np.asarray(curve.end)-curve.start))
+        elif type(curve) is EllipticArc:
+            factor = 2. + float(np.linalg.norm(curve.u_vector) + np.linalg.norm(curve.v_vector))
+        rounding = 64*np.finfo(float).eps*max(float(np.max(np.abs(lo))), float(np.max(np.abs(hi))), 1.)
+        pad = tolerance*factor + rounding
+        if not np.isfinite(pad):
+            return None
+        return np.nextafter(lo-pad, -np.inf), np.nextafter(hi+pad, np.inf)
+    a, b = envelope(first), envelope(second)
+    return (a is not None and b is not None
+            and (np.any(a[1] < b[0]) or np.any(b[1] < a[0])))
 
 
 @dataclass(frozen=True, slots=True)
@@ -375,12 +438,18 @@ def ellipse_on_branch_supports(ellipse,curve,tolerance):
 
 
 def curve_junctions(first, second, *, tolerance=1e-10,cancellation_check=None):
+    if cancellation_check is not None and cancellation_check():
+        raise GeometryError('curve intersection predicate cancelled')
+    if _separated_line_pair(first, second, tolerance):
+        from .runtime_diagnostics import _increment
+        _increment('junction_line_bounds_pruned')
+        return ()
     # Named interval endpoints are independent qualified candidates. A root
     # of a clipped conic can round just beyond its new angular chart; retaining
     # its full world-space endpoint avoids an artificial detached port.
     candidates=[]
     for t in (0.,1.):
-        if cancellation_check is not None and cancellation_check():
+        if t != 0. and cancellation_check is not None and cancellation_check():
             raise GeometryError('curve intersection predicate cancelled')
         candidates.extend((t,s) for s in point_parameters(second,first.evaluate(t),tolerance=tolerance))
         candidates.extend((s,t) for s in point_parameters(first,second.evaluate(t),tolerance=tolerance))

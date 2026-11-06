@@ -14,7 +14,7 @@ from .curves import Straight, LineRange
 from .support_curves import PlaneNurbsCurve
 from .regular_source_reference import SourceNode, SourceSide, source_node, source_side, parameter_transport_bound
 from .planar_exact import ExactPlane
-from .nurbs_metric import add, mul, derivative_intervals
+from .nurbs_metric import add, mul, derivative_intervals, _trace_derivative_intervals
 from .plane_nurbs import charge_box, charge_split, depth_limit
 from .definition_binding import definition_checksum
 
@@ -46,7 +46,13 @@ class PlaneSide:
     def derivative(self, lo, hi):
         chart = self.native.box(lo, hi)
         rates = self.native.derivative(lo, hi)
-        du, dv = derivative_intervals(self.native.curve.surface, chart)
+        # A true section's closed trace/point can have a singleton chart axis.
+        # Differentiate before restricting it; this enclosure is not an
+        # immersion certificate. Positive-area queries retain their API.
+        if any(a == b for a, b in chart):
+            du, dv = _trace_derivative_intervals(self.native.curve.surface, chart)
+        else:
+            du, dv = derivative_intervals(self.native.curve.surface, chart)
         world = tuple(add(mul(a, rates[0]), mul(b, rates[1])) for a, b in zip(du, dv))
         return project(self.frame, world, direction=True)
 

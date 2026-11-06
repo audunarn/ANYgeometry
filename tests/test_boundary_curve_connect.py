@@ -174,6 +174,7 @@ def _material_area(geometry: GeometryModel) -> float:
     return sum(chart.material_area for chart in query_trimmed_surface_charts(geometry).charts)
 
 
+@pytest.mark.slow
 def test_a_boundary_curve_in_a_non_convex_or_trimmed_support_is_classified_by_the_exact_engine() -> None:
     """Formerly pinned as UNCLASSIFIED (the CONNECT qualification covers only a convex support that strictly
     contains the curve). The exact material engine classifies these supports; the qualified case above keeps

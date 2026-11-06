@@ -11,29 +11,6 @@ import pytest
 from anygeometry import GeometryModel
 
 
-def _record_active_test(nodeid, phase):
-    import os
-    report = os.environ.get("ANYGEOMETRY_ACTIVE_TEST_REPORT")
-    if not report:
-        return
-    import json
-    from datetime import datetime, timezone
-    path = Path(report)
-    temporary = path.with_name(path.name + ".tmp")
-    temporary.write_text(json.dumps({"nodeid": nodeid, "phase": phase,
-        "utc": datetime.now(timezone.utc).isoformat(),
-        "shard": os.environ.get("ANYGEOMETRY_TEST_SHARD")}) + "\n", encoding="utf-8")
-    temporary.replace(path)
-
-
-def pytest_runtest_logstart(nodeid, location):
-    _record_active_test(nodeid, "started")
-
-
-def pytest_runtest_logfinish(nodeid, location):
-    _record_active_test(nodeid, "finished")
-
-
 def pytest_configure(config):
     if getattr(config.option, "basetemp", None) is None:
         root = Path(__file__).resolve().parents[1]
@@ -54,9 +31,7 @@ def pytest_collection_modifyitems(config, items):
     """CI tiers C2: the tests the duration table records as slow get ``@pytest.mark.slow`` before
     ``-m`` deselection, so ``-m slow`` and ``-m "not slow"`` partition the suite."""
     shards = _ci_shards()
-    table = shards.load_table()
-    slow = shards.slow_ids(table) | shards.fixture_cost_slow_ids(
-        items, table, Path(__file__).resolve().parents[1])
+    slow = shards.slow_ids(shards.load_table())
     for item in items:
         if item.nodeid in slow:
             item.add_marker(pytest.mark.slow)
@@ -78,7 +53,10 @@ def pytest_collection_finish(session):
     selected = [item.nodeid for item in session.items]
     slow = sorted(item.nodeid for item in session.items if item.get_closest_marker("slow"))
     index, count = shards.parse_shard(shard) if shard else (1, 1)
-    owner = shards.assign(selected, count, table)
+    grouping = shards.grouping_policy(os.environ.get('ANYGEOMETRY_SHARD_GROUPING','node'))
+    group_modules=shards.fixture_group_modules(session.items) if grouping=='module' else []
+    session.config._anygeometry_shard_group_modules=group_modules
+    owner = shards.assign(selected, count, table,grouping=grouping,group_modules=group_modules)
     keep = [item for item in session.items if owner[item.nodeid] == index]
     dropped = [item for item in session.items if owner[item.nodeid] != index]
     if dropped:
@@ -86,7 +64,8 @@ def pytest_collection_finish(session):
         session.items[:] = keep
     if report:
         Path(report).write_text(json.dumps({"index": index, "count": count, "selected": sorted(selected),
-                                            "ran": [item.nodeid for item in keep], "slow": slow}, indent=0),
+                                            "ran": [item.nodeid for item in keep], "slow": slow,"grouping":grouping,
+                                            "group_modules":group_modules}, indent=0),
                                 encoding="utf-8")
 
 

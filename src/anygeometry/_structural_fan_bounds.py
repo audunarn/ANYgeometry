@@ -95,8 +95,7 @@ def structural_fan_bound(support, boundary, centre_uv, xyz_side, centre_xyz, *,
     if lo != 0 or hi != 1 or a is not first or b is not last or arc.slicing != 0:
         return None
     charge_box()  # before native extraction and polynomial algebra
-    validate_section_runtime(curve)
-    arcs = curve._arcs()
+    arcs = validate_section_runtime(curve)
     if not any(actual is arc for actual in arcs):
         raise GeometryError('structural fan arc is not the current native branch')
     # Detached definition and consumed-reference pins surround EVERY callback.

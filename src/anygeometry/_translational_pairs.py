@@ -136,3 +136,84 @@ def topology_boundary_uv(model, face_id, edge_id, parameter):
             value = float(parameter) if chain[0].forward else 1.-float(parameter)
             return ((value, 0.), (1., value), (1.-value, 1.), (0., 1.-value))[side]
     return None
+
+
+def query_translational_profile_interfaces(model, face_ids=None, *, expected_revision=None,
+                                         cancellation_check=None):
+    """Fresh complete pair descriptions for canonical raw rational translations.
+
+    None means unsupported, never permission to omit an interior contact. The
+    immutable result describes this exact source read; it is not persisted
+    preparation authority. Connector offsets are nonzero rational upper bounds
+    against the original absolute length tolerance, not zero residual claims.
+    """
+    from .errors import GeometryError
+    from .structural import FrozenMetadata
+    from .trimmed_charts import _query_start, _query_end
+    from .nurbs_sweep_chart import source_sweep_chart_model
+    from .curves import sample_straight
+
+    revision, checksum = _query_start(model, expected_revision, cancellation_check)
+    def check():
+        _query_end(model, revision, checksum, cancellation_check)
+    check()
+    ids = tuple(sorted(model.faces if face_ids is None else face_ids))
+    if (len(ids)<2 or len(set(ids))!=len(ids)
+            or any(type(face) is not int or face not in model.faces for face in ids)):
+        raise GeometryError('translational interfaces require at least two unique source face IDs')
+    faces=[]
+    for face_id in ids:
+        check()
+        face=model.faces[face_id]
+        if (type(face.surface) is not CoonsSurface or face.surface.has_boundaries
+                or face.parameterization is not None or face.holes
+                or any(len(side)!=1 for side in face.sides())
+                or any(type(model.edges[use.edge].curve) not in (Straight,NurbsCurve) for use in face.loop)):
+            check();return None
+        found=_sweep(model,face_id)
+        if found is None:check();return None
+        profile,vector,connectors=found
+        # Bind the ACTUAL source frozen corners (sides 0/2), including rotations.
+        for side in (face.sides()[0],face.sides()[2]):
+            use=side[0];edge=model.edges[use.edge]
+            for at in (0.,1.):
+                t=at if use.forward else 1.-at
+                start=model.vertices[edge.start].position;end=model.vertices[edge.end].position
+                point=(sample_straight(start,end,np.asarray([t]))[0] if type(edge.curve) is Straight
+                       else edge.curve.evaluate(t))
+                vertex=start if t==0. else end
+                if not np.array_equal(point,vertex):check();return None
+        bounds=[]
+        for u,edge_id in enumerate(connectors):
+            edge=model.edges[edge_id]
+            a,b=(_q(model.vertices[vertex].position) for vertex in (edge.start,edge.end))
+            if _sub(b,a)==vector:base,tip=a,b
+            elif _sub(a,b)==vector:base,tip=b,a
+            else:check();return None
+            exact=profile.exact_point(u)
+            offset=_sub(base,exact)
+            if _sub(tip,tuple(x+d for x,d in zip(exact,vector)))!=offset:check();return None
+            bound=sum(map(abs,offset))
+            if bound>Q(float(model.tolerance.length)):
+                raise GeometryError('translational connector offset exceeds original absolute length tolerance')
+            bounds.append(dict(edge=edge_id,offset=tuple((x.numerator,x.denominator) for x in offset),
+                               upper_L1=(bound.numerator,bound.denominator)))
+        # Existing full-boundary correspondence guards, without installing a chart.
+        view=source_sweep_chart_model(model,face_id)
+        if view is None:check();return None
+        for use in face.loop:
+            check();view.chart_edge(model.edges[use.edge])
+        faces.append(dict(face_id=face_id,connectors=tuple(bounds)))
+    pairs=[]
+    for index,first in enumerate(ids):
+        for second in ids[index+1:]:
+            check()
+            shared=separated_sweep_connectors(model,first,second)
+            if shared is None:check();return None
+            actual={use.edge for use in model.faces[first].loop}&{use.edge for use in model.faces[second].loop}
+            if set(shared)!=actual:check();return None
+            pairs.append(dict(faces=(first,second),shared_edges=shared,relation='shared-boundary-only' if shared else 'disjoint'))
+    check()
+    return FrozenMetadata(dict(schema='translational-profile-interfaces-v1',
+        source_model_id=str(model.model_id),source_revision=revision,source_checksum=checksum,
+        face_ids=ids,faces=tuple(faces),pairs=tuple(pairs)))

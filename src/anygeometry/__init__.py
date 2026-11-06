@@ -708,3 +708,5 @@ from .approximation_scale import (ApproximationSourceBinding, TrimEnclosureScale
     query_trim_enclosure_scale, validate_trim_enclosure_scale_binding)
 __all__ += ["ApproximationSourceBinding", "TrimEnclosureScale", "query_approximation_source_binding",
     "validate_approximation_source_binding", "query_trim_enclosure_scale", "validate_trim_enclosure_scale_binding"]
+from ._translational_pairs import query_translational_profile_interfaces
+__all__ += ["query_translational_profile_interfaces"]

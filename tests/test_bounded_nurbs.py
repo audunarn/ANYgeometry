@@ -43,20 +43,20 @@ def test_bounded_batch_plan_is_source_bound_and_rejects_raw_edits():
     model, wall, plate = fixture()
     plan = plan_intersections(model, [('face', wall), ('face', plate)], policy='imprint')
     face = model.faces[plate]
-    original = face.metadata
-    before, revision = to_dict(model), model.revision
+    original = to_dict(model)
+    revision = model.revision
     with pytest.raises(TypeError):
         face.metadata['raw-edit'] = True
-    assert face.metadata is original
-    assert model.revision == revision and to_dict(model) == before
-    try:
-        object.__setattr__(face, 'metadata', FrozenMetadata({**original, 'raw-edit': True}))
-        before = to_dict(model)
-        with pytest.raises(GeometryError, match='stale|changed'):
-            apply_intersections(model, plan, policy='imprint')
-        assert model.revision == revision and to_dict(model) == before
-    finally:
-        object.__setattr__(face, 'metadata', original)
+    assert to_dict(model) == original and model.revision == revision
+    # Deliberate raw-storage corruption: bypass the frozen record's public
+    # protection without the model setter's revision/transaction notification.
+    object.__setattr__(face, 'metadata', FrozenMetadata({**face.metadata, 'raw-edit': True}))
+    assert model.revision == revision
+    before = to_dict(model)
+    assert before != original
+    with pytest.raises(GeometryError, match='stale|changed'):
+        apply_intersections(model, plan, policy='imprint')
+    assert to_dict(model) == before
 
 
 def test_copied_bounded_plan_cannot_enter_generic_empty_arrangement_route():

@@ -13,15 +13,18 @@ never becomes an empty intersection; it becomes ``UNCLASSIFIED``.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from fractions import Fraction
 from math import atan2, ceil, comb, floor, pi
 import heapq
 from typing import Iterable, Sequence
 
 import numpy as np
 
-from .curves import Arc, Spline, Straight
+from .curves import Arc, Spline, Straight, _wrapped_angle
 from .errors import GeometryError
 from .exact_curves import EXACT_CURVES, EllipticArc, CylinderIntersectionCurve
+from .line_ranges import LineRange
+from .nurbs import CurveOnSurface, NurbsCurve
 from .identity import EntityHandle
 from .predicates import (
     DEFAULT_INTERSECTION_QUALIFICATION_POLICY,
@@ -738,18 +741,673 @@ def _surface_point_derivatives(model, face_id: int, uv: Sequence[float]):
     return point, du[0], dv[0]
 
 
-def _support_projection(model, face_id: int, point: np.ndarray, seeds: Sequence[Sequence[float]] = ()):
+class _PlaneChart:
+    """How the support uv of one face may be treated by this module.
+
+    A ``Plane`` is an unbounded affine chart: its stored frame is free and
+    need not cover the face (the ANYfem webs store frames whose unit square
+    misses most of the face).  Clipping such uv to ``[0, 1]^2`` evaluates the
+    support metres away from the queried point and certifies real crossings
+    as disjoint.  ``unbounded`` is True only for an exact ``Plane`` support
+    whose frame is not proven to cover the face; every other support, and a
+    Plane whose frame provably covers the face, keeps the historical bounded
+    treatment bit for bit.  ``box`` is the face's conservative support-uv
+    box ``((u_min, v_min), (u_max, v_max))`` or ``None`` when no conservative
+    box is available for its trim curves.
+    """
+
+    __slots__ = ("unbounded", "box")
+
+    def __init__(self, unbounded: bool, box: np.ndarray | None = None) -> None:
+        self.unbounded = unbounded
+        self.box = box
+
+
+_BOUNDED_CHART = _PlaneChart(False)
+
+
+_COVER_PIECE_BUDGET = 4096
+_COVER_MAX_DEPTH = 48
+# Rounding pads of the covering test (S0g round 4, Codex R3 P1).
+_UNIT_ROUNDOFF = 2.0 ** -53
+_PAD_GAMMA = 16.0 * _UNIT_ROUNDOFF
+_PAD_SAFETY = 2.0
+_PAD_MEANINGFUL = 0.25
+
+
+def _round_up(value: Fraction) -> float:
+    """The smallest double not below a non-negative rational."""
+
+    result = float(value)
+    if Fraction(result) < value:
+        result = float(np.nextafter(result, np.inf))
+    return result
+
+
+class _ExactPlaneUV:
+    """The exact support uv of a ``Plane``: ``uv(p) = R p - c`` over the rationals.
+
+    ``R = (A^T A)^-1 A^T`` with ``A = [u_vector, v_vector]`` and ``c = R origin``
+    is the least-squares ``Plane.local_uv`` evaluated without rounding on the
+    stored doubles.  ``rows`` / ``offset`` are ``R`` / ``c`` rounded to nearest
+    once (relative error at most the unit roundoff per entry).
+    """
+
+    __slots__ = ("exact_rows", "exact_offset", "rows", "offset", "abs_rows", "abs_offset")
+
+    def __init__(self, plane: Plane) -> None:
+        u = tuple(Fraction(float(x)) for x in plane.u_vector)
+        v = tuple(Fraction(float(x)) for x in plane.v_vector)
+        o = tuple(Fraction(float(x)) for x in plane.origin)
+        uu = sum(a * a for a in u)
+        uv = sum(a * b for a, b in zip(u, v))
+        vv = sum(b * b for b in v)
+        det = uu * vv - uv * uv
+        if det <= 0:
+            raise GeometryError("plane frame is degenerate")
+        first = tuple((vv * a - uv * b) / det for a, b in zip(u, v))
+        second = tuple((uu * b - uv * a) / det for a, b in zip(u, v))
+        self.exact_rows = (first, second)
+        self.exact_offset = tuple(sum(r * x for r, x in zip(row, o)) for row in self.exact_rows)
+        self.rows = np.asarray([[float(r) for r in row] for row in self.exact_rows], dtype=float)
+        self.offset = np.asarray([float(c) for c in self.exact_offset], dtype=float)
+        self.abs_rows = np.abs(self.rows)
+        self.abs_offset = np.abs(self.offset)
+
+    def exact_uv(self, point) -> tuple[Fraction, Fraction]:
+        p = tuple(x if isinstance(x, Fraction) else Fraction(float(x)) for x in point)
+        return tuple(
+            sum(r * x for r, x in zip(row, p)) - c for row, c in zip(self.exact_rows, self.exact_offset)
+        )
+
+    def exactly_inside(self, points, lower_limit, upper_limit) -> bool:
+        """Exact test that every point's uv lies in the (double) limits."""
+
+        lows = tuple(Fraction(float(x)) for x in lower_limit)
+        highs = tuple(Fraction(float(x)) for x in upper_limit)
+        for point in points:
+            for value, low, high in zip(self.exact_uv(point), lows, highs):
+                if not low <= value <= high:
+                    return False
+        return True
+
+
+_ARC_MAX_SCALE = 1.0e5
+
+
+def _sqrt_bounds(value: Fraction) -> tuple[float, float]:
+    """Doubles ``lo <= sqrt(value) <= hi`` for a non-negative rational."""
+
+    root = float(np.sqrt(float(value)))
+    lo = hi = root
+    while lo > 0.0 and Fraction(lo) * Fraction(lo) > value:
+        lo = float(np.nextafter(lo, 0.0))
+    while Fraction(hi) * Fraction(hi) < value:
+        hi = float(np.nextafter(hi, np.inf))
+    return lo, hi
+
+
+def _fraction_cross(a, b):
+    return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+
+
+def _exact_circumcircle(points):
+    """Exact circle through three stored points (the same formula as ``arc_frame``, in rationals).
+
+    Returns ``(h, a - h, r^2, n, |n|^2)`` with ``n = ab x ac``, or ``None`` for
+    collinear points.
+    """
+
+    a, b, c = (tuple(Fraction(float(x)) for x in point) for point in points)
+    ab = tuple(q - p for p, q in zip(a, b))
+    ac = tuple(q - p for p, q in zip(a, c))
+    normal = _fraction_cross(ab, ac)
+    normal_sq = sum(x * x for x in normal)
+    if normal_sq == 0:
+        return None
+    ab_sq = sum(x * x for x in ab)
+    ac_sq = sum(x * x for x in ac)
+    first = _fraction_cross(ac, normal)
+    second = _fraction_cross(normal, ab)
+    h = tuple(p + (ab_sq * f + ac_sq * s) / (2 * normal_sq) for p, f, s in zip(a, first, second))
+    radial = tuple(p - q for p, q in zip(a, h))
+    return h, radial, sum(x * x for x in radial), normal, normal_sq
+
+
+def _exact_arc_disc(points, exact):
+    """Conservative uv box of the exact circle through three stored points, or ``None``.
+
+    ``uv_k(X) = uv_k(h) + R_k (X - h)`` and ``|R_k (X - h)| <= |R_k|_2 r``.
+    """
+
+    if not all(np.all(np.isfinite(np.asarray(point, dtype=float))) for point in points):
+        return None
+    circle = _exact_circumcircle(points)
+    if circle is None:
+        return None
+    h, _radial, radius_sq, _normal, _normal_sq = circle
+    _r_lo, r_hi = _sqrt_bounds(radius_sq)
+    centre = exact.exact_uv(h)
+    lower, upper = np.zeros(2), np.zeros(2)
+    for k in range(2):
+        _n_lo, n_hi = _sqrt_bounds(sum(x * x for x in exact.exact_rows[k]))
+        reach = Fraction(r_hi) * Fraction(n_hi)
+        lower[k] = -_round_up(reach - centre[k])
+        upper[k] = _round_up(centre[k] + reach)
+    if not (np.all(np.isfinite(lower)) and np.all(np.isfinite(upper))):
+        return None
+    return lower, upper
+
+
+def _arc_construction_bound(start, via, end, frame):
+    """How far the rounded ``arc_frame`` can sit from the exact arc of its stored points.
+
+    The arc's definition is the exact circle through the stored doubles
+    ``a`` (start), ``b`` (via) and ``c`` (end), from ``a`` through ``b`` to
+    ``c``; ``model.arc_frame`` is a rounded construction of it (centre ``c~``,
+    radius ``rho``, axes ``e1, e2``, sweep ``s~``).  With the exact centre ``h``
+    and exact axes ``r e1^ = a - h``, ``r e2^ = n^ x (a - h)`` (``n = ab x ac``),
+    the exact arc point ``X(t) = h + r (cos t e1^ + sin t e2^)`` and the frame
+    point ``F(t) = c~ + rho (cos t e1 + sin t e2)`` differ componentwise by at
+    most ``dev = |h - c~| + |r e1^ - rho e1| + |r e2^ - rho e2|``; every term is
+    measured in rationals from the stored points (``|n|`` enclosed by
+    outward-rounded square roots) and rounded up, so this is an a-posteriori
+    bound of the construction error rather than an a-priori conditioning
+    estimate.  The exact sweep ``S`` differs from ``s~``: an angle of a point
+    ``p`` on the circle (p = b, c) moves by at most ``(pi/2) sqrt2 eps / r``
+    with ``eps = 3 |dev|_1 + 8 u rho + 8 u (|p|_1 + |c~|_1)`` (centre, axis and
+    radius deviations plus the rounding of the frame's own dot products),
+    plus ``128 u`` for arctan2 and the wrap.  Returns ``(dev, sweep_error)``,
+    or ``None`` (decline: the caller does not prove coverage) when the arc is
+    ill-conditioned: a non-finite intermediate, collinear points, radius
+    above 1e5 m, ``sqrt2 eps > r / 2``, ``|dev|_1 > r / 10``, or when the via
+    or end angle lies within its error of the wrap or of each other (the
+    frame might then sweep the complementary arc).
+    """
+
+    points = [np.asarray(item, dtype=float) for item in (start, via, end)]
+    center = np.asarray(frame.center, dtype=float)
+    e1 = np.asarray(frame.e1, dtype=float)
+    e2 = np.asarray(frame.e2, dtype=float)
+    rho = float(frame.radius)
+    values = np.concatenate(points + [center, e1, e2, np.asarray((rho, float(frame.sweep)))])
+    if not np.all(np.isfinite(values)) or not 0.0 < rho <= _ARC_MAX_SCALE:
+        return None
+    circle = _exact_circumcircle(points)
+    if circle is None:
+        return None
+    h, radial, radius_sq, normal, normal_sq = circle
+    r_lo, r_hi = _sqrt_bounds(radius_sq)
+    if not (0.0 < r_lo and r_hi <= _ARC_MAX_SCALE):
+        return None
+    n_lo, n_hi = _sqrt_bounds(normal_sq)
+    if not n_lo > 0.0:
+        return None
+    axis = _fraction_cross(normal, radial)
+    deviation = np.zeros(3)
+    for j in range(3):
+        rho_e1 = Fraction(rho) * Fraction(float(e1[j]))
+        rho_e2 = Fraction(rho) * Fraction(float(e2[j]))
+        ends = (axis[j] / Fraction(n_hi), axis[j] / Fraction(n_lo))
+        deviation[j] = (
+            _round_up(abs(h[j] - Fraction(float(center[j]))))
+            + _round_up(abs(radial[j] - rho_e1))
+            + _round_up(max(abs(end - rho_e2) for end in ends))
+        )
+    deviation = deviation * (1.0 + 4.0 * _UNIT_ROUNDOFF)
+    total = float(deviation.sum())
+    if not (np.isfinite(total) and total <= 0.1 * r_lo):
+        return None
+
+    def angle_error(point):
+        eps = 3.0 * total + 8.0 * _UNIT_ROUNDOFF * (rho + float(np.abs(point).sum()) + float(np.abs(center).sum()))
+        if not np.sqrt(2.0) * eps <= 0.5 * r_lo:
+            return None
+        return (np.pi / 2.0) * np.sqrt(2.0) * eps / r_lo * (1.0 + 1.0e-6) + 128.0 * _UNIT_ROUNDOFF
+
+    via_error = angle_error(points[1])
+    end_error = angle_error(points[2])
+    if via_error is None or end_error is None:
+        return None
+    theta_via = _wrapped_angle(points[1] - center, e1, e2)
+    theta_end = _wrapped_angle(points[2] - center, e1, e2)
+    period = 2.0 * np.pi
+    if not (
+        via_error < theta_via < period - via_error
+        and end_error < theta_end < period - end_error
+        and abs(theta_via - theta_end) > via_error + end_error
+    ):
+        return None
+    return deviation, end_error + 64.0 * _UNIT_ROUNDOFF
+
+
+def _plane_face_uv_extent(model, face_id: int, plane: Plane, slack: np.ndarray):
+    """Conservative support-uv box of a face on an exact ``Plane`` support,
+    and whether the stored frame provably covers the face.
+
+    ``Plane.local_uv`` is affine, so the uv image of the face lies in the
+    convex hull of the uv images of its trim curves.  Straight edges map to
+    their endpoints and arcs to their exact angular extrema (as in the model's
+    spatial bounds).  Bezier splines are bounded by their control polygons and
+    exact curves by the interval image of their conservative ``bounds``; both
+    are subdivided adaptively (de Casteljau / parameter halving) until every
+    piece is proven inside ``[-slack, 1 + slack]^2``, a curve point is found
+    outside it, or the piece budget is spent.  Returns ``(box, covers)``:
+    ``box`` is ``None`` for a curve type without conservative bounds;
+    ``covers`` is True only when coverage is proven.
+
+    Rounding (S0g round 4).  "Proven" refers to the exact uv of the stored
+    doubles (``_ExactPlaneUV``), never to rounded values: every floating uv
+    bound below carries an outward pad ``E_k`` (k = u, v) that bounds its
+    rounding error, and coverage is claimed only when the padded bound lies
+    inside the limits or an exact rational test of exact data proves it.
+    With ``g = 16 u`` (u = 2^-53 the unit roundoff), ``|R~_k|`` the absolute
+    row k of the rounded ``R``, ``|c~_k|`` its offset and ``P`` a point:
+
+    * points evaluated as ``R~ p - c~``: ``E_k(p) = g (|R~_k| |p| + |c~_k|)``
+      (the rounding of ``R`` and ``c`` to nearest, a three-term dot product
+      and one subtraction need at most ``5 u (1 + u)``);
+    * arc points ``q~ = c + r (cos t e1 + sin t e2)`` add the world error
+      ``g (|c| + r (|e1| + |e2|))`` mapped by ``|R~_k|``, plus
+      ``r a_k d^2 / 2`` for the extremum missed by an angle error ``d``.
+      The arc is the exact circle through its stored start/via/end points,
+      not the rounded ``model.arc_frame`` (S0g round 5, Codex R4 P2): the
+      construction deviation ``dev`` and sweep error of
+      ``_arc_construction_bound`` add ``2 |R~_k| dev`` and enter ``d``, and
+      the exact end vertices join the candidates.  An ill-conditioned arc
+      (no meaningful bound, radius above 1e5 m) or a frame vector above
+      1e5 m never proves coverage; such an arc is boxed by its exact disc;
+    * de Casteljau pieces at depth ``m`` of a degree-``n`` spline add the
+      world error ``m n u max|P|`` (each midpoint is one rounding; averaging
+      does not amplify earlier errors) mapped by ``|R~_k|``;
+    * exact curves bounded in the frame (``curve.transformed(to_frame)``, the
+      route Codex R3 P1 broke at 1e8 m): the transformed data differ from the
+      exact uv of the original data by ``dM_k |P| + dt_k + g (|T_k| |P| +
+      |t_k|)`` per datum, where ``dM_k = ||T_k - R_k||_1`` and ``dt_k =
+      |t_k + c_k|`` are measured exactly between the float ``to_frame`` rows
+      ``(T_k, t_k)`` and ``(R_k, -c_k)``; a curve point is a combination of
+      its data with absolute coefficient sum at most ``L`` (1 for NURBS
+      curves and curves on NURBS supports, convex hull with positive weights,
+      and for line ranges; 1 + sqrt 2 < 3 for elliptic arcs).  Curves stored
+      as a 4x4 ``transform`` of a reference chart instead use ``|C~_k - (T
+      M)_k| |x_ref| + dM_k |w| + dt_k`` with the composed-matrix error
+      measured exactly, ``|x_ref|`` from the reference chart's bounds and
+      ``|w|`` from the curve's world bounds.  Other exact curves use the
+      world-box route, padded by ``E_k`` of its centre plus the rounding of
+      ``|R~| half``.
+
+    All pads are multiplied by ``_PAD_SAFETY`` = 2 for the rounding of their
+    own evaluation; the returned box is padded too.  A pad that is not
+    finite or exceeds ``_PAD_MEANINGFUL`` (the bound no longer means
+    anything at this coordinate scale) never proves coverage: the face takes
+    the fail-closed unbounded path.  Exact data are tested exactly (straight
+    edge vertices, a spline's own control polygon, a line range's exact end
+    points, a NURBS curve's control points), so exact-fit frames keep their
+    covering decision at every scale.
+    """
+
+    face = model.faces[face_id]
+    try:
+        exact = _ExactPlaneUV(plane)
+    except (GeometryError, ZeroDivisionError, ValueError, OverflowError):
+        return None, False
+    rows, offset, abs_rows, abs_offset = exact.rows, exact.offset, exact.abs_rows, exact.abs_offset
+    if not (np.all(np.isfinite(rows)) and np.all(np.isfinite(offset))):
+        return None, False
+    # World -> (u, v, n) affine map; the normal is orthogonal to the frame, so
+    # its first two coordinates are the least-squares Plane.local_uv.
+    to_frame = np.eye(4)
+    to_frame[:3, :3] = np.linalg.inv(np.column_stack((plane.u_vector, plane.v_vector, plane.normal)))
+    to_frame[:3, 3] = -to_frame[:3, :3] @ np.asarray(plane.origin, dtype=float)
+    if not np.all(np.isfinite(to_frame)):
+        return None, False
+    # Exact distance of the float frame map's uv rows from (R, -c).
+    frame_rows = tuple(tuple(Fraction(float(x)) for x in to_frame[k]) for k in range(2))
+    frame_dm = np.asarray(
+        [
+            _round_up(sum(abs(t - r) for t, r in zip(frame_rows[k][:3], exact.exact_rows[k])))
+            for k in range(2)
+        ],
+        dtype=float,
+    )
+    frame_dt = np.asarray(
+        [_round_up(abs(frame_rows[k][3] + exact.exact_offset[k])) for k in range(2)], dtype=float
+    )
+    frame_abs = np.abs(to_frame[:2, :3]).sum(axis=1)
+    frame_abs_t = np.abs(to_frame[:2, 3])
+    lower_limit = -slack
+    upper_limit = 1.0 + slack
+    frame_scale = float(max(np.linalg.norm(plane.u_vector), np.linalg.norm(plane.v_vector)))
+    state = {"lower": np.full(2, np.inf), "upper": np.full(2, -np.inf), "covers": True, "pieces": 0}
+
+    def uv_of(point) -> np.ndarray:
+        return rows @ np.asarray(point, dtype=float) - offset
+
+    def point_pad(point) -> np.ndarray:
+        return _PAD_GAMMA * (abs_rows @ np.abs(np.asarray(point, dtype=float)) + abs_offset)
+
+    def padded(lower, upper, pad):
+        pad = _PAD_SAFETY * np.asarray(pad, dtype=float)
+        return lower - pad, upper + pad, pad
+
+    def inside(lower, upper, pad) -> bool:
+        if not (np.all(np.isfinite(pad)) and np.all(pad <= _PAD_MEANINGFUL)):
+            return False
+        return bool(np.all(lower >= lower_limit) and np.all(upper <= upper_limit))
+
+    def outside(uv) -> bool:
+        return bool(np.any(uv < lower_limit) or np.any(uv > upper_limit))
+
+    def include(lower, upper) -> None:
+        state["lower"] = np.minimum(state["lower"], lower)
+        state["upper"] = np.maximum(state["upper"], upper)
+
+    def include_points(points, world_pads=None, extra=None, exact_points=None) -> None:
+        points = [np.asarray(point, dtype=float) for point in points]
+        values = np.asarray([uv_of(point) for point in points], dtype=float)
+        pads = np.asarray([point_pad(point) for point in points], dtype=float)
+        if world_pads is not None:
+            pads = pads + np.asarray([abs_rows @ item for item in world_pads], dtype=float)
+        if extra is not None:
+            pads = pads + extra
+        pad = pads.max(axis=0)
+        lower, upper, pad = padded(values.min(axis=0), values.max(axis=0), pad)
+        include(lower, upper)
+        if inside(lower, upper, pad):
+            return
+        if exact_points is not None and exact.exactly_inside(exact_points, lower_limit, upper_limit):
+            return
+        state["covers"] = False
+
+    def refine(pieces, hull, on_curve, split, exact_proof=None) -> None:
+        # pieces: list of (piece, depth); hull(piece, depth) -> padded uv box
+        # (lower, upper, pad); on_curve(piece) -> uv of points on the curve;
+        # split(piece) -> two pieces; exact_proof(piece, depth) -> True when
+        # exact data prove the piece inside.
+        while pieces:
+            piece, depth = pieces.pop()
+            lower, upper, pad = hull(piece, depth)
+            if inside(lower, upper, pad) or (
+                exact_proof is not None and exact_proof(piece, depth)
+            ):
+                include(lower, upper)
+                continue
+            state["pieces"] += 1
+            if (
+                not state["covers"]
+                or depth >= _COVER_MAX_DEPTH
+                or state["pieces"] > _COVER_PIECE_BUDGET
+                or any(outside(uv) for uv in on_curve(piece))
+            ):
+                # Not proven inside: keep the conservative hull, stop refining.
+                state["covers"] = False
+                include(lower, upper)
+                continue
+            first, second = split(piece)
+            pieces.extend(((second, depth + 1), (first, depth + 1)))
+
+    def local_pad(curve, local_curve):
+        """Pad of the frame-local bounds of an exact curve, or None (world route)."""
+
+        if local_curve is None:
+            return None
+        transform = getattr(curve, "transform", None)
+        local_transform = getattr(local_curve, "transform", None)
+        if isinstance(curve, CurveOnSurface):
+            if not np.array_equal(np.asarray(local_transform, dtype=float), np.eye(4)) or not np.array_equal(
+                np.asarray(transform, dtype=float), np.eye(4)
+            ):
+                return None
+            data, coefficient = np.asarray(curve.support.controls, dtype=float), 1.0
+        elif isinstance(curve, NurbsCurve):
+            data, coefficient = np.asarray(curve.controls, dtype=float), 1.0
+        elif isinstance(curve, LineRange):
+            data, coefficient = np.asarray((curve.a, curve.b), dtype=float), 1.0
+        elif isinstance(curve, EllipticArc):
+            data, coefficient = np.asarray((curve.center, curve.u_vector, curve.v_vector), dtype=float), 3.0
+        elif transform is not None and local_transform is not None:
+            original = np.asarray(transform, dtype=float)
+            composed = np.asarray(local_transform, dtype=float)
+            if (
+                original.shape != (4, 4)
+                or composed.shape != (4, 4)
+                or not np.array_equal(original[3], (0.0, 0.0, 0.0, 1.0))
+                or not np.all(np.isfinite(composed))
+            ):
+                return None
+            error = np.zeros((2, 4))
+            for k in range(2):
+                for i in range(4):
+                    product = sum(frame_rows[k][j] * Fraction(float(original[j, i])) for j in range(3))
+                    if i == 3:
+                        product += frame_rows[k][3]
+                    error[k, i] = _round_up(abs(Fraction(float(composed[k, i])) - product))
+            try:
+                world_lower, world_upper = curve.bounds(0.0, 1.0)
+                world = float(np.max(np.abs(np.concatenate((world_lower, world_upper)))))
+                if np.any(error[:, :3]):
+                    reference = getattr(curve, "_reference_copy", None)
+                    if reference is None:
+                        return None
+                    ref_lower, ref_upper = reference().bounds(0.0, 1.0)
+                    scale = float(np.max(np.abs(np.concatenate((ref_lower, ref_upper)))))
+                else:
+                    scale = 0.0
+            except (GeometryError, ValueError, TypeError, AttributeError, np.linalg.LinAlgError):
+                return None
+            return error[:, :3].sum(axis=1) * scale + error[:, 3] + frame_dm * world + frame_dt
+        else:
+            return None
+        scale = float(np.max(np.abs(data))) if data.size else 0.0
+        return coefficient * (
+            frame_dm * scale + frame_dt + _PAD_GAMMA * (frame_abs * scale + frame_abs_t)
+        )
+
+    for loop in (face.loop,) + face.holes:
+        for oriented in loop:
+            edge = model.edges[oriented.edge]
+            curve = edge.curve
+            if isinstance(curve, Straight):
+                ends = (model.vertex_position(edge.start), model.vertex_position(edge.end))
+                include_points(ends, exact_points=ends)
+            elif isinstance(curve, Arc):
+                frame = model.arc_frame(oriented.edge)
+                center = np.asarray(frame.center, dtype=float)
+                e1 = np.asarray(frame.e1, dtype=float)
+                e2 = np.asarray(frame.e2, dtype=float)
+                radius = float(frame.radius)
+                sweep = float(frame.sweep)
+                spread = abs_rows @ (np.abs(e1) + np.abs(e2))
+                amplitude = np.hypot(rows @ e1, rows @ e2)
+                # Angle error of each computed extremum: the phase from R~
+                # rows (dot products of relative error g), arctan2 and the
+                # sweep-membership test.
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    phase_error = np.where(
+                        amplitude > 1.0e3 * _PAD_GAMMA * spread,
+                        4.0 * _PAD_GAMMA * spread / amplitude + 4.0 * _UNIT_ROUNDOFF,
+                        np.pi,
+                    )
+                ends = (
+                    model.vertex_position(edge.start),
+                    model.vertex_position(edge.curve.via_vertex),
+                    model.vertex_position(edge.end),
+                )
+                try:
+                    construction = _arc_construction_bound(*ends, frame)
+                except (ValueError, OverflowError, ZeroDivisionError, FloatingPointError):
+                    construction = None
+                if construction is None:
+                    # Ill-conditioned arc (or no rigorous bound): never prove
+                    # coverage; box the exact circle by its full disc.
+                    try:
+                        disc = _exact_arc_disc(ends, exact)
+                    except (ValueError, OverflowError, ZeroDivisionError):
+                        disc = None
+                    if disc is None:
+                        return None, False
+                    include(*disc)
+                    state["covers"] = False
+                    continue
+                deviation, sweep_error = construction
+                # The exact arc's extremum may sit within the sweep error of
+                # an end the frame excludes (flat there: quadratic term); the
+                # frame and exact arcs differ by `deviation` at equal angles,
+                # once for the curve and once for the exact end vertices.
+                angle_error = phase_error + sweep_error + 8.0 * _UNIT_ROUNDOFF * (1.0 + abs(sweep))
+                extremum = radius * (amplitude + _PAD_GAMMA * spread) * angle_error**2 / 2.0
+                extremum = extremum + 2.0 * (abs_rows @ deviation) * (1.0 + _PAD_GAMMA)
+                angles = [0.0, sweep]
+                for row in rows:
+                    phase = float(np.arctan2(float(row @ e2), float(row @ e1)))
+                    for candidate in (phase, phase + np.pi):
+                        if model._angle_on_arc_sweep(candidate, frame.sweep):  # noqa: SLF001
+                            angles.append(candidate)
+                world_pad = _PAD_GAMMA * (np.abs(center) + radius * (np.abs(e1) + np.abs(e2)))
+                include_points(
+                    [center + radius * (np.cos(angle) * e1 + np.sin(angle) * e2) for angle in angles]
+                    + [ends[0], ends[2]],
+                    world_pads=[world_pad] * len(angles) + [np.zeros(3), np.zeros(3)],
+                    extra=extremum,
+                )
+                if frame_scale > _ARC_MAX_SCALE:
+                    # Fail closed on frames above 1e5 m (owner rule, S0g round 5).
+                    state["covers"] = False
+            elif isinstance(curve, Spline):
+                control = np.asarray(model._spline_points(edge), dtype=float)  # noqa: SLF001
+                degree = len(control) - 1
+                magnitude = np.max(np.abs(control), axis=0)
+
+                def spline_hull(points, depth, degree=degree, magnitude=magnitude):
+                    values = np.asarray([uv_of(point) for point in points], dtype=float)
+                    pad = np.max([point_pad(point) for point in points], axis=0)
+                    pad = pad + abs_rows @ (depth * degree * _UNIT_ROUNDOFF * 1.01 * magnitude)
+                    return padded(values.min(axis=0), values.max(axis=0), pad)
+
+                refine(
+                    [(control, 0)],
+                    spline_hull,
+                    lambda points: (uv_of(points[0]), uv_of(points[-1])),
+                    lambda points: model._split_bezier(points, 0.5),  # noqa: SLF001
+                    lambda points, depth: depth == 0
+                    and exact.exactly_inside(points, lower_limit, upper_limit),
+                )
+            elif isinstance(curve, EXACT_CURVES):
+                # Bound the curve in the frame's own (u, v, n) coordinates when
+                # it supports an affine transform, so the uv box keeps the
+                # correlation of the coordinates (a world box mapped by |pinv|
+                # does not); otherwise map its world box conservatively.
+                try:
+                    local_curve = curve.transformed(to_frame)
+                except (GeometryError, ValueError, TypeError, AttributeError, np.linalg.LinAlgError):
+                    local_curve = None
+                try:
+                    curve_pad = local_pad(curve, local_curve)
+                except (GeometryError, ValueError, TypeError, AttributeError, ZeroDivisionError, OverflowError):
+                    curve_pad = None
+                if curve_pad is not None and not np.all(np.isfinite(curve_pad)):
+                    curve_pad = None
+
+                def exact_hull(interval, depth, curve=curve, local_curve=local_curve, curve_pad=curve_pad):
+                    if curve_pad is not None:
+                        try:
+                            box_lower, box_upper = local_curve.bounds(*interval)
+                        except (GeometryError, ValueError, np.linalg.LinAlgError):
+                            pass
+                        else:
+                            return padded(
+                                np.asarray(box_lower, dtype=float)[:2],
+                                np.asarray(box_upper, dtype=float)[:2],
+                                curve_pad,
+                            )
+                    box_lower, box_upper = curve.bounds(*interval)
+                    box_lower = np.asarray(box_lower, dtype=float)
+                    box_upper = np.asarray(box_upper, dtype=float)
+                    middle = 0.5 * (box_lower + box_upper)
+                    # The box lies in middle +- half (each difference rounded
+                    # once); |R| <= |R~| (1 + u) and the dot product adds g.
+                    half = np.maximum(box_upper - middle, middle - box_lower) * (1.0 + 4.0 * _UNIT_ROUNDOFF)
+                    radius = (abs_rows @ half) * (1.0 + _PAD_GAMMA)
+                    center = uv_of(middle)
+                    return padded(center - radius, center + radius, point_pad(middle))
+
+                def exact_points(interval, edge_id=oriented.edge):
+                    return tuple(uv_of(point) for point in _edge_points(model, edge_id, interval))
+
+                def exact_proof(interval, depth, curve=curve):
+                    if depth != 0:
+                        return False
+                    if isinstance(curve, LineRange):
+                        ends = (curve.exact_point(0), curve.exact_point(1))
+                        return exact.exactly_inside(ends, lower_limit, upper_limit)
+                    if isinstance(curve, NurbsCurve) and len(curve.controls[0]) == 3:
+                        # Positive weights (validated): the curve lies in the
+                        # convex hull of its control points.
+                        return exact.exactly_inside(curve.controls, lower_limit, upper_limit)
+                    return False
+
+                refine(
+                    [((0.0, 1.0), 0)],
+                    exact_hull,
+                    exact_points,
+                    lambda interval: (
+                        (interval[0], 0.5 * (interval[0] + interval[1])),
+                        (0.5 * (interval[0] + interval[1]), interval[1]),
+                    ),
+                    exact_proof,
+                )
+            else:
+                return None, False
+    lower, upper = state["lower"], state["upper"]
+    if not (np.all(np.isfinite(lower)) and np.all(np.isfinite(upper))):
+        return None, False
+    return np.vstack((lower, upper)), bool(state["covers"])
+
+
+def _plane_chart(model, face_id: int) -> _PlaneChart:
+    """Classify a face's support chart (see ``_PlaneChart``)."""
+
+    face = model.faces[face_id]
+    plane = face.surface
+    if type(plane) is not Plane:
+        return _BOUNDED_CHART
+    from .nurbs_sweep_chart import has_sweep_chart
+    if has_sweep_chart(face):
+        return _BOUNDED_CHART
+    # Covering is decided with a slack far below the length tolerance:
+    # clipping inside it moves a point by at most 1e-3 * tolerance.length.
+    slack = 1.0e-3 * model.tolerance.length / np.asarray(
+        (np.linalg.norm(plane.u_vector), np.linalg.norm(plane.v_vector)), dtype=float
+    )
+    box, covers = _plane_face_uv_extent(model, face_id, plane, slack)
+    if covers:
+        return _BOUNDED_CHART
+    return _PlaneChart(True, box)
+
+
+def _support_projection(
+    model,
+    face_id: int,
+    point: np.ndarray,
+    seeds: Sequence[Sequence[float]] = (),
+    chart: _PlaneChart | None = None,
+):
     face = model.faces[face_id]
     surface = face.surface
     if surface is None:
         raise GeometryError(f"face {face_id} has no authoritative support")
+    if chart is None:
+        chart = _plane_chart(model, face_id)
+    # An unbounded Plane chart is never clipped: the exact orthogonal
+    # projection is the answer wherever the frame happens to lie.
+    bound = (lambda uv: uv) if chart.unbounded else (lambda uv: np.clip(uv, 0.0, 1.0))
     candidates: list[np.ndarray] = []
     try:
         local = model.face_support_local_uv(face_id, point)
-        candidates.append(np.clip(np.asarray(local, dtype=float), 0.0, 1.0))
+        candidates.append(bound(np.asarray(local, dtype=float)))
     except (GeometryError, ValueError, np.linalg.LinAlgError):
         pass
-    candidates.extend(np.clip(np.asarray(item, dtype=float), 0.0, 1.0) for item in seeds)
+    candidates.extend(bound(np.asarray(item, dtype=float)) for item in seeds)
     if not isinstance(surface, (Plane, Cylinder, Cone)):
         candidates.extend(
             np.asarray(item, dtype=float)
@@ -764,7 +1422,7 @@ def _support_projection(model, face_id: int, point: np.ndarray, seeds: Sequence[
             if not np.all(np.isfinite(jacobian)) or np.linalg.matrix_rank(jacobian) < 2:
                 break
             delta, *_ = np.linalg.lstsq(jacobian, point - current, rcond=None)
-            next_uv = np.clip(uv + delta, 0.0, 1.0)
+            next_uv = bound(uv + delta)
             if float(np.linalg.norm(next_uv - uv)) <= model.tolerance.parameter:
                 uv = next_uv
                 break
@@ -839,14 +1497,16 @@ def _inside_face(model, face_id: int, uv: np.ndarray, loops: tuple[np.ndarray, .
     return not any(_point_in_polygon(uv, hole) for hole in polygons[1:])
 
 
-def _curve_surface_samples(model, edge_id: int, face_id: int, count: int):
+def _curve_surface_samples(model, edge_id: int, face_id: int, count: int, chart: _PlaneChart | None = None):
     parameters = np.linspace(0.0, 1.0, count)
     points = _edge_points(model, edge_id, parameters)
     records = []
     seed = None
+    if chart is None:
+        chart = _plane_chart(model, face_id)
     for parameter, point in zip(parameters, points):
         seeds = () if seed is None else (seed,)
-        projected, uv, residual, normal = _support_projection(model, face_id, point, seeds)
+        projected, uv, residual, normal = _support_projection(model, face_id, point, seeds, chart)
         seed = uv
         signed = float((point - projected) @ normal)
         records.append((float(parameter), point, uv, residual, signed))
@@ -986,15 +1646,25 @@ def _curve_exactly_on_support(
     return expected_radius >= -tolerance and abs(frame.radius - expected_radius) <= tolerance
 
 
-def _refine_curve_surface_root(model, edge_id: int, face_id: int, lower: float, upper: float, policy):
+def _refine_curve_surface_root(
+    model,
+    edge_id: int,
+    face_id: int,
+    lower: float,
+    upper: float,
+    policy,
+    chart: _PlaneChart | None = None,
+):
+    if chart is None:
+        chart = _plane_chart(model, face_id)
     left_point = _edge_points(model, edge_id, (lower,))[0]
-    _projected, left_uv, _residual, normal = _support_projection(model, face_id, left_point)
+    _projected, left_uv, _residual, normal = _support_projection(model, face_id, left_point, (), chart)
     left_value = float((left_point - _projected) @ normal)
     best = None
     for _ in range(max(24, policy.max_newton_iterations * 2)):
         middle = 0.5 * (lower + upper)
         point = _edge_points(model, edge_id, (middle,))[0]
-        projected, uv, residual, normal = _support_projection(model, face_id, point, (left_uv,))
+        projected, uv, residual, normal = _support_projection(model, face_id, point, (left_uv,), chart)
         value = float((point - projected) @ normal)
         candidate = (residual, middle, point, uv)
         if best is None or candidate[:2] < best[:2]:
@@ -1059,11 +1729,12 @@ def qualified_curve_face(
         model, edge.id, face.id, tolerance
     )
     try:
+        chart = _plane_chart(model, face.id)
         trim_loops = _support_trim_loops(model, face.id)
         samples = (
             []
             if exact_on_support
-            else _curve_surface_samples(model, edge.id, face.id, count)
+            else _curve_surface_samples(model, edge.id, face.id, count, chart)
         )
     except (GeometryError, ValueError, np.linalg.LinAlgError) as error:
         return _result(
@@ -1114,7 +1785,7 @@ def qualified_curve_face(
                 residual = 0.0
             else:
                 _projected, middle_uv, residual, _normal = _support_projection(
-                    model, face.id, middle_point
+                    model, face.id, middle_point, (), chart
                 )
             if not _inside_face(model, face.id, middle_uv, trim_loops):
                 continue
@@ -1128,7 +1799,7 @@ def qualified_curve_face(
                 endpoint_residuals = (0.0, 0.0)
             else:
                 projected_endpoints = tuple(
-                    _support_projection(model, face.id, point) for point in points
+                    _support_projection(model, face.id, point, (), chart) for point in points
                 )
                 uvs = tuple(item[1] for item in projected_endpoints)
                 endpoint_residuals = tuple(float(item[2]) for item in projected_endpoints)
@@ -1192,7 +1863,9 @@ def qualified_curve_face(
         near = min(previous[3], current[3]) <= tolerance
         if not sign_change and not near:
             continue
-        candidates.append(_refine_curve_surface_root(model, edge.id, face.id, previous[0], current[0], policy))
+        candidates.append(
+            _refine_curve_surface_root(model, edge.id, face.id, previous[0], current[0], policy, chart)
+        )
     for before, current, after in zip(samples, samples[1:], samples[2:]):
         if current[3] <= tolerance and current[3] <= before[3] and current[3] <= after[3]:
             candidates.append((current[0], current[1], current[2], current[3]))
@@ -1811,14 +2484,30 @@ def _supports_coincident(model, first_id: int, second_id: int, tolerance: float)
             for left, right in zip(first_boundaries, second_boundaries)
         ):
             return True
-    parameters = np.asarray(
-        tuple((float(u), float(v)) for u in np.linspace(0.0, 1.0, 17) for v in np.linspace(0.0, 1.0, 17)),
-        dtype=float,
-    )
+    charts = {first_id: _plane_chart(model, first_id), second_id: _plane_chart(model, second_id)}
+    projection_charts = charts
+    if any(chart.unbounded for chart in charts.values()):
+        # An unbounded Plane is sampled over its whole face; a covering Plane
+        # target is then projected unclipped too, because those samples may
+        # leave the target's own face (pairs of two covering frames keep the
+        # historical clipped check bit for bit).
+        projection_charts = {
+            face_id: (
+                _PlaneChart(True, chart.box) if type(model.faces[face_id].surface) is Plane else chart
+            )
+            for face_id, chart in charts.items()
+        }
     for source, target in ((first_id, second_id), (second_id, first_id)):
+        u_values, v_values = _chart_axes(charts[source], 17)
+        parameters = np.asarray(
+            tuple((float(u), float(v)) for u in u_values for v in v_values),
+            dtype=float,
+        )
         for uv in parameters:
             point, source_du, source_dv = _surface_point_derivatives(model, source, uv)
-            projected, _target_uv, residual, target_normal = _support_projection(model, target, point)
+            projected, _target_uv, residual, target_normal = _support_projection(
+                model, target, point, (), projection_charts[target]
+            )
             if residual > tolerance:
                 return False
             source_normal = np.cross(source_du, source_dv)
@@ -1833,9 +2522,26 @@ def _supports_coincident(model, first_id: int, second_id: int, tolerance: float)
     return True
 
 
-def _surface_grid(model, face_id: int, count: int):
-    parameters = np.linspace(0.0, 1.0, count)
-    uv = np.asarray(tuple((float(u), float(v)) for v in parameters for u in parameters), dtype=float)
+def _chart_axes(chart: _PlaneChart, count: int) -> tuple[np.ndarray, np.ndarray]:
+    """Sample axes of a support chart: the unit square, or the face's uv box."""
+
+    if not chart.unbounded:
+        parameters = np.linspace(0.0, 1.0, count)
+        return parameters, parameters
+    if chart.box is None:
+        # Fail closed: without a conservative box the face is not covered.
+        raise GeometryError("plane support chart has no conservative face uv box")
+    return (
+        np.linspace(float(chart.box[0][0]), float(chart.box[1][0]), count),
+        np.linspace(float(chart.box[0][1]), float(chart.box[1][1]), count),
+    )
+
+
+def _surface_grid(model, face_id: int, count: int, chart: _PlaneChart | None = None):
+    if chart is None:
+        chart = _plane_chart(model, face_id)
+    u_values, v_values = _chart_axes(chart, count)
+    uv = np.asarray(tuple((float(u), float(v)) for v in v_values for u in u_values), dtype=float)
     points = np.asarray(
         [model.face_support_point(face_id, float(item[0]), float(item[1])) for item in uv],
         dtype=float,
@@ -1862,16 +2568,58 @@ def _contour_crossing(
     return first_uv + fraction * (second_uv - first_uv)
 
 
-def _refine_surface_pair(model, first_id: int, second_id: int, first_uv, second_uv, policy):
-    first_parameters = np.clip(np.asarray(first_uv, dtype=float), 0.0, 1.0)
-    second_parameters = np.clip(np.asarray(second_uv, dtype=float), 0.0, 1.0)
+def _refine_surface_pair(
+    model,
+    first_id: int,
+    second_id: int,
+    first_uv,
+    second_uv,
+    policy,
+    first_chart: _PlaneChart | None = None,
+    second_chart: _PlaneChart | None = None,
+):
+    if first_chart is None:
+        first_chart = _plane_chart(model, first_id)
+    if second_chart is None:
+        second_chart = _plane_chart(model, second_id)
+
+    # A bounded chart is refined in its own parameters, clipped to the unit
+    # square, exactly as before.  An unbounded Plane is refined unclipped in
+    # its face-box chart (uv = lower + w * (upper - lower)), so the
+    # minimum-norm Newton steps do not depend on the stored frame's scale.
+    def chart_map(chart):
+        if not chart.unbounded:
+            return None
+        if chart.box is None:
+            return np.zeros(2), np.ones(2)
+        span = np.asarray(chart.box[1] - chart.box[0], dtype=float)
+        span = np.where(span > 0.0, span, 1.0)
+        return np.asarray(chart.box[0], dtype=float), span
+
+    first_map = chart_map(first_chart)
+    second_map = chart_map(second_chart)
+
+    def to_work(mapping, uv):
+        uv = np.asarray(uv, dtype=float)
+        return np.clip(uv, 0.0, 1.0) if mapping is None else (uv - mapping[0]) / mapping[1]
+
+    def to_uv(mapping, work):
+        return work if mapping is None else mapping[0] + work * mapping[1]
+
+    def bound(mapping, work):
+        return np.clip(work, 0.0, 1.0) if mapping is None else work
+
+    def derivatives(face_id, mapping, work):
+        point, du, dv = _surface_point_derivatives(model, face_id, to_uv(mapping, work))
+        if mapping is not None:
+            du, dv = du * mapping[1][0], dv * mapping[1][1]
+        return point, du, dv
+
+    first_parameters = to_work(first_map, first_uv)
+    second_parameters = to_work(second_map, second_uv)
     for _ in range(policy.max_newton_iterations):
-        first_point, first_du, first_dv = _surface_point_derivatives(
-            model, first_id, first_parameters
-        )
-        second_point, second_du, second_dv = _surface_point_derivatives(
-            model, second_id, second_parameters
-        )
+        first_point, first_du, first_dv = derivatives(first_id, first_map, first_parameters)
+        second_point, second_du, second_dv = derivatives(second_id, second_map, second_parameters)
         difference = first_point - second_point
         jacobian = np.column_stack(
             (first_du, first_dv, -second_du, -second_dv)
@@ -1879,8 +2627,8 @@ def _refine_surface_pair(model, first_id: int, second_id: int, first_uv, second_
         if not np.all(np.isfinite(jacobian)) or np.linalg.matrix_rank(jacobian) < 3:
             break
         delta, *_ = np.linalg.lstsq(jacobian, -difference, rcond=None)
-        next_first = np.clip(first_parameters + delta[:2], 0.0, 1.0)
-        next_second = np.clip(second_parameters + delta[2:], 0.0, 1.0)
+        next_first = bound(first_map, first_parameters + delta[:2])
+        next_second = bound(second_map, second_parameters + delta[2:])
         if max(
             float(np.linalg.norm(next_first - first_parameters)),
             float(np.linalg.norm(next_second - second_parameters)),
@@ -1888,6 +2636,8 @@ def _refine_surface_pair(model, first_id: int, second_id: int, first_uv, second_
             first_parameters, second_parameters = next_first, next_second
             break
         first_parameters, second_parameters = next_first, next_second
+    first_parameters = to_uv(first_map, first_parameters)
+    second_parameters = to_uv(second_map, second_parameters)
     first_point, _du, _dv = _surface_point_derivatives(model, first_id, first_parameters)
     second_point, _du, _dv = _surface_point_derivatives(model, second_id, second_parameters)
     return (
@@ -2074,8 +2824,27 @@ def qualified_face_face(
         )
 
     count = min(33, max(9, int(np.sqrt(policy.max_trace_segments)) // 8 + 1))
-    first_uv_grid, first_points = _surface_grid(model, first.id, count)
-    second_seed_uv, second_seed_points = _surface_grid(model, second.id, 9)
+    try:
+        first_chart = _plane_chart(model, first.id)
+        second_chart = _plane_chart(model, second.id)
+    except (GeometryError, ValueError, np.linalg.LinAlgError) as error:
+        return _result(
+            first, second, IntersectionKind.UNCLASSIFIED,
+            tolerance=tolerance,
+            algorithm="surface_surface_subdivision",
+            diagnostics=(f"plane_support_chart_failed:{error}",),
+        )
+    if any(chart.unbounded and chart.box is None for chart in (first_chart, second_chart)):
+        return _result(
+            first, second, IntersectionKind.UNCLASSIFIED,
+            tolerance=tolerance,
+            algorithm="surface_surface_subdivision",
+            diagnostics=("plane_support_chart_has_no_conservative_face_uv_box",),
+        )
+    # An unbounded Plane is sampled over its face's uv box, not over the
+    # unit square of an arbitrary stored frame.
+    first_uv_grid, first_points = _surface_grid(model, first.id, count, first_chart)
+    second_seed_uv, second_seed_points = _surface_grid(model, second.id, 9, second_chart)
     flat_seeds = second_seed_uv.reshape((-1, 2))
     flat_seed_points = second_seed_points.reshape((-1, 3))
     signed = np.empty((count, count), dtype=float)
@@ -2087,7 +2856,7 @@ def qualified_face_face(
                 point = first_points[row, column]
                 nearest = int(np.argmin(np.linalg.norm(flat_seed_points - point, axis=1)))
                 projected, uv, residual, normal = _support_projection(
-                    model, second.id, point, (flat_seeds[nearest],)
+                    model, second.id, point, (flat_seeds[nearest],), second_chart
                 )
                 signed[row, column] = float((point - projected) @ normal)
                 residuals[row, column] = residual
@@ -2123,7 +2892,9 @@ def qualified_face_face(
                 )
                 if crossing is not None:
                     point = model.face_support_point(first.id, float(crossing[0]), float(crossing[1]))
-                    projected, uv_second, residual, _normal = _support_projection(model, second.id, point)
+                    projected, uv_second, residual, _normal = _support_projection(
+                        model, second.id, point, (), second_chart
+                    )
                     world, crossing, uv_second, residual = _refine_surface_pair(
                         model,
                         first.id,
@@ -2131,6 +2902,8 @@ def qualified_face_face(
                         crossing,
                         uv_second,
                         policy,
+                        first_chart,
+                        second_chart,
                     )
                     if residual <= tolerance:
                         crossings.append((world, crossing, uv_second, residual))

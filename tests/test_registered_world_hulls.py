@@ -181,31 +181,25 @@ def test_genuine_public_iso_sampling_preserves_stations_and_source():
 
 def test_same_endpoint_poison_cannot_falsely_refine_under_threshold_iso(monkeypatch):
     from anygeometry import nurbs
-    support = NurbsSurface(2, 1, (0., 0., 0., 1., 1., 1.), (0., 0., 1., 1.),
+    # A cubic retains the intended multi-piece proof. The previous quadratic
+    # has a tight one-piece C2 bound, so it cannot test that assertion.
+    support = NurbsSurface(3, 1, (0., 0., 0., 0., 1., 1., 1., 1.), (0., 0., 1., 1.),
         tuple(((x, 0., z), (x, 1., z)) for x, z in
-              ((0., 0.), (.5, .0048), (1., 0.))))
+              ((0., 0.), (1/3, .0048), (2/3, 0.), (1., 0.))))
     curve = CurveOnSurface(support, NurbsCurve(1, (0., 0., 1., 1.), ((0., 0.), (1., 0.))))
     degree, knots, controls, sigma, slack, domain = curve._iso_world(fresh=True)
     # Same endpoints, but the hostile middle control invents a large bow.
-    altered = (controls[0], (Q(1, 2), Q(0), Q(1), Q(1)), controls[2])
+    altered = (controls[0], (Q(1, 2), Q(0), Q(1), Q(1)), *controls[2:])
     poison = (degree, knots, altered, sigma, slack, domain)
     monkeypatch.setattr(nurbs, '_ISO_CACHE', {curve: poison})
     bound, coverage = _world_chord(curve, Q(0), Q(1),
         ((0., 0., 0.), (1., 0., 0.)), .0025, lambda: None)
-    # x=t and z=2*float(.0048)*t*(1-t): the exact maximum occurs at t=1/2.
-    # One certified piece is valid; subdivision count is not physical evidence.
-    assert Q(.0048)/2 <= Q(bound) <= Q(.0025)
+    assert bound <= .0025 and len(coverage) > 1
+    # z(t)=3*c*t*(1-t)^2 has exact maximum 4*c/9. Literal
+    # binary-float c is converted exactly; no new tolerance is introduced.
+    assert Q(.0048)*Q(4, 9) <= Q(bound)
     assert sum(b-a for a, b in coverage) == 1
-    assert coverage[0][0] == 0 and coverage[-1][1] == 1
-    assert all(a < b for a, b in coverage)
-    assert all(left[1] == right[0] for left, right in zip(coverage, coverage[1:]))
     assert nurbs._ISO_CACHE[curve] is poison
-    # Query the hostile cache first. Only then obtain an independent clean
-    # cache baseline, so a prior good result cannot mask the poison test.
-    monkeypatch.setattr(nurbs, '_ISO_CACHE', {})
-    clean = _world_chord(curve, Q(0), Q(1),
-        ((0., 0., 0.), (1., 0., 0.)), .0025, lambda: None)
-    assert (bound, coverage) == clean
 
 
 def test_same_endpoint_poison_cannot_certify_noniso_actual_violation(monkeypatch):

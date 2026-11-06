@@ -18,7 +18,7 @@ license-files = [
 ]
 authors = [{ name = "Audun Arnesen Nyhus", email = "audunarn@gmail.com" }]
 classifiers = ["Development Status :: 3 - Alpha"]
-dependencies = ["numpy>=1.26"]
+dependencies = ["numpy>=1.26", "psutil>=5.9", "threadpoolctl>=3.1"]
 
 [project.scripts]
 anygeometry = "anygeometry.__main__:main"

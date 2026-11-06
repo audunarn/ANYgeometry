@@ -33,7 +33,6 @@ FORBIDDEN = {
     "anytk3d",
     "gmsh",
     "meshio",
-    "scipy",
     "tkinter",
 }
 
@@ -58,18 +57,48 @@ def test_public_owner_exports_use_one_geometry_and_reference_type() -> None:
     }
 
 
+def _validate_annotationlib_imports(source, tree):
+    """Only the two exact planner imports guarded by Python3.14 are stdlib."""
+    def imports_annotationlib(node):
+        return (isinstance(node, ast.Import) and any(a.name.split('.')[0]=='annotationlib' for a in node.names)
+                or isinstance(node, ast.ImportFrom) and node.level==0
+                and node.module is not None and node.module.split('.')[0]=='annotationlib')
+    imports={id(n) for n in ast.walk(tree) if imports_annotationlib(n)}
+    if not imports:return
+    assert source in {'_planning_ledger.py','_planning_manifest.py'}
+    guard=ast.dump(ast.parse('sys.version_info >= (3, 14)',mode='eval').body,include_attributes=False)
+    guarded=set()
+    for node in ast.walk(tree):
+        if isinstance(node,ast.If) and ast.dump(node.test,include_attributes=False)==guard:
+            guarded.update(id(n) for statement in node.body for n in ast.walk(statement)
+                           if imports_annotationlib(n))
+    assert imports==guarded
+
+
 def test_source_import_graph_has_no_forbidden_or_undeclared_dependency() -> None:
     external_imports: set[str] = set()
+    scipy_sources: set[str] = set()
     for path in PACKAGE.rglob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        _validate_annotationlib_imports(path.relative_to(PACKAGE).as_posix(), tree)
+        source_imports: set[str] = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
-                external_imports.update(alias.name.split(".", 1)[0] for alias in node.names)
+                source_imports.update(alias.name.split(".", 1)[0] for alias in node.names)
             elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-                external_imports.add(node.module.split(".", 1)[0])
+                source_imports.add(node.module.split(".", 1)[0])
+        source_imports.discard(PACKAGE.name)  # Absolute imports of the owner itself.
+        external_imports.update(source_imports)
+        if "scipy" in source_imports:
+            scipy_sources.add(path.relative_to(PACKAGE).as_posix())
 
     assert not (external_imports & FORBIDDEN)
-    assert external_imports <= set(sys.stdlib_module_names) | {"numpy", "shapely"}
+    # The adopted planner attests SciPy at its trusted runtime interface;
+    # it remains optional and cannot leak into ordinary geometry modules.
+    assert scipy_sources <= {"_planning_child.py", "_planning_qualification.py"}
+    assert external_imports <= set(sys.stdlib_module_names) | {
+        "numpy", "shapely", "psutil", "threadpoolctl", "scipy", "annotationlib"
+    }
 
 
 def test_core_and_optional_dependencies_match_release_metadata() -> None:
@@ -77,7 +106,7 @@ def test_core_and_optional_dependencies_match_release_metadata() -> None:
         "project"
     ]
 
-    assert project["dependencies"] == ["numpy>=1.26"]
+    assert project["dependencies"] == ["numpy>=1.26", "psutil>=5.9", "threadpoolctl>=3.1"]
     assert project["optional-dependencies"]["planar"] == ["shapely>=2.0"]
     assert project["scripts"] == {"anygeometry": "anygeometry.__main__:main"}
     assert (PACKAGE / "py.typed").is_file()
@@ -684,3 +713,18 @@ def test_module_main_and_version_work_from_outside_checkout(tmp_path) -> None:
     )
 
     assert completed.stdout.strip() == anygeometry.__version__
+
+
+@pytest.mark.parametrize('source,code,valid', [
+    ('_planning_ledger.py','if sys.version_info >= (3,14):\n from annotationlib import ForwardRef',True),
+    ('_planning_manifest.py','if sys.version_info >= (3,14): import annotationlib',True),
+    ('_planning_ledger.py','import annotationlib',False),
+    ('_planning_ledger.py','if sys.version_info >= (3,13): import annotationlib',False),
+    ('_planning_ledger.py','if sys.version_info >= (3,14): pass\nelse: import annotationlib',False),
+    ('ordinary.py','if sys.version_info >= (3,14): import annotationlib',False),
+])
+def test_future_stdlib_import_requires_exact_owner_and_guard(source,code,valid):
+    tree=ast.parse(code)
+    if valid:_validate_annotationlib_imports(source,tree)
+    else:
+        with pytest.raises(AssertionError):_validate_annotationlib_imports(source,tree)

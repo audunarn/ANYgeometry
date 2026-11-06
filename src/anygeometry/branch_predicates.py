@@ -619,6 +619,61 @@ class _Context:
 # ------------------------------------------------------------------ predicates
 
 
+def _quadratic_affine_disjoint(first, second) -> bool:
+    """Prove that two exact Bernstein patches have no common real zero.
+
+    Only a total-degree <=2 polynomial and an affine polynomial are admitted.
+    Eliminate one coordinate exactly; a negative quadratic discriminant (or a
+    nonzero constant) excludes every real zero, including outside the patch.
+    Unsupported degrees, coefficients, contacts and crossings return False.
+    """
+    binomial = ((1,), (1, 1), (1, 2, 1))
+
+    def power(rows):
+        if type(rows) not in (list, tuple) or not 1 <= len(rows) <= 3:
+            return None
+        if any(type(row) not in (list, tuple) for row in rows):
+            return None
+        width = len(rows[0])
+        if not 1 <= width <= 3 or any(len(row) != width for row in rows):
+            return None
+        if any(type(value) is not Fraction for row in rows for value in row):
+            return None
+        p, q = len(rows)-1, width-1
+        result = {}
+        for i, row in enumerate(rows):
+            _cooperative_tick()
+            for j, value in enumerate(row):
+                for k in range(p-i+1):
+                    for l in range(q-j+1):
+                        key = (i+k, j+l)
+                        term = (value * binomial[p][i] * binomial[p-i][k]
+                                * binomial[q][j] * binomial[q-j][l] * (-1)**(k+l))
+                        result[key] = result.get(key, Fraction(0)) + term
+        result = {key: value for key, value in result.items() if value}
+        return None if any(i+j > 2 for i, j in result) else result
+
+    conic, affine = power(first), power(second)
+    if conic is None or affine is None or any(i+j > 1 for i, j in affine):
+        return False
+    a, b, c = (affine.get(key, Fraction(0)) for key in ((1, 0), (0, 1), (0, 0)))
+    if not b:
+        if not a:
+            return False
+        conic = {(j, i): value for (i, j), value in conic.items()}
+        a, b = b, a
+    # v = slope*u + intercept is equivalent to the affine equation: b != 0.
+    slope, intercept = -a/b, -c/b
+    coefficients = [Fraction(0)] * 3
+    for (i, j), value in conic.items():
+        for k in range(j+1):
+            coefficients[i+k] += value * binomial[j][k] * slope**k * intercept**(j-k)
+    constant, linear, quadratic = coefficients
+    if not quadratic:
+        return not linear and bool(constant)
+    return linear*linear - 4*quadratic*constant < 0
+
+
 def section_roots(curve: PlaneNurbsCurve, n, d, *, max_depth: int = MAX_DEPTH,
                   refine: int = 40) -> tuple[SectionRoot, ...]:
     """Intervals containing every root of ``n . C(t) = d`` on the curve (see the module docstring);
@@ -660,6 +715,12 @@ def section_roots(curve: PlaneNurbsCurve, n, d, *, max_depth: int = MAX_DEPTH,
             t_lo, t_hi = context.t_interval()
             lower, upper = context.world()
             found.append(SectionRoot(t_lo, t_hi, lower, upper, False, (context.t_exact(),)))
+            return "done"
+        # Preserve every completed interval proof and every reduced depth gate.
+        # This exact algebra is attempted only where the original default-depth
+        # classifier would split and the engine would immediately refuse.
+        if (max_depth == MAX_DEPTH and context.depth >= max_depth
+                and _quadratic_affine_disjoint(context.view.g1, context.view.g2)):
             return "done"
         return "split"
 

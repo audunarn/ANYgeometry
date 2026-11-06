@@ -10,9 +10,12 @@ block exits through an exception.
 Counting is strictly observational. Increments are a no-op when no collector
 is active, and counters never influence geometry decisions, validation or
 serialized output. The module holds no model state and persists nothing.
+Timing keys ending in ``_time_ns`` are inclusive wall-clock nanoseconds;
+nested phases overlap and must not be summed as exclusive phase durations.
 """
 from contextlib import contextmanager
 from contextvars import ContextVar
+from time import perf_counter_ns
 
 COUNTER_KEYS = ("attachment_clip_calls", "attachment_bounds_tests",
                 "attachment_bounds_pruned")
@@ -39,3 +42,64 @@ def _increment(key, amount=1):
         return
     for counters in collectors:
         counters[key] = counters.get(key, 0) + amount
+
+
+# Structured records (non-integer details) are collected separately, so the counter mapping keeps its
+# contract of integer values that consumers sum. Same ContextVar scoping as the counters.
+_RECORD_COLLECTORS: ContextVar[tuple] = ContextVar(
+    "anygeometry_runtime_record_collectors", default=())
+
+
+@contextmanager
+def collect_runtime_records():
+    """Yield a fresh ``dict[str, list]`` receiving the observational records made within its scope.
+
+    Records are strictly observational, like the counters. Current keys:
+    ``arrangement_snap_fallback`` (one dict per material arrangement accepted by the snap fallback of
+    the float cell route: face id, moved edges, snapped vertices, maximum move, refused and accepted
+    conservation ratios, seconds).
+    """
+    records = {}
+    token = _RECORD_COLLECTORS.set((*_RECORD_COLLECTORS.get(), records))
+    try:
+        yield records
+    finally:
+        _RECORD_COLLECTORS.reset(token)
+
+
+def _record(key, item):
+    """Append ``item`` to the list ``key`` of every active record collector; no-op without one."""
+    for records in _RECORD_COLLECTORS.get():
+        records.setdefault(key, []).append(item)
+
+
+@contextmanager
+def _planning_transaction():
+    """Isolate provisional/sample work and restore every caller collector."""
+    counters,records={},{}
+    counter_token=_COLLECTORS.set((counters,))
+    record_token=_RECORD_COLLECTORS.set((records,))
+    try:
+        yield dict(counters=counters,records=records)
+    finally:
+        _RECORD_COLLECTORS.reset(record_token)
+        _COLLECTORS.reset(counter_token)
+
+
+def _publish_planning(data):
+    for key,value in data['counters'].items():_increment(key,value)
+    for key,values in data['records'].items():
+        for value in values:_record(key,value)
+
+
+@contextmanager
+def _timed_phase(name):
+    """Accumulate observational nanoseconds, including failed phases."""
+    if not _COLLECTORS.get():
+        yield
+        return
+    start = perf_counter_ns()
+    try:
+        yield
+    finally:
+        _increment(name + '_time_ns', perf_counter_ns() - start)

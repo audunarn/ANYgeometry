@@ -36,10 +36,10 @@ def test_integer_paths_no_new_fraction_property_or_constructor(monkeypatch, muta
     selected = (values[0], net[0][0][0])
     if mutation == 'constructor':
         original = Q.__new__
-        def altered(cls, numerator=0, denominator=None):
+        def altered(cls, numerator=0, denominator=None, **kwargs):
             if denominator is not None:
-                return original(cls, 0)
-            return original(cls, numerator)
+                return original(cls, 0, **kwargs)
+            return original(cls, numerator, **kwargs)
         monkeypatch.setattr(Q, '__new__', staticmethod(altered))
     else:
         slot = '_' + mutation

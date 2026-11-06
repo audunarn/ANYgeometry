@@ -139,7 +139,26 @@ def test_exact_curve_curvature_scales_in_world_units():
 def test_unresolved_support_knot_crossing_refuses_boundedly():
     support=NurbsSurface(1,1,(0.,0.,.3,1.,1.),(0.,0.,1.,1.),
         (((0.,0.,0.),(0.,1.,0.)),((.3,0.,0.),(.3,1.,.1)),((1.,0.,0.),(1.,1.,.2))))
-    pc=NurbsCurve(1,(0.,0.,1.,1.),((0.,.5),(1.,.5)))
+    # Affine support crossings now have exact anchors; this rational parametrization
+    # remains non-affine and must retain the same bounded refusal.
+    pc=NurbsCurve(1,(0.,0.,1.,1.),((0.,.5),(1.,.5)),(2.,1.))
     with pytest.raises(GeometryError,match='support-knot'):
         bound_curve_geometry(CurveOnSurface(support,pc),
             policy=IntersectionQualificationPolicy(max_boxes_per_pair=20,max_subdivision_depth=2))
+
+
+def test_original_affine_support_crossing_has_piecewise_one_sided_bounds():
+    # Exact geometry formerly used by the unresolved-crossing refusal fixture.
+    support=NurbsSurface(1,1,(0.,0.,.3,1.,1.),(0.,0.,1.,1.),
+        (((0.,0.,0.),(0.,1.,0.)),((.3,0.,0.),(.3,1.,.1)),((1.,0.,0.),(1.,1.,.2))))
+    pc=NurbsCurve(1,(0.,0.,1.,1.),((0.,.5),(1.,.5)))
+    result=bound_curve_geometry(CurveOnSurface(support,pc),
+        policy=IntersectionQualificationPolicy(max_boxes_per_pair=20,max_subdivision_depth=2))
+    coverage(result)
+    assert Q(.3) in result.anchors
+    left=next(piece for piece in result.pieces if piece.parameter_range[1]==Q(.3))
+    right=next(piece for piece in result.pieces if piece.parameter_range[0]==Q(.3))
+    assert left.tangent!=right.tangent
+    # These are one-sided straight pieces; there is no finite global curvature
+    # or continuity/star certificate at their corner.
+    assert left.curvature_upper==right.curvature_upper==0

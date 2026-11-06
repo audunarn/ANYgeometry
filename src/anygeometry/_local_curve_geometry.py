@@ -152,6 +152,25 @@ def _plane(curve,lo,hi,sign):
     return rows
 
 
+def _affine_uv_map(pcurve):
+    """Exact a,d for the already admitted literal affine 2D pcurve, else None."""
+    if (type(pcurve) is not NurbsCurve or pcurve.dimension!=2 or pcurve.degree!=1
+            or len(pcurve.controls)!=2 or len(pcurve.knots)!=4):
+        return None
+    knots=tuple(map(Q,pcurve.knots))
+    left,right=knots[0],knots[-1]
+    if knots!=(left,left,right,right) or not left<right:return None
+    weights=tuple(map(Q,pcurve.weights)) if pcurve.weights is not None else (Q(1),Q(1))
+    if len(weights)!=2 or not weights[0]==weights[1]>0:return None
+    alpha,beta=map(Q,pcurve.domain)
+    if alpha==beta or not left<=min(alpha,beta)<=max(alpha,beta)<=right:return None
+    first,last=(tuple(map(Q,row)) for row in pcurve.controls)
+    delta=tuple(b-a for a,b in zip(first,last))
+    offset=tuple(a+d*(alpha-left)/(right-left) for a,d in zip(first,delta))
+    velocity=tuple(d*(beta-alpha)/(right-left) for d in delta)
+    return offset,velocity
+
+
 def bound_curve_geometry(curve, lower=0, upper=1, *, policy=None, cancellation_check=None):
     """Cover the entire oriented descriptor interval with exact one-sided bounds.
 
@@ -209,6 +228,20 @@ def bound_curve_geometry(curve, lower=0, upper=1, *, policy=None, cancellation_c
             a,b=map(Q,curve.domain);n=len(curve._arcs())
             anchors.update((Q(i,n)-a)/(b-a) for i in range(n+1) if start<(Q(i,n)-a)/(b-a)<end)
         elif shape is not None: anchors.update(t for t in shape.breakpoints if start<t<end)
+        if kind is CurveOnSurface:
+            affine=_affine_uv_map(curve.pcurve)
+            if affine is not None:
+                offset,velocity=affine
+                for axis,(knots,domain) in enumerate(zip(
+                        (curve.support.knots_u,curve.support.knots_v),
+                        (curve.support.u_range,curve.support.v_range))):
+                    if velocity[axis]==0:continue
+                    first,last=map(Q,domain)
+                    for knot in knots:
+                        normalized=(Q(knot)-first)/(last-first)
+                        root=(normalized-offset[axis])/velocity[axis]
+                        if start<root<end:anchors.add(root)
+        # Exact structural pieces still pass through the same charged box queue.
         ordered=sorted(anchors);queue=[(a,b,0) for a,b in zip(ordered,ordered[1:])]
         pieces=[];boxes=splits=0
         while queue:

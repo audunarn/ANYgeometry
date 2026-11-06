@@ -277,7 +277,7 @@ def test_a_curve_is_hashable_and_equal_to_its_rebuilt_self():
     (lambda f, s: BezierQuadricCurve(f, s, 0., math.inf), "finite"),
     (lambda f, s: BezierQuadricCurve(f, s, .5, 1.), "interval"),
     (lambda f, s: BezierQuadricCurve(f, s, 0., .1, 1, "linear", ((1, 0, 0), (0, 1, 0), (0, 0, 1))), "transformation"),
-    (lambda f, s: BezierQuadricCurve(wall(), s, 0., .1), "Bezier ruled support"),
+    (lambda f, s: BezierQuadricCurve(wall(), s, 0., .1), "the first support of a Bezier quadric curve is a Bezier or plane ruled support"),
 ])
 def test_invalid_definitions_are_refused(make, expected):
     first, second = CASES["linear charts across the wall"]

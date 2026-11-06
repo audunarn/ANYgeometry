@@ -217,10 +217,10 @@ def test_document_fingerprint_count_is_constant_per_batch(monkeypatch):
     def counted(*args,**kwargs):
         counts.append(1)
         return before(*args,**kwargs)
-    monkeypatch.setattr(serialization,'_checksum',counted)
     model=crossing()
     roots=list(model.faces)
     prepare(model)
+    monkeypatch.setattr(serialization,'_checksum',counted)
     counts.clear();query(model,[roots[0]]);single=len(counts)
     counts.clear();query(model,roots)
     assert len(counts)==single

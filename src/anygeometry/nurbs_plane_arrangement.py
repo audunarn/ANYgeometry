@@ -10,13 +10,109 @@ from fractions import Fraction as Q
 
 from .entities import OrientedEdge, EntityRef
 from .errors import GeometryError
-from .nurbs import CurveOnSurface, _IDENTITY
-from .nurbs_section_faces import chart_loop_area, contains_chart_curves, chart_boundary_contact
+from .nurbs import CurveOnSurface, NurbsCurve, NurbsSurface, _IDENTITY
+from .nurbs_section_faces import (chart_loop_area, contains_chart_curves, chart_boundary_contact,
+                                  _Chart, _chart_tolerance, _rect_spread2)
 from .section_events import section_segment_events
 from .support_curves import PlaneNurbsCurve
 
 
 _EVENT_KINDS = ('event', 'straight_plane_root', 'sweep_source_plane_root', 'plate')
+
+
+def _affine_parent_joint_bound(model, face, surface, edges):
+    """A conservative upper bound on every prospective rectangular child's joint tolerance."""
+    from .model import GeometryModel
+    from .tolerance import TolerancePolicy
+    import numpy as np
+    if (type(model) is not GeometryModel or type(model.tolerance) is not TolerancePolicy
+            or type(surface) is not NurbsSurface or (surface.degree_u, surface.degree_v) != (1, 1)
+            or len(surface.controls) != 2 or any(len(row) != 2 for row in surface.controls)
+            or surface.weights is not None and any(w != 1 for row in surface.weights for w in row)
+            or face.holes or len(face.loop) != 4):
+        return None
+    net = tuple(tuple(tuple(map(Q, point)) for point in row) for row in surface.controls)
+    du = tuple(b-a for a, b in zip(net[0][0], net[1][0]))
+    dv = tuple(b-a for a, b in zip(net[0][0], net[0][1]))
+    if (net[1][1] != tuple(a+u+v for a, u, v in zip(net[0][0], du, dv))
+            or not any(du[i]*dv[j]-du[j]*dv[i] for i, j in ((0, 1), (0, 2), (1, 2)))):
+        return None
+    chart_starts, points = [], []
+    for use in face.loop:
+        edge = edges[use.edge]; curve = edge.curve
+        if (type(curve) is not CurveOnSurface or curve.support != surface or curve.transform != _IDENTITY
+                or type(curve.pcurve) is not NurbsCurve or curve.pcurve.degree != 1
+                or len(curve.pcurve.controls) != 2):
+            return None
+        ends = tuple(curve.pcurve.exact_point(t) for t in (0, 1))
+        if (ends[0] == ends[1] or all(a != b for a, b in zip(*ends))
+                or any(curve.exact_point(t) != tuple(Q(float(x)) for x in model.vertex_position(vertex))
+                       for t, vertex in ((0, edge.start), (1, edge.end)))):
+            return None
+        chart_starts.append(ends[0 if use.forward else 1])
+        points.append(model.vertex_position(edge.start if use.forward else edge.end))
+    low = tuple(min(point[k] for point in chart_starts) for k in (0, 1))
+    high = tuple(max(point[k] for point in chart_starts) for k in (0, 1))
+    if set(chart_starts) != {(u, v) for u in (low[0], high[0]) for v in (low[1], high[1])}:
+        return None
+    positions = np.asarray(points, dtype=float)
+    extent = float(np.linalg.norm(np.ptp(positions, axis=0)))
+    # The validator replaces a zero/underflowed child norm with 1.0.
+    # A parent norm >= 1 bounds that fallback as well as nonzero norms.
+    if not np.isfinite(extent) or extent < 1.0:
+        return None
+    bbox = tuple((Q(float(positions[:, k].min())), Q(float(positions[:, k].max()))) for k in range(3))
+    tolerance = _chart_tolerance(surface, model.tolerance.effective_length(extent))
+    return bbox, tolerance*tolerance
+
+
+def _staged_joint_widths_bounded(positions, bbox):
+    """Binary64 widths only; caller proves the full vertex set and parent scale >= 1."""
+    import numpy as np
+    values = np.asarray(positions, dtype=np.float64)
+    limits = np.asarray(bbox, dtype=np.float64)
+    if (values.ndim != 2 or values.shape[1] != 3 or not len(values)
+            or limits.shape != (3, 2) or not np.all(np.isfinite(values))
+            or not np.all(np.isfinite(limits)) or np.any(limits[:, 0] > limits[:, 1])):
+        return False
+    with np.errstate(over='ignore', invalid='ignore'):
+        widths = np.ptp(values, axis=0)
+        original = np.ptp(limits, axis=1)
+    return bool(np.all(np.isfinite(widths)) and np.all(np.isfinite(original))
+                and np.all(widths <= original))
+
+
+def _refused_trim_station(section, event, joint, bound):
+    """Repair an exact affine crossing only after the old represented joint already fails."""
+    ordinary = sum(event.section_interval)/2
+    if joint is None or bound is None or tuple(map(Q, section.domain)) != (Q(0), Q(1)):
+        return ordinary
+    arcs = section._arcs()
+    if len(arcs) != 1:
+        return ordinary
+    curve, point = joint
+    # This is exactly the section endpoint rectangle used by _ends: the
+    # untrimmed section domain is (0,1), so subcurve endpoints store float(t).
+    rectangle = _Chart(section.surface).rect(*section.chart_enclosure(float(ordinary)))
+    source_end = tuple((value, value) for value in point)
+    if _rect_spread2(source_end, rectangle) <= bound[1]:
+        return ordinary
+    fixed = next((axis for axis in (0, 1)
+                  if curve.pcurve.controls[0][axis] == curve.pcurve.controls[1][axis]), None)
+    arc = arcs[0]
+    if fixed is None or fixed != arc.slicing or arc.s0 == arc.s1:
+        return ordinary
+    ranges = (section.surface.u_range, section.surface.v_range)[fixed]
+    level = Q(ranges[0])+point[fixed]*(Q(ranges[1])-Q(ranges[0]))
+    if not min(arc.s0, arc.s1) <= level <= max(arc.s0, arc.s1):
+        raise GeometryError('trim graph level lies outside its certified arc')
+    # One arc gives one exact graph station. Keep the authenticated event's
+    # interval and identity; neither a rounded station nor proximity merges it.
+    station = (level-arc.s0)/(arc.s1-arc.s0)
+    low, high = event.section_interval
+    if not (0 <= station <= 1 and low <= station <= high and low <= Q(float(station)) <= high):
+        raise GeometryError('trim graph station is outside its certified event interval')
+    return station
 
 
 def _straight_event_key(model, source_edge, plane, event):
@@ -92,6 +188,8 @@ def fragment_nurbs_plane(model, parent, plane, section, *, source_context=None, 
                     or curve.transform != _IDENTITY or curve.pcurve.degree != 1
                     or len(curve.pcurve.controls) != 2):
                 raise GeometryError('plane arrangement currently requires own-support chart-segment trims')
+    joint_bound = _affine_parent_joint_bound(model, face, surface, context['edges'])
+    event_joints = {}
     curves = [PlaneNurbsCurve.from_plane(plane, surface, i) for i in range(len(section.paths))]
     events_by_edge, events_by_path = {}, [[] for _ in curves]
     for path_index, curve in enumerate(curves):
@@ -174,6 +272,8 @@ def fragment_nurbs_plane(model, parent, plane, section, *, source_context=None, 
             left_curve = model.edges[left].curve
             stored_knot = Q(left_curve.domain[1] if isinstance(left_curve, PlaneNurbsCurve) else left_curve.pcurve.domain[1])
             represented = (stored_knot-original_domain[0])/(original_domain[1]-original_domain[0])
+            if joint_bound is not None and type(left_curve) is CurveOnSurface:
+                event_joints[key] = (left_curve, left_curve.pcurve.exact_point(1))
             preceding = unique[event_index-1][1].segment_interval[1] if event_index else Q(0)
             following = unique[event_index+1][1].segment_interval[0] if event_index+1 < len(unique) else Q(1)
             if not preceding < represented < following:
@@ -193,6 +293,25 @@ def fragment_nurbs_plane(model, parent, plane, section, *, source_context=None, 
         context['ledgers'][edge_id] = (boundary_pieces[edge_id], {key: vertices[key] for key in keys})
     # Normalize material to the left, preserving the original face orientation
     # separately when the child loops are published.
+    if joint_bound is not None:
+        bbox = joint_bound[0]
+        if any(not all(low <= Q(float(value)) <= high for value, (low, high) in zip(model.vertex_position(vertex), bbox))
+               for vertex in vertices.values()):
+            joint_path = section.paths[0] if len(section.paths) == 1 else None
+            joint_entries = events_by_path[0] if joint_path is not None else ()
+            # Only the material interval between two interior boundary crossings
+            # can survive on this single open arc of a rectangular affine face.
+            # There are no breaks or plate stations to create later vertices.
+            closed_vertices = (not plate_stations and joint_path is not None
+                and not joint_path.closed and len(joint_path.arcs) == 1 and len(joint_entries) == 2
+                and joint_entries[0][0] != joint_entries[1][0]
+                and all(key in vertices and 0 < event.section_interval[0]
+                        <= event.section_interval[1] < 1 for key, event in joint_entries))
+            if (not closed_vertices or not _staged_joint_widths_bounded(
+                    [model.vertex_position(vertex) for vertex in vertices.values()], bbox)):
+                joint_bound = None
+    # The original inside-bbox path is unchanged. The escaped fallback retains
+    # only its binary64 width bound; it makes no exact-world-coordinate claim.
     source_positive = _area(model, model.faces[parent].loop, surface)[0] > 0
     for loop_index, loop in enumerate(original):
         directed = []
@@ -224,7 +343,8 @@ def fragment_nurbs_plane(model, parent, plane, section, *, source_context=None, 
             breaks = breaks[:max(1, min_closed_pieces-1)] if path.closed else ()
         cuts.extend((Q(t), ('arc', index, k+1), (Q(t), Q(t))) for k, t in breaks)
         for key, event in entries:
-            cuts.append((sum(event.section_interval)/2, key, event.section_interval))
+            station = _refused_trim_station(curve, event, event_joints.get(key), joint_bound)
+            cuts.append((station, key, event.section_interval))
         cuts.sort(key=lambda pair: pair[0])
         merged = []
         for t, key, interval in cuts:

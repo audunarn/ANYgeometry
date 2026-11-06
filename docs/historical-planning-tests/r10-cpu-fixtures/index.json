@@ -1,0 +1,14 @@
+[
+  {
+    "file": "tests\\test_chain_eval_derived_slack.py",
+    "original_sha256": "c2160f3e1661ac1fd0e9465360789e963597978f0a2b8c0a9194a94d5b1f25e8",
+    "adopted_sha256": "d72024592ed3e037c7e2ffcecb97f7e9828a509f35b0551ec074df49c6498c48",
+    "original_archive": "docs\\historical-planning-tests\\r10-cpu-fixtures\\test_chain_eval_derived_slack.py.txt"
+  },
+  {
+    "file": "tests\\test_arrangement_snap_fallback.py",
+    "original_sha256": "cc5a487a2c4ad8206a3848a285af7442f5e396096fa1273b0ca14ec4a2b73e2d",
+    "adopted_sha256": "c7a95e8250479e33da44a0580060bc04a4875d6de90b5ddf0ecc619f45d26cb1",
+    "original_archive": "docs\\historical-planning-tests\\r10-cpu-fixtures\\test_arrangement_snap_fallback.py.txt"
+  }
+]

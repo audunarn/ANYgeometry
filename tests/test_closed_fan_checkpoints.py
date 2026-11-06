@@ -20,19 +20,104 @@ def fan(boundary,check):
 
 
 @contextmanager
+def code_events(code,event,callback):
+    """Measure real exact-code entry/return events without wrapping calculators."""
+    monitoring=getattr(sys,'monitoring',None)
+    tool=None if monitoring is None else next((i for i in range(5,-1,-1) if monitoring.get_tool(i) is None),None)
+    if tool is None:
+        previous=sys.getprofile()
+        def profile(frame,kind,value):
+            if kind==event and frame.f_code is code:callback()
+            if previous is not None:previous(frame,kind,value)
+        sys.setprofile(profile)
+        try:yield
+        finally:sys.setprofile(previous)
+    else:
+        flag=monitoring.events.PY_START if event=='call' else monitoring.events.PY_RETURN
+        monitoring.use_tool_id(tool,'closed-fan-test')
+        try:
+            monitoring.register_callback(tool,flag,callback)
+            monitoring.set_local_events(tool,code,flag)
+            yield
+        finally:
+            try:monitoring.set_local_events(tool,code,0)
+            finally:monitoring.free_tool_id(tool)
+
+
+@contextmanager
 def counts(code):
-    tool=next(i for i in range(5,-1,-1) if sys.monitoring.get_tool(i) is None)
     count=[0]
     def started(*args):count[0]+=1
-    sys.monitoring.use_tool_id(tool,'closed-fan-test')
-    sys.monitoring.register_callback(tool,sys.monitoring.events.PY_START,started)
-    sys.monitoring.set_local_events(tool,code,sys.monitoring.events.PY_START)
-    try:yield count
-    finally:
-        sys.monitoring.set_local_events(tool,code,0);sys.monitoring.free_tool_id(tool)
+    with code_events(code,'call',started):yield count
 
 
-def test_genuine_rational_numeric_bound_identical_with_fewer_checkpoint_validations():
+def test_all_monitoring_ids_occupied_uses_real_profile_and_preserves_prior_hook(monkeypatch):
+    class Occupied:
+        def get_tool(self,tool):return 'foreign-owner'
+        def use_tool_id(self,*args):raise AssertionError('occupied tool must not be claimed')
+    monkeypatch.setattr(sys,'monitoring',Occupied(),raising=False)
+    def selected():return 7
+    original=sys.getprofile();prior_calls=[]
+    def prior(frame,event,value):
+        if event=='call' and frame.f_code is selected.__code__:prior_calls.append(1)
+        if original is not None:original(frame,event,value)
+    sys.setprofile(prior)
+    try:
+        with counts(selected.__code__) as measured:
+            assert selected()==selected()==7
+        assert measured==[2] and prior_calls==[1,1]
+        assert sys.getprofile() is prior
+    finally:sys.setprofile(original)
+    assert sys.getprofile() is original
+
+
+@pytest.mark.parametrize('failure',('callback','enable'))
+def test_monitoring_setup_failure_frees_only_owned_tool(monkeypatch,failure):
+    from types import SimpleNamespace
+    error=RuntimeError('original observer setup failure');owned={};freed=[];cleared=[]
+    class Monitoring:
+        events=SimpleNamespace(PY_START=1,PY_RETURN=2)
+        def get_tool(self,tool):return owned.get(tool)
+        def use_tool_id(self,tool,name):owned[tool]=name
+        def register_callback(self,tool,flag,callback):
+            if failure=='callback':raise error
+        def set_local_events(self,tool,code,flag):
+            if flag and failure=='enable':raise error
+            if not flag:cleared.append(tool)
+        def free_tool_id(self,tool):freed.append(tool);del owned[tool]
+    monkeypatch.setattr(sys,'monitoring',Monitoring(),raising=False)
+    def selected():return 7
+    with pytest.raises(RuntimeError) as caught:
+        with counts(selected.__code__):pytest.fail('setup failure must precede body')
+    assert caught.value is error and not owned
+    assert freed==cleared==[5]
+
+
+def test_code_event_measurement_is_exact_nested_and_restores_previous_profiler(request):
+    original=sys.getprofile();calls=[];returns=[];previous_calls=[]
+    def selected():return 7
+    def other():return 8
+    def previous(frame,event,value):
+        if event=='call' and frame.f_code is selected.__code__:previous_calls.append(1)
+        if original is not None:original(frame,event,value)
+    sys.setprofile(previous)
+    try:
+        with code_events(selected.__code__,'call',lambda *args:calls.append(1)):
+            assert selected()==7 and other()==8
+            with code_events(selected.__code__,'return',lambda *args:returns.append(1)):
+                assert selected()==7 and other()==8
+            assert selected()==7
+        assert sys.getprofile() is previous
+    finally:sys.setprofile(original)
+    assert calls==[1,1,1] and returns==[1]
+    assert previous_calls==[1,1,1] and sys.getprofile() is original
+    request.node.user_properties.extend((('instrumentation_backend',
+        'sys.monitoring' if hasattr(sys,'monitoring') else 'sys.setprofile'),
+        ('selected_entry_events',len(calls)),('selected_return_events',len(returns)),
+        ('previous_profile_entry_events',len(previous_calls)),('original_profiler_restored',True)))
+
+
+def test_genuine_rational_numeric_bound_identical_with_fewer_checkpoint_validations(request):
     boundary=side(parabola())
     with counts(type(boundary)._validate.__code__) as strict:
         expected=fan(boundary,lambda:False)
@@ -42,6 +127,8 @@ def test_genuine_rational_numeric_bound_identical_with_fewer_checkpoint_validati
             with counts(type(boundary)._validate.__code__) as closed:
                 actual=fan(boundary,step)
     assert actual==expected and 0<closed[0]<strict[0]
+    request.node.user_properties.extend((('strict_validation_calls',strict[0]),
+        ('closed_validation_calls',closed[0]),('rational_bound_identical',True)))
 
 
 def test_public_cell_proof_bounds_and_correspondence_equal_strict_callback():
@@ -200,20 +287,16 @@ def test_work_transition_at_actual_fan_entry_reselects_full_guards():
         with counts(type(boundary)._validate.__code__) as strict:
             expected=fan(boundary,lambda:False)
     finally:CURRENT_WORK.reset(token)
-    tokens=[];tool=next(i for i in range(5,-1,-1) if sys.monitoring.get_tool(i) is None)
+    tokens=[]
     def enter(*args):
         if not tokens:tokens.append(CURRENT_WORK.set(Work(100000,32)))
-    sys.monitoring.use_tool_id(tool,'late-work-test')
-    sys.monitoring.register_callback(tool,sys.monitoring.events.PY_START,enter)
-    sys.monitoring.set_local_events(tool,maps._certify_fan_subtriangle.__code__,sys.monitoring.events.PY_START)
     try:
-        with maps._closed_fan_steps(None) as step:
-            with maps._closed_fan_window(step):
-                with counts(type(boundary)._validate.__code__) as guarded:
-                    result=fan(boundary,step)
+        with code_events(maps._certify_fan_subtriangle.__code__,'call',enter):
+            with maps._closed_fan_steps(None) as step:
+                with maps._closed_fan_window(step):
+                    with counts(type(boundary)._validate.__code__) as guarded:
+                        result=fan(boundary,step)
     finally:
-        sys.monitoring.set_local_events(tool,maps._certify_fan_subtriangle.__code__,0)
-        sys.monitoring.free_tool_id(tool)
         for token in reversed(tokens):CURRENT_WORK.reset(token)
     assert tokens and result==expected and guarded[0]==strict[0]
 
@@ -286,27 +369,24 @@ def test_genuine_mid_fan_mutation_refuses_strict_and_active_closed(mutation):
             from anygeometry.nurbs import NurbsCurve
             changed=NurbsCurve(2,(0.,0.,0.,1.,1.,1.),((0.,0.),(.2,.8),(1.,1.)))
         value=changed.controls if mutation=='source' else changed._prepared
-        fired=[];tool=next(i for i in range(5,-1,-1) if sys.monitoring.get_tool(i) is None)
+        fired=[]
         def returned(*args):
             if not fired:
                 fired.append(maps._CLOSED_FAN_ACTIVE.get() is not None)
                 object.__setattr__(pcurve,attribute,value)
-        sys.monitoring.use_tool_id(tool,'mid-fan-source-mutation')
-        sys.monitoring.register_callback(tool,sys.monitoring.events.PY_RETURN,returned)
-        sys.monitoring.set_local_events(tool,maps._source_box.__code__,sys.monitoring.events.PY_RETURN)
         try:
-            with counts(type(boundary)._validate.__code__) as validations:
-                with pytest.raises(GeometryError) as caught:
-                    if closed:
-                        with maps._closed_fan_steps(None) as step:
-                            assert step is not None
-                            with maps._closed_fan_window(step):
-                                assert maps._closed_fan_step(step)
-                                fan(boundary,step)
-                    else:fan(boundary,lambda:False)
-                outcomes.append(type(caught.value));validation_counts.append(validations[0])
+            with code_events(maps._source_box.__code__,'return',returned):
+                with counts(type(boundary)._validate.__code__) as validations:
+                    with pytest.raises(GeometryError) as caught:
+                        if closed:
+                            with maps._closed_fan_steps(None) as step:
+                                assert step is not None
+                                with maps._closed_fan_window(step):
+                                    assert maps._closed_fan_step(step)
+                                    fan(boundary,step)
+                        else:fan(boundary,lambda:False)
+                    outcomes.append(type(caught.value));validation_counts.append(validations[0])
         finally:
-            sys.monitoring.set_local_events(tool,maps._source_box.__code__,0);sys.monitoring.free_tool_id(tool)
             object.__setattr__(pcurve,attribute,original)
         assert fired==[closed]
     assert outcomes==[GeometryError,GeometryError]

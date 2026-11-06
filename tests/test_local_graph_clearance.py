@@ -93,6 +93,7 @@ def test_unknown_initial_runtime_falls_back_and_changed_runtime_refuses(monkeypa
         monkeypatch.setattr(graph,'_derive',old);boundary.close()
 
 
+@pytest.mark.slow
 def test_saved_circle_pair_actual_local_field_uses_complete_graph_clearance():
     from test_nurbs_pair_public import model_pair
     from anygeometry.serialization import to_dict,from_dict

@@ -829,38 +829,20 @@ def _query_boundary_chords(model, regions, edge_intervals, *, expected_revision=
     source_faces = {chart.face.id: chart for region in regions.regions for chart in region.sources}
     if references is None:
         references = _sampling_references(model, regions)
+    chart_boxes = None
     plane_references = {face: pair[1] for face, pair in references.items()}
     frozen_curves = {} if frozen_curves is None else frozen_curves
     occurrence_curves = {}
     anchors = []
+    select_anchor = _sampling_anchor_choice(model, regions, check)
     for face_id, chart in sorted(source_faces.items()):
         check()
         if isinstance(chart.support, NurbsSurface):
             certify_projected_chart(chart.support, cancellation_check=lambda: (check() or False))
         elif not isinstance(chart.support, Plane):
             raise GeometryError('curvilinear source support immersion is not yet qualified')
-        anchor = None
-        anchor_box = ((Q(0), Q(1)), (Q(0), Q(1)))
-        if isinstance(chart.support, Plane):
-            boxes = [_uv_interval(chart.support, path.curve, Q(0), Q(1)) for loop in chart.boundaries for path in loop]
-            anchor_box = tuple((min(box[i][0] for box in boxes), max(box[i][1] for box in boxes)) for i in (0, 1))
-        for level in range(1, 6):
-            size = 2**level
-            for u, v in product(range(1, size, 2), repeat=2):
-                point = tuple(a+(b-a)*Q(k, size) for (a, b), k in zip(anchor_box, (u, v)))
-                try:
-                    inside = chart.domain.contains_loop(chart.boundaries[0], point, chart.world_tolerance, boundary=False)
-                    inside &= not any(chart.domain.contains_loop(loop, point, chart.world_tolerance, boundary=True)
-                                      for loop in chart.boundaries[1:])
-                except ChartContainmentUndecided:
-                    continue
-                if inside:
-                    anchor = tuple(map(float, point))
-                    break
-            if anchor is not None:
-                break
-        if anchor is None:
-            raise GeometryError('curvilinear source has no certified interior regular reference anchor')
+        chosen = select_anchor(face_id)
+        anchor = tuple(float(lo) for lo, hi in chosen)
         anchors.append((chart.face, anchor))
     intervals = []
     for handle, t0, t1 in input_rows:
@@ -919,7 +901,6 @@ def _query_boundary_chords(model, regions, edge_intervals, *, expected_revision=
             if face_id not in source_faces:
                 continue
             chart = source_faces[face_id]
-            from .nurbs_sweep_chart import has_sweep_chart
             occurrence_key = (face_id,handle.id)
             if occurrence_key not in occurrence_curves:
                 reference = plane_references[face_id]
@@ -928,13 +909,21 @@ def _query_boundary_chords(model, regions, edge_intervals, *, expected_revision=
                 # every sweep connector for every accepted dyadic interval.
                 owner = reference.owner if hasattr(reference,'owner') else reference.model
                 occurrence_curves[occurrence_key] = (owner.edges[handle.id].curve
-                    if has_sweep_chart(model.faces[face_id]) else curve)
+                    if owner is not model else curve)
             occurrence_curve = occurrence_curves[occurrence_key]
             uses = [use for loop in (model.faces[face_id].loop, *model.faces[face_id].holes)
                     for use in loop if use.edge == handle.id]
             if len(uses) != 1:
                 raise GeometryError('source boundary edge has ambiguous face occurrence')
-            boxes = tuple(_uv_box(chart.support, occurrence_curve, t) for t in (a, b))
+            if type(chart.support) is Plane and type(occurrence_curve) in (PlaneNurbsCurve,NurbsCurve,LinePath):
+                if chart_boxes is None:
+                    chart_boxes = _sampling_chart_boxes(model, regions, check)
+                boxes = tuple(chart_boxes(face_id, handle.id, t) for t in (a, b))
+            else:
+                # Preserve the original occurrence operands for families outside
+                # chart reuse. Entering the producer would construct a second
+                # reference set without reusing any arithmetic for these paths.
+                boxes = tuple(_uv_box(chart.support, occurrence_curve, t) for t in (a, b))
             from .regular_source_reference import source_node
             uv = []
             for t in (a, b):
@@ -958,6 +947,12 @@ def _query_boundary_chords(model, regions, edge_intervals, *, expected_revision=
         intervals.append(MaterialBoundaryChord(handle, (a, b), ((handle.id, a), (handle.id, b)), xyz,
                                                tuple(occurrences), world_error, _float_up(chart_error)))
     _check(cancellation_check, 'curvilinear boundary qualification complete')
+    arithmetic_variable, arithmetic_issuer = _sampling_arithmetic_variable()
+    arithmetic = arithmetic_variable.get()
+    if arithmetic is not arithmetic_issuer.get():
+        raise GeometryError('boundary sampling operation arithmetic issuer changed')
+    if arithmetic is not None:
+        arithmetic[1](final=True)
     # Callback mutation of evaluated private kernels is invisible to public
     # serialization. Validate them again after the last callback and before
     # any receipt is registered; legitimate cache fills are permitted.
@@ -1194,16 +1189,101 @@ def _sampling_arithmetic_variable(variable=_SAMPLING_ARITHMETIC,issuer=_SAMPLING
 
 
 def _sampling_arithmetic_context():
+    from . import plane_nurbs as accounting
     from .native_support_snapshots import capture_native_supports
-    from .arrangement_geometry import freeze_edge
+    from .arrangement_geometry import freeze_edge, LinePath
+    from .nurbs import NurbsCurve
     from .serialization import _qualified_model_state
+    producers=tuple(_sampling_producer_pin(f) for f in
+        (_sampling_terminal_arithmetic,_sampling_chart_boxes,_sampling_anchor_choice))
     return (_cell_reference_calculator_context(),tuple(_chord_function_pin(f) for f in
         (_cell_reference_calculator_context,_cell_reference_world_chord,
          _cell_reference_is_world_affine,_world_chord,_parameterized_world_chord,
          _sampling_bound_arithmetic,_sampling_terminal_arithmetic,
+         _sampling_box_arithmetic,_sampling_chart_boxes,_sampling_box_operand,
+         _sampling_anchor_arithmetic,_sampling_anchor_eligible,_sampling_anchor_context,
+         _sampling_anchor_choice,
+         _sampling_work_frontier,_sampling_work_context,_sampling_guarded_work,_sampling_producer_pin,
+         _uv_box,_charged_bounds,_box_corners,
          _new_sampling_arithmetic,_sampling_arithmetic_context,_sampling_arithmetic_variable,
          _sampling_arithmetic_producer,_sampling_references,_current,_checksum,
-         capture_native_supports,freeze_edge,_qualified_model_state)))
+         capture_native_supports,freeze_edge,_qualified_model_state)),
+        (Q,Plane,PlaneNurbsCurve,NurbsCurve,LinePath,accounting.CURRENT_WORK,
+         *(_chord_function_pin(cls.bounds) for cls in (PlaneNurbsCurve,NurbsCurve,LinePath))),
+        producers,_sampling_work_context())
+
+
+def _sampling_work_context():
+    """Finite owner Work bindings read by the arithmetic frontier, without hooks."""
+    from .section_audit import Work
+    from types import FunctionType
+    rows=[]
+    for cls,names in ((Work,('__init__','take')),(_SamplingWork,('__init__','guard','take'))):
+        if type(cls) is not type:
+            raise GeometryError('boundary sampling work class changed')
+        namespace=type.__getattribute__(cls,'__dict__')
+        functions=[]
+        for name in names:
+            function=namespace.get(name)
+            if type(function) is not FunctionType:
+                raise GeometryError('boundary sampling work method changed')
+            functions.append((name,_chord_function_pin(function)))
+        descriptors=[]
+        for name in ('boxes','subdivisions','max_boxes','max_depth','max_newton_iterations',
+                     'local','parent','__getattribute__','__getattr__','__setattr__'):
+            value=namespace.get(name)
+            accessors=(() if type(value) is not property else tuple(
+                None if f is None else _chord_function_pin(f) for f in (value.fget,value.fset)))
+            descriptors.append((name,id(value),accessors))
+        rows.append((id(cls),tuple(id(base) for base in type.__getattribute__(cls,'__mro__')),
+                     tuple(functions),tuple(descriptors)))
+    return tuple(rows)
+
+
+def _sampling_producer_pin(function):
+    from types import FunctionType
+    if type(function) is not FunctionType:
+        raise GeometryError('boundary sampling arithmetic producer type changed')
+    return (_chord_function_pin(function),tuple((name,id(cell.cell_contents))
+        for name,cell in zip(function.__code__.co_freevars,function.__closure__ or ())))
+
+
+def _sampling_work_frontier():
+    """Do not return a retained result after an already exhausted owned allowance."""
+    from .plane_nurbs import CURRENT_WORK, PlaneNurbsNotCertified
+    from .section_audit import Work
+    _sampling_work_context()
+    work = CURRENT_WORK.get()
+    while work is not None:
+        if type(work) is _SamplingWork:
+            work.guard()
+            local, parent = work.local, work.parent
+        elif type(work) is Work:
+            local, parent = work, None
+        else:
+            # Preserve the original builder path for an unknown enclosing
+            # accounting protocol; it cannot acquire a retained arithmetic hit.
+            return False
+        if type(local.boxes) is not int or type(local.max_boxes) is not int:
+            raise GeometryError('boundary sampling work counters changed')
+        if local.boxes > local.max_boxes:
+            raise PlaneNurbsNotCertified('qualification budget exhausted')
+        work = parent
+    return True
+
+
+def _sampling_guarded_work(work):
+    context_function=_sampling_work_context
+    context_code=context_function.__code__
+    context=context_function()
+    guard=object.__getattribute__(work,'guard')
+    def checked():
+        if (_sampling_work_context is not context_function
+                or context_function.__code__ is not context_code
+                or context_function()!=context):
+            raise GeometryError('boundary sampling work calculator context changed')
+        return guard()
+    return checked
 
 
 def _new_sampling_arithmetic():
@@ -1211,10 +1291,22 @@ def _new_sampling_arithmetic():
     # namespace. Generic caller scratch cannot seed this producer's keys.
     rows, sources = {}, {}
     expected = _sampling_arithmetic_context()
+    expected_anchor = _sampling_anchor_context()
+    anchor_used = False
     closed = False
-    def guard():
-        if closed or _sampling_arithmetic_context() != expected:
+    def guard(*,anchor=False,final=False):
+        nonlocal anchor_used
+        if type(anchor) is not bool or type(final) is not bool:
+            raise GeometryError('boundary sampling arithmetic guard selection changed')
+        if closed:
             raise GeometryError('boundary sampling operation arithmetic context changed')
+        if anchor or (final and anchor_used):
+            if _sampling_anchor_context() != expected_anchor:
+                raise GeometryError('boundary sampling anchor calculator context changed')
+        if _sampling_arithmetic_context() != expected:
+            raise GeometryError('boundary sampling operation arithmetic context changed')
+        if anchor:
+            anchor_used = True
     def access(namespace,model,epoch,key,error,builder):
         guard()
         source_key = namespace,id(model)
@@ -1227,16 +1319,26 @@ def _new_sampling_arithmetic():
             sources[source_key] = model,epoch
         cache_key = namespace,id(model),key
         result = rows.get(cache_key)
-        if result is not None and result[0] <= error:
+        if result is not None and (error is None or result[0] <= error):
             guard()
             return result
         result = builder()
         guard()
         # Only completed successful arithmetic enters the bank. Refusals and
         # counters are never cached; tighter error requests recompute normally.
-        value = Q(result[0]),tuple(tuple(map(Q,piece)) for piece in result[1])
-        if value[0] > error:
-            raise GeometryError('boundary sampling arithmetic exceeds requested error')
+        if error is None:
+            # Exact chart boxes have no requested approximation error. This is
+            # a distinct closed producer namespace, never a zero-residual claim.
+            if (type(result) is not tuple or len(result)!=2 or any(
+                    type(pair) is not tuple or len(pair)!=2 or
+                    any(type(x) not in (int,Q) for x in pair) or pair[0]>pair[1]
+                    for pair in result)):
+                raise GeometryError('boundary sampling chart arithmetic box is malformed')
+            value = tuple(tuple(map(Q,pair)) for pair in result)
+        else:
+            value = Q(result[0]),tuple(tuple(map(Q,piece)) for piece in result[1])
+            if value[0] > error:
+                raise GeometryError('boundary sampling arithmetic exceeds requested error')
         if len(rows) >= 4096:
             rows.clear()  # bounded eviction is only a safe miss, not a new Work allowance
         rows[cache_key] = value
@@ -1254,7 +1356,10 @@ def _new_sampling_arithmetic():
     return (*functions,tuple(_chord_function_pin(f) for f in functions)),cleanup
 
 
-def _sampling_arithmetic_producer(builder):
+def _sampling_arithmetic_producer(builder, *, chart_boxes=False, anchor_choice=False):
+    if (type(chart_boxes) is not bool or type(anchor_choice) is not bool
+            or (chart_boxes and anchor_choice)):
+        raise GeometryError('boundary sampling arithmetic producer selection changed')
     namespace = object()
     def start(model,regions,check):
         from .native_support_snapshots import capture_native_supports
@@ -1264,20 +1369,35 @@ def _sampling_arithmetic_producer(builder):
         state = variable.get()
         if state is not issuer.get():
             raise GeometryError('boundary sampling operation arithmetic issuer changed')
+        if state is not None and anchor_choice:
+            if tuple(_chord_function_pin(f) for f in state[:3]) != state[3]:
+                raise GeometryError('boundary sampling arithmetic producer calculator changed')
+            state[1](anchor=True)
         context = _sampling_arithmetic_context()
-        if state is not None:
+        if state is not None and not anchor_choice:
             state[1]()
+        from . import plane_nurbs as accounting
+        work_variable = accounting.CURRENT_WORK
+        work = work_variable.get()
         checksum,region_signature = _current(model,regions,model.revision,None)
         epoch = model.revision,checksum,capture_native_supports(model)
         references,curves = None,{}
         def live():
+            if state is not None and anchor_choice:
+                if (variable.get() is not state or issuer.get() is not state
+                        or tuple(_chord_function_pin(f) for f in state[:3]) != state[3]):
+                    raise GeometryError('boundary sampling arithmetic producer calculator changed')
+                state[1](anchor=True)
             if (variable.get() is not state or issuer.get() is not state
                     or _sampling_arithmetic_context()!=context):
                 raise GeometryError('boundary sampling arithmetic producer context changed')
+            if accounting.CURRENT_WORK is not work_variable or work_variable.get() is not work:
+                raise GeometryError('boundary sampling arithmetic work context changed')
             if state is not None:
                 if tuple(_chord_function_pin(f) for f in state[:3]) != state[3]:
                     raise GeometryError('boundary sampling arithmetic producer calculator changed')
-                state[1]()
+                if not anchor_choice:
+                    state[1]()
             # This is an unpublished numerical read window, not receipt
             # qualification. Entry qualified native/runtime state; every actual
             # ordinary external callback is bracketed by _pinned_callback before
@@ -1289,6 +1409,72 @@ def _sampling_arithmetic_producer(builder):
                 raise GeometryError('boundary sampling arithmetic producer source changed')
             _qualified_model_state(model,expected_checksum=epoch[1],
                 changed_message='boundary sampling arithmetic producer source changed')
+        if anchor_choice:
+            def anchor(face_id):
+                if type(face_id) is not int:
+                    raise GeometryError('boundary sampling anchor requires an owned face identifier')
+                if state is not None:
+                    if (variable.get() is not state or issuer.get() is not state
+                            or tuple(_chord_function_pin(f) for f in state[:3]) != state[3]):
+                        raise GeometryError('boundary sampling arithmetic producer calculator changed')
+                    state[1](anchor=True)
+                check()
+                if state is not None:
+                    if (variable.get() is not state or issuer.get() is not state
+                            or tuple(_chord_function_pin(f) for f in state[:3]) != state[3]):
+                        raise GeometryError('boundary sampling arithmetic producer calculator changed')
+                    state[1](anchor=True)
+                live()
+                reuse = _sampling_work_frontier()
+                # Match _query_boundary_chords' original last-occurrence
+                # resolution; repeated source charts are not a new refusal.
+                charts = {chart.face.id: chart for region in regions.regions for chart in region.sources}
+                if face_id not in charts:
+                    raise GeometryError('boundary sampling anchor has no source occurrence')
+                chart = charts[face_id]
+                # The selected dyadic PARAMETER point is stored in the existing
+                # strict 2D-box schema. It is not a world-error/proof encoding.
+                def calculate():
+                    return builder(chart)
+                if state is None or not reuse or not _sampling_anchor_eligible(chart):
+                    value = calculate()
+                else:
+                    state[1](anchor=True)
+                    policy = None if work is None else (work.max_depth,getattr(work,'max_newton_iterations',None))
+                    key = region_signature,face_id,definition_checksum(chart),policy
+                    value = state[0](namespace,model,epoch,key,None,calculate)
+                    state[1](anchor=True)
+                check();live();_sampling_work_frontier()
+                return value
+            return anchor
+        if chart_boxes:
+            def box(face_id,edge_id,parameter):
+                nonlocal references
+                if type(face_id) is not int or type(edge_id) is not int or type(parameter) not in (int,float,Q):
+                    raise GeometryError('boundary sampling chart operands are unsupported')
+                try:
+                    t=Q(parameter)
+                    if not 0<=t<=1 or Q(float(t))!=t:raise ValueError
+                except (ValueError,OverflowError):
+                    raise GeometryError('boundary sampling chart station is not canonical') from None
+                check();live()
+                reuse = _sampling_work_frontier()
+                if references is None:
+                    references = _sampling_references(model,regions)
+                support,curve = _sampling_box_operand(model,references,face_id,edge_id,curves)
+                from .arrangement_geometry import LinePath
+                from .nurbs import NurbsCurve
+                # Initially reuse only these source-owned Plane enclosure paths.
+                # Other original chart families keep their actual builder path.
+                eligible = type(support) is Plane and type(curve) in (PlaneNurbsCurve,NurbsCurve,LinePath)
+                key = region_signature,face_id,edge_id,t
+                def calculate():
+                    return builder(support,curve,t)
+                value = (calculate() if state is None or not reuse or not eligible else
+                    state[0](namespace,model,epoch,key,None,calculate))
+                check();live();_sampling_work_frontier()
+                return value
+            return box
         def evaluate(edge_id,a,b,endpoints,error,measure):
             nonlocal references
             if type(edge_id) is not int or type(measure) is not str or measure not in (
@@ -1307,6 +1493,7 @@ def _sampling_arithmetic_producer(builder):
             # source reference, curve or proof-family argument can seed a row.
             key=region_signature,measure,edge_id,a,b,endpoints
             check();live()
+            reuse = _sampling_work_frontier()
             def calculate():
                 nonlocal references
                 if references is None:
@@ -1316,9 +1503,9 @@ def _sampling_arithmetic_producer(builder):
                 def frontier():
                     check()
                 return builder(model,references,edge_id,a,b,endpoints,error,frontier,curves[edge_id],measure)
-            value=(calculate() if state is None else
+            value=(calculate() if state is None or not reuse else
                 state[0](namespace,model,epoch,key,Q(error),calculate))
-            check();live()
+            check();live();_sampling_work_frontier()
             return value
         return evaluate
     return start
@@ -1332,6 +1519,156 @@ def _sampling_bound_arithmetic(model,references,edge_id,a,b,endpoints,error,chec
 
 
 _sampling_terminal_arithmetic = _sampling_arithmetic_producer(_sampling_bound_arithmetic)
+
+
+def _sampling_box_operand(model,references,face_id,edge_id,curves):
+    if face_id not in references or face_id not in model.faces_using_edge(edge_id):
+        raise GeometryError('boundary sampling chart has no selected source occurrence')
+    key = face_id,edge_id
+    if key not in curves:
+        from .arrangement_geometry import freeze_edge
+        support,reference = references[face_id]
+        owner = reference.owner if hasattr(reference,'owner') else reference.model
+        curves[key] = (support,owner.edges[edge_id].curve if owner is not model else freeze_edge(model,edge_id))
+    return curves[key]
+
+
+def _sampling_box_arithmetic(support,curve,parameter):
+    return _uv_box(support,curve,parameter)
+
+
+_sampling_chart_boxes = _sampling_arithmetic_producer(_sampling_box_arithmetic,chart_boxes=True)
+
+
+def _sampling_anchor_arithmetic(chart):
+    """Original deterministic search; return an exact parameter point only."""
+    from .nurbs_domain import ChartContainmentUndecided
+    anchor = None
+    anchor_box = ((Q(0), Q(1)), (Q(0), Q(1)))
+    if isinstance(chart.support, Plane):
+        boxes = [_uv_interval(chart.support, path.curve, Q(0), Q(1)) for loop in chart.boundaries for path in loop]
+        anchor_box = tuple((min(box[i][0] for box in boxes), max(box[i][1] for box in boxes)) for i in (0, 1))
+    for level in range(1, 6):
+        size = 2**level
+        for u, v in product(range(1, size, 2), repeat=2):
+            point = tuple(a+(b-a)*Q(k, size) for (a, b), k in zip(anchor_box, (u, v)))
+            try:
+                inside = chart.domain.contains_loop(chart.boundaries[0], point, chart.world_tolerance, boundary=False)
+                inside &= not any(chart.domain.contains_loop(loop, point, chart.world_tolerance, boundary=True)
+                                  for loop in chart.boundaries[1:])
+            except ChartContainmentUndecided:
+                continue
+            if inside:
+                anchor = point
+                break
+        if anchor is not None:
+            break
+    if anchor is None:
+        raise GeometryError('curvilinear source has no certified interior regular reference anchor')
+    return tuple((value,value) for value in anchor)
+
+
+def _sampling_anchor_eligible(chart):
+    from .trimmed_charts import TrimmedSurfaceChart
+    from .material_arrangement import MaterialDomain,ArrangementPath
+    return (type(chart) is TrimmedSurfaceChart and type(chart.support) is NurbsSurface
+        and type(chart.domain) is MaterialDomain and type(chart.boundaries) is tuple
+        and bool(chart.boundaries) and all(type(loop) is tuple and bool(loop) and all(
+            type(path) is ArrangementPath and type(path.curve) is PlaneNurbsCurve
+            and path.curve.surface == chart.support for path in loop) for loop in chart.boundaries))
+
+
+def _sampling_anchor_context():
+    """Finite owner numerical slice, including actual global dispatch bindings."""
+    from types import FunctionType, ModuleType
+    import sys
+    # Reject unknown loaded metadata providers before import/from attribute reads.
+    names = ('nurbs_domain','nurbs_section_faces','branch_predicates','support_curves',
+             'surface_capabilities','material_arrangement','section_chart','trimmed_charts')
+    registered = sys.modules
+    if type(registered) is not dict or any(
+            type(dict.__getitem__(registered,__package__+'.'+name)) is not ModuleType
+            for name in names if dict.__contains__(registered,__package__+'.'+name)):
+        raise GeometryError('boundary sampling anchor calculator context changed')
+    from . import nurbs_domain, nurbs_section_faces, branch_predicates, support_curves
+    from . import surface_capabilities, material_arrangement, section_chart, trimmed_charts
+    owners = (nurbs_domain,nurbs_section_faces,branch_predicates,support_curves,
+              surface_capabilities,material_arrangement,section_chart,trimmed_charts)
+    if any(type(owner) is not ModuleType for owner in owners):
+        raise GeometryError('boundary sampling anchor calculator context changed')
+    owner_namespaces = tuple(ModuleType.__getattribute__(owner,'__dict__') for owner in owners)
+    if any(type(namespace) is not dict or any(type(name) is not str
+            for name in dict.keys(namespace)) for namespace in owner_namespaces):
+        raise GeometryError('boundary sampling anchor calculator context changed')
+    modules = (nurbs_domain,nurbs_section_faces,branch_predicates,support_curves,surface_capabilities)
+    functions = []
+    for owner in modules:
+        namespace = ModuleType.__getattribute__(owner,'__dict__')
+        if type(namespace) is not dict or any(type(name) is not str for name in dict.keys(namespace)):
+            raise GeometryError('boundary sampling anchor calculator context changed')
+        functions.extend((owner,name,value) for name,value in dict.items(namespace)
+                         if type(value) is FunctionType and value.__globals__ is namespace)
+
+    def pin(function):
+        # Identity-first pairs retain the old objects without comparing any
+        # default/keyword/global payload, including signed-zero tuples.
+        if type(function) is not FunctionType:
+            raise GeometryError('boundary sampling anchor calculator context changed')
+        code,defaults,keywords,namespace = (function.__code__,function.__defaults__,
+            function.__kwdefaults__,function.__globals__)
+        if ((defaults is not None and type(defaults) is not tuple)
+                or (keywords is not None and type(keywords) is not dict)
+                or type(namespace) is not dict or any(type(key) is not str for key in code.co_names)):
+            raise GeometryError('boundary sampling anchor calculator context changed')
+        if keywords is not None and any(type(key) is not str for key in dict.keys(keywords)):
+            raise GeometryError('boundary sampling anchor calculator context changed')
+        items = (() if keywords is None else tuple((key,id(dict.__getitem__(keywords,key)),
+            dict.__getitem__(keywords,key)) for key in sorted(dict.keys(keywords))))
+        bindings = tuple((key,id(dict.__getitem__(namespace,key)),dict.__getitem__(namespace,key))
+            for key in code.co_names if dict.__contains__(namespace,key))
+        return (id(function),function,id(code),code,id(defaults),defaults,
+                id(keywords),keywords,items,id(namespace),namespace,bindings)
+    classes = (dict.__getitem__(owner_namespaces[5],'MaterialDomain'),
+               dict.__getitem__(owner_namespaces[1],'_Chart'),
+               dict.__getitem__(owner_namespaces[2],'_Arc'),PlaneNurbsCurve,
+               dict.__getitem__(owner_namespaces[6],'SectionChart'),
+               dict.__getitem__(owner_namespaces[4],'SurfaceCapabilities'),
+               dict.__getitem__(owner_namespaces[4],'JacobianBounds'),
+               dict.__getitem__(owner_namespaces[7],'TrimmedSurfaceChart'))
+    if any(type(cls) is not type for cls in classes):
+        raise GeometryError('boundary sampling anchor calculator context changed')
+    # Keep the raw bindings alive and compare identity BEFORE the object.
+    # A new descriptor is not invoked, and its __eq__ cannot participate.
+    namespaces = []
+    for cls in classes:
+        namespace = type.__getattribute__(cls,'__dict__')
+        if any(type(name) is not str for name in namespace):
+            raise GeometryError('boundary sampling anchor calculator context changed')
+        namespaces.append((id(cls),cls,tuple((name,id(namespace[name]),namespace[name])
+            for name in sorted(namespace))))
+    methods = []
+    for cls in classes:
+        for name,value in type.__getattribute__(cls,'__dict__').items():
+            if type(value) in (staticmethod,classmethod):
+                value = value.__func__
+                if type(value) is not FunctionType:
+                    raise GeometryError('boundary sampling anchor calculator context changed')
+            elif type(value) is not FunctionType:
+                continue
+            methods.append((cls,name,value))
+    rows = []
+    for owner,name,function in (*functions,*methods):
+        rows.append((id(owner),owner,name,pin(function)))
+    own = (_sampling_anchor_arithmetic,_sampling_anchor_eligible,_sampling_anchor_context)
+    properties = tuple((cls,name,id(value),tuple(None if f is None else
+        pin(f)
+        for f in (value.fget,value.fset,value.fdel)))
+        for cls in classes for name,value in vars(cls).items() if type(value) is property)
+    return (tuple(namespaces),tuple(rows),tuple((id(cls),cls) for cls in classes),
+            tuple(pin(f) for f in own),properties)
+
+
+_sampling_anchor_choice = _sampling_arithmetic_producer(_sampling_anchor_arithmetic,anchor_choice=True)
 
 
 class _SamplingWork:
@@ -1445,7 +1782,7 @@ def prepared_material_boundary_sampling_operation(*, qualification=None):
     """
     from .plane_nurbs import CURRENT_WORK
     work = _sampling_worker(_sampling_policy(qualification))
-    guard = work.guard
+    guard = _sampling_guarded_work(work)
     pin = _chord_function_pin
     def runtime():
         from .section_audit import Work
@@ -1470,7 +1807,7 @@ def prepared_material_boundary_sampling_operation(*, qualification=None):
                 or arithmetic_variable.get() is not arithmetic or arithmetic_issuer.get() is not arithmetic
                 or tuple(pin(f) for f in arithmetic[:3]) != arithmetic[3]):
             raise GeometryError('boundary sampling operation arithmetic identity or calculator changed')
-        arithmetic[1]()
+        arithmetic[1](final=True)
     except BaseException as error:
         failure = error
         try:
@@ -1562,7 +1899,7 @@ def _query_boundary_sampling(model, regions, edge_parameters, chord_error, expec
     if arithmetic is not arithmetic_issuer.get():
         raise GeometryError('boundary sampling operation arithmetic issuer changed')
     from .plane_nurbs import CURRENT_WORK
-    work_guard = work.guard
+    work_guard = _sampling_guarded_work(work)
     work_context = tuple(pin(f) for f in (_SamplingWork, _SamplingWork.guard,
         _SamplingWork.take, _SamplingWork.subdivisions.fset, _sampling_worker))
     def context_guard():
@@ -1573,7 +1910,7 @@ def _query_boundary_sampling(model, regions, edge_parameters, chord_error, expec
         if arithmetic is not None:
             if tuple(pin(f) for f in arithmetic[:3]) != arithmetic[3]:
                 raise GeometryError('boundary sampling operation arithmetic calculator changed')
-            arithmetic[1]()
+            arithmetic[1](final=True)
         if CURRENT_WORK.get() is not work or tuple(pin(f) for f in (
                 _SamplingWork, _SamplingWork.guard, _SamplingWork.take,
                 _SamplingWork.subdivisions.fset, _sampling_worker)) != work_context:

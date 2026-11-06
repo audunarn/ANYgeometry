@@ -853,7 +853,7 @@ def prepare_local_boundary_limit_query(prepared,allocation):
 
         from .prepared_material_curvilinear import _uv_interval
 
-        from .nurbs_sweep_chart import has_sweep_chart,chart_model
+        from .source_cell_complex import _support_owner
 
         values=[];records=[]
 
@@ -865,9 +865,13 @@ def prepare_local_boundary_limit_query(prepared,allocation):
 
         for face in incident:
 
-            curve=(chart_model(prepared,face).edges[edge].curve if has_sweep_chart(prepared.faces[face])
+            view=_support_owner(prepared,face)
 
-                   else freeze_edge(prepared,edge))
+            # Only the UV footprint uses this qualified, read-only source view.
+
+            # Actual world boundaries and their transport errors remain unchanged.
+
+            curve=view.edges[edge].curve if view is not prepared else freeze_edge(prepared,edge)
 
             box=_uv_interval(charts[face].support,curve,a,b)
 

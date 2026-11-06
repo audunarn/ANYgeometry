@@ -5,7 +5,17 @@ from pathlib import Path
 import shutil
 import sys
 import platform
+import tomllib
 from check_compatibility import Runner,identity,wheel_metadata
+
+
+def expected_artifact_versions(*, baseline):
+    if baseline:
+        return {'geometry':'0.4.3','mesher':'0.5.0','fem':'0.4.1'}
+    project=Path(__file__).resolve().parents[1]/'pyproject.toml'
+    with project.open('rb') as stream:
+        version=tomllib.load(stream)['project']['version']
+    return {'geometry':version,'mesher':'0.5.1','fem':'0.4.1'}
 
 
 def main():
@@ -27,12 +37,11 @@ def main():
     if root.exists() or any((parent/'.git').exists() for parent in (root,*root.parents)):
         parser.error('output must be new and outside all source checkouts')
     artifacts={name:getattr(args,name).resolve(strict=True) for name in ('geometry','mesher','fem')}
+    versions=expected_artifact_versions(baseline=args.baseline)
     for name,expected in (('geometry','anygeometry'),('mesher','anymesher'),('fem','anyfem')):
         if wheel_metadata(artifacts[name])[0]!=expected:
             parser.error('incorrect '+name+' candidate artifact')
         version=wheel_metadata(artifacts[name])[1]
-        versions={'geometry':'0.4.3' if args.baseline else '0.4.5',
-                  'mesher':'0.5.0' if args.baseline else '0.5.1','fem':'0.4.1'}
         if version!=versions[name]:
             parser.error('unexpected '+name+' artifact version: '+version)
     if args.baseline and identity(artifacts['geometry'])['sha256'].lower()!='6ab8f398de8ad1cc19b5c0d70a9787e1a15d3f5253c1125134eeb5050ec4b8b5':

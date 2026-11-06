@@ -8,8 +8,10 @@ are maintained in [dependency-licenses.json](dependency-licenses.json).
 | Dependency | Declared requirement | Purpose | Upstream | License | Bundled |
 |---|---|---|---|---|---|
 | NumPy | `numpy>=1.26` | Runtime numerical arrays | https://numpy.org/ | BSD-3-Clause and permissive component licenses | No |
+| psutil | `psutil>=5.9` | Runtime process resource monitoring | https://github.com/giampaolo/psutil | BSD-3-Clause | No |
+| threadpoolctl | `threadpoolctl>=3.1` | Runtime native thread-pool limits | https://github.com/joblib/threadpoolctl | BSD-3-Clause | No |
 | Shapely | `shapely>=2.0` | Optional planar operations | https://shapely.readthedocs.io/ | BSD-3-Clause | No |
-| SciPy | `scipy>=1.13` | Optional sketch operations | https://scipy.org/ | BSD-3-Clause; installed wheels carry separate bundled-component notices | No |
+| SciPy | `scipy>=1.13` | Optional sketch extra (sketch solving) | https://scipy.org/ | BSD-3-Clause | No |
 | mpmath | `mpmath>=1.3` | Optional test extra (CH3 reference values; never a runtime dependency) | https://mpmath.org/ | BSD-3-Clause | No |
 | setuptools | `setuptools>=77.0.3` | Build backend | https://github.com/pypa/setuptools | MIT | No |
 | wheel | `wheel` | Wheel build support | https://github.com/pypa/wheel | MIT | No |

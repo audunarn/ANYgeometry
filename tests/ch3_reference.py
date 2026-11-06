@@ -30,6 +30,42 @@ mp.mp.dps = 30
 _NODES = {}
 
 
+def _quadratic_roots(a, b, c):
+    """Roots of ``a*x**2+b*x+c`` without iterative convergence or cancellation.
+
+    Work at the caller's precision plus the same 60 guard *bits* previously
+    given to polyroots. Choose the larger of b +/- sqrt(b*b-4*a*c) for q;
+    q/a gives one root and Viete's product gives c/q without subtracting
+    nearly equal numbers. This also works for complex coefficients/roots.
+    Exact zero tests handle degree reduction; no discriminant or imaginary
+    part is clamped. A zero polynomial has no finite complete root set.
+    """
+    with mp.extraprec(60):
+        a, b, c = (mp.mpmathify(value) for value in (a, b, c))
+        if not all(mp.isfinite(value) for value in (a, b, c)):
+            raise ValueError('quadratic coefficients must be finite')
+        if a == 0:
+            if b == 0:
+                if c == 0:
+                    raise ValueError('zero polynomial has no finite complete root set')
+                roots = []
+            else:
+                roots = [-c / b]
+        elif c == 0:
+            roots = [mp.mpf(0), -b / a]
+        else:
+            # Common scaling keeps products moderate without changing roots.
+            scale = max(abs(a), abs(b), abs(c))
+            a, b, c = a / scale, b / scale, c / scale
+            discriminant_root = mp.sqrt(b * b - 4 * a * c)
+            plus, minus = b + discriminant_root, b - discriminant_root
+            q = -(plus if abs(plus) >= abs(minus) else minus) / 2
+            roots = [q / a, c / q]
+        roots.sort(key=lambda value: (abs(mp.im(value)), mp.re(value)))
+    # Match polyroots: round only after restoring the caller's context.
+    return [+root for root in roots]
+
+
 def _gl(order: int):
     if order not in _NODES:
         x, w = np.polynomial.legendre.leggauss(order)
@@ -106,7 +142,7 @@ class Hull:
         """The ``u`` in [0, 1] with ``x(u, z) = x`` (``x`` increases with ``u``)."""
         nx, _ny, w = self.coeffs(z)
         q = [nx[0] - x * w[0], nx[1] - x * w[1], nx[2] - x * w[2]]
-        roots = mp.polyroots(q[::-1], maxsteps=200, extraprec=60)
+        roots = _quadratic_roots(q[2], q[1], q[0])
         good = [r.real for r in roots if abs(r.imag) < mp.mpf(10) ** -20 and -mp.mpf(10) ** -20 <= r.real <= 1]
         assert len(good) == 1, (z, x, roots)
         return good[0]
@@ -148,7 +184,7 @@ class Hull:
         q = [a * nx[e] + b * sign * ny[e] - c * w[e] for e in range(3)]
         if q[2] == 0 and q[1] == 0:
             return []
-        roots = [-q[0] / q[1]] if q[2] == 0 else mp.polyroots(q[::-1], maxsteps=200, extraprec=60)
+        roots = [-q[0] / q[1]] if q[2] == 0 else _quadratic_roots(q[2], q[1], q[0])
         out = []
         for r in roots:
             if abs(mp.im(r)) > mp.mpf(10) ** -20:

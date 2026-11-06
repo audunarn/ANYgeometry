@@ -12,10 +12,11 @@ import functools
 import heapq
 import itertools
 import math
+from contextlib import nullcontext
 import numpy as np
 
 from .arrangement_geometry import (LinePath, BezierPath, curve_junctions,
-                                   plane_roots, point_parameters, freeze_edge)
+                                   plane_roots, point_parameters, freeze_edge, _junction_bounds_policy)
 from .exact_curves import EllipticArc, CylinderIntersectionCurve
 from .branch_curves import BezierQuadricCurve
 from .quadric_curves import QuadricIntersectionCurve
@@ -32,6 +33,199 @@ from .nurbs import NurbsSurface
 from . import nurbs_domain
 
 _EPS = float(np.finfo(float).eps)
+
+# Domain of the T2-0 vertex-junction rule (contract decision, 2026-10-29).
+#
+# MaterialDomain.contains_loop (and its exact replicas) count a ray crossing at a boundary vertex that
+# no start root owns (_unowned_junction_crossing). That rule is certified only in a narrow domain; in
+# every other case contains_loop is the parent rule (2608332) bit for bit, with no new refusal:
+#   (a) the loop's curves are LinePath or EllipticArc;
+#   (b) the support is a Plane whose chart [u v] has condition number sigma_max / sigma_min <= 16, i.e.
+#       |u|^2 + |v|^2 <= (16 + 1/16) |u x v| (sin(u, v) >= 1/8.03, |u| / |v| within [1/16, 16]), with
+#       max |u_i|, max |v_i| in [2^-128, 2^128] (no overflow or underflow in the test or the chart); or a
+#       Cylinder whose loop is seam-free (_cylinder_loop_admitted: every curve keeps half the radius from
+#       the axis, every curve's angle path stays a margin away from the chart's cut and does not wrap,
+#       and the full-turn endpoint period shift of MaterialDomain.uv is inert); and the scale (support
+#       origin, curve coordinates, parametric speeds and angular phases, the Cylinder's angle arithmetic;
+#       exact bounds for lines and arcs) satisfies scale * K * eps <= tol / M with K = 128, M = 16:
+#       scale <= tol / (2048 eps), 2199 for tol = 1e-9 (tripod: largest scale 105, 20.9x inside), tol in [2^-128, 2^64];
+#   (c) for the query: finite chart coordinates whose world reach (|u| |u_vector| + ..., on a Cylinder
+#       |v| |height|) is at most 2^32 loop scales (so the level offset and root constraints stay finite), on a
+#       Cylinder an angle the margin away from the cut, and
+#       no curve has two roots in one 8-eps end window and no junction has roots strictly inside both its
+#       8-eps windows (an apex/spike) (_window_roots_ambiguous).
+# Why: roots within 128 eps of an in-band end are snapped and roots within 8 eps of an end are junction
+# roots; a window of w eps moves a crossing by w eps times the parametric speed. Under (b) the widest
+# window moves it by at most tol / 16 and chart rounding (a few eps times the condition number times the
+# scale) stays below tol / 32, so a window root lies at an in-band vertex and the rule's crossing location
+# is exact to the tolerance. Inside the domain the rule therefore keeps the parent's ray-crossing and
+# containment semantics, and corrects them only where the parent loses a vertex crossing; it does NOT
+# promise Euclidean tolerance-band membership: the boundary test (boundary=True) is the parent's
+# ray-based one (review R7 P3, a known policy pinned in the tests). Clause (c) is decided by one predicate,
+# MaterialDomain._junction_rule_applies_to, on every route (float, exact straight, exact curved, the
+# arrangement's hole-owner test), so a query outside the reach takes the parent path on all of them. Outside (b) the reviews found wrong answers of the rule (L = 1e8, a sampled
+# Bezier scale, an ill-conditioned chart, a seam-period mix, a 1e12 arc phase, an overflowing chart
+# test); the parent rule's own limits there are kept and documented (tests/test_material_domain_vertex_ray.py,
+# KNOWN LIMITS). The closure audit (every quantity feeding a decision and its bound) is
+# redesign/T20-DOMAIN-AUDIT.md in the T2-0 work folder.
+_FLOAT_RAY_BAND = 128
+_FLOAT_RAY_MARGIN = 16
+_CHART_CONDITION = 16
+_MAGNITUDE_RANGE = (2.**-128, 2.**128)       # chart vectors, Cylinder radius and height
+_TOLERANCE_RANGE = (2.**-128, 2.**64)
+_QUERY_REACH = 2.**32                        # a query coordinate may lie this many loop scales from the origin
+_ADMISSION_ERRORS = (ArithmeticError, ValueError, TypeError)     # any of these in the admission: outside the domain
+
+
+def float_ray_scale_trusted(scale, tolerance) -> bool:
+    """Whether ``scale`` is inside the junction rule's scale bound at this world tolerance (False on NaN)."""
+    try:
+        tolerance = float(tolerance)
+        return bool(_TOLERANCE_RANGE[0] <= tolerance <= _TOLERANCE_RANGE[1]
+                    and float(scale) * (_FLOAT_RAY_BAND * _FLOAT_RAY_MARGIN * _EPS) <= tolerance)
+    except _ADMISSION_ERRORS:
+        return False        # unrepresentable in a float: outside the domain, never an error (review R6 P2-1)
+
+
+def _in_magnitude_range(value) -> bool:
+    return _MAGNITUDE_RANGE[0] <= value <= _MAGNITUDE_RANGE[1]      # False on NaN and inf
+
+
+def _plane_chart_conditioned(u_vector, v_vector) -> bool:
+    """Whether the Plane chart [u v] has condition number <= _CHART_CONDITION (False on NaN or inf).
+
+    The largest components of u and v must lie in [2^-128, 2^128]: then |u|^2 + |v|^2 and u x v neither
+    overflow nor lose relative accuracy to underflow (review R5: an unscaled 1e100 chart overflowed the
+    norm to inf and passed), and the test's own rounding (a few eps, relative) is immaterial to the bound.
+    """
+    u, v = np.asarray(u_vector, dtype=float), np.asarray(v_vector, dtype=float)
+    if not (_in_magnitude_range(float(np.max(np.abs(u)))) and _in_magnitude_range(float(np.max(np.abs(v))))):
+        return False
+    bound = _CHART_CONDITION + 1 / _CHART_CONDITION        # kappa + 1/kappa = (|u|^2 + |v|^2) / |u x v|
+    return float(u @ u + v @ v) <= bound * float(np.linalg.norm(np.cross(u, v)))
+
+
+def _curve_float_scale(curve) -> float:
+    """Bound on a line's or elliptic arc's coordinates, parametric speed and phase error; inf otherwise.
+
+    A line: its largest absolute coordinate and its length. An arc ``c + u cos(s + w t) + v sin(s + w t)``
+    with ``rho = |u| + |v|``: ``max|c| + rho`` bounds its coordinates and ``rho |w|`` its speed (the window
+    term, weight K). Its phase ``s + w t`` is rounded by eps (|s| + |w|), its cos/sin by eps, and its
+    trigonometric roots are mapped into the sweep with an error of a few eps (pi + |s| + |w|): together at
+    most 4 eps rho (4 + |s| + |w|) in world units, a rounding term, so ``rho (4 + |s| + |w|) / 8`` keeps it
+    below 32 eps scale <= tol / 64, inside the rounding budget (review R5: a start angle of 1e12 moved the
+    arc by 1e-4 at scale 4).
+    """
+    if type(curve) is LinePath:
+        start, end = [float(v) for v in curve.start], [float(v) for v in curve.end]
+        return max(*map(abs, start), *map(abs, end), math.dist(start, end))
+    if type(curve) is EllipticArc:
+        radius = (math.hypot(*(float(v) for v in curve.u_vector))
+                  + math.hypot(*(float(v) for v in curve.v_vector)))   # bounds |u cos + v sin| and its rate
+        sweep = abs(float(curve.sweep_angle))
+        phase = 4. + abs(float(curve.start_angle)) + sweep
+        return max(max(abs(float(v)) for v in curve.center) + radius, sweep * radius, phase * radius / 8.)
+    return math.inf
+
+
+def _cylinder_frame_admitted(support) -> bool:
+    """A Cylinder's radius, height and sweep in range and its frame orthonormal to 64 eps (False on NaN)."""
+    sweep = abs(float(support.sweep_angle))
+    if not (_in_magnitude_range(float(support.radius)) and _in_magnitude_range(abs(float(support.height)))
+            and 2.**-64 <= sweep <= math.tau and math.isfinite(float(support.start_angle))):
+        return False
+    axis, radial = np.asarray(support.axis, dtype=float), np.asarray(support.radial_direction, dtype=float)
+    circumferential = np.asarray(support.circumferential_direction, dtype=float)
+    limit = 64 * _EPS
+    return bool(abs(float(axis @ axis) - 1) <= limit and abs(float(radial @ radial) - 1) <= limit
+                and abs(float(axis @ radial)) <= limit
+                and float(np.max(np.abs(circumferential - np.cross(axis, radial)))) <= limit)
+
+
+def _cylinder_angle_scale(support) -> float:
+    """World effect bound of a Cylinder's angle arithmetic: ``R (4 + |start| + |sweep|)``.
+
+    ``_angle_on_sweep`` rounds ``angle - start`` and its reduction by eps (pi + |start|) and snaps angles
+    within 64 eps max(1, |angle|, |start|, |sweep|) of the start; an angle error delta moves a chart point by
+    R delta in world units (``world_delta``).
+    """
+    return float(support.radius) * (4. + abs(float(support.start_angle)) + abs(float(support.sweep_angle)))
+
+
+def _cylinder_cut_margin(support, scale) -> float:
+    """The angular margin to the chart's cut, in chart u units, for a seam-free loop of this scale.
+
+    The angle of a point at least R/2 from the axis is computed with an error of at most
+    K eps (4 + |start| + |sweep| + 2 scale / R) (coordinate rounding over the radial distance, plus the
+    angle arithmetic of ``_cylinder_angle_scale``); the margin is M times that, as the scale bound.
+    """
+    radius, sweep = float(support.radius), abs(float(support.sweep_angle))
+    error = _FLOAT_RAY_BAND * _EPS * (4. + abs(float(support.start_angle)) + sweep + 2. * float(scale) / radius)
+    return _FLOAT_RAY_MARGIN * error / sweep
+
+
+def _cylinder_chart_window(support, margin):
+    """The u interval of the Cylinder's chart that keeps ``margin`` from its cut.
+
+    ``_angle_on_sweep`` cuts the circle at ``start + sweep / 2 + pi`` (for a full turn: at the start), so
+    every chart value lies in [1/2 - pi / |sweep|, 1/2 + pi / |sweep|].
+    """
+    half = math.pi / abs(float(support.sweep_angle))
+    return .5 - half + margin, .5 + half - margin
+
+
+def _cylinder_loop_admitted(support, loop, scale) -> bool:
+    """Whether ``loop`` (lines and elliptic arcs) is seam-free on the Cylinder ``support`` (review R5).
+
+    MaterialDomain.uv picks each point's angle period per curve: a loop that touches the chart's cut, or a
+    curve that crosses it, mixes periods and the ray test is wrong (on the parent as well). Admitted only
+    when, with ``margin`` = _cylinder_cut_margin:
+    - every curve keeps at least R/2 from the axis (lines: max end distance minus projected length; arcs:
+      the projected ellipse contains the axis with its inscribed-circle bound minus the centre's offset),
+      so its angle is well conditioned and, for an arc, monotone along it;
+    - the chart u of both ends and the middle (as MaterialDomain.uv evaluates them) lies in the cut-free
+      window; a line's ends are less than pi - margin apart (its angle path, shorter than pi, is then the
+      direct one); an arc's u advances by at least the margin in its own direction (its monotone path,
+      shorter than a full turn, is then the direct one), so no point of the loop is near the cut;
+    - for a full-turn chart, every end is within half a period minus the margin of the curve's middle, so
+      the endpoint period shift of MaterialDomain.uv is zero.
+    """
+    origin = np.asarray(support.origin, dtype=float)
+    axis = np.asarray(support.axis, dtype=float)
+    radius, sweep = float(support.radius), float(support.sweep_angle)
+    margin = _cylinder_cut_margin(support, scale)
+    low, high = _cylinder_chart_window(support, margin)
+    full = abs(abs(sweep) - math.tau) <= 1e-12                       # as MaterialDomain.uv
+    half_period = .5 * math.tau / abs(sweep) - margin
+
+    def perpendicular(vector):
+        return vector - float(vector @ axis) * axis
+
+    for path in loop:
+        curve = path.curve
+        us = [float(support.local_uv(curve.evaluate(t))[0]) for t in (0., .5, 1.)]
+        if not all(low <= u <= high for u in us):
+            return False
+        if full and not (abs(us[1] - us[0]) <= half_period and abs(us[1] - us[2]) <= half_period):
+            return False
+        if type(curve) is LinePath:
+            start = perpendicular(np.asarray(curve.start, dtype=float) - origin)
+            end = perpendicular(np.asarray(curve.end, dtype=float) - origin)
+            reach = max(float(np.linalg.norm(start)), float(np.linalg.norm(end))) - float(np.linalg.norm(end - start))
+            if not (reach >= .5 * radius and abs(us[2] - us[0]) * abs(sweep) <= math.pi - margin * abs(sweep)):
+                return False
+        else:                                                         # EllipticArc (clause (a))
+            centre = perpendicular(np.asarray(curve.center, dtype=float) - origin)
+            u_vector = perpendicular(np.asarray(curve.u_vector, dtype=float))
+            v_vector = perpendicular(np.asarray(curve.v_vector, dtype=float))
+            normal = float(np.cross(u_vector, v_vector) @ axis)
+            spread = math.sqrt(float(u_vector @ u_vector + v_vector @ v_vector))
+            if not (spread > 0 and abs(normal) / spread - float(np.linalg.norm(centre)) >= .5 * radius):
+                return False
+            direction = math.copysign(1., normal) * math.copysign(1., float(curve.sweep_angle)) * math.copysign(1., sweep)
+            if not direction * (us[2] - us[0]) >= margin:
+                return False
+    return True
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +272,142 @@ class MaterialDomain:
                                              compare=False, repr=False, metadata={"definition": False})
     _exact_boundary_cache: tuple | None = field(default=None, init=False, hash=False,
                                                 compare=False, repr=False, metadata={"definition": False})
+    # Instance-lifetime reuse of the junction rule's scale per boundary loop (_float_ray_scale).
+    _float_scale_cache: tuple | None = field(default=None, init=False, hash=False,
+                                             compare=False, repr=False, metadata={"definition": False})
+
+    def _junction_rule_applies(self, loop, tolerance) -> bool:
+        """Whether the T2-0 junction rule applies to ``loop`` (clauses (a) and (b) of its domain).
+
+        Otherwise ``contains_loop`` is the parent rule for this loop. Clause (c) is per query.
+        """
+        return float_ray_scale_trusted(self._float_ray_scale(loop), tolerance)
+
+    def _junction_rule_applies_to(self, loop, uv, tolerance) -> bool:
+        """The rule's full domain for one query: the loop clauses (a), (b) and the query clause (c).
+
+        Every route (float, exact straight, exact curved, the arrangement's hole-owner test) asks this
+        one predicate, so a query outside the reach takes the parent path on all of them (review R7 P2).
+        Any conversion error is outside the domain.
+        """
+        try:
+            scale = self._float_ray_scale(loop)
+            return float_ray_scale_trusted(scale, tolerance) and self._junction_query_admitted(uv, scale)
+        except _ADMISSION_ERRORS:
+            return False
+
+    def _float_ray_scale(self, loop) -> float:
+        """The scale of ``float_ray_scale_trusted`` for ``loop`` on this support (T2-0 contract).
+
+        inf when clause (a) or the support part of clause (b) fails: a curve other than a LinePath or
+        EllipticArc, a support other than a conditioned Plane or a Cylinder, or a Cylinder loop that is
+        not seam-free. Cached only for this domain's own boundary loops when every input is immutable
+        (``_float_ray_scale_cacheable``, as ``_prepared_exact_boundary``); otherwise measured on each call.
+        """
+        cacheable = self._float_ray_scale_cacheable(loop)
+        index = next((i for i, item in enumerate(self.boundaries) if item is loop), None) if cacheable else None
+        cache = self._float_scale_cache
+        if index is not None and cache is not None and cache[0] is self.support and cache[1] is self.boundaries:
+            scale = cache[2][index]
+            if scale is not None:
+                return scale
+        scale = self._measure_float_ray_scale(loop)
+        if index is not None:
+            if cache is None or cache[0] is not self.support or cache[1] is not self.boundaries:
+                cache = (self.support, self.boundaries, [None] * len(self.boundaries))
+                object.__setattr__(self, "_float_scale_cache", cache)
+            cache[2][index] = scale
+        return scale
+
+    def _float_ray_scale_cacheable(self, loop) -> bool:
+        """Whether the scale of ``loop`` can be reused: every input it is measured from is immutable.
+
+        Checked on every call, like ``_prepared_exact_boundary`` (review R5: a LinePath built on lists
+        kept a stale scale after the lists were changed). Frozen records with tuple payloads of scalars
+        and read-only support arrays cannot change; anything else is measured again. (A Cylinder's
+        private derived ``_circumferential`` is never handed out: ``circumferential_direction`` copies.)
+        """
+        support = self.support
+        if type(support) is Plane:
+            arrays = (support.origin, support.u_vector, support.v_vector)
+        elif type(support) is Cylinder:
+            arrays = (support.origin, support.axis, support.radial_direction)
+        else:
+            return False
+        if (type(self) is not MaterialDomain or type(self.boundaries) is not tuple or type(loop) is not tuple
+                or any(type(array) is not np.ndarray or array.flags.writeable for array in arrays)):
+            return False
+        scalars = (float, int, np.float64, Fraction)
+        for path in loop:
+            if type(path) is not ArrangementPath:
+                return False
+            curve = path.curve
+            if type(curve) is LinePath:
+                if not (type(curve.start) is tuple and type(curve.end) is tuple
+                        and all(type(value) in scalars for value in (*curve.start, *curve.end))):
+                    return False
+            elif type(curve) is EllipticArc:
+                if not all(type(vector) is tuple and all(type(value) is float for value in vector)
+                           for vector in (curve.center, curve.u_vector, curve.v_vector)):
+                    return False
+            else:
+                return False
+        return True
+
+    def _measure_float_ray_scale(self, loop) -> float:
+        """The loop's scale, inf outside the domain; any conversion, overflow or arithmetic error in the
+        measurement (exact coordinates beyond float range, ...) also means outside, never an exception."""
+        try:
+            with np.errstate(all="ignore"):
+                scale = self._measure_float_ray_scale_unguarded(loop)
+            return scale if scale == scale else math.inf       # NaN: outside
+        except _ADMISSION_ERRORS:
+            return math.inf
+
+    def _measure_float_ray_scale_unguarded(self, loop) -> float:
+        support = self.support
+        if type(support) is Plane:
+            if not _plane_chart_conditioned(support.u_vector, support.v_vector):
+                return math.inf
+            extra = 0.
+        elif type(support) is Cylinder:
+            if not _cylinder_frame_admitted(support):
+                return math.inf
+            extra = _cylinder_angle_scale(support)
+        else:
+            return math.inf
+        scale = max([float(np.max(np.abs(np.asarray(support.origin, dtype=float)))), extra,
+                     *(_curve_float_scale(path.curve) for path in loop)])
+        if type(support) is Cylinder and math.isfinite(scale) and not _cylinder_loop_admitted(support, loop, scale):
+            return math.inf
+        return scale
+
+    def _junction_query_admitted(self, uv, scale) -> bool:
+        """The query part of clause (c) of the junction rule's domain (before the window-root test).
+
+        Finite chart coordinates; on a Cylinder the query's u lies in the cut-free window of the loop of
+        this (finite) scale, so it is on the chart sheet of the seam-free loop: MaterialDomain.uv shifts a
+        point of a curve that crosses the cut by a period.
+        """
+        try:
+            with np.errstate(all="ignore"):
+                u, v = float(uv[0]), float(uv[1])
+                if not (math.isfinite(u) and math.isfinite(v) and math.isfinite(scale)):
+                    return False
+                support = self.support
+                if type(support) is Cylinder:
+                    reach = (0., abs(v) * abs(float(support.height)))      # u: the window below
+                else:
+                    reach = (abs(u) * float(np.max(np.abs(np.asarray(support.u_vector, dtype=float)))),
+                             abs(v) * float(np.max(np.abs(np.asarray(support.v_vector, dtype=float)))))
+                if not all(item <= _QUERY_REACH * scale for item in reach):
+                    return False
+                if type(support) is not Cylinder:
+                    return True
+                low, high = _cylinder_chart_window(support, _cylinder_cut_margin(support, scale))
+                return bool(low <= u <= high)
+        except _ADMISSION_ERRORS:
+            return False
 
     def _prepared_exact_boundary(self, loop):
         """Lazy exact line data, retained only for this immutable domain's edges."""
@@ -365,6 +695,15 @@ class MaterialDomain:
     def horizontal_roots(self, curve, value, tolerance):
         if isinstance(self.support, NurbsSurface):        # pcurve level roots (float route)
             return nurbs_domain.horizontal_roots(self, curve, value, tolerance)
+        return self._horizontal_roots_and_ends(curve, value, tolerance)[0]
+
+    def _horizontal_roots_and_ends(self, curve, value, tolerance):
+        """``horizontal_roots`` and the curve ends (0., 1.) within the scalar tolerance of the level.
+
+        The ends are the band test ``horizontal_roots`` already makes for its
+        128-eps snapping; ``contains_loop`` uses them to find vertices on the ray.
+        Not for NURBS supports (their containment has its own exact route).
+        """
         if isinstance(self.support, ExtrudedSurface):
             # The extrusion coordinate is linear in position: a level of v is a plane parallel to the profile.
             support = self.support
@@ -381,10 +720,10 @@ class MaterialDomain:
         scalar_tolerance=tolerance*np.linalg.norm(normal)
         roots=plane_roots(curve,normal,offset,tolerance=scalar_tolerance)
         if roots is None:
-            return None
+            return None, ()
         endpoints=tuple(t for t in (0.,1.) if abs(float(normal @ curve.evaluate(t))-offset)<=scalar_tolerance)
         return tuple(dict.fromkeys(next((t for t in endpoints
-            if abs(root-t)<=128*np.finfo(float).eps),root) for root in roots))
+            if abs(root-t)<=128*np.finfo(float).eps),root) for root in roots)), endpoints
 
     def _exact_planar(self, loops) -> bool:
         """Whether the exact planar route applies: a Plane support and straight loops only."""
@@ -409,7 +748,8 @@ class MaterialDomain:
         if isinstance(self.support, Plane) and any(isinstance(path.curve, PlaneNurbsCurve) for paths in self.boundaries for path in paths):
             if all(isinstance(path.curve, LinePath) for path in loop):
                 return _contains_loop_exact(self._exact_chart(), loop, tuple(map(Fraction, uv)), tolerance,
-                                            boundary=boundary, prepared=self._prepared_exact_boundary(loop))
+                                            boundary=boundary, prepared=self._prepared_exact_boundary(loop),
+                                            junctions=self._junction_rule_applies_to(loop, uv, tolerance))
             from .plane_source_reference import contains_section_loop
             return contains_section_loop(self.support, loop, uv, tolerance, boundary=boundary)
         # Exact route (robust-predicate R1b): only for an exact (rational) query
@@ -419,18 +759,32 @@ class MaterialDomain:
             if self._exact_planar(self.boundaries) and self._exact_planar((loop,)):
                 return _contains_loop_exact(self._exact_chart(), loop, tuple(uv), tolerance,
                                             boundary=boundary,
-                                            prepared=self._prepared_exact_boundary(loop))
+                                            prepared=self._prepared_exact_boundary(loop),
+                                            junctions=self._junction_rule_applies_to(loop, uv, tolerance))
             if self._exact_curved_planar(self.boundaries) and self._exact_curved_planar((loop,)):
                 # Lines and elliptic arcs (robust-predicate R1c, E4): certified replica.
                 from .planar_arcs import contains_loop_exact_curved
                 return contains_loop_exact_curved(self._exact_chart(), loop, tuple(uv),
-                                                  tolerance, boundary=boundary)
+                                                  tolerance, boundary=boundary,
+                                                  junctions=self._junction_rule_applies_to(loop, uv, tolerance))
         if isinstance(self.support, NurbsSurface):        # exact level sets on the pcurves (A1e-lite)
             return nurbs_domain.contains_loop(self, loop, uv, tolerance, boundary=boundary)
+        junctions = self._junction_rule_applies_to(loop, uv, tolerance)
         winding = 0
+        level = float(uv[1])
+        window = 8*np.finfo(float).eps
+        found = {}
+
+        def roots_at(index):
+            # One root computation per curve and query (the walk-back below reuses it).
+            index %= len(loop)
+            if index not in found:
+                found[index] = self._horizontal_roots_and_ends(loop[index].curve, level, tolerance)
+            return found[index]
+
         for index, path in enumerate(loop):
             curve = path.curve
-            roots = self.horizontal_roots(curve, float(uv[1]), tolerance)
+            roots = roots_at(index)[0]
             if roots is None:
                 # A horizontal curve can contain the query but contributes no
                 # ray crossing. Exact point inversion handles its boundary.
@@ -447,11 +801,11 @@ class MaterialDomain:
                 point_uv = self.uv(curve, t)
                 if np.linalg.norm(self.world_delta(point_uv-uv, float(uv[1]), float(uv[0]))) <= tolerance:
                     return boundary
-                if point_uv[0] <= uv[0] or t >= 1-8*np.finfo(float).eps:
+                if point_uv[0] <= uv[0] or t >= 1-window:
                     continue
-                if t <= 8*np.finfo(float).eps:
+                if t <= window:
                     previous = loop[index-1].curve
-                    previous_roots = self.horizontal_roots(previous, float(uv[1]), tolerance)
+                    previous_roots = roots_at(index-1)[0]
                     for distance in range(2, len(loop)+1):
                         if previous_roots is not None:
                             break
@@ -459,8 +813,8 @@ class MaterialDomain:
                         # edges must inspect the preceding non-horizontal
                         # branch. Zero alone is not a crossing sign.
                         previous = loop[index-distance].curve
-                        previous_roots = self.horizontal_roots(previous, float(uv[1]), tolerance)
-                    previous_lower = max((r for r in (previous_roots or ()) if r < 1-8*np.finfo(float).eps), default=0.)
+                        previous_roots = roots_at(index-distance)[0]
+                    previous_lower = max((r for r in (previous_roots or ()) if r < 1-window), default=0.)
                     before = self.uv(previous, .5*(previous_lower+1))[1]-uv[1]
                 else:
                     previous_root = roots[position-1] if position else 0.
@@ -471,7 +825,69 @@ class MaterialDomain:
                     winding += 1
                 elif after <= 0 < before:
                     winding -= 1
+        # Vertex junctions (T2-0), only inside the rule's domain (see _FLOAT_RAY_BAND). Every junction
+        # between a non-horizontal curve and the next one (across any horizontal run) is one event. Its
+        # start root (t <= 8 eps) owns it above; without one, it is decided here.
+        if junctions and not _window_roots_ambiguous(
+                len(loop), roots_at, lambda i: sorted(set(min(1., max(0., float(t))) for t in roots_at(i)[0])),
+                window, _compare_numbers):
+            for index in range(len(loop)):
+                winding += self._unowned_junction_crossing(loop, index, roots_at, uv, window)
         return winding != 0
+
+    def _unowned_junction_crossing(self, loop, index, roots_at, uv, window):
+        """The crossing (+1, -1 or 0) at the junction after ``loop[index]`` that no start root owns.
+
+        ``contains_loop`` skips a root at a curve end (``t >= 1 - 8 eps``) and
+        lets the start root of the next non-horizontal curve ``B`` (horizontal
+        runs on the ray are walked over) count the junction: from the last
+        branch before the junction (midpoint of the last root below
+        ``1 - 8 eps`` and 1) to ``B``'s first branch. ``B`` can report no
+        start root although the junction lies on the ray: an arc whose root
+        lies just outside its sweep, a short line whose root lies outside its
+        window. Then the same two branches are compared here, at ``B``'s
+        start, so each junction is decided exactly once whatever the number
+        of junctions, horizontal runs or the loop's first curve, and the side
+        sequence telescopes.
+
+        The crossing is located at the vertex only when the vertex lies on the
+        ray (``_junction_on_ray``). Off the band, the crossing is the skipped
+        end root itself and is located there (T2-0 fix 2): the vertex can lie
+        up to 8 eps of the curve's length away from it, far more than the
+        tolerance for a long curve. The sides stay the two branch midpoints:
+        an off-band root within 8 eps of an end means the vertex is within a
+        few ulps (of the curve's extent) of the ray, so samples between that
+        root and the vertex carry no reliable sign (float rounding; in the
+        exact replicas, an arc end and the next curve's start can differ by
+        such a gap).
+
+        Used only inside the rule's domain (``MaterialDomain._junction_rule_applies``
+        and ``_window_roots_ambiguous``), where off-band end roots cannot occur
+        (they need 8 eps times the curve's speed to exceed the tolerance).
+        """
+        roots = roots_at(index)[0]
+        if roots is None:
+            return 0
+        count = len(loop)
+        following = _following_index(count, index, roots_at)
+        following_roots = roots_at(following)[0]
+        first = min((min(1., max(0., float(t))) for t in following_roots), default=1.)
+        if first <= window:
+            return 0
+        end_roots = [min(1., max(0., float(t))) for t in roots if t >= 1-window]
+        on_ray = _junction_on_ray(count, index, roots_at)
+        if not (on_ray or end_roots):
+            return 0
+        previous_lower = max((r for r in roots if r < 1-window), default=0.)
+        before = self.uv(loop[index].curve, .5*(previous_lower+1))[1]-uv[1]
+        after = self.uv(loop[following].curve, .5*first)[1]-uv[1]
+        if not (before <= 0 < after or after <= 0 < before):
+            return 0
+        location = (self.uv(loop[following].curve, 0.) if on_ray
+                    else self.uv(loop[index].curve, min(end_roots)))
+        if location[0] <= uv[0]:
+            return 0
+        return 1 if before <= 0 else -1
 
     def contains(self, curve, parameter, tolerance, *, boundary=True):
         uv = None
@@ -754,8 +1170,13 @@ def _same_ray(first, second) -> bool:
     return bool(np.linalg.norm(unit_a - unit_b) <= 64 * _EPS)
 
 
-def _add_exact_planar_seams(domain, boundaries, paths, segments, points, tolerance, check, *, deferred=True):
+def _add_exact_planar_seams(domain, boundaries, paths, segments, points, tolerance, check, *, deferred=True,
+                            rotation=None, seam_policy=None, record=None, sources=None):
     """Decomposition seams on a Plane support through exact stations (R1b step 2b, D6/D7).
+
+    Returns the number of seam ends. ``rotation`` (cosine, sine) turns both seam directions in the
+    support plane; ``None`` (every first attempt) keeps main's directions. It is used only by the
+    refusal-only retry of :func:`_arrange_material`.
 
     Main's rules: an interior trace end (on no boundary) with at most one ray
     gets two seams, along the authored ``u`` direction and its in-plane
@@ -788,6 +1209,7 @@ def _add_exact_planar_seams(domain, boundaries, paths, segments, points, toleran
         item = (exact_vector(point.position), np.asarray(point.position))
         if not on_boundary(*item):
             endpoints.append(item)
+    point_ends = len(endpoints)                       # ring_split: the first ends are arrangement points
     traces = range(len(boundaries), len(paths))
     for index in traces:
         for t in (0, 1):
@@ -837,11 +1259,30 @@ def _add_exact_planar_seams(domain, boundaries, paths, segments, points, toleran
     normal = np.cross(support.u_vector, support.v_vector)
     normal /= np.linalg.norm(normal)
     authored = np.asarray(support.u_vector)/np.linalg.norm(support.u_vector)
+    if rotation is not None:
+        cosine, sine = rotation
+        authored = cosine*authored + sine*np.cross(normal, authored)
+        authored /= np.linalg.norm(authored)
     # Main's seam: through the end point along the authored direction and its
     # physical perpendicular, as float unit vectors scaled by ``extent``. The
     # same parameterization is kept (clipping's 32-eps parameter windows depend
     # on it); the seam passes exactly through the station.
     offsets = [exact_vector(extent*direction) for direction in (authored, np.cross(normal, authored))]
+    if seam_policy == "ring_split" and endpoints:
+        # RING-SPLIT: selection only; a decline (or any non-cancellation GeometryError of the selection, which
+        # mutates nothing before its last step) leaves paths/segments untouched and main's seams follow.
+        from .runtime_diagnostics import _increment
+        try:
+            _ring_split_seams(domain, boundaries, paths, segments, endpoints, tolerance, check, deferred=deferred,
+                              sources=sources, record=record, point_ends=point_ends, extent=extent)
+        except _RingSplitDecline as decline:
+            _increment(f"ring_split_declined:{decline.reason}")
+        except GeometryError as error:
+            if str(error).endswith("cancelled"):
+                raise
+            _increment("ring_split_declined:selection_error")
+        else:
+            return len(endpoints)
     for station, position in sorted(endpoints, key=lambda item: tuple(item[1])):   # main's (stable) order
         point = station if station is not None else exact_vector(position)
         for offset in offsets:
@@ -851,6 +1292,488 @@ def _add_exact_planar_seams(domain, boundaries, paths, segments, points, toleran
                                           deferred=deferred):
                 segments[len(paths)] = piece
                 paths.append(ArrangementPath(stations.to_line(piece), decomposition=True))
+    return len(endpoints)
+
+
+class _RingSplitDecline(Exception):
+    """The ring_split policy declines a face (a precondition or certificate failed); not a GeometryError, so it
+    can never be confused with (or swallow) a cancellation. ``reason`` names the rule."""
+
+    def __init__(self, reason):
+        super().__init__(reason)
+        self.reason = reason
+
+
+#: Half-width (in tol) of the certified clearance box around a ring_split seam (see ``_RingSplitGeometry.clear``).
+_RING_SPLIT_BOX = 2
+#: Length (in tol) along a seam at a shared end that the clearance box leaves to the shared vertex.
+_RING_SPLIT_END = 4
+#: Relative float error bound of the arc prefilter (far above the few-ulp evaluation error it covers).
+_RING_SPLIT_FLOAT = 1e-12
+
+
+def _rational_lower_sqrt(value: Fraction) -> Fraction:
+    """A positive rational ``r <= sqrt(value)`` (``value > 0``), certified by exact squaring."""
+    root = Fraction(math.sqrt(float(value))) * (1 - Fraction(1, 10 ** 9))
+    while root * root > value:
+        root /= 2
+    return root
+
+
+def _rational_upper_sqrt(value: Fraction) -> Fraction:
+    root = Fraction(math.sqrt(float(value))) * (1 + Fraction(1, 10 ** 9)) + Fraction(1, 2 ** 60)
+    while root * root < value:
+        root *= 2
+    return root
+
+
+class _RingSplitGeometry:
+    """Certified predicates of one ring_split face (RING-SPLIT production brief section 2).
+
+    Exact for straight pieces (the arrangement's own exact station predicates); line/arc by the CAP-1 certified
+    first-harmonic roots (``_chart_segment_arc_clear``); containment by the exact ``contains_loop`` route.
+    Floats only skip work where their error bound is proven far below the margin (``arc_far``).
+    """
+
+    def __init__(self, domain, paths, segments, limit, ends, tolerance, check):
+        self.domain, self.paths, self.segments, self.limit = domain, paths, segments, limit
+        self.ends, self.tolerance, self.check = ends, tolerance, check
+        self.tol = Fraction(tolerance)
+        self.tol2 = self.tol * self.tol
+        self.chart = ExactPlane.from_plane(domain.support)
+        self.normal = self.chart.normal
+        self.normal2 = exact_dot(self.normal, self.normal)
+
+    # --- incidence -------------------------------------------------------------------------------------------
+    def near(self, index, point, segment=None):
+        """``point`` (exact) within tol of path ``index`` (or of ``segment``): the arrangement's own rule."""
+        self.check()
+        if segment is not None or index in self.segments:
+            return bool(stations.point_parameters(segment if segment is not None else self.segments[index], point,
+                                                  self.tolerance))
+        return bool(point_parameters(self.paths[index].curve, stations.rounded(point), tolerance=self.tolerance))
+
+    def arc_end_at(self, index, point):
+        """An end of the arc ``index`` lies within tol of ``point`` (exact distance to its evaluated end)."""
+        curve = self.paths[index].curve
+        return any(stations.distance2(exact_vector(curve.evaluate(t)), point) <= self.tol2 for t in (0., 1.))
+
+    # --- clearance -------------------------------------------------------------------------------------------
+    def _guard(self, call):
+        """Run a certified test; an undecidable case (GeometryError, overflow) is not clear. A cancellation
+        propagates."""
+        try:
+            return bool(call())
+        except GeometryError as error:
+            if str(error).endswith("cancelled"):
+                raise
+            return False
+        except (OverflowError, ZeroDivisionError, ValueError):
+            return False
+
+    def _frame(self, a, b):
+        """In-plane seam frame: projected direction d', perpendicular n = N x d, and rational lower bounds of
+        their lengths."""
+        d = tuple(q - p for p, q in zip(a, b))
+        dn = exact_dot(d, self.normal)
+        dp = tuple(x - dn * y / self.normal2 for x, y in zip(d, self.normal))
+        n = stations._cross(self.normal, d)
+        dp2, n2 = exact_dot(dp, dp), exact_dot(n, n)
+        if dp2 == 0 or n2 == 0:
+            return None
+        return dp, n, dp2, n2, _rational_lower_sqrt(dp2), _rational_lower_sqrt(n2)
+
+    def arc_far(self, curve, a, frame, s_lo, s_hi, t_h):
+        """Float prefilter, valid by its error bound: the arc's sweep range along each seam-frame axis lies
+        outside the clearance box by more than tol plus ``_RING_SPLIT_FLOAT`` times the magnitudes involved (the
+        float evaluation errs by a few ulps of them). Only then True: the arc misses the box, no certified test
+        is needed. Otherwise (including any non-finite value) False and the certified test decides."""
+        dp, n, _dp2, _n2, _dl, _nl = frame
+        with np.errstate(all="ignore"):
+            origin = np.asarray(stations.rounded(a))
+            centre = np.asarray(curve.center, dtype=float) - origin
+            u, v = np.asarray(curve.u_vector, dtype=float), np.asarray(curve.v_vector, dtype=float)
+            magnitude = float(np.max(np.abs(origin)) + np.max(np.abs(np.asarray(curve.center, dtype=float)))
+                              + np.max(np.abs(u)) + np.max(np.abs(v)))
+            start, sweep = float(curve.start_angle), float(curve.sweep_angle)
+            lo, hi = min(start, start + sweep), max(start, start + sweep)
+            if not (math.isfinite(lo) and math.isfinite(hi)) or max(abs(lo), abs(hi)) > _FLOAT_ANGLE_WINDOW:
+                return False                    # Codex RS R1 P2: no float shortcut outside the angle window
+            # Angle error of every float angle below (sums, peak + k pi, the cos/sin arguments): a few ulps of the
+            # largest angle involved; its effect on a value is at most amplitude * (delta + delta^2 / 2).
+            delta = 16 * np.finfo(float).eps * (max(abs(lo), abs(hi)) + 4 * math.pi)
+            for axis, low, high in ((n, -t_h, t_h), (dp, s_lo, s_hi)):
+                vector = np.asarray(stations.rounded(axis))
+                length = float(np.linalg.norm(vector))
+                if not (math.isfinite(length) and length > 0 and math.isfinite(magnitude)):
+                    return False
+                unit = vector / length
+                c0, c1, c2 = float(unit @ centre), float(unit @ u), float(unit @ v)
+                peak = math.atan2(c2, c1)
+                angles = [lo, hi]
+                for k in range(math.floor((lo - peak) / math.pi), math.ceil((hi - peak) / math.pi) + 1):
+                    if lo < peak + k * math.pi < hi:
+                        angles.append(peak + k * math.pi)
+                values = [c0 + c1 * math.cos(t) + c2 * math.sin(t) for t in angles]
+                world_low, world_high = float(low) * length, float(high) * length
+                amplitude = abs(c1) + abs(c2)
+                margin = (float(self.tol) + _RING_SPLIT_FLOAT * (magnitude + abs(world_low) + abs(world_high))
+                          + 2 * amplitude * (delta + delta * delta))
+                if not all(math.isfinite(x) for x in (*values, world_low, world_high, margin)):
+                    return False
+                if min(values) > world_high + margin or max(values) < world_low - margin:
+                    return True
+        return False
+
+    def arc_clear(self, index, a, b, at_a, at_b):
+        """Certified: the arc ``index`` stays more than ``_RING_SPLIT_BOX`` tol (in the support plane) from the seam
+        ``a``-``b``, except within ``_RING_SPLIT_END`` tol of an end it is incident to (``at_a``/``at_b``), where it
+        meets the seam at most within 2 tol of that end. The box {s in [s_lo, s_hi], |t| <= t_h} in the seam frame
+        (s along d', t along n) contains the tube; the arc meets none of its four sides (certified roots), an arc
+        end lies certainly outside it, so the connected arc lies outside the box."""
+        path = self.paths[index]
+        curve = path.curve
+        frame = self._frame(a, b)
+        if frame is None:
+            return False
+        dp, n, dp2, n2, dl, nl = frame
+        h, e = _RING_SPLIT_BOX * self.tol, _RING_SPLIT_END * self.tol
+        t_h = h / nl
+        s_lo = e / dl if at_a else -h / dl
+        s_hi = 1 - e / dl if at_b else 1 + h / dl
+        # s is measured in units of |d'|^2: s = (X - a) . d' / |d'|^2; the box parameter range is [s_lo, s_hi].
+        if not s_lo < s_hi:
+            return False
+        shared = [point for point, flag in ((a, at_a), (b, at_b)) if flag]
+        if shared:
+            # The box leaves the first _RING_SPLIT_END tol at a shared end to the shared vertex; contacts there are
+            # decided by the certified roots on the seam itself, always (Codex RS R1 P2: never skipped by the
+            # prefilter, which only knows the box).
+            seam = stations.Segment(a, b, derived=True)
+            if not self._guard(lambda: _chart_segment_arc_clear(self.chart, seam, path, shared,
+                                                                (2 * self.tol) ** 2, self.check)):
+                return False
+        if self.arc_far(curve, a, frame, s_lo, s_hi, t_h):
+            return True
+
+        def corner(s, t):
+            return tuple(p + s * x + t * y for p, x, y in zip(a, dp, n))
+        corners = (corner(s_lo, -t_h), corner(s_hi, -t_h), corner(s_hi, t_h), corner(s_lo, t_h))
+        for k in range(4):
+            side = stations.Segment(corners[k], corners[(k + 1) % 4], derived=True)
+            if not self._guard(lambda: _chart_segment_arc_clear(self.chart, side, path, (), Fraction(0), self.check)):
+                return False
+        magnitude = Fraction(float(np.max(np.abs(curve.center)) + np.max(np.abs(curve.u_vector))
+                                   + np.max(np.abs(curve.v_vector))))
+        margin = 64 * _EPS_EXACT * magnitude + Fraction(2) ** -1070
+        for t in (0., 1.):
+            x = exact_vector(curve.evaluate(t))
+            offset = tuple(p - q for p, q in zip(x, a))
+            s_x, t_x = exact_dot(offset, dp) / dp2, exact_dot(offset, n) / n2
+            if (s_x < s_lo - margin / dl or s_x > s_hi + margin / dl
+                    or t_x > t_h + margin / nl or t_x < -t_h - margin / nl):
+                return True
+        return False
+
+    def clear(self, a, b, excused_a, excused_b, extra=(), skip_ends=()):
+        """Certified visibility of the seam ``a``-``b`` (exact points): longer than the excused end lengths; no
+        junction with a boundary, trace or ``extra`` segment except, within tol of an end, with the paths
+        incident there (``excused_*``: path indices, or ``("extra", k)``); every arc certified clear
+        (``arc_clear``); no free end other than ``skip_ends`` within tol of it; its midpoint in the material
+        (exact ``contains_loop``)."""
+        seam = stations.Segment(a, b, derived=True)
+        length2 = seam.length2()
+        if length2 <= (2 * (_RING_SPLIT_END + _RING_SPLIT_BOX) * self.tol) ** 2:
+            return False
+
+        def excused(a_param, key):
+            return ((a_param * a_param * length2 <= self.tol2 and key in excused_a)
+                    or ((1 - a_param) ** 2 * length2 <= self.tol2 and key in excused_b))
+        items = [(index, self.segments.get(index)) for index in range(self.limit)]
+        items += [(("extra", k), segment) for k, segment in enumerate(extra)]
+        for key, segment in items:
+            self.check()
+            if segment is not None:
+                if stations.boxes_separated(seam, segment, self.tolerance):
+                    continue
+                for a_param, _b in stations.junctions(seam, segment, self.tolerance):
+                    if not excused(a_param, key):
+                        return False
+            elif not self.arc_clear(key, a, b, key in excused_a, key in excused_b):
+                return False
+        for k, end in enumerate(self.ends):
+            self.check()
+            if k in skip_ends:
+                continue
+            if stations.point_parameters(seam, end["point"], self.tolerance):
+                return False
+        middle = stations.at(seam, Fraction(1, 2))
+        uv = self.domain._exact_chart().uv(middle)
+        return self._guard(lambda: self.domain.contains_loop(self.domain.boundaries[0], uv, self.tolerance))
+
+    # --- junctions between pieces (components) -----------------------------------------------------------------
+    def meets(self, first, second):
+        """The arrangement's own junction rule between two pieces: exact for straight pairs, main's float rule
+        with a straight piece or arcs. ``first``/``second`` are (segment or None, curve)."""
+        (s1, c1), (s2, c2) = first, second
+        self.check()
+        if s1 is not None and s2 is not None:
+            return (not stations.boxes_separated(s1, s2, self.tolerance)
+                    and bool(stations.junctions(s1, s2, self.tolerance)))
+        lo1, hi1 = c1.bounds()
+        lo2, hi2 = c2.bounds()
+        if np.any(hi1 < lo2 - self.tolerance) or np.any(hi2 < lo1 - self.tolerance):
+            return False
+        for short, other in ((s1, c2), (s2, c1)):
+            if short is not None and short.length2() <= self.tol2:
+                return any(point_parameters(other, stations.rounded(point), tolerance=self.tolerance)
+                           for point in short)
+        return bool(curve_junctions(c1, c2, tolerance=self.tolerance, cancellation_check=lambda: (self.check() or False)))
+
+
+def _ring_split_seams(domain, boundaries, paths, segments, endpoints, tolerance, check, *, deferred, sources,
+                      record, point_ends, extent):
+    """The ring_split seams of a Plane face (RING-SPLIT production brief section 2, owner YES 2026-10-30).
+
+    Free ends (``endpoints``, main's collection: interior trace ends and interior arrangement points) are joined
+    by straight chords: the union over all ends of each end's 2 nearest certified-visible candidates (exact
+    squared distances; never the two ends of one input trace or of one path). Every trace+chord component that
+    reaches no boundary is split by 2 seams from existing straight-trace vertices of degree >= 2, outward along
+    the trace to the first boundary hit. Declines (``_RingSplitDecline``, the face then runs main's seams
+    unchanged) on: inner domain loops, other curve kinds, an exact tie between ranks 2 and 3, an end without a
+    chord, crossing seams, fewer than 2 split candidates, a seam that does not clip to itself. Only
+    seam endpoints are selected here; every seam is an exact segment clipped by ``_clip_line_exact`` and marked
+    ``decomposition=True``, and every downstream check is unchanged. Mutates ``paths``/``segments`` only after
+    every decision succeeded.
+    """
+    decline = _RingSplitDecline
+    boundary_count, limit = len(boundaries), len(paths)
+    if len(domain.boundaries) != 1:
+        raise decline("domain_holes")
+    if not domain._exact_curved_planar(domain.boundaries):
+        raise decline("boundary_kind")
+    for index in range(limit):
+        kind = type(paths[index].curve)
+        if (kind is LinePath and index not in segments) or kind not in (LinePath, EllipticArc):
+            raise decline("curve_kind")
+    tol2 = Fraction(tolerance) ** 2
+    ends = []
+    for k, (station, position) in enumerate(endpoints):
+        point = station if station is not None else exact_vector(position)
+        kind = "point" if k < point_ends else ("straight" if station is not None else "curved")
+        ends.append({"point": point, "kind": kind})
+    for i in range(len(ends)):
+        for j in range(i + 1, len(ends)):
+            check()
+            if stations.distance2(ends[i]["point"], ends[j]["point"]) <= tol2:
+                raise decline("ends_within_tolerance")
+    geometry = _RingSplitGeometry(domain, paths, segments, limit, ends, tolerance, check)
+    traces = range(boundary_count, limit)
+    for end in ends:
+        end["incident"] = [index for index in traces if geometry.near(index, end["point"])]
+        end["sources"] = {sources.get(index, -1 - index) for index in end["incident"]}
+
+    # 1. ranking with the same-trace rule; 2. certified visibility; 3. order-free selection
+    visible = {}
+
+    def is_visible(i, j):
+        key = (min(i, j), max(i, j))
+        if key not in visible:
+            a, b = ends[key[0]], ends[key[1]]
+            visible[key] = geometry.clear(a["point"], b["point"], set(a["incident"]), set(b["incident"]),
+                                          skip_ends=key)
+        return visible[key]
+
+    chords = set()
+    for i, end in enumerate(ends):
+        candidates = []
+        for j, other in enumerate(ends):
+            check()
+            if j == i or end["sources"] & other["sources"]:
+                continue                                 # same input trace or one path: never chorded
+            candidates.append((stations.distance2(end["point"], other["point"]), j))
+        candidates.sort()
+        chosen = []
+        for distance2, j in candidates:
+            check()
+            if len(chosen) == 2 and distance2 > chosen[1][0]:
+                break
+            if not is_visible(i, j):
+                continue
+            if len(chosen) == 2:
+                raise decline("tie")                     # an exact tie between ranks 2 and 3
+            chosen.append((distance2, j))
+        if not chosen:
+            raise decline("end_without_chord")
+        chords.update((min(i, j), max(i, j)) for _d, j in chosen)
+    chords = sorted(chords)
+    chord_segments = [stations.Segment(ends[i]["point"], ends[j]["point"], derived=True) for i, j in chords]
+    for x in range(len(chords)):
+        for y in range(x + 1, len(chords)):
+            check()
+            if not _seams_meet_only_at_shared_ends(chord_segments[x], chord_segments[y],
+                                                   set(chords[x]) & set(chords[y]), tolerance):
+                raise decline("chord_crossing")
+
+    # 4. crossing-aware components (boundary, clipped traces, chords; the arrangement's own junctions)
+    pieces = [(segments.get(index), paths[index].curve) for index in traces]
+    pieces += [(segment, stations.to_line(segment)) for segment in chord_segments]
+    parent = list(range(len(pieces)))
+
+    def find(k):
+        while parent[k] != k:
+            parent[k] = parent[parent[k]]
+            k = parent[k]
+        return k
+    boundary_pieces = [(segments.get(index), paths[index].curve) for index in range(boundary_count)]
+    touching = [False] * len(pieces)
+    try:
+        for x in range(len(pieces)):
+            touching[x] = any(geometry.meets(pieces[x], boundary) for boundary in boundary_pieces)
+            for y in range(x + 1, len(pieces)):
+                if find(x) != find(y) and geometry.meets(pieces[x], pieces[y]):
+                    parent[max(find(x), find(y))] = min(find(x), find(y))
+    except GeometryError as error:
+        if str(error).endswith("cancelled"):
+            raise
+        raise decline("component_junction") from None
+    roots = sorted({find(k) for k in range(len(pieces))})
+    reaching = {find(k) for k in range(len(pieces)) if touching[k]}
+
+    # 5. split every component that reaches no boundary with exactly 2 seams
+    point_stations = [end["point"] for end in ends if end["kind"] == "point"]
+    extensions = []
+    for root in roots:
+        if root in reaching:
+            continue
+        members = [k for k in range(len(pieces)) if find(k) == root]
+        candidates = []
+        for k in members:
+            if k >= len(traces) or pieces[k][0] is None:
+                continue                                 # chords and curved traces are never sources
+            index = boundary_count + k
+            segment = segments[index]
+            for t in (0, 1):
+                check()
+                vertex, other = segment[t], segment[1 - t]
+                if any(stations.distance2(vertex, point) <= tol2 for point in point_stations):
+                    continue
+                degree = sum(1 for m in members if (geometry.near(boundary_count + m, vertex) if m < len(traces)
+                                                    else geometry.near(None, vertex, pieces[m][0])))
+                if degree < 2:
+                    continue
+                hit = _ring_split_extension(geometry, boundaries, segments, vertex, other, members, traces,
+                                            boundary_count, chord_segments, extent)
+                if hit is not None:
+                    candidates.append((stations.distance2(vertex, hit), len(candidates), vertex, hit))
+        if not candidates:
+            raise decline("split_candidates")
+        first = min(candidates, key=lambda item: (item[0], item[1]))
+        others = [item for item in candidates if stations.distance2(item[2], first[2]) > tol2]
+        if not others:
+            raise decline("split_candidates")
+        second = min(others, key=lambda item: (-stations.distance2(item[2], first[2]), item[1]))
+        extensions.extend((first, second))
+    extension_segments = [stations.Segment(vertex, hit, derived=True) for _d, _o, vertex, hit in extensions]
+    for x in range(len(extension_segments)):
+        for y in range(x + 1, len(extension_segments)):
+            check()
+            if not _seams_meet_only_at_shared_ends(extension_segments[x], extension_segments[y], set(), tolerance):
+                raise decline("extension_crossing")
+
+    # 6. clip every seam (exactly one piece, itself) before any mutation
+    made = []
+    for seam in (*chord_segments, *extension_segments):
+        clipped = _clip_line_exact(domain, stations.to_line(seam), tolerance, check, segment=seam, deferred=deferred)
+        if (len(clipped) != 1 or clipped[0][0] != seam[0]
+                or stations.distance2(clipped[0][1], seam[1]) > tol2):
+            raise decline("clip")
+        made.append(clipped[0])
+    for piece in made:
+        segments[len(paths)] = piece
+        paths.append(ArrangementPath(stations.to_line(piece), decomposition=True))
+    from .runtime_diagnostics import _increment
+    _increment("ring_split_applied")
+    _increment("ring_split_chords", len(chord_segments))
+    _increment("ring_split_extensions", len(extension_segments))
+    shortest = min(piece.length2() for piece in made)
+    if record is not None:
+        record["ring_split"] = True
+        record["ring_split_stats"] = {"face_id": domain.face_id, "free_ends": len(ends),
+                                      "chords": len(chord_segments),
+                                      "split_components": len(extension_segments) // 2,
+                                      "shortest_seam": math.sqrt(float(shortest))}
+
+
+def _ring_split_new_boundary_vertices(domain, arrangement, tolerance, cancellation_check):
+    """Count accepted boundary vertices absent from the input boundary, with main's vertex rule."""
+    boundary = [path.curve for loop in domain.boundaries for path in loop]
+    seen = [exact_vector(curve.evaluate(t)) for curve in boundary for t in (0., 1.)]
+    straight = {i: stations.segment_of(curve) for i, curve in enumerate(boundary) if type(curve) is LinePath}
+    tol2 = Fraction(tolerance) ** 2
+    count = 0
+    for path in arrangement.paths:
+        for t in (0., 1.):
+            if cancellation_check is not None and cancellation_check():
+                raise GeometryError("intersection arrangement cancelled")
+            point = exact_vector(path.curve.evaluate(t))
+            if any(stations.distance2(point, old) <= tol2 for old in seen):
+                continue
+            if any(stations.point_parameters(straight[i], point, tolerance) if i in straight
+                   else point_parameters(curve, stations.rounded(point), tolerance=tolerance)
+                   for i, curve in enumerate(boundary)):
+                seen.append(point)
+                count += 1
+    return count
+
+
+def _seams_meet_only_at_shared_ends(first, second, shared, tolerance):
+    """Exact: two seams have no junction except, when they share an end (``shared`` non-empty), within tol of it on
+    both."""
+    if stations.boxes_separated(first, second, tolerance):
+        return True
+    tol2 = Fraction(tolerance) ** 2
+    l1, l2 = first.length2(), second.length2()
+    common = [(s, t) for s in (0, 1) for t in (0, 1) if shared and first[s] == second[t]]
+    for a, b in stations.junctions(first, second, tolerance):
+        if not any((a - s) ** 2 * l1 <= tol2 and (b - t) ** 2 * l2 <= tol2 for s, t in common):
+            return False
+    return True
+
+
+def _ring_split_extension(geometry, boundaries, segments, vertex, other, members, traces, boundary_count,
+                          chord_segments, extent):
+    """The seam from ``vertex`` outward along its straight trace (away from ``other``) to the first straight
+    boundary hit, if that seam is certified clear (``clear``: every path, every chord, every arc; incident
+    pieces excused at ``vertex``, the hit boundary paths at the hit). None otherwise."""
+    tolerance, tol2 = geometry.tolerance, geometry.tol2
+    direction = tuple(p - q for p, q in zip(vertex, other))
+    length2 = exact_dot(direction, direction)
+    if length2 == 0:
+        return None
+    scale = 2 * Fraction(extent) / _rational_lower_sqrt(length2)
+    ray = stations.Segment(vertex, tuple(p + scale * d for p, d in zip(vertex, direction)), derived=True)
+    ray_length2 = ray.length2()
+    best = None
+    for index in range(len(boundaries)):
+        geometry.check()
+        segment = segments.get(index)
+        if segment is None or stations.boxes_separated(ray, segment, tolerance):
+            continue
+        for a, _b in stations.junctions(ray, segment, tolerance):
+            if a * a * ray_length2 > tol2 and (best is None or a < best):
+                best = a
+    if best is None:
+        return None
+    hit = stations.at(ray, best)
+    excused_vertex = {boundary_count + m for m in members if m < len(traces)
+                      and geometry.near(boundary_count + m, vertex)}
+    excused_vertex |= {("extra", k) for k, segment in enumerate(chord_segments)
+                       if geometry.near(None, vertex, segment)}
+    excused_hit = {index for index in range(len(boundaries)) if geometry.near(index, hit)}
+    if not geometry.clear(vertex, hit, excused_vertex, excused_hit, extra=chord_segments):
+        return None
+    return hit
 
 
 def _exact_outgoing_direction(chart, edge_segments, item):
@@ -949,8 +1872,12 @@ def _exact_planar_cells(domain, chains, edges, edge_segments, tolerance, native_
     for chain, area, probe in cycles:
         if area >= 0:
             continue
-        containers = [i for i, (outer, _area, _probe) in enumerate(positive)
-                      if _contains_loop_exact(chart, straight_loop(outer), probe, tolerance, boundary=False)]
+        def contains(outer):
+            loop = straight_loop(outer)
+            return _contains_loop_exact(chart, loop, probe, tolerance, boundary=False,
+                                        junctions=domain._junction_rule_applies_to(loop, probe, tolerance))
+
+        containers = [i for i, (outer, _area, _probe) in enumerate(positive) if contains(outer)]
         if not containers:
             raise GeometryError("arrangement hole has no material owner")
         owner = min(containers, key=lambda i: positive[i][1])
@@ -1600,13 +2527,144 @@ def _parameters(values, tolerance, curve=None):
     return result
 
 
+#: Seam policies of :func:`arrange_material` (RING-SPLIT RS-0). ``None`` and ``"baseline"`` are main's seams.
+ARRANGEMENT_SEAM_POLICIES = (None, "baseline", "ring_split")
+
+
 def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
-                     max_predicates=None, area_tolerance=None, points=()):
+                     max_predicates=None, area_tolerance=None, points=(), seam_policy=None):
+    """Return complete cells, preserving explicit predicate-budget semantics.
+
+    ``seam_policy`` (RING-SPLIT, opt-in): ``None``/``"baseline"`` keeps main's decomposition seams;
+    ``"ring_split"`` asks for the ring_split seams on an exact planar face (see
+    :func:`_arrange_material`); an explicit ``max_predicates`` budget keeps baseline. No environment
+    variable is read here: the planner resolves the policy once per planning call.
+    """
+    if not any(seam_policy is value or (type(seam_policy) is str and seam_policy == value)
+               for value in ARRANGEMENT_SEAM_POLICIES):
+        raise GeometryError(f"arrangement seam_policy must be one of {ARRANGEMENT_SEAM_POLICIES}")
+    context = _junction_bounds_policy(False) if max_predicates is not None else nullcontext()
+    options = {} if seam_policy in (None, "baseline") else {"seam_policy": seam_policy}
+    with context:
+        return _arrange_material(domain, traces, tolerance=tolerance,
+                                 cancellation_check=cancellation_check, max_predicates=max_predicates,
+                                 area_tolerance=area_tolerance, points=points, **options)
+
+
+#: OPT-S refusal-only retry: (cosine, sine) of the seam-direction rotation, the nearest doubles to the
+#: rational angle (3/5, 4/5) (about 53.13 degrees: not a multiple of 90, so neither seam family maps onto
+#: an authored one).
+_SEAM_RETRY_ROTATION = (0.6, 0.8)
+#: The refusals that may stem from the seam directions (decomposition seams made tangent to a trace at its
+#: own end, two seams collinear within tol whose boundary hits are not, seam-carried conservation gaps).
+_SEAM_RETRY_REFUSALS = ("arrangement contains an unresolved bridge", "arrangement failed material conservation")
+#: Module-level switch of the OPT-S retry (default on). CAP-1's snap fallback runs inside each attempt, so it
+#: decides first and the retry is the second chance; tests set this to False to observe CAP-1's own refusals.
+_SEAM_RETRY_ENABLED = True
+
+
+def _arrange_material(domain, traces, *, tolerance, cancellation_check=None,
+                      max_predicates=None, area_tolerance=None, points=(), seam_policy=None):
     """Return the complete arrangement, or raise without returning partial cells.
 
     ``max_predicates`` is an explicit optional resource budget; default planning
     has no model/intersection-count limit. The caller owns atomic application.
+
+    OPT-S: when a Plane face with decomposition seams refuses with an unresolved bridge or failed
+    material conservation, the arrangement is rebuilt once with both seam directions rotated by
+    :data:`_SEAM_RETRY_ROTATION`; every check and tolerance is unchanged. If the retry fails too, the
+    original error is raised (a cancellation during the retry propagates). Accepted first attempts are
+    returned unchanged. No retry under an explicit ``max_predicates`` budget.
+
+    RING-SPLIT (``seam_policy="ring_split"``, never under a budget): one attempt with the ring_split
+    seams first (:func:`_ring_split_attempt`). It returns only an arrangement whose ring_split layout
+    passed every unchanged check and the postconditions; otherwise (the policy declined, or a check
+    refused its layout) this face runs the unchanged baseline chain below from the start, so a
+    declined or refused face is bit-identical to baseline. A cancellation always propagates.
     """
+    traces = tuple(traces)
+    options = dict(tolerance=tolerance, cancellation_check=cancellation_check, max_predicates=max_predicates,
+                   area_tolerance=area_tolerance, points=points)
+    if seam_policy == "ring_split" and max_predicates is None:
+        arrangement = _ring_split_attempt(domain, traces, options)
+        if arrangement is not None:
+            return arrangement
+    record = {}
+    try:
+        return _arrange_material_once(domain, traces, record=record, **options)
+    except GeometryError as error:
+        if (not _SEAM_RETRY_ENABLED or str(error) not in _SEAM_RETRY_REFUSALS or not record.get("seams")
+                or max_predicates is not None):
+            raise
+        original = error
+    from .runtime_diagnostics import _increment, _timed_phase
+    _increment("arrangement_seam_rotation_retries")
+    if cancellation_check is not None and cancellation_check():
+        raise GeometryError("intersection arrangement cancelled")
+    outcome = None                                  # None: accepted; else the error to raise
+    with _timed_phase("arrangement_seam_rotation"):
+        try:
+            arrangement = _arrange_material_once(domain, traces, seam_rotation=_SEAM_RETRY_ROTATION, **options)
+        except Exception as error:
+            if isinstance(error, GeometryError) and str(error).endswith("cancelled"):
+                raise                               # a cancellation from within the retry, as raised
+            # Any other retry failure: a cancellation requested meanwhile wins, else the original refusal
+            # (raised outside this handler, so it is not chained to the retry's error).
+            cancelled = cancellation_check is not None and cancellation_check()
+            outcome = GeometryError("intersection arrangement cancelled") if cancelled else original
+    if outcome is not None:
+        raise outcome
+    _increment("arrangement_seam_rotation_accepted")
+    return arrangement
+
+
+def _ring_split_attempt(domain, traces, options):
+    """The ring_split attempt of :func:`_arrange_material`: its arrangement, or None for the baseline chain.
+
+    Where the policy declined (or the face has no free end, or is not an exact planar face) no layout
+    change was made, so this attempt IS the baseline chain's first attempt: an accepted one is returned
+    as is (bit-identical), a refused one gives None and the chain repeats it from the start (including
+    the OPT-S retry decision). Where the ring_split seams were used, None when an unchanged downstream
+    check refused that layout (``ring_split_refused``) or a postcondition failed. A cancellation --
+    raised by a check, or requested while a check refused -- propagates as the cancellation error.
+    """
+    from .runtime_diagnostics import _increment
+    cancellation_check = options["cancellation_check"]
+    record = {}
+    try:
+        arrangement = _arrange_material_once(domain, traces, seam_policy="ring_split", record=record, **options)
+    except GeometryError as error:
+        if str(error).endswith("cancelled"):
+            raise
+        if cancellation_check is not None and cancellation_check():
+            raise GeometryError("intersection arrangement cancelled") from None
+        if not record.get("ring_split"):
+            # Declined before any layout change: this attempt WAS the baseline first attempt; the chain
+            # repeats it from the start (bit-identical, including the OPT-S retry decision).
+            return None
+        _increment("ring_split_refused")
+        return None
+    if not record.get("ring_split"):
+        return arrangement                           # no layout change: the baseline first attempt itself
+    if any(cell.holes for cell in arrangement.cells):
+        _increment("ring_split_declined:postcondition_holed_cell")
+        return None
+    stats = dict(record["ring_split_stats"])
+    stats["new_boundary_vertices"] = _ring_split_new_boundary_vertices(
+        domain, arrangement, options["tolerance"], cancellation_check)
+    from .runtime_diagnostics import _record
+    _record("ring_split", stats)
+    _increment("ring_split_accepted")
+    return arrangement
+
+
+def _arrange_material_once(domain, traces, *, tolerance, cancellation_check=None,
+                           max_predicates=None, area_tolerance=None, points=(), seam_rotation=None, record=None,
+                           seam_policy=None):
+    """One arrangement attempt; ``seam_rotation`` and ``record`` (receives ``seams``, the number of
+    Plane seam ends) serve the retry of :func:`_arrange_material`. ``seam_policy="ring_split"`` asks
+    :func:`_add_exact_planar_seams` for the ring_split seams (``record["ring_split"]`` is then True
+    only when they replaced the baseline seams)."""
     native_area_tolerance = (tolerance if area_tolerance is None else area_tolerance/domain.area_jacobian)
     examined = 0
     def check():
@@ -1641,6 +2699,8 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
         else:
             paths.extend(replace(path, curve=piece) for piece in _clip(domain, curve, tolerance, check))
 
+    # RING-SPLIT: the input trace of every clipped piece (its same-trace rule); only in that mode.
+    sources = {} if seam_policy == "ring_split" else None
     if deferred:
         # S9: every input station -- boundary and trace ends as given, arrangement points -- lies on
         # the support within tol, checked before clipping or identification can drop or absorb it.
@@ -1648,11 +2708,19 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
                                 for point in stations.segment_of(path.curve)]
                        + [point for trace in traces for point in stations.segment_of(trace.curve)]
                        + [exact_vector(item.position) for item in points], tolerance)
-    for trace in traces:
+    for ordinal, trace in enumerate(traces):
+        first_piece = len(paths)
         add_clipped(trace, trace.curve)
+        if sources is not None:
+            sources.update((index, ordinal) for index in range(first_piece, len(paths)))
 
     if exact:
-        _add_exact_planar_seams(domain, boundaries, paths, segments, points, tolerance, check, deferred=deferred)
+        policy_options = ({} if seam_policy is None else
+                          {"seam_policy": seam_policy, "record": record, "sources": sources})
+        seams = _add_exact_planar_seams(domain, boundaries, paths, segments, points, tolerance, check,
+                                        deferred=deferred, rotation=seam_rotation, **policy_options)
+        if record is not None:
+            record["seams"] = seams
     else:
         # Interior-ended traces need material decomposition seams. Their physical
         # directions must not inherit scale/shear from an affine support chart.
@@ -1875,65 +2943,118 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
     if deferred:
         _close_embedding(domain, vertices, lookup, stored_of, edges, edge_segments, endpoints_by_edge, check)
 
-    outgoing = [[] for _ in vertices]
     chart_exact = ExactPlane.from_plane(domain.support) if exact else None
-    for index, ((start, end), path) in enumerate(zip(endpoints_by_edge, edges)):
-        for vertex_id, forward in ((start, True), (end, False)):
-            end_parameter = 0. if forward else 1.
-            if domain.at_apex(path.curve.evaluate(end_parameter)):
-                # Every edge leaves the collapsed apex edge upward; the plane embedding around it is the
-                # order of the azimuths (counterclockwise in the chart: decreasing u).
-                u = float(domain.uv(path.curve, end_parameter)[0])
-                outgoing[vertex_id].append((.5*math.pi+.25*math.pi*(1-2*u), None, index, forward))
-                continue
-            if index in edge_segments:
-                # A straight edge's chart direction is its exact station difference (non-zero: its
-                # vertices are distinct); its float image only serves the float order at vertices
-                # that also carry a curved edge, and a line has zero curvature.
-                du, dv = chart_exact.uv_direction(tuple(b - a for a, b in zip(*edge_segments[index])))
-                angle = math.atan2(float(dv if forward else -dv), float(du if forward else -du)) % math.tau
-                if min(angle, math.tau-angle) < 64*np.finfo(float).eps:
-                    angle = 0.
-                outgoing[vertex_id].append((angle, 0., index, forward))
-                continue
-            tangent = domain.tangent(path.curve, end_parameter)*(1 if forward else -1)
-            if np.linalg.norm(tangent) == 0:
-                raise GeometryError("arrangement endpoint needs a regular curve chart")
-            angle = math.atan2(tangent[1], tangent[0]) % math.tau
-            if min(angle, math.tau-angle) < 64*np.finfo(float).eps:
-                angle = 0.
-            curvature = domain.curvature(path.curve, end_parameter, forward)
-            outgoing[vertex_id].append((angle, curvature, index, forward))
+    entries = [_outgoing_entries(domain, chart_exact, edge_segments, index, path) for index, path in enumerate(edges)]
+    outgoing = [[] for _ in vertices]
+    for (start, end), (first_entry, second_entry) in zip(endpoints_by_edge, entries):
+        outgoing[start].append(first_entry); outgoing[end].append(second_entry)
     chart = ExactPlane.from_plane(domain.support) if exact else None
     for values in outgoing:
-        if exact and values and all(item[2] in edge_segments for item in values):
-            # D2 on planes (robust-predicate R1b step 2c): a vertex whose edges
-            # are all straight is ordered by the exact chart directions of its
-            # stations; exactly equal directions keep main's tie order. Main's
-            # atan2 order of least-squares chart tangents can differ wherever
-            # the projection error exceeds the angular gaps (inside its 64-eps
-            # grouping/snap window, and beyond it on ill-conditioned charts);
-            # the exact order is the true one for the stored data.
-            values.sort(key=functools.cmp_to_key(lambda a, b: _compare_outgoing(chart, edge_segments, a, b)))
-            continue
-        values.sort(key=lambda item: item[0])
-        groups = []
-        for value in values:
-            if not groups or value[0]-groups[-1][0][0] > 64*np.finfo(float).eps:
-                groups.append([])
-            groups[-1].append(value)
-        values.clear()
-        for group in groups:
-            if len(group) > 1 and any(value[1] is None for value in group):
-                raise GeometryError("tangent junction needs a certified higher-order chart")
-            values.extend(sorted(group, key=lambda item: (0. if item[1] is None else item[1], item[2:])))
+        _order_outgoing(values, exact, chart, edge_segments)
 
     # D3/D5 on planes (robust-predicate R1b step 2d): when the domain and every
     # edge are straight, main's cell phase (areas, drop threshold, probes,
     # material, hole ownership, conservation) runs on the exact stations.
     exact_cells = (exact and domain._exact_planar(domain.boundaries) and len(edge_segments) == len(edges))
-    exact_chains = []
-    seen, cycles = set(), []
+    exact_chains, cycles, evaluated = [], [], {}
+
+    def visit(chain):
+        if exact_cells:
+            exact_chains.append(chain)
+            return
+        item = evaluated[chain] = _float_cycle(domain, edges, chain, tolerance, native_area_tolerance)
+        if item is not None:
+            cycles.append(item)
+    _walk_cycles(edges, endpoints_by_edge, outgoing, check, visit)
+
+    if exact_cells and deferred:
+        cells, retained, outer_area = _certified_planar_cells(
+            domain, exact_chains, edges, edge_segments, endpoints_by_edge, boundary_uses,
+            tolerance, native_area_tolerance, check)
+        return MaterialArrangement(domain.face_id, tuple(edges), cells, retained, tolerance,
+                                   native_area_tolerance, domain.support, -1 if outer_area < 0 else 1,
+                                   certified=True)
+    if exact_cells:
+        cells, retained, outer_area = _exact_planar_cells(domain, exact_chains, edges, edge_segments,
+                                                          tolerance, native_area_tolerance, check)
+        return MaterialArrangement(domain.face_id, tuple(edges), cells, retained, tolerance,
+                                   native_area_tolerance, domain.support, -1 if outer_area < 0 else 1)
+    cells, retained, outer_area, original = _float_material_cells(domain, cycles, tolerance, native_area_tolerance)
+    if not cells or abs(original-retained) > native_area_tolerance:
+        failure = GeometryError("arrangement failed material conservation")
+        if exact and not deferred and edge_segments and max_predicates is None:
+            # CAP-1: refusal-only snap fallback (see _snap_fallback). It returns None, and this original
+            # error is raised unchanged, unless the closed loops pass every acceptance check.
+            snapped = _snap_fallback(domain, vertices, lookup, edges, edge_segments, endpoints_by_edge, entries,
+                                     outgoing, evaluated, cells, (outer_area, original), retained, tolerance,
+                                     native_area_tolerance, cancellation_check, chart_exact, chart)
+            if snapped is not None:
+                return snapped
+        raise failure
+    return MaterialArrangement(domain.face_id, tuple(edges), cells, retained, tolerance,
+                               native_area_tolerance, domain.support, -1 if outer_area < 0 else 1)
+
+
+def _outgoing_entries(domain, chart_exact, edge_segments, index, path):
+    """The outgoing-order entries ``(angle, curvature, edge, forward)`` of edge ``index`` at its start and end."""
+    result = []
+    for forward in (True, False):
+        end_parameter = 0. if forward else 1.
+        if domain.at_apex(path.curve.evaluate(end_parameter)):
+            # Every edge leaves the collapsed apex edge upward; the plane embedding around it is the
+            # order of the azimuths (counterclockwise in the chart: decreasing u).
+            u = float(domain.uv(path.curve, end_parameter)[0])
+            result.append((.5*math.pi+.25*math.pi*(1-2*u), None, index, forward))
+            continue
+        if index in edge_segments:
+            # A straight edge's chart direction is its exact station difference (non-zero: its
+            # vertices are distinct); its float image only serves the float order at vertices
+            # that also carry a curved edge, and a line has zero curvature.
+            du, dv = chart_exact.uv_direction(tuple(b - a for a, b in zip(*edge_segments[index])))
+            angle = math.atan2(float(dv if forward else -dv), float(du if forward else -du)) % math.tau
+            if min(angle, math.tau-angle) < 64*np.finfo(float).eps:
+                angle = 0.
+            result.append((angle, 0., index, forward))
+            continue
+        tangent = domain.tangent(path.curve, end_parameter)*(1 if forward else -1)
+        if np.linalg.norm(tangent) == 0:
+            raise GeometryError("arrangement endpoint needs a regular curve chart")
+        angle = math.atan2(tangent[1], tangent[0]) % math.tau
+        if min(angle, math.tau-angle) < 64*np.finfo(float).eps:
+            angle = 0.
+        curvature = domain.curvature(path.curve, end_parameter, forward)
+        result.append((angle, curvature, index, forward))
+    return tuple(result)
+
+
+def _order_outgoing(values, exact, chart, edge_segments):
+    """Sort one vertex's outgoing entries in place (the embedding order of the half-edge walk)."""
+    if exact and values and all(item[2] in edge_segments for item in values):
+        # D2 on planes (robust-predicate R1b step 2c): a vertex whose edges
+        # are all straight is ordered by the exact chart directions of its
+        # stations; exactly equal directions keep main's tie order. Main's
+        # atan2 order of least-squares chart tangents can differ wherever
+        # the projection error exceeds the angular gaps (inside its 64-eps
+        # grouping/snap window, and beyond it on ill-conditioned charts);
+        # the exact order is the true one for the stored data.
+        values.sort(key=functools.cmp_to_key(lambda a, b: _compare_outgoing(chart, edge_segments, a, b)))
+        return
+    values.sort(key=lambda item: item[0])
+    groups = []
+    for value in values:
+        if not groups or value[0]-groups[-1][0][0] > 64*np.finfo(float).eps:
+            groups.append([])
+        groups[-1].append(value)
+    values.clear()
+    for group in groups:
+        if len(group) > 1 and any(value[1] is None for value in group):
+            raise GeometryError("tangent junction needs a certified higher-order chart")
+        values.extend(sorted(group, key=lambda item: (0. if item[1] is None else item[1], item[2:])))
+
+
+def _walk_cycles(edges, endpoints_by_edge, outgoing, check, visit):
+    """Walk every half-edge cycle of the embedding once; ``visit`` receives each cycle that is not a bridge."""
+    seen = set()
     for index in range(len(edges)):
         for forward in (True, False):
             start = (index, forward)
@@ -1958,36 +3079,28 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
                 if len(chain) > 2:
                     raise GeometryError("arrangement contains an unresolved bridge")
                 continue
-            if exact_cells:
-                exact_chains.append(tuple(chain))
-                continue
-            loop = tuple(ArrangementPath(edges[e].curve if direction else edges[e].curve.subcurve(1., 0.))
-                         for e, direction in chain)
-            area = domain.area_loop(loop, native_area_tolerance*.05)
-            if abs(area) <= tolerance*tolerance:
-                continue
-            curve = loop[0].curve
-            middle = domain.uv(curve, .5)
-            tangent = domain.tangent(curve, .5)
-            probe = domain.left_probe(middle, tangent, 2*tolerance)
-            material = (domain.contains_loop(domain.boundaries[0], probe, tolerance, boundary=False)
-                        and not any(domain.contains_loop(hole, probe, tolerance, boundary=True)
-                                    for hole in domain.boundaries[1:]))
-            if material:
-                cycles.append((tuple(chain), loop, area))
+            visit(tuple(chain))
 
-    if exact_cells and deferred:
-        cells, retained, outer_area = _certified_planar_cells(
-            domain, exact_chains, edges, edge_segments, endpoints_by_edge, boundary_uses,
-            tolerance, native_area_tolerance, check)
-        return MaterialArrangement(domain.face_id, tuple(edges), cells, retained, tolerance,
-                                   native_area_tolerance, domain.support, -1 if outer_area < 0 else 1,
-                                   certified=True)
-    if exact_cells:
-        cells, retained, outer_area = _exact_planar_cells(domain, exact_chains, edges, edge_segments,
-                                                          tolerance, native_area_tolerance, check)
-        return MaterialArrangement(domain.face_id, tuple(edges), cells, retained, tolerance,
-                                   native_area_tolerance, domain.support, -1 if outer_area < 0 else 1)
+
+def _float_cycle(domain, edges, chain, tolerance, native_area_tolerance):
+    """``(chain, loop, area)`` of a material cycle on the float route, or None (negligible or not material)."""
+    loop = tuple(ArrangementPath(edges[e].curve if direction else edges[e].curve.subcurve(1., 0.))
+                 for e, direction in chain)
+    area = domain.area_loop(loop, native_area_tolerance*.05)
+    if abs(area) <= tolerance*tolerance:
+        return None
+    curve = loop[0].curve
+    middle = domain.uv(curve, .5)
+    tangent = domain.tangent(curve, .5)
+    probe = domain.left_probe(middle, tangent, 2*tolerance)
+    material = (domain.contains_loop(domain.boundaries[0], probe, tolerance, boundary=False)
+                and not any(domain.contains_loop(hole, probe, tolerance, boundary=True)
+                            for hole in domain.boundaries[1:]))
+    return (chain, loop, area) if material else None
+
+
+def _float_material_cells(domain, cycles, tolerance, native_area_tolerance, areas=None):
+    """Cells (hole ownership), retained and original area of the float route; ``areas`` reuses the domain's."""
     positive = [item for item in cycles if item[2] > 0]
     holes = [[] for _ in positive]
     for chain, loop, area in cycles:
@@ -2003,13 +3116,463 @@ def arrange_material(domain, traces, *, tolerance, cancellation_check=None,
         holes[owner].append(chain)
     cells = tuple(ArrangementCell(chain, tuple(holes[index]))
                   for index, (chain, _loop, _area) in enumerate(positive))
-    outer_area = domain.area_loop(domain.boundaries[0], native_area_tolerance*.05)
-    original = abs(outer_area)-sum(
-        abs(domain.area_loop(loop, native_area_tolerance*.05)) for loop in domain.boundaries[1:])
+    if areas is None:
+        outer_area = domain.area_loop(domain.boundaries[0], native_area_tolerance*.05)
+        original = abs(outer_area)-sum(
+            abs(domain.area_loop(loop, native_area_tolerance*.05)) for loop in domain.boundaries[1:])
+    else:
+        outer_area, original = areas
     retained = sum(item[2] for item in cycles)
-    if not cells or abs(original-retained) > native_area_tolerance:
-        raise GeometryError("arrangement failed material conservation")
-    return MaterialArrangement(domain.face_id, tuple(edges), cells, retained, tolerance,
+    return cells, retained, outer_area, original
+
+
+#: Residual closure bound of the snap fallback, as a fraction of the vertex-merge tolerance: after snapping,
+#: every cell loop must close within ``tolerance * _SNAP_RESIDUAL_GAP`` (about 9.8e-13 m at 1e-9). Only curved
+#: ends (which never move) can still differ; measured on tripod cap 1082: 1.6e-14 m. The bound is below the
+#: largest loop gap the unchanged float route accepts on ordinary faces (1.1e-12 m on cap 1083).
+_SNAP_RESIDUAL_GAP = Fraction(1, 1024)
+
+
+def _snap_open_vertices(edges, edge_segments, endpoints_by_edge, representatives, *, tolerance):
+    """Close the cell loops at their identified vertices by moving straight edge ends; None if not allowed.
+
+    A vertex is open when the exact end points of its incident edges differ (straight ends: their stations;
+    curved ends: their float evaluation, which is their position). Its canonical point is the end of its
+    first incident curved edge (curved pieces cannot move), else the vertex's representative (the station
+    every member was identified against). Every straight end at an open vertex moves to it. Returns None
+    when any end would move farther than ``tolerance`` (the vertex-merge tolerance; exact comparison), when
+    the curved ends of a vertex differ from its canonical point by more than the residual bound
+    ``tolerance * _SNAP_RESIDUAL_GAP`` (they cannot be closed by moving straight ends), or when a moved edge
+    would collapse (equal stations, or equal correctly rounded stations).
+    Returns ``(edges, edge_segments, moved edge indices, max squared move, snapped vertices, vertices
+    whose curved ends differ, max squared curved disagreement)``; the inputs are not modified.
+    """
+    ends = [[] for _ in representatives]
+    for index, (start, end) in enumerate(endpoints_by_edge):
+        segment = edge_segments.get(index)
+        for k, vertex_id in ((0, start), (1, end)):
+            point = segment[k] if segment is not None else exact_vector(edges[index].curve.evaluate(float(k)))
+            ends[vertex_id].append((index, k, point))
+    tol2 = Fraction(tolerance) ** 2
+    residual2 = (Fraction(tolerance) * _SNAP_RESIDUAL_GAP) ** 2
+    replaced, max_move2, max_curved2, snapped_vertices, open_curved = {}, Fraction(0), Fraction(0), 0, 0
+    for vertex_id, items in enumerate(ends):
+        if len({point for _index, _k, point in items}) <= 1:
+            continue
+        curved = [point for index, _k, point in items if index not in edge_segments]
+        canonical = curved[0] if curved else representatives[vertex_id]
+        if len(set(curved)) > 1:
+            open_curved += 1
+            for point in curved[1:]:
+                gap2 = stations.distance2(point, canonical)
+                if gap2 > residual2:
+                    return None
+                max_curved2 = max(max_curved2, gap2)
+        straight = [(index, k, point) for index, k, point in items if index in edge_segments and point != canonical]
+        if not straight:
+            continue
+        snapped_vertices += 1
+        for index, k, point in straight:
+            move2 = stations.distance2(point, canonical)
+            if move2 > tol2:
+                return None
+            max_move2 = max(max_move2, move2)
+            replaced.setdefault(index, list(edge_segments[index]))[k] = canonical
+    new_edges, new_segments = list(edges), dict(edge_segments)
+    for index, (a, b) in replaced.items():
+        if a == b or stations.rounded(a) == stations.rounded(b):
+            return None
+        piece = stations.Segment(a, b, derived=True)
+        new_segments[index] = piece
+        new_edges[index] = replace(edges[index], curve=stations.to_line(piece))
+    return new_edges, new_segments, set(replaced), max_move2, snapped_vertices, open_curved, max_curved2
+
+
+def _orient(a, b, c) -> Fraction:
+    return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+
+def _chart_segments_clear(first, second, shared) -> bool:
+    """Exact: the chart segments ``first`` and ``second`` meet at most in their shared end point.
+
+    ``shared`` is True when the two edges share a vertex; then their ends at it must be the same exact
+    point (the snap makes them so) and the segments may not overlap from it. Otherwise they may not meet.
+    """
+    p, q = first
+    r, s = second
+    if shared:
+        common = next(((a, b) for a in (p, q) for b in (r, s) if a == b), None)
+        if common is None:
+            return False
+        x = common[0]
+        a = q if p == x else p
+        b = s if r == x else r
+        if _orient(x, a, b) != 0:
+            return True
+        # Collinear from the common point: they overlap unless they leave it in opposite directions.
+        return (a[0] - x[0]) * (b[0] - x[0]) + (a[1] - x[1]) * (b[1] - x[1]) < 0
+    d1, d2 = _orient(r, s, p), _orient(r, s, q)
+    d3, d4 = _orient(p, q, r), _orient(p, q, s)
+    if ((d1 > 0 and d2 < 0) or (d1 < 0 and d2 > 0)) and ((d3 > 0 and d4 < 0) or (d3 < 0 and d4 > 0)):
+        return False
+
+    def on(a, b, c):                                            # c on the closed segment ab (collinear given)
+        return (min(a[0], b[0]) <= c[0] <= max(a[0], b[0])) and (min(a[1], b[1]) <= c[1] <= max(a[1], b[1]))
+    return not ((d1 == 0 and on(r, s, p)) or (d2 == 0 and on(r, s, q))
+                or (d3 == 0 and on(p, q, r)) or (d4 == 0 and on(p, q, s)))
+
+
+#: No shallow-touch excuse (CAP-1 contract decision, 2026-10-29). Fix rounds 1 and 2 excused a contact of a
+#: snapped straight edge with an incident arc away from the shared vertex when it looked like a tolerance-deep
+#: tangential touch (fix 1: depth <= tol; fix 2: plus tangency at the shared vertex and confinement to a
+#: 1024 tol disc). Codex R2 and R3 broke both with transversal crossings that pass every such condition (a
+#: flat ellipse crossed at ~90 deg 2 m away; a thin ellipse turning sharply inside the disc, 96 variants; a
+#: major arc whose tip is 1 cm from the vertex and 1000 tol off the tangent line): a condition at the vertex
+#: does not certify the arc between the vertex and the contact. The fallback now fails closed: any contact
+#: beyond the closure bound of a shared vertex refuses (tripod cap 1082 with the single wall-449 trace needed
+#: the excuse and now refuses with the original conservation error; the 121-face 1082 subset never used it).
+
+
+#: Float shortcuts of the snap-fallback validators (CAP-1 R5 class rule, after Codex R4 found a subnormal
+#: discriminant). A float quantity may let a validator skip work, or feed an acceptance decision, only where its
+#: error is proven smaller than the margin it is compared with; wherever that cannot be guaranteed the shortcut
+#: is declined and the exact/certified test decides (or the fallback refuses with the original error):
+#: - a square root is enclosed by exact rational squaring of a float proposal made on an exactly normalised value
+#:   (``_root_angle_enclosures``): the enclosure holds whatever the conversion and rounding errors were;
+#: - float angles feed the turn skip only within ``|angle| <= _FLOAT_ANGLE_WINDOW`` rad (errors < 1e-12 there,
+#:   against the 1e-9 margin);
+#: - the world-box prefilter skips pairs only when every float in it is finite and its error bound is within the
+#:   tolerance each box is widened by (``_snapped_edges_clear``);
+#: - a rational converted to a float for a decision must convert faithfully (``_float_faithful``: zero or a
+#:   normal double, relative error <= 2**-53); a conversion that overflows (``OverflowError``) refuses;
+#: - the final conservation comparison is written so that NaN fails it.
+_FLOAT_ANGLE_WINDOW = 1024
+#: Error factor of the world-box prefilter (in units of eps * magnitude / sin(chart angle)); see
+#: ``_snapped_edges_clear``. The analysed bound is below 64; 256 leaves slack.
+_PREFILTER_ERROR_FACTOR = 256
+_FLOAT_NORMAL_MIN = Fraction(2) ** -1022
+_FLOAT_MAX = Fraction(np.finfo(float).max)
+
+
+def _float_faithful(value: Fraction) -> bool:
+    """``float(value)`` is finite with relative error <= 2**-53: ``value`` is zero or in the normal double range."""
+    magnitude = abs(value)
+    return magnitude == 0 or _FLOAT_NORMAL_MIN <= magnitude <= _FLOAT_MAX
+
+
+def _chart_segment_arc_clear(chart, segment, arc, shared, radius2, check=None) -> bool:
+    """Certified: the chart image of the straight ``segment`` meets the arc's chart image only within
+    ``sqrt(radius2)`` (world) of a shared vertex. ``shared`` lists the segment's exact end point at every
+    vertex the two edges share (empty for a non-incident pair, which may not meet at all). Any other
+    contact, however shallow or nearly tangential, makes the pair not clear (no touch excuse; see the
+    comment above).
+
+    The segment's chart line is ``n . uv(X) = n . uv(a)``; on the arc ``X = C + U cos + V sin`` this is
+    ``c0 + c1 cos + c2 sin = 0`` with exact rational coefficients. Its roots (exact tan-half-angle
+    quadratic irrationals, ``planar_arcs.first_harmonic_angles``) are tested against the stored sweep and the
+    segment's parameter range by certified comparisons; an undecidable tie raises (the caller refuses).
+    """
+    from .exact_predicates import exact
+    from .planar_arcs import Num, _dot, _end_angle, _turn_range, _turned, arc_point, compare, first_harmonic_angles
+    if type(arc.curve) is not EllipticArc:
+        return False                                             # no certified test for other curve kinds
+    curve = arc.curve
+    a, b = segment
+    ua, ub = chart.uv(a), chart.uv(b)
+    du, dv = ub[0] - ua[0], ub[1] - ua[1]
+    n = (-dv, du)
+    # uv(X) = ((X - O) . Du, (X - O) . Dv) / scale, so n . uv(X) = w . X - w . O.
+    w = tuple((n[0] * x + n[1] * y) / chart._scale for x, y in zip(chart._dual_u, chart._dual_v))
+    offset = exact_dot(w, chart.origin) + n[0] * ua[0] + n[1] * ua[1]
+    c0 = exact_dot(w, exact_vector(curve.center)) - offset
+    c1 = exact_dot(w, exact_vector(curve.u_vector))
+    c2 = exact_dot(w, exact_vector(curve.v_vector))
+    if c1 * c1 + c2 * c2 < c0 * c0:
+        return True                                              # the line misses the whole ellipse
+
+    def within(point, centres, bound2):
+        return any(compare(_dot(delta, delta), bound2) <= 0
+                   for x in centres for delta in [tuple(p - Num(c) for p, c in zip(point, x))])
+    length2 = du * du + dv * dv
+    du_w = tuple((du * x + dv * y) / chart._scale for x, y in zip(chart._dual_u, chart._dual_v))
+    start, end = exact(curve.start_angle), _end_angle(curve)
+    lower, upper = min(start, end), max(start, end)
+    turns = _turn_range(lower, upper, Fraction(0))
+    angles = first_harmonic_angles(c0, c1, c2)
+    # Float turn skip only inside the angle window (see _FLOAT_ANGLE_WINDOW): there |turn| < 170, and float(lower),
+    # float(upper) (exact: stored doubles), 2 pi turn in float (|math.pi - pi| 2 |turn| + one rounding) and the
+    # two float sums err by less than 1e-12 rad in all, far inside the 1e-9 margin.
+    enclosures = (_root_angle_enclosures(c0, c1, c2, len(angles))
+                  if max(abs(lower), abs(upper)) <= _FLOAT_ANGLE_WINDOW else None)
+    lower_f, upper_f = float(lower), float(upper)
+    for number, angle in enumerate(angles):
+        for turn in turns:
+            if check is not None:
+                check()
+            if enclosures is not None:
+                # Outward float enclosure of theta + 2 pi turn: a turn certainly outside the sweep (by more
+                # than 1e-9 rad) skips the certified comparisons; anything closer is decided by them.
+                lo, hi = enclosures[number]
+                shift = 2 * math.pi * turn
+                if hi + shift + 1e-9 < lower_f or lo + shift - 1e-9 > upper_f:
+                    continue
+            candidate = _turned(angle, turn)
+            if compare(candidate.theta, lower) < 0 or compare(candidate.theta, upper) > 0:
+                continue
+            point = arc_point(curve, candidate)
+            # Segment parameter of the root: ((uv(X) - uv(a)) . d) / |d|^2.
+            along = (_dot(du_w, point) - exact_dot(du_w, chart.origin) - du * ua[0] - dv * ua[1]) / Num(length2)
+            if compare(along, 0) < 0 or compare(along, 1) > 0:
+                continue
+            if within(point, shared, radius2):
+                continue                                         # the shared vertex itself
+            return False                                         # any other contact refuses (fail closed)
+    return True
+
+
+def _root_angle_enclosures(c0, c1, c2, count):
+    """Float enclosures ``(lo, hi)`` (widened by 1e-12 rad) of the root angles of ``c0 + c1 cos + c2 sin``, in
+    ``planar_arcs.first_harmonic_angles`` order, or None (then every root is decided by certified comparisons).
+
+    The roots are ``2 atan(x)`` with ``x = (-b +- sqrt(D)) / (2 a)`` (``a = c0 - c1``, ``b = 2 c2``,
+    ``c = c0 + c1``, ``D = b^2 - 4 a c``). ``sqrt(D)`` is enclosed in ``[lo, hi]``, its float proposal widened by
+    a relative 1e-12, and the enclosure is used only when exact rational squaring certifies
+    ``lo^2 <= D <= hi^2`` (no float error is assumed; REVIEW-CAP1-R4: ``float(D)`` of a subnormal ``D`` lost
+    all relative precision). The proposal is made on ``D / 4^k`` in ``(1/2, 4)`` (exact), so it is a normal
+    double at every scale and, wherever ``float(D)`` is normal, bit-identical to ``sqrt(float(D))``. ``x`` is
+    enclosed by exact rational arithmetic on ``[lo, hi]`` (monotone in ``sqrt(D)``); ``float(x)`` errs by at most
+    ``2^-53 |x| + 2^-1075`` and ``atan`` is 1-Lipschitz, so with ``atan``'s rounding (a few 1e-16) this stays far
+    inside the 1e-12 widening; an ``x`` beyond the double range declines (None).
+    """
+    a, b, c = c0 - c1, 2 * c2, c0 + c1
+    discriminant = b * b - 4 * a * c
+    if a == 0 or discriminant <= 0 or count != 2:
+        return None
+    k = (discriminant.numerator.bit_length() - discriminant.denominator.bit_length()) // 2
+    power = Fraction(2) ** k
+    root = Fraction(math.sqrt(float(discriminant / (power * power)))) * power
+    lo_root, hi_root = root * (1 - Fraction(1, 10 ** 12)), root * (1 + Fraction(1, 10 ** 12))
+    if not lo_root * lo_root <= discriminant <= hi_root * hi_root:
+        return None                                              # the proposal is not certified
+    result = []
+    for sign in (1, -1):
+        ends = sorted(((-b + sign * value) / (2 * a)) for value in (lo_root, hi_root))
+        if not all(abs(end) <= _FLOAT_MAX for end in ends):
+            return None
+        result.append((2 * math.atan(float(ends[0])) - 1e-12, 2 * math.atan(float(ends[1])) + 1e-12))
+    return result
+
+
+def _snapped_edges_clear(chart, edges, segments, endpoints_by_edge, moved, tolerance, check=None) -> bool:
+    """Every moved straight edge meets every other edge only at a shared vertex (chart image).
+
+    Straight pairs are decided exactly (``_chart_segments_clear``); straight/arc pairs by the certified root
+    test (``_chart_segment_arc_clear``: only intersections within twice the residual closure bound of a
+    shared vertex are excused; no touch excuse); any other curved partner refuses. Pairs whose
+    world boxes, each widened by its height bound above the support plane plus tol, are separated cannot
+    meet in the chart and are skipped, provided the float prefilter is trustworthy: every float in it is finite
+    and its error bound ``_PREFILTER_ERROR_FACTOR * eps * M / sin(u, v)`` is within ``tol`` (``M`` the largest
+    magnitude among the origin, the boxes, the heights and each arc's ``(|C| + |U| + |V|) (2 + |end angles|)``;
+    ``sin(u, v)`` the chart basis angle). The bound covers the arc boxes' float evaluation (``bounds`` widens
+    by 16 eps (|C| + |U| + |V|); its angles err by eps |angle|), the float normal (error ~4 eps / sin(u, v)) times
+    the lever ``|X - O| <= 2 M``, and the float sums of the expansion and comparison; segment boxes are outward
+    by construction. Each box carries ``tol`` of margin, two per pair against the errors of two. Otherwise
+    (overflow, nan from a degenerate float normal, huge coordinates against a small tol) no pair is skipped.
+    ``check`` (cancellation) is polled for every pair and root.
+    """
+    count = len(edges)
+    lo, hi, height = np.empty((count, 3)), np.empty((count, 3)), np.empty(count)
+    extent, unbounded = np.zeros(count), np.zeros(count, dtype=bool)   # unbounded: no height bound (never skipped)
+    with np.errstate(all="ignore"):                    # overflow / nan are detected below, not warned about
+        origin = np.asarray(stations.rounded(chart.origin))
+        u_float, v_float = np.asarray(stations.rounded(chart.u_vector)), np.asarray(stations.rounded(chart.v_vector))
+        normal = np.cross(u_float, v_float)
+        sine = np.linalg.norm(normal) / (np.linalg.norm(u_float) * np.linalg.norm(v_float))
+        normal = normal / np.linalg.norm(normal)
+        for index, path in enumerate(edges):
+            if index in segments:
+                lo[index], hi[index] = segments[index].lo, segments[index].hi
+                height[index] = max(abs(float(normal @ (np.asarray(stations.rounded(point)) - origin)))
+                                    for point in segments[index])
+            else:
+                lo[index], hi[index] = path.curve.bounds()
+                curve = path.curve
+                height[index] = (abs(float(normal @ (np.asarray(curve.center, dtype=float) - origin)))
+                                 + abs(float(normal @ np.asarray(curve.u_vector, dtype=float)))
+                                 + abs(float(normal @ np.asarray(curve.v_vector, dtype=float)))
+                                 if type(curve) is EllipticArc else math.inf)
+                if type(curve) is EllipticArc:
+                    extent[index] = (float(np.max(np.abs(curve.center) + np.abs(curve.u_vector)
+                                                  + np.abs(curve.v_vector)))
+                                     * (2 + max(abs(curve.start_angle), abs(curve.start_angle + curve.sweep_angle))))
+                else:
+                    unbounded[index] = True
+        # Chart images meet only where the world points are within both edges' heights above the support.
+        expand = (height + tolerance)[:, None]
+        bounded = ~unbounded
+        magnitude = max(float(np.max(np.abs(origin))), float(np.max(np.abs(lo[bounded]), initial=0.)),
+                        float(np.max(np.abs(hi[bounded]), initial=0.)), float(np.max(height[bounded], initial=0.)),
+                        float(np.max(extent, initial=0.)))
+        trusted = bool(np.isfinite(sine) and sine > 0 and np.all(np.isfinite(normal)) and math.isfinite(magnitude)
+                       and np.all(np.isfinite(lo[bounded])) and np.all(np.isfinite(hi[bounded]))
+                       and np.all(np.isfinite(height[bounded]))
+                       and _PREFILTER_ERROR_FACTOR * np.finfo(float).eps * magnitude / sine <= tolerance)
+        lo, hi = lo - expand, hi + expand
+    radius2 = (2 * Fraction(tolerance) * _SNAP_RESIDUAL_GAP) ** 2
+    uv = {}
+
+    def chart_segment(index):
+        if index not in uv:
+            uv[index] = tuple(chart.uv(point) for point in segments[index])
+        return uv[index]
+    for index in sorted(moved):
+        near = (np.flatnonzero(np.all(lo <= hi[index], axis=1) & np.all(hi >= lo[index], axis=1)) if trusted
+                else range(count))
+        for other in near:
+            if check is not None:
+                check()
+            other = int(other)
+            if other == index:
+                continue
+            shared = set(endpoints_by_edge[index]) & set(endpoints_by_edge[other])
+            if other in segments:
+                if not _chart_segments_clear(chart_segment(index), chart_segment(other), bool(shared)):
+                    return False
+                continue
+            # the segment's end at every vertex it shares with the arc
+            excused = [segments[index][k] for k in (0, 1) if endpoints_by_edge[index][k] in shared]
+            if not _chart_segment_arc_clear(chart, segments[index], edges[other], excused, radius2, check):
+                return False
+    return True
+
+
+def _cycle_ends(edges, segments, chain):
+    """``(entry, exit)`` exact points of each piece of a cycle, in walking order."""
+    result = []
+    for index, forward in chain:
+        if index in segments:
+            first, last = segments[index]
+        else:
+            curve = edges[index].curve
+            first, last = exact_vector(curve.evaluate(0.)), exact_vector(curve.evaluate(1.))
+        result.append((first, last) if forward else (last, first))
+    return result
+
+
+def _snap_fallback(domain, vertices, lookup, edges, edge_segments, endpoints_by_edge, entries, outgoing,
+                   evaluated, first_cells, areas, refused_retained, tolerance, native_area_tolerance,
+                   cancellation_check, chart_exact, chart):
+    """CAP-1 refusal-only fallback of the float cell route on a Plane support; None means refuse as before.
+
+    Called only after the unchanged conservation check refused, so every accepted arrangement is
+    untouched. The per-path parameter merge can keep different parameters of one exact crossing on
+    different paths; vertex identity joins them, but each straight edge keeps its own end station, so cell
+    loops stay open by up to the merge tolerance and their Green areas miss the check. Here the loops are
+    closed at the identified vertices (``_snap_open_vertices``: straight ends only, each move at most the
+    vertex-merge tolerance, curved ends within the residual bound). The result is accepted only if all of
+    these hold, else None:
+    - no moved edge meets another edge except at a shared vertex (``_snapped_edges_clear``);
+    - the embedding walk yields exactly the first pass's cycles, each with the same negligible/material
+      decision and area sign, and the same cells and hole ownership (snapping moved geometry only);
+    - every cycle closes within ``tolerance * _SNAP_RESIDUAL_GAP`` (exact distances);
+    - the unchanged conservation check with the unchanged tolerance.
+    Cycles without a moved edge reuse their first-pass loop, area and material decision. Any GeometryError
+    on the way returns None; a cancellation propagates.
+    """
+    from time import perf_counter
+    from .runtime_diagnostics import _increment, _record
+    started = perf_counter()
+    _increment("arrangement_snap_fallback_attempts")
+    cancelled = []
+
+    def check():
+        if cancellation_check is not None and cancellation_check():
+            cancelled.append(True)
+            raise GeometryError("intersection arrangement cancelled")
+
+    outer_area, original = areas
+    accepted = False
+    try:
+        representatives = [station if station is not None else exact_vector(vertices[vertex_id])
+                           for vertex_id, station in enumerate(lookup.exact)]
+        check()
+        snapped = _snap_open_vertices(edges, edge_segments, endpoints_by_edge, representatives, tolerance=tolerance)
+        check()
+        if snapped is not None:
+            new_edges, new_segments, moved, max_move2, snapped_vertices, open_curved, max_curved2 = snapped
+            if moved and _snapped_edges_clear(chart, new_edges, new_segments, endpoints_by_edge, moved, tolerance,
+                                              check):
+                new_entries = list(entries)
+                for index in sorted(moved):
+                    check()
+                    # The float order at a vertex with a curved edge uses atan2 of this direction's floats: they
+                    # must convert faithfully (see _FLOAT_ANGLE_WINDOW's comment), else refuse.
+                    direction = chart_exact.uv_direction(tuple(b - a for a, b in zip(*new_segments[index])))
+                    if not all(_float_faithful(value) for value in direction):
+                        raise GeometryError("snapped edge direction is outside the float range")
+                    new_entries[index] = _outgoing_entries(domain, chart_exact, new_segments, index, new_edges[index])
+                touched = {vertex_id: [] for index in sorted(moved) for vertex_id in endpoints_by_edge[index]}
+                for (start, end), (first_entry, second_entry) in zip(endpoints_by_edge, new_entries):
+                    if start in touched:
+                        touched[start].append(first_entry)
+                    if end in touched:
+                        touched[end].append(second_entry)
+                new_outgoing = list(outgoing)
+                for vertex_id, values in touched.items():
+                    check()
+                    _order_outgoing(values, True, chart, new_segments)
+                    new_outgoing[vertex_id] = values
+                cycles, walked, same = [], set(), [True]
+                gap_bound2 = (Fraction(tolerance) * _SNAP_RESIDUAL_GAP) ** 2
+                max_gap2 = [Fraction(0)]
+
+                def visit(chain):
+                    walked.add(chain)
+                    if chain not in evaluated:
+                        same[0] = False
+                        return
+                    old = evaluated[chain]
+                    ends = _cycle_ends(new_edges, new_segments, chain)
+                    for k, (_entry, exit_point) in enumerate(ends):
+                        following = ends[(k + 1) % len(ends)][0]
+                        if following != exit_point:
+                            max_gap2[0] = max(max_gap2[0], stations.distance2(exit_point, following))
+                    if not any(index in moved for index, _direction in chain):
+                        item = old
+                    else:
+                        item = _float_cycle(domain, new_edges, chain, tolerance, native_area_tolerance)
+                        if (item is None) != (old is None) or (item is not None and (item[2] > 0) != (old[2] > 0)):
+                            same[0] = False
+                    if item is not None:
+                        cycles.append(item)
+                _walk_cycles(new_edges, endpoints_by_edge, new_outgoing, check, visit)
+                if same[0] and walked == set(evaluated) and max_gap2[0] <= gap_bound2:
+                    check()
+                    cells, retained, _outer, _original = _float_material_cells(domain, cycles, tolerance,
+                                                                               native_area_tolerance, areas)
+                    # The unchanged conservation inequality and tolerance, written so that NaN fails it.
+                    accepted = (cells == first_cells and bool(cells)
+                                and abs(original-retained) <= native_area_tolerance)
+    except (GeometryError, OverflowError):            # OverflowError: a rational beyond the double range
+        if cancelled:
+            raise
+        accepted = False
+    # A cancellation requested while a validator was refusing (validators may not poll) or during the final
+    # material-cell computation is still a cancellation: polled before committing either outcome.
+    check()
+    if not accepted:
+        _increment("arrangement_snap_fallback_refusals")
+        return None
+    _increment("arrangement_snap_fallbacks")
+    _increment("arrangement_snap_moved_edges", len(moved))
+    _record("arrangement_snap_fallback", {
+        "face_id": domain.face_id, "moved_edges": len(moved), "snapped_vertices": snapped_vertices,
+        "open_curved_vertices": open_curved, "max_move": math.sqrt(max_move2),
+        "max_curved_disagreement": math.sqrt(max_curved2), "max_cycle_gap": math.sqrt(max_gap2[0]),
+        "refused_ratio": float(abs(original-refused_retained)/native_area_tolerance),
+        "accepted_ratio": float(abs(original-retained)/native_area_tolerance),
+        "seconds": perf_counter()-started})
+    return MaterialArrangement(domain.face_id, tuple(new_edges), cells, retained, tolerance,
                                native_area_tolerance, domain.support, -1 if outer_area < 0 else 1)
 
 
@@ -2047,15 +3610,72 @@ def _prepare_exact_boundary_line(chart, curve):
     )
 
 
-def _exact_horizontal_roots(chart, curve, level, tolerance, *, prepared=None):
+def _following_index(count, index, roots_at):
+    """Index of the next curve after ``index`` with roots (horizontal curves, None roots, walked over)."""
+    return next((index + distance) % count for distance in range(1, count + 1)
+                if roots_at((index + distance) % count)[0] is not None)
+
+
+def _junction_on_ray(count, index, roots_at):
+    """Whether the junction after the non-horizontal curve ``index`` lies on the ray (T2-0 fix 2).
+
+    ``roots_at(i)`` is (roots, ends) of curve ``i``: its ray roots (None when it lies
+    on the ray) and its ends (0, 1) within the tolerance band of the level. The
+    junction's vertex lies on the ray when either band test accepts it or a
+    horizontal run (curves within the band) joins the two curves. Only then may a
+    junction crossing be located at the vertex; off the band it is located at the
+    skipped end root, up to 8 eps of the curve's length away from the vertex
+    (``MaterialDomain._unowned_junction_crossing``). Shared by the float and both
+    exact routes.
+    """
+    if 1 in roots_at(index)[1]:
+        return True
+    following = _following_index(count, index, roots_at)
+    return 0 in roots_at(following)[1] or following != (index + 1) % count
+
+
+def _compare_numbers(a, b) -> int:
+    return int(a > b) - int(a < b)
+
+
+def _window_roots_ambiguous(count, roots_at, parameters, window, compare) -> bool:
+    """Clause (c) of the junction rule's domain: whether this query's roots leave it.
+
+    True when a curve has two roots within 8 eps of the same end, or a curve's root strictly inside its
+    end window (``1 - 8 eps <= t < 1``) meets the following non-horizontal curve's root strictly inside
+    its start window (``0 < t <= 8 eps``): two crossings at one junction (an apex/spike). The parent
+    rule then decides the query. ``parameters(i)`` are curve ``i``'s roots clamped to [0, 1] and
+    deduplicated; ``compare(a, b)`` is their sign comparison. Shared by the float and both exact routes.
+    """
+    for index in range(count):
+        if roots_at(index)[0] is None:
+            continue
+        ts = parameters(index)
+        ends = [t for t in ts if compare(t, 1 - window) >= 0]
+        if sum(compare(t, window) <= 0 for t in ts) > 1 or len(ends) > 1:
+            return True
+        if any(compare(t, 1) < 0 for t in ends) and any(
+                compare(t, 0) > 0 and compare(t, window) <= 0
+                for t in parameters(_following_index(count, index, roots_at))):
+            return True
+    return False
+
+
+def _exact_horizontal_roots(chart, curve, level, tolerance, *, prepared=None, ends=False):
     """Exact replica of ``MaterialDomain.horizontal_roots`` for a LinePath on a Plane.
 
     The chart's v-level ``level`` is the world plane ``n . x = level + n . origin``
     with ``n`` the exact dual row of ``v`` (the pseudo-inverse row ``horizontal_roots``
     uses). The scalar tolerance ``tolerance * |n|`` is compared through squares.
     Returns None (coincident), or the sorted roots in [0, 1] with the 128-eps
-    endpoint snapping of the float route.
+    endpoint snapping of the float route. With ``ends``, the pair (that result,
+    the curve ends within the band of the level), as ``_horizontal_roots_and_ends``.
     """
+    roots, endpoints = _exact_horizontal_roots_and_ends(chart, curve, level, tolerance, prepared=prepared)
+    return (roots, endpoints) if ends else roots
+
+
+def _exact_horizontal_roots_and_ends(chart, curve, level, tolerance, *, prepared=None):
     if prepared is None:
         normal = tuple(value / chart._scale for value in chart._dual_v)
         offset = level + exact_dot(normal, chart.origin)
@@ -2068,9 +3688,9 @@ def _exact_horizontal_roots(chart, curve, level, tolerance, *, prepared=None):
         start = prepared.start_level - level
         delta = prepared.delta_level
     if _within(start, bound2) and _within(start + delta, bound2):
-        return None
+        return None, ()
     if delta == 0:
-        return ()
+        return (), ()
     root = -start / delta
     below = root < 0 and not _within(root, bound2)
     above = root > 1 and not _within(root - 1, bound2)
@@ -2086,7 +3706,7 @@ def _exact_horizontal_roots(chart, curve, level, tolerance, *, prepared=None):
         root = next((t for t in endpoints if (root - t) ** 2 * length2 <= tol2), root)
         if root not in snapped:
             snapped.append(root)
-    return tuple(snapped)
+    return tuple(snapped), endpoints
 
 
 def _exact_point_on_segment(curve, world, tolerance) -> bool:
@@ -2112,13 +3732,14 @@ def _exact_point_on_segment(curve, world, tolerance) -> bool:
     return sum((a - b) ** 2 for a, b in zip(point, world)) <= tol2
 
 
-def _contains_loop_exact(chart, loop, uv, tolerance, *, boundary=True, prepared=None):
+def _contains_loop_exact(chart, loop, uv, tolerance, *, boundary=True, prepared=None, junctions=False):
     """Exact replica of ``MaterialDomain.contains_loop`` for straight loops on a Plane.
 
     The same rules as the float route (horizontal-ray roots, the world-distance
     boundary test at each crossing, horizontal edges by point membership, the
     8-eps endpoint windows and the half-open parity bookkeeping), evaluated in
     exact rational arithmetic on the stored doubles (robust-predicate R1b).
+    ``junctions``: the T2-0 junction rule applies (``MaterialDomain._junction_rule_applies``).
     """
     u_query, v_query = uv
     tol2 = Fraction(tolerance) ** 2
@@ -2145,23 +3766,32 @@ def _contains_loop_exact(chart, loop, uv, tolerance, *, boundary=True, prepared=
 
     root_cache = {}
 
-    def horizontal_roots(curve):
+    def roots_and_ends(curve):
         if prepared is None:
-            return _exact_horizontal_roots(chart, curve, v_query, tolerance)
+            return _exact_horizontal_roots(chart, curve, v_query, tolerance, ends=True)
         key = id(curve)
         if key not in root_cache:
             root_cache[key] = _exact_horizontal_roots(
-                chart, curve, v_query, tolerance, prepared=line_data(curve))
+                chart, curve, v_query, tolerance, prepared=line_data(curve), ends=True)
         return root_cache[key]
 
     def world_distance2(du, dv):
         vector = tuple(du * a + dv * b for a, b in zip(chart.u_vector, chart.v_vector))
         return exact_dot(vector, vector)
 
+    count = len(loop)
+    found = {}
+
+    def roots_at(index):
+        index %= count
+        if index not in found:
+            found[index] = roots_and_ends(loop[index].curve)
+        return found[index]
+
     winding = 0
     for index, path in enumerate(loop):
         curve = path.curve
-        roots = horizontal_roots(curve)
+        roots = roots_at(index)[0]
         if roots is None:
             if _exact_point_on_segment(curve, chart.world(u_query, v_query), tolerance):
                 return boundary
@@ -2175,12 +3805,12 @@ def _contains_loop_exact(chart, loop, uv, tolerance, *, boundary=True, prepared=
                 continue
             if t <= window:
                 previous = loop[index - 1].curve
-                previous_roots = horizontal_roots(previous)
-                for distance in range(2, len(loop) + 1):
+                previous_roots = roots_at(index - 1)[0]
+                for distance in range(2, count + 1):
                     if previous_roots is not None:
                         break
                     previous = loop[index - distance].curve
-                    previous_roots = horizontal_roots(previous)
+                    previous_roots = roots_at(index - distance)[0]
                 previous_lower = max((r for r in (previous_roots or ()) if r < 1 - window), default=Fraction(0))
                 before = station_uv(previous, (previous_lower + 1) / 2)[1] - v_query
             else:
@@ -2192,4 +3822,33 @@ def _contains_loop_exact(chart, loop, uv, tolerance, *, boundary=True, prepared=
                 winding += 1
             elif after <= 0 < before:
                 winding -= 1
+    # Vertex junctions no start root owns (T2-0; MaterialDomain._unowned_junction_crossing), only
+    # inside the rule's domain.
+    if not junctions or _window_roots_ambiguous(count, roots_at, lambda i: sorted(set(roots_at(i)[0])),
+                                                window, _compare_numbers):
+        return winding != 0
+    for index in range(count):
+        roots = roots_at(index)[0]
+        if roots is None:
+            continue
+        following = _following_index(count, index, roots_at)
+        following_roots = roots_at(following)[0]
+        first = min(following_roots, default=Fraction(1))
+        if first <= window:
+            continue
+        end_roots = [t for t in roots if t >= 1 - window]
+        on_ray = _junction_on_ray(count, index, roots_at)
+        if not (on_ray or end_roots):
+            continue
+        previous_lower = max((r for r in roots if r < 1 - window), default=Fraction(0))
+        before = station_uv(loop[index].curve, (previous_lower + 1) / 2)[1] - v_query
+        after = station_uv(loop[following].curve, first / 2)[1] - v_query
+        if not (before <= 0 < after or after <= 0 < before):
+            continue
+        # T2-0 fix 2: off the band the crossing is the end root itself, not the vertex.
+        location = (station_uv(loop[following].curve, Fraction(0)) if on_ray
+                    else station_uv(loop[index].curve, min(end_roots)))
+        if location[0] <= u_query:
+            continue
+        winding += 1 if before <= 0 else -1
     return winding != 0

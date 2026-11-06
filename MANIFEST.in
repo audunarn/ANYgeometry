@@ -3,4 +3,7 @@ recursive-include docs *.md *.json
 include CHANGELOG.md ECOSYSTEM_GUIDE.md MIGRATION.md
 include setup.py
 include native/_core.cpp
+include native/_planning_native_core.cpp
+include native/_planning_runtime_inspector.cpp
+include native/runtime_inspector_profile.json
 recursive-include native/include *.hpp
