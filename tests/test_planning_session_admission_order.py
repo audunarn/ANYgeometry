@@ -7,9 +7,16 @@ from anygeometry import _planning_session as s
 class RepliesReached(Exception):pass
 
 
-def run_dispatch(tmp_path,monkeypatch,admission='valid'):
+def run_dispatch(tmp_path,monkeypatch,admission='valid',model='real'):
     events=[];limits={'payload_limit':4_000_000,'walk_limit':100000};session='a'*64
-    setup={'workers':2,'batch_size':1,'model':{'sha256':'b'*64},'sources':{}}
+    # The legacy planner decodes the admitted model up front (production thaw_model, unchanged): the fake setup
+    # must therefore carry a REAL frozen model packet. 'sha-only' is the old (invalid) shape, kept to prove refusal.
+    if model=='real':
+        from anygeometry._planning_canaries import _fixture
+        from anygeometry._planning_executor import freeze_model
+        packet=freeze_model(_fixture()[0])
+    else:packet={'sha256':'b'*64}
+    setup={'workers':2,'batch_size':1,'model':packet,'sources':{}}
     monkeypatch.setattr(s,'_setup',lambda *a,**k:(setup,session))
     ledger=SimpleNamespace(resets={},trusted_image=True,prepare=lambda **k:None,live_code_pins=lambda:{})
     def loaded_ledger(*,trusted_image):
@@ -50,6 +57,12 @@ def run_dispatch(tmp_path,monkeypatch,admission='valid'):
         raise RepliesReached()
     monkeypatch.setattr(s,'_wait_file',wait)
     return events,lambda:s.session_planner(tmp_path,time.monotonic()+30,{}, {},{},limits,declared_generated)
+
+
+def test_legacy_planner_decodes_the_model_before_any_worker_dispatch(tmp_path,monkeypatch):
+    events,run=run_dispatch(tmp_path,monkeypatch,model='sha-only')
+    with pytest.raises(s.QualificationDecline):run()          # production thaw_model refuses the invalid packet
+    assert events==[]                                          # before any tree/worker/admission activity
 
 
 def test_next_worker_stage_waits_for_previous_admission(tmp_path,monkeypatch):

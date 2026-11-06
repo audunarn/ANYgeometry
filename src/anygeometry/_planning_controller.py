@@ -167,12 +167,20 @@ def run(model,serial,parallel,*,policy,mode,eligible=True,preparation=None,seria
         raise QualificationDecline('forced route reason type')
     units,route_reason=(_ROUTING_THRESHOLD,'forced') if forced is not None else (
         _estimate_cost(model) if route_operands is None else _estimate_cost(model,route_operands))
-    if type(units) is not int or units<_ROUTING_THRESHOLD:
-        # Cheap automatic routing: before storage/freeze/manifest/child setup.
+    binding=_INITIAL_DECLINE
+    # Exact ContextVar BEFORE any .get(): a replaced/hostile binding is never called here; it falls through untouched
+    # to the full path whose existing guard raises the typed 'initial decline context type' decline.
+    inherited=binding.get() if type(binding) is contextvars.ContextVar else None
+    if type(binding) is contextvars.ContextVar and (type(units) is not int or units<_ROUTING_THRESHOLD) and (
+            inherited is None or (type(inherited) is str and 0<len(inherited)<=1024)):
+        # Cheap automatic routing: before storage/freeze/manifest/child setup. A caller's nested initial decline
+        # (read, never mutated here) stays the receipt reason; an invalid context value falls through to the full
+        # path below, which refuses it with the established typed decline.
         from .runtime_diagnostics import _record as record_route
+        routing='routed serial: '+route_reason+' threshold=%d'%_ROUTING_THRESHOLD
         record_route('parallel_planning',dict(schema='R5-production-v1',disposition='serial',
-            ci_verified=False,stages=[],costs={},retired=True,
-            reason='routed serial: '+route_reason+' threshold=%d'%_ROUTING_THRESHOLD))
+            ci_verified=False,stages=[],costs={},retired=True,reason=routing if inherited is None else inherited,
+            routing=routing))
         return serial()
     from ._planning_manifest import capture_loaded_manifest,prepare_interfaces
     from .serialization import to_dict

@@ -510,15 +510,31 @@ def test_capture_path_retarget_after_capture_is_terminal(tmp_path,monkeypatch,fu
 
 
 def test_instruction_memo_has_one_assembly_budget_and_releases_it():
+    # The per-request memo is a STORAGE-only performance cap (named _INSTRUCTION_CACHE_SLOTS), not the 80k
+    # callable/authority or 100k value bound. Past it instructions are still returned in full, just not retained.
+    cap=manifest._INSTRUCTION_CACHE_SLOTS
+    def total(evidence):return sum(len(ops) for code,ops in evidence.instruction_cache.values())
     evidence=manifest._ImmutableEvidence(cache_traversal=True)
-    large=compile('\n'.join('value='+str(i) for i in range(3000)),'<large-evidence>','exec')
-    assert evidence.instructions(large)==tuple(manifest._instructions(large))
-    assert sum(len(ops) for code,ops in evidence.instruction_cache.values())<=4096
-    assert not any(code is large for code,ops in evidence.instruction_cache.values())
-    for i in range(80):
+    mid=compile('\n'.join('value='+str(i) for i in range(3000)),'<mid-evidence>','exec')
+    assert 4096<len(tuple(manifest._instructions(mid)))<cap          # the former cap would have refused this one
+    assert evidence.instructions(mid)==tuple(manifest._instructions(mid))
+    assert any(code is mid for code,ops in evidence.instruction_cache.values())
+    # genuinely over-capacity code object: its ACTUAL instruction count exceeds the named cap
+    large=compile('\n'.join('value='+str(i) for i in range(cap//2+1000)),'<large-evidence>','exec')
+    expected=tuple(manifest._instructions(large))
+    assert len(expected)>cap
+    assert evidence.instructions(large)==expected                     # complete result, nothing omitted
+    assert total(evidence)<=cap
+    assert not any(code is large for code,ops in evidence.instruction_cache.values())   # oversized object not retained
+    assert evidence.instruction_slots==total(evidence)
+    sizes=[]
+    for i in range(1200):                                             # many small bodies exhaust the combined budget
         code=compile('\n'.join('value='+str(j+i) for j in range(40)),'<small-evidence>','exec')
-        assert evidence.instructions(code)==tuple(manifest._instructions(code))
-    assert sum(len(ops) for code,ops in evidence.instruction_cache.values())<=4096
-    assert evidence.instruction_slots==sum(len(ops) for code,ops in evidence.instruction_cache.values())
+        ops=tuple(manifest._instructions(code));sizes.append(len(ops))
+        assert evidence.instructions(code)==ops
+        assert total(evidence)<=cap
+    assert sum(sizes)+len(tuple(manifest._instructions(mid)))>cap     # the budget really was exhausted
+    assert evidence.instruction_slots==total(evidence)<=cap and cap-evidence.instruction_slots<max(sizes)+1
+    assert len(evidence.instruction_cache)<1200+1                      # some small bodies were not retained
     evidence.release_parsing()
     assert evidence.instruction_slots==0 and not evidence.instruction_cache

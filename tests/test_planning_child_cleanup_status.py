@@ -43,7 +43,11 @@ def test_planner_cleanup_failure_is_terminal_on_wire(tmp_path,monkeypatch,failur
     if role=='session-planner':
         from anygeometry import _planning_session as session
         monkeypatch.setattr(session,'OwnedTree',Tree)
-        monkeypatch.setattr(session,'_setup',lambda *a: (dict(workers=0,sources={}), 'session-sha'))
+        # session_planner calls _setup(...,decode=False) and, on this legacy path, then really decodes the admitted
+        # model with session.thaw_model (unpatched): the faked setup must carry a REAL frozen canary packet.
+        from anygeometry._planning_canaries import _fixture
+        packet=executor.freeze_model(_fixture()[0])
+        monkeypatch.setattr(session,'_setup',lambda *a,**k: (dict(workers=0,sources={},model=packet), 'session-sha'))
         def refuse_command(*a,**k):
             raise child.q.QualificationDecline('injected session-command refusal')
         monkeypatch.setattr(session,'_wait_file',refuse_command)

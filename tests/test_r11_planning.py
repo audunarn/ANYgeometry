@@ -38,6 +38,51 @@ def test_unsupported_policy_exits_before_estimate(monkeypatch):
     assert controller.run(None,lambda:sentinel,None,policy=_policy(max_predicates=1),mode='exact') is sentinel
 
 
+def test_cheap_serial_route_preserves_the_nested_initial_decline_reason_and_restoration(monkeypatch):
+    """Established contract: a caller's nested initial decline is the receipt reason even when the cheap workload
+    gate sends the call serial (still before storage/freeze/manifest/children; the context is read, never mutated)."""
+    _forbid_setup(monkeypatch)
+    monkeypatch.setattr(controller,'_estimate_cost',lambda model,operands=None:(3,'tiny'))
+    sentinel=object()
+    def run():
+        return controller.run(None,lambda:sentinel,lambda b:pytest.fail('parallel'),policy=_policy(),mode='exact')
+    with collect_runtime_records() as records:
+        with controller._initial_decline('outer'):
+            with controller._initial_decline('inner'):
+                assert run() is sentinel
+            assert controller._INITIAL_DECLINE.get()=='outer'
+        assert controller._INITIAL_DECLINE.get() is None
+        assert run() is sentinel                                   # no context: the routing reason itself
+    inherited,plain=records['parallel_planning'][-2:]
+    assert inherited['reason']=='inner' and inherited['disposition']=='serial' and inherited['retired'] is True
+    assert inherited['routing'].startswith('routed serial: tiny') and plain['reason']==plain['routing']
+    # an invalid context value is not interpreted by the cheap exit: the established typed decline refuses it
+    token=controller._INITIAL_DECLINE.set(5)
+    try:
+        with collect_runtime_records() as bad:
+            assert run() is sentinel
+    finally:controller._INITIAL_DECLINE.reset(token)
+    assert bad['parallel_planning'][-1]['reason']=='initial decline context reason type'
+    assert controller._INITIAL_DECLINE.get() is None
+
+
+@pytest.mark.parametrize('kind',['hostile_getter','plain_object','dict'])
+def test_invalid_initial_decline_binding_is_never_called_and_gets_the_existing_typed_decline(monkeypatch,kind):
+    """The BINDING (not its value) is validated first: only an exact ContextVar is ever .get()-ed by the cheap gate."""
+    _forbid_setup(monkeypatch)
+    monkeypatch.setattr(controller,'_estimate_cost',lambda model,operands=None:(3,'tiny'))
+    class Hostile:
+        def get(self,*a):raise AssertionError('hostile getter was called')
+    fake={'hostile_getter':Hostile(),'plain_object':object(),'dict':{}}[kind]
+    monkeypatch.setattr(controller,'_INITIAL_DECLINE',fake)
+    sentinel=object()
+    with collect_runtime_records() as records:
+        assert controller.run(None,lambda:sentinel,lambda b:pytest.fail('parallel'),policy=_policy(),mode='exact') is sentinel
+    receipt=records['parallel_planning'][-1]
+    assert receipt['reason']=='initial decline context type' and receipt['disposition']=='serial'
+    assert 'routing' not in receipt                                # it was NOT taken by the cheap exit
+
+
 def test_estimate_is_passive_and_refuses_unknown_models():
     class Fake:
         @property
