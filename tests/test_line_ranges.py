@@ -203,6 +203,7 @@ def _general_mantissa_public_cut(*, verify_plan_readonly=False):
             wall_children, plate_children, model._intersection_application_receipt[3])
 
 
+@pytest.mark.slow
 def test_public_general_mantissa_oblique_plate_cut_material_topology_and_carriers():
     """Mandatory public split/material/topology contract, independent of native/load gates."""
     from anygeometry.entities import EntityRef
@@ -270,6 +271,7 @@ def test_public_general_mantissa_oblique_plate_native_joint_and_all_face_admissi
     _assert_native_face_admission(model, symbols, wall_children, plate_children, 'native_cut')
 
 
+@pytest.mark.slow
 def test_public_general_mantissa_oblique_plate_fresh_load_native_reconstruction():
     """Mandatory fresh JSON reconstruction; only joint identities are queried before load."""
     model, _, _, _, _, _, wall_children, plate_children, traces = _general_mantissa_public_cut()

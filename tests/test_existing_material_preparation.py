@@ -29,6 +29,7 @@ def imprint(**kwargs):
 
 @pytest.mark.parametrize('family', ('flat_cut', 'closed_cut'))
 @pytest.mark.parametrize('loaded', (False, True))
+@pytest.mark.slow
 def test_public_complete_no_recut_plan_apply_and_repeated_apply(request, family, loaded):
     original, ids = request.getfixturevalue(family)
     model = from_dict(to_dict(original)) if loaded else original.clone()

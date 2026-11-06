@@ -73,6 +73,7 @@ def test_closed_loop_split_transfers_sheet_uses_with_identities_orientation_and_
     assert model.parts[sheet_before.part_id].metadata.to_dict() == {'role': 'assembly'}
 
 
+@pytest.mark.slow
 def test_save_and_load_reconstruct_the_structural_tables_and_a_second_cut_continues_the_transfer():
     model, face, plane, sheet = sheet_model(metadata=True)
     apply_plane_split(model, plan_plane_split(model, [face], plane), policy='imprint')

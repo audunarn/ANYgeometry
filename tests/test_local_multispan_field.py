@@ -76,6 +76,7 @@ def test_callback_mutates_source_no_multispan_field_issued():
     with pytest.raises(owner.GeometryError):field_query(model,face,cancellation_check=mutate)
 
 
+@pytest.mark.slow
 def test_actual_public_multispan_flat_mesh_uses_owner_local_field():
     import anymesher.hybrid as mesher
     from anymesher.native_v2 import NativeMeshingOptions

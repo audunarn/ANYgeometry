@@ -863,6 +863,7 @@ def test_known_limit_spike_tip_at_1e8(arc):
     assert got == _PARENT[f"spike_tip_{arc}"]
 
 
+@pytest.mark.slow
 def test_known_limit_family_counts():
     """Wrong answers (vs the exact oracle) of the parent rule on the out-of-domain families, unchanged."""
     got = {}

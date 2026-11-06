@@ -803,6 +803,7 @@ def test_fragmented_members_share_one_connectable_internal_vertex_component() ->
     assert geometry.validate_topology() == ()
 
 
+@pytest.mark.slow
 def test_fragmented_member_point_is_symmetric_after_member_reversal() -> None:
     geometry = GeometryModel()
     left, centre, right, lower, upper = geometry.add_points(
