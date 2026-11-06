@@ -9,8 +9,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: development-${{ github.ref }}
-  cancel-in-progress: true
+  group: development-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 env:
   OMP_NUM_THREADS: '1'
@@ -44,7 +44,7 @@ jobs:
           if-no-files-found: warn
   gate:
     name: Development gate
-    needs: unit
+    needs: [unit, manual-integration]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -52,7 +52,15 @@ jobs:
       - name: Require development unit feedback only
         env:
           UNIT_RESULT: ${{ needs.unit.result }}
-        run: test "$UNIT_RESULT" = success
+          INTEGRATION_RESULT: ${{ needs['manual-integration'].result }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          test "$UNIT_RESULT" = success
+          if [ "$EVENT_NAME" = workflow_dispatch ]; then
+            test "$INTEGRATION_RESULT" = success
+          else
+            test "$INTEGRATION_RESULT" = skipped
+          fi
   manual-integration:
     if: github.event_name == 'workflow_dispatch'
     needs: unit

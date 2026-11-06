@@ -279,6 +279,7 @@ class _SessionBridge(Bridge):
                     self.control.lease.observe_phase('before-retirement',owned.tree.memory_snapshot())
             except BaseException as error:
                 # A failed accounting observation cannot prevent containment.
+                self._retirement_error=error
                 try:owned.close()
                 except BaseException as cleanup:
                     self._retirement_error=PlannerCleanupError('session planner cleanup failed')
@@ -291,7 +292,10 @@ class _SessionBridge(Bridge):
                 raise self._retirement_error from exc
             self.session=None;self.retired=True
             if getattr(self.control,'production',False):
-                self.control.lease.observe_phase('retired',owned.tree._memory_observation)
+                try:self.control.lease.observe_phase('retired',owned.tree._memory_observation)
+                except BaseException as error:
+                    self._retirement_error=error
+                    raise
 
     def verify_pending(self):
         if self.session is not None:raise PlannerCleanupError('session must retire before verification')

@@ -134,6 +134,12 @@ class ModuleSchedulingTests(unittest.TestCase):
         self.assertIn('needs: unit',manual)
         self.assertIn('uses: ./.github/workflows/integration.yml',manual)
         self.assertIn('actions: read',manual)
+        self.assertIn("group: development-${{ github.event_name }}-${{ github.ref }}",development)
+        self.assertIn("cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}",development)
+        gate=development.split('\n  gate:\n',1)[1].split('\n  manual-integration:\n',1)[0]
+        self.assertIn('needs: [unit, manual-integration]',gate)
+        self.assertIn("INTEGRATION_RESULT: ${{ needs['manual-integration'].result }}",gate)
+        self.assertIn('test "$INTEGRATION_RESULT" = success',gate)
         ci=(ROOT/'.github/workflows/ci.yml').read_text()
         regular=ci.split('\n  pytest:\n',1)[1].split('\n  pytest-qualified:\n',1)[0]
         qualified=ci.split('\n  pytest-qualified:\n',1)[1].split('\n  pytest-shards:\n',1)[0]

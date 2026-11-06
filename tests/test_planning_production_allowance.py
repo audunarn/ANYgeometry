@@ -146,3 +146,45 @@ def test_production_allowance_cannot_be_swallowed_by_geometry_retry(monkeypatch,
     with pytest.raises(controller._ProductionAllowanceExpired):
         try:bridge.check_clock()
         except GeometryError:pytest.fail('numerical retry swallowed internal allowance')
+
+
+@pytest.mark.parametrize('phase',['before-retirement','retired'])
+@pytest.mark.parametrize('original',['allowance','decline','callback'])
+def test_retirement_accounting_failure_is_sticky_and_blocks_replay(monkeypatch,tmp_path,phase,original):
+    work,plan,policy,clock,events,seen,unused=_fixture(monkeypatch,tmp_path)
+    failure=executor.PlannerMemoryExceeded('retirement accounting refused')
+    callback_error=RuntimeError('original callback failure')
+    armed=[False];observations=[];closed=[];serial_calls=[]
+    class FakeOwned:
+        def __init__(self):
+            self.tree=SimpleNamespace(memory_snapshot=lambda:{},_memory_observation={})
+        def close(self):closed.append(True)
+    def observe(name,*args):
+        observations.append(name)
+        if name==phase:raise failure
+    def callback():
+        if armed[0]:raise callback_error
+        return False
+    if original=='callback':policy.cancellation_check=callback
+    def parallel(bridge):
+        seen.append(bridge);bridge.session=FakeOwned();bridge.retired=False
+        bridge.control.lease.observe_phase=observe
+        if original=='callback':
+            armed[0]=True;bridge.poll()
+            pytest.fail('callback did not fail')
+        if original=='allowance':raise controller._ProductionAllowanceExpired('eligible expiry')
+        raise controller.QualificationDecline('eligible decline')
+    def serial():serial_calls.append(True);return plan
+    expected=callback_error if original=='callback' else failure
+    with collect_runtime_records() as records,pytest.raises(type(expected)) as caught:
+        host.qualified_plan(None,None,serial,parallel,policy=policy,mode='exact')
+    assert caught.value is expected
+    assert serial_calls==[] and closed==[True]
+    assert seen[0].retired is True and seen[0].session is None
+    assert seen[0]._retirement_error is failure
+    assert records['parallel_planning'][-1]['disposition']=='terminal'
+    observed=list(observations)
+    with pytest.raises(executor.PlannerMemoryExceeded) as repeated:
+        seen[0].close()
+    assert repeated.value is failure
+    assert closed==[True] and observations==observed
