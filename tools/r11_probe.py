@@ -18,9 +18,10 @@ Diagnostics are measured with the REAL per-task ``reset_for_batch(owned_worker=T
 built for the probe's own WorkerModel (dedicated process, registered declined caches only), the same task
 payload decode/check_types and the same diagnostic transaction as BatchWorkerGate._execute. Not a native-worker
 qualification: the ledger's worker-role absence invariant cannot hold here and is recorded.
-No flag upgrades missing evidence. Open named gap: ``worker_setup.expected_environment_packet`` (the child's
-expected-environment snapshot is not reproduced) => feasibility stays ``conditional``; ``complete`` only for
-``passed``.
+No flag upgrades missing evidence. The worker expected-environment snapshot is bounded by the shared,
+producer/child-enforced eligibility cap; its actual child contents are never replaced by a host snapshot.
+Normal terminal commands/results use the production builders and verifiers too. ``complete`` requires every
+named proof condition and any supplied actual-packet comparison to pass.
 
 Usage:
   python tools/r11_probe.py --model DOC.json --sha256 HEX --output DIR
@@ -663,9 +664,9 @@ def compare_capture(result, session_dir):
 def _compare_capture_sizes(result, session_dir):
     """Compare ACTUAL raw packets of a real small run (session dir copy) with the proof bounds/simulation.
 
-    Rows: setup, per-stage session command/reply, per-worker command/reply, plus an informational
-    worker-setup row (no bound is claimed for it). Equality is required for result rows; diagnostics are reported
-    against the simulated payload."""
+    Measure setup, stage packets and bounded worker setup; compare exact result rows and stable diagnostics.
+    The outer comparison also checks terminal traffic, source/model/native binding and production protocol
+    validation. This empirical comparison alone does not qualify a full model or native execution."""
     root = Path(session_dir)
     rows, ok = [], True
     def check(name, kind, path, bound, **extra):
