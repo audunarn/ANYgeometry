@@ -17,11 +17,20 @@ UNIT_MODULES = frozenset({
     'tests/test_predicates.py',
     'tests/test_ci_test_profiles.py',
     'tests/test_ci_structure_followup.py',
+    'tests/test_ci_module_scheduling.py',
     'tests/test_ci_tools.py',
     'tests/test_ci_collection_durations.py',
     'tests/test_ci_planning_profile.py',
 })
 QUALIFICATION_MODULES = frozenset({
+    # Root-adopted engineering proof tier; full release selection still includes every case.
+    'tests/test_bounded_nurbs_clipping.py',
+    'tests/test_bounded_nurbs.py',
+    'tests/test_local_sweep_competition.py',
+    'tests/test_local_contact_field.py',
+    'tests/test_local_contact_transport.py',
+    'tests/test_local_contact_stars.py',
+    'tests/nurbs_surface_intersection/test_generic.py',
     'tests/test_certified_hydrostatics_admission.py',
     'tests/test_certified_hydrostatics_ch3_admission.py',
     'tests/test_certified_hydrostatics_ch3_kernel.py',

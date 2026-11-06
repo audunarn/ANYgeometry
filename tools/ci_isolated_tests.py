@@ -217,7 +217,10 @@ def select_manifest_ids(collected,assigned,inventory):
 
 class PhaseProgress:
     """Flushed observations only; never a replacement for actual JUnit results."""
-    def __init__(self,path,mode,nodes,binding):
+    def __init__(self,path,mode,nodes,binding,*,grouping='node',group_modules=None):
+        from ci_shards import grouping_policy,group_modules_policy
+        self.grouping=grouping_policy(grouping)
+        self.group_modules=group_modules_policy(grouping,group_modules)
         validate_nodes(nodes)
         if type(binding) is not str or len(binding)!=64 or any(c not in '0123456789abcdef' for c in binding):
             raise ValueError('progress configuration binding')
@@ -235,7 +238,7 @@ class PhaseProgress:
             raise
 
     def _write(self,event,node,**details):
-        row=dict(schema='ci-phase-progress-v1',cohort=self.mode,event=event,nodeid=node,
+        row=dict(schema='ci-phase-progress-v1',cohort=self.mode,event=event,nodeid=node,grouping=self.grouping,group_modules=self.group_modules,
             config_sha256=self.binding,pid=self.pid,monotonic_seconds=self.clock(),
             assigned_total=len(self.indices),assigned_index=self.indices.get(node),
             completed_count=self.completed,**details)
@@ -277,6 +280,11 @@ class PhaseProgress:
 
 def child(config):
     row=read_json(config);root=Path(row['root']);os.chdir(root)
+    from ci_shards import grouping_policy,group_modules_policy,fixture_group_modules
+    grouping=grouping_policy(row.get('grouping','node'))
+    if grouping=='module' and os.environ.get('ANYGEOMETRY_REQUIRE_QUALIFIED_PLANNING_TESTS')=='1':
+        raise ValueError('qualified positive hosts require node grouping')
+    group_modules=group_modules_policy(grouping,row.get('group_modules'))
     # Match python -m pytest: the checkout root remains importable (examples,
     # tools and namespace packages) as well as pyproject's candidate src path.
     sys.path.insert(0,str(root));sys.path.insert(0,str(root/'src'))
@@ -297,7 +305,7 @@ def child(config):
     module_names=(list(dict.fromkeys(node.split('::',1)[0] for node in expected))
                   if expected is not None else row.get('allowed_modules'))
     allowed=None if module_names is None else {(root/name).resolve() for name in module_names}
-    progress=(PhaseProgress(manifest.with_name(row['mode']+'-progress.jsonl'),row['mode'],expected,hashfile(config))
+    progress=(PhaseProgress(manifest.with_name(row['mode']+'-progress.jsonl'),row['mode'],expected,hashfile(config),grouping=grouping,group_modules=group_modules)
               if expected is not None and row['mode'] in ('core','oracle') else None)
     class ExactCollection:
         @pytest.hookimpl(wrapper=True)
@@ -323,8 +331,16 @@ def child(config):
         def pytest_runtestloop(self,session):
             actual=[item.nodeid for item in session.items]
             check()
+            actual_modules=fixture_group_modules(session.items) if grouping=='module' else []
+            if expected is not None and grouping=='module':
+                admitted=sorted(set(group_modules or []) & {node.split('::',1)[0] for node in actual})
+                if group_modules is None or actual_modules!=admitted:
+                    raise RuntimeError('actual scoped fixture modules differ from admitted phase policy')
+            recorded_modules=(getattr(session.config,'_anygeometry_shard_group_modules',actual_modules)
+                              if row['mode']=='collect' else group_modules)
             manifest.write_text(json.dumps(dict(nodes=raw_inventory if row['mode']=='inventory' else actual,
-                mode=row['mode'],mpmath_loaded='mpmath' in sys.modules,
+                mode=row['mode'],mpmath_loaded='mpmath' in sys.modules,grouping=grouping,group_modules=recorded_modules,
+                present_group_modules=actual_modules,
                 collection_mode='original' if allowed is None else 'directory-walk',pid=os.getpid(),
                 positive_host_scope='fresh-H-single-authoritative-case' if positive is not None else None),indent=2),encoding='utf-8')
             if expected is not None and (len(actual)!=len(expected) or set(actual)!=set(expected)):
@@ -379,6 +395,10 @@ def main(argv=None):
                         help='full preserves the release inventory; other profiles are partial development selections')
     args=parser.parse_args(argv)
     if args.child:return child(args.child)
+    from ci_shards import grouping_policy,group_modules_policy,load_table,scheduling_receipt
+    grouping=grouping_policy(os.environ.get('ANYGEOMETRY_SHARD_GROUPING','node'))
+    if grouping=='module' and os.environ.get('ANYGEOMETRY_REQUIRE_QUALIFIED_PLANNING_TESTS')=='1':
+        raise ValueError('qualified positive hosts require node grouping')
     focused=args.profile is None and bool(args.select or args.k or args.m or os.environ.get('PYTEST_ADDOPTS'))
     args.profile=args.profile or 'full'
     validate_selection('unit' if focused else args.profile,args.select,args.k,args.m,os.environ)
@@ -397,17 +417,27 @@ def main(argv=None):
     common=['--rootdir='+str(root),'--maxfail='+str(args.maxfail),'--durations='+str(args.durations)]
     if args.k:common+=['-k',args.k]
     if args.m:common+=['-m',args.m]
-    collection=dict(root=str(root),mode='collect',manifest=str(folder/'collection.json'),
+    collection=dict(root=str(root),mode='collect',grouping=grouping,manifest=str(folder/'collection.json'),
                     args=(args.select or ['tests'])+common+['--collect-only','-q'])
     if args.profile!='full':collection['allowed_modules']=profile['selected_modules']
     code=run_phase(root,folder,'collection',collection,env,budget=budget)
     if code:raise RuntimeError('original collection failed; retained phase evidence')
-    shard=read_json(report);assigned=validate_nodes(shard['ran'],root)
+    shard=read_json(report)
+    if grouping_policy(shard.get('grouping','node'))!=grouping:raise ValueError('original shard grouping policy differs')
+    collected=read_json(folder/'collection.json')
+    if grouping_policy(collected.get('grouping','node'))!=grouping:raise ValueError('collection grouping policy differs')
+    reported_modules=shard.get('group_modules',[] if grouping=='node' else None)
+    if grouping=='module' and type(reported_modules) is not list:raise ValueError('shard lacks admitted scoped fixture modules')
+    if grouping=='module' and type(collected.get('group_modules')) is not list:raise ValueError('collection lacks admitted scoped fixture modules')
+    group_modules=group_modules_policy(grouping,reported_modules)
+    if group_modules_policy(grouping,collected.get('group_modules'))!=group_modules:raise ValueError('collection scoped fixture modules differ')
+    assigned=validate_nodes(shard['ran'],root)
     selected=validate_nodes(shard['selected'],root)
-    from ci_shards import load_table,scheduling_receipt
-    schedule=scheduling_receipt(selected,shard['count'],load_table(root/'reports/ci/durations.json'))
+    schedule=scheduling_receipt(selected,shard['count'],load_table(root/'reports/ci/durations.json'),grouping=grouping,group_modules=group_modules)
     (folder/'schedule-receipt.json').write_text(json.dumps(schedule,indent=2),encoding='utf-8')
     receipt=node_receipt(selected,args.profile)
+    receipt['grouping']=grouping
+    receipt['group_modules']=group_modules
     if focused:receipt.update(profile='legacy-focused',scope='partial-development-only')
     if receipt['selected']!=selected:raise ValueError('collected nodes escaped requested test profile')
     receipt['module_manifest_sha256']=hashfile(folder/'profile-modules.json')
@@ -415,12 +445,13 @@ def main(argv=None):
     if not set(assigned)<=set(selected) or not set(shard['slow'])<=set(selected):raise ValueError('invalid original shard report')
     if read_json(folder/'collection.json')['nodes']!=assigned:raise ValueError('original report differs from actual shard collection')
     env.pop('ANYGEOMETRY_TEST_SHARD',None);env.pop('ANYGEOMETRY_SHARD_REPORT',None)
+    env.pop('ANYGEOMETRY_SHARD_GROUPING',None)
     # Default CI already collected the complete global inventory. A partial
     # local selector needs its modules' full inventory, via the same directory
     # traversal/allowlist mechanism, never hundreds of positional selectors.
     if args.select or args.k or args.m or os.environ.get('PYTEST_ADDOPTS'):
         modules=list(dict.fromkeys(node.split('::',1)[0] for node in assigned))
-        inventory_config=dict(root=str(root),mode='inventory',manifest=str(folder/'inventory.json'),
+        inventory_config=dict(root=str(root),mode='inventory',grouping=grouping,group_modules=group_modules,manifest=str(folder/'inventory.json'),
             allowed_modules=modules,args=['tests','--rootdir='+str(root),'--collect-only','-q'])
         if run_phase(root,folder,'inventory',inventory_config,env,budget=budget):raise RuntimeError('module inventory collection failed')
         inventory=validate_nodes(read_json(folder/'inventory.json')['nodes'],root)
@@ -429,7 +460,7 @@ def main(argv=None):
     groups,closure=classify_nodes(root,assigned)
     groups=split_required_positives(groups,required=env.get('ANYGEOMETRY_REQUIRE_QUALIFIED_PLANNING_TESTS')=='1')
     plan=dict(shard_report=str(report),shard_report_sha256=hashlib.sha256(report.read_bytes()).hexdigest(),
-              index=shard['index'],count=shard['count'],assigned=assigned,groups=groups,
+              index=shard['index'],count=shard['count'],assigned=assigned,groups=groups,grouping=grouping,group_modules=group_modules,
               module_inventory=inventory,closure=closure,profile_receipt_sha256=hashfile(folder/'profile-receipt.json'),
               schedule_receipt_sha256=hashfile(folder/'schedule-receipt.json'))
     (folder/'plan.json').write_text(json.dumps(plan,indent=2),encoding='utf-8')
@@ -441,10 +472,16 @@ def main(argv=None):
         junit=location/(group+'.xml')
         options=common+(['--collect-only','-q'] if args.collect_only else ['--junitxml='+str(junit)])
         files={node.split('::',1)[0] for node in nodes}
-        config=dict(root=str(root),mode=group,nodes=nodes,positive=phase['positive'],
+        config=dict(root=str(root),mode=group,nodes=nodes,positive=phase['positive'],grouping=grouping,group_modules=group_modules,
             inventory=[node for node in inventory if node.split('::',1)[0] in files],
             manifest=str(location/(group+'-collection.json')),args=options)
         code=run_phase(root,location,group,config,env,budget=budget)
+        phase_manifest=Path(config['manifest'])
+        if phase_manifest.exists():
+            actual_phase=read_json(phase_manifest)
+            if (grouping_policy(actual_phase.get('grouping','node'))!=grouping
+                    or group_modules_policy(grouping,actual_phase.get('group_modules'))!=group_modules):
+                raise ValueError('returned phase grouping/admitted-module policy differs')
         if not args.collect_only:
             if junit.exists():results.append(junit)
             if phase['positive'] is not None:
@@ -461,7 +498,7 @@ def main(argv=None):
         merge_junit(results,assigned,output)
         if any(codes):raise RuntimeError('cohort failed; retained real combined JUnit')
     (folder/'complete.json').write_text(json.dumps(dict(status='collection-verified' if args.collect_only else 'complete',
-        assigned=len(assigned),core=len(groups['core']),oracle=len(groups['oracle']),
+        assigned=len(assigned),core=len(groups['core']),oracle=len(groups['oracle']),grouping=grouping,group_modules=group_modules,
         planning_positive=len(groups.get('planning_positive',[])),driver_budget=budget.report()),indent=2),encoding='utf-8')
     print(json.dumps(dict(assigned=len(assigned),core=len(groups['core']),oracle=len(groups['oracle']),planning_positive=len(groups.get('planning_positive',[])),collect_only=args.collect_only)))
     return 0

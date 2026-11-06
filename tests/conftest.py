@@ -53,7 +53,10 @@ def pytest_collection_finish(session):
     selected = [item.nodeid for item in session.items]
     slow = sorted(item.nodeid for item in session.items if item.get_closest_marker("slow"))
     index, count = shards.parse_shard(shard) if shard else (1, 1)
-    owner = shards.assign(selected, count, table)
+    grouping = shards.grouping_policy(os.environ.get('ANYGEOMETRY_SHARD_GROUPING','node'))
+    group_modules=shards.fixture_group_modules(session.items) if grouping=='module' else []
+    session.config._anygeometry_shard_group_modules=group_modules
+    owner = shards.assign(selected, count, table,grouping=grouping,group_modules=group_modules)
     keep = [item for item in session.items if owner[item.nodeid] == index]
     dropped = [item for item in session.items if owner[item.nodeid] != index]
     if dropped:
@@ -61,7 +64,8 @@ def pytest_collection_finish(session):
         session.items[:] = keep
     if report:
         Path(report).write_text(json.dumps({"index": index, "count": count, "selected": sorted(selected),
-                                            "ran": [item.nodeid for item in keep], "slow": slow}, indent=0),
+                                            "ran": [item.nodeid for item in keep], "slow": slow,"grouping":grouping,
+                                            "group_modules":group_modules}, indent=0),
                                 encoding="utf-8")
 
 

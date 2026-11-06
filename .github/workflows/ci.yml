@@ -33,6 +33,7 @@ jobs:
     # Partial JUnit observations guide scheduling; they do not establish 30-minute fit.
     timeout-minutes: 30
     env:
+      ANYGEOMETRY_SHARD_GROUPING: 'module'
       ANYGEOMETRY_REQUIRE_QUALIFIED_PLANNING_TESTS: ${{ matrix.os == 'windows-latest' && matrix.python-version == '3.14' && '1' || '0' }}
     strategy:
       fail-fast: false

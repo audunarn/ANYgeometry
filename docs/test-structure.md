@@ -15,8 +15,8 @@ python tools/ci_isolated_tests.py --profile qualification
 python tools/ci_isolated_tests.py --profile full
 ```
 
-`fast` aliases `unit`. Unit contains six explicitly listed modules: primitive
-predicates/tolerances and five small CI metadata/selection tool modules.
+`fast` aliases `unit`. Unit contains seven explicitly listed modules: primitive
+predicates/tolerances and six small CI metadata/selection tool modules.
 Qualification contains the explicit certified hydrostatics and planner modules
 listed in `tools/ci_test_profiles.py`. Every other test module, including newly
 added modules, defaults to integration. These three tiers are disjoint and their
@@ -69,3 +69,43 @@ Validation for this change is pure selection/manifest/workflow testing and the
 existing synthetic miniature driver protocol, run under the root coordinator's
 bounded harness. Local full collection, numerical/model suites, actual hosted
 workflow execution and release acceptance are separate outstanding checks.
+
+The general sixteen-shard lane now opts into fixture-aware assignment. At actual
+pytest collection, resolved FixtureDef scopes in each item's fixture information
+admit modules using module/class-scoped fixtures. Each admitted module stays in
+one shard; fixture-free modules still balance individual nodes. This preserves
+fixture lifetime without forcing a large fixture-free module into one job. The
+node policy remains the API default and the qualified Windows 3.14/128-shard
+workflow, numerical runtime pins and fresh-host positive route remain unchanged.
+
+The shard report and collection receipt record the admitted module list. The
+schedule, profile, plan, child configs, phase manifests and progress carry the
+same grouping policy/list; existing report/config/receipt SHA-256 bindings cover
+that list. Every execution phase checks its actual present scoped-fixture modules
+against the admitted-list intersection. Mixed, unknown or returned mismatching
+policies/lists refuse; the verifier also rejects splitting an admitted module.
+The grouping environment is cleared before execution, so nested tooling fixtures
+do not inherit the outer job's assignment policy.
+
+The root adopted seven engineering-proof modules into qualification using retained real-case evidence:
+`test_bounded_nurbs_clipping`, `test_local_sweep_competition`,
+`test_local_contact_field`, `test_local_contact_transport`, and
+`test_local_contact_stars`, and
+`nurbs_surface_intersection/test_generic`, and `test_bounded_nurbs`. Their test bodies and inclusion in full qualification
+are unchanged. The retained integration kernel now explicitly runs
+only the integration profile through the real isolated driver in five shards. Its
+original forty-minute job cap and the stronger 1800-second driver budget remain
+unchanged. Four provisional shards exceeded the driver envelope including reserve;
+five were the minimum tested count below it. This is an estimate, not measured fit.
+Full remains the
+exhaustive unit/integration/qualification union; required qualified positives,
+wheels, consumers and release gates remain required. This removes duplicate full
+scientific selection from the legacy integration route, not tests from full.
+
+Offline scheduling uses preserved node IDs plus explicitly provisional new pure
+cases, with four historical fixture-consumer modules as provisional admission.
+This does not substitute for authoritative fixture metadata from future actual
+collection. Largest whole-module and admitted-group costs, worst projected shard,
+setup reserve and unknown costs are reported. A favorable estimate proves no
+measured fit, future timing bound or savings. No cost cap, timeout increase or
+automatic refusal of unmeasured cases was introduced.

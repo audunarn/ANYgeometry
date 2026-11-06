@@ -12,6 +12,10 @@ ids to that JSON file.
 Costs are scheduling policy estimates from incomplete historical observations. They are neither
 measured full-suite job durations nor a guarantee that a shard fits its job cap.
 
+The node policy remains the default. CI can opt into the module policy with an explicit list
+of modules whose collected items use module/class-scoped fixtures. Those modules are indivisible;
+fixture-free modules retain node assignment. Collection order within each shard is unchanged.
+
 ``verify`` checks the reports of one run: identical selections, the union of the shards' ids equals
 the selection and no id runs twice. ``guard`` checks JUnit results against the slow marks: a test that
 is not marked slow but took longer than ``--limit`` seconds fails (refresh the duration table).
@@ -54,18 +58,61 @@ def duration(table: dict, name: str) -> float:
                max((bucket["maximum_seconds"] for bucket in protocols.values()), default=0.0))
 
 
-def assign(ids: list[str], count: int, table: dict) -> dict[str, int]:
+def grouping_policy(value='node'):
+    if value not in ('node','module'):
+        raise ValueError('unknown CI shard grouping: '+str(value))
+    return value
+
+
+def group_modules_policy(grouping,modules=None):
+    grouping=grouping_policy(grouping)
+    if modules is None:return None if grouping=='module' else []
+    if type(modules) is not list or any(type(name) is not str for name in modules) or len(modules)!=len(set(modules)):
+        raise ValueError('invalid scoped fixture module list')
+    if any(type(name) is not str or not name.startswith('tests/') or not name.endswith('.py')
+           or '\\' in name or '..' in Path(name).parts for name in modules):
+        raise ValueError('invalid scoped fixture module path')
+    if grouping=='node' and modules:raise ValueError('node grouping cannot admit fixture modules')
+    return sorted(modules)
+
+
+def fixture_group_modules(items):
+    """Read pytest's resolved used fixtures, including transitive/autouse fixtures."""
+    modules=set()
+    for item in items:
+        info=getattr(item,'_fixtureinfo',None)
+        definitions=getattr(info,'name2fixturedefs',{})
+        if any(fixture.scope in ('module','class') for choices in definitions.values() for fixture in (choices or ())):
+            modules.add(item.nodeid.split('::',1)[0])
+    return sorted(modules)
+
+
+def assignment_groups(ids,table,grouping,group_modules=None):
+    grouping=grouping_policy(grouping)
+    admitted=group_modules_policy(grouping,group_modules)
+    if grouping=='node':return [(node,[node],duration(table,node)) for node in ids]
+    if admitted is not None and not set(admitted)<={node.split('::',1)[0] for node in ids}:
+        raise ValueError('admitted fixture module outside selected inventory')
+    groups={}
+    for node in ids:
+        if '::' not in node:raise ValueError('module grouping requires test node IDs')
+        module=node.split('::',1)[0]
+        groups.setdefault(module if admitted is None or module in admitted else node,[]).append(node)
+    return [(name,sorted(nodes),sum(duration(table,node) for node in sorted(nodes))) for name,nodes in groups.items()]
+
+
+def assign(ids: list[str], count: int, table: dict, *, grouping='node',group_modules=None) -> dict[str, int]:
     """``{id: shard index 1..count}``: longest first onto the lightest shard (ties: lowest index)."""
     loads = [0.0] * count
     result = {}
-    for name in sorted(ids, key=lambda n: (-duration(table, n), n)):
+    for name,nodes,cost in sorted(assignment_groups(ids,table,grouping,group_modules),key=lambda group:(-group[2],group[0])):
         index = min(range(count), key=lambda i: (loads[i], i))
-        loads[index] += duration(table, name)
-        result[name] = index + 1
+        loads[index] += cost
+        for node in nodes:result[node] = index + 1
     return result
 
 
-def scheduling_receipt(ids: list[str], count: int, table: dict, *, setup_reserve_seconds=180, cap_seconds=1800):
+def scheduling_receipt(ids: list[str], count: int, table: dict, *, setup_reserve_seconds=180, cap_seconds=1800, grouping='node',group_modules=None):
     """Policy estimates plus explicit setup/collection/phase/artifact reserve.
 
     Reserve is a planning allowance, not a measured bound. A passing estimate
@@ -75,12 +122,20 @@ def scheduling_receipt(ids: list[str], count: int, table: dict, *, setup_reserve
         raise ValueError('invalid scheduling envelope')
     if not ids or len(ids) != len(set(ids)):
         raise ValueError('invalid scheduling inventory')
-    owner = assign(ids, count, table)
+    grouping=grouping_policy(grouping)
+    admitted=group_modules_policy(grouping,group_modules)
+    owner = assign(ids, count, table,grouping=grouping,group_modules=admitted)
+    groups=assignment_groups(ids,table,grouping,admitted)
+    largest=min(groups,key=lambda group:(-group[2],group[0]))
+    largest_module=(min(assignment_groups(ids,table,'module'),key=lambda group:(-group[2],group[0]))
+                    if all('::' in node for node in ids) else largest)
     loads = [sum(duration(table, node) for node in ids if owner[node] == index) for index in range(1, count+1)]
     known = (set(table.get('tests', {})) | set(table.get('scheduling', {}).get('tests', {}))
              | set(table.get('scheduling', {}).get('protocol_tests', {})))
     return dict(schema='ci-scheduling-estimate-v1', scope='policy-estimate-only-not-measured-fit',
-        cap_seconds=cap_seconds, setup_reserve_seconds=setup_reserve_seconds,
+        cap_seconds=cap_seconds, setup_reserve_seconds=setup_reserve_seconds,grouping=grouping,group_modules=admitted,
+        group_count=len(groups),largest_group=dict(key=largest[0],nodes=len(largest[1]),estimated_seconds=largest[2]),
+        largest_module=dict(key=largest_module[0],nodes=len(largest_module[1]),estimated_seconds=largest_module[2]),
         reserve_scope='setup, collection, serial interpreter startup and artifact allowance',
         estimated_test_seconds=loads,
         estimated_with_reserve_seconds=[cost+setup_reserve_seconds for cost in loads],
@@ -103,6 +158,18 @@ def verify(reports: list[Path], results: str = "kernel-results.xml") -> list[str
     from ci_durations import read_junit
     data = [json.loads(path.read_text(encoding="utf-8")) for path in reports]
     problems = []
+    policies=[];admissions=[]
+    for item in data:
+        try:policies.append(grouping_policy(item.get('grouping','node')))
+        except ValueError as error:problems.append(str(error));policies.append(None)
+        try:
+            if policies[-1]=='module' and not isinstance(item.get('group_modules'),list):raise ValueError('module policy lacks admitted fixture list')
+            admitted=group_modules_policy(policies[-1],item.get('group_modules',[]))
+            if not set(admitted)<={node.split('::',1)[0] for node in item['selected']}:raise ValueError('admitted module outside selection')
+            admissions.append(admitted)
+        except (ValueError,TypeError) as error:problems.append(str(error));admissions.append(None)
+    if len(set(policies))!=1:problems.append('the shards used different grouping policies')
+    if admissions and any(value!=admissions[0] for value in admissions):problems.append('the shards admitted different fixture module lists')
     for path, item in zip(reports, data):
         junit = path.parent / results
         if not junit.is_file():
@@ -132,6 +199,13 @@ def verify(reports: list[Path], results: str = "kernel-results.xml") -> list[str
     problems += [f"ran in two shards: {n}" for n in twice[:20]]
     problems += [f"selected but run by no shard: {n}" for n in missing[:20]]
     problems += [f"run but not selected: {n}" for n in extra[:20]]
+    if policies and set(policies)=={'module'}:
+        owners={}
+        for item in data:
+            for node in item['ran']:
+                module=node.split('::',1)[0]
+                if module in (admissions[0] or []):owners.setdefault(module,set()).add(item['index'])
+        problems += ['module split across shards: '+name for name,indices in sorted(owners.items()) if len(indices)>1]
     return problems
 
 

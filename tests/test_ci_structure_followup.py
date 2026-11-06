@@ -20,7 +20,7 @@ class FollowupTests(unittest.TestCase):
         self.assertIn('import anygeometry._planning_native_core', kernel)
         self.assertLess(kernel.index('name: Verify required integration planner helper'), kernel.index('name: Run the kernel shard'))
         self.assertIn('timeout-minutes: 40', kernel)
-        self.assertIn('shard: [1, 2, 3]', kernel)
+        self.assertIn('shard: [1, 2, 3, 4, 5]', kernel)
         self.assertNotIn('ANYGEOMETRY_BUILD_NATIVE', kernel)
 
     def tooling(self):

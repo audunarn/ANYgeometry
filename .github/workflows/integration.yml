@@ -82,21 +82,29 @@ jobs:
           if-no-files-found: error
 
   kernel:
-    name: Development kernel (${{ matrix.os }}, Python 3.13, shard ${{ matrix.shard }}/3)
+    name: Development kernel (${{ matrix.os }}, Python 3.13, shard ${{ matrix.shard }}/5)
     needs: plan
     if: needs.plan.outputs.runtime == 'true'
     runs-on: ${{ matrix.os }}
-    # CI tiers C3/C4: the suite in three duration-balanced shards per OS (tools/ci_shards.py); kernel
-    # changes run every test, other runtime changes the fast tier plus the changed test files
+    # Partial integration profile; full Tests workflow retains the exhaustive release universe.
     timeout-minutes: 40
+    env:
+      ANYGEOMETRY_SHARD_GROUPING: 'module'
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4, 5]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          persist-credentials: false
+      - name: Check out the source-only test consumer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: audunarn/ANYmesh
+          ref: 2ef01d47e29fb461da1cf1ece73913c1708d4e49
+          path: .worktrees/ci-mesher-consumer
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
@@ -113,20 +121,13 @@ jobs:
       - name: Run the kernel shard
         shell: bash
         env:
-          ANYGEOMETRY_TEST_SHARD: ${{ matrix.shard }}/3
+          PYTHONPATH: ${{ github.workspace }}/.worktrees/ci-mesher-consumer/src
+          CI_MESHER_SOURCE_ROOT: ${{ github.workspace }}/.worktrees/ci-mesher-consumer/src
+          ANYGEOMETRY_TEST_SHARD: ${{ matrix.shard }}/5
           ANYGEOMETRY_SHARD_REPORT: shard-${{ matrix.shard }}.json
-          SCOPE: ${{ needs.plan.outputs.scope }}
-          FOCUSED: ${{ needs.plan.outputs.focused }}
         run: |
-          if [ "$SCOPE" = "full" ]; then
-            python -m pytest --durations=20 --junitxml=kernel-results.xml
-          else
-            # D-CI1 a: the fast tier always (sharded); the changed test files completely, in shard 1
-            python -m pytest -m "not slow" --durations=20 --junitxml=kernel-results.xml
-            if [ "${{ matrix.shard }}" = "1" ] && [ -n "$FOCUSED" ]; then
-              ANYGEOMETRY_TEST_SHARD= ANYGEOMETRY_SHARD_REPORT= python -m pytest $FOCUSED --durations=20 --junitxml=focused-results.xml
-            fi
-          fi
+          python -c "import os,pathlib,json,sys,anygeometry,anymesher; consumer=pathlib.Path(os.environ['CI_MESHER_SOURCE_ROOT']).resolve(); assert pathlib.Path(anymesher.__file__).resolve().is_relative_to(consumer); assert pathlib.Path(anygeometry.__file__).resolve().is_relative_to(pathlib.Path('src').resolve()); pathlib.Path('consumer-runtime.json').write_text(json.dumps(dict(consumer_ref='2ef01d47e29fb461da1cf1ece73913c1708d4e49',consumer_origin=anymesher.__file__,geometry_origin=anygeometry.__file__,mpmath_loaded='mpmath' in sys.modules)),encoding='utf-8')"
+          python tools/ci_isolated_tests.py --profile integration --durations=20 --junitxml=kernel-results.xml
       - name: Slowest tests
         if: always()
         shell: bash
@@ -137,8 +138,8 @@ jobs:
           name: development-kernel-${{ matrix.os }}-${{ matrix.shard }}
           path: |
             kernel-results.xml
-            focused-results.xml
             shard-*.json
+            ci-isolation/
             *-runtime.json
           if-no-files-found: error
 
