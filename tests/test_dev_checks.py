@@ -58,6 +58,7 @@ def test_real_child_receives_runtime_settings_and_preserves_caller_evidence(monk
     assert os.environ['OMP_NUM_THREADS'] == '16'
 
 
+@pytest.mark.slow
 def test_git_selection_includes_committed_staged_deleted_and_new_files(monkeypatch, tmp_path):
     import subprocess
     def git(*args):

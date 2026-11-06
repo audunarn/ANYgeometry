@@ -119,6 +119,7 @@ def test_alias_callback_raw_mutation_refuses_and_does_not_publish(operand):
         object.__setattr__(target,name,original)
 
 
+@pytest.mark.slow
 def test_alias_cancelled_or_callback_failure_keeps_geometry_unchanged():
     source,prepared,transfer,_,_ = genuine_station_inputs()
     before = to_dict(prepared)

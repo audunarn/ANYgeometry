@@ -588,6 +588,7 @@ def test_release_authority_accepts_exact_ledger_bound_artifacts(
     assert completed.returncode == 0, completed.stderr
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize(
     "mutation",
     [

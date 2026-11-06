@@ -259,6 +259,7 @@ def test_face_only_interface_and_selector_cell_cannot_seed_a_choice():
         assert get(face) == ((Q(1, 2),)*2,)*2
 
 
+@pytest.mark.slow
 def test_selected_parameter_uses_the_shared_bounded_bank_after_eviction(request):
     model, regions, _, face = _fixture()
     with module.prepared_material_boundary_sampling_operation():
