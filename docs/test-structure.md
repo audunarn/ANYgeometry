@@ -93,10 +93,16 @@ The root adopted seven engineering-proof modules into qualification using retain
 `test_local_contact_stars`, and
 `nurbs_surface_intersection/test_generic`, and `test_bounded_nurbs`. Their test bodies and inclusion in full qualification
 are unchanged. The retained integration kernel now explicitly runs
-only the integration profile through the real isolated driver in five shards. Its
-original forty-minute job cap and the stronger 1800-second driver budget remain
-unchanged. Four provisional shards exceeded the driver envelope including reserve;
-five were the minimum tested count below it. This is an estimate, not measured fit.
+only the integration profile through the real isolated driver in eight shards. Its
+original forty-minute job cap and 1800-second secondary driver budget remain
+unchanged. The driver checks its budget around phases; run_phase does not impose
+a subprocess timeout. This is not a hard child-process deadline. A retained
+Windows 3.13 five-shard job timed out after 1361 passed and three skipped core
+cases. Screening unchanged-weight candidate assignments with the maximum of
+existing cost and completed passed-prefix clocks plus 180 seconds reserve found
+six shards the minimum screened count. The root selected eight for additional
+screening margin: about 1261 seconds, with 4747 nodes still unobserved. These are
+partial scheduling estimates, not measured fit or a future runtime bound.
 Full remains the
 exhaustive unit/integration/qualification union; required qualified positives,
 wheels, consumers and release gates remain required. This removes duplicate full

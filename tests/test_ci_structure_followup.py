@@ -10,6 +10,19 @@ sys.path.insert(0, str(ROOT/'tools'))
 
 
 class FollowupTests(unittest.TestCase):
+    def test_integration_partition_replaces_the_timed_out_five_way_layout(self):
+        import re
+        text=(ROOT/'.github/workflows/integration.yml').read_text()
+        kernel=text.split('\n  kernel:\n',1)[1].split('\n  shards:\n',1)[0]
+        axis=re.search(r'^        shard: \[([0-9, ]+)\]$',kernel,re.M)
+        values=[int(value.strip()) for value in axis.group(1).split(',')]
+        self.assertGreater(len(values),5)
+        self.assertEqual(values,list(range(1,len(values)+1)))
+        self.assertEqual(kernel.count('${{ matrix.shard }}/'+str(len(values))),2)
+        self.assertIn('timeout-minutes: 40',kernel)
+        self.assertIn('--profile integration',kernel)
+        self.assertIn("ANYGEOMETRY_SHARD_GROUPING: 'module'",kernel)
+
     def test_windows_integration_installs_and_preflights_required_planner_helper(self):
         text = (ROOT/'.github/workflows/integration.yml').read_text()
         kernel = text.split('\n  kernel:\n', 1)[1].split('\n  shards:\n', 1)[0]
@@ -20,7 +33,7 @@ class FollowupTests(unittest.TestCase):
         self.assertIn('import anygeometry._planning_native_core', kernel)
         self.assertLess(kernel.index('name: Verify required integration planner helper'), kernel.index('name: Run the kernel shard'))
         self.assertIn('timeout-minutes: 40', kernel)
-        self.assertIn('shard: [1, 2, 3, 4, 5]', kernel)
+        self.assertIn('shard: [1, 2, 3, 4, 5, 6, 7, 8]', kernel)
         self.assertNotIn('ANYGEOMETRY_BUILD_NATIVE', kernel)
 
     def tooling(self):

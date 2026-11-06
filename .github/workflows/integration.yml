@@ -82,7 +82,7 @@ jobs:
           if-no-files-found: error
 
   kernel:
-    name: Development kernel (${{ matrix.os }}, Python 3.13, shard ${{ matrix.shard }}/5)
+    name: Development kernel (${{ matrix.os }}, Python 3.13, shard ${{ matrix.shard }}/8)
     needs: plan
     if: needs.plan.outputs.runtime == 'true'
     runs-on: ${{ matrix.os }}
@@ -94,7 +94,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        shard: [1, 2, 3, 4, 5]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -123,7 +123,7 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}/.worktrees/ci-mesher-consumer/src
           CI_MESHER_SOURCE_ROOT: ${{ github.workspace }}/.worktrees/ci-mesher-consumer/src
-          ANYGEOMETRY_TEST_SHARD: ${{ matrix.shard }}/5
+          ANYGEOMETRY_TEST_SHARD: ${{ matrix.shard }}/8
           ANYGEOMETRY_SHARD_REPORT: shard-${{ matrix.shard }}.json
         run: |
           python -c "import os,pathlib,json,sys,anygeometry,anymesher; consumer=pathlib.Path(os.environ['CI_MESHER_SOURCE_ROOT']).resolve(); assert pathlib.Path(anymesher.__file__).resolve().is_relative_to(consumer); assert pathlib.Path(anygeometry.__file__).resolve().is_relative_to(pathlib.Path('src').resolve()); pathlib.Path('consumer-runtime.json').write_text(json.dumps(dict(consumer_ref='2ef01d47e29fb461da1cf1ece73913c1708d4e49',consumer_origin=anymesher.__file__,geometry_origin=anygeometry.__file__,mpmath_loaded='mpmath' in sys.modules)),encoding='utf-8')"
