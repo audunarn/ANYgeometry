@@ -19,6 +19,7 @@ def bowl(model=None, offset=0.):
     return model, face, Plane((0., 0., .5), (1., 0., 0.), (0., 1., 0.))
 
 
+@pytest.mark.slow
 def test_closed_split_preserves_source_support_and_shared_trace():
     model, face, plane = bowl()
     before = to_dict(model)
@@ -58,6 +59,7 @@ def test_forged_plan_field_refuses():
     assert to_dict(model) == before
 
 
+@pytest.mark.slow
 def test_two_parents_publish_as_one_revision():
     model, first, plane = bowl()
     _, second, _ = bowl(model, offset=4.)
@@ -121,6 +123,7 @@ def test_two_open_sections_partition_one_rectangle(weights, reverse):
     assert not model.validate_topology()
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize('points', [
     [(.65, .4), (.65, .6), (.9, .6), (.9, .4)],
     [(.45, .45), (.45, .55), (.55, .55), (.55, .45)],

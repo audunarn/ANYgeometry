@@ -243,6 +243,7 @@ def _small_cylinder_large_plate(frame):
     return model, plate
 
 
+@pytest.mark.slow
 def test_face_face_fallback_on_unbounded_plane_does_not_depend_on_frame_scale():
     """Codex S0g-R1 finding 1: refinement ran in the stored frame's scale.
 

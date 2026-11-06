@@ -244,6 +244,7 @@ MALFORMED_POLICY_FIELDS = (
 )
 
 
+@pytest.mark.slow
 def test_bounded_apply_refuses_a_malformed_caller_policy_in_place():
     # Review T2-1b R7 (Codex P2 on e0646dd): the real bounded route (plan_intersections ->
     # plan_bounded, apply_intersections -> apply_bounded). Without the copy that ran __post_init__,

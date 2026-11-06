@@ -110,6 +110,7 @@ def test_native_evaluation_kernel_and_point_cache_are_not_geometry_authority():
         capture_native_supports(model)
 
 
+@pytest.mark.slow
 def test_closed_section_disk_has_true_source_boundary_coverage():
     model, face, plane = bowl()
     apply_plane_split(model, plan_plane_split(model, [face], plane), policy='imprint')
@@ -366,6 +367,7 @@ def closed_disk_chords():
     return model, regions, intervals, chords, curve
 
 
+@pytest.mark.slow
 def test_section_runtime_changed_arc_parameter_refuses_existing_binding():
     model, regions, _intervals, chords, curve = closed_disk_chords()
     arc = curve._arcs()[0]
@@ -378,6 +380,7 @@ def test_section_runtime_changed_arc_parameter_refuses_existing_binding():
         object.__setattr__(arc, 's0', original)
 
 
+@pytest.mark.slow
 def test_section_runtime_final_callback_cannot_poison_arc_parameter():
     model, regions, intervals, _chords, curve = closed_disk_chords()
     arc, changed = curve._arcs()[0], False

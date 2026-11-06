@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from anygeometry.audit import AuditCode
 from anygeometry.model import GeometryModel
 from anygeometry.strict_audit import strict_audit
@@ -555,6 +556,7 @@ def test_coons_interior_outside_boundary_aabb_is_qualified_by_shared_predicate()
     assert report.metrics.classification_complete
 
 
+@pytest.mark.slow
 def test_shared_endpoint_curves_and_generated_cylinders_are_conformal() -> None:
     curves = GeometryModel()
     start, first_via, first_end, second_via, second_end = curves.add_points(

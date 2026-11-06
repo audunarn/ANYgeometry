@@ -139,6 +139,7 @@ def b1_reference(draft, trim=0.0, x0=2.5, frames=(1.5, 3.5), bottom=.5, deck=3.,
     return totals[0], totals[1:] / totals[0], area, (wx, x, y, stretch)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("draft", [1.0, 1.75, 2.5])
 def test_the_upright_b1_hull_matches_the_independent_reference(b1, draft):
     from anygeometry.b1_example import build_b1_half_hull
@@ -714,6 +715,7 @@ def test_free_trim_where_newton_stalls_uses_the_bracketed_solve():
     assert result["volume"] == pytest.approx(60., rel=1e-10)
 
 
+@pytest.mark.slow
 def test_free_trim_survives_probes_into_a_dry_hull():
     from anygeometry.errors import GeometryError
     from anygeometry.hydrostatics import float_free_trim

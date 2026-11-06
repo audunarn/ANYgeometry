@@ -30,6 +30,7 @@ def model_pair():
     return model,tuple(faces)
 
 
+@pytest.mark.slow
 def test_public_circle_query_plan_apply_persist_shared_world_edges():
     model,faces = model_pair()
     before = to_dict(model)
@@ -258,6 +259,7 @@ def test_pair_callback_same_revision_mutation_refuses_before_candidate_publicati
     assert not hasattr(model,'_intersection_application_receipt')
 
 
+@pytest.mark.slow
 def test_advisory_area_reuse_is_literal_scoped_and_regenerates_for_settings_or_orientation(monkeypatch):
     import dataclasses
     import anygeometry.nurbs_domain as domain_module

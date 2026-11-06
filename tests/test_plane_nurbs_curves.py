@@ -38,6 +38,7 @@ def ellipse_length(theta0, theta1):
     return .5 * (theta1 - theta0) * float(weights @ speed)
 
 
+@pytest.mark.slow
 def test_points_lie_on_both_exact_surfaces():
     curve = PlaneNurbsCurve.from_plane(OBLIQUE, cylinder(), 0)
     points = curve.evaluate(np.linspace(0., 1., 10001))   # exact evaluation (owner option a): ~0.5 ms per point
@@ -68,6 +69,7 @@ def test_length_matches_the_analytic_ellipse():
     assert abs(model.edge_length(edge) - expected) <= 1e-10 * expected
 
 
+@pytest.mark.slow
 def test_bounds_distance_bounds_and_projection():
     curve = PlaneNurbsCurve.from_plane(OBLIQUE, cylinder(math.pi), 0)
     model, edge = edge_model(curve)

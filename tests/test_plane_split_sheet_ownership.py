@@ -106,6 +106,7 @@ class Cancelled(BaseException):
     """A cancellation-style failure that is not an ``Exception``."""
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize('failure', (RuntimeError('injected publication failure'), Cancelled()))
 def test_publication_failure_rolls_back_geometry_and_structural_tables(monkeypatch, failure):
     import anygeometry.prepared_material_source_transfer as transfer

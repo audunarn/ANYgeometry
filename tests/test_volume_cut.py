@@ -265,6 +265,7 @@ def test_a_plate_with_a_hole(box, hole_inside):
     assert_inside(result)
 
 
+@pytest.mark.slow
 def test_a_cylinder_patch_across_a_seam():
     model, faces = cylinder_patches()
     result = cut(model, BoxVolume((0.5, -0.5, 1.5), (1.5, 0.5, 2.5)))

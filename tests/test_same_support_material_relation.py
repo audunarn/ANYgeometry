@@ -79,6 +79,7 @@ def test_flat_public_split_regenerates_after_plain_clone_and_load(flat_cut, copy
     assert to_dict(model) == before
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize('copy', ('direct', 'clone', 'load'))
 def test_closed_public_disk_complement_cancel_only_fresh_complete_cycle(closed_cut, copy):
     original, ids = closed_cut

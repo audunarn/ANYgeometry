@@ -297,6 +297,7 @@ def _polls_inside(domain, traces):
     return counted, poll, polls, inside
 
 
+@pytest.mark.slow
 def test_cancellation_anywhere_in_the_selection_raises(monkeypatch):
     domain, traces = cap()
     counted, poll, polls, inside = _polls_inside(domain, traces)

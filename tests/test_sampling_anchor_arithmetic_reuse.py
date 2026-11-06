@@ -22,6 +22,7 @@ def _fixture():
     return model, regions, seeds, face
 
 
+@pytest.mark.slow
 def test_actual_one_face_reuses_selection_with_fresh_equal_sampling(tmp_path):
     model, regions, seeds, face = _fixture()
     original = owner.to_dict(model)
@@ -157,6 +158,7 @@ def test_hit_preserves_callback_terminal_identity(kind):
             assert caught.value is marker
 
 
+@pytest.mark.slow
 def test_effective_depth_separates_choices_under_the_same_operation(monkeypatch):
     model, regions, _, face = _fixture()
     calls = []
@@ -313,6 +315,7 @@ def test_domain_subclass_keeps_original_uncached_search_component(request):
     request.node.user_properties.append(('execution_scope', 'uncached-selector-component'))
 
 
+@pytest.mark.slow
 def test_final_callback_drift_cannot_publish_a_retained_choice(monkeypatch):
     model, regions, seeds, _ = _fixture()
     original = owner.to_dict(model)
@@ -566,6 +569,7 @@ def test_unknown_metadata_provider_refuses_without_hooks(kind, monkeypatch, requ
     request.node.user_properties.append(('execution_scope', 'passive-metadata-provider-component'))
 
 
+@pytest.mark.slow
 def test_public_complete_callback_alias_drift_is_typed_before_generic_context(monkeypatch):
     model, regions, seeds, face = _fixture()
     original = owner.to_dict(model)

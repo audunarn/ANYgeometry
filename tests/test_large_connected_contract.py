@@ -101,6 +101,7 @@ def test_boundary_member_decomposition_preserves_point_attachment(builders, heig
     assert model.validate_topology() == ()
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize('bay', [60, 69])
 def test_translated_cubic_bay_retains_material_without_relaxed_tolerance(builders, bay):
     from check_large_connected import verify

@@ -669,6 +669,7 @@ def _random_off_band_polygon(rng, top_exponent=2.3):
     return vertices, [(x, 0.) for x in xs]
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("seed", (11, 12, 13))
 def test_off_band_junctions_match_exact_winding_oracle(seed):
     """Random long-edge junctions (L 1..200, 1..16 eps) inside the domain: lines, and a following half circle."""

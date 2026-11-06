@@ -9,6 +9,7 @@ from anygeometry.entities import EntityRef
 from test_local_sweep_competition import closed_source
 
 
+@pytest.mark.slow
 def test_bounded_connect_declares_authentic_joints_and_atomic_apply():
     model,faces,plane=closed_source();before=to_dict(model)
     original_revision=model.revision

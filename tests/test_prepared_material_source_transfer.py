@@ -154,6 +154,7 @@ def test_existing_transfer_binds_full_issued_native_state(owner, attack):
     finally:
         object.__setattr__(support, '_circumferential', stored)
 
+@pytest.mark.slow
 def test_public_clone_split_mixed_children_transfer_exact_source_edge_intervals():
     from anygeometry import Plane, plan_plane_split, apply_plane_split
     from test_mixed_source_junctions import fan_receipt

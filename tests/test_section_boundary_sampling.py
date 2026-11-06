@@ -224,6 +224,7 @@ def policy(**changes):
     return dataclasses.replace(POLICY, **changes)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("error", (.01, .0025))
 def test_owner_sampling_of_the_closed_plane_disk_is_complete_and_within_the_supplied_world_error(error):
     from anygeometry.errors import GeometryError
@@ -255,6 +256,7 @@ def test_owner_sampling_of_the_closed_plane_disk_is_complete_and_within_the_supp
     assert result.chord_error == error
 
 
+@pytest.mark.slow
 def test_owner_sampling_refuses_with_a_typed_error_under_low_work_and_leaves_the_caller_unchanged():
     from anygeometry.errors import GeometryError
     from anygeometry.prepared_material_curvilinear import query_prepared_material_boundary_sampling

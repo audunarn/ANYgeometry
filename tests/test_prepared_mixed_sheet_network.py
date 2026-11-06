@@ -454,6 +454,7 @@ def test_plane_basis_residuals_do_not_certify_whole_material_distance():
         'carrier_correspondence'] == 'exact_fields'
 
 
+@pytest.mark.slow
 def test_restricted_carriers_keep_unmoved_bounds_under_ulp_rounding(monkeypatch):
     # macOS Intel libm put an unmoved axial bound at local v ~3e-17 instead of 0, which moved the
     # restricted Cylinder origin by one ulp and the receipt refused it. Bounds physically within

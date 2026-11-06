@@ -110,6 +110,7 @@ def test_curved_rational_leaf_and_reversal_match_exhaustive(reverse):
     assert outcome(module._skeleton,operands)==outcome(exhaustive_skeleton,operands)
 
 
+@pytest.mark.slow
 def test_large_cartesian_grid_has_complete_boundary_cover_with_fixed_budget():
     operands=grid(64)
     cells,boundary,sides,nodes=operands

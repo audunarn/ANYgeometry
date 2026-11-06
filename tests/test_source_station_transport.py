@@ -81,6 +81,7 @@ def test_exact_binary_legacy_stations_need_no_alias_rows():
     validate_prepared_source_station_transport_binding(source,prepared,transfer,result)
 
 
+@pytest.mark.slow
 def test_alias_receipt_copy_forgery_and_raw_output_edits_refuse():
     source,prepared,transfer,_,_ = genuine_station_inputs()
     result = query_prepared_source_station_transport(source,prepared,transfer)
@@ -93,6 +94,7 @@ def test_alias_receipt_copy_forgery_and_raw_output_edits_refuse():
         validate_prepared_source_station_transport_binding(source,prepared,transfer,result)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize('operand',['source','prepared','transfer','chords'])
 def test_alias_callback_raw_mutation_refuses_and_does_not_publish(operand):
     source,prepared,transfer,_,chords = genuine_station_inputs()
@@ -131,6 +133,7 @@ def test_alias_cancelled_or_callback_failure_keeps_geometry_unchanged():
     assert caught.value is failure and to_dict(prepared) == before
 
 
+@pytest.mark.slow
 def test_alias_binding_refuses_raw_stale_source_and_each_output_callback_frontier():
     source,prepared,transfer,_,_ = genuine_station_inputs()
     result = query_prepared_source_station_transport(source,prepared,transfer)
