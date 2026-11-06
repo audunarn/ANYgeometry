@@ -763,15 +763,11 @@ workflow remains unchanged. Licensing tests:32 passed; static checker9declared
 dependencies; a fresh real dev+planar environment passed, and strict default
 correctly refused missing optional mpmath. Missing local Twine evidence remains.
 
-New has_current_prepared_partition_lineage is an availability predicate for an
-optional shortcut, not a pairwise disjointness certificate. Ordinary committed
-edits select fresh classification; explicit stale proof queries remain strict.
-Only genuinely issued participants receive weak commit-state witnesses, sealed
-at all five owner publication boundaries before consumer observers. Raw/native
-mutation, malformed/forged authority and stale callback effects still refuse.
-Reads/recloning do not overwrite old witnesses; fresh clone routes do not inherit
-stale sibling groups. Untracked model commits remain inert. No extra cloning,
-epoch issuance or link clearing is used to repair optional readiness.
+2026-11-06: the optional has_current_prepared_partition_lineage predicate and its commit-witness
+registry were REMOVED when this candidate was reconciled with geometry main c3b2704. Mesh main requires an
+owner stale-lineage refusal before any reclassification (mesh 33ef095); the readiness fallback contradicted
+that contract. Explicit partition queries keep their strict stale-proof refusal. The earlier text and its
+test evidence describe the superseded design and remain in Git history.
 
 Final focused source checks:19 exact development smoke,55 owner,10 consumer,
 20 material/native/cancellation checks passed. A broader intermediate selection

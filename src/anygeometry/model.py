@@ -501,7 +501,6 @@ class GeometryModel:
         self._last_change_set = change_set
         self._notifying_hooks = True
         try:
-            self._capture_prepared_partition_commit()
             for hook in tuple(self._change_hooks):
                 try:
                     hook(change_set)
@@ -598,7 +597,6 @@ class GeometryModel:
         self._last_change_set = change_set
         self._notifying_hooks = True
         try:
-            self._capture_prepared_partition_commit()
             for hook in tuple(self._change_hooks):
                 try:
                     hook(change_set)
@@ -771,11 +769,6 @@ class GeometryModel:
         if hook not in self._change_hooks:
             self._change_hooks.append(hook)
 
-    def _capture_prepared_partition_commit(self) -> None:
-        """Seal tracked preparation participants before consumer callbacks."""
-        if getattr(self, '_prepared_partition_lineage_tracked', False):
-            from .prepared_material_source_transfer import _capture_partition_commit
-            _capture_partition_commit(self)
 
     def remove_change_hook(self, hook: ChangeHook) -> None:
         try:
@@ -1671,7 +1664,6 @@ class GeometryModel:
             self._transaction_journal = None
             self._notifying_hooks = True
             try:
-                self._capture_prepared_partition_commit()
                 for hook in tuple(self._change_hooks):
                     try:
                         hook(change_set)
@@ -2269,7 +2261,6 @@ class GeometryModel:
         self._last_change_set = change_set
         self._notifying_hooks = True
         try:
-            self._capture_prepared_partition_commit()
             for hook in tuple(self._change_hooks):
                 try:
                     hook(change_set)
@@ -2428,7 +2419,6 @@ class GeometryModel:
             # ChangeSet exactly once after both halves are installed.
             self._notifying_hooks = True
             try:
-                self._capture_prepared_partition_commit()
                 for hook in tuple(original_hooks):
                     try:
                         hook(change_set)
