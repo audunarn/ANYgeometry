@@ -785,12 +785,22 @@ def test_r11_metadata_admits_through_the_real_prepared_legacy_ledger_and_mutable
     True) + prepare(owned_worker=True). Runtime requirement: OPENBLAS/OMP/MKL/NUMEXPR_NUM_THREADS=1 set in the
     environment BEFORE the test process starts (the child module records them at import and prepare() refuses
     otherwise). The two-census coverage guard is deliberate and unchanged: nothing here mocks or retries it."""
+    import runpy
+    import sys
+    from pathlib import Path
     from threadpoolctl import threadpool_limits
     from anygeometry import _planning_session as session                    # session closure imported first, as the roles do
-    from anygeometry import _planning_child as child, _planning_ledger as ledger_api, _planning_qualification as q
+    from anygeometry import _planning_ledger as ledger_api, _planning_qualification as q
     from anygeometry._planning_qualification import QualificationDecline
+    # Production runs _planning_child.py BY FILE as a script (never as the package module anygeometry._planning_child),
+    # so its namespace (scipy/threadpoolctl/... globals) is not an audited anygeometry.* root. Load it the same way
+    # under a NON-anygeometry, non-__main__ name; importing it as a package module would add an artificial root.
+    assert 'anygeometry._planning_child' not in sys.modules, \
+        'requires a fresh host: anygeometry._planning_child was already imported by another test/cohort'
+    namespace = runpy.run_path(str(Path(session.__file__).with_name('_planning_child.py')), run_name='r11_legacy_preparation')
+    assert 'anygeometry._planning_child' not in sys.modules and 'r11_legacy_preparation' not in sys.modules
     with threadpool_limits(limits=1):
-        canaries, goldens = child.prepare(production=False)                  # the real legacy producer closure
+        canaries, goldens = namespace['prepare'](production=False)           # the real legacy producer closure
         generated = q.generated_runtime_modules()
         assert set(canaries) == {'pair', 'face'} and set(goldens) == set(canaries)
         ledger = ledger_api.loaded_geometry_ledger(trusted_image=True)       # the real legacy admission, default roots
