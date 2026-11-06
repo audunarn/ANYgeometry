@@ -53,3 +53,10 @@ jobs:
         env:
           UNIT_RESULT: ${{ needs.unit.result }}
         run: test "$UNIT_RESULT" = success
+  manual-integration:
+    if: github.event_name == 'workflow_dispatch'
+    needs: unit
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/integration.yml

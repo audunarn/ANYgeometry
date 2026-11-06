@@ -128,6 +128,12 @@ class ModuleSchedulingTests(unittest.TestCase):
                 self.assertNotIn('ANYGEOMETRY_SHARD_GROUPING',phases[0][2])
 
     def test_workflow_profiles_preserve_full_union_and_qualified_path(self):
+        development=(ROOT/'.github/workflows/development.yml').read_text()
+        manual=development.split('\n  manual-integration:\n',1)[1]
+        self.assertIn("if: github.event_name == 'workflow_dispatch'",manual)
+        self.assertIn('needs: unit',manual)
+        self.assertIn('uses: ./.github/workflows/integration.yml',manual)
+        self.assertIn('actions: read',manual)
         ci=(ROOT/'.github/workflows/ci.yml').read_text()
         regular=ci.split('\n  pytest:\n',1)[1].split('\n  pytest-qualified:\n',1)[0]
         qualified=ci.split('\n  pytest-qualified:\n',1)[1].split('\n  pytest-shards:\n',1)[0]
