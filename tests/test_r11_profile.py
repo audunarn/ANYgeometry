@@ -271,6 +271,7 @@ def test_failed_first_decode_is_refused(tmp_path, monkeypatch):
 
 
 @pytest.mark.slow
+@numpy_profile_test          # real manifest/InfrastructurePin capture: original body on the qualified profile, exact typed refusal elsewhere
 def test_probe_fixture_small_is_single_process_and_reports_actual_packets(tmp_path):
     probe = _tool('r11_probe')
     from anygeometry._planning_canaries import _fixture
@@ -776,45 +777,60 @@ def test_r11_metadata_declarations_are_immutable_and_accessors_return_fresh_mapp
         assert accessor()[key] == original                                           # mutating a copy changes nothing
 
 
-@pytest.mark.slow
-@numpy_profile_test
-def test_r11_metadata_admits_through_the_real_prepared_legacy_ledger_and_mutable_standins_are_refused(monkeypatch, request):
-    """Scope: ACTUAL legacy ledger preparation, not native-worker qualification. Mirrors what the legacy session child
-    does before it builds its ledger: import the session closure, run the real ``_planning_child.prepare`` (real
-    canaries + constructor/task lazy closure) under threadpool_limits(1), THEN loaded_geometry_ledger(trusted_image=
-    True) + prepare(owned_worker=True). Runtime requirement: OPENBLAS/OMP/MKL/NUMEXPR_NUM_THREADS=1 set in the
-    environment BEFORE the test process starts (the child module records them at import and prepare() refuses
-    otherwise). The two-census coverage guard is deliberate and unchanged: nothing here mocks or retries it."""
-    import runpy
-    import sys
-    from pathlib import Path
-    from threadpoolctl import threadpool_limits
-    from anygeometry import _planning_session as session                    # session closure imported first, as the roles do
-    from anygeometry import _planning_ledger as ledger_api, _planning_qualification as q
+def test_r11_metadata_census_on_explicit_session_root_is_complete_and_classifies_mutable_replacements():
+    """METADATA-SPECIFIC scope (NOT a full legacy admission, no producer claim): the real ``_planning_ledger._census``
+    — the walker ``loaded_geometry_ledger``/``build_ledger`` use — over the explicit root ``(_planning_session,)``
+    under the UNCHANGED default bounds (80000 nodes / depth 24). Requires a COMPLETE census, shows the immutable
+    scalar-pair declarations add no store entries, and shows that a mutable replacement of the exact declaration is
+    classified as a (declined) store by the unchanged inventory policy. No mocks, no raised bounds. Assumption: only
+    this module is walked, so it is independent of ambient imports and of the 156-root default closure."""
+    from anygeometry import _planning_ledger as ledger_api, _planning_session as session
+    prefix = 'anygeometry._planning_session.'
+    objects = {}
+    report, _ = ledger_api._census((session,), objects)
+    assert report.truncated is False, 'the metadata census must be COMPLETE under the unchanged 80000-node bound'
+    stored = {store.path[len(prefix):]: store for store in report.stores if store.path.startswith(prefix)}
+    assert set(objects) == {store.path for store in report.stores}
+    assert not set(stored) & (set(R11_METADATA_NAMES) | {'REPLY_BOUNDS', 'WORKER_EXPECTED_CAP', 'TIMING_RECORD_FIELDS'})
+    # the exact declarations are walked as ordinary immutable data: their entries are not stores either
+    assert not [path for path in stored if path.startswith(('_REPLY_BOUNDS', '_WORKER_EXPECTED_CAP', '_TIMING_RECORD_FIELDS'))]
+    replacements = {'_REPLY_BOUNDS': (dict, dict(session._REPLY_BOUNDS)),
+                    '_WORKER_EXPECTED_CAP': (list, list(session._WORKER_EXPECTED_CAP)),
+                    '_TIMING_RECORD_FIELDS': (dict, dict(session._TIMING_RECORD_FIELDS))}
+    for name, (kind, replacement) in replacements.items():
+        original = getattr(session, name)
+        setattr(session, name, replacement)
+        try:
+            mutated_objects = {}
+            mutated, _ = ledger_api._census((session,), mutated_objects)
+        finally:
+            setattr(session, name, original)                                 # always restore the immutable declaration
+        assert mutated.truncated is False
+        rows = [store for store in mutated.stores if store.path == prefix + name]
+        assert len(rows) == 1 and rows[0].kind == kind.__name__ and rows[0].decision == 'declined', (name, rows)
+        assert mutated_objects[prefix + name] is replacement                # the real store handle the ledger would hold
+    assert getattr(session, '_REPLY_BOUNDS') == session._REPLY_BOUNDS and type(session._REPLY_BOUNDS) is tuple
+
+
+def test_default_ledger_guard_refuses_an_oversized_closure_with_the_exact_typed_decline():
+    """BOUNDARY test (not a claim about any legacy producer): a controlled closure — the real session module plus a
+    synthetic ModuleType carrying 80001 immutable int atoms — exceeds the UNCHANGED 80000-node bound. The real
+    census truncates, and the real ``loaded_geometry_ledger`` -> ``build_ledger`` combined guard refuses with the exact
+    typed QualificationDecline. Explicit roots only, so it needs no ambient imports / fresh host and no GC change."""
+    import types
+    from anygeometry import _planning_ledger as ledger_api, _planning_session as session
     from anygeometry._planning_qualification import QualificationDecline
-    # Production runs _planning_child.py BY FILE as a script (never as the package module anygeometry._planning_child),
-    # so its namespace (scipy/threadpoolctl/... globals) is not an audited anygeometry.* root. Load it the same way
-    # under a NON-anygeometry, non-__main__ name; importing it as a package module would add an artificial root.
-    assert 'anygeometry._planning_child' not in sys.modules, \
-        'requires a fresh host: anygeometry._planning_child was already imported by another test/cohort'
-    namespace = runpy.run_path(str(Path(session.__file__).with_name('_planning_child.py')), run_name='r11_legacy_preparation')
-    assert 'anygeometry._planning_child' not in sys.modules and 'r11_legacy_preparation' not in sys.modules
-    with threadpool_limits(limits=1):
-        canaries, goldens = namespace['prepare'](production=False)           # the real legacy producer closure
-        generated = q.generated_runtime_modules()
-        assert set(canaries) == {'pair', 'face'} and set(goldens) == set(canaries)
-        ledger = ledger_api.loaded_geometry_ledger(trusted_image=True)       # the real legacy admission, default roots
-        ledger.prepare(owned_worker=True)                                    # real reset of the registered declined caches
-        ledger.validate()                                                    # and the real census validation
-        assert generated == q.generated_runtime_modules()                    # session_planner's own post-prepare guard
-        prefix = 'anygeometry._planning_session.'
-        stored = {path[len(prefix):] for path in ledger.rows if path.startswith(prefix)}
-        assert not stored & (set(R11_METADATA_NAMES) | {'REPLY_BOUNDS', 'WORKER_EXPECTED_CAP', 'TIMING_RECORD_FIELDS'})
-        # a mutable stand-in for a declaration is still refused by the unchanged ledger (census not weakened)
-        monkeypatch.setattr(session, '_REPLY_BOUNDS', dict(session._REPLY_BOUNDS))
-        with pytest.raises(QualificationDecline) as caught:
-            ledger_api.loaded_geometry_ledger(trusted_image=True)
-        assert '_REPLY_BOUNDS' in str(caught.value), str(caught.value)
+    oversized = types.ModuleType('r11_synthetic_oversized_closure')
+    oversized.atoms = tuple(range(80001))                                    # 1 tuple + 80001 atoms > 80000 visits
+    roots = (session, oversized)
+    sized, _ = ledger_api._census(roots, {})
+    assert sized.truncated is True                                           # the original default bound refuses, unchanged
+    within, _ = ledger_api._census((session,), {})
+    assert within.truncated is False                                         # the oversized module alone causes it
+    with pytest.raises(QualificationDecline) as caught:
+        ledger_api.loaded_geometry_ledger(trusted_image=True, modules=roots)
+    assert str(caught.value) == 'ledger creation live coverage mismatch'
+    assert type(caught.value) is QualificationDecline
 
 
 def test_worker_expected_cap_is_exact_and_overcap_declines_with_a_typed_error():
