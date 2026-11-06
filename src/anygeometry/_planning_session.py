@@ -24,6 +24,10 @@ from ._planning_stages import WorkerModel, stage_task, dispatch
 from ._planning_process import OwnedTree
 
 
+_TIMING_FIELDS=frozenset(('count','total_wall','total_cpu','setup_wall','setup_cpu','kernel_wall','kernel_cpu',
+    'encode_wall','encode_cpu','bookkeeping_wall','bookkeeping_cpu','encoded_utf8_bytes','max_total_wall','max_kernel_wall'))
+
+
 def _digest(value):
     return type(value) is str and len(value)==64 and all(c in '0123456789abcdef' for c in value)
 
@@ -203,6 +207,164 @@ def _validate_rows(rows,assigned):
         raise QualificationDecline('prepared worker assignment coverage')
 
 
+# Declared, validated bounds for runtime metadata that is not otherwise source-bounded.
+# They are enforced on the host for every compact worker report (verify_prepared_stage) and
+# reused by the R11 reply-feasibility proof, so production and proof cannot drift.
+# Immutable declarations only (tuples of (key,value) scalar pairs): module globals of this closure must not be
+# mutable containers, or the legacy ledger declines them as unregistered stores. Fresh dicts come from accessors.
+_REPLY_BOUNDS=(('blas_entries',8),('blas_filepath_chars',1024),('blas_string_chars',64),('pid_max',2**32-1),
+    ('counter_max',2**63-1))
+_BLAS_STRING_FIELDS=('user_api','internal_api','prefix','filepath','version','threading_layer','architecture')
+
+
+def reply_bounds():
+    """Fresh mapping of the declared reply-metadata bounds (callers may not mutate the declaration)."""
+    return dict(_REPLY_BOUNDS)
+
+
+def bounded_duration(value):
+    """ONE validator for every duration/aggregate scalar: a non-bool int in 0..int63 (checked BEFORE any float
+    conversion, so huge ints are refused, never OverflowError) or a finite non-negative float."""
+    if type(value) is int:
+        return 0<=value<=reply_bounds()['counter_max']
+    return type(value) is float and math.isfinite(value) and value>=0
+
+
+# The ONLY concrete wall-time field emitted inside a diagnostic RECORD (material_arrangement.py
+# arrangement_snap_fallback['seconds']); counters named *_time_ns are the other timing form. No other
+# record key is treated as timing (no blanket stripping).
+_TIMING_RECORD_FIELDS=(('arrangement_snap_fallback','seconds'),)
+
+
+def timing_record_fields():
+    return dict(_TIMING_RECORD_FIELDS)
+
+
+def stable_diagnostics(data):
+    """Diagnostic transaction without its known wall-time observables (comparison content)."""
+    records={};timing=timing_record_fields()
+    for name,rows in data.get('records',{}).items():
+        field=timing.get(name)
+        records[name]=[({k:v for k,v in row.items() if k!=field} if field and type(row) is dict else row) for row in rows]
+    return dict(counters={k:v for k,v in data.get('counters',{}).items() if not k.endswith('_time_ns')},records=records)
+
+
+def check_diagnostic_timing(data):
+    """Typed decline for a malformed known timing observable (shared by host verification and the proof)."""
+    for name,field in timing_record_fields().items():
+        for row in data.get('records',{}).get(name,[]):
+            if type(row) is not dict or field not in row or not bounded_duration(row[field]):
+                raise QualificationDecline('diagnostic timing record field')
+
+
+def check_blas_report(pools):
+    """Parallel-route metadata eligibility bound (documented): a worker reply is accepted only if its
+    threadpoolctl info has <=8 pools with known keys, str/None values of <=1024 Unicode codepoints
+    for ``filepath`` and <=64 for every other string, and num_threads in 0..2**63-1. Unicode (e.g.
+    Windows library paths) is allowed; the JSON wire is ensure_ascii, so the worst case is 12 ASCII
+    characters per codepoint (a non-BMP codepoint = two \\uXXXX surrogate escapes), which the R11
+    proof bounds on the real packet. Overbound metadata raises QualificationDecline: no truncation,
+    no normalization; the original serial route is the fallback."""
+    bounds=reply_bounds()
+    if type(pools) is not list or not 1<=len(pools)<=bounds['blas_entries']:
+        raise QualificationDecline('worker BLAS report size')
+    for pool in pools:
+        if type(pool) is not dict or not set(pool)<=set(_BLAS_STRING_FIELDS)|{'num_threads'}:
+            raise QualificationDecline('worker BLAS report fields')
+        for key,value in pool.items():
+            if key=='num_threads':
+                if type(value) is not int or not 0<=value<=bounds['counter_max']:raise QualificationDecline('worker BLAS thread field')
+            elif value is not None:
+                limit=bounds['blas_filepath_chars'] if key=='filepath' else bounds['blas_string_chars']
+                if type(value) is not str or len(value)>limit:
+                    raise QualificationDecline('worker BLAS string field')
+
+
+def build_worker_report(binding,*,rows,model_sha256,pid,task_count,batch_size,assignment_seconds,startup_seconds,
+        task_seconds,task_timing,boundary_seconds,reset_count,full_environment_checks,blas_threads,gate_closed,
+        gate_poisoned,diagnostics,resource_guard=None,value_codec=None):
+    """Pure session-worker stage reply body; the ONLY place its field set is assembled."""
+    report=dict(status='passed',**binding,rows=rows,model_sha256=model_sha256,model_decode_count=1,pid=pid,
+        task_count=task_count,batch_size=batch_size,assignment_seconds=assignment_seconds,startup_seconds=startup_seconds,
+        task_seconds=task_seconds,task_timing=task_timing,boundary_seconds=boundary_seconds,reset_count=reset_count,
+        full_environment_checks=full_environment_checks,blas_threads=blas_threads,gate_closed=gate_closed,
+        gate_poisoned=gate_poisoned,diagnostics=diagnostics)
+    if resource_guard is not None:report['resource_guard']=resource_guard
+    if value_codec is not None:report['value_codec']=value_codec
+    return report
+
+
+# Parallel-route eligibility cap for the worker expected-environment reference (canonical JSON payload bytes
+# and decoded walk nodes). Checked by ONE shared function at the producer (before any worker starts) and by
+# the child on reading its setup. Overlarge runtime metadata routes to the original serial path. The global
+# 4 MB / 8.1 MB / 100k wire limits are unchanged; this cap only makes the worker-setup size provable.
+_WORKER_EXPECTED_CAP=(('payload_bytes',524288),('walk_nodes',16384))
+
+
+def worker_expected_cap():
+    """Fresh mapping of the (immutably declared) worker expected-reference eligibility cap."""
+    return dict(_WORKER_EXPECTED_CAP)
+
+
+def walk_node_count(value):
+    """Nodes of a decoded JSON value: every container, dict key and scalar (iterative, no recursion limit)."""
+    count=0;stack=[value]
+    while stack:
+        item=stack.pop();count+=1
+        if type(item) is dict:
+            count+=len(item);stack.extend(item.values())
+        elif type(item) in (list,tuple):stack.extend(item)
+    return count
+
+
+def check_worker_expected_bound(expected):
+    """Pure producer/child check; typed QualificationDecline (safe serial fallback), never truncation."""
+    try:payload=json.dumps(expected,sort_keys=True,separators=(',',':'),allow_nan=False)
+    except (TypeError,ValueError) as error:raise QualificationDecline('worker expected reference is not canonical JSON') from error
+    size=len(payload.encode('utf-8'));nodes=walk_node_count(json.loads(payload))
+    cap=worker_expected_cap()
+    if size>cap['payload_bytes'] or nodes>cap['walk_nodes']:
+        raise QualificationDecline('worker expected reference exceeds parallel eligibility cap: bytes=%d/%d nodes=%d/%d'%(
+            size,cap['payload_bytes'],nodes,cap['walk_nodes']))
+    return size,nodes
+
+
+def build_worker_setup(session,worker,model,sources,expected,workers,batch_size):
+    """Pure per-worker setup body (the ONLY place its field set is assembled)."""
+    return dict(session_sha256=session,worker=worker,model=model,sources=sources,expected=expected,
+        workers=workers,batch_size=batch_size)
+
+
+def build_worker_final(binding,*,model_sha256,stages,gate_closures,blas_threads,pid,resource_guard=None,value_codec=None):
+    """Pure session-worker terminal (finish) result body; _planning_child.main adds status/process_seconds."""
+    result=dict(status='passed',**binding,model_sha256=model_sha256,stages=list(stages),gate_closures=gate_closures,
+        blas_threads=blas_threads,pid=pid,model_decode_count=1)
+    if resource_guard is not None:result['resource_guard']=resource_guard
+    if value_codec is not None:result['value_codec']=value_codec
+    return result
+
+
+def build_planner_result(session,request,stages,infrastructure,stage_requests,worker_reports,prepared_entries,preparation_sha256):
+    """Pure session-planner terminal result body (default route: prepared_entries/preparation_sha256 are None)."""
+    return dict(status='passed',session_sha256=session,request_sha256=request,stages=list(stages),
+        infrastructure=infrastructure,stage_requests=stage_requests,worker_reports=worker_reports,
+        prepared_entries=prepared_entries,preparation_sha256=preparation_sha256)
+
+
+def build_infrastructure_record(numerical_manifest,planner_digest,planner_nodes,planner_native):
+    """Pure planner infrastructure record (references are added by the caller via update())."""
+    return dict(host=numerical_manifest['infrastructure_host'],planner=planner_digest,planner_nodes=planner_nodes,
+        resource=planner_native,value_codec=numerical_manifest['value_codec'])
+
+
+def build_session_reply(session,request,kind,*,rows,infrastructure,worker_reports,requested_workers,actual_workers,
+        task_layout,model_sha256,startup):
+    """Pure session stage reply body (compact worker reports already applied)."""
+    return dict(status='passed',session_sha256=session,request_sha256=request,stage=kind,rows=rows,
+        infrastructure=infrastructure,worker_reports=worker_reports,requested_workers=requested_workers,
+        actual_workers=actual_workers,task_layout=task_layout,model_sha256=model_sha256,startup=startup)
+
+
 def compact_worker_report(report,assigned,*,payload_limit=4_000_000):
     """Validate original ordered rows before dropping the nested result echo."""
     if type(report) is not dict or 'result_count' in report or 'results_sha256' in report:
@@ -227,9 +389,13 @@ def _verify_finish_workers(reports,stages,workers,model_sha):
                 type(report.get('worker')) is not int or report['worker']!=i or report.get('stages')!=list(stages) or
                 type(report.get('gate_closures')) is not int or report['gate_closures']!=len(stages) or
                 report.get('model_sha256')!=model_sha or type(report.get('model_decode_count')) is not int or
-                report['model_decode_count']!=1 or type(report.get('pid')) is not int or report['pid']<=0):
+                report['model_decode_count']!=1 or type(report.get('pid')) is not int or not 0<report['pid']<=reply_bounds()['pid_max']):
             raise QualificationDecline('session finish worker gate/model/PID binding')
         verify_threads(report.get('blas_threads',[]))
+        # Same declared metadata ceilings as stage replies (terminal reports are bounded by them too).
+        check_blas_report(report.get('blas_threads'))
+        if 'process_seconds' in report and not bounded_duration(report['process_seconds']):
+            raise QualificationDecline('session finish worker duration bounds')
 
 
 def validate_command(body, *, session, sequence, previous, seen, worker=None):
@@ -262,6 +428,27 @@ def validate_command(body, *, session, sequence, previous, seen, worker=None):
     if any(type(t) is not dict or t.get('kind')!=kind for t in tasks):
         raise QualificationDecline('session task/stage mismatch')
     return kind
+
+
+def build_session_setup(packet,sources,*,workers,batch_size,limits,startup_concurrency=1,numerical_manifest=None):
+    """Pure session setup body shared by the normal route and the R11 wire probe."""
+    setup=dict(model=packet,sources=sources,workers=workers,batch_size=batch_size,limits=limits)
+    if startup_concurrency!=1:setup['startup_concurrency']=startup_concurrency
+    if numerical_manifest is not None:setup['numerical_manifest']=numerical_manifest
+    return setup
+
+
+def build_session_command(session,sequence,previous,kind,tasks,*,seen=None,validate=True):
+    """Pure session command body; validated against the closed command grammar."""
+    body=dict(session=session,sequence=sequence,previous=previous,stage=kind,tasks=list(tasks))
+    if validate:validate_command(body,session=session,sequence=sequence,previous=previous,seen=seen)
+    return body
+
+
+def build_worker_command(session,sequence,previous,kind,assigned,worker,parent_request):
+    """Pure per-worker command body (assigned = [[ordinal,task],...])."""
+    return dict(session=session,sequence=sequence,previous=previous,stage=kind,
+                tasks=assigned,worker=worker,parent_request=parent_request)
 
 
 def sampling_digest(packet,tasks,*,workers,batch_size,sources,payload_limit=4_000_000):
@@ -396,8 +583,7 @@ class OwnedSession(OwnedPlanner):
         if time.monotonic()>=self.deadline:raise PlannerDeadline('session deadline consumed')
 
     def _command(self,kind,tasks):
-        body=dict(session=self.session,sequence=len(self.stages),previous=self.previous,stage=kind,tasks=list(tasks))
-        validate_command(body,session=self.session,sequence=len(self.stages),previous=self.previous,seen=self.stages)
+        body=build_session_command(self.session,len(self.stages),self.previous,kind,tasks,seen=self.stages)
         return body,pack(body,'session-command',limit=self.limits['payload_limit'])
 
     def submit_stage(self,kind,packet,tasks,*,poll=None):
@@ -406,10 +592,8 @@ class OwnedSession(OwnedPlanner):
             self._poll(poll)
             if self.session is None:
                 self.packet=dict(packet);self.sources=source_files()
-                setup=dict(model=self.packet,sources=self.sources,workers=self.workers,
-                           batch_size=self.batch_size,limits=self.limits)
-                if self.startup_concurrency!=1:setup['startup_concurrency']=self.startup_concurrency
-                if self.numerical_manifest is not None:setup['numerical_manifest']=self.numerical_manifest
+                setup=build_session_setup(self.packet,self.sources,workers=self.workers,batch_size=self.batch_size,
+                    limits=self.limits,startup_concurrency=self.startup_concurrency,numerical_manifest=self.numerical_manifest)
                 initial=pack(setup,'session',limit=self.limits['payload_limit'])
                 self.session=self.previous=initial['sha256']
                 write_packet(self.directory/'session.json',initial)
@@ -529,6 +713,8 @@ class OwnedSession(OwnedPlanner):
                 raise QualificationDecline('session finish stage coverage')
             reports=result.get('worker_reports')
             _verify_finish_workers(reports,self.stages,self.workers,self.packet['sha256'])
+            if 'process_seconds' in result and not bounded_duration(result['process_seconds']):
+                raise QualificationDecline('session planner duration bounds')
             if self.numerical_manifest is not None:
                 for worker in reports:_verify_worker_resources(worker,self.numerical_manifest['resource'],self.numerical_manifest['value_codec'])
             if len(self._stage_reports)!=len(self.stages):
@@ -583,9 +769,13 @@ def _setup(folder,limits,deadline,*,decode=True):
 
 def session_planner(folder,deadline,canaries,goldens,binding,limits,generated):
     stamp=time.perf_counter()
-    setup,session=_setup(folder,limits,deadline)
+    # One decode of the admitted model: production thaws exactly once at model_context
+    # (after the infrastructure/admission bindings); legacy keeps its up-front decode
+    # validation. Invalid models are refused by thaw_model either way.
+    setup,session=_setup(folder,limits,deadline,decode=False)
     production='numerical_manifest' in setup
     if production:_record_initialization(folder,'setup_and_initial_thaw',stamp)
+    else:thaw_model(setup['model'],**limits)
     binding['session_sha256']=session
     infrastructure=None;infrastructure_record=None
     if 'numerical_manifest' in setup:
@@ -595,9 +785,8 @@ def session_planner(folder,deadline,canaries,goldens,binding,limits,generated):
         _record_initialization(folder,'infrastructure',stamp)
         if infrastructure.native!=setup['numerical_manifest']['resource']:
             raise QualificationDecline('H/P resource identity mismatch')
-        infrastructure_record=dict(host=setup['numerical_manifest']['infrastructure_host'],
-            planner=infrastructure.digest,planner_nodes=infrastructure.nodes,resource=infrastructure.native,
-            value_codec=setup['numerical_manifest']['value_codec'])
+        infrastructure_record=build_infrastructure_record(setup['numerical_manifest'],infrastructure.digest,
+            infrastructure.nodes,infrastructure.native)
         if read_packet(folder/'admission.json','package-admission')!=setup['numerical_manifest']:
             raise QualificationDecline('planner admission marker mismatch')
         stamp=time.perf_counter();model=thaw_model(setup['model'],**limits)
@@ -619,6 +808,7 @@ def session_planner(folder,deadline,canaries,goldens,binding,limits,generated):
     expected['live_code_pins']=ledger.live_code_pins()
     write_packet(folder/'reference.json',pack(expected,'reference'))
     worker_expected=q.worker_environment_reference(expected) if production else expected
+    if production:check_worker_expected_bound(worker_expected)      # before any worker starts
     if production:
         write_packet(folder/'worker-reference.json',pack(worker_expected,'worker-reference'))
         infrastructure_record.update(planner_reference=pack(expected,'reference')['sha256'],
@@ -629,8 +819,8 @@ def session_planner(folder,deadline,canaries,goldens,binding,limits,generated):
         stamp=time.perf_counter()
         for index in range(setup['workers']):
             location=folder/('worker-'+str(index));location.mkdir()
-            initial=pack(dict(session_sha256=session,worker=index,model=setup['model'],sources=setup['sources'],
-                              expected=worker_expected,workers=setup['workers'],batch_size=setup['batch_size']),
+            initial=pack(build_worker_setup(session,index,setup['model'],setup['sources'],worker_expected,
+                                            setup['workers'],setup['batch_size']),
                          'session-worker',limit=limits['payload_limit'])
             write_packet(location/'limits.json',pack(limits,'limits'))
             if 'numerical_manifest' in setup:
@@ -657,8 +847,7 @@ def session_planner(folder,deadline,canaries,goldens,binding,limits,generated):
                 # publish every command before waiting for any startup reply.
                 for index,item in batch:
                     assigned=[] if index>=len(parts) else [[i,body['tasks'][i]] for i in parts[index]]
-                    command=dict(session=session,sequence=len(seen),previous=item['previous'],stage=kind,
-                                 tasks=assigned,worker=index,parent_request=request)
+                    command=build_worker_command(session,len(seen),item['previous'],kind,assigned,index,request)
                     packet=pack(command,'session-worker-command',limit=limits['payload_limit'])
                     write_packet(_path(item['folder'],'command',len(seen)),packet)
                     sent.append(packet['sha256'])
@@ -717,12 +906,11 @@ def session_planner(folder,deadline,canaries,goldens,binding,limits,generated):
             reports=[compact_worker_report(report,parts[i] if i<len(parts) else [],
                         payload_limit=limits['payload_limit']) for i,report in enumerate(reports)]
             verify_sources(setup['sources'])
-            report=dict(status='passed',session_sha256=session,request_sha256=request,stage=kind,rows=rows,
-                        infrastructure=infrastructure_record,
-                        worker_reports=reports,requested_workers=setup['workers'],actual_workers=len(parts),
-                        task_layout=layout,model_sha256=setup['model']['sha256'],
-                        startup=dict(configured_concurrency=concurrency,max_inflight_startups=max_inflight,
-                                     ready_workers=ready_count,active_workers=len(parts)))
+            report=build_session_reply(session,request,kind,rows=rows,infrastructure=infrastructure_record,
+                worker_reports=reports,requested_workers=setup['workers'],actual_workers=len(parts),
+                task_layout=layout,model_sha256=setup['model']['sha256'],
+                startup=dict(configured_concurrency=concurrency,max_inflight_startups=max_inflight,
+                             ready_workers=ready_count,active_workers=len(parts)))
             write_packet(_path(folder,'reply',len(seen)),pack(report,'session-reply',limit=limits['payload_limit']))
             seen+=kind,;previous=request;stage_requests.append(request)
             return report
@@ -736,7 +924,7 @@ def session_planner(folder,deadline,canaries,goldens,binding,limits,generated):
             model=thaw_model(setup['model'],**limits)
             entries=[]
             def command(kind,tasks):
-                body=dict(session=session,sequence=len(seen),previous=previous,stage=kind,tasks=list(tasks))
+                body=build_session_command(session,len(seen),previous,kind,tasks,validate=False)
                 packet=pack(body,'session-command',limit=limits['payload_limit'])
                 write_packet(_path(folder,'command',len(seen)),packet)
                 return execute(body,packet['sha256'])
@@ -779,9 +967,7 @@ def session_planner(folder,deadline,canaries,goldens,binding,limits,generated):
         _retire_session_tree(tree,folder,production=production,prior_error=sys.exc_info()[1])
     verify_sources(setup['sources'])
     if infrastructure is not None:infrastructure.verify()
-    return dict(status='passed',session_sha256=session,request_sha256=request,stages=list(seen),
-                infrastructure=infrastructure_record,
-                stage_requests=stage_requests,worker_reports=reports,prepared_entries=entries,preparation_sha256=plan_sha)
+    return build_planner_result(session,request,seen,infrastructure_record,stage_requests,reports,entries,plan_sha)
 
 
 def session_worker(folder,deadline,canaries,goldens,binding,limits,generated,*,emergency=None):
@@ -816,6 +1002,7 @@ def session_worker(folder,deadline,canaries,goldens,binding,limits,generated,*,e
             raise QualificationDecline('H/W common/constructor manifest mismatch')
     else:ledger=ledger_api.loaded_geometry_ledger(trusted_image=True)
     expected=setup['expected']
+    if production:check_worker_expected_bound(expected)             # child re-checks on reading its setup
     if generated != q.generated_runtime_modules(reference=expected):
         raise QualificationDecline('generated module selection changed after preparation')
     seen=();previous=setup_sha;parent_previous=session;gate=None
@@ -842,12 +1029,10 @@ def session_worker(folder,deadline,canaries,goldens,binding,limits,generated,*,e
             if gate is None or not gate.closed or gate.poisoned:raise QualificationDecline('unfinished session gate')
             gate._boundary();context.verify();verify_threads(threadpool_info())
             if production:_record_initialization(folder,'finish',stamp)
-            result=dict(status='passed',**binding,model_sha256=context.verify(),stages=list(seen),gate_closures=len(seen),
-                        blas_threads=threadpool_info(),pid=os.getpid(),model_decode_count=1)
-            if production:
-                result['resource_guard']=_worker_resource_observation(resource['identity'])
-                result['value_codec']=root['numerical_manifest']['value_codec']
-            return result
+            return build_worker_final(binding,model_sha256=context.verify(),stages=seen,gate_closures=len(seen),
+                blas_threads=threadpool_info(),pid=os.getpid(),
+                resource_guard=_worker_resource_observation(resource['identity']) if production else None,
+                value_codec=root['numerical_manifest']['value_codec'] if production else None)
         stamp=time.perf_counter();gate=BatchWorkerGate(expected,stores=ledger.resets,owned_worker=True,ledger=ledger,
             generated_modules=generated,batch_size=assignment_size(setup['batch_size'],len(assigned)),coalesce_boundaries=True)
         if production:_record_initialization(folder,'gate_'+kind,stamp)
@@ -860,16 +1045,15 @@ def session_worker(folder,deadline,canaries,goldens,binding,limits,generated,*,e
         started=time.perf_counter();values=gate.run_tasks(tasks,context=context);elapsed=time.perf_counter()-started
         if time.monotonic()>=deadline:raise PlannerDeadline('session worker deadline consumed')
         verify_threads(threadpool_info());model_sha=context.verify()
-        report=dict(status='passed',**binding,rows=[[row[0],value] for row,value in zip(assigned,values)],
-                    model_sha256=model_sha,model_decode_count=1,pid=os.getpid(),task_count=len(assigned),
-                    batch_size=gate.batch_size,assignment_seconds=elapsed,startup_seconds=startup,
-                    task_seconds=gate.task_seconds,boundary_seconds=gate.boundary_seconds,reset_count=len(ledger.costs),
-                    full_environment_checks=len(gate.verification_seconds),blas_threads=threadpool_info(),
-                    gate_closed=gate.closed,gate_poisoned=gate.poisoned,
-                    diagnostics=[[row[0],item] for row,item in zip(assigned,gate.task_diagnostics)])
-        if production:
-            report['resource_guard']=_worker_resource_observation(resource['identity'])
-            report['value_codec']=root['numerical_manifest']['value_codec']
+        report=build_worker_report(binding,rows=[[row[0],value] for row,value in zip(assigned,values)],
+            model_sha256=model_sha,pid=os.getpid(),task_count=len(assigned),batch_size=gate.batch_size,
+            assignment_seconds=elapsed,startup_seconds=startup,task_seconds=gate.task_seconds,task_timing=gate.task_timing,
+            boundary_seconds=gate.boundary_seconds,reset_count=len(ledger.costs),
+            full_environment_checks=len(gate.verification_seconds),blas_threads=threadpool_info(),
+            gate_closed=gate.closed,gate_poisoned=gate.poisoned,
+            diagnostics=[[row[0],item] for row,item in zip(assigned,gate.task_diagnostics)],
+            resource_guard=_worker_resource_observation(resource['identity']) if production else None,
+            value_codec=root['numerical_manifest']['value_codec'] if production else None)
         write_packet(_path(folder,'reply',len(seen)),pack(report,'session-worker-reply',limit=limits['payload_limit']))
         seen+=kind,;previous=request;parent_previous=parent_request
 
@@ -950,17 +1134,41 @@ def verify_prepared_stage(report,tasks,setup,final,*,payload_limit=4_000_000):
                     any(type(row) is not list or len(row)!=2 or row[0]!=ordinal or
                         type(row[1]) is not dict or set(row[1])!={'counters','records'} or
                         type(row[1]['counters']) is not dict or type(row[1]['records']) is not dict or
-                        any(type(k) is not str or type(v) is not int or v<0 for k,v in row[1]['counters'].items()) or
+                        any(type(k) is not str or type(v) is not int or not 0<=v<=reply_bounds()['counter_max'] for k,v in row[1]['counters'].items()) or
                         any(type(k) is not str or type(v) is not list for k,v in row[1]['records'].items())
                         for row,ordinal in zip(diagnostics,assigned))):
                 raise QualificationDecline('task diagnostic envelope binding/schema')
+            for row in diagnostics:check_diagnostic_timing(row[1])      # known timing observable, bounded or typed decline
             pack(diagnostics,'task-diagnostics',limit=payload_limit)
         compact='result_count' in worker or 'results_sha256' in worker
         if compact:
             allowed={'status','session_sha256','request_sha256','worker','worker_setup_sha256',
                 'model_sha256','model_decode_count','pid','task_count','batch_size','assignment_seconds',
                 'startup_seconds','task_seconds','boundary_seconds','reset_count','full_environment_checks',
-                'blas_threads','gate_closed','gate_poisoned','result_count','results_sha256','diagnostics'}
+                'blas_threads','gate_closed','gate_poisoned','result_count','results_sha256','diagnostics','task_timing'}
+            # Declared reply-metadata bounds (shared with the R11 feasibility proof).
+            check_blas_report(worker.get('blas_threads'))
+            bounds=reply_bounds()
+            if (type(worker.get('pid')) is not int or not 0<worker['pid']<=bounds['pid_max'] or
+                    ('reset_count' in worker and (type(worker['reset_count']) is not int or not 0<=worker['reset_count']<=bounds['counter_max'])) or
+                    ('batch_size' in worker and (type(worker['batch_size']) is not int or not 0<worker['batch_size']<=bounds['counter_max']))):
+                raise QualificationDecline('worker reply integer field bounds')
+            timing=worker.get('task_timing')
+            # Optional (old reports omit it). Fixed-size per-assignment aggregate, never per-task rows.
+            if timing is not None and (type(timing) is not dict or set(timing)!=_TIMING_FIELDS or
+                    type(timing['count']) is not int or timing['count']!=len(assigned) or
+                    type(timing['encoded_utf8_bytes']) is not int or
+                    not all(bounded_duration(v) for v in timing.values())):
+                raise QualificationDecline('task timing receipt schema')
+            # Source formulas for variable-length metadata: encoded bytes are EXACTLY the assigned row bytes;
+            # list lengths follow the assignment; every duration is a finite non-negative number.
+            if timing is not None and timing['encoded_utf8_bytes']!=sum(len(results[ordinal].encode('utf-8')) for ordinal in assigned):
+                raise QualificationDecline('task timing encoded byte total differs from assigned rows')
+            if (any(name in worker and not bounded_duration(worker[name]) for name in ('assignment_seconds','startup_seconds')) or
+                    ('task_seconds' in worker and (type(worker['task_seconds']) is not list or len(worker['task_seconds'])!=len(assigned) or
+                        not all(bounded_duration(v) for v in worker['task_seconds']))) or
+                    not all(bounded_duration(v) for v in worker['boundary_seconds'])):
+                raise QualificationDecline('worker duration list/value bounds')
             if 'resource_identity' in setup:allowed.add('resource_guard')
             if 'value_codec' in setup:allowed.add('value_codec')
             values=[[ordinal,results[ordinal]] for ordinal in assigned]

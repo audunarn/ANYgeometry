@@ -138,9 +138,18 @@ class Bridge:
         if time.monotonic()>=self.deadline:raise PlannerDeadline('stage planning deadline consumed')
 
     def check_deadline(self):
+        """Ordinary (predicate) poll: clock/count-throttled memory only."""
+        return self._checked(self.poll)
+
+    def check_wait(self):
+        """File/pipe wait iterations only: forces the memory check when the
+        controller poll offers it. Same clock and exception semantics."""
+        return self._checked(getattr(self.poll,'wait',self.poll))
+
+    def _checked(self,poll):
         try:
             self.check_clock()
-            self.poll()
+            poll()
             self.check_clock()
         except (PlannerCancelled,PlannerDeadline,PlannerSourceChanged,PlannerCleanupError,PlannerMemoryExceeded) as error:
             # Kernel numerical retry handlers catch GeometryError. Resource
@@ -156,7 +165,7 @@ class Bridge:
             try:
                 planner=OwnedPlanner(self.control.directory/kind,workers=self.control.workers,
                     timeout=min(110,self.deadline-time.monotonic()),**self.control.limits,**self.tree_options)
-                candidate=planner.submit_stage(self.packet,tasks,poll=self.check_deadline)
+                candidate=planner.submit_stage(self.packet,tasks,poll=self.check_wait)
             except (OSError,psutil.AccessDenied) as exc:
                 raise QualificationDecline('stage infrastructure '+type(exc).__name__+': '+str(exc)) from exc
         finally:
@@ -246,7 +255,7 @@ class _SessionBridge(Bridge):
                 from ._planning_values import transport_tasks_v2,verify_transport_tasks_v2
                 transported=transport_tasks_v2(tasks,limit=self.control.limits['walk_limit'],payload_limit=self.control.limits['payload_limit'])
                 verify_transport_tasks_v2(tasks,transported,limit=self.control.limits['walk_limit'],payload_limit=self.control.limits['payload_limit'])
-            candidate=self.session.submit_stage(kind,self.packet,transported,poll=self.check_deadline)
+            candidate=self.session.submit_stage(kind,self.packet,transported,poll=self.check_wait)
         except (OSError,psutil.AccessDenied) as exc:
             raise QualificationDecline('session infrastructure '+type(exc).__name__+': '+str(exc)) from exc
         if attempt is not None:
@@ -267,7 +276,7 @@ class _SessionBridge(Bridge):
 
     def finish(self):
         self.check_boundary()
-        if self.session is not None:self.session.finish(poll=self.check_deadline)
+        if self.session is not None:self.session.finish(poll=self.check_wait)
         self.check_boundary()
 
     def close(self):
@@ -391,7 +400,7 @@ class _PreparingBridge(Bridge):
                     timeout=min(110,self.deadline-time.monotonic()),startup_concurrency=self.control.startup_concurrency,
                     numerical_manifest=getattr(self.control,'numerical_manifest',None),
                     **self.control.limits,**self.tree_options)
-                entries=owned.prepare_plan(self.packet,self.descriptor,poll=self.check_deadline)
+                entries=owned.prepare_plan(self.packet,self.descriptor,poll=self.check_wait)
                 sources=owned.sources
             except (OSError,psutil.AccessDenied) as exc:
                 raise QualificationDecline('preparation infrastructure '+type(exc).__name__+': '+str(exc)) from exc
@@ -403,11 +412,12 @@ class _PreparingBridge(Bridge):
         raise _PreparedTranscript(entries,sources)
 
 
-def qualified_plan(model,control,serial,parallel,*,policy,mode,eligible=True,preparation=None,serial_replay=None):
+def qualified_plan(model,control,serial,parallel,*,policy,mode,eligible=True,preparation=None,serial_replay=None,route_operands=None):
     if control is None:
         from ._planning_controller import run
+        extra={} if route_operands is None else dict(route_operands=route_operands)
         try:
-            return run(model,serial,parallel,policy=policy,mode=mode,eligible=eligible,preparation=preparation,serial_replay=serial_replay)
+            return run(model,serial,parallel,policy=policy,mode=mode,eligible=eligible,preparation=preparation,serial_replay=serial_replay,**extra)
         except _CallbackFailed as failure:
             raise failure.error
     owned_control=type(control) is StageControl

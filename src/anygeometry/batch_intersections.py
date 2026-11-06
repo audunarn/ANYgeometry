@@ -1382,7 +1382,7 @@ def plan_intersections(model, operands, *, policy, _parallel_control=None):
             plan=qualified_plan(model,_parallel_control,
                 lambda:_plan_intersections(model,operands,policy=policy,_planning_mode=mode,_seam_policy=seam),
                 lambda stages:_plan_intersections(model,operands,policy=policy,_planning_mode=mode,_seam_policy=seam,_stages=stages),
-                policy=effective,mode=mode,eligible=native is None,
+                policy=effective,mode=mode,eligible=native is None,route_operands=handles,
                 serial_replay=lambda poll:_plan_intersections(model,operands,policy=policy,_planning_mode=mode,_seam_policy=seam,_replay_poll=poll),
                 preparation=lambda:dict(operands=[list(h.key) for h in handles],seam=seam,
                     policy={name:(effective.intent.value if name=='intent' else getattr(effective,name))

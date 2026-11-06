@@ -15,6 +15,8 @@ def _fixture(monkeypatch,tmp_path):
     monkeypatch.setattr(controller,'_SessionBridge',host._SessionBridge)
     if hasattr(controller,'_ProductionBridge'):
         monkeypatch.setattr(controller,'_ProductionBridge',bridge_type)
+    # These fakes use model None; force the cost gate to admit the parallel route.
+    monkeypatch.setattr(controller,'_estimate_cost',lambda model,operands=None:(10**6,'test admit'))
     clock=[0.];events=[];seen=[]
     monkeypatch.setattr(controller.time,'monotonic',lambda:clock[0])
     original_close=bridge_type.close
@@ -76,7 +78,42 @@ def test_explicit_terminal_after_retirement_never_replays(monkeypatch,tmp_path,n
     assert records['parallel_planning'][-1]['disposition']=='terminal'
 
 
-@pytest.mark.parametrize('fault',['source','memory','cleanup','caller_deadline'])
+def test_active_memory_fault_is_terminal_and_post_retirement_memory_is_not_polled(monkeypatch,tmp_path):
+    """Memory is enforced while the child tree is active; never after verified retirement."""
+    work,plan,policy,clock,events,seen,parallel=_fixture(monkeypatch,tmp_path)
+    failure=executor.PlannerMemoryExceeded('active child memory')
+    lease=controller.memory_profile().begin();calls=[]
+    def check():
+        calls.append('retired' in events)
+        if len(calls)==2:raise failure   # second explicit boundary, child active
+    lease.check=check
+    def active(bridge):
+        bridge.check_boundary()          # first explicit boundary
+        bridge.check_boundary()          # second: injected active fault
+        return plan
+    with collect_runtime_records() as records,pytest.raises(type(failure)) as caught:
+        # Public path unwraps the internal carrier to the original exception.
+        host.qualified_plan(None,None,lambda:pytest.fail('terminal replay'),active,policy=policy,mode='exact')
+    assert caught.value is failure
+    assert calls and not any(calls)
+    assert records['parallel_planning'][-1]['disposition']=='terminal'
+
+
+def test_fallback_replay_polls_no_child_memory_after_verified_retirement(monkeypatch,tmp_path):
+    work,plan,policy,clock,events,seen,parallel=_fixture(monkeypatch,tmp_path)
+    lease=controller.memory_profile().begin();after=[]
+    lease.check=lambda:after.append('retired' in events) if 'retired' in events else None
+    def serial(poll):
+        poll();poll.boundary() if hasattr(poll,'boundary') else None
+        return 'replayed'
+    with collect_runtime_records() as records:
+        assert controller.run(None,lambda:pytest.fail('wrong entry'),parallel,
+            policy=policy,mode='exact',serial_replay=serial)=='replayed'
+    assert after==[]
+    assert records['parallel_planning'][-1]['disposition']=='serial'
+
+
+@pytest.mark.parametrize('fault',['source','cleanup','caller_deadline'])
 def test_allowance_fallback_does_not_bypass_terminal_boundaries(monkeypatch,tmp_path,fault):
     work,plan,policy,clock,events,seen,parallel=_fixture(monkeypatch,tmp_path)
     errors=dict(source=executor.PlannerSourceChanged,memory=executor.PlannerMemoryExceeded,

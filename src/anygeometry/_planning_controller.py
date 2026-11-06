@@ -32,6 +32,24 @@ def _initial_decline(reason):
     finally:_INITIAL_DECLINE.reset(token)
 
 
+_FORCE_ROUTE=contextvars.ContextVar('anygeometry_planning_forced_route',default=None)
+
+
+@contextmanager
+def _forced_route(reason):
+    """PRIVATE diagnostic selector (R11 profiling): skips only the cost gate.
+
+    Every other guard (unsupported-policy exit, storage, memory lease, H/P/W
+    manifests, 100 s allowance, retirement) is unchanged. The receipt records
+    ``forced_selector``; a forced run never satisfies default-selector acceptance.
+    """
+    if type(reason) is not str or not 0<len(reason)<=1024:
+        raise QualificationDecline('forced route requires bounded immutable reason')
+    token=_FORCE_ROUTE.set(reason)
+    try:yield
+    finally:_FORCE_ROUTE.reset(token)
+
+
 def memory_profile():
     observed=observe_memory()
     return MemoryBudget(observed['host_peak_bytes']+512*2**20,4*2**30,8*2**30,(1,2))
@@ -90,6 +108,45 @@ def _storage():
         raise QualificationDecline('planning storage unavailable: '+type(error).__name__) from error
 
 
+_MEMORY_POLL_INTERVAL=2048
+_MEMORY_SECONDS=.025
+# Provisional routing threshold in estimated face count (parent calibrates with
+# subset timings). 97 and 240 faces stay serial; 561 faces may parallelize.
+_ROUTING_THRESHOLD=400
+
+
+def _estimate_cost(model,operands=None):
+    """Passive structure estimate: (units, reason). units None => serial.
+
+    Reads only the exact private dict of the exact model type; no property,
+    kernel, thaw or mapping subclass is invoked. With ``operands`` (the public
+    caller's normalized handles) the requested face scope is counted rather
+    than the whole container model; non-face or foreign handles are unknown.
+    """
+    try:
+        from .model import GeometryModel
+        if type(model) is not GeometryModel:return None,'unknown model type'
+        state=object.__getattribute__(model,'__dict__')
+        faces=state.get('_faces') if type(state) is dict else None
+        if type(faces) is not dict:return None,'unsafe face storage'
+        if operands is not None:
+            from .identity import EntityHandle
+            if type(operands) is not tuple:return None,'unsafe operand scope'
+            seen=set()
+            # Property-free: the private field of the exact instance dict, never model.model_id.
+            model_id=state.get('_model_id')
+            if model_id is None:return None,'unknown model identity'
+            for handle in operands:
+                if (type(handle) is not EntityHandle or handle.kind!='face' or
+                        handle.model_id!=model_id or type(handle.id) is not int):
+                    return None,'unknown operand scope'
+                seen.add(handle.id)
+            return len(seen),'requested faces=%d of %d'%(len(seen),len(faces))
+        return len(faces),'estimated faces=%d'%len(faces)
+    except Exception as error:
+        return None,'estimate failed: '+type(error).__name__
+
+
 class _ProductionAllowanceExpired(BaseException):
     """Only the internal production attempt expired; caller limits still apply."""
 
@@ -100,10 +157,22 @@ class _ProductionBridge(_SessionBridge):
             raise _ProductionAllowanceExpired('internal production allowance consumed')
 
 
-def run(model,serial,parallel,*,policy,mode,eligible=True,preparation=None,serial_replay=None):
+def run(model,serial,parallel,*,policy,mode,eligible=True,preparation=None,serial_replay=None,route_operands=None):
     # Unsupported routes never enter the parallel transaction or adapt caller
     # callbacks. Preserve the original serial error and work-budget contracts.
     if not eligible or mode!='exact' or policy.max_predicates is not None or policy.max_candidate_pairs is not None:
+        return serial()
+    forced=_FORCE_ROUTE.get()
+    if forced is not None and (type(forced) is not str or not 0<len(forced)<=1024):
+        raise QualificationDecline('forced route reason type')
+    units,route_reason=(_ROUTING_THRESHOLD,'forced') if forced is not None else (
+        _estimate_cost(model) if route_operands is None else _estimate_cost(model,route_operands))
+    if type(units) is not int or units<_ROUTING_THRESHOLD:
+        # Cheap automatic routing: before storage/freeze/manifest/child setup.
+        from .runtime_diagnostics import _record as record_route
+        record_route('parallel_planning',dict(schema='R5-production-v1',disposition='serial',
+            ci_verified=False,stages=[],costs={},retired=True,
+            reason='routed serial: '+route_reason+' threshold=%d'%_ROUTING_THRESHOLD))
         return serial()
     from ._planning_manifest import capture_loaded_manifest,prepare_interfaces
     from .serialization import to_dict
@@ -112,6 +181,7 @@ def run(model,serial,parallel,*,policy,mode,eligible=True,preparation=None,seria
     decline_variable=_INITIAL_DECLINE;decline_state=None
     folder=None;work=None;receipt=dict(schema='R5-production-v1',ci_verified=False,workers=8,
         startup_concurrency=8,disposition='terminal',stages=[],costs={})
+    if forced is not None:receipt['forced_selector']=forced
     def model_bytes():return json.dumps(to_dict(model),sort_keys=True,separators=(',',':'),allow_nan=False)
     from . import runtime_diagnostics as diagnostics
     from .cancellation import is_cancellation_signal
@@ -140,7 +210,8 @@ def run(model,serial,parallel,*,policy,mode,eligible=True,preparation=None,seria
     def check_collectors():
         if diagnostics._COLLECTORS.get() is not collectors[0] or diagnostics._RECORD_COLLECTORS.get() is not collectors[1]:
             raise PlannerSourceChanged('host diagnostic collector scope changed')
-    def poll(*,full=False):
+    memory_polls=[0];memory_stamp=[time.monotonic()];child_memory_active=True
+    def poll(*,full=False,wait=False):
         nonlocal callback_calls
         explicit_boundary=full
         check_collectors()
@@ -154,7 +225,7 @@ def run(model,serial,parallel,*,policy,mode,eligible=True,preparation=None,seria
             try:cancelled=bool(policy.cancellation_check())
             except BaseException as error:raise _CallbackFailed(error) from error
             if cancelled:raise PlannerCancelled('intersection planning cancelled')
-            full=True
+            # Callback presence is cancellation only; it never promotes verification.
         check_collectors()
         if source is not None and full:
             stamp=time.perf_counter();components={}
@@ -180,12 +251,17 @@ def run(model,serial,parallel,*,policy,mode,eligible=True,preparation=None,seria
                     recent_limit=64,recent_seconds=list(verification_times),recent_components=list(verification_components),
                     scope='last completed checkpoint; terminal receipt has complete totals')),encoding='utf-8')
                 temporary.replace(path)
-        if lease is not None:
-            memory_started=time.perf_counter()
-            try:lease.check()
-            finally:measure('memory_check_seconds',time.perf_counter()-memory_started)
+        if lease is not None and child_memory_active:
+            memory_polls[0]+=1;now=time.monotonic()
+            if explicit_boundary or wait or memory_polls[0]>=_MEMORY_POLL_INTERVAL or now-memory_stamp[0]>=_MEMORY_SECONDS:
+                memory_polls[0]=0;memory_stamp[0]=now
+                memory_started=time.perf_counter()
+                try:lease.check()
+                finally:measure('memory_check_seconds',time.perf_counter()-memory_started)
         if bridge is not None and parallel_active:bridge.check_clock()
     poll.boundary=lambda:poll(full=True)
+    # File/pipe wait iterations: memory check every iteration, no full verification.
+    poll.wait=lambda:poll(wait=True)
     failure=None;published=None;result=None
     try:
         if type(decline_variable) is not contextvars.ContextVar:
@@ -233,6 +309,7 @@ def run(model,serial,parallel,*,policy,mode,eligible=True,preparation=None,seria
                 raise
             else:
                 with phase('retirement'):bridge.close()
+                if bridge.retired:child_memory_active=False  # verified: no child tree to watch
         with transaction() as verification:
             with phase('samples_and_second_decode'):bridge.verify_pending()
         with phase('final_boundary'):
@@ -251,13 +328,13 @@ def run(model,serial,parallel,*,policy,mode,eligible=True,preparation=None,seria
         receipt['disposition']='parallel';receipt['plan_checksum']=result.content_checksum;published=provisional
         receipt['costs']['verification']=verification
         receipt['costs']['infrastructure']=[dict(stage=kind,host=report.get('host_timing'),
-            workers=[{key:worker.get(key) for key in ('startup_seconds','assignment_seconds','task_seconds','boundary_seconds','resource_guard','value_codec')}
+            workers=[{key:worker.get(key) for key in ('startup_seconds','assignment_seconds','task_seconds','task_timing','boundary_seconds','resource_guard','value_codec')}
                 for worker in report.get('worker_reports',[])]) for kind,tasks,serial_task,report in bridge.pending]
     except (QualificationDecline,_ProductionAllowanceExpired) as error:
         failure=error;receipt['reason']=str(error);receipt['disposition']='serial'
         receipt['costs']['abandoned']=locals().get('provisional',{})
-        if bridge is not None:bridge.close()
-        parallel_active=False
+        if bridge is not None:bridge.close()  # sticky retirement errors propagate; no replay
+        parallel_active=False;child_memory_active=False  # verified retirement: no child tree remains
         poll(full=True)
         with transaction() as replay:
             result=serial() if serial_replay is None else serial_replay(poll)
@@ -318,6 +395,7 @@ def run(model,serial,parallel,*,policy,mode,eligible=True,preparation=None,seria
                     # Retain scratch on every failed write/replay. The parallel
                     # deadline is no longer active; caller replay budget remains.
                     parallel_active=False
+                    if receipt['retired']:child_memory_active=False
                     try:
                         poll(full=True)
                         with transaction() as replay:

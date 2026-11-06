@@ -162,10 +162,16 @@ def test_public_eight_worker_canary_matches_serial(monkeypatch,tmp_path,warm,req
     monkeypatch.setenv('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING','1')
     with collect_runtime_records() as records,retain_observation(request,records,
             label='warm8-warm' if warm else 'warm8-cold'),collect_runtime_diagnostics() as parallel_counts:
-        with collect_runtime_diagnostics() as nested_counts:
+        # Prospective R11 transition: this tiny canary is routed serial by the DEFAULT cost
+        # selector (covered, unforced, by the separate public-selector tests). The required 8W
+        # numerical/ownership coverage is kept by forcing ONLY the dispatch seam of the parallel
+        # side; every other guard and all assertions below are unchanged. Not a default-selector claim.
+        from anygeometry import _planning_controller as controller
+        with collect_runtime_diagnostics() as nested_counts,controller._forced_route('CI required positive 8W canary'):
             plan=bi.plan_intersections(source,faces,policy='connect',_parallel_control=None)
     assert parallel_counts==nested_counts
     receipt=records['parallel_planning'][-1]
+    assert receipt['forced_selector']=='CI required positive 8W canary',receipt
     assert receipt['disposition']=='parallel',receipt
     assert receipt['workers']==receipt['startup_concurrency']==8
     assert receipt['retired'] is True and receipt['ci_verified'] is False

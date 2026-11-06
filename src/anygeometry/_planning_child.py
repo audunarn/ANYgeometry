@@ -220,6 +220,12 @@ def _publish_memory_failure(error,publication,binding):
     return True
 
 
+def with_process_seconds(result, seconds):
+    """Pure terminal wrapper shared with the R11 wire proof: adds the child's process duration."""
+    result['process_seconds'] = seconds
+    return result
+
+
 def main():
     role, location, seconds = sys.argv[1:]
     # Import the complete optional session closure before any reference capture.
@@ -281,7 +287,7 @@ def main():
             result = dict(status=status, reason=type(exc).__name__+': '+str(exc), **binding)
     finally:
         if not emergency_path:
-            result['process_seconds'] = time.perf_counter()-started
+            with_process_seconds(result, time.perf_counter()-started)
             if production:
                 try:
                     from anygeometry._planning_session import _record_initialization

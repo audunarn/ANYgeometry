@@ -17,6 +17,9 @@ def _finalization_fixture(monkeypatch,tmp_path):
         roles={name:SimpleNamespace(digest=name,_reference_tokens=[]) for name in ('constructor','host')},
         wire={'sha256':'manifest'},parsing_release={},verify=lambda:None)
     lease=SimpleNamespace(tree_limit_bytes=100,check=lambda:None,report=lambda:{},observe_phase=lambda *args:None)
+    # Fake models must reach the admitted parallel internals; the actual cost
+    # gate is covered separately in test_r11_planning.py.
+    monkeypatch.setattr(controller,'_estimate_cost',lambda model,operands=None:(10**6,'test admit'))
     monkeypatch.setattr(controller,'_storage',lambda:(work.parent,work))
     monkeypatch.setattr(controller,'memory_profile',lambda:SimpleNamespace(begin=lambda:lease))
     monkeypatch.setattr(controller,'freeze_model',lambda model:packet)
@@ -134,12 +137,20 @@ def test_receipt_failure_successful_replay_retains_scratch(monkeypatch,tmp_path)
 
 def test_receipt_counts_every_poll_memory_check_and_host_phase(monkeypatch,tmp_path):
     work,plan,policy=_finalization_fixture(monkeypatch,tmp_path)
+    from anygeometry import _planning_host as host
+    monkeypatch.setattr(controller,'_ProductionBridge',host._SessionBridge)
     lease=controller.memory_profile().begin();checks=[]
     lease.check=lambda:checks.append('fresh')
+    def parallel(bridge):
+        # Real active checks: an explicit full boundary and a wait iteration,
+        # not a fabricated record. Ordinary polls stay below the 2048/25ms gate.
+        bridge.poll();bridge.poll.boundary();bridge.poll.wait()
+        assert len(checks)==2
+        return plan
     with collect_runtime_records() as records:
-        assert controller.run(None,lambda:None,lambda bridge:plan,policy=policy,mode='exact') is plan
+        assert controller.run(None,lambda:None,parallel,policy=policy,mode='exact') is plan
     costs=records['parallel_planning'][-1]['costs']
-    assert costs['boundary_totals']['memory_check_seconds']['count']==len(checks)>0
+    assert costs['boundary_totals']['memory_check_seconds']['count']==len(checks)>=2
     assert set(costs['host_phases'])=={'initial_snapshot','orchestration','finish','retirement','samples_and_second_decode','final_boundary'}
     assert all(value>=0 for value in costs['host_phases'].values())
 
@@ -198,6 +209,8 @@ def test_real_public_callback_after_capture_is_terminal(monkeypatch,tmp_path,act
     from anygeometry._planning_canaries import _fixture
     from anygeometry._planning_executor import PlannerCancelled,PlannerSourceChanged
     model,_=_fixture();calls=[];witness=[];original=RuntimeError('original callback exception')
+    # Private admission only: keep the real public model/code/exception/cancel path.
+    monkeypatch.setattr(controller,'_estimate_cost',lambda m,o=None:(10**6,'test admit'))
     monkeypatch.setenv('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING','1')
     monkeypatch.setenv('ANYGEOMETRY_PLANNING_SCRATCH_ROOT',str(tmp_path/'production'))
     def callback():
@@ -216,13 +229,23 @@ def test_real_public_callback_after_capture_is_terminal(monkeypatch,tmp_path,act
     assert any(phase['captured'] for phase in witness),witness
     if action=='exception':assert caught.value is original
     receipt=records['parallel_planning'][-1]
-    assert len(calls)==2 and receipt['manifest_sha256']
+    first=next(index for index,phase in enumerate(witness) if phase['captured'])
+    if action in ('exception','cancel'):
+        assert len(calls)==first+1          # aborts immediately at the trigger poll
+    else:
+        # Mutation is first applied at the first captured callback and is not
+        # accepted: it is caught at the next explicit verification boundary
+        # (ordinary polls no longer verify), after a bounded number of callbacks.
+        assert first+1<len(calls)<=200
+        assert receipt['stages']==[]
+    assert receipt['costs']['callback_calls']==len(calls) and receipt['manifest_sha256']
     assert receipt['disposition']=='terminal' and receipt['stages']==[] and receipt['retired'] is True
 
 
 @pytest.mark.parametrize('failure',['missing_environment','mkdir','inventory','free_space'])
 def test_initial_storage_unavailable_replays_original_serial(monkeypatch,tmp_path,failure):
     root=tmp_path/'storage'
+    monkeypatch.setattr(controller,'_estimate_cost',lambda m,o=None:(10**6,'test admit'))
     monkeypatch.delenv('ANYGEOMETRY_PLANNING_SCRATCH_ROOT',raising=False)
     monkeypatch.delenv('LOCALAPPDATA',raising=False)
     def denied(*args,**kwargs):raise OSError('storage unavailable')

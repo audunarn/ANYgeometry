@@ -71,6 +71,9 @@ class BatchWorkerGate(q.WorkerGate):
         self.closed = False
         self.boundary_seconds = []
         self.task_seconds = []
+        self.task_timing = dict(count=0, total_wall=0., total_cpu=0., setup_wall=0., setup_cpu=0.,
+            kernel_wall=0., kernel_cpu=0., encode_wall=0., encode_cpu=0., bookkeeping_wall=0., bookkeeping_cpu=0.,
+            encoded_utf8_bytes=0, max_total_wall=0., max_kernel_wall=0.)
         self.discarded_batch_tasks = 0
         self.discarded_run_tasks = 0
 
@@ -157,10 +160,27 @@ class BatchWorkerGate(q.WorkerGate):
                 if not self.coalesce_boundaries or offset == 0:
                     self._boundary()
                 for task, payload, digest in tasks[offset:offset + self.batch_size]:
-                    started = time.perf_counter()
+                    started = time.perf_counter();cpu_started = time.process_time()
+                    if context is not None:context.last_timing = None
                     self._pending.append(self._execute(task, payload, digest) if context is None else
                                          self._execute(task, payload, digest, context))
                     self.task_seconds.append(time.perf_counter() - started)
+                    split = getattr(context, 'last_timing', None) if context is not None else None
+                    if split is not None:
+                        total_wall = self.task_seconds[-1];total_cpu = time.process_time() - cpu_started
+                        # Receipt-only FIXED-SIZE aggregate per assignment (never per-task rows):
+                        # setup (view/domains/decode), kernel (only the numerical call), v2 encode,
+                        # and bookkeeping (payload decode, type check, diagnostics transaction, reset).
+                        total = self.task_timing
+                        total['count'] += 1
+                        total['total_wall'] += total_wall;total['total_cpu'] += total_cpu
+                        for name in ('setup', 'kernel', 'encode'):
+                            total[name + '_wall'] += split[name + '_wall'];total[name + '_cpu'] += split[name + '_cpu']
+                        total['bookkeeping_wall'] += max(0., total_wall - split['setup_wall'] - split['kernel_wall'] - split['encode_wall'])
+                        total['bookkeeping_cpu'] += max(0., total_cpu - split['setup_cpu'] - split['kernel_cpu'] - split['encode_cpu'])
+                        total['encoded_utf8_bytes'] += split['encoded_utf8_bytes']
+                        total['max_total_wall'] = max(total['max_total_wall'], total_wall)
+                        total['max_kernel_wall'] = max(total['max_kernel_wall'], split['kernel_wall'])
                 self._boundary()
                 completed.extend(self._pending)
                 self._pending.clear()

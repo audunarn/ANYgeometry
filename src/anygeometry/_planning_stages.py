@@ -9,6 +9,7 @@ from .model import GeometryModel
 import json
 import math
 import os
+import time
 from dataclasses import replace
 from ._planning_executor import freeze_model,thaw_model,pack,unpack
 from ._planning_qualification import QualificationDecline
@@ -62,13 +63,16 @@ def stage_task(context,task):
     if type(context) is not WorkerModel or type(task) is not dict:
         raise QualificationDecline('stage context/task schema')
     kind=task.get('kind')
+    started=(time.perf_counter(),time.process_time())
     if kind=='pair':
         model=context.view((task['first'],task['second']))
         first=MaterialDomain.from_model(model,task['first']);second=MaterialDomain.from_model(model,task['second'])
         _domain_bounds(first);_domain_bounds(second)
         points=[]
+        kernel_start=(time.perf_counter(),time.process_time())
         value=_pair_paths(first,second,model,task['tolerance'],lambda:None,
                           point_contacts=points,face_tolerances=tuple(task['face_tolerances']),route=None)
+        kernel_end=(time.perf_counter(),time.process_time())
         result=(value,points)
     elif kind=='face':
         model=context.view((task['face'],))
@@ -80,10 +84,21 @@ def stage_task(context,task):
             domain=replace(domain,support=support)
         traces,points=decode_value(task['inputs'],limit=context.limits['walk_limit'],codec=context.value_codec,payload_limit=context.limits['payload_limit'])
         seam={} if task['seam']=='baseline' else {'seam_policy':task['seam']}
+        kernel_start=(time.perf_counter(),time.process_time())
         result=arrange_material(domain,traces,points=points,tolerance=task['tolerance'],
             area_tolerance=task['area_tolerance'],cancellation_check=lambda:False,**seam)
+        kernel_end=(time.perf_counter(),time.process_time())
     else:raise QualificationDecline('unknown stage task')
-    return json.dumps(encode_value(result,limit=context.limits['walk_limit'],codec=context.value_codec,payload_limit=context.limits['payload_limit']),sort_keys=True,separators=(',',':'),allow_nan=False)
+    encoded=json.dumps(encode_value(result,limit=context.limits['walk_limit'],codec=context.value_codec,payload_limit=context.limits['payload_limit']),sort_keys=True,separators=(',',':'),allow_nan=False)
+    end=(time.perf_counter(),time.process_time())
+    # Receipt-only comparable split: wall and process CPU seconds, same clocks for every task.
+    # setup = worker view + domain construction + bounds + input/support decode (host serial
+    # precomputes these outside the matched kernel); kernel = only _pair_paths / arrange_material,
+    # the same calls host _timed_phase intersection_support_and_clipping / _arrangements wrap.
+    context.last_timing=dict(setup_wall=kernel_start[0]-started[0],setup_cpu=kernel_start[1]-started[1],
+        kernel_wall=kernel_end[0]-kernel_start[0],kernel_cpu=kernel_end[1]-kernel_start[1],
+        encode_wall=end[0]-kernel_end[0],encode_cpu=end[1]-kernel_end[1],encoded_utf8_bytes=len(encoded.encode('utf-8')))
+    return encoded
 
 
 def dispatch(tasks,workers):

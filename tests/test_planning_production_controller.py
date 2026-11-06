@@ -11,6 +11,23 @@ def test_public_opt_in_without_private_control_selects_production(monkeypatch):
     assert result=='production' and seen
 
 
+def test_public_default_selector_uses_actual_cost_gate_and_routes_small_model_serial(monkeypatch):
+    """No private estimate patch: the real gate keeps a small real model serial before setup."""
+    from types import SimpleNamespace
+    from anygeometry import _planning_controller as production
+    from anygeometry.model import GeometryModel
+    from anygeometry.runtime_diagnostics import collect_runtime_records
+    monkeypatch.setattr(production,'_storage',lambda:pytest.fail('setup before cost gate'))
+    monkeypatch.setattr(production,'freeze_model',lambda m:pytest.fail('freeze before cost gate'))
+    policy=SimpleNamespace(cancellation_check=None,max_predicates=None,max_candidate_pairs=None)
+    model=GeometryModel(model_id='00000000-0000-0000-0000-000000000003')
+    with collect_runtime_records() as records:
+        result=host.qualified_plan(model,None,lambda:'serial',lambda bridge:pytest.fail('parallel'),
+            policy=policy,mode='exact')
+    assert result=='serial'
+    assert 'routed serial' in records['parallel_planning'][-1]['reason']
+
+
 def test_production_memory_profile_is_explicit_and_fixed(monkeypatch):
     from anygeometry import _planning_controller as production
     monkeypatch.setattr(production,'observe_memory',lambda:dict(host_peak_bytes=123456,host_private_bytes=100,available_bytes=2**36))
