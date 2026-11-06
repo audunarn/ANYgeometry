@@ -17,6 +17,42 @@ def put(root,name,text):
     return path
 
 
+def tiny_driver_checkout(root):
+    """Exercise the real driver against two tiny tests, not the scientific suite.
+
+    The original numerical positives remain independent full-suite cases. This
+    fixture owns only checkout namespace imports, shards and interpreter cohorts.
+    """
+    root.mkdir(parents=True,exist_ok=True)
+    put(root,'examples/namespace_probe.py',"TOKEN='checkout-namespace'\n")
+    put(root,'tests/test_core.py', '''import sys
+from pathlib import Path
+import examples.namespace_probe as probe
+assert Path(probe.__file__).resolve()==Path(__file__).resolve().parents[1]/'examples/namespace_probe.py'
+def test_core():
+    assert probe.TOKEN=='checkout-namespace'
+    assert 'mpmath' not in sys.modules
+''')
+    put(root,'tests/test_oracle.py', '''import mpmath
+def test_oracle():
+    assert mpmath.__name__=='mpmath'
+''')
+    put(root,'tests/conftest.py', '''import json,os
+from pathlib import Path
+import ci_shards
+def pytest_collection_finish(session):
+    report=os.environ.get('ANYGEOMETRY_SHARD_REPORT')
+    if not report:return
+    index,count=ci_shards.parse_shard(os.environ.get('ANYGEOMETRY_TEST_SHARD','1/1'))
+    selected=[item.nodeid for item in session.items]
+    owner=ci_shards.assign(selected,count,ci_shards.load_table())
+    session.items[:]=[item for item in session.items if owner[item.nodeid]==index]
+    Path(report).write_text(json.dumps(dict(index=index,count=count,selected=sorted(selected),
+        ran=[item.nodeid for item in session.items],slow=[])))
+''')
+    return root
+
+
 def test_partition_follows_transitive_relative_and_dynamic_literal_imports(tmp_path):
     put(tmp_path,'tests/pkg/oracle.py','\ufefffrom importlib import import_module as load\nvalue=load("mpmath")\n')
     put(tmp_path,'tests/pkg/helper.py','from . import oracle\n')
@@ -100,9 +136,8 @@ def test_core_import_attempt_is_runtime_error_never_skip(statement):
 
 def test_real_selected_cases_keep_shard_assignment_and_complete_actual_union(tmp_path):
     import ci_shards
-    root=Path(ci.__file__).resolve().parents[1]
-    nodes=['tests/test_ci_tools.py::test_node_ids_follow_pytest',
-           'tests/test_ch3_reference_root_solver.py::test_actual_ci_nearly_double_coefficients_do_not_need_iterative_convergence']
+    root=tiny_driver_checkout(tmp_path/'checkout')
+    nodes=['tests/test_core.py::test_core','tests/test_oracle.py::test_oracle']
     report=tmp_path/'shard-1.json';output=tmp_path/'kernel-results.xml';evidence=tmp_path/'phases'
     env=dict(os.environ,ANYGEOMETRY_TEST_SHARD='1/1',ANYGEOMETRY_SHARD_REPORT=str(report))
     command=[sys.executable,'-B',str(ci.__file__),'--root',str(root),'--evidence-dir',str(evidence),
@@ -155,10 +190,10 @@ def test_module_inventory_drift_is_rejected_before_filtering(actual):
 
 
 def test_bootstrap_preserves_checkout_namespace_imports_at_real_collection(tmp_path):
-    root=Path(ci.__file__).resolve().parents[1]
+    root=tiny_driver_checkout(tmp_path/'checkout')
     env=dict(os.environ,ANYGEOMETRY_TEST_SHARD='1/1',ANYGEOMETRY_SHARD_REPORT=str(tmp_path/'shard.json'))
     command=[sys.executable,'-B',str(ci.__file__),'--collect-only','--root',str(root),
-        '--evidence-dir',str(tmp_path/'phases'),'--select','tests/test_authored_constraint_scope.py']
+        '--evidence-dir',str(tmp_path/'phases'),'--select','tests/test_core.py']
     result=subprocess.run(command,cwd=root,env=env,capture_output=True,text=True,timeout=40)
     (tmp_path/'stdout.txt').write_text(result.stdout);(tmp_path/'stderr.txt').write_text(result.stderr)
     assert result.returncode==0,result.stdout+result.stderr

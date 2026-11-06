@@ -15,8 +15,8 @@ python tools/ci_isolated_tests.py --profile qualification
 python tools/ci_isolated_tests.py --profile full
 ```
 
-`fast` aliases `unit`. Unit contains five explicitly listed modules: primitive
-predicates/tolerances and four small CI metadata/selection tool modules.
+`fast` aliases `unit`. Unit contains six explicitly listed modules: primitive
+predicates/tolerances and five small CI metadata/selection tool modules.
 Qualification contains the explicit certified hydrostatics and planner modules
 listed in `tools/ci_test_profiles.py`. Every other test module, including newly
 added modules, defaults to integration. These three tiers are disjoint and their

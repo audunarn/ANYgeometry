@@ -16,6 +16,7 @@ UNIT_MODULES = frozenset({
     # actual runtime. This declaration is not a measured speed guarantee.
     'tests/test_predicates.py',
     'tests/test_ci_test_profiles.py',
+    'tests/test_ci_structure_followup.py',
     'tests/test_ci_tools.py',
     'tests/test_ci_collection_durations.py',
     'tests/test_ci_planning_profile.py',
