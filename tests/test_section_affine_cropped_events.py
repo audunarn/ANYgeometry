@@ -28,7 +28,7 @@ def test_exact_interior_cropped_crossing_retains_both_native_domains(reverse_tri
     section, trim = fixture(reverse_trim)
     if reverse_section:
         section = section.subcurve(1, 0)
-    events = section_segment_events(section, trim)
+    events = section_segment_events(section, trim, exact_witness=True)
     assert len(events) == 1
     event = events[0]
     assert event.chart_enclosure == ((Q(1, 2), Q(1, 2)), (Q(3, 8), Q(3, 8)))
@@ -64,7 +64,7 @@ def test_affine_line_extension_pole_and_active_boundary_are_not_inverted(monkeyp
 def test_affine_event_cancellation_is_not_hidden():
     section, trim = fixture()
     with pytest.raises(GeometryError, match='cancelled'):
-        section_segment_events(section, trim, cancellation_check=lambda: True)
+        section_segment_events(section, trim, cancellation_check=lambda: True, exact_witness=True)
 
 
 def test_coincident_and_nonaffine_pairs_keep_the_conservative_classifier():

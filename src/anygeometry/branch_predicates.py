@@ -675,7 +675,7 @@ def _quadratic_affine_disjoint(first, second) -> bool:
 
 
 def section_roots(curve: PlaneNurbsCurve, n, d, *, max_depth: int = MAX_DEPTH,
-                  refine: int = 40) -> tuple[SectionRoot, ...]:
+                  refine: int = 40, affine_exclusion: bool = False) -> tuple[SectionRoot, ...]:
     """Intervals containing every root of ``n . C(t) = d`` on the curve (see the module docstring);
     isolated roots are refined by exact bisection to ``refine`` halvings of their arc piece."""
     n = tuple(Fraction(value) for value in n)
@@ -691,12 +691,13 @@ def section_roots(curve: PlaneNurbsCurve, n, d, *, max_depth: int = MAX_DEPTH,
     found: list[SectionRoot] = []
 
     def classify(context: _Context) -> str:
-        view = context.view
-        if not hasattr(view, '_affine_cut_excluded'):
-            charge_box()
-            view._affine_cut_excluded = _affine_quadratic_exclusion(view.g1, view.g2)
-        if view._affine_cut_excluded:
-            return "done"
+        if affine_exclusion:
+            view = context.view
+            if not hasattr(view, '_affine_cut_excluded'):
+                charge_box()
+                view._affine_cut_excluded = _affine_quadratic_exclusion(view.g1, view.g2)
+            if view._affine_cut_excluded:
+                return "done"
         low, high = context.g2_range()
         if low == high == 0 and context.solid():
             raise PlaneNurbsNotCertified("the second plane contains a piece of the curve (coincident)")

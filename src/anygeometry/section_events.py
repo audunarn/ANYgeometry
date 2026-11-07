@@ -147,7 +147,7 @@ def _exact_affine_segment_event(context, chart, pcurve, axis):
     return SectionSegmentEvent((parameter, parameter), (segment_parameter, segment_parameter), rect)
 
 
-def section_segment_events(section, segment, *, cancellation_check=None):
+def section_segment_events(section, segment, *, cancellation_check=None, exact_witness=False):
     """All transverse interior crossings; contact/tangency/coincidence refuses.
 
     The entire graph is accounted by exact exclusion or one monotone root in a
@@ -187,7 +187,7 @@ def section_segment_events(section, segment, *, cancellation_check=None):
     def classify(context):
         if cancellation_check is not None and cancellation_check():
             raise GeometryError('section crossing cancelled')
-        exact = _exact_affine_segment_event(context, chart, pcurve, axis)
+        exact = _exact_affine_segment_event(context, chart, pcurve, axis) if exact_witness else None
         if exact is False:
             return 'done'
         if exact is not None:

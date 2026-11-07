@@ -12,6 +12,7 @@ import pytest
 from anygeometry import ConnectionIntent, GeometryError, IntersectionBatchPolicy
 from anygeometry.bounded_cut_graph import PlateContactRefused, clip_path, interval_inside, plate_roots
 from anygeometry.entities import EntityRef, OrientedEdge
+from anygeometry.plane_nurbs import PlaneNurbsNotCertified
 from anygeometry.planar_exact import ExactPlane
 from anygeometry.plane_section_plate import PlateBoundaryCrossingRequired, plate_loops
 from anygeometry.serialization import from_dict, to_dict
@@ -152,7 +153,8 @@ def test_near_tangent_plate_trace_walk_is_capped_and_refuses_without_cancellatio
     def watchdog():
         calls[0] += 1
         return calls[0] > 4000
-    with pytest.raises(PlateBoundaryCrossingRequired):
+    # Ordinary section roots (no affine shortcuts) refuse typed, as on main; the walk cap bounds the other route.
+    with pytest.raises((PlateBoundaryCrossingRequired, PlaneNurbsNotCertified)):
         plan_bounded(model, handles, policy_for(cancellation_check=watchdog))
     assert calls[0] <= 4000
     assert to_dict(model) == before
