@@ -353,6 +353,7 @@ from .surfaces import (
 )
 
 __all__ = [
+    "ClosedSolidRegion", "SolidRegionSnapshot",
     "backend_info",
     "model_to_world_points",
     "world_to_model_points",
@@ -678,6 +679,7 @@ __all__ = [
     "JunctionMemberUse",
 ]
 
+from .solid_regions import ClosedSolidRegion, SolidRegionSnapshot
 __version__ = "0.4.7"
 
 from .prepared_material_source_transfer import (PreparedMaterialSourceTransfer,

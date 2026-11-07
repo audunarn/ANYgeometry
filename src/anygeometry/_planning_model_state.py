@@ -18,6 +18,7 @@ _MODEL_DICT_CACHES = (
 _MODEL_PUBLIC_VIEWS = (
     'vertices', 'edges', 'faces', 'parts', 'sheets', 'face_uses', 'coedges',
     'members', 'member_edge_uses', 'attachments', 'junctions',
+    'solid_regions',
 )
 
 
@@ -43,6 +44,9 @@ def declarative_state(model):
         backing=gc.get_referents(view)
         if len(backing)!=1 or backing[0] is not private:
             raise QualificationDecline('model public view backing: '+name)
+    if state['_solid_regions']:
+        # Solid-region records have no qualified parallel-planning contract; decline (serial route) rather than accept.
+        raise QualificationDecline('model solid region state is not qualified for planning')
     # This view is a computed property, so validate its private owner without
     # invoking the property or any injected mapping operation.
     if type(state['_construction_vertices']) is not dict:

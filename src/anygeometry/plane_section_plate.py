@@ -79,12 +79,21 @@ def _line_box_clear(a, b, box):
     return min(values) > 0 or max(values) < 0
 
 
+# Boxes one trace walk may examine before it refuses; ordinary traces certify in a handful (the depth-32 walk
+# along a near-tangent plate contact is otherwise exponential, with exact-rational cost growing per box).
+MAX_TRACE_WALK_BOXES = 2000
+
+
 def trace_in_plate(model, edge, frame, loops, check):
     statuses, pending = set(), [(Q(0), Q(1), 0)]
     segments = [(a, b) for loop in loops for a, b in zip(loop, loop[1:]+loop[:1])]
+    walked = 0
     from .nurbs import _float_down, _float_up
     while pending:
         check()
+        walked += 1
+        if walked > MAX_TRACE_WALK_BOXES:
+            raise PlateBoundaryCrossingRequired('trace/plate boundary contact is not certified within the box cap')
         a, b, depth = pending.pop()
         box = _curve_box(model, edge, frame, _float_down(a), _float_up(b))
         if all(_line_box_clear(p, q, box) for p, q in segments):
@@ -394,6 +403,26 @@ class _UndecidedRay(Exception):
     pass
 
 
+def _ray_segment_crossing(point, direction, a, b):
+    """Exact parity contribution on the actual forward-ray/closed-segment domains."""
+    e = (b[0]-a[0], b[1]-a[1])
+    w = (a[0]-point[0], a[1]-point[1])
+    den = direction[0]*e[1]-direction[1]*e[0]
+    if den == 0:
+        if w[0]*direction[1]-w[1]*direction[0] == 0:
+            raise _UndecidedRay()  # Existing conservative collinear case.
+        return False
+    s = (w[0]*e[1]-w[1]*e[0])/den
+    r = (w[0]*direction[1]-w[1]*direction[0])/den
+    # A contact of the infinite supporting lines supplies no boundary event
+    # when it is outside the segment or behind the ray's origin.
+    if r < 0 or r > 1 or s < 0:
+        return False
+    if r == 0 or r == 1 or s == 0:
+        raise _UndecidedRay()  # Actual forward vertex/origin contact remains ambiguous.
+    return True
+
+
 def _contains(model, loop, point, frame, check):
     """Exact branch-root parity in the plane, never a sampled polygon."""
     if all(type(model.edges[e.edge].curve) in (Straight, LineRange) for e in loop):
@@ -411,22 +440,7 @@ def _contains(model, loop, point, frame, check):
                     # exact ray/segment parity term of a straight piece in a mixed loop
                     item = model.edges[use.edge]
                     a, b = _line_endpoints(model, OrientedEdge(item.id, True), frame)
-                    e = (b[0]-a[0], b[1]-a[1])
-                    w = (a[0]-point[0], a[1]-point[1])
-                    den = direction[0]*e[1] - direction[1]*e[0]
-                    if den == 0:
-                        if w[0]*direction[1] - w[1]*direction[0] == 0:
-                            raise _UndecidedRay()           # collinear with the ray
-                        continue
-                    s = (w[0]*e[1] - w[1]*e[0])/den
-                    r = (w[0]*direction[1] - w[1]*direction[0])/den
-                    # An intersection with the supporting-line extension is
-                    # not a hit on this finite segment, even when s == 0.
-                    if r < 0 or r > 1:
-                        continue
-                    if r == 0 or r == 1 or s == 0:
-                        raise _UndecidedRay()               # vertex or start contact: try another slope
-                    if 0 < r < 1 and s > 0:
+                    if _ray_segment_crossing(point, direction, a, b):
                         count[0] += 1
                     continue
                 def classify(context):

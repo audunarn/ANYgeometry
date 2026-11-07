@@ -1,8 +1,9 @@
 """Source-pinned read-only adapter for frozen private ANYgeometry primitives.
 
-Pins come from the captured dirty baseline, not upstream HEAD. Only this
-experimental package checks these source files; it never edits shared modules.
-Checking actual module files also rejects an installed incompatible primitive.
+Pins identify the reviewed current-source compatibility candidate, not new
+numerical qualification or equivalence to the unrecoverable dirty baseline.
+Only CRLF line endings are canonicalized to LF; every other byte is pinned.
+This experimental package never edits the shared modules it checks.
 """
 from __future__ import annotations
 
@@ -13,11 +14,11 @@ from ._source import NurbsSurfaceIntersectionIntegrityError
 
 
 PINS = (
-    ("nurbs.py","53310819017985a2bd6153a3449f27b24d087ecee713eb9c379f1eb021f21b77"),
-    ("_cert_exact_runtime.py","5b600f1be3d641fe1f6f4feee05542ef72b665f946c160aa745bd296e38e7725"),
-    ("plane_nurbs.py","f60c8b6d80ab2c652af2db32df3adfd0817af467b2aac20d775281991aa21db2"),
-    ("tolerance.py","f7709e89d2294dab1b71aecdb6a6a92f212a42905531e21ace78e89f1e0ab7f5"),
-    ("errors.py","8dd49f04145b15f5d6bde5a91458b0df13d1c889a7dd760f04092dfcd064b2bd"),
+    ("nurbs.py","fb0550ff48f5fae8e346f672183744a5dd9c6e981276286cccc074799ba5db06"),
+    ("_cert_exact_runtime.py","68427a0294a160c10c32af712fb374eb4ac95d249fc719940f629e2a798c4afa"),
+    ("plane_nurbs.py","77c8155418b33b7c1dbb22b5ee7f831ea43ef25ef89db206150b8fdf137868aa"),
+    ("tolerance.py","994f4ce8306e796c5ac77b8e960e4cee917665a657ec0974059e32fca35b425e"),
+    ("errors.py","a6da540fff83f27e8f4fc5cc2b187f8413da6d2d3460461fa64b820429e04c89"),
 )
 
 
@@ -25,7 +26,7 @@ def verify_dependencies():
     base = Path(__file__).resolve().parent.parent
     for name,expected in PINS:
         try:
-            actual = hashlib.sha256((base/name).read_bytes()).hexdigest()
+            actual = hashlib.sha256((base/name).read_bytes().replace(b'\r\n', b'\n')).hexdigest()
         except OSError as error:
             raise NurbsSurfaceIntersectionIntegrityError(f"source-pinned dependency unavailable: {name}") from error
         if actual!=expected:

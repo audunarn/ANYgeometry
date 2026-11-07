@@ -248,10 +248,9 @@ def _qualified_auxiliary(model, edge_id):
 
 def _register_source_clone(source, prepared):
     """Called ONLY by clone_prepared_geometry after its genuine clone."""
-    from .serialization import to_dict
+    from .serialization import to_dict, _clone_content_payload
     before, copied = to_dict(source), to_dict(prepared)
-    if ({k: v for k, v in before.items() if k not in ('model_id', 'checksum')}
-            != {k: v for k, v in copied.items() if k not in ('model_id', 'checksum')}):
+    if _clone_content_payload(before) != _clone_content_payload(copied):
         raise GeometryError('immediate source clone changed complete definitions')
     source_state, prepared_state = _state(source), _state(prepared)
     if source_state[2] != prepared_state[2]:
