@@ -31,5 +31,5 @@ jobs:
           if [ "${{ matrix.mode }}" = alone ]; then
             python -m pytest -p no:cacheprovider -q "tests/test_plane_trim_station.py::test_ordinary_weighted_trim_retains_original_trace_station_bits" 2>&1 | tail -30
           else
-            python -m pytest -p no:cacheprovider -q -p no:randomly $(cat .github/bisect-ids.txt | tr '\n' ' ') 2>&1 | tail -30
+            python -c "import sys,pytest; ids=[l.strip() for l in open('.github/bisect-ids.txt') if l.strip()]; sys.exit(pytest.main(['-p','no:cacheprovider','-q']+ids))" 2>&1 | tail -30
           fi
