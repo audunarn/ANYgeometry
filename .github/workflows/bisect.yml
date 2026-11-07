@@ -1,0 +1,35 @@
+name: Bisect trace station
+on:
+  push:
+    branches: ['codex/w2-bisect-*']
+permissions:
+  contents: read
+env:
+  OMP_NUM_THREADS: '1'
+  OPENBLAS_NUM_THREADS: '1'
+  MKL_NUM_THREADS: '1'
+jobs:
+  bisect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [alone, ordered]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.13'
+          cache: pip
+      - run: python -m pip install -e '.[dev]'
+      - run: pip list 2>/dev/null | grep -i -E "numpy|scipy|mpmath|pytest"
+      - name: run
+        run: |
+          if [ "${{ matrix.mode }}" = alone ]; then
+            python -m pytest -p no:cacheprovider -q "tests/test_plane_trim_station.py::test_ordinary_weighted_trim_retains_original_trace_station_bits" 2>&1 | tail -30
+          else
+            python -c "import sys,pytest; ids=[l.strip() for l in open('.github/bisect-ids.txt') if l.strip()]; sys.exit(pytest.main(['-p','no:cacheprovider','-q']+ids))" 2>&1 | tail -30
+          fi
