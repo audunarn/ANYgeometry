@@ -2107,6 +2107,9 @@ class GeometryModel:
             raise
         except (KeyError, TypeError, ValueError) as error:
             raise GeometryError(f"invalid topology snapshot: {error}") from error
+        if candidate.solid_regions and self._units != "m":
+            raise GeometryError("solid regions require SI metres; cannot restore them into a "
+                                f"{self._units!r} document")
         from .solid_regions import validate_regions
         problems = (*candidate.validate_topology(), *candidate._validate_structural(), *validate_regions(candidate))
         if problems:

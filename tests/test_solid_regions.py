@@ -273,6 +273,20 @@ def test_snapshot_restore_and_group_edit_nested_failure_are_atomic():
     assert m.solid_region_snapshot(rid).face_refs==s.face_refs
 
 
+def test_restoring_solids_into_a_non_metre_document_is_refused_and_leaves_the_model_unchanged():
+    m=GeometryModel()
+    rid=m.add_solid_box((0,0,0),(1,1,1))
+    saved=m.topology_snapshot()
+    empty=GeometryModel().topology_snapshot()
+    m.restore_topology(empty)
+    m.set_document_settings(units='mm')
+    before=to_dict(m)
+    with pytest.raises(GeometryError):
+        m.restore_topology(saved)
+    assert to_dict(m)==before
+    assert not m.validate_topology()
+
+
 def test_coincident_duplicate_edge_cannot_break_closed_source_topology():
     from anygeometry.entities import OrientedEdge
     m=GeometryModel()
