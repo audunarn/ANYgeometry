@@ -160,6 +160,19 @@ def test_near_tangent_plate_trace_walk_is_capped_and_refuses_without_cancellatio
     assert to_dict(model) == before
 
 
+def test_trace_walk_cap_is_the_refusal_bound_and_ordinary_traces_stay_far_below_it(monkeypatch):
+    """Direct cap test: an ordinary contained plate certifies under the default cap, and the same run refuses
+    typed (not a hang, not a plausible wrong status) once the cap is lowered below what the walk needs."""
+    import anygeometry.plane_section_plate as psp
+    square = [(-2., -2.), (2., -2.), (2., 2.), (-2., 2.)]
+    model, *_ = bounded_run(square)
+    assert not model.validate_topology()
+    assert psp.MAX_TRACE_WALK_BOXES >= 100
+    monkeypatch.setattr(psp, 'MAX_TRACE_WALK_BOXES', 0)
+    with pytest.raises(PlateBoundaryCrossingRequired, match='box cap'):
+        bounded_run(square)
+
+
 def test_keep_hook_default_none_is_the_legacy_route_and_a_rejecting_hook_creates_no_trace():
     from anygeometry.plane_split import _stage_plane_split
     from anygeometry.predicates import DEFAULT_INTERSECTION_QUALIFICATION_POLICY as POLICY
