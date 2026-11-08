@@ -143,6 +143,7 @@ def test_ambiguous_owner_partition_refused(monkeypatch):
     with pytest.raises(GeometryError, match='malformed'):
         query_local_field_transport(source, prepared, regions)
 
+@pytest.mark.slow
 def test_closed_split_retains_hole_and_shared_trace_in_actual_child_domains():
     from test_plane_split import bowl
     source, face, plane = bowl()
