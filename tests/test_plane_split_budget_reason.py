@@ -78,3 +78,67 @@ def test_work_counts_denied_takes_and_keeps_its_old_take_behaviour():
     work = Work(1)
     assert [work.take(), work.take(), work.take()] == [True, False, False]
     assert work.boxes == 3 and work.denied == 2
+
+
+def _denying_ids(error, takes):
+    """A face-id generator that overruns the budget (swallowing the refusal) and then raises ``error``."""
+    from anygeometry.plane_nurbs import PlaneNurbsNotCertified, charge_box
+    for _ in range(takes):
+        try:
+            charge_box()
+        except PlaneNurbsNotCertified:
+            pass
+    raise error
+    yield  # pragma: no cover
+
+
+_PLANE = Plane((0., 0., .5), (1., 0., 0.), (0., 1., 0.))
+
+
+def _plan_ids(model, ids, cap):
+    return plan_plane_split(model, ids, _PLANE, qualification=IntersectionQualificationPolicy(max_boxes_per_pair=cap))
+
+
+def test_shared_exception_keeps_the_facts_of_its_first_plan():
+    model, _ = _bowl_face()
+    shared = GeometryError("shared refusal")
+    with pytest.raises(GeometryError):
+        _plan_ids(model, _denying_ids(shared, 2), 1)
+    first = (shared.budget_limit, shared.budget_spent, shared.budget_denied)
+    assert first == (1, 2, 1) and len(shared.__notes__) == 1
+    with pytest.raises(GeometryError):
+        _plan_ids(model, _denying_ids(shared, 5), 3)
+    assert (shared.budget_limit, shared.budget_spent, shared.budget_denied) == first
+    assert len(shared.__notes__) == 1
+
+
+def test_nested_plans_decorate_the_propagated_exception_once():
+    model, _ = _bowl_face()
+    shared = GeometryError("inner refusal")
+
+    def outer_ids():
+        from anygeometry.plane_nurbs import PlaneNurbsNotCertified, charge_box
+        for _ in range(2):
+            try:
+                charge_box()
+            except PlaneNurbsNotCertified:
+                pass
+        _plan_ids(model, _denying_ids(shared, 2), 1)
+        yield  # pragma: no cover
+
+    with pytest.raises(GeometryError):
+        _plan_ids(model, outer_ids(), 1)
+    assert len(shared.__notes__) == 1 and shared.budget_limit == 1
+
+
+def test_undecoratable_exception_escapes_unchanged():
+    from dataclasses import dataclass
+
+    @dataclass(frozen=True)
+    class Frozen(GeometryError):
+        message: str
+
+    model, _ = _bowl_face()
+    with pytest.raises(Frozen) as info:
+        _plan_ids(model, _denying_ids(Frozen("frozen refusal"), 2), 1)
+    assert str(info.value) == "frozen refusal"
