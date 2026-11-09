@@ -147,7 +147,21 @@ def _sturm(p):
 
 
 def _variations(sequence, point):
-    numerator,denominator=point.numerator,point.denominator
+    return _variations_at(sequence, point.numerator, point.denominator)
+
+
+def _integer_value_at(polynomial, numerator, denominator):
+    """``_integer_value`` at ``numerator / denominator`` (``denominator > 0``, not necessarily reduced)."""
+    value=polynomial[-1]
+    power=denominator
+    for coefficient in reversed(polynomial[:-1]):
+        value=value*numerator+coefficient*power
+        power*=denominator
+    return value
+
+
+def _variations_at(sequence, numerator, denominator):
+    """Sign variations of ``sequence`` at ``numerator / denominator`` (``denominator > 0``, not necessarily reduced)."""
     signs=[]
     for polynomial in sequence:
         value=polynomial[-1]
@@ -249,8 +263,11 @@ def _isolate_real_roots(coefficients, tolerance, cancellation_check, interval):
             raise GeometryError('root isolation interval must have two finite increasing endpoints') from exc
     if len(p) == 1:
         return ()
-    p = _square_free(p)
-    sequence = _sturm(p)
+    # Integer coefficients take the gcd-only route of ``_integer_row``: equal Fractions give the same primitive
+    # rows, so ``p`` and the Sturm rows are those of the Fraction route.
+    p = _square_free(p if not all(value.denominator == 1 for value in p) else
+                     tuple(value.numerator for value in p))
+    sequence = _sturm(tuple(value.numerator for value in p))      # ``_square_free`` returns integer-valued Fractions
     if interval is None:
         bound = Fraction(2)+max(abs(value/p[-1]) for value in p[:-1])
         # The strict Cauchy bound puts all roots inside, not on the endpoints.
@@ -269,15 +286,30 @@ def _isolate_real_roots(coefficients, tolerance, cancellation_check, interval):
     # a node with exactly one simple root locates it by one sign of the
     # square-free polynomial. Visited intervals, roots and cancellation polls
     # are identical to counting both endpoints at every node.
+    #
+    # Every point of the bisection is ``N / (base << j)`` with ``base`` the
+    # common denominator of the two starting endpoints. Points are kept as the
+    # integer pair ``(N, j)`` reduced to ``N`` odd or ``j == 0`` (one pair per
+    # rational), so bisection, the width test and the cache need no gcd. A
+    # homogeneous Horner value at an unreduced ``N / (base << j)`` is the value
+    # at the reduced fraction times a positive power, so every sign, zero and
+    # variation count equals the one at the normalised Fraction. A Fraction is
+    # built (normalised, hence equal) only where a point leaves this function.
+    base = math.lcm(lower.denominator, upper.denominator)
+    tolerance_numerator, tolerance_denominator = tolerance.numerator, tolerance.denominator
     variation_cache = {}
 
     def variations(point):
         value = variation_cache.get(point)
         if value is None:
-            value = variation_cache[point] = _variations(sequence, point)
+            value = variation_cache[point] = _variations_at(sequence, point[0], base << point[1])
         return value
 
-    pending = [(lower, upper, None, 0)]
+    def fraction(point):
+        return Fraction(point[0], base << point[1])
+
+    pending = [((lower.numerator*(base//lower.denominator), 0),
+                (upper.numerator*(base//upper.denominator), 0), None, 0)]
     roots = []
     while pending:
         if cancellation_check is not None and cancellation_check():
@@ -287,14 +319,25 @@ def _isolate_real_roots(coefficients, tolerance, cancellation_check, interval):
             count = variations(lower)-variations(upper)
         if count == 0:
             continue
-        if count == 1 and upper-lower <= tolerance:
-            roots.append(IsolatedRoot(lower, upper))
+        (lower_numerator, lower_level), (upper_numerator, upper_level) = lower, upper
+        level = max(lower_level, upper_level)
+        lower_scaled = lower_numerator << (level-lower_level)
+        upper_scaled = upper_numerator << (level-upper_level)
+        if count == 1 and ((upper_scaled-lower_scaled)*tolerance_denominator
+                           <= tolerance_numerator*(base << level)):
+            roots.append(IsolatedRoot(fraction(lower), fraction(upper)))
             continue
-        middle = (lower+upper)/2
-        middle_value = _integer_value(sequence[0], middle)
+        middle_numerator, middle_level = lower_scaled+upper_scaled, level+1
+        if middle_numerator:
+            shift = min((middle_numerator & -middle_numerator).bit_length()-1, middle_level)
+            middle = (middle_numerator >> shift, middle_level-shift)
+        else:
+            middle = (0, 0)
+        middle_value = _integer_value_at(sequence[0], middle[0], base << middle[1])
         if middle_value == 0:
             # Remove an exact dyadic root and restart on its quotient. This
             # keeps the isolating endpoints away from every remaining root.
+            middle = fraction(middle)
             roots.append(IsolatedRoot(middle, middle))
             quotient, remainder = _division(p, (-middle, Fraction(1)))
             if remainder != (0,):
@@ -308,7 +351,7 @@ def _isolate_real_roots(coefficients, tolerance, cancellation_check, interval):
         middle_sign = 1 if middle_value > 0 else -1
         if count == 1:
             if not lower_sign:
-                lower_value = _integer_value(sequence[0], lower)
+                lower_value = _integer_value_at(sequence[0], lower[0], base << lower[1])
                 lower_sign = 1 if lower_value > 0 else -1
             left = int(lower_sign != middle_sign)
         else:
