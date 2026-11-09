@@ -2,7 +2,7 @@
 from ._certificate import LocalArcCertificate, certify_local_arc
 from ._source import (IntersectionResult, IntersectionStats, IntersectionStatus,
                       NurbsSurfaceIntersectionCancelled, NurbsSurfaceIntersectionIntegrityError,
-                      SourceDefinition)
+                      SourceDefinition, UnclassifiedReason)
 from ._evaluate import ArcEvaluation, evaluate_arc, evaluate_arcs
 from ._records import ArcRecord, ComponentRecord, StructuralCertificate, RationalProjectionCertificate
 from ._source import NurbsSurfaceIntersectionRefused
@@ -16,5 +16,5 @@ __all__ = [
     "NurbsSurfaceIntersectionRefused",
     "IntersectionResult", "IntersectionStats", "IntersectionStatus", "LocalArcCertificate",
     "NurbsSurfaceIntersectionCancelled", "NurbsSurfaceIntersectionIntegrityError", "SourceDefinition",
-    "certify_local_arc", "query_nurbs_surface_intersection",
+    "certify_local_arc", "query_nurbs_surface_intersection", "UnclassifiedReason",
 ]
