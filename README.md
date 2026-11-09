@@ -169,6 +169,10 @@ lineage, groups, tags, and exact plane/cylinder surfaces are preserved.
 `FaceIntersection.edges` contains the complete ring while the compatible
 `FaceIntersection.edge` accessor remains its deterministic first edge.
 
+Intersection planning runs serially by default. Set
+`ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING=1` to opt into the experimental
+parallel planner; absent, `0`, and other values use the serial path.
+
 Topology-changing intersections require caller intent, for example
 `intersect_faces(model, a, b, policy=MutationPolicy.IMPRINT)`. Query-only
 calls use `fragment=False`; `KEEP_SEPARATE_PART` retains both inputs without
