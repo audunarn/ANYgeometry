@@ -38,7 +38,7 @@ import numpy as np
 from .errors import GeometryError
 from ._cert_exact_runtime import fraction_kind as _fraction_kind
 from .nurbs import NurbsSurface, _float_down, _float_up
-from .plane_nurbs import CURRENT_WORK, PlaneNurbsNotCertified, charge_box, charge_split, depth_limit, plane_nurbs_section
+from .plane_nurbs import PlaneNurbsNotCertified, charge_box, charge_split, depth_limit, plane_nurbs_section
 
 _SECTIONS: dict = {}
 _RUNTIME_CACHE_BANK = ContextVar('plane_nurbs_runtime_cache_bank', default=None)
@@ -642,18 +642,10 @@ class PlaneNurbsCurve:
                 stack.append((*outer, level + 1))
             return None
 
-        work = CURRENT_WORK.get()
-        previous = None if work is None else work.consumer
-        if work is not None:
-            work.consumer = "extreme"
-        try:
-            low = extreme(True)
-            if low is None:
-                return None
-            high = extreme(False)
-        finally:
-            if work is not None:
-                work.consumer = previous
+        low = extreme(True)
+        if low is None:
+            return None
+        high = extreme(False)
         return x0 + low * (x1 - x0), x0 + high * (x1 - x0)
 
     def _graph_view(self, arc):

@@ -10,7 +10,7 @@ from weakref import WeakKeyDictionary, ref
 from .errors import GeometryError
 from .entities import EntityRef, OrientedEdge
 from .nurbs import CurveOnSurface, NurbsSurface, _IDENTITY
-from .plane_nurbs import PlaneNurbsNotCertified, plane_nurbs_section
+from .plane_nurbs import plane_nurbs_section
 from .policies import MutationPolicy
 from .support_curves import PlaneNurbsCurve
 from .surfaces import Plane
@@ -105,32 +105,6 @@ def _qualify_sheet_ownership(model, parent):
     return True
 
 
-class QualificationBudgetExhausted(PlaneNurbsNotCertified):
-    """A plane split refused because its qualification budget ran out (the original refusal text is kept).
-
-    ``limit`` boxes were allowed, ``spent`` taken, ``subdivisions`` made; ``consumer`` names the search that
-    first overran the budget; ``cause_message`` is the refusal the exhaustion surfaced as."""
-
-    def __init__(self, cause_message, *, limit, spent, subdivisions, consumer):
-        self.cause_message, self.limit, self.spent = cause_message, limit, spent
-        self.subdivisions, self.consumer = subdivisions, consumer
-        super().__init__(f"{cause_message} (qualification budget exhausted: {spent} of {limit} boxes, "
-                         f"{subdivisions} subdivisions, first overrun in {consumer})")
-
-
-def _source_is_invalid(model):
-    """True when the caller's model is invalid on its own, judged without any budget (so no budget failure
-    can be mistaken for it); a larger budget cannot repair such a model."""
-    from .plane_nurbs import CURRENT_WORK
-    token = CURRENT_WORK.set(None)
-    try:
-        return bool(model.validate_topology() or model._validate_structural())
-    except GeometryError:
-        return True
-    finally:
-        CURRENT_WORK.reset(token)
-
-
 def plan_plane_split(model, face_ids, plane, *, qualification=None):
     from .predicates import IntersectionQualificationPolicy, DEFAULT_INTERSECTION_QUALIFICATION_POLICY
     from .section_audit import Work
@@ -143,23 +117,13 @@ def plan_plane_split(model, face_ids, plane, *, qualification=None):
     token = CURRENT_WORK.set(work)
     try:
         return _plan_plane_split(model, face_ids, plane, qualification=policy)
-    except QualificationBudgetExhausted:
-        raise
     except GeometryError as error:
-        if work.boxes <= work.max_boxes:
-            raise
-        facts = dict(budget_denied=True, budget_limit=work.max_boxes, budget_spent=work.boxes,
-                     budget_consumer=work.exhausted_by)
-        if _source_is_invalid(model):
-            # an independent cause exists: keep the original refusal and only attach the budget facts
-            for name, value in facts.items():
-                setattr(error, name, value)
-            error.add_note(f"qualification budget also exhausted: {work.boxes} of {work.max_boxes} boxes, "
-                           f"first overrun in {work.exhausted_by}")
-            raise
-        raise QualificationBudgetExhausted(
-            str(error), limit=work.max_boxes, spent=work.boxes, subdivisions=work.subdivisions,
-            consumer=work.exhausted_by) from error
+        if work.denied:
+            # the refusal keeps its class and message; the budget facts are attached, without claiming causality
+            error.budget_limit, error.budget_spent, error.budget_denied = work.max_boxes, work.boxes, work.denied
+            error.add_note(f"plan qualification budget was denied {work.denied} times "
+                           f"(spent {work.boxes} of limit {work.max_boxes})")
+        raise
     finally:
         CURRENT_WORK.reset(token)
 
