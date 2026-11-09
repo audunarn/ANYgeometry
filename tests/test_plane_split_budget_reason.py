@@ -39,3 +39,35 @@ def test_small_budget_refusal_names_the_exhausted_budget(cap):
 def test_sufficient_budget_still_plans():
     plan = _plan(8000)
     assert plan is not None
+
+
+def test_independent_failure_is_not_relabelled_as_budget_exhaustion():
+    from anygeometry import apply_plane_split
+    from anygeometry.entities import EntityRef
+    from anygeometry.native_support_snapshots import capture_native_supports
+    from anygeometry.plane_split import QualificationBudgetExhausted
+    from anygeometry.policies import MutationPolicy
+    model, face = _bowl_face()
+    plane = Plane((0., 0., .5), (1., 0., 0.), (0., 1., 0.))
+    plan = plan_plane_split(model, [face], plane, qualification=IntersectionQualificationPolicy(max_boxes_per_pair=8000))
+    apply_plane_split(model, plan, policy=MutationPolicy.IMPRINT)
+    capture_native_supports(model)
+    model._groups['bad'] = {EntityRef('face', 10 ** 9)}      # an invalid group no budget can repair
+    with pytest.raises(GeometryError) as info:
+        plan_plane_split(model, [sorted(model.faces)[-1]], Plane((0., 0., .25), (1., 0., 0.), (0., 1., 0.)),
+                         qualification=IntersectionQualificationPolicy(max_boxes_per_pair=1))
+    error = info.value
+    assert not isinstance(error, QualificationBudgetExhausted)
+    assert "cannot serialize invalid topology" in str(error)
+    # the budget facts stay visible on the original exception
+    assert error.budget_denied is True and error.budget_limit == 1 and error.budget_spent > 1
+
+
+def test_work_take_is_safe_when_called_directly_and_records_the_declared_consumer():
+    from anygeometry.section_audit import Work
+    assert Work(0).take() is False            # no stack inspection: a module-level call works
+    work = Work(1)
+    work.consumer = "edge_edge"
+    assert work.take() is True and work.take() is False
+    assert work.exhausted_by == "edge_edge"
+    assert Work(1).exhausted_by is None
