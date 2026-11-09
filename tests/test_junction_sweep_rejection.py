@@ -87,3 +87,49 @@ def test_budgeted_route_is_not_filtered(monkeypatch):
     assert ag._line_clear_of_branch(line, curve, 1e-9)
     with _junction_bounds_policy(False):
         assert not ag._line_clear_of_branch(line, curve, 1e-9)
+
+
+def test_curve_pairs_and_ellipse_lines_match_unfiltered_route(monkeypatch):
+    from anygeometry.exact_curves import EllipticArc
+    rng = np.random.default_rng(1110)
+    calls = {"clear": 0, "total": 0}
+    original = ag._curve_pair_clear
+
+    def spy(*args):
+        result = original(*args)
+        calls["total"] += 1
+        calls["clear"] += bool(result)
+        return result
+
+    monkeypatch.setattr(ag, "_curve_pair_clear", spy)
+    branches = _curves()
+    arcs = []
+    for _ in range(8):
+        centre = rng.normal(size=3) * .8
+        u, v = rng.normal(size=3) * .6, rng.normal(size=3) * .6
+        arcs.append(EllipticArc(tuple(centre), tuple(u), tuple(v), float(rng.uniform(-3, 3)), float(rng.uniform(.3, 5.))))
+    for branch in branches[:4]:             # arcs through points of the branch curves, offset by multiples of tol
+        for t in (0., .3, .7, 1.):
+            point = np.asarray(branch.evaluate(t))
+            for offset in (0., 1e-9, 2e-9, 1e-7):
+                arcs.append(EllipticArc(tuple(point + offset), (.5, 0., 0.), (0., .5, 0.), 0., 2.))
+    lines = [LinePath(tuple(rng.normal(size=3) * 2), tuple(rng.normal(size=3) * 2)) for _ in range(20)]
+    for arc in arcs[8:12]:
+        p = np.asarray(arc.evaluate(0.))
+        lines.append(LinePath(tuple(p - (.5, 0., 0.)), tuple(p + (0., 0., 1e-9))))
+    groups = [(arc, other) for arc in arcs for other in (*arcs[:10], *branches, *lines)]
+    for tol in (1e-9, 1e-6):
+        for first, second in groups:
+            for pair in ((first, second), (second, first)):
+                assert actual(*pair, tol) == reference(*pair, tol)
+    for first, second in [(a, b) for a in branches for b in branches]:
+        assert actual(first, second, 1e-9) == reference(first, second, 1e-9)
+    assert calls["clear"] > 50 and calls["clear"] < calls["total"]
+
+
+def test_degenerate_line_against_ellipse_refusal_is_unchanged():
+    from anygeometry.exact_curves import EllipticArc
+    good = EllipticArc((50., 0., 0.), (1., 0., 0.), (0., 1., 0.), 0., 2.)
+    point = LinePath((9., 9., 9.), (9., 9., 9.))
+    for pair in ((point, good), (good, point)):
+        assert actual(*pair, 1e-9) == reference(*pair, 1e-9)

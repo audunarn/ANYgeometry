@@ -19,6 +19,7 @@ from .branch_curves import BezierQuadricCurve
 from .quadric_curves import QuadricIntersectionCurve
 from .surfaces import Cylinder, Plane
 from contextvars import ContextVar
+from functools import lru_cache
 from contextlib import contextmanager
 
 # Retained for controlled experiments; full-case benefit is not established.
@@ -156,6 +157,111 @@ def _separated_line_pair(first, second, tolerance):
     a, b = envelope(first), envelope(second)
     return (a is not None and b is not None
             and (np.any(a[1] < b[0]) or np.any(b[1] < a[0])))
+
+
+@lru_cache(maxsize=16384)
+def _cached_enclosure(curve, lower, upper):
+    """``curve.bounds(lower, upper)`` as float lists (the curves are immutable values)."""
+    lo, hi = curve.bounds(lower, upper)
+    return lo.tolist(), hi.tolist()
+
+
+def _box_pair_clear(lo1, hi1, lo2, hi2, pad):
+    for k in range(3):
+        if lo2[k]-hi1[k] > pad or lo1[k]-hi2[k] > pad:
+            return True
+    return False
+
+
+def _curve_pair_clear(first, second, tolerance):
+    """``True`` only when ``curve_junctions(first, second)`` certainly returns ``()`` (curve x curve).
+
+    A junction needs a point of each curve within ``tolerance`` times the curve's acceptance
+    window of a point of the other (lines: the extended segment; arcs: ``2 + |u| + |v|``,
+    the angular window). Outward interval enclosures (whole, then eight pieces) padded by
+    those windows and a rounding allowance must be pairwise disjoint. Lines against branch
+    curves use ``_line_clear_of_branch``; other types, degenerate or non-finite data keep the
+    original route.
+    """
+    if not _SWEEP_REJECTION.get():
+        return False
+    kinds = (LinePath, EllipticArc, BezierQuadricCurve, CylinderIntersectionCurve)
+    if type(first) not in kinds or type(second) not in kinds or (type(first) is LinePath and type(second) is LinePath):
+        return False
+    if type(first) is LinePath and type(second) in (BezierQuadricCurve, CylinderIntersectionCurve):
+        return False
+    if type(second) is LinePath and type(first) in (BezierQuadricCurve, CylinderIntersectionCurve):
+        return False
+    try:
+        window = 0.
+        objects = []
+        for curve in (first, second):
+            if type(curve) is LinePath:
+                start = [float(v) for v in curve.start]
+                end = [float(v) for v in curve.end]
+                d = [end[k]-start[k] for k in range(3)]
+                size = math.sqrt(d[0]*d[0]+d[1]*d[1]+d[2]*d[2])
+                if not (size > tolerance and math.isfinite(size)):
+                    return False
+                objects.append((curve, (start, end, d)))
+                window += 1.
+            else:
+                if type(curve) is EllipticArc:
+                    u = [float(v) for v in curve.u_vector]
+                    v = [float(x) for x in curve.v_vector]
+                    nu, nv = math.sqrt(sum(x*x for x in u)), math.sqrt(sum(x*x for x in v))
+                    cross = (u[1]*v[2]-u[2]*v[1], u[2]*v[0]-u[0]*v[2], u[0]*v[1]-u[1]*v[0])
+                    if not (math.isfinite(nu+nv) and nu > 0 and nv > 0
+                            and math.sqrt(sum(x*x for x in cross)) > 1e-6*nu*nv
+                            and math.isfinite(float(curve.sweep_angle)) and float(curve.sweep_angle) != 0.):
+                        return False
+                    window += 2.+nu+nv
+                else:
+                    window += 1.
+                objects.append((curve, None))
+        if not (0 < tolerance < 1e100) or not math.isfinite(window):
+            return False
+        base = tolerance*(1+1e-9)*window
+
+        def enclosure(item, lower, upper):
+            curve, line = item
+            if line is not None:
+                start, end, d = line
+                return ('s', [start[k]-tolerance*d[k] for k in range(3)], [end[k]+tolerance*d[k] for k in range(3)])
+            lo, hi = _cached_enclosure(curve, lower, upper)
+            return ('b', lo, hi)
+
+        whole = [enclosure(item, 0., 1.) for item in objects]
+        top = max(1., *(abs(x) for obj in whole for part in obj[1:] for x in part))
+        if not math.isfinite(top):
+            return False
+        pad = base+1e3*_SWEEP_EPS*top
+
+        def apart(x, y):
+            if x[0] == 'b' and y[0] == 'b':
+                return _box_pair_clear(x[1], x[2], y[1], y[2], pad)
+            seg, box = (x, y) if x[0] == 's' else (y, x)
+            return _segment_clear_of_box(seg[1], seg[2], [v-pad for v in box[1]], [v+pad for v in box[2]])
+
+        if apart(whole[0], whole[1]):
+            return True
+        n = _SWEEP_PIECES
+
+        def pieces(index):
+            item = objects[index]
+            if item[1] is not None:
+                return [whole[index]]
+            return [enclosure(item, i/n, (i+1)/n) for i in range(n)]
+
+        second_pieces = pieces(1)
+        for piece in pieces(0):
+            if apart(piece, whole[1]):
+                continue
+            if not all(apart(piece, other) for other in second_pieces):
+                return False
+        return True
+    except (GeometryError, ArithmeticError, ValueError, TypeError):
+        return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -520,6 +626,8 @@ def curve_junctions(first, second, *, tolerance=1e-10,cancellation_check=None):
         _increment('junction_line_bounds_pruned')
         return ()
     if _line_clear_of_branch(first, second, tolerance):
+        return ()
+    if _curve_pair_clear(first, second, tolerance):
         return ()
     # Named interval endpoints are independent qualified candidates. A root
     # of a clipped conic can round just beyond its new angular chart; retaining
