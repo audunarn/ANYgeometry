@@ -43,10 +43,14 @@ class Work:
     def __init__(self, max_boxes: int = 200_000, max_depth: int = 32):
         self.max_boxes, self.max_depth = int(max_boxes), int(max_depth)
         self.boxes = self.subdivisions = 0
+        self.denied = 0              # takes refused after the budget ran out (reported on later refusals)
 
     def take(self) -> bool:
         self.boxes += 1
-        return self.boxes <= self.max_boxes
+        if self.boxes <= self.max_boxes:
+            return True
+        self.denied += 1
+        return False
 
 
 @contextmanager
