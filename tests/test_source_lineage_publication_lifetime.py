@@ -18,6 +18,7 @@ def _staged_clone():
     return source,intermediate,prepared,candidate,stage
 
 
+@pytest.mark.slow
 def test_public_repeated_cuts_survive_gc_at_publication(monkeypatch):
     from test_prepared_material_source_transfer import (
         test_repeated_public_axis_cuts_compose_original_edge_intervals_through_genuine_clone as original_gate)

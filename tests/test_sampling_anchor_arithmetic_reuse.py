@@ -22,6 +22,7 @@ def _fixture():
     return model, regions, seeds, face
 
 
+@pytest.mark.slow
 def test_actual_one_face_reuses_selection_with_fresh_equal_sampling(tmp_path):
     model, regions, seeds, face = _fixture()
     original = owner.to_dict(model)
