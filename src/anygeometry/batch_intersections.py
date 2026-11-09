@@ -1377,7 +1377,8 @@ def plan_intersections(model, operands, *, policy, _parallel_control=None):
         raise GeometryError('epoch planning native support binding is unavailable')
     junction_policy = _junction_bounds_policy(False) if effective.max_predicates is not None else nullcontext()
     with root_isolation_memo(), _timed_phase('intersection_planning'), junction_policy:
-        if os.environ.get('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING', '1') == '1':
+        # Parallel remains experimental and explicitly opt-in.
+        if os.environ.get('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING') == '1':
             from ._planning_host import qualified_plan
             plan=qualified_plan(model,_parallel_control,
                 lambda:_plan_intersections(model,operands,policy=policy,_planning_mode=mode,_seam_policy=seam),

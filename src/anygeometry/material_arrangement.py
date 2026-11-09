@@ -2279,6 +2279,64 @@ def expected_cell_signatures(arrangement):
     return [tuple(walk(list(loop)) for loop in (cell.outer, *cell.holes)) for cell in arrangement.cells]
 
 
+class _CellBoxIndex:
+    """Conservative ordered candidates for the existing closed-box predicate.
+
+    This only indexes the already padded float boxes. Leaves may return extra
+    indices; the caller still applies its original comparisons and exact tests.
+    Non-finite data and small collections retain the original scan. No chart,
+    rounding, padding, narrow-phase predicate or inter-cell order changes.
+    """
+
+    def __init__(self, boxes):
+        self.count = len(boxes)
+        self.root = None
+        if not 32 <= self.count <= 100000:
+            return
+        try:
+            bounds = [tuple(float(value) for point in box for value in point) for box in boxes]
+            if any(len(row) != 4 or not all(math.isfinite(value) for value in row)
+                   or row[0] > row[2] or row[1] > row[3] for row in bounds):
+                return
+
+            def build(indices, axis):
+                low_x = min(bounds[i][0] for i in indices)
+                low_y = min(bounds[i][1] for i in indices)
+                high_x = max(bounds[i][2] for i in indices)
+                high_y = max(bounds[i][3] for i in indices)
+                if len(indices) <= 8:
+                    return (low_x, low_y, high_x, high_y, None, None, indices)
+                indices.sort(key=lambda i: bounds[i][axis])
+                middle = len(indices) // 2
+                return (low_x, low_y, high_x, high_y,
+                        build(indices[:middle], 1 - axis), build(indices[middle:], 1 - axis), None)
+
+            self.root = build(list(range(self.count)), 0)
+        except MemoryError:
+            # The optional acceleration must not require an extra allocation
+            # to succeed where the existing scan could proceed.
+            self.root = None
+
+    def candidates(self, x, y):
+        if self.root is None or not (math.isfinite(x) and math.isfinite(y)):
+            return range(self.count)
+        try:
+            found = []
+            stack = [self.root]
+            while stack:
+                node = stack.pop()
+                if not (node[0] <= x <= node[2] and node[1] <= y <= node[3]):
+                    continue
+                if node[6] is not None:
+                    found.extend(node[6])
+                else:
+                    stack.extend((node[4], node[5]))
+            found.sort()
+            return found
+        except MemoryError:
+            return range(self.count)
+
+
 def certify_persisted_cells(support, loops, edge_ends, position, check=lambda: None, expected=None):
     """Re-certify the persisted cells of a certified arrangement (T-b/D8 slice E2a, S10).
 
@@ -2444,12 +2502,14 @@ def certify_persisted_cells(support, loops, edge_ends, position, check=lambda: N
             probe = ((region[0][0] + region[1][0]) / 2, (region[0][1] + region[1][1]) / 2)
             if any(point_in_polygon(probe, other) is Outcome.ABOVE for b, other in enumerate(regions) if b != a):
                 raise failure("hole inside another hole")
+    box_index = _CellBoxIndex(cell_boxes)
     for j, (outer, holes, _op, _hp) in enumerate(cells):
         for edge in sorted(cell_edges[j]):
             check()
             probe = midpoint(edge)
             fx, fy = float(probe[0]), float(probe[1])
-            for i, (low, high) in enumerate(cell_boxes):
+            for i in box_index.candidates(fx, fy):
+                low, high = cell_boxes[i]
                 if i == j or edge in cell_edges[i]:
                     continue
                 if not (low[0] <= fx <= high[0] and low[1] <= fy <= high[1]):
