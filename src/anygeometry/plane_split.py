@@ -118,6 +118,19 @@ class QualificationBudgetExhausted(PlaneNurbsNotCertified):
                          f"{subdivisions} subdivisions, first overrun in {consumer})")
 
 
+def _source_is_invalid(model):
+    """True when the caller's model is invalid on its own, judged without any budget (so no budget failure
+    can be mistaken for it); a larger budget cannot repair such a model."""
+    from .plane_nurbs import CURRENT_WORK
+    token = CURRENT_WORK.set(None)
+    try:
+        return bool(model.validate_topology() or model._validate_structural())
+    except GeometryError:
+        return True
+    finally:
+        CURRENT_WORK.reset(token)
+
+
 def plan_plane_split(model, face_ids, plane, *, qualification=None):
     from .predicates import IntersectionQualificationPolicy, DEFAULT_INTERSECTION_QUALIFICATION_POLICY
     from .section_audit import Work
@@ -134,6 +147,15 @@ def plan_plane_split(model, face_ids, plane, *, qualification=None):
         raise
     except GeometryError as error:
         if work.boxes <= work.max_boxes:
+            raise
+        facts = dict(budget_denied=True, budget_limit=work.max_boxes, budget_spent=work.boxes,
+                     budget_consumer=work.exhausted_by)
+        if _source_is_invalid(model):
+            # an independent cause exists: keep the original refusal and only attach the budget facts
+            for name, value in facts.items():
+                setattr(error, name, value)
+            error.add_note(f"qualification budget also exhausted: {work.boxes} of {work.max_boxes} boxes, "
+                           f"first overrun in {work.exhausted_by}")
             raise
         raise QualificationBudgetExhausted(
             str(error), limit=work.max_boxes, spent=work.boxes, subdivisions=work.subdivisions,

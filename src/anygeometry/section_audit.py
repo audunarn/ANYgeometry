@@ -44,15 +44,14 @@ class Work:
         self.max_boxes, self.max_depth = int(max_boxes), int(max_depth)
         self.boxes = self.subdivisions = 0
         self.exhausted_by = None
+        self.consumer = None         # set by the search that charges the budget (support_curves._tight_x)
 
     def take(self) -> bool:
         self.boxes += 1
         if self.boxes <= self.max_boxes:
             return True
         if self.exhausted_by is None:
-            # first overrun only: name the search that consumed the budget (the caller of charge_box)
-            import sys
-            self.exhausted_by = sys._getframe(2).f_code.co_name
+            self.exhausted_by = self.consumer      # first overrun only; None when the caller declared none
         return False
 
 
