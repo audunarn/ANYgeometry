@@ -495,6 +495,11 @@ class PolyFloatSystem:
     def discriminant(self, t, order=0):
         return self.D_forms[order].many(t)
 
+    def frame_order(self, t, order):
+        """``frame(t)[order]`` alone (the same per-axis evaluations, without the other two orders)."""
+        t = np.asarray(t, dtype=float)
+        return np.stack([self.P_forms[axis][order].many(t) for axis in range(3)], axis=-1)
+
     def frame(self, t):
         """``(P, P', P'')`` at ``t`` (any shape), relative to ``origin``."""
         t = np.asarray(t, dtype=float)

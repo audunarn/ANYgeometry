@@ -25,13 +25,88 @@ from contextlib import contextmanager
 _JUNCTION_BOUNDS = ContextVar('junction_bounds', default=False)
 
 
+# Piecewise line/branch rejection (default on). A predicate budget or an explicit
+# ``_junction_bounds_policy(False)`` restores the unfiltered route for exact accounting.
+_SWEEP_REJECTION = ContextVar('junction_sweep_rejection', default=True)
+
+
 @contextmanager
 def _junction_bounds_policy(enabled):
     token = _JUNCTION_BOUNDS.set(enabled)
+    sweep = _SWEEP_REJECTION.set(bool(enabled))
     try:
         yield
     finally:
+        _SWEEP_REJECTION.reset(sweep)
         _JUNCTION_BOUNDS.reset(token)
+
+
+_SWEEP_EPS = float(np.finfo(float).eps)
+_SWEEP_PIECES = 8
+
+
+def _segment_clear_of_box(p, q, lo, hi):
+    """``True`` only when the segment ``p``-``q`` (3 floats each) and the box ``lo``-``hi`` are disjoint
+    (separating-axis test: the three box axes, then the three ``d x e_k`` axes)."""
+    for k in range(3):
+        a, b = p[k], q[k]
+        if a > b:
+            a, b = b, a
+        if b < lo[k] or a > hi[k]:
+            return True
+    d = (q[0]-p[0], q[1]-p[1], q[2]-p[2])
+    gap = [.5*(lo[k]+hi[k])-.5*(p[k]+q[k]) for k in range(3)]
+    half = [.5*(hi[k]-lo[k]) for k in range(3)]
+    for axis in ((0., d[2], -d[1]), (-d[2], 0., d[0]), (d[1], -d[0], 0.)):
+        if abs(axis[0]*gap[0]+axis[1]*gap[1]+axis[2]*gap[2]) > (
+                abs(axis[0])*half[0]+abs(axis[1])*half[1]+abs(axis[2])*half[2]):
+            return True
+    return False
+
+
+def _line_clear_of_branch(first, second, tolerance):
+    """``True`` only when ``curve_junctions(first, second)`` certainly returns ``()``.
+
+    Every junction needs a curve point within ``tolerance`` of the line's segment extended by
+    ``tolerance`` in parameter (the window ``point_parameters`` accepts). The outward interval
+    enclosures of the curve (whole, then eight parameter pieces) padded by ``tolerance`` and a
+    rounding allowance must all be disjoint from that extended segment. Anything unusual
+    (other curve types, a degenerate line, non-finite data) keeps the original route.
+    """
+    if not _SWEEP_REJECTION.get():
+        return False
+    if type(first) is LinePath and type(second) in (BezierQuadricCurve, CylinderIntersectionCurve):
+        line, curve = first, second
+    elif type(second) is LinePath and type(first) in (BezierQuadricCurve, CylinderIntersectionCurve):
+        line, curve = second, first
+    else:
+        return False
+    try:
+        start = [float(v) for v in line.start]
+        end = [float(v) for v in line.end]
+        d = [end[k]-start[k] for k in range(3)]
+        size = math.sqrt(d[0]*d[0]+d[1]*d[1]+d[2]*d[2])
+        if not (size > tolerance and math.isfinite(size) and 0 < tolerance < 1e100):
+            return False
+        p = [start[k]-tolerance*d[k] for k in range(3)]
+        q = [end[k]+tolerance*d[k] for k in range(3)]
+        scale = max(1., *(abs(v) for v in p), *(abs(v) for v in q))
+        base = tolerance*(1+1e-9)
+
+        def clear(lower, upper):
+            lo, hi = curve.bounds(lower, upper)
+            lo, hi = lo.tolist(), hi.tolist()
+            top = max(scale, *(abs(v) for v in lo), *(abs(v) for v in hi))
+            if not math.isfinite(top):
+                return False
+            pad = base+1e3*_SWEEP_EPS*top
+            return _segment_clear_of_box(p, q, [v-pad for v in lo], [v+pad for v in hi])
+
+        if clear(0., 1.):
+            return True
+        return all(clear(i/_SWEEP_PIECES, (i+1)/_SWEEP_PIECES) for i in range(_SWEEP_PIECES))
+    except (GeometryError, ArithmeticError, ValueError, TypeError):
+        return False
 
 
 def _separated_line_pair(first, second, tolerance):
@@ -443,6 +518,8 @@ def curve_junctions(first, second, *, tolerance=1e-10,cancellation_check=None):
     if _separated_line_pair(first, second, tolerance):
         from .runtime_diagnostics import _increment
         _increment('junction_line_bounds_pruned')
+        return ()
+    if _line_clear_of_branch(first, second, tolerance):
         return ()
     # Named interval endpoints are independent qualified candidates. A root
     # of a clipped conic can round just beyond its new angular chart; retaining
