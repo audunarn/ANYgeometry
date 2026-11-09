@@ -119,6 +119,8 @@ def plan_plane_split(model, face_ids, plane, *, qualification=None):
         return _plan_plane_split(model, face_ids, plane, qualification=policy)
     except GeometryError as error:
         if work.denied and getattr(error, 'budget_limit', None) is None:
+            # Contract boundary (owner-accepted): hostile exception subclasses built to defeat this
+            # decoration (__setattr__/add_note overrides, __slots__, properties) are out of contract.
             # the refusal keeps its class and message; the budget facts are attached once (first writer wins),
             # without claiming causality; an exception that cannot take them escapes untouched
             try:
