@@ -118,11 +118,15 @@ def plan_plane_split(model, face_ids, plane, *, qualification=None):
     try:
         return _plan_plane_split(model, face_ids, plane, qualification=policy)
     except GeometryError as error:
-        if work.denied:
-            # the refusal keeps its class and message; the budget facts are attached, without claiming causality
-            error.budget_limit, error.budget_spent, error.budget_denied = work.max_boxes, work.boxes, work.denied
-            error.add_note(f"plan qualification budget was denied {work.denied} times "
-                           f"(spent {work.boxes} of limit {work.max_boxes})")
+        if work.denied and getattr(error, 'budget_limit', None) is None:
+            # the refusal keeps its class and message; the budget facts are attached once (first writer wins),
+            # without claiming causality; an exception that cannot take them escapes untouched
+            try:
+                error.budget_limit, error.budget_spent, error.budget_denied = work.max_boxes, work.boxes, work.denied
+                error.add_note(f"plan qualification budget was denied {work.denied} times "
+                               f"(spent {work.boxes} of limit {work.max_boxes})")
+            except Exception:
+                pass
         raise
     finally:
         CURRENT_WORK.reset(token)
