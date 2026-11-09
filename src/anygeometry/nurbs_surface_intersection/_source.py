@@ -19,6 +19,7 @@ __all__ = [
     "NurbsSurfaceIntersectionCancelled",
     "NurbsSurfaceIntersectionIntegrityError",
     "IntersectionStatus",
+    "UnclassifiedReason",
     "IntersectionStats",
     "WorkCounters",
     "IntersectionResult",
@@ -80,6 +81,14 @@ class IntersectionStatus(str, Enum):
     DISJOINT = "disjoint"            # complete exclusion certificate, no unaccounted frontier
     UNCLASSIFIED = "unclassified"    # intersecting/unproven pair or exhausted resources
     CERTIFIED = "certified"          # complete cover plus component accounting; inspect algorithm field
+
+
+class UnclassifiedReason(str, Enum):
+    """Typed sub-reason of an UNCLASSIFIED result; set only when the cause is proven exactly (else ``None``)."""
+
+    COINCIDENT = "coincident"                        # the same exact map on a positive-area parameter rectangle
+    COPLANAR_OVERLAP = "coplanar-overlap"            # exact affine maps into one plane, positive-area overlap
+    SHARED_BOUNDARY_CURVE = "shared-boundary-curve"  # an exact common edge curve of both full supports
 
 
 @dataclass(frozen=True, slots=True)
@@ -264,3 +273,4 @@ class IntersectionResult:
     boxes: tuple = ()                       # frozen regular scalar boxes
     descriptor_digest: str = ""             # integrity digest of structural/roots/boxes/components
     atlas: object = None                    # AtlasReport of the generic continuing cover and continuation
+    unclassified_reason: UnclassifiedReason | None = None   # typed proven cause of an UNCLASSIFIED result

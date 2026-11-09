@@ -15,6 +15,7 @@ from fractions import Fraction
 from ..errors import GeometryError
 from ..tolerance import TolerancePolicy
 from ._atlas import run_atlas
+from ._coincidence import detect_coincidence
 from ..plane_nurbs import PlaneNurbsNotCertified
 from ._intervals import float_up
 from ._records import digest_of, RationalProjectionCertificate
@@ -124,6 +125,16 @@ def query_nurbs_surface_intersection(first, second, *, tolerances, qualification
     if certificate is not None:
         return _fast_path(first, second, source_a, source_b, certificate, tolerances, limits, stats, tick,
                           recheck, started)
+    # Exact early refusal (silent unless proven): two-dimensional coincidence or a shared boundary curve
+    # can never be certified or excluded by the generic cover, which would otherwise burn its box budget.
+    proven = detect_coincidence(source_a, source_b)
+    if proven is not None:
+        code, message = proven
+        recheck()                              # before issuance
+        tick()
+        stats.total_seconds = time.perf_counter() - started
+        return IntersectionResult(IntersectionStatus.UNCLASSIFIED, message, stats.freeze(), source_a, source_b,
+                                  (), False, (), unclassified_reason=code)
     # Generic route: complete support cover followed by certified section-root continuation.
     report = run_atlas(source_a, source_b, tolerances, limits, stats, tick)
     recheck()                                  # before issuance
