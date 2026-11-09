@@ -10,7 +10,7 @@ from weakref import WeakKeyDictionary, ref
 from .errors import GeometryError
 from .entities import EntityRef, OrientedEdge
 from .nurbs import CurveOnSurface, NurbsSurface, _IDENTITY
-from .plane_nurbs import plane_nurbs_section
+from .plane_nurbs import PlaneNurbsNotCertified, plane_nurbs_section
 from .policies import MutationPolicy
 from .support_curves import PlaneNurbsCurve
 from .surfaces import Plane
@@ -105,6 +105,19 @@ def _qualify_sheet_ownership(model, parent):
     return True
 
 
+class QualificationBudgetExhausted(PlaneNurbsNotCertified):
+    """A plane split refused because its qualification budget ran out (the original refusal text is kept).
+
+    ``limit`` boxes were allowed, ``spent`` taken, ``subdivisions`` made; ``consumer`` names the search that
+    first overran the budget; ``cause_message`` is the refusal the exhaustion surfaced as."""
+
+    def __init__(self, cause_message, *, limit, spent, subdivisions, consumer):
+        self.cause_message, self.limit, self.spent = cause_message, limit, spent
+        self.subdivisions, self.consumer = subdivisions, consumer
+        super().__init__(f"{cause_message} (qualification budget exhausted: {spent} of {limit} boxes, "
+                         f"{subdivisions} subdivisions, first overrun in {consumer})")
+
+
 def plan_plane_split(model, face_ids, plane, *, qualification=None):
     from .predicates import IntersectionQualificationPolicy, DEFAULT_INTERSECTION_QUALIFICATION_POLICY
     from .section_audit import Work
@@ -117,6 +130,14 @@ def plan_plane_split(model, face_ids, plane, *, qualification=None):
     token = CURRENT_WORK.set(work)
     try:
         return _plan_plane_split(model, face_ids, plane, qualification=policy)
+    except QualificationBudgetExhausted:
+        raise
+    except GeometryError as error:
+        if work.boxes <= work.max_boxes:
+            raise
+        raise QualificationBudgetExhausted(
+            str(error), limit=work.max_boxes, spent=work.boxes, subdivisions=work.subdivisions,
+            consumer=work.exhausted_by) from error
     finally:
         CURRENT_WORK.reset(token)
 

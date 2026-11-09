@@ -43,10 +43,17 @@ class Work:
     def __init__(self, max_boxes: int = 200_000, max_depth: int = 32):
         self.max_boxes, self.max_depth = int(max_boxes), int(max_depth)
         self.boxes = self.subdivisions = 0
+        self.exhausted_by = None
 
     def take(self) -> bool:
         self.boxes += 1
-        return self.boxes <= self.max_boxes
+        if self.boxes <= self.max_boxes:
+            return True
+        if self.exhausted_by is None:
+            # first overrun only: name the search that consumed the budget (the caller of charge_box)
+            import sys
+            self.exhausted_by = sys._getframe(2).f_code.co_name
+        return False
 
 
 @contextmanager
