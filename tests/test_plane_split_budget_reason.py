@@ -24,16 +24,17 @@ def _plan(cap):
                             qualification=IntersectionQualificationPolicy(max_boxes_per_pair=cap))
 
 
+def _assert_budget_facts(error, cap):
+    assert error.budget_limit == cap and error.budget_spent > cap and error.budget_denied >= 1
+    assert any("qualification budget was denied" in note for note in error.__notes__)
+
+
 @pytest.mark.parametrize("cap", [3000, 7000])
-def test_small_budget_refusal_names_the_exhausted_budget(cap):
-    from anygeometry.plane_split import QualificationBudgetExhausted
-    with pytest.raises(QualificationBudgetExhausted) as info:
+def test_small_budget_refusal_keeps_its_type_and_carries_the_budget_facts(cap):
+    with pytest.raises(GeometryError) as info:
         _plan(cap)
-    error = info.value
-    assert isinstance(error, GeometryError)
-    assert "qualification budget exhausted" in str(error)
-    assert error.limit == cap and error.spent > cap and error.subdivisions > 0
-    assert error.consumer == "extreme"
+    assert type(info.value) is GeometryError          # the original class and message are untouched
+    _assert_budget_facts(info.value, cap)
 
 
 def test_sufficient_budget_still_plans():
@@ -45,7 +46,6 @@ def test_independent_failure_is_not_relabelled_as_budget_exhaustion():
     from anygeometry import apply_plane_split
     from anygeometry.entities import EntityRef
     from anygeometry.native_support_snapshots import capture_native_supports
-    from anygeometry.plane_split import QualificationBudgetExhausted
     from anygeometry.policies import MutationPolicy
     model, face = _bowl_face()
     plane = Plane((0., 0., .5), (1., 0., 0.), (0., 1., 0.))
@@ -57,17 +57,24 @@ def test_independent_failure_is_not_relabelled_as_budget_exhaustion():
         plan_plane_split(model, [sorted(model.faces)[-1]], Plane((0., 0., .25), (1., 0., 0.), (0., 1., 0.)),
                          qualification=IntersectionQualificationPolicy(max_boxes_per_pair=1))
     error = info.value
-    assert not isinstance(error, QualificationBudgetExhausted)
+    assert type(error) is GeometryError
     assert "cannot serialize invalid topology" in str(error)
     # the budget facts stay visible on the original exception
-    assert error.budget_denied is True and error.budget_limit == 1 and error.budget_spent > 1
+    _assert_budget_facts(error, 1)
 
 
-def test_work_take_is_safe_when_called_directly_and_records_the_declared_consumer():
+def test_empty_selection_keeps_its_original_refusal_at_every_cap():
+    model, _ = _bowl_face()
+    plane = Plane((0., 0., .5), (1., 0., 0.), (0., 1., 0.))
+    for cap in (1, 2):
+        with pytest.raises(GeometryError, match="requires selected faces") as info:
+            plan_plane_split(model, [], plane, qualification=IntersectionQualificationPolicy(max_boxes_per_pair=cap))
+        assert type(info.value) is GeometryError
+
+
+def test_work_counts_denied_takes_and_keeps_its_old_take_behaviour():
     from anygeometry.section_audit import Work
-    assert Work(0).take() is False            # no stack inspection: a module-level call works
+    assert Work(0).take() is False
     work = Work(1)
-    work.consumer = "edge_edge"
-    assert work.take() is True and work.take() is False
-    assert work.exhausted_by == "edge_edge"
-    assert Work(1).exhausted_by is None
+    assert [work.take(), work.take(), work.take()] == [True, False, False]
+    assert work.boxes == 3 and work.denied == 2
