@@ -123,6 +123,27 @@ def _sampled(surface):
                         tuple(tuple(control(u, v) for v in vs) for u in us))
 
 
+def _same_bezier_boundary(support, side, curve, forward):
+    """Equality of directed Bernstein coefficients is an exact sufficient proof."""
+    axis_u = side in (0, 2)
+    degree = support.degree_u if axis_u else support.degree_v
+    knots = support.knots_u if axis_u else support.knots_v
+    transverse = support.knots_v if axis_u else support.knots_u
+    ends = (support.degree_v if axis_u else support.degree_u) + 1
+    if (curve.degree != degree or curve.weights is not None or support.weights is not None
+            or curve.domain != (0., 1.) or support.u_range != (0., 1.) or support.v_range != (0., 1.)
+            or transverse[:ends] != (0.,)*ends or transverse[-ends:] != (1.,)*ends
+            or knots != (0.,) * (degree+1) + (1.,) * (degree+1) or curve.knots != knots):
+        return False
+    if axis_u:
+        boundary = tuple(row[0 if side == 0 else -1] for row in support.controls)
+    else:
+        boundary = support.controls[-1 if side == 1 else 0]
+    if forward == (side >= 2):
+        boundary = boundary[::-1]
+    return tuple(curve.controls) == tuple(boundary)
+
+
 def _matches_edge(support, side, curve, forward):
     # On an open knot span, homogeneous curve components have degree d.
     # The tensor restriction along an axis is polynomial of degree k.
@@ -132,6 +153,8 @@ def _matches_edge(support, side, curve, forward):
     start, end = _CORNERS[side], _CORNERS[(side+1)%4]
     if not forward:
         start, end = end, start
+    if _same_bezier_boundary(support, side, curve, forward):
+        return NurbsCurve(1, _UNIT, (start, end))
     axis = 0 if start[0] != end[0] else 1
     degree, knots = ((support.degree_u, support.knots_u) if axis == 0
                      else (support.degree_v, support.knots_v))

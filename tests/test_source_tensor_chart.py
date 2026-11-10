@@ -58,3 +58,19 @@ def test_source_tensor_rejects_hidden_evaluator():
     object.__setattr__(g.faces[f].surface, 'evaluate', lambda u,v: (0.,0.,0.))
     with pytest.raises(GeometryError,match='canonical authored evaluators'):
         source_tensor_chart(g,f)
+
+
+def test_bezier_rim_equality_requires_all_directed_bernstein_coefficients():
+    from anygeometry.nurbs import NurbsSurface
+    from anygeometry.source_tensor_chart import _matches_edge, _same_bezier_boundary
+    profile = ((0.,0.,0.),(.5,0.,.125),(1.,0.,0.))
+    top = tuple((x,1.,z) for x,_,z in profile)
+    ku, kv = (0.,0.,0.,1.,1.,1.), (0.,0.,1.,1.)
+    support = NurbsSurface(2,1,ku,kv,tuple(zip(profile,top)))
+    curve = NurbsCurve(2,ku,top[::-1])
+    assert _same_bezier_boundary(support, 2, curve, True)
+    assert not _same_bezier_boundary(support, 2, curve, False)
+    changed = NurbsCurve(2,ku,(top[-1], (.5,1.,.1), top[0]))
+    assert not _same_bezier_boundary(support, 2, changed, True)
+    with pytest.raises(GeometryError, match="directed authored edge"):
+        _matches_edge(support, 2, changed, True)
