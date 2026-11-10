@@ -672,17 +672,22 @@ def test_r6_endpoint_snap_cylinder_curve_same_as_original():
             assert got == ref, (policy, got, ref)
 
 
-def test_r6_endpoint_snap_box_contains_scalar_and_vector_endpoints():
+def test_r6_endpoint_snap_box_contains_scalar_endpoints_and_vector_samples():
     L = 2.**24
     curve = _snap_curve(L)
-    box = _admitted_box(curve, 0., 1., 1e-9)
-    if box is None:
-        return                                                  # declined: the original route decides
-    lo, hi, _new = box
-    for t in (0., 1.):
-        assert not np.any(np.isnan(np.asarray(curve.evaluate(t))))
-        point = np.asarray(curve.evaluate(t))
-        assert np.all(point >= lo) and np.all(point <= hi), (t, point, lo, hi)
+    checked = 0
+    for lower, upper in [(0., 1.)] + [(i/8, (i+1)/8) for i in range(8)]:
+        box = _admitted_box(curve, lower, upper, 1e-9)
+        if box is None:
+            continue                                            # declined: the original route decides
+        lo, hi, _new = box
+        ts = np.unique(np.concatenate(([lower, upper], np.linspace(lower, upper, 9))))
+        points = [np.asarray(curve.evaluate(float(t))) for t in (lower, upper)] + list(np.asarray(curve.evaluate(ts)))
+        for point in points:
+            assert not np.any(np.isnan(point))
+            assert np.all(point >= lo) and np.all(point <= hi), (lower, upper, point, lo, hi)
+        checked += 1
+    assert checked >= 1                                         # some piece away from the snapped ends is admitted
 
 
 # Mechanical completeness check: every conditional, raise and masked operation of the float code that builds the points of
@@ -697,7 +702,7 @@ _EVAL_DISPOSITION = {
     "_root_at_angles": {
         "IF magnitude": "interval: m > 0 required (decline otherwise)",
         "IF discriminant is not None": "decline: only set for non-linear parameterizations",
-        "IF np.any(disc < -roundoff)": "decline: refusal happens only when a disc below -roundoff exists; box needs disc_hi > 0 and clamps the lower end at 0 (sqrt of max(disc, 0))",
+        "IF np.any(disc < -roundoff)": "interval counterpart: the box relies only on evaluate returning (a refusal is a separate original outcome and is never skipped: curve set-up and both end evaluations must succeed, and disc_hi > 0 is required); for the values evaluate returns, root = sqrt(max(disc, 0)) lies in the clamped sqrt interval. A mixed-sign disc interval does NOT exclude disc < -roundoff, which would make evaluate raise: the shortcut then returns () where the original raises. Accepted only because the guard checks both ends evaluate and the interior of a linear chart is real (the constructor proves the chart real over its whole interval)",
         "CALL np.maximum(disc, 0)": "interval: root lower end clamped at 0",
         "CALL np.any(disc < -roundoff)": "decline: see IF np.any(disc < -roundoff)",
         "CALL np.abs(c)": "not a branch: the roundoff term of the refusal test only",
@@ -824,7 +829,7 @@ def _containment_report2(seed, count, tol=1e-9):
         built[kind] += 1
         if _admitted_box(curve, 0., 1., tol) is None and _admitted_box(curve, 0., .125, tol) is None:
             continue
-        clean = True
+        clean, checked_ranges = True, 0
         for lower, upper in [(0., 1.)] + [(i/8, (i+1)/8) for i in range(8)]:
             box = _admitted_box(curve, lower, upper, tol)
             if box is None:
@@ -838,6 +843,7 @@ def _containment_report2(seed, count, tol=1e-9):
                 skipped += 1
                 continue
             checked += 1
+            checked_ranges += 1
             if np.any(np.isnan(pts)):
                 bad.append((kind, lower, upper, "nan"))
                 clean = False
@@ -846,7 +852,7 @@ def _containment_report2(seed, count, tol=1e-9):
             if not (np.all(pts >= lo - pad) and np.all(pts <= hi + pad)):
                 bad.append((kind, lower, upper))
                 clean = False
-        if clean:
+        if clean and checked_ranges >= 1:                       # a curve whose evaluation raised is not counted
             admitted_ok[kind] += 1
     return built, admitted_ok, bad, skipped, checked
 
@@ -858,3 +864,128 @@ def test_r6_stronger_containment_net(seed):
     assert all(admitted_ok[k] >= 6 for k in (0, 1, 3, 4, 5)), (built, admitted_ok)   # per-kind admitted AFTER the point check
     assert checked >= 400 and skipped <= 0.05*(checked + skipped), (checked, skipped)
     assert not bad, f"{len(bad)} box/point violations; first {bad[0]}; built {built} admitted_ok {admitted_ok}"
+
+
+# ---------------------------------------------------------------- round 7: huge / non-finite coordinates, all kinds
+import warnings
+
+
+def _huge_objects():
+    big = 1e308
+    return {
+        "arc_codex": EllipticArc((-big, -big, 0.), (1., 1., 0.), (1., -1., 0.), 0., 1.),
+        "line_codex": LinePath((big, big, 0.), (big, big, 1.)),
+    }
+
+
+@pytest.mark.filterwarnings("ignore")
+def test_r7_codex_huge_coordinate_ellipse_and_line_same_as_original():
+    # the original route raises ValueError('cannot convert float NaN to integer') (inf - inf in the least squares, then
+    # atan2 -> math.ceil); the shortcuts must not turn it into ()
+    objs = _huge_objects()
+    for x, y in ((objs["line_codex"], objs["arc_codex"]), (objs["arc_codex"], objs["line_codex"])):
+        for policy in ("default", "bounds"):
+            got, ref = (both(x, y, 1e-9) if policy == "default" else both_policy_on(x, y, 1e-9))
+            assert got == ref, (policy, got, ref)
+    with _junction_bounds_policy(False):
+        ref = outcome(lambda: curve_junctions(objs["line_codex"], objs["arc_codex"], tolerance=1e-9))
+    assert ref[0] == "raise", ref                                   # the recorded actual outcome of the original route
+
+
+def _huge_value(rng):
+    return float(rng.choice([1e30, 1e100, 1e200, 1e300, 1e308, -1e308, -1e200, np.nan, np.inf, -np.inf, 1e-300]))
+
+
+def _huge_kind_objects(rng):
+    """One object per kind, ordinary except for a few huge / NaN / inf entries."""
+    def vec(scale=1., bad=False):
+        v = rng.normal(size=3)*scale
+        if bad:
+            v[int(rng.integers(3))] = _huge_value(rng)
+        return tuple(float(x) for x in v)
+    objects = {}
+    for tag, bad in (("ok", False), ("bad", True)):
+        try:
+            objects["line_" + tag] = LinePath(vec(5., bad), vec(5., bad))
+        except Exception:
+            pass
+        try:
+            objects["arc_" + tag] = EllipticArc(vec(5., bad), vec(1., bad), vec(1., bad), float(rng.choice([0., .3])), 2.)
+        except Exception:
+            pass
+        try:
+            scale = _huge_value(rng) if bad else 1.
+            controls = tuple((float(x)*scale, float(y)*scale, 0.) for x, y in np.cumsum(rng.normal(size=(3, 2)), axis=0))
+            objects["branch_" + tag] = make_C(controls)
+        except Exception:
+            pass
+        try:
+            far = _huge_value(rng) if bad else 0.
+            a = Cylinder((0, 0, 0), (0, 0, 1), (1, 0, 0), 1., 4.)
+            b = Cylinder((far, 0, 0), (1, 0, 0), (0, 1, 0), 1.5, 4.)
+            objects["cyl_" + tag] = CylinderIntersectionCurve(a, b, 0.3, 1.0, 1)
+        except Exception:
+            pass
+    return objects
+
+
+@pytest.mark.filterwarnings("ignore")
+@pytest.mark.parametrize("seed", [41, 42, 43, 44])
+def test_r7_randomized_huge_and_nonfinite_differential_all_kinds(seed):
+    rng = np.random.default_rng(seed)
+    objects = {}
+    for _ in range(6):
+        for name, obj in _huge_kind_objects(rng).items():
+            objects[f"{name}{len(objects)}"] = obj
+    names = sorted(objects)
+    kinds = {n: n.rstrip("0123456789") for n in names}
+    pairs = [(a, b) for i, a in enumerate(names) for b in names[i+1:]
+             if not (kinds[a].startswith("line") and kinds[b].startswith("line"))]
+    rng.shuffle(pairs)
+    pairs = pairs[:160]
+    mismatches = []
+    raised = 0
+    for a, b in pairs:
+        for x, y in ((objects[a], objects[b]), (objects[b], objects[a])):
+            for policy in ("default", "bounds"):
+                got, ref = (both(x, y, 1e-9) if policy == "default" else both_policy_on(x, y, 1e-9))
+                raised += ref[0] == "raise"
+                if got != ref:
+                    mismatches.append((a, b, policy, got, ref))
+    assert raised >= 5, raised                                            # the net really reaches original exceptions
+    assert not mismatches, f"{len(mismatches)} mismatches; first: {mismatches[0]}"
+
+
+@pytest.mark.filterwarnings("ignore")
+@pytest.mark.parametrize("seed", [51, 52])
+def test_r7_huge_paired_ellipse_line_and_ellipse_ellipse_differential(seed):
+    # the Codex pattern generalized: huge centers / line points of either sign, huge or ordinary axes, so that
+    # inf - inf, overflow in the least squares and atan2 of NaN are reached through the ellipse inversion
+    rng = np.random.default_rng(seed)
+    mismatches, raised, total = [], 0, 0
+    for _ in range(60):
+        s = float(rng.choice([1e30, 1e100, 1e200, 1e300, 1e308]))
+        sign = lambda: float(rng.choice([-1., 1.]))
+        center = tuple(sign()*s*float(rng.choice([0., 1.])) for _ in range(3))
+        scale_u = float(rng.choice([1., 1., s]))
+        try:
+            arc = EllipticArc(center, (scale_u, sign()*scale_u, 0.), (1., -1., 0.), float(rng.choice([0., .5])), float(rng.choice([1., 2.])))
+        except Exception:
+            continue
+        point = tuple(sign()*s*float(rng.choice([0., 1.])) for _ in range(3))
+        other = list(point)
+        other[int(rng.integers(3))] += float(rng.choice([1., s]))
+        try:
+            line = LinePath(point, tuple(other))
+            arc2 = EllipticArc(tuple(sign()*s*float(rng.choice([0., 1.])) for _ in range(3)), (1., 1., 0.), (1., -1., 0.), 0., 1.)
+        except Exception:
+            continue
+        for x, y in ((line, arc), (arc, line), (arc, arc2), (arc2, arc)):
+            for policy in ("default", "bounds"):
+                total += 1
+                got, ref = (both(x, y, 1e-9) if policy == "default" else both_policy_on(x, y, 1e-9))
+                raised += ref[0] == "raise"
+                if got != ref:
+                    mismatches.append((type(x).__name__, type(y).__name__, policy, got, ref))
+    assert total >= 200 and raised >= 10, (total, raised)
+    assert not mismatches, f"{len(mismatches)} mismatches; first: {mismatches[0]}"
