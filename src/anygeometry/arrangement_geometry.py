@@ -5,6 +5,7 @@ queries; discretization samples are never used for trim or junction predicates.
 """
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 from fractions import Fraction
 import math
@@ -89,6 +90,57 @@ def _curve_setup_benign(curve):
         return False
 
 
+_MODERATE = 1e50
+
+
+def _numeric_leaves(value, depth=0):
+    """Every number reachable in a curve, line or support (dataclass fields, arrays, tuples, Fractions); caches are skipped."""
+    if depth > 5:
+        return
+    if isinstance(value, (bool, str, bytes)) or value is None:
+        return
+    if isinstance(value, (int, float, np.integer, np.floating, Fraction)):
+        yield float(value)
+    elif isinstance(value, np.ndarray):
+        if value.dtype.kind in 'fiu':
+            yield from (float(v) for v in value.ravel().tolist())
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _numeric_leaves(item, depth+1)
+    elif dataclasses.is_dataclass(value) and not isinstance(value, type):
+        for field in dataclasses.fields(value):
+            if not field.name.startswith('_'):
+                yield from _numeric_leaves(getattr(value, field.name), depth+1)
+    elif not callable(value) and hasattr(value, '__dict__'):
+        for name, item in vars(value).items():
+            if not name.startswith('_'):
+                yield from _numeric_leaves(item, depth+1)
+
+
+def _inputs_moderate(curve):
+    """Every number entering the curve or line is finite with magnitude at most ``_MODERATE`` (1e50).
+
+    With NaN, infinity or enormous coordinates the original route can raise (``inf - inf`` in a least squares,
+    ``math.ceil`` of NaN, overflow) where the interval and box comparisons of the shortcuts fail open or closed
+    by accident, so the shortcut declines (all four curve kinds and lines, every route).
+    """
+    if type(curve) is LinePath:
+        return _leaves_moderate(curve)
+    return _leaves_moderate_cached(curve)
+
+
+def _leaves_moderate(curve):
+    try:
+        return all(math.isfinite(v) and abs(v) <= _MODERATE for v in _numeric_leaves(curve))
+    except Exception:
+        return False
+
+
+@lru_cache(maxsize=16384)
+def _leaves_moderate_cached(curve):
+    return _leaves_moderate(curve)
+
+
 def _shortcut_curve_ok(curve, tolerance):
     """``False`` for a curve the rejection shortcuts must not decide; they then decline to the original route.
 
@@ -104,6 +156,8 @@ def _shortcut_curve_ok(curve, tolerance):
     Both keep the original route.
     """
     kind = type(curve)
+    if not _inputs_moderate(curve):
+        return False
     if kind is BezierQuadricCurve:
         return bool(curve._identity) and _curve_setup_benign(curve)
     if kind is CylinderIntersectionCurve:
@@ -360,7 +414,7 @@ def _line_clear_of_branch(first, second, tolerance):
         line, curve = second, first
     else:
         return False
-    if not _shortcut_curve_ok(curve, tolerance):
+    if not (_shortcut_curve_ok(curve, tolerance) and _shortcut_curve_ok(line, tolerance)):
         return False
     try:
         start = [float(v) for v in line.start]
@@ -411,7 +465,7 @@ def _separated_line_pair(first, second, tolerance):
         return False
     if type(other) is BezierQuadricCurve and not other._identity:
         return False
-    if not _shortcut_curve_ok(other, tolerance):
+    if not (_shortcut_curve_ok(other, tolerance) and _shortcut_curve_ok(line, tolerance)):
         return False
     direction = np.asarray(line.end) - line.start
     if np.linalg.norm(direction) <= tolerance:
