@@ -334,3 +334,79 @@ def test_r2d_bounds_route_scaled_cylinder_curve_vs_line_same_as_original():
             for x, y in ((line, curve), (curve, line)):
                 got, ref = both_policy_on(x, y, tol)
                 assert got == ref, (tol, off, got, ref)
+
+
+# ---------------------------------------------------------------- round 3: huge-parameter class
+def test_r3_cylinder_curve_with_huge_start_phase_vs_line_same_as_original():
+    a = Cylinder((0, 0, 0), (0, 0, 1), (-0.020691120661983364, 0.9997859158468633, 0), 1., 4.)
+    b = Cylinder((0, 0, 0), (0, 1, 0), (1, 0, 0), 2., 4.)
+    curve = CylinderIntersectionCurve(a, b, 870099176652729.5, 0.7942977928370237, 1)
+    p = np.asarray(curve.evaluate(.75))
+    line = LinePath(tuple(p), tuple(p + (0., 0., 1.)))
+    for a_, b_ in ((line, curve), (curve, line)):
+        for policy in ("default", "bounds"):
+            got, ref = (both(a_, b_, 1e-9) if policy == "default" else both_policy_on(a_, b_, 1e-9))
+            assert got == ref, (policy, got, ref)
+
+
+def _random_curves(rng):
+    """Curves of all four kinds with ordinary and huge or odd parameters (angles, radii, axes, control nets)."""
+    def phase():
+        return float(rng.choice([0., 0.3, 3.0, 40., 1e3, 1e5, 1e10, 1e15, 8.7e14, 1e20, -2.5e16]) + rng.normal()*rng.choice([0, 1e-3, 1]))
+
+    def vec(scale=1.):
+        return tuple(float(x) for x in rng.normal(size=3)*scale)
+    curves = []
+    for _ in range(6):
+        u, v = vec(rng.choice([.1, 1., 30.])), vec(rng.choice([.1, 1., 30.]))
+        try:
+            curves.append(EllipticArc(vec(rng.choice([0., 5., 100.])), u, v, phase(), float(rng.uniform(-6.2, 6.2))))
+        except Exception:
+            pass
+    for _ in range(6):
+        try:
+            axis_a = rng.normal(size=3); axis_b = rng.normal(size=3)
+            cyl_a = Cylinder(vec(2.), tuple(axis_a/np.linalg.norm(axis_a)), tuple(np.cross(axis_a, [0., 0., 1.])/np.linalg.norm(np.cross(axis_a, [0., 0., 1.]))),
+                             float(rng.uniform(.3, 3.)), 4.)
+            cyl_b = Cylinder(vec(2.), tuple(axis_b/np.linalg.norm(axis_b)), tuple(np.cross(axis_b, [0., 0., 1.])/np.linalg.norm(np.cross(axis_b, [0., 0., 1.]))),
+                             float(rng.uniform(.3, 3.)), 4.)
+            curves.append(CylinderIntersectionCurve(cyl_a, cyl_b, phase(), float(rng.uniform(-3., 3.)), int(rng.choice([-1, 1]))))
+        except Exception:
+            pass
+    for _ in range(6):
+        try:
+            scale = float(rng.choice([.5, 1., 1e3, 1e8]))
+            n = int(rng.integers(3, 5))
+            controls = tuple((float(x)*scale, float(y)*scale, 0.) for x, y in np.cumsum(rng.normal(size=(n, 2)), axis=0))
+            curves.append(make_C(controls, tuple(float(x) for x in rng.normal(size=3))))
+        except Exception:
+            pass
+    return curves
+
+
+def test_r3_randomized_differential_shortcuts_vs_original():
+    rng = np.random.default_rng(20261110)
+    curves = _random_curves(rng)
+    cases = []
+    for curve in curves:
+        for _ in range(5):
+            try:
+                p = np.asarray(curve.evaluate(float(rng.uniform(0., 1.))))
+            except Exception:
+                continue
+            d = rng.normal(size=3)
+            d *= rng.choice([.5, 2.]) / np.linalg.norm(d)
+            shift = rng.normal(size=3)*rng.choice([0., 0., 1e-8, 1e-3])      # through the curve, or just beside it
+            cases.append((LinePath(tuple(p + shift - d), tuple(p + shift + d)), curve))
+    for i, a in enumerate(curves):
+        for b in curves[i+1:i+3]:
+            cases.append((a, b))
+    assert len(cases) >= 60
+    bad = []
+    for a, b in cases:
+        for x, y in ((a, b), (b, a)):
+            for policy in ("default", "bounds"):
+                got, ref = (both(x, y, 1e-9) if policy == "default" else both_policy_on(x, y, 1e-9))
+                if got != ref:
+                    bad.append((type(x).__name__, type(y).__name__, policy, got, ref))
+    assert not bad, f"{len(bad)} mismatches, first: {bad[0]}"
