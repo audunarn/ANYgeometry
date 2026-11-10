@@ -1388,6 +1388,13 @@ def plan_intersections(model, operands, *, policy, _parallel_control=None):
                 preparation=lambda:dict(operands=[list(h.key) for h in handles],seam=seam,
                     policy={name:(effective.intent.value if name=='intent' else getattr(effective,name))
                         for name in ('intent','face_connections','member_connections','member_face_connections','planning_mode','seam_policy')}))
+        elif os.environ.get('ANYGEOMETRY_PLANNING_THREADS') not in (None, '', '0'):
+            # Opt-in in-process thread dispatch of the pair and face stages (prototype); it returns
+            # None, and planning stays on the serial route, whenever the call is not eligible.
+            from ._planning_threads import thread_stages
+            threaded=thread_stages(model,effective,mode,native)
+            plan=_plan_intersections(model, operands, policy=policy, _planning_mode=mode, _seam_policy=seam,
+                                     **({} if threaded is None else {'_stages':threaded}))
         else:
             plan=_plan_intersections(model, operands, policy=policy, _planning_mode=mode, _seam_policy=seam)
     if native is not None:
@@ -1575,7 +1582,7 @@ def _plan_intersections(model, operands, *, policy, _planning_mode="exact", _cer
             for face_id in (first_id,second_id):
                 points[face_id].append(ArrangementPoint(point))
     if _stages is not None:
-        def serial_pair(task):
+        def serial_pair(task,check=check):
             found=[]
             paths=_pair_paths(domains[task['first']],domains[task['second']],model,task['tolerance'],check,
                 point_contacts=found,face_tolerances=tuple(task['face_tolerances']),route=route)
@@ -1598,6 +1605,12 @@ def _plan_intersections(model, operands, *, policy, _planning_mode="exact", _cer
     for face_id, domain in domains.items():
         if not traces[face_id] and not points[face_id]:
             continue
+        if getattr(_stages,'in_process',False):
+            # Same-process stage: the task function reads the host inputs directly.
+            stage_faces.append(dict(kind='face',face=face_id,tolerance=model.tolerance.effective_length(lengths[face_id]),
+                area_tolerance=model.tolerance.effective_area(lengths[face_id]),
+                cost=float(len(traces[face_id])**2+len(points[face_id])+1)))
+            continue
         if _stages is not None:
             from ._planning_values import encode_value
             stage_faces.append(dict(kind='face',face=face_id,inputs=encode_value((traces[face_id],points[face_id])),support=encode_value(domain.support),
@@ -1616,7 +1629,7 @@ def _plan_intersections(model, operands, *, policy, _planning_mode="exact", _cer
             raise GeometryError(f"intersection material arrangement face:{face_id}: {exc}") from exc
         arrangements.append(_normalise_cells(arrangement))
     if _stages is not None:
-        def serial_face(task):
+        def serial_face(task,check=check):
             face_id=task['face']
             return arrange_material(domains[face_id],traces[face_id],points=points[face_id],
                 tolerance=task['tolerance'],area_tolerance=task['area_tolerance'],

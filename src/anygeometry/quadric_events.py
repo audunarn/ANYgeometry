@@ -90,7 +90,10 @@ def curve_quadric_roots(curve, quadric, *, tolerance=1e-10, cancellation_check=N
         pass
     result = _curve_quadric_roots(curve, quadric, tolerance, cancellation_check)
     if len(_MEMO) >= _MEMO_SIZE:
-        _MEMO.pop(next(iter(_MEMO)), None)                 # oldest first: plans are local in time
+        try:
+            _MEMO.pop(next(iter(_MEMO)), None)             # oldest first: plans are local in time
+        except (RuntimeError, StopIteration):
+            pass    # another planning thread changed the memo meanwhile: skip this eviction
     _MEMO[key] = result
     return result
 

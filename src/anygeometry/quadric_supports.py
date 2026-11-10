@@ -578,15 +578,19 @@ _FIRST_CHOICE = {}
 def _prefer_first(a, b):
     """Which of two ruled supports should supply the angle: the one whose branches fold least."""
     key = (ruled_support(a), QuadricSupport.from_surface(a), ruled_support(b), QuadricSupport.from_surface(b))
-    if key not in _FIRST_CHOICE:
+    choice = _FIRST_CHOICE.get(key)
+    if choice is None:
         costs = []
         for first, second in ((a, b), (b, a)):
             plan = get_plan(ruled_support(first), second)
             costs.append(sum(m for _a, m in plan.discriminant_roots()) + 2 * len(plan.pole_roots()))
-        _FIRST_CHOICE[key] = costs[0] <= costs[1]
+        choice = _FIRST_CHOICE[key] = costs[0] <= costs[1]
         if len(_FIRST_CHOICE) > 4096:
-            _FIRST_CHOICE.pop(next(iter(_FIRST_CHOICE)))
-    return _FIRST_CHOICE[key]
+            try:
+                _FIRST_CHOICE.pop(next(iter(_FIRST_CHOICE)), None)
+            except (RuntimeError, StopIteration):
+                pass    # another planning thread changed the memo meanwhile: skip this eviction
+    return choice
 
 
 def _parabolic(surface):
