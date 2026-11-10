@@ -89,7 +89,7 @@ def _curve_setup_benign(curve):
         return False
 
 
-def _shortcut_curve_ok(curve):
+def _shortcut_curve_ok(curve, tolerance):
     """``False`` for a curve the rejection shortcuts must not decide; they then decline to the original route.
 
     The single guard of every shortcut path (``_separated_line_pair``, ``_line_clear_of_branch``,
@@ -111,13 +111,35 @@ def _shortcut_curve_ok(curve):
                 and _curve_setup_benign(curve)):
             return False
         try:
-            return _angle_error_ok(float(curve.start_angle), float(curve.sweep_angle))
+            return (_angle_error_ok(float(curve.start_angle), float(curve.sweep_angle))
+                    and _cylinder_conditioned_ok(curve, tolerance))
         except Exception:
             return False
     if kind is EllipticArc:
         start, sweep = float(curve.start_angle), float(curve.sweep_angle)
         return _angle_error_ok(start, sweep)
     return True
+
+
+def _cylinder_conditioned_ok(curve, tolerance):
+    """The cylinder curve's evaluate/bounds division by ``2a`` (``a = sin^2`` of the angle between the axes) stays accurate.
+
+    Derivation in ``serial-consolidated/cylinder-enclosure-derivation.md``: the axial position error of both
+    ``evaluate`` and ``bounds`` is at most ``16 eps L / a`` (``L`` the coordinate scale); it must use at most a
+    quarter of the allowance ``tolerance + 1e3 eps L`` of the enclosures, so near-parallel axes decline.
+    """
+    from .exact_curves import _branch_constants
+    try:
+        a = float(_branch_constants(curve).a)
+        lo, hi = _cached_enclosure(curve, 0., 1.)
+        scale = max(1., float(curve.first.radius), float(curve.second.radius),
+                    *(abs(float(v)) for v in curve.first.origin), *(abs(float(v)) for v in curve.second.origin),
+                    *(abs(v) for v in (*lo, *hi)))
+        eps = float(np.finfo(float).eps)
+        return (math.isfinite(scale) and math.isfinite(a) and a > 0.
+                and 16*eps*scale/a <= .25*(tolerance+1e3*eps*scale))
+    except Exception:
+        return False
 
 
 def _angle_error_ok(start, sweep):
@@ -174,7 +196,7 @@ def _line_clear_of_branch(first, second, tolerance):
         line, curve = second, first
     else:
         return False
-    if not _shortcut_curve_ok(curve):
+    if not _shortcut_curve_ok(curve, tolerance):
         return False
     try:
         start = [float(v) for v in line.start]
@@ -223,7 +245,7 @@ def _separated_line_pair(first, second, tolerance):
         return False
     if type(other) is BezierQuadricCurve and not other._identity:
         return False
-    if not _shortcut_curve_ok(other):
+    if not _shortcut_curve_ok(other, tolerance):
         return False
     direction = np.asarray(line.end) - line.start
     if np.linalg.norm(direction) <= tolerance:
@@ -288,7 +310,7 @@ def _curve_pair_clear(first, second, tolerance):
         return False
     if type(second) is LinePath and type(first) in (BezierQuadricCurve, CylinderIntersectionCurve):
         return False
-    if not (_shortcut_curve_ok(first) and _shortcut_curve_ok(second)):
+    if not (_shortcut_curve_ok(first, tolerance) and _shortcut_curve_ok(second, tolerance)):
         return False
     for ellipse, other in ((first, second), (second, first)):
         if type(ellipse) is EllipticArc and type(other) in (BezierQuadricCurve, CylinderIntersectionCurve):
