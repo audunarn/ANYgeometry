@@ -15,6 +15,8 @@ from .analytic_roots import isolate_real_roots, trigonometric_roots
 from .curves import Arc, Straight, Spline
 from .errors import GeometryError
 from .exact_curves import EXACT_CURVES, EllipticArc, CylinderIntersectionCurve
+from .branch_algebra import directrix_of
+from .plane_ruled import PlaneRuledSupport
 from .branch_curves import BezierQuadricCurve
 from .quadric_curves import QuadricIntersectionCurve
 from .surfaces import Cylinder, Plane
@@ -68,8 +70,33 @@ def _segment_clear_of_box(p, q, lo, hi):
 _IDENTITY_ROWS = ((1., 0., 0., 0.), (0., 1., 0., 0.), (0., 0., 1., 0.), (0., 0., 0., 1.))
 
 
+@lru_cache(maxsize=16384)
+def _curve_setup_benign(curve):
+    """``True`` when the curve-only set-up of the original route (directrix, plan, end evaluations) does not refuse.
+
+    The original ``curve_junctions`` inverts the end points of each curve on the other; that builds the
+    directrix and the plan of a branch curve, which can refuse (for example a directrix that degenerates to a
+    line). A shortcut must not turn such a refusal into ``()``, so it declines when the set-up raises.
+    """
+    try:
+        if type(curve) is BezierQuadricCurve and not isinstance(curve.first, PlaneRuledSupport):
+            directrix_of(curve.first)
+        if type(curve) in (BezierQuadricCurve, CylinderIntersectionCurve):
+            curve.evaluate(0.)
+            curve.evaluate(1.)
+        return True
+    except Exception:
+        return False
+
+
 def _shortcut_curve_ok(curve):
-    """``False`` for a curve whose acceptance window the rejection shortcuts do not bound.
+    """``False`` for a curve the rejection shortcuts must not decide; they then decline to the original route.
+
+    The single guard of every shortcut path (``_separated_line_pair``, ``_line_clear_of_branch``,
+    ``_curve_pair_clear``). Contract: with the shortcuts on, ``curve_junctions`` returns the same values and
+    raises the same typed refusals as the original route. Cancellation poll counts beyond the replay in
+    ``_poll_like_original`` and exceptions under ``np.errstate(...='raise')`` are not part of the contract
+    (production never sets errstate to raise).
 
     A branch curve with a non-identity transform measures its endpoint inversion tolerance in reference
     space (a scale or shear widens the world-space window beyond the padding); an elliptic arc with a
@@ -78,9 +105,10 @@ def _shortcut_curve_ok(curve):
     """
     kind = type(curve)
     if kind is BezierQuadricCurve:
-        return bool(curve._identity)
+        return bool(curve._identity) and _curve_setup_benign(curve)
     if kind is CylinderIntersectionCurve:
-        return tuple(tuple(float(v) for v in row) for row in curve.transform) == _IDENTITY_ROWS
+        return (tuple(tuple(float(v) for v in row) for row in curve.transform) == _IDENTITY_ROWS
+                and _curve_setup_benign(curve))
     if kind is EllipticArc:
         start, sweep = float(curve.start_angle), float(curve.sweep_angle)
         return abs(start)+abs(sweep) <= 1e3 and start+sweep != start
@@ -174,6 +202,8 @@ def _separated_line_pair(first, second, tolerance):
     if type(other) not in (LinePath, EllipticArc, CylinderIntersectionCurve, BezierQuadricCurve, BezierPath):
         return False
     if type(other) is BezierQuadricCurve and not other._identity:
+        return False
+    if not _shortcut_curve_ok(other):
         return False
     direction = np.asarray(line.end) - line.start
     if np.linalg.norm(direction) <= tolerance:
