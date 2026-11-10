@@ -410,3 +410,100 @@ def test_r3_randomized_differential_shortcuts_vs_original():
                 if got != ref:
                     bad.append((type(x).__name__, type(y).__name__, policy, got, ref))
     assert not bad, f"{len(bad)} mismatches, first: {bad[0]}"
+
+
+# ---------------------------------------------------------------- round 4: near-parallel cylinders (conditioning)
+def test_r4_near_parallel_cylinders_cylinder_curve_vs_line_same_as_original():
+    a = Cylinder((0, 0, 0), (1, 1, 0), (0, 0, 1), 1., 4.)
+    b = Cylinder((0, 0, 0), (1, 1+1e-8, 0), (0, 0, 1), 2., 4.)
+    curve = CylinderIntersectionCurve(a, b, .3, 1e-12, 1)
+    p = np.asarray(curve.evaluate(0.))
+    line = LinePath(tuple(p), tuple(p + (0., 0., 1.)))
+    for x, y in ((line, curve), (curve, line)):
+        for policy in ("default", "bounds"):
+            got, ref = (both(x, y, 1e-9) if policy == "default" else both_policy_on(x, y, 1e-9))
+            assert got == ref, (policy, got, ref)
+
+
+def _unit(v):
+    v = np.asarray(v, dtype=float)
+    return v / np.linalg.norm(v)
+
+
+def _frame_for(axis, rng):
+    ref = np.eye(3)[int(np.argmin(np.abs(axis)))]
+    radial = _unit(np.cross(axis, ref))
+    angle = rng.uniform(0., 6.3)
+    return _unit(np.cos(angle)*radial + np.sin(angle)*np.cross(axis, radial))
+
+
+def _conditioned_cases(seed, count):
+    """Correlated near-parallel cylinder pairs (angles 1e-12 .. 1e-1, log scale), extreme radius ratios, log-scale
+    sweeps and origins, axes near coordinate extrema, endpoint and interior witness points, lines through the
+    witness along box faces / coordinate axes / random directions, and some non-identity transforms."""
+    rng = np.random.default_rng(seed)
+    stats = {"built": 0, "tried": 0, "nonempty": 0}
+    cases = []
+    for _ in range(count):
+        stats["tried"] += 1
+        if rng.random() < .5:
+            axis = _unit(np.eye(3)[int(rng.integers(3))] + rng.normal(size=3)*10**rng.uniform(-12, -2))
+        else:
+            axis = _unit(rng.normal(size=3))
+        theta = 10**rng.uniform(-12, -1)
+        pivot = _unit(np.cross(axis, rng.normal(size=3)))
+        other = _unit(axis*np.cos(theta) + np.cross(pivot, axis)*np.sin(theta))
+        r1 = 10**rng.uniform(-1, 1)
+        r2 = r1*10**rng.uniform(-2, 2)
+        o1 = rng.normal(size=3)*10**rng.uniform(-1, 3)
+        o2 = o1 + rng.normal(size=3)*10**rng.uniform(-2, 1)*(r1 + r2)
+        try:
+            c1 = Cylinder(tuple(o1), tuple(axis), tuple(_frame_for(axis, rng)), float(r1), 4.)
+            c2 = Cylinder(tuple(o2), tuple(other), tuple(_frame_for(other, rng)), float(r2), 4.)
+            start = float(rng.choice([0., .3, 1., 3., 5.9, rng.uniform(0., 6.)]))
+            sweep = float(rng.choice([1., 3., 6.2, 10**rng.uniform(-12, 0.7)]))*float(rng.choice([1., -1.]))
+            curve = CylinderIntersectionCurve(c1, c2, start, sweep, int(rng.choice([-1, 1])))
+            curve.evaluate(0.)
+            curve.evaluate(1.)
+        except Exception:
+            continue
+        stats["built"] += 1
+        if rng.random() < .15:
+            k = 10**rng.uniform(-2, 4)
+            shear = float(rng.normal())*k
+            try:
+                curve = curve.transformed(((k, shear, 0., 1.), (0., k, 0., 0.), (0., 0., k, 0.), (0., 0., 0., 1.)))
+            except Exception:
+                continue
+        for u in (0., 1., float(rng.uniform(0.05, .95))):
+            try:
+                p = np.asarray(curve.evaluate(u))
+            except Exception:
+                continue
+            for direction in (np.array([0., 0., 1.]), np.eye(3)[int(rng.integers(3))], rng.normal(size=3)):
+                shift = rng.normal(size=3)*rng.choice([0., 0., 1e-9, 1e-6])
+                d = _unit(direction)*rng.choice([.5, 3.])
+                cases.append((LinePath(tuple(p + shift - d), tuple(p + shift + d)), curve))
+    return cases, stats
+
+
+def _run_conditioned(seed, count):
+    cases, stats = _conditioned_cases(seed, count)
+    bad = []
+    for line, curve in cases:
+        for x, y in ((line, curve), (curve, line)):
+            for policy in ("default", "bounds"):
+                got, ref = (both(x, y, 1e-9) if policy == "default" else both_policy_on(x, y, 1e-9))
+                if ref[0] == "ok" and ref[1] != "()":
+                    stats["nonempty"] += 1
+                if got != ref:
+                    bad.append((type(x).__name__, type(y).__name__, policy, got, ref))
+    return bad, stats
+
+
+@pytest.mark.parametrize("seed", [1, 2, 3, 4])
+def test_r4_randomized_conditioned_cylinder_differential(seed):
+    bad, stats = _run_conditioned(seed, 70)
+    assert stats["built"] >= 15, stats                    # enough constructions succeeded
+    assert stats["nonempty"] >= 20, stats                 # and enough cases have a non-empty original result
+    assert not bad, f"{len(bad)} mismatches, first: {bad[0]}"
