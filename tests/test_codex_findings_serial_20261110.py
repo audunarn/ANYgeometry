@@ -507,3 +507,145 @@ def test_r4_randomized_conditioned_cylinder_differential(seed):
     assert stats["built"] >= 15, stats                    # enough constructions succeeded
     assert stats["nonempty"] >= 20, stats                 # and enough cases have a non-empty original result
     assert not bad, f"{len(bad)} mismatches, first: {bad[0]}"
+
+
+# ---------------------------------------------------------------- round 5: enclosure containment of cylinder curves
+import anygeometry.arrangement_geometry as _ag
+
+_B1 = dict(n1=(0.4771723190205203, -0.12821495974963623, -0.8694064078766489),
+           n2=(0.7243519434948941, 0.6854406832255213, 0.07406302542092481),
+           radial=(0.597711332364669, -0.6778911033720145, 0.4280243160521664),
+           origin2=(72435194.3494894, 68544068.32255213, 7406302.542092482), radius2=2., start=.3)
+_B2 = dict(n1=(-0.8153544006431129, -0.5336730022260952, 0.22447790102122792),
+           n2=(-0.47788401709472794, 0.4792787487641864, 0.7361513072653213),
+           radial=(-0.5244632620098799, 0.5166015682258827, -0.6768021176891476),
+           origin2=(-47789.42792054749, 47928.88570460989, 73613.80643581653), radius2=1.4674782283599237,
+           start=1.0596126305492337)
+
+
+def _codex_r5_curve(case):
+    a = Cylinder((0, 0, 0), case["n1"], case["radial"], 1., 4.)
+    b = Cylinder(case["origin2"], case["n2"], case["radial"], case["radius2"], 4.)
+    return CylinderIntersectionCurve(a, b, case["start"], 1e-12, 1)
+
+
+@pytest.mark.parametrize("case", [_B1, _B2], ids=["B1_far_support_origin", "B2_near_tangency"])
+def test_r5_codex_counterexamples_same_as_original(case):
+    curve = _codex_r5_curve(case)
+    p = np.asarray(curve.evaluate(0.))
+    line = LinePath(tuple(p), tuple(p + (0., 0., 1.)))
+    for x, y in ((line, curve), (curve, line)):
+        for policy in ("default", "bounds"):
+            got, ref = (both(x, y, 1e-9) if policy == "default" else both_policy_on(x, y, 1e-9))
+            assert got == ref, (policy, got, ref)
+
+
+def _admitted_box(curve, lower, upper, tol):
+    """The box the shortcuts use for a curve the guard admits, or None (guard declines)."""
+    if not _ag._shortcut_curve_ok(curve, tol):
+        return None
+    fn = getattr(_ag, "_shortcut_bounds", None)
+    try:
+        if fn is not None:
+            lo, hi = fn(curve, lower, upper)
+        else:
+            lo, hi = curve.bounds(lower, upper)
+    except Exception:
+        return None
+    return np.asarray(lo, dtype=float), np.asarray(hi, dtype=float), fn is not None
+
+
+def _adversarial_cylinder_curves(seed, count):
+    """B1/B2-style and random pairs: far origins (shifted along the second axis), near tangency, near-parallel and
+    anti-parallel axes, huge/tiny radii, start phases up to 1e15, log-scale sweeps."""
+    rng = np.random.default_rng(seed)
+    out, tried = [], 0
+    for index in range(count):
+        tried += 1
+        n1 = _unit(rng.normal(size=3))
+        kind = index % 5
+        if kind == 3:                                           # near-parallel / anti-parallel
+            theta = 10**rng.uniform(-9, -1)
+            pivot = _unit(np.cross(n1, rng.normal(size=3)))
+            n2 = _unit((n1*np.cos(theta) + np.cross(pivot, n1)*np.sin(theta))*rng.choice([1., -1.]))
+        else:
+            n2 = _unit(rng.normal(size=3))
+        r1 = float(rng.choice([1., 10**rng.uniform(-3, 3)]))
+        r2 = float(rng.choice([2., 10**rng.uniform(-3, 3)]))
+        perp = np.cross(n1, n2)
+        perp = perp/np.linalg.norm(perp) if np.linalg.norm(perp) > 0 else _unit(rng.normal(size=3))
+        sep = float(rng.uniform(0., 1.5))*(r1 + r2)
+        if kind == 2:                                           # near tangency: axes separation about r1 + r2
+            sep = (r1 + r2)*(1. - 10**rng.uniform(-12, -1))
+        far = float(rng.choice([0., 1e3, 1e6, 1e8]))*(1. if kind in (1, 4) else 0.)
+        origin2 = far*n2 + sep*perp + rng.normal(size=3)*10**rng.uniform(-3, 0)*(r1 + r2)*(kind == 0)
+        radial = _unit(rng.normal(size=3))
+        try:
+            a = Cylinder((0, 0, 0), tuple(n1), tuple(_frame_for(n1, rng)) if kind != 1 else tuple(radial), r1, 4.)
+            b = Cylinder(tuple(origin2), tuple(n2), tuple(_frame_for(n2, rng)) if kind != 1 else tuple(radial), r2, 4.)
+            start = float(rng.choice([0., .3, 1., 5.9, rng.uniform(0., 6.), 1e3, 1e15]))
+            sweep = float(rng.choice([1., 3., 6.2, 10**rng.uniform(-12, 0.7)]))*float(rng.choice([1., -1.]))
+            curve = CylinderIntersectionCurve(a, b, start, sweep, int(rng.choice([-1, 1])))
+            curve.evaluate(0.)
+        except Exception:
+            continue
+        out.append(curve)
+    return out, tried
+
+
+def _containment_report(seed, count, tol=1e-9):
+    curves, tried = _adversarial_cylinder_curves(seed, count)
+    admitted, declined, bad, exact_bad = [], 0, [], []
+    rng = np.random.default_rng(seed + 1000)
+    for curve in curves:
+        ranges = [(0., 1.)] + [(i/8, (i+1)/8) for i in range(8)]
+        whole = _admitted_box(curve, 0., 1., tol)
+        if whole is None:
+            declined += 1
+            continue
+        admitted.append(curve)
+        for lower, upper in ranges:
+            box = _admitted_box(curve, lower, upper, tol)
+            if box is None:
+                continue
+            lo, hi, new = box
+            ts = np.unique(np.concatenate(([lower, upper], rng.uniform(lower, upper, 24))))
+            try:
+                pts = np.asarray(curve.evaluate(ts))
+            except Exception:
+                continue
+            top = max(1., float(np.max(np.abs(np.concatenate((lo, hi))))))
+            pad = tol*(1 + 1e-9) + 1e3*np.finfo(float).eps*top
+            if np.any(pts < lo - pad) or np.any(pts > hi + pad):
+                bad.append((lower, upper))
+            if new and (np.any(pts < lo) or np.any(pts > hi)):
+                exact_bad.append((lower, upper))
+    return curves, tried, admitted, declined, bad, exact_bad
+
+
+@pytest.mark.parametrize("seed", [11, 12, 13, 14])
+def test_r5_admitted_cylinder_boxes_contain_every_evaluated_point(seed):
+    curves, tried, admitted, declined, bad, exact_bad = _containment_report(seed, 1000)
+    assert len(curves) >= 150, (tried, len(curves))                  # enough constructions succeeded
+    assert len(admitted) >= 60, (len(admitted), declined)            # enough curves admitted by the guard
+    assert not bad, f"{len(bad)} boxes miss an evaluated point (padded); first {bad[0]}; admitted {len(admitted)} declined {declined}"
+    assert not exact_bad, f"{len(exact_bad)} boxes miss an evaluated point exactly; admitted {len(admitted)} declined {declined}"
+
+
+@pytest.mark.parametrize("seed", [21, 22])
+def test_r5_filtered_equals_unfiltered_on_admitted_cylinder_curves(seed):
+    curves, _tried, admitted, _declined, _bad, _exact = _containment_report(seed, 500)
+    assert len(admitted) >= 25, len(admitted)
+    rng = np.random.default_rng(seed + 2000)
+    nonempty = 0
+    for curve in admitted[:40]:
+        p = np.asarray(curve.evaluate(float(rng.choice([0., 1., rng.uniform(.05, .95)]))))
+        direction = _unit(rng.choice([1., 0.])*np.array([0., 0., 1.]) + rng.normal(size=3)*rng.choice([0., 1.]) + 1e-3)
+        line = LinePath(tuple(p - direction), tuple(p + direction))
+        for x, y in ((line, curve), (curve, line)):
+            for policy in ("default", "bounds"):
+                got, ref = (both(x, y, 1e-9) if policy == "default" else both_policy_on(x, y, 1e-9))
+                if ref[0] == "ok" and ref[1] != "()":
+                    nonempty += 1
+                assert got == ref, (policy, got, ref)
+    assert nonempty >= 20, nonempty
