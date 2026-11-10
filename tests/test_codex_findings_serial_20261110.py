@@ -257,3 +257,80 @@ def test_f7_frame_order_overflow_refusal_same_as_original(monkeypatch, what):
     new = run()
     _old_frame(monkeypatch, curve)
     assert new == run()
+
+
+# ---------------------------------------------------------------- round 2: results and refusals (contract of the owner)
+# Contract: with the shortcuts on, the call returns the same values and raises the same typed refusals as the
+# original route for all inputs; otherwise the shortcut declines. Cancellation poll counts and exceptions under
+# np.errstate(...='raise') are not part of the contract (production never sets errstate raise).
+def both_policy_on(first, second, tol):
+    """Shortcuts on including the default-off ``_separated_line_pair`` route, against the unfiltered original."""
+    with _junction_bounds_policy(False):
+        ref = outcome(lambda: curve_junctions(first, second, tolerance=tol))
+    with _junction_bounds_policy(True):
+        got = outcome(lambda: curve_junctions(first, second, tolerance=tol))
+    return got, ref
+
+
+def test_r2a_bounds_route_huge_phase_arc_vs_line_same_as_original():
+    arc = EllipticArc((0., 0., 0.), (1., 0., 0.), (0., 1., 0.), 1e20, 1.)
+    line = LinePath((1., 0., 0.), (2., 0., 0.))
+    for tol in TOLS:
+        for a, b in ((arc, line), (line, arc)):
+            got, ref = both_policy_on(a, b, tol)
+            assert got == ref, (tol, got, ref)
+
+
+def _degenerate_directrix_branch():
+    return make_C(((50., 0., 0.), (50.5, 0., 0.), (51., 0., 0.)))
+
+
+def _r2_partners():
+    X, Y = (1., 0., 0.), (0., 1., 0.)
+    a = Cylinder((0, 0, -2), (0, 0, 1), (1, 0, 0), 1, 4)
+    b = Cylinder((-2, 0, 0), (1, 0, 0), (0, 1, 0), 1, 4)
+    far_a = Cylinder((100, 0, -2), (0, 0, 1), (1, 0, 0), 1, 4)
+    far_b = Cylinder((98, 0, 0), (1, 0, 0), (0, 1, 0), 1, 4)
+    return {
+        "line": LinePath((0., 0., 5.), (1., 0., 5.)),
+        "far_line": LinePath((200., 200., 5.), (201., 200., 5.)),
+        "noncoplanar_arc": EllipticArc((50., 0., 3.), X, Y, 0., 2.),
+        "branch": make_C(),
+        "branch_other_plane": make_C(((0., 0., 9.), (.5, 0., 9.), (1., 1., 9.))),
+        "cylinder_curve": CylinderIntersectionCurve(a, b, 0.3, 1.0, 1),
+        "far_cylinder_curve": CylinderIntersectionCurve(far_a, far_b, 0.3, 1.0, 1),
+    }
+
+
+@pytest.mark.parametrize("name", sorted(_r2_partners()))
+@pytest.mark.parametrize("policy", ["default", "bounds"])
+def test_r2b_degenerate_directrix_branch_keeps_its_refusal(name, policy):
+    # the original route inverts the branch curve's endpoints and refuses a directrix that degenerates to a line;
+    # a shortcut must not turn that refusal into an empty result (any partner kind, both orders)
+    bad, partner = _degenerate_directrix_branch(), _r2_partners()[name]
+    for tol in TOLS:
+        for a, b in ((bad, partner), (partner, bad)):
+            if policy == "bounds":
+                got, ref = both_policy_on(a, b, tol)
+            else:
+                got, ref = both(a, b, tol)
+            assert got == ref, (name, policy, tol, got, ref)
+
+
+def test_r2d_bounds_route_scaled_cylinder_curve_vs_line_same_as_original():
+    a = Cylinder((0, 0, -2), (0, 0, 1), (1, 0, 0), 1, 4)
+    b = Cylinder((-2, 0, 0), (1, 0, 0), (0, 1, 0), 1, 4)
+    k = 1e4
+    curve = CylinderIntersectionCurve(a, b, 0.3, 1.0, 1).transformed(
+        ((k, 0, 0, 0), (0, k, 0, 0), (0, 0, k, 0), (0, 0, 0, 1)))
+    p = np.asarray(curve.evaluate(0.0))
+    d = p - np.asarray(curve.evaluate(.1))
+    n = np.cross(d, [0, 0, 1.])
+    n /= np.linalg.norm(n)
+    for tol in TOLS:
+        for off in (.5, .9):
+            q = p + off*k*tol*n
+            line = LinePath(tuple(q), tuple(q + d/np.linalg.norm(d)*k))
+            for x, y in ((line, curve), (curve, line)):
+                got, ref = both_policy_on(x, y, tol)
+                assert got == ref, (tol, off, got, ref)
