@@ -65,6 +65,50 @@ def _segment_clear_of_box(p, q, lo, hi):
     return False
 
 
+_IDENTITY_ROWS = ((1., 0., 0., 0.), (0., 1., 0., 0.), (0., 0., 1., 0.), (0., 0., 0., 1.))
+
+
+def _shortcut_curve_ok(curve):
+    """``False`` for a curve whose acceptance window the rejection shortcuts do not bound.
+
+    A branch curve with a non-identity transform measures its endpoint inversion tolerance in reference
+    space (a scale or shear widens the world-space window beyond the padding); an elliptic arc with a
+    huge angular phase loses the angle arithmetic (``start + sweep == start``) the enclosure assumes.
+    Both keep the original route.
+    """
+    kind = type(curve)
+    if kind is BezierQuadricCurve:
+        return bool(curve._identity)
+    if kind is CylinderIntersectionCurve:
+        return tuple(tuple(float(v) for v in row) for row in curve.transform) == _IDENTITY_ROWS
+    if kind is EllipticArc:
+        start, sweep = float(curve.start_angle), float(curve.sweep_angle)
+        return abs(start)+abs(sweep) <= 1e3 and start+sweep != start
+    return True
+
+
+def _poll_like_original(cancellation_check):
+    """The two cancellation polls the original route makes for a pair that returns ``()``.
+
+    ``curve_junctions`` polls on entry (already done), before the ``t = 1`` endpoint candidates and on
+    entry to ``_curve_junctions``; a pair certainly apart reaches no other poll.
+    """
+    if cancellation_check is not None:
+        for _ in range(2):
+            if cancellation_check():
+                raise GeometryError('curve intersection predicate cancelled')
+
+
+def _coplanar_with_ellipse(ellipse, curve, tolerance):
+    """``True`` when the original route could refuse or take its coplanar branch for this ellipse/branch pair."""
+    try:
+        normal = _cross3(ellipse.u_vector, ellipse.v_vector)
+        normal /= np.linalg.norm(normal)
+        return plane_roots(curve, normal, float(normal @ ellipse.center), tolerance=tolerance) is None
+    except Exception:
+        return True
+
+
 def _line_clear_of_branch(first, second, tolerance):
     """``True`` only when ``curve_junctions(first, second)`` certainly returns ``()``.
 
@@ -81,6 +125,8 @@ def _line_clear_of_branch(first, second, tolerance):
     elif type(second) is LinePath and type(first) in (BezierQuadricCurve, CylinderIntersectionCurve):
         line, curve = second, first
     else:
+        return False
+    if not _shortcut_curve_ok(curve):
         return False
     try:
         start = [float(v) for v in line.start]
@@ -192,6 +238,12 @@ def _curve_pair_clear(first, second, tolerance):
         return False
     if type(second) is LinePath and type(first) in (BezierQuadricCurve, CylinderIntersectionCurve):
         return False
+    if not (_shortcut_curve_ok(first) and _shortcut_curve_ok(second)):
+        return False
+    for ellipse, other in ((first, second), (second, first)):
+        if type(ellipse) is EllipticArc and type(other) in (BezierQuadricCurve, CylinderIntersectionCurve):
+            if _coplanar_with_ellipse(ellipse, other, tolerance):
+                return False
     try:
         window = 0.
         objects = []
@@ -625,9 +677,8 @@ def curve_junctions(first, second, *, tolerance=1e-10,cancellation_check=None):
         from .runtime_diagnostics import _increment
         _increment('junction_line_bounds_pruned')
         return ()
-    if _line_clear_of_branch(first, second, tolerance):
-        return ()
-    if _curve_pair_clear(first, second, tolerance):
+    if _line_clear_of_branch(first, second, tolerance) or _curve_pair_clear(first, second, tolerance):
+        _poll_like_original(cancellation_check)
         return ()
     # Named interval endpoints are independent qualified candidates. A root
     # of a clipped conic can round just beyond its new angular chart; retaining

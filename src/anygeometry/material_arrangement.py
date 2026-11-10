@@ -2593,7 +2593,7 @@ def _point_clear_of_curve(curve, tolerance):
     except Exception:                               # no filter: the unfiltered route decides, as before
         return None
     lo, hi = tuple(float(value) for value in lo), tuple(float(value) for value in hi)
-    if len(lo) != 3 or len(hi) != 3 or not all(math.isfinite(value) for value in (*lo, *hi)):
+    if len(lo) != 3 or len(hi) != 3 or not all(math.isfinite(value) and abs(value) <= 1e100 for value in (*lo, *hi)):
         return None
     margin = 2.0*tolerance + 1e-6*max(1.0, *(abs(value) for value in (*lo, *hi)))
     lo = tuple(value - margin for value in lo)
@@ -2602,9 +2602,11 @@ def _point_clear_of_curve(curve, tolerance):
     def far(position):
         if len(position) != 3:
             return False
-        for value, low, high in zip(position, lo, hi):
-            value = float(value)
-            if value < low or value > high:         # False for NaN: such a point keeps the unfiltered route
+        values = [float(value) for value in position]
+        if not all(math.isfinite(value) and abs(value) <= 1e50 for value in values):
+            return False                            # non-finite or huge: such a point keeps the unfiltered route
+        for value, low, high in zip(values, lo, hi):
+            if value < low or value > high:
                 return True
         return False
     return far
