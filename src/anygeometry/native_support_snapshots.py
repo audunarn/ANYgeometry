@@ -4,7 +4,7 @@ import math
 from .errors import GeometryError
 from .curves import Straight, Spline, LineRange
 from .extrusions import BezierDirectrix
-from .surfaces import Plane, Cylinder, CoonsSurface, ExtrudedSurface
+from .surfaces import Plane, Cylinder, CoonsSurface, ExtrudedSurface, RuledSurface
 from .polynomial_extrusion_support import COONS_POLYNOMIAL, BEZIER_EXTRUSION
 from .nurbs import NurbsSurface, NurbsCurve, nurbs_record
 
@@ -113,6 +113,9 @@ def capture_native_supports(model):
     rows = []
     for identifier, face in sorted(model.faces.items()):
         support = face.surface
+        if type(support) in (CoonsSurface, RuledSurface, ExtrudedSurface):
+            from .source_tensor_chart import _require_tensor_runtime
+            _require_tensor_runtime(model, face)
         translation = _translation_snapshot(model, face) if type(support) is CoonsSurface else None
         if translation is not None:
             rows.append((identifier, NURBS_TRANSLATION, translation))
@@ -133,6 +136,9 @@ def capture_native_supports(model):
         elif type(support) is CoonsSurface:
             kind, data = _coons_snapshot(model, face, support)
             rows.append((identifier, kind, data))
+        elif type(support) is RuledSurface:
+            rows.append((identifier, 'ruled_sampled', tuple(tuple(_vector(point) for point in side)
+                for side in (support.first_boundary, support.second_boundary))))
         elif type(support) is ExtrudedSurface and type(support.directrix) is BezierDirectrix:
             # Keep both declared and actually evaluated coefficients. A mismatch
             # cannot be hidden by serializing only public controls/vector.
@@ -198,6 +204,9 @@ def capture_material_validation_read_pin(model):
     validate_model_curve_runtimes(model)
     rows = []
     for identifier, face in sorted(model.faces.items()):
+        if type(face.surface) in (CoonsSurface, RuledSurface, ExtrudedSurface):
+            from .source_tensor_chart import _require_tensor_runtime
+            _require_tensor_runtime(model, face)
         if (type(face.surface) is CoonsSurface
                 and all(getattr(face.surface, key) is None for key in ('bottom', 'right', 'top', 'left'))):
             from .nurbs_sweep_chart import has_sweep_chart
