@@ -27,6 +27,15 @@ from .trimmed_charts import _check
 _NATIVE_QUALIFIED = WeakKeyDictionary()      # model -> (complete persisted checksum, actual native snapshot)
 
 
+def _freeze_world_edge(model, edge_id):
+    """Use the exact Bernstein representation of a topology-controlled spline."""
+    from .arrangement_geometry import freeze_edge
+    from .curves import Spline
+    from .source_tensor_chart import _edge_curve
+    edge = model.edges[edge_id]
+    return _edge_curve(model, edge) if type(edge.curve) is Spline else freeze_edge(model, edge_id)
+
+
 def _native_cache_safe(model, native):
     """Whether every non-persisted dependency of topology validity is bound by the native snapshot.
 
@@ -856,10 +865,10 @@ def _query_boundary_chords(model, regions, edge_intervals, *, expected_revision=
             raise GeometryError('source boundary parameters must be finite') from exc
         if not (0 <= a <= 1 and 0 <= b <= 1 and a != b) or Q(float(a)) != a or Q(float(b)) != b:
             raise GeometryError('source boundary stations require distinct exactly stored double parameters in [0,1]')
-        from .arrangement_geometry import freeze_edge, LinePath
+        from .arrangement_geometry import LinePath
         from .nurbs import NurbsCurve
         if handle.id not in frozen_curves:
-            frozen_curves[handle.id] = freeze_edge(model, handle.id)
+            frozen_curves[handle.id] = _freeze_world_edge(model, handle.id)
         curve = frozen_curves[handle.id]
         if not isinstance(curve, (CurveOnSurface, PlaneNurbsCurve, NurbsCurve, LinePath,NurbsSurfaceIntersectionCurve)):
             raise GeometryError('curvilinear boundary edge family is not yet qualified')
@@ -1207,7 +1216,7 @@ def _sampling_arithmetic_context():
          _uv_box,_charged_bounds,_box_corners,
          _new_sampling_arithmetic,_sampling_arithmetic_context,_sampling_arithmetic_variable,
          _sampling_arithmetic_producer,_sampling_references,_current,_checksum,
-         capture_native_supports,freeze_edge,_qualified_model_state)),
+         capture_native_supports,freeze_edge,_freeze_world_edge,_qualified_model_state)),
         (Q,Plane,PlaneNurbsCurve,NurbsCurve,LinePath,accounting.CURRENT_WORK,
          *(_chord_function_pin(cls.bounds) for cls in (PlaneNurbsCurve,NurbsCurve,LinePath))),
         producers,_sampling_work_context())
@@ -1363,7 +1372,6 @@ def _sampling_arithmetic_producer(builder, *, chart_boxes=False, anchor_choice=F
     namespace = object()
     def start(model,regions,check):
         from .native_support_snapshots import capture_native_supports
-        from .arrangement_geometry import freeze_edge
         from .serialization import _qualified_model_state
         variable,issuer = _sampling_arithmetic_variable()
         state = variable.get()
@@ -1499,7 +1507,7 @@ def _sampling_arithmetic_producer(builder, *, chart_boxes=False, anchor_choice=F
                 if references is None:
                     references=_sampling_references(model,regions)
                 if edge_id not in curves:
-                    curves[edge_id]=freeze_edge(model,edge_id)
+                    curves[edge_id]=_freeze_world_edge(model,edge_id)
                 def frontier():
                     check()
                 return builder(model,references,edge_id,a,b,endpoints,error,frontier,curves[edge_id],measure)
@@ -1872,7 +1880,6 @@ def query_prepared_material_boundary_sampling(model, regions, edge_parameters, *
 def _query_boundary_sampling(model, regions, edge_parameters, chord_error, expected_revision,
         cancellation_check, settings, work, segment_limit,local_approximation=None, error_measure="geometric", proposal_fraction=1.):
     from .native_support_snapshots import capture_native_supports
-    from .arrangement_geometry import freeze_edge
     from .plane_nurbs import charge_split
     error = _positive_error(chord_error, 'chord_error')
     try:
@@ -1962,7 +1969,7 @@ def _query_boundary_sampling(model, regions, edge_parameters, chord_error, expec
             raise GeometryError('boundary seeds must be strictly ordered exact binary64 stations in [0,1]')
         increasing = parameters[0] < parameters[-1]
         ordered = parameters if increasing else parameters[::-1]
-        curve, edge = freeze_edge(model, handle.id), model.edges[handle.id]
+        curve, edge = _freeze_world_edge(model, handle.id), model.edges[handle.id]
         frozen_curves[handle.id] = curve
         if local_approximation is not None:
             from .local_approximation_field import local_boundary_corner_parameters

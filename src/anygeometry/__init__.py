@@ -26,6 +26,7 @@ from .batch_intersections import (
     plan_intersections, apply_intersections, has_current_intersection_preparation, clone_prepared_geometry,
     set_prepared_face_corners,
 )
+from .source_tensor_chart import source_tensor_chart
 from .trimmed_charts import (
     TrimmedSurfaceChart, TrimmedSurfaceCharts, query_trimmed_surface_charts,
     validate_trimmed_surface_charts_binding, evaluate_trimmed_surface_chart,
@@ -448,6 +449,7 @@ __all__ = [
     "TrimmedSurfaceChart",
     "TrimmedSurfaceCharts",
     "query_trimmed_surface_charts",
+    "source_tensor_chart",
     "validate_trimmed_surface_charts_binding",
     "evaluate_trimmed_surface_chart",
     "MaterialSurfaceRegion",

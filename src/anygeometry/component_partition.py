@@ -18,10 +18,10 @@ from .definition_binding import definition_checksum
 from .errors import GeometryError
 from .identity import EntityHandle
 from .serialization import to_dict, _serialized_model_state, _qualified_model_state
-from .surfaces import Plane, Cylinder, Cone
+from .surfaces import Plane, Cylinder, Cone, CoonsSurface
 
 
-def _certified_face_bound(model, face_id, edges):
+def _certified_face_bound(model, face_id, edges, *, allow_bilinear=False):
     """Enclose the complete material, including legal support extrapolation.
 
     Linear functionals on a bounded material domain attain extrema on its
@@ -31,7 +31,18 @@ def _certified_face_bound(model, face_id, edges):
     this API, so their otherwise useful normalized patch bounds cannot certify
     independent extrapolated material and are explicitly refused.
     """
-    support = model.faces[face_id].support_surface
+    face = model.faces[face_id]
+    support = face.support_surface
+    if (allow_bilinear and type(support) is CoonsSurface and support.bottom is None
+            and face.parameterization is None and not face.holes and len(face.loop) == 4
+            and len(set(face.corners)) == 4 and len(edges) == 4
+            and set(edges) == {use.edge for use in face.loop}
+            and all(type(model.edges[edge].curve) is Straight for edge in edges)):
+        # One straight span per side of the topology-backed, untrimmed unit
+        # square makes its Coons blend exactly the bilinear interpolant.
+        # Its four weights are nonnegative and sum to one. The corner box
+        # thus encloses the whole material, including a noncoplanar interior.
+        return model.bounds(tuple(("edge", edge) for edge in sorted(edges)))
     if type(support) not in (Plane, Cylinder, Cone):
         raise GeometryError("face support family lacks certified full trim-domain conservative bounds")
     boundary = model.bounds(tuple(('edge', e) for e in sorted(edges)))
@@ -122,7 +133,8 @@ def _ids(model, kind, values):
 
 def plan_independent_components(model, *, face_ids=None, member_ids=None,
                                 edge_ids=(), separation=0.0, expected_revision=None,
-                                cancellation_check=None, stop_if_single_component=False):
+                                cancellation_check=None, stop_if_single_component=False,
+                                allow_untrimmed_bilinear=False):
     """Certify independent selected components without modifying the model.
 
     ``separation`` grows *each* support box in every direction. Overlap, shared
@@ -137,9 +149,14 @@ def plan_independent_components(model, *, face_ids=None, member_ids=None,
     When authoritative joins already connect every unit, it may return early
     with an explicit refusal instead of completing the independence audit.
     The default always performs the complete audit.
+
+    Regional mapped meshing may opt into the convex-hull proof for a
+    topology-backed unit square with four straight sides.
     """
     if type(stop_if_single_component) is not bool:
         raise GeometryError("stop_if_single_component must be Boolean")
+    if type(allow_untrimmed_bilinear) is not bool:
+        raise GeometryError("allow_untrimmed_bilinear must be Boolean")
     if isinstance(separation, bool):
         raise GeometryError("component separation must be finite and nonnegative")
     try:
@@ -392,7 +409,8 @@ def plan_independent_components(model, *, face_ids=None, member_ids=None,
             if dependency_kind == "face":
                 face = model.faces[dependency_id]
                 edges = {item.edge for loop in (face.loop, *face.holes) for item in loop}
-                bound = _certified_face_bound(model, dependency_id, edges)
+                bound = _certified_face_bound(model, dependency_id, edges,
+                                              allow_bilinear=allow_untrimmed_bilinear)
             else:
                 if dependency_kind == "edge" and type(model.edges[dependency_id].curve) not in (Straight, Arc, Spline, *EXACT_CURVES):
                     raise GeometryError("edge curve family has no certified conservative bound")
