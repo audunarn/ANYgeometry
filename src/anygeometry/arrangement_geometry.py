@@ -107,12 +107,32 @@ def _shortcut_curve_ok(curve):
     if kind is BezierQuadricCurve:
         return bool(curve._identity) and _curve_setup_benign(curve)
     if kind is CylinderIntersectionCurve:
-        return (tuple(tuple(float(v) for v in row) for row in curve.transform) == _IDENTITY_ROWS
-                and _curve_setup_benign(curve))
+        if not (tuple(tuple(float(v) for v in row) for row in curve.transform) == _IDENTITY_ROWS
+                and _curve_setup_benign(curve)):
+            return False
+        try:
+            return _angle_error_ok(float(curve.start_angle), float(curve.sweep_angle))
+        except Exception:
+            return False
     if kind is EllipticArc:
         start, sweep = float(curve.start_angle), float(curve.sweep_angle)
-        return abs(start)+abs(sweep) <= 1e3 and start+sweep != start
+        return _angle_error_ok(start, sweep)
     return True
+
+
+def _angle_error_ok(start, sweep):
+    """The rounding of the angular phase stays below half of the rounding allowance of the enclosures.
+
+    The evaluated angle ``start + sweep * value`` and the angles the bounds are built from differ by a few
+    ulp of the largest angle (taken as 8). The enclosures pad their box by ``1e3 * eps`` times the
+    coordinate scale, and the angle error moves a point by at most that error times a lever arm no larger
+    than the coordinate scale, so ``8 ulp(max |angle|) <= 500 eps`` (a largest angle of about 60 rad) keeps the
+    error inside half of the allowance for every radius, axis length and axial range. A phase so large that
+    ``start + sweep == start`` is always declined.
+    """
+    top = max(abs(start), abs(start+sweep), 1.)
+    return (math.isfinite(top) and start+sweep != start
+            and 8*float(np.spacing(top)) <= 500*float(np.finfo(float).eps))
 
 
 def _poll_like_original(cancellation_check):
