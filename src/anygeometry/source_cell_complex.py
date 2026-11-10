@@ -215,6 +215,9 @@ def _support_owner(model, face):
     if has_sweep_chart(model.faces[face]):
         return chart_model(model, face)
     source_view = source_sweep_chart_model(model, face)
+    if source_view is None:
+        from .source_tensor_chart import source_tensor_chart
+        source_view = source_tensor_chart(model, face)
     return source_view if source_view is not None else model
 
 
