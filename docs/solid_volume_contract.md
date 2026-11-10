@@ -40,6 +40,45 @@ identity/revision/signature. Rebinding topology changes must be explicit.
 Regeneration with unchanged topology preserves region identity and face roles;
 incompatible topology reports conflict without moving selections to other faces.
 
+## Shell detail box
+
+`anygeometry.shell_detail.derive_shell_detail_box(model, face_id, footprint, *,
+director, thickness, reference_offset=0.0)` returns `(detail_model, region_id)`.
+
+- `footprint`: four ordered xyz points on the shell reference plane. They form a
+  finite rectangle (any rotation, either winding) lying strictly inside the
+  material of the single planar source face `face_id`: holes and concave rims
+  may not touch or enter it. Straight boundary edges are checked to the model
+  tolerance; curved boundary edges are checked on a fixed 257-sample polyline
+  (sampled, not proven).
+- `director` must point the same way as the authoritative face normal
+  (`model.face_normal`); the box uses that normal exactly. An opposed or skewed
+  director is refused.
+- `thickness` is positive, in metres. The source model must be in `'m'`;
+  other units are refused, not converted.
+- `reference_offset` is the signed height of the box *midsurface* above the
+  supplied shell plane, measured along the physical director. `start` lies at
+  `reference_offset - thickness/2` and `end` at `reference_offset + thickness/2`,
+  so the director runs from `start` to `end` whatever the footprint winding.
+- Faces are the default snapshot groups `start`, `end`, `side_0..side_3`.
+  `side_i` always stands on input edge `footprint[i] -> footprint[i+1]`, also for
+  a clockwise footprint; a post-check on the published snapshot enforces this.
+- The box is built by the canonical prism construction (`solid_regions.add_prism`,
+  the body of `add_solid_prism`, called directly to attach provenance and a
+  deterministic region id).
+- Lineage: the region's provenance key `shell_detail` records the source model
+  id, revision and content checksum, the face id, the exact authored footprint,
+  director, thickness, offset, and `footprint_signature` (SHA-256 of that
+  record). The region id is a UUIDv5 of the signature; the detail model has a
+  fresh model id.
+- The source model is only read; its revision and content are unchanged.
+
+Copying: `GeometryModel.clone()` is the only supported copy. It returns an
+independent model (new model id unless `preserve_identity=True`). `copy.copy`
+and `copy.deepcopy` of a model are unsupported: a shallow copy shares the
+private stores (vertices, edges, faces, solid regions), so editing one edits
+the other without revisions or transactions being kept consistent.
+
 ## Mesher owner
 
 `VolumeMesh` is a sibling of shell `Mesh`, never a shell codec reinterpretation.

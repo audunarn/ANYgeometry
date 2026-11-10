@@ -1878,7 +1878,10 @@ def _child_support(model, face, outer, holes, tolerance):
     if len(corners)==4 and all(isinstance(model.edges[use.edge].curve,Straight) for use in outer):
         p0,p1,p2,p3=(points[index] for index in corners)
         if np.linalg.norm(p0+p2-p1-p3)<=tolerance:
-            return outer,Plane(p0,p1-p0,p3-p0),None,corners
+            u, v = p1 - p0, p3 - p0
+            if np.cross(u, v) @ support.normal < 0.0:
+                u, v = v, u
+            return outer, Plane(p0, u, v), None, corners
     return outer,support,None,None
 
 
