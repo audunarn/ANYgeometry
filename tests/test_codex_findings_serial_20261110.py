@@ -187,12 +187,25 @@ def test_f5_far_finite_point_filter_implies_unfiltered_returns_empty_without_rai
     assert far is not None
     assert not far((0.5, 0.25, 0.))
     point = (1e308, 1e308, 0.)
-    assert far(point)
+    is_far = far(point)
 
     def unfiltered():
         with np.errstate(over="raise"):
             return point_parameters(curve, point, tolerance=1e-9)
     # contract of _point_clear_of_curve: far(p) implies the unfiltered route yields () and does not refuse
+    assert (not is_far) or outcome(unfiltered) == ("ok", repr(()))
+
+
+def test_f5_prefilter_still_filters_moderate_far_points_and_declines_huge_ones():
+    curve = make_C()
+    far = ma._point_clear_of_curve(curve, 1e-9)
+    assert far((1e308, 1e308, 0.)) is False
+    moderate = (1e6, 1e6, 0.)
+    assert far(moderate) is True
+
+    def unfiltered():
+        with np.errstate(over="raise"):
+            return point_parameters(curve, moderate, tolerance=1e-9)
     assert outcome(unfiltered) == ("ok", repr(()))
 
 
