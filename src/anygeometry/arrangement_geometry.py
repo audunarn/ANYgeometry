@@ -111,8 +111,8 @@ def _shortcut_curve_ok(curve, tolerance):
                 and _curve_setup_benign(curve)):
             return False
         try:
-            return (_angle_error_ok(float(curve.start_angle), float(curve.sweep_angle))
-                    and _cylinder_conditioned_ok(curve, tolerance))
+            return (curve.parameterization == 'linear'
+                    and _angle_error_ok(float(curve.start_angle), float(curve.sweep_angle)))
         except Exception:
             return False
     if kind is EllipticArc:
@@ -121,25 +121,182 @@ def _shortcut_curve_ok(curve, tolerance):
     return True
 
 
-def _cylinder_conditioned_ok(curve, tolerance):
-    """The cylinder curve's evaluate/bounds division by ``2a`` (``a = sin^2`` of the angle between the axes) stays accurate.
+_EPS = float(np.finfo(float).eps)
 
-    Derivation in ``serial-consolidated/cylinder-enclosure-derivation.md``: the axial position error of both
-    ``evaluate`` and ``bounds`` is at most ``16 eps L / a`` (``L`` the coordinate scale); it must use at most a
-    quarter of the allowance ``tolerance + 1e3 eps L`` of the enclosures, so near-parallel axes decline.
+
+class _IntervalDecline(Exception):
+    """The interval computation cannot prove an enclosure: the shortcut declines to the original route."""
+
+
+def _dn(value):
+    return math.nextafter(value, -math.inf)
+
+
+def _up(value):
+    return math.nextafter(value, math.inf)
+
+
+def _iv(lo, hi):
+    if not (math.isfinite(lo) and math.isfinite(hi)) or lo > hi:
+        raise _IntervalDecline
+    return (_dn(lo), _up(hi))
+
+
+def _iv_const(value):
+    value = float(value)
+    if not math.isfinite(value):
+        raise _IntervalDecline
+    return (_dn(value), _up(value))
+
+
+def _iv_add(a, b):
+    return _iv(a[0]+b[0], a[1]+b[1])
+
+
+def _iv_sub(a, b):
+    return _iv(a[0]-b[1], a[1]-b[0])
+
+
+def _iv_neg(a):
+    return (-a[1], -a[0])
+
+
+def _iv_mul(a, b):
+    products = (a[0]*b[0], a[0]*b[1], a[1]*b[0], a[1]*b[1])
+    if not all(math.isfinite(v) for v in products):
+        raise _IntervalDecline
+    return _iv(min(products), max(products))
+
+
+def _iv_div_positive(a, divisor):
+    if not (divisor > 0. and math.isfinite(divisor)):
+        raise _IntervalDecline
+    return _iv(a[0]/divisor, a[1]/divisor)
+
+
+def _iv_dot(u, v):
+    """Dot product of two interval 3-vectors, valid for any summation order or fused multiply-add of the float code."""
+    total, magnitude = None, 0.
+    for x, y in zip(u, v):
+        product = _iv_mul(x, y)
+        total = product if total is None else _iv_add(total, product)
+        magnitude += max(abs(x[0]), abs(x[1]))*max(abs(y[0]), abs(y[1]))
+    extra = 4*_EPS*magnitude
+    return _iv(total[0]-extra, total[1]+extra)
+
+
+def _phase_inside(lower, upper, phase):
+    """Over-inclusive test: some ``phase + 2 pi k`` lies in ``[lower, upper]`` widened by ``1e-6``."""
+    k = math.ceil((lower-1e-6-phase)/(2*math.pi))
+    return phase+2*math.pi*k <= upper+1e-6
+
+
+def _iv_sincos(lower, upper):
+    """Enclosures of sin and cos over ``[lower, upper]``; libm assumption: at most 4 ulp error (widened by 8 eps)."""
+    if upper-lower >= 2*math.pi-1e-6:
+        return (-1., 1.), (-1., 1.)
+    sines = (math.sin(lower), math.sin(upper))
+    cosines = (math.cos(lower), math.cos(upper))
+    s_lo, s_hi = min(sines), max(sines)
+    c_lo, c_hi = min(cosines), max(cosines)
+    if _phase_inside(lower, upper, math.pi/2):
+        s_hi = 1.
+    if _phase_inside(lower, upper, -math.pi/2):
+        s_lo = -1.
+    if _phase_inside(lower, upper, 0.):
+        c_hi = 1.
+    if _phase_inside(lower, upper, math.pi):
+        c_lo = -1.
+    wide = 8*_EPS
+    return (max(s_lo-wide, -1.-wide), min(s_hi+wide, 1.+wide)), (max(c_lo-wide, -1.-wide), min(c_hi+wide, 1.+wide))
+
+
+def _cylinder_box_once(curve, t0, t1):
+    """Outward-rounded box of ``curve.evaluate(t)`` for every ``t`` in ``[t0, t1]``, built from the formula ``evaluate`` uses.
+
+    Linear chart, identity transform: ``angle = start + sweep t``; ``base = O1 + r (cos e1 + sin e2)``;
+    ``q = (base - O2) - ((base - O2) . n2) n2``; ``b = 2 q . w``;
+    ``disc = 4 (remainder + m^2 sine^2 - 2 n0 m cosine)``; ``z = (-b + branch sqrt(disc)) / (2 a)``;
+    ``point = base + z n1``. Every operation widens by one ulp (so by its rounding), the constants come from the
+    same ``_branch_constants`` the float code uses. Raises ``_IntervalDecline`` when a divisor, the
+    discriminant (kept above a snap/cancellation margin) or any interval cannot be proven.
     """
     from .exact_curves import _branch_constants
+    c = _branch_constants(curve)
+    first, second = curve.first, curve.second
+    angle = _iv_add(_iv_const(curve.start_angle), _iv_mul(_iv_const(curve.sweep_angle), (float(t0), float(t1))))
+    sn, cs = _iv_sincos(angle[0], angle[1])
+    r1 = _iv_const(first.radius)
+    base = []
+    for k in range(3):
+        ring = _iv_add(_iv_mul(cs, _iv_const(c.e1[k])), _iv_mul(sn, _iv_const(c.e2[k])))
+        base.append(_iv_add(_iv_const(first.origin[k]), _iv_mul(r1, ring)))
+    offset = [_iv_sub(base[k], _iv_const(second.origin[k])) for k in range(3)]
+    axis2 = [_iv_const(c.other_axis[k]) for k in range(3)]
+    along = _iv_dot(offset, axis2)
+    q = [_iv_sub(offset[k], _iv_mul(along, axis2[k])) for k in range(3)]
+    b = _iv_mul(_iv_const(2.), _iv_dot(q, [_iv_const(c.w[k]) for k in range(3)]))
+    a = float(c.a)
+    magnitude = float(c.magnitude)
+    if not (a > 0. and magnitude > 0.):
+        raise _IntervalDecline
+    cosine = _iv_div_positive(_iv_add(_iv_mul(_iv_const(c.nc), cs), _iv_mul(_iv_const(c.ns), sn)), magnitude)
+    sine = _iv_div_positive(_iv_sub(_iv_mul(_iv_const(c.nc), sn), _iv_mul(_iv_const(c.ns), cs)), magnitude)
+    square = _iv_const(magnitude**2)
+    positive = _iv_add(_iv_const(c.remainder), _iv_mul(_iv_mul(square, sine), sine))
+    negative = _iv_mul(_iv_mul(_iv_const(2*c.n0), _iv_const(magnitude)), cosine)
+    disc = _iv_mul(_iv_const(4.), _iv_sub(positive, negative))
+    if not disc[1] > 0.:
+        raise _IntervalDecline                    # no positive discriminant: evaluate would refuse or return a fold point
+    # ``evaluate`` takes ``sqrt(max(disc, 0))`` of the float discriminant, which lies in this interval, so the root
+    # lies in [sqrt(max(lo, 0)), sqrt(hi)] (the sqrt interval carries the 1/sqrt(D) amplification of the width of
+    # ``disc`` by itself). The endpoint snap of ``evaluate`` (z = -b / (2 a) at a fold) lies in the hull as well, since
+    # the root interval then contains 0.
+    root = (0. if disc[0] <= 0. else _dn(math.sqrt(disc[0])), _up(math.sqrt(disc[1])))
+    signed = root if curve.branch == 1 else _iv_neg(root)
+    z = _iv_div_positive(_iv_add(_iv_neg(b), signed), 2*a)
+    lo, hi = [], []
+    for k in range(3):
+        point = _iv_add(base[k], _iv_mul(z, _iv_const(c.axis[k])))
+        lo.append(point[0])
+        hi.append(point[1])
+    return lo, hi
+
+
+def _cylinder_box_split(curve, t0, t1, depth):
     try:
-        a = float(_branch_constants(curve).a)
-        lo, hi = _cached_enclosure(curve, 0., 1.)
-        scale = max(1., float(curve.first.radius), float(curve.second.radius),
-                    *(abs(float(v)) for v in curve.first.origin), *(abs(float(v)) for v in curve.second.origin),
-                    *(abs(v) for v in (*lo, *hi)))
-        eps = float(np.finfo(float).eps)
-        return (math.isfinite(scale) and math.isfinite(a) and a > 0.
-                and 16*eps*scale/a <= .25*(tolerance+1e3*eps*scale))
-    except Exception:
-        return False
+        return _cylinder_box_once(curve, t0, t1)
+    except _IntervalDecline:
+        if depth <= 0:
+            raise
+    middle = .5*(t0+t1)
+    left = _cylinder_box_split(curve, t0, middle, depth-1)
+    right = _cylinder_box_split(curve, middle, t1, depth-1)
+    return [min(x, y) for x, y in zip(left[0], right[0])], [max(x, y) for x, y in zip(left[1], right[1])]
+
+
+@lru_cache(maxsize=16384)
+def _cylinder_box_cached(curve, t0, t1):
+    try:
+        return _cylinder_box_split(curve, t0, t1, 3)
+    except _IntervalDecline:
+        return None
+    except (GeometryError, ArithmeticError, ValueError, TypeError, FloatingPointError):
+        return None
+
+
+def _shortcut_bounds(curve, lower, upper):
+    """The box a shortcut may use for ``curve`` over ``[lower, upper]`` as float lists; raises ``GeometryError`` to decline.
+
+    Cylinder curves: the interval box above (no hand-derived padding). Other kinds: ``curve.bounds``.
+    """
+    if type(curve) is CylinderIntersectionCurve:
+        box = _cylinder_box_cached(curve, float(lower), float(upper))
+        if box is None:
+            raise GeometryError('no proven enclosure; the original route decides')
+        return box
+    lo, hi = curve.bounds(lower, upper)
+    return np.asarray(lo).tolist(), np.asarray(hi).tolist()
 
 
 def _angle_error_ok(start, sweep):
@@ -211,8 +368,10 @@ def _line_clear_of_branch(first, second, tolerance):
         base = tolerance*(1+1e-9)
 
         def clear(lower, upper):
-            lo, hi = curve.bounds(lower, upper)
-            lo, hi = lo.tolist(), hi.tolist()
+            try:
+                lo, hi = _shortcut_bounds(curve, lower, upper)
+            except GeometryError:
+                return False
             top = max(scale, *(abs(v) for v in lo), *(abs(v) for v in hi))
             if not math.isfinite(top):
                 return False
@@ -256,7 +415,7 @@ def _separated_line_pair(first, second, tolerance):
 
     def envelope(curve):
         try:
-            lo, hi = curve.bounds()
+            lo, hi = _shortcut_bounds(curve, 0., 1.)
         except (GeometryError, ArithmeticError, ValueError):
             return None
         lo, hi = np.asarray(lo), np.asarray(hi)
@@ -279,9 +438,8 @@ def _separated_line_pair(first, second, tolerance):
 
 @lru_cache(maxsize=16384)
 def _cached_enclosure(curve, lower, upper):
-    """``curve.bounds(lower, upper)`` as float lists (the curves are immutable values)."""
-    lo, hi = curve.bounds(lower, upper)
-    return lo.tolist(), hi.tolist()
+    """``_shortcut_bounds(curve, lower, upper)`` cached (the curves are immutable values)."""
+    return _shortcut_bounds(curve, lower, upper)
 
 
 def _box_pair_clear(lo1, hi1, lo2, hi2, pad):
