@@ -649,3 +649,212 @@ def test_r5_filtered_equals_unfiltered_on_admitted_cylinder_curves(seed):
                     nonempty += 1
                 assert got == ref, (policy, got, ref)
     assert nonempty >= 20, nonempty
+
+
+# ---------------------------------------------------------------- round 6: endpoint snap, completeness table, stronger net
+def _snap_curve(L=2.**24, start=0., sweep=1e-12, radius2=2., branch=1):
+    a = Cylinder((0., 0., 0.), (0., 0., 1.), (0., 1., 0.), 1., 4.)
+    b = Cylinder((0., 0., L), (1., 0., 0.), (0., 1., 0.), radius2, 4.)
+    return CylinderIntersectionCurve(a, b, start, sweep, branch)
+
+
+def test_r6_endpoint_snap_cylinder_curve_same_as_original():
+    # evaluate snaps the double-root endpoints to z = -b / (2 a) (here z = L) although the discriminant is positive
+    L = 2.**24
+    curve = _snap_curve(L)
+    scalar = [np.asarray(curve.evaluate(float(t))) for t in (0., 1.)]
+    vector = np.asarray(curve.evaluate(np.array([0., .5, 1.])))
+    assert abs(scalar[0][2] - L) < 1e-6 and abs(vector[0][2] - L) < 1e-6     # the snap really happens
+    line = LinePath((0., 1., L), (0., 1., L + .25))
+    for x, y in ((line, curve), (curve, line)):
+        for policy in ("default", "bounds"):
+            got, ref = (both(x, y, 1e-9) if policy == "default" else both_policy_on(x, y, 1e-9))
+            assert got == ref, (policy, got, ref)
+
+
+def test_r6_endpoint_snap_box_contains_scalar_and_vector_endpoints():
+    L = 2.**24
+    curve = _snap_curve(L)
+    box = _admitted_box(curve, 0., 1., 1e-9)
+    if box is None:
+        return                                                  # declined: the original route decides
+    lo, hi, _new = box
+    for t in (0., 1.):
+        assert not np.any(np.isnan(np.asarray(curve.evaluate(t))))
+        point = np.asarray(curve.evaluate(t))
+        assert np.all(point >= lo) and np.all(point <= hi), (t, point, lo, hi)
+
+
+# Mechanical completeness check: every conditional, raise and masked operation of the float code that builds the points of
+# CylinderIntersectionCurve.evaluate has an interval counterpart in _cylinder_box_once or an explicit decline. The table is
+# keyed by the unparsed condition; the source hash of each function pins the table to the reviewed code (change => review).
+_EVAL_DISPOSITION = {
+    "_angle": {
+        "IF self.parameterization == 'left_square'": "decline: shortcut requires parameterization == 'linear'",
+        "IF self.parameterization == 'right_square'": "decline: shortcut requires parameterization == 'linear'",
+        "IF self.parameterization == 'both_sine'": "decline: shortcut requires parameterization == 'linear'",
+    },
+    "_root_at_angles": {
+        "IF magnitude": "interval: m > 0 required (decline otherwise)",
+        "IF discriminant is not None": "decline: only set for non-linear parameterizations",
+        "IF np.any(disc < -roundoff)": "decline: refusal happens only when a disc below -roundoff exists; box needs disc_hi > 0 and clamps the lower end at 0 (sqrt of max(disc, 0))",
+        "CALL np.maximum(disc, 0)": "interval: root lower end clamped at 0",
+        "CALL np.any(disc < -roundoff)": "decline: see IF np.any(disc < -roundoff)",
+        "CALL np.abs(c)": "not a branch: the roundoff term of the refusal test only",
+        "RAISE raise GeometryError('intersection branch leaves the real cylinder intersection')": "decline: see the refusal condition above; curve set-up evaluation at both ends must not raise",
+    },
+    "_root": {
+        "IF self.parameterization != 'linear'": "decline: shortcut requires parameterization == 'linear'",
+        "IF np.any(regular)": "decline: regular needs a non-linear parameterization, or the double-root snap, which is declined at t = 0 and t = 1 when the discriminant interval does not prove root^2 > envelope",
+        "CALL np.any(regular)": "same as IF np.any(regular)",
+        "IF np.any(regular & (root * root > envelope))": "decline: part of the snap branch",
+        "CALL np.any(regular & (root * root > envelope))": "decline: part of the snap branch",
+        "CALL np.where(regular, -b / (2 * a), z)": "decline: the snapped value; avoided by proving no snap at the end ranges",
+        "CALL np.where(regular, 0.0, root)": "decline: the snapped root; avoided by proving no snap",
+        "CALL np.abs(-8 * n * dn)": "decline: part of the double-root snap condition (only evaluated at t = 0 or 1)",
+        "IF self.parameterization == 'left_square'": "decline: non-linear only",
+        "IF self.parameterization == 'right_square'": "decline: non-linear only",
+        "IF np.any(endpoint_root * endpoint_root > envelope)": "decline: non-linear only",
+        "CALL np.where(left, self.start_angle, self.start_angle + self.sweep_angle)": "decline: non-linear only",
+        "CALL np.any(endpoint_root * endpoint_root > envelope)": "decline: non-linear only",
+        "RAISE raise GeometryError('regular endpoint is not a discriminant transition')": "decline: non-linear only / snap branch",
+        "CALL np.where(left, self.sweep_angle * np.sin(0.5 * np.pi * t) ** 2, -self.sweep_angle * np.cos(0.5 * np.pi * t) ** 2)": "decline: non-linear only",
+    },
+    "_coefficients": {},
+    "evaluate": {},
+}
+_EVAL_SOURCE_SHA = {}                                           # filled by the first run of the pin test below (see assert)
+
+
+def _conditionals(function):
+    import ast
+    import inspect
+    import textwrap
+    tree = ast.parse(textwrap.dedent(inspect.getsource(function)))
+    found = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.If, ast.IfExp)):
+            found.add("IF " + ast.unparse(node.test))
+        elif isinstance(node, ast.Call) and ast.unparse(node.func) in ("np.where", "np.any", "np.maximum", "np.minimum", "np.abs", "np.divide"):
+            found.add("CALL " + ast.unparse(node))
+        elif isinstance(node, ast.Raise):
+            found.add("RAISE " + ast.unparse(node))
+    return found
+
+
+def _normalized_source_hash(function):
+    import hashlib
+    import inspect
+    text = "\n".join(line.strip() for line in inspect.getsource(function).replace("\r\n", "\n").split("\n") if line.strip())
+    return hashlib.sha256(text.encode()).hexdigest()[:16]
+
+
+@pytest.mark.parametrize("name", sorted(_EVAL_DISPOSITION))
+def test_r6_every_conditional_of_the_evaluate_path_has_an_interval_counterpart_or_decline(name):
+    function = getattr(CylinderIntersectionCurve, name)
+    found = _conditionals(function)
+    table = set(_EVAL_DISPOSITION[name])
+    assert found - table == set(), f"{name}: a new conditional needs an interval counterpart or a decline: {sorted(found - table)}"
+    assert table - found == set(), f"{name}: table entries without code (code changed? review the table): {sorted(table - found)}"
+
+
+def test_r6_evaluate_path_source_is_the_reviewed_one():
+    expected = {"_angle": "34791f8ae77d616b", "_coefficients": "74cb10de6e2bd78b", "_root_at_angles": "74606db371e14ba3",
+                "_root": "3baa9a815863ae22", "evaluate": "933def1a34a60adf"}
+    actual = {name: _normalized_source_hash(getattr(CylinderIntersectionCurve, name)) for name in expected}
+    assert actual == expected, f"the float code of the cylinder curve changed; re-derive the interval box and update the table: {actual}"
+
+
+def _adversarial2(seed, count):
+    """Kinds: 0 generic, 1 shift along the second axis (B1), 2 near tangency, 3 near-parallel/anti-parallel, 4 large shift
+    along the FIRST axis, 5 large shift along all axes, 6 short sweep from 0 with a large axial shift (endpoint snap)."""
+    rng = np.random.default_rng(seed)
+    out = []
+    for index in range(count):
+        kind = index % 7
+        n1 = _unit(rng.normal(size=3))
+        if kind == 3:
+            theta = 10**rng.uniform(-9, -1)
+            pivot = _unit(np.cross(n1, rng.normal(size=3)))
+            n2 = _unit((n1*np.cos(theta) + np.cross(pivot, n1)*np.sin(theta))*rng.choice([1., -1.]))
+        else:
+            n2 = _unit(rng.normal(size=3))
+        r1 = float(rng.choice([1., 10**rng.uniform(-2, 2)]))
+        r2 = float(rng.choice([2., 10**rng.uniform(-2, 2)]))
+        perp = np.cross(n1, n2)
+        perp = perp/np.linalg.norm(perp) if np.linalg.norm(perp) > 0 else _unit(rng.normal(size=3))
+        sep = float(rng.uniform(0., 1.5))*(r1 + r2)
+        if kind == 2:
+            sep = (r1 + r2)*(1. - 10**rng.uniform(-12, -1))
+        shift = np.zeros(3)
+        big = float(rng.choice([2.**14, 2.**20, 2.**24, 1e6, 1e8]))
+        if kind == 1:
+            shift = big*n2
+        elif kind == 4:
+            shift = big*n1
+        origin1 = np.zeros(3)
+        if kind == 5:                                           # translate the whole configuration far along a generic direction
+            origin1 = big*_unit(rng.normal(size=3))
+            shift = origin1 + float(rng.choice([0., 1e3, big]))*n2
+        origin2 = shift + sep*perp
+        try:
+            if kind == 6:
+                curve = _snap_curve(float(rng.choice([2.**14, 2.**20, 2.**24, 2.**26])), float(rng.choice([0., 1e-9, .3])),
+                                    float(10**rng.uniform(-12, -6))*float(rng.choice([1., -1.])), float(rng.uniform(1.5, 3.)),
+                                    int(rng.choice([-1, 1])))
+            else:
+                a = Cylinder(tuple(origin1), tuple(n1), tuple(_frame_for(n1, rng)), r1, 4.)
+                b = Cylinder(tuple(origin2), tuple(n2), tuple(_frame_for(n2, rng)), r2, 4.)
+                start = float(rng.choice([0., .3, 1., 5.9, rng.uniform(0., 6.), 1e3, 1e15]))
+                sweep = float(rng.choice([1., 3., 6.2, 10**rng.uniform(-12, 0.7)]))*float(rng.choice([1., -1.]))
+                curve = CylinderIntersectionCurve(a, b, start, sweep, int(rng.choice([-1, 1])))
+            curve.evaluate(0.)
+        except Exception:
+            continue
+        out.append((kind, curve))
+    return out
+
+
+def _containment_report2(seed, count, tol=1e-9):
+    built = {k: 0 for k in range(7)}
+    admitted_ok = {k: 0 for k in range(7)}
+    bad, skipped, checked = [], 0, 0
+    rng = np.random.default_rng(seed + 5000)
+    for kind, curve in _adversarial2(seed, count):
+        built[kind] += 1
+        if _admitted_box(curve, 0., 1., tol) is None and _admitted_box(curve, 0., .125, tol) is None:
+            continue
+        clean = True
+        for lower, upper in [(0., 1.)] + [(i/8, (i+1)/8) for i in range(8)]:
+            box = _admitted_box(curve, lower, upper, tol)
+            if box is None:
+                continue
+            lo, hi, exact = box
+            ts = np.unique(np.concatenate(([lower, upper], rng.uniform(lower, upper, 12))))
+            try:
+                pts = np.vstack([np.asarray(curve.evaluate(float(t))) for t in (lower, upper)]    # scalar endpoint path
+                                 + [np.asarray(curve.evaluate(ts))])                                  # vector path
+            except Exception:
+                skipped += 1
+                continue
+            checked += 1
+            if np.any(np.isnan(pts)):
+                bad.append((kind, lower, upper, "nan"))
+                clean = False
+                continue
+            pad = 0. if exact else tol*(1 + 1e-9) + 1e3*np.finfo(float).eps*max(1., float(np.max(np.abs(np.concatenate((lo, hi))))))
+            if not (np.all(pts >= lo - pad) and np.all(pts <= hi + pad)):
+                bad.append((kind, lower, upper))
+                clean = False
+        if clean:
+            admitted_ok[kind] += 1
+    return built, admitted_ok, bad, skipped, checked
+
+
+@pytest.mark.parametrize("seed", [31, 32, 33])
+def test_r6_stronger_containment_net(seed):
+    built, admitted_ok, bad, skipped, checked = _containment_report2(seed, 1400)
+    assert all(built[k] >= (2 if k == 2 else 12) for k in range(7)), built                         # per-kind constructions
+    assert all(admitted_ok[k] >= 6 for k in (0, 1, 3, 4, 5)), (built, admitted_ok)   # per-kind admitted AFTER the point check
+    assert checked >= 400 and skipped <= 0.05*(checked + skipped), (checked, skipped)
+    assert not bad, f"{len(bad)} box/point violations; first {bad[0]}; built {built} admitted_ok {admitted_ok}"
