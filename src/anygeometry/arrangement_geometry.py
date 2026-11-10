@@ -180,8 +180,8 @@ def _iv_dot(u, v):
     for x, y in zip(u, v):
         product = _iv_mul(x, y)
         total = product if total is None else _iv_add(total, product)
-        magnitude += max(abs(x[0]), abs(x[1]))*max(abs(y[0]), abs(y[1]))
-    extra = 4*_EPS*magnitude
+        magnitude = _up(magnitude+_up(max(abs(x[0]), abs(x[1]))*max(abs(y[0]), abs(y[1]))))
+    extra = _up(_up(4*_EPS)*magnitude)
     return _iv(total[0]-extra, total[1]+extra)
 
 
@@ -193,8 +193,9 @@ def _phase_inside(lower, upper, phase):
 
 def _iv_sincos(lower, upper):
     """Enclosures of sin and cos over ``[lower, upper]``; libm assumption: at most 4 ulp error (widened by 8 eps)."""
+    wide = 8*_EPS
     if upper-lower >= 2*math.pi-1e-6:
-        return (-1., 1.), (-1., 1.)
+        return (-1.-wide, 1.+wide), (-1.-wide, 1.+wide)
     sines = (math.sin(lower), math.sin(upper))
     cosines = (math.cos(lower), math.cos(upper))
     s_lo, s_hi = min(sines), max(sines)
@@ -207,7 +208,6 @@ def _iv_sincos(lower, upper):
         c_hi = 1.
     if _phase_inside(lower, upper, math.pi):
         c_lo = -1.
-    wide = 8*_EPS
     return (max(s_lo-wide, -1.-wide), min(s_hi+wide, 1.+wide)), (max(c_lo-wide, -1.-wide), min(c_hi+wide, 1.+wide))
 
 
@@ -248,10 +248,17 @@ def _cylinder_box_once(curve, t0, t1):
     disc = _iv_mul(_iv_const(4.), _iv_sub(positive, negative))
     if not disc[1] > 0.:
         raise _IntervalDecline                    # no positive discriminant: evaluate would refuse or return a fold point
+    if t0 <= 0. or t1 >= 1.:
+        # ``_root`` replaces z by -b / (2 a) at t == 0 and t == 1 when root^2 <= envelope = 64 eps (b^2 + a r2^2) (and two
+        # more conditions, ignored here: declining is conservative). That value need not lie in the box (the root interval
+        # need not contain 0 when b is large). Decline unless the discriminant interval proves root^2 > envelope.
+        bsq = _up(max(b[0]*b[0], b[1]*b[1]))
+        envelope = _up(_up(64*_EPS)*_up(bsq+_up(a*float(second.radius)**2)))
+        if not disc[0] > _up(envelope*(1+1e-9)):
+            raise _IntervalDecline
     # ``evaluate`` takes ``sqrt(max(disc, 0))`` of the float discriminant, which lies in this interval, so the root
     # lies in [sqrt(max(lo, 0)), sqrt(hi)] (the sqrt interval carries the 1/sqrt(D) amplification of the width of
-    # ``disc`` by itself). The endpoint snap of ``evaluate`` (z = -b / (2 a) at a fold) lies in the hull as well, since
-    # the root interval then contains 0.
+    # ``disc`` by itself). An interval that reaches 0 only inside the chart (no snap possible there) is clamped at 0.
     root = (0. if disc[0] <= 0. else _dn(math.sqrt(disc[0])), _up(math.sqrt(disc[1])))
     signed = root if curve.branch == 1 else _iv_neg(root)
     z = _iv_div_positive(_iv_add(_iv_neg(b), signed), 2*a)
