@@ -49,6 +49,18 @@ def _branch_root(a, b, c, radical, branch):
     return np.where(radical == 0.0, direct, root)                              # the fold itself: one point for both branches
 
 
+def _frame_part(fs, t, order):
+    """``fs.frame(t)[order]``; the one-order evaluation only when no frame form can overflow.
+
+    ``frame(t)`` evaluates all three orders, and the unused ones can raise an overflow under
+    ``np.errstate(over='raise')`` for extreme control nets; with Bernstein bounds above ``1e100`` the full
+    original evaluation is kept so the refusal is unchanged.
+    """
+    if max(form.bound for axis in fs.P_forms for form in axis) <= 1e100:
+        return fs.frame_order(t, order)
+    return fs.frame(t)[order]
+
+
 @dataclass(frozen=True, slots=True)
 class BezierQuadricCurve:
     """One real branch of a Bezier extrusion cut with a quadric, over a chart ``[start, start + sweep]`` of ``t``.
@@ -230,12 +242,16 @@ class BezierQuadricCurve:
         return f * np.sqrt(np.maximum(side * self.sweep * self._difference(fs, anchor, f * f), 0.0))
 
     def _root(self, fs, t, anchor, delta, f, side):
-        a, b, c = fs.at(t)
+        return self._root_abc(fs, t, anchor, delta, f, side, fs.at(t))[:2]
+
+    def _root_abc(self, fs, t, anchor, delta, f, side, abc):
+        """``_root`` for the already evaluated ``abc = fs.at(t)``; returns ``(s, radical, abc)``."""
+        a, b, c = abc
         if self.plan().linear:
             with np.errstate(divide="ignore", invalid="ignore"):
-                return -c / b, np.zeros_like(t)
+                return -c / b, np.zeros_like(t), abc
         radical = self._radical(fs, t, anchor, delta, f, side)
-        return _branch_root(a, b, c, radical, self.branch), radical            # at a fold both branches give one point
+        return _branch_root(a, b, c, radical, self.branch), radical, abc       # at a fold both branches give one point
 
     def _evaluate_scalar(self, tau):
         """One point without numpy: the arrangement calls this tens of thousands of times."""
@@ -293,7 +309,7 @@ class BezierQuadricCurve:
         t, _dt, anchor, delta, f, _fp, side = self._chart(np.atleast_1d(tau))
         fs = self.plan().floats()
         s, _radical = self._root(fs, t, anchor, delta, f, side)
-        points = fs.origin + fs.frame(t)[0] + s[..., None] * fs.direction
+        points = fs.origin + _frame_part(fs, t, 0) + s[..., None] * fs.direction
         if not self._identity:
             points = self._apply_transform(points)
         return points[0] if tau.ndim == 0 else points
@@ -306,9 +322,8 @@ class BezierQuadricCurve:
         tau = np.atleast_1d(tau)
         t, dt, anchor, delta, f, fp, side = self._chart(tau)
         fs = self.plan().floats()
-        _P, Pd, _Pdd = fs.frame(t)
-        s, radical = self._root(fs, t, anchor, delta, f, side)
-        a, b, c = fs.at(t)
+        Pd = _frame_part(fs, t, 1)
+        s, radical, (a, b, c) = self._root_abc(fs, t, anchor, delta, f, side, fs.at(t))
         _a1, b1, c1 = fs.at(t, 1)
         with np.errstate(divide="ignore", invalid="ignore"):
             if self.plan().linear:

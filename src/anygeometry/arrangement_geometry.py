@@ -5,6 +5,7 @@ queries; discretization samples are never used for trim or junction predicates.
 """
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 from fractions import Fraction
 import math
@@ -15,23 +16,512 @@ from .analytic_roots import isolate_real_roots, trigonometric_roots
 from .curves import Arc, Straight, Spline
 from .errors import GeometryError
 from .exact_curves import EXACT_CURVES, EllipticArc, CylinderIntersectionCurve
+from .branch_algebra import directrix_of
+from .plane_ruled import PlaneRuledSupport
 from .branch_curves import BezierQuadricCurve
 from .quadric_curves import QuadricIntersectionCurve
 from .surfaces import Cylinder, Plane
 from contextvars import ContextVar
+from functools import lru_cache
 from contextlib import contextmanager
 
 # Retained for controlled experiments; full-case benefit is not established.
 _JUNCTION_BOUNDS = ContextVar('junction_bounds', default=False)
 
 
+# Piecewise line/branch rejection (default on). A predicate budget or an explicit
+# ``_junction_bounds_policy(False)`` restores the unfiltered route for exact accounting.
+_SWEEP_REJECTION = ContextVar('junction_sweep_rejection', default=True)
+
+
 @contextmanager
 def _junction_bounds_policy(enabled):
     token = _JUNCTION_BOUNDS.set(enabled)
+    sweep = _SWEEP_REJECTION.set(bool(enabled))
     try:
         yield
     finally:
+        _SWEEP_REJECTION.reset(sweep)
         _JUNCTION_BOUNDS.reset(token)
+
+
+_SWEEP_EPS = float(np.finfo(float).eps)
+_SWEEP_PIECES = 8
+
+
+def _segment_clear_of_box(p, q, lo, hi):
+    """``True`` only when the segment ``p``-``q`` (3 floats each) and the box ``lo``-``hi`` are disjoint
+    (separating-axis test: the three box axes, then the three ``d x e_k`` axes)."""
+    for k in range(3):
+        a, b = p[k], q[k]
+        if a > b:
+            a, b = b, a
+        if b < lo[k] or a > hi[k]:
+            return True
+    d = (q[0]-p[0], q[1]-p[1], q[2]-p[2])
+    gap = [.5*(lo[k]+hi[k])-.5*(p[k]+q[k]) for k in range(3)]
+    half = [.5*(hi[k]-lo[k]) for k in range(3)]
+    for axis in ((0., d[2], -d[1]), (-d[2], 0., d[0]), (d[1], -d[0], 0.)):
+        if abs(axis[0]*gap[0]+axis[1]*gap[1]+axis[2]*gap[2]) > (
+                abs(axis[0])*half[0]+abs(axis[1])*half[1]+abs(axis[2])*half[2]):
+            return True
+    return False
+
+
+_IDENTITY_ROWS = ((1., 0., 0., 0.), (0., 1., 0., 0.), (0., 0., 1., 0.), (0., 0., 0., 1.))
+
+
+@lru_cache(maxsize=16384)
+def _curve_setup_benign(curve):
+    """``True`` when the curve-only set-up of the original route (directrix, plan, end evaluations) does not refuse.
+
+    The original ``curve_junctions`` inverts the end points of each curve on the other; that builds the
+    directrix and the plan of a branch curve, which can refuse (for example a directrix that degenerates to a
+    line). A shortcut must not turn such a refusal into ``()``, so it declines when the set-up raises.
+    """
+    try:
+        if type(curve) is BezierQuadricCurve and not isinstance(curve.first, PlaneRuledSupport):
+            directrix_of(curve.first)
+        if type(curve) in (BezierQuadricCurve, CylinderIntersectionCurve):
+            curve.evaluate(0.)
+            curve.evaluate(1.)
+        return True
+    except Exception:
+        return False
+
+
+_MODERATE = 1e50
+
+
+_STRUCTURAL_STR = frozenset(('parameterization', 'kind'))
+_STRUCTURAL_INT = frozenset(('branch',))
+_CACHE_FIELDS = frozenset(('_inversions',))
+#: Longest container the guard accepts. Control nets and polynomial degrees up to 64 are accepted; the longest
+#: container seen in the 67,451 captured tripod calls has 4 entries (a 4x4 transform), and no captured curve is a
+#: BezierPath or carries a control net (the branch curves there are plane ruled).
+_CONTAINER_CAP = 65
+
+
+def _is_float_leaf(value):
+    kind = type(value)
+    return (kind is float or kind is np.float64) and math.isfinite(value) and abs(value) <= _MODERATE
+
+
+def _is_point3(value):
+    """Exactly three float leaves as a plain tuple (no nesting), or a float64 ndarray of shape (3,) (finite, moderate)."""
+    if type(value) is tuple:
+        return len(value) == 3 and all(_is_float_leaf(item) for item in value)
+    return (type(value) is np.ndarray and value.shape == (3,) and value.dtype == np.float64
+            and bool(np.all(np.isfinite(value))) and float(np.max(np.abs(value))) <= _MODERATE)
+
+
+#: Scalar-valued fields (a float leaf, never a container) of the package's own curve / support classes.
+_SCALAR_FIELDS = frozenset(('start_angle', 'sweep_angle', 'radius', 'height', 'start', 'sweep'))
+
+
+def _shape_ok(value):
+    """The dimensions the original route assumes for the classes that do not validate them themselves.
+
+    ``LinePath`` points are 3-vectors; ``BezierPath`` controls are an ``(n, 3)`` array or a tuple of ``n >= 2``
+    3-tuples (``n`` at most ``_CONTAINER_CAP``); ``EllipticArc`` vectors are 3-vectors. Other dataclasses
+    validate their own shapes.
+    """
+    kind = type(value)
+    if kind is LinePath:
+        return _is_point3(value.start) and _is_point3(value.end)
+    if kind is EllipticArc:
+        return _is_point3(value.center) and _is_point3(value.u_vector) and _is_point3(value.v_vector)
+    if kind is BezierPath:
+        controls = value.controls
+        if type(controls) is np.ndarray:
+            return controls.ndim == 2 and controls.shape[1] == 3 and 2 <= controls.shape[0] <= _CONTAINER_CAP
+        return (type(controls) is tuple and 2 <= len(controls) <= _CONTAINER_CAP
+                and all(_is_point3(row) and type(row) is tuple for row in controls))
+    return True
+
+
+def _allowed(value, name, depth):
+    """Allow-list walk: ``True`` only for the ordinary case, every unknown kind of value returns ``False``.
+
+    Numbers must be exactly ``float`` or ``np.float64`` (finite, at most ``_MODERATE``); ``int`` only in the
+    structural ``branch`` field (+-1); ``str`` only in the structural ``parameterization`` / ``kind`` fields;
+    containers are ``tuple`` or float64 ``ndarray`` (no list or other sequence) of at most ``_CONTAINER_CAP``
+    entries; the ``_inversions`` result cache is the only dict (never read as input); dataclasses and the
+    package's own support objects are walked through ALL their fields, private ones included. Integers,
+    bools, ``np.int*``, ``np.float32``, ``Fraction``, ``complex``, object arrays, lists, other mappings and
+    anything deeper than 6 levels return ``False``.
+    """
+    if depth > 6:
+        return False
+    kind = type(value)
+    if kind is float or kind is np.float64:
+        return math.isfinite(value) and abs(value) <= _MODERATE
+    if kind is int:
+        return name in _STRUCTURAL_INT and (value == 1 or value == -1)
+    if kind is str:
+        return name in _STRUCTURAL_STR
+    if kind is tuple:
+        return len(value) <= _CONTAINER_CAP and all(_allowed(item, name, depth+1) for item in value)
+    if kind is np.ndarray:
+        return (value.dtype == np.float64 and 1 <= value.ndim <= 2 and value.size <= 3*_CONTAINER_CAP
+                and bool(np.all(np.isfinite(value)))
+                and (value.size == 0 or float(np.max(np.abs(value))) <= _MODERATE))
+    if kind is dict:
+        return name in _CACHE_FIELDS
+    if dataclasses.is_dataclass(value):
+        if not _shape_ok(value):
+            return False
+        return all((_is_float_leaf(getattr(value, field.name)) if field.name in _SCALAR_FIELDS and kind is not LinePath
+                    else _allowed(getattr(value, field.name), field.name, depth+1)) for field in dataclasses.fields(value))
+    if getattr(kind, '__module__', '').startswith('anygeometry'):
+        fields = dict(getattr(value, '__dict__', {}))
+        for cls in kind.__mro__:
+            for slot in getattr(cls, '__slots__', ()):
+                if hasattr(value, slot):
+                    fields[slot] = getattr(value, slot)
+        return all((_is_float_leaf(item) if field in _SCALAR_FIELDS else _allowed(item, field, depth+1))
+                   for field, item in fields.items())
+    return False
+
+
+def _inputs_moderate(curve):
+    """The curve or line is the ordinary case: every value it holds passes ``_allowed`` (never raises).
+
+    With NaN, infinity, huge coordinates, integer / bool / float32 / Fraction values, list containers or large
+    degrees the original route can raise or wrap around (``inf - inf``, ``int64`` overflow, an unhashable cache
+    key, ``math.comb`` overflow), so every shortcut declines for anything but exactly the allowed shapes.
+    """
+    if type(curve) is LinePath:
+        return _leaves_moderate(curve)
+    try:
+        return _leaves_moderate_cached(curve)
+    except Exception:                                  # unhashable (list controls) or any other failure: decide uncached
+        return _leaves_moderate(curve)
+
+
+def _leaves_moderate(curve):
+    try:
+        return bool(_allowed(curve, '', 0))
+    except Exception:
+        return False
+
+
+@lru_cache(maxsize=16384)
+def _leaves_moderate_cached(curve):
+    return _leaves_moderate(curve)
+
+
+def _shortcut_curve_ok(curve, tolerance):
+    """Total guard: any failure while inspecting the curve declines (the guard never raises)."""
+    try:
+        return bool(_shortcut_curve_ok_inner(curve, tolerance))
+    except Exception:
+        return False
+
+
+def _shortcut_curve_ok_inner(curve, tolerance):
+    """``False`` for a curve the rejection shortcuts must not decide; they then decline to the original route.
+
+    The single guard of every shortcut path (``_separated_line_pair``, ``_line_clear_of_branch``,
+    ``_curve_pair_clear``). Contract: with the shortcuts on, ``curve_junctions`` returns the same values and
+    raises the same typed refusals as the original route. Cancellation poll counts beyond the replay in
+    ``_poll_like_original`` and exceptions under ``np.errstate(...='raise')`` are not part of the contract
+    (production never sets errstate to raise).
+
+    A branch curve with a non-identity transform measures its endpoint inversion tolerance in reference
+    space (a scale or shear widens the world-space window beyond the padding); an elliptic arc with a
+    huge angular phase loses the angle arithmetic (``start + sweep == start``) the enclosure assumes.
+    Both keep the original route.
+    """
+    kind = type(curve)
+    if not _inputs_moderate(curve):
+        return False
+    if kind is BezierQuadricCurve:
+        return bool(curve._identity) and _curve_setup_benign(curve)
+    if kind is CylinderIntersectionCurve:
+        if not (tuple(tuple(float(v) for v in row) for row in curve.transform) == _IDENTITY_ROWS
+                and _curve_setup_benign(curve)):
+            return False
+        try:
+            return (curve.parameterization == 'linear'
+                    and _angle_error_ok(float(curve.start_angle), float(curve.sweep_angle)))
+        except Exception:
+            return False
+    if kind is EllipticArc:
+        start, sweep = float(curve.start_angle), float(curve.sweep_angle)
+        return _angle_error_ok(start, sweep)
+    return True
+
+
+_EPS = float(np.finfo(float).eps)
+
+
+class _IntervalDecline(Exception):
+    """The interval computation cannot prove an enclosure: the shortcut declines to the original route."""
+
+
+def _dn(value):
+    return math.nextafter(value, -math.inf)
+
+
+def _up(value):
+    return math.nextafter(value, math.inf)
+
+
+def _iv(lo, hi):
+    if not (math.isfinite(lo) and math.isfinite(hi)) or lo > hi:
+        raise _IntervalDecline
+    return (_dn(lo), _up(hi))
+
+
+def _iv_const(value):
+    value = float(value)
+    if not math.isfinite(value):
+        raise _IntervalDecline
+    return (_dn(value), _up(value))
+
+
+def _iv_add(a, b):
+    return _iv(a[0]+b[0], a[1]+b[1])
+
+
+def _iv_sub(a, b):
+    return _iv(a[0]-b[1], a[1]-b[0])
+
+
+def _iv_neg(a):
+    return (-a[1], -a[0])
+
+
+def _iv_mul(a, b):
+    products = (a[0]*b[0], a[0]*b[1], a[1]*b[0], a[1]*b[1])
+    if not all(math.isfinite(v) for v in products):
+        raise _IntervalDecline
+    return _iv(min(products), max(products))
+
+
+def _iv_div_positive(a, divisor):
+    if not (divisor > 0. and math.isfinite(divisor)):
+        raise _IntervalDecline
+    return _iv(a[0]/divisor, a[1]/divisor)
+
+
+def _iv_dot(u, v):
+    """Dot product of two interval 3-vectors, valid for any summation order or fused multiply-add of the float code."""
+    total, magnitude = None, 0.
+    for x, y in zip(u, v):
+        product = _iv_mul(x, y)
+        total = product if total is None else _iv_add(total, product)
+        magnitude = _up(magnitude+_up(max(abs(x[0]), abs(x[1]))*max(abs(y[0]), abs(y[1]))))
+    extra = _up(_up(4*_EPS)*magnitude)
+    return _iv(total[0]-extra, total[1]+extra)
+
+
+def _phase_inside(lower, upper, phase):
+    """Over-inclusive test: some ``phase + 2 pi k`` lies in ``[lower, upper]`` widened by ``1e-6``."""
+    k = math.ceil((lower-1e-6-phase)/(2*math.pi))
+    return phase+2*math.pi*k <= upper+1e-6
+
+
+def _iv_sincos(lower, upper):
+    """Enclosures of sin and cos over ``[lower, upper]``; libm assumption: at most 4 ulp error (widened by 8 eps)."""
+    wide = 8*_EPS
+    if upper-lower >= 2*math.pi-1e-6:
+        return (-1.-wide, 1.+wide), (-1.-wide, 1.+wide)
+    sines = (math.sin(lower), math.sin(upper))
+    cosines = (math.cos(lower), math.cos(upper))
+    s_lo, s_hi = min(sines), max(sines)
+    c_lo, c_hi = min(cosines), max(cosines)
+    if _phase_inside(lower, upper, math.pi/2):
+        s_hi = 1.
+    if _phase_inside(lower, upper, -math.pi/2):
+        s_lo = -1.
+    if _phase_inside(lower, upper, 0.):
+        c_hi = 1.
+    if _phase_inside(lower, upper, math.pi):
+        c_lo = -1.
+    return (max(s_lo-wide, -1.-wide), min(s_hi+wide, 1.+wide)), (max(c_lo-wide, -1.-wide), min(c_hi+wide, 1.+wide))
+
+
+def _cylinder_box_once(curve, t0, t1):
+    """Outward-rounded box of ``curve.evaluate(t)`` for every ``t`` in ``[t0, t1]``, built from the formula ``evaluate`` uses.
+
+    Linear chart, identity transform: ``angle = start + sweep t``; ``base = O1 + r (cos e1 + sin e2)``;
+    ``q = (base - O2) - ((base - O2) . n2) n2``; ``b = 2 q . w``;
+    ``disc = 4 (remainder + m^2 sine^2 - 2 n0 m cosine)``; ``z = (-b + branch sqrt(disc)) / (2 a)``;
+    ``point = base + z n1``. Every operation widens by one ulp (so by its rounding), the constants come from the
+    same ``_branch_constants`` the float code uses. Raises ``_IntervalDecline`` when a divisor, the
+    discriminant (kept above a snap/cancellation margin) or any interval cannot be proven.
+    """
+    from .exact_curves import _branch_constants
+    c = _branch_constants(curve)
+    first, second = curve.first, curve.second
+    angle = _iv_add(_iv_const(curve.start_angle), _iv_mul(_iv_const(curve.sweep_angle), (float(t0), float(t1))))
+    sn, cs = _iv_sincos(angle[0], angle[1])
+    r1 = _iv_const(first.radius)
+    base = []
+    for k in range(3):
+        ring = _iv_add(_iv_mul(cs, _iv_const(c.e1[k])), _iv_mul(sn, _iv_const(c.e2[k])))
+        base.append(_iv_add(_iv_const(first.origin[k]), _iv_mul(r1, ring)))
+    offset = [_iv_sub(base[k], _iv_const(second.origin[k])) for k in range(3)]
+    axis2 = [_iv_const(c.other_axis[k]) for k in range(3)]
+    along = _iv_dot(offset, axis2)
+    q = [_iv_sub(offset[k], _iv_mul(along, axis2[k])) for k in range(3)]
+    b = _iv_mul(_iv_const(2.), _iv_dot(q, [_iv_const(c.w[k]) for k in range(3)]))
+    a = float(c.a)
+    magnitude = float(c.magnitude)
+    if not (a > 0. and magnitude > 0.):
+        raise _IntervalDecline
+    cosine = _iv_div_positive(_iv_add(_iv_mul(_iv_const(c.nc), cs), _iv_mul(_iv_const(c.ns), sn)), magnitude)
+    sine = _iv_div_positive(_iv_sub(_iv_mul(_iv_const(c.nc), sn), _iv_mul(_iv_const(c.ns), cs)), magnitude)
+    square = _iv_const(magnitude**2)
+    positive = _iv_add(_iv_const(c.remainder), _iv_mul(_iv_mul(square, sine), sine))
+    negative = _iv_mul(_iv_mul(_iv_const(2*c.n0), _iv_const(magnitude)), cosine)
+    disc = _iv_mul(_iv_const(4.), _iv_sub(positive, negative))
+    if not disc[1] > 0.:
+        raise _IntervalDecline                    # no positive discriminant: evaluate would refuse or return a fold point
+    if t0 <= 0. or t1 >= 1.:
+        # ``_root`` replaces z by -b / (2 a) at t == 0 and t == 1 when root^2 <= envelope = 64 eps (b^2 + a r2^2) (and two
+        # more conditions, ignored here: declining is conservative). That value need not lie in the box (the root interval
+        # need not contain 0 when b is large). Decline unless the discriminant interval proves root^2 > envelope.
+        bsq = _up(max(b[0]*b[0], b[1]*b[1]))
+        envelope = _up(_up(64*_EPS)*_up(bsq+_up(a*float(second.radius)**2)))
+        if not disc[0] > _up(envelope*(1+1e-9)):
+            raise _IntervalDecline
+    # ``evaluate`` takes ``sqrt(max(disc, 0))`` of the float discriminant, which lies in this interval, so the root
+    # lies in [sqrt(max(lo, 0)), sqrt(hi)] (the sqrt interval carries the 1/sqrt(D) amplification of the width of
+    # ``disc`` by itself). An interval that reaches 0 only inside the chart (no snap possible there) is clamped at 0.
+    root = (0. if disc[0] <= 0. else _dn(math.sqrt(disc[0])), _up(math.sqrt(disc[1])))
+    signed = root if curve.branch == 1 else _iv_neg(root)
+    z = _iv_div_positive(_iv_add(_iv_neg(b), signed), 2*a)
+    lo, hi = [], []
+    for k in range(3):
+        point = _iv_add(base[k], _iv_mul(z, _iv_const(c.axis[k])))
+        lo.append(point[0])
+        hi.append(point[1])
+    return lo, hi
+
+
+def _cylinder_box_split(curve, t0, t1, depth):
+    try:
+        return _cylinder_box_once(curve, t0, t1)
+    except _IntervalDecline:
+        if depth <= 0:
+            raise
+    middle = .5*(t0+t1)
+    left = _cylinder_box_split(curve, t0, middle, depth-1)
+    right = _cylinder_box_split(curve, middle, t1, depth-1)
+    return [min(x, y) for x, y in zip(left[0], right[0])], [max(x, y) for x, y in zip(left[1], right[1])]
+
+
+@lru_cache(maxsize=16384)
+def _cylinder_box_cached(curve, t0, t1):
+    try:
+        return _cylinder_box_split(curve, t0, t1, 3)
+    except _IntervalDecline:
+        return None
+    except (GeometryError, ArithmeticError, ValueError, TypeError, FloatingPointError):
+        return None
+
+
+def _shortcut_bounds(curve, lower, upper):
+    """The box a shortcut may use for ``curve`` over ``[lower, upper]`` as float lists; raises ``GeometryError`` to decline.
+
+    Cylinder curves: the interval box above (no hand-derived padding). Other kinds: ``curve.bounds``.
+    """
+    if type(curve) is CylinderIntersectionCurve:
+        box = _cylinder_box_cached(curve, float(lower), float(upper))
+        if box is None:
+            raise GeometryError('no proven enclosure; the original route decides')
+        return box
+    lo, hi = curve.bounds(lower, upper)
+    return np.asarray(lo).tolist(), np.asarray(hi).tolist()
+
+
+def _angle_error_ok(start, sweep):
+    """The rounding of the angular phase stays below half of the rounding allowance of the enclosures.
+
+    The evaluated angle ``start + sweep * value`` and the angles the bounds are built from differ by a few
+    ulp of the largest angle (taken as 8). The enclosures pad their box by ``1e3 * eps`` times the
+    coordinate scale, and the angle error moves a point by at most that error times a lever arm no larger
+    than the coordinate scale, so ``8 ulp(max |angle|) <= 500 eps`` (a largest angle of about 60 rad) keeps the
+    error inside half of the allowance for every radius, axis length and axial range. A phase so large that
+    ``start + sweep == start`` is always declined.
+    """
+    top = max(abs(start), abs(start+sweep), 1.)
+    return (math.isfinite(top) and start+sweep != start
+            and 8*float(np.spacing(top)) <= 500*float(np.finfo(float).eps))
+
+
+def _poll_like_original(cancellation_check):
+    """The two cancellation polls the original route makes for a pair that returns ``()``.
+
+    ``curve_junctions`` polls on entry (already done), before the ``t = 1`` endpoint candidates and on
+    entry to ``_curve_junctions``; a pair certainly apart reaches no other poll.
+    """
+    if cancellation_check is not None:
+        for _ in range(2):
+            if cancellation_check():
+                raise GeometryError('curve intersection predicate cancelled')
+
+
+def _coplanar_with_ellipse(ellipse, curve, tolerance):
+    """``True`` when the original route could refuse or take its coplanar branch for this ellipse/branch pair."""
+    try:
+        normal = _cross3(ellipse.u_vector, ellipse.v_vector)
+        normal /= np.linalg.norm(normal)
+        return plane_roots(curve, normal, float(normal @ ellipse.center), tolerance=tolerance) is None
+    except Exception:
+        return True
+
+
+def _line_clear_of_branch(first, second, tolerance):
+    """``True`` only when ``curve_junctions(first, second)`` certainly returns ``()``.
+
+    Every junction needs a curve point within ``tolerance`` of the line's segment extended by
+    ``tolerance`` in parameter (the window ``point_parameters`` accepts). The outward interval
+    enclosures of the curve (whole, then eight parameter pieces) padded by ``tolerance`` and a
+    rounding allowance must all be disjoint from that extended segment. Anything unusual
+    (other curve types, a degenerate line, non-finite data) keeps the original route.
+    """
+    if not _SWEEP_REJECTION.get():
+        return False
+    if type(first) is LinePath and type(second) in (BezierQuadricCurve, CylinderIntersectionCurve):
+        line, curve = first, second
+    elif type(second) is LinePath and type(first) in (BezierQuadricCurve, CylinderIntersectionCurve):
+        line, curve = second, first
+    else:
+        return False
+    if not (_shortcut_curve_ok(curve, tolerance) and _shortcut_curve_ok(line, tolerance)):
+        return False
+    try:
+        start = [float(v) for v in line.start]
+        end = [float(v) for v in line.end]
+        d = [end[k]-start[k] for k in range(3)]
+        size = math.sqrt(d[0]*d[0]+d[1]*d[1]+d[2]*d[2])
+        if not (size > tolerance and math.isfinite(size) and 0 < tolerance < 1e100):
+            return False
+        p = [start[k]-tolerance*d[k] for k in range(3)]
+        q = [end[k]+tolerance*d[k] for k in range(3)]
+        scale = max(1., *(abs(v) for v in p), *(abs(v) for v in q))
+        base = tolerance*(1+1e-9)
+
+        def clear(lower, upper):
+            try:
+                lo, hi = _shortcut_bounds(curve, lower, upper)
+            except GeometryError:
+                return False
+            top = max(scale, *(abs(v) for v in lo), *(abs(v) for v in hi))
+            if not math.isfinite(top):
+                return False
+            pad = base+1e3*_SWEEP_EPS*top
+            return _segment_clear_of_box(p, q, [v-pad for v in lo], [v+pad for v in hi])
+
+        if clear(0., 1.):
+            return True
+        return all(clear(i/_SWEEP_PIECES, (i+1)/_SWEEP_PIECES) for i in range(_SWEEP_PIECES))
+    except (GeometryError, ArithmeticError, ValueError, TypeError):
+        return False
 
 
 def _separated_line_pair(first, second, tolerance):
@@ -53,6 +543,8 @@ def _separated_line_pair(first, second, tolerance):
         return False
     if type(other) is BezierQuadricCurve and not other._identity:
         return False
+    if not (_shortcut_curve_ok(other, tolerance) and _shortcut_curve_ok(line, tolerance)):
+        return False
     direction = np.asarray(line.end) - line.start
     if np.linalg.norm(direction) <= tolerance:
         raise GeometryError('degenerate arrangement line')
@@ -62,7 +554,7 @@ def _separated_line_pair(first, second, tolerance):
 
     def envelope(curve):
         try:
-            lo, hi = curve.bounds()
+            lo, hi = _shortcut_bounds(curve, 0., 1.)
         except (GeometryError, ArithmeticError, ValueError):
             return None
         lo, hi = np.asarray(lo), np.asarray(hi)
@@ -81,6 +573,116 @@ def _separated_line_pair(first, second, tolerance):
     a, b = envelope(first), envelope(second)
     return (a is not None and b is not None
             and (np.any(a[1] < b[0]) or np.any(b[1] < a[0])))
+
+
+@lru_cache(maxsize=16384)
+def _cached_enclosure(curve, lower, upper):
+    """``_shortcut_bounds(curve, lower, upper)`` cached (the curves are immutable values)."""
+    return _shortcut_bounds(curve, lower, upper)
+
+
+def _box_pair_clear(lo1, hi1, lo2, hi2, pad):
+    for k in range(3):
+        if lo2[k]-hi1[k] > pad or lo1[k]-hi2[k] > pad:
+            return True
+    return False
+
+
+def _curve_pair_clear(first, second, tolerance):
+    """``True`` only when ``curve_junctions(first, second)`` certainly returns ``()`` (curve x curve).
+
+    A junction needs a point of each curve within ``tolerance`` times the curve's acceptance
+    window of a point of the other (lines: the extended segment; arcs: ``2 + |u| + |v|``,
+    the angular window). Outward interval enclosures (whole, then eight pieces) padded by
+    those windows and a rounding allowance must be pairwise disjoint. Lines against branch
+    curves use ``_line_clear_of_branch``; other types, degenerate or non-finite data keep the
+    original route.
+    """
+    if not _SWEEP_REJECTION.get():
+        return False
+    kinds = (LinePath, EllipticArc, BezierQuadricCurve, CylinderIntersectionCurve)
+    if type(first) not in kinds or type(second) not in kinds or (type(first) is LinePath and type(second) is LinePath):
+        return False
+    if type(first) is LinePath and type(second) in (BezierQuadricCurve, CylinderIntersectionCurve):
+        return False
+    if type(second) is LinePath and type(first) in (BezierQuadricCurve, CylinderIntersectionCurve):
+        return False
+    if not (_shortcut_curve_ok(first, tolerance) and _shortcut_curve_ok(second, tolerance)):
+        return False
+    for ellipse, other in ((first, second), (second, first)):
+        if type(ellipse) is EllipticArc and type(other) in (BezierQuadricCurve, CylinderIntersectionCurve):
+            if _coplanar_with_ellipse(ellipse, other, tolerance):
+                return False
+    try:
+        window = 0.
+        objects = []
+        for curve in (first, second):
+            if type(curve) is LinePath:
+                start = [float(v) for v in curve.start]
+                end = [float(v) for v in curve.end]
+                d = [end[k]-start[k] for k in range(3)]
+                size = math.sqrt(d[0]*d[0]+d[1]*d[1]+d[2]*d[2])
+                if not (size > tolerance and math.isfinite(size)):
+                    return False
+                objects.append((curve, (start, end, d)))
+                window += 1.
+            else:
+                if type(curve) is EllipticArc:
+                    u = [float(v) for v in curve.u_vector]
+                    v = [float(x) for x in curve.v_vector]
+                    nu, nv = math.sqrt(sum(x*x for x in u)), math.sqrt(sum(x*x for x in v))
+                    cross = (u[1]*v[2]-u[2]*v[1], u[2]*v[0]-u[0]*v[2], u[0]*v[1]-u[1]*v[0])
+                    if not (math.isfinite(nu+nv) and nu > 0 and nv > 0
+                            and math.sqrt(sum(x*x for x in cross)) > 1e-6*nu*nv
+                            and math.isfinite(float(curve.sweep_angle)) and float(curve.sweep_angle) != 0.):
+                        return False
+                    window += 2.+nu+nv
+                else:
+                    window += 1.
+                objects.append((curve, None))
+        if not (0 < tolerance < 1e100) or not math.isfinite(window):
+            return False
+        base = tolerance*(1+1e-9)*window
+
+        def enclosure(item, lower, upper):
+            curve, line = item
+            if line is not None:
+                start, end, d = line
+                return ('s', [start[k]-tolerance*d[k] for k in range(3)], [end[k]+tolerance*d[k] for k in range(3)])
+            lo, hi = _cached_enclosure(curve, lower, upper)
+            return ('b', lo, hi)
+
+        whole = [enclosure(item, 0., 1.) for item in objects]
+        top = max(1., *(abs(x) for obj in whole for part in obj[1:] for x in part))
+        if not math.isfinite(top):
+            return False
+        pad = base+1e3*_SWEEP_EPS*top
+
+        def apart(x, y):
+            if x[0] == 'b' and y[0] == 'b':
+                return _box_pair_clear(x[1], x[2], y[1], y[2], pad)
+            seg, box = (x, y) if x[0] == 's' else (y, x)
+            return _segment_clear_of_box(seg[1], seg[2], [v-pad for v in box[1]], [v+pad for v in box[2]])
+
+        if apart(whole[0], whole[1]):
+            return True
+        n = _SWEEP_PIECES
+
+        def pieces(index):
+            item = objects[index]
+            if item[1] is not None:
+                return [whole[index]]
+            return [enclosure(item, i/n, (i+1)/n) for i in range(n)]
+
+        second_pieces = pieces(1)
+        for piece in pieces(0):
+            if apart(piece, whole[1]):
+                continue
+            if not all(apart(piece, other) for other in second_pieces):
+                return False
+        return True
+    except (GeometryError, ArithmeticError, ValueError, TypeError):
+        return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -443,6 +1045,9 @@ def curve_junctions(first, second, *, tolerance=1e-10,cancellation_check=None):
     if _separated_line_pair(first, second, tolerance):
         from .runtime_diagnostics import _increment
         _increment('junction_line_bounds_pruned')
+        return ()
+    if _line_clear_of_branch(first, second, tolerance) or _curve_pair_clear(first, second, tolerance):
+        _poll_like_original(cancellation_check)
         return ()
     # Named interval endpoints are independent qualified candidates. A root
     # of a clipped conic can round just beyond its new angular chart; retaining

@@ -2570,6 +2570,63 @@ class _VertexLookup:
             self.grid.setdefault(self._key(point), []).append(len(self.vertices))
 
 
+def _point_clear_of_curve(curve, tolerance):
+    """Pure prefilter of the points-by-paths split loop: ``None`` (no filter) or ``far(position)``.
+
+    ``far`` is True only when ``point_parameters(curve, position, tolerance=tolerance)`` certainly
+    returns ``()``. Only for a :class:`BezierQuadricCurve` with the identity transform: every parameter
+    that route returns (its exact ends, the cached or polished inversion) passed ``norm(evaluate - point)
+    <= tolerance`` on the world points, and ``bounds()`` is an outward enclosure of the curve. A point
+    with a coordinate outside that enclosure widened by ``2 tol + 1e-6 max(1, |bounds|)`` (far beyond
+    the evaluation rounding, also near a square-root end) is farther than ``tol`` from every evaluated
+    point. The caller makes one unfiltered call per path first, so the curve-only refusals of that route
+    (inverse/dual/directrix set-up, end evaluations) are raised as before; the rest of the route has no
+    refusal for a finite point (chart parameters are clamped into ``[0, 1]``). Non-finite coordinates,
+    other curve types, a non-finite enclosure or a failing ``bounds()`` keep the unfiltered route.
+    """
+    if type(curve) is not BezierQuadricCurve or not curve._identity:
+        return None
+    if not (0.0 < tolerance < math.inf):
+        return None
+    from .arrangement_geometry import _inputs_moderate
+    if not _inputs_moderate(curve):                 # the shared allow-list guard of the junction shortcuts
+        return None
+    try:
+        lo, hi = curve.bounds()
+    except Exception:                               # no filter: the unfiltered route decides, as before
+        return None
+    lo, hi = tuple(float(value) for value in lo), tuple(float(value) for value in hi)
+    if len(lo) != 3 or len(hi) != 3 or not all(math.isfinite(value) and abs(value) <= 1e100 for value in (*lo, *hi)):
+        return None
+    margin = 2.0*tolerance + 1e-6*max(1.0, *(abs(value) for value in (*lo, *hi)))
+    lo = tuple(value - margin for value in lo)
+    hi = tuple(value + margin for value in hi)
+
+    def far(position):
+        # Ordinary positions only: a plain tuple of three float / np.float64, or a float64 ndarray of shape (3,).
+        # Anything else (0-d or 2-D arrays, other lengths, lists, scalars, subclasses, integers ...) keeps the original route.
+        try:
+            if type(position) is np.ndarray:
+                if position.dtype != np.float64 or position.shape != (3,):
+                    return False
+                values = position.tolist()
+            elif type(position) is tuple:
+                if len(position) != 3 or not all(type(value) is float or type(value) is np.float64 for value in position):
+                    return False
+                values = [float(value) for value in position]
+            else:
+                return False
+            if not all(math.isfinite(value) and abs(value) <= 1e50 for value in values):
+                return False                        # non-finite or huge: such a point keeps the unfiltered route
+            for value, low, high in zip(values, lo, hi):
+                if value < low or value > high:
+                    return True
+            return False
+        except Exception:                           # the filter never raises
+            return False
+    return far
+
+
 def _parameters(values, tolerance, curve=None):
     values = sorted(values)
     result = []
@@ -2818,12 +2875,19 @@ def _arrange_material_once(domain, traces, *, tolerance, cancellation_check=None
 
     splits = [[0., 1.] for _ in paths]
     for index, path in enumerate(paths):
+        # Points far outside a branch curve's enclosure certainly add no split (_point_clear_of_curve);
+        # the first point of every path still takes the unfiltered route, which raises any curve-only refusal.
+        far = _point_clear_of_curve(path.curve, tolerance) if points and index not in segments else None
+        probed = False
         for point in points:
             if index in segments:
                 splits[index].extend(stations.point_parameters(
                     segments[index], exact_vector(point.position), tolerance))
             else:
+                if probed and far is not None and far(point.position):
+                    continue
                 splits[index].extend(point_parameters(path.curve, point.position, tolerance=tolerance))
+                probed = True
     for first in range(len(paths)):
         for second in range(first+1, len(paths)):
             check()

@@ -111,6 +111,102 @@ def _is_zero(poly):
 def build_abc(first, second):
     """``(A, B, C)`` as ascending Fraction polynomials in ``t``: ``Q(c(t) + s d) = A s^2 + B(t) s + C(t)``."""
     second = QuadricSupport.from_surface(second)
+    integers = _abc_integers(first, second)
+    if integers is not None:
+        return _abc_fractions(*integers)
+    return _build_abc_fractions(first, second)
+
+
+def _common_integers(values):
+    """``(integers, denominator)`` with ``values[i] == integers[i] / denominator`` exactly (``denominator > 0``)."""
+    denominator = math.lcm(*(value.denominator for value in values))
+    return [value.numerator * (denominator // value.denominator) for value in values], denominator
+
+
+def _all_fractions(values):
+    return all(type(value) is Fraction for value in values)
+
+
+@lru_cache(maxsize=1024)
+def _cached_ruling_integers(first):
+    return _ruling_integers(first)
+
+
+def _ruling_integers(first):
+    """The direction and the power rows of ``first`` over common positive denominators, or ``None``.
+
+    ``None`` (the Fraction route is kept) unless every exact input is a ``Fraction``, so the Fractions built from
+    the integers below have the types, as well as the values, of the Fraction route.
+    """
+    d = _fraction_vec(first.direction)
+    a = first.exact_power()
+    flat = [value for row in a for value in row]
+    if len(a) != first.degree + 1 or any(len(row) != 3 for row in a) or not _all_fractions(d) or not _all_fractions(flat):
+        return None
+    direction, e = _common_integers(d)
+    flat, f = _common_integers(flat)
+    return tuple(direction), e, tuple(tuple(flat[3 * k:3 * k + 3]) for k in range(len(a))), f
+
+
+@lru_cache(maxsize=1024)
+def _cached_quadric_integers(second, origin):
+    return _quadric_integers(second, origin)
+
+
+def _quadric_integers(second, origin):
+    """``exact_relative(origin)`` of a quadric as integers over one positive denominator, or ``None``."""
+    m, l, c0 = second.exact_relative(origin)
+    values = [m[i][j] for i in range(3) for j in range(3)] + list(l) + [c0]
+    if len(m) != 3 or any(len(row) != 3 for row in m) or len(l) != 3 or not _all_fractions(values):
+        return None
+    values, q = _common_integers(values)
+    return tuple(tuple(values[3 * i:3 * i + 3]) for i in range(3)), tuple(values[9:12]), values[12], q
+
+
+def _abc_integers(first, second):
+    """``(A, B, C, denominator)``: the polynomials of :func:`build_abc` as integer lists over ONE positive denominator.
+
+    The Fraction polynomials are these integers divided by ``denominator`` (trimmed identically); ``None`` when an
+    exact input is not a ``Fraction`` and the Fraction route must be used. With ``m = M / q``, ``l = L / q``,
+    ``c0 = c / q``, ``d = v / e`` and ``a_k = w_k / f`` every term of ``A``, ``B`` and ``C`` is brought to the
+    denominator ``q e^2 f^2``. Integer arithmetic is exact, so the values are those of the Fraction route.
+    """
+    origin = first.origin                      # the Fraction route's order: exact_relative, then the ruling
+    try:
+        hash((second, origin))
+    except TypeError:
+        quadric = _quadric_integers(second, origin)
+    else:
+        quadric = _cached_quadric_integers(second, origin)
+    ruling = _cached_ruling_integers(first) if type(first) is BezierRuledSupport else _ruling_integers(first)
+    if quadric is None or ruling is None:
+        return None
+    v, e, w, f = ruling
+    m, l, c0, q = quadric
+    n = first.degree
+    ff, ef = f * f, e * f
+    mv = [m[i][0] * v[0] + m[i][1] * v[1] + m[i][2] * v[2] for i in range(3)]
+    lead = (v[0] * mv[0] + v[1] * mv[1] + v[2] * mv[2]) * ff
+    b = [2 * (l[0] * v[0] + l[1] * v[1] + l[2] * v[2]) * ef * f]
+    b += [2 * (mv[0] * w[k][0] + mv[1] * w[k][1] + mv[2] * w[k][2]) * ef for k in range(1, n + 1)]
+    mw = [[m[i][0] * w[k][0] + m[i][1] * w[k][1] + m[i][2] * w[k][2] for i in range(3)] for k in range(n + 1)]
+    ee = e * e
+    c = [c0 * ee * ff] + [0] * (2 * n)
+    for i in range(1, n + 1):
+        for k in range(1, n + 1):
+            c[i + k] += (w[i][0] * mw[k][0] + w[i][1] * mw[k][1] + w[i][2] * mw[k][2]) * ee
+    for j in range(1, n + 1):
+        c[j] += 2 * (l[0] * w[j][0] + l[1] * w[j][1] + l[2] * w[j][2]) * ee * f
+    return [lead], _trim(b), _trim(c), q * ee * ff
+
+
+def _abc_fractions(A, B, C, denominator):
+    """The normalised Fractions of integer polynomials over ``denominator`` (equal to the Fraction route's values)."""
+    return tuple([Fraction(value, denominator) for value in poly] for poly in (A, B, C))
+
+
+def _build_abc_fractions(first, second):
+    """The Fraction route of :func:`build_abc` (kept for inputs that are not all Fractions)."""
     m, l, c0 = second.exact_relative(first.origin)
     d = _fraction_vec(first.direction)
     a = first.exact_power()
@@ -169,11 +265,16 @@ class PolyPlan:
     """Everything that depends on a (Bezier ruled support, quadric) pair but not on a patch (lazy, shared)."""
 
     __slots__ = ("first", "second", "A", "B", "C", "disc", "linear", "_disc", "_poles", "_common", "_bound",
-                 "_resultant", "_float")
+                 "_resultant", "_float", "_abc")
 
     def __init__(self, first, second):
         self.first, self.second = first, second
-        self.A, self.B, self.C = build_abc(first, second)
+        second = QuadricSupport.from_surface(second)
+        self._abc = _abc_integers(first, second)
+        if self._abc is None:
+            self.A, self.B, self.C = _build_abc_fractions(first, second)
+        else:
+            self.A, self.B, self.C = _abc_fractions(*self._abc)
         self.linear = _is_zero(self.A)
         self.disc = _trim(_padd(_pmul(self.B, self.B), _pmul([4 * self.A[0]], self.C), -1))
         self._disc = self._poles = self._common = self._float = None
@@ -209,7 +310,8 @@ class PolyPlan:
         if self._common is None:
             from .analytic_roots import _integer_gcd
             current = None
-            for poly in (self.A, self.B, self.C):
+            # the integer rows are positive multiples of A, B and C: the same primitive rows
+            for poly in (self.A, self.B, self.C) if self._abc is None else self._abc[:3]:
                 if _is_zero(poly):
                     continue
                 row = _integer_row(_trim(poly))
@@ -226,7 +328,12 @@ class PolyPlan:
         key = float(s0)
         if key not in self._bound:
             s = Fraction(key)
-            poly = _padd(_padd([self.A[0] * s * s], [value * s for value in self.B]), self.C)
+            if self._abc is None:
+                poly = _padd(_padd([self.A[0] * s * s], [value * s for value in self.B]), self.C)
+            else:                                                   # times denominator * s.denominator^2 > 0
+                A, B, C, _denominator = self._abc
+                p, q = s.numerator, s.denominator
+                poly = _padd(_padd([A[0] * p * p], [value * p * q for value in B]), [value * q * q for value in C])
             roots = poly_roots(poly)
             self._bound[key] = [] if roots is None else roots
         return self._bound[key]
@@ -235,8 +342,15 @@ class PolyPlan:
         """Parameters where the branch can meet ``other`` (a quadric), or ``None`` when the resultant vanishes."""
         other = QuadricSupport.from_surface(other)
         if other not in self._resultant:
-            A3, B3, C3 = build_abc(self.first, other)
-            self._resultant[other] = poly_roots(_resultant(self.A, self.B, self.C, A3, B3, C3))
+            other_abc = None if self._abc is None else _abc_integers(self.first, other)
+            if other_abc is None:
+                A3, B3, C3 = build_abc(self.first, other)
+                self._resultant[other] = poly_roots(_resultant(self.A, self.B, self.C, A3, B3, C3))
+            else:
+                # Every branch of ``_resultant`` is bihomogeneous in (A, B, C) and (A3, B3, C3), so on the integer
+                # numerators it is the Fraction resultant times a positive constant: the same primitive row,
+                # zero test and roots.
+                self._resultant[other] = poly_roots(_resultant(*self._abc[:3], *other_abc[:3]))
         return self._resultant[other]
 
     def floats(self):
@@ -494,6 +608,11 @@ class PolyFloatSystem:
 
     def discriminant(self, t, order=0):
         return self.D_forms[order].many(t)
+
+    def frame_order(self, t, order):
+        """``frame(t)[order]`` alone (the same per-axis evaluations, without the other two orders)."""
+        t = np.asarray(t, dtype=float)
+        return np.stack([self.P_forms[axis][order].many(t) for axis in range(3)], axis=-1)
 
     def frame(self, t):
         """``(P, P', P'')`` at ``t`` (any shape), relative to ``origin``."""
