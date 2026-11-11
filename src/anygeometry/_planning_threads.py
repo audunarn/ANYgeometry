@@ -14,16 +14,26 @@ Contract (see thread-design-note.md in the programme work folder):
   planning is repeated serially, so the refusal carries serial's message, cause, counters and records by
   construction. The discarded attempt is visible only as the clock
   ``intersection_thread_discarded_attempt_time_ns``.
-* The one decision (``_Attempt.verdict``, applied by ``plan_with_threads`` and by a ``ThreadStages.run`` called
-  on its own) when the threaded attempt ended with an ordinary exception:
+* The one decision (``_Attempt.verdict``) when the threaded attempt ended with an ordinary exception:
   (1) an interrupt observed anywhere in the attempt is raised;
-  (2) otherwise the serial repeat, ONLY IF the exception is a plain refusal - a typed ``GeometryError`` (the
-  lowest-index task refusal of a stage, or a refusal of the planner's own code in the dispatching thread) or
-  ``_NotAudited`` (an unaudited stage input) - AND every stage of the attempt is finished, i.e. every thread
-  whose start was attempted was joined (``running == 0``);
+  (2) otherwise the PLAIN-REFUSAL outcome, ONLY IF the exception is a plain refusal AND every stage of the
+  attempt is finished, i.e. every thread whose start was attempted was joined (``running == 0``). A plain
+  refusal is decided by where the exception comes from, not only by its type: it is a typed ``GeometryError``
+  or ``_NotAudited`` (an unaudited stage input), and NO stage of the attempt ended with anything but its own
+  task refusal - the ``GeometryError`` a stage builds from its lowest-index refused task is the only ordinary
+  exception that may leave a stage without marking the attempt as failed. So a ``GeometryError`` raised by the
+  route's own machinery (for example while it formats that refusal) is not a plain refusal, while a refusal
+  of the planner's own code in the dispatching thread, between the stages, is one;
   (3) otherwise a typed ``GeometryError`` with the original exception as its cause, and nothing is planned:
   any exception of the route's own machinery, a task failure that is not a ``GeometryError``, a failed thread
-  start, a crew that is not accounted. The caller plans serially by unsetting the switch.
+  start, a crew that is not accounted, a failure while the successful attempt's diagnostics are published.
+  The caller plans serially by unsetting the switch.
+  The plain-refusal outcome is the serial repeat in ``plan_with_threads``. A ``ThreadStages.run`` called on its
+  own has no serial route: there the plain refusal itself is re-raised, and (1) and (3) apply unchanged.
+  ``plan_with_threads`` lets no ordinary exception of the attempt out except through this decision: the
+  attempt's start-up, the publication after success, the decision itself and the discard clock are inside it,
+  and ``thread_stages`` answers a failure of the eligibility test with a typed ``GeometryError``. (The serial
+  repeat itself is the serial route: what it raises is serial's.)
   So a failure of the route never turns into a silent serial answer, and an interrupt that was lost in spite
   of the rules below can at worst become a typed refusal.
 * The planner hands the stage its ordinary task list and its own serial task function through the
@@ -192,7 +202,10 @@ def _scope_active():
         module = sys.modules.get(module_name)
         if module is None:
             continue
-        if getattr(module, name).get() not in (None, ()):
+        # A module that is still being imported (by this or another thread) may not have the variable yet;
+        # a scope it would hold cannot be active then.
+        variable = getattr(module, name, None)
+        if variable is not None and variable.get() not in (None, ()):
             return True
     return False
 
@@ -208,11 +221,17 @@ def thread_stages(model, policy, mode, native):
     threads = requested_threads()
     if not threads:
         return None
-    if (mode != 'exact' or native is not None or policy.cancellation_check is not None
-            or policy.max_predicates is not None or policy.max_candidate_pairs is not None
-            or _inside_task() or _scope_active() or not _audited_model(model)):
-        return None
-    return ThreadStages(threads)
+    try:
+        if (mode != 'exact' or native is not None or policy.cancellation_check is not None
+                or policy.max_predicates is not None or policy.max_candidate_pairs is not None
+                or _inside_task() or _scope_active() or not _audited_model(model)):
+            return None
+        return ThreadStages(threads)
+    except Exception as exc:
+        # The eligibility test is the route's own machinery: its failure is a typed refusal, not a raw
+        # exception and not a silent choice of route.
+        raise _refusal(f"thread planning eligibility could not be decided ({_type_name(exc)}); "
+                       f"unset {THREADS_ENVIRONMENT} to plan on the serial route", exc)
 
 
 _SUBTYPE = type.__subclasscheck__
@@ -228,20 +247,40 @@ def _ordinary(exc):
     return _SUBTYPE(Exception, type(exc))
 
 
+_TYPE_NAME = type.__dict__['__name__'].__get__
+
+
+def _type_name(exc):
+    """The name of the real class of ``exc``, read from ``type`` itself (no code of the class or its metaclass)."""
+    try:
+        return _TYPE_NAME(type(exc))
+    except Exception:
+        return 'exception'
+
+
+def _refusal(text, cause):
+    """The typed refusal of the route, carrying what happened as its cause."""
+    error = GeometryError(text)
+    error.__cause__ = cause
+    return error
+
+
 class _Attempt:
     """What the stages of one threaded attempt observed; the single owner of the interrupt rule (``verdict``).
 
     Written by its owner thread only (``note``, ``running``, ``closed``), except the per-task interrupt slots
     of a stage, each of which is written by the one worker that runs that task.
     """
-    __slots__ = ('owner', 'worker_slots', 'dispatcher', 'running', 'closed')
+    __slots__ = ('owner', 'worker_slots', 'dispatcher', 'running', 'closed', 'refusal', 'failed')
 
     def __init__(self):
         self.owner = threading.get_ident()
         self.worker_slots = []     # per stage: the list of worker interrupts by task index (None = none)
         self.dispatcher = None     # the first interrupt met by the owner thread itself
-        self.running = 0           # stages of the owner between their first submit and the return of shutdown
+        self.running = 0           # stages of the owner whose crew was started and is not (yet) accounted
         self.closed = False        # set when the boundary has left the attempt; a closed attempt is not reused
+        self.refusal = None        # the GeometryError a stage built from its lowest-index refused task
+        self.failed = False        # a stage ended with something else, or the route failed after its stages
 
     def note(self, exc):
         """Remember an interrupt met by the owner thread (no allocation; ordinary exceptions are not kept)."""
@@ -259,25 +298,23 @@ class _Attempt:
         """The one decision: what must be raised instead of the ordinary ``failure`` the attempt ended with, or
         None for the serial repeat.
 
-        The serial repeat needs a plain refusal (a typed ``GeometryError``, or ``_NotAudited``) AND every stage
-        finished (all started threads joined). An observed interrupt is raised. Everything else - the route's
-        own machinery failing, a task failure that is not a refusal, threads not accounted for - is a typed
-        ``GeometryError`` with ``failure`` as its cause.
+        None (the serial repeat; a stage called on its own re-raises ``failure``) needs a plain refusal - a typed
+        ``GeometryError`` or ``_NotAudited``, with no stage of the attempt having ended in anything but its own
+        task refusal (``failed``) - AND every stage finished (all started threads joined). An observed interrupt
+        is raised. Everything else - the route's own machinery failing, a task failure that is not a refusal,
+        threads not accounted for - is a typed ``GeometryError`` with ``failure`` as its cause. Never raises.
         """
         interrupt = self.interrupt()
         if interrupt is not None:
             return interrupt
         if self.running:
-            error = GeometryError("thread planning stage did not finish: its workers are not known to have "
-                                  "stopped, so planning is not repeated serially")
-        elif _is(failure, GeometryError) or _is(failure, _NotAudited):
+            return _refusal("thread planning stage did not finish: its workers are not known to have "
+                            "stopped, so planning is not repeated serially", failure)
+        if not self.failed and (_is(failure, GeometryError) or _is(failure, _NotAudited)):
             return None
-        else:
-            error = GeometryError(
-                f"thread planning failed outside a geometry refusal ({type(failure).__name__}); planning is not "
-                f"repeated serially - unset {THREADS_ENVIRONMENT} to plan on the serial route")
-        error.__cause__ = failure
-        return error
+        return _refusal(
+            f"thread planning failed outside a geometry refusal ({_type_name(failure)}); planning is not "
+            f"repeated serially - unset {THREADS_ENVIRONMENT} to plan on the serial route", failure)
 
 
 _ATTEMPT = contextvars.ContextVar('anygeometry_planning_thread_attempt', default=None)
@@ -387,19 +424,21 @@ def _inside_task():
 
 
 def plan_with_threads(threaded, serial):
-    """``threaded()`` with its diagnostics published on success; on any failure the result of ``serial()``.
+    """``threaded()`` with its diagnostics published on success; after a plain refusal the result of ``serial()``;
+    after any other failure of the attempt a typed ``GeometryError`` (``_Attempt.verdict``).
 
     The attempt runs under private collectors. A refusal of the attempt may have counted work the serial route
     never reaches and may come from another task than serial's first failure, so nothing of it is kept: after a
-    plain refusal the serial route is run from the start and decides alone; any other failure of the attempt
-    is a typed ``GeometryError`` (``_Attempt.verdict``).
-    ``KeyboardInterrupt`` and ``SystemExit`` pass through, and ``_Attempt.verdict`` decides whether an ordinary
-    failure may lead to the serial repeat at all (not after an interrupt seen anywhere in the attempt, and not
-    while workers are not known to have finished).
+    plain refusal the serial route is run from the start and decides alone.
+    ``KeyboardInterrupt`` and ``SystemExit`` pass through, and an interrupt observed anywhere in the attempt is
+    raised instead of the ordinary exception the attempt ended with. No ordinary exception of the attempt -
+    its start-up, the stages, the publication after success, the decision itself - leaves this function except
+    as the typed refusal; only ``serial()`` raises what the serial route raises.
     """
-    start = perf_counter_ns()
-    attempt, failure, plan = _Attempt(), None, None
+    attempt = failure = start = plan = None
     try:
+        start = perf_counter_ns()
+        attempt = _Attempt()
         token = _ATTEMPT.set(attempt)
         try:
             try:
@@ -411,16 +450,26 @@ def plan_with_threads(threaded, serial):
         finally:
             attempt.closed = True
             _ATTEMPT.reset(token)
-    except Exception as exc:             # also an ordinary failure of the context set / reset itself
+        attempt.failed = True            # the stages are over: what fails from here on is the route, not geometry
+        _diagnostics._publish_planning(collected)
+    except Exception as exc:             # also an ordinary failure of the start-up, the context reset, the publication
         failure = exc
     if failure is None:
-        _diagnostics._publish_planning(collected)
         return plan
     # Outside the handler, so what follows has no threaded context. The one place that decides.
-    instead = attempt.verdict(failure)
+    try:
+        if attempt is None:
+            instead = _refusal(f"thread planning could not start ({_type_name(failure)}); unset "
+                               f"{THREADS_ENVIRONMENT} to plan on the serial route", failure)
+        else:
+            instead = attempt.verdict(failure)
+        if instead is None:
+            _diagnostics._increment('intersection_thread_discarded_attempt_time_ns', perf_counter_ns() - start)
+    except Exception as exc:             # the decision or its clock failed: still the typed refusal, no repeat
+        instead = _refusal("thread planning failed while its outcome was decided; planning is not repeated "
+                           "serially", exc)
     if instead is not None:
         raise instead
-    _diagnostics._increment('intersection_thread_discarded_attempt_time_ns', perf_counter_ns() - start)
     return serial()
 
 
@@ -488,9 +537,12 @@ class ThreadStages:
             return self._run(kind, tasks, serial, attempt)
         except BaseException as exc:
             attempt.note(exc)                # whatever leaves a stage is recorded, also if a caller swallows it
+            if _ordinary(exc) and exc is not attempt.refusal:
+                attempt.failed = True        # anything but the stage's own task refusal: never a plain refusal
             if not own or not _ordinary(exc):
                 raise
             failure = exc
+        # Called on its own: the same decision; there is no serial route here, so a plain refusal is re-raised.
         instead = attempt.verdict(failure)
         raise instead if instead is not None else failure
 
@@ -606,8 +658,12 @@ class ThreadStages:
             if _is(error, GeometryError):
                 task = tasks[failed]
                 if kind == 'pair':
-                    raise GeometryError(
-                        f"intersection batch face:{task['first']}/face:{task['second']}: {error}") from error
-                raise GeometryError(f"intersection material arrangement face:{task['face']}: {error}") from error
+                    refusal = GeometryError(f"intersection batch face:{task['first']}/face:{task['second']}: {error}")
+                else:
+                    refusal = GeometryError(f"intersection material arrangement face:{task['face']}: {error}")
+                refusal.__cause__ = error
+                # Provenance: this object, and nothing else that leaves the stage, is a plain task refusal.
+                attempt.refusal = refusal
+                raise refusal
             raise error
         return [outcome[0] for outcome in outcomes]

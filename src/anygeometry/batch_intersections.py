@@ -1396,7 +1396,8 @@ def plan_intersections(model, operands, *, policy, _parallel_control=None):
         elif os.environ.get('ANYGEOMETRY_PLANNING_THREADS') not in (None, '', '0'):
             # Opt-in in-process thread dispatch of the pair and face stages (prototype). thread_stages
             # returns None, and planning stays on the serial route, whenever the call is not eligible;
-            # a threaded attempt that fails is discarded whole and planning is repeated serially.
+            # a threaded attempt that ends with a plain geometry refusal is discarded whole and planning
+            # is repeated serially; any other failure of the attempt is a typed GeometryError.
             from ._planning_threads import plan_with_threads, thread_stages
             threaded=thread_stages(model,effective,mode,native)
             serial_plan=lambda:_plan_intersections(model, operands, policy=policy, _planning_mode=mode, _seam_policy=seam)
