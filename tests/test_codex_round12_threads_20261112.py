@@ -133,16 +133,21 @@ def test_failure_of_the_planner_between_the_stages_that_is_not_a_refusal_is_a_ty
 def test_task_refusal_beside_an_unaccounted_thread_is_not_repeated(monkeypatch):
     # A plain task refusal, but one crew thread was killed on entry (before its marker): not every started
     # thread is accounted for, so the refusal does not lead to the serial repeat.
-    seen = {}
+    # Deterministic (round 13): the hook kills exactly the second crew thread, by its name; the first thread then
+    # runs the tasks, and the test checks that a task really issued the refusal.
+    seen, lock = {}, threading.Lock()
 
     def trace(frame, event, argument):
         if (event == 'call' and frame.f_code.co_filename == MODULE and frame.f_code.co_name == '_main'
-                and not seen.get('hook')):
-            seen['hook'] = True
+                and threading.current_thread().name.endswith('_1')):
+            with lock:
+                seen['killed'] = seen.get('killed', 0) + 1
             raise RuntimeError('before the marker')
         return None
 
     def task(item, check=None):
+        with lock:
+            seen['refused'] = threading.current_thread().name
         raise GeometryError('ordinary refusal')
     threading.settrace(trace)
     try:
@@ -150,7 +155,8 @@ def test_task_refusal_beside_an_unaccounted_thread_is_not_repeated(monkeypatch):
     finally:
         threading.settrace(None)
     assert outcome[:2] == ('raised', GeometryError) and 'did not finish' in outcome[2] and not serial
-    assert seen == dict(hook=True)
+    assert outcome[3] is RuntimeError                 # the stage reports the lost thread before any task refusal
+    assert seen == dict(killed=1, refused='anygeometry-plan_0')
 
 
 def test_interrupt_lost_inside_the_recording_step_is_at_worst_a_typed_refusal():              # FAILS-ON-OLD
