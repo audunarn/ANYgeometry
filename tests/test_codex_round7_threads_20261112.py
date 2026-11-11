@@ -85,8 +85,29 @@ def test_unfinished_inner_workers_cannot_exist_beside_the_serial_repeat(monkeypa
     # Round-7 scenario: an inner stage whose worker blocks, whose wait() fails ordinarily and whose shutdown fails
     # without draining. Its refusal used to become an ordinary task failure of the outer stage, and the outer
     # boundary repeated serially beside the inner worker. Now the inner stage never starts.
-    pools, seen = _counted_pools(monkeypatch), {}
+    # The doubles are installed before any thread exists and decide per instance / per calling thread (nothing is
+    # patched from inside a task): the SECOND pool ever created is the inner one and cannot be shut down; wait()
+    # fails only when a pool worker (the inner dispatcher) calls it.
+    pools, seen = [], {}
     release = threading.Event()
+    real_wait = pt.wait
+
+    class Pool(ThreadPoolExecutor):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            pools.append(self)
+
+        def shutdown(self, wait=True, **options):
+            if len(pools) > 1 and self is pools[1] and not release.is_set():
+                raise MemoryError('inner shutdown')
+            super().shutdown(wait=wait, **options)
+    monkeypatch.setattr(pt, 'ThreadPoolExecutor', Pool)
+
+    def waiting(futures, *args, **kwargs):
+        if threading.current_thread().name.startswith(POOL):
+            raise RuntimeError('inner wait')
+        return real_wait(futures, *args, **kwargs)
+    monkeypatch.setattr(pt, 'wait', waiting)
 
     def inner(item, check=None):
         seen['inner worker started'] = True
@@ -95,24 +116,17 @@ def test_unfinished_inner_workers_cannot_exist_beside_the_serial_repeat(monkeypa
 
     def task(item, check=None):
         if item['face'] == 0:
-            real_wait, real_shutdown = pt.wait, ThreadPoolExecutor.shutdown
-            try:
-                pt.wait = lambda futures, *a, **k: (_ for _ in ()).throw(RuntimeError('inner wait'))
-                ThreadPoolExecutor.shutdown = lambda self, wait=True, **k: (_ for _ in ()).throw(MemoryError('inner'))
-                pt.ThreadStages(2).run('face', _two(), inner)
-            finally:
-                pt.wait, ThreadPoolExecutor.shutdown = real_wait, real_shutdown
+            pt.ThreadStages(2).run('face', _two(), inner)
         return item['face']
     try:
-        # One outer worker, so the patched wait/shutdown above are only ever seen by the inner stage.
-        result = pt.plan_with_threads(lambda: pt.ThreadStages(1).run('face', _two(), task), _serial(seen))
+        result = pt.plan_with_threads(lambda: pt.ThreadStages(2).run('face', _two(), task), _serial(seen))
         assert result == 'serial'
         assert seen == dict(serial=True)              # the repeat is safe: no inner worker was ever started
         assert len(pools) == 1
     finally:
         release.set()
         for pool in pools:
-            ThreadPoolExecutor.shutdown(pool, wait=True)
+            pool.shutdown(wait=True)
 
 
 def test_thread_that_inherited_a_task_context_is_refused_as_well(monkeypatch):             # FAILS-ON-OLD
