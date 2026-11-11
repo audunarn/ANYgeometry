@@ -989,3 +989,104 @@ def test_r7_huge_paired_ellipse_line_and_ellipse_ellipse_differential(seed):
                     mismatches.append((type(x).__name__, type(y).__name__, policy, got, ref))
     assert total >= 200 and raised >= 10, (total, raised)
     assert not mismatches, f"{len(mismatches)} mismatches; first: {mismatches[0]}"
+
+
+# ---------------------------------------------------------------- round 8: allow-list guard (dtypes, containers, degree)
+from anygeometry.arrangement_geometry import BezierPath
+
+
+@pytest.mark.filterwarnings("ignore")
+def test_r8_integer_dtype_line_wraps_in_original_and_shortcut_declines():
+    z = np.int64(0)
+    line = LinePath((z, z, z), (np.int64(2**32), z, z))
+    arc = EllipticArc((0., 100., 0.), (1., 0., 0.), (0., 1., 0.), 0., 1.)
+    for x, y in ((line, arc), (arc, line)):
+        for policy in ("default", "bounds"):
+            got, ref = (both(x, y, 1e-9) if policy == "default" else both_policy_on(x, y, 1e-9))
+            assert got == ref, (policy, got, ref)
+    with _junction_bounds_policy(False):
+        assert outcome(lambda: curve_junctions(line, arc, tolerance=1e-9)) == ("raise", "GeometryError", "degenerate arrangement line")
+
+
+@pytest.mark.filterwarnings("ignore")
+def test_r8_bool_coordinate_line_same_as_original():
+    line = LinePath((False, False, False), (True, False, False))
+    arc = EllipticArc((0., 100., 0.), (1., 0., 0.), (0., 1., 0.), 0., 1.)
+    for x, y in ((line, arc), (arc, line)):
+        for policy in ("default", "bounds"):
+            got, ref = (both(x, y, 1e-9) if policy == "default" else both_policy_on(x, y, 1e-9))
+            assert got == ref, (policy, got, ref)
+
+
+@pytest.mark.filterwarnings("ignore")
+def test_r8_list_controls_bezier_path_same_as_original_on_the_bounds_route():
+    path = BezierPath([(0., 0., 0.), (1., 0., 0.)])
+    line = LinePath((0., 50., 0.), (1., 50., 0.))
+    for x, y in ((path, line), (line, path)):
+        for policy in ("default", "bounds"):
+            got, ref = (both(x, y, 1e-9) if policy == "default" else both_policy_on(x, y, 1e-9))
+            assert got == ref, (policy, got, ref)
+
+
+@pytest.mark.filterwarnings("ignore")
+def test_r8_degree_2048_bezier_path_same_as_original_on_the_bounds_route():
+    path = BezierPath(((0., 0., 0.),)*2049)
+    line = LinePath((50., 0., 0.), (51., 0., 0.))
+    for x, y in ((path, line), (line, path)):
+        for policy in ("default", "bounds"):
+            got, ref = (both(x, y, 1e-9) if policy == "default" else both_policy_on(x, y, 1e-9))
+            assert got == ref, (policy, got, ref)
+    with _junction_bounds_policy(False):
+        assert outcome(lambda: curve_junctions(path, line, tolerance=1e-9))[:2] == ("raise", "OverflowError")
+
+
+@pytest.mark.filterwarnings("ignore")
+@pytest.mark.parametrize("seed", [61, 62, 63])
+def test_r8_randomized_dtype_container_degree_differential(seed):
+    from fractions import Fraction
+    rng = np.random.default_rng(seed)
+    casts = [float, np.float64, np.float32, np.int64, np.int32, int, bool, Fraction, np.float16]
+
+    def cast(value):
+        kind = casts[int(rng.integers(len(casts)))]
+        try:
+            if kind in (np.int64, np.int32, int, bool):
+                return kind(int(round(value)) if kind is not bool else int(value > .5))
+            return kind(float(value))
+        except Exception:
+            return float(value)
+
+    def point(scale, typed):
+        values = rng.normal(size=3)*scale
+        if rng.random() < .3:
+            values[0] = float(rng.choice([2.**32, 2.**40, 1e30, 2.**31]))
+        return tuple(cast(v) if typed else float(v) for v in values)
+
+    def container(rows):
+        pick = int(rng.integers(3))
+        return list(rows) if pick == 0 else tuple(rows) if pick == 1 else np.array(rows, dtype=float)
+
+    objects = []
+    for _ in range(40):
+        typed = rng.random() < .7
+        try:
+            objects.append(("line", LinePath(point(5., typed), point(5., typed))))
+            objects.append(("arc", EllipticArc(point(5., typed), (1., 0., 0.), (0., 1., 0.), float(rng.choice([0., .5])), 2.)))
+            degree = int(rng.choice([1, 2, 3, 5]))
+            rows = [tuple(float(v) for v in rng.normal(size=3)) for _ in range(degree + 1)]
+            objects.append(("bezier", BezierPath(container(rows))))
+        except Exception:
+            continue
+    assert {k for k, _ in objects} == {"line", "arc", "bezier"}
+    mismatches, raised, total = [], 0, 0
+    pairs = [(a, b) for i, a in enumerate(objects) for b in objects[i+1:i+4] if not (a[0] == "line" and b[0] == "line")]
+    for (ka, a), (kb, b) in pairs:
+        for x, y in ((a, b), (b, a)):
+            for policy in ("default", "bounds"):
+                total += 1
+                got, ref = (both(x, y, 1e-9) if policy == "default" else both_policy_on(x, y, 1e-9))
+                raised += ref[0] == "raise"
+                if got != ref:
+                    mismatches.append((ka, kb, policy, got, ref))
+    assert total >= 200 and raised >= 10, (total, raised)
+    assert not mismatches, f"{len(mismatches)} mismatches; first: {mismatches[0]}"
