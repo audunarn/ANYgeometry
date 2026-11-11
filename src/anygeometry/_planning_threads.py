@@ -56,10 +56,19 @@ Contract (see thread-design-note.md in the programme work folder):
   worker of an outer stage, a thread that inherited the context) keeps a record and a verdict of its own, so
   the ``running`` state seen by the boundary is written by one thread only. The context reset is inside the
   region whose ordinary failures go to the verdict, and a closed attempt is never used again.
-* No stage inside a stage task: a stage asked to run inside a task of another stage (in the worker, or in a
-  thread that inherited the task's context) refuses with a typed ``GeometryError`` before it creates a pool, and
-  a planning call inside a task is not eligible for the thread route. Every worker of the route therefore
-  belongs to the record whose verdict decides, and "workers may still run" cannot be lost in a task failure.
+* No stage inside a worker of the route: a stage asked to run there refuses with a typed ``GeometryError``
+  before it creates a pool, and a planning call there is not eligible for the thread route. Every worker of the
+  route therefore belongs to the record whose verdict decides, and "workers may still run" cannot be lost in a
+  task failure. "There" is decided by two markers that exist BEFORE the code they cover runs (``_inside_task``):
+  (a) the worker thread - every pool thread carries the name prefix ``anygeometry-plan`` from its construction,
+  so this covers every frame that runs in a worker once ``threading`` has registered the thread, including the
+  worker's own machinery, C-call profile events and any trace or profile hook that ``threading`` installs in it;
+  (b) the task context - ``_IN_TASK`` is set in the copied context before the task body is entered, so this
+  covers the body from its call event on and any thread or callback that inherits or copies that context.
+  Out of contract: re-entry from a tracing or profiling hook that is NOT caught by these markers (a hook that
+  runs in a worker thread before ``threading`` has registered it, for example one installed for all threads
+  below ``threading``), a worker thread that was renamed, and deliberate bypass of the guards (calling the
+  private ``_run``, resetting the marker, replacing module globals).
 * Whether an exception is an interrupt is decided on the object's real type (``_ordinary`` / ``_is``), never by
   ``isinstance``, which can run code of the exception object and fail before the interrupt is recorded.
 * Inside a stage that ends normally the dispatcher still raises in this order: lowest-index worker interrupt,
@@ -164,7 +173,7 @@ def thread_stages(model, policy, mode, native):
         return None
     if (mode != 'exact' or native is not None or policy.cancellation_check is not None
             or policy.max_predicates is not None or policy.max_candidate_pairs is not None
-            or _IN_TASK.get() or _scope_active() or not _audited_model(model)):
+            or _inside_task() or _scope_active() or not _audited_model(model)):
         return None
     return ThreadStages(threads)
 
@@ -225,6 +234,13 @@ class _Attempt:
 _ATTEMPT = contextvars.ContextVar('anygeometry_planning_thread_attempt', default=None)
 # True in the context of a stage task (and of anything that inherits that context): no stage may start there.
 _IN_TASK = contextvars.ContextVar('anygeometry_planning_thread_task', default=False)
+# Name prefix of every pool thread of the route, given at construction: the thread is marked before it starts.
+_WORKER_PREFIX = 'anygeometry-plan'
+
+
+def _inside_task():
+    """In a worker thread of the route, or in (a copy of) the context of one of its tasks."""
+    return _IN_TASK.get() or threading.current_thread().name.startswith(_WORKER_PREFIX)
 
 
 def plan_with_threads(threaded, serial):
@@ -311,7 +327,7 @@ class ThreadStages:
     def run(self, kind, tasks, serial):
         if threading.get_ident() != self._owner:
             raise GeometryError("thread planning stage entered from a foreign thread")
-        if _IN_TASK.get():
+        if _inside_task():
             # Before any pool exists: a nested stage would have workers that the outer verdict cannot see.
             raise GeometryError("thread planning stage inside a task of another stage is not supported")
         tasks = list(tasks)
@@ -354,7 +370,9 @@ class ThreadStages:
             try:
                 if stopped.is_set() or index > first_failure[0]:
                     return
-                parent.copy().run(body, index)
+                context = parent.copy()
+                context.run(_IN_TASK.set, True)      # marked before the body is entered (its call event included)
+                context.run(body, index)
             except Exception as exc:
                 machinery[index] = exc
                 stopped.set()
@@ -366,7 +384,6 @@ class ThreadStages:
             def check():
                 if stopped.is_set() or index > first_failure[0]:
                     raise _Abandoned()
-            _IN_TASK.set(True)
             counters, records = {}, {}
             _diagnostics._COLLECTORS.set((counters,))
             _diagnostics._RECORD_COLLECTORS.set((records,))
@@ -391,7 +408,7 @@ class ThreadStages:
 
         order = sorted(range(count), key=lambda i: (-float(tasks[i].get('cost', 0.)), i))
         start = perf_counter_ns()
-        pool = ThreadPoolExecutor(max_workers=min(self.threads, count), thread_name_prefix='anygeometry-plan')
+        pool = ThreadPoolExecutor(max_workers=min(self.threads, count), thread_name_prefix=_WORKER_PREFIX)
         held = None              # what the dispatching thread itself met; judged after the workers have drained
         futures = []
         attempt.running += 1
