@@ -102,11 +102,21 @@ _CACHE_FIELDS = frozenset(('_inversions',))
 _CONTAINER_CAP = 65
 
 
+def _is_float_leaf(value):
+    kind = type(value)
+    return (kind is float or kind is np.float64) and math.isfinite(value) and abs(value) <= _MODERATE
+
+
 def _is_point3(value):
-    """Exactly three coordinates as a plain tuple or a 1-D float64 ndarray of shape (3,)."""
+    """Exactly three float leaves as a plain tuple (no nesting), or a float64 ndarray of shape (3,) (finite, moderate)."""
     if type(value) is tuple:
-        return len(value) == 3
-    return type(value) is np.ndarray and value.shape == (3,)
+        return len(value) == 3 and all(_is_float_leaf(item) for item in value)
+    return (type(value) is np.ndarray and value.shape == (3,) and value.dtype == np.float64
+            and bool(np.all(np.isfinite(value))) and float(np.max(np.abs(value))) <= _MODERATE)
+
+
+#: Scalar-valued fields (a float leaf, never a container) of the package's own curve / support classes.
+_SCALAR_FIELDS = frozenset(('start_angle', 'sweep_angle', 'radius', 'height', 'start', 'sweep'))
 
 
 def _shape_ok(value):
@@ -126,7 +136,7 @@ def _shape_ok(value):
         if type(controls) is np.ndarray:
             return controls.ndim == 2 and controls.shape[1] == 3 and 2 <= controls.shape[0] <= _CONTAINER_CAP
         return (type(controls) is tuple and 2 <= len(controls) <= _CONTAINER_CAP
-                and all(type(row) is tuple and len(row) == 3 for row in controls))
+                and all(_is_point3(row) and type(row) is tuple for row in controls))
     return True
 
 
@@ -161,14 +171,16 @@ def _allowed(value, name, depth):
     if dataclasses.is_dataclass(value):
         if not _shape_ok(value):
             return False
-        return all(_allowed(getattr(value, field.name), field.name, depth+1) for field in dataclasses.fields(value))
+        return all((_is_float_leaf(getattr(value, field.name)) if field.name in _SCALAR_FIELDS and kind is not LinePath
+                    else _allowed(getattr(value, field.name), field.name, depth+1)) for field in dataclasses.fields(value))
     if getattr(kind, '__module__', '').startswith('anygeometry'):
         fields = dict(getattr(value, '__dict__', {}))
         for cls in kind.__mro__:
             for slot in getattr(cls, '__slots__', ()):
                 if hasattr(value, slot):
                     fields[slot] = getattr(value, slot)
-        return all(_allowed(item, field, depth+1) for field, item in fields.items())
+        return all((_is_float_leaf(item) if field in _SCALAR_FIELDS else _allowed(item, field, depth+1))
+                   for field, item in fields.items())
     return False
 
 
@@ -200,6 +212,14 @@ def _leaves_moderate_cached(curve):
 
 
 def _shortcut_curve_ok(curve, tolerance):
+    """Total guard: any failure while inspecting the curve declines (the guard never raises)."""
+    try:
+        return bool(_shortcut_curve_ok_inner(curve, tolerance))
+    except Exception:
+        return False
+
+
+def _shortcut_curve_ok_inner(curve, tolerance):
     """``False`` for a curve the rejection shortcuts must not decide; they then decline to the original route.
 
     The single guard of every shortcut path (``_separated_line_pair``, ``_line_clear_of_branch``,
