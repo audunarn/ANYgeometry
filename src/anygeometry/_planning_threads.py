@@ -56,6 +56,12 @@ Contract (see thread-design-note.md in the programme work folder):
   worker of an outer stage, a thread that inherited the context) keeps a record and a verdict of its own, so
   the ``running`` state seen by the boundary is written by one thread only. The context reset is inside the
   region whose ordinary failures go to the verdict, and a closed attempt is never used again.
+* No stage inside a stage task: a stage asked to run inside a task of another stage (in the worker, or in a
+  thread that inherited the task's context) refuses with a typed ``GeometryError`` before it creates a pool, and
+  a planning call inside a task is not eligible for the thread route. Every worker of the route therefore
+  belongs to the record whose verdict decides, and "workers may still run" cannot be lost in a task failure.
+* Whether an exception is an interrupt is decided on the object's real type (``_ordinary`` / ``_is``), never by
+  ``isinstance``, which can run code of the exception object and fail before the interrupt is recorded.
 * Inside a stage that ends normally the dispatcher still raises in this order: lowest-index worker interrupt,
   interrupt of the dispatching thread, ordinary machinery failure (lowest task index), lowest-index task
   failure with the serial wrapping.
@@ -158,9 +164,22 @@ def thread_stages(model, policy, mode, native):
         return None
     if (mode != 'exact' or native is not None or policy.cancellation_check is not None
             or policy.max_predicates is not None or policy.max_candidate_pairs is not None
-            or _scope_active() or not _audited_model(model)):
+            or _IN_TASK.get() or _scope_active() or not _audited_model(model)):
         return None
     return ThreadStages(threads)
+
+
+_SUBTYPE = type.__subclasscheck__
+
+
+def _is(exc, kind):
+    """``exc`` is an instance of the plain class ``kind`` by its real type; runs no code of the object."""
+    return _SUBTYPE(kind, type(exc))
+
+
+def _ordinary(exc):
+    """Not an interrupt: an ``Exception`` by its real type."""
+    return _SUBTYPE(Exception, type(exc))
 
 
 class _Attempt:
@@ -180,7 +199,7 @@ class _Attempt:
 
     def note(self, exc):
         """Remember an interrupt met by the owner thread (no allocation; ordinary exceptions are not kept)."""
-        if self.dispatcher is None and not isinstance(exc, Exception):
+        if self.dispatcher is None and not _ordinary(exc):
             self.dispatcher = exc
 
     def interrupt(self):
@@ -204,6 +223,8 @@ class _Attempt:
 
 
 _ATTEMPT = contextvars.ContextVar('anygeometry_planning_thread_attempt', default=None)
+# True in the context of a stage task (and of anything that inherits that context): no stage may start there.
+_IN_TASK = contextvars.ContextVar('anygeometry_planning_thread_task', default=False)
 
 
 def plan_with_threads(threaded, serial):
@@ -290,6 +311,9 @@ class ThreadStages:
     def run(self, kind, tasks, serial):
         if threading.get_ident() != self._owner:
             raise GeometryError("thread planning stage entered from a foreign thread")
+        if _IN_TASK.get():
+            # Before any pool exists: a nested stage would have workers that the outer verdict cannot see.
+            raise GeometryError("thread planning stage inside a task of another stage is not supported")
         tasks = list(tasks)
         if not tasks:
             return []
@@ -304,7 +328,7 @@ class ThreadStages:
             return self._run(kind, tasks, serial, attempt)
         except BaseException as exc:
             attempt.note(exc)                # whatever leaves a stage is recorded, also if a caller swallows it
-            if not own or not isinstance(exc, Exception):
+            if not own or not _ordinary(exc):
                 raise
             failure = exc
         instead = attempt.verdict(failure)
@@ -342,6 +366,7 @@ class ThreadStages:
             def check():
                 if stopped.is_set() or index > first_failure[0]:
                     raise _Abandoned()
+            _IN_TASK.set(True)
             counters, records = {}, {}
             _diagnostics._COLLECTORS.set((counters,))
             _diagnostics._RECORD_COLLECTORS.set((records,))
@@ -390,12 +415,12 @@ class ThreadStages:
                 future.result()
             except BaseException as exc:
                 attempt.note(exc)
-                if held is None or (isinstance(held, Exception) and not isinstance(exc, Exception)):
+                if held is None or (_ordinary(held) and not _ordinary(exc)):
                     held = exc
         for exc in interrupts:   # 1. the lowest-index interrupt of a worker
             if exc is not None:
                 raise exc
-        if held is not None and not isinstance(held, Exception):   # 2. an interrupt of the dispatching thread
+        if held is not None and not _ordinary(held):   # 2. an interrupt of the dispatching thread
             raise held
         for exc in machinery:    # 3. an ordinary machinery failure (leads to the serial repeat)
             if exc is not None:
@@ -408,7 +433,7 @@ class ThreadStages:
             _diagnostics._publish_planning(outcomes[index][2])
         if failed < count:
             error = outcomes[failed][1]
-            if isinstance(error, GeometryError):
+            if _is(error, GeometryError):
                 task = tasks[failed]
                 if kind == 'pair':
                     raise GeometryError(
