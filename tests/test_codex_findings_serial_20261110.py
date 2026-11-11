@@ -1204,3 +1204,63 @@ def test_r9_randomized_shape_length_ndim_differential(seed):
                     mismatches.append((ka, kb, policy, got, ref))
     assert total >= 200 and raised >= 20, (total, raised)
     assert not mismatches, f"{len(mismatches)} mismatches; first: {mismatches[0]}"
+
+
+# ---------------------------------------------------------------- round 10: container-valued scalar / point fields
+def _set(obj, name, value):
+    object.__setattr__(obj, name, value)
+    return obj
+
+
+def _fresh_arc():
+    return EllipticArc((0., 0., 0.), (1., 0., 0.), (0., 1., 0.), 0., 1.)
+
+
+def _fresh_far_arc():
+    return EllipticArc((0., 100., 0.), (1., 0., 0.), (0., 1., 0.), 0., 1.)
+
+
+def _fresh_cyl_curve():
+    a = Cylinder((0, 0, 0), (0, 0, 1), (1, 0, 0), 1., 4.)
+    b = Cylinder((-2, 0, 0), (1, 0, 0), (0, 1, 0), 1., 4.)
+    return CylinderIntersectionCurve(a, b, 0.3, 1.0, 1)
+
+
+_FAR_LINE = lambda: LinePath((0., 50., 5.), (1., 50., 5.))                       # noqa: E731
+_R10_CASES = {
+    # Codex round 10: container-valued scalar angle field plus nested-empty point on the line
+    "codex_angle_tuple": lambda: (LinePath(((), (), ()), (0., 0., 0.)), _set(_fresh_arc(), "start_angle", (0.,))),
+    # siblings of the same class: nested / empty tuples, singleton and 0-d arrays in scalar or point fields of every curve type
+    "line_nested_point": lambda: (LinePath(((0.,), (0.,), (0.,)), (1., 0., 0.)), _fresh_far_arc()),
+    "line_empty_end": lambda: (LinePath((0., 0., 0.), ((), (), ())), _fresh_far_arc()),
+    "arc_center_nested": lambda: (_set(_fresh_arc(), "center", ((0.,), (0.,), (0.,))), _FAR_LINE()),
+    "arc_sweep_singleton_array": lambda: (_set(_fresh_arc(), "sweep_angle", np.array([1.])), _FAR_LINE()),
+    "arc_start_zero_d_array": lambda: (_set(_fresh_arc(), "start_angle", np.array(0.)), _FAR_LINE()),
+    "bezier_rows_nested": lambda: (BezierPath((((0.,), (0.,), (0.,)), ((1.,), (0.,), (0.,)))), _FAR_LINE()),
+    "cyl_sweep_tuple": lambda: (_set(_fresh_cyl_curve(), "sweep_angle", (1.,)), _FAR_LINE()),
+    "cyl_start_singleton_array": lambda: (_set(_fresh_cyl_curve(), "start_angle", np.array([0.3])), _FAR_LINE()),
+    "branch_start_tuple": lambda: (_set(make_C(), "start", (0.,)), _FAR_LINE()),
+    "branch_sweep_zero_d_array": lambda: (_set(make_C(), "sweep", np.array(1.)), _FAR_LINE()),
+}
+
+
+@pytest.mark.filterwarnings("ignore")
+@pytest.mark.parametrize("name", sorted(_R10_CASES))
+def test_r10_container_valued_scalar_and_point_fields_same_as_original(name):
+    a, b = _R10_CASES[name]()
+    for x, y in ((a, b), (b, a)):
+        for policy in ("default", "bounds"):
+            got, ref = (both(x, y, 1e-9) if policy == "default" else both_policy_on(x, y, 1e-9))
+            assert got == ref, (name, policy, got, ref)
+
+
+@pytest.mark.filterwarnings("ignore")
+@pytest.mark.parametrize("name", sorted(_R10_CASES))
+def test_r10_the_guard_never_raises(name):
+    a, b = _R10_CASES[name]()
+    for obj in (a, b):
+        try:
+            result = _ag._shortcut_curve_ok(obj, 1e-9)
+        except Exception as error:
+            pytest.fail(f"guard raised {type(error).__name__}: {error}")
+        assert result in (True, False)
