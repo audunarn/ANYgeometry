@@ -54,6 +54,11 @@ Contract (see thread-design-note.md in the programme work folder):
   the reads of the switches (also the two in ``batch_intersections``), ``route``'s own preparation, the
   eligibility test, and the entry of a stage with its guards. Only ``plan(None)`` - the serial route - is
   called outside one, so that serial planning raises what it raises without the switch.
+  Out of contract (owner, after review round 16): an allocation failure (``MemoryError``) inside or on entry to
+  the route's own statements - also the few that stand outside a handler: raising a refusal that was just
+  built, the empty-list return and the decision of a stage called on its own - and any failure BEFORE a guarded
+  helper is entered, for example recursion exhaustion at the call of ``_thread_switch_set`` or ``_thread_route``.
+  The route does not claim to guard a call instruction itself.
 * The planner hands the stage its ordinary task list and its own serial task function through the
   existing ``_stages`` hook; this module only decides WHERE each task runs. Results are returned in
   task order, so everything assembled from them is assembled in the serial order.
@@ -63,6 +68,12 @@ Contract (see thread-design-note.md in the programme work folder):
 * A failed task stops the stage: tasks with a higher index are abandoned, the failure with the
   lowest index is raised with the serial wrapping (a ``GeometryError`` refusal then leads to the serial repeat
   above, any other task failure to the typed refusal).
+  A ROUTE failure (``_RouteFailure``) of a task is not such a task failure and is not subject to "lowest index
+  only": after the join the outcomes of ALL tasks that ran are scanned for one, as the interrupt slots are, and
+  the lowest-index route failure is raised before any task failure. So the refusal of a lower-index task cannot
+  hide a route failure that a higher-index task (already running) met, and cannot lead to a serial repeat
+  after it. An ORDINARY failure of a higher-index task stays behind the lower-index one, as in serial planning,
+  which never reaches that task.
 * Not eligible: a ``cancellation_check`` on the policy (a callback's poll sequence cannot be
   reproduced from several threads), predicate or candidate-pair budgets (their refusal point is order
   dependent), a planning mode other than exact, an epoch/native plan, a face support other than a
@@ -138,8 +149,8 @@ Contract (see thread-design-note.md in the programme work folder):
 * Whether an exception is an interrupt is decided on the object's real type (``_ordinary`` / ``_is``), never by
   ``isinstance``, which can run code of the exception object and fail before the interrupt is recorded.
 * Inside a stage that ends normally the dispatcher still raises in this order: lowest-index worker interrupt,
-  interrupt of the dispatching thread, ordinary machinery failure (lowest task index), lowest-index task
-  failure with the serial wrapping.
+  interrupt of the dispatching thread, ordinary machinery failure (lowest task index), lowest-index route
+  failure of a task, lowest-index task failure with the serial wrapping.
 """
 import contextvars
 import os
@@ -731,6 +742,11 @@ class ThreadStages:
         if not crew.accounted():
             # A thread died outside our statements, or was not joined: running stays up, the verdict refuses.
             raise RuntimeError("thread planning stage lost track of a worker thread")
+        # 4. a route failure of ANY task that ran (also one above the lowest failed index, which was running when
+        # that task failed): it is the route that failed, so no task refusal may stand in front of it.
+        for outcome in outcomes:
+            if outcome is not None and outcome[1] is not None and _is(outcome[1], _RouteFailure):
+                raise outcome[1]
         _diagnostics._increment(f'intersection_thread_{kind}_stage_time_ns', perf_counter_ns() - start)
         failed = first_failure[0]
         for index in range(min(failed + 1, count)):
