@@ -8,11 +8,24 @@ without speed-up.
 Contract (see thread-design-note.md in the programme work folder):
 
 * The threaded route returns exactly what the serial route returns (plan, deterministic counters,
-  records), or planning runs on the serial route. There are two ways to the serial route:
-  the call is not eligible (``thread_stages`` returns ``None``), or the threaded attempt raised
-  (``plan_with_threads``): its counters and records are discarded whole and planning is repeated
-  serially, so a refusal carries serial's message, cause, counters and records by construction.
-  The discarded attempt is visible only as the clock ``intersection_thread_discarded_attempt_time_ns``.
+  records), or planning runs on the serial route, or a typed ``GeometryError`` is raised. Planning runs on the
+  serial route when the call is not eligible (``thread_stages`` returns ``None``), and when the threaded
+  attempt ended with a PLAIN REFUSAL (``plan_with_threads``): its counters and records are discarded whole and
+  planning is repeated serially, so the refusal carries serial's message, cause, counters and records by
+  construction. The discarded attempt is visible only as the clock
+  ``intersection_thread_discarded_attempt_time_ns``.
+* The one decision (``_Attempt.verdict``, applied by ``plan_with_threads`` and by a ``ThreadStages.run`` called
+  on its own) when the threaded attempt ended with an ordinary exception:
+  (1) an interrupt observed anywhere in the attempt is raised;
+  (2) otherwise the serial repeat, ONLY IF the exception is a plain refusal - a typed ``GeometryError`` (the
+  lowest-index task refusal of a stage, or a refusal of the planner's own code in the dispatching thread) or
+  ``_NotAudited`` (an unaudited stage input) - AND every stage of the attempt is finished, i.e. every thread
+  whose start was attempted was joined (``running == 0``);
+  (3) otherwise a typed ``GeometryError`` with the original exception as its cause, and nothing is planned:
+  any exception of the route's own machinery, a task failure that is not a ``GeometryError``, a failed thread
+  start, a crew that is not accounted. The caller plans serially by unsetting the switch.
+  So a failure of the route never turns into a silent serial answer, and an interrupt that was lost in spite
+  of the rules below can at worst become a typed refusal.
 * The planner hands the stage its ordinary task list and its own serial task function through the
   existing ``_stages`` hook; this module only decides WHERE each task runs. Results are returned in
   task order, so everything assembled from them is assembled in the serial order.
@@ -20,7 +33,8 @@ Contract (see thread-design-note.md in the programme work folder):
   collectors and a root-isolation memo that is private to its worker thread. Counters and records
   are published to the caller's collectors in task order after the stage.
 * A failed task stops the stage: tasks with a higher index are abandoned, the failure with the
-  lowest index is raised with the serial wrapping (and then leads to the serial repeat above).
+  lowest index is raised with the serial wrapping (a ``GeometryError`` refusal then leads to the serial repeat
+  above, any other task failure to the typed refusal).
 * Not eligible: a ``cancellation_check`` on the policy (a callback's poll sequence cannot be
   reproduced from several threads), predicate or candidate-pair budgets (their refusal point is order
   dependent), a planning mode other than exact, an epoch/native plan, a face support other than a
@@ -38,32 +52,27 @@ Contract (see thread-design-note.md in the programme work folder):
 * The switch is validated at the public entry before any route is chosen (``validate_switches``): the value
   is unset, empty, ``0`` or exactly one of ``1`` .. ``8``, and it excludes the process-route switch.
 * Interrupts (``KeyboardInterrupt`` / ``SystemExit``, any non-``Exception``) are never turned into a serial
-  repeat. ONE rule owns this, ``_Attempt.verdict``, applied by ``plan_with_threads`` (and by a ``ThreadStages.run``
-  called on its own) when the attempt ends with an ordinary exception: (1) an interrupt seen anywhere in a stage
-  of the attempt - recorded by a worker (task function, setup, bookkeeping, outcome storage; lowest task index
-  first), met by the dispatching thread in ``wait()`` or in its cleanup - is raised instead of that exception;
-  (2) otherwise, if the workers are not known to have finished (``pool.shutdown`` did not return), a typed
-  ``GeometryError`` is raised and nothing is planned beside them; (3) only otherwise planning is repeated
-  serially. An interrupt that propagates by itself is not caught at all.
-  Limit of the rule: it sees what the route's own code observed. An ordinary failure of an interpreter
-  primitive at the very moment of an interrupt can mask it only where the interrupt was never observed (for
-  example inside ``shutdown`` before any Python statement of this module runs); that is outside the contract,
-  as it is on the serial route.
-  How the rule is kept complete: every ``except`` of this module that can hold an interrupt records it in the
-  attempt as its first statement (reading the futures, whatever leaves a stage, whatever leaves the threaded
-  attempt, the cleanup), so an interrupt that a caller swallowed or that a later ordinary failure replaced
-  still decides. The attempt record belongs to the thread that created it: a stage run from another thread (a
-  worker of an outer stage, a thread that inherited the context) keeps a record and a verdict of its own, so
-  the ``running`` state seen by the boundary is written by one thread only. The context reset is inside the
-  region whose ordinary failures go to the verdict, and a closed attempt is never used again.
+  repeat: an interrupt observed anywhere in a stage of the attempt - recorded by a worker (task function,
+  setup, bookkeeping, outcome storage; lowest task index first), met by the dispatching thread while it waits
+  or in its cleanup - is raised instead of the ordinary exception the attempt ended with. An interrupt that
+  propagates by itself is not caught at all. Every ``except`` of this module that can hold an interrupt records
+  it as its first statement, the attempt record belongs to the thread that created it, and the context reset
+  is inside the region whose ordinary failures go to the verdict.
+  Out of contract: exceptions raised by trace or profile hooks INSIDE this module's own statements (a hook can
+  raise before any statement, the recording one included), anything that happens in a worker thread after its
+  last statement of this module, and an ordinary failure of an interpreter primitive at the very moment of an
+  interrupt where no statement of this module observed the interrupt. Because of decision (3) above, what is
+  lost there can become a typed refusal, not serial planning beside the failure - except where the hook itself
+  raises a ``GeometryError``.
 * The threads of a stage are owned by this module (``_Crew``), not by an executor: created -> started -> joined.
   The dispatcher creates every thread object before any runs, marks a thread as possibly running BEFORE it calls
   ``start()`` on it, and joins each one itself. A worker thread registers itself as its first statement and sets
   its ``done`` flag as its last. A stage counts as finished (``attempt.running`` goes down, the serial repeat
   becomes possible) only if the crew is ACCOUNTED: every thread whose start was attempted was joined by the
   dispatcher AND reached its last statement. A ``start()`` that raised, a join that raised, a thread that died
-  before its first statement of ours or before its last: each leaves the crew unaccounted, the stage raises, and
-  the verdict gives a typed ``GeometryError`` (or an observed interrupt), never the serial repeat.
+  before its first statement of ours or before its last: each leaves the crew unaccounted, ``running`` stays
+  up, and the verdict gives a typed ``GeometryError`` (or an observed interrupt), never the serial repeat -
+  also when the stage itself ended with a plain task refusal.
   Limit: what happens in a worker thread AFTER its last statement of this module - the return event of its main
   function and the frames of ``threading`` below it, where a trace or profile hook could still raise - is seen
   by no statement of this module. Such a thread is still joined before the stage counts as finished, so nothing
@@ -247,16 +256,28 @@ class _Attempt:
         return self.dispatcher
 
     def verdict(self, failure):
-        """What must be raised instead of the ordinary ``failure`` of the attempt, or None for the serial repeat."""
+        """The one decision: what must be raised instead of the ordinary ``failure`` the attempt ended with, or
+        None for the serial repeat.
+
+        The serial repeat needs a plain refusal (a typed ``GeometryError``, or ``_NotAudited``) AND every stage
+        finished (all started threads joined). An observed interrupt is raised. Everything else - the route's
+        own machinery failing, a task failure that is not a refusal, threads not accounted for - is a typed
+        ``GeometryError`` with ``failure`` as its cause.
+        """
         interrupt = self.interrupt()
         if interrupt is not None:
             return interrupt
         if self.running:
             error = GeometryError("thread planning stage did not finish: its workers are not known to have "
                                   "stopped, so planning is not repeated serially")
-            error.__cause__ = failure
-            return error
-        return None
+        elif _is(failure, GeometryError) or _is(failure, _NotAudited):
+            return None
+        else:
+            error = GeometryError(
+                f"thread planning failed outside a geometry refusal ({type(failure).__name__}); planning is not "
+                f"repeated serially - unset {THREADS_ENVIRONMENT} to plan on the serial route")
+        error.__cause__ = failure
+        return error
 
 
 _ATTEMPT = contextvars.ContextVar('anygeometry_planning_thread_attempt', default=None)
@@ -278,7 +299,7 @@ class _Crew:
     """The threads of one stage, owned by this module: created -> started -> joined.
 
     Per thread (slot): ``attempted`` is set by the dispatcher before it calls ``start()``; ``entered`` (the ident)
-    is set by the thread after it has registered itself; ``done`` is the thread's last statement; ``joined`` is
+    is set by the thread just before it registers itself; ``done`` is the thread's last statement; ``joined`` is
     set by the dispatcher when ``join()`` has returned. ``interrupts`` / ``machinery`` hold what a thread met
     outside a task. All lists are preallocated; a slot is written by one thread only.
     """
@@ -368,9 +389,10 @@ def _inside_task():
 def plan_with_threads(threaded, serial):
     """``threaded()`` with its diagnostics published on success; on any failure the result of ``serial()``.
 
-    The attempt runs under private collectors. A refusal (or any other exception) of the attempt may have
-    counted work the serial route never reaches and may come from another task than serial's first
-    failure, so nothing of it is kept: the serial route is run from the start and decides alone.
+    The attempt runs under private collectors. A refusal of the attempt may have counted work the serial route
+    never reaches and may come from another task than serial's first failure, so nothing of it is kept: after a
+    plain refusal the serial route is run from the start and decides alone; any other failure of the attempt
+    is a typed ``GeometryError`` (``_Attempt.verdict``).
     ``KeyboardInterrupt`` and ``SystemExit`` pass through, and ``_Attempt.verdict`` decides whether an ordinary
     failure may lead to the serial repeat at all (not after an interrupt seen anywhere in the attempt, and not
     while workers are not known to have finished).
