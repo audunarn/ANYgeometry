@@ -29,7 +29,7 @@ def _assert_budget_facts(error, cap):
     assert any("qualification budget was denied" in note for note in error.__notes__)
 
 
-@pytest.mark.parametrize("cap", [3000, 7000])
+@pytest.mark.parametrize("cap", [1000, 1500])  # was [3000, 7000] before the _tight_x memo (about 1,700 boxes are needed now)
 def test_small_budget_refusal_keeps_its_type_and_carries_the_budget_facts(cap):
     with pytest.raises(GeometryError) as info:
         _plan(cap)
@@ -38,7 +38,7 @@ def test_small_budget_refusal_keeps_its_type_and_carries_the_budget_facts(cap):
 
 
 def test_sufficient_budget_still_plans():
-    plan = _plan(8000)
+    plan = _plan(2500)
     assert plan is not None
 
 
