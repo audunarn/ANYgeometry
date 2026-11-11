@@ -37,12 +37,21 @@ Contract (see thread-design-note.md in the programme work folder):
   ``RECORD_CLOCK_FIELDS``. Every other counter and record value is part of the contract.
 * The switch is validated at the public entry before any route is chosen (``validate_switches``): the value
   is unset, empty, ``0`` or exactly one of ``1`` .. ``8``, and it excludes the process-route switch.
-* Order of what a stage raises, decided only after every worker has finished: (1) a ``KeyboardInterrupt`` /
-  ``SystemExit`` (any non-``Exception``) seen anywhere in a worker - task function, worker setup, bookkeeping,
-  outcome storage - the one with the lowest task index; (2) such an interrupt delivered to the dispatching
-  thread itself; (3) an ordinary exception of the worker machinery outside the task function (lowest task
-  index); (4) the lowest-index task failure with the serial wrapping. (1) and (2) reach the caller, there is
-  no serial repeat; (3) and (4) lead to the serial repeat.
+* Interrupts (``KeyboardInterrupt`` / ``SystemExit``, any non-``Exception``) are never turned into a serial
+  repeat. ONE rule owns this, ``_Attempt.verdict``, applied by ``plan_with_threads`` (and by a ``ThreadStages.run``
+  called on its own) when the attempt ends with an ordinary exception: (1) an interrupt seen anywhere in a stage
+  of the attempt - recorded by a worker (task function, setup, bookkeeping, outcome storage; lowest task index
+  first), met by the dispatching thread in ``wait()`` or in its cleanup - is raised instead of that exception;
+  (2) otherwise, if the workers are not known to have finished (``pool.shutdown`` did not return), a typed
+  ``GeometryError`` is raised and nothing is planned beside them; (3) only otherwise planning is repeated
+  serially. An interrupt that propagates by itself is not caught at all.
+  Limit of the rule: it sees what the route's own code observed. An ordinary failure of an interpreter
+  primitive at the very moment of an interrupt can mask it only where the interrupt was never observed (for
+  example inside ``shutdown`` before any Python statement of this module runs); that is outside the contract,
+  as it is on the serial route.
+* Inside a stage that ends normally the dispatcher still raises in this order: lowest-index worker interrupt,
+  interrupt of the dispatching thread, ordinary machinery failure (lowest task index), lowest-index task
+  failure with the serial wrapping.
 """
 import contextvars
 import os
@@ -147,25 +156,72 @@ def thread_stages(model, policy, mode, native):
     return ThreadStages(threads)
 
 
+class _Attempt:
+    """What the stages of one threaded attempt observed; the single owner of the interrupt rule (``verdict``)."""
+    __slots__ = ('worker_slots', 'dispatcher', 'running')
+
+    def __init__(self):
+        self.worker_slots = []     # per stage: the list of worker interrupts by task index (None = none)
+        self.dispatcher = None     # the first interrupt met by the dispatching thread itself
+        self.running = False       # True from the first submit until pool.shutdown(wait=True) has returned
+
+    def note(self, exc):
+        """Remember an interrupt of the dispatching thread (no allocation; ordinary exceptions are not kept)."""
+        if self.dispatcher is None and not isinstance(exc, Exception):
+            self.dispatcher = exc
+
+    def interrupt(self):
+        for slots in self.worker_slots:
+            for exc in slots:
+                if exc is not None:
+                    return exc
+        return self.dispatcher
+
+    def verdict(self, failure):
+        """What must be raised instead of the ordinary ``failure`` of the attempt, or None for the serial repeat."""
+        interrupt = self.interrupt()
+        if interrupt is not None:
+            return interrupt
+        if self.running:
+            error = GeometryError("thread planning stage did not finish: its workers are not known to have "
+                                  "stopped, so planning is not repeated serially")
+            error.__cause__ = failure
+            return error
+        return None
+
+
+_ATTEMPT = contextvars.ContextVar('anygeometry_planning_thread_attempt', default=None)
+
+
 def plan_with_threads(threaded, serial):
     """``threaded()`` with its diagnostics published on success; on any failure the result of ``serial()``.
 
     The attempt runs under private collectors. A refusal (or any other exception) of the attempt may have
     counted work the serial route never reaches and may come from another task than serial's first
     failure, so nothing of it is kept: the serial route is run from the start and decides alone.
-    ``KeyboardInterrupt`` and ``SystemExit`` pass through.
+    ``KeyboardInterrupt`` and ``SystemExit`` pass through, and ``_Attempt.verdict`` decides whether an ordinary
+    failure may lead to the serial repeat at all (not after an interrupt seen anywhere in the attempt, and not
+    while workers are not known to have finished).
     """
     start = perf_counter_ns()
+    attempt, failure, plan = _Attempt(), None, None
+    token = _ATTEMPT.set(attempt)
     try:
-        with _diagnostics._planning_transaction() as attempt:
+        with _diagnostics._planning_transaction() as collected:
             plan = threaded()
-    except Exception:
-        plan = None
-    if plan is None:        # outside the handler, so the serial exception has no threaded context
-        _diagnostics._increment('intersection_thread_discarded_attempt_time_ns', perf_counter_ns() - start)
-        return serial()
-    _diagnostics._publish_planning(attempt)
-    return plan
+    except Exception as exc:
+        failure = exc
+    finally:
+        _ATTEMPT.reset(token)
+    if failure is None:
+        _diagnostics._publish_planning(collected)
+        return plan
+    # Outside the handler, so what follows has no threaded context. The one place that decides.
+    instead = attempt.verdict(failure)
+    if instead is not None:
+        raise instead
+    _diagnostics._increment('intersection_thread_discarded_attempt_time_ns', perf_counter_ns() - start)
+    return serial()
 
 
 class _NotAudited(Exception):
@@ -218,6 +274,17 @@ class ThreadStages:
         tasks = list(tasks)
         if not tasks:
             return []
+        attempt = _ATTEMPT.get()
+        if attempt is not None:                      # inside plan_with_threads: the boundary applies the rule
+            return self._run(kind, tasks, serial, attempt)
+        attempt = _Attempt()                         # called on its own: the same rule, applied here
+        try:
+            return self._run(kind, tasks, serial, attempt)
+        except Exception as failure:
+            caught, instead = failure, attempt.verdict(failure)
+        raise instead if instead is not None else caught
+
+    def _run(self, kind, tasks, serial, attempt):
         phase = _PHASES[kind]
         count = len(tasks)
         outcomes = [None] * count
@@ -229,6 +296,7 @@ class ThreadStages:
         # machinery outside the task function (setup, bookkeeping, outcome storage).
         interrupts = [None] * count
         machinery = [None] * count
+        attempt.worker_slots.append(interrupts)
         parent = contextvars.copy_context()
 
         def execute(index):
@@ -275,15 +343,22 @@ class ThreadStages:
         pool = ThreadPoolExecutor(max_workers=min(self.threads, count), thread_name_prefix='anygeometry-plan')
         held = None              # what the dispatching thread itself met; judged after the workers have drained
         futures = []
+        attempt.running = True
         try:
-            for index in order:
-                futures.append(pool.submit(execute, index))
-            wait(futures)
-        except BaseException as exc:
-            held = exc
-            stopped.set()
-        finally:
-            pool.shutdown(wait=True)
+            try:
+                for index in order:
+                    futures.append(pool.submit(execute, index))
+                wait(futures)
+            except BaseException as exc:
+                attempt.note(exc)        # first of all: an interrupt is kept whatever the cleanup below does
+                held = exc
+                stopped.set()
+            finally:
+                pool.shutdown(wait=True)
+                attempt.running = False  # only now are all workers known to have finished
+        except BaseException as exc:     # the cleanup itself failed or was interrupted: verdict decides
+            attempt.note(exc)
+            raise
         for future in futures:   # execute records everything; a future carries an error only if recording failed
             try:
                 future.result()
