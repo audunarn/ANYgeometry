@@ -1090,3 +1090,117 @@ def test_r8_randomized_dtype_container_degree_differential(seed):
                     mismatches.append((ka, kb, policy, got, ref))
     assert total >= 200 and raised >= 10, (total, raised)
     assert not mismatches, f"{len(mismatches)} mismatches; first: {mismatches[0]}"
+
+
+# ---------------------------------------------------------------- round 9: shapes / lengths / ndim of ordinary containers
+# Contract (owner, narrowed): shortcut == original for ORDINARY inputs (exact float / np.float64 leaves, plain tuple or float64
+# ndarray containers) in values, typed refusals and exception type / message. Out of contract: ndarray / tuple subclasses and
+# objects with overridden __iter__ / __len__ / __array__, mutated private caches, the cancellation exception of the
+# default-off bounds route.
+@pytest.mark.filterwarnings("ignore")
+def test_r9_one_dimensional_bezier_controls_same_as_original():
+    first = LinePath((100., 100., 100.), (101., 100., 100.))
+    second = BezierPath(np.array([0., 0., 0.], dtype=np.float64))
+    for x, y in ((first, second), (second, first)):
+        for policy in ("default", "bounds"):
+            got, ref = (both(x, y, 1e-9) if policy == "default" else both_policy_on(x, y, 1e-9))
+            assert got == ref, (policy, got, ref)
+    with _junction_bounds_policy(False):
+        assert outcome(lambda: curve_junctions(first, second, tolerance=1e-9))[:2] == ("raise", "IndexError")
+
+
+@pytest.mark.filterwarnings("ignore")
+@pytest.mark.parametrize("length", [2, 4, 5])
+def test_r9_wrong_length_line_tuples_same_as_original(length):
+    zeros = (0.,)*length
+    one = (1.,) + (0.,)*(length - 1)
+    line = LinePath(zeros, one)
+    arc = EllipticArc((0., 100., 0.), (1., 0., 0.), (0., 1., 0.), 0., 1.)
+    far_line = LinePath((0., 50., 0.), (1., 50., 0.))
+    for other in (arc, far_line):
+        for x, y in ((line, other), (other, line)):
+            for policy in ("default", "bounds"):
+                got, ref = (both(x, y, 1e-9) if policy == "default" else both_policy_on(x, y, 1e-9))
+                assert got == ref, (length, type(other).__name__, policy, got, ref)
+
+
+@pytest.mark.filterwarnings("ignore")
+@pytest.mark.parametrize("shape", [(3,), (1, 3), (4,), (2, 2), (2, 4), (3, 1), (2, 3, 1)])
+def test_r9_odd_shape_bezier_controls_same_as_original(shape):
+    controls = np.arange(float(np.prod(shape))).reshape(shape) + 100.
+    try:
+        path = BezierPath(controls)
+    except Exception:
+        return
+    line = LinePath((0., 50., 0.), (1., 50., 0.))
+    arc = EllipticArc((0., -100., 0.), (1., 0., 0.), (0., 1., 0.), 0., 1.)
+    for other in (line, arc):
+        for x, y in ((path, other), (other, path)):
+            for policy in ("default", "bounds"):
+                got, ref = (both(x, y, 1e-9) if policy == "default" else both_policy_on(x, y, 1e-9))
+                assert got == ref, (shape, type(other).__name__, policy, got, ref)
+
+
+@pytest.mark.filterwarnings("ignore")
+@pytest.mark.parametrize("make", [
+    lambda: np.array(50., dtype=np.float64),                         # 0-d array
+    lambda: np.array([[50., 50., 50.]]),                             # 2-D
+    lambda: np.array([50., 50.]),                                    # length 2
+    lambda: np.array([50., 50., 50., 50.]),                          # length 4
+    lambda: (50., 50.),                                              # 2-tuple
+    lambda: (50., 50., 50., 50.),                                    # 4-tuple
+    lambda: np.array([[50.], [50.], [50.]]),                         # (3, 1)
+    lambda: 50.,                                                     # bare float
+], ids=["0d", "2d", "len2", "len4", "tuple2", "tuple4", "col3", "scalar"])
+def test_r9_point_filter_positions_of_other_shapes_decline(make):
+    curve = make_C()
+    far = ma._point_clear_of_curve(curve, 1e-9)
+    assert far is not None
+    position = make()
+    try:
+        is_far = far(position)
+    except Exception as error:                                       # the filter itself must never raise
+        pytest.fail(f"far() raised {type(error).__name__}: {error}")
+    original = outcome(lambda: point_parameters(curve, position, tolerance=1e-9))
+    assert (not is_far) or original == ("ok", repr(())), (is_far, original)
+    assert is_far is False                                           # ordinary positions are exactly three float coordinates
+
+
+@pytest.mark.filterwarnings("ignore")
+@pytest.mark.parametrize("seed", [71, 72])
+def test_r9_randomized_shape_length_ndim_differential(seed):
+    rng = np.random.default_rng(seed)
+
+    def point():
+        length = int(rng.choice([2, 3, 3, 3, 4]))
+        values = tuple(float(v) for v in rng.normal(size=length)*float(rng.choice([1., 50.])))
+        return values if rng.random() < .7 else np.array(values)
+
+    def controls():
+        rows, cols = int(rng.choice([1, 2, 3, 4])), int(rng.choice([2, 3, 3, 3, 4]))
+        array = rng.normal(size=(rows, cols))*float(rng.choice([1., 50.]))
+        pick = int(rng.integers(5))
+        return (array if pick == 0 else tuple(map(tuple, array.tolist())) if pick == 1
+                else array.ravel() if pick == 2 else array[0] if pick == 3 else array.reshape(rows, cols, 1))
+
+    objects = []
+    for _ in range(30):
+        try:
+            objects.append(("line", LinePath(point(), point())))
+            objects.append(("arc", EllipticArc(point() if rng.random() < .5 else (0., 100., 0.), (1., 0., 0.), (0., 1., 0.), 0., 1.)))
+            objects.append(("bezier", BezierPath(controls())))
+        except Exception:
+            continue
+    assert {k for k, _ in objects} == {"line", "arc", "bezier"}
+    mismatches, raised, total = [], 0, 0
+    pairs = [(a, b) for i, a in enumerate(objects) for b in objects[i+1:i+4] if not (a[0] == "line" and b[0] == "line")]
+    for (ka, a), (kb, b) in pairs:
+        for x, y in ((a, b), (b, a)):
+            for policy in ("default", "bounds"):
+                total += 1
+                got, ref = (both(x, y, 1e-9) if policy == "default" else both_policy_on(x, y, 1e-9))
+                raised += ref[0] == "raise"
+                if got != ref:
+                    mismatches.append((ka, kb, policy, got, ref))
+    assert total >= 200 and raised >= 20, (total, raised)
+    assert not mismatches, f"{len(mismatches)} mismatches; first: {mismatches[0]}"
