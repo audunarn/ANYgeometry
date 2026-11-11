@@ -294,7 +294,23 @@ def test_refusal_has_the_serial_cause_chain(threads, monkeypatch):
     assert planned(threads, monkeypatch)[0] == serial
 
 
-def test_compared_records_are_not_empty(monkeypatch):
+def test_records_of_both_stages_are_compared_by_content_and_order(monkeypatch):
+    # The joint model emits no runtime records of its own (measured: the serial record set is empty), so
+    # record parity is tested on records emitted from inside the pair and the face task functions.
+    from anygeometry.runtime_diagnostics import _record
+    pair, arrange = bi._pair_paths, bi.arrange_material
+
+    def pairing(first, second, *args, **kwargs):
+        _record('test_pair_order', dict(pair=(first.face_id, second.face_id)))
+        return pair(first, second, *args, **kwargs)
+
+    def arranging(domain, *args, **kwargs):
+        _record('test_face_order', dict(face=domain.face_id))
+        return arrange(domain, *args, **kwargs)
+    monkeypatch.setattr(bi, '_pair_paths', pairing)
+    monkeypatch.setattr(bi, 'arrange_material', arranging)
     serial, _ = planned(0, monkeypatch)
-    assert any(serial['records'].values())
-    assert planned(4, monkeypatch)[0] == serial
+    assert len(serial['records']['test_pair_order']) >= 4 and len(serial['records']['test_face_order']) >= 4
+    for threads in (1, 4, 8):
+        threaded, counters = planned(threads, monkeypatch)
+        assert threaded == serial and len(_stage_clocks(counters)) == 2
