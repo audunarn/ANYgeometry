@@ -3,9 +3,9 @@
 A. Every statement of the module that has an interrupt in hand records it in the attempt before anything else
    (reading the futures, whatever leaves a stage, whatever leaves the threaded attempt), so an interrupt that a
    caller swallowed, or that a later ordinary failure replaced, still decides the verdict.
-B. The attempt record belongs to the thread that created it: a stage run from any other thread (a worker of an
-   outer stage, a thread that inherited the context) keeps its own record, so ``running`` of the boundary's
-   attempt cannot be cleared by a nested stage.
+B. The attempt record belongs to the thread that created it: a stage run from any other thread (a thread that
+   inherited the context) keeps its own record, so ``running`` of the boundary's attempt is written by one thread.
+   (Since round 7 a stage inside a task of another stage is refused outright; the nested tests here say so.)
 C. An ordinary failure of the context reset cannot bypass the verdict.
 
 Tests marked FAILS-ON-OLD fail on 380b389. Every test here is bounded: a hang (for example in an executor
@@ -244,7 +244,8 @@ def test_nested_stage_in_a_worker_cannot_clear_the_running_state_of_the_outer_st
 
     def task(item, check=None):
         if item['face'] == 0:
-            assert pt.ThreadStages(2).run('face', _two(), _fine) == [0, 1]      # a nested stage in this worker
+            with pytest.raises(GeometryError, match='inside a task of another stage'):
+                pt.ThreadStages(2).run('face', _two(), _fine)                   # since round 7: refused, no pool
             seen['nested'] = True
             nested_done.set()
             return 0
@@ -284,21 +285,13 @@ def test_stage_in_a_thread_that_inherited_the_context_keeps_its_own_record():   
     assert seen == dict(foreign=[0, 1])
 
 
-def test_nested_stage_failures_stay_inside_the_task_that_ran_them():
-    def inner(item, check=None):
-        raise GeometryError('inner refusal')
-
+def test_nested_stage_refusal_is_an_ordinary_task_failure():
+    # Since round 7 a stage inside a task is refused before it has a pool; for the outer stage that is an ordinary
+    # failure of that task (serial wrapping, serial repeat at the boundary).
     def task(item, check=None):
         if item['face'] == 1:
-            pt.ThreadStages(2).run('face', _two(), inner)
+            pt.ThreadStages(2).run('face', _two(), _fine)
         return item['face']
-    with pytest.raises(GeometryError, match='face:1: intersection material arrangement face:0: inner refusal'):
+    with pytest.raises(GeometryError, match='face:1: thread planning stage inside a task of another stage'):
         pt.ThreadStages(2).run('face', _two(), task)
-
-    def interrupted(item, check=None):
-        raise SystemExit('inner interrupt')
-
-    def outer(item, check=None):
-        pt.ThreadStages(2).run('face', _two(), interrupted)
-    with pytest.raises(SystemExit, match='inner interrupt'):
-        pt.plan_with_threads(lambda: pt.ThreadStages(2).run('face', _two(), outer), lambda: 'serial')
+    assert pt.plan_with_threads(lambda: pt.ThreadStages(2).run('face', _two(), task), lambda: 'serial') == 'serial'
