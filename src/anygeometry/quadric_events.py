@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from fractions import Fraction
 import math
+import threading
 
 import numpy as np
 
@@ -69,6 +70,7 @@ def _quadratic_roots(c0, c1, c2):
 
 _MEMO = {}
 _MEMO_SIZE = 8192
+_MEMO_LOCK = threading.Lock()      # eviction and insertion are one step, so the size bound holds between threads
 
 
 def curve_quadric_roots(curve, quadric, *, tolerance=1e-10, cancellation_check=None):
@@ -89,12 +91,10 @@ def curve_quadric_roots(curve, quadric, *, tolerance=1e-10, cancellation_check=N
     except KeyError:
         pass
     result = _curve_quadric_roots(curve, quadric, tolerance, cancellation_check)
-    if len(_MEMO) >= _MEMO_SIZE:
-        try:
+    with _MEMO_LOCK:
+        if len(_MEMO) >= _MEMO_SIZE:
             _MEMO.pop(next(iter(_MEMO)), None)             # oldest first: plans are local in time
-        except (RuntimeError, StopIteration):
-            pass    # another planning thread changed the memo meanwhile: skip this eviction
-    _MEMO[key] = result
+        _MEMO[key] = result
     return result
 
 

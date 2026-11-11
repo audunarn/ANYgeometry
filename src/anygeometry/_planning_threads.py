@@ -1,40 +1,54 @@
 """Opt-in in-process thread dispatch of the pair and face stages of intersection planning.
 
-PROTOTYPE (thread-design slice, 2026-11-10). Serial planning is the default and is not changed.
-The route is selected only by ``ANYGEOMETRY_PLANNING_THREADS=<1..8>`` and is useful only on a
-free-threaded interpreter (GIL off); on a GIL build it gives the same plan, without speed-up.
+PROTOTYPE (thread-design slice, 2026-11-10; Codex round-1 fixes 2026-11-11). Serial planning is the
+default and is not changed. The route is selected only by ``ANYGEOMETRY_PLANNING_THREADS=<1..8>`` and
+is useful only on a free-threaded interpreter (GIL off); on a GIL build it gives the same plan,
+without speed-up.
 
 Contract (see thread-design-note.md in the programme work folder):
 
+* The threaded route returns exactly what the serial route returns (plan, deterministic counters,
+  records), or planning runs on the serial route. There are two ways to the serial route:
+  the call is not eligible (``thread_stages`` returns ``None``), or the threaded attempt raised
+  (``plan_with_threads``): its counters and records are discarded whole and planning is repeated
+  serially, so a refusal carries serial's message, cause, counters and records by construction.
+  The discarded attempt is visible only as the clock ``intersection_thread_discarded_attempt_time_ns``.
 * The planner hands the stage its ordinary task list and its own serial task function through the
   existing ``_stages`` hook; this module only decides WHERE each task runs. Results are returned in
   task order, so everything assembled from them is assembled in the serial order.
 * Every task runs in its own copy of the dispatching context with private runtime-diagnostics
   collectors and a root-isolation memo that is private to its worker thread. Counters and records
   are published to the caller's collectors in task order after the stage.
-* Refusals: every task with a lower index than a failed task runs to completion, so the failure
-  reported is the first one in serial order, with the serial message. Counters of later tasks are
-  discarded.
-* The caller's ``cancellation_check`` is called on the dispatching thread only; workers poll an
-  event.
-* Not eligible (the request falls back to the unchanged serial route): predicate or candidate-pair
-  budgets (their refusal point is order dependent), a planning mode other than exact, an epoch/native
-  plan, a face support other than a plane or a cylinder, or an active tracing/work scope held in a
-  context variable.
+* A failed task stops the stage: tasks with a higher index are abandoned, the failure with the
+  lowest index is raised with the serial wrapping (and then leads to the serial repeat above).
+* Not eligible: a ``cancellation_check`` on the policy (a callback's poll sequence cannot be
+  reproduced from several threads), predicate or candidate-pair budgets (their refusal point is order
+  dependent), a planning mode other than exact, an epoch/native plan, a face support other than a
+  plane or a cylinder, an edge curve other than a straight line, a circular arc or an elliptic arc
+  (exact types; these are what the shared-store audit and the identity runs cover), or an active
+  tracing/work scope held in a context variable.
 """
 import contextvars
 import os
 import sys
 import threading
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from concurrent.futures import ThreadPoolExecutor, wait
 from time import perf_counter_ns
 
 from .errors import GeometryError
 from . import runtime_diagnostics as _diagnostics
 from .analytic_roots import _ROOT_MEMO
+from .curves import Arc, Straight
+from .exact_curves import EllipticArc
+from .surfaces import Cylinder, Plane
 
 THREADS_ENVIRONMENT = 'ANYGEOMETRY_PLANNING_THREADS'
+PROCESS_ENVIRONMENT = 'ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING'
 MAX_THREADS = 8
+# What the shared-store audit and the identity runs cover (exact types, no subclasses). NURBS section
+# curves use a validated shared runtime store; splines and the other exact curves were never run threaded.
+_AUDITED_SUPPORTS = (Plane, Cylinder)
+_AUDITED_EDGE_CURVES = (Straight, Arc, EllipticArc)
 # Context variables that hold a live mutable work/trace object while their scope is active. A task
 # that inherited one would share it with other threads, so an active scope keeps planning serial.
 _SCOPE_VARIABLES = (
@@ -61,9 +75,11 @@ def requested_threads():
     raw = os.environ.get(THREADS_ENVIRONMENT)
     if raw is None or raw in ('', '0'):
         return 0
-    if not (raw.isascii() and raw.isdecimal()) or not 1 <= int(raw) <= MAX_THREADS:
+    # Length first: int() of a very long digit string raises ValueError, which is not a typed refusal.
+    if len(raw) > 2 or not (raw.isascii() and raw.isdecimal()) or not 1 <= int(raw) <= MAX_THREADS:
+        shown = repr(raw) if len(raw) <= 16 else repr(raw[:16]) + f'... ({len(raw)} characters)'
         raise GeometryError(
-            f"{THREADS_ENVIRONMENT}={raw!r} is not supported (0 or unset: serial; 1..{MAX_THREADS}: threads)")
+            f"{THREADS_ENVIRONMENT}={shown} is not supported (0 or unset: serial; 1..{MAX_THREADS}: threads)")
     return int(raw)
 
 
@@ -77,11 +93,9 @@ def _scope_active():
     return False
 
 
-def _audited_supports(model):
-    # The shared-store audit and the identity runs cover plane and cylinder supports. Other supports
-    # (NURBS section curves use a validated shared runtime store) keep the serial route.
-    from .surfaces import Cylinder, Plane
-    return all(type(face.surface) in (Plane, Cylinder) for face in model.faces.values())
+def _audited_model(model):
+    return (all(type(face.surface) in _AUDITED_SUPPORTS for face in model.faces.values())
+            and all(type(edge.curve) in _AUDITED_EDGE_CURVES for edge in model.edges.values()))
 
 
 def thread_stages(model, policy, mode, native):
@@ -89,32 +103,51 @@ def thread_stages(model, policy, mode, native):
     threads = requested_threads()
     if not threads:
         return None
-    if os.environ.get('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING') == '1':
-        raise GeometryError(
-            f"{THREADS_ENVIRONMENT} and ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING are mutually exclusive")
-    if (mode != 'exact' or native is not None or policy.max_predicates is not None
-            or policy.max_candidate_pairs is not None or _scope_active() or not _audited_supports(model)):
+    if os.environ.get(PROCESS_ENVIRONMENT) == '1':
+        raise GeometryError(f"{THREADS_ENVIRONMENT} and {PROCESS_ENVIRONMENT} are mutually exclusive")
+    if (mode != 'exact' or native is not None or policy.cancellation_check is not None
+            or policy.max_predicates is not None or policy.max_candidate_pairs is not None
+            or _scope_active() or not _audited_model(model)):
         return None
-    return ThreadStages(threads, policy.cancellation_check)
+    return ThreadStages(threads)
+
+
+def plan_with_threads(threaded, serial):
+    """``threaded()`` with its diagnostics published on success; on any failure the result of ``serial()``.
+
+    The attempt runs under private collectors. A refusal (or any other exception) of the attempt may have
+    counted work the serial route never reaches and may come from another task than serial's first
+    failure, so nothing of it is kept: the serial route is run from the start and decides alone.
+    ``KeyboardInterrupt`` and ``SystemExit`` pass through.
+    """
+    start = perf_counter_ns()
+    try:
+        with _diagnostics._planning_transaction() as attempt:
+            plan = threaded()
+    except Exception:
+        plan = None
+    if plan is None:        # outside the handler, so the serial exception has no threaded context
+        _diagnostics._increment('intersection_thread_discarded_attempt_time_ns', perf_counter_ns() - start)
+        return serial()
+    _diagnostics._publish_planning(attempt)
+    return plan
 
 
 class _Abandoned(BaseException):
-    """A task stopped because an earlier task failed or planning was cancelled."""
+    """A task stopped because an earlier task failed or the dispatcher is unwinding."""
 
 
 class ThreadStages:
     in_process = True
 
-    def __init__(self, threads, cancellation_check):
+    def __init__(self, threads):
         self.threads = threads
-        self._cancel = cancellation_check
         self._local = threading.local()
         self._owner = threading.get_ident()
 
     def check_deadline(self):
-        # Same poll and message as the serial route; dispatching thread only.
-        if self._cancel is not None and self._cancel():
-            raise GeometryError("intersection planning cancelled")
+        # No caller callback exists on this route (a policy with one is not eligible).
+        return None
 
     def run(self, kind, tasks, serial):
         if threading.get_ident() != self._owner:
@@ -125,16 +158,16 @@ class ThreadStages:
         phase = _PHASES[kind]
         count = len(tasks)
         outcomes = [None] * count
-        cancelled = threading.Event()
+        stopped = threading.Event()
         lock = threading.Lock()
         first_failure = [count]
         parent = contextvars.copy_context()
 
         def execute(index):
-            if cancelled.is_set() or index > first_failure[0]:
+            if stopped.is_set() or index > first_failure[0]:
                 return
             def check():
-                if cancelled.is_set() or index > first_failure[0]:
+                if stopped.is_set() or index > first_failure[0]:
                     raise _Abandoned()
             def body():
                 counters, records = {}, {}
@@ -161,30 +194,17 @@ class ThreadStages:
         order = sorted(range(count), key=lambda i: (-float(tasks[i].get('cost', 0.)), i))
         start = perf_counter_ns()
         pool = ThreadPoolExecutor(max_workers=min(self.threads, count), thread_name_prefix='anygeometry-plan')
-        cancel_error = None
         try:
-            pending = {pool.submit(execute, index) for index in order}
-            futures = tuple(pending)
-            while pending:
-                if self._cancel is None or cancel_error is not None:
-                    pending = wait(pending).not_done
-                    continue
-                pending = wait(pending, timeout=0.05, return_when=FIRST_COMPLETED).not_done
-                try:
-                    self.check_deadline()
-                except BaseException as exc:
-                    cancel_error = exc
-                    cancelled.set()
+            futures = [pool.submit(execute, index) for index in order]
+            wait(futures)
             for future in futures:
                 future.result()  # an error of the dispatch machinery itself is never swallowed
         except BaseException:
-            cancelled.set()
+            stopped.set()
             raise
         finally:
             pool.shutdown(wait=True)
         _diagnostics._increment(f'intersection_thread_{kind}_stage_time_ns', perf_counter_ns() - start)
-        if cancel_error is not None:
-            raise cancel_error
         failed = first_failure[0]
         for index in range(min(failed + 1, count)):
             _diagnostics._publish_planning(outcomes[index][2])
@@ -198,4 +218,3 @@ class ThreadStages:
                 raise GeometryError(f"intersection material arrangement face:{task['face']}: {error}") from error
             raise error
         return [outcome[0] for outcome in outcomes]
-

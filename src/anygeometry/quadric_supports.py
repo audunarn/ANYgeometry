@@ -15,6 +15,7 @@ dictionary lookup and a handful of midpoint tests each.
 from __future__ import annotations
 
 import math
+import threading
 
 import numpy as np
 
@@ -573,6 +574,7 @@ def _coaxial_rings(a, b, relation, tolerance):
 
 
 _FIRST_CHOICE = {}
+_FIRST_CHOICE_LOCK = threading.Lock()   # insertion and eviction are one step, so the size bound holds between threads
 
 
 def _prefer_first(a, b):
@@ -584,12 +586,11 @@ def _prefer_first(a, b):
         for first, second in ((a, b), (b, a)):
             plan = get_plan(ruled_support(first), second)
             costs.append(sum(m for _a, m in plan.discriminant_roots()) + 2 * len(plan.pole_roots()))
-        choice = _FIRST_CHOICE[key] = costs[0] <= costs[1]
-        if len(_FIRST_CHOICE) > 4096:
-            try:
+        choice = costs[0] <= costs[1]
+        with _FIRST_CHOICE_LOCK:
+            _FIRST_CHOICE[key] = choice
+            if len(_FIRST_CHOICE) > 4096:
                 _FIRST_CHOICE.pop(next(iter(_FIRST_CHOICE)), None)
-            except (RuntimeError, StopIteration):
-                pass    # another planning thread changed the memo meanwhile: skip this eviction
     return choice
 
 

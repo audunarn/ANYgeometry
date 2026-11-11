@@ -1379,6 +1379,9 @@ def plan_intersections(model, operands, *, policy, _parallel_control=None):
     with root_isolation_memo(), _timed_phase('intersection_planning'), junction_policy:
         # Parallel remains experimental and explicitly opt-in.
         if os.environ.get('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING') == '1':
+            if os.environ.get('ANYGEOMETRY_PLANNING_THREADS') not in (None, '', '0'):
+                raise GeometryError(
+                    "ANYGEOMETRY_PLANNING_THREADS and ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING are mutually exclusive")
             from ._planning_host import qualified_plan
             plan=qualified_plan(model,_parallel_control,
                 lambda:_plan_intersections(model,operands,policy=policy,_planning_mode=mode,_seam_policy=seam),
@@ -1389,12 +1392,15 @@ def plan_intersections(model, operands, *, policy, _parallel_control=None):
                     policy={name:(effective.intent.value if name=='intent' else getattr(effective,name))
                         for name in ('intent','face_connections','member_connections','member_face_connections','planning_mode','seam_policy')}))
         elif os.environ.get('ANYGEOMETRY_PLANNING_THREADS') not in (None, '', '0'):
-            # Opt-in in-process thread dispatch of the pair and face stages (prototype); it returns
-            # None, and planning stays on the serial route, whenever the call is not eligible.
-            from ._planning_threads import thread_stages
+            # Opt-in in-process thread dispatch of the pair and face stages (prototype). thread_stages
+            # returns None, and planning stays on the serial route, whenever the call is not eligible;
+            # a threaded attempt that fails is discarded whole and planning is repeated serially.
+            from ._planning_threads import plan_with_threads, thread_stages
             threaded=thread_stages(model,effective,mode,native)
-            plan=_plan_intersections(model, operands, policy=policy, _planning_mode=mode, _seam_policy=seam,
-                                     **({} if threaded is None else {'_stages':threaded}))
+            serial_plan=lambda:_plan_intersections(model, operands, policy=policy, _planning_mode=mode, _seam_policy=seam)
+            plan=serial_plan() if threaded is None else plan_with_threads(
+                lambda:_plan_intersections(model, operands, policy=policy, _planning_mode=mode, _seam_policy=seam,
+                                           _stages=threaded), serial_plan)
         else:
             plan=_plan_intersections(model, operands, policy=policy, _planning_mode=mode, _seam_policy=seam)
     if native is not None:

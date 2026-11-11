@@ -194,7 +194,8 @@ def _inputs_moderate(curve):
     if type(curve) is LinePath:
         return _leaves_moderate(curve)
     try:
-        return _leaves_moderate_cached(curve)
+        hash(curve)                                    # only curves that are values (hashable) are remembered
+        return _leaves_moderate_cached(_SameObject(curve))
     except Exception:                                  # unhashable (list controls) or any other failure: decide uncached
         return _leaves_moderate(curve)
 
@@ -206,9 +207,29 @@ def _leaves_moderate(curve):
         return False
 
 
+class _SameObject:
+    """Memo key that matches the very same object only.
+
+    The allow-list decides on exact types, while curve equality does not (``1.0 == 1``, a ``str`` subclass
+    equals its ``str``), so an answer remembered by value could be handed to an equal curve with other field
+    types, and which of the two is asked first would decide both answers. The key keeps the curve alive, so
+    its ``id`` cannot be reused while the entry exists.
+    """
+    __slots__ = ('value',)
+
+    def __init__(self, value):
+        self.value = value
+
+    def __hash__(self):
+        return id(self.value)
+
+    def __eq__(self, other):
+        return type(other) is _SameObject and other.value is self.value
+
+
 @lru_cache(maxsize=16384)
-def _leaves_moderate_cached(curve):
-    return _leaves_moderate(curve)
+def _leaves_moderate_cached(reference):
+    return _leaves_moderate(reference.value)
 
 
 def _shortcut_curve_ok(curve, tolerance):
