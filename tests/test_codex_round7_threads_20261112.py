@@ -14,7 +14,7 @@ Tests marked FAILS-ON-OLD fail on 05fcc7d. Bounded like the round-6 tests.
 import contextvars
 import faulthandler
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from anygeometry._planning_threads import _Crew as ThreadPoolExecutor   # the crew of a stage (since round 10)
 
 import pytest
 
@@ -58,7 +58,7 @@ def _counted_pools(monkeypatch):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
             pools.append(self)
-    monkeypatch.setattr(pt, 'ThreadPoolExecutor', Pool)
+    monkeypatch.setattr(pt, '_Crew', Pool)
     return pools
 
 
@@ -101,7 +101,7 @@ def test_unfinished_inner_workers_cannot_exist_beside_the_serial_repeat(monkeypa
             if len(pools) > 1 and self is pools[1] and not release.is_set():
                 raise MemoryError('inner shutdown')
             super().shutdown(wait=wait, **options)
-    monkeypatch.setattr(pt, 'ThreadPoolExecutor', Pool)
+    monkeypatch.setattr(pt, '_Crew', Pool)
 
     def waiting(futures, *args, **kwargs):
         if threading.current_thread().name.startswith(POOL):
@@ -225,7 +225,7 @@ def test_interrupt_with_a_hostile_class_leaving_the_attempt_is_still_an_interrup
     assert seen == {}
 
 
-@pytest.mark.parametrize('where', ('task', 'wait', 'shutdown', 'future'))
+@pytest.mark.parametrize('where', ('task', 'wait', 'shutdown'))       # ('future' ended with the executor, round 10)
 def test_interrupt_with_a_hostile_class_anywhere_in_a_stage_is_still_an_interrupt(where, monkeypatch):   # FAILS-ON-OLD (not 'task')
     seen = {}
     if where == 'wait':
@@ -235,24 +235,12 @@ def test_interrupt_with_a_hostile_class_anywhere_in_a_stage_is_still_an_interrup
             real(futures, *args, **kwargs)
             raise Hostile('stop')
         monkeypatch.setattr(pt, 'wait', waiting)
-    if where in ('shutdown', 'future'):
+    if where == 'shutdown':
         class Pool(ThreadPoolExecutor):
             def shutdown(self, wait=True, **options):
                 super().shutdown(wait=wait, **options)
-                if where == 'shutdown':
-                    raise Hostile('stop')
-
-            def submit(self, *args, **kwargs):
-                future = super().submit(*args, **kwargs)
-                if where == 'future':
-                    real = future.result
-
-                    def result(timeout=None):
-                        real(timeout)
-                        raise Hostile('stop')
-                    future.result = result
-                return future
-        monkeypatch.setattr(pt, 'ThreadPoolExecutor', Pool)
+                raise Hostile('stop')
+        monkeypatch.setattr(pt, '_Crew', Pool)
 
     def task(item, check=None):
         if where == 'task':
@@ -298,29 +286,3 @@ def test_the_module_never_uses_isinstance_on_a_caught_exception():
     assert hits == []
     assert pt._ordinary(ValueError('x')) and not pt._ordinary(KeyboardInterrupt()) and not pt._ordinary(Hostile())
     assert pt._ordinary(HostileOrdinary('x')) and not pt._ordinary(SystemExit())
-
-
-def test_future_loop_records_on_its_own(monkeypatch):
-    # White box: the interrupt met while reading the futures is noted there, before the stage's own guard notes it.
-    notes = []
-    real = pt._Attempt.note
-
-    def note(self, exc):
-        notes.append(type(exc))
-        return real(self, exc)
-    monkeypatch.setattr(pt._Attempt, 'note', note)
-
-    class Pool(ThreadPoolExecutor):
-        def submit(self, *args, **kwargs):
-            future = super().submit(*args, **kwargs)
-            real_result = future.result
-
-            def result(timeout=None):
-                real_result(timeout)
-                raise SystemExit('reading futures')
-            future.result = result
-            return future
-    monkeypatch.setattr(pt, 'ThreadPoolExecutor', Pool)
-    with pytest.raises(SystemExit):
-        pt.ThreadStages(1).run('face', _two()[:1], _fine)
-    assert notes == [SystemExit, SystemExit]          # the future loop, then the guard around the stage

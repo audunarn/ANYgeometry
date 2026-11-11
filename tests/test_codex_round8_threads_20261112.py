@@ -16,7 +16,7 @@ Tests marked FAILS-ON-OLD fail on bb3d7ba. Bounded like the round-6 tests.
 import faulthandler
 import sys
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from anygeometry._planning_threads import _Crew as ThreadPoolExecutor   # the crew of a stage (since round 10)
 
 import pytest
 
@@ -58,7 +58,7 @@ def _counted_pools(monkeypatch):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
             pools.append(self)
-    monkeypatch.setattr(pt, 'ThreadPoolExecutor', Pool)
+    monkeypatch.setattr(pt, '_Crew', Pool)
     return pools
 
 
@@ -163,15 +163,16 @@ def test_planning_is_not_eligible_anywhere_in_a_worker(monkeypatch):            
     assert isinstance(pt.thread_stages(model, policy, 'exact', None), pt.ThreadStages)
 
 
-def test_every_pool_of_the_route_names_its_threads_before_they_start():
-    """Source rule: the one place that creates a pool passes the marker prefix, so a pool thread is marked from
-    its construction."""
+def test_every_thread_of_the_route_is_named_before_it_starts():
+    """Source rule (round 10: the crew creates the threads itself): the one ``threading.Thread(...)`` call of the
+    module passes a name built from the marker prefix, so a crew thread is marked from its construction."""
     import ast
     from pathlib import Path
     tree = ast.parse(Path(MODULE).read_text(encoding='utf-8'))
-    pools = [node for node in ast.walk(tree)
-             if isinstance(node, ast.Call) and getattr(node.func, 'id', None) == 'ThreadPoolExecutor']
-    assert len(pools) == 1
-    prefix = {keyword.arg: keyword.value for keyword in pools[0].keywords}['thread_name_prefix']
-    assert isinstance(prefix, ast.Name) and prefix.id == '_WORKER_PREFIX' and pt._WORKER_PREFIX == POOL
-    assert not any(isinstance(node, ast.Call) and getattr(node.func, 'attr', None) == 'Thread' for node in ast.walk(tree))
+    threads = [node for node in ast.walk(tree)
+               if isinstance(node, ast.Call) and getattr(node.func, 'attr', getattr(node.func, 'id', None)) == 'Thread']
+    assert len(threads) == 1
+    name = {keyword.arg: keyword.value for keyword in threads[0].keywords}['name']
+    assert isinstance(name, ast.JoinedStr) and name.values[0].value.id == '_WORKER_PREFIX' and pt._WORKER_PREFIX == POOL
+    crew = pt._Crew(2, lambda: None, threading.Event())
+    assert [thread.name for thread in crew.threads] == [f'{POOL}_0', f'{POOL}_1'] and not any(crew.attempted)

@@ -12,7 +12,7 @@ Tests marked FAILS-ON-OLD fail on 5d2d3ae. Also closed: the four test limits Cod
 """
 import ast
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from anygeometry._planning_threads import _Crew as ThreadPoolExecutor   # the crew of a stage (since round 10)
 
 import pytest
 
@@ -48,7 +48,7 @@ def _failing_shutdown(monkeypatch, error, seen):
             if not seen.get('shutdown'):
                 seen['shutdown'] = True
                 raise error('shutdown')
-    monkeypatch.setattr(pt, 'ThreadPoolExecutor', Pool)
+    monkeypatch.setattr(pt, '_Crew', Pool)
 
 
 def _interrupted_wait(monkeypatch, fatal, seen):

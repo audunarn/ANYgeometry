@@ -14,7 +14,7 @@ shutdown) dumps all stacks and ends the process after ``BOUND`` seconds instead 
 import contextvars
 import faulthandler
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from anygeometry._planning_threads import _Crew as ThreadPoolExecutor   # the crew of a stage (since round 10)
 
 import pytest
 
@@ -64,36 +64,14 @@ def _swallowing(stage, kinds, seen):
 
 # ---- A. an interrupt in hand is always recorded ----
 
-@pytest.mark.parametrize('fatal', FATAL)
-def test_interrupt_met_while_reading_the_futures_decides_the_verdict(fatal, monkeypatch):      # FAILS-ON-OLD
-    seen = {}
-
-    class Pool(ThreadPoolExecutor):
-        def submit(self, *args, **kwargs):
-            future = super().submit(*args, **kwargs)
-            real = future.result
-
-            def result(timeout=None):
-                value = real(timeout)
-                if not seen.get('future'):
-                    seen['future'] = True
-                    raise fatal('reading futures')
-                return value
-            future.result = result
-            return future
-    monkeypatch.setattr(pt, 'ThreadPoolExecutor', Pool)
-    with pytest.raises(fatal, match='reading futures'):                 # the stage itself raises it
-        pt.ThreadStages(2).run('face', _two(), _fine)
-    seen.clear()
-    with pytest.raises(fatal, match='reading futures'):                 # and a swallowed one is not forgotten
-        pt.plan_with_threads(_swallowing(lambda: pt.ThreadStages(2).run('face', _two(), _fine), fatal, seen),
-                             _serial(seen))
-    assert seen == dict(future=True, swallowed=True)
+# (Round 10: the stage owns its threads; there are no futures to read. The interrupt "met while reading the
+# futures" is now the interrupt met while joining, covered by the round-5 wait/shutdown tests and by
+# test_codex_round10_threads_20261112.py.)
 
 
-def test_interrupt_of_a_worker_that_leaves_through_its_future_decides_the_verdict(monkeypatch):   # FAILS-ON-OLD
+def test_interrupt_of_a_worker_outside_its_task_slot_decides_the_verdict(monkeypatch):   # FAILS-ON-OLD
     # A worker's machinery fails ordinarily, and its stop signal is then interrupted: the interrupt is not in the
-    # worker's slot, it leaves through the future.
+    # task's slot; since round 10 it is recorded in the slot of the crew thread.
     seen, real, doomed = {}, pt.perf_counter_ns, set()
 
     def clock():
@@ -205,10 +183,10 @@ def test_an_attempt_left_in_the_context_by_a_failed_reset_is_not_used_again(monk
             def shutdown(self, wait=True, **options):
                 super().shutdown(wait=wait, **options)
                 raise MemoryError('shutdown')
-        monkeypatch.setattr(pt, 'ThreadPoolExecutor', Pool)
+        monkeypatch.setattr(pt, '_Crew', Pool)
         with pytest.raises(GeometryError, match='did not finish'):
             pt.ThreadStages(2).run('face', _two(), _fine)
-        assert len(stale.worker_slots) == before == 1                 # nothing added by the later stage
+        assert len(stale.worker_slots) == before == 2                 # nothing added by the later stage
     finally:
         real.reset(seen['token'])
     assert real.get() is None
@@ -232,7 +210,7 @@ def test_nested_stage_in_a_worker_cannot_clear_the_running_state_of_the_outer_st
                 seen['shutdown'] = True               # the OUTER pool: fails before draining its blocked worker
                 raise MemoryError('shutdown')
             super().shutdown(wait=wait, **options)
-    monkeypatch.setattr(pt, 'ThreadPoolExecutor', Pool)
+    monkeypatch.setattr(pt, '_Crew', Pool)
 
     def waiting(futures, *args, **kwargs):
         if threading.get_ident() != main:
@@ -279,7 +257,7 @@ def test_stage_in_a_thread_that_inherited_the_context_keeps_its_own_record():   
         assert not thread.is_alive()
         assert attempt.worker_slots == [] and not attempt.running
         result = pt.ThreadStages(2).run('face', _two(), _fine)
-        assert len(attempt.worker_slots) == 1 and not attempt.running
+        assert len(attempt.worker_slots) == 2 and not attempt.running     # task slots and crew slots
         return result
     assert pt.plan_with_threads(threaded, _serial(seen)) == [0, 1]
     assert seen == dict(foreign=[0, 1])

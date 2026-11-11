@@ -5,7 +5,7 @@ runs in that thread; a finalizer there could start a stage, because both markers
 ``threading`` registry, task context) read state that is torn down before the thread is gone.
 Class: "the guard reads state that the interpreter tears down before the thread is really gone, or that does not
 exist yet when the thread already runs". Closed with a third marker that depends on neither: the module-level
-registry ``_WORKER_IDENTS`` of OS thread idents. A pool thread adds its ident as its first statement (the pool's
+registry ``_WORKERS`` of OS thread idents. A pool thread adds its ident as its first statement (the pool's
 initializer, and again first in ``execute``); only the dispatcher removes it, after ``pool.shutdown(wait=True)``
 has joined the thread. A stage refuses when the calling thread's ident is registered.
 
@@ -14,7 +14,7 @@ Tests marked FAILS-ON-OLD fail on 2f55dc1. Bounded, and no thread object may be 
 import ast
 import faulthandler
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from anygeometry._planning_threads import _Crew as ThreadPoolExecutor   # the crew of a stage (since round 10)
 from pathlib import Path
 
 import pytest
@@ -29,7 +29,7 @@ REFUSED = 'thread planning stage inside a task of another stage is not supported
 
 
 def _registry():
-    return set(getattr(pt, '_WORKER_IDENTS', ()))
+    return set(getattr(pt, '_WORKERS', ()))
 
 
 @pytest.fixture(autouse=True)
@@ -58,7 +58,7 @@ def _counted_pools(monkeypatch):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
             pools.append(self)
-    monkeypatch.setattr(pt, 'ThreadPoolExecutor', Pool)
+    monkeypatch.setattr(pt, '_Crew', Pool)
     return pools
 
 
@@ -115,41 +115,56 @@ def test_worker_idents_are_registered_from_the_first_statement_until_the_join(mo
 
     def trace(frame, event, argument):
         if event == 'call' and frame.f_code.co_filename == MODULE and frame.f_code.co_name in ('execute', 'body'):
-            seen.append((frame.f_code.co_name, threading.get_ident() in pt._WORKER_IDENTS))
+            seen.append((frame.f_code.co_name, threading.get_ident() in pt._WORKERS))
         return None
 
     def task(item, check=None):
-        seen.append(('task', threading.get_ident() in pt._WORKER_IDENTS))
+        seen.append(('task', threading.get_ident() in pt._WORKERS))
         return item['face']
-    assert threading.get_ident() not in pt._WORKER_IDENTS
-    before = set(pt._WORKER_IDENTS)
+    assert threading.get_ident() not in pt._WORKERS
+    before = set(pt._WORKERS)
     threading.settrace(trace)
     try:
         assert pt.ThreadStages(1).run('face', _two()[:1], task) == [0]
     finally:
         threading.settrace(None)
     assert seen == [('execute', True), ('body', True), ('task', True)]      # already at the call event of execute
-    assert set(pt._WORKER_IDENTS) == before and threading.get_ident() not in pt._WORKER_IDENTS
+    assert set(pt._WORKERS) == before and threading.get_ident() not in pt._WORKERS
 
 
-def test_idents_stay_registered_when_the_pool_was_not_joined(monkeypatch):                    # FAILS-ON-OLD
-    kept = []
+def test_idents_stay_registered_when_a_thread_was_not_joined(monkeypatch):                     # FAILS-ON-OLD
+    # Round 10 form: the join of ONE crew thread fails (after really joining, so the test can end cleanly); that
+    # thread stays registered and the stage is not finished; the other thread is unmarked.
+    failed = []
 
-    class Pool(ThreadPoolExecutor):
-        def shutdown(self, wait=True, **options):
-            super().shutdown(wait=wait, **options)
-            if not kept:
-                kept.append(set(pt._WORKER_IDENTS))
-                raise MemoryError('shutdown')
-    monkeypatch.setattr(pt, 'ThreadPoolExecutor', Pool)
-    before = set(pt._WORKER_IDENTS)
+    class Thread(threading.Thread):
+        calls = 0
+
+        def join(self, timeout=None):
+            super().join(timeout)
+            self.calls += 1                           # first join: the dispatcher's wait; second: its shutdown
+            if self.name.endswith('_1') and self.calls == 2:
+                failed.append(self.ident)
+                raise MemoryError('join')
+
+    class Threading:
+        def __getattr__(self, name):
+            return Thread if name == 'Thread' else getattr(threading, name)
+    monkeypatch.setattr(pt, 'threading', Threading())
+    before = set(pt._WORKERS)
+    barrier = threading.Barrier(2, timeout=30)
+
+    def task(item, check=None):
+        barrier.wait()                                # both crew threads take a task
+        return item['face']
     try:
-        with pytest.raises(GeometryError, match='did not finish'):
-            pt.ThreadStages(2).run('face', _two(), _fine)
-        assert kept[0] - before and set(pt._WORKER_IDENTS) == kept[0]      # not removed: the join is not known
+        with pytest.raises(GeometryError, match='did not finish') as error:
+            pt.ThreadStages(2).run('face', _two(), task)
+        assert isinstance(error.value.__cause__, MemoryError)
+        assert set(pt._WORKERS) - before == set(failed) and len(failed) == 1
     finally:
-        for ident in kept[0] - before:
-            pt._WORKER_IDENTS.discard(ident)
+        for ident in failed:
+            pt._WORKERS.pop(ident, None)
 
 
 def test_first_profiled_event_of_every_pool_thread_is_already_inside(monkeypatch):
@@ -171,21 +186,25 @@ def test_first_profiled_event_of_every_pool_thread_is_already_inside(monkeypatch
     assert not any(ours for _, ours in first.values())                     # it is start-up code, not this module
 
 
-def test_the_module_creates_threads_only_through_its_one_marked_pool():
-    """Source rule (replaces the round-8 one, which missed a directly imported ``Thread``): one
-    ``ThreadPoolExecutor(...)`` with the marker prefix and the registering initializer; no ``Thread`` call or
-    import in any spelling, no other executor, no ``_thread`` / ``start_new_thread``."""
+def test_the_module_creates_threads_only_in_its_crew():
+    """Source rule (round 10): exactly one ``threading.Thread(...)`` call, inside ``_Crew.__init__``; no executor,
+    no Timer, no ``_thread``; and no thread is started anywhere but in ``_Crew.start``."""
     tree = ast.parse(Path(MODULE).read_text(encoding='utf-8'))
     nodes = list(ast.walk(tree))
     called = [getattr(node.func, 'id', getattr(node.func, 'attr', None)) for node in nodes if isinstance(node, ast.Call)]
     imported = [alias.name for node in nodes if isinstance(node, (ast.Import, ast.ImportFrom)) for alias in node.names]
-    assert called.count('ThreadPoolExecutor') == 1
-    assert not {'Thread', 'Timer', 'ProcessPoolExecutor', 'start_new_thread', 'start_joinable_thread'} & set(called)
-    assert not {'Thread', 'Timer', '_thread', 'ProcessPoolExecutor', 'multiprocessing'} & set(imported)
-    pool = next(node for node in nodes if isinstance(node, ast.Call) and getattr(node.func, 'id', None) == 'ThreadPoolExecutor')
-    keywords = {keyword.arg: keyword.value for keyword in pool.keywords}
-    assert keywords['thread_name_prefix'].id == '_WORKER_PREFIX' and keywords['initializer'].id == '_enter_worker'
-    for source in ('from threading import Thread\nThread(target=f).start()\n', 'import threading as t\nt.Thread(target=f)\n'):
-        extra = ast.parse(source)
-        names = [getattr(node.func, 'id', getattr(node.func, 'attr', None)) for node in ast.walk(extra) if isinstance(node, ast.Call)]
-        assert 'Thread' in names
+    assert called.count('Thread') == 1
+    starts = sorted(node.func.value.id for node in nodes if isinstance(node, ast.Call)
+                    and getattr(node.func, 'attr', None) == 'start')
+    assert starts == ['crew', 'thread']             # crew.start() in the stage, thread.start() in the crew
+    assert not {'ThreadPoolExecutor', 'ProcessPoolExecutor', 'Timer', 'start_new_thread', 'start_joinable_thread',
+                'submit'} & set(called)
+    assert not {'Thread', 'Timer', '_thread', 'ThreadPoolExecutor', 'ProcessPoolExecutor', 'multiprocessing',
+                'concurrent.futures', 'futures'} & set(imported)
+    assert not any(isinstance(node, ast.ImportFrom) and (node.module or '').startswith('concurrent') for node in nodes)
+    crew = next(node for node in nodes if isinstance(node, ast.ClassDef) and node.name == '_Crew')
+    inside = {id(node) for node in ast.walk(crew)}
+    for node in nodes:
+        if isinstance(node, ast.Call) and (getattr(node.func, 'attr', None) == 'Thread' or (
+                getattr(node.func, 'attr', None) == 'start' and node.func.value.id == 'thread')):
+            assert id(node) in inside
