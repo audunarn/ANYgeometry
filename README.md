@@ -374,7 +374,7 @@ ANYgeometry <- ANYmesher <- ANYfem
 ANYstructure -------+
 ```
 
-ANYgeometry never imports ANYmesher, ANYfem, ANYstructure, ANYsolver, a GUI,
+ANYgeometry never imports ANYmesher, ANYfem, ANYstructure, ANYfeSolver, a GUI,
 or a finite-element package. See [MIGRATION.md](MIGRATION.md) when moving code
 from the historical `anymesher.geometry` namespace.
 

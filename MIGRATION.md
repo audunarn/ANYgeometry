@@ -170,6 +170,6 @@ ANYfem      -> ANYgeometry and optionally ANYmesher
 ANYstructure-> ANYgeometry and optionally ANYmesher/ANYfem
 ```
 
-ANYgeometry must never import ANYmesher, ANYfem, ANYstructure, ANYsolver, GUI,
+ANYgeometry must never import ANYmesher, ANYfem, ANYstructure, ANYfeSolver, GUI,
 FE, or mesh modules. Compatibility modules belong in the consuming package so
 the dependency direction cannot reverse.
