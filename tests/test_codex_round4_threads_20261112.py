@@ -226,11 +226,15 @@ def record_calls(tree):
     out as well; a module that does both is not judged."""
     keys, unjudged, called = set(), [], set()
     nodes = list(ast.walk(tree))
-    defines = any(isinstance(node, ast.FunctionDef) and node.name == '_record' for node in nodes)
+    # Only a MODULE-LEVEL function owns the bare name; a nested function or a method of that name does not.
+    defines = any(isinstance(node, ast.FunctionDef) and node.name == '_record' for node in tree.body)
     imports = any(isinstance(node, ast.ImportFrom) and any(alias.name == '_record' for alias in node.names)
                   for node in nodes)
     if defines and imports:
         unjudged.append('own _record and imported _record in one module')
+    if any(isinstance(node, ast.ImportFrom) and (node.module or '').split('.')[-1] == 'runtime_diagnostics'
+           and any(alias.name == '*' for alias in node.names) for node in nodes):
+        unjudged.append('wildcard import of the diagnostics module')
 
     def own(node):
         if isinstance(node, ast.Name):
@@ -255,6 +259,22 @@ def record_calls(tree):
     return keys, unjudged
 
 
+def clocked_record_fields(tree, key):
+    """The sorted field names of every ``_record(key, {...})`` call (bare or qualified, as ``record_calls`` counts
+    them); ``None`` for a call whose row is not a dict literal with literal field names."""
+    found = []
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call) and getattr(node.func, 'id', getattr(node.func, 'attr', None)) == '_record'
+                and not (isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
+                         and node.func.value.id == 'self')
+                and node.args and getattr(node.args[0], 'value', None) == key):
+            row = node.args[1] if len(node.args) > 1 else None
+            literal = isinstance(row, ast.Dict) and all(
+                isinstance(name, ast.Constant) and isinstance(name.value, str) for name in row.keys)
+            found.append(sorted(name.value for name in row.keys) if literal else None)
+    return found
+
+
 def test_record_scan_declines_what_it_cannot_judge():
     for source in ('_record(key, row)\n', "_record('a' + suffix, row)\n",
                    'from .runtime_diagnostics import _record as emit\nemit("x", 1)\n',
@@ -276,11 +296,7 @@ def test_every_record_key_and_every_field_of_the_clocked_record_is_judged():
         found, unjudged = record_calls(tree)
         assert not unjudged, (path.name, unjudged)
         keys |= found
-        for node in ast.walk(tree):
-            if (isinstance(node, ast.Call) and getattr(node.func, 'id', None) == '_record' and node.args
-                    and getattr(node.args[0], 'value', None) == 'arrangement_snap_fallback'):
-                assert isinstance(node.args[1], ast.Dict)
-                snap_fields.append(sorted(key.value for key in node.args[1].keys))
+        snap_fields += clocked_record_fields(tree, 'arrangement_snap_fallback')
     assert keys == {'arrangement_snap_fallback', 'ring_split', 'parallel_planning'}
     assert snap_fields == [sorted(('face_id', 'moved_edges', 'snapped_vertices', 'open_curved_vertices', 'max_move',
                                    'max_curved_disagreement', 'max_cycle_gap', 'refused_ratio', 'accepted_ratio',

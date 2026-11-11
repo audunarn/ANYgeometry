@@ -227,7 +227,7 @@ def test_diagnostics_of_normalisation_are_published_in_the_serial_order(monkeypa
     monkeypatch.setattr(bi, '_normalise_cells', normalising)
     serial, _ = planned(0, monkeypatch)
     rows = serial['records']['test_face_order']
-    assert len(rows) >= 4 and [row[1][0] for row in rows[:2]] == [('str', "'arranged'"), ('str', "'normalised'")]
+    assert len(rows) >= 4 and [row[1][0][1] for row in rows[:2]] == ["'arranged'", "'normalised'"]
     for threads in (1, 4, 8):
         assert planned(threads, monkeypatch)[0] == serial
 
@@ -264,6 +264,30 @@ def plan_store_uses(tree):
     return sorted(found)
 
 
+def plain_reexport(tree):
+    """What makes a module more than a plain re-export of the two public split functions: a store function
+    imported under another name, used as a value or called (any Name node), the plane_split module object or
+    ``*`` imported, or the store itself. Empty for ``from .plane_split import plan_plane_split, ...`` plus
+    the names as strings (``__all__``)."""
+    found = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id in _STORE_FUNCTIONS:
+            found.append(f'name {node.id}')                    # a call, an alias assignment, a container entry
+        if isinstance(node, ast.Attribute) and (node.attr in _STORE_FUNCTIONS or node.attr == '_PLANS'):
+            found.append(f'attribute {node.attr}')
+        if isinstance(node, ast.ImportFrom):
+            from_split = (node.module or '').split('.')[-1] == 'plane_split'
+            for alias in node.names:
+                if alias.name in _STORE_FUNCTIONS and alias.asname:
+                    found.append(f'import {alias.name} as {alias.asname}')
+                if alias.name == '_plan_plane_split' or (from_split and alias.name in ('*', '_PLANS')) or (
+                        not from_split and alias.name == 'plane_split'):
+                    found.append(f'import {alias.name}')
+        if isinstance(node, ast.Import) and any(alias.name.split('.')[-1] == 'plane_split' for alias in node.names):
+            found.append('module plane_split')
+    return sorted(found)
+
+
 def test_plane_split_plan_store_is_reached_only_through_the_public_split_entries():
     """Static proof: inside the package only plane_split itself can reach the store, and __init__ only
     re-exports the two public functions without calling them. A planner task has no path to the store."""
@@ -277,10 +301,8 @@ def test_plane_split_plan_store_is_reached_only_through_the_public_split_entries
     # __init__: the re-export import and the two names in __all__, nothing else (and no call, below).
     assert users['__init__.py'] == ['import apply_plane_split', 'import plan_plane_split',
                                     'string apply_plane_split', 'string plan_plane_split'], users
-    init = ast.parse((root / '__init__.py').read_text(encoding='utf-8'))
-    calls = {getattr(node.func, 'id', getattr(node.func, 'attr', None))
-             for node in ast.walk(init) if isinstance(node, ast.Call)}
-    assert not calls & _STORE_FUNCTIONS
+    # No alias, no call, no use as a value in __init__ (aliases are resolved by forbidding them).
+    assert plain_reexport(ast.parse((root / '__init__.py').read_text(encoding='utf-8'))) == []
 
 
 def test_thread_stages_never_touch_the_plane_split_plan_store(monkeypatch):

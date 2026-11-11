@@ -58,21 +58,19 @@ def joint():
 
 
 def comparable_records(records):
-    """The records exactly as collected (keys, order, values and their types), without the clock fields
-    named in the contract (``_planning_threads.RECORD_CLOCK_FIELDS``): nothing else is dropped or converted."""
-    def exact(value):
-        if isinstance(value, dict):
-            return (type(value).__name__, tuple((exact(key), exact(item)) for key, item in value.items()))
-        if isinstance(value, (list, tuple)):
-            return (type(value).__name__, tuple(exact(item) for item in value))
-        return (type(value).__name__, repr(value))
+    """The records exactly as collected (keys, order, values, and the class of every value, key and container),
+    without the clock fields named in the contract (``_planning_threads.RECORD_CLOCK_FIELDS``, top-level fields of
+    that record key): nothing else is dropped or converted."""
+    def kind(value):
+        return (type(value).__module__, type(value).__qualname__, id(type(value)))
 
-    def row_of(key, row):
-        clocks = RECORD_CLOCK_FIELDS.get(key, ())
-        if isinstance(row, dict) and clocks:
-            row = {name: item for name, item in row.items() if name not in clocks}
-        return exact(row)
-    return {key: [row_of(key, row) for row in rows] for key, rows in records.items()}
+    def exact(value, skip=()):
+        if isinstance(value, dict):
+            return (kind(value), tuple((exact(key), exact(item)) for key, item in value.items() if key not in skip))
+        if isinstance(value, (list, tuple)):
+            return (kind(value), tuple(exact(item) for item in value))
+        return (kind(value), repr(value))
+    return {key: [exact(row, RECORD_CLOCK_FIELDS.get(key, ())) for row in rows] for key, rows in records.items()}
 
 
 def run(threads, policy, patch, apply=True):
