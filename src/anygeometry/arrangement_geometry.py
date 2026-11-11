@@ -195,7 +195,7 @@ def _inputs_moderate(curve):
         return _leaves_moderate(curve)
     try:
         hash(curve)                                    # only curves that are values (hashable) are remembered
-        return _leaves_moderate_cached(_SameObject(curve))
+        return _leaves_moderate_cached(_SameValueAndTypes(curve))
     except Exception:                                  # unhashable (list controls) or any other failure: decide uncached
         return _leaves_moderate(curve)
 
@@ -207,24 +207,55 @@ def _leaves_moderate(curve):
         return False
 
 
-class _SameObject:
-    """Memo key that matches the very same object only.
+def _exact_types(value, depth=0):
+    """The exact types of everything the allow-list walk inspects, in its traversal order (never the values)."""
+    kind = type(value)
+    if depth > 6 or kind in (float, np.float64, int, str, dict):
+        return kind
+    if kind is tuple:
+        return (kind, tuple(_exact_types(item, depth+1) for item in value))
+    if kind is np.ndarray:
+        return (kind, value.dtype.str, value.shape)
+    if dataclasses.is_dataclass(value):
+        return (kind, tuple(_exact_types(getattr(value, field.name), depth+1) for field in dataclasses.fields(value)))
+    if getattr(kind, '__module__', '').startswith('anygeometry'):
+        fields = dict(getattr(value, '__dict__', {}))
+        for cls in kind.__mro__:
+            for slot in getattr(cls, '__slots__', ()):
+                if hasattr(value, slot):
+                    fields[slot] = getattr(value, slot)
+        return (kind, tuple((name, _exact_types(item, depth+1)) for name, item in fields.items()))
+    return kind
+
+
+class _SameValueAndTypes:
+    """Memo key: the curve by value, as the memo was always keyed, AND by the exact types the allow-list reads.
 
     The allow-list decides on exact types, while curve equality does not (``1.0 == 1``, a ``str`` subclass
-    equals its ``str``), so an answer remembered by value could be handed to an equal curve with other field
-    types, and which of the two is asked first would decide both answers. The key keeps the curve alive, so
-    its ``id`` cannot be reused while the entry exists.
+    equals its ``str``). Keyed by value alone, an answer could be handed to an equal curve with other field
+    types, and which of the two was asked first decided both answers. Equal curves of the same exact types
+    share one entry, exactly as before; equal curves whose exact types differ get separate entries.
     """
-    __slots__ = ('value',)
+    __slots__ = ('value', 'types')
 
     def __init__(self, value):
         self.value = value
+        self.types = None
 
     def __hash__(self):
-        return id(self.value)
+        return hash(self.value)
+
+    def _types(self):
+        if self.types is None:
+            self.types = _exact_types(self.value)
+        return self.types
 
     def __eq__(self, other):
-        return type(other) is _SameObject and other.value is self.value
+        if type(other) is not _SameValueAndTypes:
+            return False
+        if other.value is self.value:
+            return True
+        return bool(self.value == other.value) and self._types() == other._types()
 
 
 @lru_cache(maxsize=16384)

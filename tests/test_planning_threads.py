@@ -15,6 +15,7 @@ import pytest
 
 from anygeometry import GeometryError, GeometryModel, apply_intersections, plan_intersections, to_dict
 from anygeometry import batch_intersections as bi
+from anygeometry._planning_threads import RECORD_CLOCK_FIELDS
 from anygeometry import _planning_threads as pt
 from anygeometry.batch_intersections import IntersectionBatchPolicy
 from anygeometry.generators import cylinder
@@ -57,14 +58,21 @@ def joint():
 
 
 def comparable_records(records):
-    """Record CONTENTS in order, without the clock fields (the only timing-dependent values)."""
-    def clean(row):
-        if isinstance(row, dict):
-            return {key: clean(value) for key, value in row.items() if 'seconds' not in key}
-        if isinstance(row, (list, tuple)):
-            return [clean(value) for value in row]
-        return repr(row)
-    return {key: [clean(row) for row in rows] for key, rows in records.items()}
+    """The records exactly as collected (keys, order, values and their types), without the clock fields
+    named in the contract (``_planning_threads.RECORD_CLOCK_FIELDS``): nothing else is dropped or converted."""
+    def exact(value):
+        if isinstance(value, dict):
+            return ('dict', tuple((key, exact(item)) for key, item in value.items()))
+        if isinstance(value, (list, tuple)):
+            return (type(value).__name__, tuple(exact(item) for item in value))
+        return (type(value).__name__, repr(value))
+
+    def row_of(key, row):
+        clocks = RECORD_CLOCK_FIELDS.get(key, ())
+        if isinstance(row, dict) and clocks:
+            row = {name: item for name, item in row.items() if name not in clocks}
+        return exact(row)
+    return {key: [row_of(key, row) for row in rows] for key, rows in records.items()}
 
 
 def run(threads, policy, patch, apply=True):

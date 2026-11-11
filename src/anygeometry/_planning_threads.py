@@ -33,6 +33,12 @@ Contract (see thread-design-note.md in the programme work folder):
   path curves; before the face stage every trace (pair traces and member inputs) must be an
   ``ArrangementPath`` with an audited path curve and every point an ``ArrangementPoint``.
 * Cell normalisation runs inside the face task, directly after that face's arrangement, as in serial.
+* Identity excludes clock values only: the ``*_time_ns`` counters and the record fields named in
+  ``RECORD_CLOCK_FIELDS``. Every other counter and record value is part of the contract.
+* The switch is validated at the public entry before any route is chosen (``validate_switches``): the value
+  is unset, empty, ``0`` or exactly one of ``1`` .. ``8``, and it excludes the process-route switch.
+* ``KeyboardInterrupt`` / ``SystemExit`` raised inside a task always propagate to the caller (the one with
+  the lowest task index), also when another task failed with an ordinary error; there is no serial repeat.
 """
 import contextvars
 import os
@@ -54,6 +60,8 @@ from .surfaces import Cylinder, Plane
 THREADS_ENVIRONMENT = 'ANYGEOMETRY_PLANNING_THREADS'
 PROCESS_ENVIRONMENT = 'ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING'
 MAX_THREADS = 8
+# Record fields that hold a clock value, by record key: the only record contents outside the identity contract.
+RECORD_CLOCK_FIELDS = {'arrangement_snap_fallback': ('seconds',)}
 # What the shared-store audit and the identity runs cover (exact types, no subclasses). NURBS section
 # curves use a validated shared runtime store; splines and the other exact curves were never run threaded.
 _AUDITED_SUPPORTS = (Plane, Cylinder)
@@ -89,12 +97,22 @@ def requested_threads():
     raw = os.environ.get(THREADS_ENVIRONMENT)
     if raw is None or raw in ('', '0'):
         return 0
-    # Length first: int() of a very long digit string raises ValueError, which is not a typed refusal.
-    if len(raw) > 2 or not (raw.isascii() and raw.isdecimal()) or not 1 <= int(raw) <= MAX_THREADS:
+    # Canonical spelling only ('1' .. '8'): no sign, padding, leading zero or other digit alphabet.
+    if raw not in _THREAD_COUNTS:
         shown = repr(raw) if len(raw) <= 16 else repr(raw[:16]) + f'... ({len(raw)} characters)'
         raise GeometryError(
             f"{THREADS_ENVIRONMENT}={shown} is not supported (0 or unset: serial; 1..{MAX_THREADS}: threads)")
-    return int(raw)
+    return _THREAD_COUNTS[raw]
+
+
+_THREAD_COUNTS = {str(count): count for count in range(1, MAX_THREADS + 1)}
+
+
+def validate_switches():
+    """Typed refusal of an unsupported thread switch or of both parallel switches; called once per public
+    planning call before any route (existing-material, bounded, process, thread, serial) is chosen."""
+    if requested_threads() and os.environ.get(PROCESS_ENVIRONMENT) == '1':
+        raise GeometryError(f"{THREADS_ENVIRONMENT} and {PROCESS_ENVIRONMENT} are mutually exclusive")
 
 
 def _scope_active():
@@ -114,11 +132,10 @@ def _audited_model(model):
 
 def thread_stages(model, policy, mode, native):
     """A stage dispatcher for this planning call, or None for the unchanged serial route."""
+    validate_switches()
     threads = requested_threads()
     if not threads:
         return None
-    if os.environ.get(PROCESS_ENVIRONMENT) == '1':
-        raise GeometryError(f"{THREADS_ENVIRONMENT} and {PROCESS_ENVIRONMENT} are mutually exclusive")
     if (mode != 'exact' or native is not None or policy.cancellation_check is not None
             or policy.max_predicates is not None or policy.max_candidate_pairs is not None
             or _scope_active() or not _audited_model(model)):
@@ -203,6 +220,7 @@ class ThreadStages:
         stopped = threading.Event()
         lock = threading.Lock()
         first_failure = [count]
+        interrupts = {}          # task index -> KeyboardInterrupt / SystemExit (any non-Exception) of that task
         parent = contextvars.copy_context()
 
         def execute(index):
@@ -224,11 +242,16 @@ class ThreadStages:
                     value, error = serial(tasks[index], check=check), None
                 except _Abandoned:
                     return
-                except BaseException as exc:  # reported in serial order by the dispatcher
+                except Exception as exc:      # reported in serial order by the dispatcher
                     value, error = None, exc
                     with lock:
                         if index < first_failure[0]:
                             first_failure[0] = index
+                except BaseException as exc:  # an interrupt: stop everything, it is raised whatever else failed
+                    with lock:
+                        interrupts[index] = exc
+                    stopped.set()
+                    return
                 counters[phase + '_time_ns'] = counters.get(phase + '_time_ns', 0) + perf_counter_ns() - start
                 outcomes[index] = (value, error, dict(counters=counters, records=records))
             parent.copy().run(body)
@@ -246,6 +269,8 @@ class ThreadStages:
             raise
         finally:
             pool.shutdown(wait=True)
+        if interrupts:
+            raise interrupts[min(interrupts)]
         _diagnostics._increment(f'intersection_thread_{kind}_stage_time_ns', perf_counter_ns() - start)
         failed = first_failure[0]
         for index in range(min(failed + 1, count)):

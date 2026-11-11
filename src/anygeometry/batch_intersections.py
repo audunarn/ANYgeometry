@@ -1351,6 +1351,11 @@ def plan_intersections(model, operands, *, policy, _parallel_control=None):
     from .preparation_epochs import _epoch_plan_required,_issue_native_plan
     from .native_support_snapshots import capture_native_supports
     operands = tuple(operands)
+    if os.environ.get('ANYGEOMETRY_PLANNING_THREADS') not in (None, '', '0'):
+        # The thread switch is validated here, before any route is chosen, so an unsupported value or both
+        # parallel switches refuse identically on the existing-material, bounded and general routes.
+        from ._planning_threads import validate_switches
+        validate_switches()
     from .bounded_nurbs import handles_bounded, plan_bounded
     from .intersections import _normalize_operand
     handles = tuple(sorted(set(_normalize_operand(model, value) for value in operands)))
@@ -1379,9 +1384,6 @@ def plan_intersections(model, operands, *, policy, _parallel_control=None):
     with root_isolation_memo(), _timed_phase('intersection_planning'), junction_policy:
         # Parallel remains experimental and explicitly opt-in.
         if os.environ.get('ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING') == '1':
-            if os.environ.get('ANYGEOMETRY_PLANNING_THREADS') not in (None, '', '0'):
-                raise GeometryError(
-                    "ANYGEOMETRY_PLANNING_THREADS and ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING are mutually exclusive")
             from ._planning_host import qualified_plan
             plan=qualified_plan(model,_parallel_control,
                 lambda:_plan_intersections(model,operands,policy=policy,_planning_mode=mode,_seam_policy=seam),

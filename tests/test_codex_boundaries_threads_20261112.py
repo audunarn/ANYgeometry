@@ -227,7 +227,7 @@ def test_diagnostics_of_normalisation_are_published_in_the_serial_order(monkeypa
     monkeypatch.setattr(bi, '_normalise_cells', normalising)
     serial, _ = planned(0, monkeypatch)
     rows = serial['records']['test_face_order']
-    assert len(rows) >= 4 and [row[0] for row in rows[:2]] == ["'arranged'", "'normalised'"]
+    assert len(rows) >= 4 and [row[1][0] for row in rows[:2]] == [('str', "'arranged'"), ('str', "'normalised'")]
     for threads in (1, 4, 8):
         assert planned(threads, monkeypatch)[0] == serial
 
