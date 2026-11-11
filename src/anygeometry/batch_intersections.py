@@ -1451,6 +1451,9 @@ def _plan_intersections(model, operands, *, policy, _planning_mode="exact", _cer
             domains[face_id] = MaterialDomain.from_model(model, face_id)
         except GeometryError:
             boundary_only[face_id] = bilinear_boundary(model, face_id)
+    if getattr(_stages,'in_process',False):
+        # Thread route: only audited effective domains reach a stage (otherwise the serial route).
+        _stages.admit_domains(domains,boundary_only)
     traces = {face_id: [] for face_id in faces}
     points = {face_id: [] for face_id in faces}
     face_contacts=[]
@@ -1608,6 +1611,9 @@ def _plan_intersections(model, operands, *, policy, _planning_mode="exact", _cer
     # RS-0 (Codex RS R1 P3): the default call is unchanged; the keyword only for a non-baseline policy
     seam_options = {} if _seam_policy == "baseline" else {"seam_policy": _seam_policy}
     stage_faces=[]
+    if getattr(_stages,'in_process',False):
+        # Thread route: pair traces, member inputs and points of every face are of audited exact types.
+        _stages.admit_face_inputs(traces,points)
     for face_id, domain in domains.items():
         if not traces[face_id] and not points[face_id]:
             continue
@@ -1637,10 +1643,15 @@ def _plan_intersections(model, operands, *, policy, _planning_mode="exact", _cer
     if _stages is not None:
         def serial_face(task,check=check):
             face_id=task['face']
-            return arrange_material(domains[face_id],traces[face_id],points=points[face_id],
+            value=arrange_material(domains[face_id],traces[face_id],points=points[face_id],
                 tolerance=task['tolerance'],area_tolerance=task['area_tolerance'],
                 cancellation_check=lambda:(check() or False),**seam_options)
-        arrangements.extend(_normalise_cells(value) for value in _stages.run('face',stage_faces,serial_face))
+            # Same-process stage: normalise inside the task, directly after this face's arrangement as in
+            # serial (its diagnostics are then published in task order with the arrangement's).
+            return _normalise_cells(value) if in_process else value
+        in_process=bool(getattr(_stages,'in_process',False))
+        values=_stages.run('face',stage_faces,serial_face)
+        arrangements.extend(values if in_process else (_normalise_cells(value) for value in values))
     if model.revision != revision or _qualified_model_state(model)["checksum"]["value"] != checksum:
         raise GeometryError("geometry changed during intersection planning")
     arrangements=_synchronize_boundary_events(arrangements,check)

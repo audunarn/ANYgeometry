@@ -27,6 +27,12 @@ Contract (see thread-design-note.md in the programme work folder):
   plane or a cylinder, an edge curve other than a straight line, a circular arc or an elliptic arc
   (exact types; these are what the shared-store audit and the identity runs cover), or an active
   tracing/work scope held in a context variable.
+* Declined during the attempt (``_NotAudited``, then the serial repeat above): the EFFECTIVE stage
+  inputs are checked by exact type, not only the authored model. Before the pair stage every face must
+  have a ``MaterialDomain`` whose support is a plane or a cylinder and whose boundary curves are audited
+  path curves; before the face stage every trace (pair traces and member inputs) must be an
+  ``ArrangementPath`` with an audited path curve and every point an ``ArrangementPoint``.
+* Cell normalisation runs inside the face task, directly after that face's arrangement, as in serial.
 """
 import contextvars
 import os
@@ -38,8 +44,11 @@ from time import perf_counter_ns
 from .errors import GeometryError
 from . import runtime_diagnostics as _diagnostics
 from .analytic_roots import _ROOT_MEMO
+from .arrangement_geometry import LinePath
+from .branch_curves import BezierQuadricCurve
 from .curves import Arc, Straight
-from .exact_curves import EllipticArc
+from .exact_curves import CylinderIntersectionCurve, EllipticArc
+from .material_arrangement import ArrangementPath, ArrangementPoint, MaterialDomain
 from .surfaces import Cylinder, Plane
 
 THREADS_ENVIRONMENT = 'ANYGEOMETRY_PLANNING_THREADS'
@@ -49,6 +58,11 @@ MAX_THREADS = 8
 # curves use a validated shared runtime store; splines and the other exact curves were never run threaded.
 _AUDITED_SUPPORTS = (Plane, Cylinder)
 _AUDITED_EDGE_CURVES = (Straight, Arc, EllipticArc)
+# Frozen curves that may reach a stage inside a domain boundary or a trace (exact types): what the audited
+# edges freeze to and what the pair routes generated in the identity runs (census of the 570 captured N2c
+# face inputs, 2026-11-11: LinePath, EllipticArc, CylinderIntersectionCurve, BezierQuadricCurve; their
+# per-object stores are rows 1-5 of the object-store audit). QuadricIntersectionCurve was never run threaded.
+_AUDITED_PATH_CURVES = (LinePath, EllipticArc, CylinderIntersectionCurve, BezierQuadricCurve)
 # Context variables that hold a live mutable work/trace object while their scope is active. A task
 # that inherited one would share it with other threads, so an active scope keeps planning serial.
 _SCOPE_VARIABLES = (
@@ -133,6 +147,18 @@ def plan_with_threads(threaded, serial):
     return plan
 
 
+class _NotAudited(Exception):
+    """A stage input is outside the audited exact types: the attempt is dropped for the serial route.
+
+    Deliberately not a GeometryError: it is never an answer about the geometry and never reaches a caller
+    (``plan_with_threads`` repeats planning serially).
+    """
+
+
+def _audited_paths(paths):
+    return all(type(path) is ArrangementPath and type(path.curve) in _AUDITED_PATH_CURVES for path in paths)
+
+
 class _Abandoned(BaseException):
     """A task stopped because an earlier task failed or the dispatcher is unwinding."""
 
@@ -148,6 +174,22 @@ class ThreadStages:
     def check_deadline(self):
         # No caller callback exists on this route (a policy with one is not eligible).
         return None
+
+    def admit_domains(self, domains, boundary_only):
+        """Before the pair stage: every face has an audited effective material domain."""
+        if boundary_only:
+            raise _NotAudited('a face without a material domain')
+        for domain in domains.values():
+            if (type(domain) is not MaterialDomain or type(domain.support) not in _AUDITED_SUPPORTS
+                    or not all(_audited_paths(loop) for loop in domain.boundaries)):
+                raise _NotAudited('material domain outside the audited supports and boundary curves')
+
+    def admit_face_inputs(self, traces, points):
+        """Before the face stage: pair traces, member inputs and points are of audited exact types."""
+        if not all(_audited_paths(paths) for paths in traces.values()):
+            raise _NotAudited('trace outside the audited path curves')
+        if not all(type(point) is ArrangementPoint for found in points.values() for point in found):
+            raise _NotAudited('point input of an unaudited type')
 
     def run(self, kind, tasks, serial):
         if threading.get_ident() != self._owner:
