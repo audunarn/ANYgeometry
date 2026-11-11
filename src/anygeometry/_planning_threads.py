@@ -59,16 +59,25 @@ Contract (see thread-design-note.md in the programme work folder):
 * No stage inside a worker of the route: a stage asked to run there refuses with a typed ``GeometryError``
   before it creates a pool, and a planning call there is not eligible for the thread route. Every worker of the
   route therefore belongs to the record whose verdict decides, and "workers may still run" cannot be lost in a
-  task failure. "There" is decided by two markers that exist BEFORE the code they cover runs (``_inside_task``):
-  (a) the worker thread - every pool thread carries the name prefix ``anygeometry-plan`` from its construction,
-  so this covers every frame that runs in a worker once ``threading`` has registered the thread, including the
-  worker's own machinery, C-call profile events and any trace or profile hook that ``threading`` installs in it;
-  (b) the task context - ``_IN_TASK`` is set in the copied context before the task body is entered, so this
-  covers the body from its call event on and any thread or callback that inherits or copies that context.
+  task failure. "There" is decided by three markers (``_inside_task``):
+  (a) the worker's OS thread ident in the module registry ``_WORKER_IDENTS``: a pool thread adds its ident as
+  its first statement (the pool's initializer, and again first in ``execute``) and only the dispatcher removes
+  it, after ``pool.shutdown(wait=True)`` has joined the thread - so it holds for everything that runs in the
+  thread from that first statement until the thread is really gone, including finalizers of thread-local
+  objects during the teardown of the thread state, and it reads no state that the interpreter tears down
+  earlier (no ``threading`` registration, no thread name, no context). If the pool was not joined the idents
+  stay registered;
+  (b) the worker thread's name - every pool thread carries the prefix ``anygeometry-plan`` from its
+  construction, which covers the frames that run between the registration of the thread with ``threading`` and
+  marker (a): the executor's start-up code and any trace or profile hook that ``threading`` installs there;
+  (c) the task context - ``_IN_TASK`` is set in the copied context before the task body is entered, which
+  covers any other thread or callback that inherits or copies a task's context.
   Out of contract: re-entry from a tracing or profiling hook that is NOT caught by these markers (a hook that
   runs in a worker thread before ``threading`` has registered it, for example one installed for all threads
-  below ``threading``), a worker thread that was renamed, and deliberate bypass of the guards (calling the
-  private ``_run``, resetting the marker, replacing module globals).
+  below ``threading``); re-entry from an object finalizer or other callback during a worker thread's teardown
+  that the ident registry cannot see (one that runs in another thread, or after the pool was joined); a worker
+  thread that was renamed; and deliberate bypass of the guards (calling the private ``_run``, resetting a
+  marker, replacing module globals).
 * Whether an exception is an interrupt is decided on the object's real type (``_ordinary`` / ``_is``), never by
   ``isinstance``, which can run code of the exception object and fail before the interrupt is recorded.
 * Inside a stage that ends normally the dispatcher still raises in this order: lowest-index worker interrupt,
@@ -238,9 +247,26 @@ _IN_TASK = contextvars.ContextVar('anygeometry_planning_thread_task', default=Fa
 _WORKER_PREFIX = 'anygeometry-plan'
 
 
+# OS thread idents of the pool threads of the route that may still run Python code: added by the thread itself
+# as its first statement, removed only by its dispatcher after the pool has been joined.
+_WORKER_IDENTS = set()
+
+
+def _enter_worker(started):
+    """First statement of a pool thread (the pool's initializer) and of every ``execute``."""
+    ident = threading.get_ident()
+    _WORKER_IDENTS.add(ident)        # first: from here on a stage refuses in this thread
+    started.add(ident)
+
+
 def _inside_task():
-    """In a worker thread of the route, or in (a copy of) the context of one of its tasks."""
-    return _IN_TASK.get() or threading.current_thread().name.startswith(_WORKER_PREFIX)
+    """In a worker thread of the route, or in (a copy of) the context of one of its tasks.
+
+    The ident test comes first: it needs nothing but the module registry, so it also answers while the thread is
+    being torn down (where ``threading.current_thread()`` would invent a dummy thread).
+    """
+    return (threading.get_ident() in _WORKER_IDENTS or _IN_TASK.get()
+            or threading.current_thread().name.startswith(_WORKER_PREFIX))
 
 
 def plan_with_threads(threaded, serial):
@@ -368,6 +394,7 @@ class ThreadStages:
         def execute(index):
             # Nothing leaves a worker: whatever happens is recorded and judged after all workers have finished.
             try:
+                _enter_worker(started)
                 if stopped.is_set() or index > first_failure[0]:
                     return
                 context = parent.copy()
@@ -408,7 +435,9 @@ class ThreadStages:
 
         order = sorted(range(count), key=lambda i: (-float(tasks[i].get('cost', 0.)), i))
         start = perf_counter_ns()
-        pool = ThreadPoolExecutor(max_workers=min(self.threads, count), thread_name_prefix=_WORKER_PREFIX)
+        started = set()          # idents of this stage's pool threads, for the removal after the join
+        pool = ThreadPoolExecutor(max_workers=min(self.threads, count), thread_name_prefix=_WORKER_PREFIX,
+                                  initializer=_enter_worker, initargs=(started,))
         held = None              # what the dispatching thread itself met; judged after the workers have drained
         futures = []
         attempt.running += 1
@@ -423,7 +452,11 @@ class ThreadStages:
                 stopped.set()
             finally:
                 pool.shutdown(wait=True)
-                attempt.running -= 1     # only now are all workers of this stage known to have finished
+                # Joined: the pool threads are gone (their thread states are torn down), so nothing of this
+                # stage can run any more. Only now are they unmarked and the stage counted as finished.
+                for ident in tuple(started):
+                    _WORKER_IDENTS.discard(ident)
+                attempt.running -= 1
         except BaseException as exc:     # the cleanup itself failed or was interrupted: verdict decides
             attempt.note(exc)
             raise
