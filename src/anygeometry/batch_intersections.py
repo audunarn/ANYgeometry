@@ -1878,7 +1878,10 @@ def _child_support(model, face, outer, holes, tolerance):
     if len(corners)==4 and all(isinstance(model.edges[use.edge].curve,Straight) for use in outer):
         p0,p1,p2,p3=(points[index] for index in corners)
         if np.linalg.norm(p0+p2-p1-p3)<=tolerance:
-            return outer,Plane(p0,p1-p0,p3-p0),None,corners
+            u, v = p1 - p0, p3 - p0
+            if np.cross(u, v) @ support.normal < 0.0:
+                u, v = v, u
+            return outer, Plane(p0, u, v), None, corners
     return outer,support,None,None
 
 
@@ -2578,8 +2581,9 @@ def clone_prepared_geometry(model, *, new_preparation_epoch=False):
         before=to_dict(model);native=capture_native_supports(model)
         made=model.clone(preserve_identity=False)
         copied=to_dict(made)
-        source_payload={k:v for k,v in before.items() if k not in ('model_id','checksum')}
-        clone_payload={k:v for k,v in copied.items() if k not in ('model_id','checksum')}
+        from .serialization import _clone_content_payload
+        source_payload=_clone_content_payload(before)
+        clone_payload=_clone_content_payload(copied)
         if (made.model_id==model.model_id or source_payload!=clone_payload or
                 capture_native_supports(made)!=native or capture_native_supports(model)!=native or to_dict(model)!=before):
             raise GeometryError('preparation epoch clone changed source or native geometry')
