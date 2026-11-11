@@ -34,9 +34,13 @@ MODULE = pt.__file__
 @pytest.fixture(autouse=True)
 def _bounded(monkeypatch):
     _clear(monkeypatch)
+    before = threading.active_count()
     faulthandler.dump_traceback_later(BOUND, exit=True)
     yield
     faulthandler.cancel_dump_traceback_later()
+    # No thread object is left behind (a hook that asks threading for the current thread after a pool thread has
+    # unregistered would create a dummy thread that never goes away).
+    assert threading.active_count() == before
 
 
 def _two():
@@ -95,8 +99,8 @@ def test_profile_hook_on_the_first_event_of_a_worker_cannot_start_a_stage(monkey
     pools, seen = _counted_pools(monkeypatch), {}
 
     def profile(frame, event, argument):
-        if threading.current_thread().name.startswith(POOL):
-            _reenter(seen, 'first event')             # whatever the first profiled event in a pool thread is
+        if frame.f_code.co_filename == MODULE:        # the first profiled event of the route's code in a worker
+            _reenter(seen, 'first event')
     threading.setprofile(profile)
     try:
         result = pt.ThreadStages(2).run('face', _two(), _fine)
