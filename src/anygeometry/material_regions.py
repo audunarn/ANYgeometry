@@ -228,7 +228,8 @@ def _regions(model, source, cancellation_check):
     return tuple(regions)
 
 
-def query_material_surface_regions(model, operands=None, *, expected_revision=None, cancellation_check=None):
+def query_material_surface_regions(model, operands=None, *, expected_revision=None, cancellation_check=None,
+                                   source_tensors=False):
     """Return exact source-bound regions without changing authored topology.
 
     Artificial straight extrusion seams may disappear from region boundaries;
@@ -242,7 +243,7 @@ def query_material_surface_regions(model, operands=None, *, expected_revision=No
     when its material spans multiple independently authored faces.
     """
     source=query_trimmed_surface_charts(model,operands,expected_revision=expected_revision,
-                                      cancellation_check=cancellation_check)
+                                      cancellation_check=cancellation_check, source_tensors=source_tensors)
     result=MaterialSurfaceRegions(source,_regions(model,source,cancellation_check))
     validate_material_surface_regions_binding(model,result,cancellation_check=cancellation_check)
     return result

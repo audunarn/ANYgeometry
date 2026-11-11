@@ -74,7 +74,8 @@ def query_trim_enclosure_scale(model, faces, *, cancellation_check=None):
     feature size or a curvature measure. The floor is owner numerical policy,
     not a theorem of achievable approximation. Whole-cell proof is separate.
     """
-    charts = query_trimmed_surface_charts(model, faces, cancellation_check=cancellation_check)
+    charts = query_trimmed_surface_charts(model, faces, cancellation_check=cancellation_check,
+                                         source_tensors=True)
     values = _values(model, charts, cancellation_check)
     validate_trimmed_surface_charts_binding(model, charts, cancellation_check=cancellation_check)
     source = ApproximationSourceBinding(charts.model_id, charts.revision, charts.source_checksum)

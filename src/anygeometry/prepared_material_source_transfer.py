@@ -44,6 +44,10 @@ def _effective(model, face_id):
         return chart_model(model, face_id).support
     if isinstance(face.surface, (Plane, NurbsSurface)) and (face.parameterization is None or face.parameterization is face.surface):
         return face.surface
+    from .source_tensor_chart import source_tensor_chart
+    view = source_tensor_chart(model, face_id)
+    if view is not None:
+        return view.support
     found = _sweep(model, face_id)
     if found is not None:
         return _tensor(found[0], found[1])
@@ -53,7 +57,8 @@ def _effective(model, face_id):
 def _chart_map(source, face, support):
     if definition_checksum(_effective(source, face)) != definition_checksum(support):
         raise GeometryError('qualified descendant changed its original physical support')
-    if isinstance(support, Plane):
+    from .source_tensor_chart import source_tensor_chart
+    if isinstance(support, Plane) or source_tensor_chart(source, face) is not None:
         return ((Q(1), Q(0), Q(0)), (Q(0), Q(1), Q(0)))
     from .nurbs_sweep_chart import authored_query_uv
     origin, u, v = authored_query_uv(source, face, support, ((0., 0.), (1., 0.), (0., 1.)))
@@ -248,10 +253,9 @@ def _qualified_auxiliary(model, edge_id):
 
 def _register_source_clone(source, prepared):
     """Called ONLY by clone_prepared_geometry after its genuine clone."""
-    from .serialization import to_dict
+    from .serialization import to_dict, _clone_content_payload
     before, copied = to_dict(source), to_dict(prepared)
-    if ({k: v for k, v in before.items() if k not in ('model_id', 'checksum')}
-            != {k: v for k, v in copied.items() if k not in ('model_id', 'checksum')}):
+    if _clone_content_payload(before) != _clone_content_payload(copied):
         raise GeometryError('immediate source clone changed complete definitions')
     source_state, prepared_state = _state(source), _state(prepared)
     if source_state[2] != prepared_state[2]:

@@ -26,6 +26,7 @@ from .batch_intersections import (
     plan_intersections, apply_intersections, has_current_intersection_preparation, clone_prepared_geometry,
     set_prepared_face_corners,
 )
+from .source_tensor_chart import source_tensor_chart
 from .trimmed_charts import (
     TrimmedSurfaceChart, TrimmedSurfaceCharts, query_trimmed_surface_charts,
     validate_trimmed_surface_charts_binding, evaluate_trimmed_surface_chart,
@@ -353,6 +354,7 @@ from .surfaces import (
 )
 
 __all__ = [
+    "ClosedSolidRegion", "SolidRegionSnapshot",
     "backend_info",
     "model_to_world_points",
     "world_to_model_points",
@@ -447,6 +449,7 @@ __all__ = [
     "TrimmedSurfaceChart",
     "TrimmedSurfaceCharts",
     "query_trimmed_surface_charts",
+    "source_tensor_chart",
     "validate_trimmed_surface_charts_binding",
     "evaluate_trimmed_surface_chart",
     "MaterialSurfaceRegion",
@@ -678,6 +681,7 @@ __all__ = [
     "JunctionMemberUse",
 ]
 
+from .solid_regions import ClosedSolidRegion, SolidRegionSnapshot
 __version__ = "0.4.7"
 
 from .prepared_material_source_transfer import (PreparedMaterialSourceTransfer,

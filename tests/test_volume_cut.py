@@ -181,6 +181,34 @@ def cut(model, volume):
     return apply_volume_cut(model, plan_volume_cut(model, volume))
 
 
+@pytest.mark.parametrize("flipped", [False, True])
+@pytest.mark.parametrize("clockwise_loop", [False, True])
+def test_explicit_plane_signed_normal_survives_a_four_edge_child(flipped, clockwise_loop):
+    """The rebuilt canonical child keeps the authored plane's signed normal (the guard stays on).
+
+    The box crosses the plate's x = 1 side, so the cut leaves a four-edge rectangular child.
+    The source plane may face +z or -z, independent of the winding of the face loop.
+    (Written without being executed in the authoring session.)
+    """
+
+    model = GeometryModel()
+    corners = [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)]
+    if clockwise_loop:
+        corners = corners[::-1]
+    ids = [model.add_point(*c) for c in corners]
+    edges = [model.add_line(ids[i], ids[(i + 1) % 4]) for i in range(4)]
+    u, v = ((0, 1, 0), (1, 0, 0)) if flipped else ((1, 0, 0), (0, 1, 0))
+    face = model.add_face(edges, surface=Plane((0, 0, 0), u, v))
+    expected = np.array([0.0, 0.0, -1.0 if flipped else 1.0])
+    result = cut(model, BoxVolume((0.5, -0.5, -0.5), (1.5, 1.5, 0.5)))
+    extracted = result.closure.working_model
+    (child,) = extracted.faces
+    assert result.source_faces == {child: (face,)}
+    _projected, uv, _distance = extracted.project_to_face(child, np.array([0.75, 0.5, 0.0]))
+    np.testing.assert_allclose(extracted.face_normal(child, *uv), expected, atol=1e-12)
+    assert area(extracted, child) == pytest.approx(0.5, abs=1e-12)
+
+
 # ----------------------------------------------------------------------
 # cuts
 # ----------------------------------------------------------------------
@@ -625,26 +653,19 @@ def test_member_edge_use_metadata_is_carried():
     assert tags == [{"region": "first"}, {"region": "second"}]
 
 
-def test_a_face_whose_surface_the_imprint_turns_refuses():
-    """Review S4b round 3: a clockwise loop on an explicit +z plane.
+@pytest.mark.parametrize("clockwise", [True, False])
+def test_imprinted_rectangular_piece_keeps_source_plane_side(clockwise, monkeypatch):
+    from anygeometry.volume_cut import _require_source_orientation
 
-    The imprint rebuilds the split piece's plane from its loop, facing -z; plate-side
-    conventions read from the surface normal would flip in the extract, so the cut refuses.
-    A counter-clockwise loop on the same plane is cut as usual.
-    """
-
-    for points, flipped in (([(0, 0, 0), (0, 1, 0), (1, 1, 0), (1, 0.6, 0), (0.6, 0.6, 0), (0.6, 0, 0)], True),
-                            ([(0, 0, 0), (0.6, 0, 0), (0.6, 0.6, 0), (1, 0.6, 0), (1, 1, 0), (0, 1, 0)], False)):
-        model = GeometryModel()
-        vertices = model.add_points(points)
-        edges = [model.add_line(vertices[i], vertices[(i + 1) % len(vertices)]) for i in range(len(vertices))]
-        face = model.add_face(edges, surface=Plane((0, 0, 0), (1, 0, 0), (0, 1, 0)))
-        assert np.allclose(model.face_normal(face, 0.5, 0.5), (0, 0, 1))
-        box = BoxVolume((-0.1, -0.1, -0.1), (0.4, 1.1, 0.1))
-        if flipped:
-            with pytest.raises(VolumeCutError, match="VOLUME_ORIENTATION"):
-                cut(model, box)
-        else:
-            extracted = cut(model, box).closure.working_model
-            (piece,) = extracted.faces
-            assert np.allclose(extracted.face_normal(piece, 0.5, 0.5), (0, 0, 1))
+    points = [(0, 0, 0), (0, 1, 0), (1, 1, 0), (1, .6, 0), (.6, .6, 0), (.6, 0, 0)]
+    model = GeometryModel()
+    vertices = model.add_points(points if clockwise else list(reversed(points)))
+    edges = [model.add_line(v, vertices[(i + 1) % len(vertices)]) for i, v in enumerate(vertices)]
+    face = model.add_face(edges, surface=Plane((0, 0, 0), (1, 0, 0), (0, 1, 0)))
+    extracted = cut(model, BoxVolume((-.1, -.1, -.1), (.4, 1.1, .1))).closure.working_model
+    (piece,) = extracted.faces
+    np.testing.assert_allclose(extracted.face_normal(piece, .5, .5), (0, 0, 1))
+    # The independent extraction guard still rejects a contradictory support.
+    monkeypatch.setattr(extracted, "face_normal", lambda *args: np.array([0., 0., -1.]))
+    with pytest.raises(VolumeCutError, match="VOLUME_ORIENTATION"):
+        _require_source_orientation(model, extracted, piece, [face])

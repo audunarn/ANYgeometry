@@ -226,11 +226,7 @@ Branch `claude/submodel-s2b`. Members that reach the box are partitioned at it w
 - Every extracted face must keep its source face's surface normal. It is compared at a point
   verified inside the extracted face, against each source face at that point. A dot product
   below 0.99 refuses with `VOLUME_ORIENTATION`.
-- **Why:** the imprint rebuilds the surface of a split face. When a source plane opposes its own
-  loop (a clockwise loop on an explicit +z `Plane`), the rebuilt plane follows the loop and faces
-  −z. Beam frames, scalar beam offsets and the normals of a driven trace read the plate side from
-  the surface normal, so a flipped face would mirror them silently.
-- **Finding for the intersection owner:** the split piece's plane faces the other way. This
-  happens in `apply_intersections`, before extraction; the volume cut does not change it.
-- Evidence: `test_a_face_whose_surface_the_imprint_turns_refuses`. The clockwise loop refuses;
-  the counter-clockwise loop on the same plane cuts with +z kept. 36 tests in total.
+- A planar rectangular split uses the source plane to orient the rebuilt chart. Both loop
+  windings retain the physical plate side used for beam offsets and shell transfer.
+- `test_imprinted_rectangular_piece_keeps_source_plane_side` exercises both windings and
+  independently injects a contradictory face normal to exercise the typed extraction guard.

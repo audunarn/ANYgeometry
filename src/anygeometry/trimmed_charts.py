@@ -112,9 +112,11 @@ def _selected_faces(model, operands):
     return tuple(sorted(faces))
 
 
-def _qualified_chart(model, face_id, cancellation_check):
+def _qualified_chart(model, face_id, cancellation_check, *, source_tensors=False):
     _check(cancellation_check, "trimmed surface chart qualification")
-    domain = MaterialDomain.from_model(model, face_id)
+    from .source_tensor_chart import source_tensor_chart
+    view = source_tensor_chart(model, face_id) if source_tensors else None
+    domain = MaterialDomain.from_model(view if view is not None else model, face_id)
     boxes = [path.curve.bounds() for loop in domain.boundaries for path in loop]
     length = float(np.linalg.norm(np.max([box[1] for box in boxes],axis=0)
                                   - np.min([box[0] for box in boxes],axis=0)))
@@ -130,7 +132,14 @@ def _qualified_chart(model, face_id, cancellation_check):
         # NURBS material is established by the owner's chart predicates, not
         # by the generic proximity-based analytic arrangement. This is trim
         # authority only; metric/whole-cell source maps remain separate.
-        problems = model._validate_face_geometry(face_id)
+        if view is None:
+            problems = model._validate_face_geometry(face_id)
+        else:
+            from .model import GeometryModel
+            face = view.faces[face_id]
+            loops = (face.loop, *face.holes)
+            GeometryModel._require_nurbs_face_loops(view, view.support, loops)
+            problems = GeometryModel._validate_nurbs_trims(view, face_id, view.support, loops)
         if problems:
             raise GeometryError('; '.join(problems))
         area_tolerance = model.tolerance.effective_area(length)
@@ -181,7 +190,7 @@ def _query_end(model, revision, checksum, cancellation_check):
 
 
 def query_trimmed_surface_charts(model, operands=None, *, expected_revision=None,
-                                cancellation_check=None):
+                                cancellation_check=None, source_tensors=False):
     """Return all selected material charts, including every hole and trim.
 
     Faces, FaceUses and Sheets are accepted; omitted operands select all faces.
@@ -190,7 +199,7 @@ def query_trimmed_surface_charts(model, operands=None, *, expected_revision=None
     There is no face, hole or intersection count limit.
     """
     revision, checksum = _query_start(model, expected_revision, cancellation_check)
-    charts = tuple(_qualified_chart(model, face_id, cancellation_check)
+    charts = tuple(_qualified_chart(model, face_id, cancellation_check, source_tensors=source_tensors)
                    for face_id in _selected_faces(model, operands))
     _query_end(model, revision, checksum, cancellation_check)
     return TrimmedSurfaceCharts(model.model_id,revision,checksum,tuple(charts))
@@ -250,7 +259,10 @@ def validate_trimmed_surface_charts_binding(model, result, *, expected_revision=
         _handle(model,chart.face)
         if chart.face.kind != 'face':
             raise GeometryError("trimmed chart binding requires a face")
-        live = MaterialDomain.from_model(model,chart.face.id)
+        from .nurbs import NurbsSurface
+        from .source_tensor_chart import source_tensor_chart
+        view = source_tensor_chart(model, chart.face.id) if type(chart.support) is NurbsSurface else None
+        live = MaterialDomain.from_model(view if view is not None else model, chart.face.id)
         if definition_checksum(live) != definition_checksum(chart.domain):
             raise GeometryError("trimmed chart analytic definition binding changed")
         uses = tuple(model.handle('face_use',identifier) for identifier,use in sorted(model.face_uses.items())

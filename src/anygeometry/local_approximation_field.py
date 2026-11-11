@@ -221,7 +221,7 @@ def query_local_approximation_field(model,faces,*,relative_accuracy,scale_error,
 
     if not 0<floor<=ceiling or alpha<=0:raise LocalApproximationNotCertified('invalid local field policy')
 
-    charts=query_trimmed_surface_charts(model,faces,cancellation_check=cancellation_check)
+    charts=query_trimmed_surface_charts(model,faces,cancellation_check=cancellation_check,source_tensors=True)
 
     from ._detached_geometry_read import detach_numeric, NumericalBoundary, DetachedOperandUnavailable
 
