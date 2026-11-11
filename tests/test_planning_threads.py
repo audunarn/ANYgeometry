@@ -56,6 +56,17 @@ def joint():
     return model, sorted(model.faces)
 
 
+def comparable_records(records):
+    """Record CONTENTS in order, without the clock fields (the only timing-dependent values)."""
+    def clean(row):
+        if isinstance(row, dict):
+            return {key: clean(value) for key, value in row.items() if 'seconds' not in key}
+        if isinstance(row, (list, tuple)):
+            return [clean(value) for value in row]
+        return repr(row)
+    return {key: [clean(row) for row in rows] for key, rows in records.items()}
+
+
 def run(threads, policy, patch, apply=True):
     """Plan (and apply) on a fresh model; returns everything that must be identical between routes."""
     if threads:
@@ -70,7 +81,7 @@ def run(threads, policy, patch, apply=True):
     stable = {key: value for key, value in counters.items() if not key.endswith('_time_ns')}
     result = dict(plan=exact_projection(plan), checksum=plan.content_checksum,
                   document=json.dumps(to_dict(model), sort_keys=True, default=repr),
-                  counters=stable, records={key: len(rows) for key, rows in records.items()})
+                  counters=stable, records=comparable_records(records))
     return result, {key for key in counters if key.endswith('_time_ns')}
 
 
@@ -141,7 +152,7 @@ def test_planner_refusal_equals_the_serial_refusal(monkeypatch):
 
 
 def test_first_failure_in_task_order_wins_and_later_counters_are_dropped():
-    stages = pt.ThreadStages(4, None)
+    stages = pt.ThreadStages(4)
     tasks = [dict(kind='pair', first=i, second=100 + i, cost=float(i + 1)) for i in range(12)]
     later_failed = threading.Event()
 
@@ -172,7 +183,7 @@ def test_first_failure_in_task_order_wins_and_later_counters_are_dropped():
 
 
 def test_results_and_published_counters_follow_task_order():
-    stages = pt.ThreadStages(8, None)
+    stages = pt.ThreadStages(8)
     tasks = [dict(kind='face', face=i, cost=float((i * 7) % 5 + 1)) for i in range(200)]
 
     def task(item, check):
@@ -183,36 +194,6 @@ def test_results_and_published_counters_follow_task_order():
         assert stages.run('face', tasks, task) == [2 * i for i in range(200)]
     assert records['order'] == list(range(200)) and counters['total'] == sum(range(200))
     assert stages.run('pair', [], task) == []
-
-
-def test_cancellation_is_polled_on_the_calling_thread_only(monkeypatch):
-    monkeypatch.setenv(ENV, '4')
-    model, faces = joint()
-    callers, polls = set(), []
-
-    def cancel():
-        callers.add(threading.get_ident())
-        polls.append(1)
-        return len(polls) > 400
-    with pytest.raises(GeometryError, match='intersection planning cancelled'):
-        plan_intersections(model, faces, policy=IntersectionBatchPolicy(cancellation_check=cancel))
-    assert callers == {threading.get_ident()}
-
-
-def test_cancellation_during_a_stage_stops_the_workers():
-    polls = []
-    stages = pt.ThreadStages(2, lambda: polls.append(1) or len(polls) > 3)
-    started = threading.Event()
-
-    def task(item, check):
-        started.set()
-        for _ in range(2000):
-            check()
-            threading.Event().wait(.005)
-        return item['face']
-    with pytest.raises(GeometryError, match='intersection planning cancelled'):
-        stages.run('face', [dict(kind='face', face=i, cost=1.) for i in range(6)], task)
-    assert started.is_set() and not [t for t in threading.enumerate() if t.name.startswith('anygeometry-plan')]
 
 
 def test_budgets_and_other_modes_stay_on_the_serial_route(monkeypatch):
