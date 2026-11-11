@@ -36,6 +36,18 @@ Contract (see thread-design-note.md in the programme work folder):
   repeat itself is the serial route: what it raises is serial's.)
   So a failure of the route never turns into a silent serial answer, and an interrupt that was lost in spite
   of the rules below can at worst become a typed refusal.
+* ONE outer boundary. ``batch_intersections`` reaches the route only through its helper ``_thread_route``,
+  which loads this module inside a handler (a failure to import it is a typed ``GeometryError``), and calls
+  exactly two functions of it: ``validate_switches`` at the public entry and ``route`` at the dispatch.
+  ``route`` owns everything else - eligibility, the threaded attempt, the decision, the serial repeat.
+  Every refusal the route itself raises is a ``_RouteFailure`` (a ``GeometryError`` subclass): switch refusals,
+  a failed eligibility test, a stage entered from a foreign thread or inside a worker, a failure while a stage
+  reads its tasks or admits its inputs, "did not finish", "failed outside a geometry refusal", "could not
+  start". A ``_RouteFailure`` is never a plain refusal, for any boundary: it passes through every decision
+  unchanged, a stage does not wrap one that a task raised into its task refusal, and so a nested boundary (a
+  stage or a planning call inside a task, a boundary inside a boundary) cannot turn it into a serial repeat.
+  The texts of these refusals are built only from literals and from a class name that is checked to be an
+  exact ``str``; building them cannot raise.
 * The planner hands the stage its ordinary task list and its own serial task function through the
   existing ``_stages`` hook; this module only decides WHERE each task runs. Results are returned in
   task order, so everything assembled from them is assembled in the serial order.
@@ -182,7 +194,7 @@ def requested_threads():
     # Canonical spelling only ('1' .. '8'): no sign, padding, leading zero or other digit alphabet.
     if raw not in _THREAD_COUNTS:
         shown = repr(raw) if len(raw) <= 16 else repr(raw[:16]) + f'... ({len(raw)} characters)'
-        raise GeometryError(
+        raise _RouteFailure(
             f"{THREADS_ENVIRONMENT}={shown} is not supported (0 or unset: serial; 1..{MAX_THREADS}: threads)")
     return _THREAD_COUNTS[raw]
 
@@ -194,7 +206,7 @@ def validate_switches():
     """Typed refusal of an unsupported thread switch or of both parallel switches; called once per public
     planning call before any route (existing-material, bounded, process, thread, serial) is chosen."""
     if requested_threads() and os.environ.get(PROCESS_ENVIRONMENT) == '1':
-        raise GeometryError(f"{THREADS_ENVIRONMENT} and {PROCESS_ENVIRONMENT} are mutually exclusive")
+        raise _RouteFailure(f"{THREADS_ENVIRONMENT} and {PROCESS_ENVIRONMENT} are mutually exclusive")
 
 
 def _scope_active():
@@ -215,6 +227,20 @@ def _audited_model(model):
             and all(type(edge.curve) in _AUDITED_EDGE_CURVES for edge in model.edges.values()))
 
 
+class _RouteFailure(GeometryError):
+    """A refusal raised by the thread route itself (never by geometry): typed for the caller, and never a plain
+    refusal for any boundary, so it cannot lead to a serial repeat."""
+
+
+def route(model, policy, mode, native, plan):
+    """The single entry of the route at the dispatch: ``plan(stages)`` threaded where the call is eligible,
+    ``plan(None)`` - the unchanged serial call - where it is not, or after a plain refusal of the attempt."""
+    stages = thread_stages(model, policy, mode, native)
+    if stages is None:
+        return plan(None)
+    return plan_with_threads(lambda: plan(stages), lambda: plan(None))
+
+
 def thread_stages(model, policy, mode, native):
     """A stage dispatcher for this planning call, or None for the unchanged serial route."""
     validate_switches()
@@ -230,8 +256,8 @@ def thread_stages(model, policy, mode, native):
     except Exception as exc:
         # The eligibility test is the route's own machinery: its failure is a typed refusal, not a raw
         # exception and not a silent choice of route.
-        raise _refusal(f"thread planning eligibility could not be decided ({_type_name(exc)}); "
-                       f"unset {THREADS_ENVIRONMENT} to plan on the serial route", exc)
+        raise _refusal("thread planning eligibility could not be decided (" + _type_name(exc) + "); unset "
+                       + THREADS_ENVIRONMENT + " to plan on the serial route", exc)
 
 
 _SUBTYPE = type.__subclasscheck__
@@ -251,16 +277,19 @@ _TYPE_NAME = type.__dict__['__name__'].__get__
 
 
 def _type_name(exc):
-    """The name of the real class of ``exc``, read from ``type`` itself (no code of the class or its metaclass)."""
+    """The name of the real class of ``exc`` as an exact ``str``, read from ``type`` itself (no code of the class,
+    of its metaclass or of a ``str`` subclass stored as its name); a fixed word if that is not possible."""
     try:
-        return _TYPE_NAME(type(exc))
+        name = _TYPE_NAME(type(exc))
+        return name if type(name) is str else 'exception'
     except Exception:
         return 'exception'
 
 
 def _refusal(text, cause):
-    """The typed refusal of the route, carrying what happened as its cause."""
-    error = GeometryError(text)
+    """The typed refusal of the route (``_RouteFailure``), carrying what happened as its cause. ``text`` is
+    built by the callers from literals, module constants and ``_type_name`` only."""
+    error = _RouteFailure(text)
     error.__cause__ = cause
     return error
 
@@ -307,14 +336,16 @@ class _Attempt:
         interrupt = self.interrupt()
         if interrupt is not None:
             return interrupt
+        if _is(failure, _RouteFailure):
+            return failure               # already the route's typed refusal (also one of a nested boundary)
         if self.running:
             return _refusal("thread planning stage did not finish: its workers are not known to have "
                             "stopped, so planning is not repeated serially", failure)
         if not self.failed and (_is(failure, GeometryError) or _is(failure, _NotAudited)):
             return None
         return _refusal(
-            f"thread planning failed outside a geometry refusal ({_type_name(failure)}); planning is not "
-            f"repeated serially - unset {THREADS_ENVIRONMENT} to plan on the serial route", failure)
+            "thread planning failed outside a geometry refusal (" + _type_name(failure) + "); planning is not "
+            "repeated serially - unset " + THREADS_ENVIRONMENT + " to plan on the serial route", failure)
 
 
 _ATTEMPT = contextvars.ContextVar('anygeometry_planning_thread_attempt', default=None)
@@ -459,8 +490,8 @@ def plan_with_threads(threaded, serial):
     # Outside the handler, so what follows has no threaded context. The one place that decides.
     try:
         if attempt is None:
-            instead = _refusal(f"thread planning could not start ({_type_name(failure)}); unset "
-                               f"{THREADS_ENVIRONMENT} to plan on the serial route", failure)
+            instead = _refusal("thread planning could not start (" + _type_name(failure) + "); unset "
+                               + THREADS_ENVIRONMENT + " to plan on the serial route", failure)
         else:
             instead = attempt.verdict(failure)
         if instead is None:
@@ -503,27 +534,40 @@ class ThreadStages:
 
     def admit_domains(self, domains, boundary_only):
         """Before the pair stage: every face has an audited effective material domain."""
-        if boundary_only:
-            raise _NotAudited('a face without a material domain')
-        for domain in domains.values():
-            if (type(domain) is not MaterialDomain or type(domain.support) not in _AUDITED_SUPPORTS
-                    or not all(_audited_paths(loop) for loop in domain.boundaries)):
-                raise _NotAudited('material domain outside the audited supports and boundary curves')
+        try:
+            if boundary_only:
+                raise _NotAudited('a face without a material domain')
+            for domain in domains.values():
+                if (type(domain) is not MaterialDomain or type(domain.support) not in _AUDITED_SUPPORTS
+                        or not all(_audited_paths(loop) for loop in domain.boundaries)):
+                    raise _NotAudited('material domain outside the audited supports and boundary curves')
+        except _NotAudited:
+            raise
+        except Exception as exc:         # the admission itself failed: the route's failure, not an unaudited input
+            raise _refusal("thread planning stage could not admit its domains (" + _type_name(exc) + ")", exc)
 
     def admit_face_inputs(self, traces, points):
         """Before the face stage: pair traces, member inputs and points are of audited exact types."""
-        if not all(_audited_paths(paths) for paths in traces.values()):
-            raise _NotAudited('trace outside the audited path curves')
-        if not all(type(point) is ArrangementPoint for found in points.values() for point in found):
-            raise _NotAudited('point input of an unaudited type')
+        try:
+            if not all(_audited_paths(paths) for paths in traces.values()):
+                raise _NotAudited('trace outside the audited path curves')
+            if not all(type(point) is ArrangementPoint for found in points.values() for point in found):
+                raise _NotAudited('point input of an unaudited type')
+        except _NotAudited:
+            raise
+        except Exception as exc:
+            raise _refusal("thread planning stage could not admit its face inputs (" + _type_name(exc) + ")", exc)
 
     def run(self, kind, tasks, serial):
         if threading.get_ident() != self._owner:
-            raise GeometryError("thread planning stage entered from a foreign thread")
+            raise _RouteFailure("thread planning stage entered from a foreign thread")
         if _inside_task():
             # Before any thread exists: a nested stage would have workers that the outer verdict cannot see.
-            raise GeometryError("thread planning stage inside a task of another stage is not supported")
-        tasks = list(tasks)
+            raise _RouteFailure("thread planning stage inside a task of another stage is not supported")
+        try:
+            tasks = list(tasks)
+        except Exception as exc:         # reading the task list is the route's own step, not a task
+            raise _refusal("thread planning stage could not read its tasks (" + _type_name(exc) + ")", exc)
         if not tasks:
             return []
         attempt = _ATTEMPT.get()
@@ -655,7 +699,7 @@ class ThreadStages:
             _diagnostics._publish_planning(outcomes[index][2])
         if failed < count:
             error = outcomes[failed][1]
-            if _is(error, GeometryError):
+            if _is(error, GeometryError) and not _is(error, _RouteFailure):
                 task = tasks[failed]
                 if kind == 'pair':
                     refusal = GeometryError(f"intersection batch face:{task['first']}/face:{task['second']}: {error}")

@@ -1346,6 +1346,17 @@ def _pair_paths_exact(first, second, model, tolerance, check, *, point_contacts=
     return curves
 
 
+def _thread_route(name):
+    """A function of the opt-in thread route (``ANYGEOMETRY_PLANNING_THREADS``). The route module is loaded here
+    and nowhere else, so that a failure to load it is a typed refusal instead of a raw import error."""
+    try:
+        from importlib import import_module
+        return getattr(import_module('._planning_threads', __package__), name)
+    except Exception as exc:
+        raise GeometryError("the thread planning route (ANYGEOMETRY_PLANNING_THREADS) could not be loaded; "
+                            "unset the switch to plan on the serial route") from exc
+
+
 def plan_intersections(model, operands, *, policy, _parallel_control=None):
     """Plan intersections between the complete original operand set, read-only."""
     from .preparation_epochs import _epoch_plan_required,_issue_native_plan
@@ -1354,8 +1365,7 @@ def plan_intersections(model, operands, *, policy, _parallel_control=None):
     if os.environ.get('ANYGEOMETRY_PLANNING_THREADS') not in (None, '', '0'):
         # The thread switch is validated here, before any route is chosen, so an unsupported value or both
         # parallel switches refuse identically on the existing-material, bounded and general routes.
-        from ._planning_threads import validate_switches
-        validate_switches()
+        _thread_route('validate_switches')()
     from .bounded_nurbs import handles_bounded, plan_bounded
     from .intersections import _normalize_operand
     handles = tuple(sorted(set(_normalize_operand(model, value) for value in operands)))
@@ -1394,16 +1404,14 @@ def plan_intersections(model, operands, *, policy, _parallel_control=None):
                     policy={name:(effective.intent.value if name=='intent' else getattr(effective,name))
                         for name in ('intent','face_connections','member_connections','member_face_connections','planning_mode','seam_policy')}))
         elif os.environ.get('ANYGEOMETRY_PLANNING_THREADS') not in (None, '', '0'):
-            # Opt-in in-process thread dispatch of the pair and face stages (prototype). thread_stages
-            # returns None, and planning stays on the serial route, whenever the call is not eligible;
-            # a threaded attempt that ends with a plain geometry refusal is discarded whole and planning
-            # is repeated serially; any other failure of the attempt is a typed GeometryError.
-            from ._planning_threads import plan_with_threads, thread_stages
-            threaded=thread_stages(model,effective,mode,native)
-            serial_plan=lambda:_plan_intersections(model, operands, policy=policy, _planning_mode=mode, _seam_policy=seam)
-            plan=serial_plan() if threaded is None else plan_with_threads(
-                lambda:_plan_intersections(model, operands, policy=policy, _planning_mode=mode, _seam_policy=seam,
-                                           _stages=threaded), serial_plan)
+            # Opt-in in-process thread dispatch of the pair and face stages (prototype). The route decides
+            # everything inside its one boundary: planning stays on the serial call (stages None) whenever
+            # the call is not eligible; a threaded attempt that ends with a plain geometry refusal is
+            # discarded whole and planning is repeated serially; any other failure of the route is a typed
+            # GeometryError.
+            plan=_thread_route('route')(model,effective,mode,native,
+                lambda stages:_plan_intersections(model, operands, policy=policy, _planning_mode=mode,
+                                                  _seam_policy=seam, _stages=stages))
         else:
             plan=_plan_intersections(model, operands, policy=policy, _planning_mode=mode, _seam_policy=seam)
     if native is not None:
