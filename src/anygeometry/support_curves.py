@@ -38,7 +38,7 @@ import numpy as np
 from .errors import GeometryError
 from ._cert_exact_runtime import fraction_kind as _fraction_kind
 from .nurbs import NurbsSurface, _float_down, _float_up
-from .plane_nurbs import PlaneNurbsNotCertified, charge_box, charge_split, depth_limit, plane_nurbs_section
+from .plane_nurbs import CURRENT_WORK, PlaneNurbsNotCertified, charge_box, charge_split, depth_limit, plane_nurbs_section
 
 _SECTIONS: dict = {}
 _RUNTIME_CACHE_BANK = ContextVar('plane_nurbs_runtime_cache_bank', default=None)
@@ -612,6 +612,20 @@ class PlaneNurbsCurve:
         budget refuses (``PlaneNurbsNotCertified``).
         """
         depth = depth_limit(depth)
+        # Memo owned by the plan's Work (no module state), keyed by VALUE; the budget is charged on a miss only.
+        work = CURRENT_WORK.get()
+        cache = getattr(work, 'tight_x_cache', None) if work is not None else None
+        box = arc.box
+        key = (arc.slicing, box.u_range, box.v_range, tuple(tuple(row) for row in box.coefficients),
+               s_low, s_high, depth)
+        if cache is not None and key in cache:
+            return cache[key]
+        result = self._tight_x_uncached(arc, s_low, s_high, depth)
+        if cache is not None:
+            cache[key] = result
+        return result
+
+    def _tight_x_uncached(self, arc, s_low, s_high, depth):
         coefficients = _integer_scaled(self._sub_box(arc.box, arc.slicing, s_low, s_high))
         x0, x1 = (arc.box.v_range if arc.slicing == 0 else arc.box.u_range)
 

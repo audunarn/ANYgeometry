@@ -44,6 +44,7 @@ class Work:
         self.max_boxes, self.max_depth = int(max_boxes), int(max_depth)
         self.boxes = self.subdivisions = 0
         self.denied = 0              # takes refused after the budget ran out (reported on later refusals)
+        self.tight_x_cache = {}      # support_curves._tight_x results by value, per plan; only misses are charged
 
     def take(self) -> bool:
         self.boxes += 1
