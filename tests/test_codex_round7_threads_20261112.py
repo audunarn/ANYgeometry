@@ -75,9 +75,10 @@ def test_stage_inside_a_task_is_refused_before_any_pool_exists(monkeypatch):    
         if item['face'] == 1:
             pt.ThreadStages(2).run('face', _two(), inner)
         return item['face']
-    with pytest.raises(GeometryError) as error:
+    # (Round 15: the nested refusal is a route failure; the outer stage does not wrap it into a task refusal.)
+    with pytest.raises(pt._RouteFailure) as error:
         pt.ThreadStages(2).run('face', _two(), task)
-    assert 'inside a task of another stage' in str(error.value) and 'face:1' in str(error.value)
+    assert str(error.value) == 'thread planning stage inside a task of another stage is not supported'
     assert len(pools) == 1 and seen == {}
 
 
@@ -119,9 +120,10 @@ def test_unfinished_inner_workers_cannot_exist_beside_the_serial_repeat(monkeypa
             pt.ThreadStages(2).run('face', _two(), inner)
         return item['face']
     try:
-        result = pt.plan_with_threads(lambda: pt.ThreadStages(2).run('face', _two(), task), _serial(seen))
-        assert result == 'serial'
-        assert seen == dict(serial=True)              # the repeat is safe: no inner worker was ever started
+        # (Round 15: the nested refusal is a route failure, so there is no serial repeat at all.)
+        with pytest.raises(pt._RouteFailure, match='inside a task of another stage'):
+            pt.plan_with_threads(lambda: pt.ThreadStages(2).run('face', _two(), task), _serial(seen))
+        assert seen == {}                             # no inner worker was ever started, and nothing was repeated
         assert len(pools) == 1
     finally:
         release.set()
@@ -272,13 +274,13 @@ def test_ordinary_exception_with_a_hostile_class_is_still_ordinary():           
             call()
         except BaseException as exc:
             return type(exc), type(exc.__cause__)
-    assert refused(lambda: pt.plan_with_threads(threaded, _serial(seen))) == (GeometryError, HostileOrdinary)
+    assert refused(lambda: pt.plan_with_threads(threaded, _serial(seen))) == (pt._RouteFailure, HostileOrdinary)
 
     def task(item, check=None):
         raise HostileOrdinary('refused')
-    assert refused(lambda: pt.ThreadStages(2).run('face', _two(), task)) == (GeometryError, HostileOrdinary)
+    assert refused(lambda: pt.ThreadStages(2).run('face', _two(), task)) == (pt._RouteFailure, HostileOrdinary)
     assert refused(lambda: pt.plan_with_threads(lambda: pt.ThreadStages(2).run('face', _two(), task),
-                                                _serial(seen))) == (GeometryError, HostileOrdinary)
+                                                _serial(seen))) == (pt._RouteFailure, HostileOrdinary)
     assert seen == {}
 
 

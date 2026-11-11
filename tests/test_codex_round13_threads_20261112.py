@@ -77,7 +77,7 @@ def test_geometry_error_of_the_wrapping_machinery_is_not_a_plain_refusal():     
     def task(item, check=None):
         raise Unprintable()
     outcome, error, serial = _attempt(_stage(task))
-    assert outcome[:2] == ('raised', GeometryError) and FAILED in outcome[2] and not serial
+    assert outcome[:2] == ('raised', pt._RouteFailure) and FAILED in outcome[2] and not serial
     assert type(error.__cause__) is GeometryError and str(error.__cause__) == 'raised while the refusal was formatted'
     with pytest.raises(GeometryError, match=FAILED):          # the same from a stage called on its own
         pt.ThreadStages(2).run('face', _two(), task)
@@ -98,7 +98,7 @@ def test_geometry_error_of_the_worker_machinery_is_not_a_plain_refusal(monkeypat
             doomed.add(threading.get_ident())
         return item['face']
     outcome, error, serial = _attempt(_stage(task))
-    assert outcome[:2] == ('raised', GeometryError) and FAILED in outcome[2] and not serial
+    assert outcome[:2] == ('raised', pt._RouteFailure) and FAILED in outcome[2] and not serial
     assert str(error.__cause__) == 'raised by the bookkeeping, not by geometry'
 
 
@@ -113,7 +113,7 @@ def test_stage_failure_that_a_caller_swallowed_still_forbids_the_serial_repeat()
             pass
         raise GeometryError('a later refusal of the planner')
     outcome, error, serial = _attempt(threaded)
-    assert outcome[:2] == ('raised', GeometryError) and FAILED in outcome[2] and not serial
+    assert outcome[:2] == ('raised', pt._RouteFailure) and FAILED in outcome[2] and not serial
     assert str(error.__cause__) == 'a later refusal of the planner'
 
 
@@ -174,7 +174,7 @@ def test_failure_while_publishing_a_successful_attempt_is_a_typed_refusal():    
     with collect_runtime_diagnostics() as counters:
         counters['test_published_counter'] = 'not a number'      # publication cannot add to this
         outcome, error, serial = _attempt(threaded)
-    assert outcome[:2] == ('raised', GeometryError) and FAILED in outcome[2] and not serial
+    assert outcome[:2] == ('raised', pt._RouteFailure) and FAILED in outcome[2] and not serial
     assert type(error.__cause__) is TypeError
 
 
@@ -190,7 +190,7 @@ def test_failure_of_the_discard_clock_is_a_typed_refusal(monkeypatch):          
     def task(item, check=None):
         raise GeometryError('ordinary refusal')
     outcome, error, serial = _attempt(_stage(task))
-    assert outcome[:2] == ('raised', GeometryError) and 'while its outcome was decided' in outcome[2] and not serial
+    assert outcome[:2] == ('raised', pt._RouteFailure) and 'while its outcome was decided' in outcome[2] and not serial
     assert type(error.__cause__) is OverflowError
 
 
@@ -198,7 +198,7 @@ def test_failure_before_the_attempt_exists_is_a_typed_refusal(monkeypatch):     
     monkeypatch.setattr(pt, '_Attempt', lambda: (_ for _ in ()).throw(MemoryError('attempt record')))
     ran = []
     outcome, error, serial = _attempt(lambda: ran.append(1))
-    assert outcome[:2] == ('raised', GeometryError) and 'could not start' in outcome[2] and not serial and not ran
+    assert outcome[:2] == ('raised', pt._RouteFailure) and 'could not start' in outcome[2] and not serial and not ran
     assert type(error.__cause__) is MemoryError
 
 
@@ -239,8 +239,8 @@ def test_decision_does_not_depend_on_naming_the_failure():                      
     def task(item, check=None):
         raise Anonymous('a defect')
     outcome, error, serial = _attempt(_stage(task))
-    assert outcome[:2] == ('raised', GeometryError) and FAILED in outcome[2] and not serial
+    assert outcome[:2] == ('raised', pt._RouteFailure) and FAILED in outcome[2] and not serial
     assert type(error.__cause__) is Anonymous
     assert pt._type_name(Anonymous('x')) == 'Anonymous' and pt._type_name(ValueError()) == 'ValueError'
     attempt = pt._Attempt()
-    assert type(attempt.verdict(Anonymous('x'))) is GeometryError
+    assert type(attempt.verdict(Anonymous('x'))) is pt._RouteFailure

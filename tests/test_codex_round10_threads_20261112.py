@@ -163,7 +163,7 @@ def test_thread_that_dies_before_its_marker_exists_blocks_the_serial_repeat(erro
                                                         _serial(seen)))
     finally:
         threading.settrace(None)
-    assert outcome[:2] == ('raised', GeometryError) and 'did not finish' in outcome[2]
+    assert outcome[:2] == ('raised', pt._RouteFailure) and 'did not finish' in outcome[2]
     assert seen == dict(hook=True)                    # no serial repeat
 
 
@@ -227,7 +227,7 @@ def test_start_that_raises_although_the_thread_runs_blocks_the_serial_repeat(mon
     try:
         outcome = _outcome(lambda: pt.plan_with_threads(lambda: pt.ThreadStages(2).run('face', _two(), task),
                                                         _serial(seen)))
-        assert outcome[:2] == ('raised', GeometryError) and 'did not finish' in outcome[2]
+        assert outcome[:2] == ('raised', pt._RouteFailure) and 'did not finish' in outcome[2]
         alive = [thread for thread in made if thread.is_alive()]
         assert [thread.name for thread in alive] == [f'{POOL}_1']
         assert 'serial' not in seen and 'second worker finished' not in seen
@@ -253,7 +253,7 @@ def test_start_that_fails_before_the_thread_exists_is_not_treated_as_joined(monk
     _threads(monkeypatch, Thread)
     outcome = _outcome(lambda: pt.plan_with_threads(lambda: pt.ThreadStages(2).run('face', _two(), _fine),
                                                     _serial(seen)))
-    assert outcome[:2] == ('raised', GeometryError) and 'did not finish' in outcome[2] and seen == {}
+    assert outcome[:2] == ('raised', pt._RouteFailure) and 'did not finish' in outcome[2] and seen == {}
 
 
 def test_crew_state_machine():                                                              # FAILS-ON-OLD

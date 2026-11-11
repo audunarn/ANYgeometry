@@ -265,13 +265,14 @@ def test_stage_in_a_thread_that_inherited_the_context_keeps_its_own_record():   
     assert seen == dict(foreign=[0, 1])
 
 
-def test_nested_stage_refusal_is_an_ordinary_task_failure():
-    # Since round 7 a stage inside a task is refused before it has a pool; for the outer stage that is an ordinary
-    # failure of that task (serial wrapping, serial repeat at the boundary).
+def test_nested_stage_refusal_is_a_route_failure():
+    # Since round 7 a stage inside a task is refused before it has a thread. Since round 15 that refusal is a route
+    # failure: the outer stage does not wrap it into a task refusal, and no boundary repeats serially after it.
     def task(item, check=None):
         if item['face'] == 1:
             pt.ThreadStages(2).run('face', _two(), _fine)
         return item['face']
-    with pytest.raises(GeometryError, match='face:1: thread planning stage inside a task of another stage'):
+    with pytest.raises(pt._RouteFailure, match='^thread planning stage inside a task of another stage'):
         pt.ThreadStages(2).run('face', _two(), task)
-    assert pt.plan_with_threads(lambda: pt.ThreadStages(2).run('face', _two(), task), lambda: 'serial') == 'serial'
+    with pytest.raises(pt._RouteFailure, match='inside a task of another stage'):
+        pt.plan_with_threads(lambda: pt.ThreadStages(2).run('face', _two(), task), lambda: pytest.fail('serial repeat'))

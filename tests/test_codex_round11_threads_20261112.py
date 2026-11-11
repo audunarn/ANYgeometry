@@ -124,7 +124,8 @@ def test_every_handler_that_can_hold_an_interrupt_records_it_first():
     # Tuples and other spellings that could catch an interrupt are not used at all.
     for node in ast.walk(tree):
         if isinstance(node, ast.ExceptHandler) and node.type is not None:
-            assert isinstance(node.type, ast.Name) and node.type.id in ('BaseException', 'Exception', '_Abandoned')
+            assert isinstance(node.type, ast.Name) and node.type.id in ('BaseException', 'Exception', '_Abandoned',
+                                                                        '_NotAudited')
 
 
 def test_crew_notes_a_join_interrupt_before_anything_else(monkeypatch):                     # FAILS-ON-OLD

@@ -106,7 +106,7 @@ def test_machinery_failure_is_a_typed_refusal(monkeypatch):                     
             doomed.add(threading.get_ident())
         return item['face']
     outcome, serial = _attempt(_stage(task))
-    assert outcome[:2] == ('raised', GeometryError) and FAILED in outcome[2] and '(MemoryError)' in outcome[2]
+    assert outcome[:2] == ('raised', pt._RouteFailure) and FAILED in outcome[2] and '(MemoryError)' in outcome[2]
     assert ENV in outcome[2] and outcome[3] is MemoryError and not serial
     with pytest.raises(GeometryError, match='MemoryError') as error:      # the same from a stage called on its own
         doomed.clear()
@@ -119,7 +119,7 @@ def test_task_failure_that_is_not_a_refusal_is_a_typed_refusal(kind):           
     def task(item, check=None):
         raise kind('a defect, not a geometry answer')
     outcome, serial = _attempt(_stage(task))
-    assert outcome[:2] == ('raised', GeometryError) and FAILED in outcome[2] and outcome[3] is kind and not serial
+    assert outcome[:2] == ('raised', pt._RouteFailure) and FAILED in outcome[2] and outcome[3] is kind and not serial
 
 
 def test_failure_of_the_planner_between_the_stages_that_is_not_a_refusal_is_a_typed_refusal():   # FAILS-ON-OLD
@@ -127,7 +127,7 @@ def test_failure_of_the_planner_between_the_stages_that_is_not_a_refusal_is_a_ty
         assert pt.ThreadStages(2).run('face', _two(), _fine) == [0, 1]
         raise KeyError('a defect')
     outcome, serial = _attempt(threaded)
-    assert outcome[:2] == ('raised', GeometryError) and outcome[3] is KeyError and not serial
+    assert outcome[:2] == ('raised', pt._RouteFailure) and outcome[3] is KeyError and not serial
 
 
 def test_task_refusal_beside_an_unaccounted_thread_is_not_repeated(monkeypatch):
@@ -154,7 +154,7 @@ def test_task_refusal_beside_an_unaccounted_thread_is_not_repeated(monkeypatch):
         outcome, serial = _attempt(_stage(task))
     finally:
         threading.settrace(None)
-    assert outcome[:2] == ('raised', GeometryError) and 'did not finish' in outcome[2] and not serial
+    assert outcome[:2] == ('raised', pt._RouteFailure) and 'did not finish' in outcome[2] and not serial
     assert outcome[3] is RuntimeError                 # the stage reports the lost thread before any task refusal
     assert seen == dict(killed=1, refused='anygeometry-plan_0')
 
@@ -183,7 +183,7 @@ def test_interrupt_lost_inside_the_recording_step_is_at_worst_a_typed_refusal():
     finally:
         sys.settrace(previous)
     assert armed == dict(fired=True) and not serial
-    assert outcome[:2] == ('raised', GeometryError) and outcome[3] is MemoryError
+    assert outcome[:2] == ('raised', pt._RouteFailure) and outcome[3] is MemoryError
 
 
 def test_observed_interrupt_is_still_raised():
@@ -216,8 +216,8 @@ def test_verdict_table():                                                       
     assert verdict(refusal) is None and verdict(Refusal('x')) is None and verdict(pt._NotAudited('x')) is None
     for failure in (MemoryError(), RuntimeError('x'), ValueError('x'), OSError('x'), AssertionError()):
         error = verdict(failure)
-        assert type(error) is GeometryError and error.__cause__ is failure and 'thread planning failed' in str(error)
+        assert type(error) is pt._RouteFailure and error.__cause__ is failure and 'thread planning failed' in str(error)
     for failure in (refusal, pt._NotAudited('x'), MemoryError()):
         error = verdict(failure, running=1)
-        assert type(error) is GeometryError and error.__cause__ is failure and 'did not finish' in str(error)
+        assert type(error) is pt._RouteFailure and error.__cause__ is failure and 'did not finish' in str(error)
         assert verdict(failure, interrupt=stop) is stop and verdict(failure, running=1, interrupt=stop) is stop
