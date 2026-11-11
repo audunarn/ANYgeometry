@@ -31,7 +31,12 @@ FATAL = (KeyboardInterrupt, SystemExit)
 
 @pytest.fixture(autouse=True)
 def _clean_environment(monkeypatch):
+    # Bounded: a hang (for example in an executor shutdown) dumps all stacks and ends the process.
+    import faulthandler
     _clear(monkeypatch)
+    faulthandler.dump_traceback_later(240, exit=True)
+    yield
+    faulthandler.cancel_dump_traceback_later()
 
 
 def _two():
