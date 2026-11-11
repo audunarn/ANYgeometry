@@ -249,15 +249,17 @@ def plan_store_uses(tree):
             found.add(getattr(node, 'id', getattr(node, 'attr', None)))
         if isinstance(node, ast.ImportFrom):
             from_split = (node.module or '').split('.')[-1] == 'plane_split'
+            package = node.module is None or node.module == 'anygeometry'
             for alias in node.names:
-                if from_split and (alias.name in ('_PLANS', '*') or alias.name in _STORE_FUNCTIONS):
-                    found.add(f'import {alias.name}')
+                if alias.name in _STORE_FUNCTIONS or (alias.name == '_PLANS' and from_split) or (
+                        alias.name == '*' and (from_split or package)):
+                    found.add(f'import {alias.name}')         # also the re-export: from . import plan_plane_split
                 if not from_split and alias.name == 'plane_split':
                     found.add('module plane_split')
         if isinstance(node, ast.Import) and any(alias.name.split('.')[-1] == 'plane_split' for alias in node.names):
             found.add('module plane_split')
         if isinstance(node, ast.Constant) and isinstance(node.value, str) and (
-                node.value == '_PLANS' or node.value.split('.')[-1] == 'plane_split'):
+                node.value == '_PLANS' or node.value in _STORE_FUNCTIONS or node.value.split('.')[-1] == 'plane_split'):
             found.add(f'string {node.value}')
     return sorted(found)
 
@@ -272,7 +274,9 @@ def test_plane_split_plan_store_is_reached_only_through_the_public_split_entries
         if uses:
             users[path.relative_to(root).as_posix()] = uses
     assert sorted(users) == ['__init__.py', 'plane_split.py'], users
-    assert users['__init__.py'] == ['import apply_plane_split', 'import plan_plane_split'], users
+    # __init__: the re-export import and the two names in __all__, nothing else (and no call, below).
+    assert users['__init__.py'] == ['import apply_plane_split', 'import plan_plane_split',
+                                    'string apply_plane_split', 'string plan_plane_split'], users
     init = ast.parse((root / '__init__.py').read_text(encoding='utf-8'))
     calls = {getattr(node.func, 'id', getattr(node.func, 'attr', None))
              for node in ast.walk(init) if isinstance(node, ast.Call)}

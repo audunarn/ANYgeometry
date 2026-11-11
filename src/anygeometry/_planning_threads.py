@@ -37,8 +37,12 @@ Contract (see thread-design-note.md in the programme work folder):
   ``RECORD_CLOCK_FIELDS``. Every other counter and record value is part of the contract.
 * The switch is validated at the public entry before any route is chosen (``validate_switches``): the value
   is unset, empty, ``0`` or exactly one of ``1`` .. ``8``, and it excludes the process-route switch.
-* ``KeyboardInterrupt`` / ``SystemExit`` raised inside a task always propagate to the caller (the one with
-  the lowest task index), also when another task failed with an ordinary error; there is no serial repeat.
+* Order of what a stage raises, decided only after every worker has finished: (1) a ``KeyboardInterrupt`` /
+  ``SystemExit`` (any non-``Exception``) seen anywhere in a worker - task function, worker setup, bookkeeping,
+  outcome storage - the one with the lowest task index; (2) such an interrupt delivered to the dispatching
+  thread itself; (3) an ordinary exception of the worker machinery outside the task function (lowest task
+  index); (4) the lowest-index task failure with the serial wrapping. (1) and (2) reach the caller, there is
+  no serial repeat; (3) and (4) lead to the serial repeat.
 """
 import contextvars
 import os
@@ -220,57 +224,82 @@ class ThreadStages:
         stopped = threading.Event()
         lock = threading.Lock()
         first_failure = [count]
-        interrupts = {}          # task index -> KeyboardInterrupt / SystemExit (any non-Exception) of that task
+        # Per task index, preallocated so that recording needs no allocation: a KeyboardInterrupt / SystemExit
+        # (any non-Exception) seen anywhere in that task's worker, and an ordinary exception of the worker
+        # machinery outside the task function (setup, bookkeeping, outcome storage).
+        interrupts = [None] * count
+        machinery = [None] * count
         parent = contextvars.copy_context()
 
         def execute(index):
-            if stopped.is_set() or index > first_failure[0]:
-                return
+            # Nothing leaves a worker: whatever happens is recorded and judged after all workers have finished.
+            try:
+                if stopped.is_set() or index > first_failure[0]:
+                    return
+                parent.copy().run(body, index)
+            except Exception as exc:
+                machinery[index] = exc
+                stopped.set()
+            except BaseException as exc:
+                interrupts[index] = exc
+                stopped.set()
+
+        def body(index):
             def check():
                 if stopped.is_set() or index > first_failure[0]:
                     raise _Abandoned()
-            def body():
-                counters, records = {}, {}
-                _diagnostics._COLLECTORS.set((counters,))
-                _diagnostics._RECORD_COLLECTORS.set((records,))
-                memo = getattr(self._local, 'memo', None)
-                if memo is None:
-                    memo = self._local.memo = {}
-                _ROOT_MEMO.set(memo)
-                start = perf_counter_ns()
-                try:
-                    value, error = serial(tasks[index], check=check), None
-                except _Abandoned:
-                    return
-                except Exception as exc:      # reported in serial order by the dispatcher
-                    value, error = None, exc
-                    with lock:
-                        if index < first_failure[0]:
-                            first_failure[0] = index
-                except BaseException as exc:  # an interrupt: stop everything, it is raised whatever else failed
-                    with lock:
-                        interrupts[index] = exc
-                    stopped.set()
-                    return
-                counters[phase + '_time_ns'] = counters.get(phase + '_time_ns', 0) + perf_counter_ns() - start
-                outcomes[index] = (value, error, dict(counters=counters, records=records))
-            parent.copy().run(body)
+            counters, records = {}, {}
+            _diagnostics._COLLECTORS.set((counters,))
+            _diagnostics._RECORD_COLLECTORS.set((records,))
+            memo = getattr(self._local, 'memo', None)
+            if memo is None:
+                memo = self._local.memo = {}
+            _ROOT_MEMO.set(memo)
+            start = perf_counter_ns()
+            try:
+                value, error = serial(tasks[index], check=check), None
+            except _Abandoned:
+                return
+            except Exception as exc:          # a task failure: reported in serial order by the dispatcher
+                value, error = None, exc
+                with lock:
+                    if index < first_failure[0]:
+                        first_failure[0] = index
+            # A non-Exception out of the task function (an interrupt) goes to execute, like one raised by the
+            # setup above or the bookkeeping below.
+            counters[phase + '_time_ns'] = counters.get(phase + '_time_ns', 0) + perf_counter_ns() - start
+            outcomes[index] = (value, error, dict(counters=counters, records=records))
 
         order = sorted(range(count), key=lambda i: (-float(tasks[i].get('cost', 0.)), i))
         start = perf_counter_ns()
         pool = ThreadPoolExecutor(max_workers=min(self.threads, count), thread_name_prefix='anygeometry-plan')
+        held = None              # what the dispatching thread itself met; judged after the workers have drained
+        futures = []
         try:
-            futures = [pool.submit(execute, index) for index in order]
+            for index in order:
+                futures.append(pool.submit(execute, index))
             wait(futures)
-            for future in futures:
-                future.result()  # an error of the dispatch machinery itself is never swallowed
-        except BaseException:
+        except BaseException as exc:
+            held = exc
             stopped.set()
-            raise
         finally:
             pool.shutdown(wait=True)
-        if interrupts:
-            raise interrupts[min(interrupts)]
+        for future in futures:   # execute records everything; a future carries an error only if recording failed
+            try:
+                future.result()
+            except BaseException as exc:
+                if held is None or (isinstance(held, Exception) and not isinstance(exc, Exception)):
+                    held = exc
+        for exc in interrupts:   # 1. the lowest-index interrupt of a worker
+            if exc is not None:
+                raise exc
+        if held is not None and not isinstance(held, Exception):   # 2. an interrupt of the dispatching thread
+            raise held
+        for exc in machinery:    # 3. an ordinary machinery failure (leads to the serial repeat)
+            if exc is not None:
+                raise exc
+        if held is not None:
+            raise held
         _diagnostics._increment(f'intersection_thread_{kind}_stage_time_ns', perf_counter_ns() - start)
         failed = first_failure[0]
         for index in range(min(failed + 1, count)):

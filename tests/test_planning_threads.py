@@ -62,7 +62,7 @@ def comparable_records(records):
     named in the contract (``_planning_threads.RECORD_CLOCK_FIELDS``): nothing else is dropped or converted."""
     def exact(value):
         if isinstance(value, dict):
-            return ('dict', tuple((key, exact(item)) for key, item in value.items()))
+            return (type(value).__name__, tuple((exact(key), exact(item)) for key, item in value.items()))
         if isinstance(value, (list, tuple)):
             return (type(value).__name__, tuple(exact(item) for item in value))
         return (type(value).__name__, repr(value))
