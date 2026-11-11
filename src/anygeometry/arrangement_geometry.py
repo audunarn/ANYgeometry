@@ -102,6 +102,34 @@ _CACHE_FIELDS = frozenset(('_inversions',))
 _CONTAINER_CAP = 65
 
 
+def _is_point3(value):
+    """Exactly three coordinates as a plain tuple or a 1-D float64 ndarray of shape (3,)."""
+    if type(value) is tuple:
+        return len(value) == 3
+    return type(value) is np.ndarray and value.shape == (3,)
+
+
+def _shape_ok(value):
+    """The dimensions the original route assumes for the classes that do not validate them themselves.
+
+    ``LinePath`` points are 3-vectors; ``BezierPath`` controls are an ``(n, 3)`` array or a tuple of ``n >= 2``
+    3-tuples (``n`` at most ``_CONTAINER_CAP``); ``EllipticArc`` vectors are 3-vectors. Other dataclasses
+    validate their own shapes.
+    """
+    kind = type(value)
+    if kind is LinePath:
+        return _is_point3(value.start) and _is_point3(value.end)
+    if kind is EllipticArc:
+        return _is_point3(value.center) and _is_point3(value.u_vector) and _is_point3(value.v_vector)
+    if kind is BezierPath:
+        controls = value.controls
+        if type(controls) is np.ndarray:
+            return controls.ndim == 2 and controls.shape[1] == 3 and 2 <= controls.shape[0] <= _CONTAINER_CAP
+        return (type(controls) is tuple and 2 <= len(controls) <= _CONTAINER_CAP
+                and all(type(row) is tuple and len(row) == 3 for row in controls))
+    return True
+
+
 def _allowed(value, name, depth):
     """Allow-list walk: ``True`` only for the ordinary case, every unknown kind of value returns ``False``.
 
@@ -125,11 +153,14 @@ def _allowed(value, name, depth):
     if kind is tuple:
         return len(value) <= _CONTAINER_CAP and all(_allowed(item, name, depth+1) for item in value)
     if kind is np.ndarray:
-        return (value.dtype == np.float64 and value.size <= 3*_CONTAINER_CAP and bool(np.all(np.isfinite(value)))
+        return (value.dtype == np.float64 and 1 <= value.ndim <= 2 and value.size <= 3*_CONTAINER_CAP
+                and bool(np.all(np.isfinite(value)))
                 and (value.size == 0 or float(np.max(np.abs(value))) <= _MODERATE))
     if kind is dict:
         return name in _CACHE_FIELDS
     if dataclasses.is_dataclass(value):
+        if not _shape_ok(value):
+            return False
         return all(_allowed(getattr(value, field.name), field.name, depth+1) for field in dataclasses.fields(value))
     if getattr(kind, '__module__', '').startswith('anygeometry'):
         fields = dict(getattr(value, '__dict__', {}))

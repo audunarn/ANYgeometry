@@ -2603,17 +2603,27 @@ def _point_clear_of_curve(curve, tolerance):
     hi = tuple(value + margin for value in hi)
 
     def far(position):
-        if len(position) != 3:
+        # Ordinary positions only: a plain tuple of three float / np.float64, or a float64 ndarray of shape (3,).
+        # Anything else (0-d or 2-D arrays, other lengths, lists, scalars, subclasses, integers ...) keeps the original route.
+        try:
+            if type(position) is np.ndarray:
+                if position.dtype != np.float64 or position.shape != (3,):
+                    return False
+                values = position.tolist()
+            elif type(position) is tuple:
+                if len(position) != 3 or not all(type(value) is float or type(value) is np.float64 for value in position):
+                    return False
+                values = [float(value) for value in position]
+            else:
+                return False
+            if not all(math.isfinite(value) and abs(value) <= 1e50 for value in values):
+                return False                        # non-finite or huge: such a point keeps the unfiltered route
+            for value, low, high in zip(values, lo, hi):
+                if value < low or value > high:
+                    return True
             return False
-        if not all(type(value) is float or type(value) is np.float64 for value in position):
-            return False                            # integers, bools, float32, Fractions ...: the original route decides
-        values = [float(value) for value in position]
-        if not all(math.isfinite(value) and abs(value) <= 1e50 for value in values):
-            return False                            # non-finite or huge: such a point keeps the unfiltered route
-        for value, low, high in zip(values, lo, hi):
-            if value < low or value > high:
-                return True
-        return False
+        except Exception:                           # the filter never raises
+            return False
     return far
 
 
