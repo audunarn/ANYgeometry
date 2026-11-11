@@ -178,7 +178,8 @@ def test_the_lowest_index_interrupt_is_the_one_raised():
         pt.ThreadStages(2).run('face', _two(), task)
 
 
-def test_machinery_failure_alone_is_ordinary_and_leads_to_the_serial_repeat(monkeypatch):
+def test_machinery_failure_alone_is_a_typed_refusal(monkeypatch):
+    # (Owner decision after round 12: only a plain refusal is repeated serially; this is a typed refusal now.)
     real, doomed = pt.perf_counter_ns, set()
 
     def clock():
@@ -192,9 +193,12 @@ def test_machinery_failure_alone_is_ordinary_and_leads_to_the_serial_repeat(monk
         if item['face'] == 1:
             doomed.add(threading.get_ident())
         return item['face']
-    with pytest.raises(MemoryError):
+    with pytest.raises(GeometryError, match='thread planning failed') as error:
         pt.ThreadStages(2).run('face', _two(), task)
-    assert pt.plan_with_threads(lambda: pt.ThreadStages(2).run('face', _two(), task), lambda: 'serial') == 'serial'
+    assert type(error.value.__cause__) is MemoryError
+    with pytest.raises(GeometryError, match='thread planning failed') as error:
+        pt.plan_with_threads(lambda: pt.ThreadStages(2).run('face', _two(), task), lambda: pytest.fail('serial repeat'))
+    assert type(error.value.__cause__) is MemoryError
 
 
 def test_task_failures_and_results_are_unchanged():

@@ -182,10 +182,12 @@ def test_first_failure_in_task_order_wins_and_later_counters_are_dropped():
     assert str(error.value) == 'intersection batch face:3/face:103: refused 3'
     assert isinstance(error.value.__cause__, GeometryError)
     assert counters['ran'] == 4 and records['rows'] == [0, 1, 2, 3]
-    # A foreign exception is passed through unwrapped, as the serial loop does.
-    with pytest.raises(ValueError, match='not a geometry refusal'):
+    # A foreign exception of a task is not a geometry refusal. The serial loop passes it through unwrapped; the
+    # route (owner decision after Codex round 12) answers with a typed refusal that carries it as the cause.
+    with pytest.raises(GeometryError, match='thread planning failed outside a geometry refusal') as error:
         stages.run('face', [dict(kind='face', face=i, cost=1.) for i in range(4, 8)],
                    lambda item, check: task(dict(first=item['face']), check))
+    assert type(error.value.__cause__) is ValueError and str(error.value.__cause__) == 'not a geometry refusal'
 
 
 def test_results_and_published_counters_follow_task_order():

@@ -156,24 +156,26 @@ def test_recorded_interrupt_survives_a_failing_context_reset(fatal, monkeypatch)
     assert seen == dict(reset=True)
 
 
-def test_failing_context_reset_alone_is_ordinary(monkeypatch):
+def test_failing_context_reset_alone_is_a_typed_refusal(monkeypatch):
+    # (Owner decision after round 12: only a plain refusal is repeated serially; this is a typed refusal now.)
     seen = {}
     _failing_reset(monkeypatch, seen)
 
     def task(item, check=None):
         raise GeometryError('ordinary refusal')
-    assert pt.plan_with_threads(lambda: pt.ThreadStages(2).run('face', _two(), task), _serial(seen)) == 'serial'
-    assert seen == dict(reset=True, serial=True)
-    seen.clear()                                      # also after a successful attempt: discarded, repeated serially
-    assert pt.plan_with_threads(lambda: pt.ThreadStages(2).run('face', _two(), _fine), _serial(seen)) == 'serial'
-    assert seen == dict(reset=True, serial=True)
+    for stage_task in (task, _fine):                  # after a refusing attempt and after a successful one
+        seen.clear()
+        with pytest.raises(GeometryError, match='thread planning failed') as error:
+            pt.plan_with_threads(lambda: pt.ThreadStages(2).run('face', _two(), stage_task), _serial(seen))
+        assert type(error.value.__cause__) is MemoryError and seen == dict(reset=True)
 
 
 def test_an_attempt_left_in_the_context_by_a_failed_reset_is_not_used_again(monkeypatch):     # FAILS-ON-OLD
     seen = {}
     real = _failing_reset(monkeypatch, seen, really_reset=False)
     try:
-        assert pt.plan_with_threads(lambda: pt.ThreadStages(2).run('face', _two(), _fine), _serial(seen)) == 'serial'
+        with pytest.raises(GeometryError, match='thread planning failed'):      # the reset failed: typed refusal
+            pt.plan_with_threads(lambda: pt.ThreadStages(2).run('face', _two(), _fine), _serial(seen))
         stale = real.get()
         assert stale is not None and stale.closed
         before = len(stale.worker_slots)

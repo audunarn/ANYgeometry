@@ -151,15 +151,30 @@ def test_crew_notes_a_join_interrupt_before_anything_else(monkeypatch):         
 
 
 def test_registry_is_keyed_by_crew_and_slot():                                               # FAILS-ON-OLD
-    crew = pt._Crew(2, lambda: None, threading.Event())
+    # Both workers are alive at the same time (barrier), so their idents are distinct by construction - the test
+    # does not rely on scheduling (round 12: two trivial workers could run one after the other and reuse an ident).
+    barrier, release = threading.Barrier(2, timeout=30), threading.Event()
+
+    def work():
+        barrier.wait()
+        release.wait(30)
+    crew = pt._Crew(2, work, threading.Event())
     crew.start()
+    try:
+        deadline = 300
+        while (None in crew.entered or not all(ident in pt._WORKERS for ident in crew.entered)) and deadline:
+            threading.Event().wait(.01)
+            deadline -= 1
+        first, second = crew.entered
+        assert first != second and all(thread.is_alive() for thread in crew.threads)
+        assert pt._WORKERS[first] is crew.keys[0] and pt._WORKERS[second] is crew.keys[1]
+        assert crew.keys[0] == (crew, 0) and crew.keys[0] is not crew.keys[1]
+    finally:
+        release.set()
     pt.wait(crew)
-    first, second = crew.entered
-    assert pt._WORKERS[first] is crew.keys[0] and pt._WORKERS[second] is crew.keys[1]
-    assert crew.keys[0] == (crew, 0) and crew.keys[0] is not crew.keys[1]
     # As if the first thread's ident had been reused by the (not yet joined) thread of the second slot.
     pt._WORKERS[first] = crew.keys[1]
-    crew.joined[0] = True                             # only the first slot is joined
+    crew.joined[0] = True                             # only the first slot counts as joined
     crew.attempted[1] = False                         # (keep shutdown from joining the second slot here)
     try:
         crew.shutdown()
@@ -204,6 +219,9 @@ def test_ident_is_published_before_the_registry_entry(monkeypatch):
     crew.shutdown()
     assert crew.entered[0] is not None and crew.entered[0] not in pt._WORKERS
     assert type(crew.machinery[0]) is MemoryError and crew.done == [True] and crew.accounted() and stopped.is_set()
-    with pytest.raises(MemoryError):
+    # (Owner decision after round 12: a machinery failure is a typed refusal, not a serial repeat.)
+    with pytest.raises(GeometryError, match='thread planning failed') as error:
         pt.ThreadStages(1).run('face', _two()[:1], _fine)
-    assert pt.plan_with_threads(lambda: pt.ThreadStages(1).run('face', _two()[:1], _fine), lambda: 'serial') == 'serial'
+    assert type(error.value.__cause__) is MemoryError
+    with pytest.raises(GeometryError, match='thread planning failed'):
+        pt.plan_with_threads(lambda: pt.ThreadStages(1).run('face', _two()[:1], _fine), lambda: pytest.fail('serial'))

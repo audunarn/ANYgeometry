@@ -260,17 +260,26 @@ def test_interrupt_with_a_hostile_class_anywhere_in_a_stage_is_still_an_interrup
 
 
 def test_ordinary_exception_with_a_hostile_class_is_still_ordinary():                      # FAILS-ON-OLD
+    # Not an interrupt: it is never re-raised as one. (Owner decision after round 12: an ordinary exception that
+    # is not a geometry refusal gives the typed refusal with the exception as its cause, not the serial repeat.)
     seen = {}
 
     def threaded():
         raise HostileOrdinary('refused')
-    assert _outcome(lambda: pt.plan_with_threads(threaded, _serial(seen))) == ('returned', 'serial')
+
+    def refused(call):
+        try:
+            call()
+        except BaseException as exc:
+            return type(exc), type(exc.__cause__)
+    assert refused(lambda: pt.plan_with_threads(threaded, _serial(seen))) == (GeometryError, HostileOrdinary)
 
     def task(item, check=None):
         raise HostileOrdinary('refused')
-    assert _outcome(lambda: pt.ThreadStages(2).run('face', _two(), task)) == ('raised', HostileOrdinary, ('refused',))
-    assert _outcome(lambda: pt.plan_with_threads(lambda: pt.ThreadStages(2).run('face', _two(), task),
-                                                 _serial(seen))) == ('returned', 'serial')
+    assert refused(lambda: pt.ThreadStages(2).run('face', _two(), task)) == (GeometryError, HostileOrdinary)
+    assert refused(lambda: pt.plan_with_threads(lambda: pt.ThreadStages(2).run('face', _two(), task),
+                                                _serial(seen))) == (GeometryError, HostileOrdinary)
+    assert seen == {}
 
 
 def test_the_module_never_uses_isinstance_on_a_caught_exception():

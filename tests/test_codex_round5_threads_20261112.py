@@ -194,7 +194,7 @@ def test_attempts_do_not_leak_into_each_other():
     with pytest.raises(SystemExit):
         pt.plan_with_threads(lambda: pt.ThreadStages(2).run('face', _two(), task), lambda: 'serial')
     assert pt._ATTEMPT.get() is None
-    assert pt.plan_with_threads(lambda: (_ for _ in ()).throw(RuntimeError('x')), lambda: 'serial') == 'serial'
+    assert pt.plan_with_threads(lambda: (_ for _ in ()).throw(GeometryError('x')), lambda: 'serial') == 'serial'
 
 
 # ---- the four test limits named in round 5 ----
