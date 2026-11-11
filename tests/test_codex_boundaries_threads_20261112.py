@@ -234,28 +234,49 @@ def test_diagnostics_of_normalisation_are_published_in_the_serial_order(monkeypa
 
 # ---- 3. plane_split._PLANS is not reachable from a stage task ----
 
+_STORE_FUNCTIONS = frozenset(('plan_plane_split', 'apply_plane_split', '_plan_plane_split'))
+
+
+def plan_store_uses(tree):
+    """What in a module could reach ``plane_split._PLANS``: an attribute ``._PLANS`` on anything, the store
+    or ``*`` imported from plane_split, the plane_split module object bound by an import or looked up by
+    name, or one of the functions that use the store. A module's own global called ``_PLANS`` is not one."""
+    found = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr == '_PLANS':
+            found.add('attribute _PLANS')
+        if isinstance(node, (ast.Name, ast.Attribute)) and getattr(node, 'id', getattr(node, 'attr', None)) in _STORE_FUNCTIONS:
+            found.add(getattr(node, 'id', getattr(node, 'attr', None)))
+        if isinstance(node, ast.ImportFrom):
+            from_split = (node.module or '').split('.')[-1] == 'plane_split'
+            for alias in node.names:
+                if from_split and (alias.name in ('_PLANS', '*') or alias.name in _STORE_FUNCTIONS):
+                    found.add(f'import {alias.name}')
+                if not from_split and alias.name == 'plane_split':
+                    found.add('module plane_split')
+        if isinstance(node, ast.Import) and any(alias.name.split('.')[-1] == 'plane_split' for alias in node.names):
+            found.add('module plane_split')
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and (
+                node.value == '_PLANS' or node.value.split('.')[-1] == 'plane_split'):
+            found.add(f'string {node.value}')
+    return sorted(found)
+
+
 def test_plane_split_plan_store_is_reached_only_through_the_public_split_entries():
-    """Static proof: inside the package only plane_split itself names the store or the functions that
-    use it, and __init__ only re-exports them. A planner task therefore has no call path to the store."""
+    """Static proof: inside the package only plane_split itself can reach the store, and __init__ only
+    re-exports the two public functions without calling them. A planner task has no path to the store."""
     root = Path(anygeometry.__file__).parent
     users = {}
     for path in sorted(root.rglob('*.py')):
-        tree = ast.parse(path.read_text(encoding='utf-8'))
-        nodes = list(ast.walk(tree))
-        names = {node.id for node in nodes if isinstance(node, ast.Name)}
-        names |= {node.attr for node in nodes if isinstance(node, ast.Attribute)}
-        names |= {alias.name for node in nodes if isinstance(node, ast.ImportFrom) for alias in node.names}
-        hit = names & {'plan_plane_split', 'apply_plane_split', '_plan_plane_split'}
-        imports_store = any(isinstance(node, ast.ImportFrom) and (node.module or '').endswith('plane_split')
-                            and any(alias.name in ('_PLANS', '*') for alias in node.names) for node in nodes)
-        if hit or imports_store:
-            users[path.relative_to(root).as_posix()] = (sorted(hit), imports_store)
+        uses = plan_store_uses(ast.parse(path.read_text(encoding='utf-8')))
+        if uses:
+            users[path.relative_to(root).as_posix()] = uses
     assert sorted(users) == ['__init__.py', 'plane_split.py'], users
-    assert users['__init__.py'] == (['apply_plane_split', 'plan_plane_split'], False)
+    assert users['__init__.py'] == ['import apply_plane_split', 'import plan_plane_split'], users
     init = ast.parse((root / '__init__.py').read_text(encoding='utf-8'))
     calls = {getattr(node.func, 'id', getattr(node.func, 'attr', None))
              for node in ast.walk(init) if isinstance(node, ast.Call)}
-    assert not calls & {'plan_plane_split', 'apply_plane_split'}
+    assert not calls & _STORE_FUNCTIONS
 
 
 def test_thread_stages_never_touch_the_plane_split_plan_store(monkeypatch):
