@@ -48,6 +48,12 @@ Contract (see thread-design-note.md in the programme work folder):
   stage or a planning call inside a task, a boundary inside a boundary) cannot turn it into a serial repeat.
   The texts of these refusals are built only from literals and from a class name that is checked to be an
   exact ``str``; building them cannot raise.
+  The class itself lives in ``batch_intersections`` (``_ThreadRouteFailure``), so that the refusal "the route
+  could not be loaded" carries the same provenance although this module is not there to define it.
+  Every statement of the route is inside a handler that turns an ordinary exception into such a refusal:
+  the reads of the switches (also the two in ``batch_intersections``), ``route``'s own preparation, the
+  eligibility test, and the entry of a stage with its guards. Only ``plan(None)`` - the serial route - is
+  called outside one, so that serial planning raises what it raises without the switch.
 * The planner hands the stage its ordinary task list and its own serial task function through the
   existing ``_stages`` hook; this module only decides WHERE each task runs. Results are returned in
   task order, so everything assembled from them is assembled in the serial order.
@@ -150,6 +156,9 @@ from .curves import Arc, Straight
 from .exact_curves import CylinderIntersectionCurve, EllipticArc
 from .material_arrangement import ArrangementPath, ArrangementPoint, MaterialDomain
 from .surfaces import Cylinder, Plane
+# The provenance class of the route's own refusals. It is defined by the dispatching module, which exists before
+# this module is loaded, so that a refusal to load this module has the same class.
+from .batch_intersections import _ThreadRouteFailure as _RouteFailure
 
 THREADS_ENVIRONMENT = 'ANYGEOMETRY_PLANNING_THREADS'
 PROCESS_ENVIRONMENT = 'ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING'
@@ -188,15 +197,20 @@ _PHASES = {'pair': 'intersection_support_and_clipping', 'face': 'intersection_ar
 
 def requested_threads():
     """The thread count asked for by the environment; 0 means the serial route."""
-    raw = os.environ.get(THREADS_ENVIRONMENT)
-    if raw is None or raw in ('', '0'):
-        return 0
-    # Canonical spelling only ('1' .. '8'): no sign, padding, leading zero or other digit alphabet.
-    if raw not in _THREAD_COUNTS:
-        shown = repr(raw) if len(raw) <= 16 else repr(raw[:16]) + f'... ({len(raw)} characters)'
-        raise _RouteFailure(
-            f"{THREADS_ENVIRONMENT}={shown} is not supported (0 or unset: serial; 1..{MAX_THREADS}: threads)")
-    return _THREAD_COUNTS[raw]
+    try:
+        raw = os.environ.get(THREADS_ENVIRONMENT)
+        if raw is None or raw in ('', '0'):
+            return 0
+        # Canonical spelling only ('1' .. '8'): no sign, padding, leading zero or other digit alphabet.
+        if raw not in _THREAD_COUNTS:
+            shown = repr(raw) if len(raw) <= 16 else repr(raw[:16]) + f'... ({len(raw)} characters)'
+            raise _RouteFailure(
+                f"{THREADS_ENVIRONMENT}={shown} is not supported (0 or unset: serial; 1..{MAX_THREADS}: threads)")
+        return _THREAD_COUNTS[raw]
+    except _RouteFailure:
+        raise
+    except Exception as exc:
+        raise _refusal("the thread planning switch could not be read (" + _type_name(exc) + ")", exc)
 
 
 _THREAD_COUNTS = {str(count): count for count in range(1, MAX_THREADS + 1)}
@@ -205,8 +219,13 @@ _THREAD_COUNTS = {str(count): count for count in range(1, MAX_THREADS + 1)}
 def validate_switches():
     """Typed refusal of an unsupported thread switch or of both parallel switches; called once per public
     planning call before any route (existing-material, bounded, process, thread, serial) is chosen."""
-    if requested_threads() and os.environ.get(PROCESS_ENVIRONMENT) == '1':
-        raise _RouteFailure(f"{THREADS_ENVIRONMENT} and {PROCESS_ENVIRONMENT} are mutually exclusive")
+    threads = requested_threads()
+    try:
+        both = bool(threads) and os.environ.get(PROCESS_ENVIRONMENT) == '1'
+    except Exception as exc:
+        raise _refusal("the parallel planning switches could not be read (" + _type_name(exc) + ")", exc)
+    if both:
+        raise _RouteFailure(THREADS_ENVIRONMENT + " and " + PROCESS_ENVIRONMENT + " are mutually exclusive")
 
 
 def _scope_active():
@@ -227,18 +246,30 @@ def _audited_model(model):
             and all(type(edge.curve) in _AUDITED_EDGE_CURVES for edge in model.edges.values()))
 
 
-class _RouteFailure(GeometryError):
-    """A refusal raised by the thread route itself (never by geometry): typed for the caller, and never a plain
-    refusal for any boundary, so it cannot lead to a serial repeat."""
-
-
 def route(model, policy, mode, native, plan):
     """The single entry of the route at the dispatch: ``plan(stages)`` threaded where the call is eligible,
-    ``plan(None)`` - the unchanged serial call - where it is not, or after a plain refusal of the attempt."""
-    stages = thread_stages(model, policy, mode, native)
+    ``plan(None)`` - the unchanged serial call - where it is not, or after a plain refusal of the attempt.
+
+    Everything the route does before it plans is inside the handler; ``plan(None)`` is called outside it, so the
+    serial route raises exactly what it raises without the switch.
+    """
+    try:
+        stages = thread_stages(model, policy, mode, native)
+        threaded = serial = None
+        if stages is not None:
+            def threaded():
+                return plan(stages)
+
+            def serial():
+                return plan(None)
+    except _RouteFailure:
+        raise
+    except Exception as exc:
+        raise _refusal("thread planning could not be prepared (" + _type_name(exc) + "); unset "
+                       + THREADS_ENVIRONMENT + " to plan on the serial route", exc)
     if stages is None:
         return plan(None)
-    return plan_with_threads(lambda: plan(stages), lambda: plan(None))
+    return plan_with_threads(threaded, serial)
 
 
 def thread_stages(model, policy, mode, native):
@@ -559,24 +590,31 @@ class ThreadStages:
             raise _refusal("thread planning stage could not admit its face inputs (" + _type_name(exc) + ")", exc)
 
     def run(self, kind, tasks, serial):
-        if threading.get_ident() != self._owner:
-            raise _RouteFailure("thread planning stage entered from a foreign thread")
-        if _inside_task():
-            # Before any thread exists: a nested stage would have workers that the outer verdict cannot see.
-            raise _RouteFailure("thread planning stage inside a task of another stage is not supported")
+        # The entry of a stage - its guards, reading the task list, finding the attempt record - is the route's
+        # own code: whatever fails here is a route failure, never a refusal of geometry.
         try:
-            tasks = list(tasks)
-        except Exception as exc:         # reading the task list is the route's own step, not a task
-            raise _refusal("thread planning stage could not read its tasks (" + _type_name(exc) + ")", exc)
+            if threading.get_ident() != self._owner:
+                raise _RouteFailure("thread planning stage entered from a foreign thread")
+            if _inside_task():
+                # Before any thread exists: a nested stage would have workers that the outer verdict cannot see.
+                raise _RouteFailure("thread planning stage inside a task of another stage is not supported")
+            try:
+                tasks = list(tasks)
+            except Exception as exc:     # reading the task list is the route's own step, not a task
+                raise _refusal("thread planning stage could not read its tasks (" + _type_name(exc) + ")", exc)
+            attempt = _ATTEMPT.get()
+            # The boundary's attempt is used only by the thread that owns it and only while it is open; a stage
+            # called on its own, from another thread or after the boundary has left gets a record of its own
+            # and applies the same rule here.
+            own = attempt is None or attempt.closed or attempt.owner != threading.get_ident()
+            if own:
+                attempt = _Attempt()
+        except _RouteFailure:
+            raise
+        except Exception as exc:
+            raise _refusal("thread planning stage could not be entered (" + _type_name(exc) + ")", exc)
         if not tasks:
             return []
-        attempt = _ATTEMPT.get()
-        # The boundary's attempt is used only by the thread that owns it and only while it is open; a stage
-        # called on its own, from another thread or after the boundary has left gets a record of its own and
-        # applies the same rule here.
-        own = attempt is None or attempt.closed or attempt.owner != threading.get_ident()
-        if own:
-            attempt = _Attempt()
         try:
             return self._run(kind, tasks, serial, attempt)
         except BaseException as exc:

@@ -1346,6 +1346,20 @@ def _pair_paths_exact(first, second, model, tolerance, check, *, point_contacts=
     return curves
 
 
+class _ThreadRouteFailure(GeometryError):
+    """A refusal raised by the opt-in thread route itself (never by geometry): typed for the caller, and never a
+    plain refusal for any boundary of the route, so it cannot lead to a serial repeat. Defined here, not in the
+    route module, so that "the route could not be loaded" carries the same provenance."""
+
+
+def _thread_switch_set():
+    """Whether the opt-in thread route is asked for (``ANYGEOMETRY_PLANNING_THREADS`` neither unset, empty nor 0)."""
+    try:
+        return os.environ.get('ANYGEOMETRY_PLANNING_THREADS') not in (None, '', '0')
+    except Exception as exc:
+        raise _ThreadRouteFailure("the thread planning switch (ANYGEOMETRY_PLANNING_THREADS) could not be read") from exc
+
+
 def _thread_route(name):
     """A function of the opt-in thread route (``ANYGEOMETRY_PLANNING_THREADS``). The route module is loaded here
     and nowhere else, so that a failure to load it is a typed refusal instead of a raw import error."""
@@ -1353,8 +1367,8 @@ def _thread_route(name):
         from importlib import import_module
         return getattr(import_module('._planning_threads', __package__), name)
     except Exception as exc:
-        raise GeometryError("the thread planning route (ANYGEOMETRY_PLANNING_THREADS) could not be loaded; "
-                            "unset the switch to plan on the serial route") from exc
+        raise _ThreadRouteFailure("the thread planning route (ANYGEOMETRY_PLANNING_THREADS) could not be loaded; "
+                                  "unset the switch to plan on the serial route") from exc
 
 
 def plan_intersections(model, operands, *, policy, _parallel_control=None):
@@ -1362,7 +1376,7 @@ def plan_intersections(model, operands, *, policy, _parallel_control=None):
     from .preparation_epochs import _epoch_plan_required,_issue_native_plan
     from .native_support_snapshots import capture_native_supports
     operands = tuple(operands)
-    if os.environ.get('ANYGEOMETRY_PLANNING_THREADS') not in (None, '', '0'):
+    if _thread_switch_set():
         # The thread switch is validated here, before any route is chosen, so an unsupported value or both
         # parallel switches refuse identically on the existing-material, bounded and general routes.
         _thread_route('validate_switches')()
@@ -1403,7 +1417,7 @@ def plan_intersections(model, operands, *, policy, _parallel_control=None):
                 preparation=lambda:dict(operands=[list(h.key) for h in handles],seam=seam,
                     policy={name:(effective.intent.value if name=='intent' else getattr(effective,name))
                         for name in ('intent','face_connections','member_connections','member_face_connections','planning_mode','seam_policy')}))
-        elif os.environ.get('ANYGEOMETRY_PLANNING_THREADS') not in (None, '', '0'):
+        elif _thread_switch_set():
             # Opt-in in-process thread dispatch of the pair and face stages (prototype). The route decides
             # everything inside its one boundary: planning stays on the serial call (stages None) whenever
             # the call is not eligible; a threaded attempt that ends with a plain geometry refusal is
