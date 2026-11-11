@@ -49,6 +49,13 @@ Contract (see thread-design-note.md in the programme work folder):
   primitive at the very moment of an interrupt can mask it only where the interrupt was never observed (for
   example inside ``shutdown`` before any Python statement of this module runs); that is outside the contract,
   as it is on the serial route.
+  How the rule is kept complete: every ``except`` of this module that can hold an interrupt records it in the
+  attempt as its first statement (reading the futures, whatever leaves a stage, whatever leaves the threaded
+  attempt, the cleanup), so an interrupt that a caller swallowed or that a later ordinary failure replaced
+  still decides. The attempt record belongs to the thread that created it: a stage run from another thread (a
+  worker of an outer stage, a thread that inherited the context) keeps a record and a verdict of its own, so
+  the ``running`` state seen by the boundary is written by one thread only. The context reset is inside the
+  region whose ordinary failures go to the verdict, and a closed attempt is never used again.
 * Inside a stage that ends normally the dispatcher still raises in this order: lowest-index worker interrupt,
   interrupt of the dispatching thread, ordinary machinery failure (lowest task index), lowest-index task
   failure with the serial wrapping.
@@ -157,16 +164,22 @@ def thread_stages(model, policy, mode, native):
 
 
 class _Attempt:
-    """What the stages of one threaded attempt observed; the single owner of the interrupt rule (``verdict``)."""
-    __slots__ = ('worker_slots', 'dispatcher', 'running')
+    """What the stages of one threaded attempt observed; the single owner of the interrupt rule (``verdict``).
+
+    Written by its owner thread only (``note``, ``running``, ``closed``), except the per-task interrupt slots
+    of a stage, each of which is written by the one worker that runs that task.
+    """
+    __slots__ = ('owner', 'worker_slots', 'dispatcher', 'running', 'closed')
 
     def __init__(self):
+        self.owner = threading.get_ident()
         self.worker_slots = []     # per stage: the list of worker interrupts by task index (None = none)
-        self.dispatcher = None     # the first interrupt met by the dispatching thread itself
-        self.running = False       # True from the first submit until pool.shutdown(wait=True) has returned
+        self.dispatcher = None     # the first interrupt met by the owner thread itself
+        self.running = 0           # stages of the owner between their first submit and the return of shutdown
+        self.closed = False        # set when the boundary has left the attempt; a closed attempt is not reused
 
     def note(self, exc):
-        """Remember an interrupt of the dispatching thread (no allocation; ordinary exceptions are not kept)."""
+        """Remember an interrupt met by the owner thread (no allocation; ordinary exceptions are not kept)."""
         if self.dispatcher is None and not isinstance(exc, Exception):
             self.dispatcher = exc
 
@@ -205,14 +218,20 @@ def plan_with_threads(threaded, serial):
     """
     start = perf_counter_ns()
     attempt, failure, plan = _Attempt(), None, None
-    token = _ATTEMPT.set(attempt)
     try:
-        with _diagnostics._planning_transaction() as collected:
-            plan = threaded()
-    except Exception as exc:
+        token = _ATTEMPT.set(attempt)
+        try:
+            try:
+                with _diagnostics._planning_transaction() as collected:
+                    plan = threaded()
+            except BaseException as exc:
+                attempt.note(exc)        # whatever leaves the attempt, before the cleanup below can replace it
+                raise
+        finally:
+            attempt.closed = True
+            _ATTEMPT.reset(token)
+    except Exception as exc:             # also an ordinary failure of the context set / reset itself
         failure = exc
-    finally:
-        _ATTEMPT.reset(token)
     if failure is None:
         _diagnostics._publish_planning(collected)
         return plan
@@ -275,14 +294,21 @@ class ThreadStages:
         if not tasks:
             return []
         attempt = _ATTEMPT.get()
-        if attempt is not None:                      # inside plan_with_threads: the boundary applies the rule
-            return self._run(kind, tasks, serial, attempt)
-        attempt = _Attempt()                         # called on its own: the same rule, applied here
+        # The boundary's attempt is used only by the thread that owns it and only while it is open; a stage
+        # called on its own, from another thread or after the boundary has left gets a record of its own and
+        # applies the same rule here.
+        own = attempt is None or attempt.closed or attempt.owner != threading.get_ident()
+        if own:
+            attempt = _Attempt()
         try:
             return self._run(kind, tasks, serial, attempt)
-        except Exception as failure:
-            caught, instead = failure, attempt.verdict(failure)
-        raise instead if instead is not None else caught
+        except BaseException as exc:
+            attempt.note(exc)                # whatever leaves a stage is recorded, also if a caller swallows it
+            if not own or not isinstance(exc, Exception):
+                raise
+            failure = exc
+        instead = attempt.verdict(failure)
+        raise instead if instead is not None else failure
 
     def _run(self, kind, tasks, serial, attempt):
         phase = _PHASES[kind]
@@ -343,7 +369,7 @@ class ThreadStages:
         pool = ThreadPoolExecutor(max_workers=min(self.threads, count), thread_name_prefix='anygeometry-plan')
         held = None              # what the dispatching thread itself met; judged after the workers have drained
         futures = []
-        attempt.running = True
+        attempt.running += 1
         try:
             try:
                 for index in order:
@@ -355,7 +381,7 @@ class ThreadStages:
                 stopped.set()
             finally:
                 pool.shutdown(wait=True)
-                attempt.running = False  # only now are all workers known to have finished
+                attempt.running -= 1     # only now are all workers of this stage known to have finished
         except BaseException as exc:     # the cleanup itself failed or was interrupted: verdict decides
             attempt.note(exc)
             raise
@@ -363,6 +389,7 @@ class ThreadStages:
             try:
                 future.result()
             except BaseException as exc:
+                attempt.note(exc)
                 if held is None or (isinstance(held, Exception) and not isinstance(exc, Exception)):
                     held = exc
         for exc in interrupts:   # 1. the lowest-index interrupt of a worker
