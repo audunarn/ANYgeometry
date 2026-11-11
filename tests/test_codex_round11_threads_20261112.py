@@ -125,7 +125,7 @@ def test_every_handler_that_can_hold_an_interrupt_records_it_first():
     for node in ast.walk(tree):
         if isinstance(node, ast.ExceptHandler) and node.type is not None:
             assert isinstance(node.type, ast.Name) and node.type.id in ('BaseException', 'Exception', '_Abandoned',
-                                                                        '_NotAudited')
+                                                                        '_NotAudited', '_RouteFailure')
 
 
 def test_crew_notes_a_join_interrupt_before_anything_else(monkeypatch):                     # FAILS-ON-OLD
