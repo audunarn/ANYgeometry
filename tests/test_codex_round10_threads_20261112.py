@@ -86,7 +86,7 @@ def test_a_crew_never_removes_an_entry_that_names_another_owner():              
     crew.start()
     pt.wait(crew)
     idents = list(crew.entered)
-    assert all(pt._WORKERS[ident] is crew for ident in idents) and all(crew.done)
+    assert all(pt._WORKERS[ident][0] is crew for ident in idents) and all(crew.done)   # (crew, slot) since round 11
     other = object()                                  # a later thread of another stage reused the first ident
     pt._WORKERS[idents[0]] = other
     try:
@@ -103,7 +103,7 @@ def test_concurrent_dispatchers_keep_their_own_markers_and_leave_none():        
     errors, rounds = [], 40
 
     def task(item, check=None):
-        if not isinstance(pt._WORKERS.get(threading.get_ident()), pt._Crew):
+        if not isinstance((pt._WORKERS.get(threading.get_ident()) or (None,))[0], pt._Crew):
             errors.append('worker not registered')
         return item['face']
 
@@ -265,7 +265,7 @@ def test_crew_state_machine():                                                  
     assert crew.attempted == [True] * 3
     pt.wait(crew)
     assert crew.done == [True] * 3 and crew.joined == [False] * 3 and not crew.accounted()   # started, not joined
-    assert sorted(crew.entered) == sorted(ran) and all(pt._WORKERS[ident] is crew for ident in crew.entered)
+    assert sorted(crew.entered) == sorted(ran) and all(pt._WORKERS[ident][0] is crew for ident in crew.entered)
     crew.shutdown()
     assert crew.joined == [True] * 3 and crew.accounted() and not set(crew.entered) & set(pt._WORKERS)
     crew.shutdown()                                   # idempotent
