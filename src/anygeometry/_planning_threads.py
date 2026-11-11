@@ -62,16 +62,26 @@ Contract (see thread-design-note.md in the programme work folder):
   its ``done`` flag as its last. A stage counts as finished (``attempt.running`` goes down, the serial repeat
   becomes possible) only if the crew is ACCOUNTED: every thread whose start was attempted was joined by the
   dispatcher AND reached its last statement. A ``start()`` that raised, a join that raised, a thread that died
-  before its first or after its last statement of ours: each leaves the crew unaccounted, the stage raises, and
+  before its first statement of ours or before its last: each leaves the crew unaccounted, the stage raises, and
   the verdict gives a typed ``GeometryError`` (or an observed interrupt), never the serial repeat.
+  Limit: what happens in a worker thread AFTER its last statement of this module - the return event of its main
+  function and the frames of ``threading`` below it, where a trace or profile hook could still raise - is seen
+  by no statement of this module. Such a thread is still joined before the stage counts as finished, so nothing
+  of it runs beside a serial repeat; but an exception a hook raises there, an interrupt included, is not
+  observed and is outside the interrupt rule (as the owner's limit says: the rule holds as far as a statement
+  of this module observed the interrupt).
+* Every handler of this module that can hold an interrupt records it as its FIRST statement - in the attempt
+  (``note``) or in a preallocated slot of the worker - before it does anything else, the crew's own join loop
+  included (source rule in the tests).
 * No stage inside a worker of the route: a stage asked to run there refuses with a typed ``GeometryError``
   before it creates a thread, and a planning call there is not eligible for the thread route. Every worker of
   the route therefore belongs to the record whose verdict decides, and "workers may still run" cannot be lost in
   a task failure. "There" is decided by three markers (``_inside_task``):
-  (a) the worker's OS thread ident in the module registry ``_WORKERS`` (ident -> owning crew): the thread adds
-  itself as its first statement, inside the handler that records its failures; only the dispatcher of the SAME
-  crew removes the entry, under the registry lock, after it has joined that thread, and only while the entry
-  still names its crew - so one stage's cleanup cannot erase the marker of a later thread that reuses the ident.
+  (a) the worker's OS thread ident in the module registry ``_WORKERS`` (ident -> the key of its crew slot): the
+  thread adds itself as its first statements, inside the handler that records its failures; only the dispatcher
+  of the SAME crew removes the entry, under the registry lock, after it has joined that thread, and only while
+  the entry still is the key of that very slot - so no cleanup can erase the marker of a later thread that
+  reuses the ident, in another stage or in another slot of the same crew.
   It holds from the thread's first statement until the thread is really gone, including finalizers of
   thread-local objects during the teardown of the thread state, and reads no ``threading`` registration, thread
   name or context. A thread that was not joined stays registered;
@@ -256,9 +266,10 @@ _IN_TASK = contextvars.ContextVar('anygeometry_planning_thread_task', default=Fa
 _WORKER_PREFIX = 'anygeometry-plan'
 
 
-# The worker threads of the route that may still run Python code: OS thread ident -> the crew that owns the
-# thread. Written by the thread itself as its first statement, removed only by the dispatcher of that crew after
-# it has joined the thread. Every change is made under the lock, so a removal cannot hit a later owner.
+# The worker threads of the route that may still run Python code: OS thread ident -> the key (crew, slot) of the
+# crew slot that owns the thread. Written by the thread itself as its first statements, removed only by the
+# dispatcher of that crew after it has joined that thread. Every change is made under the lock and a removal
+# compares the key by identity, so it cannot hit a later owner of a reused ident.
 _WORKERS = {}
 _WORKERS_LOCK = threading.Lock()
 
@@ -272,8 +283,10 @@ class _Crew:
     outside a task. All lists are preallocated; a slot is written by one thread only.
     """
 
-    def __init__(self, size, work, stopped):
+    def __init__(self, size, work, stopped, note=None):
         self.work, self.stopped = work, stopped
+        self.note = _no_note if note is None else note       # where the dispatcher's own interrupts are recorded
+        self.keys = [(self, slot) for slot in range(size)]    # registry values, compared by identity
         self.attempted = [False] * size
         self.entered = [None] * size
         self.done = [False] * size
@@ -281,15 +294,16 @@ class _Crew:
         self.interrupts = [None] * size
         self.machinery = [None] * size
         # Every thread object exists, named, before any of them runs.
-        self.threads = [threading.Thread(target=self._main, args=(slot,), name=f'{_WORKER_PREFIX}_{slot}')
-                        for slot in range(size)]
+        # Not daemon threads, whatever the dispatcher is: like the executor's workers they are always joined.
+        self.threads = [threading.Thread(target=self._main, args=(slot,), name=f'{_WORKER_PREFIX}_{slot}',
+                                         daemon=False) for slot in range(size)]
 
     def _main(self, slot):
         try:
             ident = threading.get_ident()
+            self.entered[slot] = ident       # published first, so that the entry below can always be removed
             with _WORKERS_LOCK:
-                _WORKERS[ident] = self       # first: from here on a stage refuses in this thread
-            self.entered[slot] = ident
+                _WORKERS[ident] = self.keys[slot]    # from here on a stage refuses in this thread
             self.work()
         except Exception as exc:
             self.machinery[slot] = exc
@@ -313,11 +327,12 @@ class _Crew:
                     thread.join()
                     self.joined[slot] = True
                 except BaseException as exc:
+                    self.note(exc)           # first: an interrupt of a join is kept whatever follows here
                     if first is None or (_ordinary(first) and not _ordinary(exc)):
                         first = exc
         with _WORKERS_LOCK:
             for slot, ident in enumerate(self.entered):
-                if ident is not None and self.joined[slot] and _WORKERS.get(ident) is self:
+                if ident is not None and self.joined[slot] and _WORKERS.get(ident) is self.keys[slot]:
                     del _WORKERS[ident]
         if first is not None:
             raise first
@@ -328,6 +343,10 @@ class _Crew:
             if attempted and not (self.joined[slot] and self.done[slot]):
                 return False
         return True
+
+
+def _no_note(exc):
+    """A crew used on its own records its dispatcher's interrupts nowhere (it only re-raises them)."""
 
 
 def wait(crew):
@@ -522,7 +541,7 @@ class ThreadStages:
         order = sorted(range(count), key=lambda i: (-float(tasks[i].get('cost', 0.)), i))
         cursor = [0]
         start = perf_counter_ns()
-        crew = _Crew(min(self.threads, count), work, stopped)     # nothing runs yet
+        crew = _Crew(min(self.threads, count), work, stopped, attempt.note)     # nothing runs yet
         attempt.worker_slots.append(crew.interrupts)
         held = None              # what the dispatching thread itself met; judged after the join
         attempt.running += 1
