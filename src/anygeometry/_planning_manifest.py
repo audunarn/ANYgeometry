@@ -1322,7 +1322,7 @@ class CallableManifest:
                     sentinel=next(((owner,key) for owner,key in sentinel_names if owner in sys.modules and vars(sys.modules[owner]).get(key) is value),None)
                     if typ is object and (sentinel is not None or identity in owned_sentinels):
                         emit((path,'owner-sentinel',sentinel or owned_sentinels[identity]));continue
-                    locks=(('anygeometry.surface_capabilities','_LOCK'),('anygeometry.exact_predicates','_PI_CACHE_LOCK'),('anygeometry._canonical_curve_runtime','_LOCK'),('anygeometry.cancellation','_LOCK'))
+                    locks=(('anygeometry.surface_capabilities','_LOCK'),('anygeometry.exact_predicates','_PI_CACHE_LOCK'),('anygeometry._canonical_curve_runtime','_LOCK'),('anygeometry.cancellation','_LOCK'),('anygeometry.quadric_events','_MEMO_LOCK'),('anygeometry.quadric_supports','_FIRST_CHOICE_LOCK'))
                     lock=next(((owner,key) for owner,key in locks if owner in sys.modules and vars(sys.modules[owner]).get(key) is value),None)
                     if lock is not None:
                         import _thread
