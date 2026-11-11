@@ -56,26 +56,36 @@ Contract (see thread-design-note.md in the programme work folder):
   worker of an outer stage, a thread that inherited the context) keeps a record and a verdict of its own, so
   the ``running`` state seen by the boundary is written by one thread only. The context reset is inside the
   region whose ordinary failures go to the verdict, and a closed attempt is never used again.
+* The threads of a stage are owned by this module (``_Crew``), not by an executor: created -> started -> joined.
+  The dispatcher creates every thread object before any runs, marks a thread as possibly running BEFORE it calls
+  ``start()`` on it, and joins each one itself. A worker thread registers itself as its first statement and sets
+  its ``done`` flag as its last. A stage counts as finished (``attempt.running`` goes down, the serial repeat
+  becomes possible) only if the crew is ACCOUNTED: every thread whose start was attempted was joined by the
+  dispatcher AND reached its last statement. A ``start()`` that raised, a join that raised, a thread that died
+  before its first or after its last statement of ours: each leaves the crew unaccounted, the stage raises, and
+  the verdict gives a typed ``GeometryError`` (or an observed interrupt), never the serial repeat.
 * No stage inside a worker of the route: a stage asked to run there refuses with a typed ``GeometryError``
-  before it creates a pool, and a planning call there is not eligible for the thread route. Every worker of the
-  route therefore belongs to the record whose verdict decides, and "workers may still run" cannot be lost in a
-  task failure. "There" is decided by three markers (``_inside_task``):
-  (a) the worker's OS thread ident in the module registry ``_WORKER_IDENTS``: a pool thread adds its ident as
-  its first statement (the pool's initializer, and again first in ``execute``) and only the dispatcher removes
-  it, after ``pool.shutdown(wait=True)`` has joined the thread - so it holds for everything that runs in the
-  thread from that first statement until the thread is really gone, including finalizers of thread-local
-  objects during the teardown of the thread state, and it reads no state that the interpreter tears down
-  earlier (no ``threading`` registration, no thread name, no context). If the pool was not joined the idents
-  stay registered;
-  (b) the worker thread's name - every pool thread carries the prefix ``anygeometry-plan`` from its
-  construction, which covers the frames that run between the registration of the thread with ``threading`` and
-  marker (a): the executor's start-up code and any trace or profile hook that ``threading`` installs there;
+  before it creates a thread, and a planning call there is not eligible for the thread route. Every worker of
+  the route therefore belongs to the record whose verdict decides, and "workers may still run" cannot be lost in
+  a task failure. "There" is decided by three markers (``_inside_task``):
+  (a) the worker's OS thread ident in the module registry ``_WORKERS`` (ident -> owning crew): the thread adds
+  itself as its first statement, inside the handler that records its failures; only the dispatcher of the SAME
+  crew removes the entry, under the registry lock, after it has joined that thread, and only while the entry
+  still names its crew - so one stage's cleanup cannot erase the marker of a later thread that reuses the ident.
+  It holds from the thread's first statement until the thread is really gone, including finalizers of
+  thread-local objects during the teardown of the thread state, and reads no ``threading`` registration, thread
+  name or context. A thread that was not joined stays registered;
+  (b) the worker thread's name - every crew thread carries the prefix ``anygeometry-plan`` from its
+  construction, which covers the frames between the registration of the thread with ``threading`` and marker
+  (a), including trace or profile hooks that ``threading`` installs there;
   (c) the task context - ``_IN_TASK`` is set in the copied context before the task body is entered, which
   covers any other thread or callback that inherits or copies a task's context.
+  A thread that dies before marker (a) exists has no marker at its teardown; that is why such a thread leaves
+  the crew unaccounted (above).
   Out of contract: re-entry from a tracing or profiling hook that is NOT caught by these markers (a hook that
   runs in a worker thread before ``threading`` has registered it, for example one installed for all threads
   below ``threading``); re-entry from an object finalizer or other callback during a worker thread's teardown
-  that the ident registry cannot see (one that runs in another thread, or after the pool was joined); a worker
+  that the ident registry cannot see (one that runs in another thread, or after the thread was joined); a worker
   thread that was renamed; and deliberate bypass of the guards (calling the private ``_run``, resetting a
   marker, replacing module globals).
 * Whether an exception is an interrupt is decided on the object's real type (``_ordinary`` / ``_is``), never by
@@ -88,7 +98,6 @@ import contextvars
 import os
 import sys
 import threading
-from concurrent.futures import ThreadPoolExecutor, wait
 from time import perf_counter_ns
 
 from .errors import GeometryError
@@ -247,16 +256,84 @@ _IN_TASK = contextvars.ContextVar('anygeometry_planning_thread_task', default=Fa
 _WORKER_PREFIX = 'anygeometry-plan'
 
 
-# OS thread idents of the pool threads of the route that may still run Python code: added by the thread itself
-# as its first statement, removed only by its dispatcher after the pool has been joined.
-_WORKER_IDENTS = set()
+# The worker threads of the route that may still run Python code: OS thread ident -> the crew that owns the
+# thread. Written by the thread itself as its first statement, removed only by the dispatcher of that crew after
+# it has joined the thread. Every change is made under the lock, so a removal cannot hit a later owner.
+_WORKERS = {}
+_WORKERS_LOCK = threading.Lock()
 
 
-def _enter_worker(started):
-    """First statement of a pool thread (the pool's initializer) and of every ``execute``."""
-    ident = threading.get_ident()
-    _WORKER_IDENTS.add(ident)        # first: from here on a stage refuses in this thread
-    started.add(ident)
+class _Crew:
+    """The threads of one stage, owned by this module: created -> started -> joined.
+
+    Per thread (slot): ``attempted`` is set by the dispatcher before it calls ``start()``; ``entered`` (the ident)
+    is set by the thread after it has registered itself; ``done`` is the thread's last statement; ``joined`` is
+    set by the dispatcher when ``join()`` has returned. ``interrupts`` / ``machinery`` hold what a thread met
+    outside a task. All lists are preallocated; a slot is written by one thread only.
+    """
+
+    def __init__(self, size, work, stopped):
+        self.work, self.stopped = work, stopped
+        self.attempted = [False] * size
+        self.entered = [None] * size
+        self.done = [False] * size
+        self.joined = [False] * size
+        self.interrupts = [None] * size
+        self.machinery = [None] * size
+        # Every thread object exists, named, before any of them runs.
+        self.threads = [threading.Thread(target=self._main, args=(slot,), name=f'{_WORKER_PREFIX}_{slot}')
+                        for slot in range(size)]
+
+    def _main(self, slot):
+        try:
+            ident = threading.get_ident()
+            with _WORKERS_LOCK:
+                _WORKERS[ident] = self       # first: from here on a stage refuses in this thread
+            self.entered[slot] = ident
+            self.work()
+        except Exception as exc:
+            self.machinery[slot] = exc
+            self.stopped.set()
+        except BaseException as exc:
+            self.interrupts[slot] = exc
+            self.stopped.set()
+        self.done[slot] = True               # last: a thread that never gets here leaves the crew unaccounted
+
+    def start(self):
+        for slot, thread in enumerate(self.threads):
+            self.attempted[slot] = True      # before start(): from here on this thread may be running
+            thread.start()
+
+    def shutdown(self, wait=True):
+        """Join every thread whose start was attempted; unmark the ones that are gone. Raises what a join met."""
+        first = None
+        for slot, thread in enumerate(self.threads):
+            if self.attempted[slot] and not self.joined[slot]:
+                try:
+                    thread.join()
+                    self.joined[slot] = True
+                except BaseException as exc:
+                    if first is None or (_ordinary(first) and not _ordinary(exc)):
+                        first = exc
+        with _WORKERS_LOCK:
+            for slot, ident in enumerate(self.entered):
+                if ident is not None and self.joined[slot] and _WORKERS.get(ident) is self:
+                    del _WORKERS[ident]
+        if first is not None:
+            raise first
+
+    def accounted(self):
+        """Every thread whose start was attempted reached its last statement and was joined."""
+        for slot, attempted in enumerate(self.attempted):
+            if attempted and not (self.joined[slot] and self.done[slot]):
+                return False
+        return True
+
+
+def wait(crew):
+    """Block until every thread of the crew has ended (the dispatcher's waiting point)."""
+    for thread in crew.threads:
+        thread.join()
 
 
 def _inside_task():
@@ -265,7 +342,7 @@ def _inside_task():
     The ident test comes first: it needs nothing but the module registry, so it also answers while the thread is
     being torn down (where ``threading.current_thread()`` would invent a dummy thread).
     """
-    return (threading.get_ident() in _WORKER_IDENTS or _IN_TASK.get()
+    return (threading.get_ident() in _WORKERS or _IN_TASK.get()
             or threading.current_thread().name.startswith(_WORKER_PREFIX))
 
 
@@ -354,7 +431,7 @@ class ThreadStages:
         if threading.get_ident() != self._owner:
             raise GeometryError("thread planning stage entered from a foreign thread")
         if _inside_task():
-            # Before any pool exists: a nested stage would have workers that the outer verdict cannot see.
+            # Before any thread exists: a nested stage would have workers that the outer verdict cannot see.
             raise GeometryError("thread planning stage inside a task of another stage is not supported")
         tasks = list(tasks)
         if not tasks:
@@ -392,9 +469,8 @@ class ThreadStages:
         parent = contextvars.copy_context()
 
         def execute(index):
-            # Nothing leaves a worker: whatever happens is recorded and judged after all workers have finished.
+            # Nothing of a task leaves a worker: whatever happens is recorded and judged after the join.
             try:
-                _enter_worker(started)
                 if stopped.is_set() or index > first_failure[0]:
                     return
                 context = parent.copy()
@@ -406,6 +482,16 @@ class ThreadStages:
             except BaseException as exc:
                 interrupts[index] = exc
                 stopped.set()
+
+        def work():
+            # One crew thread: take the next task in cost order until none is left or the stage is stopped.
+            while not stopped.is_set():
+                with lock:
+                    position = cursor[0]
+                    if position >= count:
+                        return
+                    cursor[0] = position + 1
+                execute(order[position])
 
         def body(index):
             def check():
@@ -434,49 +520,42 @@ class ThreadStages:
             outcomes[index] = (value, error, dict(counters=counters, records=records))
 
         order = sorted(range(count), key=lambda i: (-float(tasks[i].get('cost', 0.)), i))
+        cursor = [0]
         start = perf_counter_ns()
-        started = set()          # idents of this stage's pool threads, for the removal after the join
-        pool = ThreadPoolExecutor(max_workers=min(self.threads, count), thread_name_prefix=_WORKER_PREFIX,
-                                  initializer=_enter_worker, initargs=(started,))
-        held = None              # what the dispatching thread itself met; judged after the workers have drained
-        futures = []
+        crew = _Crew(min(self.threads, count), work, stopped)     # nothing runs yet
+        attempt.worker_slots.append(crew.interrupts)
+        held = None              # what the dispatching thread itself met; judged after the join
         attempt.running += 1
         try:
             try:
-                for index in order:
-                    futures.append(pool.submit(execute, index))
-                wait(futures)
+                crew.start()
+                wait(crew)
             except BaseException as exc:
                 attempt.note(exc)        # first of all: an interrupt is kept whatever the cleanup below does
                 held = exc
                 stopped.set()
             finally:
-                pool.shutdown(wait=True)
-                # Joined: the pool threads are gone (their thread states are torn down), so nothing of this
-                # stage can run any more. Only now are they unmarked and the stage counted as finished.
-                for ident in tuple(started):
-                    _WORKER_IDENTS.discard(ident)
-                attempt.running -= 1
+                crew.shutdown(wait=True)
+                # The stage is finished only if every thread whose start was attempted has reached its last
+                # statement and was joined here: then nothing of this stage can run any more.
+                if crew.accounted():
+                    attempt.running -= 1
         except BaseException as exc:     # the cleanup itself failed or was interrupted: verdict decides
             attempt.note(exc)
             raise
-        for future in futures:   # execute records everything; a future carries an error only if recording failed
-            try:
-                future.result()
-            except BaseException as exc:
-                attempt.note(exc)
-                if held is None or (_ordinary(held) and not _ordinary(exc)):
-                    held = exc
-        for exc in interrupts:   # 1. the lowest-index interrupt of a worker
+        for exc in (*interrupts, *crew.interrupts):   # 1. the lowest-index interrupt of a worker
             if exc is not None:
                 raise exc
         if held is not None and not _ordinary(held):   # 2. an interrupt of the dispatching thread
             raise held
-        for exc in machinery:    # 3. an ordinary machinery failure (leads to the serial repeat)
+        for exc in (*machinery, *crew.machinery):    # 3. an ordinary machinery failure
             if exc is not None:
                 raise exc
         if held is not None:
             raise held
+        if not crew.accounted():
+            # A thread died outside our statements, or was not joined: running stays up, the verdict refuses.
+            raise RuntimeError("thread planning stage lost track of a worker thread")
         _diagnostics._increment(f'intersection_thread_{kind}_stage_time_ns', perf_counter_ns() - start)
         failed = first_failure[0]
         for index in range(min(failed + 1, count)):
