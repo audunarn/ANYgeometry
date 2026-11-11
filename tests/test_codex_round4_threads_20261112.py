@@ -221,10 +221,20 @@ def record_calls(tree):
     """(literal record keys, what the scan cannot judge) of one module: a ``_record`` call whose key is not a
     string literal, ``_record`` imported under another name, or ``_record`` used as a value (aliased, passed on).
     ``self._record`` is an object's own attribute or method (two unrelated classes have one), not the diagnostics
-    function, and is left out."""
+    function, and is left out. A module that defines a function ``_record`` of its own and does not import the
+    diagnostics one (exact_predicates: its predicate trace) uses the bare name for that function, which is left
+    out as well; a module that does both is not judged."""
     keys, unjudged, called = set(), [], set()
+    nodes = list(ast.walk(tree))
+    defines = any(isinstance(node, ast.FunctionDef) and node.name == '_record' for node in nodes)
+    imports = any(isinstance(node, ast.ImportFrom) and any(alias.name == '_record' for alias in node.names)
+                  for node in nodes)
+    if defines and imports:
+        unjudged.append('own _record and imported _record in one module')
 
     def own(node):
+        if isinstance(node, ast.Name):
+            return defines and not imports
         return isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == 'self'
     for node in ast.walk(tree):
         if (isinstance(node, ast.Call) and getattr(node.func, 'id', getattr(node.func, 'attr', None)) == '_record'
@@ -254,6 +264,8 @@ def test_record_scan_declines_what_it_cannot_judge():
     assert record_calls(ast.parse("from .runtime_diagnostics import _record\n_record('x', 1)\nd._record('y', 2)\n")) == (
         {'x', 'y'}, [])
     assert record_calls(ast.parse('self._record = snapshot()\nself._record(first)\n')) == (set(), [])
+    assert record_calls(ast.parse('def _record(a, b):\n    pass\n_record(x, y)\n')) == (set(), [])
+    assert record_calls(ast.parse('from .runtime_diagnostics import _record\ndef _record(a, b):\n    pass\n'))[1]
 
 
 def test_every_record_key_and_every_field_of_the_clocked_record_is_judged():
