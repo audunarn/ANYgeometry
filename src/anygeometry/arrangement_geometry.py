@@ -93,45 +93,72 @@ def _curve_setup_benign(curve):
 _MODERATE = 1e50
 
 
-def _numeric_leaves(value, depth=0):
-    """Every number reachable in a curve, line or support (dataclass fields, arrays, tuples, Fractions); caches are skipped."""
-    if depth > 5:
-        return
-    if isinstance(value, (bool, str, bytes)) or value is None:
-        return
-    if isinstance(value, (int, float, np.integer, np.floating, Fraction)):
-        yield float(value)
-    elif isinstance(value, np.ndarray):
-        if value.dtype.kind in 'fiu':
-            yield from (float(v) for v in value.ravel().tolist())
-    elif isinstance(value, (list, tuple)):
-        for item in value:
-            yield from _numeric_leaves(item, depth+1)
-    elif dataclasses.is_dataclass(value) and not isinstance(value, type):
-        for field in dataclasses.fields(value):
-            if not field.name.startswith('_'):
-                yield from _numeric_leaves(getattr(value, field.name), depth+1)
-    elif not callable(value) and hasattr(value, '__dict__'):
-        for name, item in vars(value).items():
-            if not name.startswith('_'):
-                yield from _numeric_leaves(item, depth+1)
+_STRUCTURAL_STR = frozenset(('parameterization', 'kind'))
+_STRUCTURAL_INT = frozenset(('branch',))
+_CACHE_FIELDS = frozenset(('_inversions',))
+#: Longest container the guard accepts. Control nets and polynomial degrees up to 64 are accepted; the longest
+#: container seen in the 67,451 captured tripod calls has 4 entries (a 4x4 transform), and no captured curve is a
+#: BezierPath or carries a control net (the branch curves there are plane ruled).
+_CONTAINER_CAP = 65
+
+
+def _allowed(value, name, depth):
+    """Allow-list walk: ``True`` only for the ordinary case, every unknown kind of value returns ``False``.
+
+    Numbers must be exactly ``float`` or ``np.float64`` (finite, at most ``_MODERATE``); ``int`` only in the
+    structural ``branch`` field (+-1); ``str`` only in the structural ``parameterization`` / ``kind`` fields;
+    containers are ``tuple`` or float64 ``ndarray`` (no list or other sequence) of at most ``_CONTAINER_CAP``
+    entries; the ``_inversions`` result cache is the only dict (never read as input); dataclasses and the
+    package's own support objects are walked through ALL their fields, private ones included. Integers,
+    bools, ``np.int*``, ``np.float32``, ``Fraction``, ``complex``, object arrays, lists, other mappings and
+    anything deeper than 6 levels return ``False``.
+    """
+    if depth > 6:
+        return False
+    kind = type(value)
+    if kind is float or kind is np.float64:
+        return math.isfinite(value) and abs(value) <= _MODERATE
+    if kind is int:
+        return name in _STRUCTURAL_INT and (value == 1 or value == -1)
+    if kind is str:
+        return name in _STRUCTURAL_STR
+    if kind is tuple:
+        return len(value) <= _CONTAINER_CAP and all(_allowed(item, name, depth+1) for item in value)
+    if kind is np.ndarray:
+        return (value.dtype == np.float64 and value.size <= 3*_CONTAINER_CAP and bool(np.all(np.isfinite(value)))
+                and (value.size == 0 or float(np.max(np.abs(value))) <= _MODERATE))
+    if kind is dict:
+        return name in _CACHE_FIELDS
+    if dataclasses.is_dataclass(value):
+        return all(_allowed(getattr(value, field.name), field.name, depth+1) for field in dataclasses.fields(value))
+    if getattr(kind, '__module__', '').startswith('anygeometry'):
+        fields = dict(getattr(value, '__dict__', {}))
+        for cls in kind.__mro__:
+            for slot in getattr(cls, '__slots__', ()):
+                if hasattr(value, slot):
+                    fields[slot] = getattr(value, slot)
+        return all(_allowed(item, field, depth+1) for field, item in fields.items())
+    return False
 
 
 def _inputs_moderate(curve):
-    """Every number entering the curve or line is finite with magnitude at most ``_MODERATE`` (1e50).
+    """The curve or line is the ordinary case: every value it holds passes ``_allowed`` (never raises).
 
-    With NaN, infinity or enormous coordinates the original route can raise (``inf - inf`` in a least squares,
-    ``math.ceil`` of NaN, overflow) where the interval and box comparisons of the shortcuts fail open or closed
-    by accident, so the shortcut declines (all four curve kinds and lines, every route).
+    With NaN, infinity, huge coordinates, integer / bool / float32 / Fraction values, list containers or large
+    degrees the original route can raise or wrap around (``inf - inf``, ``int64`` overflow, an unhashable cache
+    key, ``math.comb`` overflow), so every shortcut declines for anything but exactly the allowed shapes.
     """
     if type(curve) is LinePath:
         return _leaves_moderate(curve)
-    return _leaves_moderate_cached(curve)
+    try:
+        return _leaves_moderate_cached(curve)
+    except Exception:                                  # unhashable (list controls) or any other failure: decide uncached
+        return _leaves_moderate(curve)
 
 
 def _leaves_moderate(curve):
     try:
-        return all(math.isfinite(v) and abs(v) <= _MODERATE for v in _numeric_leaves(curve))
+        return bool(_allowed(curve, '', 0))
     except Exception:
         return False
 

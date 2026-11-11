@@ -2588,6 +2588,9 @@ def _point_clear_of_curve(curve, tolerance):
         return None
     if not (0.0 < tolerance < math.inf):
         return None
+    from .arrangement_geometry import _inputs_moderate
+    if not _inputs_moderate(curve):                 # the shared allow-list guard of the junction shortcuts
+        return None
     try:
         lo, hi = curve.bounds()
     except Exception:                               # no filter: the unfiltered route decides, as before
@@ -2602,6 +2605,8 @@ def _point_clear_of_curve(curve, tolerance):
     def far(position):
         if len(position) != 3:
             return False
+        if not all(type(value) is float or type(value) is np.float64 for value in position):
+            return False                            # integers, bools, float32, Fractions ...: the original route decides
         values = [float(value) for value in position]
         if not all(math.isfinite(value) and abs(value) <= 1e50 for value in values):
             return False                            # non-finite or huge: such a point keeps the unfiltered route
