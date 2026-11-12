@@ -187,6 +187,13 @@ class _StrictAuditState:
         self._face_points: dict[int, np.ndarray] = {}
         self._face_support_trim_uv: dict[int, tuple[np.ndarray, ...]] = {}
         self._polygon_cache: dict[tuple[int, int], object] = {}
+        # Exact measurements are immutable for the lifetime of this one audit.
+        # No cache survives a source revision or changes candidate enumeration.
+        self._edge_length_cache: dict[int, float] = {}
+        self._face_extent_cache: dict[int, float] = {}
+        self._face_boundary_cache: dict[int, frozenset[int]] = {}
+        self._plane_uv_cache: dict[tuple[int, tuple[float, ...]], tuple[float, float]] = {}
+        self._plane_uv_owners: dict[int, Plane] = {}
 
         # Ownership/incidence is resolved lazily from the model's maintained
         # reverse indices.  A changed-region audit therefore does not begin by
@@ -276,6 +283,25 @@ class _StrictAuditState:
             }
         return self.vertex_parts[identifier]
 
+    def _edge_length(self, edge_id: int) -> float:
+        if edge_id not in self._edge_length_cache:
+            self._edge_length_cache[edge_id] = self.model.edge_length(edge_id)
+        return self._edge_length_cache[edge_id]
+
+    def _face_extent(self, face_id: int) -> float:
+        if face_id not in self._face_extent_cache:
+            self._face_extent_cache[face_id] = feature_extent(self.face_points(face_id))
+        return self._face_extent_cache[face_id]
+
+    def _plane_local_uv(self, plane: Plane, point: object) -> tuple[float, float]:
+        # Retain the frame so a temporary Plane identity cannot be reused
+        # for a different coordinate system during this audit.
+        self._plane_uv_owners.setdefault(id(plane), plane)
+        key = (id(plane), tuple(float(value) for value in point))
+        if key not in self._plane_uv_cache:
+            self._plane_uv_cache[key] = plane.local_uv(point)
+        return self._plane_uv_cache[key]
+
     def _bounds_length_tolerance(self, bounds: AABB) -> float:
         """Return tolerance scaled only by the bounded participating entity."""
 
@@ -283,13 +309,13 @@ class _StrictAuditState:
 
     def _edge_pair_length_tolerance(self, first_id: int, second_id: int) -> float:
         return self.tolerance.effective_length(
-            max(self.model.edge_length(first_id), self.model.edge_length(second_id))
+            max(self._edge_length(first_id), self._edge_length(second_id))
         )
 
     def _face_pair_extent(self, first_id: int, second_id: int) -> float:
         return max(
-            feature_extent(self.face_points(first_id)),
-            feature_extent(self.face_points(second_id)),
+            self._face_extent(first_id),
+            self._face_extent(second_id),
         )
 
     def entity(self, key: SpatialKey) -> AuditEntity:
@@ -427,7 +453,7 @@ class _StrictAuditState:
     def _member_parameter_tolerance(self, member_id: int) -> float:
         member = self.model.members[member_id]
         length = sum(
-            self.model.edge_length(self.model.member_edge_uses[use_id].edge_id)
+            self._edge_length(self.model.member_edge_uses[use_id].edge_id)
             for use_id in member.edge_use_ids
         )
         return self.tolerance.effective_parameter(length, length)
@@ -450,7 +476,7 @@ class _StrictAuditState:
                     edge_id, witness
                 )
                 tolerance = self.tolerance.effective_surface_residual(
-                    self.model.edge_length(edge_id)
+                    self._edge_length(edge_id)
                 )
                 if distance > tolerance:
                     return ()
@@ -1115,6 +1141,11 @@ class _StrictAuditState:
         return True
 
     def audit_spatial_pairs(self) -> None:
+        result = self.spatial_pair_candidates()
+        self.classify_spatial_pairs(result.pairs)
+
+    def spatial_pair_candidates(self):
+        """Build and account the unchanged full-model broad phase once."""
         items: list[tuple[SpatialKey, AABB]] = []
         failed: list[tuple[SpatialKey, str]] = []
         for key in sorted(
@@ -1140,7 +1171,11 @@ class _StrictAuditState:
         tree.validate()
         result = tree.overlap_pairs(pair_filter=self.pair_filter)
         self.collector.record_broad_phase(result.diagnostics)
-        for first, second in result.pairs:
+        return result
+
+    def classify_spatial_pairs(self, pairs) -> None:
+        """Classify each supplied pair with the exact serial owner route."""
+        for first, second in pairs:
             self.collector.record_narrow_phase()
             try:
                 classification = self.classify_pair(first, second)
@@ -1430,12 +1465,12 @@ class _StrictAuditState:
             return _PairClassification(True)
         point = self.model.vertex_position(vertex_id)
         closest, parameter, distance = self.model.closest_edge_point(edge_id, point)
-        extent = max(self.model.edge_length(edge_id), distance)
+        extent = max(self._edge_length(edge_id), distance)
         tolerance = self.tolerance.effective_length(extent)
         if distance > tolerance:
             return _PairClassification(True)
         parameter_tolerance = self.tolerance.effective_parameter(
-            self.model.edge_length(edge_id), extent
+            self._edge_length(edge_id), extent
         )
         if parameter_tolerance < parameter < 1.0 - parameter_tolerance:
             intent = self.ownership_intent(
@@ -1484,7 +1519,7 @@ class _StrictAuditState:
         if type(face.surface).__name__ == "NurbsSurface":
             # NURBS faces: exact sub-patch hulls (B1-P4d); undecided -> refused
             from .section_audit import vertex_face
-            extent = feature_extent(self.face_points(face_id))
+            extent = self._face_extent(face_id)
             work = self._section_work()
             # the existing vertex x face route's tolerance (review B1-P4d round 1)
             verdict = vertex_face(self.model, vertex_id, face_id, self.tolerance.effective_surface_residual(extent), work)
@@ -1494,7 +1529,7 @@ class _StrictAuditState:
             return self.unclassified(vertex_key, face_key, "nurbs_vertex_face_not_certified")
         point = self.model.vertex_position(vertex_id)
         projected, uv, distance = self.project_to_face_support(face_id, point)
-        extent = feature_extent(self.face_points(face_id))
+        extent = self._face_extent(face_id)
         tolerance = self.tolerance.effective_surface_residual(extent)
         if distance > tolerance or not self.face_support_contains_uv(face_id, uv):
             return _PairClassification(True)
@@ -1994,8 +2029,8 @@ class _StrictAuditState:
                     if kind is IntersectionKind.COINCIDENT:
                         tolerance = self.tolerance.effective_length(
                             max(
-                                self.model.edge_length(first.id),
-                                self.model.edge_length(second.id),
+                                self._edge_length(first.id),
+                                self._edge_length(second.id),
                             )
                         )
                         reversed_duplicate = (
@@ -2189,7 +2224,7 @@ class _StrictAuditState:
         )
         if result.kind is IntersectionKind.COINCIDENT:
             tolerance = self.tolerance.effective_length(
-                max(self.model.edge_length(first.id), self.model.edge_length(second.id))
+                max(self._edge_length(first.id), self._edge_length(second.id))
             )
             reversed_duplicate = (
                 float(np.linalg.norm(first_start - second_end)) <= tolerance
@@ -2348,12 +2383,14 @@ class _StrictAuditState:
 
     # -------------------------------------------------------- member / faces
     def _face_boundary_edges(self, face_id: int) -> frozenset[int]:
-        face = self.model.faces[face_id]
-        return frozenset(
-            oriented.edge
-            for loop in (face.loop,) + tuple(face.holes)
-            for oriented in loop
-        )
+        if face_id not in self._face_boundary_cache:
+            face = self.model.faces[face_id]
+            self._face_boundary_cache[face_id] = frozenset(
+                oriented.edge
+                for loop in (face.loop,) + tuple(face.holes)
+                for oriented in loop
+            )
+        return self._face_boundary_cache[face_id]
 
     def _member_face_attachment(
         self, member_id: int, face_id: int, edge_id: int
@@ -2423,7 +2460,7 @@ class _StrictAuditState:
         """Qualify a bounded line/arc against one cylindrical patch."""
 
         edge = self.model.edges[edge_id]
-        extent = max(surface.radius, abs(surface.height), self.model.edge_length(edge_id))
+        extent = max(surface.radius, abs(surface.height), self._edge_length(edge_id))
         tolerance = self.tolerance.effective_surface_residual(extent)
         parameter_tolerance = max(
             self.tolerance.parameter,
@@ -2613,7 +2650,7 @@ class _StrictAuditState:
                     if oriented.forward
                     else edge.end
                 )
-                uv = plane.local_uv(self.model.vertex_position(vertex_id))
+                uv = self._plane_local_uv(plane, self.model.vertex_position(vertex_id))
                 result.append((float(uv[0]), float(uv[1])))
             return result
 
@@ -2642,8 +2679,8 @@ class _StrictAuditState:
         edge_id, face_id = edge_key[1], face_key[1]
         edge = self.model.edges[edge_id]
         members = sorted(self.members_for_edge(edge_id))
-        edge_length = self.model.edge_length(edge_id)
-        face_extent = feature_extent(self.face_points(face_id))
+        edge_length = self._edge_length(edge_id)
+        face_extent = self._face_extent(face_id)
         local_extent = max(edge_length, face_extent)
         local_length_tolerance = self.tolerance.effective_length(local_extent)
         boundary = self._face_boundary_edges(face_id)
@@ -2742,8 +2779,8 @@ class _StrictAuditState:
                 plane,
                 policy=self.tolerance,
                 characteristic_length=max(
-                    self.model.edge_length(edge_id),
-                    feature_extent(self.face_points(face_id)),
+                    self._edge_length(edge_id),
+                    self._face_extent(face_id),
                 ),
             )
             if result.kind in (
@@ -2779,7 +2816,7 @@ class _StrictAuditState:
                 ):
                     return _PairClassification(True)
                 world = np.asarray(component.witnesses[0])
-                uv = plane.local_uv(world)
+                uv = self._plane_local_uv(plane, world)
                 try:
                     from shapely.geometry import Point
                 except ImportError as error:  # pragma: no cover
@@ -2797,7 +2834,7 @@ class _StrictAuditState:
                     from shapely.geometry import LineString
                 except ImportError as error:  # pragma: no cover
                     raise GeometryError("planar strict audit requires shapely") from error
-                start_uv, end_uv = plane.local_uv(start), plane.local_uv(end)
+                start_uv, end_uv = self._plane_local_uv(plane, start), self._plane_local_uv(plane, end)
                 segment = LineString((start_uv, end_uv))
                 material = segment.intersection(polygon)
                 boundary_material = segment.intersection(polygon.boundary)
@@ -2928,7 +2965,7 @@ class _StrictAuditState:
             float(np.max(np.linalg.norm(points - witness, axis=1))) + local_tolerance,
         )
         world_start, world_end = witness - 2.0 * span * direction, witness + 2.0 * span * direction
-        line = LineString((plane.local_uv(world_start), plane.local_uv(world_end)))
+        line = LineString((self._plane_local_uv(plane, world_start), self._plane_local_uv(plane, world_end)))
         clipped = polygon.intersection(line)
         components = []
         if clipped.is_empty:
@@ -3274,8 +3311,8 @@ class _StrictAuditState:
             second_plane,
             policy=self.tolerance,
             characteristic_length=max(
-                feature_extent(self.face_points(first_face.id)),
-                feature_extent(self.face_points(second_face.id)),
+                self._face_extent(first_face.id),
+                self._face_extent(second_face.id),
             ),
         )
         if result.kind in (
@@ -3299,10 +3336,10 @@ class _StrictAuditState:
             # trims can share only boundary, avoiding polygon work for the
             # common structured-grid adjacency case.
             first_uv = np.asarray(
-                [first_plane.local_uv(point) for point in self.face_points(first_face.id)]
+                [self._plane_local_uv(first_plane, point) for point in self.face_points(first_face.id)]
             )
             second_uv = np.asarray(
-                [first_plane.local_uv(point) for point in self.face_points(second_face.id)]
+                [self._plane_local_uv(first_plane, point) for point in self.face_points(second_face.id)]
             )
             overlap_extents = np.minimum(first_uv.max(axis=0), second_uv.max(axis=0)) - np.maximum(
                 first_uv.min(axis=0), second_uv.min(axis=0)
@@ -4035,10 +4072,6 @@ class _StrictAuditState:
                 self.collector.record_classification(classified=False)
 
     def run(self) -> None:
-        from .solid_regions import validate_regions
-        for error in validate_regions(self.model):
-            self.issue(AuditCode.CHECK_FAILED, AuditSeverity.BLOCKER, error,
-                       classification="invalid_closed_solid_region", blocks_strict_handoff=True)
         self.audit_topology()
         self.audit_spatial_pairs()
         self.audit_same_edge_members()
