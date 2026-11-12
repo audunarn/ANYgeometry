@@ -585,3 +585,28 @@ def test_r2_envelope_route_must_match_the_decoded_plan_and_the_owner():
     envelope['route'] = ['exact', 'ring_split']
     assert "differ from the producer's route" in str(_refused('route', lambda: _adopt(model, pa._canonical(envelope), faces, IntersectionBatchPolicy(seam_policy='ring_split'))))
     _refused('route', lambda: _adopt(model, pa._canonical(envelope), faces, IntersectionBatchPolicy()))
+
+
+# ------------------------------------------------------------------------------------------ review round 3
+
+@pytest.mark.parametrize('payload', ['string', 'array'])
+def test_r3_shared_large_payload_amplification_is_bounded_by_payload_weight(payload):
+    import time
+    model, faces = _plates()
+    policy = IntersectionBatchPolicy()
+    _, packet = _worker(model, faces, policy)
+    if payload == 'string':
+        leaf = ['s', 'x' * (1 << 20)]                                   # 1 MiB, one node
+    else:
+        leaf = ['a', 'leaf', [1 << 17], struct_hex(1.0) * (1 << 17), False]   # 1 MiB of float64, one node
+
+    def bomb(tree):
+        level = ['t', 'b0', [leaf]]
+        for k in range(1, 6):                                           # 32 MiB expanded, ~50 expanded nodes
+            level = ['t', 'b%d' % k, [level, ['r', 'b%d' % (k - 1)]]]
+        tree[3][6] = ['t', 'top', [level]]
+        tree[:] = _renumber(tree)
+    tampered = _reseal(packet, bomb)
+    start = time.perf_counter()
+    error = _refused('packet', lambda: _adopt(model, tampered, faces, policy))
+    assert 'expanded' in str(error) and time.perf_counter() - start < 10.0

@@ -41,16 +41,31 @@ PLAN_CODEC_FORMAT = "anygeometry.intersection-plan"
 PLAN_CODEC_VERSION = 1
 _MAX_PACKET_BYTES = 64_000_000
 _MAX_NODES = 5_000_000
-# Bound on the plan's EXPANDED tree (every shared reference counted at its full size): the owner's content
-# hash, constructors and the apply walk the expansion, so a small packet of nested shared references must
-# not expand without bound. Measured real plans: sector60 / r7 / N2c-size surrogate expand to far less
-# (see the A0/A1 reports); a plan beyond the bound is refused and planned serially.
+# Bound on the plan's EXPANDED weight (every shared reference counted at its full size; one unit per node
+# plus one per 8 payload bytes of a string or array): the owner's content hash, constructors and the apply
+# walk the expansion, so a small packet of nested shared references to small or large payloads must not
+# expand without bound. Measured real plans (sector60 / r7 / N2c-size surrogate) weigh far less (see the
+# A0/A1 reports); a plan beyond the bound is refused and planned serially.
 _MAX_EXPANDED = 2_000_000
 _CONTAINERS = frozenset(('t', 'l', 'a', 'p', 'R'))
 
 
 def _children(node):
     return node[3] if node[0] == 'R' else node[2] if node[0] in ('t', 'l', 'p') else ()
+
+
+def _weight(node, sizes):
+    """Expanded weight of a well-formed wire node whose container ordinals are already in ``sizes``."""
+    tag = node[0]
+    if tag == 'r' or tag in _CONTAINERS:
+        return sizes[node[1]]
+    if tag == 's':
+        return 1 + len(node[1]) // 8
+    return 1
+
+
+def _array_weight(hex_text):
+    return 1 + len(hex_text) // 16
 
 
 class PlanAdoptionRefused(GeometryError):
@@ -207,11 +222,9 @@ def _encode_tree(plan, classes):
         node = _encode_node(v)
         if node[0] in _CONTAINERS:
             # Records are bounded before their constructor runs (below); the plan itself is a record.
-            sizes[node[1]] = 1 + sum(expanded(child) for child in _children(node))
+            sizes[node[1]] = (_array_weight(node[3]) if node[0] == 'a' else
+                              1 + sum(_weight(child, sizes) for child in _children(node)))
         return node
-
-    def expanded(node):
-        return sizes[node[1]] if node[0] == 'r' or node[0] in _CONTAINERS else 1
 
     def _encode_node(v):
         t = type(v)
@@ -263,7 +276,7 @@ def _encode_tree(plan, classes):
             declared = dict(_RECORD_FIELDS)[name]
             values = {key: getattr(v, key) for key in declared}
             args = [encode(values[key]) for key in declared]
-            if 1 + sum(expanded(x) for x in args) > _MAX_EXPANDED:
+            if 1 + sum(_weight(x, sizes) for x in args) > _MAX_EXPANDED:
                 raise _Refuse("encode", "plan expanded size limit")
             _check_record_state(v, name, t, values)
             return ['R', ordinal, name, args]
@@ -364,7 +377,7 @@ def _decode_tree(tree, classes):
 
     def bound(children):
         # Expanded size of a container from its already decoded children; checked BEFORE any constructor.
-        size = 1 + sum(sizes[c[1]] if c[0] == 'r' or c[0] in _CONTAINERS else 1 for c in children)
+        size = 1 + sum(_weight(c, sizes) for c in children)
         if size > _MAX_EXPANDED:
             raise _Refuse("packet", "plan expanded size limit")
         return size
@@ -425,7 +438,7 @@ def _decode_tree(tree, classes):
             if not np.all(np.isfinite(value)):
                 raise _Refuse("packet", "non-finite array")
             value.flags.writeable = p[4]
-            sizes[ordinal] = 1
+            sizes[ordinal] = _array_weight(p[3])
         elif tag == 'p' and n == 3 and type(p[2]) is list and len(p[2]) == len(_POLICY_FIELDS):
             items = [decode(x) for x in p[2]]
             sizes[ordinal] = bound(p[2])
