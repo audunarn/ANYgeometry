@@ -48,6 +48,9 @@ _MAX_NODES = 5_000_000
 # A0/A1 reports); a plan beyond the bound is refused and planned serially.
 _MAX_EXPANDED = 2_000_000
 _CONTAINERS = frozenset(('t', 'l', 'a', 'p', 'R'))
+# Every atomic wire value has a bounded payload: integers (values and array shapes) are signed 64-bit;
+# floats, NumPy scalars and UUIDs have a fixed size; strings and arrays carry their payload weight.
+_INT_MIN, _INT_MAX = -(1 << 63), (1 << 63) - 1
 
 
 def _children(node):
@@ -233,6 +236,8 @@ def _encode_tree(plan, classes):
         if t is bool:
             return ['b', v]
         if t is int:
+            if not _INT_MIN <= v <= _INT_MAX:
+                raise _Refuse("encode", "integer outside the signed 64-bit range")
             return ['i', v]
         if t is str:
             return ['s', v]
@@ -395,6 +400,8 @@ def _decode_tree(tree, classes):
         if tag == 'b' and n == 2 and type(p[1]) is bool:
             return p[1]
         if tag == 'i' and n == 2 and type(p[1]) is int:
+            if not _INT_MIN <= p[1] <= _INT_MAX:
+                raise _Refuse("packet", "integer outside the signed 64-bit range")
             return p[1]
         if tag == 's' and n == 2 and type(p[1]) is str:
             return p[1]
@@ -432,7 +439,7 @@ def _decode_tree(tree, classes):
             sizes[ordinal] = bound(p[2])
             value = tuple(items) if tag == 't' else items
         elif tag == 'a' and n == 5 and type(p[2]) is list and type(p[4]) is bool:
-            if any(type(k) is not int or k < 0 for k in p[2]):
+            if len(p[2]) > 32 or any(type(k) is not int or not 0 <= k <= _INT_MAX for k in p[2]):
                 raise _Refuse("packet", "array shape")
             value = np.frombuffer(_hex_bytes(p[3]), dtype='<f8').copy().reshape(p[2])
             if not np.all(np.isfinite(value)):

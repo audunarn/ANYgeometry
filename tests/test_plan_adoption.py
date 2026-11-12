@@ -610,3 +610,31 @@ def test_r3_shared_large_payload_amplification_is_bounded_by_payload_weight(payl
     start = time.perf_counter()
     error = _refused('packet', lambda: _adopt(model, tampered, faces, policy))
     assert 'expanded' in str(error) and time.perf_counter() - start < 10.0
+
+
+# ------------------------------------------------------------------------------------------ review round 4
+
+def test_r4_every_atomic_payload_is_bounded_large_integers_refuse():
+    import time
+    model, faces = _plates()
+    policy = IntersectionBatchPolicy()
+    plan, packet = _worker(model, faces, policy)
+
+    def bomb(tree):
+        level = ['t', 'b0', [['i', 10 ** 4095]]]
+        for k in range(1, 6):
+            level = ['t', 'b%d' % k, [level, ['r', 'b%d' % (k - 1)]]]
+        tree[3][6] = ['t', 'top', [level]]
+        tree[:] = _renumber(tree)
+    start = time.perf_counter()
+    _refused('packet', lambda: _adopt(model, _reseal(packet, bomb), faces, policy))
+    assert time.perf_counter() - start < 5.0
+
+    def big_shape(tree):
+        text = json.dumps(tree)
+        tree[:] = json.loads(text.replace('[3]', '[%d]' % (1 << 70), 1))
+    _refused('packet', lambda: _adopt(model, _reseal(packet, big_shape), faces, policy))
+    _refused('encode', lambda: encode_intersection_plan(replace(plan, revision=1 << 63), job_id='j'))
+    for value in ((1 << 63) - 1, -(1 << 63)):
+        classes, _ = pa._schema()
+        assert pa._decode_tree(json.loads(pa._canonical(pa._encode_tree((value,), classes))), classes) == (value,)
