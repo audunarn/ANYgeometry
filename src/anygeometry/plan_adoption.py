@@ -41,6 +41,16 @@ PLAN_CODEC_FORMAT = "anygeometry.intersection-plan"
 PLAN_CODEC_VERSION = 1
 _MAX_PACKET_BYTES = 64_000_000
 _MAX_NODES = 5_000_000
+# Bound on the plan's EXPANDED tree (every shared reference counted at its full size): the owner's content
+# hash, constructors and the apply walk the expansion, so a small packet of nested shared references must
+# not expand without bound. Measured real plans: sector60 / r7 / N2c-size surrogate expand to far less
+# (see the A0/A1 reports); a plan beyond the bound is refused and planned serially.
+_MAX_EXPANDED = 2_000_000
+_CONTAINERS = frozenset(('t', 'l', 'a', 'p', 'R'))
+
+
+def _children(node):
+    return node[3] if node[0] == 'R' else node[2] if node[0] in ('t', 'l', 'p') else ()
 
 
 class PlanAdoptionRefused(GeometryError):
@@ -181,7 +191,7 @@ def _encode_tree(plan, classes):
     from .batch_intersections import IntersectionBatchPolicy
     from .structural import ConnectionIntent
     names = {cls: name for name, cls in classes.items()}
-    memo, active, spans = {}, set(), []
+    memo, active, spans, sizes = {}, set(), [], {}
     nodes = 0
 
     def float_hex(value):
@@ -194,6 +204,16 @@ def _encode_tree(plan, classes):
         nodes += 1
         if nodes > _MAX_NODES:
             raise _Refuse("encode", "plan node limit")
+        node = _encode_node(v)
+        if node[0] in _CONTAINERS:
+            # Records are bounded before their constructor runs (below); the plan itself is a record.
+            sizes[node[1]] = 1 + sum(expanded(child) for child in _children(node))
+        return node
+
+    def expanded(node):
+        return sizes[node[1]] if node[0] == 'r' or node[0] in _CONTAINERS else 1
+
+    def _encode_node(v):
         t = type(v)
         if v is None:
             return ['n']
@@ -243,6 +263,8 @@ def _encode_tree(plan, classes):
             declared = dict(_RECORD_FIELDS)[name]
             values = {key: getattr(v, key) for key in declared}
             args = [encode(values[key]) for key in declared]
+            if 1 + sum(expanded(x) for x in args) > _MAX_EXPANDED:
+                raise _Refuse("encode", "plan expanded size limit")
             _check_record_state(v, name, t, values)
             return ['R', ordinal, name, args]
         finally:
@@ -279,6 +301,14 @@ def _check_record_state(value, name, cls, values):
                 raise _Refuse("encode", f"{name}.{f.name} is not a known answer memo")
 
 
+def _plan_route(plan):
+    """The producer's resolved (planning mode, seam policy), bound in the envelope beside the record type."""
+    from .batch_intersections import TopologyCertifiedPlan
+    if type(plan) is TopologyCertifiedPlan:
+        return [plan.planning_mode, plan.seam_policy]
+    return ["exact", "baseline"]
+
+
 def encode_intersection_plan(plan, *, job_id=None):
     """Encode an owner-made intersection plan as canonical bytes (closed codec, no pickle).
 
@@ -298,18 +328,19 @@ def encode_intersection_plan(plan, *, job_id=None):
         from .preparation_epochs import _plan_bindings
         if is_existing_plan(plan) or is_bounded_plan(plan) or id(plan) in _plan_bindings:
             raise _Refuse("encode", "registry-issued plans cannot be transported")
+        classes, schema = _schema()
+        tree = _encode_tree(plan, classes)          # cycle guard and size bounds before any content hash
         if plan.content_checksum != _plan_content(plan):
             raise _Refuse("encode", "plan content checksum does not recompute")
-        classes, schema = _schema()
-        tree = _encode_tree(plan, classes)
         body = _canonical(tree)
         return _canonical({"format": PLAN_CODEC_FORMAT, "version": PLAN_CODEC_VERSION, "schema": schema,
-                           "job_id": job_id, "plan_sha256": hashlib.sha256(body).hexdigest(), "plan": tree})
+                           "job_id": job_id, "route": _plan_route(plan),
+                           "plan_sha256": hashlib.sha256(body).hexdigest(), "plan": tree})
     except _Refuse as exc:
         raise PlanAdoptionRefused(exc.reason, str(exc)) from None
     except PlanAdoptionRefused:
         raise
-    except (GeometryError, TypeError, ValueError, AttributeError, OverflowError) as exc:
+    except (GeometryError, TypeError, ValueError, AttributeError, KeyError, OverflowError, RecursionError) as exc:
         raise PlanAdoptionRefused("encode", f"{type(exc).__name__}: {exc}") from None
 
 
@@ -328,8 +359,15 @@ def _decode_tree(tree, classes):
     from .batch_intersections import IntersectionBatchPolicy
     from .structural import ConnectionIntent
     record_fields = dict(_RECORD_FIELDS)
-    memo = []
+    memo, sizes = [], []
     nodes = 0
+
+    def bound(children):
+        # Expanded size of a container from its already decoded children; checked BEFORE any constructor.
+        size = 1 + sum(sizes[c[1]] if c[0] == 'r' or c[0] in _CONTAINERS else 1 for c in children)
+        if size > _MAX_EXPANDED:
+            raise _Refuse("packet", "plan expanded size limit")
+        return size
 
     def decode(p):
         nonlocal nodes
@@ -375,8 +413,10 @@ def _decode_tree(tree, classes):
             raise _Refuse("packet", "object ordinal")
         ordinal = len(memo)
         memo.append(None)
+        sizes.append(None)
         if tag in ('t', 'l') and n == 3 and type(p[2]) is list:
             items = [decode(x) for x in p[2]]
+            sizes[ordinal] = bound(p[2])
             value = tuple(items) if tag == 't' else items
         elif tag == 'a' and n == 5 and type(p[2]) is list and type(p[4]) is bool:
             if any(type(k) is not int or k < 0 for k in p[2]):
@@ -385,13 +425,18 @@ def _decode_tree(tree, classes):
             if not np.all(np.isfinite(value)):
                 raise _Refuse("packet", "non-finite array")
             value.flags.writeable = p[4]
+            sizes[ordinal] = 1
         elif tag == 'p' and n == 3 and type(p[2]) is list and len(p[2]) == len(_POLICY_FIELDS):
-            value = IntersectionBatchPolicy(**dict(zip(_POLICY_FIELDS, (decode(x) for x in p[2]))))
+            items = [decode(x) for x in p[2]]
+            sizes[ordinal] = bound(p[2])
+            value = IntersectionBatchPolicy(**dict(zip(_POLICY_FIELDS, items)))
         elif tag == 'R' and n == 4 and type(p[2]) is str and p[2] in classes and type(p[3]) is list:
             declared = record_fields[p[2]]
             if len(p[3]) != len(declared):
                 raise _Refuse("packet", f"{p[2]} field count")
-            value = classes[p[2]](**dict(zip(declared, (decode(x) for x in p[3]))))
+            items = [decode(x) for x in p[3]]
+            sizes[ordinal] = bound(p[3])
+            value = classes[p[2]](**dict(zip(declared, items)))
             if type(value) is not classes[p[2]]:
                 raise _Refuse("record_type", f"{p[2]} constructor returned another type")
         else:
@@ -413,7 +458,7 @@ def _decode_packet(packet, classes, schema):
     except (UnicodeDecodeError, ValueError) as exc:
         raise _Refuse("packet", f"not canonical JSON: {type(exc).__name__}") from None
     if (type(envelope) is not dict or
-            set(envelope) != {"format", "version", "schema", "job_id", "plan_sha256", "plan"}):
+            set(envelope) != {"format", "version", "schema", "job_id", "route", "plan_sha256", "plan"}):
         raise _Refuse("packet", "envelope fields")
     if envelope["format"] != PLAN_CODEC_FORMAT or type(envelope["version"]) is not int or \
             envelope["version"] != PLAN_CODEC_VERSION:
@@ -427,10 +472,12 @@ def _decode_packet(packet, classes, schema):
     plan = _decode_tree(envelope["plan"], classes)
     if type(plan) not in (IntersectionPlan, TopologyCertifiedPlan):
         raise _Refuse("record_type", "packet does not hold an intersection plan")
+    if envelope["route"] != _plan_route(plan):
+        raise _Refuse("route", "the plan's record type or route fields differ from the producer's route")
     # The reconstruction must be canonical: the owner's own encoding of the decoded plan is the packet.
     if _canonical(_encode_tree(plan, classes)) != _canonical(envelope["plan"]):
         raise _Refuse("codec", "decoded plan does not re-encode to the packet")
-    return plan, envelope["job_id"]
+    return plan, envelope["job_id"], envelope["route"]
 
 
 # -------------------------------------------------------------------------------------------------- adopt
@@ -473,7 +520,7 @@ def adopt_intersection_plan(model, packet, *, policy, operands, job_id, expected
 
 def _adopt(model, packet, *, policy, operands, job_id, expected_source_checksum):
     from .batch_intersections import (IntersectionBatchPolicy, _check_policy_in_place, _plan_content,
-                                      _validate_policy, resolve_planning_mode)
+                                      _validate_policy, resolve_planning_mode, resolve_seam_policy)
     from .model import GeometryModel
     from .serialization import to_dict
     from .intersections import _normalize_operand
@@ -504,9 +551,11 @@ def _adopt(model, packet, *, policy, operands, job_id, expected_source_checksum)
     if eligible(model, handles) or handles_bounded(model, handles):
         raise _Refuse("registry_route", "the operands select an owner-issued (registry) planning route")
     classes, schema = _schema()
-    plan, packet_job = _decode_packet(packet, classes, schema)
+    plan, packet_job, route = _decode_packet(packet, classes, schema)
     if packet_job != job_id:
         raise _Refuse("job", "the packet belongs to another job")
+    if route != [resolve_planning_mode(policy), resolve_seam_policy(policy)]:
+        raise _Refuse("route", "the producer's planning mode / seam policy differ from the owner's")
     if plan.content_checksum != _plan_content(plan):
         raise _Refuse("content", "plan content checksum does not recompute")
     if plan.operands != handles or any(type(h) is not type(k) for h, k in zip(plan.operands, handles)):

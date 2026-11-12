@@ -106,7 +106,7 @@ def test_codec_round_trip_keeps_exact_type_bits_content_and_sharing(seam):
     packet = encode_intersection_plan(plan, job_id='j')
     assert type(packet) is bytes
     classes, schema = pa._schema()
-    decoded, job = pa._decode_packet(packet, classes, schema)
+    decoded, job, _ = pa._decode_packet(packet, classes, schema)
     assert job == 'j' and type(decoded) is type(plan) and decoded is not plan
     assert pa._same(decoded, plan)
     assert _plan_content(decoded) == plan.content_checksum == decoded.content_checksum
@@ -144,7 +144,7 @@ def test_callables_never_cross_and_the_policy_is_rebuilt_from_plain_fields():
     assert closure.policy.cancellation_check is not None
     assert encode_intersection_plan(closure, job_id='j') == encode_intersection_plan(plain, job_id='j')
     classes, schema = pa._schema()
-    decoded, _ = pa._decode_packet(encode_intersection_plan(closure, job_id='j'), classes, schema)
+    decoded, _, _ = pa._decode_packet(encode_intersection_plan(closure, job_id='j'), classes, schema)
     assert decoded.policy.cancellation_check is None
     assert decoded.policy == replace(closure.policy, cancellation_check=None)
 
@@ -299,10 +299,10 @@ def test_2d_downcast_of_a_topology_certified_plan_refuses():
     def downcast(tree):
         tree[2] = 'IntersectionPlan'
         del tree[3][len(pa._PLAN_FIELDS):]
-    _refused('route', lambda: _adopt(model, _reseal(packet, downcast), faces, policy))
+    assert "differ from the producer's route" in str(_refused('route', lambda: _adopt(model, _reseal(packet, downcast), faces, policy)))
     _refused('route', lambda: _adopt(model, packet, faces, IntersectionBatchPolicy()))
     _, exact = _worker(model, faces, IntersectionBatchPolicy())
-    _refused('route', lambda: _adopt(model, exact, faces, policy))
+    assert "producer's planning mode / seam policy" in str(_refused('route', lambda: _adopt(model, exact, faces, policy)))
 
 
 def test_3_parent_edited_after_spawn_refuses_and_serial_gives_the_serial_result():
@@ -418,3 +418,170 @@ def test_route_plans_adopt_and_apply_bit_identically_to_serial(policy):
     assert to_dict(model)['checksum'] == to_dict(serial)['checksum']
     assert has_current_intersection_preparation(model)
     assert model._intersection_preparation_receipt[0] is plan
+
+
+# ------------------------------------------------------------------------------------------ review round 1
+
+def _renumber(tree):
+    """Re-assign object ordinals in decode (pre-)order; placeholders may be any hashable value."""
+    mapping, counter = {}, [0]
+
+    def walk(p):
+        if p[0] == 'r':
+            return ['r', mapping[p[1]]]
+        if p[0] in ('t', 'l', 'a', 'p', 'R'):
+            q = list(p)
+            mapping[p[1]] = q[1] = counter[0]
+            counter[0] += 1
+            slot = 3 if p[0] == 'R' else 2
+            if p[0] != 'a':
+                q[slot] = [walk(c) for c in p[slot]]
+            return q
+        return p
+    return walk(tree)
+
+
+def test_r1_shared_reference_expansion_is_bounded_before_any_constructor_or_hash():
+    import time
+    model, faces = _plates()
+    policy = IntersectionBatchPolicy()
+    _, packet = _worker(model, faces, policy)
+    depth = 22                                       # 2**22 expanded nodes in a ~2 kB body
+
+    def bomb(tree):
+        level = ['t', 'b0', [['f', struct_hex(1.0)]]]
+        for k in range(1, depth):
+            level = ['t', 'b%d' % k, [level, ['r', 'b%d' % (k - 1)]]]
+        tree[3][6] = ['t', 'top', [level]]                # axes: nothing else refers into it
+        tree[:] = _renumber(tree)
+    tampered = _reseal(packet, bomb)
+    assert len(tampered) < len(packet) + 4096
+    start = time.perf_counter()
+    error = _refused('packet', lambda: _adopt(model, tampered, faces, policy))
+    assert 'expanded' in str(error) and time.perf_counter() - start < 5.0
+
+
+def struct_hex(value):
+    import struct
+    return struct.pack('!d', value).hex()
+
+
+def test_r1_encoder_refuses_an_oversized_expansion_and_a_cyclic_plan(monkeypatch):
+    model, faces = _plates()
+    plan = plan_intersections(model, faces, policy=IntersectionBatchPolicy())
+    looped = []
+    looped.append(looped)
+    error = _refused('encode', lambda: encode_intersection_plan(replace(plan, arrangements=looped), job_id='j'))
+    assert 'cyclic' in str(error)
+    monkeypatch.setattr(pa, '_MAX_EXPANDED', 50)
+    assert 'expanded' in str(_refused('encode', lambda: encode_intersection_plan(plan, job_id='j')))
+
+
+def test_r1_same_revision_owner_edit_after_spawn_refuses():
+    model, faces = _plates()
+    policy = IntersectionBatchPolicy()
+    spawn_checksum = _checksum(model)
+    _, packet = _worker(model, faces, policy)
+    vertex = next(iter(model.vertices.values()))
+    model._vertices[vertex.id] = replace(vertex, position=vertex.position + np.array([-1e-3, 0., 0.]))
+    assert _checksum(model) != spawn_checksum
+    revision = model.revision
+    _refused('source', lambda: _adopt(model, packet, faces, policy, checksum=spawn_checksum))
+    assert model.revision == revision
+
+
+def _plan_with(model_faces=None):
+    model, faces = _plates() if model_faces is None else model_faces
+    return plan_intersections(model, faces, policy=IntersectionBatchPolicy())
+
+
+def test_r1_unknown_or_altered_record_state_refuses_at_encode():
+    from anygeometry.surfaces import Plane
+    plan = _plan_with()
+    support = next(a.support for a in plan.arrangements if type(a.support) is Plane)
+    object.__setattr__(support, 'extra', 1)
+    _refused('encode', lambda: encode_intersection_plan(plan, job_id='j'))
+    plan = _plan_with()
+    support = next(a.support for a in plan.arrangements if type(a.support) is Plane)
+    object.__setattr__(support, 'normal', support.normal * -1.0)          # cached normal not the recomputation
+    _refused('encode', lambda: encode_intersection_plan(plan, job_id='j'))
+    plan = _plan_with()
+    support = next(a.support for a in plan.arrangements if type(a.support) is Plane)
+    object.__setattr__(support, 'u_vector', support.u_vector * 2.0)        # the constructor would normalise it
+    _refused('encode', lambda: encode_intersection_plan(plan, job_id='j'))
+
+
+def _cylinders():
+    from anygeometry.generators import cylinder
+    model = cylinder(1., 4., origin=(0, 0, -2), circumferential_segments=4)
+    model.insert_model(cylinder(0.6, 4., origin=(-2, 0, 0), axis=(1, 0, 0), radial_direction=(0, 1, 0),
+                                circumferential_segments=4))
+    return model, tuple(model.handle('face', f) for f in sorted(model.faces))
+
+
+def test_r1_altered_cylinder_derived_state_refuses_and_cylinder_plans_round_trip():
+    from anygeometry.surfaces import Cylinder
+    model, faces = _cylinders()
+    policy = IntersectionBatchPolicy()
+    plan, packet = _worker(model, faces, policy)
+    adopted = _adopt(model, packet, faces, policy)
+    assert pa._same(adopted, plan)
+    support = next(a.support for a in plan.arrangements if type(a.support) is Cylinder)
+    object.__setattr__(support, '_circumferential', support._circumferential * -1.0)
+    _refused('encode', lambda: encode_intersection_plan(plan, job_id='j'))
+
+
+def test_r1_every_registry_class_round_trips_with_its_exact_type():
+    from anygeometry.member_arrangements import MemberAxisArrangement, MemberPointContact
+    from anygeometry.arrangement_geometry import LinePath
+    from anygeometry.material_arrangement import ArrangementPoint
+    from anygeometry.branch_curves import BezierQuadricCurve
+    from anygeometry.quadric_algebra import QuadricSupport
+    from anygeometry.plane_ruled import PlaneRuledSupport
+    from anygeometry.batch_intersections import FacePointContact
+    classes, _ = pa._schema()
+    ruled = PlaneRuledSupport(base=(56.464392319893776, 0.6794350112397475, -17.5),
+                              directrix_vector=(-0.007083671712961483, -0.0007445238982637945, 0.9999746333178796),
+                              ruling=(-0.9944966676474915, -0.10452581172735692, -0.007122690557092655),
+                              t0=-7.424585283355499, length=36.13361611880462)
+    quadric = QuadricSupport(kind='cylinder', origin=(50.0, 0.0, -24.5), axis=(0.0, 0.0, 1.0), radius=6.5, slope=0.0,
+                             matrix=(), linear=(), constant=0.0, u_vector=(), v_vector=())
+    curve = BezierQuadricCurve(first=ruled, second=quadric, start=0.2054758444032841, sweep=0.6605876794881089,
+                               branch=-1, parameterization='linear')
+    curve.parameters_of(curve.evaluate(0.5) if hasattr(curve, 'evaluate') else (0., 0., 0.))   # warm the answer memo
+    line = LinePath(np.array([0., 0, 0]), np.array([1., 0, 0]))
+    loose = (curve, MemberAxisArrangement(3, (1, 2), line, (0.25, np.float64(0.5)), 1e-9),
+             MemberPointContact(None, (0., 1., 2.), ((1, 0.5),), (4,), 1e-9), ArrangementPoint((0., 0., 0.), (1,)),
+             FacePointContact((1, 2), (0., 0., 0.), 1e-9),
+             np.int64(7), np.bool_(True), [1, 2], (True, None, 'x'))
+    back = pa._decode_tree(json.loads(pa._canonical(pa._encode_tree(loose, classes))), classes)
+    assert pa._same(back, loose) and back[0]._inversions == {}
+    seen = {type(x).__name__ for x in _walk_records(back)}
+    for plan in (_plan_with(), _plan_with(_cylinders()),
+                 plan_intersections(*_plates(), policy=IntersectionBatchPolicy(seam_policy='ring_split'))):
+        decoded = pa._decode_tree(json.loads(pa._canonical(pa._encode_tree(plan, classes))), classes)
+        assert pa._same(decoded, plan)
+        seen |= {type(x).__name__ for x in _walk_records(decoded)}
+    assert set(classes) <= seen, set(classes) - seen
+
+
+# ------------------------------------------------------------------------------------------ review round 2
+
+def _downcast(tree):
+    tree[2] = 'IntersectionPlan'
+    del tree[3][len(pa._PLAN_FIELDS):]
+
+
+def test_r2_downcast_plus_baseline_owner_route_refuses():
+    model, faces = _plates()
+    _, packet = _worker(model, faces, IntersectionBatchPolicy(seam_policy='ring_split'))
+    _refused('route', lambda: _adopt(model, _reseal(packet, _downcast), faces, IntersectionBatchPolicy()))
+
+
+def test_r2_envelope_route_must_match_the_decoded_plan_and_the_owner():
+    model, faces = _plates()
+    _, packet = _worker(model, faces, IntersectionBatchPolicy())
+    envelope = json.loads(packet)
+    envelope['route'] = ['exact', 'ring_split']
+    assert "differ from the producer's route" in str(_refused('route', lambda: _adopt(model, pa._canonical(envelope), faces, IntersectionBatchPolicy(seam_policy='ring_split'))))
+    _refused('route', lambda: _adopt(model, pa._canonical(envelope), faces, IntersectionBatchPolicy()))
