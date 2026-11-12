@@ -67,8 +67,15 @@ def _weight(node, sizes):
     return 1
 
 
-def _array_weight(hex_text):
-    return 1 + len(hex_text) // 16
+def _array_weight(shape, hex_text):
+    """Payload units plus every nested row a list conversion (the content hash) builds, saturating early."""
+    weight, rows = 1 + len(hex_text) // 16, 1
+    for extent in shape[:-1]:
+        rows *= extent
+        weight += rows
+        if weight > _MAX_EXPANDED:
+            return weight
+    return weight
 
 
 class PlanAdoptionRefused(GeometryError):
@@ -225,7 +232,7 @@ def _encode_tree(plan, classes):
         node = _encode_node(v)
         if node[0] in _CONTAINERS:
             # Records are bounded before their constructor runs (below); the plan itself is a record.
-            sizes[node[1]] = (_array_weight(node[3]) if node[0] == 'a' else
+            sizes[node[1]] = (_array_weight(node[2], node[3]) if node[0] == 'a' else
                               1 + sum(_weight(child, sizes) for child in _children(node)))
         return node
 
@@ -441,11 +448,13 @@ def _decode_tree(tree, classes):
         elif tag == 'a' and n == 5 and type(p[2]) is list and type(p[4]) is bool:
             if len(p[2]) > 32 or any(type(k) is not int or not 0 <= k <= _INT_MAX for k in p[2]):
                 raise _Refuse("packet", "array shape")
+            sizes[ordinal] = _array_weight(p[2], p[3])
+            if sizes[ordinal] > _MAX_EXPANDED:
+                raise _Refuse("packet", "plan expanded size limit (array shape)")
             value = np.frombuffer(_hex_bytes(p[3]), dtype='<f8').copy().reshape(p[2])
             if not np.all(np.isfinite(value)):
                 raise _Refuse("packet", "non-finite array")
             value.flags.writeable = p[4]
-            sizes[ordinal] = _array_weight(p[3])
         elif tag == 'p' and n == 3 and type(p[2]) is list and len(p[2]) == len(_POLICY_FIELDS):
             items = [decode(x) for x in p[2]]
             sizes[ordinal] = bound(p[2])

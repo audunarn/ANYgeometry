@@ -638,3 +638,22 @@ def test_r4_every_atomic_payload_is_bounded_large_integers_refuse():
     for value in ((1 << 63) - 1, -(1 << 63)):
         classes, _ = pa._schema()
         assert pa._decode_tree(json.loads(pa._canonical(pa._encode_tree((value,), classes))), classes) == (value,)
+
+
+# ------------------------------------------------------------------------------------------ review round 5
+
+def test_r5_array_shape_expansion_is_weighted_even_without_payload():
+    model, faces = _plates()
+    policy = IntersectionBatchPolicy()
+    plan, packet = _worker(model, faces, policy)
+
+    def empty_giant(tree):
+        tree[3][6] = ['a', 'giant', [10 ** 12, 0], '', False]
+        tree[:] = _renumber(tree)
+    assert 'expanded' in str(_refused('packet', lambda: _adopt(model, _reseal(packet, empty_giant), faces, policy)))
+    error = _refused('encode', lambda: encode_intersection_plan(replace(plan, axes=np.zeros((10 ** 7, 0))), job_id='j'))
+    assert 'expanded' in str(error)
+    classes, _ = pa._schema()
+    small = (np.zeros((2, 0)), np.zeros((0,)), np.zeros(()), np.ones((2, 3)))
+    back = pa._decode_tree(json.loads(pa._canonical(pa._encode_tree(small, classes))), classes)
+    assert pa._same(back, small)
