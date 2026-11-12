@@ -92,3 +92,16 @@ def quarter_cylinder() -> tuple[GeometryModel, int, int]:
     arc = geometry.add_arc(start, via, end)
     face = geometry.extrude((arc,), (0.0, 0.0, 3.0))[0]
     return geometry, arc, face
+
+
+@pytest.fixture(autouse=True)
+def _isolate_ch3_verify_arithmetic_scope():
+    """Test isolation: ``_ch3_verify_math.Arithmetic.__init__`` sets a ContextVar and never resets it, so
+    a test that builds one directly would leave an active scope for the rest of the session, which makes
+    the planning-threads route decline (fail closed) in every later test. Reset it around each test."""
+    from anygeometry.certified_hydrostatics._ch3_verify_math import _active
+    token = _active.set(None)
+    try:
+        yield
+    finally:
+        _active.reset(token)
