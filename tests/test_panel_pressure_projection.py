@@ -9,6 +9,22 @@ from anygeometry import (MappingLimits, PanelProjectionError, PanelProjectionCan
                          prepare_panel_projection, validate_panel_geometry)
 
 
+def test_pressure_exports_match_the_source_admitted_by_the_planner():
+    from hashlib import sha256
+    from pathlib import Path
+
+    import anygeometry
+    from anygeometry import _planning_manifest, panel_pressure_projection
+
+    names = ("MappingLimits", "PanelProjection", "PanelProjectionError",
+             "PanelProjectionCancelled", "prepare_panel_projection", "validate_panel_geometry")
+    for name in names:
+        assert name in anygeometry.__all__
+        assert getattr(anygeometry, name) is getattr(panel_pressure_projection, name)
+    source_digest = sha256(Path(anygeometry.__file__).read_bytes()).hexdigest()
+    assert source_digest == _planning_manifest._MODEL_CALLER_SOURCE_PINS["anygeometry"]
+
+
 def square(x0=0., x1=1., z=0.):
     return np.array([[x0, 0, z], [x1, 0, z], [x1, 1, z], [x0, 1, z]], float)
 
