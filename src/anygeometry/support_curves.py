@@ -349,6 +349,27 @@ class PlaneNurbsCurve:
                             root.lo, root.hi, None, None)
 
     def _exact_point(self, arc, tau: Fraction):
+        """Memoised ``_exact_point_uncached``: a pure function of the plane, surface, arc and ``tau``; the cache is
+        owned by the plan's Work (no module state), keyed by VALUE. Refusals are not cached."""
+        work = CURRENT_WORK.get()
+        cache = getattr(work, 'chart_point_cache', None) if work is not None else None
+        if cache is None:
+            return self._exact_point_uncached(arc, tau)
+        box = arc.box
+        key = (self.plane_record, self.surface, arc.slicing, box.u_range, box.v_range,
+               tuple(tuple(row) for row in box.coefficients), arc.s0, arc.s1,
+               self._root_key(arc.first), self._root_key(arc.second), tau)
+        if key in cache:
+            return cache[key]
+        result = self._exact_point_uncached(arc, tau)
+        cache[key] = result
+        return result
+
+    @staticmethod
+    def _root_key(root):
+        return (root.axis, root.value, root.lo, root.hi)
+
+    def _exact_point_uncached(self, arc, tau: Fraction):
         """Exact knot rectangle ``((u_lo, u_hi), (v_lo, v_hi))``, the rational knot point of the curve
         at ``tau`` and its exact world point.
 
