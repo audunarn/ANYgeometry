@@ -119,6 +119,7 @@ def plan_plane_split(model, face_ids, plane, *, qualification=None):
         return _plan_plane_split(model, face_ids, plane, qualification=policy)
     except GeometryError as error:
         if work.denied and getattr(error, 'budget_limit', None) is None:
+            _raise_typed_if_budget_caused(work, error)
             # Contract boundary (owner-accepted): hostile exception subclasses built to defeat this
             # decoration (__setattr__/add_note overrides, __slots__, properties) are out of contract.
             # the refusal keeps its class and message; the budget facts are attached once (first writer wins),
@@ -132,6 +133,23 @@ def plan_plane_split(model, face_ids, plane, *, qualification=None):
         raise
     finally:
         CURRENT_WORK.reset(token)
+
+
+def _raise_typed_if_budget_caused(work, error):
+    """Typed budget refusal when a face check of THIS attempt failed while the budget denied takes.
+
+    Single attempt, no replay, the caller's cap is never exceeded. Independent refusals (empty selection,
+    invalid group, ownership) keep their class even after a denial: only ``Work.budget_refusal`` (every reported problem budget-caused) counts.
+    """
+    from .plane_nurbs import PlaneNurbsNotCertified
+    if not work.budget_refusal:
+        return
+    typed = PlaneNurbsNotCertified(f"plane split qualification budget exhausted (spent {work.boxes} of limit "
+                                   f"{work.max_boxes}, denied {work.denied}); the refusal surfaced as: {error}")
+    typed.budget_limit, typed.budget_spent, typed.budget_denied = work.max_boxes, work.boxes, work.denied
+    typed.add_note(f"plan qualification budget was denied {work.denied} times "
+                   f"(spent {work.boxes} of limit {work.max_boxes})")
+    raise typed from error
 
 
 def _plan_plane_split(model, face_ids, plane, *, qualification):

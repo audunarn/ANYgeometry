@@ -44,6 +44,8 @@ class Work:
         self.max_boxes, self.max_depth = int(max_boxes), int(max_depth)
         self.boxes = self.subdivisions = 0
         self.denied = 0              # takes refused after the budget ran out (reported on later refusals)
+        self.failed_entries = 0      # per-face validation entries reported by checks that observed a denial
+        self.budget_refusal = False  # a topology refusal whose EVERY entry came from such checks
         self.tight_x_cache = {}      # support_curves._tight_x results by value, per plan; only misses are charged
         self.chart_point_cache = {}  # support_curves._exact_point results by value, per plan
 

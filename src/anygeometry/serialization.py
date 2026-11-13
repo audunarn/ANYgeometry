@@ -647,9 +647,12 @@ def to_dict(
 def _qualify_document(geometry, *, include_features=True, certified=False):
     if include_features:
         geometry.features.validate_persistence(geometry)
+    from .model import _budget_entry_count, _flag_budget_refusal
+    counted = _budget_entry_count()
     errors = geometry.validate_topology()
     structural_errors = geometry._validate_structural()  # noqa: SLF001
     if errors or structural_errors:
+        _flag_budget_refusal(counted, (*errors, *structural_errors))
         raise GeometryError(
             "cannot serialize invalid topology: "
             + "; ".join((*errors, *structural_errors))

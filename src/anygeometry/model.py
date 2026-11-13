@@ -188,6 +188,23 @@ def _snap_chain_local_rounding(parameter: float, bound: Fraction) -> float | Non
     return None
 
 
+
+from ._budget_provenance import denial_mark, note_entry
+
+
+def _budget_entry_count():
+    from .plane_nurbs import CURRENT_WORK
+    return getattr(CURRENT_WORK.get(), 'failed_entries', None)
+
+
+def _flag_budget_refusal(counted, problems):
+    """Mark the plan's Work when EVERY reported problem came from a check that observed a budget denial."""
+    from .plane_nurbs import CURRENT_WORK
+    work = CURRENT_WORK.get()
+    if counted is not None and work.failed_entries - counted == len(problems):
+        work.budget_refusal = True
+
+
 @dataclass(frozen=True, slots=True)
 class StructuralValidationDiagnostics:
     """Bounded work performed by the most recent committed validation.
@@ -828,8 +845,10 @@ class GeometryModel:
                 validates_commit = validates_commit or any(ns == "solid_region" for ns, _ in journal.mapping_before)
                 if validates_commit:
                     from .solid_regions import validate_regions
+                    counted = _budget_entry_count()
                     problems = (*self._validate_incremental(journal), *validate_regions(self))
                     if problems:
+                        _flag_budget_refusal(counted, problems)
                         raise GeometryError("; ".join(problems))
                 self._commit_transaction(journal)
             except BaseException:
@@ -5672,7 +5691,9 @@ class GeometryModel:
         for index, loop in enumerate(pcurves):
             count = len(loop)
             for i, pcurve in enumerate(loop):
+                mark = denial_mark()
                 if certify_simple(pcurve) is not True:
+                    note_entry(mark)
                     result.append(f"face {face_id} loop {index} edge {i} is not certified simple")
             for i in range(count):
                 for j in range(i + 1, count):
@@ -5681,13 +5702,18 @@ class GeometryModel:
                     if (len(common) != 1 if adjacent and count > 2 else bool(common) and not adjacent):
                         result.append(f"face {face_id} loop {index} self-intersects")
                         continue
+                    mark = denial_mark()
                     if not certify_only_shared_ends(loop[i], loop[j]):
+                        note_entry(mark)
                         result.append(f"face {face_id} loop {index} is not certified simple")
         for first in range(len(pcurves)):
             for second in range(first + 1, len(pcurves)):
                 for a, pcurve_a in enumerate(pcurves[first]):
                     for b, pcurve_b in enumerate(pcurves[second]):
+                        mark = denial_mark()
                         if shared(ends[first][a], ends[second][b]) or not certify_only_shared_ends(pcurve_a, pcurve_b):
+                            if not shared(ends[first][a], ends[second][b]):
+                                note_entry(mark)
                             result.append(f"face {face_id} loops {first} and {second} are not certified disjoint")
         if result:
             return result

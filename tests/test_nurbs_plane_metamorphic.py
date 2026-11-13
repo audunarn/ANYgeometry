@@ -258,8 +258,6 @@ def test_budget_monotonicity(level):
     assert error.budget_limit == CAPS[0] and error.budget_denied >= 1
 
 
-@pytest.mark.xfail(strict=True, reason='FINDING (gap audit G1): between the cheapest cap and the certifying cap '
-                   'the refusal can be an untyped GeometryError (not certified disjoint / invalid topology)')
 def test_every_budget_refusal_is_the_typed_budget_class():
     for cap in CAPS:
         kind, error = split_under(.0625, cap)
