@@ -25,23 +25,87 @@ def polygon_area(poly) -> float:
     return float(np.linalg.norm(area_vector(poly)))
 
 
-def polygon_plane(poly):
-    """(unit outward normal, centroid, area); refuses a non-planar polygon (relative 1e-9) or zero area."""
+PLANAR_SIZE_FACTOR = 64        # eps units of the facet's own extent: rounding of the plane fit itself
+PLANAR_ROUNDING_FACTOR = 32    # eps units of the vertex coordinate magnitude: a few rigid-transform operations
+PLANAR_ROUNDING_SIZE_CAP = 1e-9  # allowance never exceeds this fraction of the extent (the former local-frame overlap gate scale)
+
+
+def _checked_scale(value, name="coordinate_scale"):
+    """None, or a positive finite real number as float; anything else (NaN, inf, 0, negative, bool, str, array) is refused."""
+    if value is None:
+        return None
+    if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, float, np.integer, np.floating)):
+        raise GeometryError(f"{name} must be a positive finite real number")
+    v = float(value)
+    if not np.isfinite(v) or v <= 0.0:
+        raise GeometryError(f"{name} must be a positive finite real number")
+    return v
+
+
+def planarity_tolerance(poly, coordinate_scale=None) -> float:
+    """Strict planarity limit (metres) for a convex facet of four or more vertices, from the facet's own geometry.
+
+    ``64*eps*extent`` covers rounding of the plane fit; ``min(32*eps*M, 1e-9*extent)`` adds the rounding the vertex
+    coordinates already carry, M being the coordinate magnitude of the ORIGINAL (untranslated) vertices
+    (``coordinate_scale``, default ``max|p|``). The allowance is capped relative to the facet so a large translation
+    cannot admit physically meaningful warp. float64 criterion: float32 input is promoted exactly and its ~6e-8
+    relative rounding is refused as non-planar, never repaired. The residual is measured in a local frame.
+    """
+    p = np.asarray(poly, dtype=np.float64)
+    coordinate_scale = _checked_scale(coordinate_scale)
+    eps = np.finfo(float).eps
+    extent = float(np.linalg.norm(np.ptp(p, axis=0)))
+    m = float(np.abs(p).max()) if coordinate_scale is None else coordinate_scale
+    return PLANAR_SIZE_FACTOR * eps * max(extent, np.finfo(float).tiny) + min(PLANAR_ROUNDING_FACTOR * eps * m,
+                                                                              PLANAR_ROUNDING_SIZE_CAP * extent)
+
+
+def polygon_plane(poly, *, planarity: str = "legacy", coordinate_scale=None):
+    """(unit outward normal, centroid, area); refuses a non-planar polygon or zero area.
+
+    ``planarity="legacy"`` (default, the original behaviour for every existing caller, triangles included):
+    residual from vertex 0 <= 1e-9*max(1, max|p|). ``"strict"``: triangles are planar by construction and not
+    plane-gated; for four or more vertices the residual, measured in a local frame (vertex 0 subtracted, then the
+    local centroid), must be <= :func:`planarity_tolerance`; ``coordinate_scale`` is the magnitude of the original,
+    untranslated vertices when ``poly`` is a translated copy.
+    """
+    if planarity not in ("legacy", "strict"):
+        raise ValueError("planarity must be 'legacy' or 'strict'")
+    coordinate_scale = _checked_scale(coordinate_scale)
     p = np.asarray(poly, dtype=np.float64)
     av = area_vector(p)
     a = float(np.linalg.norm(av))
     if a <= 0.0:
         raise GeometryError("degenerate polygon")
     n = av / a
-    scale = max(1.0, float(np.abs(p).max()))
-    if np.abs((p - p[0]) @ n).max() > 1e-9 * scale:
-        raise GeometryError("floating overlap requires planar polygons")
+    if planarity == "legacy":
+        scale = max(1.0, float(np.abs(p).max()) if coordinate_scale is None else float(coordinate_scale))
+        if np.abs((p - p[0]) @ n).max() > 1e-9 * scale:
+            raise GeometryError("floating overlap requires planar polygons")
+    elif len(p) > 3:
+        local = p - p[0]
+        if np.abs((local - local.mean(axis=0)) @ n).max() > planarity_tolerance(p, coordinate_scale):
+            raise GeometryError("polygon must be planar to numerical precision")
+    return n, _fan_centroid(p), a
+
+
+def _polygon_plane_admitted(poly):
+    """Plane of a polygon the caller already admitted with ``planarity="strict"``; no gate (private: panel_pressure_projection only)."""
+    p = np.asarray(poly, dtype=np.float64)
+    av = area_vector(p)
+    a = float(np.linalg.norm(av))
+    if a <= 0.0:
+        raise GeometryError("degenerate polygon")
+    return av / a, _fan_centroid(p), a
+
+
+def _fan_centroid(p):
     # area-weighted centroid by fan triangles
     c = np.zeros(3); tot = 0.0
     for k in range(1, len(p) - 1):
         t = p[[0, k, k + 1]]; ta = 0.5 * np.linalg.norm(np.cross(t[1] - t[0], t[2] - t[0]))
         c += ta * t.mean(axis=0); tot += ta
-    return n, c / tot, a
+    return c / tot
 
 
 def clip_halfspace(poly, normal, offset):
@@ -107,10 +171,26 @@ def panelize(poly, size: float):
     return [q + origin for q in pieces]
 
 
-def overlap_polygon(source, target, *, distance_tol: float = 1e-6, normal_cos_tol: float = 1.0 - 1e-6):
-    """Physical overlap polygon (in the source plane) of two coplanar same-orientation convex polygons, or None."""
-    ns, cs, _ = polygon_plane(source)
-    nt, ct, _ = polygon_plane(target)
+def overlap_polygon(source, target, *, distance_tol: float = 1e-6, normal_cos_tol: float = 1.0 - 1e-6,
+                    planarity: str = "legacy", source_scale=None, target_scale=None):
+    """Physical overlap polygon (in the source plane) of two coplanar same-orientation convex polygons, or None.
+
+    ``planarity`` / ``source_scale`` / ``target_scale`` are forwarded to :func:`polygon_plane` (see there)."""
+    source_scale = _checked_scale(source_scale, "source_scale")
+    target_scale = _checked_scale(target_scale, "target_scale")
+    ns, cs, _ = polygon_plane(source, planarity=planarity, coordinate_scale=source_scale)
+    nt, ct, _ = polygon_plane(target, planarity=planarity, coordinate_scale=target_scale)
+    return _overlap_core(source, target, ns, cs, nt, distance_tol, normal_cos_tol)
+
+
+def _overlap_polygon_admitted(source, target, *, distance_tol: float, normal_cos_tol: float):
+    """:func:`overlap_polygon` for polygons already admitted with ``planarity="strict"`` (private)."""
+    ns, cs, _ = _polygon_plane_admitted(source)
+    nt, ct, _ = _polygon_plane_admitted(target)
+    return _overlap_core(source, target, ns, cs, nt, distance_tol, normal_cos_tol)
+
+
+def _overlap_core(source, target, ns, cs, nt, distance_tol, normal_cos_tol):
     if float(ns @ nt) < normal_cos_tol:
         return None
     t = np.asarray(target, dtype=np.float64)

@@ -14,7 +14,7 @@ from anygeometry._planning_qualification import ModuleObserver,QualificationDecl
 
 def _standalone_contract(record_property):
     """Exercise the standalone boundary when no real provider is installed."""
-    if 'anysolver._qualified_authority_epoch' in sys.modules:
+    if 'anyfesolver._qualified_authority_epoch' in sys.modules:
         record_property('observer_contract', 'genuine_provider')
         return False
     record_property('observer_contract', 'standalone')
@@ -41,7 +41,7 @@ def _standalone_contract(record_property):
         pin_module(module)
     with pytest.raises(QualificationDecline, match='unregistered external module observer'):
         pin_module(module, package_only=True)
-    assert 'anysolver._qualified_authority_epoch' not in sys.modules
+    assert 'anyfesolver._qualified_authority_epoch' not in sys.modules
     return True
 
 
@@ -57,7 +57,7 @@ def test_real_observer_keeps_portable_pin_and_legacy_refusal(record_property):
 def test_observer_foreign_registry_collision_refuses_without_equality(monkeypatch,record_property):
     if _standalone_contract(record_property):
         return
-    owner=sys.modules['anysolver._qualified_authority_epoch'];calls=[]
+    owner=sys.modules['anyfesolver._qualified_authority_epoch'];calls=[]
     cell=next(cell for name,cell in zip(owner._WATCH_MODULE.__code__.co_freevars,owner._WATCH_MODULE.__closure__)
               if name=='tracked_module_types')
     class Collision:
@@ -66,6 +66,29 @@ def test_observer_foreign_registry_collision_refuses_without_equality(monkeypatc
     monkeypatch.setattr(cell,'cell_contents',{Collision():type(np)})
     with pytest.raises(QualificationDecline):ModuleObserver(np)
     assert calls==[]
+
+
+def test_legacy_observer_aliased_under_canonical_key_refuses(monkeypatch):
+    legacy='anysolver._qualified_authority_epoch'
+    class Foreign(types.ModuleType):
+        __module__=legacy
+    module=Foreign('external')
+    monkeypatch.setitem(sys.modules,'anyfesolver._qualified_authority_epoch',types.ModuleType(legacy))
+    with pytest.raises(QualificationDecline,match='unregistered external module observer'):
+        is_package_module(module)
+
+
+@pytest.mark.parametrize('target',['package_name','provider_filename'])
+def test_observer_canonical_package_origin_is_required(monkeypatch,record_property,target):
+    if _standalone_contract(record_property):
+        return
+    package=sys.modules['anyfesolver']
+    if target=='package_name':
+        monkeypatch.setattr(package,'__name__','anysolver')
+    else:
+        monkeypatch.setattr(package,'__file__',str(Path(package.__file__).with_name('other.py')))
+    with pytest.raises(QualificationDecline,match='external observer provider origin'):
+        ModuleObserver(np)
 
 
 @pytest.mark.parametrize('hook',[False,True])
@@ -82,7 +105,7 @@ def test_unknown_external_module_subclass_refuses_without_read_hook(hook):
 def test_observer_initial_source_or_namespace_skew_refuses(monkeypatch,target,record_property):
     if _standalone_contract(record_property):
         return
-    owner=sys.modules['anysolver._qualified_authority_epoch'];cls=type(np)
+    owner=sys.modules['anyfesolver._qualified_authority_epoch'];cls=type(np)
     if target=='read_hook':monkeypatch.setattr(cls,'__getattribute__',lambda *a:pytest.fail('changed read hook invoked'),raising=False)
     else:
         function=owner._make_attribute_registry if target=='factory' else vars(cls)['__setattr__']
@@ -92,11 +115,11 @@ def test_observer_initial_source_or_namespace_skew_refuses(monkeypatch,target,re
     finally:monkeypatch.undo()
 
 
-@pytest.mark.parametrize('target',['factory','setter','registry','registry_namespace','module','read_hook'])
+@pytest.mark.parametrize('target',['factory','setter','registry','registry_namespace','module','package','package_origin','read_hook'])
 def test_observer_retained_changes_are_terminal(monkeypatch,target,record_property):
     if _standalone_contract(record_property):
         return
-    owner=sys.modules['anysolver._qualified_authority_epoch'];cls=type(np);captured=ModuleObserver(np)
+    owner=sys.modules['anyfesolver._qualified_authority_epoch'];cls=type(np);captured=ModuleObserver(np)
     if target in ('factory','setter'):
         function=owner._make_attribute_registry if target=='factory' else vars(cls)['__setattr__']
         monkeypatch.setattr(function,'__code__',function.__code__.replace())
@@ -108,6 +131,8 @@ def test_observer_retained_changes_are_terminal(monkeypatch,target,record_proper
                   if name=='tracked_module_types')
         monkeypatch.setattr(cell,'cell_contents',dict(cell.cell_contents))
     elif target=='module':monkeypatch.setitem(sys.modules,'numpy',types.ModuleType('numpy'))
+    elif target=='package':monkeypatch.setitem(sys.modules,'anyfesolver',types.ModuleType('anyfesolver'))
+    elif target=='package_origin':monkeypatch.setattr(sys.modules['anyfesolver'],'__file__','other.py')
     else:monkeypatch.setattr(cls,'__getattribute__',lambda *a:pytest.fail('changed read hook invoked'),raising=False)
     try:
         with pytest.raises(QualificationDecline):captured.verify()

@@ -711,3 +711,10 @@ __all__ += ["ApproximationSourceBinding", "TrimEnclosureScale", "query_approxima
     "validate_approximation_source_binding", "query_trim_enclosure_scale", "validate_trim_enclosure_scale_binding"]
 from ._translational_pairs import query_translational_profile_interfaces
 __all__ += ["query_translational_profile_interfaces"]
+
+from .panel_pressure_projection import (
+    MappingLimits, PanelProjection, PanelProjectionError, PanelProjectionCancelled, prepare_panel_projection,
+    validate_panel_geometry,
+)
+__all__ += ["MappingLimits", "PanelProjection", "PanelProjectionError", "PanelProjectionCancelled",
+            "prepare_panel_projection", "validate_panel_geometry"]

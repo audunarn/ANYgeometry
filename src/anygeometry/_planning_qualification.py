@@ -114,8 +114,11 @@ def _observer_shape(module):
     namespace=types.ModuleType.__dict__['__dict__'].__get__(module,cls)
     if str(namespace.get('__name__','')).startswith('anygeometry.'):
         raise QualificationDecline('owned package module observer is unsupported')
-    owner=sys.modules.get('anysolver._qualified_authority_epoch')
-    if type(owner) is not types.ModuleType or vars(cls).get('__module__')!=owner.__name__:
+    owner_name='anyfesolver._qualified_authority_epoch'
+    owner=sys.modules.get(owner_name)
+    declared=vars(cls).get('__module__')
+    if (type(owner) is not types.ModuleType or type(vars(owner).get('__name__')) is not str or
+            vars(owner)['__name__']!=owner_name or type(declared) is not str or declared!=owner_name):
         raise QualificationDecline('unregistered external module observer')
     allowed={'__module__','__setattr__','__delattr__','__static_attributes__','__doc__'}
     if (set(vars(cls))!=allowed or vars(cls)['__static_attributes__']!=() or vars(cls)['__doc__'] is not None or
@@ -153,10 +156,20 @@ class ModuleObserver:
         self.module=module;self.cls=cls;self.namespace=namespace;self.owner=owner
         self.name=namespace['__name__'];self.checks=_RetainedChecks();self.evidence=_ImmutableEvidence()
         self.pin=pin_module(owner);self.references=[module,cls,owner,watch,registry]
-        package=sys.modules.get('anysolver')
-        if (type(package) is not types.ModuleType or Path(self.pin['path']).name!='_qualified_authority_epoch.py' or
-                Path(self.pin['path']).parent!=Path(vars(package).get('__file__','')).resolve().parent):
+        package=sys.modules.get('anyfesolver')
+        if type(package) is not types.ModuleType:
             raise QualificationDecline('external observer provider origin')
+        package_name=vars(package).get('__name__');package_file=vars(package).get('__file__')
+        if type(package_name) is not str or package_name!='anyfesolver' or type(package_file) is not str:
+            raise QualificationDecline('external observer provider origin')
+        package_path=Path(package_file).resolve()
+        if (package_path.parts[-2:]!=('anyfesolver','__init__.py') or
+                Path(self.pin['path'])!=package_path.with_name('_qualified_authority_epoch.py')):
+            raise QualificationDecline('external observer provider origin')
+        self.package=package
+        self.checks.binding('observer owner name',vars(owner),'__name__')
+        self.checks.binding('observer package name',vars(package),'__name__')
+        self.checks.binding('observer package origin',vars(package),'__file__')
         _,_,_,codes=self.evidence.source(owner,self.pin['path'])
         functions=[vars(owner).get('_make_attribute_registry'),watch,cells.get('tracked_module_type')]
         callbacks=None
@@ -205,7 +218,8 @@ class ModuleObserver:
     def verify(self):
         # Class identity is checked before any potentially replaced attribute path.
         if (type(self.module) is not self.cls or sys.modules.get(self.name) is not self.module or
-                sys.modules.get('anysolver._qualified_authority_epoch') is not self.owner):
+                sys.modules.get('anyfesolver') is not self.package or
+                sys.modules.get('anyfesolver._qualified_authority_epoch') is not self.owner):
             raise QualificationDecline('external observer module/type binding changed')
         self.checks.verify()
         if self.read_descriptor.__get__(self.module,self.cls) is not self.namespace:

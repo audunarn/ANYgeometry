@@ -28,6 +28,7 @@ PACKAGE = SOURCE / "anygeometry"
 FORBIDDEN = {
     "anyfem",
     "anymesher",
+    "anyfesolver",
     "anysolver",
     "anystruct",
     "anytk3d",
