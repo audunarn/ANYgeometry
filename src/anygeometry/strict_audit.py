@@ -2399,6 +2399,21 @@ class _StrictAuditState:
         for identifier, attachment in sorted(self.model.attachments.items()):
             if attachment.member_id is None or attachment.member_id != member_id:
                 continue
+            if attachment.sheet_id is not None:
+                sheet = self.model.sheets[attachment.sheet_id]
+                if not any(self.model.face_uses[use].face_id == face_id
+                           for use in sheet.face_use_ids):
+                    continue
+            if attachment.kind is AttachmentKind.MEMBER_ON_FACE_BOUNDARY:
+                # An edge-local declaration cannot qualify the rest of a
+                # multi-edge member. Target geometry is qualified independently.
+                uses = (self.model.member_edge_uses[use]
+                        for use in self.model.members[member_id].edge_use_ids)
+                if not any(use.edge_id == edge_id
+                           and attachment.member_range.start <= use.parent_range.start
+                           and attachment.member_range.end >= use.parent_range.end
+                           for use in uses):
+                    continue
             if (
                 attachment.target_kind is AttachmentTargetKind.FACE
                 and attachment.target_id == face_id
@@ -2418,6 +2433,7 @@ class _StrictAuditState:
             return attachment_kind is AttachmentKind.MEMBER_THROUGH_FACE
         if relationship == "boundary":
             return attachment_kind in (
+                AttachmentKind.MEMBER_ON_FACE_BOUNDARY,
                 AttachmentKind.MEMBER_ON_BOUNDARY,
                 AttachmentKind.ENDPOINT,
             )
@@ -3629,6 +3645,23 @@ class _StrictAuditState:
                     },
                 )
             try:
+                if (attachment.kind is AttachmentKind.MEMBER_ON_FACE_BOUNDARY
+                        and attachment.sheet_id is not None):
+                    sheet = self.model.sheets[attachment.sheet_id]
+                    if not any(attachment.target_id in self._face_boundary_edges(
+                            self.model.face_uses[use].face_id)
+                            for use in sheet.face_use_ids):
+                        self.issue(
+                            AuditCode.ATTACHMENT_INCONSISTENT,
+                            AuditSeverity.ERROR,
+                            "boundary attachment target is not a boundary of its declared sheet",
+                            keys=(attachment_key, attachment.target_key,
+                                  ("sheet", attachment.sheet_id)),
+                            classification="inconsistent",
+                            recommended_action="correct the attachment target or sheet context",
+                        )
+                        self.collector.record_classification(classified=True)
+                        continue
                 if attachment.kind is AttachmentKind.SHEET_ON_JOINT:
                     from .joint_edges import query_joint_edge
                     if not query_joint_edge(self.model,attachment.target_id).declared:
@@ -3655,7 +3688,7 @@ class _StrictAuditState:
                             attachment.target_id, np.asarray((parameter,))
                         )[0]
                         trim_valid = True
-                        extent = self.model.edge_length(attachment.target_id)
+                        extent = self._edge_length(attachment.target_id)
                     elif attachment.target_kind is AttachmentTargetKind.VERTEX:
                         target_point = self.model.vertex_position(attachment.target_id)
                         trim_valid = True
