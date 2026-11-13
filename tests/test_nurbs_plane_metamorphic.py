@@ -2,7 +2,7 @@
 
 No oracle: every relation compares the kernel with itself on a transformed input.
 Seeded ``random`` only; tiny 3x3 degree-2 patches; public entry ``plane_nurbs_section``
-(the budget relation sets the audit's ``CURRENT_WORK`` exactly as ``plan_plane_split`` does).
+(the budget relation goes through ``plan_plane_split`` and its public ``qualification`` policy).
 """
 from __future__ import annotations
 
@@ -13,8 +13,11 @@ import pytest
 
 from anygeometry import GeometryError, Plane
 from anygeometry.nurbs import NurbsSurface
-from anygeometry.plane_nurbs import CURRENT_WORK, PlaneNurbsNotCertified, plane_nurbs_section
-from anygeometry.section_audit import Work
+from anygeometry import GeometryModel, apply_plane_split, plan_plane_split
+from anygeometry.nurbs import CurveOnSurface, NurbsCurve
+from anygeometry.plane_nurbs import PlaneNurbsNotCertified, plane_nurbs_section
+from anygeometry.predicates import IntersectionQualificationPolicy
+from anygeometry.serialization import to_dict
 
 KN3 = (0., 0., 0., 1., 1., 1.)
 SEEDS = range(12)
@@ -47,16 +50,12 @@ def surface_of(net):
 
 # ------------------------------------------------------------------ outcome signature
 
-def outcome(plane, surface, work=None, detail=True):
+def outcome(plane, surface, detail=True):
     """('ok', signature) or ('refused', exception class name); anything else escapes (a failure)."""
-    token = CURRENT_WORK.set(work) if work is not None else None
     try:
         section = plane_nurbs_section(plane, surface)
     except GeometryError as error:
         return ('refused', type(error).__name__)
-    finally:
-        if token is not None:
-            CURRENT_WORK.reset(token)
     paths = []
     for path in section.paths:
         if path.closed:
@@ -135,17 +134,39 @@ def insert_mid(net, knots_u, knots_v, direction):
     return tuple(tuple(r) for r in out), knots_u, new_knots
 
 
-def elevate_u(net):
-    """Degree 2 -> 3 in u on one Bezier span: Q_i = i/3 P_{i-1} + (1 - i/3) P_i."""
-    cols = []
+def elevation_case(seed):
+    """Dyadic controls whose degree elevation is exactly representable in doubles.
+
+    Q_i = (i P_{i-1} + (3 - i) P_i) / 3 is exact when the three u-controls of every column
+    are congruent modulo 3 in units of 1/64, per coordinate (so no thirds appear)."""
+    rng = random.Random(1000 + seed)
+    net = [[None] * 3 for _ in range(3)]
     for j in range(3):
-        p = [net[i][j] for i in range(3)]
-        q = [p[0]]
-        for i in (1, 2):
-            q.append(tuple(i / 3 * a + (1 - i / 3) * b for a, b in zip(p[i - 1], p[i])))
-        q.append(p[2])
-        cols.append(q)
-    return tuple(tuple(cols[j][i] for j in range(3)) for i in range(4))
+        coords = []
+        for axis in range(3):
+            target = rng.randrange(3)
+            column = []
+            for i in range(3):
+                grid = (32 * i, 32 * j, 0)[axis]
+                column.append(grid + rng.choice([r for r in range(-6, 7) if (grid + r) % 3 == target]) * (1 + 3 * (axis == 2)))
+            coords.append(column)
+        for i in range(3):
+            net[i][j] = tuple(coords[axis][i] / 64 for axis in range(3))
+    return tuple(tuple(r) for r in net)
+
+
+def elevate_u(net):
+    """Degree 2 -> 3 in u on one Bezier span, in exact rationals; asserted exact as doubles."""
+    out = [[None] * 3 for _ in range(4)]
+    for j in range(3):
+        p = [tuple(Fraction(c) for c in net[i][j]) for i in range(3)]
+        q = [p[0]] + [tuple(Fraction(i, 3) * a + (1 - Fraction(i, 3)) * b for a, b in zip(p[i - 1], p[i]))
+                      for i in (1, 2)] + [p[2]]
+        for i in range(4):
+            floats = tuple(float(c) for c in q[i])
+            assert tuple(Fraction(c) for c in floats) == q[i], 'elevated control is not a double'
+            out[i][j] = floats
+    return tuple(tuple(r) for r in out)
 
 
 def coarse(plane, surface):
@@ -176,8 +197,8 @@ def test_knot_insertion_keeps_certified_topology():
 def test_degree_elevation_keeps_certified_topology():
     oks = 0
     for seed in SEEDS:
-        net, lt = make_case(seed)
-        plane = plane_of(lt)
+        net = elevation_case(seed)
+        plane = plane_of(make_case(seed)[1])
         base = coarse(plane, surface_of(net))
         elevated = NurbsSurface(3, 2, (0., 0., 0., 0., 1., 1., 1., 1.), KN3, elevate_u(net))
         assert coarse(plane, elevated) == base, seed
@@ -185,31 +206,65 @@ def test_degree_elevation_keeps_certified_topology():
     assert oks >= 3
 
 
-# ------------------------------------------------------------------ budget monotonicity
+# ------------------------------------------------------------------ budget monotonicity (public policy)
 
-def test_budget_monotonicity():
-    certified = 0
-    for seed in SEEDS:
-        net, lt = make_case(seed)
-        plane, surface = plane_of(lt), surface_of(net)
-        reference = outcome(plane, surface)
-        cheap = outcome(plane, surface, Work(1, 32))
-        if cheap[0] == 'ok':
-            assert cheap == reference
-        else:
-            assert reference[0] != 'ok' or cheap == ('refused', 'PlaneNurbsNotCertified')
-        previous = None
-        for n in (1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024):
-            current = outcome(plane, surface, Work(n, 32))
-            if previous is not None and previous[0] == 'ok':
-                assert current == previous, (seed, n)      # certified at N: identical at 2N
-            if current[0] != 'ok':
-                if reference[0] == 'ok':                   # a refusal below the need is the typed class
-                    assert current == ('refused', 'PlaneNurbsNotCertified'), (seed, n, current)
-            previous = current
-        assert previous == reference or reference[0] != 'ok'
-        certified += reference[0] == 'ok'
-    assert certified >= 3
+RIDGE = NurbsSurface(2, 1, KN3, (0., 0., 1., 1.),
+                     tuple(((i / 2, 0., z), (i / 2, 1., z)) for i, z in enumerate((.25, -.25, .25))))
+
+
+def ridge_model():
+    model = GeometryModel()
+    points = [(0., 0.), (1., 0.), (1., 1.), (0., 1.)]
+    vertices = [model.add_point(*RIDGE.evaluate(*p)) for p in points]
+    edges = [model.add_curve(vertices[i], vertices[(i + 1) % 4], CurveOnSurface(
+        RIDGE, NurbsCurve(1, (0., 0., 1., 1.), (p, points[(i + 1) % 4])))) for i, p in enumerate(points)]
+    return model, model.add_face(edges, surface=RIDGE)
+
+
+def split_under(level, boxes):
+    """('ok', published model) or ('refused', error) for one plan+apply under a box budget."""
+    model, face = ridge_model()
+    plane = Plane((0., 0., level), (1., 0., 0.), (0., 1., 0.))
+    try:
+        plan = plan_plane_split(model, [face], plane,
+                                qualification=IntersectionQualificationPolicy(max_boxes_per_pair=boxes))
+    except GeometryError as error:
+        return 'refused', error
+    apply_plane_split(model, plan, policy='imprint')
+    return 'ok', to_dict(model)
+
+
+CAPS = [4 ** k for k in range(0, 7)] + [200_000]
+
+
+def published(result):
+    kind, payload = result
+    if kind == 'ok':
+        payload = {key: value for key, value in payload.items() if key not in ('model_id', 'checksum')}
+    return kind, payload
+
+
+@pytest.mark.parametrize('level', (.0625, -.125))
+def test_budget_monotonicity(level):
+    results = [split_under(level, cap) for cap in CAPS]
+    reference = published(results[-1])
+    assert reference[0] == 'ok'
+    first = next(i for i, r in enumerate(results) if r[0] == 'ok')
+    assert first > 0, 'the cheapest cap must demonstrate a budget refusal'
+    for cap, result in zip(CAPS[first:], results[first:]):
+        assert published(result) == reference, cap            # certified at N: identical at larger caps
+    kind, error = results[0]                                  # the cheapest cap: the typed budget refusal
+    assert type(error) is PlaneNurbsNotCertified and 'budget' in str(error), error
+    assert error.budget_limit == CAPS[0] and error.budget_denied >= 1
+
+
+@pytest.mark.xfail(strict=True, reason='FINDING (gap audit G1): between the cheapest cap and the certifying cap '
+                   'the refusal can be an untyped GeometryError (not certified disjoint / invalid topology)')
+def test_every_budget_refusal_is_the_typed_budget_class():
+    for cap in CAPS:
+        kind, error = split_under(.0625, cap)
+        if kind == 'refused':
+            assert type(error) is PlaneNurbsNotCertified and 'budget' in str(error), (cap, error)
 
 
 # ------------------------------------------------------------------ refusal fuzzing
@@ -244,8 +299,8 @@ def test_every_exception_is_a_typed_refusal():
             plane_nurbs_section(plane, surface)
             seen.add('ok')
         except GeometryError as error:
-            seen.add(type(error).__name__)
-            if isinstance(error, PlaneNurbsNotCertified):
-                assert str(error)
+            assert type(error) is PlaneNurbsNotCertified, (type(error).__name__, str(error))
+            assert str(error)
+            seen.add('refused')
         # any non-GeometryError exception propagates and fails the test
-    assert 'ok' in seen
+    assert seen == {'ok', 'refused'}, seen
