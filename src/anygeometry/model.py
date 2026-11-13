@@ -188,6 +188,35 @@ def _snap_chain_local_rounding(parameter: float, bound: Fraction) -> float | Non
     return None
 
 
+
+def _face_check_noting_denials(check, face_id):
+    """Run one per-face geometry check; count its entries on the plan's Work when it observed a denial.
+
+    Structural (no message text): entries of a face whose own check observed a denial are budget-caused
+    evidence; failures of checks that saw no denial (groups, ownership, selection) are not.
+    """
+    from .plane_nurbs import CURRENT_WORK
+    work = CURRENT_WORK.get()
+    before = getattr(work, 'denied', None)
+    result = check(face_id)
+    if result and before is not None and work.denied > before:
+        work.failed_entries += len(result)
+    return result
+
+
+def _budget_entry_count():
+    from .plane_nurbs import CURRENT_WORK
+    return getattr(CURRENT_WORK.get(), 'failed_entries', None)
+
+
+def _flag_budget_refusal(counted, problems):
+    """Mark the plan's Work when EVERY reported problem came from a check that observed a budget denial."""
+    from .plane_nurbs import CURRENT_WORK
+    work = CURRENT_WORK.get()
+    if counted is not None and work.failed_entries - counted == len(problems):
+        work.budget_refusal = True
+
+
 @dataclass(frozen=True, slots=True)
 class StructuralValidationDiagnostics:
     """Bounded work performed by the most recent committed validation.
@@ -828,8 +857,10 @@ class GeometryModel:
                 validates_commit = validates_commit or any(ns == "solid_region" for ns, _ in journal.mapping_before)
                 if validates_commit:
                     from .solid_regions import validate_regions
+                    counted = _budget_entry_count()
                     problems = (*self._validate_incremental(journal), *validate_regions(self))
                     if problems:
+                        _flag_budget_refusal(counted, problems)
                         raise GeometryError("; ".join(problems))
                 self._commit_transaction(journal)
             except BaseException:
@@ -1558,7 +1589,7 @@ class GeometryModel:
                             errors.append(f"face {identifier} has a discontinuous loop")
                             break
                 if not errors:
-                    errors.extend(self._validate_face_geometry(identifier))
+                    errors.extend(_face_check_noting_denials(self._validate_face_geometry, identifier))
 
         for name in sorted(journal.group_changes):
             for reference in self._groups.get(name, ()):
@@ -5174,7 +5205,7 @@ class GeometryModel:
             if not any(
                 message.startswith(f"face {face_id} ") for message in errors
             ):
-                errors.extend(self._validate_face_geometry(face_id))
+                errors.extend(_face_check_noting_denials(self._validate_face_geometry, face_id))
         keys = self.entity_keys()
         for name, members in sorted(self.groups.items()):
             for reference in sorted(members, key=lambda item: (item.kind, item.id)):

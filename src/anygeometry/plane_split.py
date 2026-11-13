@@ -119,7 +119,7 @@ def plan_plane_split(model, face_ids, plane, *, qualification=None):
         return _plan_plane_split(model, face_ids, plane, qualification=policy)
     except GeometryError as error:
         if work.denied and getattr(error, 'budget_limit', None) is None:
-            _raise_typed_if_budget_caused(model, face_ids, plane, policy, work, error)
+            _raise_typed_if_budget_caused(work, error)
             # Contract boundary (owner-accepted): hostile exception subclasses built to defeat this
             # decoration (__setattr__/add_note overrides, __slots__, properties) are out of contract.
             # the refusal keeps its class and message; the budget facts are attached once (first writer wins),
@@ -135,29 +135,15 @@ def plan_plane_split(model, face_ids, plane, *, qualification=None):
         CURRENT_WORK.reset(token)
 
 
-def _raise_typed_if_budget_caused(model, face_ids, plane, policy, work, error):
-    """Typed budget refusal for a failure that a larger budget would have avoided (causality is measured).
+def _raise_typed_if_budget_caused(work, error):
+    """Typed budget refusal when a face check of THIS attempt failed while the budget denied takes.
 
-    A plan that was denied takes and then failed is replayed ONCE under the default budget: if the replay
-    plans, the budget caused the failure (whatever downstream refusal it surfaced as) and
-    ``PlaneNurbsNotCertified`` carrying budget_limit/spent/denied replaces it; if the replay also fails (or
-    there is nothing larger to try) the original refusal propagates unchanged. Zero-denial plans never get here.
+    Single attempt, no replay, the caller's cap is never exceeded. Independent refusals (empty selection,
+    invalid group, ownership) keep their class even after a denial: only ``Work.budget_refusal`` (every reported problem budget-caused) counts.
     """
-    from .predicates import DEFAULT_INTERSECTION_QUALIFICATION_POLICY
-    from .section_audit import Work
-    from .plane_nurbs import CURRENT_WORK, PlaneNurbsNotCertified
-    larger = DEFAULT_INTERSECTION_QUALIFICATION_POLICY
-    if larger.max_boxes_per_pair <= work.max_boxes:
+    from .plane_nurbs import PlaneNurbsNotCertified
+    if not work.budget_refusal:
         return
-    replay = Work(larger.max_boxes_per_pair, policy.max_subdivision_depth)
-    replay.max_newton_iterations = policy.max_newton_iterations
-    token = CURRENT_WORK.set(replay)
-    try:
-        _plan_plane_split(model, face_ids, plane, qualification=policy)
-    except GeometryError:
-        return
-    finally:
-        CURRENT_WORK.reset(token)
     typed = PlaneNurbsNotCertified(f"plane split qualification budget exhausted (spent {work.boxes} of limit "
                                    f"{work.max_boxes}, denied {work.denied}); the refusal surfaced as: {error}")
     typed.budget_limit, typed.budget_spent, typed.budget_denied = work.max_boxes, work.boxes, work.denied
