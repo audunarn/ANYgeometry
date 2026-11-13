@@ -45,6 +45,7 @@ class Work:
         self.boxes = self.subdivisions = 0
         self.denied = 0              # takes refused after the budget ran out (reported on later refusals)
         self.tight_x_cache = {}      # support_curves._tight_x results by value, per plan; only misses are charged
+        self.chart_point_cache = {}  # support_curves._exact_point results by value, per plan
 
     def take(self) -> bool:
         self.boxes += 1
