@@ -189,19 +189,7 @@ def _snap_chain_local_rounding(parameter: float, bound: Fraction) -> float | Non
 
 
 
-def _face_check_noting_denials(check, face_id):
-    """Run one per-face geometry check; count its entries on the plan's Work when it observed a denial.
-
-    Structural (no message text): entries of a face whose own check observed a denial are budget-caused
-    evidence; failures of checks that saw no denial (groups, ownership, selection) are not.
-    """
-    from .plane_nurbs import CURRENT_WORK
-    work = CURRENT_WORK.get()
-    before = getattr(work, 'denied', None)
-    result = check(face_id)
-    if result and before is not None and work.denied > before:
-        work.failed_entries += len(result)
-    return result
+from ._budget_provenance import denial_mark, note_entry
 
 
 def _budget_entry_count():
@@ -1589,7 +1577,7 @@ class GeometryModel:
                             errors.append(f"face {identifier} has a discontinuous loop")
                             break
                 if not errors:
-                    errors.extend(_face_check_noting_denials(self._validate_face_geometry, identifier))
+                    errors.extend(self._validate_face_geometry(identifier))
 
         for name in sorted(journal.group_changes):
             for reference in self._groups.get(name, ()):
@@ -5205,7 +5193,7 @@ class GeometryModel:
             if not any(
                 message.startswith(f"face {face_id} ") for message in errors
             ):
-                errors.extend(_face_check_noting_denials(self._validate_face_geometry, face_id))
+                errors.extend(self._validate_face_geometry(face_id))
         keys = self.entity_keys()
         for name, members in sorted(self.groups.items()):
             for reference in sorted(members, key=lambda item: (item.kind, item.id)):
@@ -5703,7 +5691,9 @@ class GeometryModel:
         for index, loop in enumerate(pcurves):
             count = len(loop)
             for i, pcurve in enumerate(loop):
+                mark = denial_mark()
                 if certify_simple(pcurve) is not True:
+                    note_entry(mark)
                     result.append(f"face {face_id} loop {index} edge {i} is not certified simple")
             for i in range(count):
                 for j in range(i + 1, count):
@@ -5712,13 +5702,18 @@ class GeometryModel:
                     if (len(common) != 1 if adjacent and count > 2 else bool(common) and not adjacent):
                         result.append(f"face {face_id} loop {index} self-intersects")
                         continue
+                    mark = denial_mark()
                     if not certify_only_shared_ends(loop[i], loop[j]):
+                        note_entry(mark)
                         result.append(f"face {face_id} loop {index} is not certified simple")
         for first in range(len(pcurves)):
             for second in range(first + 1, len(pcurves)):
                 for a, pcurve_a in enumerate(pcurves[first]):
                     for b, pcurve_b in enumerate(pcurves[second]):
+                        mark = denial_mark()
                         if shared(ends[first][a], ends[second][b]) or not certify_only_shared_ends(pcurve_a, pcurve_b):
+                            if not shared(ends[first][a], ends[second][b]):
+                                note_entry(mark)
                             result.append(f"face {face_id} loops {first} and {second} are not certified disjoint")
         if result:
             return result

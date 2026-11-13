@@ -173,3 +173,43 @@ def test_independent_refusal_after_a_denial_keeps_its_class_and_gets_the_facts()
         plan_plane_split(model, _denying_ids(GeometryError("requires selected faces"), 3), plane,
                          qualification=IntersectionQualificationPolicy(max_boxes_per_pair=1))
     assert type(info.value) is GeometryError and info.value.budget_denied >= 1
+
+
+# ---- G1 round 3: an independent permanent defect is never relabelled as budget (per-entry provenance)
+
+def _bowtie_child():
+    """Bowl split at z=.5, then a self-intersecting straight-pcurve bowtie hole appended to the child with holes."""
+    from dataclasses import replace
+    from anygeometry import apply_plane_split
+    from anygeometry.entities import OrientedEdge
+    from anygeometry.policies import MutationPolicy
+    model, face = _bowl_face()
+    plan = plan_plane_split(model, [face], Plane((0., 0., .5), (1., 0., 0.), (0., 1., 0.)),
+                            qualification=IntersectionQualificationPolicy(max_boxes_per_pair=200000))
+    apply_plane_split(model, plan, policy=MutationPolicy.IMPRINT)
+    child = next(i for i, f in model.faces.items() if f.holes)
+    support = model.faces[child].surface
+    points = [(.02, .02), (.18, .18), (.02, .18), (.18, .02)]
+    vertices = [model.add_point(*support.evaluate(*p)) for p in points]
+    edges = [model.add_curve(vertices[i], vertices[(i + 1) % 4],
+                             CurveOnSurface(support, NurbsCurve(1, (0., 0., 1., 1.), (p, points[(i + 1) % 4]))))
+             for i, p in enumerate(points)]
+    current = model.faces[child]
+    model._put_entity('face', replace(current, holes=current.holes + (tuple(OrientedEdge(e, True) for e in edges),)))
+    return model, child
+
+
+@pytest.mark.parametrize("z", [.25, .5])
+def test_independent_self_intersection_keeps_its_class_at_every_cap(z):
+    from anygeometry.plane_nurbs import PlaneNurbsNotCertified
+    classes = {}
+    for cap in (64, 200000):                    # 64: a denial AND the defect coexist; 200000: the defect alone
+        model, child = _bowtie_child()
+        with pytest.raises(GeometryError) as info:
+            plan_plane_split(model, [child], Plane((0., 0., z), (1., 0., 0.), (0., 1., 0.)),
+                             qualification=IntersectionQualificationPolicy(max_boxes_per_pair=cap))
+        classes[cap] = type(info.value)
+        assert 'self-intersects in the chart' in str(info.value)
+        if cap == 64:
+            assert info.value.budget_limit == 64 and info.value.budget_denied >= 1   # facts still attached
+    assert classes[64] is classes[200000] is GeometryError and not issubclass(classes[64], PlaneNurbsNotCertified)

@@ -23,6 +23,7 @@ Anything not certified is reported (the face is refused).
 from __future__ import annotations
 
 from fractions import Fraction
+from ._budget_provenance import denial_mark, note_entry
 import math
 
 import numpy as np
@@ -509,6 +510,7 @@ def validate_plane_section_face(model, face_id: int) -> list[str]:
         for j in range(i + 1, len(items)):
             (loop_a, pos_a, first), (loop_b, pos_b, second) = items[i], items[j]
             a, b = model.edges[first.edge], model.edges[second.edge]
+            mark = denial_mark()
             if isinstance(a.curve, (Straight, LineRange)) and isinstance(b.curve, (Straight, LineRange)):
                 if isinstance(a.curve, LineRange) or isinstance(b.curve, LineRange):
                     verdict = _retained_line_pair_verdict(model, first, second, plane)
@@ -550,6 +552,7 @@ def validate_plane_section_face(model, face_id: int) -> list[str]:
                               if loop_a == loop_b else
                               f"face {face_id} {where} intersect (edges {first.edge}, {second.edge})")
             else:
+                note_entry(mark)
                 result.append(f"face {face_id} {where}: edges {first.edge} and {second.edge} not certified disjoint")
     if result:
         return result

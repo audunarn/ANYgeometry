@@ -371,6 +371,9 @@ def has_section_edges(model, face) -> bool:
                for loop in (face.loop,) + tuple(face.holes) for item in loop)
 
 
+from ._budget_provenance import denial_mark, note_entry
+
+
 def validate_nurbs_section_face(model, face_id: int) -> list[str]:
     """Validation messages of a NURBS face trimmed by chart segments and section curves (empty: valid)."""
     from .nurbs import CurveOnSurface, _IDENTITY
@@ -434,6 +437,7 @@ def validate_nurbs_section_face(model, face_id: int) -> list[str]:
             shared = [located[v] for v in shared_ids if v in located]
             count = len(loops[la])
             neighbours = la == lb and (abs(pa - pb) == 1 or abs(pa - pb) == count - 1)
+            mark = denial_mark()
             verdict = _pair(model, a, b, chart, shared, shared_ids, tolerance, neighbours)
             if verdict is True:
                 continue
@@ -443,6 +447,7 @@ def validate_nurbs_section_face(model, face_id: int) -> list[str]:
                               f"{second.edge})" if la == lb else
                               f"face {face_id} {where} intersect in the chart (edges {first.edge}, {second.edge})")
             else:
+                note_entry(mark)
                 result.append(f"face {face_id} {where}: edges {first.edge} and {second.edge} not certified "
                               "disjoint in the chart")
     if result:
@@ -451,9 +456,11 @@ def validate_nurbs_section_face(model, face_id: int) -> list[str]:
         centers = [_center(ends[(index, position)][0]) for position in range(len(loop))]
         span = max(max(abs(float(p[0] - q[0])), abs(float(p[1] - q[1]))) for p in centers for q in centers) or 1.0
         for level in (3, 5, 7):
+            mark = denial_mark()
             try:
                 area, bound = chart_loop_area(model, loop, surface, level)
             except PlaneNurbsNotCertified as error:
+                note_entry(mark)
                 result.append(f"face {face_id} loop {index}: {error}")
                 break
             if abs(area) > bound + 1e-12 * span * span:
