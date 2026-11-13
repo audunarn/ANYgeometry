@@ -31,9 +31,10 @@ def _assert_budget_facts(error, cap):
 
 @pytest.mark.parametrize("cap", [1000, 1500])  # was [3000, 7000] before the _tight_x memo (about 1,700 boxes are needed now)
 def test_small_budget_refusal_keeps_its_type_and_carries_the_budget_facts(cap):
+    from anygeometry.plane_nurbs import PlaneNurbsNotCertified
     with pytest.raises(GeometryError) as info:
         _plan(cap)
-    assert type(info.value) is GeometryError          # the original class and message are untouched
+    assert type(info.value) is PlaneNurbsNotCertified and 'budget' in str(info.value)   # G1: typed at the source
     _assert_budget_facts(info.value, cap)
 
 
