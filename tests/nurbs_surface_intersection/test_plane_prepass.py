@@ -110,6 +110,33 @@ def test_acceptance_sections_decided(name, make, status, closed, cells):
     assert plane_nurbs_prepass(b, a).components == result.components      # operand order is irrelevant
 
 
+def test_uniform_nonunit_weights_keep_the_offset_homogeneous():
+    """F = n.(wX) - c w (review round 2): weights .25 everywhere must give the same section as weights 1."""
+    heavy = dataclasses.replace(bump(), weights=((.25,) * 3,) * 3)
+    result = plane_nurbs_prepass(plane(.1), heavy)
+    assert result.status is PrepassStatus.DECIDED and [c.closed for c in result.components] == [True]
+    assert result.cells_tested == 37
+    assert plane_nurbs_prepass(plane(.5), heavy).status is PrepassStatus.DISJOINT
+    assert plane_nurbs_prepass(plane(.2), heavy).reason is PrepassDecline.DEPTH_CAP
+
+
+def tent(ku=(0., 0., 0., .3, .3, 1., 1., 1.)):
+    """Degree 2 with an interior knot of multiplicity 2 (C0, interpolating the crest control): two spans of
+    unequal length; the section loop crosses the span boundary line u = 0.3."""
+    zi, xs, w = (0, .5, 1, .5, 0), (0, .15, .3, .65, 1.0), (0, 1, 0)
+    return NurbsSurface(2, 2, ku, K2, tuple(tuple((xs[i], j / 2, zi[i] * w[j]) for j in range(3)) for i in range(5)))
+
+
+def test_multiplicity_equal_to_degree_is_c0_and_shares_roots_across_the_span_line():
+    result = plane_nurbs_prepass(plane(.2), tent())
+    assert result.status is PrepassStatus.DECIDED and [c.closed for c in result.components] == [True]
+    assert sum(1 for root in result.roots if root.axis == 0 and root.line == F(0.3)) == 2    # one root pair on the knot line
+    assert all(not root.boundary or root.line in (0, 1) for root in result.roots)
+    # the crest at height 1/2 touches the plane: refused (double root on the span line / depth), never decided
+    assert plane_nurbs_prepass(plane(.5), tent()).status is PrepassStatus.DECLINED
+    assert plane_nurbs_prepass(plane(.6), tent()).status is PrepassStatus.DISJOINT
+
+
 def test_apex_tangent_is_declined_not_decided():
     result = plane_nurbs_prepass(plane(.2), bump())
     assert result.status is PrepassStatus.DECLINED and result.reason is PrepassDecline.DEPTH_CAP
