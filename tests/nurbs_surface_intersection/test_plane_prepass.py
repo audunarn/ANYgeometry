@@ -69,6 +69,8 @@ def test_mean_direction_is_strict_and_used():
     assert monotone_direction(grid(((0, 0), (1, 2)))) == (0, 1)
     # F = u + v - 3/4 * u*v*0 : F_u = F_v = 1; (1,0) is returned first (axis order is part of the contract)
     assert monotone_direction(grid(((-1, 0), (0, 1)))) == (1, 0)
+    # the mean-direction branch (degree elevation) is the only certificate for this grid (review round 1)
+    assert monotone_direction(grid(((0, F(1, 2), 2), (F(1, 2), F(1, 2), F(3, 2)), (2, F(3, 2), 2)))) == (1, -1)
     # only the mixed (mean) direction is strict: F_v = u - 1/2 changes sign, F_u = v - 1/2 changes sign,
     # F = (u - 1/2)(v - 1/2) has a saddle critical point at (1/2, 1/2) -> refused
     assert monotone_direction(grid(((F(1, 4), F(-1, 4)), (F(-1, 4), F(1, 4))))) is None
@@ -119,6 +121,10 @@ def test_declines_outside_the_narrow_class():
     assert plane_nurbs_prepass(plane(.1), bump(.8, 2.0)).reason is PrepassDecline.PLANE_FOOTPRINT
     trimmed = dataclasses.replace(bump(), u_range=(0.25, 1.0))
     assert plane_nurbs_prepass(plane(.1), trimmed).reason is PrepassDecline.RANGES_NOT_FULL
+    # skew (non axis-aligned) plane patch: every point of `other` has x - y < 0 but the patch needs 0 <= x - y <= 1
+    skew = NurbsSurface(1, 1, K1, K1, (((0., 0., 0.), (1., 1., 0.)), ((1., 0., 0.), (2., 1., 0.))))
+    other = NurbsSurface(1, 1, K1, K1, (((.25, .625, -1.), (.25, .75, -1.)), ((.375, .625, 2.), (.375, .75, 2.))))
+    assert plane_nurbs_prepass(skew, other).reason is PrepassDecline.PLANE_FOOTPRINT
     # coplanar: F is identically zero, never a decision
     assert plane_nurbs_prepass(plane(0.0), bump(0.0)).status is PrepassStatus.DECLINED
 
