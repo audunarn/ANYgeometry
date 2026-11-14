@@ -137,6 +137,38 @@ def test_multiplicity_equal_to_degree_is_c0_and_shares_roots_across_the_span_lin
     assert plane_nurbs_prepass(plane(.6), tent()).status is PrepassStatus.DISJOINT
 
 
+def _ramp(knots_u, knots_v, rows):
+    return NurbsSurface(1, 1, knots_u, knots_v, rows)
+
+
+def test_open_components_run_between_domain_boundary_roots_and_cover_each_arc_once():
+    """Review round 3: an open path through two cells is ONE component, every arc used exactly once."""
+    rows = tuple(((x, 0., -1.), (x, 1., 2.)) for x in (0., .5, 1.))
+    ramp = _ramp((0., 0., .5, 1., 1.), K1, rows)
+    result = plane_nurbs_prepass(plane(0.), ramp)
+    assert result.status is PrepassStatus.DECIDED
+    assert [(c.closed, len(c.arcs)) for c in result.components] == [(False, 2)]
+    assert len({a.cell for c in result.components for a in c.arcs}) == 2
+    assert [r.boundary for r in result.roots].count(True) == 2
+
+
+def test_boundary_lines_use_the_native_knot_domain_not_zero_one():
+    rows = (((0., 0., -1.), (0., 1., -1.)), ((1., 0., 2.), (1., 1., 2.)))
+    ramp = _ramp((2., 2., 5., 5.), (-3., -3., 7., 7.), rows)
+    result = plane_nurbs_prepass(plane(0.), ramp)
+    assert result.status is PrepassStatus.DECIDED
+    assert [(c.closed, len(c.arcs)) for c in result.components] == [(False, 1)]
+    assert sorted(r.line for r in result.roots) == [-3, 7] and all(r.boundary for r in result.roots)
+
+
+def test_disjoint_can_come_from_accepted_empty_cells_alone():
+    """z = (u - 1/2)^2 + v + 1/8 > 0: the Bernstein coefficient -1/8 forbids exclusion; certificate + 0 roots decides."""
+    rows = tuple(tuple((x, float(j), a + j + .125) for j in range(2)) for x, a in ((0., .25), (.5, -.25), (1., .25)))
+    surface = NurbsSurface(2, 1, K2, K1, rows)
+    result = plane_nurbs_prepass(plane(0.), surface)
+    assert result.status is PrepassStatus.DISJOINT and result.excluded == 0 and result.certified == 1
+
+
 def test_apex_tangent_is_declined_not_decided():
     result = plane_nurbs_prepass(plane(.2), bump())
     assert result.status is PrepassStatus.DECLINED and result.reason is PrepassDecline.DEPTH_CAP
