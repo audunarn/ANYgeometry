@@ -135,6 +135,18 @@ def query_nurbs_surface_intersection(first, second, *, tolerances, qualification
         stats.total_seconds = time.perf_counter() - started
         return IntersectionResult(IntersectionStatus.UNCLASSIFIED, message, stats.freeze(), source_a, source_b,
                                   (), False, (), unclassified_reason=code)
+    # Opt-in exact pre-pass (qualification.plane_prepass is True): plane x NURBS only; it may only decide
+    # DISJOINT here (exact strict-sign exclusion of every Bezier cell); every other outcome continues unchanged.
+    if getattr(qualification, "plane_prepass", False) is True:
+        from ._plane_prepass import PrepassStatus, plane_nurbs_prepass
+        pre = plane_nurbs_prepass(source_a.rebuild(), source_b.rebuild())
+        if pre.status is PrepassStatus.DISJOINT:
+            recheck()                          # before issuance
+            tick()
+            stats.total_seconds = time.perf_counter() - started
+            return IntersectionResult(IntersectionStatus.DISJOINT,
+                                      f"plane pre-pass: all {pre.cells_tested} Bezier cells exactly excluded",
+                                      stats.freeze(), source_a, source_b, (), True, (), algorithm="plane-prepass")
     # Generic route: complete support cover followed by certified section-root continuation.
     report = run_atlas(source_a, source_b, tolerances, limits, stats, tick)
     recheck()                                  # before issuance
