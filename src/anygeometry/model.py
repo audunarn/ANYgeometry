@@ -2449,6 +2449,12 @@ class GeometryModel:
             finally:
                 self._notifying_hooks = False
 
+    def __copy__(self):
+        """Refuse a shallow copy: it would share every private store but not the units."""
+
+        raise TypeError("GeometryModel cannot be shallow-copied (the copy would share its "
+                        "topology and solid-region stores); use clone()")
+
     def clone(self, *, include_features: bool = True, preserve_identity: bool = False) -> "GeometryModel":
         """Return a deep, independently mutable geometry copy."""
 
