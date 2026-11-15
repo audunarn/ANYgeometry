@@ -36,14 +36,18 @@ def test_unique_dependency_bounds_are_certified_once_per_invocation(monkeypatch)
     def counting_bounds(self, keys):
         edge_calls.append(tuple(keys))
         return original_bounds(self, keys)
-    def counting_face_bound(model, face_id, edges):
+    face_kwargs = []
+    def counting_face_bound(model, face_id, edges, *args, **kwargs):
         face_calls.append(face_id)
-        return original_face_bound(model, face_id, edges)
+        face_kwargs.append(kwargs)
+        return original_face_bound(model, face_id, edges, *args, **kwargs)
     monkeypatch.setattr(GeometryModel, "bounds", counting_bounds)
     monkeypatch.setattr(component_partition, "_certified_face_bound", counting_face_bound)
     plan = plan_independent_components(model, separation=.1)
     assert plan.certified and len(plan.components) == 2
     assert sorted(face_calls) == sorted((first, second))
+    # The wrapper must see (and forward) the keyword the production call passes.
+    assert all("allow_bilinear" in kwargs for kwargs in face_kwargs)
     # The shared edge is a dependency of four units but is certified once.
     singles = [call[0] for call in edge_calls if len(call) == 1]
     assert len(singles) == 8 and len(set(singles)) == 8
