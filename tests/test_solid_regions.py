@@ -345,3 +345,21 @@ def test_full_replay_blocked_prism_does_not_retain_materialized_topology():
     assert not old_vertices.intersection(m.vertices)
     assert not m.edges
     assert to_dict(from_dict(to_dict(m))) == to_dict(m)
+
+
+def test_shallow_copy_is_refused_so_a_copy_cannot_hold_solids_under_other_units():
+    """copy.copy would share every private store but not the document units."""
+    import copy
+
+    model = GeometryModel()
+    model.add_solid_box((0, 0, 0), (1, 1, 1))
+    before = to_dict(model)
+    with pytest.raises(TypeError, match="clone"):
+        copy.copy(model)
+    with pytest.raises(TypeError, match="clone"):
+        copy.copy(GeometryModel())
+    assert to_dict(model) == before
+    assert not model.validate_topology()
+    deep = model.clone(include_features=False)
+    deep.set_document_settings(units="m")
+    assert deep._solid_regions is not model._solid_regions

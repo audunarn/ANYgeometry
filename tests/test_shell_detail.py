@@ -304,7 +304,7 @@ def test_unknown_face_and_type_errors():
         derive_shell_detail_box(object(), face, Frame().points(RECT), director=(0, 0, 1), thickness=0.2)
 
 
-def test_clone_is_independent_and_shallow_copy_shares_stores():
+def test_clone_is_independent_and_shallow_copy_is_refused():
     """Documents the contract: only ``clone()`` is a supported way to copy a model."""
 
     model, face = plate(Frame(), SQUARE)
@@ -312,6 +312,5 @@ def test_clone_is_independent_and_shallow_copy_shares_stores():
     assert deep.model_id != model.model_id and deep.revision == model.revision
     deep.add_point(50.0, 50.0, 50.0)
     assert len(deep.vertices) == len(model.vertices) + 1
-    shallow = copy.copy(model)
-    assert shallow._vertices is model._vertices  # shared mutable store: unsupported
-    assert shallow._solid_regions is model._solid_regions
+    with pytest.raises(TypeError, match="clone"):  # shared stores would be unsafe: refused
+        copy.copy(model)
