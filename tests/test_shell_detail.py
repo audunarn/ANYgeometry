@@ -314,3 +314,12 @@ def test_clone_is_independent_and_shallow_copy_is_refused():
     assert len(deep.vertices) == len(model.vertices) + 1
     with pytest.raises(TypeError, match="clone"):  # shared stores would be unsafe: refused
         copy.copy(model)
+
+
+def test_rotated_plate_director_not_refused_by_finite_difference_noise():
+    # face_normal is a forward difference (step 1e-6): its rounding error (~1e-10) must not look like a wrong director.
+    f = FRAMES["rotated"]
+    model, face = plate(f, SQUARE)
+    for c in [(2.0, 6.5), (2.0, 7.75), (2.5, 7.5)]:
+        xys = [(c[0] - .5, c[1] - .5), (c[0] + .5, c[1] - .5), (c[0] + .5, c[1] + .5), (c[0] - .5, c[1] + .5)]
+        derive(model, face, f, xys)  # must not raise DETAIL_DIRECTOR
