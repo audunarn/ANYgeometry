@@ -344,3 +344,72 @@ def test_rotated_plate_truly_off_plane_footprint_still_refused(lift):
     pts = f.points([(7.0, 7.0), (8.0, 7.0), (8.0, 8.0), (7.0, 8.0)]) + lift * np.asarray(f.normal, dtype=float)
     with pytest.raises(ShellDetailError, match="DETAIL_FOOTPRINT"):
         derive_shell_detail_box(model, face, pts, director=f.normal, thickness=0.2)
+
+
+def _tilted(frame, angle, axis=(1.0, 0.0)):
+    """Unit director at exactly ``angle`` rad from the frame normal (|wanted x normal| = sin(angle))."""
+
+    t = frame.R @ np.array([axis[0], axis[1], 0.0])
+    return np.cos(angle) * frame.normal + np.sin(angle) * t
+
+
+def _centres_footprint(c):
+    return [(c[0] - .5, c[1] - .5), (c[0] + .5, c[1] - .5), (c[0] + .5, c[1] + .5), (c[0] - .5, c[1] + .5)]
+
+
+@pytest.mark.parametrize("angle", [1e-7, 1e-6])
+@pytest.mark.parametrize("axis", [(1.0, 0.0), (0.0, 1.0), (0.6, -0.8)])
+def test_rotated_plate_misaligned_director_still_refused(angle, axis):
+    f = FRAMES["rotated"]
+    model, face = plate(f, SQUARE)
+    with pytest.raises(ShellDetailError) as error:
+        derive(model, face, f, RECT, director=_tilted(f, angle, axis))
+    assert error.value.code == "DETAIL_DIRECTOR"
+
+
+@pytest.mark.parametrize("axis", [(1.0, 0.0), (0.0, 1.0), (0.6, -0.8)])
+def test_rotated_plate_director_tolerance_boundary(axis):
+    # director_tol is 1e-8 (|wanted x normal|): 5e-9 rad is accepted, 5e-8 rad refused.
+    f = FRAMES["rotated"]
+    model, face = plate(f, SQUARE)
+    derive(model, face, f, RECT, director=_tilted(f, 5e-9, axis))
+    with pytest.raises(ShellDetailError) as error:
+        derive(model, face, f, RECT, director=_tilted(f, 5e-8, axis))
+    assert error.value.code == "DETAIL_DIRECTOR"
+
+
+@pytest.mark.parametrize("name", sorted(FRAMES))
+def test_every_frame_unit_footprints_at_several_centres(name):
+    f = FRAMES[name]
+    model, face = plate(f, SQUARE)
+    for c in [(1.0, 1.0), (2.0, 6.5), (5.0, 5.0), (7.5, 2.25), (9.0, 9.0)]:
+        detail, region_id = derive(model, face, f, _centres_footprint(c))
+        assert detail.solid_region_snapshot(region_id) is not None
+
+
+def test_reversed_face_normal_with_plane_support_takes_flipped_exact_normal():
+    # A reversed face: the explicit parameterization swaps u and v, so the authoritative normal is -(u x v) of the
+    # support plane and the code must flip the exact support normal (exact @ normal <= 0 branch).
+    f = FRAMES["rotated"]
+    model, face = plate(f, SQUARE)
+    support = model.faces[face].support_surface
+    model.set_face_parameterization(face, Plane(support.origin, support.v_vector, support.u_vector))
+    assert float(model.face_normal(face, 0.5, 0.5) @ f.normal) < 0.0
+    detail, region_id = derive(model, face, f, RECT, director=-f.normal, reference_offset=0.25, thickness=0.1)
+    snapshot = detail.solid_region_snapshot(region_id)
+    base = f.points(RECT)
+    heights = (np.asarray(snapshot.coordinates) - base[[0, 1, 2, 3, 0, 1, 2, 3]]) @ (-f.normal)
+    np.testing.assert_allclose(sorted(heights), [0.2] * 4 + [0.3] * 4, atol=1e-9)
+    with pytest.raises(ShellDetailError) as error:  # the original (now wrong-sided) director is refused
+        derive(model, face, f, RECT, director=f.normal)
+    assert error.value.code == "DETAIL_DIRECTOR"
+
+
+def test_rotated_planar_coons_face_accepts_footprints_and_refuses_tilted_director():
+    f = FRAMES["rotated"]
+    model, face = _default_face_plate(f)
+    for c in [(2.0, 6.5), (5.0, 5.0), (7.5, 2.25)]:
+        derive(model, face, f, _centres_footprint(c))
+    with pytest.raises(ShellDetailError) as error:
+        derive(model, face, f, RECT, director=_tilted(f, 1e-6))
+    assert error.value.code == "DETAIL_DIRECTOR"
