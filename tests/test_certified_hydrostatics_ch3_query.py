@@ -31,6 +31,7 @@ sum of the two half-hull claims."""
 from __future__ import annotations
 
 import math
+import os
 import time
 from fractions import Fraction as F
 from functools import lru_cache
@@ -52,8 +53,22 @@ ACC = F(1e-9)                  # the exact value of the double 1e-9 (queries con
 NAMES = ("V", "Jx", "Jy", "Jz", "A", "Mu", "Mv", "Iuu", "Ivv", "Iuv")
 ALL_ACCURACY = {"V": 1e-9, "J": 1e-9, "A": 1e-9, "Mu": 1e-9, "Mv": 1e-9, "Iuu": 1e-9, "Ivv": 1e-9, "Iuv": 1e-9}
 FORMS = ("enclosure", "binary64", "decimal")
-QUERY_CEILING = 30.0          # seconds per query (Q08 minimum answer)
-PREPARE_CEILING = 120.0       # seconds, cold preparation
+def _timing_factor():
+    """Slow-runner allowance for the wall-clock ceilings below: 1 everywhere except where CI sets ANYGEOMETRY_TIMING_FACTOR
+    (macos-15-intel).  Never below 1 and never above 4, so the ceilings cannot be switched off."""
+    raw = os.environ.get("ANYGEOMETRY_TIMING_FACTOR", "1")
+    try:
+        factor = float(raw)
+    except ValueError as error:
+        raise RuntimeError(f"ANYGEOMETRY_TIMING_FACTOR must be a number in [1, 4], got {raw!r}") from error
+    if not 1.0 <= factor <= 4.0:
+        raise RuntimeError(f"ANYGEOMETRY_TIMING_FACTOR must be in [1, 4], got {factor}")
+    return factor
+
+
+TIMING_FACTOR = _timing_factor()
+QUERY_CEILING = 30.0 * TIMING_FACTOR          # seconds per query (Q08 minimum answer)
+PREPARE_CEILING = 120.0 * TIMING_FACTOR       # seconds, cold preparation
 TIMES: dict = {}
 
 
