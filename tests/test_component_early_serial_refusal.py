@@ -68,7 +68,7 @@ def test_unknown_extent_is_declined_not_certified(monkeypatch):
     model.add_face(model.add_polyline(points, close=True), corners=(0,1,2,3), surface=None)
     default = plan_independent_components(model)
     assert not default.certified
-    monkeypatch.setattr(module, "_certified_face_bound", lambda *args:pytest.fail("no extent audit"))
+    monkeypatch.setattr(module, "_certified_face_bound", lambda *args, **kwargs:pytest.fail("no extent audit"))
     probe = plan_independent_components(model, stop_if_single_component=True)
     assert not probe.certified and not probe.components
     assert "without full independence certification" in probe.refusals[-1].reason
