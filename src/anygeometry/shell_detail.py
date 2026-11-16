@@ -208,6 +208,9 @@ def derive_shell_detail_box(model, face_id, footprint, *, director, thickness, r
 
     _domain, tolerance = _material(model, face_id)
     angular = max(float(model.tolerance.angular), 256 * float(np.finfo(float).eps))
+    # face_normal is a forward difference (step 1e-6): its rounding error floor is eps/step ~ 1.1e-10..1.7e-10,
+    # above the default angular tolerance 1e-10, so the director comparison needs a looser floor.
+    director_tol = max(angular, 1.0e-8)
 
     # Authoritative normal of the source face at the footprint.
     try:
@@ -216,12 +219,18 @@ def derive_shell_detail_box(model, face_id, footprint, *, director, thickness, r
     except GeometryError as error:
         raise ShellDetailError("DETAIL_FACE", f"face {face_id} has no usable normal: {error}") from error
     normal = normal / float(np.linalg.norm(normal))
-    if float(np.linalg.norm(np.cross(wanted, normal))) > angular or float(wanted @ normal) <= 0.0:
+    if float(np.linalg.norm(np.cross(wanted, normal))) > director_tol or float(wanted @ normal) <= 0.0:
         raise ShellDetailError("DETAIL_DIRECTOR",
                                f"director {wanted.tolist()} is not the authoritative normal {normal.tolist()} of face {face_id}")
 
     # A Coons patch has no ``origin``: its reference plane passes through the source projection of the footprint.
     plane_origin = np.asarray(projected if planar_coons else support.origin, dtype=float)
+    if isinstance(support, Plane):
+        # The finite-difference normal is only good to ~director_tol, which tilts the reference plane by ~1e-9 m over
+        # a few metres: use the exact support-plane normal (same side as the authoritative normal) for the plane.
+        exact = np.cross(np.asarray(support.u_vector, dtype=float), np.asarray(support.v_vector, dtype=float))
+        exact = exact / float(np.linalg.norm(exact))
+        normal = exact if float(exact @ normal) > 0.0 else -exact
     heights = (points - plane_origin) @ normal
     if float(np.max(np.abs(heights))) > tolerance:
         raise ShellDetailError("DETAIL_FOOTPRINT", "footprint is not on the shell reference plane of the face")
