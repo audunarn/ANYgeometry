@@ -323,3 +323,24 @@ def test_rotated_plate_director_not_refused_by_finite_difference_noise():
     for c in [(2.0, 6.5), (2.0, 7.75), (2.5, 7.5)]:
         xys = [(c[0] - .5, c[1] - .5), (c[0] + .5, c[1] - .5), (c[0] + .5, c[1] + .5), (c[0] - .5, c[1] + .5)]
         derive(model, face, f, xys)  # must not raise DETAIL_DIRECTOR
+
+
+def test_rotated_plate_footprint_not_refused_by_normal_noise_across_grid():
+    # heights are measured along the finite-difference normal: its ~1e-10 error times a distance of a few metres
+    # must not make an on-plane footprint look off-plane.
+    f = FRAMES["rotated"]
+    model, face = plate(f, SQUARE)
+    for i in range(25):
+        for j in range(25):
+            c = (2.0 + 0.25 * i, 2.0 + 0.25 * j)
+            xys = [(c[0] - .5, c[1] - .5), (c[0] + .5, c[1] - .5), (c[0] + .5, c[1] + .5), (c[0] - .5, c[1] + .5)]
+            derive(model, face, f, xys)
+
+
+@pytest.mark.parametrize("lift", [1e-6, 1e-4])
+def test_rotated_plate_truly_off_plane_footprint_still_refused(lift):
+    f = FRAMES["rotated"]
+    model, face = plate(f, SQUARE)
+    pts = f.points([(7.0, 7.0), (8.0, 7.0), (8.0, 8.0), (7.0, 8.0)]) + lift * np.asarray(f.normal, dtype=float)
+    with pytest.raises(ShellDetailError, match="DETAIL_FOOTPRINT"):
+        derive_shell_detail_box(model, face, pts, director=f.normal, thickness=0.2)

@@ -225,6 +225,12 @@ def derive_shell_detail_box(model, face_id, footprint, *, director, thickness, r
 
     # A Coons patch has no ``origin``: its reference plane passes through the source projection of the footprint.
     plane_origin = np.asarray(projected if planar_coons else support.origin, dtype=float)
+    if isinstance(support, Plane):
+        # The finite-difference normal is only good to ~director_tol, which tilts the reference plane by ~1e-9 m over
+        # a few metres: use the exact support-plane normal (same side as the authoritative normal) for the plane.
+        exact = np.cross(np.asarray(support.u_vector, dtype=float), np.asarray(support.v_vector, dtype=float))
+        exact = exact / float(np.linalg.norm(exact))
+        normal = exact if float(exact @ normal) > 0.0 else -exact
     heights = (points - plane_origin) @ normal
     if float(np.max(np.abs(heights))) > tolerance:
         raise ShellDetailError("DETAIL_FOOTPRINT", "footprint is not on the shell reference plane of the face")
