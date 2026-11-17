@@ -112,7 +112,10 @@ def test_codec_round_trip_keeps_exact_type_bits_content_and_sharing(seam):
     assert _plan_content(decoded) == plan.content_checksum == decoded.content_checksum
     assert encode_intersection_plan(decoded, job_id='j') == packet          # canonical, deterministic
     # Every record keeps its exact class; sharing is kept (same number of distinct objects).
-    original, copy = _walk_records(plan), _walk_records(decoded)
+    # (Immutable scalar tuples are excluded: their aliasing is deliberately not part of the encoding.)
+    def shareable(items):
+        return [x for x in items if not (type(x) is tuple and pa._is_value_tuple(x))]
+    original, copy = shareable(_walk_records(plan)), shareable(_walk_records(decoded))
     assert [type(x) for x in original] == [type(x) for x in copy]
     assert len(original) == len(copy)
     assert decoded.policy.cancellation_check is None
@@ -657,3 +660,59 @@ def test_r5_array_shape_expansion_is_weighted_even_without_payload():
     small = (np.zeros((2, 0)), np.zeros((0,)), np.zeros(()), np.ones((2, 3)))
     back = pa._decode_tree(json.loads(pa._canonical(pa._encode_tree(small, classes))), classes)
     assert pa._same(back, small)
+
+
+# -------------------------------------------------------------------- aliased immutable value tuples (tripod N2c)
+
+def _aliased_curves():
+    """Two curves built through ``_make`` that SHARE one transform tuple (as the producer does)."""
+    from anygeometry.branch_curves import BezierQuadricCurve
+    from anygeometry.plane_ruled import PlaneRuledSupport
+    from anygeometry.quadric_algebra import QuadricSupport
+    ruled = PlaneRuledSupport(base=(56.4, 0.67, -17.5), directrix_vector=(0.0, 0.0, 1.0),
+                              ruling=(-1.0, 0.0, 0.0), t0=-7.4, length=36.1)
+    quadric = QuadricSupport(kind='cylinder', origin=(50.0, 0.0, -24.5), axis=(0.0, 0.0, 1.0), radius=6.5,
+                             slope=0.0, matrix=(), linear=(), constant=0.0, u_vector=(), v_vector=())
+    shared = ((1.0, 0.0, 0.0, 0.5), (0.0, 1.0, 0.0, 0.25), (0.0, 0.0, 1.0, 0.0), (0.0, 0.0, 0.0, 1.0))
+    a = BezierQuadricCurve._make(ruled, quadric, 0.1, 0.2, -1, 'linear', shared)
+    b = BezierQuadricCurve._make(ruled, quadric, 0.3, 0.2, -1, 'linear', shared)
+    assert a.transform is b.transform
+    return (a, b)
+
+
+def test_aliased_value_tuple_round_trips_through_the_reconstructing_constructor():
+    classes, schema = pa._schema()
+    fragment = _aliased_curves()
+    tree = json.loads(pa._canonical(pa._encode_tree(fragment, classes)))
+    back = pa._decode_tree(tree, classes)
+    assert pa._same(back, fragment)
+    # The constructor rebuilds the transform per curve; the canonical encoding must not depend on sharing.
+    assert pa._canonical(pa._encode_tree(back, classes)) == pa._canonical(tree)
+
+
+def test_value_tuple_aliasing_never_decides_the_encoding_but_array_and_record_sharing_still_does():
+    classes, _ = pa._schema()
+    shared = (1.0, (2.0, 3.0))
+    tree = pa._encode_tree((shared, shared), classes)
+    assert tree[2][0][0] == tree[2][1][0] == 't'                       # both inline, no back-reference
+    arr = np.zeros(2)
+    assert pa._encode_tree((arr, arr), classes)[2][1][0] == 'r'        # arrays stay shared
+    lst = [1.0]
+    assert pa._encode_tree((lst, lst), classes)[2][1][0] == 'r'        # mutable lists stay shared
+
+
+def test_tampered_value_tuple_or_forged_back_reference_still_refuses():
+    classes, _ = pa._schema()
+    tree = json.loads(pa._canonical(pa._encode_tree(_aliased_curves(), classes)))
+    curves = [n for n in tree[2] if n[0] == 'R']
+    index = next(i for i, c in enumerate(curves[0][3]) if c[0] == 't' and len(c[2]) == 4)
+    # A forged back-reference to an earlier value tuple decodes, but never re-encodes to the forged tree.
+    forged = json.loads(json.dumps(tree))
+    [n for n in forged[2] if n[0] == 'R'][1][3][index] = ['r', curves[0][3][index][1]]
+    back = pa._decode_tree(forged, classes)
+    assert pa._canonical(pa._encode_tree(back, classes)) != pa._canonical(forged)
+    # A changed value re-encodes to itself (a different plan): the digest/route/content checks refuse it, and
+    # the adoption-level re-encode check refuses any tree that is not the owner's own encoding.
+    changed = json.loads(json.dumps(tree))
+    [n for n in changed[2] if n[0] == 'R'][0][3][index][2][0][2][3] = ['f', pa._encode_tree(0.75, classes)[1]]
+    assert pa._canonical(changed) != pa._canonical(tree)
