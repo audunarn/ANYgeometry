@@ -38,7 +38,7 @@ __all__ = ("PlanAdoptionRefused", "encode_intersection_plan", "adopt_intersectio
            "PLAN_CODEC_FORMAT", "PLAN_CODEC_VERSION")
 
 PLAN_CODEC_FORMAT = "anygeometry.intersection-plan"
-PLAN_CODEC_VERSION = 1
+PLAN_CODEC_VERSION = 2
 _MAX_PACKET_BYTES = 64_000_000
 _MAX_NODES = 5_000_000
 # Bound on the plan's EXPANDED weight (every shared reference counted at its full size; one unit per node
@@ -174,7 +174,7 @@ def _schema():
             _POLICY_FIELDS[:3] + ('cancellation_check',) + _POLICY_FIELDS[3:]):
         raise _Refuse("codec", "the intersection policy declaration changed; the plan codec is disabled")
     digest = hashlib.sha256(_canonical([_RECORD_FIELDS, _POLICY_FIELDS, sorted(_DERIVED), sorted(_INIT_FALSE),
-                                        "plan-codec-1"])).hexdigest()
+                                        "plan-codec-2"])).hexdigest()
     return {cls.__name__: cls for cls in classes}, digest
 
 
@@ -212,11 +212,29 @@ def _same(a, b):
 
 # ------------------------------------------------------------------------------------------------- encode
 
+def _is_value_tuple(v, cache):
+    """A tuple of immutable scalars (nested tuples allowed): its identity carries no meaning.
+
+    Owner constructors rebuild such tuples (e.g. ``BezierQuadricCurve.transform``), so a decoded plan
+    cannot reproduce the producer's aliasing of them. They are always encoded inline, never by back-reference;
+    mutable lists, arrays and records keep their sharing. ``cache`` (id -> bool, one per encode call; the
+    plan keeps every classified object alive) makes the classification linear in DISTINCT objects, so a
+    deeply shared tuple cannot make it exponential before the node limit applies.
+    """
+    key = id(v)
+    if key not in cache:
+        cache[key] = all(type(x) in (float, int, bool, str, type(None)) or
+                         (type(x) is tuple and _is_value_tuple(x, cache)) for x in v)
+    return cache[key]
+
+
 def _encode_tree(plan, classes):
     from .batch_intersections import IntersectionBatchPolicy
     from .structural import ConnectionIntent
     names = {cls: name for name, cls in classes.items()}
     memo, active, spans, sizes = {}, set(), [], {}
+    value_cache = {}
+    counter = [0]          # every container takes an ordinal; only shareable objects are memoised
     nodes = 0
 
     def float_hex(value):
@@ -266,10 +284,13 @@ def _encode_tree(plan, classes):
             raise _Refuse("encode", f"unsupported plan value type {t.__module__}.{t.__qualname__}")
         if id(v) in active:
             raise _Refuse("encode", "cyclic plan value")
-        if id(v) in memo:
+        value_tuple = t is tuple and _is_value_tuple(v, value_cache)
+        if not value_tuple and id(v) in memo:
             return ['r', memo[id(v)]]
-        ordinal = len(memo)
-        memo[id(v)] = ordinal
+        ordinal = counter[0]
+        counter[0] += 1
+        if not value_tuple:
+            memo[id(v)] = ordinal
         active.add(id(v))
         try:
             if t in (tuple, list):
