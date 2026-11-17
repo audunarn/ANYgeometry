@@ -114,7 +114,7 @@ def test_codec_round_trip_keeps_exact_type_bits_content_and_sharing(seam):
     # Every record keeps its exact class; sharing is kept (same number of distinct objects).
     # (Immutable scalar tuples are excluded: their aliasing is deliberately not part of the encoding.)
     def shareable(items):
-        return [x for x in items if not (type(x) is tuple and pa._is_value_tuple(x))]
+        return [x for x in items if not (type(x) is tuple and pa._is_value_tuple(x, {}))]
     original, copy = shareable(_walk_records(plan)), shareable(_walk_records(decoded))
     assert [type(x) for x in original] == [type(x) for x in copy]
     assert len(original) == len(copy)
@@ -716,3 +716,99 @@ def test_tampered_value_tuple_or_forged_back_reference_still_refuses():
     changed = json.loads(json.dumps(tree))
     [n for n in changed[2] if n[0] == 'R'][0][3][index][2][0][2][3] = ['f', pa._encode_tree(0.75, classes)[1]]
     assert pa._canonical(changed) != pa._canonical(tree)
+
+
+def test_deep_shared_tuple_chain_classification_is_bounded_by_distinct_objects(monkeypatch):
+    classes, _ = pa._schema()
+    real, calls = pa._is_value_tuple, [0]
+
+    def counting(v, *rest):
+        calls[0] += 1
+        return real(v, *rest)
+    monkeypatch.setattr(pa, '_is_value_tuple', counting)
+    monkeypatch.setattr(pa, '_MAX_NODES', 1)
+    v = (1.0,)
+    for _ in range(18):
+        v = (v, v)
+    with pytest.raises(pa._Refuse):
+        pa._encode_tree(v, classes)
+    assert calls[0] <= 100, calls[0]                      # not exponential in the sharing depth
+    # Within the node budget the chain still encodes (inline) and round-trips.
+    monkeypatch.undo()
+    w = (1.0,)
+    for _ in range(6):
+        w = (w, w)
+    tree = pa._encode_tree(w, classes)
+    assert pa._same(pa._decode_tree(json.loads(pa._canonical(tree)), classes), w)
+
+
+def _value_tuple_nodes(tree):
+    """Wire nodes of immutable scalar tuples (every child an atomic tag), in encode order."""
+    found = []
+
+    def walk(p):
+        if p[0] in ('t', 'l', 'p', 'R'):
+            if p[0] == 't' and all(c[0] in ('f', 'i', 'b', 'n', 's') for c in p[2]):
+                found.append(p)
+            for c in (p[3] if p[0] == 'R' else p[2]):
+                walk(c)
+    walk(tree)
+    return found
+
+
+def test_forged_v2_back_reference_to_a_value_tuple_is_refused_on_the_adoption_path():
+    model, faces = _plates()
+    policy = IntersectionBatchPolicy()
+    _, packet = _worker(model, faces, policy)
+    nodes = _value_tuple_nodes(json.loads(packet)['plan'])
+    assert len(nodes) >= 2 and all(n[0] != 'r' for n in nodes)          # v2 never shares value tuples
+
+    def forge(tree):
+        first, second = _value_tuple_nodes(tree)[:2]
+        second_id = second[1]
+        replaced = []
+
+        def sub(p):
+            if p[0] == 't' and p[1] == second_id:
+                return ['r', first[1]]
+            if p[0] in ('t', 'l', 'p'):
+                p[2] = [sub(c) for c in p[2]]
+            elif p[0] == 'R':
+                p[3] = [sub(c) for c in p[3]]
+            return p
+        tree[:] = _renumber(sub(tree))
+    # Ordinals consistent, values possibly equal: the owner's own encoding differs, so it is not the packet.
+    with pytest.raises(PlanAdoptionRefused) as info:
+        _adopt(model, _reseal(packet, forge), faces, policy)
+    assert info.value.reason in ('codec', 'content')
+    # Crafted (non-renumbered) ordinals refuse in the packet reader.
+    def skew(tree):
+        first, second = _value_tuple_nodes(tree)[:2]
+        second[0], second[1:] = 'r', [first[1]]
+    _refused('packet', lambda: _adopt(model, _reseal(packet, skew), faces, policy))
+
+
+def test_changed_value_inside_a_value_tuple_and_a_v1_version_refuse_on_the_adoption_path():
+    model, faces = _plates()
+    policy = IntersectionBatchPolicy()
+    _, packet = _worker(model, faces, policy)
+
+    def change(tree):
+        child = next(c for n in _value_tuple_nodes(tree) for c in n[2] if c[0] == 'i')
+        child[1] += 1
+    _refused('content', lambda: _adopt(model, _reseal(packet, change), faces, policy))
+    envelope = json.loads(packet)
+    envelope['version'] = 1
+    _refused('packet', lambda: _adopt(model, pa._canonical(envelope), faces, policy))
+    envelope['version'] = 2
+    envelope['schema'] = hashlib.sha256(b'plan-codec-1').hexdigest()
+    _refused('codec', lambda: _adopt(model, pa._canonical(envelope), faces, policy))
+
+
+def test_a_genuinely_different_plan_is_refused_by_the_owner_not_by_aliasing_rules():
+    model, faces = _plates()
+    other, other_faces = _plates()
+    policy = IntersectionBatchPolicy()
+    _, foreign = _worker(other, other_faces[:2], policy)
+    with pytest.raises(PlanAdoptionRefused):
+        _adopt(model, foreign, faces, policy)

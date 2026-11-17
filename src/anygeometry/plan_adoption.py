@@ -212,15 +212,20 @@ def _same(a, b):
 
 # ------------------------------------------------------------------------------------------------- encode
 
-def _is_value_tuple(v):
+def _is_value_tuple(v, cache):
     """A tuple of immutable scalars (nested tuples allowed): its identity carries no meaning.
 
     Owner constructors rebuild such tuples (e.g. ``BezierQuadricCurve.transform``), so a decoded plan
     cannot reproduce the producer's aliasing of them. They are always encoded inline, never by back-reference;
-    mutable lists, arrays and records keep their sharing.
+    mutable lists, arrays and records keep their sharing. ``cache`` (id -> bool, one per encode call; the
+    plan keeps every classified object alive) makes the classification linear in DISTINCT objects, so a
+    deeply shared tuple cannot make it exponential before the node limit applies.
     """
-    return all(type(x) in (float, int, bool, str, type(None)) or (type(x) is tuple and _is_value_tuple(x))
-               for x in v)
+    key = id(v)
+    if key not in cache:
+        cache[key] = all(type(x) in (float, int, bool, str, type(None)) or
+                         (type(x) is tuple and _is_value_tuple(x, cache)) for x in v)
+    return cache[key]
 
 
 def _encode_tree(plan, classes):
@@ -228,6 +233,7 @@ def _encode_tree(plan, classes):
     from .structural import ConnectionIntent
     names = {cls: name for name, cls in classes.items()}
     memo, active, spans, sizes = {}, set(), [], {}
+    value_cache = {}
     counter = [0]          # every container takes an ordinal; only shareable objects are memoised
     nodes = 0
 
@@ -278,7 +284,7 @@ def _encode_tree(plan, classes):
             raise _Refuse("encode", f"unsupported plan value type {t.__module__}.{t.__qualname__}")
         if id(v) in active:
             raise _Refuse("encode", "cyclic plan value")
-        value_tuple = t is tuple and _is_value_tuple(v)
+        value_tuple = t is tuple and _is_value_tuple(v, value_cache)
         if not value_tuple and id(v) in memo:
             return ['r', memo[id(v)]]
         ordinal = counter[0]
