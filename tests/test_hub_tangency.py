@@ -380,8 +380,8 @@ def test_zero_sweep_bounds_of_an_ordinary_pair_are_unchanged():
         ((1., 0., 0., -.5), (0., 1., 0., 0.), (0., 0., 1., 0.), (0., 0., 0., 1.)))
     # A pin, not a fails-before test (Codex's exact round-2 interval did not reproduce here): the zero-sweep
     # hull is gated on node treatment, so an ordinary (and any transformed) chart takes the original expression.
-    from anygeometry.exact_curves import _evaluation_nodes
-    assert _evaluation_nodes(curve) == ()
+    from anygeometry.exact_curves import _node_treatment
+    assert _node_treatment(curve) == ()
     lower, upper = .500000000000001, .5000000000000012
     lo, hi = curve.bounds(lower, upper)
     point = curve.evaluate(lower)
@@ -395,3 +395,52 @@ def test_a_node_just_outside_the_chart_does_not_move_its_end():
     starts = [c.start_angle for c in cylinder_cylinder_support(first, second, tolerance=1e-10).curves
               if isinstance(c, CylinderIntersectionCurve)]
     assert starts and min(starts) >= 2. ** -48, starts
+
+
+# ---- Codex review round 3 regressions: one node-eligibility decision for supports, charts and constructors
+
+def _internal_tangent_pair(radial_z, start=0., sweep=2 * math.pi):
+    """x-pipe r = 13 and a pipe r = 7 whose axis is turned 0.3518 rad in the xy plane, 6 higher: internally
+    tangent (fold +1 an exact double: every term carries the same rounded sin of the turn)."""
+    from anygeometry.surfaces import Cylinder
+    turn = 0.35180855140225564
+    first = Cylinder((-30., 0., 0.), (1., 0., 0.), (0., 0., radial_z), 13., 60., start, sweep)
+    axis = (math.cos(turn), math.sin(turn), 0.)
+    second = Cylinder((-30. * axis[0], -30. * axis[1], 6.), axis, (0., 0., 1.), 7., 60.)
+    return first, second
+
+
+def test_support_events_and_emitted_charts_agree_at_any_turn():
+    # One eligibility decision (no angle cutoff): wherever the support is built, no square chart is anchored
+    # at a certified node. Beyond four turns this pair's simple folds refuse typed, exactly as on main.
+    from anygeometry.analytic_supports import _certified_nodes
+    from anygeometry.errors import GeometryError
+    for start, end in ((0., 2 * math.pi), (2 * math.pi, 3.9 * math.pi), (6.5 * math.pi, 7.8 * math.pi),
+                       (6.5 * math.pi, 8.25 * math.pi)):
+        first, second = _internal_tangent_pair(-1., start, end - start)
+        nodes = _certified_nodes(first, second)
+        assert nodes
+        try:
+            curves = [c for c in cylinder_cylinder_support(first, second, tolerance=1e-9).curves
+                      if isinstance(c, CylinderIntersectionCurve)]
+        except GeometryError as error:
+            assert end > 4 * math.pi and "regular endpoint is not a discriminant transition" in str(error)
+            continue
+        assert curves
+        for curve in curves:
+            for t, kind in ((0., "left_square"), (1., "right_square")):
+                if curve.parameterization not in (kind, "both_sine"):
+                    continue
+                anchor = curve.start_angle + t * curve.sweep_angle
+                for node in nodes.values():
+                    assert abs(math.remainder(anchor - node.angle, math.tau)) > 1e-6, (start, end, curve)
+
+
+def test_transformed_node_chart_is_constructed_and_evaluated_like_its_untransformed_chart():
+    first, second = _internal_tangent_pair(1.)
+    plain = CylinderIntersectionCurve(first, second, 0., .2, 1, "linear")
+    shift = ((1., 0., 0., .3), (0., 1., 0., 0.), (0., 0., 1., 0.), (0., 0., 0., 1.))
+    moved = CylinderIntersectionCurve(first, second, 0., .2, 1, "linear", shift)
+    for t in (0., 1e-12, 1e-9, 1e-6, .5):
+        assert np.linalg.norm(moved.evaluate(t) - (plain.evaluate(t) + (.3, 0., 0.))) <= 1e-14
+        assert np.linalg.norm(moved.derivative(t) - plain.derivative(t)) <= 1e-12
