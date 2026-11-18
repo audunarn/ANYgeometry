@@ -1083,8 +1083,9 @@ class CylinderIntersectionCurve:
                 base, _dbase, z, *_rest = self._root(np.asarray((lower, upper)))
                 raw = base+z[..., None]*np.asarray(first.axis)
                 # Per untransformed coordinate j: its largest operand (end points, origin, radius), scaled by
-                # epsilon first; each output row k weights it by its own coefficient |M_kj|. No sum of
-                # unscaled magnitudes, so no overflow (or 0 * inf) for finite points and coefficients.
+                # epsilon first; each output row k weights it by its own coefficient |M_kj|. Epsilon-first scaling
+                # avoids overflow in the unscaled operand sum (and 0 * inf); a weighted term can still overflow
+                # for extreme coefficients, which only widens the bound.
                 operand = (eps16*np.max(np.abs(raw), axis=0) + eps16*np.abs(np.asarray(first.origin, dtype=float))
                            + eps16*abs(float(first.radius)))
                 pad = (eps16*np.maximum(np.abs(low), np.abs(high)) + eps16*np.abs(matrix[:3, 3])
