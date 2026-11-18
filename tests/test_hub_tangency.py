@@ -492,9 +492,12 @@ def test_array_layout_does_not_change_a_far_node_chart(order):
     t = 1e-12
     grid = np.array([[t, .3], [.5, .7]], order=order)
     scalar = curve.evaluate(t)
-    assert np.array_equal(curve.evaluate(grid)[0, 0], scalar)
-    assert np.array_equal(curve.derivative(grid)[0, 0], curve.derivative(t))
-    assert np.array_equal(curve.second_derivative(grid)[0, 0], curve.second_derivative(t))
+    points, firsts, seconds = curve.evaluate(grid), curve.derivative(grid), curve.second_derivative(grid)
+    for index in np.ndindex(grid.shape):
+        value = float(grid[index])
+        assert np.array_equal(points[index], curve.evaluate(value)), index
+        assert np.array_equal(firsts[index], curve.derivative(value)), index
+        assert np.array_equal(seconds[index], curve.second_derivative(value)), index
     lo, hi = curve.bounds(t, t)
     assert np.all(lo <= scalar) and np.all(scalar <= hi)
 
@@ -502,7 +505,10 @@ def test_array_layout_does_not_change_a_far_node_chart(order):
 def test_far_supports_do_not_grow_the_node_cache():
     import anygeometry.exact_curves as exact_curves
     from anygeometry.analytic_supports import _certified_nodes
+    beams = _crossbeams()
+    assert _certified_nodes(beams[0], beams[1])          # an admitted pair, cached
+    before = dict(exact_curves._DOUBLE_NODES)
     first, second = _unit_pair(first_start=1e8 * math.tau - .1, first_sweep=.5)
     for _ in range(exact_curves._BRANCH_CONSTANTS_LIMIT + 64):
-        _certified_nodes(first, second)        # fresh support descriptors each call
-    assert len(exact_curves._DOUBLE_NODES) <= exact_curves._BRANCH_CONSTANTS_LIMIT
+        assert _certified_nodes(first, second) == {}    # fresh support descriptors each call
+    assert exact_curves._DOUBLE_NODES == before        # nothing added, nothing evicted
