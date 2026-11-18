@@ -588,6 +588,32 @@ def _node_angle_images(angle, start, sweep):
     return images
 
 
+def _node_half(curve, node, angle):
+    """``(sin(psi/2), cos(psi/2), sin psi, cos psi)`` with ``psi = angle - theta*`` for a certified node.
+
+    ``sin psi = tau sine`` and ``cos psi = tau cosine`` with the chart's rotated ``sine``/``cosine`` of
+    ``_root_at_angles`` (``theta* = phi`` or ``phi + pi``), so no rounded node angle enters next to the node:
+    there (``cos psi >= 0``) ``cos(psi/2) = sqrt((1 + cos psi) / 2)`` and ``|sin(psi/2)| = |sin psi| / (2 cos(psi/2))``,
+    signed by the chart's witness ``psi`` (0 exactly at the witness).
+    Away from it the exactly reduced ``psi`` (:func:`_node_psi`) is used.
+    """
+    constants = _branch_constants(curve)
+    nc, ns, m = constants.nc, constants.ns, constants.magnitude
+    angle = np.asarray(angle, dtype=float)
+    cosine = (nc*np.cos(angle)+ns*np.sin(angle))/m
+    sine = (nc*np.sin(angle)-ns*np.cos(angle))/m
+    cos_psi, sin_psi = node.tau*cosine, node.tau*sine
+    near = cos_psi >= 0
+    psi = _node_psi(angle, node.angle)
+    c_near = np.sqrt(np.maximum(.5*(1+cos_psi), .5))
+    # Magnitude from the rotated sine (no rounded node angle); side from the chart's node witness psi (the
+    # chart ends at the float witness, so an angle that rounds onto it is the node: exactly 0).
+    s = np.where(near, np.copysign(np.abs(sin_psi)/(2*c_near), psi), np.sin(.5*psi))
+    s = np.where(psi == 0, 0., s)
+    c = np.where(near, c_near, np.cos(.5*psi))
+    return s, c, sin_psi, cos_psi
+
+
 def _node_discriminant(curve, nodes, angle):
     """``D(theta)`` of an exact-double support pair without cancellation at its nodes.
 
@@ -607,7 +633,7 @@ def _node_discriminant(curve, nodes, angle):
         if node is None:
             factors.append((n0-sign*reach)+nc*np.cos(angle)+ns*np.sin(angle))
             continue
-        half = np.sin(.5*_node_psi(angle, node.angle))
+        half = _node_half(curve, node, angle)[0]
         factors.append(-2*node.tau*m*half*half)
     return -4*factors[0]*factors[1]
 
@@ -630,24 +656,19 @@ def _node_axial_jets(curve, nodes, angle, db, ddb, a):
     angle = np.asarray(angle, dtype=float)
     by_sign = {node.sign: node for node in nodes}
 
-    def wrapped(node):
-        return _node_psi(angle, node.angle)
-
-    psis = {sign: wrapped(node) for sign, node in by_sign.items()}
+    halves = {sign: _node_half(curve, node, angle) for sign, node in by_sign.items()}
     usable_all = np.zeros(angle.shape, dtype=bool)
     dz_all = np.zeros(angle.shape)
     ddz_all = np.zeros(angle.shape)
     for sign, node in by_sign.items():
-        psi = psis[sign]
-        s, c = np.sin(.5*psi), np.cos(.5*psi)
+        s, c, _sin_psi, _cos_psi = halves[sign]
         node_factor = 2*m*s*s
         other = -sign
         if other in by_sign:
-            other_psi = psis[other]
-            half = np.sin(.5*other_psi)
+            half, _c, other_sin, other_cos = halves[other]
             g = -2*by_sign[other].tau*m*half*half
-            dg = -by_sign[other].tau*m*np.sin(other_psi)
-            ddg = -by_sign[other].tau*m*np.cos(other_psi)
+            dg = -by_sign[other].tau*m*other_sin
+            ddg = -by_sign[other].tau*m*other_cos
         else:
             g = (n0-other*reach)+nc*np.cos(angle)+ns*np.sin(angle)
             dg = -nc*np.sin(angle)+ns*np.cos(angle)
@@ -879,8 +900,7 @@ class CylinderIntersectionCurve:
                 anchor_sign = np.where(n0+nc*np.cos(anchor)+ns*np.sin(anchor) >= 0, 1, -1)
                 partner = np.full_like(np.asarray(angle, dtype=float), np.nan)
                 for sign, node in by_sign.items():
-                    psi = _node_psi(angle, node.angle)
-                    half = np.sin(.5*psi)
+                    half = _node_half(self, node, angle)[0]
                     partner = np.where(anchor_sign == -sign, -2*node.tau*constants.magnitude*half*half, partner)
                 anchored = 2*np.sin(.5*delta)*(-nc*np.sin(middle)+ns*np.cos(middle))
                 discriminant = np.where(np.isnan(partner), discriminant, -4*anchored*partner)

@@ -700,6 +700,7 @@ _EVAL_DISPOSITION = {
         "IF self.parameterization == 'both_sine'": "decline: shortcut requires parameterization == 'linear'",
     },
     "_root_at_angles": {
+        "IF nodes": "decline: certified tangent-node pairs only (exact_curves._node_treatment); _cylinder_box_once declines on every such chart (hub tangency, 2026-11-18)",
         "IF magnitude": "interval: m > 0 required (decline otherwise)",
         "IF discriminant is not None": "decline: only set for non-linear parameterizations",
         "IF np.any(disc < -roundoff)": "interval counterpart: the box relies only on evaluate returning (a refusal is a separate original outcome and is never skipped: curve set-up and both end evaluations must succeed, and disc_hi > 0 is required); for the values evaluate returns, root = sqrt(max(disc, 0)) lies in the clamped sqrt interval. A mixed-sign disc interval does NOT exclude disc < -roundoff, which would make evaluate raise: the shortcut then returns () where the original raises. Accepted only because the guard checks both ends evaluate and the interior of a linear chart is real (the constructor proves the chart real over its whole interval)",
@@ -709,6 +710,10 @@ _EVAL_DISPOSITION = {
         "RAISE raise GeometryError('intersection branch leaves the real cylinder intersection')": "decline: see the refusal condition above; curve set-up evaluation at both ends must not raise",
     },
     "_root": {
+        "IF nodes": "decline: certified tangent-node pairs only (exact_curves._node_treatment); _cylinder_box_once declines on every such chart (hub tangency, 2026-11-18)",
+        "CALL np.where(n0 + nc * np.cos(anchor) + ns * np.sin(anchor) >= 0, 1, -1)": "decline: certified tangent-node pairs only (exact_curves._node_treatment); _cylinder_box_once declines on every such chart (hub tangency, 2026-11-18)",
+        "CALL np.where(np.isnan(partner), discriminant, -4 * anchored * partner)": "decline: certified tangent-node pairs only (exact_curves._node_treatment); _cylinder_box_once declines on every such chart (hub tangency, 2026-11-18)",
+        "CALL np.where(anchor_sign == -sign, -2 * node.tau * constants.magnitude * half * half, partner)": "decline: certified tangent-node pairs only (exact_curves._node_treatment); _cylinder_box_once declines on every such chart (hub tangency, 2026-11-18)",
         "IF self.parameterization != 'linear'": "decline: shortcut requires parameterization == 'linear'",
         "IF np.any(regular)": "decline: regular needs a non-linear parameterization, or the double-root snap, which is declined at t = 0 and t = 1 when the discriminant interval does not prove root^2 > envelope",
         "CALL np.any(regular)": "same as IF np.any(regular)",
@@ -764,8 +769,8 @@ def test_r6_every_conditional_of_the_evaluate_path_has_an_interval_counterpart_o
 
 
 def test_r6_evaluate_path_source_is_the_reviewed_one():
-    expected = {"_angle": "34791f8ae77d616b", "_coefficients": "74cb10de6e2bd78b", "_root_at_angles": "74606db371e14ba3",
-                "_root": "3baa9a815863ae22", "evaluate": "933def1a34a60adf"}
+    expected = {"_angle": "34791f8ae77d616b", "_coefficients": "74cb10de6e2bd78b", "_root_at_angles": "1d844b08b2eafca9",
+                "_root": "78a4b4ae22f99102", "evaluate": "933def1a34a60adf"}
     actual = {name: _normalized_source_hash(getattr(CylinderIntersectionCurve, name)) for name in expected}
     assert actual == expected, f"the float code of the cylinder curve changed; re-derive the interval box and update the table: {actual}"
 
