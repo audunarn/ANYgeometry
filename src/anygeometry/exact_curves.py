@@ -510,6 +510,51 @@ def _node_discriminant(curve, nodes, angle):
     return -4*factors[0]*factors[1]
 
 
+def _node_axial_slope(curve, nodes, angle, db, a, da, fallback):
+    """``dz/dt`` of a linear chart on a certified node pair without the 0/0 of ``-(db z + dc) / root``.
+
+    With the nearest node's factor ``F = -2 tau m s^2`` (``s, c = sin, cos(psi / 2)``) and the other fold
+    factor ``G``, ``D = -4 F G = 8 tau m s^2 G`` and ``sqrt(D) = |s| sqrt(8 tau m G)``, so
+    ``D' = 8 tau m (s c G + s^2 G')``, so ``D' / (2 sqrt D) = 4 tau m (sgn(s) c G + |s| G') / sqrt(8 tau m G)``:
+    no cancelling quotient.
+    ``z = (-b + branch sqrt(D)) / (2 a)`` then gives ``dz = (-db + branch D' / (2 sqrt D)) da / (2 a)``.
+    Where ``s == 0`` or ``8 tau m G <= 0`` the original value (``fallback``) is kept.
+    """
+    constants = _branch_constants(curve)
+    n0, nc, ns, m = constants.n0, constants.nc, constants.ns, constants.magnitude
+    reach = math.sqrt(float(constants.cross @ constants.cross))*curve.second.radius
+    angle = np.asarray(angle, dtype=float)
+    by_sign = {node.sign: node for node in nodes}
+
+    def wrapped(node):
+        psi = angle-node.angle
+        return psi-2*math.pi*np.round(psi/(2*math.pi))
+
+    psis = {sign: wrapped(node) for sign, node in by_sign.items()}
+    result = np.asarray(fallback, dtype=float).copy()
+    for sign, node in by_sign.items():
+        psi = psis[sign]
+        other = -sign
+        if other in by_sign:
+            other_psi = psis[other]
+            nearest = np.abs(psi) <= np.abs(other_psi)
+            half = np.sin(.5*other_psi)
+            g = -2*by_sign[other].tau*m*half*half
+            dg = -by_sign[other].tau*m*np.sin(other_psi)
+        else:
+            nearest = np.ones_like(psi, dtype=bool)
+            g = (n0-other*reach)+nc*np.cos(angle)+ns*np.sin(angle)
+            dg = -nc*np.sin(angle)+ns*np.cos(angle)
+        s, c = np.sin(.5*psi), np.cos(.5*psi)
+        scale = 8*node.tau*m*g
+        usable = nearest & (s != 0) & (scale > 0)
+        root = np.sqrt(np.where(usable, scale, 1.))
+        ratio = 4*node.tau*m*(np.sign(s)*c*g+np.abs(s)*dg)/root
+        slope = (-db+curve.branch*ratio)*da/(2*a)
+        result = np.where(usable, slope, result)
+    return result
+
+
 def _node_discriminant_upper(curve, nodes, start, sweep):
     """Outward upper bound of ``D`` over the angles ``start .. start + sweep`` of an exact-double pair.
 
@@ -770,6 +815,9 @@ class CylinderIntersectionCurve:
         denominator = self.branch*root
         dz = np.divide(-(db*z+dc)*da, denominator,
                        out=np.zeros_like(z), where=denominator != 0)
+        nodes = _double_nodes(self) if self.parameterization == "linear" else ()
+        if nodes:
+            dz = _node_axial_slope(self, nodes, self._angle(t)[0], db, a, da, dz)
         singular = denominator == 0
         if np.any(singular):
             ddisc = 2*b*db-4*a*dc
@@ -793,8 +841,12 @@ class CylinderIntersectionCurve:
             ddc = 2*(np.sum(dq*dq, axis=-1)+np.sum(q*ddq, axis=-1))
             d2disc = 2*(db*db+b*ddb)-4*a*ddc
             envelope = 128*np.finfo(float).eps*(b*b+a*second.radius**2)
-            double = (np.abs(ddisc) <= envelope) & (d2disc > 0) & (left | right)
-            double_limit = -db*da/(2*a)+self.branch*np.where(left, 1., -1.)*np.abs(da)*np.sqrt(np.maximum(.5*d2disc, 0))/(2*a)
+            # On a certified node pair an interior parameter can round onto the node angle itself (the
+            # node factorisation then gives root 0 exactly): take the one-sided limit from the piece's side.
+            nodal = singular & ~(left | right) & bool(_double_nodes(self))
+            left_side, right_side = left | (nodal & (t < .5)), right | (nodal & (t >= .5))
+            double = (np.abs(ddisc) <= envelope) & (d2disc > 0) & (left_side | right_side)
+            double_limit = -db*da/(2*a)+self.branch*np.where(left_side, 1., -1.)*np.abs(da)*np.sqrt(np.maximum(.5*d2disc, 0))/(2*a)
             if np.any(singular & ~(regular_left | regular_right | double)):
                 raise GeometryError("intersection branch needs a regular endpoint chart")
             dz = np.where(singular & regular_left, limit, dz)
@@ -839,8 +891,11 @@ class CylinderIntersectionCurve:
         d3c = 2*(3*np.sum(dq*ddq, axis=-1)-np.sum(q*dq, axis=-1))
         d3disc = 6*db*ddb-2*b*db-4*a*d3c
         envelope = 128*np.finfo(float).eps*(b*b+a*second.radius**2)
-        double = (np.abs(ddisc) <= envelope) & (d2disc > 0) & ((t == 0) | (t == 1))
-        side = np.where(t == 0, 1., -1.)*np.sign(self.sweep_angle)
+        # As in ``derivative``: an interior parameter that rounds onto a certified node takes the one-sided jet.
+        nodal = singular & (t != 0) & (t != 1) & bool(_double_nodes(self))
+        left_side = (t == 0) | (nodal & (t < .5))
+        double = (np.abs(ddisc) <= envelope) & (d2disc > 0) & ((t == 0) | (t == 1) | nodal)
+        side = np.where(left_side, 1., -1.)*np.sign(self.sweep_angle)
         double_second = (-ddb/(2*a)+np.divide(
             self.branch*side*np.sqrt(np.maximum(.5*d2disc, 0))*d3disc,
             6*a*d2disc, out=np.zeros_like(z), where=d2disc != 0))*da*da

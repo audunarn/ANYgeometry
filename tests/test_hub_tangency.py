@@ -190,3 +190,17 @@ def test_one_double_pair_is_accurate_next_to_its_node():
             exact = 2 * math.sqrt(2.) * abs(math.sin(.5 * theta)) * math.sqrt(math.cos(theta))
             assert abs(abs(x) - exact) <= 1e-14, (curve.parameterization, t, x, exact)
     assert checked > 100
+
+
+@pytest.mark.parametrize("rotation", ["rational", "float"])
+def test_branch_tangent_is_accurate_next_to_a_double_node(rotation):
+    # Each branch lies in a vertical bisector plane, so its tangent's horizontal part is along that plane.
+    # Before the fix the 0/0 quotient -(db z + dc) / root turned it by up to 60 degrees within 1e-8 of the node.
+    branches, node = _node_branches(rotation)
+    for curve, end in branches:
+        far = curve.evaluate(.5) - node
+        plane = far[:2] / np.linalg.norm(far[:2])
+        for step in (0., 1e-16, 1e-15, 1e-13, 1e-11, 1e-9, 1e-7, 1e-5, 1e-3):
+            derivative = curve.derivative(end + (step if end == 0. else -step))
+            unit = derivative[:2] / np.linalg.norm(derivative[:2])
+            assert abs(unit[0] * plane[1] - unit[1] * plane[0]) <= 1e-13, (step, derivative)
