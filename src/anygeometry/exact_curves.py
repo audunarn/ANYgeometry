@@ -1069,17 +1069,18 @@ class CylinderIntersectionCurve:
         sweep = float(angles[1]-angles[0])
         if sweep == 0:
             point = self.evaluate(lower)
-            if self.parameterization != "linear" and _node_treatment(self):
-                # The float angles coincide, but a square chart still moves along the branch through its
-                # sub-ulp angle offset (the discriminant difference of ``_root``): z is monotone in that
-                # offset on one fold side, so the endpoints' hull, padded by a few ulps, encloses it.
-                other = self.evaluate(upper)
-                if not np.array_equal(other, point):
-                    low, high = np.minimum(point, other), np.maximum(point, other)
-                    scale = (float(np.max(np.abs(first.origin)))+abs(float(first.radius))
-                             +float(np.max(np.abs(np.asarray(self.transform)[:3, 3]))))
-                    pad = 16*np.finfo(float).eps*(np.maximum(np.abs(low), np.abs(high))+scale)
-                    return np.nextafter(low-pad, -np.inf), np.nextafter(high+pad, np.inf)
+            if _node_treatment(self):
+                # The float angles coincide. A square chart still moves along the branch through its sub-ulp
+                # angle offset (the discriminant difference of ``_root``): z is monotone in that offset on one
+                # fold side, so the endpoints' hull encloses it. Scalar and batched evaluation of one parameter
+                # can also differ by the rounding of the axial and transform arithmetic: the pad covers both.
+                other = self.evaluate(upper) if self.parameterization != "linear" else point
+                low, high = np.minimum(point, other), np.maximum(point, other)
+                matrix = np.asarray(self.transform)
+                scale = (float(np.max(np.abs(first.origin)))+abs(float(first.radius))
+                         +float(np.max(np.abs(matrix[:3, 3]))))*max(1., float(np.max(np.abs(matrix[:3, :3]))))
+                pad = 16*np.finfo(float).eps*(np.maximum(np.abs(low), np.abs(high))+scale)
+                return np.nextafter(low-pad, -np.inf), np.nextafter(high+pad, np.inf)
             return np.nextafter(point, -np.inf), np.nextafter(point, np.inf)
         base_lo, base_hi = EllipticArc(first.origin, first.radius*e1,
                                      first.radius*e2, float(angles[0]), sweep).bounds()

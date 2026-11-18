@@ -512,3 +512,19 @@ def test_far_supports_do_not_grow_the_node_cache():
     for _ in range(exact_curves._BRANCH_CONSTANTS_LIMIT + 64):
         assert _certified_nodes(first, second) == {}    # fresh support descriptors each call
     assert exact_curves._DOUBLE_NODES == before        # nothing added, nothing evicted
+
+
+def test_batched_points_stay_inside_a_collapsed_angle_bound():
+    # Codex round 7: the endpoints of [nextafter(1, 0), 1] round to one angle; the bound must contain the
+    # batched evaluation too, not only the scalar one.
+    first, second = _crossbeams()[:2]
+    for branch in (1, -1):
+        try:
+            curve = CylinderIntersectionCurve(first, second, math.pi, .25, branch, "linear")
+        except Exception:
+            continue
+        t = math.nextafter(1.0, 0.0)
+        lo, hi = curve.bounds(t, 1.0)
+        for point in (curve.evaluate(np.asarray((t, 1.0, t))), curve.evaluate(np.asarray((t,))), [curve.evaluate(t)]):
+            for value in np.atleast_2d(point):
+                assert np.all(lo <= value) and np.all(value <= hi), (branch, value, lo, hi)
