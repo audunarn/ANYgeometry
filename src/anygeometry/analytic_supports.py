@@ -164,6 +164,10 @@ def _certified_nodes(first, second):
     class _Pair:
         __slots__ = ("first", "second")
 
+    from .exact_curves import _NODE_ANGLE_LIMIT
+    start, sweep = float(first.start_angle), float(first.sweep_angle)
+    if max(abs(start), abs(start+sweep)) > _NODE_ANGLE_LIMIT:
+        return {}
     pair = _Pair()
     pair.first, pair.second = _CylinderSupport.from_surface(first), _CylinderSupport.from_surface(second)
     return {node.sign: node for node in _double_nodes(pair)}

@@ -399,7 +399,7 @@ _NODE_CHART_AGREEMENT = Fraction(1, 2**44)
 _NODE_CHART_WINDOW = Fraction(1, 8)
 
 
-def _elimination_agrees(curve, angles):
+def _elimination_agrees(curve, angles, others=()):
     """True when the rational elimination chart (``cylinder_curve_events._quadratic``, identity transform)
     has a root of its discriminant ``b^2 - 4 a c`` within ``_NODE_CHART_AGREEMENT`` of each node and no
     other root in the window ``_NODE_CHART_WINDOW`` around it (exact isolation).
@@ -425,7 +425,23 @@ def _elimination_agrees(curve, angles):
         polynomial = _trim(polynomial)
         if len(polynomial) == 1:
             return False                      # no root at all: the chart has no fold at this node
-        lower, upper = centre-_NODE_CHART_WINDOW, centre+_NODE_CHART_WINDOW
+        window = _NODE_CHART_WINDOW
+        for other in others:
+            # The other fold's own (simple) roots are expected elsewhere: keep them out of the window.
+            other_half = math.remainder(other, math.tau)/2
+            if abs(half) <= math.pi/4:
+                if abs(other_half) >= math.pi/2-1e-12:
+                    continue
+                coordinate = math.tan(other_half)
+            else:
+                if other_half == 0:
+                    continue
+                coordinate = 1/math.tan(other_half)
+            distance = abs(Fraction(coordinate)-centre)
+            window = min(window, distance/2)
+        if window <= 4*_NODE_CHART_AGREEMENT:
+            return False
+        lower, upper = centre-window, centre+window
         roots = isolate_real_roots(polynomial, tolerance=2.**-60, interval=(lower, upper))
         if not roots:
             return False
@@ -468,12 +484,59 @@ def _double_nodes(curve):
         signs = [sign for sign in (-1, 1) if sign in exact and rounded.get(sign) == exact[sign]]
         phi = math.atan2(constants.ns, constants.nc)
         candidates = [_DoubleNode(sign, exact[sign], phi if exact[sign] > 0 else phi+math.pi) for sign in signs]
-        if candidates and len(signs) == len(exact) and _elimination_agrees(curve, [node.angle for node in candidates]):
+        others = []
+        for sign in (-1, 1):
+            if sign not in exact:
+                # Predicted simple roots of the other fold (float witnesses; only used to size the window).
+                reach = math.sqrt(float(constants.cross @ constants.cross))*float(second.radius)
+                others.extend(trigonometric_roots((constants.n0-sign*reach, constants.nc, constants.ns, 0., 0.),
+                                                  start=-math.pi, sweep=2*math.pi,
+                                                  tolerance=4*np.finfo(float).eps))
+        if candidates and len(signs) == len(exact) and _elimination_agrees(
+                curve, [node.angle for node in candidates], others):
             nodes = candidates
     nodes = tuple(nodes)
     if len(_DOUBLE_NODES) >= _BRANCH_CONSTANTS_LIMIT:
         _DOUBLE_NODES.clear()
     _DOUBLE_NODES[key] = (first, second, nodes)
+    return nodes
+
+
+#: Node treatment is limited to charts whose angles stay in this range: beyond it the argument reductions of
+#: the radial coordinates and of the node factor are not known to agree to the accuracy the factorisation needs.
+_NODE_ANGLE_LIMIT = 8*math.pi
+_IDENTITY_TRANSFORM = ((1., 0., 0., 0.), (0., 1., 0., 0.), (0., 0., 1., 0.), (0., 0., 0., 1.))
+
+
+def _curve_nodes(curve):
+    """Certified nodes of ``curve``'s support pair that apply to its chart (fold events, constructor checks).
+
+    Empty unless :func:`_double_nodes` certifies the pair and the chart's angles lie within
+    ``_NODE_ANGLE_LIMIT``; then every caller keeps the original expressions."""
+    start, sweep = curve.start_angle, curve.sweep_angle
+    if not (math.isfinite(start) and math.isfinite(sweep)
+            and max(abs(start), abs(start+sweep)) <= _NODE_ANGLE_LIMIT):
+        return ()
+    return _double_nodes(curve)
+
+
+def _evaluation_nodes(curve):
+    """Nodes used by evaluation, bounds and jets: :func:`_curve_nodes`, restricted to untransformed curves
+    (the elimination charts of a transformed curve rationalize separately rounded world numerators, so
+    their node is not certified; such curves keep the original path bit for bit) and excluding square
+    charts anchored at a node (outside the factorisation's square-chart composition)."""
+    if tuple(tuple(row) for row in curve.transform) != _IDENTITY_TRANSFORM:
+        return ()
+    nodes = _curve_nodes(curve)
+    if not nodes or curve.parameterization == "linear":
+        return nodes
+    anchors = {"left_square": (curve.start_angle,), "right_square": (curve.start_angle+curve.sweep_angle,),
+               "both_sine": (curve.start_angle, curve.start_angle+curve.sweep_angle)}[curve.parameterization]
+    envelope = 64*np.finfo(float).eps*max(1., abs(curve.start_angle), abs(curve.start_angle+curve.sweep_angle))
+    for node in nodes:
+        for anchor in anchors:
+            if abs(math.remainder(anchor-node.angle, math.tau)) <= envelope:
+                return ()
     return nodes
 
 
@@ -484,7 +547,8 @@ def _node_angle_images(angle, start, sweep):
     envelope = 64*np.finfo(float).eps*max(1., abs(start), abs(start+sweep))
     first = math.ceil((lower-envelope-angle)/math.tau)
     last = math.floor((upper+envelope-angle)/math.tau)
-    return [angle+k*math.tau for k in range(first, last+1)]
+    # An image within the envelope outside the chart is the chart's own end (clamped): it never moves it.
+    return [min(upper, max(lower, angle+k*math.tau)) for k in range(first, last+1)]
 
 
 def _node_discriminant(curve, nodes, angle):
@@ -658,7 +722,7 @@ class CylinderIntersectionCurve:
         c0=4*magnitude*magnitude*second.radius**2-4*n0*n0-2*(nc*nc+ns*ns)
         c1,c2,c3,c4=-8*n0*nc,-8*n0*ns,-2*(nc*nc-ns*ns),-4*nc*ns
         transitions=[]
-        nodes = {node.sign: node for node in _double_nodes(self)}
+        nodes = {node.sign: node for node in _curve_nodes(self)}
         for sign in (-1,1):
             if sign in nodes:
                 # A certified double fold: its event is the node angle itself, not float roots of a
@@ -730,7 +794,7 @@ class CylinderIntersectionCurve:
         if discriminant is not None:
             disc=discriminant
         else:
-            nodes = _double_nodes(self)
+            nodes = _evaluation_nodes(self)
             if nodes:
                 disc = _node_discriminant(self, nodes, angle)
         roundoff = 64*np.finfo(float).eps*(b*b+4*a*np.abs(c)+self.second.radius**2*a)
@@ -773,7 +837,7 @@ class CylinderIntersectionCurve:
             middle=anchor+.5*delta
             discriminant=-16*np.sin(.5*delta)*(-nc*np.sin(middle)+ns*np.cos(middle))*(
                 n0+(nc*np.cos(middle)+ns*np.sin(middle))*np.cos(.5*delta))
-            nodes = _double_nodes(self)
+            nodes = _evaluation_nodes(self)
             if nodes:
                 # D = -4 (n - n_a)(n + n_a), n_a = s_a |c| r2 the anchor's simple fold. Its partner
                 # n + n_a = F(-s_a) vanishes at a certified double node of the other fold: take that
@@ -828,7 +892,7 @@ class CylinderIntersectionCurve:
         denominator = self.branch*root
         dz = np.divide(-(db*z+dc)*da, denominator,
                        out=np.zeros_like(z), where=denominator != 0)
-        nodes = _double_nodes(self)
+        nodes = _evaluation_nodes(self)
         if nodes:
             usable, node_dz, _node_ddz = _node_axial_jets(self, nodes, self._angle(t)[0], db, 0.*db, a)
             dz = np.where(usable, node_dz*da, dz)
@@ -857,7 +921,7 @@ class CylinderIntersectionCurve:
             envelope = 128*np.finfo(float).eps*(b*b+a*second.radius**2)
             # On a certified node pair an interior parameter can round onto the node angle itself (the
             # node factorisation then gives root 0 exactly): take the one-sided limit from the piece's side.
-            nodal = singular & ~(left | right) & bool(_double_nodes(self))
+            nodal = singular & ~(left | right) & bool(_evaluation_nodes(self))
             left_side, right_side = left | (nodal & (t < .5)), right | (nodal & (t >= .5))
             double = (np.abs(ddisc) <= envelope) & (d2disc > 0) & (left_side | right_side)
             double_limit = -db*da/(2*a)+self.branch*np.where(left_side, 1., -1.)*np.abs(da)*np.sqrt(np.maximum(.5*d2disc, 0))/(2*a)
@@ -895,7 +959,7 @@ class CylinderIntersectionCurve:
         dz = np.divide(-(db*z+dc), denominator, out=np.zeros_like(z), where=denominator != 0)
         ddz = np.divide(-(2*a*dz*dz+2*db*dz+ddb*z+ddc), denominator,
                         out=np.zeros_like(z), where=denominator != 0)
-        nodes = _double_nodes(self)
+        nodes = _evaluation_nodes(self)
         if nodes:
             usable, node_dz, node_ddz = _node_axial_jets(self, nodes, angle, db, ddb, a)
             dz, ddz = np.where(usable, node_dz, dz), np.where(usable, node_ddz, ddz)
@@ -910,7 +974,7 @@ class CylinderIntersectionCurve:
         d3disc = 6*db*ddb-2*b*db-4*a*d3c
         envelope = 128*np.finfo(float).eps*(b*b+a*second.radius**2)
         # As in ``derivative``: an interior parameter that rounds onto a certified node takes the one-sided jet.
-        nodal = singular & (t != 0) & (t != 1) & bool(_double_nodes(self))
+        nodal = singular & (t != 0) & (t != 1) & bool(_evaluation_nodes(self))
         left_side = (t == 0) | (nodal & (t < .5))
         double = (np.abs(ddisc) <= envelope) & (d2disc > 0) & ((t == 0) | (t == 1) | nodal)
         side = np.where(left_side, 1., -1.)*np.sign(self.sweep_angle)
@@ -953,14 +1017,16 @@ class CylinderIntersectionCurve:
         sweep = float(angles[1]-angles[0])
         if sweep == 0:
             point = self.evaluate(lower)
-            if self.parameterization != "linear":
+            if self.parameterization != "linear" and _evaluation_nodes(self):
                 # The float angles coincide, but a square chart still moves along the branch through its
                 # sub-ulp angle offset (the discriminant difference of ``_root``): z is monotone in that
                 # offset on one fold side, so the endpoints' hull, padded by a few ulps, encloses it.
                 other = self.evaluate(upper)
                 if not np.array_equal(other, point):
                     low, high = np.minimum(point, other), np.maximum(point, other)
-                    pad = 4*np.spacing(np.maximum(np.abs(low), np.abs(high)))
+                    scale = (float(np.max(np.abs(first.origin)))+abs(float(first.radius))
+                             +float(np.max(np.abs(np.asarray(self.transform)[:3, 3]))))
+                    pad = 16*np.finfo(float).eps*(np.maximum(np.abs(low), np.abs(high))+scale)
                     return np.nextafter(low-pad, -np.inf), np.nextafter(high+pad, np.inf)
             return np.nextafter(point, -np.inf), np.nextafter(point, np.inf)
         base_lo, base_hi = EllipticArc(first.origin, first.radius*e1,
@@ -981,7 +1047,7 @@ class CylinderIntersectionCurve:
         rounding = 128*np.finfo(float).eps*(bsqhi+4*a*max(abs(clo), abs(chi))+a*second.radius**2)
         dlo = max(bsqlo-4*a*chi-rounding, 0)
         dhi = max(bsqhi-4*a*clo+rounding, 0)
-        nodes = _double_nodes(self)
+        nodes = _evaluation_nodes(self)
         if nodes:
             # Both are outward enclosures of D over the piece; their intersection is one too.
             dhi = min(dhi, _node_discriminant_upper(self, nodes, float(angles[0]), sweep))
