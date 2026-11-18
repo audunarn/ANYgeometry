@@ -150,5 +150,5 @@ def test_branch_enclosure_is_tight_next_to_a_double_node(rotation):
             piece = curve.subcurve(end, end + (step if end == 0. else -step))
             lo, hi = piece.bounds()
             chord = np.linalg.norm(piece.evaluate(1.) - piece.evaluate(0.))
-            # An enclosure of a curve this short is a few chords wide (plus rounding), not sqrt(rounding).
-            assert np.linalg.norm(hi - lo) <= 4 * chord + 1e-12, (step, chord, hi - lo)
+            # A few chords plus the node-angle slack (~1e-12 m), not sqrt(rounding) (3.8e-6 m before the fix).
+            assert np.linalg.norm(hi - lo) <= 4 * chord + 1e-11, (step, chord, hi - lo)

@@ -333,6 +333,139 @@ def _branch_constants(curve):
     return constants
 
 
+class _DoubleNode(NamedTuple):
+    """One exact double zero of a support pair's chart discriminant (a tangent contact node)."""
+    sign: int            # fold sign s: the node solves n(theta) = s |a1 x a2| r2
+    tau: int             # n0 - s |a1 x a2| r2 = -tau m exactly, so cos(theta* - phi) = tau there
+    angle: float         # float node angle theta* (phi or phi + pi, phi = atan2(ns, nc))
+
+
+# Exact node certificates per support pair, keyed like ``_BRANCH_CONSTANTS`` (same lifetime rule).
+_DOUBLE_NODES: dict = {}
+
+
+def _signum(value) -> int:
+    return (value > 0)-(value < 0)
+
+
+def _sign_of_sum_with_root(rational: Fraction, factor: Fraction, radicand: Fraction) -> int:
+    """Exact sign of ``rational + factor*sqrt(radicand)`` (radicand >= 0)."""
+    if factor == 0 or radicand == 0:
+        return _signum(rational)
+    root_sign = _signum(factor)
+    if _signum(rational) in (0, root_sign):
+        return _signum(rational) or root_sign
+    left, right = rational*rational, factor*factor*radicand
+    return _signum(rational) if left > right else root_sign if left < right else 0
+
+
+def _double_nodes(curve):
+    """Exact double zeros of the chart discriminant of ``curve``'s support pair, decided in rationals.
+
+    The kernel's discriminant is ``D(theta) = 4 (|c|^2 r2^2 - n(theta)^2)`` with ``c = a1 x a2``,
+    ``n = n0 + nc cos + ns sin``, ``n0 = (o1 - o2) . c``, ``nc = r1 e1 . c``, ``ns = r1 (a1 x e1) . c``.
+    Over the exact values of the stored doubles, the fold equation ``n = s |c| r2`` has a double root
+    exactly when ``nc^2 + ns^2 = (n0 - s |c| r2)^2``; |c| is irrational in general, so equality is
+    decided by comparing squares. No tolerance is involved: a near miss (the F550 kind) is not a node.
+    Returns a tuple of :class:`_DoubleNode` (empty for every ordinary pair).
+    """
+    first, second = curve.first, curve.second
+    key = (id(first), id(second))
+    entry = _DOUBLE_NODES.get(key)
+    if entry is not None and entry[0] is first and entry[1] is second:
+        return entry[2]
+    q = lambda vector: [Fraction(float(value)) for value in vector]
+    cross = lambda u, v: [u[1]*v[2]-u[2]*v[1], u[2]*v[0]-u[0]*v[2], u[0]*v[1]-u[1]*v[0]]
+    dot = lambda u, v: sum(x*y for x, y in zip(u, v))
+    o1, a1, e1 = q(first.origin), q(first.axis), q(first.radial_direction)
+    o2, a2 = q(second.origin), q(second.axis)
+    c = cross(a1, a2)
+    r1, r2 = Fraction(float(first.radius)), Fraction(float(second.radius))
+    n0 = dot([x-y for x, y in zip(o1, o2)], c)
+    nc, ns = r1*dot(e1, c), r1*dot(cross(a1, e1), c)
+    m2, c2 = nc*nc+ns*ns, dot(c, c)
+    nodes = []
+    if m2 != 0 and c2 != 0:
+        constants = _branch_constants(curve)
+        phi = math.atan2(constants.ns, constants.nc)
+        for sign in (-1, 1):
+            # nc^2 + ns^2 - (n0 - s|c| r2)^2 = (m2 - n0^2 - c2 r2^2) + 2 s n0 r2 |c|
+            if _sign_of_sum_with_root(m2-n0*n0-c2*r2*r2, 2*sign*n0*r2, c2) != 0:
+                continue
+            # n0 - s|c| r2 = -tau m: tau is minus its exact sign (it is nonzero since m > 0).
+            tau = -_sign_of_sum_with_root(n0, -sign*r2, c2)
+            angle = phi if tau > 0 else phi+math.pi
+            nodes.append(_DoubleNode(sign, tau, angle))
+    nodes = tuple(nodes)
+    if len(_DOUBLE_NODES) >= _BRANCH_CONSTANTS_LIMIT:
+        _DOUBLE_NODES.clear()
+    _DOUBLE_NODES[key] = (first, second, nodes)
+    return nodes
+
+
+def _node_discriminant(curve, nodes, angle):
+    """``D(theta)`` of an exact-double support pair without cancellation at its nodes.
+
+    ``D = -4 F(+1) F(-1)`` with ``F(s) = n - s |c| r2`` exactly. For a node's fold sign,
+    ``F(s) = -tau m (1 - tau cos(theta - phi)) = -2 tau m sin^2(psi / 2)``, ``psi = theta - theta*``
+    (cos(theta* - phi) = tau): a product of accurate factors, so D has a small relative error and its
+    square root an absolute error O(eps * scale) up to the node, where ``b^2 - 4ac`` gives
+    O(sqrt(eps) * scale). The other fold factor is formed directly.
+    """
+    constants = _branch_constants(curve)
+    n0, nc, ns, m = constants.n0, constants.nc, constants.ns, constants.magnitude
+    reach = math.sqrt(float(constants.cross @ constants.cross))*curve.second.radius
+    by_sign = {node.sign: node for node in nodes}
+    factors = []
+    for sign in (1, -1):
+        node = by_sign.get(sign)
+        if node is None:
+            factors.append((n0-sign*reach)+nc*np.cos(angle)+ns*np.sin(angle))
+            continue
+        psi = angle-node.angle
+        psi = psi-2*math.pi*np.round(psi/(2*math.pi))
+        half = np.sin(.5*psi)
+        factors.append(-2*node.tau*m*half*half)
+    return -4*factors[0]*factors[1]
+
+
+def _node_discriminant_upper(curve, nodes, start, sweep):
+    """Outward upper bound of ``D`` over the angles ``start .. start + sweep`` of an exact-double pair.
+
+    ``|D| = 4 |F(+1)| |F(-1)|`` (see :func:`_node_discriminant`). A node factor is bounded by
+    ``2 m sin^2(X / 2) <= m X^2 / 2`` with ``X`` the largest ``|psi|`` over the interval plus ``slack``,
+    which covers the float node angle (atan2 of the rounded ``nc``, ``ns``: their rounding is bounded by
+    ``8 eps`` times the absolute terms of their dot products, divided by ``m``) and the rounding of
+    ``psi``. A non-node factor is bounded by ``|n0 - s |c| r2| + m``. A relative ``64 eps`` and the
+    evaluation route's rounding are added on top. Returns ``inf`` when no useful bound applies.
+    """
+    constants = _branch_constants(curve)
+    n0, nc, ns, m = constants.n0, constants.nc, constants.ns, constants.magnitude
+    if not (m > 0 and math.isfinite(start) and math.isfinite(sweep)):
+        return math.inf
+    eps = np.finfo(float).eps
+    cross = np.asarray(constants.cross)
+    c_abs = float(np.sum(np.abs(cross)))
+    r1 = abs(float(curve.first.radius))
+    e1, e2 = np.abs(np.asarray(constants.e1)), np.abs(np.asarray(constants.e2))
+    term = r1*c_abs*(float(np.max(e1))+float(np.max(e2)))*3
+    reach = math.sqrt(float(cross @ cross))*curve.second.radius
+    by_sign = {node.sign: node for node in nodes}
+    bound = 4.
+    for sign in (1, -1):
+        node = by_sign.get(sign)
+        if node is None:
+            bound *= (abs(n0-sign*reach)+m)*(1+64*eps)+64*eps*(abs(n0)+reach+m)
+            continue
+        slack = 64*eps*term/m+64*eps*(1+abs(node.angle)+abs(start)+abs(sweep))
+        psi = start-node.angle
+        psi = psi-2*math.pi*round(psi/(2*math.pi))
+        reach_psi = max(abs(psi), abs(psi+sweep))+slack
+        # |F| = 2 m sin^2(psi / 2) <= min(2 m, m psi^2 / 2) over the interval.
+        bound *= min(2., .5*reach_psi*reach_psi)*m*(1+64*eps)
+    return bound*(1+64*eps)
+
+
 @dataclass(frozen=True, slots=True)
 class CylinderIntersectionCurve:
     """One analytic quadratic-root branch of two cylinder supports.
@@ -451,6 +584,10 @@ class CylinderIntersectionCurve:
         disc = 4*(remainder+magnitude**2*sine*sine-2*n0*magnitude*cosine)
         if discriminant is not None:
             disc=discriminant
+        else:
+            nodes = _double_nodes(self)
+            if nodes:
+                disc = _node_discriminant(self, nodes, angle)
         roundoff = 64*np.finfo(float).eps*(b*b+4*a*np.abs(c)+self.second.radius**2*a)
         if np.any(disc < -roundoff):
             raise GeometryError("intersection branch leaves the real cylinder intersection")
@@ -660,6 +797,10 @@ class CylinderIntersectionCurve:
         rounding = 128*np.finfo(float).eps*(bsqhi+4*a*max(abs(clo), abs(chi))+a*second.radius**2)
         dlo = max(bsqlo-4*a*chi-rounding, 0)
         dhi = max(bsqhi-4*a*clo+rounding, 0)
+        nodes = _double_nodes(self)
+        if nodes:
+            # Both are outward enclosures of D over the piece; their intersection is one too.
+            dhi = min(dhi, _node_discriminant_upper(self, nodes, float(angles[0]), sweep))
         rlo, rhi = math.sqrt(dlo), math.sqrt(dhi)
         zlo, zhi = -bhi/(2*a), -blo/(2*a)
         if self.branch == 1:
