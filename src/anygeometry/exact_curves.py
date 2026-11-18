@@ -469,6 +469,11 @@ def _double_nodes(curve):
     entry = _DOUBLE_NODES.get(key)
     if entry is not None and entry[0] is first and entry[1] is second:
         return entry[2]
+    if not _angles_admitted(first.start_angle, first.sweep_angle):
+        # Decided on the first support's own angular range, so the support's events and every chart cut
+        # from it agree; such pairs keep the original expressions everywhere.
+        _DOUBLE_NODES[key] = (first, second, ())
+        return ()
     q = lambda vector: [Fraction(float(value)) for value in np.asarray(vector, dtype=float)]
     cross = lambda u, v: [u[1]*v[2]-u[2]*v[1], u[2]*v[0]-u[0]*v[2], u[0]*v[1]-u[1]*v[0]]
     a1 = q(first.axis)
@@ -510,24 +515,39 @@ _TWO_PI = Fraction(Decimal("6.28318530717958647692528676655900576839433879875021
 _FLOAT_REDUCTION_LIMIT = 8*math.pi
 
 
+#: Node treatment is admitted only for supports (and charts) whose angles stay within this many radians
+#: (2^10 turns): image enumeration stays small and the 100-digit period reduces exactly there.
+_NODE_ADMISSION_LIMIT = 2**10*2*math.pi
+
+
+def _angles_admitted(start, sweep):
+    start, sweep = float(start), float(sweep)
+    return (math.isfinite(start) and math.isfinite(sweep)
+            and max(abs(start), abs(start+sweep)) <= _NODE_ADMISSION_LIMIT)
+
+
 def _node_psi(angle, node_angle):
-    """``angle - node_angle`` reduced to about ``[-pi, pi]``, accurate to an ulp-level error at any magnitude
-    (the radial coordinates' ``cos``/``sin`` reduce their arguments exactly, so the node factor must too)."""
+    """``angle - node_angle`` reduced to about ``[-pi, pi]`` with an ulp-level error (the radial coordinates'
+    ``cos``/``sin`` reduce their arguments exactly, so the node factor must too). Each element is reduced by
+    the same rule whatever array it comes in (float within ``_FLOAT_REDUCTION_LIMIT``, exact beyond)."""
     angle = np.asarray(angle, dtype=float)
-    if np.all(np.abs(angle) <= _FLOAT_REDUCTION_LIMIT) and abs(node_angle) <= _FLOAT_REDUCTION_LIMIT:
-        psi = angle-node_angle
-        return psi-2*math.pi*np.round(psi/(2*math.pi))
-    result = np.empty(angle.shape)
-    flat = result.reshape(-1)
-    centre = Fraction(float(node_angle))
-    for index, value in enumerate(angle.reshape(-1)):
-        if not math.isfinite(float(value)):
-            flat[index] = math.nan
-            continue
-        difference = Fraction(float(value))-centre
-        turns = round(difference/_TWO_PI)
-        flat[index] = float(difference-turns*_TWO_PI)
-    return result
+    psi = angle-node_angle
+    psi = psi-2*math.pi*np.round(psi/(2*math.pi))
+    far = ~(np.abs(angle) <= _FLOAT_REDUCTION_LIMIT) if abs(node_angle) <= _FLOAT_REDUCTION_LIMIT else (
+        np.ones(angle.shape, dtype=bool))
+    if np.any(far):
+        psi = np.array(psi, dtype=float, copy=True)
+        flat, values, mask = psi.reshape(-1), angle.reshape(-1), far.reshape(-1)
+        centre = Fraction(float(node_angle))
+        for index in np.flatnonzero(mask):
+            value = float(values[index])
+            if not math.isfinite(value):
+                flat[index] = math.nan
+                continue
+            difference = Fraction(value)-centre
+            turns = round(difference/_TWO_PI)
+            flat[index] = float(difference-turns*_TWO_PI)
+    return psi
 
 
 def _node_treatment(curve):
@@ -535,7 +555,9 @@ def _node_treatment(curve):
     of them): :func:`_double_nodes`, except for a square chart anchored at a node (outside the square-chart
     composition; it keeps the original expressions everywhere). Ordinary pairs: always empty."""
     nodes = _double_nodes(curve)
-    if not nodes or curve.parameterization == "linear":
+    if not nodes or not _angles_admitted(curve.start_angle, curve.sweep_angle):
+        return ()
+    if curve.parameterization == "linear":
         return nodes
     anchors = {"left_square": (curve.start_angle,), "right_square": (curve.start_angle+curve.sweep_angle,),
                "both_sine": (curve.start_angle, curve.start_angle+curve.sweep_angle)}[curve.parameterization]
@@ -550,6 +572,8 @@ def _node_treatment(curve):
 def _node_angle_images(angle, start, sweep):
     """The images ``angle + 2 pi k`` in the closed angular interval ``start .. start + sweep``,
     widened by the endpoint envelope the branch charts use (64 eps of the angles)."""
+    if not _angles_admitted(start, sweep):
+        return []                     # never enumerated: such charts carry no node treatment
     lower, upper = sorted((start, start+sweep))
     envelope = 64*np.finfo(float).eps*max(1., abs(start), abs(start+sweep))
     first = math.ceil((lower-envelope-angle)/math.tau)

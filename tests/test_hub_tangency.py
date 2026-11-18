@@ -444,3 +444,38 @@ def test_transformed_node_chart_is_constructed_and_evaluated_like_its_untransfor
     for t in (0., 1e-12, 1e-9, 1e-6, .5):
         assert np.linalg.norm(moved.evaluate(t) - (plain.evaluate(t) + (.3, 0., 0.))) <= 1e-14
         assert np.linalg.norm(moved.derivative(t) - plain.derivative(t)) <= 1e-12
+
+
+# ---- Codex review round 4 regressions
+
+def test_batching_does_not_change_a_node_chart_result():
+    first, second = _unit_pair()
+    curve = _branch(first, second, 4 * math.tau, .2, 1)
+    t = 1e-15
+    alone, batched = curve.derivative(t), curve.derivative(np.asarray((t, .5)))[0]
+    assert np.array_equal(alone, batched), (alone, batched)
+    assert np.array_equal(curve.evaluate(t), curve.evaluate(np.asarray((t, .5)))[0])
+    lo, hi = curve.bounds(t, t)
+    point = curve.evaluate(np.asarray((t, .5)))[0]
+    assert np.all(lo <= point) and np.all(point <= hi)
+
+
+def test_extreme_start_angles_are_constructed_promptly_without_node_treatment():
+    import time
+    from anygeometry.exact_curves import _node_treatment
+    first, second = _unit_pair()
+    began = time.perf_counter()
+    for branch in (1, -1):
+        try:
+            curve = _branch(first, second, 1e30, .2, branch)
+        except Exception:       # main's own validation may refuse such a chart; it must not hang
+            continue
+        assert _node_treatment(curve) == ()
+    assert time.perf_counter() - began < 5.
+
+
+def test_far_support_emits_no_square_chart_at_a_certified_node():
+    first, second = _unit_pair(first_start=1e8 * math.tau - .1, first_sweep=.5)
+    for curve in (c for c in cylinder_cylinder_support(first, second, tolerance=1e-10).curves
+                  if isinstance(c, CylinderIntersectionCurve)):
+        curve.derivative(np.linspace(0., 1., 9))      # must not refuse
