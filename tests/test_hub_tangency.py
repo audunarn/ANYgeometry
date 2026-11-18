@@ -517,14 +517,25 @@ def test_far_supports_do_not_grow_the_node_cache():
 def test_batched_points_stay_inside_a_collapsed_angle_bound():
     # Codex round 7: the endpoints of [nextafter(1, 0), 1] round to one angle; the bound must contain the
     # batched evaluation too, not only the scalar one.
+    from anygeometry.exact_curves import _node_treatment
     first, second = _crossbeams()[:2]
     for branch in (1, -1):
-        try:
-            curve = CylinderIntersectionCurve(first, second, math.pi, .25, branch, "linear")
-        except Exception:
-            continue
+        curve = CylinderIntersectionCurve(first, second, math.pi, .25, branch, "linear")
+        assert _node_treatment(curve)
         t = math.nextafter(1.0, 0.0)
+        angles = curve._angle(np.asarray((t, 1.0)))[0]
+        assert angles[0] == angles[1]
         lo, hi = curve.bounds(t, 1.0)
         for point in (curve.evaluate(np.asarray((t, 1.0, t))), curve.evaluate(np.asarray((t,))), [curve.evaluate(t)]):
             for value in np.atleast_2d(point):
                 assert np.all(lo <= value) and np.all(value <= hi), (branch, value, lo, hi)
+
+
+def test_collapsed_angle_bounds_stay_finite_under_a_large_transform():
+    first, second = _unit_pair()
+    curve = _branch(first, second, 0., .5, 1).transformed(((1., 0., 0., 0.), (0., 1e308, 0., 0.),
+                                                           (0., 0., 1., 0.), (0., 0., 0., 1.)))
+    lo, hi = curve.bounds(.5, .5)
+    point = curve.evaluate(.5)
+    assert np.all(np.isfinite(lo[[0, 2]])) and np.all(np.isfinite(hi[[0, 2]]))
+    assert np.all(lo <= point) and np.all(point <= hi)

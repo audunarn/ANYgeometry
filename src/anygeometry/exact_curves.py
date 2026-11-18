@@ -1077,9 +1077,11 @@ class CylinderIntersectionCurve:
                 other = self.evaluate(upper) if self.parameterization != "linear" else point
                 low, high = np.minimum(point, other), np.maximum(point, other)
                 matrix = np.asarray(self.transform)
-                scale = (float(np.max(np.abs(first.origin)))+abs(float(first.radius))
-                         +float(np.max(np.abs(matrix[:3, 3]))))*max(1., float(np.max(np.abs(matrix[:3, :3]))))
-                pad = 16*np.finfo(float).eps*(np.maximum(np.abs(low), np.abs(high))+scale)
+                eps16 = 16*np.finfo(float).eps
+                operand = float(np.max(np.abs(first.origin)))+abs(float(first.radius))
+                # per output row, epsilon applied before the products (no overflow for finite inputs)
+                pad = (eps16*np.maximum(np.abs(low), np.abs(high)) + eps16*np.abs(matrix[:3, 3])
+                       + (eps16*np.abs(matrix[:3, :3])).sum(axis=1)*operand)
                 return np.nextafter(low-pad, -np.inf), np.nextafter(high+pad, np.inf)
             return np.nextafter(point, -np.inf), np.nextafter(point, np.inf)
         base_lo, base_hi = EllipticArc(first.origin, first.radius*e1,
