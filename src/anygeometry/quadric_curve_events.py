@@ -106,4 +106,39 @@ def quadric_roots(curve,matrix,linear,constant,*,tolerance=1e-10,cancellation_ch
             if residual(parameter)<=tolerance and not any(abs(parameter-old)<=64*np.finfo(float).eps
                                                          for old in parameters):
                 parameters.append(parameter)
-    return tuple(sorted(parameters))
+    return tuple(sorted(_node_roots(curve,parameters,matrix,linear,constant)))
+
+
+#: Angular radius around a certified tangent node inside which a quadric through the node has no root but
+#: the node (about 9.5e-7 rad; split roots caused by rounding of the chart numerators lie ~1e-8 rad away).
+_NODE_ROOT_RADIUS = 2.**-20
+
+
+def _node_roots(curve, parameters, matrix, linear, constant):
+    """Certified tangent nodes of ``curve``'s support pair (``exact_curves._double_nodes``): when the quadric
+    passes through a node point within the input-rounding envelope (64 eps of its terms, the envelope of the
+    branch charts' double-endpoint snap), the node parameter replaces every root within ``_NODE_ROOT_RADIUS``
+    of it. The elimination chart rationalizes separately rounded numerators, so a quadric tangent at the node
+    has its double root split by O(sqrt(eps)) there (or lost); the node itself is exact. Curves without a
+    certified node are returned unchanged."""
+    from .exact_curves import _double_nodes, _node_angle_images
+    nodes = _double_nodes(curve)
+    if not nodes:
+        return parameters
+    from .arrangement_geometry import _angle_parameter
+    eps = np.finfo(float).eps
+    result = list(parameters)
+    for node in nodes:
+        for angle in _node_angle_images(node.angle, curve.start_angle, curve.sweep_angle):
+            at = min(1., max(0., _angle_parameter(curve, angle)))
+            point = curve.evaluate(at)
+            size = float(np.linalg.norm(point))
+            value = abs(float(point @ matrix @ point+2*linear @ point+constant))
+            envelope = 64*eps*(abs(float(constant))+2*float(np.linalg.norm(linear))*size
+                               +float(np.linalg.norm(matrix))*size*size)
+            if value > envelope:
+                continue
+            angles = curve._angle(np.asarray(result, dtype=float))[0] if result else ()
+            result = [t for t, a in zip(result, angles) if abs(a-angle) > _NODE_ROOT_RADIUS]
+            result.append(at)
+    return result

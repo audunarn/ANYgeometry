@@ -204,3 +204,103 @@ def test_branch_tangent_is_accurate_next_to_a_double_node(rotation):
             derivative = curve.derivative(end + (step if end == 0. else -step))
             unit = derivative[:2] / np.linalg.norm(derivative[:2])
             assert abs(unit[0] * plane[1] - unit[1] * plane[0]) <= 1e-13, (step, derivative)
+
+
+# ---- Codex review round 1 regressions
+
+def test_far_apart_origins_do_not_certify_a_node():
+    # Coplanar equal-radius axes whose elimination chart puts its fold 2.2e-6 (half-angle chart) away from
+    # the node: certification must fail (an empty search window is not agreement).
+    from anygeometry.analytic_supports import _certified_nodes
+    from anygeometry.surfaces import Cylinder
+    L = 1e11
+    first = Cylinder((-4., 0., 14.), (1., 0., 0.), (0., 0., 1.), 6., 8.)
+    second = Cylinder((-L / 2, L * math.sqrt(3.) / 2, 14.), (-.5, math.sqrt(3.) / 2, 0.), (0., 0., 1.), 6., 8.)
+    assert _certified_nodes(first, second) == {}
+    # ... while the hub and the offset pipes stay certified
+    big, small, _curves = _offset_pipes()
+    assert set(_certified_nodes(big, small)) == {-1}
+    beams = _crossbeams()
+    assert set(_certified_nodes(beams[0], beams[1])) == {-1, 1}
+
+
+def _sampled_contained(curve, lower, upper):
+    lo, hi = curve.bounds(lower, upper)
+    for t in np.linspace(lower, upper, 33):
+        point = curve.evaluate(t)
+        assert np.all(lo <= point) and np.all(point <= hi), (curve.parameterization, lower, upper, t, point, lo, hi)
+
+
+@pytest.mark.parametrize("fixture", ["hub", "pipes", "oblique"])
+def test_bounds_contain_evaluated_points_near_chart_ends(fixture):
+    curves = ([curve for curve, _end in _node_branches()[0]] if fixture == "hub"
+              else _offset_pipes()[2] if fixture == "pipes" else _oblique_pipes()[2])
+    for curve in curves:
+        for step in (1e-15, 1e-12, 1e-9, 1e-6, 1e-3):
+            _sampled_contained(curve, 0., step)
+            _sampled_contained(curve, 1. - step, 1.)
+
+
+def _oblique_pipes(tilt=.3):
+    """The offset pipes with the small pipe's axis turned by ``tilt`` in the horizontal plane: the node stays
+    an exact double (|a1 x a2| = cos(tilt) enters every term exactly) and a square chart starts at it."""
+    from anygeometry.surfaces import Cylinder
+    big = Cylinder((-4., 0., 0.), (1., 0., 0.), (0., 0., -1.), 2., 8.)
+    axis = (math.sin(tilt), math.cos(tilt), 0.)
+    small = Cylinder((-4. * axis[0], -4. * axis[1], -1.), axis, (math.cos(tilt), -math.sin(tilt), 0.), 1., 8.)
+    curves = [c for c in cylinder_cylinder_support(big, small, tolerance=1e-9).curves
+              if isinstance(c, CylinderIntersectionCurve)]
+    return big, small, curves
+
+
+def _forward_difference(function, t, step):
+    """Second-order one-sided difference that stays inside [0, 1]."""
+    sign = 1. if t + 2 * step <= 1. else -1.
+    h = sign * step
+    return sign * (-3 * function(t) + 4 * function(t + h) - function(t + 2 * h)) / (2 * step)
+
+
+@pytest.mark.parametrize("fixture", ["pipes", "oblique"])
+def test_first_derivative_is_accurate_on_every_chart_next_to_the_node(fixture):
+    _big, _small, curves = _offset_pipes() if fixture == "pipes" else _oblique_pipes()
+    checked = 0
+    for curve in curves:
+        for end in (0., 1.):
+            if np.linalg.norm(curve.evaluate(end) - np.array((0., 0., -2.))) > 1e-12:
+                continue
+            for step in (1e-14, 1e-11, 1e-8):
+                t = end + (step if end == 0. else -step)
+                reference = _forward_difference(curve.evaluate, t, 1e-6)
+                derivative = curve.derivative(t)
+                assert np.linalg.norm(derivative - reference) <= 1e-6 * np.linalg.norm(reference), (
+                    curve.parameterization, t, derivative, reference)
+                checked += 1
+    assert checked >= 6
+
+
+def test_second_derivative_is_bounded_and_accurate_next_to_a_double_node():
+    branches, _node = _node_branches()
+    for curve, end in branches:
+        for step in (1e-12, 1e-9, 1e-6):
+            t = end + (step if end == 0. else -step)
+            second = curve.second_derivative(t)
+            reference = _forward_difference(curve.derivative, t, 1e-6)
+            assert np.linalg.norm(second - reference) <= 1e-5 * max(1., np.linalg.norm(reference)), (
+                t, second, reference)
+
+
+@pytest.mark.parametrize("shift", [-.3, 3.1, 0.])
+def test_tangent_plane_roots_at_a_node_are_the_node_for_transformed_branches(shift):
+    # The plane z = zc - R + shift is tangent to the (translated) branch at its node: its only root near the
+    # node is the node itself, not points 1.2e-7 m away (nor no root at all).
+    from anygeometry.arrangement_geometry import plane_roots
+    branches, node = _node_branches()
+    matrix = ((1., 0., 0., 0.), (0., 1., 0., 0.), (0., 0., 1., shift), (0., 0., 0., 1.))
+    for curve, end in branches:
+        moved = curve.transformed(matrix)
+        target = node + (0., 0., shift)
+        roots = plane_roots(moved, np.array((0., 0., 1.)), float(target[2]), tolerance=1e-9)
+        near = [t for t in roots if np.linalg.norm(moved.evaluate(t) - target) < 1e-3]
+        assert near, (shift, end, roots)
+        for t in near:
+            assert np.linalg.norm(moved.evaluate(t) - target) <= 1e-12, (shift, end, t, moved.evaluate(t))

@@ -393,18 +393,20 @@ def _trim(values):
 
 
 #: Largest separation (in the half-angle chart t = tan(theta / 2), or 1 / t) the elimination chart's
-#: discriminant roots may have from a certified node, and the window searched around it.
+#: discriminant roots may have from a certified node, and the window searched around it (about 0.25 rad:
+#: every root in it must lie in the small ball, and at least one must).
 _NODE_CHART_AGREEMENT = Fraction(1, 2**44)
-_NODE_CHART_WINDOW = Fraction(1, 10**6)
+_NODE_CHART_WINDOW = Fraction(1, 8)
 
 
 def _elimination_agrees(curve, angles):
     """True when the rational elimination chart (``cylinder_curve_events._quadratic``, identity transform)
-    places every root of its discriminant ``b^2 - 4 a c`` near each node angle within
-    ``_NODE_CHART_AGREEMENT`` of the node (exact isolation in the window ``_NODE_CHART_WINDOW``).
+    has a root of its discriminant ``b^2 - 4 a c`` within ``_NODE_CHART_AGREEMENT`` of each node and no
+    other root in the window ``_NODE_CHART_WINDOW`` around it (exact isolation).
 
     That chart rationalizes float-projected vectors, so its node can differ from the certified one by
-    rounding; this bounds the difference rigorously (no roots in the window outside the small ball)."""
+    rounding; this bounds the difference rigorously. An empty window (the chart's fold missing or moved
+    away) is a disagreement, not agreement."""
     from .analytic_roots import isolate_real_roots
     from .cylinder_curve_events import _add, _multiply, _quadratic, _scale
     identity = ((1., 0., 0., 0.), (0., 1., 0., 0.), (0., 0., 1., 0.), (0., 0., 0., 1.))
@@ -422,11 +424,12 @@ def _elimination_agrees(curve, angles):
             polynomial, centre = tuple(reversed(discriminant)), Fraction(1/math.tan(half))
         polynomial = _trim(polynomial)
         if len(polynomial) == 1:
-            if polynomial[0] == 0:
-                return False
-            continue
+            return False                      # no root at all: the chart has no fold at this node
         lower, upper = centre-_NODE_CHART_WINDOW, centre+_NODE_CHART_WINDOW
-        for root in isolate_real_roots(polynomial, tolerance=2.**-60, interval=(lower, upper)):
+        roots = isolate_real_roots(polynomial, tolerance=2.**-60, interval=(lower, upper))
+        if not roots:
+            return False
+        for root in roots:
             if root.lower < centre-_NODE_CHART_AGREEMENT or root.upper > centre+_NODE_CHART_AGREEMENT:
                 return False
     return True
@@ -510,15 +513,17 @@ def _node_discriminant(curve, nodes, angle):
     return -4*factors[0]*factors[1]
 
 
-def _node_axial_slope(curve, nodes, angle, db, a, da, fallback):
-    """``dz/dt`` of a linear chart on a certified node pair without the 0/0 of ``-(db z + dc) / root``.
+def _node_axial_jets(curve, nodes, angle, db, ddb, a):
+    """First and second angle derivatives of the axial root on a certified node pair, without the 0/0
+    quotients ``-(db z + dc) / root`` (and its second-order analogue) next to a node.
 
-    With the nearest node's factor ``F = -2 tau m s^2`` (``s, c = sin, cos(psi / 2)``) and the other fold
-    factor ``G``, ``D = -4 F G = 8 tau m s^2 G`` and ``sqrt(D) = |s| sqrt(8 tau m G)``, so
-    ``D' = 8 tau m (s c G + s^2 G')``, so ``D' / (2 sqrt D) = 4 tau m (sgn(s) c G + |s| G') / sqrt(8 tau m G)``:
-    no cancelling quotient.
-    ``z = (-b + branch sqrt(D)) / (2 a)`` then gives ``dz = (-db + branch D' / (2 sqrt D)) da / (2 a)``.
-    Where ``s == 0`` or ``8 tau m G <= 0`` the original value (``fallback``) is kept.
+    With the node factor ``F = -2 tau m s^2`` (``s, c = sin, cos(psi / 2)``) and the other fold factor ``G``,
+    ``D = -4 F G = 8 tau m s^2 G``, so ``sqrt(D) = |s| H`` with ``H = sqrt(8 tau m G)``. Then
+    ``(sqrt D)' = sgn(s) (c / 2) H + |s| H'`` and ``(sqrt D)'' = -|s| H / 4 + sgn(s) c H' + |s| H''`` with
+    ``H' = 4 tau m G' / H`` and ``H'' = (4 tau m G'' - H'^2) / H``; ``z = (-b + branch sqrt(D)) / (2 a)``.
+    Used only where the node factor is the smaller one (``|F| <= |G|``), ``s != 0`` and ``tau G > 0``;
+    elsewhere (``usable`` False) the caller keeps its own expressions, which are accurate there.
+    Returns ``(usable, dz, ddz)`` per angle.
     """
     constants = _branch_constants(curve)
     n0, nc, ns, m = constants.n0, constants.nc, constants.ns, constants.magnitude
@@ -531,28 +536,36 @@ def _node_axial_slope(curve, nodes, angle, db, a, da, fallback):
         return psi-2*math.pi*np.round(psi/(2*math.pi))
 
     psis = {sign: wrapped(node) for sign, node in by_sign.items()}
-    result = np.asarray(fallback, dtype=float).copy()
+    usable_all = np.zeros(angle.shape, dtype=bool)
+    dz_all = np.zeros(angle.shape)
+    ddz_all = np.zeros(angle.shape)
     for sign, node in by_sign.items():
         psi = psis[sign]
+        s, c = np.sin(.5*psi), np.cos(.5*psi)
+        node_factor = 2*m*s*s
         other = -sign
         if other in by_sign:
             other_psi = psis[other]
-            nearest = np.abs(psi) <= np.abs(other_psi)
             half = np.sin(.5*other_psi)
             g = -2*by_sign[other].tau*m*half*half
             dg = -by_sign[other].tau*m*np.sin(other_psi)
+            ddg = -by_sign[other].tau*m*np.cos(other_psi)
         else:
-            nearest = np.ones_like(psi, dtype=bool)
             g = (n0-other*reach)+nc*np.cos(angle)+ns*np.sin(angle)
             dg = -nc*np.sin(angle)+ns*np.cos(angle)
-        s, c = np.sin(.5*psi), np.cos(.5*psi)
+            ddg = -nc*np.cos(angle)-ns*np.sin(angle)
         scale = 8*node.tau*m*g
-        usable = nearest & (s != 0) & (scale > 0)
-        root = np.sqrt(np.where(usable, scale, 1.))
-        ratio = 4*node.tau*m*(np.sign(s)*c*g+np.abs(s)*dg)/root
-        slope = (-db+curve.branch*ratio)*da/(2*a)
-        result = np.where(usable, slope, result)
-    return result
+        usable = (node_factor <= np.abs(g)) & (s != 0) & (scale > 0) & ~usable_all
+        h = np.sqrt(np.where(usable, scale, 1.))
+        dh = 4*node.tau*m*dg/h
+        ddh = (4*node.tau*m*ddg-dh*dh)/h
+        sign_s, abs_s = np.sign(s), np.abs(s)
+        droot = sign_s*.5*c*h+abs_s*dh
+        ddroot = -.25*abs_s*h+sign_s*c*dh+abs_s*ddh
+        dz_all = np.where(usable, (-db+curve.branch*droot)/(2*a), dz_all)
+        ddz_all = np.where(usable, (-ddb+curve.branch*ddroot)/(2*a), ddz_all)
+        usable_all = usable_all | usable
+    return usable_all, dz_all, ddz_all
 
 
 def _node_discriminant_upper(curve, nodes, start, sweep):
@@ -815,9 +828,10 @@ class CylinderIntersectionCurve:
         denominator = self.branch*root
         dz = np.divide(-(db*z+dc)*da, denominator,
                        out=np.zeros_like(z), where=denominator != 0)
-        nodes = _double_nodes(self) if self.parameterization == "linear" else ()
+        nodes = _double_nodes(self)
         if nodes:
-            dz = _node_axial_slope(self, nodes, self._angle(t)[0], db, a, da, dz)
+            usable, node_dz, _node_ddz = _node_axial_jets(self, nodes, self._angle(t)[0], db, 0.*db, a)
+            dz = np.where(usable, node_dz*da, dz)
         singular = denominator == 0
         if np.any(singular):
             ddisc = 2*b*db-4*a*dc
@@ -881,6 +895,10 @@ class CylinderIntersectionCurve:
         dz = np.divide(-(db*z+dc), denominator, out=np.zeros_like(z), where=denominator != 0)
         ddz = np.divide(-(2*a*dz*dz+2*db*dz+ddb*z+ddc), denominator,
                         out=np.zeros_like(z), where=denominator != 0)
+        nodes = _double_nodes(self)
+        if nodes:
+            usable, node_dz, node_ddz = _node_axial_jets(self, nodes, angle, db, ddb, a)
+            dz, ddz = np.where(usable, node_dz, dz), np.where(usable, node_ddz, ddz)
         axial_second = ddz*da*da+dz*dda
         singular = denominator == 0
         regular = ((t == 0) & (self.parameterization in ("left_square", "both_sine"))) | (
@@ -935,6 +953,15 @@ class CylinderIntersectionCurve:
         sweep = float(angles[1]-angles[0])
         if sweep == 0:
             point = self.evaluate(lower)
+            if self.parameterization != "linear":
+                # The float angles coincide, but a square chart still moves along the branch through its
+                # sub-ulp angle offset (the discriminant difference of ``_root``): z is monotone in that
+                # offset on one fold side, so the endpoints' hull, padded by a few ulps, encloses it.
+                other = self.evaluate(upper)
+                if not np.array_equal(other, point):
+                    low, high = np.minimum(point, other), np.maximum(point, other)
+                    pad = 4*np.spacing(np.maximum(np.abs(low), np.abs(high)))
+                    return np.nextafter(low-pad, -np.inf), np.nextafter(high+pad, np.inf)
             return np.nextafter(point, -np.inf), np.nextafter(point, np.inf)
         base_lo, base_hi = EllipticArc(first.origin, first.radius*e1,
                                      first.radius*e2, float(angles[0]), sweep).bounds()
