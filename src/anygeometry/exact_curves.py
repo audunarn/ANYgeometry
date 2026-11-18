@@ -1078,8 +1078,14 @@ class CylinderIntersectionCurve:
                 low, high = np.minimum(point, other), np.maximum(point, other)
                 matrix = np.asarray(self.transform)
                 eps16 = 16*np.finfo(float).eps
-                operand = float(np.max(np.abs(first.origin)))+abs(float(first.radius))
-                # per output row, epsilon applied before the products (no overflow for finite inputs)
+                # Untransformed points of both ends (base + z axis), so the axial term a transform may cancel
+                # is part of the operand size.
+                base, _dbase, z, *_rest = self._root(np.asarray((lower, upper)))
+                raw = base+z[..., None]*np.asarray(first.axis)
+                operand = (float(np.max(np.abs(raw)))+float(np.max(np.abs(first.origin)))
+                           +abs(float(first.radius)))
+                # Per output row; epsilon is applied to the coefficients first, so the pad overflows only where
+                # an epsilon-scaled row times the operand size exceeds the float range.
                 pad = (eps16*np.maximum(np.abs(low), np.abs(high)) + eps16*np.abs(matrix[:3, 3])
                        + (eps16*np.abs(matrix[:3, :3])).sum(axis=1)*operand)
                 return np.nextafter(low-pad, -np.inf), np.nextafter(high+pad, np.inf)

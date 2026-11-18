@@ -537,5 +537,31 @@ def test_collapsed_angle_bounds_stay_finite_under_a_large_transform():
                                                            (0., 0., 1., 0.), (0., 0., 0., 1.)))
     lo, hi = curve.bounds(.5, .5)
     point = curve.evaluate(.5)
-    assert np.all(np.isfinite(lo[[0, 2]])) and np.all(np.isfinite(hi[[0, 2]]))
+    assert np.all(np.isfinite(lo)) and np.all(np.isfinite(hi))
     assert np.all(lo <= point) and np.all(point <= hi)
+
+
+def test_collapsed_angle_bounds_cover_axial_terms_a_transform_cancels():
+    # Codex round 9: a large axial coordinate cancelled by the transform's first row.
+    from anygeometry.surfaces import Cylinder
+    from anygeometry.exact_curves import _node_treatment
+    axis = np.array((3., 4., 0.)) / 5.
+    first = Cylinder((0., 0., 0.), tuple(axis), (0., 0., 1.), 1., 4096.)
+    second = Cylinder((-2048., 1024., 0.), (1., 0., 0.), (0., 0., 1.), 1., 4096.)
+    matrix = ((.8, -.6, 0., 0.), (0., 64., 0., 0.), (0., 0., 1., 0.), (0., 0., 0., 1.))
+    checked = 0
+    for branch in (1, -1):
+        try:
+            curve = CylinderIntersectionCurve(first, second, math.pi, .25, branch, "linear").transformed(matrix)
+        except Exception:      # a branch outside the real intersection is not part of this check
+            continue
+        if not _node_treatment(curve):
+            continue
+        lower, upper = .125, math.nextafter(.125, 1.)
+        if curve._angle(np.asarray((lower, upper)))[0].tolist() != [curve._angle(np.asarray((lower,)))[0][0]] * 2:
+            continue
+        lo, hi = curve.bounds(lower, upper)
+        for point in curve.evaluate(np.asarray((lower, upper, lower))):
+            assert np.all(lo <= point) and np.all(point <= hi), (branch, point, lo, hi)
+        checked += 1
+    assert checked
