@@ -13,7 +13,7 @@ import numpy as np
 
 from .analytic_roots import trigonometric_roots
 from .errors import GeometryError
-from .exact_curves import CylinderIntersectionCurve, EllipticArc
+from .exact_curves import CylinderIntersectionCurve, EllipticArc, _node_angle_images
 from .surfaces import Cylinder, Plane
 
 
@@ -157,6 +157,18 @@ def _plane_branch_events(first, second, normal, offset, tolerance, cancellation_
                                   second.radius), first, tolerance, cancellation_check)
 
 
+def _certified_nodes(first, second):
+    """``{fold sign: node}`` of the exact double folds of two Cylinder supports (empty when none)."""
+    from .exact_curves import _CylinderSupport, _double_nodes
+
+    class _Pair:
+        __slots__ = ("first", "second")
+
+    pair = _Pair()
+    pair.first, pair.second = _CylinderSupport.from_surface(first), _CylinderSupport.from_surface(second)
+    return {node.sign: node for node in _double_nodes(pair)}
+
+
 def cylinder_cylinder_support(first, second, *, tolerance=1e-10, cancellation_check=None):
     """All analytic nonparallel branches, or parallel generators/coincidence."""
     if not isinstance(first, Cylinder) or not isinstance(second, Cylinder):
@@ -171,7 +183,13 @@ def cylinder_cylinder_support(first, second, *, tolerance=1e-10, cancellation_ch
     nc, ns = first.radius*float(e1 @ cross), first.radius*float(e2 @ cross)
     angle_tolerance = tolerance/max(first.radius, second.radius, 1.)
     transition = []
+    nodes = _certified_nodes(first, second)
     for sign in (-1, 1):
+        if sign in nodes:
+            # Certified exact double fold (tangent contact node): one event at the node angle, not the
+            # float roots of a double root (off by up to sqrt(eps), split in two, or missing).
+            transition.extend(_node_angle_images(nodes[sign].angle, first.start_angle, first.sweep_angle))
+            continue
         transition.extend(_linear_events(n0-sign*magnitude*second.radius, nc, ns,
                                          first, angle_tolerance, cancellation_check))
     events = [first.start_angle, first.start_angle+first.sweep_angle,

@@ -152,3 +152,41 @@ def test_branch_enclosure_is_tight_next_to_a_double_node(rotation):
             chord = np.linalg.norm(piece.evaluate(1.) - piece.evaluate(0.))
             # A few chords plus the node-angle slack (~1e-12 m), not sqrt(rounding) (3.8e-6 m before the fix).
             assert np.linalg.norm(hi - lo) <= 4 * chord + 1e-11, (step, chord, hi - lo)
+
+
+# ---- one certified double fold plus a simple fold: a large pipe with a small one tangent inside it
+
+def _offset_pipes():
+    """x-pipe r = 2 and y-pipe r = 1 with axes 1 apart in z: internally tangent at (0, 0, -2) (fold
+    sign -1 is an exact double); the other fold is simple (square charts at theta = pi/2, 3 pi/2)."""
+    from anygeometry.surfaces import Cylinder
+    big = Cylinder((-4., 0., 0.), (1., 0., 0.), (0., 0., -1.), 2., 8.)
+    small = Cylinder((0., -4., -1.), (0., 1., 0.), (1., 0., 0.), 1., 8.)
+    curves = [c for c in cylinder_cylinder_support(big, small, tolerance=1e-9).curves
+              if isinstance(c, CylinderIntersectionCurve)]
+    assert {c.parameterization for c in curves} >= {"linear", "left_square", "right_square"}
+    return big, small, curves
+
+
+def test_offset_pipes_have_one_exact_double_fold():
+    big, small, _curves = _offset_pipes()
+    assert _exact_fold_sign(big, small, -1) == 0 and _exact_fold_sign(big, small, 1) != 0
+
+
+def test_one_double_pair_is_accurate_next_to_its_node():
+    # On the big pipe y = 2 sin(theta), z = -2 cos(theta); on the small one x^2 + (z + 1)^2 = 1, so
+    # |x| = 2 sqrt(2) |sin(theta / 2)| sqrt(cos(theta)) without cancellation near the node theta = 0.
+    # (The reference is ill-conditioned at the simple folds, so only the node zone is checked; there the
+    # worst error was 1.65e-8 before the fix and 1.0e-15 after it, on every chart.)
+    _big, _small, curves = _offset_pipes()
+    checked = 0
+    for curve in curves:
+        for t in np.concatenate([np.logspace(-16, -.3, 60), 1 - np.logspace(-16, -.3, 60)]):
+            x, y, z = curve.evaluate(t)
+            theta = math.atan2(y, -z)
+            if abs(math.remainder(theta, math.tau)) > .3:
+                continue
+            checked += 1
+            exact = 2 * math.sqrt(2.) * abs(math.sin(.5 * theta)) * math.sqrt(math.cos(theta))
+            assert abs(abs(x) - exact) <= 1e-14, (curve.parameterization, t, x, exact)
+    assert checked > 100

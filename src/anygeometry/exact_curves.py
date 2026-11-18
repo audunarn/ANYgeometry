@@ -359,14 +359,89 @@ def _sign_of_sum_with_root(rational: Fraction, factor: Fraction, radicand: Fract
     return _signum(rational) if left > right else root_sign if left < right else 0
 
 
-def _double_nodes(curve):
-    """Exact double zeros of the chart discriminant of ``curve``'s support pair, decided in rationals.
+def _fold_doubles(o1, a1, e1, e2, r1, o2, a2, r2):
+    """Fold signs ``s`` whose fold equation is an exact double, with ``tau``, over the given rationals.
 
-    The kernel's discriminant is ``D(theta) = 4 (|c|^2 r2^2 - n(theta)^2)`` with ``c = a1 x a2``,
-    ``n = n0 + nc cos + ns sin``, ``n0 = (o1 - o2) . c``, ``nc = r1 e1 . c``, ``ns = r1 (a1 x e1) . c``.
-    Over the exact values of the stored doubles, the fold equation ``n = s |c| r2`` has a double root
-    exactly when ``nc^2 + ns^2 = (n0 - s |c| r2)^2``; |c| is irrational in general, so equality is
-    decided by comparing squares. No tolerance is involved: a near miss (the F550 kind) is not a node.
+    ``n = n0 + nc cos + ns sin`` with ``c = a1 x a2``, ``n0 = (o1 - o2) . c``, ``nc = e1 . c``,
+    ``ns = e2 . c`` (``e1``, ``e2`` already scaled by ``r1`` when ``r1`` is None). The fold
+    ``n = s |c| r2`` is a double root exactly when ``nc^2 + ns^2 = (n0 - s |c| r2)^2``; |c| is
+    irrational in general, so the equality is decided by comparing squares.
+    """
+    cross = lambda u, v: [u[1]*v[2]-u[2]*v[1], u[2]*v[0]-u[0]*v[2], u[0]*v[1]-u[1]*v[0]]
+    dot = lambda u, v: sum(x*y for x, y in zip(u, v))
+    c = cross(a1, a2)
+    scale = 1 if r1 is None else r1
+    n0 = dot([x-y for x, y in zip(o1, o2)], c)
+    nc, ns = scale*dot(e1, c), scale*dot(e2, c)
+    m2, c2 = nc*nc+ns*ns, dot(c, c)
+    result = {}
+    if m2 == 0 or c2 == 0:
+        return result
+    for sign in (-1, 1):
+        # nc^2 + ns^2 - (n0 - s|c| r2)^2 = (m2 - n0^2 - c2 r2^2) + 2 s n0 r2 |c|
+        if _sign_of_sum_with_root(m2-n0*n0-c2*r2*r2, 2*sign*n0*r2, c2) == 0:
+            # n0 - s|c| r2 = -tau m: tau is minus its exact sign (nonzero since m > 0).
+            result[sign] = -_sign_of_sum_with_root(n0, -sign*r2, c2)
+    return result
+
+
+def _trim(values):
+    values = list(values)
+    while len(values) > 1 and values[-1] == 0:
+        values.pop()
+    return tuple(values)
+
+
+#: Largest separation (in the half-angle chart t = tan(theta / 2), or 1 / t) the elimination chart's
+#: discriminant roots may have from a certified node, and the window searched around it.
+_NODE_CHART_AGREEMENT = Fraction(1, 2**44)
+_NODE_CHART_WINDOW = Fraction(1, 10**6)
+
+
+def _elimination_agrees(curve, angles):
+    """True when the rational elimination chart (``cylinder_curve_events._quadratic``, identity transform)
+    places every root of its discriminant ``b^2 - 4 a c`` near each node angle within
+    ``_NODE_CHART_AGREEMENT`` of the node (exact isolation in the window ``_NODE_CHART_WINDOW``).
+
+    That chart rationalizes float-projected vectors, so its node can differ from the certified one by
+    rounding; this bounds the difference rigorously (no roots in the window outside the small ball)."""
+    from .analytic_roots import isolate_real_roots
+    from .cylinder_curve_events import _add, _multiply, _quadratic, _scale
+    identity = ((1., 0., 0., 0.), (0., 1., 0., 0.), (0., 0., 1., 0.), (0., 0., 0., 1.))
+    chart = type("_Chart", (), {"first": curve.first, "transform": identity})   # no branch construction here
+    a, b, c = _quadratic(chart, curve.second, identity)
+    discriminant = _trim(_add(_multiply(b, b), _scale(c, -4*a)))
+    if not any(discriminant):
+        return False
+    discriminant = tuple(discriminant)+(Fraction(0),)*(5-len(discriminant))   # degree-4 projective chart
+    for angle in angles:
+        half = math.remainder(angle, math.tau)/2
+        if abs(half) <= math.pi/4:
+            polynomial, centre = discriminant, Fraction(math.tan(half))
+        else:
+            polynomial, centre = tuple(reversed(discriminant)), Fraction(1/math.tan(half))
+        polynomial = _trim(polynomial)
+        if len(polynomial) == 1:
+            if polynomial[0] == 0:
+                return False
+            continue
+        lower, upper = centre-_NODE_CHART_WINDOW, centre+_NODE_CHART_WINDOW
+        for root in isolate_real_roots(polynomial, tolerance=2.**-60, interval=(lower, upper)):
+            if root.lower < centre-_NODE_CHART_AGREEMENT or root.upper > centre+_NODE_CHART_AGREEMENT:
+                return False
+    return True
+
+
+def _double_nodes(curve):
+    """Certified exact double zeros of the chart discriminant of ``curve``'s support pair (tangent nodes).
+
+    The kernel's discriminant is ``D(theta) = 4 (|c|^2 r2^2 - n(theta)^2)`` (see ``_root_at_angles``).
+    A fold sign is a node only when its fold equation is an exact double root in every model the
+    kernel evaluates it in: (1) the exact values of the stored doubles, (2) the rounded chart vectors
+    ``_branch_constants`` uses (``fl(r1 e1)``, ``fl(r1 (a1 x e1))``, ``fl(a1 x a2)``), and (3) the rational
+    elimination chart of ``cylinder_curve_events._quadratic`` places its discriminant roots within
+    ``_NODE_CHART_AGREEMENT`` of the node (:func:`_elimination_agrees`). Any disagreement (an O(eps) model
+    difference can split a node by O(sqrt(eps))) certifies no node and keeps the original path. No tolerance is involved: a near miss (the F550 kind) is not a node.
     Returns a tuple of :class:`_DoubleNode` (empty for every ordinary pair).
     """
     first, second = curve.first, curve.second
@@ -374,33 +449,39 @@ def _double_nodes(curve):
     entry = _DOUBLE_NODES.get(key)
     if entry is not None and entry[0] is first and entry[1] is second:
         return entry[2]
-    q = lambda vector: [Fraction(float(value)) for value in vector]
+    q = lambda vector: [Fraction(float(value)) for value in np.asarray(vector, dtype=float)]
     cross = lambda u, v: [u[1]*v[2]-u[2]*v[1], u[2]*v[0]-u[0]*v[2], u[0]*v[1]-u[1]*v[0]]
-    dot = lambda u, v: sum(x*y for x, y in zip(u, v))
-    o1, a1, e1 = q(first.origin), q(first.axis), q(first.radial_direction)
-    o2, a2 = q(second.origin), q(second.axis)
-    c = cross(a1, a2)
-    r1, r2 = Fraction(float(first.radius)), Fraction(float(second.radius))
-    n0 = dot([x-y for x, y in zip(o1, o2)], c)
-    nc, ns = r1*dot(e1, c), r1*dot(cross(a1, e1), c)
-    m2, c2 = nc*nc+ns*ns, dot(c, c)
+    a1 = q(first.axis)
+    exact = _fold_doubles(q(first.origin), a1, q(first.radial_direction), cross(a1, q(first.radial_direction)),
+                          Fraction(float(first.radius)), q(second.origin), q(second.axis),
+                          Fraction(float(second.radius)))
     nodes = []
-    if m2 != 0 and c2 != 0:
+    if exact:
         constants = _branch_constants(curve)
+        r1 = float(first.radius)
+        rounded = _fold_doubles(q(first.origin), a1, q(r1*np.asarray(first.radial_direction)),
+                                q(r1*np.asarray(constants.e2)), None, q(second.origin), q(second.axis),
+                                Fraction(float(second.radius)))
+        signs = [sign for sign in (-1, 1) if sign in exact and rounded.get(sign) == exact[sign]]
         phi = math.atan2(constants.ns, constants.nc)
-        for sign in (-1, 1):
-            # nc^2 + ns^2 - (n0 - s|c| r2)^2 = (m2 - n0^2 - c2 r2^2) + 2 s n0 r2 |c|
-            if _sign_of_sum_with_root(m2-n0*n0-c2*r2*r2, 2*sign*n0*r2, c2) != 0:
-                continue
-            # n0 - s|c| r2 = -tau m: tau is minus its exact sign (it is nonzero since m > 0).
-            tau = -_sign_of_sum_with_root(n0, -sign*r2, c2)
-            angle = phi if tau > 0 else phi+math.pi
-            nodes.append(_DoubleNode(sign, tau, angle))
+        candidates = [_DoubleNode(sign, exact[sign], phi if exact[sign] > 0 else phi+math.pi) for sign in signs]
+        if candidates and len(signs) == len(exact) and _elimination_agrees(curve, [node.angle for node in candidates]):
+            nodes = candidates
     nodes = tuple(nodes)
     if len(_DOUBLE_NODES) >= _BRANCH_CONSTANTS_LIMIT:
         _DOUBLE_NODES.clear()
     _DOUBLE_NODES[key] = (first, second, nodes)
     return nodes
+
+
+def _node_angle_images(angle, start, sweep):
+    """The images ``angle + 2 pi k`` in the closed angular interval ``start .. start + sweep``,
+    widened by the endpoint envelope the branch charts use (64 eps of the angles)."""
+    lower, upper = sorted((start, start+sweep))
+    envelope = 64*np.finfo(float).eps*max(1., abs(start), abs(start+sweep))
+    first = math.ceil((lower-envelope-angle)/math.tau)
+    last = math.floor((upper+envelope-angle)/math.tau)
+    return [angle+k*math.tau for k in range(first, last+1)]
 
 
 def _node_discriminant(curve, nodes, angle):
@@ -519,7 +600,13 @@ class CylinderIntersectionCurve:
         c0=4*magnitude*magnitude*second.radius**2-4*n0*n0-2*(nc*nc+ns*ns)
         c1,c2,c3,c4=-8*n0*nc,-8*n0*ns,-2*(nc*nc-ns*ns),-4*nc*ns
         transitions=[]
+        nodes = {node.sign: node for node in _double_nodes(self)}
         for sign in (-1,1):
+            if sign in nodes:
+                # A certified double fold: its event is the node angle itself, not float roots of a
+                # double root (which can be off by sqrt(eps), split in two or vanish).
+                transitions.extend(_node_angle_images(nodes[sign].angle, start, sweep))
+                continue
             transitions.extend(trigonometric_roots((n0-sign*magnitude*second.radius,nc,ns,0.,0.),
                 start=start,sweep=sweep,tolerance=4*np.finfo(float).eps))
         stationary = ()
@@ -628,6 +715,21 @@ class CylinderIntersectionCurve:
             middle=anchor+.5*delta
             discriminant=-16*np.sin(.5*delta)*(-nc*np.sin(middle)+ns*np.cos(middle))*(
                 n0+(nc*np.cos(middle)+ns*np.sin(middle))*np.cos(.5*delta))
+            nodes = _double_nodes(self)
+            if nodes:
+                # D = -4 (n - n_a)(n + n_a), n_a = s_a |c| r2 the anchor's simple fold. Its partner
+                # n + n_a = F(-s_a) vanishes at a certified double node of the other fold: take that
+                # factor from the node form, keep the anchored difference for the simple fold.
+                by_sign = {node.sign: node for node in nodes}
+                anchor_sign = np.where(n0+nc*np.cos(anchor)+ns*np.sin(anchor) >= 0, 1, -1)
+                partner = np.full_like(np.asarray(angle, dtype=float), np.nan)
+                for sign, node in by_sign.items():
+                    psi = angle-node.angle
+                    psi = psi-2*math.pi*np.round(psi/(2*math.pi))
+                    half = np.sin(.5*psi)
+                    partner = np.where(anchor_sign == -sign, -2*node.tau*constants.magnitude*half*half, partner)
+                anchored = 2*np.sin(.5*delta)*(-nc*np.sin(middle)+ns*np.cos(middle))
+                discriminant = np.where(np.isnan(partner), discriminant, -4*anchored*partner)
         base, dbase, z, a, b, root, db, dc = self._root_at_angles(angle,discriminant=discriminant)
         regular = ((t == 0) & (self.parameterization in ("left_square", "both_sine"))) | (
                    (t == 1) & (self.parameterization in ("right_square", "both_sine")))
