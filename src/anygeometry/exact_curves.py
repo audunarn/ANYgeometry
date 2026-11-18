@@ -1082,12 +1082,13 @@ class CylinderIntersectionCurve:
                 # is part of the operand size.
                 base, _dbase, z, *_rest = self._root(np.asarray((lower, upper)))
                 raw = base+z[..., None]*np.asarray(first.axis)
-                operand = (float(np.max(np.abs(raw)))+float(np.max(np.abs(first.origin)))
-                           +abs(float(first.radius)))
-                # Per output row; epsilon is applied to the coefficients first, so the pad overflows only where
-                # an epsilon-scaled row times the operand size exceeds the float range.
+                # Per untransformed coordinate j: its largest operand (end points, origin, radius), scaled by
+                # epsilon first; each output row k weights it by its own coefficient |M_kj|. No sum of
+                # unscaled magnitudes, so no overflow (or 0 * inf) for finite points and coefficients.
+                operand = (eps16*np.max(np.abs(raw), axis=0) + eps16*np.abs(np.asarray(first.origin, dtype=float))
+                           + eps16*abs(float(first.radius)))
                 pad = (eps16*np.maximum(np.abs(low), np.abs(high)) + eps16*np.abs(matrix[:3, 3])
-                       + (eps16*np.abs(matrix[:3, :3])).sum(axis=1)*operand)
+                       + np.abs(matrix[:3, :3]) @ operand)
                 return np.nextafter(low-pad, -np.inf), np.nextafter(high+pad, np.inf)
             return np.nextafter(point, -np.inf), np.nextafter(point, np.inf)
         base_lo, base_hi = EllipticArc(first.origin, first.radius*e1,
