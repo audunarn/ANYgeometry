@@ -471,8 +471,7 @@ def _double_nodes(curve):
         return entry[2]
     if not _angles_admitted(first.start_angle, first.sweep_angle):
         # Decided on the first support's own angular range, so the support's events and every chart cut
-        # from it agree; such pairs keep the original expressions everywhere.
-        _DOUBLE_NODES[key] = (first, second, ())
+        # from it agree; such pairs keep the original expressions everywhere (not cached: no work to save).
         return ()
     q = lambda vector: [Fraction(float(value)) for value in np.asarray(vector, dtype=float)]
     cross = lambda u, v: [u[1]*v[2]-u[2]*v[1], u[2]*v[0]-u[0]*v[2], u[0]*v[1]-u[1]*v[0]]
@@ -536,8 +535,9 @@ def _node_psi(angle, node_angle):
     far = ~(np.abs(angle) <= _FLOAT_REDUCTION_LIMIT) if abs(node_angle) <= _FLOAT_REDUCTION_LIMIT else (
         np.ones(angle.shape, dtype=bool))
     if np.any(far):
-        psi = np.array(psi, dtype=float, copy=True)
-        flat, values, mask = psi.reshape(-1), angle.reshape(-1), far.reshape(-1)
+        psi = np.array(psi, dtype=float, order="C", copy=True)     # C order: reshape(-1) is a view
+        flat, values, mask = psi.reshape(-1), np.ravel(angle), np.ravel(far)
+        assert np.shares_memory(flat, psi)
         centre = Fraction(float(node_angle))
         for index in np.flatnonzero(mask):
             value = float(values[index])

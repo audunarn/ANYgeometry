@@ -474,8 +474,35 @@ def test_extreme_start_angles_are_constructed_promptly_without_node_treatment():
     assert time.perf_counter() - began < 5.
 
 
-def test_far_support_emits_no_square_chart_at_a_certified_node():
+def test_a_support_beyond_the_admission_range_keeps_the_original_path():
+    from anygeometry.exact_curves import _node_treatment
     first, second = _unit_pair(first_start=1e8 * math.tau - .1, first_sweep=.5)
-    for curve in (c for c in cylinder_cylinder_support(first, second, tolerance=1e-10).curves
-                  if isinstance(c, CylinderIntersectionCurve)):
-        curve.derivative(np.linspace(0., 1., 9))      # must not refuse
+    curves = [c for c in cylinder_cylinder_support(first, second, tolerance=1e-10).curves
+              if isinstance(c, CylinderIntersectionCurve)]
+    assert curves
+    for curve in curves:
+        assert _node_treatment(curve) == ()
+        assert np.all(np.isfinite(curve.derivative(np.linspace(0., 1., 9))))
+
+
+@pytest.mark.parametrize("order", ["C", "F"])
+def test_array_layout_does_not_change_a_far_node_chart(order):
+    first, second = _unit_pair()
+    curve = _branch(first, second, 1000 * math.tau, .2, 1)
+    t = 1e-12
+    grid = np.array([[t, .3], [.5, .7]], order=order)
+    scalar = curve.evaluate(t)
+    assert np.array_equal(curve.evaluate(grid)[0, 0], scalar)
+    assert np.array_equal(curve.derivative(grid)[0, 0], curve.derivative(t))
+    assert np.array_equal(curve.second_derivative(grid)[0, 0], curve.second_derivative(t))
+    lo, hi = curve.bounds(t, t)
+    assert np.all(lo <= scalar) and np.all(scalar <= hi)
+
+
+def test_far_supports_do_not_grow_the_node_cache():
+    import anygeometry.exact_curves as exact_curves
+    from anygeometry.analytic_supports import _certified_nodes
+    first, second = _unit_pair(first_start=1e8 * math.tau - .1, first_sweep=.5)
+    for _ in range(exact_curves._BRANCH_CONSTANTS_LIMIT + 64):
+        _certified_nodes(first, second)        # fresh support descriptors each call
+    assert len(exact_curves._DOUBLE_NODES) <= exact_curves._BRANCH_CONSTANTS_LIMIT
