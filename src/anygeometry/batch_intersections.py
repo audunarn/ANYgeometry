@@ -1356,8 +1356,8 @@ def _undecidable_contact_support(first, second, tolerance):
     whose double-contact intersection is the two certified bisector ellipses, else it refuses
     (:data:`UNSUPPORTED_CONTACT`). Inside the scale gates (``UndecidableContact.admitted``) a face reaches a point
     when the point lies in it or within ``_REACH_MARGIN`` reaches of its boundary curves; outside them, when the
-    point is within a quarter of the smaller radius of its boundary box. Returns the ellipse support when some
-    point requires a witness, and None when none does (the contacts lie away from at least one face, where both
+    point is within max(r / 4, tolerance) of its boundary box (r the smaller radius; the tolerance floor can only
+    add a refusal). Returns the ellipse support when some point requires a witness, and None when none does (the contacts lie away from at least one face, where both
     geometries agree within tolerance: main's path). Runs in the T2b shadow as well."""
     contact = undecidable_contact(first.support, second.support, tolerance=tolerance)
     if contact is None:
