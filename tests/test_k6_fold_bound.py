@@ -335,3 +335,51 @@ def test_an_exact_double_in_either_order_stays_on_mains_path():
     assert _certified_nodes(first, second) or _certified_nodes(second, first)
     assert undecidable_contact(first, second, tolerance=1e-10) is None
     assert undecidable_contact(second, first, tolerance=1e-10) is None
+
+
+def test_the_far_ellipse_is_withheld_inside_the_gates_by_the_scaled_certificate():
+    """Codex K6 R5 low: the R4 M2 geometry at tolerance 5e-10 passes the scale gates in both orders; the 6.9e-11
+    residual exceeds tolerance |a1 x a2| = 3.3e-11, so the chart is withheld by the scaled certificate itself."""
+    u = _unit((.066, 0., 1.))
+    first = Cylinder(origin=(0., 0., 3000.), axis=(0., 0., 1.), radial_direction=(0., 1., 0.), radius=1., height=8000.,
+                     start_angle=-2., sweep_angle=4.)
+    second = Cylinder(origin=tuple(-2000*u), axis=tuple(u), radial_direction=(0., 1., 0.),
+                      radius=float(np.nextafter(1., 0.)), height=8000., start_angle=-2., sweep_angle=4.)
+    for a, b in ((first, second), (second, first)):
+        contact = undecidable_contact(a, b, tolerance=5e-10)
+        assert contact is not None and contact.admitted and contact.support is None
+
+
+def test_ellipse_admission_does_not_depend_on_the_order_of_the_faces():
+    """Codex K6 R5 M1: axes +Z and (1, 0, 1)/sqrt 2 through origins 3000 m apart, radii 1 and 1 - 1 ulp, at a
+    tolerance where the two orders' residual bounds straddle the threshold. The ellipses are built from a canonical
+    order of the supports: both orders get the same ellipses and the same decision."""
+    u = _unit((1., 0., 1.))
+    first = Cylinder(origin=(0., 0., -3000.), axis=(0., 0., 1.), radial_direction=(0., 1., 0.), radius=1.,
+                     height=8000., start_angle=-2., sweep_angle=4.)
+    second = Cylinder(origin=tuple(-2000*u), axis=tuple(u), radial_direction=(0., 1., 0.),
+                      radius=float(np.nextafter(1., 0.)), height=8000., start_angle=-2., sweep_angle=4.)
+    tolerance = 9.154286229041723e-11
+    forward = undecidable_contact(first, second, tolerance=tolerance)
+    backward = undecidable_contact(second, first, tolerance=tolerance)
+    assert (forward is None) == (backward is None)
+    if forward is not None:
+        assert (forward.support is None) == (backward.support is None)
+        if forward.support is not None:
+            assert forward.support.curves == backward.support.curves
+
+
+def test_the_boundary_near_test_decides_a_just_missing_generator_quickly():
+    """Codex K6 R5 M2: a generator that misses the cutoff by a few 1e-15 m stalled the subdivision (2.5 million
+    evaluations); straight edges use the closed-form nearest point, other curves a work budget."""
+    import time
+    from anygeometry.batch_intersections import _boundary_within
+    cylinder = Cylinder(origin=(0., 0., -1.), axis=(0., 0., 1.), radial_direction=(1., 0., 0.), radius=1., height=2.,
+                        start_angle=0., sweep_angle=1.)
+    offset = 7.460698909929148e-5
+    domain = _arc_rectangle(1, cylinder, offset, .1, 10)
+    distance = 2*math.sin(offset/2)                  # chord from (1, 0, 0) to the generator at azimuth ``offset``
+    started = time.perf_counter()
+    assert _boundary_within(domain, (1., 0., 0.), distance*(1-1e-10)) is False
+    assert _boundary_within(domain, (1., 0., 0.), distance*(1+1e-10)) is True
+    assert time.perf_counter()-started < 2.

@@ -1275,15 +1275,30 @@ def _stored_edge_through(first, second, point, tolerance):
     return False
 
 
+#: Interval budget per curve of the K6 boundary near test; exhausting it counts as within (conservative).
+_BOUNDARY_SUBDIVISION_BUDGET = 4096
+
+
 def _boundary_within(domain, point, radius):
     """Whether some boundary curve of ``domain`` comes within ``radius`` of ``point``, judged on evaluated points:
     each curve is cut into intervals, and an interval is discarded only when ``(d0 + d1 - arc) / 2 > radius`` (``d``
     the endpoint distances, ``arc`` a 1.25x allowance over the two half-chords through its midpoint), else halved;
-    an interval still undecided at the depth limit counts as within (conservative)."""
+    an interval still undecided at the depth limit or after the work budget counts as within (conservative).
+    Straight edges use the closed-form nearest point."""
+    from .arrangement_geometry import LinePath
     point = np.asarray(point, dtype=float)
     for loop in domain.boundaries:
         for path in loop:
             curve = path.curve
+            if isinstance(curve, LinePath):
+                # Closed form (Codex K6 R5 M2: subdividing a straight edge that just misses the cutoff stalls).
+                start, end = np.asarray(curve.start, dtype=float), np.asarray(curve.end, dtype=float)
+                direction = end-start
+                length2 = float(direction @ direction)
+                t = 0. if length2 == 0 else min(1., max(0., float((point-start) @ direction)/length2))
+                if float(np.linalg.norm(np.asarray(curve.evaluate(t), dtype=float)-point)) <= radius:
+                    return True
+                continue
             lo, hi = (np.asarray(value, dtype=float) for value in curve.bounds())
             if float(np.linalg.norm(np.maximum(0., np.maximum(lo-point, point-hi)))) > radius:
                 continue
@@ -1299,7 +1314,11 @@ def _boundary_within(domain, point, radius):
             if min(values) <= radius:
                 return True
             stack = [(float(samples[k]), float(samples[k+1]), values[k], values[k+1], 0) for k in range(64)]
+            budget = _BOUNDARY_SUBDIVISION_BUDGET
             while stack:
+                budget -= 1
+                if budget < 0:
+                    return True                  # undecided within the work budget: conservative
                 t0, t1, d0, d1, depth = stack.pop()
                 tm = .5*(t0+t1)
                 pm = np.asarray(curve.evaluate(tm), dtype=float)

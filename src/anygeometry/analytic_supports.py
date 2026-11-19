@@ -337,7 +337,11 @@ def undecidable_contact(first, second, *, tolerance=1e-10):
     support = None
     if (admitted and any(order is not None and len(order[0]) == 2 for order in orders)
             and magnitude*magnitude >= _MITRE_CONDITION_LIMIT):
-        ellipses = _mitre_ellipses(first, second)
+        # Codex K6 R5 M1: built from a canonical order of the supports (the construction uses the first radius and
+        # basis), so both face orders get the same ellipses and the same certificate decision.
+        key = lambda cylinder: (float(cylinder.radius), *map(float, cylinder.origin), *map(float, cylinder.axis),
+                                *map(float, cylinder.radial_direction))
+        ellipses = _mitre_ellipses(*sorted((first, second), key=key))
         if all(_ellipse_cylinder_residual(ellipse, cylinder) <= tolerance*magnitude
                for ellipse in ellipses for cylinder in (first, second)):
             support = SupportIntersection(curves=tuple(ellipses))
