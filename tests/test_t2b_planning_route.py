@@ -1465,8 +1465,13 @@ def _cc_injections():
         return refuse
     return {
         "entry": (bi, "cylinder_cylinder_support", raising(GeometryError("injected cc entry refusal"))),
-        "transition_events": (analytic_supports, "_linear_events",
-                              raising(GeometryError("injected transition root refusal"))),
+        # The mitre's folds are certified exact doubles (exact_curves._double_nodes): their events come from
+        # _certified_nodes, so the legacy fold-root family is exercised with certification switched off.
+        "transition_events": ((analytic_supports, "_linear_events",
+                               raising(GeometryError("injected transition root refusal"))),
+                              (analytic_supports, "_certified_nodes", lambda first, second: {})),
+        "node_events": (analytic_supports, "_certified_nodes",
+                        raising(GeometryError("injected certified node refusal"))),
         "plane_branch_events": (analytic_supports, "_plane_branch_events",
                                 raising(GeometryError("injected plane-branch root refusal"))),
         "root_isolation": (analytic_supports, "trigonometric_roots",
@@ -1484,8 +1489,9 @@ def test_cc_cross_support_refusals_are_raised_in_shadow_on_a_certified_pair(monk
     the certified mitre pair, is raised in topology_certified mode exactly as in exact mode (same
     type and text); the double without the shadow does not raise it."""
     model, faces = _mitre()
-    module, name, replacement = _cc_injections()[family]
-    monkeypatch.setattr(module, name, replacement)
+    patches = _cc_injections()[family]
+    for module, name, replacement in (patches if isinstance(patches[0], tuple) else (patches,)):
+        monkeypatch.setattr(module, name, replacement)
 
     def outcome(policy):
         try:

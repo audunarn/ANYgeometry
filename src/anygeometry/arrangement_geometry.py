@@ -405,7 +405,11 @@ def _cylinder_box_once(curve, t0, t1):
     same ``_branch_constants`` the float code uses. Raises ``_IntervalDecline`` when a divisor, the
     discriminant (kept above a snap/cancellation margin) or any interval cannot be proven.
     """
-    from .exact_curves import _branch_constants
+    from .exact_curves import _branch_constants, _node_treatment
+    if _node_treatment(curve):
+        # A certified tangent-node pair evaluates its discriminant by the node factorisation
+        # (``exact_curves._node_discriminant``), not by the formula boxed here: decline (conservative).
+        raise _IntervalDecline
     c = _branch_constants(curve)
     first, second = curve.first, curve.second
     angle = _iv_add(_iv_const(curve.start_angle), _iv_mul(_iv_const(curve.sweep_angle), (float(t0), float(t1))))

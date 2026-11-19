@@ -26,7 +26,7 @@ from ._planning_qualification import QualificationDecline, reset_declined
 _NUMERICAL_ROOTS = frozenset((
     '_GAUSS_LEGENDRE', '_BRANCH_CONSTANTS', '_PI_CACHE', '_W_FACTORS', '_ISO_CACHE',
     '_SECTION_CANONICAL', '_ISSUED_CONTEXTS', '_SECTIONS', '_NETS', '_ABSOLUTE',
-    '_SCALED', '_MEMO', '_FIRST_CHOICE', '_PATCHES', '_BRANCH_POLYNOMIALS'))
+    '_SCALED', '_MEMO', '_FIRST_CHOICE', '_PATCHES', '_BRANCH_POLYNOMIALS', '_DOUBLE_NODES'))
 _FIXED_ROOTS = (
     'anygeometry.backend._TRUE',
     'anygeometry.batch_intersections.SEAM_POLICY_VERSIONS',
