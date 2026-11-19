@@ -536,8 +536,10 @@ _NODE_CONDITION_LIMIT = 2.0**-8
 #: Magnitude range of node treatment, deliberately conservative (real models sit far inside it). With
 #: L = max(|origin coordinates|, r1, r2) <= 2^64, the smaller radius s >= 2^-64 and L <= 2^64 s, every term of
 #: the axial solve, the jets and the bounds (at most a fourth power of these lengths, such as the ellipse's
-#: cross-product norm, b^2 and 4ac, times constants up to about 2^10) lies within 2^+-266: far from overflow and
-#: underflow. Pairs outside it decline node treatment and keep main's path.
+#: cross-product norm, b^2 and 4ac, times constants up to about 2^10) has a length-dependent factor within
+#: 2^+-266. This bounds only the length-dependent coefficients: a value that is also small through its angle
+#: (a discriminant near its zero, for instance) can still underflow. Pairs outside the range decline node
+#: treatment and keep main's path.
 _NODE_MAGNITUDE_LIMIT = 2.0**64
 
 
