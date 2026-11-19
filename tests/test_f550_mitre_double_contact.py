@@ -4,12 +4,16 @@ Fixture ``data/f550_face1094_arrangement.json``: N2 source face 1094 (production
 skin (r = 6.5) of a mitre with the inclined skin 1096 (r = 6.5, axes intersecting by design), with the traces of
 every incident pair, captured by the T-10 diagnosis. The two supports touch tangentially at the design double
 point, through which the stored shared trim edge 2433 (an ellipse) and the web trace 392 pass. In the stored doubles
-the double root of the transition equation is not exact: it splits into two simple folds 3.9e-8 rad apart, so the
-cylinder/cylinder branch ends 1.8e-7 m on either side of the double point (tolerance 1e-9) and the arrangement
-refuses with an unresolved bridge. The exact rational discriminant of the stored data is positive, so the split is
-a property of the stored doubles, not of their float evaluation: no certificate that the ends coincide exists and
-nothing may be welded. These tests pin that diagnosis, the refusal, a genuinely larger near miss that must keep
-refusing, and (strict xfail) the accepted outcome a certified resolution would have to deliver.
+the double root of the transition equation is not exact: main splits it into two simple folds 3.9e-8 rad apart, so
+the cylinder/cylinder branch ends 1.8e-7 m on either side of the double point (tolerance 1e-9) and the arrangement
+refuses with an unresolved bridge (the stored traces of the fixture are main's). The exact rational discriminant of
+the stored data is positive, but inside the rigorous error bound of the kernel's float fold coefficients: the sign is
+undecidable at stored precision. K6 policy (owner decision 2026-11-19, F550 option B with the stored-edge check):
+such a fold is charted as an exact double contact, and the pair stage accepts it only when a stored edge shared by
+both faces passes through the contact point; otherwise it refuses. These tests pin the diagnosis, main's refusal,
+the accepted face (production pair traces), a near miss the bound decides (32 ulp) that keeps refusing, the 8-ulp
+near miss inside the bound (accepted with the edge, refused without it).
+Second fixture ``data/f550_face1096_domain.json``: the domain of face 1096 (for the production pair stage).
 """
 from __future__ import annotations
 
@@ -25,13 +29,16 @@ import pytest
 from anygeometry.analytic_roots import trigonometric_roots
 from anygeometry.arrangement_geometry import LinePath, point_parameters
 from anygeometry.errors import GeometryError
-from anygeometry.exact_curves import CylinderIntersectionCurve, EllipticArc, _CylinderSupport
+from anygeometry.batch_intersections import UNDECIDABLE_CONTACT, _pair_paths_exact
+from anygeometry.exact_curves import (CylinderIntersectionCurve, EllipticArc, _CylinderSupport, _double_nodes,
+                                      _fold_undecidable)
 from anygeometry.material_arrangement import (ArrangementPath, ArrangementPoint, MaterialDomain,
                                               arrange_material)
 from anygeometry.serialization import _decode_bezier_quadric_curve
 from anygeometry.surfaces import Cylinder
 
 DATA = pathlib.Path(__file__).resolve().parent / "data" / "f550_face1094_arrangement.json"
+OTHER = pathlib.Path(__file__).resolve().parent / "data" / "f550_face1096_domain.json"
 BRIDGE = "arrangement contains an unresolved bridge"
 #: Fixture indices of the six 1094/1096 branch pieces (ordered along the trim) and of the web 392 trace.
 JOINT = range(35, 41)
@@ -182,22 +189,94 @@ def _near_miss_traces(ulps):
     return tuple(rebuilt), first, second, folds
 
 
+def _undecidable(first, second):
+    return _fold_undecidable(_CylinderSupport.from_surface(first), _CylinderSupport.from_surface(second))
+
+
 def test_a_genuinely_larger_near_miss_of_the_same_kind_still_refuses():
-    traces, first, second, folds = _near_miss_traces(8)
-    assert _exact_discriminant_sign(first, second, -1) == 1
+    """32 ulp (K6, owner decision 2026-11-19: moved from 8 ulp, which is inside the rigorous bound): both folds are
+    certified decided (two simple folds each), so the policy does not apply; the production pair stage splits the
+    branch at the float folds as on main and the arrangement refuses, under both seam policies."""
+    traces, first, second, folds = _near_miss_traces(32)
+    assert _exact_discriminant_sign(first, second, -1) == 1 and _exact_discriminant_sign(first, second, 1) == 1
+    assert _undecidable(first, second) == {}
     point = _design_double_point(first, second)
     gaps = [float(np.linalg.norm(traces[index].curve.evaluate(t)-point))
             for index, t in ((FOLD_BEFORE, 1.), (FOLD_AFTER, 0.))]
-    # Same order as the face-550 gap (1.8e-7): 2.5e-7 .. 1e-6 from the double point, far above tolerance.
-    assert all(2.5e-7 < gap < 1e-6 for gap in gaps), gaps
-    assert folds[1]-folds[0] > 4e-8
+    # Five times the face-550 gap (1.8e-7): 8.5e-7 .. 9e-7 from the double point, far above tolerance.
+    assert all(8.5e-7 < gap < 9e-7 for gap in gaps), gaps
+    assert folds[1]-folds[0] > 1.9e-7
     for policy in (None, "ring_split"):
         with pytest.raises(GeometryError, match=BRIDGE):
             _arrange(traces, seam_policy=policy)
+        with pytest.raises(GeometryError, match=BRIDGE):
+            _arrange(_production_traces(32), seam_policy=policy)
 
 
-@pytest.mark.xfail(strict=True, raises=GeometryError,
-                   reason="F550: no certified resolution of the inexact mitre double contact yet (owner decision)")
+def _other_domain(ulps=0, relabel=False):
+    """Face 1096 (the inclined skin) from its fixture, its radius lowered by ``ulps`` ulp; ``relabel`` gives its
+    copy of the shared trim 2433 another source edge, so no stored edge is shared any more."""
+    record = json.loads(OTHER.read_text())
+    support = _cylinder_record(record["support"])
+    for _ in range(ulps):
+        support["radius"] = float(np.nextafter(support["radius"], 0.))
+    loops = []
+    for loop in record["boundaries"]:
+        paths = [_path(item) for item in loop]
+        if relabel:
+            paths = [replace(path, source_edge=-path.source_edge) if path.source_edge == 2433 else path
+                     for path in paths]
+        loops.append(tuple(paths))
+    return MaterialDomain(record["face_id"], Cylinder(**support), tuple(loops))
+
+
+def _production_traces(ulps=0, relabel=False):
+    """The fixture with the 1094/1096 pair traces recomputed by the production pair stage (support + clipping
+    to both domains), the inclined skin's radius lowered by ``ulps`` ulp."""
+    domain, traces, _points, tolerance, _area = _fixture()
+    paths = _pair_paths_exact(domain, _other_domain(ulps, relabel), None, tolerance, lambda: None,
+                              point_contacts=[], face_tolerances=(tolerance, tolerance))
+    kept = [trace for trace in traces if set(trace.owners) != {1094, 1096}]
+    return tuple(kept)+tuple(ArrangementPath(path, owners=(1094, 1096)) for path in paths)
+
+
+def test_the_stored_folds_are_certified_undecidable_and_charted_as_double_contacts():
+    _domain, traces, _points, _tolerance, _area = _fixture()
+    curve = traces[FOLD_BEFORE].curve
+    # Both folds: exact discriminant nonzero (two folds on the trim side, see above) but inside the rigorous error
+    # bound of the float fold coefficients (K6-DESIGN.md: about 9.2 units of |a1 x a2| ulp(r2) here).
+    assert _fold_undecidable(curve.first, curve.second) == {-1: -1, 1: 1}
+    nodes = _double_nodes(curve)
+    assert [(node.sign, node.tau, node.exact) for node in nodes] == [(-1, -1, False), (1, 1, False)]
+    # The production pair stage ends the joint pieces at the node angle (one event, linear charts), so the two
+    # branch pieces meet at the design double point instead of 1.8e-7 m on either side of it.
+    production = [trace.curve for trace in _production_traces() if set(trace.owners) == {1094, 1096}]
+    point = _design_double_point(curve.first, curve.second)
+    ends = [end for piece in production for end in (piece.evaluate(0.), piece.evaluate(1.))
+            if np.linalg.norm(end-point) < 1e-6]
+    assert len(ends) == 2 and all(np.linalg.norm(end-point) < 1e-12 for end in ends), ends
+    assert all(piece.parameterization == "linear" for piece in production)
+
+
 def test_face1094_mitre_arrangement_is_accepted_once_the_double_contact_is_resolved():
-    arrangement = _arrange()
-    assert arrangement.cells
+    """Formerly the strict xfail: the production pair traces of the certified-undecidable mitre, with the stored
+    shared trim 2433 through the contact point, give a complete arrangement (K6 policy)."""
+    for policy in (None, "ring_split"):
+        arrangement = _arrange(_production_traces(), seam_policy=policy)
+        assert arrangement.cells
+
+
+def test_the_8_ulp_near_miss_is_inside_the_bound_and_accepted_as_a_contact():
+    """Owner decision 2026-11-19: 8 ulp is inside the rigorous bound (folds 8.24 and 8.72 units against about 9.2),
+    so with the stored edge through the contact point it is a double contact and the face arranges."""
+    _traces, first, second, _folds = _near_miss_traces(8)
+    assert _exact_discriminant_sign(first, second, -1) == 1
+    assert _undecidable(first, second) == {-1: -1, 1: 1}
+    for policy in (None, "ring_split"):
+        assert _arrange(_production_traces(8), seam_policy=policy).cells
+
+
+@pytest.mark.parametrize("ulps", [0, 8])
+def test_without_a_stored_shared_edge_through_the_contact_point_the_pair_refuses(ulps):
+    with pytest.raises(GeometryError, match=UNDECIDABLE_CONTACT):
+        _production_traces(ulps, relabel=True)

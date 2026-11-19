@@ -1,0 +1,119 @@
+{
+"description": "N2 source face 1096 (production 552): the inclined r = 6.5 skin of the F550 mitre with face 1094, as MaterialDomain.from_model builds it from the N2 model (model-n2-20261030, MODEL-N2-merged-skin) on 2026-11-19. Its boundary shares the trim edge 2433 with face 1094.",
+"face_id": 1096,
+"support": {
+"origin": [
+-27.474873734152904,
+47.5878772390925,
+-1.2573593128807148
+],
+"axis": [
+0.3535533905932736,
+-0.6123724356957946,
+0.7071067811865477
+],
+"radial_direction": [
+-0.35355339059327373,
+0.6123724356957948,
+0.7071067811865475
+],
+"radius": 6.5,
+"height": 30.698484809834994,
+"start_angle": -0.25,
+"sweep_angle": 6.283185307179586
+},
+"boundaries": [
+[
+{
+"curve": {
+"type": "elliptic_arc",
+"center": [
+-24.99999999999999,
+43.30127018922194,
+3.692388155425118
+],
+"u_vector": [
+-3.2499999999999987,
+5.629165124598852,
+2.692388155425118
+],
+"v_vector": [
+-5.629165124598852,
+-3.2499999999999987,
+0.0
+],
+"start_angle": 0.0,
+"sweep_angle": 3.1415926535897936
+},
+"source_edge": 2433,
+"owners": [],
+"decomposition": false,
+"member_ids": []
+},
+{
+"curve": {
+"type": "line",
+"start": [
+-21.749999999999993,
+37.67210506462309,
+1.0
+],
+"end": [
+-17.75,
+30.74390183434757,
+9.0
+]
+},
+"source_edge": 1321,
+"owners": [],
+"decomposition": false,
+"member_ids": []
+},
+{
+"curve": {
+"type": "elliptic_arc",
+"center": [
+-19.096194077712553,
+33.07557837379405,
+15.5
+],
+"u_vector": [
+-1.3461940777125583,
+2.331676539446478,
+6.5
+],
+"v_vector": [
+-5.629165124598852,
+-3.2499999999999987,
+0.0
+],
+"start_angle": 3.1415926535897936,
+"sweep_angle": -3.1415926535897936
+},
+"source_edge": 2436,
+"owners": [],
+"decomposition": false,
+"member_ids": []
+},
+{
+"curve": {
+"type": "line",
+"start": [
+-20.44238815542511,
+35.40725491324053,
+22.0
+],
+"end": [
+-28.24999999999999,
+48.93043531382079,
+6.384776310850236
+]
+},
+"source_edge": 1291,
+"owners": [],
+"decomposition": false,
+"member_ids": []
+}
+]
+]
+}
