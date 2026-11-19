@@ -255,7 +255,7 @@ def test_the_stored_folds_are_certified_undecidable_and_the_pair_is_the_two_mitr
     assert len(contact.points) == 2 and contact.support is not None
     ellipses = contact.support.curves
     assert len(ellipses) == 2 and all(type(item) is EllipticArc for item in ellipses)
-    assert all(_ellipse_cylinder_residual(item, cylinder) < 1e-12 for item in ellipses for cylinder in (first, second))
+    assert all(_ellipse_cylinder_residual(item, cylinder) < 1e-11 for item in ellipses for cylinder in (first, second))
     # Both ellipses pass through both contact points (the design double points).
     for point in contact.points:
         assert all(point_parameters(item, np.asarray(point), tolerance=1e-12) for item in ellipses)
@@ -326,4 +326,34 @@ def test_a_shared_edge_that_stops_short_of_the_contact_point_is_no_witness():
     second = MaterialDomain(other.face_id, other.support, cut(other.boundaries, -2))
     with pytest.raises(GeometryError, match=UNDECIDABLE_CONTACT):
         _pair_paths_exact(first, second, None, tolerance, lambda: None, point_contacts=[],
+                          face_tolerances=(tolerance, tolerance))
+
+
+def test_the_t2b_shadow_refuses_like_exact_planning():
+    """Codex K6 R2 H1: the T2b support shadow runs the same policy, so topology_certified planning cannot accept a
+    contact that exact planning refuses."""
+    domain, _traces, _points, tolerance, _area = _fixture()
+    with pytest.raises(GeometryError, match=UNDECIDABLE_CONTACT):
+        _pair_paths_exact(domain, _other_domain(relabel=True), None, tolerance, lambda: None, point_contacts=[],
+                          face_tolerances=(tolerance, tolerance), _shadow={})
+    shadow = {}
+    assert _pair_paths_exact(domain, _other_domain(), None, tolerance, lambda: None, point_contacts=[],
+                             face_tolerances=(tolerance, tolerance), _shadow=shadow) is None
+    assert not shadow.get("coincident")
+
+
+def test_every_contact_near_both_faces_needs_its_own_witness(monkeypatch):
+    """Codex K6 R2 H2: the second double point is 2.4 m from face 1094's box (no witness needed). Were it within its
+    near radius of both faces, the witness at the first contact would not cover it: the pair refuses."""
+    import anygeometry.batch_intersections as batch
+    domain, _traces, _points, tolerance, _area = _fixture()
+    real = batch.undecidable_contact
+
+    def widened(first, second, *, tolerance):
+        contact = real(first, second, tolerance=tolerance)
+        return replace(contact, radii=tuple(10. for _ in contact.radii))
+
+    monkeypatch.setattr(batch, "undecidable_contact", widened)
+    with pytest.raises(GeometryError, match=UNDECIDABLE_CONTACT):
+        _pair_paths_exact(domain, _other_domain(), None, tolerance, lambda: None, point_contacts=[],
                           face_tolerances=(tolerance, tolerance))

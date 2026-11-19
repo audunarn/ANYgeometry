@@ -174,12 +174,16 @@ class UndecidableContact:
     """Fold contacts of a Cylinder pair that are undecidable at stored precision (K6, F550 class).
 
     ``points``: the contact point of every undecidable fold (``exact_curves._fold_undecidable``).
+    ``radii``: per point, the distance within which the support branches of the stored doubles may differ from the
+    double-contact geometry by more than ``tolerance`` (see :func:`undecidable_contact`): a point this near both
+    faces needs a witness.
     ``support``: when both folds are undecidable and the pair is well conditioned, the pair is an equal-radius
     mitre with intersecting axes within stored precision, and its double-contact intersection is the two
     bisector-plane ellipses, certified to lie within ``tolerance`` of both cylinders; otherwise None (no chart
     is offered: the pair stage refuses wherever a contact point lies in both faces).
     """
     points: tuple
+    radii: tuple
     support: SupportIntersection | None
 
 
@@ -191,8 +195,8 @@ _MITRE_CONDITION_LIMIT = 2.**-8
 def _ellipse_cylinder_residual(ellipse, cylinder):
     """Upper bound of ``max_theta | |q(theta)| - r |`` for the ellipse against a cylinder (``q`` the offset from the
     axis): ``|q|^2 - r^2`` is the trigonometric polynomial ``k0 + k1 cos + k2 sin + k3 cos 2t + k4 sin 2t``, so its
-    modulus is at most ``|k0| + hypot(k1, k2) + hypot(k3, k4)``; a 32 eps allowance of the squared lengths covers the
-    float evaluation, and ``| |q| - r | <= | |q|^2 - r^2 | / r``."""
+    modulus is at most ``|k0| + hypot(k1, k2) + hypot(k3, k4)``; a 32 eps allowance of unprojected times projected
+    lengths covers the float evaluation (projection included), and ``| |q| - r | <= | |q|^2 - r^2 | / r``."""
     axis = cylinder.axis
     project = lambda vector: vector-float(vector @ axis)*axis
     q0 = project(np.asarray(ellipse.center)-cylinder.origin)
@@ -202,8 +206,13 @@ def _ellipse_cylinder_residual(ellipse, cylinder):
     k0 = float(q0 @ q0)+.5*(uu+vv)-r*r
     k1, k2 = 2*float(q0 @ qu), 2*float(q0 @ qv)
     k3, k4 = .5*(uu-vv), uv
-    scale = (float(np.linalg.norm(q0))+math.sqrt(uu)+math.sqrt(vv)+r)**2
-    return (abs(k0)+math.hypot(k1, k2)+math.hypot(k3, k4)+32*np.finfo(float).eps*scale)/r
+    # The projection's rounding is relative to the UNPROJECTED vectors (projecting a long axial offset cancels), and
+    # it enters the squared lengths multiplied by the projected ones: the allowance is 32 eps times the product of
+    # the unprojected and the projected length sums (each >= the corresponding true sum within rounding).
+    unprojected = (float(np.linalg.norm(np.asarray(ellipse.center)-cylinder.origin))
+                   +float(np.linalg.norm(ellipse.u_vector))+float(np.linalg.norm(ellipse.v_vector))+r)
+    projected = float(np.linalg.norm(q0))+math.sqrt(uu)+math.sqrt(vv)+r
+    return (abs(k0)+math.hypot(k1, k2)+math.hypot(k3, k4)+32*np.finfo(float).eps*unprojected*projected)/r
 
 
 def _mitre_ellipses(first, second):
@@ -247,8 +256,20 @@ def undecidable_contact(first, second, *, tolerance=1e-10):
     phi = math.atan2(ns, nc)
     project = np.eye(3)-np.outer(second.axis, second.axis)
     w = project @ first.axis
-    points = []
+    from .exact_curves import _fold_coefficient_bound
+    a = float(w @ w)
+    m = math.hypot(nc, ns)
+    points, radii = [], []
     for sign, tau in sorted(undecided.items()):
+        # Near the contact the axial root is z = (-b + branch sqrt(D)) / (2a) with D = -4 F(+1) F(-1); the stored fold
+        # factor differs from the double-contact one, 2 tau m sin^2(psi/2), by its gap |D_s| / (2m) <= B_s / (2m).
+        # With the other factor |G| <= 2m, sqrt(D) moves by at most |G|^(1/2) |D_s|^(1/2)-type amounts, and by at most
+        # (m / a) (B_s / m^2) / (2 |psi|) once |psi| is away from the contact (|sqrt(x^2 + e) - |x|| <= e / (2|x|)).
+        # That is below the tolerance for |psi| >= B_s / (2 a m tolerance); in length, r1 times that. Four times
+        # this, plus four tolerances, is the near radius.
+        bound = float(_fold_coefficient_bound(_CylinderSupport.from_surface(first),
+                                              _CylinderSupport.from_surface(second), sign))
+        radii.append(4*float(first.radius)*bound/(2*a*m*tolerance)+4*tolerance)
         # The contact point: where n(theta) is extremal (theta* = phi or phi + pi, by the sign of the fold), on the
         # first cylinder, at the axial position of the (double) root.
         angle = phi if tau > 0 else phi+math.pi
@@ -261,7 +282,7 @@ def undecidable_contact(first, second, *, tolerance=1e-10):
         if all(_ellipse_cylinder_residual(ellipse, cylinder) <= tolerance
                for ellipse in ellipses for cylinder in (first, second)):
             support = SupportIntersection(curves=tuple(ellipses))
-    return UndecidableContact(tuple(points), support)
+    return UndecidableContact(tuple(points), tuple(radii), support)
 
 
 def cylinder_cylinder_support(first, second, *, tolerance=1e-10, cancellation_check=None):

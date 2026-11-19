@@ -55,7 +55,7 @@ def _discriminants(first, second, sign):
     return floated, exact
 
 
-@pytest.mark.parametrize("scale", [1., 50., 1e4])
+@pytest.mark.parametrize("scale", [2.**-40, 1., 50., 1e4])
 def test_the_bound_covers_the_float_coefficient_error_on_random_pairs(scale):
     rng = np.random.default_rng(20261119)
     for _ in range(200):
@@ -74,13 +74,13 @@ def test_ordinary_random_pairs_have_no_undecidable_fold(scale):
         assert _fold_undecidable(first, second) == {}
 
 
-def test_the_bound_is_infinite_for_non_finite_input():
+def test_the_bound_is_none_for_non_finite_input():
     rng = np.random.default_rng(1)
     first, second = _pair(rng, 1.)
     broken = _CylinderSupport(origin=(math.inf, 0., 0.), axis=second.axis, radial_direction=second.radial_direction,
                               radius=second.radius, height=second.height, start_angle=second.start_angle,
                               sweep_angle=second.sweep_angle)
-    assert _fold_coefficient_bound(first, broken, 1) == math.inf
+    assert _fold_coefficient_bound(first, broken, 1) is None
 
 
 def test_the_magnitude_gate_declines_tiny_radii():
@@ -105,3 +105,43 @@ def test_an_ill_conditioned_undecidable_pair_offers_no_chart():
                       height=2., start_angle=-.5, sweep_angle=1.)
     contact = undecidable_contact(first, second, tolerance=1e-9)
     assert contact is not None and len(contact.points) == 2 and contact.support is None
+
+
+def test_the_bound_never_rounds_to_zero():
+    """Codex K6 R2 M5: the error propagation is exact rational arithmetic, so a pair whose float terms are tiny still
+    gets a positive bound that covers the coefficient error (here axes 2^-29 apart, radii 2^-64)."""
+    x = 2.**-29
+    r = 2.**-64
+    first = _CylinderSupport.from_surface(Cylinder(origin=(0., 0., 0.), axis=(1., 0., 0.), radial_direction=(0., 0., 1.),
+                                                   radius=r, height=1., start_angle=0., sweep_angle=2*math.pi))
+    second = _CylinderSupport.from_surface(Cylinder(origin=(0., 0., 0.), axis=tuple(_unit((1., x, 0.))),
+                                                    radial_direction=(0., 0., 1.), radius=float(np.nextafter(r, 1.)),
+                                                    height=1., start_angle=0., sweep_angle=2*math.pi))
+    for sign in (-1, 1):
+        bound = _fold_coefficient_bound(first, second, sign)
+        floated, exact = _discriminants(first, second, sign)
+        assert bound > 0 and abs(floated-exact) <= bound
+
+
+def test_axes_nearer_parallel_than_the_floor_are_not_classified():
+    """Codex K6 R2 M5: axes 2^-537 apart are below the classification floor (main's path)."""
+    x = 1.25*2.**-537
+    r = 2.**-64
+    first = _CylinderSupport.from_surface(Cylinder(origin=(0., 0., 0.), axis=(1., 0., 0.), radial_direction=(0., 0., 1.),
+                                                   radius=r, height=1., start_angle=0., sweep_angle=2*math.pi))
+    second = _CylinderSupport.from_surface(Cylinder(origin=(0., 0., 0.), axis=(1., x, 0.), radial_direction=(0., 0., 1.),
+                                                    radius=float(np.nextafter(r, 1.)), height=1., start_angle=0.,
+                                                    sweep_angle=2*math.pi))
+    assert _fold_undecidable(first, second) == {}
+
+
+def test_the_ellipse_residual_allowance_uses_unprojected_lengths():
+    """Codex K6 R2 H3: origins 1e7 m along the axes; projecting the long axial offset cancels, so an allowance on
+    projected lengths certified ellipses 3e-10 m off the cylinder at tolerance 1e-10. They are not certified now."""
+    L = 1e7+1/13
+    first = Cylinder(origin=tuple(-L*np.asarray((.6, .8, 0.))), axis=(.6, .8, 0.), radial_direction=(0., 0., 1.),
+                     radius=1., height=2*L, start_angle=0., sweep_angle=2*math.pi)
+    second = Cylinder(origin=(0., 0., -L), axis=(0., 0., 1.), radial_direction=(1., 0., 0.),
+                      radius=float(np.nextafter(1., 0.)), height=2*L, start_angle=0., sweep_angle=2*math.pi)
+    contact = undecidable_contact(first, second, tolerance=1e-10)
+    assert contact is not None and contact.support is None

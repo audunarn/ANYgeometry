@@ -1279,19 +1279,28 @@ def _undecidable_contact_support(first, second, tolerance):
     """K6 policy (owner decision 2026-11-19, F550 option B with the stored-edge check).
 
     None when no fold of the pair is undecidable at stored precision (every ordinary pair). Otherwise every contact
-    point that lies in both face domains must be decided by the B-rep: an edge stored in both boundaries passes
+    point near both face domains (within its near radius) must be decided by the B-rep: an edge stored in both boundaries passes
     through it, else the pair refuses (:data:`UNDECIDABLE_CONTACT`); and the pair must be an admitted equal-radius
     mitre, whose double-contact intersection is the two certified bisector ellipses, else it refuses
     (:data:`UNSUPPORTED_CONTACT`). Returns the ellipse support when some contact point is in both faces, and None
-    when none is (the contacts are clipped away: main's path)."""
+    when none is near both faces (the contacts are clipped away: main's path). Runs in the T2b shadow as well."""
     contact = undecidable_contact(first.support, second.support, tolerance=tolerance)
     if contact is None:
         return None
-    inside = [point for point in contact.points
-              if all(domain.contains(LinePath(point, point), 0., tolerance) for domain in (first, second))]
-    if not inside:
+    # A contact point within its near radius of both faces' bounding boxes is one the faces may reach: it must be
+    # witnessed (a box is a superset of its face, so this never misses a face that comes that near). Farther ones
+    # are clipped away by more than the distance over which the stored branches and the double-contact geometry
+    # can differ by more than the tolerance.
+    def near_box(domain, point, radius):
+        lo, hi = _domain_bounds(domain)
+        point = np.asarray(point, dtype=float)
+        return float(np.linalg.norm(np.maximum(0., np.maximum(lo-point, point-hi)))) <= radius
+
+    near = [point for point, radius in zip(contact.points, contact.radii)
+            if all(near_box(domain, point, max(radius, tolerance)) for domain in (first, second))]
+    if not near:
         return None
-    if not all(_stored_edge_through(first, second, point, tolerance) for point in inside):
+    if not all(_stored_edge_through(first, second, point, tolerance) for point in near):
         raise GeometryError(UNDECIDABLE_CONTACT)
     if contact.support is None:
         raise GeometryError(UNSUPPORTED_CONTACT)
@@ -1363,7 +1372,9 @@ def _pair_paths_exact(first, second, model, tolerance, check, *, point_contacts=
         qualify_plane_cylinder_result(result, plane, cylinder, strict, pair)
         paths = (*result.curves, *(LinePath(start, end) for start, end in result.segments))
     else:
-        result = _undecidable_contact_support(first, second, tolerance) if _shadow is None else None
+        # The policy runs in the T2b shadow too (refusal parity: a contact exact planning refuses is refused there);
+        # the shadow then only records coincidence, which an admitted mitre never is.
+        result = _undecidable_contact_support(first, second, tolerance)
         if result is None:
             result = cylinder_cylinder_support(a, b, tolerance=tolerance,
                                                cancellation_check=lambda: (check() or False))
