@@ -473,6 +473,9 @@ def _double_nodes(curve):
         # Decided on the first support's own angular range, so the support's events and every chart cut
         # from it agree; such pairs keep the original expressions everywhere (not cached: no work to save).
         return ()
+    if not _node_conditioned(curve):
+        # An ill-conditioned axial solve (nearly parallel axes) or extreme magnitudes: main's path, unchanged.
+        return ()
     q = lambda vector: [Fraction(float(value)) for value in np.asarray(vector, dtype=float)]
     cross = lambda u, v: [u[1]*v[2]-u[2]*v[1], u[2]*v[0]-u[0]*v[2], u[0]*v[1]-u[1]*v[0]]
     a1 = q(first.axis)
@@ -523,6 +526,28 @@ def _angles_admitted(start, sweep):
     start, sweep = float(start), float(sweep)
     return (math.isfinite(start) and math.isfinite(sweep)
             and max(abs(start), abs(start+sweep)) <= _NODE_ADMISSION_LIMIT)
+
+
+#: Node treatment needs a well-conditioned axial solve. evaluate() solves z = (-b + root)/(2a) with
+#: a = |w|^2 = sin^2 of the angle between the axes; its rounding grows like eps/a (measured: 0.1 to 0.4 eps/a
+#: for sin from 0.84 down to 1e-7). A node is certified to _NODE_CHART_AGREEMENT = 2^-44, so admit only pairs
+#: with eps/a <= 2^-44, i.e. a >= 2^-8 (axes at least about 3.6 degrees apart). Pairs below keep main's path.
+_NODE_CONDITION_LIMIT = 2.0**-8
+#: Node treatment squares support magnitudes and scales them by constants up to about 2^10; admitting origins
+#: and radii up to 2^500 (and radii down to 2^-500) keeps every such product finite and normal.
+_NODE_MAGNITUDE_LIMIT = 2.0**500
+
+
+def _node_conditioned(curve):
+    """Whether ``curve``'s support pair is inside the node treatment's conditioning and magnitude range."""
+    first, second = curve.first, curve.second
+    values = [*np.asarray(first.origin, dtype=float), *np.asarray(second.origin, dtype=float),
+              float(first.radius), float(second.radius)]
+    if not all(math.isfinite(value) and abs(value) <= _NODE_MAGNITUDE_LIMIT for value in values):
+        return False
+    if min(abs(float(first.radius)), abs(float(second.radius))) < 1/_NODE_MAGNITUDE_LIMIT:
+        return False
+    return _branch_constants(curve).a >= _NODE_CONDITION_LIMIT
 
 
 def _node_psi(angle, node_angle):
@@ -1058,7 +1083,11 @@ class CylinderIntersectionCurve:
         return replace(self, transform=tuple(tuple(row) for row in matrix))
 
     def bounds(self, lower=0.0, upper=1.0):
-        """Outward interval enclosure of the analytic quadratic branch."""
+        """Outward interval enclosure of the exact analytic quadratic branch over ``lower .. upper``.
+
+        The contract is the exact branch, not evaluate()'s rounded output. On node-treated charts the
+        enclosure also covers evaluate()'s rounding (the node gate keeps the axial solve well conditioned),
+        and a limit that is not finite is returned as the corresponding infinity."""
         interval = _parameters((lower, upper))
         if lower > upper:
             raise GeometryError("curve bound interval is reversed")
@@ -1143,6 +1172,10 @@ class CylinderIntersectionCurve:
         half = np.abs(matrix[:3, :3]) @ half
         if nodes:
             half = half+transform_pad+eps16*np.abs(center)
+            # The contract is an enclosure of the exact branch: a limit that overflowed (or became NaN from
+            # inf - inf) is replaced by the infinite limit, which still encloses it.
+            low, high = np.nextafter(center-half, -np.inf), np.nextafter(center+half, np.inf)
+            return np.where(np.isfinite(low), low, -np.inf), np.where(np.isfinite(high), high, np.inf)
         return np.nextafter(center-half, -np.inf), np.nextafter(center+half, np.inf)
 
 

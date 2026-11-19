@@ -579,24 +579,20 @@ def _r11_pair():
             Cylinder((0., 0., 64.), (1., .0003, 0.), (0., 0., 1.), 1., 8.))
 
 
-def test_collapsed_angle_bounds_cover_the_axial_solve_rounding():
-    # Codex round 11: nearly parallel axes make 2a tiny, so the scalar/batched rounding of b is amplified
-    # after -b + root cancels. The enclosure must contain both evaluations.
+def test_round_11_pair_is_below_the_conditioning_gate():
+    # Codex round 11: nearly parallel axes (sin 3e-4) make 2a tiny; evaluate() amplifies its rounding by
+    # eps/a. Owner decision 2026-11-19 (A+C): such pairs are outside node treatment and keep main's path.
+    from anygeometry.analytic_supports import _certified_nodes
     from anygeometry.exact_curves import _node_treatment
     first, second = _r11_pair()
-    curve = CylinderIntersectionCurve(first, second, .25, .5, 1, "linear")
-    assert _node_treatment(curve)
-    lo, hi = curve.bounds(.5, .5)
-    for point in (curve.evaluate(np.asarray((.5, .5))), [curve.evaluate(.5)]):
-        for value in np.atleast_2d(point):
-            assert np.all(lo <= value) and np.all(value <= hi), (value, lo, hi)
+    assert _certified_nodes(first, second) == {}
+    assert _node_treatment(CylinderIntersectionCurve(first, second, .25, .5, 1, "linear")) == ()
 
 
 def _node_chart_fixtures():
     from anygeometry.surfaces import Cylinder
     axis = np.array((3., 4., 0.)) / 5.
     rotation = ((.8, -.6, 0., 1e4), (.6, .8, 0., 0.), (0., 0., 1., -3.), (0., 0., 0., 1.))
-    yield _r11_pair() + (None,)
     yield tuple(_crossbeams()[:2]) + (None,)
     yield _unit_pair() + (None,)
     yield _unit_pair() + (rotation,)
@@ -631,3 +627,139 @@ def test_node_chart_bounds_contain_scalar_and_batched_points_at_any_width():
                         assert np.all(lo <= points) and np.all(points <= hi), (start, sweep, branch, t, u)
                         checked += 1
     assert checked > 1000
+
+
+# Owner decision 2026-11-19 (A+C): bounds() encloses the exact analytic branch; node treatment is declined, and
+# main's path kept bit for bit, for ill-conditioned axial solves and extreme magnitudes.
+
+def _gate_reference_pairs():
+    import sys
+    from anygeometry.surfaces import Cylinder
+    for label, first_axis, second_axis, origin, matrix in (
+            ("p1", (1., 1., 0.), (1.00001, 1., 0.), (0., 0., 0.), None),
+            ("p2", (1., 0., 0.), (0., 1., 0.), (sys.float_info.max, 0., 0.),
+             ((.25, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1)))):
+        first = Cylinder(origin, first_axis, (0., 0., 1.), 1., 8.)
+        second = Cylinder(origin, second_axis, (0., 0., 1.), 1., 8.)
+        yield label, first, second, matrix
+
+
+@pytest.mark.filterwarnings("ignore::RuntimeWarning")
+def test_gated_pairs_keep_mains_results_bit_for_bit():
+    # Codex round 12 P1 (nearly parallel axes: evaluate() is 2.5e-8 off the exact curve, as on main) and P2 (an
+    # origin at the float limit). Both are declined and reproduce main's evaluate() and bounds() exactly.
+    import json
+    import pathlib
+    from anygeometry.analytic_supports import _certified_nodes
+    path = pathlib.Path(__file__).parent / "data" / "hub_gate_main_reference.json"
+    reference = json.loads(path.read_text())["cases"]
+    for label, first, second, matrix in _gate_reference_pairs():
+        assert _certified_nodes(first, second) == {}
+        for branch in (1, -1):
+            curve = CylinderIntersectionCurve(first, second, .25, .5, branch, "linear")
+            curve = curve if matrix is None else curve.transformed(matrix)
+            expected = reference[f"{label}{branch:+d}"]
+            assert np.array_equal(curve.evaluate(np.asarray((.25, .5, .75))), expected[0])
+            for (lower, upper), (lo, hi) in zip(((.5, .5), (.25, .25), (.2, .6), (0., 1.)), expected[1:]):
+                bound = curve.bounds(lower, upper)
+                assert np.array_equal(bound[0], lo, equal_nan=True) and np.array_equal(bound[1], hi, equal_nan=True)
+
+
+def _common_origin_pair(second_axis, origin=(0., 0., 0.), radius=1.):
+    from anygeometry.surfaces import Cylinder
+    return (Cylinder(origin, (1., 0., 0.), (0., 0., 1.), radius, 8.),
+            Cylinder(origin, tuple(second_axis), (0., 0., 1.), radius, 8.))
+
+
+def test_conditioning_gate_admits_down_to_a_sine_square_of_2_to_minus_8():
+    from anygeometry.analytic_supports import _certified_nodes
+    from anygeometry.exact_curves import _NODE_CONDITION_LIMIT
+    assert _NODE_CONDITION_LIMIT == 2.**-8
+    for factor, admitted in ((1 + 2**-10, True), (1 - 2**-10, False)):
+        sine = math.sqrt(factor * 2.**-8)
+        first, second = _common_origin_pair((math.sqrt(1 - sine * sine), sine, 0.))
+        assert bool(_certified_nodes(first, second)) is admitted, factor
+    # The tripod hub's crossbeams and the other well-conditioned fixtures stay node pairs.
+    beams = _crossbeams()
+    assert set(_certified_nodes(beams[0], beams[1])) == {-1, 1}
+    assert set(_certified_nodes(*_offset_pipes()[:2])) == {-1}
+
+
+@pytest.mark.parametrize("scale, admitted", [(2.**500, True), (2.**501, False)])
+def test_magnitude_gate_sides_for_origins(scale, admitted):
+    from anygeometry.analytic_supports import _certified_nodes
+    first, second = _common_origin_pair((0., 1., 0.), origin=(scale, 0., 0.))
+    assert bool(_certified_nodes(first, second)) is admitted
+
+
+@pytest.mark.parametrize("radius, admitted", [(2.**-500, True), (2.**-501, False)])
+def test_magnitude_gate_sides_for_radii(radius, admitted):
+    from anygeometry.analytic_supports import _certified_nodes
+    first, second = _common_origin_pair((0., 1., 0.), radius=radius)
+    assert bool(_certified_nodes(first, second)) is admitted
+
+
+def _exact_point(curve, theta):
+    """The exact branch point at the float angle ``theta`` (60 digits), in world coordinates."""
+    from decimal import Decimal, localcontext
+    with localcontext() as context:
+        context.prec = 60
+        x = Decimal(float(theta))
+        cosine, sine, cterm, sterm, k = Decimal(0), Decimal(0), Decimal(1), x, 0
+        while abs(cterm) > Decimal(10)**-58 or abs(sterm) > Decimal(10)**-58:
+            cosine, sine, k = cosine + cterm, sine + sterm, k + 1
+            cterm, sterm = -cterm*x*x/((2*k-1)*(2*k)), -sterm*x*x/((2*k)*(2*k+1))
+        f, g = curve.first, curve.second
+        vec = lambda values: [Decimal(float(v)) for v in values]
+        dot = lambda u, v: sum(p*q for p, q in zip(u, v))
+        a1, e1 = vec(f.axis), vec(f.radial_direction)
+        e2 = vec(np.cross(f.axis, f.radial_direction))
+        o1, o2, a2 = vec(f.origin), vec(g.origin), vec(g.axis)
+        r1, r2 = Decimal(float(f.radius)), Decimal(float(g.radius))
+        base = [o1[i] + r1*(cosine*e1[i] + sine*e2[i]) for i in range(3)]
+        perp = lambda v: [v[i] - dot(v, a2)/dot(a2, a2)*a2[i] for i in range(3)]
+        q, w = perp([base[i] - o2[i] for i in range(3)]), perp(a1)
+        a, b, c = dot(w, w), 2*dot(q, w), dot(q, q) - r2*r2
+        disc = b*b - 4*a*c
+        z = (-b + curve.branch*(disc.sqrt() if disc > 0 else Decimal(0)))/(2*a)
+        point = [base[i] + z*a1[i] for i in range(3)]
+        matrix = [[Decimal(float(v)) for v in row] for row in curve.transform]
+        return [sum(matrix[r][j]*point[j] for j in range(3)) + matrix[r][3] for r in range(3)]
+
+
+def test_node_chart_bounds_enclose_the_exact_branch_down_to_a_collapsed_angle():
+    from decimal import Decimal
+    from anygeometry.exact_curves import _node_treatment
+    checked = 0
+    for first, second, matrix in _node_chart_fixtures():
+        for branch in (1, -1):
+            curve = CylinderIntersectionCurve(first, second, math.pi, .25, branch, "linear")
+            curve = curve if matrix is None else curve.transformed(matrix)
+            if not _node_treatment(curve):
+                continue
+            for t in (0., .125, .5, math.nextafter(1., 0.)):
+                for u in (t, math.nextafter(t, 2.), t + 1e-12):
+                    if u > 1.:
+                        continue
+                    lo, hi = curve.bounds(t, u)
+                    for parameter in {t, u}:
+                        exact = _exact_point(curve, curve._angle(np.asarray(parameter))[0])
+                        assert all(Decimal(float(lo[i])) <= exact[i] <= Decimal(float(hi[i])) for i in range(3)), (
+                            branch, t, u)
+                        checked += 1
+    assert checked > 50
+
+
+def test_node_chart_bound_limits_are_never_nan():
+    # Round 12 P2 class: an overflowing limit becomes the infinite limit instead of NaN.
+    import sys
+    from anygeometry.exact_curves import _node_treatment
+    big = sys.float_info.max
+    first, second = _unit_pair()
+    with np.errstate(over="ignore", invalid="ignore"):
+        curve = _branch(first, second, 0., .5, 1).transformed(
+            ((1., 0., big / 4, big), (0., 1., 0., 0.), (0., 0., 1., 0.), (0., 0., 0., 1.)))
+        assert _node_treatment(curve)
+        for lower, upper in ((.5, .5), (.2, .6)):
+            lo, hi = curve.bounds(lower, upper)
+            assert not np.any(np.isnan(lo)) and not np.any(np.isnan(hi)) and np.all(lo <= hi)
