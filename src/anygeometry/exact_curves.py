@@ -533,24 +533,25 @@ def _angles_admitted(start, sweep):
 #: for sin from 0.84 down to 1e-7). A node is certified to _NODE_CHART_AGREEMENT = 2^-44, so admit only pairs
 #: with eps/a <= 2^-44, i.e. a >= 2^-8 (axes at least about 3.6 degrees apart). Pairs below keep main's path.
 _NODE_CONDITION_LIMIT = 2.0**-8
-#: Magnitude range of node treatment. Origins and the second radius enter the enclosure and the jets squared
-#: (offsets, b^2, 4ac, r2^2): magnitudes 2^-480 .. 2^480 keep those within 2^+-960. The first radius also
-#: enters to the fourth power (the norm of the cross product of its ellipse's radius vectors):
-#: 2^-240 <= r1 <= 2^240 keeps that finite and normal.
-_NODE_ORIGIN_LIMIT = 2.0**480
-_NODE_RADIUS_LIMIT = 2.0**240
-_NODE_SECOND_RADIUS_LIMIT = 2.0**480
+#: Magnitude range of node treatment, deliberately conservative (real models sit far inside it). With
+#: L = max(|origin coordinates|, r1, r2) <= 2^64, the smaller radius s >= 2^-64 and L <= 2^64 s, every term of
+#: the axial solve, the jets and the bounds (at most a fourth power of these lengths, such as the ellipse's
+#: cross-product norm, b^2 and 4ac, times constants up to about 2^10) lies within 2^+-266: far from overflow and
+#: underflow. Pairs outside it decline node treatment and keep main's path.
+_NODE_MAGNITUDE_LIMIT = 2.0**64
 
 
 def _node_conditioned(curve):
     """Whether ``curve``'s support pair is inside the node treatment's conditioning and magnitude range."""
     first, second = curve.first, curve.second
-    origins = [*np.asarray(first.origin, dtype=float), *np.asarray(second.origin, dtype=float)]
-    if not all(math.isfinite(value) and abs(value) <= _NODE_ORIGIN_LIMIT for value in origins):
+    lengths = [abs(float(value)) for value in (*np.asarray(first.origin, dtype=float),
+                                               *np.asarray(second.origin, dtype=float),
+                                               first.radius, second.radius)]
+    if not all(math.isfinite(value) for value in lengths):
         return False
-    r1, r2 = abs(float(first.radius)), abs(float(second.radius))
-    if not (1/_NODE_RADIUS_LIMIT <= r1 <= _NODE_RADIUS_LIMIT
-            and 1/_NODE_SECOND_RADIUS_LIMIT <= r2 <= _NODE_SECOND_RADIUS_LIMIT):
+    largest, smallest = max(lengths), min(abs(float(first.radius)), abs(float(second.radius)))
+    if not (smallest >= 1/_NODE_MAGNITUDE_LIMIT and largest <= _NODE_MAGNITUDE_LIMIT
+            and largest <= _NODE_MAGNITUDE_LIMIT*smallest):
         return False
     return _branch_constants(curve).a >= _NODE_CONDITION_LIMIT
 

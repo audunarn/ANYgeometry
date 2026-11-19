@@ -700,21 +700,6 @@ def test_conditioning_gate_admits_down_to_a_sine_square_of_2_to_minus_8():
     assert set(_certified_nodes(*_offset_pipes()[:2])) == {-1}
 
 
-@pytest.mark.parametrize("scale, admitted", [(2.**480, True), (2.**481, False)])
-def test_magnitude_gate_sides_for_origins(scale, admitted):
-    from anygeometry.analytic_supports import _certified_nodes
-    first, second = _common_origin_pair((0., 1., 0.), origin=(scale, 0., 0.))
-    assert bool(_certified_nodes(first, second)) is admitted
-
-
-@pytest.mark.parametrize("radius, admitted", [(2.**-240, True), (2.**-241, False), (2.**240, True),
-                                               (2.**241, False)])
-def test_magnitude_gate_sides_for_radii(radius, admitted):
-    from anygeometry.analytic_supports import _certified_nodes
-    first, second = _common_origin_pair((0., 1., 0.), radius=radius)
-    assert bool(_certified_nodes(first, second)) is admitted
-
-
 def _exact_point(curve, theta):
     """The exact branch point at the float angle ``theta`` (60 digits), in world coordinates."""
     from decimal import Decimal, localcontext
@@ -781,18 +766,57 @@ def test_node_chart_bound_limits_are_never_nan():
             assert not np.any(np.isnan(lo)) and not np.any(np.isnan(hi)) and np.all(lo <= hi)
 
 
-@pytest.mark.parametrize("options", [dict(radius=2.**-240), dict(radius=2.**240), dict(origin=(2.**480, 0., 0.)),
-                                     dict(origin=(2.**480, -2.**480, 2.**479))])
-def test_admitted_magnitude_extremes_evaluate_and_enclose_the_exact_branch(options):
-    # Codex round 13: an admitted radius made bounds() raise. Every admitted extreme must construct, evaluate,
-    # differentiate and give finite bounds that enclose the exact branch.
+
+def _internally_tangent_pair(r1, r2):
+    from anygeometry.surfaces import Cylinder
+    return (Cylinder((0., 0., 0.), (1., 0., 0.), (0., 0., 1.), r1, 8.),
+            Cylinder((0., 0., -(r2 - r1)), (0., 1., 0.), (0., 0., 1.), r2, 8.))
+
+
+def _gate_corners():
+    """(first origin, second origin, r1, r2, admitted) at every corner of the magnitude range L <= 2^64,
+    s >= 2^-64, L <= 2^64 s, and one float step beyond each."""
+    up, down = (lambda x: math.nextafter(x, math.inf)), (lambda x: math.nextafter(x, 0.))
+    big, small = 2.**64, 2.**-64
+    corners = []
+    # Unequal radii (ratio corners) check the decision only: that fixture is not a valid chart at such ratios.
+    for r1, r2 in ((big, 1.), (1., big), (1., small), (small, 1.), (big, down(1.)), (up(small), up(big))):
+        corners.append(((0., 0., 0.), r1, r2, max(r1, r2) <= big*min(r1, r2)))
+    for r in (1., big, small):
+        corners.append(((0., 0., 0.), r, r, True))
+    corners += [((0., 0., 0.), up(big), up(big), False), ((0., 0., 0.), down(small), down(small), False),
+                ((big, 0., 0.), 1., 1., True), ((up(big), 0., 0.), 1., 1., False),
+                ((0., -big, 0.), 1., 1., True), ((0., 0., -up(big)), 1., 1., False),
+                ((2.**63, 0., 0.), .5, .5, True), ((2.**63, 0., 0.), down(.5), down(.5), False),
+                ((1., 0., 0.), small, small, True), ((up(1.), 0., 0.), small, small, False)]
+    return corners
+
+
+@pytest.mark.filterwarnings("ignore::RuntimeWarning")
+@pytest.mark.parametrize("origin, r1, r2, admitted", _gate_corners())
+def test_magnitude_gate_corners(origin, r1, r2, admitted):
+    # One exhaustive corner test for the conservative magnitude range (coordinator steer after rounds 13-14).
     from decimal import Decimal
-    from anygeometry.exact_curves import _node_treatment
-    first, second = _common_origin_pair((0., 1., 0.), **options)
-    cylinder_cylinder_support(first, second)
+    from anygeometry.surfaces import Cylinder
+    from anygeometry.exact_curves import _node_conditioned, _node_treatment
+    from anygeometry.analytic_supports import _certified_nodes
+    shift = np.asarray(origin)
+    first = Cylinder(tuple(shift), (1., 0., 0.), (0., 0., 1.), r1, 8.)
+    second = Cylinder(tuple(shift + (0., 0., -(r2 - r1))), (0., 1., 0.), (0., 0., 1.), r2, 8.)
+    if r1 != r2:
+        from anygeometry.exact_curves import _CylinderSupport
+        pair = type("Pair", (), {})()
+        pair.first, pair.second = _CylinderSupport.from_surface(first), _CylinderSupport.from_surface(second)
+        assert _node_conditioned(pair) is admitted
+        return
+    curve = CylinderIntersectionCurve(first, second, 0., .5, 1, "linear")
+    assert _node_conditioned(curve) is admitted
+    if not admitted:
+        assert _certified_nodes(first, second) == {} and _node_treatment(curve) == ()
+        return
     for branch in (1, -1):
-        curve = CylinderIntersectionCurve(first, second, .25, .5, branch, "linear")
-        assert _node_treatment(curve)
+        curve = CylinderIntersectionCurve(first, second, 0., .5, branch, "linear")
+        cylinder_cylinder_support(first, second)
         t = np.asarray((.25, .5, .75))
         for values in (curve.evaluate(t), curve.derivative(t), curve.second_derivative(t)):
             assert np.all(np.isfinite(values))
@@ -802,36 +826,3 @@ def test_admitted_magnitude_extremes_evaluate_and_enclose_the_exact_branch(optio
             for parameter in (lower, upper):
                 exact = _exact_point(curve, curve._angle(np.asarray(parameter))[0])
                 assert all(Decimal(float(lo[i])) <= exact[i] <= Decimal(float(hi[i])) for i in range(3))
-
-
-def _internally_tangent_pair(r1, r2):
-    from anygeometry.surfaces import Cylinder
-    return (Cylinder((0., 0., 0.), (1., 0., 0.), (0., 0., 1.), r1, 8.),
-            Cylinder((0., 0., -(r2 - r1)), (0., 1., 0.), (0., 0., 1.), r2, 8.))
-
-
-@pytest.mark.parametrize("r1, r2, admitted", [(2.**240, 2.**480, True), (2.**240, 2.**481, False),
-                                              (2.**241, 2.**242, False), (2.**-240, 2.**-200, True),
-                                              (2.**-241, 2.**-200, False)])
-def test_radius_gate_sides_by_role(r1, r2, admitted):
-    # Only the first radius enters the ellipse norm to the fourth power (limit 2^+-240); the second radius
-    # enters squared (limit 2^+-480).
-    from anygeometry.exact_curves import _node_conditioned
-    first, second = _internally_tangent_pair(r1, r2)
-    assert _node_conditioned(CylinderIntersectionCurve(first, second, 0., .5, 1, "linear")) is admitted
-
-
-def test_mixed_large_radii_stay_admitted_and_enclose_the_exact_branch():
-    # Codex round 14: radii 2^240 and 2^241 were declined by a shared radius limit; main's path then evaluates
-    # x as zero at t = 1e-9 and both derivative methods raise. Admitted, the node path is exact there.
-    from decimal import Decimal
-    from anygeometry.exact_curves import _node_treatment
-    first, second = _internally_tangent_pair(2.**240, 2.**241)
-    for branch in (1, -1):
-        curve = CylinderIntersectionCurve(first, second, 0., .5, branch, "linear")
-        assert _node_treatment(curve)
-        for t in (1e-9, .5):
-            assert np.all(np.isfinite(curve.derivative(t))) and np.all(np.isfinite(curve.second_derivative(t)))
-            lo, hi = curve.bounds(t, t)
-            exact = _exact_point(curve, curve._angle(np.asarray(t))[0])
-            assert all(Decimal(float(lo[i])) <= exact[i] <= Decimal(float(hi[i])) for i in range(3)), (branch, t)
