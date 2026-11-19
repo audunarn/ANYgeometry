@@ -118,9 +118,9 @@ def test_both_mitre_folds_are_certified_undecidable_and_edge_505_passes_through_
     tolerance = record["tolerance"]
     inside = [all(domain.contains(LinePath(tuple(point), tuple(point)), 0., tolerance) for domain in (face, other))
               for point in points]
-    # One double point of the mitre is in both faces, on the shared edge 505 (at its middle); the other (the far
-    # side of the column) is in neither face and needs no edge.
-    assert sorted(inside) == [False, True]
+    # Each order gives both double points of the mitre (four, all kept). One double point is in both faces, on the
+    # shared edge 505 (at its middle); the other (the far side of the column) is in neither face and needs no edge.
+    assert sorted(inside) == [False, False, True, True]
     for point, both in zip(points, inside):
         assert bool(point_parameters(edge, point, tolerance=tolerance)) is both
         if not both:
@@ -142,8 +142,9 @@ def test_production_pair_traces_are_mitre_ellipse_arcs_through_the_contact_point
     pieces = [trace.curve for trace in _production_traces() if set(trace.owners) == {153, 203}]
     assert pieces and all(type(piece) is EllipticArc for piece in pieces)
     inside = [point for point in contact.points if face.contains(LinePath(point, point), 0., record["tolerance"])]
-    assert len(inside) == 1
-    assert any(point_parameters(piece, np.asarray(inside[0]), tolerance=1e-12) for piece in pieces)
+    assert len(inside) == 2                      # the same double point from both orders
+    assert all(any(point_parameters(piece, np.asarray(point), tolerance=1e-12) for piece in pieces)
+               for point in inside)
 
 
 def test_without_the_shared_stored_edge_the_pair_refuses():

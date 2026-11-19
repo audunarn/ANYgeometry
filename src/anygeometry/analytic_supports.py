@@ -173,16 +173,23 @@ def _certified_nodes(first, second):
 class UndecidableContact:
     """Fold contacts of a Cylinder pair that are undecidable at stored precision (K6, F550 class).
 
-    ``points``: the contact point of every undecidable fold (``exact_curves._fold_undecidable``), in either order of
-    the supports.
-    ``near_radius``: a contact point within this distance of both faces needs its own witness (``min(r1, r2) / 4``
-    when every contact's reach is well inside it, else infinite).
-    ``support``: when both folds are undecidable and the pair is well conditioned, the pair is an equal-radius
-    mitre with intersecting axes within stored precision, and its double-contact intersection is the two
-    bisector-plane ellipses, certified to lie within ``tolerance`` of both cylinders; otherwise None (no chart
-    is offered: the pair stage refuses wherever a contact point lies in both faces).
+    ``points``: the contact point of every undecidable fold (``exact_curves._fold_undecidable``) of both orders of the
+    supports, each kept (no deduplication: every one is tested and, where required, witnessed).
+    ``reaches``: per point, the bound-derived distance beyond which the stored branches and the double-contact
+    geometry agree within tolerance (:func:`_order_contacts`).
+    ``admitted``: whether the pair is inside the scale gates (:func:`undecidable_contact`). Inside them a face
+    requires the witness only where a contact point lies in it or within ``_REACH_MARGIN`` reaches of its boundary
+    curves (a conservative geometric test, not a proof); outside them, wherever a point is within ``near_radius``
+    of both faces' boundary boxes.
+    ``near_radius``: ``min(r1, r2) / 4``, the coarse radius used outside the gates.
+    ``support``: when admitted, both folds are undecidable and the pair is well conditioned, the double-contact
+    intersection as the two bisector-plane ellipses, certified to lie within ``tolerance |a1 x a2|`` of both
+    cylinders (so within about ``tolerance`` of their intersection away from the contacts); otherwise None (no chart
+    is offered: the pair stage refuses wherever a witness is required).
     """
     points: tuple
+    reaches: tuple
+    admitted: bool
     near_radius: float
     support: SupportIntersection | None
 
@@ -285,19 +292,25 @@ def _order_contacts(first, second, tolerance):
     return undecided, entries
 
 
-#: Safety factor between a contact's computed reach and the fixed near radius it must fit in to be admitted.
+#: A contact point within this many reaches of a face's boundary curves requires that face's witness.
 _REACH_MARGIN = 16
+#: Scale gates of the K6 near test (owner decision 2026-11-19, option 1), relative to r = min(r1, r2).
+_REACH_LIMIT = 1e-3
+_COORDINATE_LIMIT = 1e6
+_TOLERANCE_FLOOR = 1e-12
 
 
 def undecidable_contact(first, second, *, tolerance=1e-10):
     """:class:`UndecidableContact` of two Cylinder supports, or None when no fold is undecidable in either order of
-    the supports (every ordinary pair: main's path, bit-identical).
+    the supports (every ordinary pair: main's path, bit-identical), or when either order has an exact double fold
+    (main's K3 path).
 
-    The near radius is fixed, ``min(r1, r2) / 4``: a contact point within it of both faces needs its own witness.
-    It is admitted only when every contact's reach (:func:`_order_contacts`), times ``_REACH_MARGIN``, fits inside
-    it; otherwise ``near_radius`` is infinite (every contact point needs a witness). The mitre ellipses are offered
-    when some order classifies both folds undecidable, the axes are at least about 3.6 degrees apart and the
-    residual certificate holds."""
+    Admission (scale gates, r = min(r1, r2)): every contact's reach is at most ``_REACH_LIMIT r``; every origin and
+    contact coordinate is at most ``_COORDINATE_LIMIT r`` in modulus; ``tolerance >= _TOLERANCE_FLOOR r``. The mitre
+    ellipses are offered only when admitted, some order classifies both folds undecidable, the axes are at least
+    about 3.6 degrees apart and the residual certificate holds within ``tolerance |a1 x a2|``: the distance from a
+    point within ``e`` of both cylinders to their intersection is at most ``e / sin`` of the angle between the
+    surface normals, which is the axes' angle at the major vertices and smaller only toward the contacts."""
     if not isinstance(first, Cylinder) or not isinstance(second, Cylinder):
         return None
     cross = np.cross(first.axis, second.axis)
@@ -307,25 +320,28 @@ def undecidable_contact(first, second, *, tolerance=1e-10):
     orders = [_order_contacts(first, second, tolerance), _order_contacts(second, first, tolerance)]
     if not any(orders):
         return None
+    # Codex K6 R4 M4: an exact double in either order is K3's (main's path), never moved onto the witness path.
+    if _certified_nodes(first, second) or _certified_nodes(second, first):
+        return None
     points, reaches = [], []
     for order in orders:
-        if order is None:
-            continue
-        for point, reach in order[1]:
-            reaches.append(reach)
-            if not any(np.linalg.norm(np.asarray(point)-np.asarray(old)) <= tolerance for old in points):
+        if order is not None:
+            for point, reach in order[1]:
                 points.append(point)
-    near = .25*min(float(first.radius), float(second.radius))
-    if not all(_REACH_MARGIN*reach <= near for reach in reaches):
-        near = math.inf
+                reaches.append(reach)
+    radius = min(float(first.radius), float(second.radius))
+    largest = max(float(np.max(np.abs(np.concatenate([first.origin, second.origin, *map(np.asarray, points)])))),
+                  0.)
+    admitted = (all(reach <= _REACH_LIMIT*radius for reach in reaches)
+                and largest <= _COORDINATE_LIMIT*radius and tolerance >= _TOLERANCE_FLOOR*radius)
     support = None
-    if (any(order is not None and len(order[0]) == 2 for order in orders)
-            and magnitude*magnitude >= _MITRE_CONDITION_LIMIT and math.isfinite(near)):
+    if (admitted and any(order is not None and len(order[0]) == 2 for order in orders)
+            and magnitude*magnitude >= _MITRE_CONDITION_LIMIT):
         ellipses = _mitre_ellipses(first, second)
-        if all(_ellipse_cylinder_residual(ellipse, cylinder) <= tolerance
+        if all(_ellipse_cylinder_residual(ellipse, cylinder) <= tolerance*magnitude
                for ellipse in ellipses for cylinder in (first, second)):
             support = SupportIntersection(curves=tuple(ellipses))
-    return UndecidableContact(tuple(points), near, support)
+    return UndecidableContact(tuple(points), tuple(reaches), admitted, .25*radius, support)
 
 
 def cylinder_cylinder_support(first, second, *, tolerance=1e-10, cancellation_check=None):

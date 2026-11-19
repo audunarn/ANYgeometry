@@ -252,7 +252,7 @@ def test_the_stored_folds_are_certified_undecidable_and_the_pair_is_the_two_mitr
     assert _double_nodes(curve) == ()
     first, second = domain.support, _other_domain().support
     contact = undecidable_contact(first, second, tolerance=tolerance)
-    assert len(contact.points) == 2 and contact.support is not None
+    assert len(contact.points) == 4 and contact.admitted and contact.support is not None   # both orders, kept
     ellipses = contact.support.curves
     assert len(ellipses) == 2 and all(type(item) is EllipticArc for item in ellipses)
     assert all(_ellipse_cylinder_residual(item, cylinder) < 1e-11 for item in ellipses for cylinder in (first, second))
@@ -343,18 +343,12 @@ def test_the_t2b_shadow_refuses_like_exact_planning():
 
 
 def test_every_contact_near_both_faces_needs_its_own_witness(monkeypatch):
-    """Codex K6 R2 H2: the second double point is 2.4 m from face 1094's box, beyond the near radius (r / 4 = 1.6 m):
-    no witness needed. Were it within the near radius of both faces, the witness at the first contact would not
-    cover it: the pair refuses."""
-    import anygeometry.batch_intersections as batch
+    """Codex K6 R2 H2: the second double point is in neither face and far from face 1094's boundary: no witness
+    needed. Were it within the near test of both faces (here: the reach margin widened to cover it), the witness at
+    the first contact would not cover it: the pair refuses."""
+    import anygeometry.analytic_supports as supports
     domain, _traces, _points, tolerance, _area = _fixture()
-    real = batch.undecidable_contact
-
-    def widened(first, second, *, tolerance):
-        contact = real(first, second, tolerance=tolerance)
-        return replace(contact, near_radius=10.)
-
-    monkeypatch.setattr(batch, "undecidable_contact", widened)
+    monkeypatch.setattr(supports, "_REACH_MARGIN", 1e5)     # 16 -> 1e5 reaches: about 36 m
     with pytest.raises(GeometryError, match=UNDECIDABLE_CONTACT):
         _pair_paths_exact(domain, _other_domain(), None, tolerance, lambda: None, point_contacts=[],
                           face_tolerances=(tolerance, tolerance))

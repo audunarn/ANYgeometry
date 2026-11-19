@@ -1275,32 +1275,89 @@ def _stored_edge_through(first, second, point, tolerance):
     return False
 
 
-def _undecidable_contact_support(first, second, tolerance):
-    """K6 policy (owner decision 2026-11-19, F550 option B with the stored-edge check).
+def _boundary_within(domain, point, radius):
+    """Whether some boundary curve of ``domain`` comes within ``radius`` of ``point``, judged on evaluated points:
+    each curve is cut into intervals, and an interval is discarded only when ``(d0 + d1 - arc) / 2 > radius`` (``d``
+    the endpoint distances, ``arc`` a 1.25x allowance over the two half-chords through its midpoint), else halved;
+    an interval still undecided at the depth limit counts as within (conservative)."""
+    point = np.asarray(point, dtype=float)
+    for loop in domain.boundaries:
+        for path in loop:
+            curve = path.curve
+            lo, hi = (np.asarray(value, dtype=float) for value in curve.bounds())
+            if float(np.linalg.norm(np.maximum(0., np.maximum(lo-point, point-hi)))) > radius:
+                continue
+            # Quick exact-pass check (the projection's tolerance capped by the curve's extent: point_parameters is
+            # meant for small tolerances); the subdivision below decides the rest.
+            quick = min(radius, max(float(np.linalg.norm(hi-lo)), 1e-300))
+            if any(float(np.linalg.norm(np.asarray(curve.evaluate(t), dtype=float)-point)) <= radius
+                   for t in point_parameters(curve, point, tolerance=quick)):
+                return True
+            distance = lambda t: float(np.linalg.norm(np.asarray(curve.evaluate(t), dtype=float)-point))
+            samples = np.linspace(0., 1., 65)
+            values = [distance(float(t)) for t in samples]
+            if min(values) <= radius:
+                return True
+            stack = [(float(samples[k]), float(samples[k+1]), values[k], values[k+1], 0) for k in range(64)]
+            while stack:
+                t0, t1, d0, d1, depth = stack.pop()
+                tm = .5*(t0+t1)
+                pm = np.asarray(curve.evaluate(tm), dtype=float)
+                dm = float(np.linalg.norm(pm-point))
+                if dm <= radius:
+                    return True
+                p0, p1 = (np.asarray(curve.evaluate(t), dtype=float) for t in (t0, t1))
+                arc = 1.25*(float(np.linalg.norm(pm-p0))+float(np.linalg.norm(p1-pm)))
+                if .5*(d0+d1-arc) > radius:
+                    continue
+                if depth >= 60 or tm <= t0 or tm >= t1:
+                    return True
+                stack.append((t0, tm, d0, dm, depth+1))
+                stack.append((tm, t1, dm, d1, depth+1))
+    return False
 
-    None when no fold of the pair is undecidable at stored precision (every ordinary pair). Otherwise every contact
-    point near both face domains (within its near radius) must be decided by the B-rep: an edge stored in both boundaries passes
-    through it, else the pair refuses (:data:`UNDECIDABLE_CONTACT`); and the pair must be an admitted equal-radius
-    mitre, whose double-contact intersection is the two certified bisector ellipses, else it refuses
-    (:data:`UNSUPPORTED_CONTACT`). Returns the ellipse support when some contact point is in both faces, and None
-    when none is near both faces (the contacts are clipped away: main's path). Runs in the T2b shadow as well."""
+
+def _requires_witness(domain, point, reach, tolerance):
+    """Inside the K6 gates: the contact point lies in ``domain`` or within ``_REACH_MARGIN`` reaches of its boundary
+    curves (a conservative geometric test inside the gates, not a proof)."""
+    from .analytic_supports import _REACH_MARGIN
+    from .arrangement_geometry import LinePath
+    point = tuple(float(value) for value in point)
+    if domain.contains(LinePath(point, point), 0., tolerance):
+        return True
+    return _boundary_within(domain, point, max(_REACH_MARGIN*reach, tolerance))
+
+
+def _undecidable_contact_support(first, second, tolerance):
+    """K6 policy (owner decisions 2026-11-19: F550 option B with the stored-edge check; near test option 1).
+
+    None when no fold of the pair is undecidable at stored precision (every ordinary pair). Otherwise a contact
+    point that both faces may reach must be decided by the B-rep: an edge stored in both boundaries passes through
+    it, else the pair refuses (:data:`UNDECIDABLE_CONTACT`); and the pair must be an admitted equal-radius mitre,
+    whose double-contact intersection is the two certified bisector ellipses, else it refuses
+    (:data:`UNSUPPORTED_CONTACT`). Inside the scale gates (``UndecidableContact.admitted``) a face reaches a point
+    when the point lies in it or within ``_REACH_MARGIN`` reaches of its boundary curves; outside them, when the
+    point is within a quarter of the smaller radius of its boundary box. Returns the ellipse support when some
+    point requires a witness, and None when none does (the contacts lie away from at least one face, where both
+    geometries agree within tolerance: main's path). Runs in the T2b shadow as well."""
     contact = undecidable_contact(first.support, second.support, tolerance=tolerance)
     if contact is None:
         return None
-    # A contact point within the near radius (a quarter of the smaller radius) of both faces' boundary boxes is one
-    # the faces may reach: it must be witnessed. The radius is far larger than the contact's reach (admission in
-    # undecidable_contact), so trims inside the model's surface residual and the contact point's own error are
-    # covered with room to spare; farther contacts are clipped away where both geometries agree within tolerance.
-    def near_box(domain, point, radius):
+
+    def near_box(domain, point):
         lo, hi = _domain_bounds(domain)
         point = np.asarray(point, dtype=float)
-        return float(np.linalg.norm(np.maximum(0., np.maximum(lo-point, point-hi)))) <= radius
+        return (float(np.linalg.norm(np.maximum(0., np.maximum(lo-point, point-hi))))
+                <= max(contact.near_radius, tolerance))
 
-    near = [point for point in contact.points
-            if all(near_box(domain, point, max(contact.near_radius, tolerance)) for domain in (first, second))]
-    if not near:
+    if contact.admitted:
+        required = [point for point, reach in zip(contact.points, contact.reaches)
+                    if all(_requires_witness(domain, point, reach, tolerance) for domain in (first, second))]
+    else:
+        required = [point for point in contact.points if all(near_box(domain, point) for domain in (first, second))]
+    if not required:
         return None
-    if not all(_stored_edge_through(first, second, point, tolerance) for point in near):
+    if not all(_stored_edge_through(first, second, point, tolerance) for point in required):
         raise GeometryError(UNDECIDABLE_CONTACT)
     if contact.support is None:
         raise GeometryError(UNSUPPORTED_CONTACT)

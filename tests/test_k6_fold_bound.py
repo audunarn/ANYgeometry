@@ -104,7 +104,7 @@ def test_an_ill_conditioned_undecidable_pair_offers_no_chart():
     second = Cylinder(origin=tuple(-u), axis=tuple(u), radial_direction=(0., 1., 0.), radius=float(np.nextafter(1., 2.)),
                       height=2., start_angle=-.5, sweep_angle=1.)
     contact = undecidable_contact(first, second, tolerance=1e-9)
-    assert contact is not None and len(contact.points) == 2 and contact.support is None
+    assert contact is not None and len(contact.points) == 4 and contact.support is None
 
 
 def test_the_bound_never_rounds_to_zero():
@@ -185,7 +185,7 @@ def test_chord_trims_that_stop_short_of_the_contact_still_need_a_witness():
 
 def test_a_contact_point_with_a_large_location_error_is_not_admitted():
     """Codex K6 R3 H2: r = 1e-6 with the second origin 2^30 m out: the axial solve can move the computed contact point
-    by more than any useful radius, so the near radius is infinite (every contact point needs a witness)."""
+    by far more than its reach, and the coordinates are 2^30 r: outside the scale gates (coarse box test, no chart)."""
     r, L = 1e-6, 2.**30
     u = (.6, 0., .8)
     first = Cylinder(origin=(0., 0., -1e-8), axis=(0., 0., 1.), radial_direction=(0., 1., 0.), radius=r, height=2e-8,
@@ -193,7 +193,7 @@ def test_a_contact_point_with_a_large_location_error_is_not_admitted():
     second = Cylinder(origin=tuple(-L*np.asarray(u)), axis=u, radial_direction=(0., 1., 0.),
                       radius=float(np.nextafter(r, 1.)), height=2*L, start_angle=-.2, sweep_angle=.4)
     contact = undecidable_contact(first, second, tolerance=1e-10)
-    assert contact is not None and contact.near_radius == math.inf and contact.support is None
+    assert contact is not None and not contact.admitted and contact.support is None
 
 
 def test_the_reach_covers_the_axial_travel_of_a_steep_branch():
@@ -223,3 +223,115 @@ def test_classification_does_not_depend_on_the_order_of_the_faces():
     assert forward is not None and backward is not None
     for point in forward.points:
         assert min(np.linalg.norm(np.asarray(point)-np.asarray(other)) for other in backward.points) < 1e-9
+    # Codex K6 R4 M3: every point of both orders is kept (no deduplication), so both orders test the same points.
+    assert sorted(zip(forward.points, forward.reaches)) == sorted(zip(backward.points, backward.reaches))
+    assert forward.admitted == backward.admitted
+
+
+def _arc_rectangle(face_id, cylinder, start, sweep, base_edge):
+    """A cylinder face over azimuth ``[start, start + sweep]`` (of the cylinder's radial basis) and its full height,
+    trimmed by its two circular arcs and two generators, with its own edge ids."""
+    from anygeometry.arrangement_geometry import EllipticArc, LinePath
+    from anygeometry.material_arrangement import ArrangementPath, MaterialDomain
+    origin, axis = np.asarray(cylinder.origin), np.asarray(cylinder.axis)
+    radial, circumferential = np.asarray(cylinder.radial_direction), cylinder.circumferential_direction
+    at = lambda angle, height: tuple(origin+cylinder.radius*(math.cos(angle)*radial+math.sin(angle)*circumferential)
+                                     + height*axis)
+    top = origin+cylinder.height*axis
+    loop = (ArrangementPath(EllipticArc(tuple(origin), tuple(cylinder.radius*radial),
+                                        tuple(cylinder.radius*circumferential), start, sweep), base_edge),
+            ArrangementPath(LinePath(at(start+sweep, 0.), at(start+sweep, cylinder.height)), base_edge+1),
+            ArrangementPath(EllipticArc(tuple(top), tuple(cylinder.radius*radial),
+                                        tuple(cylinder.radius*circumferential), start+sweep, -sweep), base_edge+2),
+            ArrangementPath(LinePath(at(start, cylinder.height), at(start, 0.)), base_edge+3))
+    return MaterialDomain(face_id, Cylinder(origin=cylinder.origin, axis=cylinder.axis,
+                                            radial_direction=cylinder.radial_direction, radius=cylinder.radius,
+                                            height=cylinder.height, start_angle=start, sweep_angle=sweep), (loop,))
+
+
+@pytest.mark.parametrize("offset, required", [(0., True), (8e-6, True), (3.2e-5, False), (1e-3, False)])
+def test_the_near_test_on_both_sides_of_the_reach_margin(offset, required):
+    """Owner decision 2026-11-19 (option 1): a face requires the witness where the contact point lies in it or within
+    ``_REACH_MARGIN`` (16) reaches of its boundary curves. Reach 1e-6: a point in the face (offset 0) and a point
+    outside it 8e-6 from its generator (8 reaches) require it; 3.2e-5 (32 reaches) and 1e-3 do not."""
+    from anygeometry.batch_intersections import _requires_witness
+    cylinder = Cylinder(origin=(0., 0., -1.), axis=(0., 0., 1.), radial_direction=(1., 0., 0.), radius=1., height=2.,
+                        start_angle=0., sweep_angle=1.)
+    domain = _arc_rectangle(1, cylinder, offset if offset else -.5, .5 if offset else 1., 10)
+    point = (1., 0., 0.)                             # azimuth 0: distance to the generator at azimuth ``offset``
+    assert _requires_witness(domain, point, 1e-6, 1e-10) is required
+
+
+def test_a_contact_in_one_face_and_far_from_the_other_takes_mains_path():
+    """N2c 551/552 shape (the R3 regression): the contact point is in the first face but a whole azimuth step
+    (1e-3 m) away from the second face's boundary, far beyond 16 reaches: no witness is required, the pair takes
+    main's path (``_undecidable_contact_support`` is None) and the pair stage succeeds."""
+    from anygeometry.batch_intersections import _pair_paths_exact, _undecidable_contact_support
+    r = 1.
+    first = Cylinder(origin=(0., 0., -2.), axis=(0., 0., 1.), radial_direction=(0., 1., 0.), radius=r, height=4.,
+                     start_angle=-.2, sweep_angle=.4)
+    second = Cylinder(origin=(-2., 0., 0.), axis=(1., 0., 0.), radial_direction=(0., 1., 0.),
+                      radius=float(np.nextafter(r, 2.)), height=4., start_angle=-.2, sweep_angle=.4)
+    one, other = _arc_rectangle(1, first, -.2, .4, 10), _arc_rectangle(2, second, .001, .2, 20)
+    assert _undecidable_contact_support(one, other, 1e-10) is None
+    _pair_paths_exact(one, other, None, 1e-10, lambda: None, point_contacts=[], face_tolerances=(1e-10, 1e-10))
+    contact = undecidable_contact(first, second, tolerance=1e-10)
+    assert contact is not None and contact.admitted
+
+
+def test_a_contact_in_both_faces_without_a_shared_edge_refuses():
+    """The same pair with the second face over the contact too: both faces require the witness and none is stored."""
+    from anygeometry.batch_intersections import UNDECIDABLE_CONTACT, _pair_paths_exact
+    from anygeometry.errors import GeometryError
+    r = 1.
+    first = Cylinder(origin=(0., 0., -2.), axis=(0., 0., 1.), radial_direction=(0., 1., 0.), radius=r, height=4.,
+                     start_angle=-.2, sweep_angle=.4)
+    second = Cylinder(origin=(-2., 0., 0.), axis=(1., 0., 0.), radial_direction=(0., 1., 0.),
+                      radius=float(np.nextafter(r, 2.)), height=4., start_angle=-.2, sweep_angle=.4)
+    with pytest.raises(GeometryError, match=UNDECIDABLE_CONTACT):
+        _pair_paths_exact(_arc_rectangle(1, first, -.2, .4, 10), _arc_rectangle(2, second, -.2, .4, 20), None, 1e-10,
+                          lambda: None, point_contacts=[], face_tolerances=(1e-10, 1e-10))
+
+
+def test_micro_chord_trims_over_the_contact_still_need_a_witness():
+    """Codex K6 R4 H1(a): r = 2e-8, chord trims whose boxes stop 7.6e-9 m short of the contact, which lies in both
+    material domains: inside the gates the point-in-face test requires the witness, and the pair refuses."""
+    from anygeometry.batch_intersections import UNDECIDABLE_CONTACT, _pair_paths_exact
+    from anygeometry.errors import GeometryError
+    r, h = 2e-8, 4e-8
+    first = Cylinder(origin=(0., 0., -h), axis=(0., 0., 1.), radial_direction=(0., 1., 0.), radius=r, height=2*h,
+                     start_angle=-.9, sweep_angle=1.8)
+    second = Cylinder(origin=(-h, 0., 0.), axis=(1., 0., 0.), radial_direction=(0., 1., 0.),
+                      radius=float(np.nextafter(r, 1.)), height=2*h, start_angle=-.9, sweep_angle=1.8)
+    contact = undecidable_contact(first, second, tolerance=1e-10)
+    assert contact is not None
+    with pytest.raises(GeometryError, match=UNDECIDABLE_CONTACT):
+        _pair_paths_exact(_chord_rectangle(1, first, .9, 10), _chord_rectangle(2, second, .9, 20), None, 1e-10,
+                          lambda: None, point_contacts=[], face_tolerances=(1e-10, 1e-10))
+
+
+def test_an_ellipse_far_from_the_origin_is_not_offered():
+    """Codex K6 R4 M2: origins 3000 m out, axes 3.8 degrees apart, radii 1 and 1 - 1 ulp: the ellipses lie within
+    6.9e-11 m of both cylinders but up to 1.4e-10 m from their intersection (the residual is amplified by 1 / sin of
+    the normals' angle). The certificate is required within tolerance |a1 x a2|: no chart is offered."""
+    u = _unit((.066, 0., 1.))
+    first = Cylinder(origin=(0., 0., 3000.), axis=(0., 0., 1.), radial_direction=(0., 1., 0.), radius=1., height=8000.,
+                     start_angle=-2., sweep_angle=4.)
+    second = Cylinder(origin=tuple(-2000*u), axis=tuple(u), radial_direction=(0., 1., 0.),
+                      radius=float(np.nextafter(1., 0.)), height=8000., start_angle=-2., sweep_angle=4.)
+    contact = undecidable_contact(first, second, tolerance=1e-10)
+    assert contact is None or contact.support is None
+
+
+def test_an_exact_double_in_either_order_stays_on_mains_path():
+    """Codex K6 R4 M4: unit radii, axes +Z and +X through -0.7 their axes, radial inputs +Y and (0, 1, 1): with +Z
+    first both discriminants are exactly zero (K3's exact doubles); the other order rounds the normalised radial
+    and classifies them undecidable. Either way the pair is not moved onto the witness path."""
+    from anygeometry.analytic_supports import _certified_nodes
+    first = Cylinder(origin=(0., 0., -.7), axis=(0., 0., 1.), radial_direction=(0., 1., 0.), radius=1., height=1.4,
+                     start_angle=-.1, sweep_angle=.2)
+    second = Cylinder(origin=(-.7, 0., 0.), axis=(1., 0., 0.), radial_direction=tuple(_unit((0., 1., 1.))), radius=1.,
+                      height=1.4, start_angle=-1., sweep_angle=1.)
+    assert _certified_nodes(first, second) or _certified_nodes(second, first)
+    assert undecidable_contact(first, second, tolerance=1e-10) is None
+    assert undecidable_contact(second, first, tolerance=1e-10) is None
