@@ -343,15 +343,16 @@ def test_the_t2b_shadow_refuses_like_exact_planning():
 
 
 def test_every_contact_near_both_faces_needs_its_own_witness(monkeypatch):
-    """Codex K6 R2 H2: the second double point is 2.4 m from face 1094's box (no witness needed). Were it within its
-    near radius of both faces, the witness at the first contact would not cover it: the pair refuses."""
+    """Codex K6 R2 H2: the second double point is 2.4 m from face 1094's box, beyond the near radius (r / 4 = 1.6 m):
+    no witness needed. Were it within the near radius of both faces, the witness at the first contact would not
+    cover it: the pair refuses."""
     import anygeometry.batch_intersections as batch
     domain, _traces, _points, tolerance, _area = _fixture()
     real = batch.undecidable_contact
 
     def widened(first, second, *, tolerance):
         contact = real(first, second, tolerance=tolerance)
-        return replace(contact, radii=tuple(10. for _ in contact.radii))
+        return replace(contact, near_radius=10.)
 
     monkeypatch.setattr(batch, "undecidable_contact", widened)
     with pytest.raises(GeometryError, match=UNDECIDABLE_CONTACT):

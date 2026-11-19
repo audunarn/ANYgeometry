@@ -1287,17 +1287,17 @@ def _undecidable_contact_support(first, second, tolerance):
     contact = undecidable_contact(first.support, second.support, tolerance=tolerance)
     if contact is None:
         return None
-    # A contact point within its near radius of both faces' bounding boxes is one the faces may reach: it must be
-    # witnessed (a box is a superset of its face, so this never misses a face that comes that near). Farther ones
-    # are clipped away by more than the distance over which the stored branches and the double-contact geometry
-    # can differ by more than the tolerance.
+    # A contact point within the near radius (a quarter of the smaller radius) of both faces' boundary boxes is one
+    # the faces may reach: it must be witnessed. The radius is far larger than the contact's reach (admission in
+    # undecidable_contact), so trims inside the model's surface residual and the contact point's own error are
+    # covered with room to spare; farther contacts are clipped away where both geometries agree within tolerance.
     def near_box(domain, point, radius):
         lo, hi = _domain_bounds(domain)
         point = np.asarray(point, dtype=float)
         return float(np.linalg.norm(np.maximum(0., np.maximum(lo-point, point-hi)))) <= radius
 
-    near = [point for point, radius in zip(contact.points, contact.radii)
-            if all(near_box(domain, point, max(radius, tolerance)) for domain in (first, second))]
+    near = [point for point in contact.points
+            if all(near_box(domain, point, max(contact.near_radius, tolerance)) for domain in (first, second))]
     if not near:
         return None
     if not all(_stored_edge_through(first, second, point, tolerance) for point in near):

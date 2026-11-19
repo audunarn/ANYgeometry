@@ -145,3 +145,81 @@ def test_the_ellipse_residual_allowance_uses_unprojected_lengths():
                       radius=float(np.nextafter(1., 0.)), height=2*L, start_angle=0., sweep_angle=2*math.pi)
     contact = undecidable_contact(first, second, tolerance=1e-10)
     assert contact is not None and contact.support is None
+
+
+def _chord_rectangle(face_id, cylinder, half_angle, base_edge):
+    """A cylinder face trimmed by four straight chords between its corner points (allowed within the model's surface
+    residual), with its own edge ids."""
+    from anygeometry.arrangement_geometry import LinePath
+    from anygeometry.material_arrangement import ArrangementPath, MaterialDomain
+    origin, axis = np.asarray(cylinder.origin), np.asarray(cylinder.axis)
+    radial, circumferential = np.asarray(cylinder.radial_direction), cylinder.circumferential_direction
+    corners = []
+    for angle, height in ((-half_angle, 0.), (half_angle, 0.), (half_angle, cylinder.height),
+                          (-half_angle, cylinder.height)):
+        corners.append(tuple(origin+cylinder.radius*(math.cos(angle)*radial+math.sin(angle)*circumferential)
+                             + height*axis))
+    loop = tuple(ArrangementPath(LinePath(corners[k], corners[(k+1) % 4]), base_edge+k) for k in range(4))
+    return MaterialDomain(face_id, Cylinder(origin=cylinder.origin, axis=cylinder.axis,
+                                            radial_direction=cylinder.radial_direction, radius=cylinder.radius,
+                                            height=cylinder.height, start_angle=-half_angle,
+                                            sweep_angle=2*half_angle), (loop,))
+
+
+def test_chord_trims_that_stop_short_of_the_contact_still_need_a_witness():
+    """Codex K6 R3 H1: micro cylinders (r = 1e-3) trimmed by straight chords: both boundary boxes end about 8e-9 m short
+    of the contact (beyond the old bound-derived radius). The near radius r / 4 covers it: the pair refuses."""
+    from anygeometry.batch_intersections import UNDECIDABLE_CONTACT, _pair_paths_exact
+    from anygeometry.errors import GeometryError
+    r = .001
+    first = Cylinder(origin=(0., 0., -.002), axis=(0., 0., 1.), radial_direction=(0., 1., 0.), radius=r, height=.004,
+                     start_angle=-.004, sweep_angle=.008)
+    second = Cylinder(origin=(-.002, 0., 0.), axis=(1., 0., 0.), radial_direction=(0., 1., 0.),
+                      radius=float(np.nextafter(r, 1.)), height=.004, start_angle=-.004, sweep_angle=.008)
+    contact = undecidable_contact(first, second, tolerance=1e-10)
+    assert contact is not None and contact.near_radius == .25*r
+    with pytest.raises(GeometryError, match=UNDECIDABLE_CONTACT):
+        _pair_paths_exact(_chord_rectangle(1, first, .004, 10), _chord_rectangle(2, second, .004, 20), None, 1e-10,
+                          lambda: None, point_contacts=[], face_tolerances=(1e-10, 1e-10))
+
+
+def test_a_contact_point_with_a_large_location_error_is_not_admitted():
+    """Codex K6 R3 H2: r = 1e-6 with the second origin 2^30 m out: the axial solve can move the computed contact point
+    by more than any useful radius, so the near radius is infinite (every contact point needs a witness)."""
+    r, L = 1e-6, 2.**30
+    u = (.6, 0., .8)
+    first = Cylinder(origin=(0., 0., -1e-8), axis=(0., 0., 1.), radial_direction=(0., 1., 0.), radius=r, height=2e-8,
+                     start_angle=-.2, sweep_angle=.4)
+    second = Cylinder(origin=tuple(-L*np.asarray(u)), axis=u, radial_direction=(0., 1., 0.),
+                      radius=float(np.nextafter(r, 1.)), height=2*L, start_angle=-.2, sweep_angle=.4)
+    contact = undecidable_contact(first, second, tolerance=1e-10)
+    assert contact is not None and contact.near_radius == math.inf and contact.support is None
+
+
+def test_the_reach_covers_the_axial_travel_of_a_steep_branch():
+    """Codex K6 R3 M3: axes 3.7 degrees apart, radii 1 and 1 - 7 ulp, tolerance 1e-10: a point 7.8e-4 m from the
+    contact still differs from the stored branch by 4.9e-10 m. The admitted near radius (r / 4) is far beyond it."""
+    first = Cylinder(origin=(0., 0., -1.), axis=(0., 0., 1.), radial_direction=(0., 1., 0.), radius=1., height=2.,
+                     start_angle=-.5, sweep_angle=1.)
+    axis = _unit((.064, 0., 1.))
+    second = Cylinder(origin=tuple(-axis), axis=tuple(axis), radial_direction=(0., 1., 0.), radius=1.-7*2.**-53,
+                      height=2., start_angle=-.5, sweep_angle=1.)
+    contact = undecidable_contact(first, second, tolerance=1e-10)
+    assert contact is not None
+    assert contact.near_radius == math.inf or contact.near_radius >= 16*7.8245e-4
+
+
+def test_classification_does_not_depend_on_the_order_of_the_faces():
+    """Codex K6 R3 M4: |D| = 3.286e-15 against B = 3.220e-15 in one order, undecidable in the other. The contact is
+    classified from both orders, so both orders see the same contact points."""
+    axis = _unit((1., 1., 0.))
+    radial = _unit((-1., 1., 0.))
+    first = Cylinder(origin=(0., 0., -2.), axis=(0., 0., 1.), radial_direction=tuple(radial), radius=1., height=4.,
+                     start_angle=-.2, sweep_angle=.4)
+    second = Cylinder(origin=tuple(-2*axis), axis=tuple(axis), radial_direction=(0., 0., 1.), radius=1.+14*2.**-53,
+                      height=4., start_angle=-.2, sweep_angle=.4)
+    forward = undecidable_contact(first, second, tolerance=1e-10)
+    backward = undecidable_contact(second, first, tolerance=1e-10)
+    assert forward is not None and backward is not None
+    for point in forward.points:
+        assert min(np.linalg.norm(np.asarray(point)-np.asarray(other)) for other in backward.points) < 1e-9
