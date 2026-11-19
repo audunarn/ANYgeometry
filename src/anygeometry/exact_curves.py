@@ -339,6 +339,10 @@ class _DoubleNode(NamedTuple):
     sign: int            # fold sign s: the node solves n(theta) = s |a1 x a2| r2
     tau: int             # n0 - s |a1 x a2| r2 = -tau m exactly, so cos(theta* - phi) = tau there
     angle: float         # float node angle theta* (phi or phi + pi, phi = atan2(ns, nc))
+    #: True for an exact double of the stored doubles (K2/K3). False for a fold whose discriminant is certified
+    #: undecidable at stored precision (:func:`_fold_undecidable`, K6 policy): it is charted exactly like an exact
+    #: double, and the pair stage accepts it only when a stored shared edge passes through its contact point.
+    exact: bool = True
 
 
 # Exact node certificates per support pair, keyed like ``_BRANCH_CONSTANTS`` (same lifetime rule).
@@ -383,6 +387,135 @@ def _fold_doubles(o1, a1, e1, e2, r1, o2, a2, r2):
         if _sign_of_sum_with_root(m2-n0*n0-c2*r2*r2, 2*sign*n0*r2, c2) == 0:
             # n0 - s|c| r2 = -tau m: tau is minus its exact sign (nonzero since m > 0).
             result[sign] = -_sign_of_sum_with_root(n0, -sign*r2, c2)
+    return result
+
+
+def _half_ulp(value):
+    return .5*float(np.spacing(abs(float(value))))
+
+
+#: Unit roundoff and the classical dot-product constant gamma_3 = 3u / (1 - 3u) (any summation order, FMA or not).
+_UNIT = 2.**-53
+_GAMMA3 = 3*_UNIT/(1-3*_UNIT)
+
+
+def _fold_coefficient_bound(first, second, sign):
+    """Rigorous upper bound ``B`` of ``|D(fl coefficients) - D(exact coefficients)|`` for the fold ``sign``.
+
+    ``D = nc^2 + ns^2 - c0^2`` with ``c0 = n0 - s |a1 x a2| r2`` is the discriminant of the fold equation
+    ``c0 + nc cos + ns sin = 0``. The float coefficients are those ``analytic_supports.cylinder_cylinder_support``
+    forms (``cross = a1 x a2``, ``magnitude = |cross|``, ``n0 = (o1 - o2) . cross``, ``nc = r1 (e1 . cross)``,
+    ``ns = r1 ((a1 x e1) . cross)``); the exact coefficients are those of the stored doubles (``e2 = a1 x e1``
+    exactly). A forward running-error bound: every product, difference and square root adds half an ulp of its
+    result unless the operation is exact (checked exactly), a 3-term dot product ``gamma_3`` times its absolute
+    terms (any summation order, FMA or not), the norm (numpy: ``sqrt(c . c)``) ``gamma_3`` relative plus half an
+    ulp; input errors are propagated to first and second order. The bound's own float evaluation (sums and
+    products of nonnegative terms, under 64 operations) is covered by the final relative margin 2^-40. Returns
+    ``inf`` when a value is not finite.
+    """
+    h = _half_ulp
+    a1, a2 = np.asarray(first.axis, dtype=float), np.asarray(second.axis, dtype=float)
+    e1 = np.asarray(first.radial_direction, dtype=float)
+    o1, o2 = np.asarray(first.origin, dtype=float), np.asarray(second.origin, dtype=float)
+    r1, r2 = float(first.radius), float(second.radius)
+    if not all(math.isfinite(float(value)) for value in (*a1, *a2, *e1, *o1, *o2, r1, r2)):
+        return math.inf
+
+    def product(x, y):
+        z = float(x)*float(y)
+        return z, (0. if Fraction(z) == Fraction(float(x))*Fraction(float(y)) else h(z))
+
+    def difference(x, y):
+        z = float(x)-float(y)
+        return z, (0. if Fraction(z) == Fraction(float(x))-Fraction(float(y)) else h(z))
+
+    def cross(u, v):
+        values, errors = [], []
+        for j, k in ((1, 2), (2, 0), (0, 1)):
+            (p, ep_), (q, eq_) = product(u[j], v[k]), product(u[k], v[j])
+            z, ez = difference(p, q)
+            values.append(z)
+            errors.append(ep_+eq_+ez)
+        return np.asarray(values), np.asarray(errors)
+
+    def dot(x, ex, y, ey):
+        # |fl(x . y) - (x_exact . y_exact)| for |x - x_exact| <= ex, |y - y_exact| <= ey componentwise.
+        ax, ay = np.abs(x), np.abs(y)
+        return float(_GAMMA3*np.sum(ax*ay)+np.sum(ax*ey+ay*ex+ex*ey))
+
+    c, ec = cross(a1, a2)
+    e2, ee2 = cross(a1, e1)
+    magnitude = float(np.linalg.norm(c))
+    # fl(sqrt(fl(c . c))): |fl(c.c) - |c_fl|^2| <= gamma_3 |c_fl|^2, so the root is within gamma_3 / 2 relative
+    # (second order included in gamma_3) and the rounded root within half an ulp more; then
+    # | |c_fl| - |c_exact| | <= ||c_fl - c_exact||_1.
+    em = _GAMMA3*(magnitude+h(magnitude))+h(magnitude)+float(np.sum(ec))
+    pairs = [difference(x, y) for x, y in zip(o1, o2)]
+    d = np.asarray([value for value, _ in pairs])
+    ed = np.asarray([error for _, error in pairs])
+    n0 = float(d @ c)
+    en0 = dot(d, ed, c, ec)
+    t_c, t_s = float(e1 @ c), float(e2 @ c)
+    et_c, et_s = dot(e1, np.zeros(3), c, ec), dot(e2, ee2, c, ec)
+    (nc, rc), (ns, rs) = product(r1, t_c), product(r1, t_s)
+    enc, ens = abs(r1)*et_c+rc, abs(r1)*et_s+rs
+    reach, er = product(magnitude, r2)
+    ep = abs(r2)*em+er
+    c0, e_sub = difference(n0, sign*reach)
+    ec0 = en0+ep+e_sub
+    bound = (2*abs(nc)+enc)*enc+(2*abs(ns)+ens)*ens+(2*abs(c0)+ec0)*ec0
+    bound *= 1+2.**-40
+    return bound if math.isfinite(bound) else math.inf
+
+
+def _fold_undecidable(first, second):
+    """``{fold sign: tau}`` of the folds whose exact discriminant (stored doubles) is nonzero but no larger than
+    :func:`_fold_coefficient_bound`: the kernel's float fold coefficients cannot decide whether the fold is two
+    simple folds, a double contact or no contact (the F550 class). ``tau`` is minus the exact sign of
+    ``n0 - s |c| r2``, as for an exact double. Empty for every pair whose float discriminant is clearly decided
+    (a float prefilter, rigorous: see below) and for exact doubles (those are :func:`_fold_doubles`)."""
+    q = lambda vector: [Fraction(float(value)) for value in np.asarray(vector, dtype=float)]
+    cross = lambda u, v: [u[1]*v[2]-u[2]*v[1], u[2]*v[0]-u[0]*v[2], u[0]*v[1]-u[1]*v[0]]
+    dot = lambda u, v: sum(x*y for x, y in zip(u, v))
+    a1, a2 = np.asarray(first.axis, dtype=float), np.asarray(second.axis, dtype=float)
+    c = np.cross(a1, a2)
+    magnitude = float(np.linalg.norm(c))
+    e1 = np.asarray(first.radial_direction, dtype=float)
+    r1, r2 = float(first.radius), float(second.radius)
+    n0 = float((np.asarray(first.origin, dtype=float)-np.asarray(second.origin, dtype=float)) @ c)
+    nc, ns = r1*float(e1 @ c), r1*float(np.cross(a1, e1) @ c)
+    result = {}
+    exact = None
+    for sign in (-1, 1):
+        bound = _fold_coefficient_bound(first, second, sign)
+        if not math.isfinite(bound):
+            continue
+        c0 = n0-sign*magnitude*r2
+        squares = nc*nc+ns*ns+c0*c0
+        discriminant = nc*nc+ns*ns-c0*c0
+        # |fl(D) - D(fl coefficients)| <= gamma_5 * squares; |D(fl) - D(exact)| <= bound. If
+        # |fl(D)| > 2 bound + gamma_5 squares (with margin), then |D(exact)| > bound: decided, skip the exact test.
+        if not math.isfinite(discriminant) or abs(discriminant) > (2*bound+6*_UNIT*squares)*(1+2.**-40):
+            continue
+        if exact is None:
+            A1, E1 = q(a1), q(e1)
+            C = cross(A1, q(a2))
+            E2 = cross(A1, E1)
+            N0 = dot([x-y for x, y in zip(q(first.origin), q(second.origin))], C)
+            R1, R2 = Fraction(r1), Fraction(r2)
+            NC, NS, C2 = R1*dot(E1, C), R1*dot(E2, C), dot(C, C)
+            exact = (N0, NC*NC+NS*NS-N0*N0-C2*R2*R2, C2, R2)
+        N0, rational, C2, R2 = exact
+        if C2 == 0:
+            return {}
+        factor, B = 2*sign*N0*R2, Fraction(bound)
+        # exact D = rational + factor sqrt(C2); undecidable iff 0 < |D| <= B
+        if _sign_of_sum_with_root(rational, factor, C2) == 0:
+            continue
+        if _sign_of_sum_with_root(rational-B, factor, C2) <= 0 <= _sign_of_sum_with_root(rational+B, factor, C2):
+            tau = -_sign_of_sum_with_root(N0, -sign*R2, C2)
+            if tau:
+                result[sign] = tau
     return result
 
 
@@ -503,6 +636,17 @@ def _double_nodes(curve):
         if candidates and len(signs) == len(exact) and _elimination_agrees(
                 curve, [node.angle for node in candidates], others):
             nodes = candidates
+    else:
+        # K6 policy (owner decision 2026-11-19, F550 option B): a fold whose sign the float coefficients cannot
+        # decide is charted as an exact double contact. Only on pairs without any exact double fold (exact
+        # pairs keep the K2/K3 decision above, bit-identical); the pair stage refuses it unless a stored shared
+        # edge passes through its contact point (batch_intersections._undecidable_contact_check).
+        undecided = _fold_undecidable(first, second)
+        if undecided:
+            constants = _branch_constants(curve)
+            phi = math.atan2(constants.ns, constants.nc)
+            nodes = [_DoubleNode(sign, tau, phi if tau > 0 else phi+math.pi, False)
+                     for sign, tau in sorted(undecided.items())]
     nodes = tuple(nodes)
     if len(_DOUBLE_NODES) >= _BRANCH_CONSTANTS_LIMIT:
         _DOUBLE_NODES.clear()
