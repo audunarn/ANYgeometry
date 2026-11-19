@@ -169,6 +169,101 @@ def _certified_nodes(first, second):
     return {node.sign: node for node in _double_nodes(pair)}
 
 
+@dataclass(frozen=True)
+class UndecidableContact:
+    """Fold contacts of a Cylinder pair that are undecidable at stored precision (K6, F550 class).
+
+    ``points``: the contact point of every undecidable fold (``exact_curves._fold_undecidable``).
+    ``support``: when both folds are undecidable and the pair is well conditioned, the pair is an equal-radius
+    mitre with intersecting axes within stored precision, and its double-contact intersection is the two
+    bisector-plane ellipses, certified to lie within ``tolerance`` of both cylinders; otherwise None (no chart
+    is offered: the pair stage refuses wherever a contact point lies in both faces).
+    """
+    points: tuple
+    support: SupportIntersection | None
+
+
+#: Conditioning of the mitre construction: the axes' common point is solved with 1 - (a1.a2)^2 = sin^2 of their
+#: angle as denominator; admitted like the K3 node gate (sin^2 >= 2^-8, axes at least about 3.6 degrees apart).
+_MITRE_CONDITION_LIMIT = 2.**-8
+
+
+def _ellipse_cylinder_residual(ellipse, cylinder):
+    """Upper bound of ``max_theta | |q(theta)| - r |`` for the ellipse against a cylinder (``q`` the offset from the
+    axis): ``|q|^2 - r^2`` is the trigonometric polynomial ``k0 + k1 cos + k2 sin + k3 cos 2t + k4 sin 2t``, so its
+    modulus is at most ``|k0| + hypot(k1, k2) + hypot(k3, k4)``; a 32 eps allowance of the squared lengths covers the
+    float evaluation, and ``| |q| - r | <= | |q|^2 - r^2 | / r``."""
+    axis = cylinder.axis
+    project = lambda vector: vector-float(vector @ axis)*axis
+    q0 = project(np.asarray(ellipse.center)-cylinder.origin)
+    qu, qv = project(np.asarray(ellipse.u_vector)), project(np.asarray(ellipse.v_vector))
+    r = float(cylinder.radius)
+    uu, vv, uv = float(qu @ qu), float(qv @ qv), float(qu @ qv)
+    k0 = float(q0 @ q0)+.5*(uu+vv)-r*r
+    k1, k2 = 2*float(q0 @ qu), 2*float(q0 @ qv)
+    k3, k4 = .5*(uu-vv), uv
+    scale = (float(np.linalg.norm(q0))+math.sqrt(uu)+math.sqrt(vv)+r)**2
+    return (abs(k0)+math.hypot(k1, k2)+math.hypot(k3, k4)+32*np.finfo(float).eps*scale)/r
+
+
+def _mitre_ellipses(first, second):
+    """The two bisector-plane ellipses of a (near) equal-radius mitre: centre at the midpoint of the axes' common
+    perpendicular, minor semi-axis ``r1 (a1 x a2)/|a1 x a2|`` (through the two double points), major semi-axis in
+    each plane with normal ``a1 -+ a2``, sized so the ellipse is the plane's section of the first cylinder."""
+    o1, a1, o2, a2 = first.origin, first.axis, second.origin, second.axis
+    radius = float(first.radius)
+    cross = np.cross(a1, a2)
+    minor = cross/float(np.linalg.norm(cross))
+    w0 = o1-o2
+    b, d, e = float(a1 @ a2), float(a1 @ w0), float(a2 @ w0)
+    denominator = 1-b*b
+    s, t = (b*e-d)/denominator, (e-b*d)/denominator
+    centre = .5*((o1+s*a1)+(o2+t*a2))
+    ellipses = []
+    for normal in (a1-a2, a1+a2):
+        normal = normal/float(np.linalg.norm(normal))
+        major = np.cross(normal, minor)
+        major = major/float(np.linalg.norm(major))
+        length = radius/math.sqrt(1-float(major @ a1)**2)
+        ellipses.append(EllipticArc(tuple(centre), tuple(length*major), tuple(radius*minor), 0., math.tau))
+    return ellipses
+
+
+def undecidable_contact(first, second, *, tolerance=1e-10):
+    """:class:`UndecidableContact` of two Cylinder supports, or None when no fold is undecidable (every ordinary
+    pair: main's path, bit-identical)."""
+    from .exact_curves import _CylinderSupport, _fold_undecidable
+    if not isinstance(first, Cylinder) or not isinstance(second, Cylinder):
+        return None
+    cross = np.cross(first.axis, second.axis)
+    magnitude = float(np.linalg.norm(cross))
+    if magnitude == 0:
+        return None
+    undecided = _fold_undecidable(_CylinderSupport.from_surface(first), _CylinderSupport.from_surface(second))
+    if not undecided:
+        return None
+    e1, e2 = first.radial_direction, first.circumferential_direction
+    nc, ns = first.radius*float(e1 @ cross), first.radius*float(e2 @ cross)
+    phi = math.atan2(ns, nc)
+    project = np.eye(3)-np.outer(second.axis, second.axis)
+    w = project @ first.axis
+    points = []
+    for sign, tau in sorted(undecided.items()):
+        # The contact point: where n(theta) is extremal (theta* = phi or phi + pi, by the sign of the fold), on the
+        # first cylinder, at the axial position of the (double) root.
+        angle = phi if tau > 0 else phi+math.pi
+        base = first.origin+first.radius*(math.cos(angle)*e1+math.sin(angle)*e2)
+        q = project @ (base-second.origin)
+        points.append(tuple(base-float(q @ w)/float(w @ w)*first.axis))
+    support = None
+    if len(undecided) == 2 and magnitude*magnitude >= _MITRE_CONDITION_LIMIT:
+        ellipses = _mitre_ellipses(first, second)
+        if all(_ellipse_cylinder_residual(ellipse, cylinder) <= tolerance
+               for ellipse in ellipses for cylinder in (first, second)):
+            support = SupportIntersection(curves=tuple(ellipses))
+    return UndecidableContact(tuple(points), support)
+
+
 def cylinder_cylinder_support(first, second, *, tolerance=1e-10, cancellation_check=None):
     """All analytic nonparallel branches, or parallel generators/coincidence."""
     if not isinstance(first, Cylinder) or not isinstance(second, Cylinder):

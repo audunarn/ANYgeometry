@@ -9,7 +9,8 @@ the cylinder/cylinder branch ends 1.8e-7 m on either side of the double point (t
 refuses with an unresolved bridge (the stored traces of the fixture are main's). The exact rational discriminant of
 the stored data is positive, but inside the rigorous error bound of the kernel's float fold coefficients: the sign is
 undecidable at stored precision. K6 policy (owner decision 2026-11-19, F550 option B with the stored-edge check):
-such a fold is charted as an exact double contact, and the pair stage accepts it only when a stored edge shared by
+such a fold is taken as an exact double contact (both folds undecidable: the pair is an equal-radius mitre
+and its intersection the two bisector ellipses), and the pair stage accepts it only when a stored edge shared by
 both faces passes through the contact point; otherwise it refuses. These tests pin the diagnosis, main's refusal,
 the accepted face (production pair traces), a near miss the bound decides (32 ulp) that keeps refusing, the 8-ulp
 near miss inside the bound (accepted with the edge, refused without it).
@@ -29,6 +30,7 @@ import pytest
 from anygeometry.analytic_roots import trigonometric_roots
 from anygeometry.arrangement_geometry import LinePath, point_parameters
 from anygeometry.errors import GeometryError
+from anygeometry.analytic_supports import _ellipse_cylinder_residual, undecidable_contact
 from anygeometry.batch_intersections import UNDECIDABLE_CONTACT, _pair_paths_exact
 from anygeometry.exact_curves import (CylinderIntersectionCurve, EllipticArc, _CylinderSupport, _double_nodes,
                                       _fold_undecidable)
@@ -240,22 +242,32 @@ def _production_traces(ulps=0, relabel=False):
     return tuple(kept)+tuple(ArrangementPath(path, owners=(1094, 1096)) for path in paths)
 
 
-def test_the_stored_folds_are_certified_undecidable_and_charted_as_double_contacts():
-    _domain, traces, _points, _tolerance, _area = _fixture()
+def test_the_stored_folds_are_certified_undecidable_and_the_pair_is_the_two_mitre_ellipses():
+    domain, traces, _points, tolerance, _area = _fixture()
     curve = traces[FOLD_BEFORE].curve
     # Both folds: exact discriminant nonzero (two folds on the trim side, see above) but inside the rigorous error
     # bound of the float fold coefficients (K6-DESIGN.md: about 9.2 units of |a1 x a2| ulp(r2) here).
     assert _fold_undecidable(curve.first, curve.second) == {-1: -1, 1: 1}
-    nodes = _double_nodes(curve)
-    assert [(node.sign, node.tau, node.exact) for node in nodes] == [(-1, -1, False), (1, 1, False)]
-    # The production pair stage ends the joint pieces at the node angle (one event, linear charts), so the two
-    # branch pieces meet at the design double point instead of 1.8e-7 m on either side of it.
-    production = [trace.curve for trace in _production_traces() if set(trace.owners) == {1094, 1096}]
+    # The branch charts themselves are main's: no node treatment for an inexact pair.
+    assert _double_nodes(curve) == ()
+    first, second = domain.support, _other_domain().support
+    contact = undecidable_contact(first, second, tolerance=tolerance)
+    assert len(contact.points) == 2 and contact.support is not None
+    ellipses = contact.support.curves
+    assert len(ellipses) == 2 and all(type(item) is EllipticArc for item in ellipses)
+    assert all(_ellipse_cylinder_residual(item, cylinder) < 1e-12 for item in ellipses for cylinder in (first, second))
+    # Both ellipses pass through both contact points (the design double points).
+    for point in contact.points:
+        assert all(point_parameters(item, np.asarray(point), tolerance=1e-12) for item in ellipses)
     point = _design_double_point(curve.first, curve.second)
-    ends = [end for piece in production for end in (piece.evaluate(0.), piece.evaluate(1.))
-            if np.linalg.norm(end-point) < 1e-6]
-    assert len(ends) == 2 and all(np.linalg.norm(end-point) < 1e-12 for end in ends), ends
-    assert all(piece.parameterization == "linear" for piece in production)
+    assert min(np.linalg.norm(np.asarray(item)-point) for item in contact.points) < 1e-12
+    # The production pair traces are arcs of those ellipses, on the stored trim 2433.
+    production = [trace.curve for trace in _production_traces() if set(trace.owners) == {1094, 1096}]
+    assert production and all(type(item) is EllipticArc for item in production)
+    trim = domain.boundaries[0][2].curve
+    for item in production:
+        for t in (0., .5, 1.):
+            assert point_parameters(trim, item.evaluate(t), tolerance=1e-12)
 
 
 def test_face1094_mitre_arrangement_is_accepted_once_the_double_contact_is_resolved():
@@ -280,3 +292,38 @@ def test_the_8_ulp_near_miss_is_inside_the_bound_and_accepted_as_a_contact():
 def test_without_a_stored_shared_edge_through_the_contact_point_the_pair_refuses(ulps):
     with pytest.raises(GeometryError, match=UNDECIDABLE_CONTACT):
         _production_traces(ulps, relabel=True)
+
+
+def test_a_shared_edge_that_stops_short_of_the_contact_point_is_no_witness():
+    """Codex K6 R1 H1: the shared trim cut 0.75e-9 rad before the contact point (about 5e-9 m short, tolerance
+    1e-9): the clamped end parameter of the shared piece is not a witness; the continuation has a different id in each face."""
+    domain, _traces, _points, tolerance, _area = _fixture()
+    other = _other_domain()
+    target = undecidable_contact(domain.support, other.support, tolerance=tolerance).points
+
+    def cut(loops, continuation):
+        result = []
+        for loop in loops:
+            paths = []
+            for path in loop:
+                if path.source_edge != 2433:
+                    paths.append(path)
+                    continue
+                arc = path.curve
+                hits = [t for p in target for t in point_parameters(arc, np.asarray(p), tolerance=tolerance)]
+                assert hits
+                angle = arc.start_angle+hits[0]*arc.sweep_angle
+                at = angle-math.copysign(.75e-9, arc.sweep_angle)
+                head = EllipticArc(arc.center, arc.u_vector, arc.v_vector, arc.start_angle, at-arc.start_angle)
+                tail = EllipticArc(arc.center, arc.u_vector, arc.v_vector, at, arc.start_angle+arc.sweep_angle-at)
+                gap = min(np.linalg.norm(head.evaluate(1.)-np.asarray(p)) for p in target)
+                assert 2*tolerance < gap < 1e-8
+                paths += [replace(path, curve=head), replace(path, curve=tail, source_edge=continuation)]
+            result.append(tuple(paths))
+        return tuple(result)
+
+    first = MaterialDomain(domain.face_id, domain.support, cut(domain.boundaries, -1))
+    second = MaterialDomain(other.face_id, other.support, cut(other.boundaries, -2))
+    with pytest.raises(GeometryError, match=UNDECIDABLE_CONTACT):
+        _pair_paths_exact(first, second, None, tolerance, lambda: None, point_contacts=[],
+                          face_tolerances=(tolerance, tolerance))

@@ -8,6 +8,7 @@ import math
 import numpy as np
 import pytest
 
+from anygeometry.analytic_supports import undecidable_contact
 from anygeometry.exact_curves import _CylinderSupport, _fold_coefficient_bound, _fold_undecidable
 from anygeometry.surfaces import Cylinder
 
@@ -80,3 +81,27 @@ def test_the_bound_is_infinite_for_non_finite_input():
                               radius=second.radius, height=second.height, start_angle=second.start_angle,
                               sweep_angle=second.sweep_angle)
     assert _fold_coefficient_bound(first, broken, 1) == math.inf
+
+
+def test_the_magnitude_gate_declines_tiny_radii():
+    """Codex K6 R1 M7: radii 2^-530 underflow the bound's terms; such pairs are outside the K3 magnitude range and
+    are never classified undecidable (main's path)."""
+    r1 = 2.**-530
+    first = _CylinderSupport.from_surface(Cylinder(origin=(0., 0., 0.), axis=(0., 0., 1.), radial_direction=(0., 1., 0.),
+                                                   radius=r1, height=1., start_angle=0., sweep_angle=2*math.pi))
+    second = _CylinderSupport.from_surface(Cylinder(origin=(0., 0., 0.), axis=tuple(_unit((1., 1., 0.))),
+                                                    radial_direction=(0., 0., 1.), radius=float(np.nextafter(r1, 1.)),
+                                                    height=1., start_angle=0., sweep_angle=2*math.pi))
+    assert _fold_undecidable(first, second) == {}
+
+
+def test_an_ill_conditioned_undecidable_pair_offers_no_chart():
+    """Codex K6 R1 M5: axes 1.7 degrees apart (sin^2 < 2^-8), equal radii within one ulp, axes intersecting: both folds
+    undecidable but no admitted chart (the pair stage then refuses wherever a contact point is in both faces)."""
+    u = _unit((.03, 0., 1.))
+    first = Cylinder(origin=(0., 0., -1.), axis=(0., 0., 1.), radial_direction=(0., 1., 0.), radius=1., height=2.,
+                     start_angle=-.5, sweep_angle=1.)
+    second = Cylinder(origin=tuple(-u), axis=tuple(u), radial_direction=(0., 1., 0.), radius=float(np.nextafter(1., 2.)),
+                      height=2., start_angle=-.5, sweep_angle=1.)
+    contact = undecidable_contact(first, second, tolerance=1e-9)
+    assert contact is not None and len(contact.points) == 2 and contact.support is None

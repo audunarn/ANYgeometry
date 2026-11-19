@@ -339,10 +339,6 @@ class _DoubleNode(NamedTuple):
     sign: int            # fold sign s: the node solves n(theta) = s |a1 x a2| r2
     tau: int             # n0 - s |a1 x a2| r2 = -tau m exactly, so cos(theta* - phi) = tau there
     angle: float         # float node angle theta* (phi or phi + pi, phi = atan2(ns, nc))
-    #: True for an exact double of the stored doubles (K2/K3). False for a fold whose discriminant is certified
-    #: undecidable at stored precision (:func:`_fold_undecidable`, K6 policy): it is charted exactly like an exact
-    #: double, and the pair stage accepts it only when a stored shared edge passes through its contact point.
-    exact: bool = True
 
 
 # Exact node certificates per support pair, keyed like ``_BRANCH_CONSTANTS`` (same lifetime rule).
@@ -407,9 +403,10 @@ def _fold_coefficient_bound(first, second, sign):
     forms (``cross = a1 x a2``, ``magnitude = |cross|``, ``n0 = (o1 - o2) . cross``, ``nc = r1 (e1 . cross)``,
     ``ns = r1 ((a1 x e1) . cross)``); the exact coefficients are those of the stored doubles (``e2 = a1 x e1``
     exactly). A forward running-error bound: every product, difference and square root adds half an ulp of its
-    result unless the operation is exact (checked exactly), a 3-term dot product ``gamma_3`` times its absolute
-    terms (any summation order, FMA or not), the norm (numpy: ``sqrt(c . c)``) ``gamma_3`` relative plus half an
-    ulp; input errors are propagated to first and second order. The bound's own float evaluation (sums and
+    result unless the operation is exact (checked exactly; half an ulp of a float also covers its rounding in the
+    subnormal range, ``np.spacing(0)`` included), a 3-term dot product ``gamma_3`` times its absolute terms (any
+    summation order, FMA or not) plus an underflow term, the norm (numpy: ``sqrt(c . c)``) ``gamma_3`` relative plus
+    half an ulp plus an underflow term; input errors are propagated to first and second order. The bound's own float evaluation (sums and
     products of nonnegative terms, under 64 operations) is covered by the final relative margin 2^-40. Returns
     ``inf`` when a value is not finite.
     """
@@ -441,7 +438,9 @@ def _fold_coefficient_bound(first, second, sign):
     def dot(x, ex, y, ey):
         # |fl(x . y) - (x_exact . y_exact)| for |x - x_exact| <= ex, |y - y_exact| <= ey componentwise.
         ax, ay = np.abs(x), np.abs(y)
-        return float(_GAMMA3*np.sum(ax*ay)+np.sum(ax*ey+ay*ex+ex*ey))
+        # gamma_3 covers normal-range rounding; each of the 3 products and 2 sums may also underflow by at most
+        # half the smallest subnormal (2^-1075): 5 * 2^-1075 < 2^-1072 absolute.
+        return float(_GAMMA3*np.sum(ax*ay)+np.sum(ax*ey+ay*ex+ex*ey))+2.**-1072
 
     c, ec = cross(a1, a2)
     e2, ee2 = cross(a1, e1)
@@ -449,7 +448,8 @@ def _fold_coefficient_bound(first, second, sign):
     # fl(sqrt(fl(c . c))): |fl(c.c) - |c_fl|^2| <= gamma_3 |c_fl|^2, so the root is within gamma_3 / 2 relative
     # (second order included in gamma_3) and the rounded root within half an ulp more; then
     # | |c_fl| - |c_exact| | <= ||c_fl - c_exact||_1.
-    em = _GAMMA3*(magnitude+h(magnitude))+h(magnitude)+float(np.sum(ec))
+    # Underflow of the squares adds at most 2^-1072 absolute to c . c, hence at most sqrt(2^-1072) = 2^-536 to the root.
+    em = _GAMMA3*(magnitude+h(magnitude))+h(magnitude)+2.**-536+float(np.sum(ec))
     pairs = [difference(x, y) for x, y in zip(o1, o2)]
     d = np.asarray([value for value, _ in pairs])
     ed = np.asarray([error for _, error in pairs])
@@ -473,7 +473,18 @@ def _fold_undecidable(first, second):
     :func:`_fold_coefficient_bound`: the kernel's float fold coefficients cannot decide whether the fold is two
     simple folds, a double contact or no contact (the F550 class). ``tau`` is minus the exact sign of
     ``n0 - s |c| r2``, as for an exact double. Empty for every pair whose float discriminant is clearly decided
-    (a float prefilter, rigorous: see below) and for exact doubles (those are :func:`_fold_doubles`)."""
+    (a float prefilter, rigorous: see below) and for exact doubles (those are :func:`_fold_doubles`).
+
+    Decided only inside the K3 magnitude range (L = max(|origin coordinates|, r1, r2) <= 2^64, min(r1, r2) >= 2^-64,
+    L <= 2^64 min(r1, r2)), so no operation of the bound overflows; underflow is covered inside the bound (absolute
+    terms). Outside the range the result is empty (main's path).
+    """
+    lengths = [abs(float(value)) for value in (*np.asarray(first.origin, dtype=float),
+                                               *np.asarray(second.origin, dtype=float), first.radius, second.radius)]
+    smallest = min(abs(float(first.radius)), abs(float(second.radius)))
+    if not (all(math.isfinite(value) for value in lengths) and smallest >= 2.**-64
+            and max(lengths) <= 2.**64 and max(lengths) <= 2.**64*smallest):
+        return {}
     q = lambda vector: [Fraction(float(value)) for value in np.asarray(vector, dtype=float)]
     cross = lambda u, v: [u[1]*v[2]-u[2]*v[1], u[2]*v[0]-u[0]*v[2], u[0]*v[1]-u[1]*v[0]]
     dot = lambda u, v: sum(x*y for x, y in zip(u, v))
@@ -636,17 +647,6 @@ def _double_nodes(curve):
         if candidates and len(signs) == len(exact) and _elimination_agrees(
                 curve, [node.angle for node in candidates], others):
             nodes = candidates
-    else:
-        # K6 policy (owner decision 2026-11-19, F550 option B): a fold whose sign the float coefficients cannot
-        # decide is charted as an exact double contact. Only on pairs without any exact double fold (exact
-        # pairs keep the K2/K3 decision above, bit-identical); the pair stage refuses it unless a stored shared
-        # edge passes through its contact point (batch_intersections._undecidable_contact_check).
-        undecided = _fold_undecidable(first, second)
-        if undecided:
-            constants = _branch_constants(curve)
-            phi = math.atan2(constants.ns, constants.nc)
-            nodes = [_DoubleNode(sign, tau, phi if tau > 0 else phi+math.pi, False)
-                     for sign, tau in sorted(undecided.items())]
     nodes = tuple(nodes)
     if len(_DOUBLE_NODES) >= _BRANCH_CONSTANTS_LIMIT:
         _DOUBLE_NODES.clear()

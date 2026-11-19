@@ -44,7 +44,7 @@ from .runtime_diagnostics import _timed_phase, _increment
 
 from ._cross3 import _cross3
 from .analytic_roots import root_isolation_memo
-from .analytic_supports import plane_cylinder_support, cylinder_cylinder_support
+from .analytic_supports import plane_cylinder_support, cylinder_cylinder_support, undecidable_contact
 from .arrangement_geometry import (LinePath, BezierPath, freeze_edge,
                                    point_parameters, curve_junctions, _junction_bounds_policy)
 from .entities import EntityRef, OrientedEdge
@@ -1254,41 +1254,48 @@ class _TopologyRoute:
 
 UNDECIDABLE_CONTACT = ("cylinder pair fold contact is undecidable at stored precision and no stored shared "
                        "edge passes through its contact point")
+UNSUPPORTED_CONTACT = ("cylinder pair fold contact is undecidable at stored precision and is not an admitted "
+                       "equal-radius mitre")
 
 
-def _undecidable_contact_points(a, b):
-    """Contact points of the folds of the Cylinder supports ``a``, ``b`` that the kernel charts as double contacts
-    by the K6 policy (certified undecidable at stored precision; ``exact_curves._fold_undecidable``)."""
-    from .analytic_supports import _certified_nodes
-    points = []
-    for node in _certified_nodes(a, b).values():
-        if node.exact:
-            continue
-        angle = node.angle
-        base = a.origin+a.radius*(math.cos(angle)*a.radial_direction+math.sin(angle)*a.circumferential_direction)
-        project = np.eye(3)-np.outer(b.axis, b.axis)
-        q, w = project @ (base-b.origin), project @ a.axis
-        points.append(base-float(q @ w)/float(w @ w)*a.axis)
-    return points
-
-
-def _undecidable_contact_check(first, second, tolerance):
-    """K6 policy (owner decision 2026-11-19): a fold contact that is undecidable at stored precision is accepted
-    as a double contact only where the B-rep decides it. If its contact point lies in both face domains, an
-    edge stored in both domains' boundaries (same source edge) must pass through it within ``tolerance``;
-    otherwise the pair refuses. Contact points outside either domain are clipped away and need no edge."""
-    points = _undecidable_contact_points(first.support, second.support)
-    if not points:
-        return
+def _stored_edge_through(first, second, point, tolerance):
+    """Whether an edge stored in both domains' boundaries (same source edge) passes through ``point``: a parameter
+    of its curve evaluates within ``tolerance`` of it (checked on the evaluated point, so a parameter clamped to the
+    curve's end does not count unless that end is itself within tolerance)."""
     shared = ({path.source_edge for loop in first.boundaries for path in loop if path.source_edge is not None}
               & {path.source_edge for loop in second.boundaries for path in loop if path.source_edge is not None})
-    edges = [path.curve for loop in first.boundaries for path in loop if path.source_edge in shared]
-    for point in points:
-        station = LinePath(tuple(point), tuple(point))
-        if not (first.contains(station, 0., tolerance) and second.contains(station, 0., tolerance)):
-            continue
-        if not any(point_parameters(curve, point, tolerance=tolerance) for curve in edges):
-            raise GeometryError(UNDECIDABLE_CONTACT)
+    point = np.asarray(point, dtype=float)
+    for loop in first.boundaries:
+        for path in loop:
+            if path.source_edge not in shared:
+                continue
+            for parameter in point_parameters(path.curve, point, tolerance=tolerance):
+                if float(np.linalg.norm(np.asarray(path.curve.evaluate(parameter), dtype=float)-point)) <= tolerance:
+                    return True
+    return False
+
+
+def _undecidable_contact_support(first, second, tolerance):
+    """K6 policy (owner decision 2026-11-19, F550 option B with the stored-edge check).
+
+    None when no fold of the pair is undecidable at stored precision (every ordinary pair). Otherwise every contact
+    point that lies in both face domains must be decided by the B-rep: an edge stored in both boundaries passes
+    through it, else the pair refuses (:data:`UNDECIDABLE_CONTACT`); and the pair must be an admitted equal-radius
+    mitre, whose double-contact intersection is the two certified bisector ellipses, else it refuses
+    (:data:`UNSUPPORTED_CONTACT`). Returns the ellipse support when some contact point is in both faces, and None
+    when none is (the contacts are clipped away: main's path)."""
+    contact = undecidable_contact(first.support, second.support, tolerance=tolerance)
+    if contact is None:
+        return None
+    inside = [point for point in contact.points
+              if all(domain.contains(LinePath(point, point), 0., tolerance) for domain in (first, second))]
+    if not inside:
+        return None
+    if not all(_stored_edge_through(first, second, point, tolerance) for point in inside):
+        raise GeometryError(UNDECIDABLE_CONTACT)
+    if contact.support is None:
+        raise GeometryError(UNSUPPORTED_CONTACT)
+    return contact.support
 
 
 def _pair_paths(first, second, model, tolerance, check, *, point_contacts=None, face_tolerances=None, route=None):
@@ -1356,9 +1363,10 @@ def _pair_paths_exact(first, second, model, tolerance, check, *, point_contacts=
         qualify_plane_cylinder_result(result, plane, cylinder, strict, pair)
         paths = (*result.curves, *(LinePath(start, end) for start, end in result.segments))
     else:
-        result = cylinder_cylinder_support(a, b, tolerance=tolerance, cancellation_check=lambda: (check() or False))
-        if not result.coincident and _shadow is None:
-            _undecidable_contact_check(first, second, tolerance)
+        result = _undecidable_contact_support(first, second, tolerance) if _shadow is None else None
+        if result is None:
+            result = cylinder_cylinder_support(a, b, tolerance=tolerance,
+                                               cancellation_check=lambda: (check() or False))
         if result.coincident:
             _mark_coincident(_shadow)
             if _rectangular_cylinder(first, tolerance) and _rectangular_cylinder(second, tolerance):

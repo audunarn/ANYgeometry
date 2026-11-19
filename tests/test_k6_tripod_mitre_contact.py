@@ -6,8 +6,9 @@ main's pair traces, and the domain of face 203 (the transition skin, r = 6). The
 design at the double points of their mitre, through which their shared stored edge 505 (an ellipse) passes. The
 rotation by 120 degrees leaves the stored doubles with fold discriminants of -3.4 and +3.7 units of
 |a1 x a2| ulp(r2), inside the rigorous bound of the float fold coefficients (about 8.8 units): main splits one fold,
-misses the other and refuses with an unresolved bridge; the K6 policy charts both as double contacts because edge
-505 passes through their contact points.
+misses the other and refuses with an unresolved bridge; the K6 policy takes the pair as the equal-radius mitre it
+is within stored precision (intersection: the two bisector ellipses), because edge 505 passes through the contact
+point that lies in both faces.
 """
 from __future__ import annotations
 
@@ -19,7 +20,8 @@ import numpy as np
 import pytest
 
 from anygeometry.arrangement_geometry import LinePath, point_parameters
-from anygeometry.batch_intersections import UNDECIDABLE_CONTACT, _pair_paths_exact, _undecidable_contact_points
+from anygeometry.analytic_supports import undecidable_contact
+from anygeometry.batch_intersections import UNDECIDABLE_CONTACT, _pair_paths_exact
 from anygeometry.errors import GeometryError
 from anygeometry.exact_curves import CylinderIntersectionCurve, EllipticArc, _CylinderSupport, _double_nodes, \
     _fold_undecidable
@@ -108,11 +110,11 @@ def test_both_mitre_folds_are_certified_undecidable_and_edge_505_passes_through_
     first, second = _supports()
     assert _fold_undecidable(first, second) == {-1: -1, 1: 1}
     curve = next(trace.curve for trace in _stored_traces() if set(trace.owners) == {153, 203})
-    assert [(node.sign, node.exact) for node in _double_nodes(curve)] == [(-1, False), (1, False)]
+    assert _double_nodes(curve) == ()            # main's charts: no node treatment for an inexact pair
     record = _record()
     face, other = _domain(record["face"]), _domain(record["other"])
     edge = next(path.curve for loop in face.boundaries for path in loop if path.source_edge == SHARED)
-    points = _undecidable_contact_points(face.support, other.support)
+    points = undecidable_contact(face.support, other.support, tolerance=record["tolerance"]).points
     tolerance = record["tolerance"]
     inside = [all(domain.contains(LinePath(tuple(point), tuple(point)), 0., tolerance) for domain in (face, other))
               for point in points]
@@ -132,15 +134,16 @@ def test_face153_arranges_with_the_production_pair_traces(policy):
     assert arrangement.cells
 
 
-def test_production_joint_pieces_meet_at_the_contact_points():
+def test_production_pair_traces_are_mitre_ellipse_arcs_through_the_contact_point():
     record = _record()
-    points = _undecidable_contact_points(*(Cylinder(**_cylinder(record[name]["support"])) for name in ("face", "other")))
+    face, other = _domain(record["face"]), _domain(record["other"])
+    contact = undecidable_contact(face.support, other.support, tolerance=record["tolerance"])
+    assert contact.support is not None
     pieces = [trace.curve for trace in _production_traces() if set(trace.owners) == {153, 203}]
-    for point in points:
-        ends = [end for piece in pieces for end in (piece.evaluate(0.), piece.evaluate(1.))
-                if np.linalg.norm(end-point) < 1e-5]
-        # Both branch pieces at a contact end on it (no 1e-7 m stubs), or the contact is not in the faces.
-        assert all(np.linalg.norm(end-point) < 1e-12 for end in ends), ends
+    assert pieces and all(type(piece) is EllipticArc for piece in pieces)
+    inside = [point for point in contact.points if face.contains(LinePath(point, point), 0., record["tolerance"])]
+    assert len(inside) == 1
+    assert any(point_parameters(piece, np.asarray(inside[0]), tolerance=1e-12) for piece in pieces)
 
 
 def test_without_the_shared_stored_edge_the_pair_refuses():
