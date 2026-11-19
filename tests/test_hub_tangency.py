@@ -645,24 +645,39 @@ def _gate_reference_pairs():
 
 
 @pytest.mark.filterwarnings("ignore::RuntimeWarning")
-def test_gated_pairs_keep_mains_results_bit_for_bit():
+def test_gated_pairs_take_the_path_without_node_treatment_bit_for_bit(monkeypatch):
     # Codex round 12 P1 (nearly parallel axes: evaluate() is 2.5e-8 off the exact curve, as on main) and P2 (an
-    # origin at the float limit). Both are declined and reproduce main's evaluate() and bounds() exactly.
-    import json
-    import pathlib
+    # origin at the float limit). Both are declined: their results equal those with node treatment switched
+    # off entirely (main's expressions), compared on the same runtime.
+    from anygeometry import analytic_supports, exact_curves
     from anygeometry.analytic_supports import _certified_nodes
-    path = pathlib.Path(__file__).parent / "data" / "hub_gate_main_reference.json"
-    reference = json.loads(path.read_text())["cases"]
-    for label, first, second, matrix in _gate_reference_pairs():
+
+    def results():
+        out = []
+        for _label, first, second, matrix in _gate_reference_pairs():
+            support = cylinder_cylinder_support(first, second)
+            out.append(repr(support))
+            for branch in (1, -1):
+                curve = CylinderIntersectionCurve(first, second, .25, .5, branch, "linear")
+                curve = curve if matrix is None else curve.transformed(matrix)
+                t = np.asarray((.25, .5, .75))
+                out.extend((curve.evaluate(t), curve.derivative(t), curve.second_derivative(t)))
+                for lower, upper in ((.5, .5), (.25, .25), (.2, .6), (0., 1.)):
+                    out.extend(curve.bounds(lower, upper))
+        return out
+
+    for _label, first, second, _matrix in _gate_reference_pairs():
         assert _certified_nodes(first, second) == {}
-        for branch in (1, -1):
-            curve = CylinderIntersectionCurve(first, second, .25, .5, branch, "linear")
-            curve = curve if matrix is None else curve.transformed(matrix)
-            expected = reference[f"{label}{branch:+d}"]
-            assert np.array_equal(curve.evaluate(np.asarray((.25, .5, .75))), expected[0])
-            for (lower, upper), (lo, hi) in zip(((.5, .5), (.25, .25), (.2, .6), (0., 1.)), expected[1:]):
-                bound = curve.bounds(lower, upper)
-                assert np.array_equal(bound[0], lo, equal_nan=True) and np.array_equal(bound[1], hi, equal_nan=True)
+    gated = results()
+    exact_curves._DOUBLE_NODES.clear()
+    monkeypatch.setattr(exact_curves, "_double_nodes", lambda curve: ())
+    off = results()
+    assert len(gated) == len(off)
+    for left, right in zip(gated, off):
+        if isinstance(left, str):
+            assert left == right
+        else:
+            assert np.array_equal(left, right, equal_nan=True)
 
 
 def _common_origin_pair(second_axis, origin=(0., 0., 0.), radius=1.):
@@ -685,14 +700,15 @@ def test_conditioning_gate_admits_down_to_a_sine_square_of_2_to_minus_8():
     assert set(_certified_nodes(*_offset_pipes()[:2])) == {-1}
 
 
-@pytest.mark.parametrize("scale, admitted", [(2.**500, True), (2.**501, False)])
+@pytest.mark.parametrize("scale, admitted", [(2.**480, True), (2.**481, False)])
 def test_magnitude_gate_sides_for_origins(scale, admitted):
     from anygeometry.analytic_supports import _certified_nodes
     first, second = _common_origin_pair((0., 1., 0.), origin=(scale, 0., 0.))
     assert bool(_certified_nodes(first, second)) is admitted
 
 
-@pytest.mark.parametrize("radius, admitted", [(2.**-500, True), (2.**-501, False)])
+@pytest.mark.parametrize("radius, admitted", [(2.**-240, True), (2.**-241, False), (2.**240, True),
+                                               (2.**241, False)])
 def test_magnitude_gate_sides_for_radii(radius, admitted):
     from anygeometry.analytic_supports import _certified_nodes
     first, second = _common_origin_pair((0., 1., 0.), radius=radius)
@@ -763,3 +779,26 @@ def test_node_chart_bound_limits_are_never_nan():
         for lower, upper in ((.5, .5), (.2, .6)):
             lo, hi = curve.bounds(lower, upper)
             assert not np.any(np.isnan(lo)) and not np.any(np.isnan(hi)) and np.all(lo <= hi)
+
+
+@pytest.mark.parametrize("options", [dict(radius=2.**-240), dict(radius=2.**240), dict(origin=(2.**480, 0., 0.)),
+                                     dict(origin=(2.**480, -2.**480, 2.**479))])
+def test_admitted_magnitude_extremes_evaluate_and_enclose_the_exact_branch(options):
+    # Codex round 13: an admitted radius made bounds() raise. Every admitted extreme must construct, evaluate,
+    # differentiate and give finite bounds that enclose the exact branch.
+    from decimal import Decimal
+    from anygeometry.exact_curves import _node_treatment
+    first, second = _common_origin_pair((0., 1., 0.), **options)
+    cylinder_cylinder_support(first, second)
+    for branch in (1, -1):
+        curve = CylinderIntersectionCurve(first, second, .25, .5, branch, "linear")
+        assert _node_treatment(curve)
+        t = np.asarray((.25, .5, .75))
+        for values in (curve.evaluate(t), curve.derivative(t), curve.second_derivative(t)):
+            assert np.all(np.isfinite(values))
+        for lower, upper in ((.5, .5), (.5, math.nextafter(.5, 1.)), (.2, .6), (0., 1.)):
+            lo, hi = curve.bounds(lower, upper)
+            assert np.all(np.isfinite(lo)) and np.all(np.isfinite(hi))
+            for parameter in (lower, upper):
+                exact = _exact_point(curve, curve._angle(np.asarray(parameter))[0])
+                assert all(Decimal(float(lo[i])) <= exact[i] <= Decimal(float(hi[i])) for i in range(3))

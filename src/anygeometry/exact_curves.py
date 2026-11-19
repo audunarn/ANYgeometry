@@ -533,19 +533,21 @@ def _angles_admitted(start, sweep):
 #: for sin from 0.84 down to 1e-7). A node is certified to _NODE_CHART_AGREEMENT = 2^-44, so admit only pairs
 #: with eps/a <= 2^-44, i.e. a >= 2^-8 (axes at least about 3.6 degrees apart). Pairs below keep main's path.
 _NODE_CONDITION_LIMIT = 2.0**-8
-#: Node treatment squares support magnitudes and scales them by constants up to about 2^10; admitting origins
-#: and radii up to 2^500 (and radii down to 2^-500) keeps every such product finite and normal.
-_NODE_MAGNITUDE_LIMIT = 2.0**500
+#: Magnitude range of node treatment. Origins enter the enclosure and the jets squared (offsets, b^2, 4ac):
+#: |origin| <= 2^480 keeps those within 2^960. Radii also enter to the fourth power (the norm of the cross
+#: product of the ellipse's radius vectors): 2^-240 <= radius <= 2^240 keeps that finite and normal.
+_NODE_ORIGIN_LIMIT = 2.0**480
+_NODE_RADIUS_LIMIT = 2.0**240
 
 
 def _node_conditioned(curve):
     """Whether ``curve``'s support pair is inside the node treatment's conditioning and magnitude range."""
     first, second = curve.first, curve.second
-    values = [*np.asarray(first.origin, dtype=float), *np.asarray(second.origin, dtype=float),
-              float(first.radius), float(second.radius)]
-    if not all(math.isfinite(value) and abs(value) <= _NODE_MAGNITUDE_LIMIT for value in values):
+    origins = [*np.asarray(first.origin, dtype=float), *np.asarray(second.origin, dtype=float)]
+    if not all(math.isfinite(value) and abs(value) <= _NODE_ORIGIN_LIMIT for value in origins):
         return False
-    if min(abs(float(first.radius)), abs(float(second.radius))) < 1/_NODE_MAGNITUDE_LIMIT:
+    radii = [abs(float(first.radius)), abs(float(second.radius))]
+    if not all(1/_NODE_RADIUS_LIMIT <= radius <= _NODE_RADIUS_LIMIT for radius in radii):
         return False
     return _branch_constants(curve).a >= _NODE_CONDITION_LIMIT
 
