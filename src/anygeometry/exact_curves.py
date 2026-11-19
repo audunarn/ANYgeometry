@@ -1067,36 +1067,27 @@ class CylinderIntersectionCurve:
         e1 = np.asarray(first.radial_direction)
         e2 = np.cross(first.axis, e1)
         sweep = float(angles[1]-angles[0])
+        nodes = _node_treatment(self)
         if sweep == 0:
-            point = self.evaluate(lower)
-            if _node_treatment(self):
-                # The float angles coincide. A square chart still moves along the branch through its sub-ulp
-                # angle offset (the discriminant difference of ``_root``): z is monotone in that offset on one
-                # fold side, so the endpoints' hull encloses it. Scalar and batched evaluation of one parameter
-                # can also differ by the rounding of the axial and transform arithmetic: the pad covers both.
-                other = self.evaluate(upper) if self.parameterization != "linear" else point
-                low, high = np.minimum(point, other), np.maximum(point, other)
-                matrix = np.asarray(self.transform)
-                eps16 = 16*np.finfo(float).eps
-                # Untransformed points of both ends (base + z axis), so the axial term a transform may cancel
-                # is part of the operand size.
-                base, _dbase, z, *_rest = self._root(np.asarray((lower, upper)))
-                raw = base+z[..., None]*np.asarray(first.axis)
-                # Per untransformed coordinate j: its largest operand (end points, origin, radius), scaled by
-                # epsilon first; each output row k weights it by its own coefficient |M_kj|. Epsilon-first scaling
-                # avoids overflow in the unscaled operand sum (and 0 * inf); a weighted term can still overflow
-                # for extreme coefficients, which only widens the bound.
-                operand = (eps16*np.max(np.abs(raw), axis=0) + eps16*np.abs(np.asarray(first.origin, dtype=float))
-                           + eps16*abs(float(first.radius)))
-                pad = (eps16*np.maximum(np.abs(low), np.abs(high)) + eps16*np.abs(matrix[:3, 3])
-                       + np.abs(matrix[:3, :3]) @ operand)
-                return np.nextafter(low-pad, -np.inf), np.nextafter(high+pad, np.inf)
-            return np.nextafter(point, -np.inf), np.nextafter(point, np.inf)
+            if not nodes:
+                point = self.evaluate(lower)
+                return np.nextafter(point, -np.inf), np.nextafter(point, np.inf)
+            # Node charts: the float angles coincide, but a square chart still moves through its sub-ulp
+            # angle offset and evaluation rounding is amplified next to a node. Enclose the exact branch
+            # over the neighbouring float angles instead of padding an evaluated point.
+            angle = float(angles[0])
+            low_angle, high_angle = np.nextafter(angle, -np.inf), np.nextafter(angle, np.inf)
+            angles = np.asarray((low_angle, high_angle))
+            sweep = float(high_angle-low_angle)
         base_lo, base_hi = EllipticArc(first.origin, first.radius*e1,
                                      first.radius*e2, float(angles[0]), sweep).bounds()
         other_axis = np.asarray(second.axis)
         projection = np.eye(3)-np.outer(other_axis, other_axis)
-        center, half = .5*(base_lo+base_hi)-second.origin, .5*(base_hi-base_lo)
+        if nodes:
+            # Halve before adding so that a finite arc near the float limit keeps a finite midpoint.
+            center, half = .5*base_lo+.5*base_hi-second.origin, .5*base_hi-.5*base_lo
+        else:
+            center, half = .5*(base_lo+base_hi)-second.origin, .5*(base_hi-base_lo)
         qcenter, qhalf = projection @ center, np.abs(projection) @ half
         qlo, qhi = qcenter-qhalf, qcenter+qhalf
         w = projection @ np.asarray(first.axis)
@@ -1110,7 +1101,6 @@ class CylinderIntersectionCurve:
         rounding = 128*np.finfo(float).eps*(bsqhi+4*a*max(abs(clo), abs(chi))+a*second.radius**2)
         dlo = max(bsqlo-4*a*chi-rounding, 0)
         dhi = max(bsqhi-4*a*clo+rounding, 0)
-        nodes = _node_treatment(self)
         if nodes:
             # Both are outward enclosures of D over the piece; their intersection is one too.
             dhi = min(dhi, _node_discriminant_upper(self, nodes, float(angles[0]), sweep))
@@ -1120,13 +1110,39 @@ class CylinderIntersectionCurve:
             zlo, zhi = zlo+rlo/(2*a), zhi+rhi/(2*a)
         else:
             zlo, zhi = zlo-rhi/(2*a), zhi-rlo/(2*a)
+        eps16 = 16*np.finfo(float).eps
+        if nodes:
+            # Node charts are enclosed down to a single ulp of angle, so the enclosure must also cover the
+            # rounding of evaluate() itself (scalar and batched alike): z = (-b + root)/(2a) cancels next to
+            # a node, so its error is bounded by the pre-cancellation magnitudes of b (and of the offset and
+            # projection that form it) and of the root, divided by 2a. Epsilon-first scaling keeps each term
+            # finite wherever its operand is.
+            offset = np.abs(center)+half
+            projected = np.abs(qcenter)+qhalf
+            bround = 2*float(np.abs(w) @ (eps16*offset+eps16*projected))
+            zpad = (eps16*max(abs(blo), abs(bhi))+bround+eps16*rhi)/(2*a)+eps16*max(abs(zlo), abs(zhi))
+            zlo, zhi = zlo-zpad, zhi+zpad
         axis = np.asarray(first.axis)
         lower = base_lo+np.minimum(axis*zlo, axis*zhi)
         upper = base_hi+np.maximum(axis*zlo, axis*zhi)
+        if nodes:
+            # base + z*axis as evaluate() rounds it.
+            point_pad = (eps16*np.maximum(np.abs(base_lo), np.abs(base_hi))
+                         + eps16*np.abs(axis)*max(abs(zlo), abs(zhi)))
+            lower, upper = lower-point_pad, upper+point_pad
         matrix = np.asarray(self.transform)
-        center, half = .5*(lower+upper), .5*(upper-lower)
+        if nodes:
+            center, half = .5*lower+.5*upper, .5*upper-.5*lower
+        else:
+            center, half = .5*(lower+upper), .5*(upper-lower)
+        if nodes:
+            # The transform of the evaluated point rounds on its pre-cancellation magnitudes, which a
+            # transform cancelling a large coordinate would otherwise lose.
+            transform_pad = np.abs(matrix[:3, :3]) @ (eps16*np.abs(center)+eps16*half) + eps16*np.abs(matrix[:3, 3])
         center = matrix[:3, :3] @ center+matrix[:3, 3]
         half = np.abs(matrix[:3, :3]) @ half
+        if nodes:
+            half = half+transform_pad+eps16*np.abs(center)
         return np.nextafter(center-half, -np.inf), np.nextafter(center+half, np.inf)
 
 

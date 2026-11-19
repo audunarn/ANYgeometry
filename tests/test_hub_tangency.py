@@ -571,3 +571,63 @@ def test_collapsed_angle_bounds_are_finite_at_extreme_magnitudes():
     lo, hi = curve.bounds(.5, .5)
     assert np.all(np.isfinite(point)) and np.all(np.isfinite(lo)) and np.all(np.isfinite(hi))
     assert np.all(lo <= point) and np.all(point <= hi)
+
+
+def _r11_pair():
+    from anygeometry.surfaces import Cylinder
+    return (Cylinder((0., 0., 64.), (1., 0., 0.), (0., 0., 1.), 1., 8.),
+            Cylinder((0., 0., 64.), (1., .0003, 0.), (0., 0., 1.), 1., 8.))
+
+
+def test_collapsed_angle_bounds_cover_the_axial_solve_rounding():
+    # Codex round 11: nearly parallel axes make 2a tiny, so the scalar/batched rounding of b is amplified
+    # after -b + root cancels. The enclosure must contain both evaluations.
+    from anygeometry.exact_curves import _node_treatment
+    first, second = _r11_pair()
+    curve = CylinderIntersectionCurve(first, second, .25, .5, 1, "linear")
+    assert _node_treatment(curve)
+    lo, hi = curve.bounds(.5, .5)
+    for point in (curve.evaluate(np.asarray((.5, .5))), [curve.evaluate(.5)]):
+        for value in np.atleast_2d(point):
+            assert np.all(lo <= value) and np.all(value <= hi), (value, lo, hi)
+
+
+def _node_chart_fixtures():
+    from anygeometry.surfaces import Cylinder
+    axis = np.array((3., 4., 0.)) / 5.
+    rotation = ((.8, -.6, 0., 1e4), (.6, .8, 0., 0.), (0., 0., 1., -3.), (0., 0., 0., 1.))
+    yield _r11_pair() + (None,)
+    yield tuple(_crossbeams()[:2]) + (None,)
+    yield _unit_pair() + (None,)
+    yield _unit_pair() + (rotation,)
+    yield (Cylinder((0., 0., 0.), tuple(axis), (0., 0., 1.), 1., 4096.),
+           Cylinder((-2048., 1024., 0.), (1., 0., 0.), (0., 0., 1.), 1., 4096.),
+           ((.8, -.6, 0., 0.), (0., 64., 0., 0.), (0., 0., 1., 0.), (0., 0., 0., 1.)))
+
+
+def test_node_chart_bounds_contain_scalar_and_batched_points_at_any_width():
+    # The class behind Codex rounds 7-11: on a node chart every bound, down to a collapsed float angle,
+    # contains scalar and batched evaluations of its parameters.
+    from anygeometry.exact_curves import _node_treatment
+    rng = np.random.default_rng(7)
+    checked = 0
+    for first, second, matrix in _node_chart_fixtures():
+        for start, sweep in ((.25, .5), (math.pi, .25), (0., .5)):
+            for branch in (1, -1):
+                try:
+                    curve = CylinderIntersectionCurve(first, second, start, sweep, branch, "linear")
+                except GeometryError:
+                    continue
+                curve = curve if matrix is None else curve.transformed(matrix)
+                if not _node_treatment(curve):
+                    continue
+                for t in np.concatenate((rng.random(12), (0., .5, .125, math.nextafter(1., 0.)))):
+                    for u in (t, math.nextafter(t, 2.), t + 1e-13, t + 1e-9):
+                        if u > 1.:
+                            continue
+                        lo, hi = curve.bounds(t, u)
+                        points = np.vstack((curve.evaluate(np.asarray((t, u, t, u, .3)))[:4],
+                                            curve.evaluate(t)[None], curve.evaluate(u)[None]))
+                        assert np.all(lo <= points) and np.all(points <= hi), (start, sweep, branch, t, u)
+                        checked += 1
+    assert checked > 1000
