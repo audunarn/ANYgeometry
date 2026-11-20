@@ -1123,3 +1123,20 @@ def test_hinge_exactly_two_zones_long_joins():
     model, faces, _ = _xy_pair([(-1, 0), (0, 0), (0, L), (-1, L)], [(0, L), (0, 0), (1, 0), (1, L)],
                                ((0, 0), (0, L)), ((0, 0, 0), (1, 0, k), (0, 1, 0), lambda x, y: k*x))
     assert len(_plan(model, faces).arrangements) == 2
+
+
+@pytest.mark.parametrize("gap, joins", ((math.nextafter(1e-9, math.inf), False), (1.0000001e-9, True)))
+def test_gap_just_above_t_closes_on_the_second_support(gap, joins):
+    # Codex z2 M: B's stored vertices lie 0.25t below both planes; a stored gap one ulp above t between non-shared
+    # edges, 1.5 m from the shared vertices, is 0.99999999988t once B's trims are on B's own plane (its material).
+    # Joined on 282a2ee. Rule 2 now separates with margin t * 2^-26; a gap 1e-7 relative above t still joins.
+    k, h = 5e-10, 2.5e-10
+    a = [(-.5, 0), (0, 0), (0, 1), (-.25, 1), (-.25, 2), (0, 2), (0, 3), (-.5, 3)]
+    b = [(0, 3), (0, 2), (.25, 1.5), (gap, .75), (gap, .25), (.5, .25), (.5, 3)]
+    model, faces, _ = _xy_pair(a, b, ((0, 2), (0, 3)), ((0, 0, 0), (1, 0, k), (0, 1, 0), lambda x, y: -h if x else 0))
+    assert model.validate_topology() == ()
+    if joins:
+        assert len(_plan(model, faces).arrangements) == 2
+    else:
+        with pytest.raises(GeometryError, match=CONTACT):
+            _plan(model, faces)

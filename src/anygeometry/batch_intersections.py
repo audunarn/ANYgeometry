@@ -1149,6 +1149,11 @@ def _edge_joined_zones(first, second, tolerance, model, provenance):
         raise refuse(CoplanarEdgeJoin.ANGLE_OUTSIDE_BAND)
     t2 = Fraction(float(tolerance))**2
     r2 = Fraction(EDGE_JOINED_ZONE)**2*t2
+    # Codex z2 M: separation is required with margin sigma t (sigma = EDGE_JOINED_MAX_SINE). The rule reads the
+    # stored vertices projected onto P; B's material (its trims projected onto B's own plane first) differs from
+    # that by at most d_B * sin <= t * sigma in P (A's material is exactly the projection), so the material
+    # boundaries are then > t apart wherever rule 2 separates the projections.
+    separation2 = (Fraction(float(tolerance))*(1 + Fraction(EDGE_JOINED_MAX_SINE)))**2
     exact = {vertex: plane.project(point) for vertex, point in position.items()}
     loops = [[[(path, exact[start], exact[end]) for path, _, start, end in loop] for loop in face] for face in uses]
     segments = [[item for loop in face for item in loop] for face in uses]
@@ -1173,13 +1178,13 @@ def _edge_joined_zones(first, second, tolerance, model, provenance):
             # vertices are not common and so must be more than t apart (they are not: refused).
             common = [vertex for vertex in (a0, a1) if vertex in zone and vertex in (b0, b1)]
             if not common:
-                if _segments_distance_squared_exact(exact[a0], exact[a1], exact[b0], exact[b1], plane) <= t2:
+                if _segments_distance_squared_exact(exact[a0], exact[a1], exact[b0], exact[b1], plane) <= separation2:
                     raise refuse(CoplanarEdgeJoin.CONTACT_OFF_SHARED_EDGE)
                 continue
             for vertex in common:
                 for (p0, p1), (q0, q1) in (((a0, a1), (b0, b1)), ((b0, b1), (a0, a1))):
                     point = zone_point(exact[vertex], exact[p1 if p0 == vertex else p0])
-                    if _segment_distance_squared_exact(point, exact[q0], exact[q1]) <= t2:
+                    if _segment_distance_squared_exact(point, exact[q0], exact[q1]) <= separation2:
                         raise refuse(CoplanarEdgeJoin.CONTACT_OFF_SHARED_EDGE)
 
     def area(loop):

@@ -55,10 +55,13 @@ M2); every stored coordinate is below 2^16 m in magnitude. Otherwise `near_copla
    faces. Z = the model vertices of S; `r = c t`.
 2. **Contact only in S and its zones.** For every segment pair (a of A, b of B) except a shared edge with
    itself:
-   - if a and b have no common model vertex in Z, their exact distance is `> t`;
+   - if a and b have no common model vertex in Z, their exact distance is `> t (1 + sigma)`;
    - else, for each common vertex V in Z, a rational point of a at world distance `>= r` from V (at parameter
      at most 1/2 from V, the midpoint when the segment is exactly `2r` long, else
-     `near_coplanar_segment_shorter_than_zone`) is `> t` from b, and the same with a and b swapped.
+     `near_coplanar_segment_shorter_than_zone`) is `> t (1 + sigma)` from b, and the same with a and b swapped.
+
+   Here `sigma = 2^-26` bounds the exact sine (the band gate), and the margin `t sigma` covers the difference
+   between the projected stored trims and the material (step (iv), Codex z2 M).
 
    Otherwise `near_coplanar_contact_off_shared_edge`. The distance to b is convex along a and 0 at V, so a's
    contact set with b is an interval from V that ends before that point. The point is chosen with an outward
@@ -96,14 +99,15 @@ decomposition seams that both faces carry are suppressed, as `_coplanar_traces` 
   boundary onto that plane; for A that is exactly the projected A. B's material, projected onto P, differs from
   the projected B by at most `sigma t` (sigma <= 2^-26 the exact sine: a stored point within t of B's plane moves
   by at most t onto it, and only the out-of-P component of that move survives projection onto P, at most
-  `sin` of the move). Every non-zone boundary point of B is outside A and `> t` from ∂A in projection, so this
-  perturbation cannot bring it inside A. Hence any point common to both faces' material projects within
+  `sin` of the move). Every non-zone boundary point of B is outside A and `> t (1 + sigma)` from ∂A in
+  projection, so this perturbation cannot bring it inside A, and the material boundaries stay `> t` apart there
+  (in P, hence in 3D). Hence any point common to both faces' material projects within
   `sigma t` (about 1.5e-17 m at t = 1 nm) of S or of a zone, and every such point is within t of the emitted
   shared edges or zones. Example (z1 M1): plates on `z = k x` and `z = -k x` (k = 1e-10) sharing a hinge stored
   0.25t above both planes: the supports cross on a line 0.25t from the emitted hinge, and the material overlap
   is a strip about 5e-20 m wide along it. The contract treats that as the shared edge (within t), not as an
-  untraced intersection. Separation: outside the zones every boundary point of one face is `> t` from the other
-  face's boundary in projection, hence in 3D.
+  untraced intersection. Without the margin, a stored gap one ulp above t closed to 0.99999999988t on B's own
+  plane (Codex z2 M).
 
 Rules 2-4 are constant-size local predicates over segment pairs; there is no global accounting.
 
@@ -168,7 +172,8 @@ in-band pair).
   emitted), the far comb inside the fence (0 m and 2^15 m).
 - Codex z1 regressions (each failed on 567653d): `test_stored_plane_angle_above_the_band_refuses_typed` (M3,
   joined), `test_domain_path_off_its_stored_vertex_refuses_typed` (M2, untyped arrangement refusal),
-  `test_hinge_exactly_two_zones_long_joins` (L2, refused).
+  `test_hinge_exactly_two_zones_long_joins` (L2, refused). Codex z2: `test_gap_just_above_t_closes_on_the_second_support`
+  (joined on 282a2ee).
 - Unchanged: `test_in_band_neighbours_sharing_an_edge_are_edge_joined_like_exact_coplanar` (plan shape equal to
   the exactly coplanar plan), the fence boundary tests and all other admission tests.
 
