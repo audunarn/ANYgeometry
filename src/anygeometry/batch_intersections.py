@@ -920,6 +920,8 @@ class CoplanarEdgeJoin(str, Enum):
     CONTACT_OFF_SHARED_EDGE = "near_coplanar_contact_off_shared_edge"
     SEGMENT_SHORTER_THAN_ZONE = "near_coplanar_segment_shorter_than_zone"
     ANGLE_OUTSIDE_BAND = "near_coplanar_angle_outside_band"
+    ANGLE_BELOW_BAND = "near_coplanar_angle_below_band"
+    LOOPS_INVALID_IN_PROJECTION = "near_coplanar_loops_invalid_in_projection"
     SAME_SIDE_OF_SHARED_EDGE = "near_coplanar_same_side_of_shared_edge"
 
 
@@ -1070,6 +1072,72 @@ def _segments_distance_squared_exact(a0, a1, b0, b1, plane):
                _segment_distance_squared_exact(b0, a0, a1), _segment_distance_squared_exact(b1, a0, a1))
 
 
+def _sqrt_up_exact(value, bits=64):
+    """A rational >= sqrt(value) within a relative 2^-bits, for a non-negative Fraction (integer square root of
+    the scaled numerator times denominator, rounded up; exact at any magnitude, subnormal included)."""
+    from fractions import Fraction
+    value = Fraction(value)
+    if value == 0:
+        return Fraction(0)
+    scaled = value.numerator*value.denominator << (2*bits)
+    root = math.isqrt(scaled)
+    root += root*root < scaled
+    return Fraction(root, value.denominator << bits)
+
+
+def _zone_point(vertex, other, r2):
+    """The exact rational point of vertex-other at distance in [r, r (1 + 2^-60)] from ``vertex`` (r = sqrt(r2)),
+    or the midpoint when the segment is exactly 2r long; None when the segment is shorter than 2r."""
+    from fractions import Fraction
+    length2 = sum((y - x)**2 for x, y in zip(vertex, other))
+    s = _sqrt_up_exact(r2/length2)
+    if s > Fraction(1, 2):
+        if length2 < 4*r2:
+            return None
+        s = Fraction(1, 2)
+    return tuple(x + s*(y - x) for x, y in zip(vertex, other))
+
+
+def _stored_plane_sine2(first, second):
+    """Exact squared sine of the angle between two stored planes (exact normals u x v of their stored axes)."""
+    n, m = _ExactStoredPlane(first).normal, _ExactStoredPlane(second).normal
+    cross = (n[1]*m[2] - n[2]*m[1], n[2]*m[0] - n[0]*m[2], n[0]*m[1] - n[1]*m[0])
+    return sum(x*x for x in cross) / (sum(x*x for x in n)*sum(x*x for x in m))
+
+
+def _projected_loops_valid(loops, plane):
+    """Each face's loops, projected onto P, are simple, pairwise disjoint, the holes (loops after the first)
+    strictly inside the outer loop and outside one another, and no loop has zero area (decision 23)."""
+    segments = [(index, position, p, q) for index, loop in enumerate(loops) for position, (_, p, q) in enumerate(loop)]
+    for i, (li, pi, p0, p1) in enumerate(segments):
+        for lj, pj, q0, q1 in segments[i + 1:]:
+            size = len(loops[li])
+            adjacent = li == lj and (pj - pi) % size in (1, size - 1)
+            if adjacent:
+                # Consecutive segments meet only in their common vertex: neither far end lies on the other.
+                common = {p0, p1} & {q0, q1}
+                if len(common) != 1:
+                    return False
+                x = p1 if p0 in common else p0
+                y = q1 if q0 in common else q0
+                if (_segment_distance_squared_exact(x, q0, q1) == 0
+                        or _segment_distance_squared_exact(y, p0, p1) == 0):
+                    return False
+            elif _segments_distance_squared_exact(p0, p1, q0, q1, plane) == 0:
+                return False
+    charts = [[(plane.chart(p), plane.chart(q)) for _, p, q in loop] for loop in loops]
+    for loop in charts:
+        points = [p for p, _ in loop]
+        if sum(p[0]*q[1] - q[0]*p[1] for p, q in zip(points, points[1:] + points[:1])) == 0:
+            return False
+    for index in range(1, len(loops)):
+        vertex = charts[index][0][0]
+        if not _parity_inside(vertex, charts[0]) or any(
+                _parity_inside(vertex, charts[other]) for other in range(1, len(loops)) if other != index):
+            return False
+    return True
+
+
 def _edge_joined_zones(first, second, tolerance, model, provenance):
     """Traces of an edge-joined pair by the zone contract (owner decisions 20-22, docs/coplanar-edge-joined.md
     "Zone contract"). Every decision is exact on the exact projections of the STORED model vertex doubles behind
@@ -1100,6 +1168,7 @@ def _edge_joined_zones(first, second, tolerance, model, provenance):
     # straight model edge, in the same order; loops close by vertex identity; no edge has equal end vertices.
     from .curves import Straight
     uses = []
+    drift2 = Fraction(0)
     for domain in domains:
         face = model.faces[domain.face_id]
         model_loops = (face.loop, *face.holes)
@@ -1117,15 +1186,16 @@ def _edge_joined_zones(first, second, tolerance, model, provenance):
                 raise refuse(CoplanarEdgeJoin.OVERLAP_UNRESOLVED)
             face_uses.append([(path, use.edge, start, end) for path, use, (start, end) in zip(loop, model_loop, ends)])
         uses.append(face_uses)
-        # Codex z1 M2: the domain paths the planner arranges must lie on the stored vertices (a reversed path is
-        # re-evaluated, an ulp off); more than t/8 off (at a tiny tolerance) refuses typed.
-        drift = (Fraction(float(tolerance))/8)**2
+        # Codex z1 M2 / z3 M1: the domain paths the planner arranges lie up to an ulp off the stored vertices (a
+        # reversed path is re-evaluated). The largest offset is measured exactly and enters the separation margin
+        # (decision 23); more than t/8 refuses typed.
         for loop in face_uses:
             for path, _, start, end in loop:
                 for point, vertex in ((path.curve.start, start), (path.curve.end, end)):
-                    if sum((Fraction(float(x)) - Fraction(float(y)))**2
-                           for x, y in zip(point, model.vertex_position(vertex))) > drift:
-                        raise refuse(CoplanarEdgeJoin.OVERLAP_UNRESOLVED)
+                    drift2 = max(drift2, sum((Fraction(float(x)) - Fraction(float(y)))**2
+                                             for x, y in zip(point, model.vertex_position(vertex))))
+    if drift2 > (Fraction(float(tolerance))/8)**2:
+        raise refuse(CoplanarEdgeJoin.OVERLAP_UNRESOLVED)
     vertices = {vertex for face in uses for loop in face for _, _, start, end in loop for vertex in (start, end)}
     position = {vertex: tuple(float(x) for x in model.vertex_position(vertex)) for vertex in vertices}
     if not max(abs(x) for point in position.values() for x in point) < EDGE_JOINED_MAX_COORDINATE:
@@ -1141,34 +1211,28 @@ def _edge_joined_zones(first, second, tolerance, model, provenance):
         shared_uses[edge] = (found[0][0], found[1][0])
 
     plane = _ExactStoredPlane(first.support)
-    other = _ExactStoredPlane(second.support)
-    # Exact sine of the stored planes' angle (squared): at most EDGE_JOINED_MAX_SINE, else typed.
-    n, m = plane.normal, other.normal
-    cross = (n[1]*m[2] - n[2]*m[1], n[2]*m[0] - n[0]*m[2], n[0]*m[1] - n[1]*m[0])
-    if sum(x*x for x in cross) > Fraction(EDGE_JOINED_MAX_SINE)**2*plane.scale*other.scale:
-        raise refuse(CoplanarEdgeJoin.ANGLE_OUTSIDE_BAND)
-    t2 = Fraction(float(tolerance))**2
-    r2 = Fraction(EDGE_JOINED_ZONE)**2*t2
-    # Codex z2 M: separation is required with margin sigma t (sigma = EDGE_JOINED_MAX_SINE). The rule reads the
-    # stored vertices projected onto P; B's material (its trims projected onto B's own plane first) differs from
-    # that by at most d_B * sin <= t * sigma in P (A's material is exactly the projection), so the material
-    # boundaries are then > t apart wherever rule 2 separates the projections.
-    separation2 = (Fraction(float(tolerance))*(1 + Fraction(EDGE_JOINED_MAX_SINE)))**2
+    t = Fraction(float(tolerance))
+    r2 = Fraction(EDGE_JOINED_ZONE)**2*t*t
+    # Decision 23 (full margin; Codex z2 M, z3 M1): rule 2 separates the projected stored geometry by more than
+    #   t + sigma (t + d) + 2 d,
+    # d the measured drift (bounded exactly from above). The arranged geometry (domain paths) is within d of the
+    # stored vertices on each face (2 d between faces); the material (B's trims projected onto B's own plane) is
+    # within sigma * (distance to that plane <= t + d, the admission bound read the domain curves) of the stored
+    # projection, sigma >= the exact sine (gate in _pair_paths_exact). A's material is exactly its projection.
+    sigma, drift = Fraction(EDGE_JOINED_MAX_SINE), _sqrt_up_exact(drift2)
+    separation2 = (t + sigma*(t + drift) + 2*drift)**2
     exact = {vertex: plane.project(point) for vertex, point in position.items()}
     loops = [[[(path, exact[start], exact[end]) for path, _, start, end in loop] for loop in face] for face in uses]
+    if not all(_projected_loops_valid(face, plane) for face in loops):
+        raise refuse(CoplanarEdgeJoin.LOOPS_INVALID_IN_PROJECTION)
     segments = [[item for loop in face for item in loop] for face in uses]
     zone = {vertex for edge in shared for vertex in shared_uses[edge][0][2:]}
 
     def zone_point(vertex, other):
-        """A rational point of vertex-other at world distance >= r from vertex, at parameter <= 1/2."""
-        length2 = sum((y - x)**2 for x, y in zip(vertex, other))
-        s = Fraction(_sqrt_up(r2/length2))
-        if s > Fraction(1, 2):
-            # Codex z1 L2: the midpoint itself is at distance >= r exactly when length >= 2r.
-            if length2 < 4*r2:
-                raise refuse(CoplanarEdgeJoin.SEGMENT_SHORTER_THAN_ZONE)
-            s = Fraction(1, 2)
-        return tuple(x + s*(y - x) for x, y in zip(vertex, other))
+        point = _zone_point(vertex, other, r2)
+        if point is None:
+            raise refuse(CoplanarEdgeJoin.SEGMENT_SHORTER_THAN_ZONE)
+        return point
 
     for _, a_edge, a0, a1 in segments[0]:
         for _, b_edge, b0, b1 in segments[1]:
@@ -1193,21 +1257,11 @@ def _edge_joined_zones(first, second, tolerance, model, provenance):
 
     def material_left(face, path):
         """Whether the face's material lies left of ``path`` (its traversal direction) in the chart: left of a
-        positively oriented loop unless the loop is a hole (inside an odd number of the face's other loops)."""
+        positively oriented outer loop, right of a positively oriented hole (loops valid in projection, checked
+        above: the outer loop is the first, holes nested directly inside it)."""
         index, loop = next((index, loop) for index, loop in enumerate(loops[face])
                            if any(item is path for item, _, _ in loop))
-        signed = area(loop)
-        if signed == 0:
-            raise refuse(CoplanarEdgeJoin.OVERLAP_UNRESOLVED)
-        vertex = loop[0][1]
-        depth = 0
-        for other_index, other in enumerate(loops[face]):
-            if other_index == index:
-                continue
-            if any(_segment_distance_squared_exact(vertex, p, q) == 0 for _, p, q in other):
-                raise refuse(CoplanarEdgeJoin.OVERLAP_UNRESOLVED)
-            depth += _parity_inside(plane.chart(vertex), [(plane.chart(p), plane.chart(q)) for _, p, q in other])
-        return (signed > 0) != (depth % 2 == 1)
+        return (area(loop) > 0) == (index == 0)
 
     for edge, (a_use, b_use) in shared_uses.items():
         same_direction = a_use[2] == b_use[2]
@@ -1798,6 +1852,16 @@ def _pair_paths_exact(first, second, model, tolerance, check, *, point_contacts=
         result = qualified_plane_plane(a, b, policy=model.tolerance)
         if not result.classified and result.diagnostics == ("ill_conditioned_plane_plane",):
             # Owner decision 12 (docs/coplanar-edge-joined.md): decided by edge, never by angle alone.
+            # Decision 23: the band is decided on the EXACT stored planes (the diagnostic is a float classification).
+            from fractions import Fraction
+            sine2 = _stored_plane_sine2(a, b)
+            if sine2 > Fraction(EDGE_JOINED_MAX_SINE)**2:
+                raise GeometryError(f"ill_conditioned_plane_plane; {CoplanarEdgeJoin.ANGLE_OUTSIDE_BAND.value}")
+            if not sine2 > Fraction(model.tolerance.angular)**2:
+                # Codex z3 M2: exactly (within the policy angle) parallel stored planes are below the band. Main's
+                # COINCIDENT route cannot take them either (its polygon backend re-runs the float predicate and
+                # refuses the same pair), so they refuse typed, as main refused them untyped.
+                raise GeometryError(f"ill_conditioned_plane_plane; {CoplanarEdgeJoin.ANGLE_BELOW_BAND.value}")
             if face_tolerances is None:
                 face_tolerances = (_face_arrangement_tolerance(model, first),
                                    _face_arrangement_tolerance(model, second))

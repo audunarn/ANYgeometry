@@ -1140,3 +1140,94 @@ def test_gap_just_above_t_closes_on_the_second_support(gap, joins):
     else:
         with pytest.raises(GeometryError, match=CONTACT):
             _plan(model, faces)
+
+
+
+# Codex z3 (zone contract round 3) and owner decision 23 (full margin): each failed on b43187e.
+
+def test_reversed_path_drift_cannot_close_a_gap_below_t():
+    # z3 M1: at t = 1e-12 m B's reversed domain path starts 2.2e-17 m (< t/8) off its stored vertex, which closes
+    # a stored gap of 1.000001t to 0.99998t in the arranged geometry; joined on b43187e. Decision 23: separation
+    # must exceed t (1 + sigma) plus sigma times the largest drift plus twice that drift.
+    from anygeometry import TolerancePolicy
+    t, k, gap = 1e-12, 5e-10, 1.000001e-12
+    a = [(-.5, 0), (0, 0), (0, 1), (-.25, 1), (-.25, 2), (0, 2), (0, 3), (-.5, 3)]
+    b = [(0, 3), (0, 2), (.25, 1.5), (gap, .75), (gap, .25), (.5, .25), (.5, 3)]
+    model = GeometryModel(tolerance=TolerancePolicy(length=t, relative_length=1e-20))
+    ids = {xy: model.add_point(xy[0], xy[1]*1e-4, 0 if xy in a else k*(xy[1]-.25)*1e-4) for xy in dict.fromkeys(a + b)}
+    face_a, edges = _ring_face(model, [ids[q] for q in a], Plane((0, 0, 0), (1, 0, 0), (0, 1, 0)))
+    reverse = (ids[(.5, .25)], ids[(gap, .25)])
+    keep = {(ids[(0, 2)], ids[(0, 3)]): edges[ids[(0, 2)], ids[(0, 3)]], reverse: model.add_line(*reverse)}
+    face_b, _ = _ring_face(model, [ids[q] for q in b], Plane((0, .25e-4, 0), (1, 0, 0), (0, 1, k)), keep)
+    assert model.validate_topology() == ()
+    with pytest.raises(GeometryError, match=CONTACT):
+        _plan(model, (model.handle("face", face_a), model.handle("face", face_b)))
+
+
+def test_exactly_coincident_stored_planes_never_take_the_band_rule():
+    # z3 M2: the stored planes are exactly coincident (proportional exact normals), but float cancellation puts the
+    # predicate in the ill-conditioned band; on b43187e the edge-joined rule joined them. Decision 23: an exact
+    # sine at or below the policy angular tolerance is below the band and refuses typed. Main's COINCIDENT route
+    # cannot take the pair either: its polygon backend re-runs the float predicate and refuses it.
+    from anygeometry.runtime_diagnostics import collect_runtime_diagnostics
+    from anygeometry.predicates import qualified_plane_plane
+    x, e = 3.141592653589793, .002
+    y = x + 1e-8
+    first, second = Plane((0, 0, 0), (1.3, 1.3, 0), (x, y, (y-x)/2)), Plane((0, 0, 0), (1, 1, 0), (-1, 1, 1))
+    assert qualified_plane_plane(first, second).diagnostics == ("ill_conditioned_plane_plane",)
+    model = GeometryModel()
+    pts = model.add_points(((e, -e, -e), (.1+e, .1-e, -e), (.1, .1, 0), (0, 0, 0), (.1-e, .1+e, e), (-e, e, e)))
+    face_a, shared = _ring_face(model, [pts[0], pts[1], pts[2], pts[3]], first)
+    face_b, _ = _ring_face(model, [pts[3], pts[2], pts[4], pts[5]], second, shared)
+    assert model.validate_topology() == ()
+    with collect_runtime_diagnostics() as counters:
+        with pytest.raises(GeometryError, match="ill_conditioned_plane_plane; near_coplanar_angle_below_band"):
+            _plan(model, (model.handle("face", face_a), model.handle("face", face_b)))
+    assert counters.get('plane_plane_coplanar_edge_joined', 0) == 0
+
+
+def _hole_across_the_shell(seam):
+    """Codex z3 L1 (t = 0.04 m): B's hole is inside B on B's own plane but, B's plane being tilted 1e-8, its
+    vertices at x = 2 + 1e-11 project onto A's plane 1.7e-10 m outside B's outer loop."""
+    from anygeometry import TolerancePolicy, EntityRef
+    from anygeometry.entities import OrientedEdge as OE
+    t, k, h = .04, 1e-8, .017
+    model = GeometryModel(tolerance=TolerancePolicy(length=t, surface_residual=.05))
+    p = model.add_points(((-1, -1, 0), (0, -1, 0), (0, 1, 0), (-1, 1, 0), (2, -1, h), (2, 1, h), (1, -.3, -h),
+                          (2+1e-11, -.3, -h), (2+1e-11, .3, -h), (1, .3, -h)))
+    face_a, edges = _ring_face(model, [p[i] for i in (0, 1, 2, 3)], Plane((0, 0, 0), (1, 0, 0), (0, 1, 0)))
+    face_b, _ = _ring_face(model, [p[i] for i in (2, 1, 4, 5)], Plane((0, 0, 0), (1, 0, k), (0, 1, 0)),
+                           {(p[1], p[2]): edges[p[1], p[2]]})
+    hole = tuple(OE(model.add_line(p[i], p[j]), True) for i, j in ((6, 7), (7, 8), (8, 9), (9, 6)))
+    with model.transaction():
+        model._put_entity("face", replace(model.faces[face_b], holes=(hole,)))
+    if seam:
+        model.tag(EntityRef("edge", edges[p[1], p[2]]), "intersection_decomposition_seam")
+        model.add_sheet([face_a, face_b], orientations=(1, 1))
+    assert model.validate_topology() == ()
+    return model, (model.handle("face", face_a), model.handle("face", face_b))
+
+
+@pytest.mark.parametrize("seam", (False, True))
+def test_loops_invalid_after_projection_refuse_typed(seam):
+    # z3 L1: rules 3 and 4 read the loops projected onto A's plane, where this hole crosses the outer loop; on
+    # b43187e the rule returned a trace (with the shared edge a same-sheet seam the planner accepted one loop
+    # start and refused another). Decision 23: each face's loops must be simple, disjoint and nested in projection.
+    model, faces = _hole_across_the_shell(seam)
+    for pair in (faces, faces[::-1]):
+        with pytest.raises(GeometryError, match="ill_conditioned_plane_plane; near_coplanar_loops_invalid_in_projection"):
+            _plan(model, pair)
+
+
+def test_zone_point_is_exact_at_any_magnitude():
+    # z3 L2: at a subnormal squared step the float square root put the zone point at 2r (8t) instead of r.
+    # Decision 23: the point is computed in exact rationals, at distance in [r, r (1 + 2^-60)].
+    from fractions import Fraction
+    from anygeometry.batch_intersections import _zone_point
+    t = Fraction(1, 2**540)
+    r = 4*t
+    for other in ((Fraction(1), Fraction(0), Fraction(0)), (Fraction(1), Fraction(3, 16), Fraction(0)),
+                  (Fraction(3), Fraction(-7), Fraction(2))):
+        point = _zone_point((Fraction(0),)*3, other, r*r)
+        distance2 = sum(x*x for x in point)
+        assert r*r <= distance2 <= (r*(1 + Fraction(1, 2**60)))**2

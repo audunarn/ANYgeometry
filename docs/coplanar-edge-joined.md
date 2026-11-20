@@ -10,8 +10,10 @@ Only to a plane-plane pair that the support predicate `qualified_plane_plane` re
 `ill_conditioned_plane_plane`: the sine of the plane angle is above the policy angular tolerance
 (`TolerancePolicy.angular`, default 1e-10, below which the planes are already COINCIDENT) and at most
 `sqrt(eps)` (~1.49e-8, below which the crossing line is not conditioned). That diagnostic is a float
-classification; the rule then checks the band exactly on the stored planes (sine of the exact normals at most
-`2^-26`, else `near_coplanar_angle_outside_band`, Codex z1 M3). Every other plane-plane pair, and every other
+classification; the rule then checks the band exactly on the stored planes (decision 23): the exact sine of
+the stored normals must exceed the policy angular tolerance (else `near_coplanar_angle_below_band`, Codex z3 M2:
+main's COINCIDENT route cannot take such a pair either, its polygon backend re-runs the float predicate and
+refuses it) and be at most `2^-26` (else `near_coplanar_angle_outside_band`, Codex z1 M3). Every other plane-plane pair, and every other
 support family, takes exactly the code path it took before: ordinary inputs are bit-identical.
 
 ## Admission (decision 12)
@@ -34,6 +36,10 @@ The pair is admitted to the zone contract only when all hold:
 
 ## Zone contract (owner decisions 20-22)
 
+Decision 23 (2026-11-20, owner option (a) "full margin", after Codex z3): every difference between the geometry
+the rule decides on and the geometry used downstream is bounded and covered by the separation margin (class
+audit below); the band is exact on both sides; loops are checked valid in projection; the zone point is exact.
+
 Decision 20 replaces the decision 17 `k t` trace-accounting contract (and its decisions 15-19 machinery:
 the float projection, the certified arrangement call and its `material_arrangement` hook, witnesses, trace
 clipping, contact unions and trace subtraction). Decision 21: `c = 4` (`EDGE_JOINED_ZONE`). Decision 22: the
@@ -47,7 +53,12 @@ projected distance `> t` is a world distance `> t`. No float is decided on.
 (outer loop then holes, as `MaterialDomain.from_model` builds them); loops close by vertex identity and no
 edge has equal end vertices; every domain path end lies within `t/8` of its stored vertex (exact; the
 domain's reversed paths are re-evaluated curves, an ulp off, which at a tiny tolerance can exceed it, Codex z1
-M2); every stored coordinate is below 2^16 m in magnitude. Otherwise `near_coplanar_overlap_unresolved` (or
+M2), and the largest such offset `d` is measured exactly and enters the margin; every stored coordinate is below
+2^16 m in magnitude. Each face's loops, projected onto P, must be simple (consecutive segments meet only in their
+common vertex, others are disjoint), pairwise disjoint, of non-zero area, with every hole strictly inside the
+outer loop and outside the other holes (exact parity), else `near_coplanar_loops_invalid_in_projection` (Codex
+z3 L1: model validation checks each face in its own chart, where a hole can be inside although it crosses the
+outer loop after projection onto P). Otherwise `near_coplanar_overlap_unresolved` (or
 `near_coplanar_coordinates_above_fence`).
 
 1. **Shared edges.** S = the model edges both faces use. Each is used exactly once per face (else
@@ -55,22 +66,26 @@ M2); every stored coordinate is below 2^16 m in magnitude. Otherwise `near_copla
    faces. Z = the model vertices of S; `r = c t`.
 2. **Contact only in S and its zones.** For every segment pair (a of A, b of B) except a shared edge with
    itself:
-   - if a and b have no common model vertex in Z, their exact distance is `> t (1 + sigma)`;
+   - if a and b have no common model vertex in Z, their exact distance is `> m`;
    - else, for each common vertex V in Z, a rational point of a at world distance `>= r` from V (at parameter
      at most 1/2 from V, the midpoint when the segment is exactly `2r` long, else
-     `near_coplanar_segment_shorter_than_zone`) is `> t (1 + sigma)` from b, and the same with a and b swapped.
+     `near_coplanar_segment_shorter_than_zone`) is `> m` from b, and the same with a and b swapped.
 
-   Here `sigma = 2^-26` bounds the exact sine (the band gate), and the margin `t sigma` covers the difference
-   between the projected stored trims and the material (step (iv), Codex z2 M).
+   Here `m = t + sigma (t + d) + 2 d` (decision 23), `sigma = 2^-26` bounds the exact sine (the band gate) and
+   `d` is the measured drift (an exact rational upper bound of its square root). `sigma (t + d)` covers the
+   difference between the projected stored trims and the material (step (iv), Codex z2 M; the admission bound
+   reads the domain curves, so a stored point is within `t + d` of its own plane), and `2 d` the difference
+   between the stored and the arranged geometry of the two faces (Codex z3 M1).
 
    Otherwise `near_coplanar_contact_off_shared_edge`. The distance to b is convex along a and 0 at V, so a's
-   contact set with b is an interval from V that ends before that point. The point is chosen with an outward
-   rounded square root, so its distance from V is between `r` and `r (1 + 2^-50)` (Codex z1 L1): "within r"
-   below means within that bound.
+   contact set with b is an interval from V that ends before that point. The point is exact (an integer square
+   root rounded up, `_zone_point`), so its distance from V is between `r` and `r (1 + 2^-60)` at any magnitude
+   (Codex z1 L1, z3 L2: a float square root put it at 2r for a subnormal step): "within r" below means within
+   that bound.
 3. **Opposite sides.** On each shared edge the faces' material lies on opposite sides: material is left of a
-   path's traversal in P's affine chart when its loop's exact signed area is positive, unless the loop is a
-   hole (its first vertex lies inside an odd number of the face's other loops, exact parity; a vertex on
-   another loop refuses unresolved). Otherwise `near_coplanar_same_side_of_shared_edge`.
+   path's traversal in P's affine chart when its loop's exact signed area is positive and the loop is the outer
+   loop, or negative and the loop is a hole (loops valid in projection, checked above; no dependence on which
+   vertex starts a loop). Otherwise `near_coplanar_same_side_of_shared_edge`.
 4. **No boundary inside the other face.** The midpoint of every non-shared segment lies outside the other
    face (exact even-odd parity over all its loops). Otherwise `positive-area overlap requires an explicit
    ownership policy`.
@@ -101,7 +116,8 @@ decomposition seams that both faces carry are suppressed, as `_coplanar_traces` 
   by at most t onto it, and only the out-of-P component of that move survives projection onto P, at most
   `sin` of the move). Every non-zone boundary point of B is outside A and `> t (1 + sigma)` from ∂A in
   projection, so this perturbation cannot bring it inside A, and the material boundaries stay `> t` apart there
-  (in P, hence in 3D). Hence any point common to both faces' material projects within
+  (in P, hence in 3D). The same holds for the arranged geometry (the domain paths), which is within `d` of the
+  stored vertices on each face: separation `> m` leaves `> t` between the arranged boundaries. Hence any point common to both faces' material projects within
   `sigma t` (about 1.5e-17 m at t = 1 nm) of S or of a zone, and every such point is within t of the emitted
   shared edges or zones. Example (z1 M1): plates on `z = k x` and `z = -k x` (k = 1e-10) sharing a hinge stored
   0.25t above both planes: the supports cross on a line 0.25t from the emitted hinge, and the material overlap
@@ -110,6 +126,22 @@ decomposition seams that both faces carry are suppressed, as `_coplanar_traces` 
   plane (Codex z2 M).
 
 Rules 2-4 are constant-size local predicates over segment pairs; there is no global accounting.
+
+## Class audit: decided geometry versus geometry used downstream (decision 23)
+
+The rule decides on the stored vertex doubles projected exactly onto P. Every place where other geometry is used:
+
+| used downstream | differs from the decided geometry by | covered by |
+|---|---|---|
+| A's material (trims projected onto A's plane = P) | 0 | - |
+| B's material (trims projected onto B's plane, seen in P) | `sigma (t + d)` | margin `m` |
+| the arranged domain paths of either face (reversed paths re-evaluated) | `d` per face (measured, `<= t/8`) | margin `m` (`2 d`) |
+| the admission bound (read on the domain curves) | `d` | in `sigma (t + d)` |
+| the emitted traces (the shared model edges' stored segments) | 0 | - |
+| the zone point (formerly float square root) | 0 (exact) | `_zone_point` |
+| the band (formerly the float predicate's diagnostic) | 0 (exact sine, both sides) | the angle gates |
+| loop validity and hole nesting (model validation, each face's own chart) | projection onto P | the projected-loop check |
+| the coordinate fence (stored doubles; domain points within `d`) | scope only, not a soundness input | - |
 
 ## Typed refusals (all keep the `ill_conditioned_plane_plane` prefix)
 
@@ -125,6 +157,8 @@ Rules 2-4 are constant-size local predicates over segment pairs; there is no glo
 | `; near_coplanar_contact_off_shared_edge` | rule 2: contact within t away from the shared edges' zones (any overlap, near-tangent or point contact, a second geometric abutment, a sliver wedge at a zone) |
 | `; near_coplanar_segment_shorter_than_zone` | rule 2: a segment at a shared vertex shorter than 2 c t = 8 nm (at t = 1 nm) |
 | `; near_coplanar_same_side_of_shared_edge` | rule 3 |
+| `; near_coplanar_angle_below_band` | the exact sine of the stored planes is at most the policy angular tolerance (the float predicate's diagnostic said ill-conditioned) |
+| `; near_coplanar_loops_invalid_in_projection` | a face's loops are not simple, disjoint and nested once projected onto the first face's plane |
 | `; near_coplanar_angle_outside_band` | the exact sine of the stored planes exceeds `2^-26` (the float predicate's diagnostic said ill-conditioned) |
 | `; near_coplanar_trace_off_boundary` | an emitted trace is not certified on both boundaries (cannot happen with shared-edge identity; kept as the certificate) |
 
@@ -174,6 +208,10 @@ in-band pair).
   joined), `test_domain_path_off_its_stored_vertex_refuses_typed` (M2, untyped arrangement refusal),
   `test_hinge_exactly_two_zones_long_joins` (L2, refused). Codex z2: `test_gap_just_above_t_closes_on_the_second_support`
   (joined on 282a2ee).
+- Codex z3 / decision 23 regressions (each failed on b43187e): `test_reversed_path_drift_cannot_close_a_gap_below_t`
+  (M1, joined), `test_exactly_coincident_stored_planes_never_take_the_band_rule` (M2, joined),
+  `test_loops_invalid_after_projection_refuse_typed` (L1, a trace was returned; with a seam the planner joined),
+  `test_zone_point_is_exact_at_any_magnitude` (L2, the float square root gave 2r).
 - Unchanged: `test_in_band_neighbours_sharing_an_edge_are_edge_joined_like_exact_coplanar` (plan shape equal to
   the exactly coplanar plan), the fence boundary tests and all other admission tests.
 
