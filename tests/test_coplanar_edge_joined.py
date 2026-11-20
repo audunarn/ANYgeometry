@@ -1257,9 +1257,11 @@ def _batch_policy(**fields):
     return IntersectionBatchPolicy(member_connections=False, member_face_connections=False, **fields)
 
 
-def test_zone_rule_polls_cancellation_once_per_segment():
+def test_zone_rule_polls_cancellation_during_face_work():
     # On d898fe0 planning polled 7 times for any n (all before the pair stage) and a cancellation requested during
-    # the zone rule was never seen. Now every outer segment of each zone loop polls, and a request then cancels.
+    # the zone rule was never seen. Now the polls grow with the faces (at least one per segment of A), and a request
+    # half-way through them (here in rule 4's midpoint pass) cancels. Which loop sees it is not asserted: under D24
+    # only "never success" is the contract (test_cancellation_after_the_last_face_poll_never_succeeds).
     n = 60
     model, faces = _seam_only_pair(n)
     calls = []
@@ -1274,8 +1276,86 @@ def test_zone_rule_polls_cancellation_once_per_segment():
 
 
 def test_zone_rule_counts_against_the_predicate_budget():
-    # On d898fe0 max_predicates=30 still returned the empty plan (7 predicates counted); the zone rule's polls now
-    # count, so the budget is exhausted.
+    # On d898fe0 max_predicates=30 still returned the empty plan (7 predicates counted); the rule's polls now count
+    # (this budget is exhausted already in admission's per-path plane-distance loop).
     model, faces = _seam_only_pair(60)
     with pytest.raises(GeometryError, match="predicate budget exhausted"):
         plan_intersections(model, faces, policy=_batch_policy(max_predicates=30))
+
+
+
+# Owner decision 24 (polling contract): a cancelled or budget-exhausted batch never returns success from the
+# edge-joined rule; it calls check() unconditionally immediately before returning. Both regressions arm the stop
+# at the last moment before success: when the rule enters its trace certificate (no traces: every shared edge is a
+# suppressed same-sheet seam, Codex z5's 24-seam emission case). The moment is observed with sys.settrace on call
+# events (nothing is replaced); on 4f77900 no poll followed, so both batches returned an empty successful plan.
+
+def _seam_hinge_pair(pieces=24):
+    """A above and B below a straight hinge from (0,0) to (1,0) split into ``pieces`` model edges, all shared, all
+    tagged same-sheet decomposition seams; B's plane is tilted by 1.1e-10."""
+    from anygeometry import EntityRef
+    k = 1.1e-10
+    model = GeometryModel()
+    hinge = [model.add_point(i/pieces, 0, 0) for i in range(pieces + 1)]
+    top = model.add_points(((1, 1, 0), (0, 1, 0)))
+    bottom = model.add_points(((0, -1, -k), (1, -1, -k)))
+    face_a, shared = _ring_face(model, [*hinge, *top], Plane((0, 0, 0), (1, 0, 0), (0, 1, 0)))
+    face_b, shared = _ring_face(model, [*hinge[::-1], *bottom], Plane((0, 0, 0), (1, 0, 0), (0, 1, k)), shared)
+    edges = [shared[(hinge[i], hinge[i + 1])] for i in range(pieces)]
+    for edge in edges:
+        model.tag(EntityRef("edge", edge), "intersection_decomposition_seam")
+    model.add_sheet([face_a, face_b], orientations=(1, 1))
+    assert model.validate_topology() == ()
+    assert all(len(model.faces_using_edge(edge)) == 2 for edge in edges)
+    return model, (model.handle("face", face_a), model.handle("face", face_b))
+
+
+def _predicates_before_certificate(model, faces):
+    """Plan once with a generous budget; return the pair stage's predicate count (its check() closure's counter,
+    read, never written) when the rule enters its trace certificate."""
+    import sys
+    seen = []
+
+    def tracer(frame, event, arg):
+        if event == "call" and frame.f_code.co_name == "_certify_edge_joined_traces" and not seen:
+            check = frame.f_locals["check"]
+            seen.append(check.__closure__[check.__code__.co_freevars.index("examined")].cell_contents)
+        return None
+    previous = sys.gettrace()
+    sys.settrace(tracer)
+    try:
+        plan = plan_intersections(model, faces, policy=_batch_policy(max_predicates=10**9))
+    finally:
+        sys.settrace(previous)
+    assert len(plan.arrangements) == 0 and seen
+    return seen[0]
+
+
+def test_cancellation_after_the_last_face_poll_never_succeeds():
+    import sys
+    model, faces = _seam_hinge_pair()
+    for pair in (faces, faces[::-1]):
+        armed = []
+
+        def tracer(frame, event, arg):
+            if event == "call" and frame.f_code.co_name == "_certify_edge_joined_traces":
+                armed.append(1)
+            return None
+        previous = sys.gettrace()
+        sys.settrace(tracer)
+        try:
+            with pytest.raises(GeometryError, match="cancelled"):
+                plan_intersections(model, pair, policy=_batch_policy(cancellation_check=lambda: bool(armed)))
+        finally:
+            sys.settrace(previous)
+        assert armed
+
+
+def test_budget_exhausted_by_the_final_poll_never_succeeds():
+    model, faces = _seam_hinge_pair()
+    for pair in (faces, faces[::-1]):
+        before = _predicates_before_certificate(model, pair)
+        # A budget equal to the polls made before the certificate: on 4f77900 nothing polled afterwards and the
+        # batch succeeded within budget; the final check now counts one more and exhausts it.
+        with pytest.raises(GeometryError, match="predicate budget exhausted"):
+            plan_intersections(model, pair, policy=_batch_policy(max_predicates=before))

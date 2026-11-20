@@ -1,21 +1,21 @@
-# Parked 2026-11-20 after the focused polling review round (Codex z5, hard limit)
+# Polling contract (owner decision 24, 2026-11-20, after Codex z5)
 
-4f77900 makes the zone rule's main loops poll `check()` (the z4 seam-only regression is fixed), but the one focused
-round (review\z5-out.md) reported, not fixed (owner rule: park on any high or medium finding):
-- **Medium: admission can refuse without polling.** The face-extent scans and the source-edge set builds before
-  `_near_coplanar_edge_join`'s distance loop run without a poll (a cancellation armed there is not seen; the pair
-  refuses `near_coplanar_without_shared_edge`).
-- **Medium: zone preparation and seam emission still have unpolled passes.** The model-topology check, the exact
-  vertex projection, the projected-loop preparation, the shared-edge emission loop and the trace certificate's
-  edge-set rebuild scan face-sized inputs between polls; with a hinge split into 24 same-sheet seams and
-  cancellation armed at emission, planning returned a successful empty plan.
-- Low: the callback reaching the rule depends on the route (threaded planning passes a task-abandonment callback,
-  direct tests a no-op; the `check=None` defaults could hide a future omission). Low: the two regression tests
-  trip in admission and in rule 4, not in every loop they claim to cover.
+A cancelled or budget-exhausted batch never returns success from the edge-joined rule: `_pair_paths_exact` calls
+the pair stage's `check()` (cancellation and the predicate budget) unconditionally immediately before returning the
+rule's traces, after the trace certificate, so no work since the last face-loop poll can let a stopped batch succeed.
+`check` is a required argument of the rule's helpers (`_domain_plane_distance_bound`, `_near_coplanar_edge_join`,
+`_edge_joined_zones`, `_projected_loops_valid`, `_certify_edge_joined_traces`; no `None` default). Face-sized loops
+keep polling for responsiveness; a stop caught early may surface as a cancellation, a budget refusal or a typed
+refusal reached first: all fail closed, none is success. Not claimed: that every pass between polls is short.
 
-Candidate fix: poll per item in every comprehension and loop over boundary paths on the path (extent, edge sets,
-topology, projection, preparation, emission, certificate), make `check` a required argument of the helpers, and add
-one regression per loop (a cancellation armed at that loop's first item, by predicate count), then one review.
+Codex z5 (review\z5-out.md) reported two Mediums against "every loop polls" (unpolled admission scans; unpolled
+preparation, emission and certificate passes, a 24-seam pair returned a successful empty plan when cancelled at
+emission) and two Lows (route-dependent callback; test claims). Under D24 the Mediums are covered by the final
+check; the Lows: the defaults are gone, and the z4 tests' comments now claim only what they show. Regressions
+(each failed on 4f77900 with a successful plan): `test_cancellation_after_the_last_face_poll_never_succeeds` and
+`test_budget_exhausted_by_the_final_poll_never_succeeds`, both armed when the rule enters its trace certificate
+in the 24-seam case (observed by `sys.settrace` call events; the budget is the pair stage's own predicate count
+there, read from its `check` closure; nothing is replaced).
 
 # Fixed 2026-11-20 after the final zone-contract review round (Codex z4, owner: fix the Medium)
 

@@ -974,12 +974,11 @@ def _plane_distance_bound(curve, plane):
     return bound if math.isfinite(bound) else None
 
 
-def _domain_plane_distance_bound(domain, plane, check=None):
+def _domain_plane_distance_bound(domain, plane, check):
     bounds = []
     for loop in domain.boundaries:
         for path in loop:
-            if check is not None:
-                check()
+            check()
             bounds.append(_plane_distance_bound(path.curve, plane))
     if not bounds or any(value is None for value in bounds):
         return None
@@ -1303,7 +1302,7 @@ def _edge_joined_zones(first, second, tolerance, model, provenance, check):
     return tuple(result)
 
 
-def _near_coplanar_edge_join(first, second, strict_tolerance, check=None):
+def _near_coplanar_edge_join(first, second, strict_tolerance, check):
     """Decide a plane-plane pair the support predicate called ill-conditioned (docs/coplanar-edge-joined.md).
 
     EDGE_JOINED needs BOTH: (1) a topological edge used by both faces' boundaries (source edge identity,
@@ -1336,7 +1335,7 @@ def _point_segment_distance_squared(point, start, end):
     return sum((d[k]-t*s[k])**2 for k in range(3))
 
 
-def _certify_edge_joined_traces(traces, provenance, first, second, strict_tolerance, check=None):
+def _certify_edge_joined_traces(traces, provenance, first, second, strict_tolerance, check):
     """Owner decision 12, option A: every emitted trace lies within ``strict_tolerance`` of BOTH faces' stored
     boundaries, or the pair refuses (typed). A trace cut from a source path whose model edge both faces use lies
     exactly on both boundaries. Any other trace must be a LinePath with both endpoints within the tolerance of
@@ -1353,8 +1352,7 @@ def _certify_edge_joined_traces(traces, provenance, first, second, strict_tolera
             for point in (trace.start, trace.end)) for loop in domain.boundaries for path in loop)
 
     for trace, edge in zip(traces, provenance, strict=True):
-        if check is not None:
-            check()
+        check()
         if edge is not None and edge in shared:
             continue
         if not (isinstance(trace, LinePath) and on_boundary(trace, first) and on_boundary(trace, second)):
@@ -1896,6 +1894,9 @@ def _pair_paths_exact(first, second, model, tolerance, check, *, point_contacts=
             provenance = []
             traces = _edge_joined_zones(first, second, strict, model, provenance, check)
             _certify_edge_joined_traces(traces, provenance, first, second, strict, check)
+            # Owner decision 24 (polling contract): a cancelled or budget-exhausted batch never returns success from
+            # this rule, whatever ran since the last face-loop poll: one unconditional check immediately before it.
+            check()
             _increment('plane_plane_coplanar_edge_joined')
             return traces
         if not result.classified:
