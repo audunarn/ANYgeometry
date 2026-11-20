@@ -1,3 +1,22 @@
+# Parked 2026-11-20 after the focused polling review round (Codex z5, hard limit)
+
+4f77900 makes the zone rule's main loops poll `check()` (the z4 seam-only regression is fixed), but the one focused
+round (review\z5-out.md) reported, not fixed (owner rule: park on any high or medium finding):
+- **Medium: admission can refuse without polling.** The face-extent scans and the source-edge set builds before
+  `_near_coplanar_edge_join`'s distance loop run without a poll (a cancellation armed there is not seen; the pair
+  refuses `near_coplanar_without_shared_edge`).
+- **Medium: zone preparation and seam emission still have unpolled passes.** The model-topology check, the exact
+  vertex projection, the projected-loop preparation, the shared-edge emission loop and the trace certificate's
+  edge-set rebuild scan face-sized inputs between polls; with a hinge split into 24 same-sheet seams and
+  cancellation armed at emission, planning returned a successful empty plan.
+- Low: the callback reaching the rule depends on the route (threaded planning passes a task-abandonment callback,
+  direct tests a no-op; the `check=None` defaults could hide a future omission). Low: the two regression tests
+  trip in admission and in rule 4, not in every loop they claim to cover.
+
+Candidate fix: poll per item in every comprehension and loop over boundary paths on the path (extent, edge sets,
+topology, projection, preparation, emission, certificate), make `check` a required argument of the helpers, and add
+one regression per loop (a cancellation armed at that loop's first item, by predicate count), then one review.
+
 # Fixed 2026-11-20 after the final zone-contract review round (Codex z4, owner: fix the Medium)
 
 Codex z4 (review\z4-out.md) confirmed the geometry and reported a Medium and a Low, now fixed:
