@@ -386,6 +386,159 @@ def _fold_doubles(o1, a1, e1, e2, r1, o2, a2, r2):
     return result
 
 
+def _half_ulp(value):
+    """Half an ulp of a float as an exact rational: ``|fl(t) - t| <= _half_ulp(fl(t))`` under round to nearest, in the
+    normal and the subnormal range (``np.spacing(0)`` is the smallest subnormal)."""
+    return Fraction(float(np.spacing(abs(float(value)))))/2
+
+
+#: Unit roundoff and the classical dot-product constant gamma_3 = 3u / (1 - 3u) (any summation order, FMA or not).
+_UNIT = Fraction(1, 2**53)
+_GAMMA3 = 3*_UNIT/(1-3*_UNIT)
+#: Absolute underflow allowance of a 3-term dot product: 3 products and 2 sums, each at most half the smallest
+#: subnormal (2^-1075) beyond the relative gamma_3 bound.
+_DOT_UNDERFLOW = Fraction(5, 2**1075)
+#: Classification floor |a1 x a2|^2 >= 2^-60 (axes at least about 1e-9 rad apart). Nearer-parallel pairs are never
+#: classified (main's path, with its own near-parallel handling); the contact point's axial solve divides by it.
+_FOLD_CROSS_FLOOR = 2.**-60
+
+
+def _fold_coefficient_bound(first, second, sign):
+    """Rigorous upper bound ``B`` (an exact rational) of ``|D(fl coefficients) - D(exact coefficients)|`` for the
+    fold ``sign``, or None when an input is not finite.
+
+    ``D = nc^2 + ns^2 - c0^2`` with ``c0 = n0 - s |a1 x a2| r2`` is the discriminant of the fold equation
+    ``c0 + nc cos + ns sin = 0``. The float coefficients are those ``analytic_supports.cylinder_cylinder_support``
+    forms (``cross = a1 x a2``, ``magnitude = |cross|``, ``n0 = (o1 - o2) . cross``, ``nc = r1 (e1 . cross)``,
+    ``ns = r1 ((a1 x e1) . cross)``); the exact coefficients are those of the stored doubles (``e2 = a1 x e1``
+    exactly). A forward running-error bound over the kernel's own float operations: every product, difference and
+    square root contributes half an ulp of its float result unless it is exact (checked exactly), a 3-term dot
+    product ``gamma_3`` times its absolute terms plus an underflow allowance (any summation order, FMA or not), the
+    norm (numpy: ``sqrt(c . c)``) ``gamma_3`` relative plus half an ulp plus an underflow allowance. All error
+    propagation (first and second order) is exact rational arithmetic, so the bound itself never rounds or
+    underflows.
+    """
+    Q = Fraction
+    h = _half_ulp
+    a1, a2 = np.asarray(first.axis, dtype=float), np.asarray(second.axis, dtype=float)
+    e1 = np.asarray(first.radial_direction, dtype=float)
+    o1, o2 = np.asarray(first.origin, dtype=float), np.asarray(second.origin, dtype=float)
+    r1, r2 = float(first.radius), float(second.radius)
+    if not all(math.isfinite(float(value)) for value in (*a1, *a2, *e1, *o1, *o2, r1, r2)):
+        return None
+
+    def product(x, y):
+        z = float(x)*float(y)
+        return z, (Q(0) if Q(z) == Q(float(x))*Q(float(y)) else h(z))
+
+    def difference(x, y):
+        z = float(x)-float(y)
+        return z, (Q(0) if Q(z) == Q(float(x))-Q(float(y)) else h(z))
+
+    def cross(u, v):
+        values, errors = [], []
+        for j, k in ((1, 2), (2, 0), (0, 1)):
+            (p, ep_), (q, eq_) = product(u[j], v[k]), product(u[k], v[j])
+            z, ez = difference(p, q)
+            values.append(z)
+            errors.append(ep_+eq_+ez)
+        return np.asarray(values), errors
+
+    def dot(x, ex, y, ey):
+        # |fl(x . y) - (x_exact . y_exact)| for |x - x_exact| <= ex, |y - y_exact| <= ey componentwise.
+        total = _DOT_UNDERFLOW
+        for xi, exi, yi, eyi in zip(x, ex, y, ey):
+            ax, ay = abs(Q(float(xi))), abs(Q(float(yi)))
+            total += _GAMMA3*ax*ay+ax*eyi+ay*exi+exi*eyi
+        return total
+
+    c, ec = cross(a1, a2)
+    e2, ee2 = cross(a1, e1)
+    magnitude = float(np.linalg.norm(c))
+    # fl(sqrt(fl(c . c))): |fl(c.c) - |c_fl|^2| <= gamma_3 |c_fl|^2 + underflow, so the root is within gamma_3 / 2
+    # relative (second order included in gamma_3) plus sqrt(underflow) < 2^-536, and the rounded root within half
+    # an ulp more; then | |c_fl| - |c_exact| | <= ||c_fl - c_exact||_1.
+    em = _GAMMA3*(Q(magnitude)+h(magnitude))+h(magnitude)+Q(1, 2**536)+sum(ec)
+    pairs = [difference(x, y) for x, y in zip(o1, o2)]
+    d = [value for value, _ in pairs]
+    ed = [error for _, error in pairs]
+    n0 = float(np.asarray(d) @ c)
+    en0 = dot(d, ed, c, ec)
+    t_c, t_s = float(e1 @ c), float(e2 @ c)
+    et_c, et_s = dot(e1, [Q(0)]*3, c, ec), dot(e2, ee2, c, ec)
+    (nc, rc), (ns, rs) = product(r1, t_c), product(r1, t_s)
+    enc, ens = abs(Q(r1))*et_c+rc, abs(Q(r1))*et_s+rs
+    reach, er = product(magnitude, r2)
+    ep = abs(Q(r2))*em+er
+    c0, e_sub = difference(n0, sign*reach)
+    ec0 = en0+ep+e_sub
+    a = lambda value: abs(Q(float(value)))
+    return (2*a(nc)+enc)*enc+(2*a(ns)+ens)*ens+(2*a(c0)+ec0)*ec0
+
+
+def _fold_undecidable(first, second):
+    """``{fold sign: tau}`` of the folds whose exact discriminant (stored doubles) is nonzero but no larger than
+    :func:`_fold_coefficient_bound`: the kernel's float fold coefficients cannot decide whether the fold is two
+    simple folds, a double contact or no contact (the F550 class). ``tau`` is minus the exact sign of
+    ``n0 - s |c| r2``, as for an exact double. Exact doubles (:func:`_fold_doubles`) are not included.
+
+    Classified only inside the K3 magnitude range (L = max(|origin coordinates|, r1, r2) <= 2^64, min(r1, r2) >=
+    2^-64, L <= 2^64 min(r1, r2); no overflow) and for |a1 x a2|^2 >= ``_FOLD_CROSS_FLOOR``; outside, the result is
+    empty (main's path).
+    """
+    lengths = [abs(float(value)) for value in (*np.asarray(first.origin, dtype=float),
+                                               *np.asarray(second.origin, dtype=float), first.radius, second.radius)]
+    smallest = min(abs(float(first.radius)), abs(float(second.radius)))
+    if not (all(math.isfinite(value) for value in lengths) and smallest >= 2.**-64
+            and max(lengths) <= 2.**64 and max(lengths) <= 2.**64*smallest):
+        return {}
+    q = lambda vector: [Fraction(float(value)) for value in np.asarray(vector, dtype=float)]
+    cross = lambda u, v: [u[1]*v[2]-u[2]*v[1], u[2]*v[0]-u[0]*v[2], u[0]*v[1]-u[1]*v[0]]
+    dot = lambda u, v: sum(x*y for x, y in zip(u, v))
+    a1, a2 = np.asarray(first.axis, dtype=float), np.asarray(second.axis, dtype=float)
+    c = np.cross(a1, a2)
+    if not float(c @ c) >= _FOLD_CROSS_FLOOR:
+        return {}
+    magnitude = float(np.linalg.norm(c))
+    e1 = np.asarray(first.radial_direction, dtype=float)
+    r1, r2 = float(first.radius), float(second.radius)
+    n0 = float((np.asarray(first.origin, dtype=float)-np.asarray(second.origin, dtype=float)) @ c)
+    nc, ns = r1*float(e1 @ c), r1*float(np.cross(a1, e1) @ c)
+    result = {}
+    exact = None
+    for sign in (-1, 1):
+        bound = _fold_coefficient_bound(first, second, sign)
+        if bound is None:
+            continue
+        c0 = n0-sign*magnitude*r2
+        # Rigorous prefilter in exact arithmetic on the float coefficients: |D(fl) - D(exact)| <= bound, so
+        # |D(fl coefficients)| > 2 bound implies |D(exact)| > bound (decided) without forming the exact D.
+        floated = Fraction(nc)**2+Fraction(ns)**2-Fraction(c0)**2
+        if abs(floated) > 2*bound:
+            continue
+        if exact is None:
+            A1, E1 = q(a1), q(e1)
+            C = cross(A1, q(a2))
+            E2 = cross(A1, E1)
+            N0 = dot([x-y for x, y in zip(q(first.origin), q(second.origin))], C)
+            R1, R2 = Fraction(r1), Fraction(r2)
+            NC, NS, C2 = R1*dot(E1, C), R1*dot(E2, C), dot(C, C)
+            exact = (N0, NC*NC+NS*NS-N0*N0-C2*R2*R2, C2, R2)
+        N0, rational, C2, R2 = exact
+        if C2 == 0:
+            return {}
+        factor = 2*sign*N0*R2
+        # exact D = rational + factor sqrt(C2); undecidable iff 0 < |D| <= bound
+        if _sign_of_sum_with_root(rational, factor, C2) == 0:
+            continue
+        if (_sign_of_sum_with_root(rational-bound, factor, C2) <= 0
+                <= _sign_of_sum_with_root(rational+bound, factor, C2)):
+            tau = -_sign_of_sum_with_root(N0, -sign*R2, C2)
+            if tau:
+                result[sign] = tau
+    return result
+
+
 def _trim(values):
     values = list(values)
     while len(values) > 1 and values[-1] == 0:

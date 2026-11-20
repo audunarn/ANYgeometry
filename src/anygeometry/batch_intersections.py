@@ -44,7 +44,7 @@ from .runtime_diagnostics import _timed_phase, _increment
 
 from ._cross3 import _cross3
 from .analytic_roots import root_isolation_memo
-from .analytic_supports import plane_cylinder_support, cylinder_cylinder_support
+from .analytic_supports import plane_cylinder_support, cylinder_cylinder_support, undecidable_contact
 from .arrangement_geometry import (LinePath, BezierPath, freeze_edge,
                                    point_parameters, curve_junctions, _junction_bounds_policy)
 from .entities import EntityRef, OrientedEdge
@@ -1252,6 +1252,137 @@ class _TopologyRoute:
                                      seam_policy=seam_policy, seam_policy_version=version)
 
 
+UNDECIDABLE_CONTACT = ("cylinder pair fold contact is undecidable at stored precision and no stored shared "
+                       "edge passes through its contact point")
+UNSUPPORTED_CONTACT = ("cylinder pair fold contact is undecidable at stored precision and is not an admitted "
+                       "equal-radius mitre")
+
+
+def _stored_edge_through(first, second, point, tolerance):
+    """Whether an edge stored in both domains' boundaries (same source edge) passes through ``point``: a parameter
+    of its curve evaluates within ``tolerance`` of it (checked on the evaluated point, so a parameter clamped to the
+    curve's end does not count unless that end is itself within tolerance)."""
+    shared = ({path.source_edge for loop in first.boundaries for path in loop if path.source_edge is not None}
+              & {path.source_edge for loop in second.boundaries for path in loop if path.source_edge is not None})
+    point = np.asarray(point, dtype=float)
+    for loop in first.boundaries:
+        for path in loop:
+            if path.source_edge not in shared:
+                continue
+            for parameter in point_parameters(path.curve, point, tolerance=tolerance):
+                if float(np.linalg.norm(np.asarray(path.curve.evaluate(parameter), dtype=float)-point)) <= tolerance:
+                    return True
+    return False
+
+
+#: Interval budget per curve of the K6 boundary near test; exhausting it counts as within (conservative).
+_BOUNDARY_SUBDIVISION_BUDGET = 4096
+
+
+def _boundary_within(domain, point, radius):
+    """Whether some boundary curve of ``domain`` comes within ``radius`` of ``point``, judged on evaluated points:
+    each curve is cut into intervals, and an interval is discarded only when ``(d0 + d1 - arc) / 2 > radius`` (``d``
+    the endpoint distances, ``arc`` a 1.25x allowance over the two half-chords through its midpoint), else halved;
+    an interval still undecided at the depth limit or after the work budget counts as within (conservative).
+    Straight edges use the closed-form nearest point."""
+    from .arrangement_geometry import LinePath
+    point = np.asarray(point, dtype=float)
+    for loop in domain.boundaries:
+        for path in loop:
+            curve = path.curve
+            if isinstance(curve, LinePath):
+                # Closed form (Codex K6 R5 M2: subdividing a straight edge that just misses the cutoff stalls).
+                start, end = np.asarray(curve.start, dtype=float), np.asarray(curve.end, dtype=float)
+                direction = end-start
+                length2 = float(direction @ direction)
+                t = 0. if length2 == 0 else min(1., max(0., float((point-start) @ direction)/length2))
+                if float(np.linalg.norm(np.asarray(curve.evaluate(t), dtype=float)-point)) <= radius:
+                    return True
+                continue
+            lo, hi = (np.asarray(value, dtype=float) for value in curve.bounds())
+            if float(np.linalg.norm(np.maximum(0., np.maximum(lo-point, point-hi)))) > radius:
+                continue
+            # Quick exact-pass check (the projection's tolerance capped by the curve's extent: point_parameters is
+            # meant for small tolerances); the subdivision below decides the rest.
+            quick = min(radius, max(float(np.linalg.norm(hi-lo)), 1e-300))
+            if any(float(np.linalg.norm(np.asarray(curve.evaluate(t), dtype=float)-point)) <= radius
+                   for t in point_parameters(curve, point, tolerance=quick)):
+                return True
+            distance = lambda t: float(np.linalg.norm(np.asarray(curve.evaluate(t), dtype=float)-point))
+            samples = np.linspace(0., 1., 65)
+            values = [distance(float(t)) for t in samples]
+            if min(values) <= radius:
+                return True
+            stack = [(float(samples[k]), float(samples[k+1]), values[k], values[k+1], 0) for k in range(64)]
+            budget = _BOUNDARY_SUBDIVISION_BUDGET
+            while stack:
+                budget -= 1
+                if budget < 0:
+                    return True                  # undecided within the work budget: conservative
+                t0, t1, d0, d1, depth = stack.pop()
+                tm = .5*(t0+t1)
+                pm = np.asarray(curve.evaluate(tm), dtype=float)
+                dm = float(np.linalg.norm(pm-point))
+                if dm <= radius:
+                    return True
+                p0, p1 = (np.asarray(curve.evaluate(t), dtype=float) for t in (t0, t1))
+                arc = 1.25*(float(np.linalg.norm(pm-p0))+float(np.linalg.norm(p1-pm)))
+                if .5*(d0+d1-arc) > radius:
+                    continue
+                if depth >= 60 or tm <= t0 or tm >= t1:
+                    return True
+                stack.append((t0, tm, d0, dm, depth+1))
+                stack.append((tm, t1, dm, d1, depth+1))
+    return False
+
+
+def _requires_witness(domain, point, reach, tolerance):
+    """Inside the K6 gates: the contact point lies in ``domain`` or within ``_REACH_MARGIN`` reaches of its boundary
+    curves (a conservative geometric test inside the gates, not a proof)."""
+    from .analytic_supports import _REACH_MARGIN
+    from .arrangement_geometry import LinePath
+    point = tuple(float(value) for value in point)
+    if domain.contains(LinePath(point, point), 0., tolerance):
+        return True
+    return _boundary_within(domain, point, max(_REACH_MARGIN*reach, tolerance))
+
+
+def _undecidable_contact_support(first, second, tolerance):
+    """K6 policy (owner decisions 2026-11-19: F550 option B with the stored-edge check; near test option 1).
+
+    None when no fold of the pair is undecidable at stored precision (every ordinary pair). Otherwise a contact
+    point that both faces may reach must be decided by the B-rep: an edge stored in both boundaries passes through
+    it, else the pair refuses (:data:`UNDECIDABLE_CONTACT`); and the pair must be an admitted equal-radius mitre,
+    whose double-contact intersection is the two certified bisector ellipses, else it refuses
+    (:data:`UNSUPPORTED_CONTACT`). Inside the scale gates (``UndecidableContact.admitted``) a face reaches a point
+    when the point lies in it or within ``_REACH_MARGIN`` reaches of its boundary curves; outside them, when the
+    point is within max(r / 4, tolerance) of its boundary box (r the smaller radius; the tolerance floor can only
+    add a refusal). Returns the ellipse support when some point requires a witness, and None when none does (the contacts lie away from at least one face, where both
+    geometries agree within tolerance: main's path). Runs in the T2b shadow as well."""
+    contact = undecidable_contact(first.support, second.support, tolerance=tolerance)
+    if contact is None:
+        return None
+
+    def near_box(domain, point):
+        lo, hi = _domain_bounds(domain)
+        point = np.asarray(point, dtype=float)
+        return (float(np.linalg.norm(np.maximum(0., np.maximum(lo-point, point-hi))))
+                <= max(contact.near_radius, tolerance))
+
+    if contact.admitted:
+        required = [point for point, reach in zip(contact.points, contact.reaches)
+                    if all(_requires_witness(domain, point, reach, tolerance) for domain in (first, second))]
+    else:
+        required = [point for point in contact.points if all(near_box(domain, point) for domain in (first, second))]
+    if not required:
+        return None
+    if not all(_stored_edge_through(first, second, point, tolerance) for point in required):
+        raise GeometryError(UNDECIDABLE_CONTACT)
+    if contact.support is None:
+        raise GeometryError(UNSUPPORTED_CONTACT)
+    return contact.support
+
+
 def _pair_paths(first, second, model, tolerance, check, *, point_contacts=None, face_tolerances=None, route=None):
     """Pair-stage traces of two domains. ``route`` (topology_certified mode only) may replace the
     clipping stage of a certified pair by its stored shared topology (ADR-T2 v2 section 4, T2b);
@@ -1317,7 +1448,12 @@ def _pair_paths_exact(first, second, model, tolerance, check, *, point_contacts=
         qualify_plane_cylinder_result(result, plane, cylinder, strict, pair)
         paths = (*result.curves, *(LinePath(start, end) for start, end in result.segments))
     else:
-        result = cylinder_cylinder_support(a, b, tolerance=tolerance, cancellation_check=lambda: (check() or False))
+        # The policy runs in the T2b shadow too (refusal parity: a contact exact planning refuses is refused there);
+        # the shadow then only records coincidence, which an admitted mitre never is.
+        result = _undecidable_contact_support(first, second, tolerance)
+        if result is None:
+            result = cylinder_cylinder_support(a, b, tolerance=tolerance,
+                                               cancellation_check=lambda: (check() or False))
         if result.coincident:
             _mark_coincident(_shadow)
             if _rectangular_cylinder(first, tolerance) and _rectangular_cylinder(second, tolerance):
