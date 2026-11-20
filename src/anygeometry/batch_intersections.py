@@ -974,8 +974,13 @@ def _plane_distance_bound(curve, plane):
     return bound if math.isfinite(bound) else None
 
 
-def _domain_plane_distance_bound(domain, plane):
-    bounds = [_plane_distance_bound(path.curve, plane) for loop in domain.boundaries for path in loop]
+def _domain_plane_distance_bound(domain, plane, check=None):
+    bounds = []
+    for loop in domain.boundaries:
+        for path in loop:
+            if check is not None:
+                check()
+            bounds.append(_plane_distance_bound(path.curve, plane))
     if not bounds or any(value is None for value in bounds):
         return None
     return max(bounds)
@@ -1105,11 +1110,12 @@ def _stored_plane_sine2(first, second):
     return sum(x*x for x in cross) / (sum(x*x for x in n)*sum(x*x for x in m))
 
 
-def _projected_loops_valid(loops, plane):
+def _projected_loops_valid(loops, plane, check):
     """Each face's loops, projected onto P, are simple, pairwise disjoint, the holes (loops after the first)
     strictly inside the outer loop and outside one another, and no loop has zero area (decision 23)."""
     segments = [(index, position, p, q) for index, loop in enumerate(loops) for position, (_, p, q) in enumerate(loop)]
     for i, (li, pi, p0, p1) in enumerate(segments):
+        check()
         for lj, pj, q0, q1 in segments[i + 1:]:
             size = len(loops[li])
             adjacent = li == lj and (pj - pi) % size in (1, size - 1)
@@ -1127,10 +1133,12 @@ def _projected_loops_valid(loops, plane):
                 return False
     charts = [[(plane.chart(p), plane.chart(q)) for _, p, q in loop] for loop in loops]
     for loop in charts:
+        check()
         points = [p for p, _ in loop]
         if sum(p[0]*q[1] - q[0]*p[1] for p, q in zip(points, points[1:] + points[:1])) == 0:
             return False
     for index in range(1, len(loops)):
+        check()
         vertex = charts[index][0][0]
         if not _parity_inside(vertex, charts[0]) or any(
                 _parity_inside(vertex, charts[other]) for other in range(1, len(loops)) if other != index):
@@ -1138,7 +1146,7 @@ def _projected_loops_valid(loops, plane):
     return True
 
 
-def _edge_joined_zones(first, second, tolerance, model, provenance):
+def _edge_joined_zones(first, second, tolerance, model, provenance, check):
     """Traces of an edge-joined pair by the zone contract (owner decisions 20-22, docs/coplanar-edge-joined.md
     "Zone contract"). Every decision is exact on the exact projections of the STORED model vertex doubles behind
     each boundary path onto the first face's stored exact plane P; projection onto P is 1-Lipschitz, so a projected
@@ -1191,6 +1199,7 @@ def _edge_joined_zones(first, second, tolerance, model, provenance):
         # (decision 23); more than t/8 refuses typed.
         for loop in face_uses:
             for path, _, start, end in loop:
+                check()
                 for point, vertex in ((path.curve.start, start), (path.curve.end, end)):
                     drift2 = max(drift2, sum((Fraction(float(x)) - Fraction(float(y)))**2
                                              for x, y in zip(point, model.vertex_position(vertex))))
@@ -1204,6 +1213,7 @@ def _edge_joined_zones(first, second, tolerance, model, provenance):
     shared = edge_sets[0] & edge_sets[1]
     shared_uses = {}
     for edge in shared:
+        check()
         # The same model edge in both faces: one stored LinePath by construction (identity, not geometry).
         found = [[item for loop in face for item in loop if item[1] == edge] for face in uses]
         if any(len(item) != 1 for item in found):
@@ -1223,7 +1233,7 @@ def _edge_joined_zones(first, second, tolerance, model, provenance):
     separation2 = (t + sigma*(t + drift) + 2*drift)**2
     exact = {vertex: plane.project(point) for vertex, point in position.items()}
     loops = [[[(path, exact[start], exact[end]) for path, _, start, end in loop] for loop in face] for face in uses]
-    if not all(_projected_loops_valid(face, plane) for face in loops):
+    if not all(_projected_loops_valid(face, plane, check) for face in loops):
         raise refuse(CoplanarEdgeJoin.LOOPS_INVALID_IN_PROJECTION)
     segments = [[item for loop in face for item in loop] for face in uses]
     zone = {vertex for edge in shared for vertex in shared_uses[edge][0][2:]}
@@ -1235,6 +1245,7 @@ def _edge_joined_zones(first, second, tolerance, model, provenance):
         return point
 
     for _, a_edge, a0, a1 in segments[0]:
+        check()
         for _, b_edge, b0, b1 in segments[1]:
             if a_edge == b_edge:
                 continue
@@ -1264,6 +1275,7 @@ def _edge_joined_zones(first, second, tolerance, model, provenance):
         return (area(loop) > 0) == (index == 0)
 
     for edge, (a_use, b_use) in shared_uses.items():
+        check()
         same_direction = a_use[2] == b_use[2]
         left = material_left(1, b_use[0])
         if material_left(0, a_use[0]) == (left if same_direction else not left):
@@ -1272,6 +1284,7 @@ def _edge_joined_zones(first, second, tolerance, model, provenance):
     for face in (0, 1):
         charts = [(plane.chart(exact[p]), plane.chart(exact[q])) for _, _, p, q in segments[1 - face]]
         for _, edge, p, q in segments[face]:
+            check()
             if edge in shared:
                 continue
             middle = tuple((x + y)/2 for x, y in zip(exact[p], exact[q]))
@@ -1290,7 +1303,7 @@ def _edge_joined_zones(first, second, tolerance, model, provenance):
     return tuple(result)
 
 
-def _near_coplanar_edge_join(first, second, strict_tolerance):
+def _near_coplanar_edge_join(first, second, strict_tolerance, check=None):
     """Decide a plane-plane pair the support predicate called ill-conditioned (docs/coplanar-edge-joined.md).
 
     EDGE_JOINED needs BOTH: (1) a topological edge used by both faces' boundaries (source edge identity,
@@ -1304,8 +1317,8 @@ def _near_coplanar_edge_join(first, second, strict_tolerance):
     if not edges & {path.source_edge for loop in second.boundaries for path in loop}:
         return CoplanarEdgeJoin.NO_SHARED_EDGE
     for domain, other in ((first, second), (second, first)):
-        off_other = _domain_plane_distance_bound(domain, other.support)
-        off_own = _domain_plane_distance_bound(domain, domain.support)
+        off_other = _domain_plane_distance_bound(domain, other.support, check)
+        off_own = _domain_plane_distance_bound(domain, domain.support, check)
         if off_other is None or off_own is None:
             return CoplanarEdgeJoin.UNBOUNDED_BOUNDARY
         if not off_other + off_own <= strict_tolerance:
@@ -1323,7 +1336,7 @@ def _point_segment_distance_squared(point, start, end):
     return sum((d[k]-t*s[k])**2 for k in range(3))
 
 
-def _certify_edge_joined_traces(traces, provenance, first, second, strict_tolerance):
+def _certify_edge_joined_traces(traces, provenance, first, second, strict_tolerance, check=None):
     """Owner decision 12, option A: every emitted trace lies within ``strict_tolerance`` of BOTH faces' stored
     boundaries, or the pair refuses (typed). A trace cut from a source path whose model edge both faces use lies
     exactly on both boundaries. Any other trace must be a LinePath with both endpoints within the tolerance of
@@ -1340,6 +1353,8 @@ def _certify_edge_joined_traces(traces, provenance, first, second, strict_tolera
             for point in (trace.start, trace.end)) for loop in domain.boundaries for path in loop)
 
     for trace, edge in zip(traces, provenance, strict=True):
+        if check is not None:
+            check()
         if edge is not None and edge in shared:
             continue
         if not (isinstance(trace, LinePath) and on_boundary(trace, first) and on_boundary(trace, second)):
@@ -1872,15 +1887,15 @@ def _pair_paths_exact(first, second, model, tolerance, check, *, point_contacts=
                 # to length/relative_length = 1000 m); the shared coplanar route is not certified above it.
                 verdict = CoplanarEdgeJoin.SCALE_ABOVE_ABSOLUTE_TOLERANCE
             else:
-                verdict = _near_coplanar_edge_join(first, second, strict)
+                verdict = _near_coplanar_edge_join(first, second, strict, check)
             if verdict is not CoplanarEdgeJoin.EDGE_JOINED:
                 raise GeometryError(f"ill_conditioned_plane_plane; {verdict.value}")
             # Zone contract (decisions 20-22): decided exactly on the projections of the stored trims onto the
             # first face's stored plane; the shared edges are emitted from the first face's stored curves.
             _mark_coincident(_shadow)
             provenance = []
-            traces = _edge_joined_zones(first, second, strict, model, provenance)
-            _certify_edge_joined_traces(traces, provenance, first, second, strict)
+            traces = _edge_joined_zones(first, second, strict, model, provenance, check)
+            _certify_edge_joined_traces(traces, provenance, first, second, strict, check)
             _increment('plane_plane_coplanar_edge_joined')
             return traces
         if not result.classified:

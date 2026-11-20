@@ -1231,3 +1231,51 @@ def test_zone_point_is_exact_at_any_magnitude():
         point = _zone_point((Fraction(0),)*3, other, r*r)
         distance2 = sum(x*x for x in point)
         assert r*r <= distance2 <= (r*(1 + Fraction(1, 2**60)))**2
+
+
+
+# Codex z4 M: the zone rule's loops polled neither cancellation nor the predicate budget; with the only trace a
+# suppressed same-sheet seam no arrangement polls later, so the batch returned an empty successful plan.
+
+def _seam_only_pair(n):
+    """A has n + 3 segments (a zigzag top), B a square; they share the bottom edge of A, tagged as a same-sheet
+    decomposition seam, so the joined pair emits no trace and no arrangement runs afterwards."""
+    from anygeometry import EntityRef
+    k = 1.1e-10
+    a = [(0, 0), (1, 0)] + [(1 - i/n, 1 + .01*(i % 2)) for i in range(n + 1)]
+    b = [(1, 0), (0, 0), (0, -1), (1, -1)]
+    model, faces, _ = _xy_pair(a, b, ((0, 0), (1, 0)), ((0, 0, 0), (1, 0, 0), (0, 1, k), lambda x, y: k*y))
+    edge = next(edge for edge in model.edges if len(model.faces_using_edge(edge)) == 2)
+    model.tag(EntityRef("edge", edge), "intersection_decomposition_seam")
+    model.add_sheet([face.id for face in faces], orientations=(1, 1))
+    assert model.validate_topology() == ()
+    return model, faces
+
+
+def _batch_policy(**fields):
+    from anygeometry.batch_intersections import IntersectionBatchPolicy
+    return IntersectionBatchPolicy(member_connections=False, member_face_connections=False, **fields)
+
+
+def test_zone_rule_polls_cancellation_once_per_segment():
+    # On d898fe0 planning polled 7 times for any n (all before the pair stage) and a cancellation requested during
+    # the zone rule was never seen. Now every outer segment of each zone loop polls, and a request then cancels.
+    n = 60
+    model, faces = _seam_only_pair(n)
+    calls = []
+    plan = plan_intersections(model, faces, policy=_batch_policy(cancellation_check=lambda: calls.append(1) and False))
+    assert plan.arrangements == () or len(plan.arrangements) == 0
+    assert len(calls) >= n
+    total = len(calls)
+    calls.clear()
+    with pytest.raises(GeometryError, match="cancelled"):
+        plan_intersections(model, faces, policy=_batch_policy(
+            cancellation_check=lambda: calls.append(1) or len(calls) > total - n//2))
+
+
+def test_zone_rule_counts_against_the_predicate_budget():
+    # On d898fe0 max_predicates=30 still returned the empty plan (7 predicates counted); the zone rule's polls now
+    # count, so the budget is exhausted.
+    model, faces = _seam_only_pair(60)
+    with pytest.raises(GeometryError, match="predicate budget exhausted"):
+        plan_intersections(model, faces, policy=_batch_policy(max_predicates=30))

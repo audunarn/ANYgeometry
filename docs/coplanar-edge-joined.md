@@ -1,18 +1,14 @@
-# Parked 2026-11-20 after the final zone-contract review round (Codex z4, hard limit)
+# Fixed 2026-11-20 after the final zone-contract review round (Codex z4, owner: fix the Medium)
 
-Decisions 20-23 (zone contract, full margin) are implemented and tested on this branch (tip d898fe0); HbeamBoth
-face:12/face:16 joins in both orders. The one final Codex round (z4, review\z4-out.md) reported:
-- **Medium: the zone checks do not poll cancellation or the predicate budget.** `_edge_joined_zones` (rule 2's
-  segment pairs and `_projected_loops_valid`) never calls the pair stage's `check` callback; when a same-sheet seam
-  suppresses the only trace no arrangement polls later, so a cancelled batch, or one with `max_predicates=2`,
-  returned a successful (empty) plan. Not a geometric soundness finding; steps (i)-(iii) held.
-- **Low: the class audit understates two differences.** B's reversed domain path projected onto its own support is
-  about 1.1e-17 m off (bound `d + sigma (t + d)` in P, already inside the margin), and the emitted stored hinge is
-  lifted off the decision plane by up to its admission distance (1.4e-13 m in the probe); the table lists both as 0.
-
-Not fixed (owner rule for this round: park on any high or medium finding). Candidate fix: call `check()` per outer
-segment in rule 2 and in the projected-loop check (and count those predicates against the budget), plus the two
-audit rows; it needs one more review.
+Codex z4 (review\z4-out.md) confirmed the geometry and reported a Medium and a Low, now fixed:
+- **Medium: the zone checks did not poll cancellation or the predicate budget** (a seam-only pair returned an empty
+  successful plan, cancelled or over budget). Every loop on the edge-joined path now calls the pair stage's
+  `check()` once per outer item (admission per boundary path, input paths, shared edges, rule 2 per outer segment,
+  the projected-loop check per outer segment, loop and hole, rule 3 per shared edge, rule 4 per segment, the trace
+  certificate per trace); each call counts against `max_predicates`. Tests:
+  `test_zone_rule_polls_cancellation_once_per_segment`, `test_zone_rule_counts_against_the_predicate_budget`
+  (both failed on d898fe0).
+- **Low: two audit rows** are corrected below (B's material relative to the domain paths, and the trace lift).
 
 # Near-coplanar plane faces joined by a shared edge
 
@@ -150,10 +146,10 @@ The rule decides on the stored vertex doubles projected exactly onto P. Every pl
 | used downstream | differs from the decided geometry by | covered by |
 |---|---|---|
 | A's material (trims projected onto A's plane = P) | 0 | - |
-| B's material (trims projected onto B's plane, seen in P) | `sigma (t + d)` | margin `m` |
+| B's material (trims projected onto B's plane, seen in P) | `sigma (t + d)` from the decided geometry; from the domain paths `d + sigma (t + d)` (Codex z4 L) | margin `m` |
 | the arranged domain paths of either face (reversed paths re-evaluated) | `d` per face (measured, `<= t/8`) | margin `m` (`2 d`) |
 | the admission bound (read on the domain curves) | `d` | in `sigma (t + d)` |
-| the emitted traces (the shared model edges' stored segments) | 0 | - |
+| the emitted traces (the shared model edges' stored segments) | 0 in P (same vertices); in world space lifted off P by at most their admission distance (`<= t`, Codex z4 L: 1.4e-13 m in a probe) | shared-edge identity (provenance) and admission (lift) |
 | the zone point (formerly float square root) | 0 (exact) | `_zone_point` |
 | the band (formerly the float predicate's diagnostic) | 0 (exact sine, both sides) | the angle gates |
 | loop validity and hole nesting (model validation, each face's own chart) | projection onto P | the projected-loop check |
