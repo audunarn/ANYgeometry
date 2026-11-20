@@ -1085,3 +1085,41 @@ def test_far_comb_inside_the_fence_refuses_typed(X):
         ((X+1, 0), (X+2, 0)), ((X, 0, 0), (1, 0, 0), (0, 1, k), lambda x, y: k*y))
     with pytest.raises(GeometryError, match=CONTACT + "|" + OVERLAP):
         _plan(model, faces)
+
+
+
+# Codex z1 (zone contract round 1): each reproducer was accepted or refused untyped on 567653d.
+
+def test_stored_plane_angle_above_the_band_refuses_typed():
+    # z1 M3: the exact sine of the stored planes is 4.17e-8 > 2^-26, but float cancellation puts the predicate's
+    # sine at 1.89e-10 (ill-conditioned band); joined on 567653d. The band is now checked on the exact planes.
+    x, y, q, e = 3.141592653589793, 3.141592658589793, 0.9999999115821654, .002
+    model = GeometryModel()
+    pts = model.add_points(((e, -e, -e), (.1+e, .1-e, -e), (.1, .1, 0), (0, 0, 0), (.1-e, .1+e, e*q), (-e, e, e*q)))
+    face_a, shared = _ring_face(model, [pts[0], pts[1], pts[2], pts[3]], Plane((0, 0, 0), (1.3, 1.3, 0), (x, y, (y-x)/2)))
+    face_b, _ = _ring_face(model, [pts[3], pts[2], pts[4], pts[5]], Plane((0, 0, 0), (1, 1, 0), (-1, 1, q)), shared)
+    assert model.validate_topology() == ()
+    with pytest.raises(GeometryError, match="ill_conditioned_plane_plane; near_coplanar_angle_outside_band"):
+        _plan(model, (model.handle("face", face_a), model.handle("face", face_b)))
+
+
+def test_domain_path_off_its_stored_vertex_refuses_typed():
+    # z1 M2: at t = 2e-17 m B's reversed domain path starts an ulp (5.6e-17 m) off the stored vertex; on 567653d
+    # the pair passed and the arrangement refused untyped ("not closable"). Drift above t/8 now refuses typed.
+    from anygeometry import TolerancePolicy
+    w, k = 1e-7, 1.1e-10
+    model = GeometryModel(tolerance=TolerancePolicy(length=2e-17, relative_length=1e-20))
+    p = model.add_points(((0, 1, 0), (0, .3, 0), (-w, .3, 0), (-w, 1, 0), (w, 1, k*w), (w, .3, k*w)))
+    face_a, shared = _ring_face(model, [p[0], p[1], p[2], p[3]], Plane((0, 0, 0), (1, 0, 0), (0, 1, 0)))
+    face_b, _ = _ring_face(model, [p[1], p[0], p[4], p[5]], Plane((0, 0, 0), (1, 0, k), (0, 1, 0)), shared)
+    assert model.validate_topology() == ()
+    with pytest.raises(GeometryError, match=UNRESOLVED):
+        _plan(model, (model.handle("face", face_a), model.handle("face", face_b)))
+
+
+def test_hinge_exactly_two_zones_long_joins():
+    # z1 L2: a hinge exactly 2 c t = 8t long has its midpoint at distance r; refused on 567653d (rounded step).
+    L, k = 8*1e-9, 1.1e-10
+    model, faces, _ = _xy_pair([(-1, 0), (0, 0), (0, L), (-1, L)], [(0, L), (0, 0), (1, 0), (1, L)],
+                               ((0, 0), (0, L)), ((0, 0, 0), (1, 0, k), (0, 1, 0), lambda x, y: k*x))
+    assert len(_plan(model, faces).arrangements) == 2

@@ -919,6 +919,7 @@ class CoplanarEdgeJoin(str, Enum):
     SHARED_EDGE_NOT_IDENTICAL = "near_coplanar_shared_edge_not_identical"
     CONTACT_OFF_SHARED_EDGE = "near_coplanar_contact_off_shared_edge"
     SEGMENT_SHORTER_THAN_ZONE = "near_coplanar_segment_shorter_than_zone"
+    ANGLE_OUTSIDE_BAND = "near_coplanar_angle_outside_band"
     SAME_SIDE_OF_SHARED_EDGE = "near_coplanar_same_side_of_shared_edge"
 
 
@@ -987,6 +988,9 @@ EDGE_JOINED_MAX_EXTENT = 1000.
 EDGE_JOINED_MAX_COORDINATE = 2.**16
 #: Owner decision 21: zone radius r = c*t around each end of a shared edge (zone contract, decision 20).
 EDGE_JOINED_ZONE = 4.
+#: The band's upper sine, sqrt(eps) = 2^-26, applied to the EXACT stored planes (Codex z1 M3): the float predicate's
+#: diagnostic alone can enter the band with an exact sine above it.
+EDGE_JOINED_MAX_SINE = 2.**-26
 
 
 def _domain_extent(domain):
@@ -1113,6 +1117,15 @@ def _edge_joined_zones(first, second, tolerance, model, provenance):
                 raise refuse(CoplanarEdgeJoin.OVERLAP_UNRESOLVED)
             face_uses.append([(path, use.edge, start, end) for path, use, (start, end) in zip(loop, model_loop, ends)])
         uses.append(face_uses)
+        # Codex z1 M2: the domain paths the planner arranges must lie on the stored vertices (a reversed path is
+        # re-evaluated, an ulp off); more than t/8 off (at a tiny tolerance) refuses typed.
+        drift = (Fraction(float(tolerance))/8)**2
+        for loop in face_uses:
+            for path, _, start, end in loop:
+                for point, vertex in ((path.curve.start, start), (path.curve.end, end)):
+                    if sum((Fraction(float(x)) - Fraction(float(y)))**2
+                           for x, y in zip(point, model.vertex_position(vertex))) > drift:
+                        raise refuse(CoplanarEdgeJoin.OVERLAP_UNRESOLVED)
     vertices = {vertex for face in uses for loop in face for _, _, start, end in loop for vertex in (start, end)}
     position = {vertex: tuple(float(x) for x in model.vertex_position(vertex)) for vertex in vertices}
     if not max(abs(x) for point in position.values() for x in point) < EDGE_JOINED_MAX_COORDINATE:
@@ -1128,6 +1141,12 @@ def _edge_joined_zones(first, second, tolerance, model, provenance):
         shared_uses[edge] = (found[0][0], found[1][0])
 
     plane = _ExactStoredPlane(first.support)
+    other = _ExactStoredPlane(second.support)
+    # Exact sine of the stored planes' angle (squared): at most EDGE_JOINED_MAX_SINE, else typed.
+    n, m = plane.normal, other.normal
+    cross = (n[1]*m[2] - n[2]*m[1], n[2]*m[0] - n[0]*m[2], n[0]*m[1] - n[1]*m[0])
+    if sum(x*x for x in cross) > Fraction(EDGE_JOINED_MAX_SINE)**2*plane.scale*other.scale:
+        raise refuse(CoplanarEdgeJoin.ANGLE_OUTSIDE_BAND)
     t2 = Fraction(float(tolerance))**2
     r2 = Fraction(EDGE_JOINED_ZONE)**2*t2
     exact = {vertex: plane.project(point) for vertex, point in position.items()}
@@ -1140,7 +1159,10 @@ def _edge_joined_zones(first, second, tolerance, model, provenance):
         length2 = sum((y - x)**2 for x, y in zip(vertex, other))
         s = Fraction(_sqrt_up(r2/length2))
         if s > Fraction(1, 2):
-            raise refuse(CoplanarEdgeJoin.SEGMENT_SHORTER_THAN_ZONE)
+            # Codex z1 L2: the midpoint itself is at distance >= r exactly when length >= 2r.
+            if length2 < 4*r2:
+                raise refuse(CoplanarEdgeJoin.SEGMENT_SHORTER_THAN_ZONE)
+            s = Fraction(1, 2)
         return tuple(x + s*(y - x) for x, y in zip(vertex, other))
 
     for _, a_edge, a0, a1 in segments[0]:

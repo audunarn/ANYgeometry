@@ -9,8 +9,10 @@ Owner decisions 12 (2026-11-19, HbeamBoth blocker 2) and 20-22 (2026-11-20, zone
 Only to a plane-plane pair that the support predicate `qualified_plane_plane` refuses with exactly
 `ill_conditioned_plane_plane`: the sine of the plane angle is above the policy angular tolerance
 (`TolerancePolicy.angular`, default 1e-10, below which the planes are already COINCIDENT) and at most
-`sqrt(eps)` (~1.49e-8, below which the crossing line is not conditioned). Every other plane-plane pair, and
-every other support family, takes exactly the code path it took before: ordinary inputs are bit-identical.
+`sqrt(eps)` (~1.49e-8, below which the crossing line is not conditioned). That diagnostic is a float
+classification; the rule then checks the band exactly on the stored planes (sine of the exact normals at most
+`2^-26`, else `near_coplanar_angle_outside_band`, Codex z1 M3). Every other plane-plane pair, and every other
+support family, takes exactly the code path it took before: ordinary inputs are bit-identical.
 
 ## Admission (decision 12)
 
@@ -43,9 +45,10 @@ projected distance `> t` is a world distance `> t`. No float is decided on.
 
 **Inputs.** Every boundary path is a LinePath and, in order, its model loop's use of a straight model edge
 (outer loop then holes, as `MaterialDomain.from_model` builds them); loops close by vertex identity and no
-edge has equal end vertices; every stored coordinate is below 2^16 m in magnitude. Otherwise
-`near_coplanar_overlap_unresolved` (or `near_coplanar_coordinates_above_fence`). The domain's own reversed
-paths are re-evaluated curves (up to an ulp off the stored vertex); they are never compared.
+edge has equal end vertices; every domain path end lies within `t/8` of its stored vertex (exact; the
+domain's reversed paths are re-evaluated curves, an ulp off, which at a tiny tolerance can exceed it, Codex z1
+M2); every stored coordinate is below 2^16 m in magnitude. Otherwise `near_coplanar_overlap_unresolved` (or
+`near_coplanar_coordinates_above_fence`).
 
 1. **Shared edges.** S = the model edges both faces use. Each is used exactly once per face (else
    `near_coplanar_shared_edge_not_identical`); being the same model edge, it is the same stored segment in both
@@ -54,11 +57,13 @@ paths are re-evaluated curves (up to an ulp off the stored vertex); they are nev
    itself:
    - if a and b have no common model vertex in Z, their exact distance is `> t`;
    - else, for each common vertex V in Z, a rational point of a at world distance `>= r` from V (at parameter
-     at most 1/2 from V, else `near_coplanar_segment_shorter_than_zone`) is `> t` from b, and the same with a
-     and b swapped.
+     at most 1/2 from V, the midpoint when the segment is exactly `2r` long, else
+     `near_coplanar_segment_shorter_than_zone`) is `> t` from b, and the same with a and b swapped.
 
    Otherwise `near_coplanar_contact_off_shared_edge`. The distance to b is convex along a and 0 at V, so a's
-   contact set with b is an interval from V that ends before that point (within r of V).
+   contact set with b is an interval from V that ends before that point. The point is chosen with an outward
+   rounded square root, so its distance from V is between `r` and `r (1 + 2^-50)` (Codex z1 L1): "within r"
+   below means within that bound.
 3. **Opposite sides.** On each shared edge the faces' material lies on opposite sides: material is left of a
    path's traversal in P's affine chart when its loop's exact signed area is positive, unless the loop is a
    hole (its first vertex lies inside an odd number of the face's other loops, exact parity; a vertex on
@@ -86,8 +91,19 @@ decomposition seams that both faces carry are suppressed, as `_coplanar_traces` 
   away from its ends), so there A and B are the two half-discs on either side of s (rule 3): C is empty
   there. So ∂C is a finite set of points. A bounded open set whose boundary is finite is empty (the plane
   minus a finite set is connected). So the interiors are disjoint and the boundaries meet exactly in S.
-- (iv) In world space: outside the zones every boundary point of one face is `> t` from the other face's
-  boundary in projection, hence in 3D; the faces' material is within t of both planes (admission 2).
+- (iv) World space (Codex z1 M1). Steps (i)-(iii) are exact for the projections onto P of the stored
+  vertices. Each face's material, as admission 2 defines it, lies on its own plane inside the projection of its
+  boundary onto that plane; for A that is exactly the projected A. B's material, projected onto P, differs from
+  the projected B by at most `sigma t` (sigma <= 2^-26 the exact sine: a stored point within t of B's plane moves
+  by at most t onto it, and only the out-of-P component of that move survives projection onto P, at most
+  `sin` of the move). Every non-zone boundary point of B is outside A and `> t` from ∂A in projection, so this
+  perturbation cannot bring it inside A. Hence any point common to both faces' material projects within
+  `sigma t` (about 1.5e-17 m at t = 1 nm) of S or of a zone, and every such point is within t of the emitted
+  shared edges or zones. Example (z1 M1): plates on `z = k x` and `z = -k x` (k = 1e-10) sharing a hinge stored
+  0.25t above both planes: the supports cross on a line 0.25t from the emitted hinge, and the material overlap
+  is a strip about 5e-20 m wide along it. The contract treats that as the shared edge (within t), not as an
+  untraced intersection. Separation: outside the zones every boundary point of one face is `> t` from the other
+  face's boundary in projection, hence in 3D.
 
 Rules 2-4 are constant-size local predicates over segment pairs; there is no global accounting.
 
@@ -100,11 +116,12 @@ Rules 2-4 are constant-size local predicates over segment pairs; there is no glo
 | `; near_coplanar_boundary_not_bounded` | a boundary curve family without a proven distance bound |
 | `; near_coplanar_scale_above_absolute_tolerance` | a participating tolerance exceeds the absolute `length`, or a face extent exceeds 1000 m |
 | `; near_coplanar_coordinates_above_fence` | a stored trim coordinate is at or above 2^16 m in magnitude |
-| `; near_coplanar_overlap_unresolved` | input outside the contract: a curved trim, a path that is not its model loop's straight edge use, a loop not closed by vertex identity, a zero-area loop, a hole vertex on another loop |
+| `; near_coplanar_overlap_unresolved` | input outside the contract: a curved trim, a path that is not its model loop's straight edge use, a loop not closed by vertex identity, a domain path end more than t/8 off its stored vertex, a zero-area loop, a hole vertex on another loop |
 | `; near_coplanar_shared_edge_not_identical` | a shared model edge used more than once by a face |
 | `; near_coplanar_contact_off_shared_edge` | rule 2: contact within t away from the shared edges' zones (any overlap, near-tangent or point contact, a second geometric abutment, a sliver wedge at a zone) |
 | `; near_coplanar_segment_shorter_than_zone` | rule 2: a segment at a shared vertex shorter than 2 c t = 8 nm (at t = 1 nm) |
 | `; near_coplanar_same_side_of_shared_edge` | rule 3 |
+| `; near_coplanar_angle_outside_band` | the exact sine of the stored planes exceeds `2^-26` (the float predicate's diagnostic said ill-conditioned) |
 | `; near_coplanar_trace_off_boundary` | an emitted trace is not certified on both boundaries (cannot happen with shared-edge identity; kept as the certificate) |
 
 Rule 4 refuses with the existing `positive-area overlap requires an explicit ownership policy`.
@@ -122,7 +139,7 @@ refuse with that message plus one of the suffixes above. Nothing else changes.
 
 ## Changed tests (against the parked 078127d, which held the decision 17-19 contract)
 
-New or changed tests fail on the parked tip (45 of 103) and on main 11dddb1 (98 of 103: main refuses every
+New or changed tests (first commit) fail on the parked tip (45 of 103) and on main 11dddb1 (98 of 103: main refuses every
 in-band pair).
 - Joined there, refuse now (decision 20): `test_toothed_contact_shorter_than_k_t_refuses` (was `_joins`),
   `test_short_zigzag_contact_refuses` (was `_joins`), `test_contact_past_a_trace_end_shorter_than_k_t_refuses`
@@ -149,6 +166,9 @@ in-band pair).
 - New: sliver wedges (5 and 14 degrees refuse, 15 and 30 degrees join), same side, a plate in a hole
   sharing the hole edge (joins) and over the material beside it (refuses), a same-sheet seam shared edge (not
   emitted), the far comb inside the fence (0 m and 2^15 m).
+- Codex z1 regressions (each failed on 567653d): `test_stored_plane_angle_above_the_band_refuses_typed` (M3,
+  joined), `test_domain_path_off_its_stored_vertex_refuses_typed` (M2, untyped arrangement refusal),
+  `test_hinge_exactly_two_zones_long_joins` (L2, refused).
 - Unchanged: `test_in_band_neighbours_sharing_an_edge_are_edge_joined_like_exact_coplanar` (plan shape equal to
   the exactly coplanar plan), the fence boundary tests and all other admission tests.
 
