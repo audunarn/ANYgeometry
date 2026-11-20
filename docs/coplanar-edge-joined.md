@@ -1,3 +1,19 @@
+# Parked 2026-11-20 after the final zone-contract review round (Codex z4, hard limit)
+
+Decisions 20-23 (zone contract, full margin) are implemented and tested on this branch (tip d898fe0); HbeamBoth
+face:12/face:16 joins in both orders. The one final Codex round (z4, review\z4-out.md) reported:
+- **Medium: the zone checks do not poll cancellation or the predicate budget.** `_edge_joined_zones` (rule 2's
+  segment pairs and `_projected_loops_valid`) never calls the pair stage's `check` callback; when a same-sheet seam
+  suppresses the only trace no arrangement polls later, so a cancelled batch, or one with `max_predicates=2`,
+  returned a successful (empty) plan. Not a geometric soundness finding; steps (i)-(iii) held.
+- **Low: the class audit understates two differences.** B's reversed domain path projected onto its own support is
+  about 1.1e-17 m off (bound `d + sigma (t + d)` in P, already inside the margin), and the emitted stored hinge is
+  lifted off the decision plane by up to its admission distance (1.4e-13 m in the probe); the table lists both as 0.
+
+Not fixed (owner rule for this round: park on any high or medium finding). Candidate fix: call `check()` per outer
+segment in rule 2 and in the projected-loop check (and count those predicates against the budget), plus the two
+audit rows; it needs one more review.
+
 # Near-coplanar plane faces joined by a shared edge
 
 Owner decisions 12 (2026-11-19, HbeamBoth blocker 2) and 20-22 (2026-11-20, zone contract). Code:
