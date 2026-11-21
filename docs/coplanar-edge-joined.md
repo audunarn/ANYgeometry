@@ -1,21 +1,13 @@
-# Parked 2026-11-20 after the D24 review round (Codex z6, hard limit)
+# Cancellation boundary (owner decision 25, 2026-11-21, after Codex z6)
 
-D24 is implemented (ed9110f): every success of the edge-joined rule, `()` included, passes one unconditional final
-`check()`; budget exhaustion is always refused (z6 found no budget bypass). The one round (review\z6-out.md)
-reported, not fixed (owner rule: park on any high or medium finding):
-- **Medium: late cancellation.** A cancellation that becomes visible after the final `check()` samples the
-  callback (during that call after the sample, at the counter increment, or at the return) still yields a
-  successful empty plan in the serial route (24-seam pair; also via the topology-certified shadow), because an
-  empty plan reaches no later poll. Note for the decision: any polling contract has a last sample; a request after
-  it is indistinguishable from one after the batch returned, unless the batch itself polls once more before it
-  publishes (a batch-level contract, outside this rule).
-- Low: the regressions' reversed face order is the same planner pair (faces are sorted), so it adds no coverage.
-- Low: `test_zone_rule_polls_cancellation_during_face_work`'s comment still claims growth with face size and a
-  half-way stop; the test shows one aggregate lower bound and a stop in rule 4.
-
-Options: (a) define D24's "cancelled" as "requested before the rule's final sample" (no code change; the Medium is
-then out of contract); (b) add a batch-level final poll immediately before `plan_intersections` returns a plan
-(changes the planner for every batch, a separate reviewed slice).
+Under D24, "cancelled" means requested before the rule's final `check()` samples the callback. A request after that
+sample cannot be told apart from one made after the batch returned, so it may still see the rule's result (for a
+pair with no traces, a successful empty plan). Codex z6 (review\z6-out.md) reported that case as a Medium; under D25
+it is out of contract. A batch-level final poll in `plan_intersections` is a possible separate future slice, not
+part of this one. z6 found no success path that skips the final check and no budget bypass. Its two Lows are fixed:
+the D24 regressions no longer repeat the reversed face order (the planner sorts the faces, so it is the same pair),
+and `test_zone_rule_polls_cancellation_during_face_work`'s comment now claims one aggregate lower bound and a stop
+seen in rule 4, as the test shows.
 
 # Polling contract (owner decision 24, 2026-11-20, after Codex z5)
 

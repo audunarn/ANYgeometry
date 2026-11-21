@@ -1259,9 +1259,10 @@ def _batch_policy(**fields):
 
 def test_zone_rule_polls_cancellation_during_face_work():
     # On d898fe0 planning polled 7 times for any n (all before the pair stage) and a cancellation requested during
-    # the zone rule was never seen. Now the polls grow with the faces (at least one per segment of A), and a request
-    # half-way through them (here in rule 4's midpoint pass) cancels. Which loop sees it is not asserted: under D24
-    # only "never success" is the contract (test_cancellation_after_the_last_face_poll_never_succeeds).
+    # the zone rule was never seen. Now one plan of this n = 60 pair polls at least n times (a single aggregate lower
+    # bound; growth with face size is not asserted), and a request made n/2 polls before the last one cancels (here
+    # it is seen in rule 4's midpoint pass). Which loop sees it is not asserted: under D24 only "never success" is the
+    # contract (test_cancellation_after_the_last_face_poll_never_succeeds).
     n = 60
     model, faces = _seam_only_pair(n)
     calls = []
@@ -1333,29 +1334,29 @@ def _predicates_before_certificate(model, faces):
 
 def test_cancellation_after_the_last_face_poll_never_succeeds():
     import sys
+    # One face order only: the planner sorts the faces, so the reversed order is the same pair (Codex z6 Low).
     model, faces = _seam_hinge_pair()
-    for pair in (faces, faces[::-1]):
-        armed = []
+    armed = []
 
-        def tracer(frame, event, arg):
-            if event == "call" and frame.f_code.co_name == "_certify_edge_joined_traces":
-                armed.append(1)
-            return None
-        previous = sys.gettrace()
-        sys.settrace(tracer)
-        try:
-            with pytest.raises(GeometryError, match="cancelled"):
-                plan_intersections(model, pair, policy=_batch_policy(cancellation_check=lambda: bool(armed)))
-        finally:
-            sys.settrace(previous)
-        assert armed
+    def tracer(frame, event, arg):
+        if event == "call" and frame.f_code.co_name == "_certify_edge_joined_traces":
+            armed.append(1)
+        return None
+    previous = sys.gettrace()
+    sys.settrace(tracer)
+    try:
+        with pytest.raises(GeometryError, match="cancelled"):
+            plan_intersections(model, faces, policy=_batch_policy(cancellation_check=lambda: bool(armed)))
+    finally:
+        sys.settrace(previous)
+    assert armed
 
 
 def test_budget_exhausted_by_the_final_poll_never_succeeds():
+    # One face order only: the planner sorts the faces, so the reversed order is the same pair (Codex z6 Low).
     model, faces = _seam_hinge_pair()
-    for pair in (faces, faces[::-1]):
-        before = _predicates_before_certificate(model, pair)
-        # A budget equal to the polls made before the certificate: on 4f77900 nothing polled afterwards and the
-        # batch succeeded within budget; the final check now counts one more and exhausts it.
-        with pytest.raises(GeometryError, match="predicate budget exhausted"):
-            plan_intersections(model, pair, policy=_batch_policy(max_predicates=before))
+    before = _predicates_before_certificate(model, faces)
+    # A budget equal to the polls made before the certificate: on 4f77900 nothing polled afterwards and the batch
+    # succeeded within budget; the final check now counts one more and exhausts it.
+    with pytest.raises(GeometryError, match="predicate budget exhausted"):
+        plan_intersections(model, faces, policy=_batch_policy(max_predicates=before))
