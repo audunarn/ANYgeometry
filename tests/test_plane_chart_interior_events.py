@@ -45,7 +45,9 @@ def test_tripod_web_root_is_one_piece_per_branch():
     for curve in result.curves:
         axial = [float((p - np.asarray(SKIN.origin)) @ np.asarray(SKIN.axis))
                  for p in curve.evaluate(np.array([0.0, 1.0]))]
-        assert sorted(axial) == pytest.approx([0.0, SKIN.height], abs=1e-6)
+        assert sorted(axial) == pytest.approx([0.0, SKIN.height], abs=TOL)
+        for end in curve.evaluate(np.array([0.0, 1.0])):
+            assert min(patch_margins(SKIN, end)) >= -TOL
 
 
 def test_merged_branch_covers_the_split_pieces():
@@ -80,3 +82,19 @@ def test_prepared_web_root_has_no_valence_two_vertex():
     edge = model.edges[shared[0]]
     ends = sorted(tuple(np.round(model.vertex_position(v), 5)) for v in (edge.start, edge.end))
     assert ends == [(37.82068, 2.05212, 19.63816), (51.63816, 2.05212, 5.82068)]
+
+
+def test_no_join_across_a_rounding_ambiguous_angular_bound():
+    """A huge stored start angle makes the computed angular margin uncertain by about 2 eps |start| r (4e-4 m here):
+    an apparent +7e-6 m margin at the angular crossing is NOT certified interior, so the crossing must stay a split
+    (joining used to return one curve running 8e-7 m outside the patch). Case from Codex review round 1."""
+    import math
+    start = -1e12
+    cylinder = Cylinder((0., 0., 0.), (0., 0., 1.), (1., 0., 0.), 1.0, 1e5, start, 0.5)
+    normal = np.array([1., 0., 1e-11]) / np.linalg.norm([1., 0., 1e-11])
+    plane = Plane((math.cos(start) + 5e-7, 0., 0.), (0., 1., 0.), tuple(np.cross(normal, [0., 1., 0.])))
+    with collect_runtime_diagnostics() as counters:
+        result = plane_cylinder_support(plane, cylinder, tolerance=1e-8)
+    assert counters["plane_cylinder_plane_chart_routes"] == 1
+    assert counters.get("plane_chart_interior_events_joined", 0) == 0
+    assert len(result.curves) == 2

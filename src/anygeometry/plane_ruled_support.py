@@ -740,18 +740,11 @@ def _div_up_certified(numerator, denominator):
     return math.inf
 
 
-def certify_point_membership(cylinder, point, error, tolerance, *, face_pair=None):
-    """Certified membership of an emitted point in the true finite patch at the ACTUAL tolerance.
-
-    ``error`` bounds the Euclidean distance from ``point`` to the exact curve (hence both support residuals). The
-    margins are metres to the native bounds: axial changes by at most ``error``; the angular arc changes by at most
-    ``r asin(error / r)``; plus the rounding of the margin computation itself. Accept (True) iff the margin minus its
-    error is >= -tolerance, reject (False) iff the margin plus its error is < -tolerance, otherwise refuse.
-    """
+def _margin_bounds(cylinder, point, error):
+    """``(lower, upper, margin)``: the computed ``min(patch_margins)`` and bounds on its value at the exact point
+    within ``error`` of ``point``, including the rounding of the margin computation itself (the arithmetic model
+    below); ``None`` when the position error is not small against the radius (the azimuth is then unbounded)."""
     radius = float(cylinder.radius)
-    if not math.isfinite(error) or error > .25 * float(tolerance):
-        _refuse("a point's position error exceeds a quarter of the face tolerance", "point_unproved", face_pair,
-                error=float(error), quarter_tolerance=.25 * float(tolerance))
     p = np.asarray(point, dtype=float)
     origin = np.asarray(cylinder.origin, dtype=float)
     # Arithmetic model of patch_margins (u = eps = 2^-53 rounding unit, gamma_n = n u / (1 - n u) ~ n u):
@@ -767,22 +760,40 @@ def certify_point_membership(cylinder, point, error, tolerance, *, face_pair=Non
     if math.isfinite(angular):
         rho_min = radius - error - e_vec            # the point lies at least rho_min from the axis
         if not rho_min > 0.0:
-            _refuse("the position error is not small against the cylinder radius", "point_unproved", face_pair,
-                    error=float(error), radius=radius)
+            return None
         # a displacement of at most (error + e_vec) changes the azimuth by at most asin((error + e_vec) / rho_min);
         # atan2 is accurate to 2 ulp of pi (2 u pi); (angle - start) mod 2 pi adds rounding of a quantity of size
         # <= 3 pi + |start| (two operations: 2 u (3 pi + |start|)); the arc margin multiplies by r (one u relative).
         d_theta = (math.asin(min(1.0, (error + e_vec) / rho_min)) + 2.0 * _EPS * math.pi
                    + 2.0 * _EPS * (3.0 * math.pi + abs(float(cylinder.start_angle))))
         e_angular = radius * d_theta * (1.0 + _EPS)
-    lower = min(axial - e_axial, angular - e_angular)
-    upper = min(axial + e_axial, angular + e_angular)
+    return (min(axial - e_axial, angular - e_angular), min(axial + e_axial, angular + e_angular),
+            min(axial, angular))
+
+
+def certify_point_membership(cylinder, point, error, tolerance, *, face_pair=None):
+    """Certified membership of an emitted point in the true finite patch at the ACTUAL tolerance.
+
+    ``error`` bounds the Euclidean distance from ``point`` to the exact curve (hence both support residuals). The
+    margins are metres to the native bounds: axial changes by at most ``error``; the angular arc changes by at most
+    ``r asin(error / r)``; plus the rounding of the margin computation itself. Accept (True) iff the margin minus its
+    error is >= -tolerance, reject (False) iff the margin plus its error is < -tolerance, otherwise refuse.
+    """
+    radius = float(cylinder.radius)
+    if not math.isfinite(error) or error > .25 * float(tolerance):
+        _refuse("a point's position error exceeds a quarter of the face tolerance", "point_unproved", face_pair,
+                error=float(error), quarter_tolerance=.25 * float(tolerance))
+    bounds = _margin_bounds(cylinder, point, error)
+    if bounds is None:
+        _refuse("the position error is not small against the cylinder radius", "point_unproved", face_pair,
+                error=float(error), radius=radius)
+    lower, upper, margin = bounds
     if lower >= -tolerance:
         return True
     if upper < -tolerance:
         return False
     _refuse("a point contact is within its error of the patch boundary at the tolerance", "point_ambiguous",
-            face_pair, margin=min(axial, angular), error=float(error), tolerance=float(tolerance))
+            face_pair, margin=margin, error=float(error), tolerance=float(tolerance))
 
 
 def _classify_piece(plan, support, fs, curve, mid_point, e0, e1, branch, cylinder, boundaries, quarter, class_error,
@@ -844,7 +855,12 @@ def _join_interior_events(plan, support, cylinder, branch, pieces, fold_ts, node
         if t in contact_reps or any(abs(t - f) <= _TOLERANCE for f in special):
             return False
         point = _points(plan, [t], _branch_values(plan, [t], branch))[0]
-        return bool(np.all(np.isfinite(point))) and min(patch_margins(cylinder, point)) > clearance
+        if not np.all(np.isfinite(point)):
+            return False
+        # the evaluation error of ``point`` is inside ``clearance`` (z_pad); the margin's own rounding (large stored
+        # angles, far origins) is bounded by the same model as certify_point_membership and must also be cleared
+        bounds = _margin_bounds(cylinder, point, 0.0)
+        return bounds is not None and bounds[0] > clearance
 
     def close(run):
         if len(run) == 1:
