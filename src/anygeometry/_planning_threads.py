@@ -404,6 +404,22 @@ _WORKER_PREFIX = 'anygeometry-plan'
 _WORKERS = {}
 _WORKERS_LOCK = threading.Lock()
 
+# A child forked while workers of the route were registered (e.g. from a worker's thread-local finalizer) has
+# a fresh _MainThread under a worker's ident, which the reuse proof of _registered would accept. Such a child
+# refuses every stage (CPython documents fork from a multithreaded process as unsafe; 0.4.7 gate class B,
+# Codex round 3).
+_FORKED_FROM_ROUTE = False
+
+
+def _after_fork_in_child():
+    global _FORKED_FROM_ROUTE
+    if _WORKERS:
+        _FORKED_FROM_ROUTE = True
+
+
+if hasattr(os, 'register_at_fork'):
+    os.register_at_fork(after_in_child=_after_fork_in_child)
+
 
 class _Crew:
     """The threads of one stage, owned by this module: created -> started -> joined.
@@ -424,6 +440,10 @@ class _Crew:
         self.joined = [False] * size
         self.interrupts = [None] * size
         self.machinery = [None] * size
+        # Set by the dispatcher when its join of this crew was interrupted: on CPython 3.11/3.12 such an
+        # interrupt can mark a running worker stopped (gh-90882), so a later join proves nothing and the
+        # registry entries are kept (fail closed; 0.4.7 gate class B, Codex round 3).
+        self.join_interrupted = False
         # Every thread object exists, named, before any of them runs.
         # Not daemon threads, whatever the dispatcher is: like the executor's workers they are always joined.
         self.threads = [threading.Thread(target=self._main, args=(slot,), name=f'{_WORKER_PREFIX}_{slot}',
@@ -463,7 +483,8 @@ class _Crew:
                         first = exc
         with _WORKERS_LOCK:
             for slot, ident in enumerate(self.entered):
-                if ident is not None and self.joined[slot] and _WORKERS.get(ident) is self.keys[slot]:
+                if (ident is not None and self.joined[slot] and not self.join_interrupted
+                        and _WORKERS.get(ident) is self.keys[slot]):
                     del _WORKERS[ident]
         if first is not None:
             raise first
@@ -492,7 +513,7 @@ def _inside_task():
     The ident test comes first: it needs nothing but the module registry, so it also answers while the thread is
     being torn down (where ``threading.current_thread()`` would invent a dummy thread).
     """
-    return (_registered(threading.get_ident()) or _IN_TASK.get()
+    return (_FORKED_FROM_ROUTE or _registered(threading.get_ident()) or _IN_TASK.get()
             or threading.current_thread().name.startswith(_WORKER_PREFIX))
 
 
@@ -639,6 +660,8 @@ class ThreadStages:
         try:
             if threading.get_ident() != self._owner:
                 raise _RouteFailure("thread planning stage entered from a foreign thread")
+            if _FORKED_FROM_ROUTE:
+                raise _RouteFailure("thread planning stage in a process forked while the route had workers is not supported")
             if _inside_task():
                 # Before any thread exists: a nested stage would have workers that the outer verdict cannot see.
                 raise _RouteFailure("thread planning stage inside a task of another stage is not supported")
@@ -747,11 +770,15 @@ class ThreadStages:
         attempt.running += 1
         try:
             try:
+                started = False
                 crew.start()
+                started = True
                 wait(crew)
             except BaseException as exc:
                 attempt.note(exc)        # first of all: an interrupt is kept whatever the cleanup below does
                 held = exc
+                if started:              # the join itself was interrupted (a failed start() joined nothing)
+                    crew.join_interrupted = True
                 stopped.set()
             finally:
                 crew.shutdown(wait=True)

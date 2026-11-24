@@ -178,3 +178,67 @@ def test_a_matching_ident_is_decided_without_probing_or_joining(stale, monkeypat
     assert not pt._registered(IDENT, active={IDENT: other})
     assert pt._registered(IDENT, active={IDENT: stale.threads[0]})
     assert pt._registered(IDENT, active={})
+
+
+# ---- Codex round 3 on 7df62f3, owner decision 2026-11-24: harden two edge cases ----
+
+def test_an_interrupted_join_keeps_the_workers_marked(monkeypatch):
+    """On 3.11/3.12 an interrupt during the dispatcher's join can mark a running worker stopped (CPython
+    gh-90882), so the cleanup join returns at once; deleting the worker's entry then let a later finalizer of
+    that worker start a nested stage. After an interrupted join the entries are kept (fail closed)."""
+    seen = {}
+    real_wait = pt.wait
+
+    def interrupted(crew):
+        real_wait(crew)                              # the workers have run; the join "is interrupted" after
+        seen['idents'] = [ident for ident in crew.entered if ident is not None]
+        raise KeyboardInterrupt('during the join')
+    monkeypatch.setattr(pt, 'wait', interrupted)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            pt.ThreadStages(2).run('face', _two(), lambda item, check=None: item['face'])
+        assert seen['idents'] and all(ident in pt._WORKERS for ident in seen['idents'])
+    finally:
+        with pt._WORKERS_LOCK:
+            for ident in seen.get('idents', ()):
+                pt._WORKERS.pop(ident, None)
+
+
+def test_an_uninterrupted_stage_still_leaves_no_entry():
+    before = dict(pt._WORKERS)
+    assert pt.ThreadStages(2).run('face', _two(), lambda item, check=None: item['face']) == [0, 1]
+    assert pt._WORKERS == before
+
+
+def test_a_forked_child_of_an_in_flight_route_refuses_every_stage():
+    """A fork from a worker (e.g. in a thread-local finalizer) gives the surviving thread a fresh _MainThread
+    under the worker's ident, which the reuse proof would accept. The child of a process with workers in the
+    registry therefore refuses the route altogether (CPython: fork from a multithreaded process is unsafe)."""
+    assert hasattr(pt, '_after_fork_in_child')
+    me = threading.get_ident()
+    with pt._WORKERS_LOCK:
+        pt._WORKERS[IDENT] = object()
+    try:
+        pt._after_fork_in_child()
+        assert pt._inside_task()
+        with pytest.raises(Exception, match='forked'):
+            pt.ThreadStages(2).run('face', _two(), lambda item, check=None: item['face'])
+    finally:
+        pt._FORKED_FROM_ROUTE = False
+        with pt._WORKERS_LOCK:
+            pt._WORKERS.pop(IDENT, None)
+    assert me not in pt._WORKERS
+
+
+def test_a_forked_child_of_an_idle_route_is_not_refused():
+    with pt._WORKERS_LOCK:                         # idle: no registered worker (earlier tests may keep some)
+        kept = dict(pt._WORKERS)
+        pt._WORKERS.clear()
+    try:
+        pt._after_fork_in_child()
+        assert not pt._FORKED_FROM_ROUTE
+        assert pt.ThreadStages(2).run('face', _two(), lambda item, check=None: item['face']) == [0, 1]
+    finally:
+        pt._FORKED_FROM_ROUTE = False
+        with pt._WORKERS_LOCK:
+            pt._WORKERS.update(kept)
