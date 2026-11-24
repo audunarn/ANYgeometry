@@ -170,17 +170,21 @@ class PhaseBudget:
 
 def merge_junit(paths,expected,output):
     from ci_durations import node_id
-    validate_nodes(expected);combined=ET.Element('testsuites');seen=[]
+    validate_nodes(expected);combined=ET.Element('testsuites');seen=[];failed=[]
     for path in paths:
         root=ET.parse(path).getroot()
         suites=[root] if root.tag=='testsuite' else list(root)
         for suite in suites:
             if suite.tag!='testsuite':raise ValueError('unexpected JUnit root child')
             combined.append(copy.deepcopy(suite))
-            seen.extend(node_id(c.get('classname',''),c.get('name','')) for c in suite.iter('testcase'))
+            for case in suite.iter('testcase'):
+                node=node_id(case.get('classname',''),case.get('name',''));seen.append(node)
+                if any(child.tag in ('failure','error') for child in case):failed.append(node)
     ET.ElementTree(combined).write(output,encoding='utf-8',xml_declaration=True)
     if len(seen)!=len(set(seen)) or set(seen)!=set(expected):
-        raise ValueError('JUnit union differs: missing='+str(sorted(set(expected)-set(seen))[:5])+
+        # A --maxfail stop leaves the rest of the shard unrun; name the real failures first so the
+        # union error never hides them (the run still fails).
+        raise ValueError('JUnit union differs: failed='+str(failed[:5])+' missing='+str(sorted(set(expected)-set(seen))[:5])+
                          ' unknown='+str(sorted(set(seen)-set(expected))[:5])+' duplicate='+str(len(seen)-len(set(seen))))
 
 

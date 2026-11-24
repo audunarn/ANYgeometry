@@ -122,6 +122,15 @@ def test_merge_rejects_missing_duplicate_unknown_but_retains_actual_xml(tmp_path
     assert len(ET.parse(target).getroot().findall('.//testcase'))==len(names)
 
 
+def test_union_error_names_the_real_failure_that_stopped_the_shard(tmp_path):
+    # Weekly run 45480936063: --maxfail=1 stopped shards and the union error showed only missing nodes.
+    a=xml(tmp_path/'a.xml',['test_a'],failure=True);target=tmp_path/'all.xml'
+    with pytest.raises(ValueError) as caught:
+        ci.merge_junit([a],['tests/test_a.py::test_a','tests/test_a.py::test_b'],target)
+    assert "failed=['tests/test_a.py::test_a']" in str(caught.value)
+    assert "missing=['tests/test_a.py::test_b']" in str(caught.value)
+
+
 @pytest.mark.parametrize('statement',[
     'import mpmath',
     'import importlib; importlib.import_module("mpmath")',
