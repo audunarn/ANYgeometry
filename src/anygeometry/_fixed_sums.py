@@ -4,22 +4,32 @@ A BLAS dot product is not a defined value: on Intel macOS numpy links Apple Acce
 (and matrix-vector product with a long inner dimension) gives results that differ in the last bits
 with the memory offset of the same values. Quadrature sums therefore never go through ``@``/``dot``.
 
-Each sum here is the IEEE elementwise products followed by one correctly rounded sum
-(``math.fsum``). When the products are not all finite, or their exact sum overflows, ``math.fsum``
-raises; the value is then the IEEE result of numpy's own (repeatable) summation, which is ``inf``,
-``-inf`` or ``nan`` - the value a dot product gave - so callers keep their non-finite handling.
+Each sum here is the IEEE elementwise products followed by one correctly rounded sum of them: the
+exact sum rounded once. ``math.fsum`` computes it; where ``math.fsum`` raises on intermediate
+overflow of finite products, the exact sum is formed in rationals and rounded once, or is a signed
+infinity when it lies beyond the floating range. Non-finite products keep IEEE semantics: a NaN
+product gives NaN, infinities of one sign give that infinity, and both signs give NaN (the values a
+dot product gave), so callers keep their non-finite handling. No warning is emitted.
 Shapes must match exactly: nothing is broadcast.
 """
 import math
+from fractions import Fraction
 
 import numpy as np
 
 
 def _sum(products):
+    values = products.tolist()
     try:
-        return math.fsum(products.tolist())
-    except (OverflowError, ValueError):
-        return float(np.sum(products))
+        return math.fsum(values)
+    except ValueError:                      # +inf and -inf among the products
+        return math.nan
+    except OverflowError:                   # finite products whose partial sums overflow
+        exact = sum(Fraction(value) for value in values)
+        try:
+            return float(exact)
+        except OverflowError:
+            return math.inf if exact > 0 else -math.inf
 
 
 def weighted_sum(weights, values):

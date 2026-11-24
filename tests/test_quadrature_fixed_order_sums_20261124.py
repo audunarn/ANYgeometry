@@ -145,3 +145,45 @@ def test_a_nan_boundary_area_fails_material_conservation(monkeypatch):
     with pytest.raises(GeometryError):
         ma.arrange_material(domain, [], tolerance=model.tolerance.length,
                             area_tolerance=model.tolerance.effective_area(2.))
+
+
+# ---- Codex round 2 (2026-11-24) ----
+
+def test_a_finite_sum_with_intermediate_overflow_is_its_correctly_rounded_exact_value():
+    """math.fsum raises on intermediate overflow although the exact sum is finite; the value is the
+    exact sum rounded once (no nan, no warning), or a signed infinity when the exact sum is beyond range."""
+    import warnings
+    from fractions import Fraction
+    from anygeometry._fixed_sums import weighted_columns, weighted_rows, weighted_sum
+    ones = np.ones(5)
+    with warnings.catch_warnings():
+        warnings.simplefilter('error')
+        assert weighted_sum(ones[:4], [1e308, 1e308, -1e308, -1e308]) == 0.
+        values = [1e308, 1e308, -1e308, 3.]
+        assert weighted_sum(ones[:4], values) == float(sum(map(Fraction, values)))
+        assert weighted_sum(ones[:4], [1e308, 1e308, 1e308, -1e308]) == math.inf
+        assert weighted_sum(ones[:4], [-1e308, -1e308, -1e308, 1e308]) == -math.inf
+        assert weighted_rows(np.array([[1e308, 1e308, -1e308, -1e308]]), ones[:4])[0] == 0.
+        assert weighted_columns(ones[:4], np.array([[1e308], [1e308], [-1e308], [-1e308]]))[0] == 0.
+
+
+def test_no_module_imports_a_blas_product_under_another_name():
+    offenders = []
+    for path in sorted(SRC.rglob('*.py')):
+        for node in ast.walk(ast.parse(path.read_text(encoding='utf-8'))):
+            if isinstance(node, ast.ImportFrom) and (node.module or '').split('.')[0] == 'numpy':
+                offenders += [(path.name, node.lineno, a.name) for a in node.names
+                              if a.name in ('dot', 'matmul', 'inner', 'vdot', 'einsum_path')]
+    assert offenders == []
+
+
+def test_curve_length_refuses_a_derivative_that_is_not_one_vector_per_parameter():
+    """A (3,) derivative for a batch of parameters must not broadcast into a length (0502f62 gave ~1.0)."""
+    import pytest
+    from anygeometry.exact_curves import analytic_curve_length
+
+    class Bad:
+        def derivative(self, parameters):
+            return np.array([1., 0., 0.])
+    with pytest.raises(ValueError):
+        analytic_curve_length(Bad(), 1e-9)
