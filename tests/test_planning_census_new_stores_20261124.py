@@ -58,3 +58,12 @@ def test_a_replaced_evaluator_is_still_refused(monkeypatch):
     probe = object.__new__(CoonsSurface)
     with pytest.raises(GeometryError, match='canonical authored evaluators'):
         source_tensor_chart._canonical_evaluators(probe)
+
+
+def test_a_double_node_copies_and_pickles_like_the_former_named_tuple():
+    """Codex review of d03e595 (Low): tuple.__reduce_ex__ rebuilt the class with one argument."""
+    import copy
+    import pickle
+    node = exact_curves._DoubleNode(1, -1, math.pi)
+    for clone in (copy.copy(node), copy.deepcopy(node), pickle.loads(pickle.dumps(node))):
+        assert type(clone) is exact_curves._DoubleNode and clone == node and clone.angle == math.pi

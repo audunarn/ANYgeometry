@@ -351,6 +351,9 @@ class _DoubleNode(tuple):
     def __new__(cls, sign, tau, angle):
         return tuple.__new__(cls, (sign, tau, angle))
 
+    def __getnewargs__(self):                     # copy and pickle rebuild through __new__
+        return tuple(self)
+
     @property
     def sign(self):
         return self[0]
