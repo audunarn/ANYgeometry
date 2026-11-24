@@ -187,3 +187,67 @@ def test_curve_length_refuses_a_derivative_that_is_not_one_vector_per_parameter(
             return np.array([1., 0., 0.])
     with pytest.raises(ValueError):
         analytic_curve_length(Bad(), 1e-9)
+
+
+# ---- Codex round 3 (2026-11-24): strict helper contract adopted by the owner ----
+# Inputs are real float64 arrays only; non-finite products are classified before any summation
+# (any nan, or +inf with -inf -> nan; infinities of one sign -> that infinity); only all-finite
+# products reach the correctly rounded sum.
+
+def test_non_finite_products_are_classified_before_any_summation():
+    from anygeometry._fixed_sums import weighted_columns, weighted_rows, weighted_sum
+    inf, nan = math.inf, math.nan
+    one = np.ones(3)
+    assert math.isnan(weighted_sum(one, [1e308, 1e308, nan]))
+    assert weighted_sum(one, [1e308, 1e308, inf]) == inf
+    assert weighted_sum(one, [1e308, 1e308, -inf]) == -inf  # finite + -inf; the old dot overflowed to +inf first (nan)
+    assert weighted_sum(one, [-1e308, -1e308, -inf]) == -inf
+    assert math.isnan(weighted_sum(one, [inf, -inf, 1.]))
+    assert math.isnan(weighted_rows(np.array([[1e308, 1e308, nan]]), one)[0])
+    assert weighted_columns(one, np.array([[1e308], [1e308], [inf]]))[0] == inf
+
+
+def test_only_real_float64_arrays_are_summed():
+    import pytest
+    from anygeometry._fixed_sums import weighted_columns, weighted_rows, weighted_sum
+    w = np.ones(3)
+    bad = (np.ones(3, dtype=complex), np.ones(3, dtype=np.float32), np.ones(3, dtype=np.longdouble),
+           np.ones(3, dtype=object), np.ones(3, dtype=int))
+    for values in bad:
+        if values.dtype == np.float64:            # longdouble is float64 on some platforms (Windows)
+            continue
+        with pytest.raises(TypeError):
+            weighted_sum(w, values)
+        with pytest.raises(TypeError):
+            weighted_sum(values, w)
+        with pytest.raises(TypeError):
+            weighted_rows(values[None, :], w)
+        with pytest.raises(TypeError):
+            weighted_columns(w, values[:, None])
+
+
+def test_a_complex_face_field_is_refused_as_before():
+    """d71c5bc refused a complex field (float() of a complex sum); the helper must not cast it to real."""
+    import sys
+    import pytest
+    sys.path.insert(0, str(pathlib.Path(__file__).parent))
+    from test_face_moments import box
+    from anygeometry.face_moments import Frame, face_moments
+    model, faces, _corner = box()
+    with pytest.raises(TypeError):
+        face_moments(model, faces[0], Frame.world(), lambda local: np.ones((len(local), 1)) * (1 + 1j))
+
+
+QUADRATURE_MODULES = ('material_arrangement.py', 'nurbs_domain.py', 'nurbs_section_faces.py',
+                      'section_faces.py', 'exact_curves.py', 'face_moments.py')
+
+
+def test_quadrature_modules_never_name_a_numpy_product_routine():
+    """Covers aliases (``op = np.dot``): the routines are not referenced at all in these modules."""
+    offenders = []
+    for name in QUADRATURE_MODULES:
+        for node in ast.walk(ast.parse((SRC / name).read_text(encoding='utf-8'))):
+            if isinstance(node, ast.Attribute) and node.attr in ('dot', 'matmul', 'inner', 'vdot') and \
+                    isinstance(node.value, ast.Name) and node.value.id in ('np', 'numpy'):
+                offenders.append((name, node.lineno))
+    assert offenders == []
