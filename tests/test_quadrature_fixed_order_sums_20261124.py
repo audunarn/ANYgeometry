@@ -207,15 +207,42 @@ def test_non_finite_products_are_classified_before_any_summation():
     assert weighted_columns(one, np.array([[1e308], [1e308], [inf]]))[0] == inf
 
 
-def test_only_real_float64_arrays_are_summed():
+# Revised contract (owner, 2026-11-24, after the strict-contract review): every real numeric input is
+# converted to native float64 before the products are formed; only complex and object input is refused.
+
+REAL_DTYPES = (np.float64, np.float32, np.float16, np.longdouble, np.int64, np.int32, np.bool_,
+               np.dtype('>f8'), np.dtype('<f8'))
+
+
+def test_real_numeric_inputs_are_converted_to_native_float64():
+    from anygeometry._fixed_sums import weighted_columns, weighted_rows, weighted_sum
+    w = np.array([.5, .25, 2.])
+    v = np.array([1., 0., 1.])                     # exact in every dtype, bool included
+    expected = math.fsum((w*v).tolist())
+    for dtype in REAL_DTYPES:
+        values = v.astype(dtype)
+        assert weighted_sum(w, values) == expected, dtype
+        if np.dtype(dtype).kind == 'f':
+            assert weighted_sum(w.astype(dtype), v) == expected, dtype
+        assert weighted_rows(values[None, :], w)[0] == expected, dtype
+        assert weighted_columns(w, values[:, None])[0] == expected, dtype
+
+
+def test_the_overflow_path_works_for_every_accepted_dtype():
+    from anygeometry._fixed_sums import weighted_columns, weighted_rows, weighted_sum
+    one = np.ones(3)
+    for dtype in (np.float64, np.longdouble, np.dtype('>f8')):
+        values = np.array([1e308, 1e308, -1e308]).astype(dtype)
+        assert weighted_sum(one, values) == 1e308, dtype
+        assert weighted_rows(values[None, :], one)[0] == 1e308, dtype
+        assert weighted_columns(one, values[:, None])[0] == 1e308, dtype
+
+
+def test_complex_and_object_inputs_are_refused():
     import pytest
     from anygeometry._fixed_sums import weighted_columns, weighted_rows, weighted_sum
     w = np.ones(3)
-    bad = (np.ones(3, dtype=complex), np.ones(3, dtype=np.float32), np.ones(3, dtype=np.longdouble),
-           np.ones(3, dtype=object), np.ones(3, dtype=int))
-    for values in bad:
-        if values.dtype == np.float64:            # longdouble is float64 on some platforms (Windows)
-            continue
+    for values in (np.ones(3, dtype=complex), np.ones(3, dtype=object)):
         with pytest.raises(TypeError):
             weighted_sum(w, values)
         with pytest.raises(TypeError):
@@ -224,6 +251,18 @@ def test_only_real_float64_arrays_are_summed():
             weighted_rows(values[None, :], w)
         with pytest.raises(TypeError):
             weighted_columns(w, values[:, None])
+
+
+def test_a_float32_derivative_still_gives_a_curve_length():
+    """A curve whose derivative() returns float32 had a length on d71c5bc; the strict contract refused it."""
+    import pytest
+    from anygeometry.exact_curves import analytic_curve_length
+
+    class Float32Line:
+        def derivative(self, parameters):
+            t = np.atleast_1d(np.asarray(parameters, dtype=float))
+            return np.tile(np.array([3., 4., 0.], dtype=np.float32), (len(t), 1))
+    assert analytic_curve_length(Float32Line(), 1e-9) == pytest.approx(5., rel=1e-12)
 
 
 def test_a_complex_face_field_is_refused_as_before():
@@ -243,11 +282,10 @@ QUADRATURE_MODULES = ('material_arrangement.py', 'nurbs_domain.py', 'nurbs_secti
 
 
 def test_quadrature_modules_never_name_a_numpy_product_routine():
-    """Covers aliases (``op = np.dot``): the routines are not referenced at all in these modules."""
+    """Covers aliases (``op = np.dot``, ``import numpy as n; n.dot``, ``a.dot``): no attribute of these names."""
     offenders = []
     for name in QUADRATURE_MODULES:
         for node in ast.walk(ast.parse((SRC / name).read_text(encoding='utf-8'))):
-            if isinstance(node, ast.Attribute) and node.attr in ('dot', 'matmul', 'inner', 'vdot') and \
-                    isinstance(node.value, ast.Name) and node.value.id in ('np', 'numpy'):
+            if isinstance(node, ast.Attribute) and node.attr in ('dot', 'matmul', 'inner', 'vdot'):
                 offenders.append((name, node.lineno))
     assert offenders == []

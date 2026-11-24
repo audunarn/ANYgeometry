@@ -4,9 +4,10 @@ A BLAS dot product is not a defined value: on Intel macOS numpy links Apple Acce
 (and matrix-vector product with a long inner dimension) gives results that differ in the last bits
 with the memory offset of the same values. Quadrature sums therefore never go through ``@``/``dot``.
 
-Contract (owner, 2026-11-24): inputs are real float64 arrays only (anything else - complex, object,
-integer, float32, a wider long double - is refused with TypeError; nothing is cast). The products
-are formed elementwise in IEEE float64. Non-finite products are classified before any summation:
+Contract (owner, 2026-11-24, revised after the strict-contract review): every real numeric input
+(bool, integer, any float width or byte order; arrays or array-likes) is converted to native float64
+- exactly, except a wider long double, which is rounded once; complex and object input is refused
+with TypeError. The products are then formed elementwise in IEEE float64. Non-finite products are classified before any summation:
 any NaN, or +inf together with -inf, gives NaN; infinities of one sign give that infinity. Only
 all-finite products are summed, as the exact sum rounded once: ``math.fsum``, or, where it raises on
 intermediate overflow, the exact rational sum rounded once (a signed infinity beyond the range).
@@ -40,9 +41,9 @@ def _sum(products):
 
 def _real(array, name):
     array = np.asarray(array)
-    if array.dtype != np.float64:
-        raise TypeError(f'{name} must be a real float64 array, got dtype {array.dtype}')
-    return array
+    if array.dtype.kind not in 'biuf':
+        raise TypeError(f'{name} must be real numbers, got dtype {array.dtype}')
+    return array.astype(np.float64)                # native float64: exact except a wider long double
 
 
 def weighted_sum(weights, values):
