@@ -21,6 +21,11 @@ Completeness (P1, P4)
   angular sweep, in metres). Margins beyond +-tol/4 decide; inside that band the piece must be proven COINCIDENT
   with one boundary plane (the interval distance along the whole piece is within tol/4) - it is then retained as
   boundary of the closed patch - or the pair is refused as ambiguous.
+* The retained events are chart parameters shared by both branches, so a branch is also cut where only the OTHER
+  branch meets a boundary. Consecutive kept pieces of one branch are joined again across an event that is certified
+  interior for that branch (not a fold, node or point contact; its point at least retention plus the evaluation pad
+  inside every native bound), when the joined chart passes the same whole-curve bound (:func:`_join_interior_events`).
+  Every returned curve therefore ends at a boundary crossing, a fold or node, or an event not certified interior.
 
 Evaluation error (P3)
 ---------------------
@@ -441,7 +446,7 @@ def plane_ruled_cylinder_support(plane, cylinder, *, tolerance=1e-10, cancellati
         return (w2n * ((_val_err(b_form) + b1 * (delta + _EPS)) / (2.0 * fs.a0) + _EPS * s_reach)
                 + support.length * w1n * delta + vector)
 
-    curves, contacts = [], []
+    curves, contacts, validated = [], [], set()
     for branch in (-1, 1):
         events = [(t, None if (t in fold_ts or t in node_ts) else "window") for t in structural]
         if candidate_events:
@@ -454,7 +459,7 @@ def plane_ruled_cylinder_support(plane, cylinder, *, tolerance=1e-10, cancellati
                 if min(patch_margins(cylinder, point)) >= -retention:      # event over-retention is always safe
                     events.append((t, index))
         ordered = sorted(events, key=lambda item: item[0])
-        reps, group = [], [ordered[0]]
+        reps, group, contact_reps = [], [ordered[0]], set()
         for item in ordered[1:] + [(math.inf, "end")]:
             if item[0] - group[-1][0] <= _TOLERANCE:
                 group.append(item)
@@ -492,8 +497,10 @@ def plane_ruled_cylinder_support(plane, cylinder, *, tolerance=1e-10, cancellati
                     point = _points(plan, [rep], _branch_values(plan, [rep], branch))[0]
                     if point_status(point, local_error(interval[0], interval[1], branch)):
                         contacts.append(tuple(float(v) for v in point))        # recorded, not erased
+                        contact_reps.add(rep)
             reps.append(rep)
             group = [item]
+        branch_curves = []                        # (e0, e1, curve) of the kept curves of this branch, in chart order
         for e0, e1 in zip(reps, reps[1:]):
             _poll(cancellation_check)
             mid = .5 * (e0 + e1)
@@ -528,7 +535,9 @@ def plane_ruled_cylinder_support(plane, cylinder, *, tolerance=1e-10, cancellati
                 if point_status(ends[1], piece_error):
                     contacts.append(tuple(float(v) for v in ends[1]))          # a sub-tolerance piece is a point
                 continue
-            curves.append(curve)
+            branch_curves.append((e0, e1, curve))
+        curves.extend(_join_interior_events(plan, support, cylinder, branch, branch_curves, fold_ts, node_ts,
+                                            contact_reps, retention + z_pad, quarter, z_pad, validated))
     points = []
     for t in (*fold_ts, *node_ts):
         a, b, _c = fs.abc_scalar(float(t))
@@ -546,7 +555,7 @@ def plane_ruled_cylinder_support(plane, cylinder, *, tolerance=1e-10, cancellati
             kept.append(point)
     if plan.common_roots():
         _refuse("a whole ruling of the plane lies on the cylinder", "common_ruling", face_pair)
-    _validate_curves(plan, support, curves, cylinder, quarter, face_pair, z_pad)
+    _validate_curves(plan, support, curves, cylinder, quarter, face_pair, z_pad, validated=validated)
     _increment("plane_chart_curves", len(curves))
     _increment("plane_chart_points", len(kept))
     return SupportIntersection(curves=tuple(curves), points=tuple(kept))
@@ -731,18 +740,11 @@ def _div_up_certified(numerator, denominator):
     return math.inf
 
 
-def certify_point_membership(cylinder, point, error, tolerance, *, face_pair=None):
-    """Certified membership of an emitted point in the true finite patch at the ACTUAL tolerance.
-
-    ``error`` bounds the Euclidean distance from ``point`` to the exact curve (hence both support residuals). The
-    margins are metres to the native bounds: axial changes by at most ``error``; the angular arc changes by at most
-    ``r asin(error / r)``; plus the rounding of the margin computation itself. Accept (True) iff the margin minus its
-    error is >= -tolerance, reject (False) iff the margin plus its error is < -tolerance, otherwise refuse.
-    """
+def _margin_bounds(cylinder, point, error):
+    """``(lower, upper, margin)``: the computed ``min(patch_margins)`` and bounds on its value at the exact point
+    within ``error`` of ``point``, including the rounding of the margin computation itself (the arithmetic model
+    below); ``None`` when the position error is not small against the radius (the azimuth is then unbounded)."""
     radius = float(cylinder.radius)
-    if not math.isfinite(error) or error > .25 * float(tolerance):
-        _refuse("a point's position error exceeds a quarter of the face tolerance", "point_unproved", face_pair,
-                error=float(error), quarter_tolerance=.25 * float(tolerance))
     p = np.asarray(point, dtype=float)
     origin = np.asarray(cylinder.origin, dtype=float)
     # Arithmetic model of patch_margins (u = eps = 2^-53 rounding unit, gamma_n = n u / (1 - n u) ~ n u):
@@ -758,22 +760,40 @@ def certify_point_membership(cylinder, point, error, tolerance, *, face_pair=Non
     if math.isfinite(angular):
         rho_min = radius - error - e_vec            # the point lies at least rho_min from the axis
         if not rho_min > 0.0:
-            _refuse("the position error is not small against the cylinder radius", "point_unproved", face_pair,
-                    error=float(error), radius=radius)
+            return None
         # a displacement of at most (error + e_vec) changes the azimuth by at most asin((error + e_vec) / rho_min);
         # atan2 is accurate to 2 ulp of pi (2 u pi); (angle - start) mod 2 pi adds rounding of a quantity of size
         # <= 3 pi + |start| (two operations: 2 u (3 pi + |start|)); the arc margin multiplies by r (one u relative).
         d_theta = (math.asin(min(1.0, (error + e_vec) / rho_min)) + 2.0 * _EPS * math.pi
                    + 2.0 * _EPS * (3.0 * math.pi + abs(float(cylinder.start_angle))))
         e_angular = radius * d_theta * (1.0 + _EPS)
-    lower = min(axial - e_axial, angular - e_angular)
-    upper = min(axial + e_axial, angular + e_angular)
+    return (min(axial - e_axial, angular - e_angular), min(axial + e_axial, angular + e_angular),
+            min(axial, angular))
+
+
+def certify_point_membership(cylinder, point, error, tolerance, *, face_pair=None):
+    """Certified membership of an emitted point in the true finite patch at the ACTUAL tolerance.
+
+    ``error`` bounds the Euclidean distance from ``point`` to the exact curve (hence both support residuals). The
+    margins are metres to the native bounds: axial changes by at most ``error``; the angular arc changes by at most
+    ``r asin(error / r)``; plus the rounding of the margin computation itself. Accept (True) iff the margin minus its
+    error is >= -tolerance, reject (False) iff the margin plus its error is < -tolerance, otherwise refuse.
+    """
+    radius = float(cylinder.radius)
+    if not math.isfinite(error) or error > .25 * float(tolerance):
+        _refuse("a point's position error exceeds a quarter of the face tolerance", "point_unproved", face_pair,
+                error=float(error), quarter_tolerance=.25 * float(tolerance))
+    bounds = _margin_bounds(cylinder, point, error)
+    if bounds is None:
+        _refuse("the position error is not small against the cylinder radius", "point_unproved", face_pair,
+                error=float(error), radius=radius)
+    lower, upper, margin = bounds
     if lower >= -tolerance:
         return True
     if upper < -tolerance:
         return False
     _refuse("a point contact is within its error of the patch boundary at the tolerance", "point_ambiguous",
-            face_pair, margin=min(axial, angular), error=float(error), tolerance=float(tolerance))
+            face_pair, margin=margin, error=float(error), tolerance=float(tolerance))
 
 
 def _classify_piece(plan, support, fs, curve, mid_point, e0, e1, branch, cylinder, boundaries, quarter, class_error,
@@ -812,9 +832,82 @@ def _classify_piece(plan, support, fs, curve, mid_point, e0, e1, branch, cylinde
     return True
 
 
-def _validate_curves(plan, support, curves, cylinder, quarter, face_pair, z_pad=1e-6):
-    """Whole-curve derived bound (not a sample certificate): refuse any curve whose bound exceeds a quarter tolerance."""
+def _join_interior_events(plan, support, cylinder, branch, pieces, fold_ts, node_ts, contact_reps, clearance,
+                          quarter, z_pad, validated):
+    """The kept curves of one branch, with consecutive pieces joined across a CERTIFIED interior chart event.
+
+    Boundary-plane roots are chart parameters shared by both branches and are all retained for classification (P1:
+    dropping one is not safe). At a root of the other branch this branch is cut although nothing happens to it there;
+    that cut used to reach the topology as a valence-2 vertex that no other path meets. Two kept pieces that share an
+    event are joined into one chart of the same branch when the event is not a fold or node (the discriminant is
+    positive across it, the chart mode is unchanged), recorded no point contact, and both pieces' ends there (their own
+    guarded evaluator, with their derived error bound and the margin's rounding) are certified at least ``clearance``
+    (retention plus the evaluation pad) inside every native bound: this branch then meets no
+    boundary plane at the event, so membership is the same on both sides, and both sides are already kept. The joined
+    chart must pass the same whole-curve bound as every returned curve (:func:`_validate_curves`); otherwise the
+    pieces are returned unchanged. Without such an event the result is the input, object for object. A joined chart
+    is added to ``validated`` (by identity): it already passed exactly the check :func:`_validate_curves` makes.
+    """
+    if len(pieces) < 2:
+        return [curve for _e0, _e1, curve in pieces]
+    special = (*fold_ts, *node_ts)
+
+    def certified_inside(curve, u):
+        # the piece's own guarded evaluator at its end, with its derived whole-curve bound (the same standard as
+        # certify_point_membership for emitted points); the margin's own rounding is in _margin_bounds
+        error = curve_error_bound(plan, support, curve, cylinder, z_pad=z_pad)[0]
+        if not (math.isfinite(error) and error <= quarter):
+            return False
+        with np.errstate(invalid="ignore", divide="ignore", over="ignore"):
+            point = np.asarray(curve.evaluate(u), dtype=float)
+        if not np.all(np.isfinite(point)):
+            return False
+        bounds = _margin_bounds(cylinder, point, error)
+        return bounds is not None and bounds[0] > clearance
+
+    def joinable(left, right):
+        t = right[0]
+        if t in contact_reps or any(abs(t - f) <= _TOLERANCE for f in special):
+            return False
+        # both pieces' ends at the shared event, each certified inside every bound by more than the clearance
+        return certified_inside(left[2], 1.0) and certified_inside(right[2], 0.0)
+
+    def close(run):
+        if len(run) == 1:
+            return [run[0][2]]
+        e0, e1 = run[0][0], run[-1][1]
+        left = any(abs(e0 - f) <= _TOLERANCE for f in fold_ts)
+        right = any(abs(e1 - f) <= _TOLERANCE for f in fold_ts)
+        mode = "both_sine" if left and right else "left_square" if left else "right_square" if right else "linear"
+        joined = BezierQuadricCurve._make(support, plan.second, e0, e1 - e0, branch, mode)
+        with np.errstate(invalid="ignore", divide="ignore", over="ignore"):
+            ends = joined.evaluate(np.array([0., 1.]))
+            lo, hi = joined.bounds()
+        if not (np.all(np.isfinite(ends)) and np.all(np.isfinite(lo)) and np.all(np.isfinite(hi))
+                and curve_error_bound(plan, support, joined, cylinder, z_pad=z_pad)[0] <= quarter):
+            _increment("plane_chart_interior_events_kept")
+            return [curve for _e0, _e1, curve in run]
+        _increment("plane_chart_interior_events_joined", len(run) - 1)
+        validated.add(id(joined))
+        return [joined]
+
+    result, run = [], [pieces[0]]
+    for piece in pieces[1:]:
+        if piece[0] == run[-1][1] and joinable(run[-1], piece):
+            run.append(piece)
+        else:
+            result.extend(close(run))
+            run = [piece]
+    result.extend(close(run))
+    return result
+
+
+def _validate_curves(plan, support, curves, cylinder, quarter, face_pair, z_pad=1e-6, *, validated=frozenset()):
+    """Whole-curve derived bound (not a sample certificate): refuse any curve whose bound exceeds a quarter tolerance.
+    Curves in ``validated`` (identities of joined charts, :func:`_join_interior_events`) passed this same check."""
     for curve in curves:
+        if id(curve) in validated:
+            continue
         lo, hi = curve.bounds()
         if not (np.all(np.isfinite(lo)) and np.all(np.isfinite(hi))):
             _refuse("the interval enclosure of a branch chart is unbounded", "unbounded_enclosure", face_pair,
