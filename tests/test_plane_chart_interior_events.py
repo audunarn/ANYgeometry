@@ -98,3 +98,18 @@ def test_no_join_across_a_rounding_ambiguous_angular_bound():
     assert counters["plane_cylinder_plane_chart_routes"] == 1
     assert counters.get("plane_chart_interior_events_joined", 0) == 0
     assert len(result.curves) == 2
+
+
+def test_no_join_from_an_unguarded_event_point():
+    """The interior test must use the piece's guarded evaluator and its certified error: the unguarded ``c / q`` root
+    put the tested point 6.7e-4 m off this branch, apparently inside, and the join erased a real crossing at
+    z = 50000. Case from Codex review round 3."""
+    import math
+    start = -1e12
+    cylinder = Cylinder((0., 0., 0.), (0., 0., 1.), (1., 0., 0.), 1.0, 1e5, start, 0.5)
+    plane = Plane((math.cos(start) + 1e-5, 3800000., 0.), (0., 1., 0.), (-2e-10, -76., 1.))
+    with collect_runtime_diagnostics() as counters:
+        result = plane_cylinder_support(plane, cylinder, tolerance=8e-7)
+    assert counters["plane_cylinder_plane_chart_routes"] == 1
+    assert counters.get("plane_chart_interior_events_joined", 0) == 0
+    assert len(result.curves) == 2

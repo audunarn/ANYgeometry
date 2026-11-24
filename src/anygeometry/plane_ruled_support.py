@@ -840,8 +840,9 @@ def _join_interior_events(plan, support, cylinder, branch, pieces, fold_ts, node
     dropping one is not safe). At a root of the other branch this branch is cut although nothing happens to it there;
     that cut used to reach the topology as a valence-2 vertex that no other path meets. Two kept pieces that share an
     event are joined into one chart of the same branch when the event is not a fold or node (the discriminant is
-    positive across it, the chart mode is unchanged), recorded no point contact, and this branch's point there is at
-    least ``clearance`` (retention plus the evaluation pad) inside every native bound: this branch then meets no
+    positive across it, the chart mode is unchanged), recorded no point contact, and both pieces' ends there (their own
+    guarded evaluator, with their derived error bound and the margin's rounding) are certified at least ``clearance``
+    (retention plus the evaluation pad) inside every native bound: this branch then meets no
     boundary plane at the event, so membership is the same on both sides, and both sides are already kept. The joined
     chart must pass the same whole-curve bound as every returned curve (:func:`_validate_curves`); otherwise the
     pieces are returned unchanged. Without such an event the result is the input, object for object. A joined chart
@@ -851,16 +852,25 @@ def _join_interior_events(plan, support, cylinder, branch, pieces, fold_ts, node
         return [curve for _e0, _e1, curve in pieces]
     special = (*fold_ts, *node_ts)
 
-    def joinable(t):
-        if t in contact_reps or any(abs(t - f) <= _TOLERANCE for f in special):
+    def certified_inside(curve, u):
+        # the piece's own guarded evaluator at its end, with its derived whole-curve bound (the same standard as
+        # certify_point_membership for emitted points); the margin's own rounding is in _margin_bounds
+        error = curve_error_bound(plan, support, curve, cylinder, z_pad=z_pad)[0]
+        if not (math.isfinite(error) and error <= quarter):
             return False
-        point = _points(plan, [t], _branch_values(plan, [t], branch))[0]
+        with np.errstate(invalid="ignore", divide="ignore", over="ignore"):
+            point = np.asarray(curve.evaluate(u), dtype=float)
         if not np.all(np.isfinite(point)):
             return False
-        # the evaluation error of ``point`` is inside ``clearance`` (z_pad); the margin's own rounding (large stored
-        # angles, far origins) is bounded by the same model as certify_point_membership and must also be cleared
-        bounds = _margin_bounds(cylinder, point, 0.0)
+        bounds = _margin_bounds(cylinder, point, error)
         return bounds is not None and bounds[0] > clearance
+
+    def joinable(left, right):
+        t = right[0]
+        if t in contact_reps or any(abs(t - f) <= _TOLERANCE for f in special):
+            return False
+        # both pieces' ends at the shared event, each certified inside every bound by more than the clearance
+        return certified_inside(left[2], 1.0) and certified_inside(right[2], 0.0)
 
     def close(run):
         if len(run) == 1:
@@ -883,7 +893,7 @@ def _join_interior_events(plan, support, cylinder, branch, pieces, fold_ts, node
 
     result, run = [], [pieces[0]]
     for piece in pieces[1:]:
-        if piece[0] == run[-1][1] and joinable(piece[0]):
+        if piece[0] == run[-1][1] and joinable(run[-1], piece):
             run.append(piece)
         else:
             result.extend(close(run))
