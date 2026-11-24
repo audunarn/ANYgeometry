@@ -28,6 +28,7 @@ from fractions import Fraction
 import math
 
 import numpy as np
+from ._fixed_sums import weighted_sum
 
 from .branch_predicates import _engine
 from .plane_nurbs import PlaneNurbsNotCertified
@@ -350,8 +351,8 @@ def chart_loop_area(model, loop, surface, level: int = 3) -> tuple[float, float]
             points = curve.chart(t) - (ox, oy)
             derivative = curve.chart_derivative(t)
             first, second = points[:, 0] * derivative[:, 1], points[:, 1] * derivative[:, 0]
-            gauss += sign * .25 * (hi - lo) * math.fsum((weights*(first - second)).tolist())
-            magnitude += .25 * (hi - lo) * math.fsum((weights*(np.abs(first) + np.abs(second))).tolist())
+            gauss += sign * .25 * (hi - lo) * weighted_sum(weights, first - second)
+            magnitude += .25 * (hi - lo) * weighted_sum(weights, np.abs(first) + np.abs(second))
         pieces = _section_pieces(curve, level)
         ts = [pieces[0][0]] + [hi for _lo, hi in pieces]
         polyline = curve.chart(np.asarray(ts)) - (ox, oy)

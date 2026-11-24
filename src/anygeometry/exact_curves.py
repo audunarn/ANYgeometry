@@ -13,6 +13,7 @@ from typing import NamedTuple
 import math
 import heapq
 import numpy as np
+from ._fixed_sums import weighted_sum
 
 from .errors import GeometryError
 from .surfaces import Cylinder
@@ -76,7 +77,7 @@ def analytic_curve_length(curve, tolerance):
         count = 16
         while True:
             nodes, weights = _gauss_legendre(count)
-            value = .5*(b-a)*math.fsum((weights*np.linalg.norm(curve.derivative(a+.5*(b-a)*(nodes+1)), axis=-1)).tolist())
+            value = .5*(b-a)*weighted_sum(weights, np.linalg.norm(curve.derivative(a+.5*(b-a)*(nodes+1)), axis=-1))
             if previous is not None and abs(value-previous) <= share:
                 total += value
                 break

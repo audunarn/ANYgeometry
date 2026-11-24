@@ -27,6 +27,7 @@ from ._budget_provenance import denial_mark, note_entry
 import math
 
 import numpy as np
+from ._fixed_sums import weighted_sum
 
 from .curves import Straight, LineRange
 from .errors import GeometryError
@@ -115,8 +116,8 @@ def _section_area(curve: PlaneNurbsCurve, frame: _Frame, forward: bool, pieces=_
         derivatives = np.stack([(curve.derivative(float(item)) @ frame.first,
                                  curve.derivative(float(item)) @ frame.second) for item in t])
         first, second = points[:, 0] * derivatives[:, 1], points[:, 1] * derivatives[:, 0]
-        gauss += .25 * (hi - lo) * math.fsum((weights*(first - second)).tolist())
-        magnitude += .25 * (hi - lo) * math.fsum((weights*(np.abs(first) + np.abs(second))).tolist())
+        gauss += .25 * (hi - lo) * weighted_sum(weights, first - second)
+        magnitude += .25 * (hi - lo) * weighted_sum(weights, np.abs(first) + np.abs(second))
     if isinstance(pieces, int):
         ts = np.linspace(0.0, 1.0, pieces + 1)
     else:

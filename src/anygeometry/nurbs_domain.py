@@ -18,6 +18,7 @@ from __future__ import annotations
 import math
 
 import numpy as np
+from ._fixed_sums import weighted_rows, weighted_sum
 
 from ._cross3 import _gauss_legendre
 from .errors import GeometryError
@@ -339,8 +340,8 @@ def area_loop(domain, loop, tolerance) -> float:
             q = _chart_points(pcurve, nodes)
             dq = pcurve.derivative(nodes)
             samples = 0.5 * (q[:, 0] * dq[:, 1] - q[:, 1] * dq[:, 0])
-            value += math.fsum((weights*samples).tolist())
-            magnitude += math.fsum((weights*np.abs(samples)).tolist())
+            value += weighted_sum(weights, samples)
+            magnitude += weighted_sum(weights, np.abs(samples))
         return value, magnitude
 
     return _settle(evaluate, tolerance, "NURBS chart area")[0]
@@ -405,7 +406,7 @@ def _inner_integral(surface: NurbsSurface, u: np.ndarray, v: np.ndarray, count: 
         s = a + width[active, None] * 0.5 * (nodes[None, :] + 1)
         vv = np.repeat(v[active, None], count, axis=1)
         density = _area_density(surface, np.column_stack((s.ravel(), vv.ravel()))).reshape(s.shape)
-        total[active] += 0.5 * width[active] * np.array([math.fsum(row) for row in (density * weights).tolist()])
+        total[active] += 0.5 * width[active] * weighted_rows(density, weights)
     return total
 
 
@@ -454,8 +455,8 @@ def _world_area_estimate_uncached(domain, loop, tolerance) -> tuple[float, float
             samples = np.zeros(len(nodes))
             if np.any(moving):
                 samples[moving] = _inner_integral(surface, q[moving, 0], q[moving, 1], count) * dq[moving, 1]
-            value += math.fsum((weights*samples).tolist())
-            magnitude += math.fsum((weights*np.abs(samples)).tolist())
+            value += weighted_sum(weights, samples)
+            magnitude += weighted_sum(weights, np.abs(samples))
         return value, magnitude
 
     return _settle(evaluate, tolerance, "NURBS world area")
