@@ -82,7 +82,11 @@ def _threads(monkeypatch, cls):
 # ---- (1) the registry is owner-keyed ----
 
 def test_a_crew_never_removes_an_entry_that_names_another_owner():                           # FAILS-ON-OLD
-    crew = pt._Crew(2, lambda: None, threading.Event())
+    # Both workers are alive at once (a barrier), so their idents differ: when the first had ended before the
+    # second started, the OS gave both the same ident (hosted macOS, 3 of 30 runs) and the assertion below on
+    # the second ident did not hold for reasons outside the crew (0.4.7 gate class B, 2026-11-24).
+    both = threading.Barrier(2, timeout=30)
+    crew = pt._Crew(2, both.wait, threading.Event())
     crew.start()
     pt.wait(crew)
     idents = list(crew.entered)

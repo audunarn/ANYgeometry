@@ -492,8 +492,26 @@ def _inside_task():
     The ident test comes first: it needs nothing but the module registry, so it also answers while the thread is
     being torn down (where ``threading.current_thread()`` would invent a dummy thread).
     """
-    return (threading.get_ident() in _WORKERS or _IN_TASK.get()
+    return (_registered(threading.get_ident()) or _IN_TASK.get()
             or threading.current_thread().name.startswith(_WORKER_PREFIX))
+
+
+def _registered(ident):
+    """The registry marks this thread: its entry names a crew slot whose thread is alive, or is anything else.
+
+    An entry outlives its worker until the dispatcher has joined that thread, and meanwhile the OS may give the
+    ident to a new thread (glibc reuses idents at once). An alive thread has not exited, so its ident cannot have
+    been reused; an entry that is not a (crew, slot) key is kept as a mark (fail closed). 0.4.7 gate class B.
+    """
+    entry = _WORKERS.get(ident)
+    if entry is None:
+        return False
+    try:
+        crew, slot = entry
+        thread = crew.threads[slot] if type(crew) is _Crew else None
+    except Exception:
+        return True
+    return thread is None or (thread.ident == ident and thread.is_alive())
 
 
 def plan_with_threads(threaded, serial):
