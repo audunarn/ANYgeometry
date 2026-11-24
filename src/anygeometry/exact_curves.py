@@ -76,7 +76,7 @@ def analytic_curve_length(curve, tolerance):
         count = 16
         while True:
             nodes, weights = _gauss_legendre(count)
-            value = .5*(b-a)*float(weights @ np.linalg.norm(curve.derivative(a+.5*(b-a)*(nodes+1)), axis=-1))
+            value = .5*(b-a)*math.fsum((weights*np.linalg.norm(curve.derivative(a+.5*(b-a)*(nodes+1)), axis=-1)).tolist())
             if previous is not None and abs(value-previous) <= share:
                 total += value
                 break

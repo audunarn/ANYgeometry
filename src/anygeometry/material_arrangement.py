@@ -1005,8 +1005,8 @@ def _integrate_loop(loop, boundary, integrand, tolerance):
         for path in loop:
             samples = integrand(path.curve, .5*(nodes+1))
             edge = boundary(path.curve)
-            value += edge+.5*float(weights @ samples)                    # [-1, 1] rule on [0, 1]
-            magnitude += abs(edge)+.5*float(weights @ np.abs(samples))
+            value += edge+.5*math.fsum((weights*samples).tolist())                    # [-1, 1] rule on [0, 1]
+            magnitude += abs(edge)+.5*math.fsum((weights*np.abs(samples)).tolist())
         if previous is not None and abs(value-previous) <= max(tolerance, 64*_EPS*magnitude):
             return value
         previous = value
@@ -1032,7 +1032,7 @@ def _adaptive_gauss(function, tolerance):
 
     def rule(a, b):
         samples = function(.5*(a+b)+.5*(b-a)*nodes)
-        return .5*(b-a)*float(weights @ samples), .5*(b-a)*float(weights @ np.abs(samples))
+        return .5*(b-a)*math.fsum((weights*samples).tolist()), .5*(b-a)*math.fsum((weights*np.abs(samples)).tolist())
 
     def refine(a, b, whole):
         middle = .5*(a+b)
