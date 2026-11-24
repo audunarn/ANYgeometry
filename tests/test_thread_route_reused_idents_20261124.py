@@ -210,35 +210,10 @@ def test_an_uninterrupted_stage_still_leaves_no_entry():
     assert pt._WORKERS == before
 
 
-def test_a_forked_child_of_an_in_flight_route_refuses_every_stage():
-    """A fork from a worker (e.g. in a thread-local finalizer) gives the surviving thread a fresh _MainThread
-    under the worker's ident, which the reuse proof would accept. The child of a process with workers in the
-    registry therefore refuses the route altogether (CPython: fork from a multithreaded process is unsafe)."""
-    assert hasattr(pt, '_after_fork_in_child')
-    me = threading.get_ident()
-    with pt._WORKERS_LOCK:
-        pt._WORKERS[IDENT] = object()
-    try:
-        pt._after_fork_in_child()
-        assert pt._inside_task()
-        with pytest.raises(Exception, match='forked'):
-            pt.ThreadStages(2).run('face', _two(), lambda item, check=None: item['face'])
-    finally:
-        pt._FORKED_FROM_ROUTE = False
-        with pt._WORKERS_LOCK:
-            pt._WORKERS.pop(IDENT, None)
-    assert me not in pt._WORKERS
-
-
-def test_a_forked_child_of_an_idle_route_is_not_refused():
-    with pt._WORKERS_LOCK:                         # idle: no registered worker (earlier tests may keep some)
-        kept = dict(pt._WORKERS)
-        pt._WORKERS.clear()
-    try:
-        pt._after_fork_in_child()
-        assert not pt._FORKED_FROM_ROUTE
-        assert pt.ThreadStages(2).run('face', _two(), lambda item, check=None: item['face']) == [0, 1]
-    finally:
-        pt._FORKED_FROM_ROUTE = False
-        with pt._WORKERS_LOCK:
-            pt._WORKERS.update(kept)
+def test_the_route_installs_no_fork_hook_and_documents_the_fork_limit():
+    """Owner (2026-11-24): no fork hook - fork from a worker and a second interrupt before the join mark are
+    documented limits for the per-thread identity redesign, not handled here."""
+    import inspect
+    source = inspect.getsource(pt)
+    assert 'register_at_fork' not in source and not hasattr(pt, '_FORKED_FROM_ROUTE')
+    assert 'Known limits of the ident registry' in source

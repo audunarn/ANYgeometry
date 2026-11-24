@@ -404,21 +404,12 @@ _WORKER_PREFIX = 'anygeometry-plan'
 _WORKERS = {}
 _WORKERS_LOCK = threading.Lock()
 
-# A child forked while workers of the route were registered (e.g. from a worker's thread-local finalizer) has
-# a fresh _MainThread under a worker's ident, which the reuse proof of _registered would accept. Such a child
-# refuses every stage (CPython documents fork from a multithreaded process as unsafe; 0.4.7 gate class B,
-# Codex round 3).
-_FORKED_FROM_ROUTE = False
-
-
-def _after_fork_in_child():
-    global _FORKED_FROM_ROUTE
-    if _WORKERS:
-        _FORKED_FROM_ROUTE = True
-
-
-if hasattr(os, 'register_at_fork'):
-    os.register_at_fork(after_in_child=_after_fork_in_child)
+# Known limits of the ident registry, left to the per-thread identity redesign (owner, 0.4.7 gate class B,
+# 2026-11-24): (1) a process forked from a worker of the route (e.g. in a thread-local finalizer) gives the
+# surviving thread a fresh _MainThread under that worker's ident, which the reuse proof of _registered accepts;
+# CPython documents fork from a multithreaded process as unsafe and the route does not support it. (2) a second
+# interrupt that lands in the dispatcher's handler before ``join_interrupted`` is set can let shutdown remove
+# the marks of threads that are still finishing.
 
 
 class _Crew:
@@ -513,7 +504,7 @@ def _inside_task():
     The ident test comes first: it needs nothing but the module registry, so it also answers while the thread is
     being torn down (where ``threading.current_thread()`` would invent a dummy thread).
     """
-    return (_FORKED_FROM_ROUTE or _registered(threading.get_ident()) or _IN_TASK.get()
+    return (_registered(threading.get_ident()) or _IN_TASK.get()
             or threading.current_thread().name.startswith(_WORKER_PREFIX))
 
 
@@ -660,8 +651,6 @@ class ThreadStages:
         try:
             if threading.get_ident() != self._owner:
                 raise _RouteFailure("thread planning stage entered from a foreign thread")
-            if _FORKED_FROM_ROUTE:
-                raise _RouteFailure("thread planning stage in a process forked while the route had workers is not supported")
             if _inside_task():
                 # Before any thread exists: a nested stage would have workers that the outer verdict cannot see.
                 raise _RouteFailure("thread planning stage inside a task of another stage is not supported")
