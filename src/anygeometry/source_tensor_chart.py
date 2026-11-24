@@ -14,8 +14,11 @@ from .surfaces import CoonsSurface, ExtrudedSurface, RuledSurface
 
 _UNIT = (0., 0., 1., 1.)
 _CORNERS = ((0., 0.), (1., 0.), (1., 1.), (0., 1.))
-_METHODS = {
-    cls: {name: (getattr(cls, name), getattr(cls, name).__code__) for name in names}
+# The authored evaluators as imported: (class, ((name, function, code), ...)) pairs. Immutable tuples, not a
+# dict: the planner's module-state census refuses a mutable module store (0.4.7 gate class C, owner
+# decision 2026-11-24).
+_METHODS = tuple(
+    (cls, tuple((name, getattr(cls, name), getattr(cls, name).__code__) for name in names))
     for cls, names in (
         (GeometryModel, ('face_point', 'sample_edge', '_sample_edge_object', '_spline_points',
                          '_topology_face_point', '_topology_face_point_and_derivatives',
@@ -25,13 +28,13 @@ _METHODS = {
         (CoonsSurface, ('evaluate', '_sample')),
         (RuledSurface, ('evaluate', '_sample')),
     )
-}
+)
 
 
 def _canonical_evaluators(value):
-    methods = _METHODS.get(type(value))
+    methods = next((entries for cls, entries in _METHODS if cls is type(value)), None)
     if methods is None or any(name in vars(value) or getattr(type(value), name) is not method
-                              or method.__code__ is not code for name, (method, code) in methods.items()):
+                              or method.__code__ is not code for name, method, code in methods):
         raise GeometryError('source tensor requires the canonical authored evaluators')
 
 

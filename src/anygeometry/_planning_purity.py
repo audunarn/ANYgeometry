@@ -63,7 +63,15 @@ def _namespace(module):
     return types.ModuleType.__getattribute__(module, '__dict__')
 
 
-def inventory(modules, *, max_nodes=80000, max_depth=24, store_objects=None, definition_objects=None,
+# Node bound of the module-state census (owner decision 2026-11-24, 0.4.7 gate class C): the census
+# of a planning worker needed ~82,400 nodes against the former 80,000 and was truncated, so the
+# process route declined. A truncated census still declines; the bound only limits work (a full
+# census of a planning process takes ~80 ms). tests/test_planning_census_headroom_20261124.py keeps
+# a quarter of it free.
+INVENTORY_MAX_NODES = 160000
+
+
+def inventory(modules, *, max_nodes=INVENTORY_MAX_NODES, max_depth=24, store_objects=None, definition_objects=None,
               store_boundary=None, infrastructure_boundary=None):
     """Bounded actual-type walk; no user descriptors, iterators or repr calls.
 

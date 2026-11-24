@@ -29,15 +29,17 @@ from contextlib import contextmanager
 _JUNCTION_BOUNDS = ContextVar('junction_bounds', default=False)
 
 
-# Piecewise line/branch rejection (default on). A predicate budget or an explicit
-# ``_junction_bounds_policy(False)`` restores the unfiltered route for exact accounting.
-_SWEEP_REJECTION = ContextVar('junction_sweep_rejection', default=True)
+# Piecewise line/branch rejection: on unless the switch is False. A predicate budget or an explicit
+# ``_junction_bounds_policy(False)`` sets False and restores the unfiltered route for exact accounting.
+# The default is None (on), an empty context value: the planner's module-state census admits only
+# empty context values (0.4.7 gate class C, owner decision 2026-11-24).
+_SWEEP_REJECTION = ContextVar('junction_sweep_rejection', default=None)
 
 
 @contextmanager
 def _junction_bounds_policy(enabled):
     token = _JUNCTION_BOUNDS.set(enabled)
-    sweep = _SWEEP_REJECTION.set(bool(enabled))
+    sweep = _SWEEP_REJECTION.set(None if enabled else False)
     try:
         yield
     finally:
@@ -540,7 +542,7 @@ def _line_clear_of_branch(first, second, tolerance):
     rounding allowance must all be disjoint from that extended segment. Anything unusual
     (other curve types, a degenerate line, non-finite data) keeps the original route.
     """
-    if not _SWEEP_REJECTION.get():
+    if _SWEEP_REJECTION.get() is False:
         return False
     if type(first) is LinePath and type(second) in (BezierQuadricCurve, CylinderIntersectionCurve):
         line, curve = first, second
@@ -654,7 +656,7 @@ def _curve_pair_clear(first, second, tolerance):
     curves use ``_line_clear_of_branch``; other types, degenerate or non-finite data keep the
     original route.
     """
-    if not _SWEEP_REJECTION.get():
+    if _SWEEP_REJECTION.get() is False:
         return False
     kinds = (LinePath, EllipticArc, BezierQuadricCurve, CylinderIntersectionCurve)
     if type(first) not in kinds or type(second) not in kinds or (type(first) is LinePath and type(second) is LinePath):
