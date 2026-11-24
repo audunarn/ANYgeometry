@@ -14,6 +14,7 @@ import itertools
 import math
 from contextlib import nullcontext
 import numpy as np
+from ._fixed_sums import weighted_sum
 
 from .arrangement_geometry import (LinePath, BezierPath, curve_junctions,
                                    plane_roots, point_parameters, freeze_edge, _junction_bounds_policy)
@@ -1005,8 +1006,8 @@ def _integrate_loop(loop, boundary, integrand, tolerance):
         for path in loop:
             samples = integrand(path.curve, .5*(nodes+1))
             edge = boundary(path.curve)
-            value += edge+.5*float(weights @ samples)                    # [-1, 1] rule on [0, 1]
-            magnitude += abs(edge)+.5*float(weights @ np.abs(samples))
+            value += edge+.5*weighted_sum(weights, samples)                    # [-1, 1] rule on [0, 1]
+            magnitude += abs(edge)+.5*weighted_sum(weights, np.abs(samples))
         if previous is not None and abs(value-previous) <= max(tolerance, 64*_EPS*magnitude):
             return value
         previous = value
@@ -1032,7 +1033,7 @@ def _adaptive_gauss(function, tolerance):
 
     def rule(a, b):
         samples = function(.5*(a+b)+.5*(b-a)*nodes)
-        return .5*(b-a)*float(weights @ samples), .5*(b-a)*float(weights @ np.abs(samples))
+        return .5*(b-a)*weighted_sum(weights, samples), .5*(b-a)*weighted_sum(weights, np.abs(samples))
 
     def refine(a, b, whole):
         middle = .5*(a+b)
@@ -3104,7 +3105,7 @@ def _arrange_material_once(domain, traces, *, tolerance, cancellation_check=None
         return MaterialArrangement(domain.face_id, tuple(edges), cells, retained, tolerance,
                                    native_area_tolerance, domain.support, -1 if outer_area < 0 else 1)
     cells, retained, outer_area, original = _float_material_cells(domain, cycles, tolerance, native_area_tolerance)
-    if not cells or abs(original-retained) > native_area_tolerance:
+    if not cells or not abs(original-retained) <= native_area_tolerance:     # a NaN area refuses
         failure = GeometryError("arrangement failed material conservation")
         if exact and not deferred and edge_segments and max_predicates is None:
             # CAP-1: refusal-only snap fallback (see _snap_fallback). It returns None, and this original

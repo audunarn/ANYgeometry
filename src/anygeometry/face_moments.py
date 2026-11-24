@@ -28,6 +28,7 @@ straight chart segments on NURBS faces. Anything else refuses (``GeometryError``
 from __future__ import annotations
 
 import numpy as np
+from ._fixed_sums import weighted_columns
 
 from .curves import Straight
 from .errors import GeometryError
@@ -781,9 +782,9 @@ def face_moments(model, face_id: int, frame: Frame, fields=volume_fields, order:
                 if frame.zeta(chart.evaluate(middle))[0] >= 0:
                     continue
             g = fields(frame.local(chart.evaluate(uv))) * chart.jacobian(uv, n)[:, None]
-            value += (.5 * (hi - lo) * weights) @ g
+            value += weighted_columns(.5 * (hi - lo) * weights, g)
         inner[k] = value if s >= 0 else -value
-    total = ws @ (inner * rates[:, other][:, None])
+    total = weighted_columns(ws, inner * rates[:, other][:, None])
     return total if axis == 0 else -total
 
 
