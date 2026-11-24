@@ -12,11 +12,22 @@ marks the thread unless ``threading._active`` proves that a different live Threa
 in teardown, a native thread, a present None and any non-crew value keep the mark (fail closed). No lock is
 taken and no thread is joined or probed.
 """
+import faulthandler
 import threading
 
 import pytest
 
 from anygeometry import _planning_threads as pt
+
+BOUND = 240
+
+
+@pytest.fixture(autouse=True)
+def _bounded():
+    # Codex round 4 (Low): a registry-lock or join regression must end the run, not hang it.
+    faulthandler.dump_traceback_later(BOUND, exit=True)
+    yield
+    faulthandler.cancel_dump_traceback_later()
 
 
 def _two():
@@ -202,6 +213,42 @@ def test_an_interrupted_join_keeps_the_workers_marked(monkeypatch):
         with pt._WORKERS_LOCK:
             for ident in seen.get('idents', ()):
                 pt._WORKERS.pop(ident, None)
+
+
+def test_an_interrupted_join_keeps_a_still_running_worker_marked(monkeypatch):
+    """Codex round 4 (Low): the interrupt lands while the workers are still inside their tasks, and the cleanup
+    join returns at once as on 3.11/3.12 (gh-90882). The live workers stay marked and see themselves inside a
+    task after the interrupt has left the stage."""
+    inside, entered, release = [], threading.Barrier(3, timeout=30), threading.Event()
+    real_join = threading.Thread.join
+    made = []
+
+    def task(item, check=None):
+        made.append(threading.current_thread())
+        entered.wait()
+        assert release.wait(60)
+        inside.append(pt._inside_task())
+        return item['face']
+
+    def interrupted(crew):
+        entered.wait()                               # both workers are inside a task
+        raise KeyboardInterrupt('during the join')
+    monkeypatch.setattr(pt, 'wait', interrupted)
+    monkeypatch.setattr(threading.Thread, 'join', lambda self, timeout=None: None)   # the join "succeeds"
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            pt.ThreadStages(2).run('face', _two(), task)
+        assert len(made) == 2 and all(thread.is_alive() for thread in made)
+        assert all(thread.ident in pt._WORKERS for thread in made)
+    finally:
+        monkeypatch.setattr(threading.Thread, 'join', real_join)
+        release.set()
+        for thread in made:
+            real_join(thread, 60)
+        with pt._WORKERS_LOCK:
+            for thread in made:
+                pt._WORKERS.pop(thread.ident, None)
+    assert inside == [True, True]
 
 
 def test_an_uninterrupted_stage_still_leaves_no_entry():

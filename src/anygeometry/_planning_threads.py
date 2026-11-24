@@ -409,7 +409,13 @@ _WORKERS_LOCK = threading.Lock()
 # surviving thread a fresh _MainThread under that worker's ident, which the reuse proof of _registered accepts;
 # CPython documents fork from a multithreaded process as unsafe and the route does not support it. (2) a second
 # interrupt that lands in the dispatcher's handler before ``join_interrupted`` is set can let shutdown remove
-# the marks of threads that are still finishing.
+# the marks of threads that are still finishing. Accepted after Codex round 4 (owner, 2026-11-24; both also
+# hold on 5e2e116): (3) a fork from any thread while another holds _WORKERS_LOCK leaves the child with a held
+# lock, so a stage in that child can hang; (4) on CPython 3.11/3.12 an interrupted join can make the cleanup
+# join return while a worker still runs (gh-90882), so the interrupt reaches the caller before that worker has
+# ended; its mark is kept. New with the kept marks: (5) the entries of an interrupted crew keep that crew (its
+# tasks and outcomes) alive until the OS reuses those idents, so memory grows with the number of interrupted
+# stages.
 
 
 class _Crew:
