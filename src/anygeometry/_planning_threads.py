@@ -404,6 +404,19 @@ _WORKER_PREFIX = 'anygeometry-plan'
 _WORKERS = {}
 _WORKERS_LOCK = threading.Lock()
 
+# Known limits of the ident registry, left to the per-thread identity redesign (owner, 0.4.7 gate class B,
+# 2026-11-24): (1) a process forked from a worker of the route (e.g. in a thread-local finalizer) gives the
+# surviving thread a fresh _MainThread under that worker's ident, which the reuse proof of _registered accepts;
+# CPython documents fork from a multithreaded process as unsafe and the route does not support it. (2) a second
+# interrupt that lands in the dispatcher's handler before ``join_interrupted`` is set can let shutdown remove
+# the marks of threads that are still finishing. Accepted after Codex round 4 (owner, 2026-11-24; both also
+# hold on 5e2e116): (3) a fork from any thread while another holds _WORKERS_LOCK leaves the child with a held
+# lock, so a stage in that child can hang; (4) on CPython 3.11/3.12 an interrupted join can make the cleanup
+# join return while a worker still runs (gh-90882), so the interrupt reaches the caller before that worker has
+# ended; its mark is kept. New with the kept marks: (5) the entries of an interrupted crew keep that crew (its
+# tasks and outcomes) alive until the OS reuses those idents, so memory grows with the number of interrupted
+# stages.
+
 
 class _Crew:
     """The threads of one stage, owned by this module: created -> started -> joined.
@@ -424,6 +437,10 @@ class _Crew:
         self.joined = [False] * size
         self.interrupts = [None] * size
         self.machinery = [None] * size
+        # Set by the dispatcher when its join of this crew was interrupted: on CPython 3.11/3.12 such an
+        # interrupt can mark a running worker stopped (gh-90882), so a later join proves nothing and the
+        # registry entries are kept (fail closed; 0.4.7 gate class B, Codex round 3).
+        self.join_interrupted = False
         # Every thread object exists, named, before any of them runs.
         # Not daemon threads, whatever the dispatcher is: like the executor's workers they are always joined.
         self.threads = [threading.Thread(target=self._main, args=(slot,), name=f'{_WORKER_PREFIX}_{slot}',
@@ -463,7 +480,8 @@ class _Crew:
                         first = exc
         with _WORKERS_LOCK:
             for slot, ident in enumerate(self.entered):
-                if ident is not None and self.joined[slot] and _WORKERS.get(ident) is self.keys[slot]:
+                if (ident is not None and self.joined[slot] and not self.join_interrupted
+                        and _WORKERS.get(ident) is self.keys[slot]):
                     del _WORKERS[ident]
         if first is not None:
             raise first
@@ -492,8 +510,41 @@ def _inside_task():
     The ident test comes first: it needs nothing but the module registry, so it also answers while the thread is
     being torn down (where ``threading.current_thread()`` would invent a dummy thread).
     """
-    return (threading.get_ident() in _WORKERS or _IN_TASK.get()
+    return (_registered(threading.get_ident()) or _IN_TASK.get()
             or threading.current_thread().name.startswith(_WORKER_PREFIX))
+
+
+_MISSING = object()
+
+
+def _registered(ident, active=None):
+    """The registry marks this thread, unless it is proven to belong to a later thread that reused the ident.
+
+    An entry outlives its worker until the dispatcher has joined that thread, and meanwhile the OS may give the
+    ident to a new thread (glibc reuses idents at once). The proof is ``threading._active`` holding, for this
+    ident, a live Thread object (not a _DummyThread) other than the crew slot's own thread that reports this
+    ident: that object exists only for a thread
+    that ``threading`` started and that is running now. Anything else keeps the mark (fail closed): a worker in
+    teardown (no longer in ``_active``), a native thread, an entry that is not a (crew, slot) key, a present
+    ``None``. No lock is taken and no thread is joined or probed (0.4.7 gate class B, Codex review of 43f7810).
+    """
+    entry = _WORKERS.get(ident, _MISSING)
+    if entry is _MISSING:
+        return False
+    try:
+        crew, slot = entry
+        own = crew.threads[slot] if type(crew) is _Crew else None
+    except Exception:
+        return True
+    if own is None:
+        return True
+    current = (threading._active if active is None else active).get(ident)
+    # A _DummyThread is no proof: current_thread() registers one under a worker's own ident when a thread-local
+    # finalizer runs after the worker left _active (Codex round 2 on a0c16be). The object must also report
+    # this ident.
+    proof = (isinstance(current, threading.Thread) and not isinstance(current, threading._DummyThread)
+             and current is not own and current.ident == ident)
+    return not proof
 
 
 def plan_with_threads(threaded, serial):
@@ -714,11 +765,15 @@ class ThreadStages:
         attempt.running += 1
         try:
             try:
+                started = False
                 crew.start()
+                started = True
                 wait(crew)
             except BaseException as exc:
                 attempt.note(exc)        # first of all: an interrupt is kept whatever the cleanup below does
                 held = exc
+                if started:              # the join itself was interrupted (a failed start() joined nothing)
+                    crew.join_interrupted = True
                 stopped.set()
             finally:
                 crew.shutdown(wait=True)
