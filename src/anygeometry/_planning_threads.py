@@ -504,7 +504,8 @@ def _registered(ident, active=None):
 
     An entry outlives its worker until the dispatcher has joined that thread, and meanwhile the OS may give the
     ident to a new thread (glibc reuses idents at once). The proof is ``threading._active`` holding, for this
-    ident, a live Thread object other than the crew slot's own thread: that object exists only for a thread
+    ident, a live Thread object (not a _DummyThread) other than the crew slot's own thread that reports this
+    ident: that object exists only for a thread
     that ``threading`` started and that is running now. Anything else keeps the mark (fail closed): a worker in
     teardown (no longer in ``_active``), a native thread, an entry that is not a (crew, slot) key, a present
     ``None``. No lock is taken and no thread is joined or probed (0.4.7 gate class B, Codex review of 43f7810).
@@ -520,7 +521,12 @@ def _registered(ident, active=None):
     if own is None:
         return True
     current = (threading._active if active is None else active).get(ident)
-    return not (isinstance(current, threading.Thread) and current is not own)
+    # A _DummyThread is no proof: current_thread() registers one under a worker's own ident when a thread-local
+    # finalizer runs after the worker left _active (Codex round 2 on a0c16be). The object must also report
+    # this ident.
+    proof = (isinstance(current, threading.Thread) and not isinstance(current, threading._DummyThread)
+             and current is not own and current.ident == ident)
+    return not proof
 
 
 def plan_with_threads(threaded, serial):

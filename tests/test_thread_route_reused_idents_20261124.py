@@ -98,6 +98,7 @@ def stale():
 
 def test_a_different_live_thread_on_the_ident_proves_the_entry_stale(stale):
     other = threading.Thread(target=lambda: None)
+    other._ident = IDENT                           # a later thread that threading started on the reused ident
     assert not pt._registered(IDENT, active={IDENT: other})
 
 
@@ -146,3 +147,34 @@ def test_the_real_registry_check_never_probes_or_joins_a_thread(monkeypatch):
         with pt._WORKERS_LOCK:
             pt._WORKERS.pop(me, None)
         crew.shutdown()
+
+
+# ---- Codex round 2 on a0c16be ----
+
+def test_a_dummy_thread_on_the_ident_keeps_the_mark(stale):
+    """A worker's thread-local finalizer runs after the worker left threading._active; current_thread() there
+    registers a _DummyThread under the still-running worker's ident. That is no proof of reuse (fail closed)."""
+    dummy = object.__new__(threading._DummyThread)
+    assert isinstance(dummy, threading.Thread)
+    assert pt._registered(IDENT, active={IDENT: dummy})
+
+
+def test_a_thread_object_that_reports_another_ident_is_no_proof(stale):
+    other = threading.Thread(target=lambda: None)
+    other._ident = IDENT + 1
+    assert pt._registered(IDENT, active={IDENT: other})
+
+
+def test_a_matching_ident_is_decided_without_probing_or_joining(stale, monkeypatch):
+    """The crew thread object reports the registered ident (the case where 92ecb15 called is_alive())."""
+    stale.threads[0]._ident = IDENT
+
+    def forbidden(self, *args, **kwargs):
+        raise AssertionError('thread probed or joined by the registry check')
+    monkeypatch.setattr(threading.Thread, 'is_alive', forbidden)
+    monkeypatch.setattr(threading.Thread, 'join', forbidden)
+    other = threading.Thread(target=lambda: None)
+    other._ident = IDENT
+    assert not pt._registered(IDENT, active={IDENT: other})
+    assert pt._registered(IDENT, active={IDENT: stale.threads[0]})
+    assert pt._registered(IDENT, active={})
