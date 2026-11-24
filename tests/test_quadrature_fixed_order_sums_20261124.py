@@ -289,3 +289,33 @@ def test_quadrature_modules_never_name_a_numpy_product_routine():
             if isinstance(node, ast.Attribute) and node.attr in ('dot', 'matmul', 'inner', 'vdot'):
                 offenders.append((name, node.lineno))
     assert offenders == []
+
+
+# ---- Accepted contract consequences (owner, 2026-11-24, after the fb92574 review) ----
+
+def test_integers_beyond_two_to_the_53_are_rounded_once_and_huge_python_ints_are_object_input():
+    import pytest
+    from anygeometry._fixed_sums import weighted_sum
+    assert weighted_sum([1.], np.array([2**53 + 1], dtype=np.int64)) == float(2**53)
+    with pytest.raises(TypeError):
+        weighted_sum([1.], [2**64])
+
+
+def test_cancelling_large_products_give_the_correctly_rounded_sum():
+    from fractions import Fraction
+    from anygeometry._fixed_sums import weighted_sum
+    w = np.array([.1, .2, .3, .4])
+    v = np.array([1e16, -1e16, 1e16, -1e16])
+    products = (w*v).tolist()
+    assert weighted_sum(w, v) == float(sum(map(Fraction, products)))
+
+
+def test_a_nan_area_tolerance_refuses_material_conservation():
+    import sys
+    import pytest
+    from anygeometry.errors import GeometryError
+    sys.path.insert(0, str(pathlib.Path(__file__).parent))
+    from test_cone_material_arrangement import _facet
+    model, _face, domain = _facet()
+    with pytest.raises(GeometryError):
+        ma.arrange_material(domain, [], tolerance=model.tolerance.length, area_tolerance=math.nan)

@@ -6,11 +6,15 @@ with the memory offset of the same values. Quadrature sums therefore never go th
 
 Contract (owner, 2026-11-24, revised after the strict-contract review): every real numeric input
 (bool, integer, any float width or byte order; arrays or array-likes) is converted to native float64
-- exactly, except a wider long double, which is rounded once; complex and object input is refused
-with TypeError. The products are then formed elementwise in IEEE float64. Non-finite products are classified before any summation:
+- exactly, except integers beyond 2**53 and a wider long double, which are rounded once (so a long
+double beyond the float64 range becomes an infinity before weighting); complex and object input is
+refused with TypeError (a Python integer list beyond int64/uint64 is object input). The products are
+then formed elementwise in IEEE float64. Non-finite products are classified before any summation:
 any NaN, or +inf together with -inf, gives NaN; infinities of one sign give that infinity. Only
 all-finite products are summed, as the exact sum rounded once: ``math.fsum``, or, where it raises on
 intermediate overflow, the exact rational sum rounded once (a signed infinity beyond the range).
+Compared with a BLAS dot, a result differs by at most that dot's own rounding error: a few ulps for
+ordinary sums, more where large products cancel (the fixed sum is then the correctly rounded value).
 The elementwise multiplication itself may emit numpy's floating-point warnings, as ``@`` did.
 Shapes must match exactly: nothing is broadcast.
 """
