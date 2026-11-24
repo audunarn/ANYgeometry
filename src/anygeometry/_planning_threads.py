@@ -496,22 +496,31 @@ def _inside_task():
             or threading.current_thread().name.startswith(_WORKER_PREFIX))
 
 
-def _registered(ident):
-    """The registry marks this thread: its entry names a crew slot whose thread is alive, or is anything else.
+_MISSING = object()
+
+
+def _registered(ident, active=None):
+    """The registry marks this thread, unless it is proven to belong to a later thread that reused the ident.
 
     An entry outlives its worker until the dispatcher has joined that thread, and meanwhile the OS may give the
-    ident to a new thread (glibc reuses idents at once). An alive thread has not exited, so its ident cannot have
-    been reused; an entry that is not a (crew, slot) key is kept as a mark (fail closed). 0.4.7 gate class B.
+    ident to a new thread (glibc reuses idents at once). The proof is ``threading._active`` holding, for this
+    ident, a live Thread object other than the crew slot's own thread: that object exists only for a thread
+    that ``threading`` started and that is running now. Anything else keeps the mark (fail closed): a worker in
+    teardown (no longer in ``_active``), a native thread, an entry that is not a (crew, slot) key, a present
+    ``None``. No lock is taken and no thread is joined or probed (0.4.7 gate class B, Codex review of 43f7810).
     """
-    entry = _WORKERS.get(ident)
-    if entry is None:
+    entry = _WORKERS.get(ident, _MISSING)
+    if entry is _MISSING:
         return False
     try:
         crew, slot = entry
-        thread = crew.threads[slot] if type(crew) is _Crew else None
+        own = crew.threads[slot] if type(crew) is _Crew else None
     except Exception:
         return True
-    return thread is None or (thread.ident == ident and thread.is_alive())
+    if own is None:
+        return True
+    current = (threading._active if active is None else active).get(ident)
+    return not (isinstance(current, threading.Thread) and current is not own)
 
 
 def plan_with_threads(threaded, serial):
