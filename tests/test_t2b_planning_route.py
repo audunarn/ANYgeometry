@@ -1642,10 +1642,11 @@ def main():
     assert type(plan) is bi.IntersectionPlan and result['mode']=='exact'
     assert not any(counts.values()) and result['t2b_mode_counter']==0,result
     if os.environ.get('ANYGEOMETRY_REQUIRE_QUALIFIED_PLANNING_TESTS')=='1':
-        assert summary is not None and summary['disposition']=='parallel',result
-        assert summary['workers']==8 and summary['retired'] is True and not summary['abandoned'],result
-        assert summary['stages'] and all(s['accepted']==s['total'] and s['total']>0 for s in summary['stages']),result
-        assert all(s['startup']['ready_workers']==8 for s in summary['stages']),result
+        # Since 41f533b (2026-11-09, "Default to serial planning") the default route is serial and the
+        # process route is opt-in (ANYGEOMETRY_EXPERIMENTAL_PARALLEL_PLANNING=1): no parallel attempt and no
+        # receipt here. The qualified process route itself is covered by the opt-in process tests.
+        # (Stale expectation found by the 0.4.7 gate, class C, 2026-11-24.)
+        assert summary is None,result
     return 0
 
 if __name__=='__main__':raise SystemExit(main())

@@ -335,11 +335,36 @@ def _branch_constants(curve):
     return constants
 
 
-class _DoubleNode(NamedTuple):
+# One exact double zero of a support pair's chart discriminant (a tangent contact node):
+#   sign  (int)   fold sign s: the node solves n(theta) = s |a1 x a2| r2
+#   tau   (int)   n0 - s |a1 x a2| r2 = -tau m exactly, so cos(theta* - phi) = tau there
+#   angle (float) float node angle theta* (phi or phi + pi, phi = atan2(ns, nc))
+# A plain source-declared tuple class, not typing.NamedTuple or collections.namedtuple: no class annotations
+# (so no Python 3.14 annotation cell for the planner's module-state census to refuse) and no runtime-built
+# base class (which the planner's callable manifest refuses as an unregistered binding). Same fields, tuple
+# value, equality and repr as the former NamedTuple (0.4.7 gate class C, owner decision 2026-11-24).
+class _DoubleNode(tuple):
     """One exact double zero of a support pair's chart discriminant (a tangent contact node)."""
-    sign: int            # fold sign s: the node solves n(theta) = s |a1 x a2| r2
-    tau: int             # n0 - s |a1 x a2| r2 = -tau m exactly, so cos(theta* - phi) = tau there
-    angle: float         # float node angle theta* (phi or phi + pi, phi = atan2(ns, nc))
+    __slots__ = ()
+    _fields = ('sign', 'tau', 'angle')
+
+    def __new__(cls, sign, tau, angle):
+        return tuple.__new__(cls, (sign, tau, angle))
+
+    @property
+    def sign(self):
+        return self[0]
+
+    @property
+    def tau(self):
+        return self[1]
+
+    @property
+    def angle(self):
+        return self[2]
+
+    def __repr__(self):
+        return f'_DoubleNode(sign={self[0]!r}, tau={self[1]!r}, angle={self[2]!r})'
 
 
 # Exact node certificates per support pair, keyed like ``_BRANCH_CONSTANTS`` (same lifetime rule).
