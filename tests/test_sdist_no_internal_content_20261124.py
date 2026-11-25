@@ -49,6 +49,8 @@ def _archive(tmp_path: Path, members: dict[str, bytes]) -> Path:
     "\\\\" + "192.168.1.10\\share\\note.md",
     "\\\\" + "fileserver\\x\\note.md",
     "/home" + "/1001/private/work",
+    "[notes](file://" + "/home/alice/private/work)",
+    "workdir:" + "/home/alice/private/work",
     USER,
     CUSTOMER,
 ])
@@ -64,6 +66,9 @@ def test_scanner_flags_internal_markers(text: str) -> None:
     '"\\\\x\\n"',
     "https://api.github.com/users/octocat",
     "see docs/home/users.md",
+    "https://example.com/home/x",
+    "HOME:/home/runner",
+    "file:///home/runner",
 ])
 def test_scanner_leaves_public_and_ci_paths(text: str) -> None:
     assert not scanner.PATTERN.search(text), text

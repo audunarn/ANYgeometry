@@ -22,6 +22,8 @@ a BOM-less UTF-32 ``PKG-INFO`` is split at the first blank line of the
 NUL-stripped text, so its header may be read from the wrong decoding; and a
 backslash-escaped literal such as ``"\\\\alpha\\n"`` in a document is read as a
 UNC path (a false positive that blocks the release until the text changes).
+Also (Codex round 4 Low): a URL with a doubled slash before ``home`` or
+``Users`` (``https://example.com//home/x``) is read as a home path.
 """
 
 from __future__ import annotations
@@ -41,7 +43,7 @@ _ANY_CASE = re.compile(
     re.IGNORECASE,
 )
 # POSIX home directories are case-sensitive; ``/users/`` inside a URL is not one.
-_EXACT_CASE = re.compile(r"(?<![\w.])/(?:home|Users)/(?!runner/)[\w.-]+")
+_EXACT_CASE = re.compile(r"(?<![\w.])/(?:home|Users)/(?!runner(?![\w.-]))[\w.-]+")
 
 
 class _Pattern:
