@@ -42,6 +42,15 @@ All notable user-visible changes to ANYgeometry are documented here.
   support axis is an apex only on a cone with an exactly zero radius and within
   `model.tolerance.length` of the apex point (a frustum with a tiny radius, or a tip off the
   apex along the axis, is `OUT_OF_DOMAIN`). All 5744 corpus results unchanged bit for bit.
+  Round 5 (owner decisions, the recommended options): a projected frame that is a similarity
+  to 8 eps (a circle seen along its axis) has aspect exactly 1; a conic's closest approach is
+  checked at its documented scale (definition points and stored-angle term, no longer the
+  support origin) and, separately, against `64 eps |c - o|`; `DisplayRoundingAllowance` adds
+  `axis_floors`, each incident support's own floor, which the dense oracle now uses; a
+  `LineRange`'s carrier endpoints must also be the edge's topology vertices within
+  `model.tolerance.length` (else `EDGE_UNSUPPORTED`); a nondegenerate ellipse beyond the aspect
+  bound is `OUT_OF_DOMAIN` before the parallel-axes test. All 5744 corpus results unchanged bit
+  for bit; 168 rounding allowances moved by at most 3.5e-16 relative.
   See `docs/DISPLAY_TESSELLATION.md` (stability table, rounding allowance). No existing module
   changes.
 

@@ -133,6 +133,8 @@ def _dense_ok(g, edge_id, samples, angle, sag=None, supports=None, count=DENSE, 
     A line is measured exactly (rational points); a circle or an ellipse at the evaluator's points."""
     supports = _round_supports(g, edge_id) if supports is None else supports
     allowance = dt.display_rounding_allowance(g, edge_id, dt.DisplayTolerance(angle, sag))
+    # each support's OWN floor (r5: a floor shared across supports skipped a small one entirely)
+    floors = {id(s): f for s, f in zip(_round_supports(g, edge_id), allowance.axis_floors)}
     assert allowance.angle <= .02 * angle, (label, edge_id, allowance)
     assert sag is None or allowance.sag <= .02 * sag, (label, edge_id, allowance)
     line = isinstance(g.edges[edge_id].curve, (Straight, LineRange))
@@ -146,7 +148,7 @@ def _dense_ok(g, edge_id, samples, angle, sag=None, supports=None, count=DENSE, 
         assert turning <= limit, (label, edge_id, t0, t1, turning, limit)
         points = _exact_line_points(g, edge_id, dense) if line else g.evaluate_edge_many(edge_id, dense)
         for support in supports:
-            turned, back = _azimuth_change(support, points, allowance.axis_floor, exact=line)
+            turned, back = _azimuth_change(support, points, floors[id(support)], exact=line)
             assert turned <= limit and back <= allowance.angle, (label, edge_id, t0, t1, turned, back, limit)
         if sag is not None:
             if line:
@@ -979,8 +981,10 @@ def test_r1_4_the_end_chords_carry_the_vertex_offset_in_their_sag(v):
 @pytest.mark.parametrize("sag,ok", [(1e-8, True), (2e-9, False)])
 def test_r1_4_a_line_range_sag_is_its_vertex_offset(sag, ok):
     """A LineRange whose end vertex is 5e-9 off its exact end: the drawn chord is within sag 1e-8
-    of the line; sag 2e-9 is refused."""
-    g = corpus.GeometryModel()
+    of the line; sag 2e-9 is refused.  Since N1 round 5 the carrier endpoints must be the edge's
+    vertices within the model length, so the model length is 1e-8 here (at the default 1e-9 the
+    edge is refused: test_r5_4)."""
+    g = corpus.GeometryModel(tolerance=TolerancePolicy(length=1e-8))
     edge = g.add_curve(g.add_point(0., 0., 0.), g.add_point(1., 0., 5e-9), LineRange((0., 0., 0.), (1., 0., 0.)))
     call = lambda: dt.edge_display_samples(g, edge, dt.DisplayTolerance(.2, sag))  # noqa: E731
     if ok:
@@ -1665,3 +1669,100 @@ def test_r4_3_an_axis_end_away_from_an_exact_apex_is_refused(inner, tip_z):
 def test_r4_3_an_end_at_the_exact_apex_is_a_generator():
     g, side = _apex_sector(0., 0.)
     assert dt.edge_display_samples(g, side, dt.DisplayTolerance(.1, 1.)).parameters.tolist() == [0., 1.]
+
+
+# ---------------------------------------------------------------------------------------------
+# Codex N1 round 5: each finding's geometry (owner's standing approval, recommended options)
+# ---------------------------------------------------------------------------------------------
+def test_r5_1_a_circular_projection_has_aspect_exactly_one():
+    """r5 MEDIUM: a unit circle on a unit Z-axis cylinder whose radial seed is (1, 1, 0), stored
+    angle nextafter(1e6, 0), sweep -.2: its projection is exactly circular, but the computed
+    aspect x stored angle came out 1000000.0000000001 and the arc was refused OUT_OF_DOMAIN."""
+    g = corpus.GeometryModel()
+    support = Cylinder((0., 0., 0.), (0., 0., 1.), (1., 1., 0.), 1., 1., 0., math.tau)
+    start = float(np.nextafter(1e6, 0.))
+    low, _high, _sides = _band(g, support, *(EllipticArc((0., 0., z), (1., 0., 0.), (0., 1., 0.), start, -.2)
+                                             for z in (.2, .8)))
+    samples = dt.edge_display_samples(g, low, dt.DisplayTolerance(.1))
+    _dense_ok(g, low, samples, .1, _default_allowance([support], .1), supports=[support], count=257)
+
+
+def _offset_frustum_band(radius):
+    """A Z-axis frustum with origin (0, 0, -1e8), height 2e8, radii .9 and 1.1 x ``radius``: circular
+    arcs of its own radius at z = 0 and 1 over [0, .4], straight sides."""
+    g = corpus.GeometryModel()
+    support = Cone((0., 0., -1e8), (0., 0., 1.), (1., 0., 0.), .9 * radius, 1.1 * radius, 2e8, -.1, 1.)
+    arcs = []
+    for z in (0., 1.):
+        r = .9 * radius + .2 * radius * (z + 1e8) / 2e8
+        arcs.append(EllipticArc((0., 0., z), (r, 0., 0.), (0., r, 0.), 0., .4))
+    low, _high, _sides = _band(g, support, *arcs)
+    return g, support, low
+
+
+def test_r5_2_the_conic_radius_scale_is_the_documented_one():
+    """r5 MEDIUM: closest approach .001 to a frustum whose origin is at z = -1e8: the documented
+    floor is 1e-9 (the conic's definition points) and the subtraction's own rounding 64 eps x 1e8
+    = 1.4e-6; the implementation added the support origin to the scale (floor .1) and refused it."""
+    g, support, low = _offset_frustum_band(.001)
+    tol = dt.DisplayTolerance(.2, 1e-4)
+    allowance = dt.display_rounding_allowance(g, low, tol)
+    assert allowance.axis_floors[0] <= 64 * EPS * 1e8 * (1 + 1e-12) and allowance.axis_floors[0] < .001
+    _dense_ok(g, low, dt.edge_display_samples(g, low, tol), .2, 1e-4, supports=[support], count=257)
+
+
+def test_r5_2_the_subtractions_rounding_term_binds():
+    """The second term of the conic radius rule: a closest approach 1e-6 at 1e8 from the support
+    origin is below 64 eps x 1e8 = 1.4e-6 (the definition-point floor is only 1e-9)."""
+    g, _support, low = _offset_frustum_band(1e-6)
+    _refused_out_of_domain(lambda: dt.edge_display_samples(g, low, dt.DisplayTolerance(.2, 1e-4)))
+
+
+def _two_cylinder_chord():
+    """A straight chord spanning .5 rad on a radius-.01 Z-axis cylinder at the origin, shared with
+    a radius-.99 Z-axis cylinder whose origin is (1, 0, -5e8); both faces have vertical rulings."""
+    g = corpus.GeometryModel(tolerance=TolerancePolicy(surface_residual=.02))
+    small = Cylinder((0., 0., 0.), (0., 0., 1.), (1., 0., 0.), .01, 1., -.1, .7)
+    large = Cylinder((1., 0., -5e8), (0., 0., 1.), (-1., 0., 0.), .99, 1e9, -.1, .2)
+    p = [(.01 * math.cos(a), .01 * math.sin(a)) for a in (0., .5)]
+    bottom = [g.add_point(x, y, 0.) for x, y in p]
+    top = [g.add_point(x, y, 1.) for x, y in p]
+    under = [g.add_point(x, y, -1.) for x, y in p]
+    chord = g.add_line(bottom[0], bottom[1])
+    g.add_face((chord, g.add_line(bottom[1], top[1]), g.add_line(top[1], top[0]), g.add_line(top[0], bottom[0])),
+               corners=(0, 1, 2, 3), surface=small)
+    g.add_face((chord, g.add_line(bottom[1], under[1]), g.add_line(under[1], under[0]),
+                g.add_line(under[0], bottom[0])), corners=(0, 1, 2, 3), surface=large)
+    return g, (small, large), chord
+
+
+def test_r5_3_the_oracle_measures_every_support_at_its_own_floor():
+    """r5 MEDIUM: the shared floor .5 (scale 5e8 from the larger cylinder's origin) skipped every
+    point on the .01 cylinder, so a one-chord replacement turning .5 rad passed the oracle.  Each
+    support's own floor now measures it, and the replacement fails."""
+    g, (small, _large), chord = _two_cylinder_chord()
+    tol = dt.DisplayTolerance(.2, 1e-4)
+    allowance = dt.display_rounding_allowance(g, chord, tol)
+    assert allowance.axis_floors[0] <= 1e-9 < allowance.axis_floors[1]
+    samples = dt.edge_display_samples(g, chord, tol)
+    assert len(samples.parameters) - 1 >= 3
+    _dense_ok(g, chord, samples, .2, 1e-4, count=257)
+    one = dt.EdgeSamples(chord, np.array([0., 1.]), samples.points[[0, -1]])
+    with pytest.raises(AssertionError):
+        _dense_ok(g, chord, one, .2, 1e-4, count=257)
+
+
+def test_r5_4_a_line_range_must_meet_its_topology_vertices():
+    """r5 LOW: a [0, 1] carrier (0, 0, 0)-(3, 0, 0) with both vertices 1e-6 off in Y (valid at
+    curve_fit_residual 1e-5) was drawn although the model length is 1e-9."""
+    g = corpus.GeometryModel(tolerance=TolerancePolicy(curve_fit_residual=1e-5))
+    edge = g.add_curve(g.add_point(0., 1e-6, 0.), g.add_point(3., 1e-6, 0.), LineRange((0., 0., 0.), (3., 0., 0.)))
+    _refused(lambda: dt.edge_display_samples(g, edge, dt.DisplayTolerance(.2)), "EDGE_UNSUPPORTED")
+    _refused(lambda: dt.display_rounding_allowance(g, edge, dt.DisplayTolerance(.2)), "EDGE_UNSUPPORTED")
+
+
+def test_r5_5_an_ellipse_beyond_the_aspect_limit_is_out_of_domain():
+    """r5 out of scope LOW: u = (1, 0, 0), v = (1, 1e-13, 0) (aspect about 2e13, nondegenerate)
+    got EDGE_UNSUPPORTED for parallel axes before the aspect check."""
+    g, edge = _lone_curve_edge(EllipticArc((0., 0., 0.), (1., 0., 0.), (1., 1e-13, 0.), 0., .4))
+    _refused_out_of_domain(lambda: dt.edge_display_samples(g, edge, dt.DisplayTolerance(.2)))

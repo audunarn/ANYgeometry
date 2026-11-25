@@ -76,8 +76,10 @@ MAX_DISPLAY_ANGLE = 1.0e6
 #: except one on the axis to the frame's rounding, 8 eps max(1, |coordinate|), at a cone's exact
 #: apex: a zero radius and within the model's length tolerance of the apex point, N1 round 4,
 #: and its interior closest approach, at the scale of the edge's definition points; a lower bound
-#: of a cylinder or cone arc's, whose scale includes max(1, |stored angle|) sigma_max of its
-#: projected frame: the evaluator rounds start + sweep t).  A line with both ends on the axis, or
+#: of a cylinder or cone arc's, at the scale of its definition points and max(1, |stored angle|)
+#: sigma_max of its projected frame (the evaluator rounds start + sweep t), not the support
+#: origin, and separately above 64 eps |c - o|, the rounding of its centre's offset from the axis
+#: point, N1 round 5).  A line with both ends on the axis, or
 #: an end on the axis of a cylinder or frustum, is refused.
 #: An azimuth computed from coordinates of size |p| at distance r from the axis is rounded by
 #: about eps |p| / r: at the bound 2.2e-7 rad, below the smallest display angle (1e-6).
@@ -157,6 +159,12 @@ class DisplayRoundingAllowance:
     when the edge has no sag allowance).  ``axis_floor``: the declared domain's smallest distance
     from an axis at this edge's scale (``MIN_DISPLAY_RADIUS_RATIO x scale``); the azimuth is
     defined, and bounded, at points at least that far from every axis (a cone's apex has none).
+    ``axis_floors`` (N1 round 5): each incident cylinder's or cone's OWN floor, in the order of
+    ``model.faces_using_edge`` (first use): the azimuth about that support is defined, and
+    bounded, at points at least that far from its axis (a line: ``MIN_DISPLAY_RADIUS_RATIO`` x the
+    scale of its definition points and that support's origin; a conic: the larger of its two
+    closest-approach terms, :data:`MIN_DISPLAY_RADIUS_RATIO`).  A floor shared across supports can
+    exceed a small support's every distance.
     :func:`edge_display_samples` refuses a tolerance for which ``angle`` exceeds 2 % of
     ``tol.angle`` (``OUT_OF_DOMAIN``) or ``sag`` 2 % of the sag allowance (``EDGE_UNSUPPORTED``).
     """
@@ -164,6 +172,7 @@ class DisplayRoundingAllowance:
     angle: float
     sag: float | None
     axis_floor: float
+    axis_floors: tuple = ()
 
 
 def _norm(vector) -> float:
@@ -352,6 +361,7 @@ class _Plan:
     count: int
     build: object
     rounding: float = 0.0      # absolute azimuth rounding of this division (radians)
+    floor: float = 0.0         # this support's own axis floor (DisplayRoundingAllowance.axis_floors)
 
 
 @dataclass(frozen=True)
@@ -520,11 +530,12 @@ def _line_azimuth_division(edge_id, support, a, b, step, scale_points, apex_leng
             _check_radius(f"edge {edge_id}'s closest approach (t = {t_star:.17g})", closest, a + t_star * d3, *points)
     if any(on_axis):
         rho = (ra + err_a if on_axis[0] else rb + err_b) + ends
-        return _Plan(1, lambda: _Division([]), 2.0 * rho / (MIN_DISPLAY_RADIUS_RATIO * scale))
+        return _Plan(1, lambda: _Division([]), 2.0 * rho / (MIN_DISPLAY_RADIUS_RATIO * scale),
+                     MIN_DISPLAY_RADIUS_RATIO * scale)
     spread = err_a + err_b + err_d + 8.0 * _EPS * max(ra, rb) + 2.0 * ends
     if collinear:
         if float(a2 @ b2) > 0.0:
-            return _Plan(1, lambda: _Division([]), 2.0 * spread / min(ra, rb))
+            return _Plan(1, lambda: _Division([]), 2.0 * spread / min(ra, rb), MIN_DISPLAY_RADIUS_RATIO * scale)
         raise _unsupported(edge_id, "the line's projection passes through a support axis")
     nearest = min(ra, rb, math.inf if closest is None else closest)
     pa = math.atan2(a2[1], a2[0])
@@ -549,7 +560,7 @@ def _line_azimuth_division(edge_id, support, a, b, step, scale_points, apex_leng
 
         return _Division(values, angle)
 
-    return _Plan(n, build, rounding_term)
+    return _Plan(n, build, rounding_term, MIN_DISPLAY_RADIUS_RATIO * scale)
 
 
 def _line_end_rounding(a, b) -> float:
@@ -577,21 +588,29 @@ class _Conic:
         nu, nv = float(np.linalg.norm(self.u)), float(np.linalg.norm(self.v))
         if not (nu > 0.0 and nv > 0.0):
             raise _unsupported(edge_id, "an ellipse axis vector is zero")
+        self.circle = (abs(nu - nv) <= _CIRCLE_RTOL * max(nu, nv)
+                       and abs(float(self.u @ self.v)) <= _CIRCLE_RTOL * nu * nv)
+        singular = np.linalg.svd(np.column_stack((self.u, self.v)), compute_uv=False)
+        self.aspect = float(singular[0] / singular[1]) if singular[1] > 0.0 else math.inf
+        self.theta_star = max(1.0, abs(self.start), abs(self.start + self.sweep))
+        # the declared aspect bound before the parallel-axes test (N1 round 5): a nondegenerate
+        # ellipse (sigma_min above 64 eps sigma_max, its float resolution) beyond the bound is
+        # OUT_OF_DOMAIN; only axes parallel to that resolution are EDGE_UNSUPPORTED
+        weight = self.aspect * self.theta_star
+        if not self.circle and not weight <= MAX_DISPLAY_ELLIPSE_ASPECT and singular[1] > 64.0 * _EPS * singular[0]:
+            raise DisplayDomainRefused(f"edge {edge_id}'s ellipse has the aspect {self.aspect!r} at stored angles up "
+                                       f"to {max(abs(self.start), abs(self.start + self.sweep))!r}: "
+                                       f"aspect x max(1, |angle|) = {weight!r} is above {MAX_DISPLAY_ELLIPSE_ASPECT:g}")
         e1 = self.u / nu
         rest = self.v - float(self.v @ e1) * e1
         nr = float(np.linalg.norm(rest))
         if not nr > _DEGENERATE * nv:
             raise _unsupported(edge_id, "the ellipse's axis vectors are parallel")
-        self.circle = (abs(nu - nv) <= _CIRCLE_RTOL * max(nu, nv)
-                       and abs(float(self.u @ self.v)) <= _CIRCLE_RTOL * nu * nv)
         self.area = float(np.linalg.norm(np.cross(self.u, self.v)))    # |u x v|
         self.radius = max(nu, nv)                     # a circle's radius (conservative to 8 eps)
-        singular = np.linalg.svd(np.column_stack((self.u, self.v)), compute_uv=False)
-        self.aspect = float(singular[0] / singular[1]) if singular[1] > 0.0 else math.inf
         # rounding of an evaluated point c + cos(theta) u + sin(theta) v (theta = start + sweep t,
         # rounded by 2 eps max(1, |stored angle|), moving the point by sigma_max times that): the
         # E of display_rounding_allowance
-        self.theta_star = max(1.0, abs(self.start), abs(self.start + self.sweep))
         self.point_rounding = 8.0 * _EPS * (_norm(self.c) + nu + nv
                                             + float(singular[0]) * self.theta_star)
         cs, sn = math.cos(self.start), math.sin(self.start)
@@ -714,22 +733,39 @@ class _Conic:
 
         One domain rule for cylinders and cones, on the PROJECTED conic ``M'`` (which can be far
         thinner than the curve): its aspect x ``max(1, |stored angle|)`` is at most
-        :data:`MAX_DISPLAY_ELLIPSE_ASPECT`, and its closest approach to the axis (a lower bound)
-        is at least the radius ratio of a scale including ``max(1, |stored angle|) sigma_max(M')``
-        (the evaluator rounds ``start + sweep t`` by eps |theta|, moving the projected point by up
-        to that times eps)."""
+        :data:`MAX_DISPLAY_ELLIPSE_ASPECT` (a projected frame that is a similarity to 8 eps
+        relative, a circle seen along its axis, has aspect exactly 1: N1 round 5), and its closest
+        approach to the axis (a lower bound) is at least both
+
+        * the radius ratio of the conic's own scale: its definition points (vertices, ``c``,
+          ``c + u``, ``c + v``) and ``max(1, |stored angle|) sigma_max(M')`` (the evaluator rounds
+          ``start + sweep t`` by eps |theta|, moving the projected point by up to that times eps),
+          not the support origin (N1 round 5: the documented scale), and
+        * ``64 eps |c - o|``, the frame's own rounding: the centre's offset from the support's
+          axis point ``o`` is a float subtraction, rounded by eps times its result.
+
+        That floor is the plan's ``floor`` (:attr:`DisplayRoundingAllowance.axis_floors`)."""
         origin, x_axis, y_axis = _axis_frame(support)
         c3 = self.c - origin
         projected = np.array(((self.lu @ x_axis, self.lv @ x_axis), (self.lu @ y_axis, self.lv @ y_axis)))
         amap = _AngleMap(self.edge_id, projected, (c3 @ x_axis, c3 @ y_axis), 0.0, 0.0, self.sweep)
         stored = max(1.0, abs(self.start), abs(self.start + self.sweep))
-        weight = amap.aspect * stored
+        n0, n1 = math.hypot(*projected[:, 0]), math.hypot(*projected[:, 1])
+        similar = (abs(n0 - n1) <= _CIRCLE_RTOL * max(n0, n1)
+                   and abs(float(projected[:, 0] @ projected[:, 1])) <= _CIRCLE_RTOL * n0 * n1)
+        aspect = 1.0 if similar else amap.aspect
+        weight = aspect * stored
         if not weight <= MAX_DISPLAY_ELLIPSE_ASPECT:
             raise DisplayDomainRefused(f"edge {self.edge_id}'s projection across a support axis has the aspect "
-                                       f"{amap.aspect!r}: aspect x max(1, |stored angle|) = {weight!r} is above "
+                                       f"{aspect!r}: aspect x max(1, |stored angle|) = {weight!r} is above "
                                        f"{MAX_DISPLAY_ELLIPSE_ASPECT:g}")
-        _check_radius(f"edge {self.edge_id} (closest approach, lower bound)", amap.closest,
-                      origin, *scale_points, (stored * amap.sigma_max, 0.0, 0.0))
+        floor = max(MIN_DISPLAY_RADIUS_RATIO * _scale([*scale_points, (stored * amap.sigma_max, 0.0, 0.0)]),
+                    64.0 * _EPS * _norm(c3))
+        if not amap.closest >= floor:
+            raise DisplayDomainRefused(f"edge {self.edge_id} (closest approach, lower bound) is {amap.closest!r} from "
+                                       f"a support axis, below its floor {floor!r} (the larger of "
+                                       f"{MIN_DISPLAY_RADIUS_RATIO:g} x its scale and 64 eps x its centre's offset "
+                                       f"{_norm(c3)!r} from the axis point)")
         start = amap.angle(0.0)
         span = amap.angle(self.sweep) - start
         n = _count(self.edge_id, span, step)
@@ -737,13 +773,13 @@ class _Conic:
         # rounding by aspect(M') x max(1, |stored angle|); every evaluated point (and its
         # projection relative to the axis point) is rounded by E, an azimuth error E / r
         sample = self.point_rounding + 8.0 * _EPS * _norm(origin)
-        rounding = 32.0 * _EPS * amap.aspect * stored + 8.0 * sample / amap.closest
+        rounding = 32.0 * _EPS * aspect * stored + 8.0 * sample / amap.closest
 
         def build():
             values = self.to_parameters(_angle_division(amap, 0.0, self.sweep, n))
             return _Division(values, lambda t: amap.angle(self.sweep * t) - start)
 
-        return _Plan(n, build, rounding)
+        return _Plan(n, build, rounding, floor)
 
 
 def _sag_allowance(supports, tol: DisplayTolerance):
@@ -951,6 +987,12 @@ def _setup(model, edge_id, tol) -> _Setup:
                     or _norm(np.asarray(curve.b, dtype=float) - line[1]) > length):
                 raise _unsupported(edge_id, "a line range drawn over part of its carrier is not supported "
                                             "(only a LineRange whose exact domain is [0, 1])")
+            # N1 round 5 (recommended option): the carrier endpoints must also be the edge's
+            # TOPOLOGY vertices within the model's length tolerance, not only its evaluated ends
+            if (_norm(np.asarray(curve.a, dtype=float) - start) > length
+                    or _norm(np.asarray(curve.b, dtype=float) - end) > length):
+                raise _unsupported(edge_id, "the line range's carrier endpoints are not the edge's vertices "
+                                            "within the model's length tolerance")
     elif isinstance(curve, EllipticArc):
         centre = np.asarray(curve.center, dtype=float)
         _check_points(f"edge {edge_id}'s ellipse", np.vstack((centre, centre + curve.u_vector,
@@ -1030,7 +1072,8 @@ def _analyse(model, setup, tol) -> _Analysis:
     allowance = DisplayRoundingAllowance(
         angle=64.0 * _EPS * step + max([tangent_rounding] + [plan.rounding for plan in plans]),
         sag=None if sag is None else 64.0 * _EPS * sag + sag_rounding + hidden,
-        axis_floor=MIN_DISPLAY_RADIUS_RATIO * scale)
+        axis_floor=MIN_DISPLAY_RADIUS_RATIO * scale,
+        axis_floors=tuple(plan.floor for plan in plans))
     return _Analysis(plans, tangent, sag, offsets, allowance)
 
 
