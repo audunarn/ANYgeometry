@@ -4,6 +4,16 @@ All notable user-visible changes to ANYgeometry are documented here.
 
 ## Unreleased
 
+- New `anygeometry.display_tessellation` (not re-exported from `anygeometry`): display edge
+  samples shared by every face using an edge (`edge_display_samples`, `DisplayTolerance`,
+  `EdgeSamples`, typed `DisplayTrimRefused`). Narrow contract: lines, circles and ellipses on
+  plane, cylinder and cone faces only, each divided in closed form (tangent angle, support
+  azimuth, a proven sag bound); any other curve or incident support is refused with a typed
+  code. Declared numeric domain: coordinates up to 1e9, stored angles up to 1e6 rad, distance
+  from a support axis at least 1e-9 x max(1, |coordinate|) (cone apex excepted); outside it
+  `DisplayDomainRefused` (`OUT_OF_DOMAIN`). See `docs/DISPLAY_TESSELLATION.md`. No existing
+  module changes.
+
 - Prepare version 0.4.7 for bounded B1 curved-hull hydrostatics point queries,
   including independently verified volume, body-origin first moments and raw
   waterplane moments. Results bind the model, displacement boundary, installed
