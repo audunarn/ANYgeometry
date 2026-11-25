@@ -8,7 +8,8 @@ polyline there.
 Scope (owner decision 2026-11-25, N1): only straight lines (``Straight``, ``LineRange``), circles
 (``Arc``, circular ``EllipticArc``) and ellipses (``EllipticArc``), on faces supported by a
 ``Plane``, ``Cylinder`` or ``Cone``.  Each is divided in closed form, so every bound below holds by
-construction (to floating-point rounding), not by measurement:
+construction (to the edge's documented rounding allowance, :func:`display_rounding_allowance`, at
+most 2 % of the angle and sag), not by measurement:
 
 * the tangent turns by at most ``tol.angle`` over every interval;
 * the azimuth about the axis of every incident cylinder or cone (the turning of its normal, an
@@ -40,6 +41,7 @@ __all__ = [
     "DisplayTolerance",
     "DisplayTrimRefused",
     "DisplayDomainRefused",
+    "DisplayRoundingAllowance",
     "EdgeSamples",
     "REFUSAL_CODES",
     "MAX_DISPLAY_COORDINATE",
@@ -47,6 +49,7 @@ __all__ = [
     "MIN_DISPLAY_RADIUS_RATIO",
     "MAX_DISPLAY_ELLIPSE_ASPECT",
     "edge_display_samples",
+    "display_rounding_allowance",
 ]
 
 #: Typed refusal codes.  ``SUPPORT_UNSUPPORTED``: an incident face's support has no display route
@@ -67,10 +70,12 @@ MAX_DISPLAY_COORDINATE = 1.0e9
 #: (radians).  Its float spacing is 1.2e-10 rad, four orders below the smallest display angle.
 MAX_DISPLAY_ANGLE = 1.0e6
 #: Smallest distance from a support axis, as a fraction of max(1, |coordinate|): every incident
-#: cylinder radius and every point used for an azimuth (a line's ends, except one on the axis to
-#: the frame's rounding, 8 eps max(1, |coordinate|), and its closest approach; a lower bound of a
-#: cylinder or cone arc's, whose scale includes max(1, |stored angle|) sigma_max of its projected
-#: frame: the evaluator rounds start + sweep t).  A line with both ends on the axis is refused.
+#: cylinder radius and every point used for an azimuth (a line's ends by their own projections,
+#: except one on the axis to the frame's rounding, 8 eps max(1, |coordinate|), at a cone's apex,
+#: and its interior closest approach, at the scale of the edge's definition points; a lower bound
+#: of a cylinder or cone arc's, whose scale includes max(1, |stored angle|) sigma_max of its
+#: projected frame: the evaluator rounds start + sweep t).  A line with both ends on the axis, or
+#: an end on the axis of a cylinder or frustum, is refused.
 #: An azimuth computed from coordinates of size |p| at distance r from the axis is rounded by
 #: about eps |p| / r: at the bound 2.2e-7 rad, below the smallest display angle (1e-6).
 MIN_DISPLAY_RADIUS_RATIO = 1.0e-9
@@ -92,6 +97,9 @@ _CIRCLE_RTOL = 8.0 * _EPS  # |u| = |v| and u.v = 0 to a few eps relative: a circ
 _ON_AXIS = 8.0 * _EPS      # a projection within 8 eps max(1, |coordinates|) of an axis is on it
 _DEGENERATE = 1.0e-12      # |det| <= this * |M|^2: a projected or in-plane frame is degenerate
 _TWO_PI = 2.0 * math.pi
+#: The rounding allowance may be at most this share of the requested angle and sag allowance;
+#: a finer request is refused (the declared domain, tightened in N1 round 3).
+_ALLOWANCE_SHARE = 0.02
 
 
 class DisplayTrimRefused(GeometryError):
@@ -134,6 +142,34 @@ class DisplayTolerance:
             if not (math.isfinite(sag) and sag > 0.0):
                 raise GeometryError("display sag must be finite and positive")
             object.__setattr__(self, "sag", sag)
+
+
+@dataclass(frozen=True)
+class DisplayRoundingAllowance:
+    """What "holds to rounding" means for one edge (:func:`display_rounding_allowance`).
+
+    ``angle``: absolute radians: every emitted interval's tangent turns, and every incident
+    cylinder's or cone's azimuth changes, by at most ``tol.angle + angle``.  ``sag``: absolute
+    model units: every drawn chord lies within the sag allowance ``+ sag`` of the curve (``None``
+    when the edge has no sag allowance).  ``axis_floor``: the declared domain's smallest distance
+    from an axis at this edge's scale (``MIN_DISPLAY_RADIUS_RATIO x scale``); the azimuth is
+    defined, and bounded, at points at least that far from every axis (a cone's apex has none).
+    :func:`edge_display_samples` refuses a tolerance for which ``angle`` exceeds 2 % of
+    ``tol.angle`` (``OUT_OF_DOMAIN``) or ``sag`` 2 % of the sag allowance (``EDGE_UNSUPPORTED``).
+    """
+
+    angle: float
+    sag: float | None
+    axis_floor: float
+
+
+def _norm(vector) -> float:
+    return math.hypot(*(float(x) for x in vector))
+
+
+def _scale(points) -> float:
+    """max(1, largest absolute coordinate of ``points``)."""
+    return max(1.0, float(np.abs(np.vstack([np.asarray(p, dtype=float) for p in points])).max()))
 
 
 def _frozen(array: np.ndarray) -> np.ndarray:
@@ -312,6 +348,7 @@ class _Plan:
 
     count: int
     build: object
+    rounding: float = 0.0      # absolute azimuth rounding of this division (radians)
 
 
 @dataclass(frozen=True)
@@ -379,59 +416,103 @@ def _axis_frame(support):
 # ---------------------------------------------------------------------------------------------
 # divisions
 # ---------------------------------------------------------------------------------------------
-def _line_azimuth_division(edge_id, support, a, b, step) -> "_Plan":
+def _reaches_axis(support, rounding) -> bool:
+    """Only a cone with a zero radius (to ``rounding``) has a point on its axis: its apex."""
+    return isinstance(support, Cone) and min(support.radius_start, support.radius_end) <= rounding
+
+
+def _line_azimuth_division(edge_id, support, a, b, step, scale_points) -> "_Plan":
     """The plan (count first, then the edge parameters) dividing a line's azimuth about
     ``support``'s axis into equal steps.
 
-    ``a``, ``b`` are the line's evaluated ends (the exact evaluator's).  The projection ``A'`` of
-    ``a`` relative to the axis point and the projection ``D'`` of the exact difference ``b - a``
-    (never of ``b`` separately: a ruling's difference projects to exactly 0 where its separately
-    rounded ends do not) onto the plane normal to the axis, with ``B' = A' + D'``, decide:
+    ``a``, ``b`` are the line's evaluated ends (the exact evaluator's).  Every decision uses the
+    quantity that is accurate for it, never a reconstruction such as ``A' + P(b - a)`` (which
+    cancels an end's own small radius):
 
-    * an end on the axis (its projection within ``8 eps max(1, |end|, |axis point|)`` of it, the
-      rounding of the frame: a cone's exact apex): the projection is a ray from the axis point,
-      constant azimuth, no division; both ends on the axis: no azimuth anywhere, ``OUT_OF_DOMAIN``;
-    * ``A'``, ``D'`` collinear (``|A' x D'| <= 8 eps |A'| |D'|``, including ``D' = 0``) with
-      ``A'``, ``B'`` on the same side: constant azimuth (a cylinder ruling, a cone generator), no
-      division; on opposite sides: the line crosses the axis, ``EDGE_UNSUPPORTED``;
-    * otherwise ``A' + t D'`` does not pass through the axis point, its azimuth is monotone
-      (``cross(A' + t D', D') = cross(A', D')`` is constant) and subtends less than pi, so the
-      wrapped end difference is its span.  A target azimuth ``phi`` is reached at
-      ``t = -cross(A', e) / cross(D', e)``, ``e = (cos phi, sin phi)``.
+    * each end's radius: its OWN projection ``A' = P(a - o)``, ``B' = P(b - o)`` relative to the
+      axis point ``o`` (rounded by ``4 eps |p - o|``);
+    * the direction: the projection ``D' = P(b - a)`` of the exact difference (a ruling's is
+      exactly 0 where its separately rounded ends are not);
+    * the segment's interior closest approach, from each end's estimate ``t* = -(A'.D') / |D'|^2``
+      and ``1 - (B'.D') / |D'|^2``, distance ``|P' x D'| / |D'|``, counted when either estimate
+      lies inside the segment beyond its ends' rounding: checked BEFORE any end shortcut (the
+      conservative branch: a near-axis end cannot hide an interior crossing).
 
-    Each end off the axis, and the closest approach ``|cross(A', D')| / |D'|`` when it lies
-    between the ends, is checked against the radius bound (``OUT_OF_DOMAIN``).  There is no
-    proximity shortcut beyond the frame's rounding: a line from near an apex is divided like any
-    other.
+    Then: an end on the axis (projected radius ``<= 8 eps max(1, |end|, |axis point|)``, the
+    frame's rounding) is only possible where the support reaches its axis, a cone's apex
+    (:func:`_reaches_axis`; elsewhere ``OUT_OF_DOMAIN``): the projection is a ray, constant
+    azimuth; both ends on the axis: ``OUT_OF_DOMAIN``.  Both ``A' x D'`` and ``B' x D'`` within
+    ``8 eps |P'| |D'|`` (``D' = 0`` included; when the two disagree the line is divided):
+    collinear, constant azimuth when ``A'``, ``B'`` lie on one side, else (or when collinear with
+    an interior closest approach) the line crosses the axis, ``EDGE_UNSUPPORTED``.  Otherwise
+    ``A' + t D'`` misses the axis point, its azimuth is monotone (``cross(A' + t D', D')`` is
+    constant) and subtends less than pi, so the wrapped difference of the ends' own azimuths is
+    its span.  A target azimuth ``phi`` is reached at ``t = -cross(A', e) / cross(D', e)``,
+    ``e = (cos phi, sin phi)``.
+
+    Every off-axis end and the interior closest approach are checked against the radius bound at
+    the scale of ``scale_points`` (the edge's definition points: an evaluated point
+    ``a + t (b - a)`` is rounded at the scale of the line's ends) and the axis point.
+
+    The plan's ``rounding`` (:func:`display_rounding_allowance`): with ``G = err(A') + err(B') +
+    err(D') + 8 eps max(|A'|, |B'|)`` (how far the line's true position across the axis can be
+    from the computed one), ``2 G / r`` over the smallest distance ``r`` used (each cut, or the
+    collinearity of a constant azimuth, is off by at most ``G / r``), plus ``4 E / r`` when
+    interior samples are drawn (``E = 8 eps (|a| + |b| + |o|)``: an evaluated sample's rounding);
+    a ray from an apex: ``2 (rho + err) / axis_floor`` (``rho`` the apex end's projected radius:
+    the chord's azimuth leaves the ray's by at most that over the distance, wherever an azimuth
+    is defined).
     """
     origin, x_axis, y_axis = _axis_frame(support)
-    a3, d3 = a - origin, b - a
+    a3, b3, d3 = a - origin, b - origin, b - a
     a2 = np.array((float(a3 @ x_axis), float(a3 @ y_axis)))
+    b2 = np.array((float(b3 @ x_axis), float(b3 @ y_axis)))
     d2 = np.array((float(d3 @ x_axis), float(d3 @ y_axis)))
-    b2 = a2 + d2
     ra, rb = math.hypot(*a2), math.hypot(*b2)
-    on_axis = [r <= _ON_AXIS * max(1.0, float(np.abs(p).max()), float(np.abs(origin).max()))
-               for r, p in ((ra, a), (rb, b))]
+    length = math.hypot(*d2)
+    err_a, err_b, err_d = 4.0 * _EPS * _norm(a3), 4.0 * _EPS * _norm(b3), 4.0 * _EPS * _norm(d3)
+    rounding = [_ON_AXIS * max(1.0, float(np.abs(p).max()), float(np.abs(origin).max())) for p in (a, b)]
+    on_axis = [ra <= rounding[0], rb <= rounding[1]]
+    points = [*scale_points, origin]
+    scale = _scale(points)
     if all(on_axis):
         raise DisplayDomainRefused(f"edge {edge_id} lies on a support axis: it has no azimuth")
-    for name, distance, point, on in (("start", ra, a, on_axis[0]), ("end", rb, b, on_axis[1])):
+    if any(on_axis) and not _reaches_axis(support, max(rounding)):
+        raise DisplayDomainRefused(f"edge {edge_id} ends on the axis of a support that does not reach its axis "
+                                   f"(a cylinder, or a cone without an apex): it has no azimuth there")
+    for name, distance, on in (("start", ra, on_axis[0]), ("end", rb, on_axis[1])):
         if not on:
-            _check_radius(f"edge {edge_id}'s {name}", distance, point, origin)
+            _check_radius(f"edge {edge_id}'s {name}", distance, *points)
+    cross_a = float(a2[0] * d2[1] - a2[1] * d2[0])
+    cross_b = float(b2[0] * d2[1] - b2[1] * d2[0])
+    collinear = not length > 0.0 or (abs(cross_a) <= 8.0 * _EPS * ra * length
+                                     and abs(cross_b) <= 8.0 * _EPS * rb * length)
+    closest = None
+    if length > 0.0:
+        found = []
+        for t, c, err in ((-float(a2 @ d2) / length / length, cross_a, err_a),
+                          (1.0 - float(b2 @ d2) / length / length, cross_b, err_b)):
+            if t * length > rounding[0] + err and (1.0 - t) * length > rounding[1] + err:
+                found.append((abs(c) / length, t))
+        if found:
+            if collinear:
+                raise _unsupported(edge_id, "the line's projection passes through a support axis")
+            closest, t_star = min(found)
+            _check_radius(f"edge {edge_id}'s closest approach (t = {t_star:.17g})", closest, a + t_star * d3, *points)
     if any(on_axis):
-        return _Plan(1, lambda: _Division([]))
-    length = math.hypot(*d2)
-    cross = float(a2[0] * d2[1] - a2[1] * d2[0])
-    if not length > 0.0 or abs(cross) <= 8.0 * _EPS * ra * length:
+        rho = ra + err_a if on_axis[0] else rb + err_b
+        return _Plan(1, lambda: _Division([]), 2.0 * rho / (MIN_DISPLAY_RADIUS_RATIO * scale))
+    spread = err_a + err_b + err_d + 8.0 * _EPS * max(ra, rb)
+    if collinear:
         if float(a2 @ b2) > 0.0:
-            return _Plan(1, lambda: _Division([]))
+            return _Plan(1, lambda: _Division([]), 2.0 * spread / min(ra, rb))
         raise _unsupported(edge_id, "the line's projection passes through a support axis")
-    closest = -float(a2 @ d2) / length / length
-    if 0.0 < closest < 1.0:
-        _check_radius(f"edge {edge_id}'s closest approach (t = {closest:.17g})", abs(cross) / length,
-                      a + closest * d3, origin)
+    nearest = min(ra, rb, math.inf if closest is None else closest)
     pa = math.atan2(a2[1], a2[0])
     span = (math.atan2(b2[1], b2[0]) - pa + math.pi) % _TWO_PI - math.pi
     n = _count(edge_id, span, step)
+    sample = 8.0 * _EPS * (_norm(a) + _norm(b) + _norm(origin))
+    rounding_term = 2.0 * spread / nearest + (4.0 * sample / nearest if n > 1 else 0.0)
 
     def build():
         values = []
@@ -449,7 +530,7 @@ def _line_azimuth_division(edge_id, support, a, b, step) -> "_Plan":
 
         return _Division(values, angle)
 
-    return _Plan(n, build)
+    return _Plan(n, build, rounding_term)
 
 
 class _Conic:
@@ -481,6 +562,12 @@ class _Conic:
         self.radius = max(nu, nv)                     # a circle's radius (conservative to 8 eps)
         singular = np.linalg.svd(np.column_stack((self.u, self.v)), compute_uv=False)
         self.aspect = float(singular[0] / singular[1]) if singular[1] > 0.0 else math.inf
+        # rounding of an evaluated point c + cos(theta) u + sin(theta) v (theta = start + sweep t,
+        # rounded by 2 eps max(1, |stored angle|), moving the point by sigma_max times that): the
+        # E of display_rounding_allowance
+        self.theta_star = max(1.0, abs(self.start), abs(self.start + self.sweep))
+        self.point_rounding = 8.0 * _EPS * (_norm(self.c) + nu + nv
+                                            + float(singular[0]) * self.theta_star)
         cs, sn = math.cos(self.start), math.sin(self.start)
         self.lu = cs * self.u + sn * self.v           # the local frame at s = 0
         self.lv = -sn * self.u + cs * self.v
@@ -607,12 +694,17 @@ class _Conic:
         start = amap.angle(0.0)
         span = amap.angle(self.sweep) - start
         n = _count(self.edge_id, span, step)
+        # display_rounding_allowance: the projected inverse and forward map stretch an angle's
+        # rounding by aspect(M') x max(1, |stored angle|); every evaluated point (and its
+        # projection relative to the axis point) is rounded by E, an azimuth error E / r
+        sample = self.point_rounding + 8.0 * _EPS * _norm(origin)
+        rounding = 32.0 * _EPS * amap.aspect * stored + 8.0 * sample / amap.closest
 
         def build():
             values = self.to_parameters(_angle_division(amap, 0.0, self.sweep, n))
             return _Division(values, lambda t: amap.angle(self.sweep * t) - start)
 
-        return _Plan(n, build)
+        return _Plan(n, build, rounding)
 
 
 def _sag_allowance(supports, tol: DisplayTolerance):
@@ -688,23 +780,104 @@ def edge_display_samples(model, edge_id: int, tol: DisplayTolerance) -> EdgeSamp
       ``ceil(span / angle)`` equal steps, solved in closed form (none for a line whose ends are
       collinear with the axis point on one side: a ruling or a generator).
 
-    Every count is computed and checked against the cap before any division is built.
+    Every count is computed first, and their sum (``1 + sum(n - 1)``, the most intervals the
+    union can have) is checked against the 4096 cap before any division is built.
 
     then every ellipse interval whose exact sag (:meth:`_Conic.sag`) exceeds the allowance is
     bisected in theta until none does, and so is every end interval whose sag plus its vertex's
-    offset from the curve does (an offset above the allowance is refused).  Every interval lies inside one interval of each division,
-    so the tangent turns,
-    and every incident cylinder's or cone's azimuth changes, by at most ``tol.angle`` over it,
-    and its chord leaves the curve by at most the sag allowance (:class:`DisplayTolerance`).  A
-    curved edge whose single chord could leave it by more than ``model.tolerance.surface_residual``
-    (its exact sag plus its vertex offsets) gets at least two intervals.  The first and last points
-    are the edge's vertex positions.
+    offset from the curve does (an offset above the allowance is refused).  Every interval lies
+    inside one interval of each division, so the tangent turns, and every incident cylinder's or
+    cone's azimuth changes, by at most ``tol.angle`` over it, and its chord leaves the curve by at
+    most the sag allowance (:class:`DisplayTolerance`), each to the edge's documented rounding
+    allowance (:func:`display_rounding_allowance`), which is at most 2 % of the angle and of the
+    sag allowance (a finer request is refused: ``OUT_OF_DOMAIN`` for the angle,
+    ``EDGE_UNSUPPORTED`` for the sag).  A curved edge whose single chord could leave it by more
+    than ``model.tolerance.surface_residual`` (its exact sag plus its vertex offsets) gets at least
+    two intervals.  The first and last points are the edge's vertex positions.
     Inputs are checked against the declared numeric domain first (``OUT_OF_DOMAIN``).  Typed
     refusal (``EDGE_UNSUPPORTED``) for a degenerate curve, an azimuth that is not monotone along
-    the edge, an unresolvable sag (at most 4 eps of the coordinates) or more than 4096 intervals.
-    An edge id not in the model is a plain :class:`GeometryError`; no raw arithmetic error escapes
-    a division (typed ``EDGE_UNSUPPORTED`` at worst).
+    the edge, an unresolvable sag or more than 4096 intervals.  An edge id not in the model is a
+    plain :class:`GeometryError`; no raw arithmetic error escapes a division (typed
+    ``EDGE_UNSUPPORTED`` at worst).
     """
+    setup = _setup(model, edge_id, tol)
+
+    def run():
+        analysis = _analyse(model, setup, tol)
+        allowance = analysis.allowance
+        if not allowance.angle <= _ALLOWANCE_SHARE * tol.angle:
+            raise DisplayDomainRefused(f"edge {setup.edge_id}: its rounding allowance {allowance.angle!r} rad is "
+                                       f"above 2 % of the display angle {tol.angle!r} (the angle is finer than "
+                                       f"the edge resolves at its scale and distance from the axis)")
+        if allowance.sag is not None and not allowance.sag <= _ALLOWANCE_SHARE * analysis.sag:
+            raise _unsupported(setup.edge_id, f"its sag rounding allowance {allowance.sag!r} is above 2 % of the "
+                                              f"sag allowance {analysis.sag!r} (unresolvable at its scale)")
+        return _build(setup, analysis)
+
+    parameters = _guarded(setup.edge_id, run)
+    return _edge_result(model, setup.edge_id, parameters, setup.start, setup.end)
+
+
+def display_rounding_allowance(model, edge_id: int, tol: DisplayTolerance) -> DisplayRoundingAllowance:
+    """The documented rounding allowance of one edge at ``tol``: inside the declared domain,
+    every interval :func:`edge_display_samples` emits turns (tangent, and every incident
+    cylinder's or cone's azimuth) by at most ``tol.angle + allowance.angle`` and its drawn chord
+    lies within ``sag + allowance.sag`` of the curve.
+
+    With ``eps`` the float epsilon, ``theta* = max(1, |start|, |start + sweep|)`` (a conic's
+    stored angles; 1 for a line), ``E`` the rounding of an evaluated point (a conic:
+    ``8 eps (|c| + |u| + |v| + sigma_max theta*)``, the evaluator rounding ``start + sweep t`` by
+    ``2 eps theta*``; a line: ``8 eps (|a| + |b|)``) and, per incident cylinder or cone, ``E_o = E +
+    8 eps |o|`` (the projection relative to its axis point ``o``) and ``r`` the smallest distance
+    from its axis that the division uses (a conic: the closest-approach lower bound; a line: its
+    ends' and interior closest approach):
+
+    * ``angle = 64 eps x tol.angle + max(T, Z_support...)``; the tangent term ``T = 32 eps W``,
+      ``W = aspect x theta*`` (1 for a circle's aspect; ``8 eps`` for a line); the azimuth term of a
+      conic ``Z = 32 eps aspect(M') theta* + 8 E_o / r`` (``M'`` its projected frame), of a line
+      ``2 G / r (+ 4 E_o / r with interior cuts)`` (:func:`_line_azimuth_division`);
+    * ``sag = 64 eps x sag + 3 E`` for a conic (both chord ends and the measured point move by
+      ``E``), ``64 eps x sag + 8 eps max(1, |b - a|) (+ E with interior cuts)`` for a line, plus any
+      vertex offset treated as 0 at the coordinates' resolution.
+
+    Same refusals as :func:`edge_display_samples` before its divisions are built (except the 2 %
+    rule itself).
+    """
+    setup = _setup(model, edge_id, tol)
+    return _guarded(setup.edge_id, lambda: _analyse(model, setup, tol).allowance)
+
+
+def _guarded(edge_id, call):
+    try:
+        return call()
+    except DisplayTrimRefused:
+        raise
+    except (ArithmeticError, ValueError) as error:      # no raw arithmetic error escapes
+        raise _unsupported(edge_id, f"{type(error).__name__} in the closed-form division: {error}") from error
+
+
+@dataclass(frozen=True)
+class _Setup:
+    edge_id: int
+    supports: tuple
+    start: np.ndarray
+    end: np.ndarray
+    line: object
+    conic: object
+    definition: list
+
+
+@dataclass(frozen=True)
+class _Analysis:
+    plans: list               # the incident cylinders' and cones' azimuth plans
+    tangent: object           # a conic's tangent plan (None for a line)
+    sag: object               # the sag allowance (None without one)
+    offsets: tuple            # vertex offsets from the curve's ends (0 at the coordinates' resolution)
+    allowance: DisplayRoundingAllowance
+
+
+def _setup(model, edge_id, tol) -> _Setup:
+    """Every input check against the declared domain, before any division."""
     if not isinstance(tol, DisplayTolerance):
         raise GeometryError("tol must be a DisplayTolerance")
     edge_id = int(edge_id)
@@ -716,7 +889,6 @@ def edge_display_samples(model, edge_id: int, tol: DisplayTolerance) -> EdgeSamp
     start = np.asarray(model.vertex_position(edge.start), dtype=float)
     end = np.asarray(model.vertex_position(edge.end), dtype=float)
 
-    # --- declared domain, before any division
     _check_points(f"edge {edge_id}'s vertices", np.vstack((start, end)))
     conic = None
     line = None
@@ -761,43 +933,63 @@ def edge_display_samples(model, edge_id: int, tol: DisplayTolerance) -> EdgeSamp
     for support in supports:
         if isinstance(support, Cylinder):
             _check_radius("a cylinder radius", support.radius, support.origin, *definition)
-
-    # --- divisions: every count first (checked against the cap), then the divisions
-    try:
-        parameters = _parameters(model, edge_id, tol, supports, start, end, line, conic, definition)
-    except DisplayTrimRefused:
-        raise
-    except (ArithmeticError, ValueError) as error:      # no raw arithmetic error escapes
-        raise _unsupported(edge_id, f"{type(error).__name__} in the closed-form division: {error}") from error
-    return _edge_result(model, edge_id, parameters, start, end)
+    return _Setup(edge_id, supports, start, end, line, conic, definition)
 
 
-def _parameters(model, edge_id, tol, supports, start, end, line, conic, definition):
+def _analyse(model, setup, tol) -> _Analysis:
+    """Every division's count (each checked against the cap, then their sum) and the edge's
+    rounding allowance; nothing is built."""
+    edge_id, line, conic = setup.edge_id, setup.line, setup.conic
     step = tol.angle
-    allowance = _sag_allowance(supports, tol)
+    sag = _sag_allowance(setup.supports, tol)
     # the drawn ends are the vertices: their offsets from the curve's ends enter the sag bound
     curve_ends = line if line is not None else _evaluate(model, edge_id, [0.0, 1.0])
-    offsets = (float(np.linalg.norm(start - curve_ends[0])), float(np.linalg.norm(end - curve_ends[1])))
+    raw = (float(np.linalg.norm(setup.start - curve_ends[0])), float(np.linalg.norm(setup.end - curve_ends[1])))
     # an offset at the coordinates' resolution (4 eps x max(1, |vertex coordinate|), the floor any
     # sag allowance must exceed) is rounding: the vertex is the curve's end to that resolution
-    resolution = 4.0 * _EPS * max(1.0, float(np.abs(np.vstack((start, end))).max()))
-    offsets = tuple(0.0 if offset <= resolution else offset for offset in offsets)
-    if allowance is not None and max(offsets) > allowance:
+    resolution = 4.0 * _EPS * max(1.0, float(np.abs(np.vstack((setup.start, setup.end))).max()))
+    offsets = tuple(0.0 if offset <= resolution else offset for offset in raw)
+    hidden = max([0.0] + [offset for offset in raw if offset <= resolution])
+    if sag is not None and max(offsets) > sag:
         raise _unsupported(edge_id, f"a vertex lies farther from its curve ({max(offsets)!r}) than the sag "
-                                    f"allowance {allowance!r}")
+                                    f"allowance {sag!r}")
+    round_supports = [s for s in setup.supports if isinstance(s, (Cylinder, Cone))]
     if line is not None:
-        plans = [_line_azimuth_division(edge_id, s, line[0], line[1], step)
-                 for s in supports if isinstance(s, (Cylinder, Cone))]
-        return _union(edge_id, [], [plan.build() for plan in plans], 64.0 * _EPS)
-    if allowance is not None and allowance <= resolution:
-        raise _unsupported(edge_id, f"the sag allowance {allowance!r} is below its coordinates' resolution")
-    tangent = conic.tangent_division(step, allowance, model.tolerance.surface_residual, max(offsets))
-    plans = [conic.azimuth_division(s, step, definition) for s in supports if isinstance(s, (Cylinder, Cone))]
+        plans = [_line_azimuth_division(edge_id, s, line[0], line[1], step, setup.definition) for s in round_supports]
+        tangent = None
+        tangent_rounding = 8.0 * _EPS
+        sample = 8.0 * _EPS * (_norm(line[0]) + _norm(line[1]))
+        sag_rounding = (8.0 * _EPS * max(1.0, _norm(line[1] - line[0]))
+                        + (sample if any(plan.count > 1 for plan in plans) else 0.0))
+    else:
+        if sag is not None and sag <= resolution:
+            raise _unsupported(edge_id, f"the sag allowance {sag!r} is below its coordinates' resolution")
+        tangent = conic.tangent_division(step, sag, model.tolerance.surface_residual, max(offsets))
+        plans = [conic.azimuth_division(s, step, setup.definition) for s in round_supports]
+        tangent_rounding = 32.0 * _EPS * (1.0 if conic.circle else conic.aspect) * conic.theta_star
+        sag_rounding = 3.0 * conic.point_rounding
+    counts = [plan.count for plan in plans] + ([] if tangent is None else [tangent.count])
+    total = 1 + sum(max(1, count) - 1 for count in counts)
+    if total > _MAX_INTERVALS:
+        raise _unsupported(edge_id, f"its divisions need up to {total} intervals together, more than {_MAX_INTERVALS}")
+    scale = _scale([*setup.definition, *(s.origin for s in round_supports)])
+    allowance = DisplayRoundingAllowance(
+        angle=64.0 * _EPS * step + max([tangent_rounding] + [plan.rounding for plan in plans]),
+        sag=None if sag is None else 64.0 * _EPS * sag + sag_rounding + hidden,
+        axis_floor=MIN_DISPLAY_RADIUS_RATIO * scale)
+    return _Analysis(plans, tangent, sag, offsets, allowance)
+
+
+def _build(setup, analysis):
+    """The divisions (their counts already checked), their union and the sag refinement."""
+    if setup.line is not None:
+        return _union(setup.edge_id, [], [plan.build() for plan in analysis.plans], 64.0 * _EPS)
+    conic = setup.conic
     # parameters closer than 64 ulps of the stored angle evaluate to the same theta (to rounding)
     gap = 64.0 * _EPS * max(1.0, abs(conic.start), abs(conic.start + conic.sweep)) / abs(conic.sweep)
-    parameters = _union(edge_id, tangent.build(), [plan.build() for plan in plans], gap)
-    if allowance is not None:
-        parameters = conic.refine_sag(parameters, allowance, offsets)
+    parameters = _union(setup.edge_id, analysis.tangent.build(), [plan.build() for plan in analysis.plans], gap)
+    if analysis.sag is not None:
+        parameters = conic.refine_sag(parameters, analysis.sag, analysis.offsets)
     return parameters
 
 

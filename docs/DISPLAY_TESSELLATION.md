@@ -46,18 +46,28 @@ exact multiple can come out a few ulps above an integer). There is no fixed slac
 2. **Support azimuth** (at most `angle` per interval, for each incident cylinder or cone: the
    turning of a cylinder's normal, an upper bound for a cone's). The curve is projected onto the
    plane normal to the axis, in the support's (radial, circumferential) frame.
-   - Lines: the start's projection `A'` relative to the axis point and the projection `D'` of the
-     exact difference `b - a` (never of the end separately: a ruling's difference projects to
-     exactly 0 where its separately rounded ends do not), `B' = A' + D'`. An end on the axis to
-     the frame's rounding (projected radius `<= 8 eps max(1, |end|, |axis point|)`, a cone's exact
-     apex on any axis): the projection is a ray from the axis point, constant azimuth, no
-     division; both ends on the axis: no azimuth anywhere, `OUT_OF_DOMAIN`. `A'`, `D'` collinear
-     (`|A' x D'| <= 8 eps |A'| |D'|`, `D' = 0` included) with `A'`, `B'` on the same side: constant
-     azimuth (cylinder rulings, cone generators), no division; on opposite sides: the line crosses
-     the axis, `EDGE_UNSUPPORTED`. Otherwise `A' + t D'` (`cross(A' + t D', D')` constant) has a
-     monotone azimuth spanning less than pi: equal azimuth steps, each
-     `t = -cross(A', e) / cross(D', e)`. There is no apex-proximity shortcut beyond the frame's
-     rounding: a line from near an apex is divided like any other.
+   - Lines: every decision uses the quantity that is accurate for it, never a reconstruction
+     (round 3: `B' = A' + P(b - a)` cancelled an end's own 1.5e-9 radius to 0 next to a 2e7 start,
+     and the line was drawn as one chord). Each end's radius from its OWN projection,
+     `A' = P(a - o)`, `B' = P(b - o)` (rounded by `4 eps |p - o|`); the direction from the
+     projection `D' = P(b - a)` of the exact difference (a ruling's is exactly 0 where its
+     separately rounded ends are not); the segment's interior closest approach (from both ends'
+     estimates, `t* = -(A'.D') / |D'|^2` and `1 - (B'.D') / |D'|^2`, distance `|P' x D'| / |D'|`,
+     counted when either lies inside the segment beyond its ends' rounding) BEFORE any end
+     shortcut. An end on the axis to the frame's rounding (projected radius
+     `<= 8 eps max(1, |end|, |axis point|)`) is only possible where the support reaches its axis,
+     a cone's apex (a zero radius): the projection is a ray from the axis point, constant azimuth,
+     no division; on a cylinder or a frustum such an end is `OUT_OF_DOMAIN` (round 3: a line from
+     1.5e-15 behind a 2e-9 cylinder's axis hid an interior axis crossing); both ends on the axis:
+     `OUT_OF_DOMAIN`. Collinear (`|A' x D'| <= 8 eps |A'| |D'|` AND `|B' x D'| <= 8 eps |B'| |D'|`,
+     `D' = 0` included; when the two estimates disagree the line is divided, the conservative
+     branch) with `A'`, `B'` on the same side: constant azimuth (cylinder rulings, cone
+     generators), no division; on opposite sides, or with an interior closest approach: the line
+     crosses the axis, `EDGE_UNSUPPORTED`. Otherwise `A' + t D'` (`cross(A' + t D', D')` constant)
+     has a monotone azimuth spanning less than pi (the wrapped difference of the ends' own
+     azimuths): equal azimuth steps, each `t = -cross(A', e) / cross(D', e)`. There is no
+     apex-proximity shortcut beyond the frame's rounding: a line from near an apex is divided like
+     any other.
    - Circles and ellipses: `c' + M' w(theta) = N (z + w(x))` (`N = M' J` with det > 0, `z = N^-1 c'`).
      `arg(z + w)` is monotone while `g = 1 + z.w` keeps its sign (its extremes over the interval
      are found in closed form): strictly inside the interval, non-strictly at its ends (`g = 0` at
@@ -108,9 +118,11 @@ to the same theta) of a kept value `k` is dropped only when that division's own 
 equals its angle at `v` to rounding (`64 eps max(1, |angle|)`, the angles being local to the
 edge), so every interval still lies inside one interval of that division up to that rounding;
 otherwise it is kept (and a cut too close to evaluate apart is refused). Every division's count
-(tangent and each support's) is computed and checked against the cap before any division is
-built, so building costs at most the sum of the admitted counts; more than 4096 intervals is
-`EDGE_UNSUPPORTED`. No raw arithmetic error escapes a division: every division is guarded, and
+(tangent and each support's) is computed and checked against the cap, and then their sum
+`1 + sum(n - 1)` (the most intervals the union can have), before any division is built, so
+building costs at most 4096 cuts; more than 4096 intervals is `EDGE_UNSUPPORTED` (round 3: a
+circle coaxial with its cylinder needing 2100 tangent and 2100 azimuth intervals is now refused
+from the sum, where both divisions were built and merged before). No raw arithmetic error escapes a division: every division is guarded, and
 any `ArithmeticError` or `ValueError` left is typed `EDGE_UNSUPPORTED`.
 
 Measured at the Fine step (7.5 deg): a tripod mitre ellipse takes 48 intervals, the tripod
@@ -120,7 +132,8 @@ the corpus at both steps, with and without sag 1e-4, is the same; parameters mov
 5.6e-14). Unchanged again by the round-2 fixes: all 5744 corpus results (every edge, both steps,
 with and without sag 1e-4) keep their counts and refusal codes; 40 parameter arrays (tripod
 mitre ellipses and the three `cone_section` cases, through the rewritten ray inverse) moved by at
-most 2.2e-16.
+most 2.2e-16. Unchanged by the round-3 fixes: all 5744 corpus results keep their counts, codes
+and parameters bit for bit.
 
 ## Declared numeric domain (owner decision 2026-11-25)
 
@@ -131,7 +144,8 @@ call raises `DisplayDomainRefused` (a `DisplayTrimRefused` with code `OUT_OF_DOM
 |---|---|---|
 | `MAX_DISPLAY_COORDINATE` | 1e9 model units: vertex positions, arc centre and (`EllipticArc`) centre + u, centre + v, an `Arc`'s via vertex, `LineRange` carrier endpoints and a line's evaluated ends, every incident support's origin (and a plane's u, v vectors), every emitted point | float spacing 1.2e-7 there; ship and offshore models in m or mm are far inside |
 | `MAX_DISPLAY_ANGLE` | 1e6 rad: `EllipticArc` start and start + sweep; cylinder and cone start and start + sweep | float spacing 1.2e-10 rad, four orders below the smallest display angle (1e-6), so `start + sweep t` keeps its steps |
-| `MIN_DISPLAY_RADIUS_RATIO` | 1e-9 x max(1, max \|coordinate\|): every incident cylinder radius (scale: the edge's definition points and the support origin); every point used for a line's azimuth about a cylinder or cone: its ends (except an end on the axis to the frame's rounding, `8 eps max(1, \|coordinate\|)`; both ends on it is refused) and its closest approach `\|A' x D'\| / \|D'\|` between them (scale: that point and the support origin); a cylinder or cone arc's closest approach (one rule for both) (a lower bound, `sigma_min(N) min \|z + w\|`, each candidate evaluated directly: `\| \|z\| - 1 \|` at the analytic critical angle, `\|z + w\|` at the ends; scale: the edge's definition points and `max(1, \|stored angle\|) sigma_max(M')`, the evaluator's rounding of `start + sweep t` moving the projected point by eps times that) | an azimuth computed from coordinates of size \|p\| at distance r from the axis is rounded by about eps \|p\| / r: at the bound 2.2e-7 rad, below the smallest display angle. Measured without the stored-angle term: a .5 circle 2e-9 from a frustum's axis at 999994 rad turns 0.116 rad per interval at `angle = .1` |
+| `MIN_DISPLAY_RADIUS_RATIO` | 1e-9 x max(1, max \|coordinate\|): every incident cylinder radius (scale: the edge's definition points and the support origin); every point used for a line's azimuth about a cylinder or cone: its ends by their own projections (except an end on the axis to the frame's rounding, `8 eps max(1, \|coordinate\|)`, at a cone's apex; elsewhere, and both ends on it, refused) and its interior closest approach `\|P' x D'\| / \|D'\|` (scale: the edge's definition points, i.e. the vertices and the line's ends, and the support origin: an evaluated point `a + t (b - a)` is rounded at the scale of the ends, round 3); a cylinder or cone arc's closest approach (one rule for both) (a lower bound, `sigma_min(N) min \|z + w\|`, each candidate evaluated directly: `\| \|z\| - 1 \|` at the analytic critical angle, `\|z + w\|` at the ends; scale: the edge's definition points and `max(1, \|stored angle\|) sigma_max(M')`, the evaluator's rounding of `start + sweep t` moving the projected point by eps times that) | an azimuth computed from coordinates of size \|p\| at distance r from the axis is rounded by about eps \|p\| / r: at the bound 2.2e-7 rad, below the smallest display angle. Measured without the stored-angle term: a .5 circle 2e-9 from a frustum's axis at 999994 rad turns 0.116 rad per interval at `angle = .1` |
+| rounding share | the edge's rounding allowance (`display_rounding_allowance`, below) at most 2 % of `tol.angle` (else `OUT_OF_DOMAIN`) and of the sag allowance (else `EDGE_UNSUPPORTED`, the unresolvable-sag code) | round 3: the allowance must be small against what is asked. It binds only near the other bounds: at the radius bound the azimuth term is about `64 eps / 1e-9 = 1.4e-5` rad, so angles below about 7e-4 rad are refused there; at coordinates 1e9 the sag term is about 5e-6, so sags below about 2.7e-4 are refused there (a test at sag 3e-5 there moved to 3e-4). Over the corpus the largest share is 8.7e-8 (angle) and 2.0e-6 (sag) |
 | `MAX_DISPLAY_ELLIPSE_ASPECT` | 1e6: a non-circular ellipse's aspect `a / b` (its principal semi-axes, the singular values of `[u v]`) times `max(1, \|start\|, \|start + sweep\|)`; and, for a circle or an ellipse, the same product for its PROJECTION across every incident cylinder's or cone's axis (the 2x2 frame `M'`, whose aspect can be far above the curve's: an ellipse of aspect 100 tilted almost into the axis direction projects at 1e8) | the tangent direction moves up to `a / b` times faster than the arc angle, and the evaluator rounds the absolute angle `start + sweep t` by eps \|theta\|: the tangent error is at most `1e6 x eps = 2.2e-10` rad, four orders below the smallest display angle. Measured with `a / b <= 1e6` alone: aspect 1e6 at 999994 rad turns 10 % over `angle = 1e-3` per interval, local divisions notwithstanding. The azimuth is resolved through `M'^-1` and back (`chi`, then the polar part of `M'`), which stretches an angle error by up to `aspect(M')`: within the bound it is at most `1e6 x eps = 2.2e-10` rad. Measured outside it: the 1e8 projection above turned 0.266 rad on one interval at `angle = .1` |
 
 No apex is recognised by proximity: a line end counts as on the axis only when its projection is
@@ -146,17 +160,46 @@ Inside the domain, a sag allowance at or below 4 eps x max(1, |vertex coordinate
 edge is `EDGE_UNSUPPORTED` (unresolvable), as are distinct parameters evaluating to one point and
 evaluator errors.
 
-## Rounding allowance
+## Rounding allowance (`display_rounding_allowance`)
 
-"Holds to rounding" means, per interval, at most (the dense oracle in
-`tests/test_display_tessellation_edges.py` checks exactly this, with no other slack):
+"Holds to rounding" means one thing, given by ONE public function,
+`display_rounding_allowance(model, edge_id, tol) -> DisplayRoundingAllowance(angle, sag,
+axis_floor)`: inside the declared domain, every emitted interval's tangent turns, and every
+incident cylinder's or cone's azimuth changes, by at most `tol.angle + angle`, and every drawn
+chord lies within the sag allowance `+ sag` of its curve. The dense oracle in
+`tests/test_display_tessellation_edges.py` checks exactly this, with no other slack, and checks
+that the allowance is at most 2 % (which `edge_display_samples` enforces). `axis_floor` is
+`MIN_DISPLAY_RADIUS_RATIO x scale` (the edge's coordinate scale): the azimuth is defined and
+measured at points at least that far from every axis (only a cone's apex is nearer).
 
-- tangent turning: `angle (1 + 64 eps) + 4 eps W + 2 n eps`, `W` the curve's aspect x
-  `max(1, |stored angle|)` (2 pi for an `Arc`), `n` the samples measured;
-- support azimuth: `angle (1 + 64 eps) + 2 n eps (1 + S / r)`, `S` = `|axis point| + |p| +` the
-  evaluator's motion (its inputs' size plus `sigma_max max(1, |stored angle|)`), `r` the smallest
-  distance from the axis on the interval (at the radius bound this is the 2.2e-7 rad above);
-- sag: `sag (1 + 64 eps) + 4 eps max(1, |coordinate|)`.
+With `eps` the float epsilon and `theta* = max(1, |start|, |start + sweep|)` (1 for a line):
+
+- `E`, the rounding of an evaluated point: a conic, `8 eps (|c| + |u| + |v| + sigma_max theta*)`
+  (the evaluator forms `start + sweep t`, rounded by `2 eps theta*`, which moves the point by up to
+  `sigma_max` times that; round 3: at 999994 rad a .2 rad interval was drawn 7e-11 rad wide, its
+  chord 3.5e-12 beyond the sag); a line, `8 eps (|a| + |b|)`. Per incident cylinder or cone,
+  `E_o = E + 8 eps |o|` (the projection relative to its axis point `o`), and `r` the smallest
+  distance from its axis the division uses (a conic: its closest-approach lower bound; a line: its
+  ends' and interior closest approach).
+- `angle = 64 eps x tol.angle + max(T, Z for each support)`:
+  - `T = 32 eps W`, `W = aspect x theta*` (aspect 1 for a circle; a line: `8 eps`): each end's
+    tangent direction is off by `aspect (2 eps theta* + 4 eps)` (the evaluated angle and the
+    vector), and the tangent division's inverse by a few `eps x aspect`;
+  - a conic's `Z = 32 eps aspect(M') theta* + 8 E_o / r`: the projected forward map and inverse
+    (`N^-1`, the polar part `S`) stretch a rounding by `aspect(M')` (round 3: at a projected aspect
+    of 990099 the forward map under-estimated a span by 1.45e-10 rad and an interval turned
+    2.1e-10 rad beyond the angle); each evaluated point's azimuth is off by `E_o / r`, at both chord
+    ends and at every measured point;
+  - a line's `Z = 2 G / r`, `G = err(A') + err(B') + err(D') + 8 eps max(|A'|, |B'|)` (how far its
+    true position across the axis can be from the computed one: each cut, or a constant azimuth's
+    collinearity, is off by at most `G / r`), plus `4 E_o / r` when interior samples are drawn; a ray
+    from an apex: `2 (rho + err) / axis_floor` (`rho` the apex end's projected radius).
+- `sag = 64 eps x sag + 3 E` for a conic (both chord ends and the measured point move by `E`);
+  `64 eps x sag + 8 eps max(1, |b - a|)` for a line (plus `E` when interior samples are drawn);
+  plus any vertex offset counted as 0 at the coordinates' resolution.
+
+Worst value inside the domain: 2 % of the angle and of the sag allowance, by the rounding-share
+bound (above); over the corpus at most 8.7e-8 of the angle and 2.0e-6 of the sag.
 
 ## Stability within the domain (round-2 class audit)
 
@@ -173,21 +216,23 @@ declared domain (or which bound makes it so):
 | `z = N^-1 c'` | adjugate product | `|z|` large on a thin projection: relative error `eps x aspect(M')` (projected aspect bound) |
 | sign of `g = 1 + z.w` | `1 + |z| cos(x - arg z)` at the ends and interior extremes | a decision: an end within `16 eps (1 + |z|)` counts as 0 only when the hidden turnback is below eps rad; an interior `g` near 0 means `|z|` near 1, so the closest approach `sigma_min ||z| - 1|` is below the radius bound and the edge is refused (fail closed) |
 | closest approach (conic) | `det / sigma_max x min(hypot(z0 + cos x, z1 + sin x), ||z| - 1|)`, each evaluated directly | absolute error `eps (1 + |z|)` of a distance, far below the 1e-9 radius ratio; the scale includes `max(1, |stored angle|) sigma_max(M')` for cylinders and cones alike |
-| forward azimuth `angle(theta)` | `chi = x + atan2(cross(w, q), w.q)`, `Phi = chi + alpha + atan2(cross(e, S e), e.S e)` | `e.S e >= sigma_min > 0`; the error `eps x aspect(M')` is at most 2.2e-10 rad by the projected aspect bound |
-| ray inverse `solve(phi)` | `h = cross(e, z)`, `w = sign(g) sqrt((1 - h)(1 + h)) e - h e_perp` | nothing of size `|z|` or `|z|^2` cancels (was `(z.e)^2 - |z|^2 + 1` and `lambda e - z`) |
-| line projection | `A' = P(a - o)`, `D' = P(b - a)`, `B' = A' + D'` | the exact difference is projected (a ruling gives `D' = 0`, not a rounded cross product); `A'` rounds by `eps |a - o|`: azimuth error `eps |p| / r <= 2.2e-7` rad by the radius bound |
-| line on-axis, collinearity | radius `<= 8 eps max(1, |coordinates|)`; `|A' x D'| <= 8 eps |A'| |D'|` (`D' = 0` included) | both are decisions at the frame's rounding; a near-collinear line that misses the test is divided generically (span below one step: no cut) or refused by its closest approach (fail closed) |
-| line closest approach | `t* = -(A'.D') / |D'| / |D'|`, distance `|A' x D'| / |D'|` | `|D'| > 0` on this path (guarded) |
-| line cut `t = -cross(A', e) / cross(D', e)` | direct | `|cross(D', e)| = |D'| h / |p|`; a relative error `eps |p| / h` in `t` moves the cut's azimuth by at most `eps |p| / r <= 2.2e-7` rad; a zero denominator is refused |
+| forward azimuth `angle(theta)` | `chi = x + atan2(cross(w, q), w.q)`, `Phi = chi + alpha + atan2(cross(e, S e), e.S e)` | `e.S e >= sigma_min > 0`; `cross(w, q)` subtracts terms of size `|z|` and `S` has aspect `aspect(M')`: the error is up to a few `eps x aspect(M') x theta*` (round 3: 1.45e-10 rad at aspect 990099), covered by the allowance's `32 eps aspect(M') theta*` and at most 7.1e-9 rad by the projected aspect bound |
+| ray inverse `solve(phi)` | `h = cross(e, z)`, `w = sign(g) sqrt((1 - h)(1 + h)) e - h e_perp` | nothing of size `|z|^2` cancels (was `(z.e)^2 - |z|^2 + 1` and `lambda e - z`); its remaining error is the forward map's, in the same allowance term |
+| line projection | `A' = P(a - o)`, `B' = P(b - o)` (each end's own), `D' = P(b - a)` | no reconstruction `A' + D'` (round 3: it cancelled a 1.5e-9 end radius next to a 2e7 start); each rounds by `4 eps |p - o|`, `D'` by `4 eps |b - a|`: the allowance's `G` |
+| line on-axis, collinearity | radius `<= 8 eps max(1, |coordinates|)`, only at a cone's apex; both `|A' x D'| <= 8 eps |A'| |D'|` and `|B' x D'| <= 8 eps |B'| |D'|` (`D' = 0` included) | decisions at the frame's rounding; when the two estimates disagree the line is divided (conservative); a near-collinear line that misses the test is divided generically (span below one step: no cut) or refused by its closest approach (fail closed); the constant azimuth's residual turning `2 G / r` is in the allowance |
+| line closest approach | both ends' estimates `t* = -(A'.D') / |D'|^2`, `1 - (B'.D') / |D'|^2`, distance `|P' x D'| / |D'|`, before any end shortcut | `|D'| > 0` on this path (guarded); interior when either estimate is inside beyond its ends' rounding and its own error; the smaller distance is checked (conservative) |
+| line cut `t = -cross(A', e) / cross(D', e)` | direct | `|cross(D', e)| = |D'| h / |p|`; the cut's azimuth is off by at most `G / r` (in the allowance); a zero denominator is refused |
 | circle classification | `|u| = |v|` and `u.v = 0` to 8 eps relative | the circle path's uniform steps and radius `max(|u|, |v|)` are then exact to 16 eps relative (was 1e-12: a 9e-13 skew overshot by 1.8e-13 rad and 2.3e-8 sag) |
-| circle sag count | `4 asin(sqrt(sag / (2 rho)))`, allowance `< 2 rho` | no cancellation (`2 rho sin^2(delta / 4)`, not `1 - cos`) |
+| circle sag count | `4 asin(sqrt(sag / (2 rho)))`, allowance `< 2 rho` | no cancellation (`2 rho sin^2(delta / 4)`, not `1 - cos`); exact for the analytic chord, the evaluated chord ends moving by `E` (the allowance's `3 E`, round 3) |
 | local frame `u'`, `v'` | one rotation by the stored start | no absolute angle formed; rounding `eps (|u| + |v|)` |
 | in-plane matrix (Gram-Schmidt) | `|u'|`, `v'.e1`, `|v' - (v'.e1) e1|` | absolute error `eps |M|`: tangent-angle error `eps x aspect <= 2.2e-10` rad by the aspect bound |
-| ellipse sag | `2 sin^2(delta / 4) |u x v| / |T(m)|`, raised by `(1 + 8 eps x aspect)` before comparing | `|u x v|` and `|T(m)|` of a skew frame round by a relative `eps x aspect` each; the raise makes the comparison fail closed; `|T(m)| = 0` is refused |
+| ellipse sag | `2 sin^2(delta / 4) |u x v| / |T(m)|`, raised by `(1 + 8 eps x aspect)` before comparing | `|u x v|` and `|T(m)|` of a skew frame round by a relative `eps x aspect` each; the raise makes the comparison fail closed; `|T(m)| = 0` is refused; the evaluated chord ends move by `E` (the allowance's `3 E`, round 3) |
 | parameters `s / sweep`, union gap `/ |sweep|` | direct | `sweep = 0` refused |
 | union drop rule | `|angle(k) - angle(v)| <= 64 eps max(1, |angle|)` | the division angles are local to the edge |
 | sag allowance default | `2 r sin^2(angle / 4)` | no `1 - cos` cancellation |
 | bisection | `a + (b - a) / 2`, refused when not strictly inside | float resolution typed |
+| combined cap | `1 + sum(n - 1)` over every division's count, before any is built | integers |
+| rounding allowance | `display_rounding_allowance` (above), at most 2 % of the angle and sag | every term is a sum or quotient of positive quantities (no cancellation); `r > 0` by the radius bound |
 | raw arithmetic | any `ArithmeticError` or `ValueError` from a division | typed `EDGE_UNSUPPORTED` |
 
 ## Refusal codes (`REFUSAL_CODES`)
@@ -195,6 +240,6 @@ declared domain (or which bound makes it so):
 | Code | Meaning |
 |---|---|
 | `SUPPORT_UNSUPPORTED` | an incident face's support is not a plane, cylinder or cone, or the face has an explicit parameterization |
-| `EDGE_UNSUPPORTED` | the curve is not a line, circle or ellipse; degenerate frame or projection; support azimuth not monotone along the edge or reaching the axis (a line crossing it); unresolvable sag; a vertex farther from its curve than the sag allowance; more than 4096 intervals; lost precision |
-| `OUT_OF_DOMAIN` | outside the declared numeric domain (`DisplayDomainRefused`) |
+| `EDGE_UNSUPPORTED` | the curve is not a line, circle or ellipse; degenerate frame or projection; support azimuth not monotone along the edge or reaching the axis (a line crossing it); unresolvable sag (including a sag rounding allowance above 2 % of the sag allowance); a vertex farther from its curve than the sag allowance; more than 4096 intervals (each division, or their sum); lost precision |
+| `OUT_OF_DOMAIN` | outside the declared numeric domain (`DisplayDomainRefused`), including an angle rounding allowance above 2 % of `tol.angle` |
 | `TRIM_INVALID`, `TRIM_WINDS_SUPPORT` | reserved for face trims (not raised by edge sampling) |

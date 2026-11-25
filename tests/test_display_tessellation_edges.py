@@ -21,10 +21,6 @@ from anygeometry.surfaces import Cone, Cylinder, Plane
 
 DENSE = 65
 EPS = np.finfo(float).eps
-#: The documented rounding allowance (docs/DISPLAY_TESSELLATION.md, "Rounding allowance"): every
-#: bound holds to 64 eps relative plus the rounding of the evaluated points the oracle measures.
-RELATIVE = 64 * EPS
-SLACK = RELATIVE
 
 
 def _angles(a, b):
@@ -35,18 +31,6 @@ def _azimuth(support, points):
     offset = np.atleast_2d(points) - support.origin
     radial = offset - np.outer(offset @ support.axis, support.axis)
     return np.arctan2(radial @ support.circumferential_direction, radial @ support.radial_direction)
-
-
-def _support_normal_turning(support, points):
-    """The azimuth swept about a cylinder's or cone's axis (exact for a cylinder, a conservative
-    upper bound for a cone, whose normal turns less than its azimuth); a point on the axis (a
-    cone's apex) has no azimuth and contributes nothing."""
-    offset = points - support.origin
-    radial = offset - np.outer(offset @ support.axis, support.axis)
-    keep = np.linalg.norm(radial, axis=1) > 1e-12 * max(1.0, float(np.abs(points).max()))
-    azimuth = _azimuth(support, points)
-    step = np.abs((np.diff(azimuth) + np.pi) % (2 * np.pi) - np.pi)
-    return float(np.where(keep[1:] & keep[:-1], step, 0.).sum())
 
 
 def _distance_to_segment(points, a, b):
@@ -86,59 +70,90 @@ def _default_allowance(supports, step):
     return min(radii) * (1 - math.cos(step / 2)) if radii else None
 
 
-def _stored_frame(g, edge_id):
-    """``(W, motion)``: the conic's aspect x max(1, |stored angle|), and how far (over eps) the
-    evaluator's rounding moves a point: its inputs' size (|c| + |u| + |v|, a line's |a| + |b|)
-    plus the largest semi-axis x max(1, |stored angle|) (it rounds start + sweep t)."""
-    curve = g.edges[edge_id].curve
-    if isinstance(curve, EllipticArc):
-        stored = max(1.0, abs(curve.start_angle), abs(curve.start_angle + curve.sweep_angle))
-        s = np.linalg.svd(np.column_stack((curve.u_vector, curve.v_vector)), compute_uv=False)
-        size = sum(float(np.linalg.norm(x)) for x in (curve.center, curve.u_vector, curve.v_vector))
-        return s[0] / s[1] * stored, size + s[0] * stored
-    ends = g.evaluate_edge_many(edge_id, [0., 1.])
-    size = float(np.linalg.norm(ends, axis=1).sum())
-    if isinstance(curve, (Straight, LineRange)):
-        return 1.0, size
-    frame = g.arc_frame(edge_id)
-    return 2 * np.pi, size + float(np.linalg.norm(frame.center)) + 2 * np.pi * frame.radius
+def _exact_line_points(g, edge_id, t):
+    """The line's points at parameters ``t`` in exact rational arithmetic (``a + t (b - a)``, ``a``,
+    ``b`` its evaluated ends): the oracle measures the line itself, not the evaluator's rounding."""
+    a, b = (np.asarray(p, dtype=float) for p in g.evaluate_edge_many(edge_id, [0., 1.]))
+    start = [Fraction(float(x)) for x in a]
+    step = [Fraction(float(y)) - Fraction(float(x)) for x, y in zip(a, b)]
+    return [[start[i] + Fraction(float(s)) * step[i] for i in range(3)] for s in t]
 
 
-def _azimuth_noise(support, points, motion):
-    """Rounding of one evaluated point's azimuth: eps (|o| + |p| + motion) / r."""
-    offset = points - support.origin
-    radial = offset - np.outer(offset @ support.axis, support.axis)
-    r = np.linalg.norm(radial, axis=1)
-    keep = r > 1e-12 * max(1.0, float(np.abs(points).max()))
-    if not keep.any():
-        return 0.0
-    size = float(np.linalg.norm(support.origin)) + float(np.linalg.norm(points, axis=1).max()) + motion
-    return float(EPS * size / r[keep].min())
+def _exact_distance_to_segment(points, a, b):
+    """Largest distance of exact rational ``points`` from the drawn segment ``a``-``b`` (exact
+    until the final square root)."""
+    a = [Fraction(float(x)) for x in a]
+    d = [Fraction(float(y)) - x for x, y in zip(a, b)]
+    dd = sum(x * x for x in d)
+    worst = 0.0
+    for p in points:
+        q = [x - y for x, y in zip(p, a)]
+        t = min(max(sum(x * y for x, y in zip(q, d)) / dd, Fraction(0)), Fraction(1)) if dd else Fraction(0)
+        worst = max(worst, math.sqrt(float(sum((x - t * y) ** 2 for x, y in zip(q, d)))))
+    return worst
+
+
+def _radial(support, points, exact):
+    """(radial, circumferential) coordinates of ``points`` about ``support``'s axis."""
+    if not exact:
+        offset = np.atleast_2d(points) - support.origin
+        return offset @ support.radial_direction, offset @ support.circumferential_direction
+    origin = [Fraction(float(x)) for x in support.origin]
+    frame = [[Fraction(float(x)) for x in v] for v in (support.radial_direction, support.circumferential_direction)]
+    xy = [[float(sum((p[i] - origin[i]) * f[i] for i in range(3))) for f in frame] for p in points]
+    return np.array([q[0] for q in xy]), np.array([q[1] for q in xy])
+
+
+def _azimuth_change(support, points, floor, exact=False):
+    """``(range, backtrack)`` of the azimuth about ``support``'s axis over ``points``: the range of
+    its continuous lift and its largest step against the net direction.  Only points at least
+    ``floor`` from the axis count (the declared domain defines an azimuth there; a cone's apex
+    has none)."""
+    x, y = _radial(support, points, exact)
+    keep = np.hypot(x, y) >= floor
+    if keep.sum() < 2:
+        return 0.0, 0.0
+    lift = np.unwrap(np.arctan2(y[keep], x[keep]))
+    steps = np.diff(lift) * (1.0 if lift[-1] >= lift[0] else -1.0)
+    return float(lift.max() - lift.min()), float(max(0.0, -steps.min()))
 
 
 def _dense_ok(g, edge_id, samples, angle, sag=None, supports=None, count=DENSE, label=None):
-    """Every drawn segment: dense tangent turning, support azimuth and distance from the segment,
-    each to the documented rounding allowance: 64 eps relative, plus per dense sample the
-    rounding of what is measured (a tangent direction: eps x aspect x max(1, |stored angle|); an
-    azimuth: eps (|o| + |p| + the evaluator's motion) / r; a distance: 4 eps max(1, |p|))."""
+    """Every drawn segment, against the module's ONE documented rounding allowance
+    (``display_rounding_allowance``, no other slack), which is itself at most 2 % of the angle and
+    sag:
+
+    * tangent turning: the largest angle of any dense tangent from the interval's first or last
+      (a conic's tangent turns monotonically, so this is its turning; the noise of two samples,
+      not of every one);
+    * support azimuth: the range of the dense azimuth's lift, and no step against its net
+      direction above the allowance (monotone);
+    * sag: the largest distance of dense curve points from the drawn segment.
+
+    A line is measured exactly (rational points); a circle or an ellipse at the evaluator's points."""
     supports = _round_supports(g, edge_id) if supports is None else supports
-    weight, motion = _stored_frame(g, edge_id)
+    allowance = dt.display_rounding_allowance(g, edge_id, dt.DisplayTolerance(angle, sag))
+    assert allowance.angle <= .02 * angle, (label, edge_id, allowance)
+    assert sag is None or allowance.sag <= .02 * sag, (label, edge_id, allowance)
+    line = isinstance(g.edges[edge_id].curve, (Straight, LineRange))
     t = samples.parameters
     assert t[0] == 0.0 and t[-1] == 1.0 and np.all(np.diff(t) > 0.0)
+    limit = angle + allowance.angle
     for k, (t0, t1) in enumerate(zip(t[:-1], t[1:])):
         dense = np.linspace(t0, t1, count)
         tangent = g.edge_tangent_many(edge_id, dense)
-        turning = _angles(tangent[1:], tangent[:-1]).sum()
-        assert turning <= angle * (1 + RELATIVE) + (4 * weight + 2 * count) * EPS, (label, edge_id, t0, t1, turning)
-        points = g.evaluate_edge_many(edge_id, dense)
+        turning = max(_angles(tangent[:1], tangent).max(), _angles(tangent[-1:], tangent).max())
+        assert turning <= limit, (label, edge_id, t0, t1, turning, limit)
+        points = _exact_line_points(g, edge_id, dense) if line else g.evaluate_edge_many(edge_id, dense)
         for support in supports:
-            limit = angle * (1 + RELATIVE) + 2 * count * _azimuth_noise(support, points, motion) + 2 * count * EPS
-            turned = _support_normal_turning(support, points)
-            assert turned <= limit, (label, edge_id, t0, t1, turned, limit)
+            turned, back = _azimuth_change(support, points, allowance.axis_floor, exact=line)
+            assert turned <= limit and back <= allowance.angle, (label, edge_id, t0, t1, turned, back, limit)
         if sag is not None:
-            distance = _distance_to_segment(points, samples.points[k], samples.points[k + 1])
-            limit = sag * (1 + RELATIVE) + 4 * EPS * max(1.0, float(np.abs(points).max()))
-            assert distance <= limit, (label, edge_id, t0, t1, distance, sag)
+            if line:
+                distance = _exact_distance_to_segment(points, samples.points[k], samples.points[k + 1])
+            else:
+                distance = _distance_to_segment(points, samples.points[k], samples.points[k + 1])
+            assert distance <= sag + allowance.sag, (label, edge_id, t0, t1, distance, sag, allowance.sag)
 
 
 def _refused(call, code):
@@ -282,7 +297,7 @@ def test_the_stricter_of_two_curved_supports_bounds_the_edge():
     assert .2 < span < .2003
     samples = dt.edge_display_samples(g, low, dt.DisplayTolerance(.1))
     azimuth = np.unwrap(_azimuth(support, samples.points))
-    assert np.abs(np.diff(azimuth)).max() <= .1 * (1 + SLACK)
+    assert np.abs(np.diff(azimuth)).max() <= .1 + dt.display_rounding_allowance(g, low, dt.DisplayTolerance(.1)).angle
     _dense_ok(g, low, samples, .1, supports=[support], count=257)
 
 
@@ -694,9 +709,9 @@ def test_stored_angles_exactly_at_the_bound(start, sweep, inside):
 @pytest.mark.parametrize("cx,inside", [(1e9 - 2., True), (2. ** 40, False)])
 def test_circles_at_and_beyond_the_coordinate_bound(cx, inside):
     g, edge = _arc_edge((cx, 0., 0.), 0., .03)
-    call = lambda: dt.edge_display_samples(g, edge, dt.DisplayTolerance(.0153, 3e-5))  # noqa: E731
+    call = lambda: dt.edge_display_samples(g, edge, dt.DisplayTolerance(.0153, 3e-4))  # noqa: E731
     if inside:
-        _dense_ok(g, edge, call(), .0153, 3e-5, count=257)
+        _dense_ok(g, edge, call(), .0153, 3e-4, count=257)
     else:
         _refused_out_of_domain(call)
 
@@ -1194,7 +1209,7 @@ def test_r2_3_a_zero_projected_difference_is_a_ruling():
     constant azimuth, whatever its ends' separately rounded projections say."""
     support = Cylinder((0., 0., 0.), (0., 0., 1.), (1., 0., 0.), 1., 1.)
     a, b = np.array([1., 0., .2]), np.array([1., 0., .8])
-    plan = dt._line_azimuth_division(0, support, a, b, .1)
+    plan = dt._line_azimuth_division(0, support, a, b, .1, (a, b))
     assert plan.count == 1 and plan.build().values == []
 
 
@@ -1275,4 +1290,245 @@ def test_r2_7_every_count_is_checked_before_any_division_is_built(monkeypatch):
     original = dt._angle_division
     monkeypatch.setattr(dt, "_angle_division", lambda *args: built.append(args) or original(*args))
     _refused(lambda: dt.edge_display_samples(g, low, dt.DisplayTolerance(1e-4, 1e-6)), "EDGE_UNSUPPORTED")
+    assert built == []
+
+
+
+# ---------------------------------------------------------------------------------------------
+# Codex N1 round 3: each finding's geometry, then its class
+# ---------------------------------------------------------------------------------------------
+def _quad(g, points, support, curves=None):
+    ids = [g.add_point(*p) for p in points]
+    curves = curves or {}
+    edges = [g.add_curve(ids[i], ids[(i + 1) % 4], curves[i]) if i in curves else g.add_line(ids[i], ids[(i + 1) % 4])
+             for i in range(4)]
+    g.add_face(edges, corners=(0, 1, 2, 3), surface=support)
+    return edges
+
+
+@pytest.mark.parametrize("reverse", [False, True], ids=("a_to_b", "b_to_a"))
+def test_r3_1_a_reconstructed_end_projection_does_not_hide_the_azimuth(reverse):
+    """r3 HIGH: on a cone with its apex at the origin, a LineRange from A (2e7 out, azimuth pi/4)
+    to B (1.5e-9 from the axis, azimuth pi/2): B' = A' + P(b - a) cancelled B's radius to 0, so
+    the line was drawn as one chord (reversed: eight intervals).  Each end's own projection now
+    decides its radius, and an evaluated point of a line a + t (b - a) is rounded at the scale of
+    its ends: B is below the radius bound of that scale, refused typed in both directions."""
+    g = corpus.GeometryModel(tolerance=TolerancePolicy(length=1e-13, surface_residual=1e7))
+    support = Cone((0., 0., 0.), (0., 0., 1.), (1., 0., 0.), 0., 3e7, 3e7, .5, 1.1)
+    a, b = (2e7, 2e7, math.hypot(2e7, 2e7)), (0., 1.5e-9, 1.5e-9)
+    points = [a, b, (0., 1e7, 1e7), (1e7, 2e7, math.hypot(1e7, 2e7))]
+    if reverse:
+        points = [b, a, (1e7, 2e7, math.hypot(1e7, 2e7)), (0., 1e7, 1e7)]
+    edges = _quad(g, points, support, {0: LineRange(points[0], points[1])})
+    _refused_out_of_domain(lambda: dt.edge_display_samples(g, edges[0], dt.DisplayTolerance(.1, 1.)))
+
+
+def test_r3_1_a_near_axis_end_hiding_an_axis_crossing_is_refused():
+    """r3 out of scope: on a 2e-9 cylinder, a line from 1.5e-15 behind the axis (on it to the
+    frame's rounding) crosses the axis at t = 7.5e-7: it was drawn as one chord by the on-axis
+    shortcut.  A cylinder never reaches its axis, so an end on it is outside the domain."""
+    g = corpus.GeometryModel(tolerance=TolerancePolicy(length=1e-13, surface_residual=1e-8))
+    support = Cylinder((0., 0., 0.), (0., 0., 1.), (1., 0., 0.), 2e-9, 1., -3.14, 6.28)
+    edges = _quad(g, [(-1.5e-15, 0., .2), (2e-9, 0., .8), (2e-9, 1e-9, .8), (1.5e-9, 1e-9, .2)], support)
+    _refused_out_of_domain(lambda: dt.edge_display_samples(g, edges[0], dt.DisplayTolerance(.1, 1.)))
+
+
+def test_r3_1_an_end_on_the_axis_of_a_frustum_is_refused():
+    """The class: only a support that reaches its axis (a cone's apex) has a point on it; a line
+    ending on the axis of a frustum (narrow radius 1e-6, within the face tolerance) is refused,
+    while the same line on the cone with an apex there is a generator drawn whole."""
+    for small, inside in ((1e-6, False), (0., True)):
+        g = corpus.GeometryModel(tolerance=TolerancePolicy(surface_residual=1e-5))
+        support = Cone((0., 0., 0.), (0., 0., 1.), (1., 0., 0.), small, 1., 1., 0., 1.)
+        tip, p0, p1 = g.add_point(0., 0., 0.), g.add_point(1., 0., 1.), g.add_point(math.cos(.5), math.sin(.5), 1.)
+        side = g.add_line(tip, p0)
+        arc = g.add_curve(p0, p1, EllipticArc((0., 0., 1.), (1., 0., 0.), (0., 1., 0.), 0., .5))
+        g.add_face((side, arc, g.add_line(p1, tip)), surface=support)
+        call = lambda: dt.edge_display_samples(g, side, dt.DisplayTolerance(.1))  # noqa: E731
+        if inside:
+            assert call().parameters.tolist() == [0., 1.]
+        else:
+            _refused_out_of_domain(call)
+
+
+def _thin_frustum_band(v_y):
+    g = corpus.GeometryModel(tolerance=TolerancePolicy(surface_residual=1.))
+    support = Cone((0., 0., 0.), (0., 0., 1.), (1., 0., 0.), 1., 1.1, 2., .3, 1.5)
+    low, _high, _sides = _band(g, support, *(EllipticArc((0., 1., z), (1., 0., 0.), (0., v_y, .02), .2, .78)
+                                             for z in (.2, .8)))
+    return g, support, low
+
+
+def test_r3_2_a_thin_projection_inside_the_domain_meets_the_allowance():
+    """r3 MEDIUM 2: projected aspect about 990099 (inside the bound): the last interval turned
+    0.02967921180924682 rad round the axis at angle 0.029679211598, above the former documented
+    allowance; the allowance now covers the projected inverse's aspect amplification."""
+    g, support, low = _thin_frustum_band(1.01e-6)
+    tol = dt.DisplayTolerance(.029679211598, 1.)
+    samples = dt.edge_display_samples(g, low, tol)
+    _dense_ok(g, low, samples, tol.angle, 1., supports=[support], count=1025)
+
+
+def test_r3_3_the_circle_sag_counts_the_evaluators_stored_angle():
+    """r3 MEDIUM 3: a unit arc at 999994 rad, sweep .4, at sag 2 sin^2(.05): its last chord sagged
+    0.00499583472546078 against 0.004995834721974234 (the evaluator rounds the interval's span up
+    to 0.2000000000698492): within the allowance, which counts that rounding."""
+    g, edge = _arc_edge((0., 0., 0.), 999994., .4)
+    sag = 2 * math.sin(.05) ** 2
+    samples = dt.edge_display_samples(g, edge, dt.DisplayTolerance(1., sag))
+    assert samples.parameters.tolist() == [0., .5, 1.]
+    _dense_ok(g, edge, samples, 1., sag, count=1025)
+
+
+def test_r3_3_the_ellipse_sag_counts_the_evaluators_stored_angle():
+    g = corpus.GeometryModel(tolerance=TolerancePolicy(surface_residual=1.))
+    arc = EllipticArc((0., 0., 0.), (1., 0., 0.), (0., 1.000001, 0.), 999994., .4)
+    ends = arc.evaluate(np.array([0., 1.]))
+    edge = g.add_curve(g.add_point(*ends[0]), g.add_point(*ends[1]), arc)
+    sag = .004995834972010272
+    samples = dt.edge_display_samples(g, edge, dt.DisplayTolerance(1., sag))
+    assert samples.parameters.tolist() == [0., .5, 1.]
+    _dense_ok(g, edge, samples, 1., sag, count=1025)
+
+
+def test_r3_the_rounding_allowance_is_public_and_at_most_two_percent():
+    """One documented function gives each edge's absolute angle and sag allowances: on every
+    drawable edge of these corpus cases at both steps (with and without sag 1e-4) it is at most
+    2 % of the angle and of the sag allowance."""
+    assert "display_rounding_allowance" in dt.__all__ and "DisplayRoundingAllowance" in dt.__all__
+    for name in ("tripod_skins", "cone_section", "steep_cuts", "tiny_offset_cylinder", "far_apex_cone",
+                 "ellipse_edge_20", "winding_fixture"):
+        case = corpus.ALL[name]()
+        g = case.model
+        for edge in _case_edges(case):
+            for step in corpus.STEPS:
+                for sag in (None, 1e-4):
+                    tol = dt.DisplayTolerance(step, sag)
+                    try:
+                        dt.edge_display_samples(g, edge, tol)
+                    except dt.DisplayTrimRefused:
+                        continue
+                    allowance = dt.display_rounding_allowance(g, edge, tol)
+                    assert 0. < allowance.angle <= .02 * step, (name, edge, allowance)
+                    assert allowance.sag is None or 0. < allowance.sag <= .02 * (sag or 1e300)
+
+
+def test_r3_a_tolerance_finer_than_the_allowance_is_refused():
+    """The domain is tightened so the allowance never exceeds 2 %: a circle passing 2e-9 from a
+    frustum's axis is drawn at angles .1 and 1e-3 but refused at 5e-4 (its azimuth rounding there
+    is about 1.4e-5 rad); a unit circle near x = 1e9 is drawn at sag 3e-4, refused at sag 3e-5
+    (its points round by about 2e-7)."""
+    g, support, low = _circle_band_on_frustum()
+    assert dt.display_rounding_allowance(g, low, dt.DisplayTolerance(.1, 1e-6)).angle > .02 * 5e-4
+    for angle in (.1, 1e-3):
+        _dense_ok(g, low, dt.edge_display_samples(g, low, dt.DisplayTolerance(angle, 1e-6)), angle, 1e-6,
+                  supports=[support], count=129)
+    _refused_out_of_domain(lambda: dt.edge_display_samples(g, low, dt.DisplayTolerance(5e-4, 1e-6)))
+    g, edge = _arc_edge((1e9 - 2., 0., 0.), 0., .03)
+    _dense_ok(g, edge, dt.edge_display_samples(g, edge, dt.DisplayTolerance(.0153, 3e-4)), .0153, 3e-4, count=257)
+    _refused(lambda: dt.edge_display_samples(g, edge, dt.DisplayTolerance(.0153, 3e-5)), "EDGE_UNSUPPORTED")
+
+
+def _projected_aspect(support, arc):
+    frame = np.column_stack((arc.u_vector, arc.v_vector))
+    projected = np.vstack((support.radial_direction @ frame, support.circumferential_direction @ frame))
+    s = np.linalg.svd(projected, compute_uv=False)
+    return s[0] / s[1]
+
+
+def _thin_band_call(v_y):
+    g, _support, low = _thin_frustum_band(v_y)
+    return dt.edge_display_samples(g, low, dt.DisplayTolerance(.1, 1.))
+
+
+def test_r3_4_the_projected_aspect_boundary_and_its_next_crossing():
+    """r3 LOW: the public bound on the projected aspect (aspect x max(1, |stored angle|) <= 1e6,
+    stored angles within 1 here), found through the public call as the last admitted float: the
+    independent SVD aspect there is 1e6, the dense oracle holds on it, and the next float down
+    (a thinner projection) is refused."""
+    inside, outside = 1.1e-6, .9e-6
+    _thin_band_call(inside)
+    _refused_out_of_domain(lambda: _thin_band_call(outside))
+    while float(np.nextafter(outside, 1.)) < inside:
+        middle = outside + (inside - outside) / 2
+        if not outside < middle < inside:
+            middle = float(np.nextafter(outside, 1.))
+        try:
+            _thin_band_call(middle)
+            inside = middle
+        except dt.DisplayDomainRefused:
+            outside = middle
+    assert outside == float(np.nextafter(inside, 0.))
+    g, support, low = _thin_frustum_band(inside)
+    assert abs(_projected_aspect(support, g.edges[low].curve) / dt.MAX_DISPLAY_ELLIPSE_ASPECT - 1) <= 1e-9
+    _dense_ok(g, low, dt.edge_display_samples(g, low, dt.DisplayTolerance(.1, 1.)), .1, 1., supports=[support],
+              count=1025)
+    _refused_out_of_domain(lambda: _thin_band_call(outside))
+
+
+def _lone_curve_edge(curve):
+    g = corpus.GeometryModel()
+    ends = np.asarray(curve.evaluate(np.array([0., 1.])), dtype=float)
+    return g, g.add_curve(g.add_point(*ends[0]), g.add_point(*ends[1]), curve)
+
+
+def test_r3_4_a_quadric_intersection_curve_is_refused():
+    from anygeometry.quadric_curves import QuadricIntersectionCurve
+    from anygeometry.quadric_supports import cone_support
+    a = math.radians(10.)
+    cone = Cone((0., 0., 0.), (math.cos(a), 0., math.sin(a)), (0., 1., 0.), .5, 1., 5., 0., math.tau)
+    other = Cylinder((0., 0., -3.), (0., 0., 1.), (1., 0., 0.), 2., 6., 0., math.tau)
+    curves = [c for c in cone_support(cone, other, tolerance=1e-9).curves if isinstance(c, QuadricIntersectionCurve)]
+    g, edge = _lone_curve_edge(curves[0])
+    _refused(lambda: dt.edge_display_samples(g, edge, dt.DisplayTolerance(.2)), "EDGE_UNSUPPORTED")
+
+
+def test_r3_4_a_bezier_quadric_curve_is_refused():
+    from anygeometry.branch_curves import BezierQuadricCurve
+    from anygeometry.branch_supports import bezier_quadric_support
+    from anygeometry.extrusions import BezierDirectrix
+    from anygeometry.surfaces import ExtrudedSurface
+    wall = ExtrudedSurface(BezierDirectrix(((0., 0., 0.), (1., 2., 0.), (2., -1., 0.), (3., 1., 0.))), (.25, 0., 1.5))
+    curves = list(bezier_quadric_support(wall, Cylinder((-2., .4, .6), (1., 0., 0.), (0., 1., 0.), .7, 8.)).curves)
+    assert isinstance(curves[0], BezierQuadricCurve)
+    g, edge = _lone_curve_edge(curves[0])
+    _refused(lambda: dt.edge_display_samples(g, edge, dt.DisplayTolerance(.2)), "EDGE_UNSUPPORTED")
+
+
+def test_r3_4_a_plane_nurbs_curve_is_refused():
+    from anygeometry.nurbs import cylinder_to_nurbs
+    from anygeometry.support_curves import PlaneNurbsCurve
+    sheet = cylinder_to_nurbs(Cylinder((0., 0., 0.), (0., 0., 1.), (1., 0., 0.), 2., 3., 0., math.pi))
+    g, edge = _lone_curve_edge(PlaneNurbsCurve.from_plane(Plane((0., 0., 1.5), (1., 0., .3), (0., 1., .2)), sheet, 0))
+    _refused(lambda: dt.edge_display_samples(g, edge, dt.DisplayTolerance(.2)), "EDGE_UNSUPPORTED")
+
+
+def test_r3_4_a_nurbs_surface_intersection_curve_is_refused():
+    from anygeometry.nurbs import NurbsSurface
+    from anygeometry.nurbs_intersection_curve import NurbsSurfaceIntersectionCurve
+    from anygeometry.nurbs_surface_intersection import (IntersectionStatus, NurbsIntersectionCurve,
+                                                        query_nurbs_surface_intersection)
+    knots = (0., 0., 1., 1.)
+    first = NurbsSurface(1, 1, knots, knots, tuple(tuple((x, y, 0.) for y in (-1., 1.)) for x in (0., 1.)))
+    second = NurbsSurface(1, 1, knots, knots, tuple(tuple((x, 0., z) for z in (-1., 1.)) for x in (-1., 2.)))
+    query = query_nurbs_surface_intersection(first, second, tolerances=TolerancePolicy())
+    assert query.status is IntersectionStatus.CERTIFIED
+    g, edge = _lone_curve_edge(NurbsSurfaceIntersectionCurve(NurbsIntersectionCurve.from_result(query)))
+    _refused(lambda: dt.edge_display_samples(g, edge, dt.DisplayTolerance(.2)), "EDGE_UNSUPPORTED")
+
+
+def test_r3_5_the_combined_cap_is_enforced_before_any_division_is_built(monkeypatch):
+    """Carry-forward: a circle coaxial with its cylinder needs 2100 tangent and 2100 azimuth
+    intervals (each admitted alone, 4199 summed): refused from the summed counts before any
+    division is built (it was built and merged first)."""
+    g = corpus.GeometryModel()
+    sweep = 2 * math.pi - 1e-3
+    support = Cylinder((0., 0., 0.), (0., 0., 1.), (1., 0., 0.), 1., 1., 0., sweep)
+    low, _high, _sides = _band(g, support, *(EllipticArc((0., 0., z), (1., 0., 0.), (0., 1., 0.), 0., sweep)
+                                             for z in (.2, .8)))
+    built = []
+    original = dt._angle_division
+    monkeypatch.setattr(dt, "_angle_division", lambda *args: built.append(args) or original(*args))
+    step = sweep / 2100 * (1 + 1e-9)
+    _refused(lambda: dt.edge_display_samples(g, low, dt.DisplayTolerance(step)), "EDGE_UNSUPPORTED")
     assert built == []

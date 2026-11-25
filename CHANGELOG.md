@@ -22,8 +22,17 @@ All notable user-visible changes to ANYgeometry are documented here.
   longer raises), an end within 8 eps of an axis is on it, a line on the axis is
   `OUT_OF_DOMAIN`; circles need orthogonal equal axes to 8 eps; the two-interval rule counts
   vertex offsets; every count is checked before any division is built; no raw arithmetic error
-  escapes. Corpus counts unchanged, parameters moved by at most 2.2e-16. See
-  `docs/DISPLAY_TESSELLATION.md` (stability table, rounding allowance). No existing module
+  escapes. Corpus counts unchanged, parameters moved by at most 2.2e-16. Round 3: lines take
+  each end's radius from its own projection (no `A' + P(b - a)` reconstruction), check the
+  segment's interior closest approach before any end shortcut, and admit an end on the axis
+  only at a cone's apex (a cylinder or frustum end there is `OUT_OF_DOMAIN`); the radius bound of
+  a line point uses the scale of the edge's definition points. One public
+  `display_rounding_allowance` (`DisplayRoundingAllowance(angle, sag, axis_floor)`) defines
+  "to rounding", counting the evaluator's stored-angle rounding and the projected inverse's
+  aspect amplification; a request for which it exceeds 2 % of the angle (`OUT_OF_DOMAIN`) or of
+  the sag allowance (`EDGE_UNSUPPORTED`) is refused; the summed division counts are checked
+  against the 4096 cap before any division is built. All corpus results unchanged bit for bit.
+  See `docs/DISPLAY_TESSELLATION.md` (stability table, rounding allowance). No existing module
   changes.
 
 - Prepare version 0.4.7 for bounded B1 curved-hull hydrostatics point queries,
