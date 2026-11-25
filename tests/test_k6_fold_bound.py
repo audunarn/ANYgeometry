@@ -66,6 +66,76 @@ def test_the_bound_covers_the_float_coefficient_error_on_random_pairs(scale):
             assert abs(floated-exact) <= Fraction(bound), (scale, sign)
 
 
+def _reference_bound(first, second, sign):
+    """``(B, whether c0's subtraction rounded)``: the documented running-error bound of ``_fold_coefficient_bound``,
+    re-derived here independently of it (own rounding model, own error terms), for this runtime's float coefficients.
+    Each rounded operation of the kernel's coefficient chain (cross products, the three dot products, the norm, the
+    r1 scalings, reach = |c| r2 and c0 = n0 - s reach) contributes an error term; the bound must enclose them all."""
+    unit = Fraction(1, 2**53)
+    gamma = 3*unit/(1-3*unit)
+
+    def half(value):                       # |fl(t) - t| <= half an ulp of fl(t), subnormals included
+        return Fraction(math.ulp(abs(float(value))))/2
+
+    def rounded(value, exact):             # error of one rounded operation: zero only when it was exact
+        return Fraction(0) if Fraction(float(value)) == exact else half(value)
+
+    F = lambda value: Fraction(float(value))
+    a1, a2, e1 = (np.asarray(v, dtype=float) for v in (first.axis, second.axis, first.radial_direction))
+    d = np.asarray(first.origin, dtype=float)-np.asarray(second.origin, dtype=float)
+    r1, r2 = float(first.radius), float(second.radius)
+
+    def cross_errors(u, v):
+        errors = []
+        for j, k in ((1, 2), (2, 0), (0, 1)):
+            p, q = u[j]*v[k], u[k]*v[j]
+            errors.append(rounded(p, F(u[j])*F(v[k]))+rounded(q, F(u[k])*F(v[j]))+rounded(p-q, F(p)-F(q)))
+        return errors
+
+    def dot_error(x, ex, y, ey):           # any order, FMA or not: gamma_3 sum |x||y| + propagated + underflow
+        return Fraction(5, 2**1075)+sum(gamma*abs(F(xi))*abs(F(yi))+abs(F(xi))*eyi+abs(F(yi))*exi+exi*eyi
+                                        for xi, exi, yi, eyi in zip(x, ex, y, ey))
+
+    c, e2 = np.cross(a1, a2), np.cross(a1, e1)
+    ec, ee2 = cross_errors(a1, a2), cross_errors(a1, e1)
+    ed = [rounded(dv, F(o1)-F(o2)) for dv, o1, o2 in zip(d, first.origin, second.origin)]
+    magnitude = float(np.linalg.norm(c))
+    em = gamma*(F(magnitude)+half(magnitude))+half(magnitude)+Fraction(1, 2**536)+sum(ec)
+    n0, tc, ts = float(d @ c), float(e1 @ c), float(e2 @ c)
+    en0, etc, ets = dot_error(d, ed, c, ec), dot_error(e1, [Fraction(0)]*3, c, ec), dot_error(e2, ee2, c, ec)
+    nc, ns = r1*tc, r1*ts
+    enc = abs(F(r1))*etc+rounded(nc, F(r1)*F(tc))
+    ens = abs(F(r1))*ets+rounded(ns, F(r1)*F(ts))
+    reach = magnitude*r2
+    ereach = abs(F(r2))*em+rounded(reach, F(magnitude)*F(r2))
+    c0 = n0-sign*reach
+    esub = rounded(c0, F(n0)-sign*F(reach))
+    ec0 = en0+ereach+esub
+    total = sum((2*abs(F(value))+error)*error for value, error in ((nc, enc), (ns, ens), (c0, ec0)))
+    return total, esub != 0
+
+
+def test_the_bound_is_no_smaller_than_an_independent_derivation():
+    """Codex gate-2 review M1: the enclosure test above cannot see a missing error term (the worst-case gamma_3 terms
+    dominate the actual error), and the classification tests take their expectation from the production bound. The
+    production B must be at least the independently derived one, on pairs where c0's subtraction rounds in this
+    runtime whatever the dot kernel (generic origins), so that dropping any term, e.g. the subtraction's, is caught."""
+    rng = np.random.default_rng(20261125)
+    inexact = 0
+    for scale in (2.**-40, 1., 50., 1e4):
+        for _ in range(50):
+            first, second = _pair(rng, scale)
+            for sign in (-1, 1):
+                reference, rounded = _reference_bound(first, second, sign)
+                assert Fraction(_fold_coefficient_bound(first, second, sign)) >= reference, (scale, sign)
+                inexact += rounded
+    for r1, r2 in _ORDER_PAIRS:
+        first, second = (_CylinderSupport.from_surface(c) for c in _order_pair(r1, r2))
+        for sign in (-1, 1):
+            assert Fraction(_fold_coefficient_bound(first, second, sign)) >= _reference_bound(first, second, sign)[0]
+    assert inexact >= 100
+
+
 @pytest.mark.parametrize("scale", [1., 50., 1e4])
 def test_ordinary_random_pairs_have_no_undecidable_fold(scale):
     rng = np.random.default_rng(7)

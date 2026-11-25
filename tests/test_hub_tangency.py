@@ -384,14 +384,18 @@ def test_zero_sweep_bounds_of_an_ordinary_pair_are_unchanged():
     assert _node_treatment(curve) == ()
     # The interval must be a zero sweep in this runtime's own float angles. Which neighbouring parameters share an
     # angle depends on the platform's np.sin rounding (0.7 ulp on Windows, correctly rounded on glibc for
-    # 0.500000000000001), so a fixed pair is not one everywhere (0.4.7 gate class G): take the first neighbouring
-    # parameters from 0.500000000000001 up that map to one angle here, and check that premise.
-    lower = upper = .500000000000001
-    for _ in range(64):
-        lower, upper = upper, float(np.nextafter(upper, 1.))
-        angles, _ = curve._angle(np.asarray((lower, upper)))
-        if angles[0] == angles[1]:
-            break
+    # 0.500000000000001), so a fixed pair is not one everywhere (0.4.7 gate class G). The original interval (two
+    # parameter ulps) is kept wherever it is one; only where its angles differ are the first neighbouring parameters
+    # from 0.500000000000001 up that map to one angle taken. Either way the premise is checked.
+    lower, upper = .500000000000001, .5000000000000012
+    angles, _ = curve._angle(np.asarray((lower, upper)))
+    if angles[0] != angles[1]:
+        upper = lower
+        for _ in range(64):
+            lower, upper = upper, float(np.nextafter(upper, 1.))
+            angles, _ = curve._angle(np.asarray((lower, upper)))
+            if angles[0] == angles[1]:
+                break
     assert lower < upper and angles[0] == angles[1]
     lo, hi = curve.bounds(lower, upper)
     point = curve.evaluate(lower)
