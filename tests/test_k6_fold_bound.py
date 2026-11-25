@@ -209,23 +209,52 @@ def test_the_reach_covers_the_axial_travel_of_a_steep_branch():
     assert contact.near_radius == math.inf or contact.near_radius >= 16*7.8245e-4
 
 
-def test_classification_does_not_depend_on_the_order_of_the_faces():
-    """Codex K6 R3 M4: |D| = 3.286e-15 against B = 3.220e-15 in one order, undecidable in the other. The contact is
-    classified from both orders, so both orders see the same contact points."""
+#: (r1, r2) of the order test's pair, all within a few ulp of 1. B (the forward error bound) is formed from the
+#: runtime's own float coefficients, and those depend on the BLAS dot kernel: with FMA (OpenBLAS SkylakeX) n0 and
+#: (a1 x e1).c are O(1e-17) residues, without FMA (OpenBLAS Haswell/Zen/Nehalem) they are exact zeros and c0 is
+#: exact, which lowers B by 2^-52 (0.4.7 gate class F). (1, 1 + 14 2^-53), the former single case, is undecidable
+#: in both orders with FMA and decided in both without. (1, 1 + 12 2^-53) is undecidable in both orders with every
+#: kernel (|D|/B <= 0.91). The (1 - 2j 2^-53, 1 + k 2^-52) pairs are undecidable in exactly one order (forward)
+#: with every dot model checked (FMA or not, either summation order); their margins are thin (|D|/B 0.92-0.99 and
+#: 1.008-1.044), so only "at least one of them is asymmetric here" is required.
+_ORDER_PAIRS = ((1., 1.+14*2.**-53), (1., 1.+12*2.**-53),
+                *((1.-2*j*2.**-53, 1.+k*2.**-52) for j, k in ((6, 1), (5, 2), (4, 3), (3, 4), (2, 5), (1, 6))))
+
+
+def _order_pair(r1, r2):
     axis = _unit((1., 1., 0.))
     radial = _unit((-1., 1., 0.))
-    first = Cylinder(origin=(0., 0., -2.), axis=(0., 0., 1.), radial_direction=tuple(radial), radius=1., height=4.,
+    first = Cylinder(origin=(0., 0., -2.), axis=(0., 0., 1.), radial_direction=tuple(radial), radius=r1, height=4.,
                      start_angle=-.2, sweep_angle=.4)
-    second = Cylinder(origin=tuple(-2*axis), axis=tuple(axis), radial_direction=(0., 0., 1.), radius=1.+14*2.**-53,
+    second = Cylinder(origin=tuple(-2*axis), axis=tuple(axis), radial_direction=(0., 0., 1.), radius=r2,
                       height=4., start_angle=-.2, sweep_angle=.4)
-    forward = undecidable_contact(first, second, tolerance=1e-10)
-    backward = undecidable_contact(second, first, tolerance=1e-10)
-    assert forward is not None and backward is not None
-    for point in forward.points:
-        assert min(np.linalg.norm(np.asarray(point)-np.asarray(other)) for other in backward.points) < 1e-9
-    # Codex K6 R4 M3: every point of both orders is kept (no deduplication), so both orders test the same points.
-    assert sorted(zip(forward.points, forward.reaches)) == sorted(zip(backward.points, backward.reaches))
-    assert forward.admitted == backward.admitted
+    return first, second
+
+
+def test_classification_does_not_depend_on_the_order_of_the_faces():
+    """Codex K6 R3 M4: a fold can be undecidable in one order of the supports and decided in the other. The contact
+    is classified from both orders, so both orders see the same contact points: wherever either order alone is
+    undecidable, both argument orders return the same contact; where neither is, both return None."""
+    from anygeometry.analytic_supports import _order_contacts
+    asymmetric = 0
+    for r1, r2 in _ORDER_PAIRS:
+        first, second = _order_pair(r1, r2)
+        alone = (_order_contacts(first, second, 1e-10) is not None, _order_contacts(second, first, 1e-10) is not None)
+        asymmetric += alone[0] != alone[1]
+        forward = undecidable_contact(first, second, tolerance=1e-10)
+        backward = undecidable_contact(second, first, tolerance=1e-10)
+        assert (forward is not None) == (backward is not None) == any(alone), (r1, r2, alone)
+        if (r1, r2) == _ORDER_PAIRS[1]:
+            assert forward is not None, alone       # undecidable with every dot kernel
+        if forward is None:
+            continue
+        for point in forward.points:
+            assert min(np.linalg.norm(np.asarray(point)-np.asarray(other)) for other in backward.points) < 1e-9
+        # Codex K6 R4 M3: every point of both orders is kept (no deduplication), so both orders test the same points.
+        assert sorted(zip(forward.points, forward.reaches)) == sorted(zip(backward.points, backward.reaches))
+        assert forward.admitted == backward.admitted
+    # The union matters only where the orders disagree: at least one such pair must be exercised in this runtime.
+    assert asymmetric >= 1
 
 
 def _arc_rectangle(face_id, cylinder, start, sweep, base_edge):
