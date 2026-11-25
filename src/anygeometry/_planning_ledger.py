@@ -415,10 +415,15 @@ def bounded_store_check(module, name):
 
 
 def _bounded_registry(modules):
-    """Every registered bounded store of the supplied modules, checked; path -> bounded_store_check()."""
+    """Every registered bounded store of the supplied modules, checked; path -> bounded_store_check().
+
+    Only the imported module itself (``sys.modules``) gets a reserved budget. Another module object of
+    the same name is walked as before, against the shared budget only.
+    """
     return {path: bounded_store_check(module, row[1])
             for module in modules if type(module) is types.ModuleType
             for row in _BOUNDED_STORES if vars(module).get('__name__') == row[0]
+            and sys.modules.get(row[0]) is module
             for path in (row[0] + '.' + row[1],)}
 
 

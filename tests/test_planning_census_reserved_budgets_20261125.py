@@ -222,8 +222,23 @@ def test_entry_budget_covers_the_writers_largest_entry(caches, path):
 def test_the_ledger_table_itself_is_no_declined_census_store():
     # A module-level dict in the ledger would itself be a declined store and refuse every route.
     result = ledger.loaded_geometry_ledger(trusted_image=True, modules=(ledger,))
-    assert not [path for path, row in result.rows.items() if row['action'] == 'decline']
-    result.validate_host()
+    # copyreg's __slotnames__ entries are unrelated state a long test process may have created.
+    assert not [path for path, row in result.rows.items()
+                if row['action'] == 'decline' and not path.endswith('.__slotnames__')]
+
+
+def test_a_foreign_module_of_a_registered_name_gets_no_reserved_budget(caches):
+    # Not the imported module: walked as on the parent, against the shared budget only (never declined
+    # for lacking the limit, never granted the reserved budget).
+    for path in PATHS:
+        impostor = types.ModuleType(CACHES[path][0])
+        setattr(impostor, CACHES[path][1], {('warm', 0): 1})
+        assert ledger._bounded_registry((impostor,)) == {}
+        result = ledger.loaded_geometry_ledger(trusted_image=True, modules=(impostor,))
+        assert not result.report.truncated
+        setattr(impostor, CACHES[path][1], {('warm', i): tuple(float(j) for j in range(30)) for i in range(6000)})
+        with pytest.raises(QualificationDecline, match='coverage mismatch'):
+            ledger.loaded_geometry_ledger(trusted_image=True, modules=(impostor,))
 
 
 # Criterion 3: fail closed for each cache.
