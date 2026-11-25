@@ -72,16 +72,22 @@ INVENTORY_MAX_NODES = 160000
 
 
 def inventory(modules, *, max_nodes=INVENTORY_MAX_NODES, max_depth=24, store_objects=None, definition_objects=None,
-              store_boundary=None, infrastructure_boundary=None, bounded_store=None, bounded_usage=None):
+              store_boundary=None, infrastructure_boundary=None, bounded=None, bounded_usage=None):
     """Bounded actual-type walk; no user descriptors, iterators or repr calls.
 
     Module metadata is excluded from numerical stores, not from loader safety.
     Unknown native/descriptor state is explicitly reported. Aliases are retained.
     Empty and warmed stores receive the same decision; a read hit is not missed.
-    ``bounded_store(value, path)`` may return ``(max_entries, entry_nodes)`` for an
-    exact dict store: its entries are walked exactly as any other, but counted
-    against that reserved budget instead of ``max_nodes``; exceeding it truncates.
-    ``bounded_usage`` (an empty dict) receives ``path -> (entries, largest entry, nodes)`` per bounded store.
+    ``bounded`` maps ``id(store)`` to ``(store, module, name, max_entries, entry_nodes, entry_identities)``
+    for an exact dict ``store`` bound as ``module.name`` (``module`` one of ``modules``). Reached at exactly
+    that binding, its entries are walked as any other, but each entry counts against a reserved budget of
+    ``entry_nodes`` walk nodes and ``entry_identities`` first-reached identities instead of ``max_nodes``;
+    more than ``max_entries`` entries, or one entry past its budget, truncates. The charge does not depend
+    on traversal order: a first pass with the bounded entries skipped fixes what ordinary state reaches,
+    and an entry expands whatever of that it reaches against the shared budget. The second pass is the walk
+    itself (same order, stores, unknowns and aliases as without ``bounded``). ``bounded_usage`` (an empty
+    dict) receives ``id(store) -> dict(foreign=paths reaching the store other than its binding, walked=None
+    or (path, entries, largest entry nodes, largest entry identities, nodes, items walked))``.
     """
     if type(modules) is not tuple or max_nodes < 1 or max_depth < 1:
         raise PurityDecline('invalid inventory bounds/modules')
@@ -93,16 +99,25 @@ def inventory(modules, *, max_nodes=INVENTORY_MAX_NODES, max_depth=24, store_obj
         raise PurityDecline('bounded usage output must be an empty dictionary')
     namespaces = [(m, _namespace(m)) for m in modules]
     included = {id(m) for m, _ in namespaces}
-    stores, unknowns, aliases, seen = [], [], [], {}
-    layouts = {}        # id(type) -> (type, slot layout), for this census only
+    bounded = {} if bounded is None else bounded
+    if type(bounded) is not dict or not all(
+            type(row) is tuple and len(row) == 6 and type(row[0]) is dict and key == id(row[0])
+            and id(row[1]) in included and type(row[2]) is str
+            and all(type(n) is int and n >= 0 for n in row[3:]) for key, row in dict.items(bounded)):
+        raise PurityDecline('invalid bounded store table')
+    ordinary = None     # identities the ordinary pass reached (bounded entries skipped), else None
+    stores = unknowns = aliases = seen = foreign = walked = sink_stores = sink_definitions = None
+    current = current_name = None   # the module whose namespace is walked (depth 1: its bindings)
     count = 0
-    reserved = None     # remaining nodes of the bounded-store entry being walked, else None
+    reserved = reserved_ids = None  # remaining budget of the bounded-store entry being walked, else None
+    shared = False      # inside an entry: an ordinary object's expansion, charged to the shared budget
+    skip = False        # ordinary pass: bounded entries are not walked
     truncated = False
 
     def definition(value, path):
         # Register the metadata object itself, never all descendants of a path.
-        if definition_objects is not None and type(value) in _STORES:
-            definition_objects.setdefault(id(value), []).append(path)
+        if sink_definitions is not None and type(value) in _STORES:
+            sink_definitions.setdefault(id(value), []).append(path)
 
     def unknown(path, reason):
         unknowns.append((path, reason))
@@ -118,9 +133,14 @@ def inventory(modules, *, max_nodes=INVENTORY_MAX_NODES, max_depth=24, store_obj
             if truncated:
                 break
 
+    # Locals, not module bindings (the census of this module itself is unchanged).
+    from itertools import repeat as _repeat
+    from operator import is_ as _is
+    _member = types.MemberDescriptorType
+
     def visit(value, path, depth):
-        nonlocal count, truncated, reserved
-        if reserved is None:
+        nonlocal count, truncated, reserved, reserved_ids, shared
+        if reserved is None or shared:
             count += 1
             over = count > max_nodes
         else:
@@ -135,43 +155,70 @@ def inventory(modules, *, max_nodes=INVENTORY_MAX_NODES, max_depth=24, store_obj
         if infrastructure_boundary is not None and infrastructure_boundary(value,path):
             return
         identity = id(value)
+        row = bounded.get(identity) if bounded else None
+        if row is not None and not (row[0] is value and depth == 1 and current is row[1]
+                                    and path == current_name + '.' + row[2]):
+            # Any other reference to a bounded store (another module, binding or object) is reported.
+            foreign.setdefault(identity, []).append(path)
+            row = None
         if identity in seen:
             aliases.append((path, seen[identity]))
             return
         seen[identity] = path
+        if reserved is not None and not shared:
+            if ordinary is not None and identity in ordinary:
+                # Reached from ordinary state as well: charged to the shared budget, whichever root came first.
+                shared = True
+                try:
+                    expand(value, typ, identity, path, depth, None)
+                finally:
+                    shared = False
+                return
+            reserved_ids -= 1
+            if reserved_ids < 0:
+                truncated = True
+                return
+        expand(value, typ, identity, path, depth, row)
+
+    def walk_bounded(value, path, depth, row):
+        nonlocal reserved, reserved_ids, truncated
+        _, _, _, max_entries, entry_nodes, entry_identities = row
+        items = tuple(dict.items(value))       # one C-level snapshot; the caller compares it with the store
+        entries = largest_nodes = largest_ids = total = 0
+        for i, (key, item) in enumerate(items):
+            if i >= max_entries:
+                truncated = True
+                break
+            reserved, reserved_ids = entry_nodes, entry_identities
+            try:
+                visit(key, path + f'.key[{i}]', depth + 1)
+                visit(item, path + ('.' + key if type(key) is str else f'.value[{i}]'), depth + 1)
+            finally:
+                nodes, ids = entry_nodes - reserved, entry_identities - reserved_ids
+                reserved = reserved_ids = None
+            entries, total = entries + 1, total + nodes
+            largest_nodes, largest_ids = max(largest_nodes, nodes), max(largest_ids, ids)
+            if truncated:
+                break
+        walked[id(value)] = (path, entries, largest_nodes, largest_ids, total, items)
+
+    def expand(value, typ, identity, path, depth, row):
         if typ in _STORES:
             kind = type.__getattribute__(typ, '__name__')
             reason = ('value-keyed LRU: typed-bit keys, returned aliasing and work semantics unproved'
                       if typ is functools._lru_cache_wrapper else
                       'state/key/value/authority and observable-work semantics unproved')
             stores.append(Store(path, kind, 'declined', reason))
-            if store_objects is not None:
-                store_objects[path] = value
+            if sink_stores is not None:
+                sink_stores[path] = value
             # The caller's explicit registry may stop only store payload walks.
             # The store itself and all externally visible aliases/definitions
             # remain in the census; the ledger must validate the registry choice.
             if store_boundary is not None and store_boundary(value, path):
                 return
-            limits = (bounded_store(value, path) if bounded_store is not None and typ is dict
-                      and reserved is None else None)
-            if limits is not None:
-                max_entries, entry_nodes = limits
-                entries = largest = total = 0
-                for i, (key, item) in enumerate(dict.items(value)):
-                    if i >= max_entries:
-                        truncated = True
-                        break
-                    reserved = entry_nodes
-                    try:
-                        visit(key, path + f'.key[{i}]', depth + 1)
-                        visit(item, path + ('.' + key if type(key) is str else f'.value[{i}]'), depth + 1)
-                    finally:
-                        used, reserved = entry_nodes - reserved, None
-                    entries, largest, total = entries + 1, max(largest, used), total + used
-                    if truncated:
-                        break
-                if bounded_usage is not None:
-                    bounded_usage[path] = (entries, largest, total)
+            if row is not None:
+                if not skip:
+                    walk_bounded(value, path, depth, row)
                 return
         if typ in (dict, OrderedDict):
             items = dict.items(value) if typ is dict else OrderedDict.items(value)
@@ -254,39 +301,58 @@ def inventory(modules, *, max_nodes=INVENTORY_MAX_NODES, max_depth=24, store_obj
         else:
             # Only concrete native slot/dict descriptors are read. Do not call
             # getattr(value, ...) or a user-supplied __dict__ property.
-            # The type's slot layout (its MRO's member descriptors and __dict__ entries, in order) is read
-            # once per census; the per-instance walk is unchanged. Keyed by identity, never by type hash.
-            cached = layouts.get(id(typ))
-            if cached is None or cached[0] is not typ:
-                cached = layouts[id(typ)] = (typ, tuple(
-                    (name, descriptor) for base in type.__getattribute__(typ, '__mro__')
-                    for name, descriptor in type.__getattribute__(base, '__dict__').items()
-                    if type(descriptor) is types.MemberDescriptorType or name == '__dict__'))
-            for name, descriptor in cached[1]:
-                if type(descriptor) is types.MemberDescriptorType:
-                    try:
-                        visit(descriptor.__get__(value, typ), path + '.' + name, depth + 1)
-                    except AttributeError:
-                        pass
-                else:
-                    # Native heap types may supply arbitrary getsets too.
-                    # Do not execute one to manufacture a complete walk.
-                    unknown(path + '.__dict__', 'instance dictionary access unqualified')
+            for base in type.__getattribute__(typ, '__mro__'):
+                mapping = type.__getattribute__(base, '__dict__')
+                # A base with neither a member descriptor nor a '__dict__' entry contributes nothing to the
+                # loop below; a C-level scan skips it (identity tests only: no hash of a value, no __eq__).
+                if '__dict__' not in mapping and not any(map(_is, map(type, mapping.values()), _repeat(_member))):
+                    continue
+                for name, descriptor in mapping.items():
+                    if type(descriptor) is types.MemberDescriptorType:
+                        try:
+                            visit(descriptor.__get__(value, typ), path + '.' + name, depth + 1)
+                        except AttributeError:
+                            pass
+                    elif name == '__dict__':
+                        # Native heap types may supply arbitrary getsets too.
+                        # Do not execute one to manufacture a complete walk.
+                        unknown(path + '.__dict__', 'instance dictionary access unqualified')
+                    if truncated:
+                        break
                 if truncated:
                     break
             unknown(path, 'opaque instance/descriptor/native state')
 
-    for m, mapping in namespaces:
-        name = mapping.get('__name__')
-        if type(name) is not str:
-            raise PurityDecline('invalid module name')
-        for key in ('__all__', '__annotations__', '__conditional_annotations__'):
-            if key in mapping:
-                definition(mapping[key], name + '.' + key)
-        namespace(mapping, name, 0, metadata=True)
-        if truncated:
-            break
-    return Inventory(tuple(stores), tuple(unknowns), tuple(aliases), truncated)
+    def run(ordinary_pass):
+        nonlocal stores, unknowns, aliases, seen, foreign, walked, sink_stores, sink_definitions
+        nonlocal current, current_name, count, truncated, skip
+        stores, unknowns, aliases, seen, foreign, walked = [], [], [], {}, {}, {}
+        sink_stores = None if ordinary_pass else store_objects
+        sink_definitions = None if ordinary_pass else definition_objects
+        count, truncated, skip = 0, False, ordinary_pass
+        for m, mapping in namespaces:
+            name = mapping.get('__name__')
+            if type(name) is not str:
+                raise PurityDecline('invalid module name')
+            current, current_name = m, name
+            for key in ('__all__', '__annotations__', '__conditional_annotations__'):
+                if key in mapping:
+                    definition(mapping[key], name + '.' + key)
+            namespace(mapping, name, 0, metadata=True)
+            if truncated:
+                break
+        current = current_name = None
+        return truncated
+
+    early = False
+    if bounded:
+        early = run(True)       # the ordinary pass: only its reached identities are kept
+        ordinary = seen
+    run(False)
+    if bounded_usage is not None:
+        for key in bounded:
+            bounded_usage[key] = dict(foreign=tuple(foreign.get(key, ())), walked=walked.get(key))
+    return Inventory(tuple(stores), tuple(unknowns), tuple(aliases), truncated or early)
 
 
 def require_pure(report):

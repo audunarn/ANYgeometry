@@ -1,12 +1,14 @@
 """Reserved census budgets for four limit-bounded caches (0.4.7 gate class H, owner decision 2026-11-25).
 
-Five module caches bound their own size by a limit constant and, warm, hold more walk nodes than the shared
+Four module caches bound their own size by a limit constant and, warm, hold more walk nodes than the shared
 census budget (160,000) leaves free, so the census truncated and the process route declined ('ledger creation
 live coverage mismatch'; on the package worker route 'worker cache alias walk bound exceeded'). Each cache is
 now walked exactly as before, but its entries count against a reserved budget of its own (limit entries x a
-measured per-entry node budget); a removed or changed limit, a store past its limit and an entry past its
-budget still decline. The per-cache fill tests below use only the caches' own writers and limit constants, so
-they run unchanged on the parent and fail there (census truncated).
+measured per-entry node and identity budget); a removed or changed limit, a store past its limit and an entry
+past its budget still decline. A fifth such cache, _TRIG_CACHE, is deliberately not reserved (owner decision):
+it stays a declined store. The per-cache fill tests below use only the caches' own writers and limit
+constants, so they run unchanged on the parent and fail there (census truncated). The Round 2 tests at the
+end reproduce the Codex round-1 probes; each is refused on the parent as well.
 """
 import importlib
 import math
@@ -170,7 +172,7 @@ def test_one_full_cache_does_not_truncate_the_planning_census(caches, path):
     result.validate()
     assert _actions(result) == empty                           # the same decision as with the cache empty
     assert result.rows[path]['action'] == ('reset' if path in RESET_PATHS else 'decline')
-    assert len(_store(path)) == _limit(path)                   # admitted without clearing
+    assert len(_store(path)) == _limit(path)                   # validated without clearing
 
 
 def test_all_four_full_caches_do_not_truncate_the_planning_census(caches):
@@ -180,8 +182,17 @@ def test_all_four_full_caches_do_not_truncate_the_planning_census(caches):
         _fill(path)
     result = ledger.loaded_geometry_ledger(trusted_image=True)
     assert not result.report.truncated
-    result.validate()
+    result.validate()             # the all-module census validates; other declined rows still refuse the host
     assert _actions(result) == empty
+    # The ledger of the four caches' own modules: full, each a 'reset' row and no other declined row except
+    # copyreg's __slotnames__ entries a long test process may create (host admission itself, validate_host,
+    # is shown in a fresh process by the package probe below). _TRIG_CACHE is not among them.
+    owners = tuple(dict.fromkeys(_module(path) for path in PATHS))
+    host = ledger.loaded_geometry_ledger(trusted_image=True, modules=owners)
+    host.validate()
+    assert all(host.rows[path]['action'] == 'reset' for path in PATHS)
+    assert not [path for path, row in host.rows.items()
+                if row['action'] == 'decline' and not path.endswith('.__slotnames__')]
     assert all(len(_store(path)) == _limit(path) for path in PATHS)
 
 
@@ -213,28 +224,36 @@ def test_trig_cache_stays_a_declined_store_and_a_full_one_still_declines():
         spc._TRIG_CACHE.update(saved)
 
 
-def _entry_nodes(key, value):
+def _entry_cost(key, value):
+    """(walk nodes, first-reached identities) of one entry measured alone on the interpreter census."""
     module = types.ModuleType('zz_entry_measure')
     module.store = {key: value}
     usage = {}
     _planning_purity.inventory((module,), max_nodes=10**7, bounded_usage=usage,
-                               bounded_store=lambda v, p: (1, 10**7) if v is module.store else None)
-    return usage['zz_entry_measure.store'][1]
+                               bounded={id(module.store): (module.store, module, 'store', 1, 10**7, 10**7)})
+    _, _, nodes, identities, _, _ = usage[id(module.store)]['walked']
+    return nodes, identities
+
+
+def _entry_nodes(key, value):
+    return _entry_cost(key, value)[0]
 
 
 @pytest.mark.parametrize('path', PATHS)
 def test_entry_budget_covers_the_writers_largest_entry(caches, path):
     # Each entry measured alone (no descendant seen before): the most a writer's entry can cost.
     FILL[path](64)
-    budget = ledger.bounded_store_row(path)[4]
-    largest = max(_entry_nodes(key, value) for key, value in _store(path).items())
-    assert largest <= budget
+    budget, identities = ledger.bounded_store_row(path)[4:6]
+    costs = [_entry_cost(key, value) for key, value in _store(path).items()]
+    assert max(nodes for nodes, _ in costs) <= budget
+    assert max(ids for _, ids in costs) <= identities
     if path == 'anygeometry.exact_curves._DOUBLE_NODES':
         # The writer's largest entry holds two nodes; the fill's pairs hold none.
         from anygeometry import exact_curves as ec
         first, second, _ = next(iter(ec._DOUBLE_NODES.values()))
         nodes = (ec._DoubleNode(1, 1, 0.), ec._DoubleNode(-1, 1, 3.))
-        assert _entry_nodes((id(first), id(second)), (first, second, nodes)) <= budget
+        cost = _entry_cost((id(first), id(second)), (first, second, nodes))
+        assert cost[0] <= budget and cost[1] <= identities
 
 
 def test_the_ledger_table_itself_is_no_declined_census_store():
@@ -453,6 +472,9 @@ for path in t.RESET_PATHS:
     store.clear(); store.update(saved)
 owned.validate()
 print('RESTORED OK')
+owned.prepare(owned_worker=True)     # admission and reset of the four full caches on the manifest route
+assert all(len(t._store(path)) == 0 for path in t.RESET_PATHS)
+print('PREPARED OK')
 '''
 
 
@@ -464,13 +486,39 @@ def test_full_caches_pass_the_package_worker_ledger_and_budgets_hold():
                             capture_output=True, text=True, env=env, timeout=900)
     assert result.returncode == 0, result.stderr[-2000:]
     lines = result.stdout.splitlines()
-    assert lines[0] == 'FULL OK' and lines[-1] == 'RESTORED OK', result.stdout
+    assert lines[0] == 'FULL OK' and lines[-2:] == ['RESTORED OK', 'PREPARED OK'], result.stdout
     for path in RESET_PATHS:
         assert 'DECLINED ' + path + ' worker cache alias walk bound exceeded: ' + path in lines, result.stdout
         assert 'DECLINED ' + path + ' bounded store exceeds its limit: ' + path in lines, result.stdout
 
 
-# The census reads each type's slot layout once (census time with full caches); the walk is unchanged.
+_HOST_PROBE = r'''
+import sys
+sys.path.insert(0, sys.argv[1])
+import test_planning_census_reserved_budgets_20261125 as t
+from anygeometry import _planning_ledger as ledger
+for path in t.FILL_ORDER:
+    t._fill(path)
+owners = tuple(dict.fromkeys(t._module(path) for path in t.PATHS))
+host = ledger.loaded_geometry_ledger(trusted_image=True, modules=owners)
+host.validate_host()                 # host admission of the four full caches, nothing cleared
+assert all(host.rows[path]['action'] == 'reset' for path in t.PATHS)
+assert all(len(t._store(path)) == t._limit(path) for path in t.PATHS)
+print('HOST OK')
+'''
+
+
+def test_four_full_caches_are_admitted_by_the_host_ledger_of_their_modules():
+    # A fresh process (a long test process creates unrelated copyreg __slotnames__ stores, declined rows).
+    src = pathlib.Path(ledger.__file__).resolve().parents[1]
+    env = dict(os.environ, PYTHONPATH=str(src))
+    result = subprocess.run([sys.executable, '-c', _HOST_PROBE, str(pathlib.Path(__file__).parent)],
+                            capture_output=True, text=True, env=env, timeout=900)
+    assert result.returncode == 0, result.stderr[-2000:]
+    assert result.stdout.splitlines() == ['HOST OK'], result.stdout
+
+
+# The slot read never hashes a type and reads every instance against its type's current layout.
 
 class _HashingMeta(type):
     hashed = []
@@ -480,7 +528,7 @@ class _HashingMeta(type):
         return 0
 
 
-def test_slot_layout_cache_never_hashes_a_type_and_walks_every_instance():
+def test_slot_read_never_hashes_a_type_and_walks_every_instance():
     cls = _HashingMeta('_Slotted', (), {'__slots__': ('first', 'second'), '__module__': __name__})
     module = types.ModuleType('zz_layout_fixture')
     first, second = cls(), cls()
@@ -491,3 +539,232 @@ def test_slot_layout_cache_never_hashes_a_type_and_walks_every_instance():
     assert _HashingMeta.hashed == []
     assert [s.path for s in report.stores] == ['zz_layout_fixture.items[0].second', 'zz_layout_fixture.items[1].first']
     assert [path for path, _ in report.unknowns] == ['zz_layout_fixture.items[0]', 'zz_layout_fixture.items[1]']
+
+
+# Round 2: the Codex round-1 probes on 4b91b68 (findings 1-4). Each test passes here and on the parent 1ac4352,
+# which refuses every probe (there because the warm cache alone exceeds its shared budget); 4b91b68 and
+# fb04f3b admitted each one. On the parent the reserved-budget table does not exist: only the refusal is checked.
+
+PARENT = not hasattr(ledger, '_BOUNDED_STORES')
+BC = 'anygeometry.exact_curves._BRANCH_CONSTANTS'
+
+
+def _pad_full(path, floats=58):
+    """The cache full to its limit, each entry an int key and a tuple of distinct floats (60 walk nodes)."""
+    store = _store(path)
+    store.clear()
+    store.update((i, tuple(float(i*1000 + j) + .5 for j in range(floats))) for i in range(_limit(path)))
+
+
+def _refused(build, then=None):
+    """The decline text of build() (and then(result)), or None when both pass."""
+    try:
+        result = build()
+        if then is not None:
+            then(result)
+    except QualificationDecline as exc:
+        return str(exc)
+    return None
+
+
+@pytest.mark.parametrize('order', ['cache first', 'cache last'])
+def test_r2_f1_ordinary_state_aliased_into_a_cache_stays_on_the_shared_budget(caches, order):
+    # 3,000 lists of 60 floats in the unreserved _ISO_CACHE exceed the shared budget. Aliasing the same lists
+    # into _BRANCH_CONSTANTS must not move them to its reserve, whichever module the census reaches first.
+    from anygeometry import exact_curves as ec, nurbs
+    modules = (ec, nurbs) if order == 'cache first' else (nurbs, ec)
+    lists = [[float(i*100 + j) + .5 for j in range(60)] for i in range(3000)]
+    saved = dict(nurbs._ISO_CACHE)
+    try:
+        nurbs._ISO_CACHE.clear()
+        nurbs._ISO_CACHE.update((('iso', i), item) for i, item in enumerate(lists))
+        build = lambda: ledger.loaded_geometry_ledger(trusted_image=True, modules=modules)
+        assert 'coverage mismatch' in _refused(build)                 # the shared budget alone
+        ec._BRANCH_CONSTANTS.update(enumerate(lists))                 # each entry 62 nodes: within its budget
+        assert 'coverage mismatch' in _refused(build)
+    finally:
+        nurbs._ISO_CACHE.clear()
+        nurbs._ISO_CACHE.update(saved)
+
+
+def test_r2_f1_entry_identity_budget_holds_on_the_interpreter_census(caches):
+    # Within the node budget (402 of 512) but past the identity budget (320): 400 distinct lists in one entry.
+    path = 'anygeometry.quadric_curve_events._BRANCH_POLYNOMIALS'
+    _pad_full(path)
+    store = _store(path)
+    store[0] = tuple([] for _ in range(400))
+    message = _refused(lambda: ledger.loaded_geometry_ledger(trusted_image=True, modules=(_module(path),)))
+    assert message is not None
+    if not PARENT:
+        assert 'coverage mismatch' in message
+        store[0] = tuple([] for _ in range(300))                      # within both budgets: admitted
+        ledger.loaded_geometry_ledger(trusted_image=True, modules=(_module(path),)).validate()
+
+
+def test_r2_f2_slot_layout_is_read_again_when_a_descriptor_returns_mid_walk(caches, monkeypatch):
+    # The walk reads the first instance's layout without the removed native slot descriptor; it comes back
+    # before the second instance is walked, whose slot holds a list also bound outside the cache.
+    from anygeometry import exact_curves as ec
+    cls = type('_Slotted', (), {'__slots__': ('held',), '__module__': __name__})
+    first, second, held = cls(), cls(), [1.]
+    second.held = held
+    descriptor = cls.__dict__['held']
+    other = types.ModuleType('anygeometry.zz_layout_alias_fixture')
+    other.exposed = held
+    monkeypatch.setitem(sys.modules, other.__name__, other)
+    ec._BRANCH_CONSTANTS[('slots', 0)] = (first, second)
+    del cls.held
+    result = ledger.loaded_geometry_ledger(trusted_image=True, modules=(ec, other))
+    real = ledger.inventory
+
+    def racing(*args, **kwargs):
+        boundary = kwargs['infrastructure_boundary']
+
+        def hooked(value, path):
+            if value is second and 'held' not in cls.__dict__:
+                cls.held = descriptor
+            return boundary(value, path)
+        return real(*args, **dict(kwargs, infrastructure_boundary=hooked))
+
+    monkeypatch.setattr(ledger, 'inventory', racing)
+    with pytest.raises(QualificationDecline, match='external alias'):
+        result.validate()
+    assert 'held' in cls.__dict__
+
+
+@pytest.mark.parametrize('change', ['limit', 'entry'])
+def test_r2_f3_a_change_after_the_registry_check_declines(caches, monkeypatch, change):
+    # 'limit': the limit constant doubled after the registry check, before the walk (Codex's probe).
+    # 'entry': an already walked entry replaced with a large tuple while the walk is still in the store.
+    from anygeometry import exact_curves as ec
+    _pad_full(BC)
+    store, limit = ec._BRANCH_CONSTANTS, ec._BRANCH_CONSTANTS_LIMIT
+    real, last = ledger.inventory, store[limit - 1]
+
+    def racing(*args, **kwargs):
+        if change == 'limit':
+            monkeypatch.setattr(ec, '_BRANCH_CONSTANTS_LIMIT', 2*limit)
+            return real(*args, **kwargs)
+        boundary = kwargs['infrastructure_boundary']
+
+        def hooked(value, path):
+            if value is last:
+                store[0] = tuple(float(i) + .5 for i in range(200000))
+            return boundary(value, path)
+        return real(*args, **dict(kwargs, infrastructure_boundary=hooked))
+
+    def then(result):
+        monkeypatch.setattr(ledger, 'inventory', racing)
+        result.validate()
+
+    message = _refused(lambda: ledger.loaded_geometry_ledger(trusted_image=True, modules=(ec,)), then)
+    assert message is not None
+    if not PARENT:
+        assert ('limit changed or removed' if change == 'limit' else 'changed during the census') in message
+
+
+@pytest.mark.parametrize('order', ['impostor first', 'impostor last'])
+def test_r2_f4_an_impostor_binding_the_real_store_gets_no_reserve(caches, order):
+    # A module object of the same name binding the real _BRANCH_CONSTANTS under the same name, in either order.
+    from anygeometry import exact_curves as ec
+    _pad_full(BC)
+    impostor = types.ModuleType(ec.__name__)
+    impostor._BRANCH_CONSTANTS = ec._BRANCH_CONSTANTS
+    modules = (impostor, ec) if order == 'impostor first' else (ec, impostor)
+    if not PARENT:
+        ledger.loaded_geometry_ledger(trusted_image=True, modules=(ec,)).validate()   # control: admitted alone
+    message = _refused(lambda: ledger.loaded_geometry_ledger(trusted_image=True, modules=modules))
+    assert message is not None
+    if not PARENT:
+        assert 'not reached only at its registered binding' in message
+
+
+# The package worker route (a fresh process): findings 1 and 3.
+
+_PACKAGE_R2_PROBE = r'''
+import gc, sys
+sys.path.insert(0, sys.argv[1])
+import test_planning_census_reserved_budgets_20261125 as t
+from anygeometry import _planning_ledger as ledger, exact_curves as ec, branch_predicates as bp, quadric_events as qe
+from anygeometry._planning_canaries import _fixture
+from anygeometry._planning_executor import freeze_model, thaw_model
+from anygeometry._planning_qualification import QualificationDecline
+owned = ledger.package_worker_ledger(thaw_model(freeze_model(_fixture()[0])))
+owned.validate()
+real_referents, limit = gc.get_referents, ec._BRANCH_CONSTANTS_LIMIT
+sentinel = None
+
+def case(name, setup, hook=None):
+    global sentinel
+    def hooked(*objects):
+        # Fires once, when the walk asks for the sentinel's referents, and puts the real function back first:
+        # the manifest check after the walk refuses a rebound gc.get_referents.
+        if any(o is sentinel for o in objects):
+            gc.get_referents = real_referents
+            hook()
+        return real_referents(*objects)
+    sentinel = setup()
+    if hook is not None:
+        gc.get_referents = hooked
+    try:
+        owned.validate()
+        print(name, 'ADMITTED' if gc.get_referents is real_referents else 'NOT-REACHED')
+    except QualificationDecline as exc:
+        print(name, 'DECLINED', exc)
+    except Exception as exc:
+        print(name, 'ERROR', type(exc).__name__, exc)
+    finally:
+        gc.get_referents = real_referents
+        ec._BRANCH_CONSTANTS_LIMIT = limit
+        for store in (ec._BRANCH_CONSTANTS, bp._PATCHES, qe._MEMO):
+            store.clear()
+
+def big():
+    return tuple(float(i) + .5 for i in range(80001))
+
+def patches(alias):
+    value = big()
+    bp._PATCHES[('big', 0)] = value
+    if alias:
+        qe._MEMO[('alias', 0)] = value
+
+def padded():
+    t._pad_full(t.BC)
+    return ec._BRANCH_CONSTANTS[7]
+
+case('f1-patches', lambda: patches(False))
+case('f1-patches-aliased-from-memo', lambda: patches(True))
+case('f1-tuple-in-entry', lambda: ec._BRANCH_CONSTANTS.__setitem__(('big', 0), big()))
+case('f3-padded-full', padded)
+case('f3-entry-after-capture', padded, lambda: ec._BRANCH_CONSTANTS.__setitem__(('pad', -1), None))
+case('f3-limit-mid-walk', padded, lambda: setattr(ec, '_BRANCH_CONSTANTS_LIMIT', 2*limit))
+owned.validate()
+print('DONE')
+'''
+
+
+def _package_r2_lines():
+    src = pathlib.Path(ledger.__file__).resolve().parents[1]
+    env = dict(os.environ, PYTHONPATH=str(src))
+    result = subprocess.run([sys.executable, '-c', _PACKAGE_R2_PROBE, str(pathlib.Path(__file__).parent)],
+                            capture_output=True, text=True, env=env, timeout=900)
+    assert result.returncode == 0, result.stderr[-2000:]
+    lines = result.stdout.splitlines()
+    assert lines[-1] == 'DONE', result.stdout
+    return dict(line.split(' ', 1) for line in lines[:-1])
+
+
+def test_r2_package_route_probes():
+    out = _package_r2_lines()
+    shared = 'DECLINED worker cache alias walk bound exceeded'
+    # Finding 1: what another reset store reaches is charged to the shared 80,000, whichever store comes first.
+    assert out['f1-patches'] == shared and out['f1-patches-aliased-from-memo'] == shared, out
+    if PARENT:
+        assert all(value.startswith('DECLINED') for value in out.values()), out
+        return
+    # Finding 1: one entry's identities are bounded by its own budget, not by the store's.
+    assert out['f1-tuple-in-entry'] == shared + ': ' + BC, out
+    # Finding 3: the walked store is checked again after the walk.
+    assert out['f3-padded-full'] == 'ADMITTED', out
+    assert out['f3-entry-after-capture'] == 'DECLINED bounded store exceeds its limit: ' + BC, out
+    assert out['f3-limit-mid-walk'] == 'DECLINED bounded store limit changed or removed: ' + BC, out
