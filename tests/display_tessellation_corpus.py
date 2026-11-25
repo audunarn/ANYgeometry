@@ -19,7 +19,7 @@ from anygeometry import GeometryModel
 from anygeometry.entities import OrientedEdge
 from anygeometry.exact_curves import EllipticArc
 from anygeometry.extrusions import EllipseDirectrix
-from anygeometry.surfaces import Cone, Cylinder, ExtrudedSurface
+from anygeometry.surfaces import Cone, Cylinder, ExtrudedSurface, Plane
 
 DATA = Path(__file__).with_name("data")
 FINE_STEP = math.radians(7.5)          # ANYfem Auto 'Fine' angular step
@@ -456,18 +456,138 @@ def lens(half_width=.05, *, with_neighbour=False) -> Case:
     return Case(g, faces, {"support": support, "theta": (t0, t1), "upper": upper, "z_low": .4})
 
 
-def steep_cuts() -> Case:
-    """r2: a band between z = 100 sin(theta) and 200 + 100 sin(theta) over +-45 degrees."""
+def steep_cuts(shift=0.0, *, with_plane=False, with_extrusion=False) -> Case:
+    """r2: a band between z = 100 sin(theta) and 200 + 100 sin(theta) over +-45 degrees.
+
+    ``shift`` translates everything along z (S1 r1: a far origin must not mask the azimuth);
+    ``with_plane`` first adds the planar face z = 100 y under the lower cut (S1 r1: the cylinder,
+    a later incident support, still bounds the lower edge); ``with_extrusion`` first adds a face
+    on the extrusion of the lower cut along its plane normal (S1 r2: two curved supports, the
+    later one, the cylinder, turning much faster along the edge)."""
     g = GeometryModel()
-    support = Cylinder((0., 0., -200.), (0., 0., 1.), (1., 0., 0.), 1.0, 600.0, math.pi)
+    support = Cylinder((0., 0., -200. + shift), (0., 0., 1.), (1., 0., 0.), 1.0, 600.0, math.pi)
     a = math.radians(45.)
-    p00, p10 = _section_point(g, -a, 0., 100., 0.), _section_point(g, a, 0., 100., 0.)
-    p01, p11 = _section_point(g, -a, 0., 100., 200.), _section_point(g, a, 0., 100., 200.)
-    lower = _section(g, p00, p10, 0., 100., 0., -a, a)
-    upper = _section(g, p01, p11, 0., 100., 200., -a, a)
-    face = g.add_face((lower, g.add_line(p10, p11), upper, g.add_line(p01, p00)), corners=(0, 1, 2, 3), surface=support)
-    return Case(g, {"steep": face}, {"support": support, "half_angle": a,
-                                     "low": lambda t: 100 * np.sin(t), "high": lambda t: 200 + 100 * np.sin(t)})
+    p00, p10 = _section_point(g, -a, 0., 100., shift), _section_point(g, a, 0., 100., shift)
+    p01, p11 = _section_point(g, -a, 0., 100., 200. + shift), _section_point(g, a, 0., 100., 200. + shift)
+    lower = _section(g, p00, p10, 0., 100., shift, -a, a)
+    upper = _section(g, p01, p11, 0., 100., 200. + shift, -a, a)
+    faces = {}
+    if with_plane:
+        plane = Plane((0., 0., shift), (1., 0., 0.), (0., 1., 100.))
+        faces["cap"] = _plane_cap(g, lower, p00, p10, plane)
+    if with_extrusion:
+        normal = np.array((0., -100., 1.)) / math.sqrt(10001.)
+        directrix = EllipseDirectrix((0., 0., shift), (1., 0., 0.), (0., 1., 100.), -a, 2 * a)
+        wall = ExtrudedSurface(directrix, tuple(normal), (0., 1.), (0., 1.))
+        q00 = g.add_point(*(g.vertex_position(p00) + normal))
+        q10 = g.add_point(*(g.vertex_position(p10) + normal))
+        shifted = _arc(g, q00, q10, normal + (0., 0., shift), (1., 0., 0.), (0., 1., 100.), -a, a)
+        faces["wall"] = g.add_face((lower, g.add_line(p10, q10), shifted, g.add_line(q00, p00)),
+                                   corners=(0, 1, 2, 3), surface=wall)
+    faces["steep"] = g.add_face((lower, g.add_line(p10, p11), upper, g.add_line(p01, p00)), corners=(0, 1, 2, 3),
+                                surface=support)
+    return Case(g, faces, {"support": support, "half_angle": a, "lower": lower,
+                           "low": lambda t: 100 * np.sin(t) + shift, "high": lambda t: 200 + 100 * np.sin(t) + shift})
+
+
+def _plane_cap(g, arc, p, q, plane):
+    """A planar face bounded by ``arc`` (from p to q) and the straight chord back, via a midpoint."""
+    mid = g.add_point(*(0.5 * (g.vertex_position(p) + g.vertex_position(q))))
+    return g.add_face_from_loop(g.order_loop((arc, g.add_line(q, mid), g.add_line(mid, p))), None, surface=plane)
+
+
+def tiny_offset_cylinder(*, coaxial_below=False) -> Case:
+    """S1 r1: a 1e-6-radius cylinder with arcs whose centre is 8e-10 off its axis (admitted by
+    the model): the arcs are circles, but not coaxial; the support azimuth turns faster.
+
+    ``coaxial_below`` (N1) first adds a face below the lower arc on a cylinder coaxial with the
+    arcs, so the off-axis cylinder is the second incident support and the stricter one."""
+    g = GeometryModel()
+    r, off = 1e-6, 8e-10
+    support = Cylinder((0., 0., 0.), (0., 0., 1.), (1., 0., 0.), r, 1.0)
+    a0, a1 = math.pi - .1, math.pi + .1
+
+    def point(t, z):
+        return g.add_point(off + r * math.cos(t), r * math.sin(t), z)
+
+    p00, p10, p11, p01 = point(a0, .2), point(a1, .2), point(a1, .8), point(a0, .8)
+    low = _arc(g, p00, p10, (off, 0., .2), (r, 0., 0.), (0., r, 0.), a0, a1)
+    high = _arc(g, p01, p11, (off, 0., .8), (r, 0., 0.), (0., r, 0.), a0, a1)
+    faces = {}
+    if coaxial_below:
+        coaxial = Cylinder((off, 0., 0.), (0., 0., 1.), (1., 0., 0.), r, 1.0)
+        q00, q10 = point(a0, .1), point(a1, .1)
+        bottom = _arc(g, q00, q10, (off, 0., .1), (r, 0., 0.), (0., r, 0.), a0, a1)
+        faces["coaxial"] = g.add_face((bottom, g.add_line(q10, p10), low, g.add_line(p00, q00)),
+                                      corners=(0, 1, 2, 3), surface=coaxial)
+    faces["tiny"] = g.add_face((low, g.add_line(p10, p11), high, g.add_line(p01, p00)), corners=(0, 1, 2, 3),
+                               surface=support)
+    return Case(g, faces, {"support": support, "low": low})
+
+
+# ---------------------------------------------------------------------------------------------
+# N1 (2026-11-25): exact divisions of lines, circles and ellipses on planes, cylinders and cones
+# ---------------------------------------------------------------------------------------------
+def skew_ellipse_edge() -> Case:
+    """N1: a lone ellipse arc whose u and v are not orthogonal (and of different lengths)."""
+    g = GeometryModel()
+    arc = EllipticArc((.5, -.25, 1.), (2., 0., .5), (1., 1., 0.), .3, 4.)
+    ends = arc.evaluate(np.array([0., 1.]))
+    edge = g.add_curve(g.add_point(*ends[0]), g.add_point(*ends[1]), arc)
+    return Case(g, {}, {"edge": edge})
+
+
+def cone_section(height=.5, slope=.6, a0=-2.5, a1=2.0, origin_z=0.0) -> Case:
+    """N1: the plane z = h + m x cuts the unit-slope cone r = z (apex at the origin) in an ellipse
+    with a focus on the axis; a sector from the apex up to that ellipse arc (two generators)."""
+    g = GeometryModel()
+    support = Cone((0., 0., origin_z), (0., 0., 1.), (1., 0., 0.), 0.0, 4.0, 4.0)
+    h, m = height, slope
+    x0, big, small = h * m / (1 - m * m), h / (1 - m * m), h / math.sqrt(1 - m * m)
+    centre, first, second = (x0, 0., h + m * x0 + origin_z), (big, 0., m * big), (0., small, 0.)
+
+    def point(t):
+        x, y = x0 + big * math.cos(t), small * math.sin(t)
+        return g.add_point(x, y, h + m * x + origin_z)
+
+    apex = g.add_point(0., 0., origin_z)
+    p, q = point(a0), point(a1)
+    arc = _arc(g, p, q, centre, first, second, a0, a1)
+    rising, falling = g.add_line(apex, p), g.add_line(q, apex)
+    face = g.add_face((rising, arc, falling), surface=support)
+    return Case(g, {"sector": face}, {"support": support, "arc": arc, "generators": (rising, falling),
+                                      "apex": apex})
+
+
+def far_apex_cone() -> Case:
+    """N1: a cone translated to z = 1e4 with its apex there (radius_start exactly 0): a sector from
+    the apex vertex (recognised exactly) to a circle at height .75."""
+    g = GeometryModel()
+    z0 = 1e4
+    support = Cone((0., 0., z0), (0., 0., 1.), (1., 0., 0.), 0.0, 1.0, 1.0)
+    apex = g.add_point(0., 0., z0)
+    a0, a1 = .2, 1.9
+    p, q = _cyl_point(g, a0, z0 + .75, .75), _cyl_point(g, a1, z0 + .75, .75)
+    arc = _arc(g, p, q, (0., 0., z0 + .75), (.75, 0., 0.), (0., .75, 0.), a0, a1)
+    rising, falling = g.add_line(apex, p), g.add_line(q, apex)
+    face = g.add_face((rising, arc, falling), surface=support)
+    return Case(g, {"sector": face}, {"support": support, "arc": arc, "generators": (rising, falling)})
+
+
+def spline_edge() -> Case:
+    """N1: a lone Bezier spline edge: outside the display curve set (EDGE_UNSUPPORTED)."""
+    g = GeometryModel()
+    ids = [g.add_point(*p) for p in ((0., 0., 0.), (1 / 3, .1, 0.), (2 / 3, 0., 0.), (1., 0., 0.))]
+    return Case(g, {}, {"edge": g.add_spline(ids[0], ids[1:3], ids[3])})
+
+
+def nurbs_edge() -> Case:
+    """N1: a lone rational NURBS edge: outside the display curve set (EDGE_UNSUPPORTED)."""
+    from anygeometry.nurbs import NurbsCurve
+    curve = NurbsCurve(2, (0., 0., 0., 1., 1., 1.), ((0., 0., 0.), (.5, .1, 0.), (1., 0., 0.)), (1., 1000., 1000000.))
+    g = GeometryModel()
+    ends = curve.evaluate(np.array([0., 1.]))
+    return Case(g, {}, {"edge": g.add_curve(g.add_point(*ends[0]), g.add_point(*ends[1]), curve)})
 
 
 def winding_fixture() -> Case:
@@ -584,16 +704,19 @@ ALL = {
     "shared_circle": shared_circle,
     "trimmed_and_whole_neighbours": trimmed_and_whole_neighbours,
     "cone_comb_r1": cone_comb_r1,
-    "elliptic_extrusion_band": elliptic_extrusion_band,
-    "whole_box_extrusion": whole_box_extrusion,
-    "half_ellipse_1000": half_ellipse_extrusion,
-    "half_ellipse_20": lambda: half_ellipse_extrusion(20.0),
     "ellipse_edge_20": ellipse_edge,
-    "mixed_route_extrusion": mixed_route_extrusion,
     "lens_01": lens,
     "lens_0002": lambda: lens(.001),
     "lens_with_neighbour": lambda: lens(with_neighbour=True),
     "steep_cuts": steep_cuts,
+    "steep_cuts_with_plane": lambda: steep_cuts(with_plane=True),
+    "tiny_offset_cylinder": tiny_offset_cylinder,
+    "tiny_offset_two_supports": lambda: tiny_offset_cylinder(coaxial_below=True),
+    "skew_ellipse_edge": skew_ellipse_edge,
+    "cone_section": cone_section,
+    "cone_section_steep": lambda: cone_section(.3, .9, -3.0, 3.0),
+    "cone_section_far": lambda: cone_section(origin_z=1e4),
+    "far_apex_cone": far_apex_cone,
     "winding_fixture": winding_fixture,
     "half_cylinder_before_start": half_cylinder_before_start,
     "seam_hole_0": seam_hole,
@@ -606,7 +729,18 @@ ALL = {
     "generated_cylinder_400": lambda: generated_cylinder(400),
 }
 
-#: valid faces this module refuses by contract (typed), not in ``ALL``
+#: valid faces and edges this module refuses by contract (typed), not in ``ALL``: N1 draws only
+#: lines, circles and ellipses on planes, cylinders and cones; an edge used by a face on any other
+#: support (extrusions here) is SUPPORT_UNSUPPORTED, any other curve EDGE_UNSUPPORTED
 REFUSED = {
     "unsupported_support": (unsupported_support, "SUPPORT_UNSUPPORTED"),
+    "elliptic_extrusion_band": (elliptic_extrusion_band, "SUPPORT_UNSUPPORTED"),
+    "whole_box_extrusion": (whole_box_extrusion, "SUPPORT_UNSUPPORTED"),
+    "half_ellipse_1000": (half_ellipse_extrusion, "SUPPORT_UNSUPPORTED"),
+    "half_ellipse_20": (lambda: half_ellipse_extrusion(20.0), "SUPPORT_UNSUPPORTED"),
+    "mixed_route_extrusion": (mixed_route_extrusion, "SUPPORT_UNSUPPORTED"),
+    "steep_cuts_with_extrusion": (lambda: steep_cuts(with_extrusion=True), "SUPPORT_UNSUPPORTED"),
+    "spline_edge": (spline_edge, "EDGE_UNSUPPORTED"),
+    "nurbs_edge": (nurbs_edge, "EDGE_UNSUPPORTED"),
+    "steep_cuts_far": (lambda: steep_cuts(2e12), "OUT_OF_DOMAIN"),
 }

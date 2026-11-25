@@ -16,7 +16,7 @@ def test_corpus_case_builds_valid_faces_on_their_supports(name):
     for face_id in case.faces.values():
         face = g.faces[face_id]
         support = face.surface
-        if name in corpus.REFUSED:
+        if name == "unsupported_support":       # a boundary-free Coons marker: nothing to lie on
             continue
         assert support is not None
         t = np.linspace(0., 1., 33)
@@ -131,14 +131,17 @@ def test_cell_outline_refuses_loops_sharing_a_lattice_point():
 
 @pytest.mark.parametrize("rotation", range(4))
 def test_seam_holes_cross_the_seam(rotation):
-    """Both rings span azimuth 0 of the full-turn support (the case is about the seam)."""
+    """Both rings span the full-turn support's own seam (its start angle), not world azimuth 0."""
     case = corpus.seam_hole(rotation)
     g = case.model
     face = g.faces[case.faces["holed"]]
+    support = face.surface
+    assert abs(abs(support.sweep_angle) - 2 * np.pi) < 1e-12
     for loop in (face.loop, *face.holes):
-        p = _boundary(g, face, loop)
-        theta = np.arctan2(p[:, 1], p[:, 0])
-        assert theta.min() < 0.0 < theta.max() and np.ptp(theta) < 1e-3
+        p = _boundary(g, face, loop) - support.origin
+        theta = np.arctan2(p @ support.circumferential_direction, p @ support.radial_direction)
+        relative = np.angle(np.exp(1j * (theta - support.start_angle)))
+        assert relative.min() < 0.0 < relative.max() and np.ptp(relative) < 1e-3
 
 
 @pytest.mark.parametrize("name", ["cone_comb_r1", "cone_comb_r3", "l_shape"])
