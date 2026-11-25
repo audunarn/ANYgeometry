@@ -21,9 +21,9 @@ env:
   NATIVE_ARC_STATION_RUNTIME_EVIDENCE: station-runtime.json
 
 concurrency:
-  # A newer dispatch on the same branch supersedes the older one; every main run (dispatch or the
-  # weekly schedule) gets a group of its own, so it is never cancelled or replaced.
-  group: ci-${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && format('run-{0}', github.run_id) || github.ref }}
+  # A newer dispatch on the same non-main branch supersedes the older one; every other run (main,
+  # tags, the weekly schedule) gets a group of its own, so it is never cancelled or replaced.
+  group: ci-${{ github.workflow }}-${{ startsWith(github.ref, 'refs/heads/') && github.ref != 'refs/heads/main' && github.ref || format('run-{0}', github.run_id) }}
   cancel-in-progress: true
 
 jobs:

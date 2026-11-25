@@ -86,6 +86,9 @@ def test_aggregate_requires_both_matrices_and_original_exact_coverage_and_profil
         assert variable + ': ${{ needs.' + dependency + '.result }}' in gate
         assert 'if [ "$' + variable + '" != success ]; then' in gate
     assert 'python tools/ci_shards.py verify lanes/kernel-runtime-$os-$py-*/shard-*.json' in gate
+    # the gate verifies exactly the lanes the two matrices run (no lane may be dropped silently)
+    assert 'for lane in windows-latest/3.11 windows-latest/3.12 windows-latest/3.13 windows-latest/3.14 ubuntu-latest/3.11 ubuntu-latest/3.12 ubuntu-latest/3.13 ubuntu-latest/3.14 macos-15/3.11 macos-15/3.14 macos-15-intel/3.13; do' in gate
+    assert gate.count('for lane in ') == 1
     assert 'python tools/ci_shards.py verify lanes/minimum-dependencies-runtime-*/shard-*.json' in gate
     assert 'python tools/ci_planning_profile.py lanes/kernel-runtime-windows-latest-3.14-*/kernel-results.xml' in gate
 
