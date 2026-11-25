@@ -167,11 +167,13 @@ def _fresh_process_check(call):
     below assume a clean process, and a long test process leaves ordinary state of its own (past the shared
     census cap, or objects aliased into a cache entry) that the census correctly declines. Reports JSON."""
     src = pathlib.Path(ledger.__file__).resolve().parents[1]
-    env = dict(os.environ, PYTHONPATH=str(src))
+    # No inherited PYTHONOPTIMIZE: the child's assertions are the checks (Codex review, tests round).
+    env = {key: value for key, value in os.environ.items() if key != 'PYTHONOPTIMIZE'}
+    env['PYTHONPATH'] = str(src)
     probe = _FRESH_PROBE.replace('@@MODULE@@', pathlib.Path(__file__).stem).replace('@@CALL@@', call)
     try:
         result = subprocess.run([sys.executable, '-c', probe, str(pathlib.Path(__file__).parent)],
-                                capture_output=True, text=True, env=env, timeout=1800, cwd=str(src.parent))
+                                capture_output=True, text=True, env=env, timeout=900, cwd=str(src.parent))
     except subprocess.TimeoutExpired as exc:
         pytest.fail('fresh-process check timed out: ' + call + ' ' + str(exc.stdout)[-500:])
     assert result.returncode == 0, result.stderr[-2000:]
@@ -181,6 +183,8 @@ def _fresh_process_check(call):
 
 _FRESH_PROBE = r'''
 import json, sys, traceback
+if sys.flags.optimize:
+    raise SystemExit('optimized interpreter: the checks are assertions')
 sys.path.insert(0, sys.argv[1])
 import @@MODULE@@ as t
 try:
@@ -539,7 +543,9 @@ print('PREPARED OK')
 def test_full_caches_pass_the_package_worker_ledger_and_budgets_hold():
     # A fresh process: the package ledger refuses unrelated state a long test process accumulates.
     src = pathlib.Path(ledger.__file__).resolve().parents[1]
-    env = dict(os.environ, PYTHONPATH=str(src))
+    # No inherited PYTHONOPTIMIZE: the child's assertions are the checks (Codex review, tests round).
+    env = {key: value for key, value in os.environ.items() if key != 'PYTHONOPTIMIZE'}
+    env['PYTHONPATH'] = str(src)
     result = subprocess.run([sys.executable, '-c', _PACKAGE_PROBE, str(pathlib.Path(__file__).parent)],
                             capture_output=True, text=True, env=env, timeout=900)
     assert result.returncode == 0, result.stderr[-2000:]
@@ -569,7 +575,9 @@ print('HOST OK')
 def test_four_full_caches_are_admitted_by_the_host_ledger_of_their_modules():
     # A fresh process (a long test process creates unrelated copyreg __slotnames__ stores, declined rows).
     src = pathlib.Path(ledger.__file__).resolve().parents[1]
-    env = dict(os.environ, PYTHONPATH=str(src))
+    # No inherited PYTHONOPTIMIZE: the child's assertions are the checks (Codex review, tests round).
+    env = {key: value for key, value in os.environ.items() if key != 'PYTHONOPTIMIZE'}
+    env['PYTHONPATH'] = str(src)
     result = subprocess.run([sys.executable, '-c', _HOST_PROBE, str(pathlib.Path(__file__).parent)],
                             capture_output=True, text=True, env=env, timeout=900)
     assert result.returncode == 0, result.stderr[-2000:]
@@ -803,7 +811,9 @@ print('DONE')
 
 def _package_r2_lines():
     src = pathlib.Path(ledger.__file__).resolve().parents[1]
-    env = dict(os.environ, PYTHONPATH=str(src))
+    # No inherited PYTHONOPTIMIZE: the child's assertions are the checks (Codex review, tests round).
+    env = {key: value for key, value in os.environ.items() if key != 'PYTHONOPTIMIZE'}
+    env['PYTHONPATH'] = str(src)
     result = subprocess.run([sys.executable, '-c', _PACKAGE_R2_PROBE, str(pathlib.Path(__file__).parent)],
                             capture_output=True, text=True, env=env, timeout=900)
     assert result.returncode == 0, result.stderr[-2000:]
