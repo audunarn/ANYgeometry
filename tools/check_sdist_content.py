@@ -24,18 +24,29 @@ import sys
 import tarfile
 from pathlib import PurePosixPath
 
-PATTERN = re.compile(
+_ANY_CASE = re.compile(
     r"(?<![A-Za-z0-9])[A-Za-z]:[\\/]+(?:Users[\\/]|Github\b|ANYworkspace)"
-    r"|(?:^|[\s'\"`(=<\[])\\\\[A-Za-z][\w.-]+\\[\w$.-]{2,}"
-    r"|/(?:home|Users)/(?!runner/)[A-Za-z][\w.-]*"
+    r"|(?:^|[^\\\w])\\\\[\w.-]{2,}\\[\w$.-]+"
     r"|/mnt" r"/[a-z]/"
     r"|Audun" r"ArnesenNyhus"
     r"|Hbeam" r"Both",
     re.IGNORECASE,
 )
+# POSIX home directories are case-sensitive; ``/users/`` inside a URL is not one.
+_EXACT_CASE = re.compile(r"(?<![\w.:/])/(?:home|Users)/(?!runner/)[\w.-]+")
 
-# Relative to the archive root directory (``anygeometry-<version>/``).
-NAMED_EXCEPTIONS = frozenset({"README.md", "ECOSYSTEM_GUIDE.md", "PKG-INFO"})
+
+class _Pattern:
+    def search(self, text: str):
+        return _ANY_CASE.search(text) or _EXACT_CASE.search(text)
+
+
+PATTERN = _Pattern()
+
+# Relative to the archive root directory (``anygeometry-<version>/``): whole-file exceptions.
+NAMED_EXCEPTIONS = frozenset({"README.md", "ECOSYSTEM_GUIDE.md"})
+# Metadata whose body is README.md: only the header block is scanned.
+_METADATA = frozenset({"PKG-INFO", "src/ANYgeometry.egg-info/PKG-INFO"})
 
 
 def decode(data: bytes) -> str:
@@ -47,8 +58,8 @@ def decode(data: bytes) -> str:
             return data[len(bom):].decode(codec, errors="replace")
     text = data.decode("utf-8", errors="replace")
     if b"\x00" in data:
-        # No BOM but NUL bytes: also read the wide interpretations and the bytes with NULs removed.
-        wide = [data.decode(codec, errors="replace") for codec in ("utf-16-le", "utf-16-be")]
+        # No BOM but NUL bytes: also read every wide interpretation and the bytes with NULs removed.
+        wide = [data.decode(codec, errors="replace") for codec in ("utf-16-le", "utf-16-be", "utf-32-le", "utf-32-be")]
         text = "\n".join([text, data.replace(b"\x00", b"").decode("utf-8", errors="replace"), *wide])
     return text
 
@@ -59,14 +70,17 @@ def offenders(archive_path: str) -> list[str]:
         for member in archive.getmembers():
             parts = PurePosixPath(member.name).parts
             relative = "/".join(parts[1:])
-            match = PATTERN.search(member.name)
+            match = PATTERN.search(member.name) or (PATTERN.search(member.linkname) if member.linkname else None)
             if match:
-                found.append(f"{member.name}: member name {match.group(0)!r}")
+                found.append(f"{member.name}: member name or link target {match.group(0)!r}")
                 continue
-            if not member.isfile() or relative in NAMED_EXCEPTIONS or ".egg-info/" in member.name:
+            if not member.isfile() or relative in NAMED_EXCEPTIONS:
                 continue
             handle = archive.extractfile(member)
-            match = PATTERN.search(decode(handle.read())) if handle is not None else None
+            text = decode(handle.read()) if handle is not None else ""
+            if relative in _METADATA:
+                text = text.replace("\r\n", "\n").split("\n\n", 1)[0]
+            match = PATTERN.search(text)
             if match:
                 found.append(f"{member.name}: {match.group(0)!r}")
     return found

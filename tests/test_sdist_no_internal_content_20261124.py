@@ -46,6 +46,9 @@ def _archive(tmp_path: Path, members: dict[str, bytes]) -> Path:
     "/home" + "/alice/work",
     "/Users" + "/alice/work",
     "/mnt" + "/c/Github",
+    "\\\\" + "192.168.1.10\\share\\note.md",
+    "\\\\" + "fileserver\\x\\note.md",
+    "/home" + "/1001/private/work",
     USER,
     CUSTOMER,
 ])
@@ -59,6 +62,8 @@ def test_scanner_flags_internal_markers(text: str) -> None:
     "/home/runner/work/_temp/x",
     "/Users/runner/work/_temp/x",
     '"\\\\x\\n"',
+    "https://api.github.com/users/octocat",
+    "see docs/home/users.md",
 ])
 def test_scanner_leaves_public_and_ci_paths(text: str) -> None:
     assert not scanner.PATTERN.search(text), text
@@ -70,6 +75,31 @@ def test_scanner_reads_wide_encodings(tmp_path: Path, codec: str) -> None:
     assert scanner.offenders(str(path)), codec
 
 
+def test_scanner_reads_utf32_without_bom(tmp_path: Path) -> None:
+    text = "Saved to 中" + "D:" + "\\Users\\someone\\private"
+    path = _archive(tmp_path, {"docs/note.md": text.encode("utf-32-le")})
+    assert scanner.offenders(str(path))
+
+
+def test_scanner_checks_link_targets_metadata_headers_and_egg_info_lookalikes(tmp_path: Path) -> None:
+    path = tmp_path / "links-0.0.0.tar.gz"
+    with tarfile.open(path, "w:gz") as archive:
+        link = tarfile.TarInfo("links-0.0.0/docs/example.md")
+        link.type, link.linkname = tarfile.SYMTYPE, "/home" + "/alice/private/note.md"
+        archive.addfile(link)
+        for name, data in {
+            "links-0.0.0/PKG-INFO": f"Metadata-Version: 2.4\nSummary: {CUSTOMER} tools\n\nC:".encode()
+            + b"/Github/readme-body",
+            "links-0.0.0/docs/notes.egg-info/case.md": CUSTOMER.encode(),
+        }.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            archive.addfile(info, io.BytesIO(data))
+    found = scanner.offenders(str(path))
+    assert len(found) == 3, found
+    assert scanner.offenders(str(_archive(tmp_path, {"PKG-INFO": b"Metadata-Version: 2.4\n\nC:" + b"/Github/readme"}))) == []
+
+
 def test_scanner_checks_member_names_and_keeps_named_exceptions(tmp_path: Path) -> None:
     path = _archive(tmp_path, {
         f"docs/{CUSTOMER}-notes.md": b"plain",
@@ -77,7 +107,7 @@ def test_scanner_checks_member_names_and_keeps_named_exceptions(tmp_path: Path) 
         "src/clean.py": b"x = 1\n",
     })
     found = scanner.offenders(str(path))
-    assert len(found) == 1 and "member name" in found[0]
+    assert len(found) == 1 and "member name" in found[0], found
     assert scanner.main([str(path)]) == 1
 
 
