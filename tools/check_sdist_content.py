@@ -33,7 +33,7 @@ _ANY_CASE = re.compile(
     re.IGNORECASE,
 )
 # POSIX home directories are case-sensitive; ``/users/`` inside a URL is not one.
-_EXACT_CASE = re.compile(r"(?<![\w.:/])/(?:home|Users)/(?!runner/)[\w.-]+")
+_EXACT_CASE = re.compile(r"(?<![\w.])/(?:home|Users)/(?!runner/)[\w.-]+")
 
 
 class _Pattern:
