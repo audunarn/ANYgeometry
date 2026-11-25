@@ -32,6 +32,16 @@ All notable user-visible changes to ANYgeometry are documented here.
   aspect amplification; a request for which it exceeds 2 % of the angle (`OUT_OF_DOMAIN`) or of
   the sag allowance (`EDGE_UNSUPPORTED`) is refused; the summed division counts are checked
   against the 4096 cap before any division is built. All corpus results unchanged bit for bit.
+  Round 4 (owner decision, the recommended option): a `LineRange` is supported only when its
+  carrier IS the edge's segment (exact domain `[0, 1]`, carrier endpoints the evaluated ends
+  within `model.tolerance.length`); a range drawn over part of its carrier is now
+  `EDGE_UNSUPPORTED` (it was divided from its rounded ends, which can lie off the exact carrier
+  beyond both bounds). The line terms of the rounding allowance add each evaluated end's
+  absolute coordinate rounding (`eps x max |coordinate|`). The two-interval rule decides on the
+  drawn chord (measured vertex offsets, never zeroed, plus the evaluator's rounding). An end on a
+  support axis is an apex only on a cone with an exactly zero radius and within
+  `model.tolerance.length` of the apex point (a frustum with a tiny radius, or a tip off the
+  apex along the axis, is `OUT_OF_DOMAIN`). All 5744 corpus results unchanged bit for bit.
   See `docs/DISPLAY_TESSELLATION.md` (stability table, rounding allowance). No existing module
   changes.
 

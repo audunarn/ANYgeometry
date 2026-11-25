@@ -13,10 +13,20 @@ measured sampling (no probes, sub-samples, margins or breakpoints).
 | | Supported | Refused |
 |---|---|---|
 | Incident supports (`model.faces_using_edge`) | `Plane`, `Cylinder`, `Cone` | any other support (`ExtrudedSurface`, NURBS, Coons marker, none, ...) or a face with an explicit `parameterization`: `SUPPORT_UNSUPPORTED` (the caller keeps its own route for that edge) |
-| Edge curves | `Straight`, `LineRange` (lines); `Arc` (circle, via `model.arc_frame`); `EllipticArc` (a circle when `|u| = |v|` and `u.v = 0` to 8 eps relative, else an ellipse; `u`, `v` need not be orthogonal) | every other curve (`Spline`, `NurbsCurve`, `CurveOnSurface`, intersection curves, ...): `EDGE_UNSUPPORTED` |
+| Edge curves | `Straight`, `LineRange` whose carrier IS the edge's segment (exact domain `[0, 1]`, both carrier endpoints the evaluated ends within `model.tolerance.length`) (lines); `Arc` (circle, via `model.arc_frame`); `EllipticArc` (a circle when `|u| = |v|` and `u.v = 0` to 8 eps relative, else an ellipse; `u`, `v` need not be orthogonal) | every other curve (`Spline`, `NurbsCurve`, `CurveOnSurface`, intersection curves, ...), and a `LineRange` drawn over part of its carrier (any other exact domain, reversed included): `EDGE_UNSUPPORTED` |
 
 An edge used by no face (a lone curve) has no supports and is divided by its tangent alone.
 Supports are checked before the curve type.
+
+**`LineRange` (owner decision, N1 round 4, the recommended option).** A `LineRange` is supported
+only when its carrier endpoints ARE the edge's segment: its exact domain is `[0, 1]` and both
+carrier endpoints equal the edge's evaluated endpoints within `model.tolerance.length`. Any other
+`LineRange` is `EDGE_UNSUPPORTED` ("a line range drawn over part of its carrier is not
+supported"), after the coordinate checks (a carrier beyond 1e9 stays `OUT_OF_DOMAIN`). Round 4:
+a 1-unit range retained over `[0, 2^-26]` of a carrier at x = 9e8 was drawn as one interval
+whose exact carrier turned 0.4636476358228977 rad against the limit 0.4636476328426804, its
+exact end 1.49e-8 off the drawn segment at sag 1e-10: the float ends of a retained range need
+not lie on the exact carrier to the bounds, and an oracle built from those ends cannot see it.
 
 ## Exact divisions
 
@@ -109,8 +119,15 @@ exact multiple can come out a few ulps above an integer). There is no fixed slac
      is compared (fail closed: `|u x v|` and `|T(m)|` of a skew frame round by a relative
      `eps x aspect` at most).
 4. A curved edge whose single DRAWN chord could leave it by more than
-   `model.tolerance.surface_residual` (its exact sag plus its vertex offsets) gets at least two
-   intervals.
+   `model.tolerance.surface_residual` gets at least two intervals (conservative). The decision is
+   on the chord between the drawn endpoints (the vertex positions): the exact sag of the analytic
+   chord raised by its rounding (`1 + 64 eps + 8 eps x aspect`), plus the larger vertex offset as
+   measured (never zeroed as rounding), plus the evaluator's rounding `3 E` (allowance, below),
+   bounds the distance of the evaluated curve from the drawn chord. Round 4: vertices one float
+   (1.19e-7) off a lone arc at x = 9e8 at `surface_residual = 1e-8` were drawn as one chord (the
+   offsets had been zeroed as rounding), and a lone unit circle at 999994 rad, sweep .4, at
+   `surface_residual = 2 sin^2(.1)` (its analytic sag; the evaluated sag exceeds it by 2.31e-12)
+   was one chord; both now get two.
 
 The union is one sort and one pass. Every tangent-division value is kept. A value `v` of a support
 division within 64 ulps of the stored angle (in edge-parameter units: closer parameters evaluate
@@ -133,7 +150,8 @@ the corpus at both steps, with and without sag 1e-4, is the same; parameters mov
 with and without sag 1e-4) keep their counts and refusal codes; 40 parameter arrays (tripod
 mitre ellipses and the three `cone_section` cases, through the rewritten ray inverse) moved by at
 most 2.2e-16. Unchanged by the round-3 fixes: all 5744 corpus results keep their counts, codes
-and parameters bit for bit.
+and parameters bit for bit. Unchanged by the round-4 fixes: all 5744 corpus results (parameters
+and points) identical bit for bit to c47336c.
 
 ## Declared numeric domain (owner decision 2026-11-25)
 
@@ -144,7 +162,7 @@ call raises `DisplayDomainRefused` (a `DisplayTrimRefused` with code `OUT_OF_DOM
 |---|---|---|
 | `MAX_DISPLAY_COORDINATE` | 1e9 model units: vertex positions, arc centre and (`EllipticArc`) centre + u, centre + v, an `Arc`'s via vertex, `LineRange` carrier endpoints and a line's evaluated ends, every incident support's origin (and a plane's u, v vectors), every emitted point | float spacing 1.2e-7 there; ship and offshore models in m or mm are far inside |
 | `MAX_DISPLAY_ANGLE` | 1e6 rad: `EllipticArc` start and start + sweep; cylinder and cone start and start + sweep | float spacing 1.2e-10 rad, four orders below the smallest display angle (1e-6), so `start + sweep t` keeps its steps |
-| `MIN_DISPLAY_RADIUS_RATIO` | 1e-9 x max(1, max \|coordinate\|): every incident cylinder radius (scale: the edge's definition points and the support origin); every point used for a line's azimuth about a cylinder or cone: its ends by their own projections (except an end on the axis to the frame's rounding, `8 eps max(1, \|coordinate\|)`, at a cone's apex; elsewhere, and both ends on it, refused) and its interior closest approach `\|P' x D'\| / \|D'\|` (scale: the edge's definition points, i.e. the vertices and the line's ends, and the support origin: an evaluated point `a + t (b - a)` is rounded at the scale of the ends, round 3); a cylinder or cone arc's closest approach (one rule for both) (a lower bound, `sigma_min(N) min \|z + w\|`, each candidate evaluated directly: `\| \|z\| - 1 \|` at the analytic critical angle, `\|z + w\|` at the ends; scale: the edge's definition points and `max(1, \|stored angle\|) sigma_max(M')`, the evaluator's rounding of `start + sweep t` moving the projected point by eps times that) | an azimuth computed from coordinates of size \|p\| at distance r from the axis is rounded by about eps \|p\| / r: at the bound 2.2e-7 rad, below the smallest display angle. Measured without the stored-angle term: a .5 circle 2e-9 from a frustum's axis at 999994 rad turns 0.116 rad per interval at `angle = .1` |
+| `MIN_DISPLAY_RADIUS_RATIO` | 1e-9 x max(1, max \|coordinate\|): every incident cylinder radius (scale: the edge's definition points and the support origin); every point used for a line's azimuth about a cylinder or cone: its ends by their own projections (except an end on the axis to the frame's rounding, `8 eps max(1, \|coordinate\|)`, at a cone's exact apex: an exactly zero radius and the end within `model.tolerance.length` of the apex point, axial position included, round 4; elsewhere, and both ends on it, refused) and its interior closest approach `\|P' x D'\| / \|D'\|` (scale: the edge's definition points, i.e. the vertices and the line's ends, and the support origin: an evaluated point `a + t (b - a)` is rounded at the scale of the ends, round 3); a cylinder or cone arc's closest approach (one rule for both) (a lower bound, `sigma_min(N) min \|z + w\|`, each candidate evaluated directly: `\| \|z\| - 1 \|` at the analytic critical angle, `\|z + w\|` at the ends; scale: the edge's definition points and `max(1, \|stored angle\|) sigma_max(M')`, the evaluator's rounding of `start + sweep t` moving the projected point by eps times that) | an azimuth computed from coordinates of size \|p\| at distance r from the axis is rounded by about eps \|p\| / r: at the bound 2.2e-7 rad, below the smallest display angle. Measured without the stored-angle term: a .5 circle 2e-9 from a frustum's axis at 999994 rad turns 0.116 rad per interval at `angle = .1` |
 | rounding share | the edge's rounding allowance (`display_rounding_allowance`, below) at most 2 % of `tol.angle` (else `OUT_OF_DOMAIN`) and of the sag allowance (else `EDGE_UNSUPPORTED`, the unresolvable-sag code) | round 3: the allowance must be small against what is asked. It binds only near the other bounds: at the radius bound the azimuth term is about `64 eps / 1e-9 = 1.4e-5` rad, so angles below about 7e-4 rad are refused there; at coordinates 1e9 the sag term is about 5e-6, so sags below about 2.7e-4 are refused there (a test at sag 3e-5 there moved to 3e-4). Over the corpus the largest share is 8.7e-8 (angle) and 2.0e-6 (sag) |
 | `MAX_DISPLAY_ELLIPSE_ASPECT` | 1e6: a non-circular ellipse's aspect `a / b` (its principal semi-axes, the singular values of `[u v]`) times `max(1, \|start\|, \|start + sweep\|)`; and, for a circle or an ellipse, the same product for its PROJECTION across every incident cylinder's or cone's axis (the 2x2 frame `M'`, whose aspect can be far above the curve's: an ellipse of aspect 100 tilted almost into the axis direction projects at 1e8) | the tangent direction moves up to `a / b` times faster than the arc angle, and the evaluator rounds the absolute angle `start + sweep t` by eps \|theta\|: the tangent error is at most `1e6 x eps = 2.2e-10` rad, four orders below the smallest display angle. Measured with `a / b <= 1e6` alone: aspect 1e6 at 999994 rad turns 10 % over `angle = 1e-3` per interval, local divisions notwithstanding. The azimuth is resolved through `M'^-1` and back (`chi`, then the polar part of `M'`), which stretches an angle error by up to `aspect(M')`: within the bound it is at most `1e6 x eps = 2.2e-10` rad. Measured outside it: the 1e8 projection above turned 0.266 rad on one interval at `angle = .1` |
 
@@ -154,6 +172,12 @@ tilted cone projects about 3e-16 off it), and a generator is recognised by the c
 `A'` and `D'`,
 so a frustum's narrow end (both radii positive, however different) is never an apex and a line
 from within `model.tolerance.length` of an apex is divided by its azimuth like any other.
+An end on the axis counts as the apex only for a cone with an EXACTLY zero radius
+(`radius_start == 0`: the apex is `origin`; `radius_end == 0`: `origin + height axis`) and only
+when the end lies within `model.tolerance.length` (plus the apex point's own float rounding,
+`8 eps max(1, |apex coordinate|)`) of that apex point, its axial position included; otherwise
+`OUT_OF_DOMAIN`. Round 4: a frustum with inner radius 1e-16 and a tip at the origin, and an exact
+cone with its tip on the axis 1e-6 above the apex, were drawn as one chord; both are refused.
 An edge id not in the model is a plain `GeometryError` (not a typed refusal).
 
 Inside the domain, a sag allowance at or below 4 eps x max(1, |vertex coordinates|) on a curved
@@ -190,13 +214,16 @@ With `eps` the float epsilon and `theta* = max(1, |start|, |start + sweep|)` (1 
     of 990099 the forward map under-estimated a span by 1.45e-10 rad and an interval turned
     2.1e-10 rad beyond the angle); each evaluated point's azimuth is off by `E_o / r`, at both chord
     ends and at every measured point;
-  - a line's `Z = 2 G / r`, `G = err(A') + err(B') + err(D') + 8 eps max(|A'|, |B'|)` (how far its
-    true position across the axis can be from the computed one: each cut, or a constant azimuth's
-    collinearity, is off by at most `G / r`), plus `4 E_o / r` when interior samples are drawn; a ray
-    from an apex: `2 (rho + err) / axis_floor` (`rho` the apex end's projected radius).
+  - a line's `Z = 2 G / r`, `G = err(A') + err(B') + err(D') + 8 eps max(|A'|, |B'|) + 2 X` (how
+    far its true position across the axis can be from the computed one: each cut, or a constant
+    azimuth's collinearity, is off by at most `G / r`; `X = eps max |coordinate|` of the evaluated
+    ends, each end's absolute coordinate rounding, round 4), plus `4 E_o / r` when interior samples
+    are drawn; a ray from an apex: `2 (rho + err + X) / axis_floor` (`rho` the apex end's projected
+    radius).
 - `sag = 64 eps x sag + 3 E` for a conic (both chord ends and the measured point move by `E`);
-  `64 eps x sag + 8 eps max(1, |b - a|)` for a line (plus `E` when interior samples are drawn);
-  plus any vertex offset counted as 0 at the coordinates' resolution.
+  `64 eps x sag + 8 eps max(1, |b - a|) + X` for a line (plus `E` when interior samples are drawn;
+  `X` as above, round 4: the drawn ends are the true ends rounded, so the published bound holds
+  for every supported line); plus any vertex offset counted as 0 at the coordinates' resolution.
 
 Worst value inside the domain: 2 % of the angle and of the sag allowance, by the rounding-share
 bound (above); over the corpus at most 8.7e-8 of the angle and 2.0e-6 of the sag.
