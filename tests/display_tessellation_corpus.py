@@ -264,7 +264,12 @@ def trimmed_and_whole_neighbours() -> Case:
 
 
 def _cell_outline(cells, origin, side):
-    """Closed lattice loops (counter-clockwise outer, clockwise holes) of a union of unit cells."""
+    """Closed lattice loops (counter-clockwise outer, clockwise holes) of a union of unit cells.
+
+    Input constraint: the cells form one edge-connected region and no lattice point is a corner
+    of two boundary loops (no cells touching only at a corner); the first loop returned is the
+    outer one only under that constraint (checked: every loop vertex is visited once).
+    """
     directed = set()
     for i, j in cells:
         corners = [(i, j), (i + 1, j), (i + 1, j + 1), (i, j + 1)]
@@ -294,8 +299,16 @@ def _cell_outline(cells, origin, side):
             return (bx - ax) * (cy - by) - (by - ay) * (cx - bx) != 0
 
         merged = [p for k, p in enumerate(loop) if turns(k)]
+        if len(set(loop)) != len(loop):
+            raise ValueError("cells touch at a corner: outside this helper's input domain")
         loops.append([(origin[0] + side * i, origin[1] + side * j) for i, j in merged])
+    loops.sort(key=lambda ring: -abs(_lattice_area(ring)))
     return loops
+
+
+def _lattice_area(ring):
+    x, y = np.asarray(ring, float).T
+    return 0.5 * float(np.dot(x, np.roll(y, -1)) - np.dot(np.roll(x, -1), y))
 
 
 def _cone_uv_face(g, support: Cone, rings):
@@ -502,8 +515,7 @@ def seam_hole(rotation=0) -> Case:
     hole = tuple(OrientedEdge(e.edge, not e.forward) for e in reversed(inner))
     face = g.add_face_from_loop(tuple(outer), None, surface=support)
     _set_holes(g, face, [hole])
-    return Case(g, {"holed": face}, {"support": support,
-                                     "uv_area_deg_z": (.006 * .8 - .003 * .4)})
+    return Case(g, {"holed": face}, {"support": support, "uv_area": (.006 * .8 - .003 * .4) / (360. * 3.)})
 
 
 def cone_comb_r3() -> Case:
@@ -524,6 +536,44 @@ def holed_cone_comb() -> Case:
     rings = _cell_outline(cells, (.2, .2), .1)
     face = _cone_uv_face(g, support, rings)
     return Case(g, {"ring": face}, {"support": support, "uv_area": 12 * .01, "rings": rings})
+
+
+def generated_cylinder(segments=3, radius=1.0, height=2.0) -> Case:
+    """An ordinary closed cylinder of ``segments`` whole-support faces sharing seam rulings."""
+    g = GeometryModel()
+    span = 2 * math.pi / segments
+    bottom = [_cyl_point(g, k * span, 0., radius) for k in range(segments)]
+    top = [_cyl_point(g, k * span, height, radius) for k in range(segments)]
+    rulings = [g.add_line(bottom[k], top[k]) for k in range(segments)]
+    faces = {}
+    for k in range(segments):
+        n = (k + 1) % segments
+        a0, a1 = k * span, (k + 1) * span
+        low = _arc(g, bottom[k], bottom[n], (0., 0., 0.), (radius, 0., 0.), (0., radius, 0.), a0, a1)
+        high = _arc(g, top[k], top[n], (0., 0., height), (radius, 0., 0.), (0., radius, 0.), a0, a1)
+        support = Cylinder((0., 0., 0.), (0., 0., 1.), (1., 0., 0.), radius, height, a0, span)
+        faces[f"segment {k}"] = g.add_face((low, rulings[n], high, rulings[k]), corners=(0, 1, 2, 3), surface=support)
+    return Case(g, faces, {"radius": radius, "height": height})
+
+
+def seamless_band() -> Case:
+    """A full-turn cylinder band bounded by two whole circles (no seam edge): winds its support."""
+    g = GeometryModel()
+    support = Cylinder((0., 0., 0.), (0., 0., 1.), (1., 0., 0.), 1.0, 1.0)
+    p, q = _cyl_point(g, 0., .2), _cyl_point(g, 0., .8)
+    low = _arc(g, p, p, (0., 0., .2), (1., 0., 0.), (0., 1., 0.), 0., 2 * math.pi)
+    high = _arc(g, q, q, (0., 0., .8), (1., 0., 0.), (0., 1., 0.), 0., 2 * math.pi)
+    face = g.add_face_from_loop((OrientedEdge(low, True),), None, surface=support)
+    _set_holes(g, face, [(OrientedEdge(high, False),)])
+    return Case(g, {"band": face}, {"support": support})
+
+
+def unsupported_support() -> Case:
+    """A four-sided face with no support surface (topology Coons): not drawn here."""
+    g = GeometryModel()
+    p = [g.add_point(*xyz) for xyz in ((0., 0., 0.), (1., 0., 0.), (1., 1., .3), (0., 1., 0.))]
+    face = g.add_face([g.add_line(p[k], p[(k + 1) % 4]) for k in range(4)], corners=(0, 1, 2, 3))
+    return Case(g, {"coons": face}, {})
 
 
 ALL = {
@@ -562,4 +612,12 @@ ALL = {
     "seam_hole_3": lambda: seam_hole(3),
     "cone_comb_r3": cone_comb_r3,
     "holed_cone_comb": holed_cone_comb,
+    "generated_cylinder_3": generated_cylinder,
+    "generated_cylinder_400": lambda: generated_cylinder(400),
+}
+
+#: valid faces this module refuses by contract (typed), not in ``ALL``
+REFUSED = {
+    "seamless_band": (seamless_band, "TRIM_WINDS_SUPPORT"),
+    "unsupported_support": (unsupported_support, "SUPPORT_UNSUPPORTED"),
 }

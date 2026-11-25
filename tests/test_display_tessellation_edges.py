@@ -10,8 +10,12 @@ import pytest
 
 import display_tessellation_corpus as corpus
 
-dt = pytest.importorskip("anygeometry.display_tessellation")
+import importlib.util  # noqa: E402
 
+if importlib.util.find_spec("anygeometry.display_tessellation") is None:   # absent before S1, not broken
+    pytest.skip("anygeometry.display_tessellation is not implemented yet", allow_module_level=True)
+
+from anygeometry import display_tessellation as dt  # noqa: E402
 from anygeometry.curves import Straight  # noqa: E402
 from anygeometry.errors import GeometryError  # noqa: E402
 from anygeometry.surfaces import Cone, Cylinder, ExtrudedSurface  # noqa: E402
@@ -25,6 +29,8 @@ def _angles(a, b):
 
 
 def _support_normal_turning(support, points):
+    """Turning of the support normal; for a cylinder or cone the azimuth swept (exact for a
+    cylinder, a conservative upper bound for a cone, whose normal turns less than its azimuth)."""
     if isinstance(support, (Cylinder, Cone)):
         offset = points - support.origin
         radial = offset - np.outer(offset @ support.axis, support.axis)
@@ -36,6 +42,13 @@ def _support_normal_turning(support, points):
     t = support.directrix.invert(points - s[:, None] * np.asarray(support.vector))
     tangent = support.directrix.derivative(t)
     return float(_angles(tangent[1:], tangent[:-1]).sum())
+
+
+def _distance_to_segment(points, a, b):
+    """Largest distance of ``points`` from the drawn segment ``a``-``b``."""
+    d = b - a
+    t = np.clip((points - a) @ d / (d @ d), 0.0, 1.0)
+    return float(np.linalg.norm(points - a - np.outer(t, d), axis=1).max())
 
 
 def _curved_edges(case):
@@ -62,12 +75,16 @@ def test_every_interval_turns_at_most_one_step(name, step):
         samples = dt.edge_display_samples(g, edge_id, tol)
         t = samples.parameters
         assert t[0] == 0.0 and t[-1] == 1.0 and np.all(np.diff(t) > 0.0)
+        # the drawn points are the curve at those parameters (ends: the vertices, within tolerance)
+        exact = g.evaluate_edge_many(edge_id, t)
+        assert np.array_equal(samples.points[1:-1], exact[1:-1])
+        assert np.abs(samples.points[[0, -1]] - exact[[0, -1]]).max() <= 1e-9 * max(1.0, np.abs(exact).max())
         supports = [g.faces[f].surface for f in g.faces_using_edge(edge_id)]
         curved = [s for s in supports if isinstance(s, (Cylinder, Cone, ExtrudedSurface))]
         radii = [s.radius if isinstance(s, Cylinder) else max(s.radius_start, s.radius_end)
                  for s in curved if isinstance(s, (Cylinder, Cone))]
         allowance = min(radii) * (1 - math.cos(step / 2)) if radii else None
-        for t0, t1 in zip(t[:-1], t[1:]):
+        for k, (t0, t1) in enumerate(zip(t[:-1], t[1:])):
             dense = np.linspace(t0, t1, DENSE)
             tangent = g.edge_tangent_many(edge_id, dense)
             assert _angles(tangent[1:], tangent[:-1]).sum() <= step * (1 + SLACK), (name, edge_id, t0, t1)
@@ -75,11 +92,7 @@ def test_every_interval_turns_at_most_one_step(name, step):
             for support in curved:
                 assert _support_normal_turning(support, points) <= step * (1 + SLACK), (name, edge_id, t0, t1)
             if allowance is not None:
-                chord = points[-1] - points[0]
-                unit = chord / np.linalg.norm(chord)
-                off = points - points[0]
-                distance = np.linalg.norm(off - np.outer(off @ unit, unit), axis=1).max()
-                assert distance <= allowance * (1 + 1e-9) + 1e-15, (name, edge_id, t0, t1)
+                assert _distance_to_segment(points, samples.points[k], samples.points[k + 1])                     <= allowance * (1 + 1e-9) + 1e-12, (name, edge_id, t0, t1)
 
 
 @pytest.mark.parametrize("name", CASES)
@@ -172,3 +185,17 @@ def test_refusals_are_typed():
         dt.DisplayTrimRefused("NOT_A_CODE", "x")
     refusal = dt.DisplayTrimRefused("TRIM_INVALID", "x")
     assert isinstance(refusal, GeometryError) and refusal.code == "TRIM_INVALID"
+
+
+@pytest.mark.parametrize("name", ["shared_circle", "steep_cuts", "elliptic_extrusion_band", "ellipse_edge_20"])
+def test_an_explicit_sag_is_honoured(name):
+    """A sag tighter than the angular default bounds every drawn segment's distance from its curve."""
+    case = corpus.ALL[name]()
+    g = case.model
+    sag = 1e-4
+    for edge_id in _curved_edges(case):
+        samples = dt.edge_display_samples(g, edge_id, dt.DisplayTolerance(corpus.INTERACTION_STEP, sag))
+        t = samples.parameters
+        for k, (t0, t1) in enumerate(zip(t[:-1], t[1:])):
+            points = g.evaluate_edge_many(edge_id, np.linspace(t0, t1, DENSE))
+            assert _distance_to_segment(points, samples.points[k], samples.points[k + 1]) <= sag * (1 + 1e-9)
