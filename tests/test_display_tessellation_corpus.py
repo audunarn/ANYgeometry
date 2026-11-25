@@ -36,11 +36,12 @@ def _boundary(g, face, loop, count=129):
 
 
 def _uv_area(support, points, period=None):
+    """Signed support-uv area of a loop (positive counter-clockwise in the support's u, v)."""
     uv = np.array([support.local_uv(p) for p in points])
     if period is not None:
         uv[:, 0] = np.unwrap(uv[:, 0] * 2 * np.pi / period) * period / (2 * np.pi)
     uv -= uv.min(axis=0)
-    return 0.5 * abs(np.dot(uv[:, 0], np.roll(uv[:, 1], -1)) - np.dot(np.roll(uv[:, 0], -1), uv[:, 1]))
+    return 0.5 * (np.dot(uv[:, 0], np.roll(uv[:, 1], -1)) - np.dot(np.roll(uv[:, 0], -1), uv[:, 1]))
 
 
 @pytest.mark.parametrize("name,holes", [("seam_hole_0", 1), ("seam_hole_1", 1), ("seam_hole_2", 1), ("seam_hole_3", 1),
@@ -54,9 +55,11 @@ def test_holes_and_trim_areas_are_the_stated_ones(name, holes):
     assert len(face.holes) == holes
     support = face.surface
     period = 1.0 if abs(abs(getattr(support, "sweep_angle", 0.0)) - 2 * np.pi) < 1e-12 else None
-    area = _uv_area(support, _boundary(g, face, face.loop), period) - sum(
-        _uv_area(support, _boundary(g, face, h), period) for h in face.holes)
-    assert area == pytest.approx(case.info["uv_area"], rel=1e-9)
+    outer = _uv_area(support, _boundary(g, face, face.loop), period)
+    holes = [_uv_area(support, _boundary(g, face, h), period) for h in face.holes]
+    # holes wind against the outer loop, and the trim area is the stated one
+    assert all(np.sign(h) == -np.sign(outer) for h in holes)
+    assert abs(outer) - sum(abs(h) for h in holes) == pytest.approx(case.info["uv_area"], rel=1e-9)
 
 
 @pytest.mark.parametrize("name", ["box_corner_cut", "wavy_band", "wavy_band_cornerless", "wavy_band_split", "steep_cuts"])
@@ -88,3 +91,21 @@ def test_standalone_ellipse_and_lens_sections():
         mid = lens.model.evaluate_edge_many(lens.info["upper"], [.5])[0]
         assert mid[2] == pytest.approx(.4 + .5 * (1 - np.cos(half)), abs=1e-12)
         assert np.arctan2(mid[1], mid[0]) == pytest.approx(.5, abs=1e-12)
+
+
+@pytest.mark.parametrize("name,bottom,corners", [("wavy_band", 1, 4), ("wavy_band_cornerless", 1, 0),
+                                                 ("wavy_band_split", 4, 4)])
+def test_band_variants_are_the_stated_topology(name, bottom, corners):
+    case = corpus.ALL[name]()
+    (face_id,) = case.faces.values()
+    face = case.model.faces[face_id]
+    assert case.info["bottom_edges"] == bottom and len(face.loop) == bottom + 3
+    assert len(face.corners) == corners
+
+
+def test_cell_outline_refuses_loops_sharing_a_lattice_point():
+    cells = [(i, j) for i in range(3) for j in range(3) if (i, j) not in ((2, 0), (1, 1))]
+    with pytest.raises(ValueError):
+        corpus._cell_outline(cells, (0., 0.), 1.)
+    with pytest.raises(ValueError):
+        corpus._cell_outline([(0, 0), (1, -1)], (0., 0.), 1.)

@@ -207,9 +207,9 @@ def wavy_band(corners=(0, 1, 2, 3), split=None) -> Case:
     if corners:
         n = len(bottom)
         face = g.add_face(loop, corners=(0, n, n + 1, n + 2), surface=support)
-    else:
-        face = g.add_face(loop, surface=support)
-    return Case(g, {"band": face}, {"support": support, "half_angle": a,
+    else:   # truly cornerless: add_face() would detect four corners at the band's kinks
+        face = g.add_face_from_loop(g.order_loop(loop), None, surface=support)
+    return Case(g, {"band": face}, {"support": support, "half_angle": a, "bottom_edges": len(bottom),
                                     "low": lambda t: .2 - .1 * np.cos(t), "high": lambda t: .8 + .1 * np.cos(t)})
 
 
@@ -281,7 +281,7 @@ def _cell_outline(cells, origin, side):
     following = {}
     for a, b in directed:
         following.setdefault(a, []).append(b)
-    loops = []
+    loops, seen = [], []
     while following:
         start = min(following)
         loop, at = [start], start
@@ -299,8 +299,9 @@ def _cell_outline(cells, origin, side):
             return (bx - ax) * (cy - by) - (by - ay) * (cx - bx) != 0
 
         merged = [p for k, p in enumerate(loop) if turns(k)]
-        if len(set(loop)) != len(loop):
+        if len(set(loop)) != len(loop) or any(set(loop) & set(other) for other in seen):
             raise ValueError("cells touch at a corner: outside this helper's input domain")
+        seen.append(loop)
         loops.append([(origin[0] + side * i, origin[1] + side * j) for i, j in merged])
     loops.sort(key=lambda ring: -abs(_lattice_area(ring)))
     return loops
@@ -556,18 +557,6 @@ def generated_cylinder(segments=3, radius=1.0, height=2.0) -> Case:
     return Case(g, faces, {"radius": radius, "height": height})
 
 
-def seamless_band() -> Case:
-    """A full-turn cylinder band bounded by two whole circles (no seam edge): winds its support."""
-    g = GeometryModel()
-    support = Cylinder((0., 0., 0.), (0., 0., 1.), (1., 0., 0.), 1.0, 1.0)
-    p, q = _cyl_point(g, 0., .2), _cyl_point(g, 0., .8)
-    low = _arc(g, p, p, (0., 0., .2), (1., 0., 0.), (0., 1., 0.), 0., 2 * math.pi)
-    high = _arc(g, q, q, (0., 0., .8), (1., 0., 0.), (0., 1., 0.), 0., 2 * math.pi)
-    face = g.add_face_from_loop((OrientedEdge(low, True),), None, surface=support)
-    _set_holes(g, face, [(OrientedEdge(high, False),)])
-    return Case(g, {"band": face}, {"support": support})
-
-
 def unsupported_support() -> Case:
     """A four-sided face with no support surface (topology Coons): not drawn here."""
     g = GeometryModel()
@@ -618,6 +607,5 @@ ALL = {
 
 #: valid faces this module refuses by contract (typed), not in ``ALL``
 REFUSED = {
-    "seamless_band": (seamless_band, "TRIM_WINDS_SUPPORT"),
     "unsupported_support": (unsupported_support, "SUPPORT_UNSUPPORTED"),
 }

@@ -196,6 +196,9 @@ def test_an_explicit_sag_is_honoured(name):
     for edge_id in _curved_edges(case):
         samples = dt.edge_display_samples(g, edge_id, dt.DisplayTolerance(corpus.INTERACTION_STEP, sag))
         t = samples.parameters
+        assert len(t) >= 2 and t[0] == 0.0 and t[-1] == 1.0 and np.all(np.diff(t) > 0.0)
+        assert samples.points.shape == (len(t), 3)
+        assert np.array_equal(samples.points[1:-1], g.evaluate_edge_many(edge_id, t)[1:-1])
         for k, (t0, t1) in enumerate(zip(t[:-1], t[1:])):
             points = g.evaluate_edge_many(edge_id, np.linspace(t0, t1, DENSE))
             assert _distance_to_segment(points, samples.points[k], samples.points[k + 1]) <= sag * (1 + 1e-9)
