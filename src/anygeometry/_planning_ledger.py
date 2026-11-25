@@ -360,44 +360,61 @@ def runtime_infrastructure():
     return handle,dict(anchor=pin_module(module),json_native=pin_module(native),json_encoder=pin_module(encoder))
 
 
-# Bounded stores (owner decision 2026-11-25, 0.4.7 gate class H, census bound kept at 160,000): two numerical
-# reset roots of exact_curves whose size the module bounds by its own limit constant. Warm, they hold up to
-# 2 x 4096 entries of about 50 walk nodes each, enough to truncate the census and decline the process route.
-# They are walked exactly like every other store (same identities, aliases, stores and unknowns, no hooks
-# executed), but their entries are counted against a reserved budget derived from that bound instead of the
-# shared one: at most ``limit`` entries per store and ``_BOUNDED_ENTRY_NODES`` nodes per entry (the writer
-# produces at most 51). The reviewed limit constant, the exact dict binding and the size are checked first;
-# any failure, or an entry or store over its budget, declines.
-_BOUNDED_STORE_MODULE = 'anygeometry.exact_curves'
-_BOUNDED_STORE_LIMIT = ('_BRANCH_CONSTANTS_LIMIT', 4096)
-_BOUNDED_STORES = ('_BRANCH_CONSTANTS', '_DOUBLE_NODES')
-_BOUNDED_ENTRY_NODES = 64
+# Bounded stores (owner decisions 2026-11-25, 0.4.7 gate class H: census bound kept at 160,000; "reserved
+# budgets", scope A). Five module caches bound their own size by a limit constant (clear or evict at the
+# limit). Warm, they hold far more walk nodes than the shared census budget leaves free, which truncated
+# the census and declined the process route. Each is walked exactly like every other store (same
+# identities, aliases, stores and unknowns, no hooks executed), but its entries are counted against a
+# reserved budget of its own: at most ``limit`` entries, each within ``entry nodes`` census nodes; on the
+# package worker route the identities first reached from it count against ``limit x entry identities``.
+# The per-entry figures are the measured writer maxima with margin
+# (tests/test_planning_census_reserved_budgets_20261125.py keeps them honest). The exact dict binding, the reviewed limit constant and the size
+# are checked before the walk; any failure, or an entry or store over its budget, declines.
+#   (module, store, limit constant, reviewed limit, entry nodes, entry identities); measured maxima per entry
+#   (each entry alone, 2026-11-25, 33 cache-heavy test files incl. hub/k6/tripod, 25,000 entries) in brackets:
+_BOUNDED_STORES = (
+    # [39 nodes, 51 identities]
+    ('anygeometry.exact_curves', '_BRANCH_CONSTANTS', '_BRANCH_CONSTANTS_LIMIT', 4096, 64, 96),
+    # [41, 44]; the writer stores at most two nodes per pair
+    ('anygeometry.exact_curves', '_DOUBLE_NODES', '_BRANCH_CONSTANTS_LIMIT', 4096, 64, 96),
+    # [305, 168]; all nine numerator products formed (a general quadric): [322, 213]
+    ('anygeometry.quadric_curve_events', '_BRANCH_POLYNOMIALS', '_BRANCH_POLYNOMIALS_LIMIT', 4096, 512, 320),
+    # [41, 37]; the key holds the caller's curve: a cylinder branch [80, 72], a Bezier path 4 per control point
+    ('anygeometry.quadric_events', '_MEMO', '_MEMO_SIZE', 8192, 192, 192),
+    # [18, 18], a fixed shape (sin/cos enclosures of one Fraction); not a reset root (its row stays 'decline')
+    ('anygeometry.separating_plane_certificate', '_TRIG_CACHE', '_TRIG_CACHE_LIMIT', 1 << 18, 24, 24),
+)
+_BOUNDED = {module + '.' + store: row for row in _BOUNDED_STORES for module, store in (row[:2],)}
 
 
 def bounded_store_check(module, name):
-    """The registered bound of one bounded store, or a decline; never inspects entries."""
-    path = _BOUNDED_STORE_MODULE + '.' + name
-    if (type(module) is not types.ModuleType or name not in _BOUNDED_STORES
-            or vars(module).get('__name__') != _BOUNDED_STORE_MODULE
-            or sys.modules.get(_BOUNDED_STORE_MODULE) is not module):
+    """The registered bound of one bounded store, or a decline; never inspects entries.
+
+    Returns ``(store, limit, entry_nodes, entry_identities)``.
+    """
+    owner = vars(module).get('__name__') if type(module) is types.ModuleType else None
+    path = str(owner) + '.' + str(name)
+    row = _BOUNDED.get(path)
+    if row is None or sys.modules.get(owner) is not module:
         raise QualificationDecline('unregistered bounded store: ' + path)
+    _, _, limit_name, limit_value, entry_nodes, entry_identities = row
     namespace = vars(module)
     value = namespace.get(name)
     if type(value) is not dict:
         raise QualificationDecline('bounded store is not its reviewed exact dict: ' + path)
-    limit_name, limit_value = _BOUNDED_STORE_LIMIT
     limit = namespace.get(limit_name)
     if type(limit) is not int or limit != limit_value:
         raise QualificationDecline('bounded store limit changed or removed: ' + path)
     if dict.__len__(value) > limit:
         raise QualificationDecline('bounded store exceeds its limit: ' + path)
-    return value, limit
+    return value, limit, entry_nodes, entry_identities
 
 
 def _bounded_registry(modules):
-    return {_BOUNDED_STORE_MODULE + '.' + name: bounded_store_check(module, name)
+    """Every registered bounded store of the supplied modules, checked; path -> bounded_store_check()."""
+    return {path: bounded_store_check(module, row[1])
             for module in modules if type(module) is types.ModuleType
-            and vars(module).get('__name__') == _BOUNDED_STORE_MODULE for name in _BOUNDED_STORES}
+            for path, row in _BOUNDED.items() if vars(module).get('__name__') == row[0]}
 
 
 def _census(modules, objects, *, omit_cache_payloads=False, definitions=None):
@@ -432,13 +449,13 @@ def _census(modules, objects, *, omit_cache_payloads=False, definitions=None):
         if entry is None or entry[0] is not value:
             return None
         walked[path] = value
-        return entry[1], _BOUNDED_ENTRY_NODES
+        return entry[1], entry[2]
 
     report = inventory(modules, store_objects=objects, definition_objects=definitions,
                        store_boundary=boundary if omit_cache_payloads else None,
                        infrastructure_boundary=infrastructure_boundary, bounded_store=bounded_store)
     # Reached first through another path, the store was walked against the shared budget: decline.
-    if any(walked.get(path) is not value and omitted.get(path) is not value for path, (value, _) in bounded.items()):
+    if any(walked.get(path) is not entry[0] and omitted.get(path) is not entry[0] for path, entry in bounded.items()):
         raise QualificationDecline('bounded store not reached at its registered binding')
     if any(id(value) in definitions for value in omitted.values()):
         raise QualificationDecline('registered cache aliases protected definition')
@@ -756,16 +773,20 @@ class PackageWorkerLedger:
             if type(value) in (weakref.WeakKeyDictionary,weakref.WeakValueDictionary):children=value.values()
             elif type(value) is weakref.WeakSet:children=value
             else:children=gc.get_referents(value)
-            pending.extend((path+'.payload',item,path in bounded) for item in children)
-        seen=set();shared=0;reserved=0
-        reserve_bound=sum(limit for _,limit in bounded.values())*_BOUNDED_ENTRY_NODES
+            pending.extend((path+'.payload',item,path if path in bounded else None) for item in children)
+        seen=set();shared=0
+        # Each bounded store's own identity budget: identities first reached from it count there.
+        reserved={path:limit*identities for path,(_,limit,_,identities) in bounded.items()}
         while pending:
             path,value,reserve=pending.pop();identity=id(value)
             if identity in seen:continue
             seen.add(identity)
-            if reserve:reserved+=1
-            else:shared+=1
-            if shared>80000 or reserved>reserve_bound:raise QualificationDecline('worker cache alias walk bound exceeded')
+            if reserve is None:
+                shared+=1
+                if shared>80000:raise QualificationDecline('worker cache alias walk bound exceeded')
+            else:
+                reserved[reserve]-=1
+                if reserved[reserve]<0:raise QualificationDecline('worker cache alias walk bound exceeded: '+reserve)
             # CPython shares this immutable leaf across numerical empty results
             # and definition metadata. It has no descendants or mutable storage.
             if type(value) is tuple and len(value)==0:continue

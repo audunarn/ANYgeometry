@@ -1377,10 +1377,14 @@ def test_module_is_wired_only_into_the_opt_in_route():
     src = pathlib.Path(sp.__file__).resolve().parent
     users = [p.name for p in src.rglob("*.py") if p.name != "separating_plane_certificate.py"
              and "separating_plane_certificate" in p.read_text(encoding="utf-8", errors="replace")]
-    assert users == ["batch_intersections.py"]
+    # The planning census also names its bounded _TRIG_CACHE (class H reserved budgets, 2026-11-25): a
+    # registry entry, never an import.
+    assert sorted(users) == ["_planning_ledger.py", "batch_intersections.py"]
     text = (src / "batch_intersections.py").read_text(encoding="utf-8")
     assert not any(line.startswith(("from .separating_plane_certificate", "import "))
                    and "separating_plane_certificate" in line for line in text.splitlines())
+    ledger_text = (src / "_planning_ledger.py").read_text(encoding="utf-8")
+    assert not any("import" in line for line in ledger_text.splitlines() if "separating_plane_certificate" in line)
 
 
 # ------------------------------------------------------------ randomized soundness (exact oracle)

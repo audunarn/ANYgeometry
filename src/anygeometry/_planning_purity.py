@@ -72,7 +72,7 @@ INVENTORY_MAX_NODES = 160000
 
 
 def inventory(modules, *, max_nodes=INVENTORY_MAX_NODES, max_depth=24, store_objects=None, definition_objects=None,
-              store_boundary=None, infrastructure_boundary=None, bounded_store=None):
+              store_boundary=None, infrastructure_boundary=None, bounded_store=None, bounded_usage=None):
     """Bounded actual-type walk; no user descriptors, iterators or repr calls.
 
     Module metadata is excluded from numerical stores, not from loader safety.
@@ -81,6 +81,7 @@ def inventory(modules, *, max_nodes=INVENTORY_MAX_NODES, max_depth=24, store_obj
     ``bounded_store(value, path)`` may return ``(max_entries, entry_nodes)`` for an
     exact dict store: its entries are walked exactly as any other, but counted
     against that reserved budget instead of ``max_nodes``; exceeding it truncates.
+    ``bounded_usage`` (an empty dict) receives ``path -> (entries, largest entry, nodes)`` per bounded store.
     """
     if type(modules) is not tuple or max_nodes < 1 or max_depth < 1:
         raise PurityDecline('invalid inventory bounds/modules')
@@ -88,6 +89,8 @@ def inventory(modules, *, max_nodes=INVENTORY_MAX_NODES, max_depth=24, store_obj
         raise PurityDecline('store handle output must be an empty dictionary')
     if definition_objects is not None and (type(definition_objects) is not dict or definition_objects):
         raise PurityDecline('definition output must be an empty dictionary')
+    if bounded_usage is not None and (type(bounded_usage) is not dict or bounded_usage):
+        raise PurityDecline('bounded usage output must be an empty dictionary')
     namespaces = [(m, _namespace(m)) for m in modules]
     included = {id(m) for m, _ in namespaces}
     stores, unknowns, aliases, seen = [], [], [], {}
@@ -152,6 +155,7 @@ def inventory(modules, *, max_nodes=INVENTORY_MAX_NODES, max_depth=24, store_obj
                       and reserved is None else None)
             if limits is not None:
                 max_entries, entry_nodes = limits
+                entries = largest = total = 0
                 for i, (key, item) in enumerate(dict.items(value)):
                     if i >= max_entries:
                         truncated = True
@@ -161,9 +165,12 @@ def inventory(modules, *, max_nodes=INVENTORY_MAX_NODES, max_depth=24, store_obj
                         visit(key, path + f'.key[{i}]', depth + 1)
                         visit(item, path + ('.' + key if type(key) is str else f'.value[{i}]'), depth + 1)
                     finally:
-                        reserved = None
+                        used, reserved = entry_nodes - reserved, None
+                    entries, largest, total = entries + 1, max(largest, used), total + used
                     if truncated:
                         break
+                if bounded_usage is not None:
+                    bounded_usage[path] = (entries, largest, total)
                 return
         if typ in (dict, OrderedDict):
             items = dict.items(value) if typ is dict else OrderedDict.items(value)
