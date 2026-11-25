@@ -42,6 +42,13 @@ def _own_registry(patch):
     an entry, or a stage refused because the entry is not provably stale (0.4.7 gate class E, Tests run
     45480936063, 2026-11-25). The threads of earlier tests are joined (the fixtures count them), so their marks
     protect nothing here. What a later test meets is tested on purpose, with planted entries.
+
+    Documented limit (owner decision E (a), 2026-11-25): the per-test registry is discarded unchecked, so a
+    production path that wrongly keeps a joined worker's mark is no longer noticed by a later test through ident
+    reuse; only tests that assert registry contents themselves catch it. A teardown check was tried and held after
+    three review rounds (local branch claude/gate2-recorder-f59cbd2-20261125). The exact fix belongs to the
+    per-thread identity redesign, which removes ident reuse from the registry. A test that calls
+    ``monkeypatch.undo()`` mid-test works against the module registry for the rest of that test.
     """
     patch.setattr(pt, '_WORKERS', {})
 
