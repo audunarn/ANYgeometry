@@ -15,7 +15,16 @@ All notable user-visible changes to ANYgeometry are documented here.
   `DisplayDomainRefused` (`OUT_OF_DOMAIN`). Circles and ellipses are divided in their local
   angle, lines from their exact evaluated ends; a line has constant azimuth only when its ends
   are collinear with the axis point; the end chords' sag bound includes the vertex offsets;
-  counts are plain ceilings. See `docs/DISPLAY_TESSELLATION.md`. No existing module changes.
+  counts are plain ceilings. Round-2 stability audit: the azimuth ray inverse and the singular
+  values are formed without cancellation; the aspect x stored-angle bound also applies to an
+  arc's projection across each cylinder or cone axis, and one closest-approach rule covers
+  cylinder and cone arcs; lines project their exact end difference (a ruling on a tilted axis no
+  longer raises), an end within 8 eps of an axis is on it, a line on the axis is
+  `OUT_OF_DOMAIN`; circles need orthogonal equal axes to 8 eps; the two-interval rule counts
+  vertex offsets; every count is checked before any division is built; no raw arithmetic error
+  escapes. Corpus counts unchanged, parameters moved by at most 2.2e-16. See
+  `docs/DISPLAY_TESSELLATION.md` (stability table, rounding allowance). No existing module
+  changes.
 
 - Prepare version 0.4.7 for bounded B1 curved-hull hydrostatics point queries,
   including independently verified volume, body-origin first moments and raw

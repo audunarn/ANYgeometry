@@ -67,9 +67,10 @@ MAX_DISPLAY_COORDINATE = 1.0e9
 #: (radians).  Its float spacing is 1.2e-10 rad, four orders below the smallest display angle.
 MAX_DISPLAY_ANGLE = 1.0e6
 #: Smallest distance from a support axis, as a fraction of max(1, |coordinate|): every incident
-#: cylinder radius and every point used for an azimuth (a line's ends, except one exactly on the
-#: axis, and its closest approach; a lower bound of a cone arc's, whose scale includes
-#: max(1, |stored angle|) sigma_max of its projected frame: the evaluator rounds start + sweep t).
+#: cylinder radius and every point used for an azimuth (a line's ends, except one on the axis to
+#: the frame's rounding, 8 eps max(1, |coordinate|), and its closest approach; a lower bound of a
+#: cylinder or cone arc's, whose scale includes max(1, |stored angle|) sigma_max of its projected
+#: frame: the evaluator rounds start + sweep t).  A line with both ends on the axis is refused.
 #: An azimuth computed from coordinates of size |p| at distance r from the axis is rounded by
 #: about eps |p| / r: at the bound 2.2e-7 rad, below the smallest display angle (1e-6).
 MIN_DISPLAY_RADIUS_RATIO = 1.0e-9
@@ -77,15 +78,19 @@ MIN_DISPLAY_RADIUS_RATIO = 1.0e-9
 #: its principal semi-axes, the singular values of ``[u v]``).  The tangent direction moves up to
 #: ``a / b`` times faster than the arc angle, and the evaluator rounds the absolute angle
 #: ``start + sweep t`` by eps |theta|: the tangent moves by at most ``1e6 x eps = 2.2e-10`` rad,
-#: four orders below the smallest display angle.
+#: four orders below the smallest display angle.  The same bound applies to the arc's projection
+#: across every incident cylinder's or cone's axis (the 2x2 projected frame ``M'``, which can be
+#: far thinner than the curve): the azimuth is resolved through ``M'^-1`` and back, so its
+#: rounding is at most ``aspect(M') x eps`` (and the stored angle's, as for the tangent).
 MAX_DISPLAY_ELLIPSE_ASPECT = 1.0e6
 
 _MAX_INTERVALS = 4096      # per edge
 _STEP_ROUNDING = 4.0 * float(np.finfo(float).eps)   # relative rounding of a computed span
 _MIN_ANGLE = 1.0e-6        # smallest display angle (radians)
-_CIRCLE_RTOL = 1.0e-12     # |u| = |v| and u.v = 0 to this relative tolerance: a circle
-_DEGENERATE = 1.0e-12      # |det| <= this * |M|^2: a projected or in-plane frame is degenerate
 _EPS = float(np.finfo(float).eps)
+_CIRCLE_RTOL = 8.0 * _EPS  # |u| = |v| and u.v = 0 to a few eps relative: a circle (else an ellipse)
+_ON_AXIS = 8.0 * _EPS      # a projection within 8 eps max(1, |coordinates|) of an axis is on it
+_DEGENERATE = 1.0e-12      # |det| <= this * |M|^2: a projected or in-plane frame is degenerate
 _TWO_PI = 2.0 * math.pi
 
 
@@ -193,10 +198,12 @@ class _AngleMap:
       and ``S e`` stays in (-pi/2, pi/2)); orientation-preserving, so monotone in ``chi``.
 
     Inverse: ``chi`` from ``N^-1 (cos Phi, sin Phi)``, lifted to within pi/2 of ``Phi - alpha``;
-    then ``z + w`` on that ray, ``w = lambda e - z`` with ``|w| = 1``: ``lambda = z.e + sign(g)
-    sqrt((z.e)^2 - |z|^2 + 1)``, the root on the monotone branch (``g = r (r + sign(g) z.e)`` with
-    ``r`` the square root); ``x`` lifted to within pi/2 of ``chi`` (``g > 0``) or of ``chi - pi``
-    (``g < 0``).
+    then ``z + w`` on that ray, ``w = lambda e - z`` with ``|w| = 1``: with ``z = (z.e) e + h e_perp``
+    (``h = cross(e, z)``), ``w = sign(g) sqrt((1 - h)(1 + h)) e - h e_perp``, the root on the
+    monotone branch (``g = r (r + sign(g) z.e)`` with ``r`` the square root), formed directly so
+    nothing of size ``|z|`` cancels; ``x`` lifted to within pi/2 of ``chi`` (``g > 0``) or of
+    ``chi - pi`` (``g < 0``).  ``sigma_max`` and ``aspect`` (``sigma_max / sigma_min``) come from
+    two sums of squares and ``det``, without cancellation.
     """
 
     def __init__(self, edge_id, matrix, offset, phase, theta_a, theta_b):
@@ -247,14 +254,19 @@ class _AngleMap:
             raise _unsupported(edge_id, "the azimuth about a support axis is not monotone along the edge "
                                         "(its projection reaches or turns back round the axis)")
         self.z_radius = radius
+        # Singular values without cancellation: with det > 0, sigma_max + sigma_min and
+        # sigma_max - sigma_min are the square roots of two sums of squares; sigma_min = det /
+        # sigma_max (never the difference of two close numbers).
+        self.sigma_max = 0.5 * (math.hypot(m[0, 0] + m[1, 1], m[1, 0] - m[0, 1])
+                                + math.hypot(m[0, 0] - m[1, 1], m[0, 1] + m[1, 0]))
+        self.aspect = self.sigma_max * self.sigma_max / det
         # Closest approach of the curve to the origin over the interval, bounded below by
         # sigma_min(N) min |z + w(x)|.  |z + w(x)| is the distance of the unit circle point w(x)
         # from -z: smallest at x = arg z + pi (odd k) where it is exactly | |z| - 1 |, else at an
         # end; each is evaluated directly (no expansion of |z + w|^2 that would cancel).
         distances = [math.hypot(self.z[0] + math.cos(x), self.z[1] + math.sin(x)) for x in (xa, xb)]
         distances += [abs(radius - 1.0) for k, _x in inside if k % 2]
-        sigma_max = math.sqrt(0.5 * (frobenius + math.sqrt(max(0.0, frobenius * frobenius - 4.0 * det * det))))
-        self.closest = det / sigma_max * min(distances)
+        self.closest = det / self.sigma_max * min(distances)
 
     def _x(self, theta):
         return self.flip * (theta + self.phase)
@@ -276,10 +288,12 @@ class _AngleMap:
         chi = math.atan2(x1, x0)
         chi += _TWO_PI * round((phi - self.alpha - chi) / _TWO_PI)
         e0, e1 = math.cos(chi), math.sin(chi)
-        ze = self.z[0] * e0 + self.z[1] * e1
-        root = math.sqrt(max(0.0, ze * ze - self.z_radius * self.z_radius + 1.0))
-        lam = ze + self.branch * root
-        x = math.atan2(lam * e1 - self.z[1], lam * e0 - self.z[0])
+        # z = (z.e) e + h e_perp (e_perp = (-e1, e0)): the ray point is w = lambda e - z
+        # = sign(g) sqrt(1 - h^2) e - h e_perp, formed directly (no (z.e)^2 - |z|^2 + 1, no
+        # lambda e - z: both cancel terms of size |z|^2 or |z| when the projection is thin)
+        h = -self.z[0] * e1 + self.z[1] * e0
+        root = self.branch * math.sqrt(max(0.0, (1.0 - h) * (1.0 + h)))
+        x = math.atan2(root * e1 - h * e0, root * e0 + h * e1)
         reference = chi if self.branch > 0 else chi - math.pi
         x += _TWO_PI * round((reference - x) / _TWO_PI)
         return self.flip * x - self.phase
@@ -289,6 +303,15 @@ def _angle_division(amap, theta_a, theta_b, n):
     """The ``n - 1`` interior thetas splitting ``amap``'s angle over [theta_a, theta_b] equally."""
     pa, pb = amap.angle(theta_a), amap.angle(theta_b)
     return [amap.solve(pa + (pb - pa) * k / n) for k in range(1, n)]
+
+
+@dataclass(frozen=True)
+class _Plan:
+    """A division's interval count (checked against the cap) and how to build it: every count
+    of an edge is known and checked before any division is materialised."""
+
+    count: int
+    build: object
 
 
 @dataclass(frozen=True)
@@ -356,65 +379,77 @@ def _axis_frame(support):
 # ---------------------------------------------------------------------------------------------
 # divisions
 # ---------------------------------------------------------------------------------------------
-def _line_azimuth_division(edge_id, support, a, b, step) -> _Division:
-    """Edge parameters dividing a line's azimuth about ``support``'s axis into equal steps.
+def _line_azimuth_division(edge_id, support, a, b, step) -> "_Plan":
+    """The plan (count first, then the edge parameters) dividing a line's azimuth about
+    ``support``'s axis into equal steps.
 
-    ``a``, ``b`` are the line's evaluated ends (the exact evaluator's).  Their projections
-    ``A'``, ``B'`` onto the plane normal to the axis, relative to the axis point, decide:
+    ``a``, ``b`` are the line's evaluated ends (the exact evaluator's).  The projection ``A'`` of
+    ``a`` relative to the axis point and the projection ``D'`` of the exact difference ``b - a``
+    (never of ``b`` separately: a ruling's difference projects to exactly 0 where its separately
+    rounded ends do not) onto the plane normal to the axis, with ``B' = A' + D'``, decide:
 
-    * an end exactly on the axis (``A' = 0``: a cone's exact apex): the projection is a ray from
-      the axis point, constant azimuth, no division;
-    * ``A'``, ``B'`` collinear with the axis point (``|A' x B'| <= 8 eps |A'| |B'|``) on the same
-      side: constant azimuth (a cylinder ruling, a cone generator), no division; on opposite
-      sides: the line crosses the axis, ``EDGE_UNSUPPORTED``;
-    * otherwise ``A' + t D'`` (``D' = B' - A'``) does not pass through the axis point, its azimuth
-      is monotone (``cross(A' + t D', D') = cross(A', D')`` is constant) and subtends less than
-      pi, so the wrapped end difference is its span.  A target azimuth ``phi`` is reached at
+    * an end on the axis (its projection within ``8 eps max(1, |end|, |axis point|)`` of it, the
+      rounding of the frame: a cone's exact apex): the projection is a ray from the axis point,
+      constant azimuth, no division; both ends on the axis: no azimuth anywhere, ``OUT_OF_DOMAIN``;
+    * ``A'``, ``D'`` collinear (``|A' x D'| <= 8 eps |A'| |D'|``, including ``D' = 0``) with
+      ``A'``, ``B'`` on the same side: constant azimuth (a cylinder ruling, a cone generator), no
+      division; on opposite sides: the line crosses the axis, ``EDGE_UNSUPPORTED``;
+    * otherwise ``A' + t D'`` does not pass through the axis point, its azimuth is monotone
+      (``cross(A' + t D', D') = cross(A', D')`` is constant) and subtends less than pi, so the
+      wrapped end difference is its span.  A target azimuth ``phi`` is reached at
       ``t = -cross(A', e) / cross(D', e)``, ``e = (cos phi, sin phi)``.
 
-    Each end off the axis, and the closest approach ``|cross(A', B')| / |D'|`` when it lies
+    Each end off the axis, and the closest approach ``|cross(A', D')| / |D'|`` when it lies
     between the ends, is checked against the radius bound (``OUT_OF_DOMAIN``).  There is no
-    proximity shortcut: a line from near an apex is divided like any other.
+    proximity shortcut beyond the frame's rounding: a line from near an apex is divided like any
+    other.
     """
     origin, x_axis, y_axis = _axis_frame(support)
-    a3, b3, d3 = a - origin, b - origin, b - a
-    a2 = np.array((a3 @ x_axis, a3 @ y_axis))
-    b_end = np.array((b3 @ x_axis, b3 @ y_axis))
-    ra, rb = float(math.hypot(*a2)), float(math.hypot(*b_end))
-    for name, distance, point in (("start", ra, a), ("end", rb, b)):
-        if distance != 0.0:
+    a3, d3 = a - origin, b - a
+    a2 = np.array((float(a3 @ x_axis), float(a3 @ y_axis)))
+    d2 = np.array((float(d3 @ x_axis), float(d3 @ y_axis)))
+    b2 = a2 + d2
+    ra, rb = math.hypot(*a2), math.hypot(*b2)
+    on_axis = [r <= _ON_AXIS * max(1.0, float(np.abs(p).max()), float(np.abs(origin).max()))
+               for r, p in ((ra, a), (rb, b))]
+    if all(on_axis):
+        raise DisplayDomainRefused(f"edge {edge_id} lies on a support axis: it has no azimuth")
+    for name, distance, point, on in (("start", ra, a, on_axis[0]), ("end", rb, b, on_axis[1])):
+        if not on:
             _check_radius(f"edge {edge_id}'s {name}", distance, point, origin)
-    if ra == 0.0 or rb == 0.0:
-        return _Division([])
-    cross = float(a2[0] * b_end[1] - a2[1] * b_end[0])
-    if abs(cross) <= 8.0 * _EPS * ra * rb:
-        if float(a2 @ b_end) > 0.0:
-            return _Division([])
+    if any(on_axis):
+        return _Plan(1, lambda: _Division([]))
+    length = math.hypot(*d2)
+    cross = float(a2[0] * d2[1] - a2[1] * d2[0])
+    if not length > 0.0 or abs(cross) <= 8.0 * _EPS * ra * length:
+        if float(a2 @ b2) > 0.0:
+            return _Plan(1, lambda: _Division([]))
         raise _unsupported(edge_id, "the line's projection passes through a support axis")
-    d2 = np.array((d3 @ x_axis, d3 @ y_axis))
-    length2 = float(d2 @ d2)
-    closest = -float(a2 @ d2) / length2
+    closest = -float(a2 @ d2) / length / length
     if 0.0 < closest < 1.0:
-        _check_radius(f"edge {edge_id}'s closest approach (t = {closest:.17g})", abs(cross) / math.sqrt(length2),
+        _check_radius(f"edge {edge_id}'s closest approach (t = {closest:.17g})", abs(cross) / length,
                       a + closest * d3, origin)
     pa = math.atan2(a2[1], a2[0])
-    b2 = a2 + d2
     span = (math.atan2(b2[1], b2[0]) - pa + math.pi) % _TWO_PI - math.pi
     n = _count(edge_id, span, step)
-    values = []
-    for k in range(1, n):
-        phi = pa + span * k / n
-        e0, e1 = math.cos(phi), math.sin(phi)
-        denominator = d2[0] * e1 - d2[1] * e0
-        if denominator == 0.0:
-            raise _unsupported(edge_id, "a target azimuth runs along the line's projection")
-        values.append(-(a2[0] * e1 - a2[1] * e0) / denominator)
 
-    def angle(t):
-        p = a2 + t * d2
-        return (math.atan2(p[1], p[0]) - pa + math.pi) % _TWO_PI - math.pi
+    def build():
+        values = []
+        for k in range(1, n):
+            phi = pa + span * k / n
+            e0, e1 = math.cos(phi), math.sin(phi)
+            denominator = d2[0] * e1 - d2[1] * e0
+            if denominator == 0.0:
+                raise _unsupported(edge_id, "a target azimuth runs along the line's projection")
+            values.append(-(a2[0] * e1 - a2[1] * e0) / denominator)
 
-    return _Division(values, angle)
+        def angle(t):
+            p = a2 + t * d2
+            return (math.atan2(p[1], p[0]) - pa + math.pi) % _TWO_PI - math.pi
+
+        return _Division(values, angle)
+
+    return _Plan(n, build)
 
 
 class _Conic:
@@ -430,6 +465,8 @@ class _Conic:
         self.edge_id = edge_id
         self.c, self.u, self.v = (np.asarray(x, dtype=float) for x in (centre, u, v))
         self.start, self.sweep = float(start), float(sweep)
+        if not (math.isfinite(self.sweep) and self.sweep != 0.0):
+            raise _unsupported(edge_id, "the arc's sweep is zero")
         nu, nv = float(np.linalg.norm(self.u)), float(np.linalg.norm(self.v))
         if not (nu > 0.0 and nv > 0.0):
             raise _unsupported(edge_id, "an ellipse axis vector is zero")
@@ -441,7 +478,7 @@ class _Conic:
         self.circle = (abs(nu - nv) <= _CIRCLE_RTOL * max(nu, nv)
                        and abs(float(self.u @ self.v)) <= _CIRCLE_RTOL * nu * nv)
         self.area = float(np.linalg.norm(np.cross(self.u, self.v)))    # |u x v|
-        self.radius = max(nu, nv)                     # a circle's radius (conservative to 1e-12)
+        self.radius = max(nu, nv)                     # a circle's radius (conservative to 8 eps)
         singular = np.linalg.svd(np.column_stack((self.u, self.v)), compute_uv=False)
         self.aspect = float(singular[0] / singular[1]) if singular[1] > 0.0 else math.inf
         cs, sn = math.cos(self.start), math.sin(self.start)
@@ -457,14 +494,18 @@ class _Conic:
     def to_parameters(self, local):
         return [s / self.sweep for s in local]
 
-    def tangent_division(self, step, allowance, residual):
-        """Edge parameters of the tangent division (the sag is refined afterwards, :meth:`sag`).
+    def tangent_division(self, step, allowance, residual, offset=0.0) -> _Plan:
+        """The plan of the tangent division (the sag is refined afterwards, :meth:`sag`).
 
         Circle: uniform in theta (the tangent turns uniformly).  A chord over a theta step
         ``delta`` leaves the circle by exactly ``rho (1 - cos(delta / 2)) = 2 rho sin^2(delta / 4)``
         and sub-intervals sag less, so ``delta <= 4 asin(sqrt(sag / (2 rho)))`` bounds it.
 
         Ellipse: uniform in the tangent angle ``psi`` (closed-form inverse, :class:`_AngleMap`).
+
+        A single interval is split in two when its DRAWN chord (from the vertices, up to
+        ``offset`` from the curve's ends) could leave the curve by more than ``residual``: the
+        exact sag plus the offset bounds that distance (:meth:`refine_sag`).
         """
         if self.circle:
             span = abs(self.sweep)
@@ -474,15 +515,15 @@ class _Conic:
                 if not largest > 0.0:
                     raise _unsupported(self.edge_id, "the sag allowance is below the circle's float resolution")
                 n = max(n, _count(self.edge_id, span, largest))
-            if n == 1 and 2.0 * self.radius * math.sin(span / 4) ** 2 > residual:
+            if n == 1 and 2.0 * self.radius * math.sin(span / 4) ** 2 + offset > residual:
                 n = 2                                   # a curved edge is never one chord
-            return np.linspace(0.0, 1.0, n + 1)[1:-1].tolist()
+            return _Plan(n, lambda: np.linspace(0.0, 1.0, n + 1)[1:-1].tolist())
         amap = _AngleMap(self.edge_id, self.plane, (0.0, 0.0), math.pi / 2, 0.0, self.sweep)
         total = abs(amap.angle(self.sweep) - amap.angle(0.0))
         n = _count(self.edge_id, total, step)
-        if n == 1 and self.sag(0.0, 1.0) > residual:
+        if n == 1 and self.sag(0.0, 1.0) + offset > residual:
             n = 2                                       # a curved edge is never one chord
-        return self.to_parameters(_angle_division(amap, 0.0, self.sweep, n))
+        return _Plan(n, lambda: self.to_parameters(_angle_division(amap, 0.0, self.sweep, n)))
 
     def sag(self, t0, t1) -> float:
         """The exact largest distance of the curve over edge parameters [t0, t1] from its chord.
@@ -501,8 +542,10 @@ class _Conic:
         """
         delta = self.sweep * (t1 - t0)
         m = self.sweep * (0.5 * (t0 + t1))           # local angle: no absolute angle is rounded
-        tangent = -math.sin(m) * self.lu + math.cos(m) * self.lv
-        return 2.0 * math.sin(delta / 4) ** 2 * self.area / float(np.linalg.norm(tangent))
+        tangent = float(np.linalg.norm(-math.sin(m) * self.lu + math.cos(m) * self.lv))
+        if not tangent > 0.0:
+            raise _unsupported(self.edge_id, "the curve's tangent vanishes")
+        return 2.0 * math.sin(delta / 4) ** 2 * self.area / tangent
 
     def refine_sag(self, parameters, allowance, offsets):
         """Bisect (in theta, deterministically) every interval whose sag bound exceeds the
@@ -512,14 +555,20 @@ class _Conic:
         ``offsets`` (start, end) from the curve's ends: such a chord is the analytic chord with
         its end moved, every point of it by at most that offset, so its distance from the curve
         is at most the exact sag plus the offset.  A circle's intervals already meet the
-        allowance (its uniform count), so only an end interval with a vertex offset is checked."""
+        allowance (its uniform count), so only an end interval with a vertex offset is checked.
+
+        The computed sag is raised by its own rounding before the comparison (fail closed):
+        ``|u x v|`` and ``|T(m)|`` of a skew frame cancel to ``eps |u| |v|`` and ``eps (|u| + |v|)``,
+        a relative error of at most ``eps x aspect`` each (``|u| |v| <= sigma_max^2``, ``|T| >=
+        sigma_min``), so ``(1 + 8 eps x aspect)`` bounds the exact sag."""
+        inflate = 1.0 + 8.0 * _EPS * (1.0 if self.circle else self.aspect)
         kept = [float(parameters[0])]
         pending = [(float(a), float(b)) for a, b in zip(parameters[:-1], parameters[1:])]
         pending.reverse()
         while pending:
             a, b = pending.pop()
             offset = max(offsets[0] if a == 0.0 else 0.0, offsets[1] if b == 1.0 else 0.0)
-            if (self.circle and offset == 0.0) or self.sag(a, b) + offset <= allowance:
+            if (self.circle and offset == 0.0) or self.sag(a, b) * inflate + offset <= allowance:
                 kept.append(b)
                 continue
             middle = a + 0.5 * (b - a)
@@ -531,27 +580,39 @@ class _Conic:
             pending.append((a, middle))
         return np.asarray(kept)
 
-    def azimuth_division(self, support, step, scale_points):
-        """Edge parameters dividing the azimuth about ``support``'s axis into equal steps: the
+    def azimuth_division(self, support, step, scale_points) -> _Plan:
+        """The plan dividing the azimuth about ``support``'s axis into equal steps: the
         projection ``c' + cos(theta) u' + sin(theta) v'`` (``c'`` relative to the axis point) in
         the support's (radial, circumferential) frame, through :class:`_AngleMap` (the exact root of
-        ``A cos(theta) + B sin(theta) = C`` on the monotone branch)."""
+        ``A cos(theta) + B sin(theta) = C`` on the monotone branch).
+
+        One domain rule for cylinders and cones, on the PROJECTED conic ``M'`` (which can be far
+        thinner than the curve): its aspect x ``max(1, |stored angle|)`` is at most
+        :data:`MAX_DISPLAY_ELLIPSE_ASPECT`, and its closest approach to the axis (a lower bound)
+        is at least the radius ratio of a scale including ``max(1, |stored angle|) sigma_max(M')``
+        (the evaluator rounds ``start + sweep t`` by eps |theta|, moving the projected point by up
+        to that times eps)."""
         origin, x_axis, y_axis = _axis_frame(support)
         c3 = self.c - origin
         projected = np.array(((self.lu @ x_axis, self.lv @ x_axis), (self.lu @ y_axis, self.lv @ y_axis)))
         amap = _AngleMap(self.edge_id, projected, (c3 @ x_axis, c3 @ y_axis), 0.0, 0.0, self.sweep)
-        if isinstance(support, Cone):
-            # the evaluator rounds the absolute angle (by eps |theta|), moving the projected point
-            # by up to eps |theta| sigma_max(M'): that enters the scale like a coordinate
-            stored = max(1.0, abs(self.start), abs(self.start + self.sweep))
-            moved = stored * float(np.linalg.norm(projected, 2))
-            _check_radius(f"edge {self.edge_id} (closest approach, lower bound)", amap.closest,
-                          origin, *scale_points, (moved, 0.0, 0.0))
+        stored = max(1.0, abs(self.start), abs(self.start + self.sweep))
+        weight = amap.aspect * stored
+        if not weight <= MAX_DISPLAY_ELLIPSE_ASPECT:
+            raise DisplayDomainRefused(f"edge {self.edge_id}'s projection across a support axis has the aspect "
+                                       f"{amap.aspect!r}: aspect x max(1, |stored angle|) = {weight!r} is above "
+                                       f"{MAX_DISPLAY_ELLIPSE_ASPECT:g}")
+        _check_radius(f"edge {self.edge_id} (closest approach, lower bound)", amap.closest,
+                      origin, *scale_points, (stored * amap.sigma_max, 0.0, 0.0))
         start = amap.angle(0.0)
         span = amap.angle(self.sweep) - start
         n = _count(self.edge_id, span, step)
-        values = self.to_parameters(_angle_division(amap, 0.0, self.sweep, n))
-        return _Division(values, lambda t: amap.angle(self.sweep * t) - start)
+
+        def build():
+            values = self.to_parameters(_angle_division(amap, 0.0, self.sweep, n))
+            return _Division(values, lambda t: amap.angle(self.sweep * t) - start)
+
+        return _Plan(n, build)
 
 
 def _sag_allowance(supports, tol: DisplayTolerance):
@@ -627,6 +688,8 @@ def edge_display_samples(model, edge_id: int, tol: DisplayTolerance) -> EdgeSamp
       ``ceil(span / angle)`` equal steps, solved in closed form (none for a line whose ends are
       collinear with the axis point on one side: a ruling or a generator).
 
+    Every count is computed and checked against the cap before any division is built.
+
     then every ellipse interval whose exact sag (:meth:`_Conic.sag`) exceeds the allowance is
     bisected in theta until none does, and so is every end interval whose sag plus its vertex's
     offset from the curve does (an offset above the allowance is refused).  Every interval lies inside one interval of each division,
@@ -634,11 +697,13 @@ def edge_display_samples(model, edge_id: int, tol: DisplayTolerance) -> EdgeSamp
     and every incident cylinder's or cone's azimuth changes, by at most ``tol.angle`` over it,
     and its chord leaves the curve by at most the sag allowance (:class:`DisplayTolerance`).  A
     curved edge whose single chord could leave it by more than ``model.tolerance.surface_residual``
-    gets at least two intervals.  The first and last points are the edge's vertex positions.
+    (its exact sag plus its vertex offsets) gets at least two intervals.  The first and last points
+    are the edge's vertex positions.
     Inputs are checked against the declared numeric domain first (``OUT_OF_DOMAIN``).  Typed
     refusal (``EDGE_UNSUPPORTED``) for a degenerate curve, an azimuth that is not monotone along
     the edge, an unresolvable sag (at most 4 eps of the coordinates) or more than 4096 intervals.
-    An edge id not in the model is a plain :class:`GeometryError`.
+    An edge id not in the model is a plain :class:`GeometryError`; no raw arithmetic error escapes
+    a division (typed ``EDGE_UNSUPPORTED`` at worst).
     """
     if not isinstance(tol, DisplayTolerance):
         raise GeometryError("tol must be a DisplayTolerance")
@@ -697,7 +762,17 @@ def edge_display_samples(model, edge_id: int, tol: DisplayTolerance) -> EdgeSamp
         if isinstance(support, Cylinder):
             _check_radius("a cylinder radius", support.radius, support.origin, *definition)
 
-    # --- divisions
+    # --- divisions: every count first (checked against the cap), then the divisions
+    try:
+        parameters = _parameters(model, edge_id, tol, supports, start, end, line, conic, definition)
+    except DisplayTrimRefused:
+        raise
+    except (ArithmeticError, ValueError) as error:      # no raw arithmetic error escapes
+        raise _unsupported(edge_id, f"{type(error).__name__} in the closed-form division: {error}") from error
+    return _edge_result(model, edge_id, parameters, start, end)
+
+
+def _parameters(model, edge_id, tol, supports, start, end, line, conic, definition):
     step = tol.angle
     allowance = _sag_allowance(supports, tol)
     # the drawn ends are the vertices: their offsets from the curve's ends enter the sag bound
@@ -711,21 +786,19 @@ def edge_display_samples(model, edge_id: int, tol: DisplayTolerance) -> EdgeSamp
         raise _unsupported(edge_id, f"a vertex lies farther from its curve ({max(offsets)!r}) than the sag "
                                     f"allowance {allowance!r}")
     if line is not None:
-        divisions = [_line_azimuth_division(edge_id, s, line[0], line[1], step)
-                     for s in supports if isinstance(s, (Cylinder, Cone))]
-        parameters = _union(edge_id, [], divisions, 64.0 * _EPS)
-    else:
-        if allowance is not None and allowance <= resolution:
-            raise _unsupported(edge_id, f"the sag allowance {allowance!r} is below its coordinates' resolution")
-        tangent = conic.tangent_division(step, allowance, model.tolerance.surface_residual)
-        divisions = [conic.azimuth_division(s, step, definition)
-                     for s in supports if isinstance(s, (Cylinder, Cone))]
-        # parameters closer than 64 ulps of the stored angle evaluate to the same theta (to rounding)
-        gap = 64.0 * _EPS * max(1.0, abs(conic.start), abs(conic.start + conic.sweep)) / abs(conic.sweep)
-        parameters = _union(edge_id, tangent, divisions, gap)
-        if allowance is not None:
-            parameters = conic.refine_sag(parameters, allowance, offsets)
-    return _edge_result(model, edge_id, parameters, start, end)
+        plans = [_line_azimuth_division(edge_id, s, line[0], line[1], step)
+                 for s in supports if isinstance(s, (Cylinder, Cone))]
+        return _union(edge_id, [], [plan.build() for plan in plans], 64.0 * _EPS)
+    if allowance is not None and allowance <= resolution:
+        raise _unsupported(edge_id, f"the sag allowance {allowance!r} is below its coordinates' resolution")
+    tangent = conic.tangent_division(step, allowance, model.tolerance.surface_residual, max(offsets))
+    plans = [conic.azimuth_division(s, step, definition) for s in supports if isinstance(s, (Cylinder, Cone))]
+    # parameters closer than 64 ulps of the stored angle evaluate to the same theta (to rounding)
+    gap = 64.0 * _EPS * max(1.0, abs(conic.start), abs(conic.start + conic.sweep)) / abs(conic.sweep)
+    parameters = _union(edge_id, tangent.build(), [plan.build() for plan in plans], gap)
+    if allowance is not None:
+        parameters = conic.refine_sag(parameters, allowance, offsets)
+    return parameters
 
 
 def _evaluate(model, edge_id, parameters) -> np.ndarray:
