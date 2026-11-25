@@ -1,4 +1,4 @@
-"""Reserved census budgets for all five limit-bounded caches (0.4.7 gate class H, owner decision 2026-11-25).
+"""Reserved census budgets for four limit-bounded caches (0.4.7 gate class H, owner decision 2026-11-25).
 
 Five module caches bound their own size by a limit constant and, warm, hold more walk nodes than the shared
 census budget (160,000) leaves free, so the census truncated and the process route declined ('ledger creation
@@ -33,11 +33,11 @@ CACHES = {
     'anygeometry.quadric_curve_events._BRANCH_POLYNOMIALS': ('anygeometry.quadric_curve_events', '_BRANCH_POLYNOMIALS',
                                                              '_BRANCH_POLYNOMIALS_LIMIT'),
     'anygeometry.quadric_events._MEMO': ('anygeometry.quadric_events', '_MEMO', '_MEMO_SIZE'),
-    'anygeometry.separating_plane_certificate._TRIG_CACHE': ('anygeometry.separating_plane_certificate',
-                                                             '_TRIG_CACHE', '_TRIG_CACHE_LIMIT'),
 }
 PATHS = tuple(CACHES)
-RESET_PATHS = PATHS[:4]          # _TRIG_CACHE is not a reset root: its row stays 'decline', full or empty
+RESET_PATHS = PATHS
+# Owner decision 2026-11-25: _TRIG_CACHE is not in the reserved-budget table; it stays a declined store.
+TRIG_PATH = 'anygeometry.separating_plane_certificate._TRIG_CACHE'
 
 
 def _module(path):
@@ -54,7 +54,7 @@ def _limit(path):
 
 @pytest.fixture
 def caches():
-    """All five caches cleared for the test and restored afterwards (no other module state is touched)."""
+    """All four caches cleared for the test and restored afterwards (no other module state is touched)."""
     saved = {path: dict(_store(path)) for path in PATHS}
     for path in PATHS:
         _store(path).clear()
@@ -131,12 +131,11 @@ def _fill_trig(count, start=0):
         spc._TRIG_CACHE[x] = hit
 
 
-FILL = dict(zip(PATHS, (_fill_branch_constants, _fill_double_nodes, _fill_branch_polynomials, _fill_memo,
-                        _fill_trig)))
+FILL = dict(zip(PATHS, (_fill_branch_constants, _fill_double_nodes, _fill_branch_polynomials, _fill_memo)))
 
 
 # Fill order for several full caches: the branch-polynomial and memo writers also reach _branch_constants.
-FILL_ORDER = (PATHS[2], PATHS[3], PATHS[4], PATHS[1], PATHS[0])
+FILL_ORDER = (PATHS[2], PATHS[3], PATHS[1], PATHS[0])
 
 
 def _fill(path):
@@ -174,7 +173,7 @@ def test_one_full_cache_does_not_truncate_the_planning_census(caches, path):
     assert len(_store(path)) == _limit(path)                   # admitted without clearing
 
 
-def test_all_five_full_caches_do_not_truncate_the_planning_census(caches):
+def test_all_four_full_caches_do_not_truncate_the_planning_census(caches):
     _all_modules()
     empty = _actions(ledger.loaded_geometry_ledger(trusted_image=True))
     for path in FILL_ORDER:
@@ -188,11 +187,30 @@ def test_all_five_full_caches_do_not_truncate_the_planning_census(caches):
 
 # The table: every registered store, its reviewed limit and its measured per-entry budget.
 
-def test_the_table_registers_exactly_the_five_caches_at_their_reviewed_limits():
+def test_the_table_registers_exactly_the_four_caches_at_their_reviewed_limits():
     rows = {module + '.' + store: (name, limit) for module, store, name, limit, _, _ in ledger._BOUNDED_STORES}
-    assert set(rows) == set(PATHS)
+    assert set(rows) == set(PATHS) and TRIG_PATH not in rows
     for path in PATHS:
         assert rows[path][0] == CACHES[path][2] and rows[path][1] == _limit(path)
+
+
+def test_trig_cache_stays_a_declined_store_and_a_full_one_still_declines():
+    # Owner decision 2026-11-25: no reserved budget for _TRIG_CACHE. Small, it is a declined row as before;
+    # full to its limit, the shared census truncates and the ledger declines (serial planning), as on main.
+    from anygeometry import separating_plane_certificate as spc
+    saved = dict(spc._TRIG_CACHE)
+    try:
+        spc._TRIG_CACHE.clear()
+        _fill_trig(8)
+        small = ledger.loaded_geometry_ledger(trusted_image=True)
+        assert not small.report.truncated and small.rows[TRIG_PATH]['action'] == 'decline'
+        _fill_trig(spc._TRIG_CACHE_LIMIT - len(spc._TRIG_CACHE), start=8)
+        assert len(spc._TRIG_CACHE) == spc._TRIG_CACHE_LIMIT
+        with pytest.raises(QualificationDecline):
+            ledger.loaded_geometry_ledger(trusted_image=True)
+    finally:
+        spc._TRIG_CACHE.clear()
+        spc._TRIG_CACHE.update(saved)
 
 
 def _entry_nodes(key, value):

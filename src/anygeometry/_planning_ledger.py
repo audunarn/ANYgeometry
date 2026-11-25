@@ -379,10 +379,12 @@ _BOUNDED_STORES = (
     ('anygeometry.exact_curves', '_DOUBLE_NODES', '_BRANCH_CONSTANTS_LIMIT', 4096, 64, 96),
     # [305, 168]; all nine numerator products formed (a general quadric): [322, 213]
     ('anygeometry.quadric_curve_events', '_BRANCH_POLYNOMIALS', '_BRANCH_POLYNOMIALS_LIMIT', 4096, 512, 320),
-    # [41, 37]; the key holds the caller's curve: a cylinder branch [80, 72], a Bezier path 4 per control point
+    # [41, 37]; the key holds the caller's curve: a cylinder branch [80, 72], a Bezier path 4 per control point.
+    # Known limit (owner decision 2026-11-25): a key whose curve needs more than 192 nodes (a Bezier path of more
+    # than about 45 control points) exceeds the entry budget and the census declines (serial planning).
     ('anygeometry.quadric_events', '_MEMO', '_MEMO_SIZE', 8192, 192, 192),
-    # [18, 18], a fixed shape (sin/cos enclosures of one Fraction); not a reset root (its row stays 'decline')
-    ('anygeometry.separating_plane_certificate', '_TRIG_CACHE', '_TRIG_CACHE_LIMIT', 1 << 18, 24, 24),
+    # The separating-plane certificate trig cache (_TRIG_CACHE) is deliberately not in this table (owner decision 2026-11-25): it
+    # is never a reset root, stays a declined store, and a large one still truncates the shared census.
 )
 
 
