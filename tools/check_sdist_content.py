@@ -14,6 +14,14 @@ checkout roots (``<drive>:/Github``, ``<drive>:/ANYworkspace*``), a UNC share
 path, WSL mounts of Windows drives, or a customer-project marker.  Named
 exceptions are user-facing documents whose wording is an open owner decision.
 The pattern literals are split so this file does not match itself.
+
+Contract (owner decision S (a), 2026-11-25): this is a tripwire for known
+markers, not a proof that no private path form exists; the primary control is
+the explicit MANIFEST.in exclusion list.  Known limits (Codex round 3 Lows):
+a BOM-less UTF-32 ``PKG-INFO`` is split at the first blank line of the
+NUL-stripped text, so its header may be read from the wrong decoding; and a
+backslash-escaped literal such as ``"\\\\alpha\\n"`` in a document is read as a
+UNC path (a false positive that blocks the release until the text changes).
 """
 
 from __future__ import annotations
