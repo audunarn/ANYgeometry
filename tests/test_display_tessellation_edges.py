@@ -102,9 +102,10 @@ def test_samples_end_on_the_vertices_and_repeat_bit_for_bit(name):
     tol = dt.DisplayTolerance(corpus.FINE_STEP)
     for edge_id in sorted(g.edges):
         first = dt.edge_display_samples(g, edge_id, tol)
+        points, parameters = first.points.tobytes(), first.parameters.tobytes()   # before the second call
         again = dt.edge_display_samples(g, edge_id, tol)
-        assert first.points.tobytes() == again.points.tobytes()
-        assert first.parameters.tobytes() == again.parameters.tobytes()
+        assert points == again.points.tobytes() == first.points.tobytes()
+        assert parameters == again.parameters.tobytes() == first.parameters.tobytes()
         edge = g.edges[edge_id]
         assert np.array_equal(first.points[0], g.vertex_position(edge.start))
         assert np.array_equal(first.points[-1], g.vertex_position(edge.end))
