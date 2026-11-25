@@ -5,14 +5,19 @@ import pytest
 import display_tessellation_corpus as corpus
 
 
-@pytest.mark.parametrize("name", sorted(corpus.ALL))
+BUILDERS = {**corpus.ALL, **{name: builder for name, (builder, _code) in corpus.REFUSED.items()}}
+
+
+@pytest.mark.parametrize("name", sorted(BUILDERS))
 def test_corpus_case_builds_valid_faces_on_their_supports(name):
-    case = corpus.ALL[name]()
+    case = BUILDERS[name]()
     g = case.model
     assert g.faces or "edge" in case.info
     for face_id in case.faces.values():
         face = g.faces[face_id]
         support = face.surface
+        if name in corpus.REFUSED:
+            continue
         assert support is not None
         t = np.linspace(0., 1., 33)
         for loop in (face.loop, *face.holes):
@@ -96,10 +101,23 @@ def test_standalone_ellipse_and_lens_sections():
 @pytest.mark.parametrize("name,bottom,corners", [("wavy_band", 1, 4), ("wavy_band_cornerless", 1, 0),
                                                  ("wavy_band_split", 4, 4)])
 def test_band_variants_are_the_stated_topology(name, bottom, corners):
+    """Counted on the geometry: edges lying on the lower section, on the upper one, rulings."""
     case = corpus.ALL[name]()
+    g = case.model
     (face_id,) = case.faces.values()
-    face = case.model.faces[face_id]
-    assert case.info["bottom_edges"] == bottom and len(face.loop) == bottom + 3
+    face = g.faces[face_id]
+    on = {"low": 0, "high": 0, "side": 0}
+    for use in face.loop:
+        p = g.evaluate_edge_many(use.edge, np.linspace(0., 1., 17))
+        theta = np.arctan2(p[:, 1], p[:, 0])
+        if np.all(np.abs(p[:, 2] - case.info["low"](theta)) <= 1e-9):
+            on["low"] += 1
+        elif np.all(np.abs(p[:, 2] - case.info["high"](theta)) <= 1e-9):
+            on["high"] += 1
+        else:
+            assert np.ptp(theta) <= 1e-12          # a ruling
+            on["side"] += 1
+    assert on == {"low": bottom, "high": 1, "side": 2}
     assert len(face.corners) == corners
 
 
@@ -109,3 +127,44 @@ def test_cell_outline_refuses_loops_sharing_a_lattice_point():
         corpus._cell_outline(cells, (0., 0.), 1.)
     with pytest.raises(ValueError):
         corpus._cell_outline([(0, 0), (1, -1)], (0., 0.), 1.)
+
+
+@pytest.mark.parametrize("rotation", range(4))
+def test_seam_holes_cross_the_seam(rotation):
+    """Both rings span azimuth 0 of the full-turn support (the case is about the seam)."""
+    case = corpus.seam_hole(rotation)
+    g = case.model
+    face = g.faces[case.faces["holed"]]
+    for loop in (face.loop, *face.holes):
+        p = _boundary(g, face, loop)
+        theta = np.arctan2(p[:, 1], p[:, 0])
+        assert theta.min() < 0.0 < theta.max() and np.ptp(theta) < 1e-3
+
+
+@pytest.mark.parametrize("name", ["cone_comb_r1", "cone_comb_r3", "l_shape"])
+def test_combs_are_concave(name):
+    """A comb or L is far from its convex hull (a same-area rectangle would not be)."""
+    case = corpus.ALL[name]()
+    g = case.model
+    (face_id,) = case.faces.values()
+    face = g.faces[face_id]
+    uv = np.array([face.surface.local_uv(p) for p in _boundary(g, face, face.loop)])
+    hull = _convex_hull_area(uv)
+    assert hull >= 1.2 * case.info["uv_area"]
+    if "rings" in case.info:
+        corners = len(case.info["rings"][0])
+        assert corners == {"cone_comb_r1": 10, "cone_comb_r3": 10}[name]
+
+
+def _convex_hull_area(points):
+    pts = sorted(map(tuple, np.round(points, 12)))
+    def half(seq):
+        out = []
+        for p in seq:
+            while len(out) >= 2 and ((out[-1][0] - out[-2][0]) * (p[1] - out[-2][1])
+                                     - (out[-1][1] - out[-2][1]) * (p[0] - out[-2][0])) <= 0:
+                out.pop()
+            out.append(p)
+        return out
+    hull = np.array(half(pts)[:-1] + half(pts[::-1])[:-1])
+    return 0.5 * abs(np.dot(hull[:, 0], np.roll(hull[:, 1], -1)) - np.dot(np.roll(hull[:, 0], -1), hull[:, 1]))

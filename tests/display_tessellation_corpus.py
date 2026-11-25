@@ -558,7 +558,8 @@ def generated_cylinder(segments=3, radius=1.0, height=2.0) -> Case:
 
 
 def unsupported_support() -> Case:
-    """A four-sided face with no support surface (topology Coons): not drawn here."""
+    """A four-sided face whose support is a boundary-free CoonsSurface marker (topology Coons
+    patch): no display route here (SUPPORT_UNSUPPORTED)."""
     g = GeometryModel()
     p = [g.add_point(*xyz) for xyz in ((0., 0., 0.), (1., 0., 0.), (1., 1., .3), (0., 1., 0.))]
     face = g.add_face([g.add_line(p[k], p[(k + 1) % 4]) for k in range(4)], corners=(0, 1, 2, 3))

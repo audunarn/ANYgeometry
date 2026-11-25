@@ -199,6 +199,9 @@ def test_an_explicit_sag_is_honoured(name):
         t = samples.parameters
         assert len(t) >= 2 and t[0] == 0.0 and t[-1] == 1.0 and np.all(np.diff(t) > 0.0)
         assert samples.points.shape == (len(t), 3)
+        edge = g.edges[edge_id]
+        assert np.array_equal(samples.points[0], g.vertex_position(edge.start))
+        assert np.array_equal(samples.points[-1], g.vertex_position(edge.end))
         assert np.array_equal(samples.points[1:-1], g.evaluate_edge_many(edge_id, t)[1:-1])
         for k, (t0, t1) in enumerate(zip(t[:-1], t[1:])):
             points = g.evaluate_edge_many(edge_id, np.linspace(t0, t1, DENSE))
