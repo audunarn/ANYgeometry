@@ -140,6 +140,7 @@ def test_manual_release_workflow_builds_without_production_publication() -> None
     assert 'version != "0.4.7"' in workflow
     assert "python tools/check_licenses.py --check-installed" in workflow
     assert "python -m twine check --strict dist/*.whl dist/*.tar.gz" in workflow
+    assert "python tools/check_sdist_content.py dist/*.tar.gz" in workflow
     assert "ANYgeometry-${{ steps.contract.outputs.version }}-release-bundle" in workflow
 
 

@@ -61,6 +61,7 @@ jobs:
           python tools/check_licenses.py --check-installed
           python -m build
           python -m twine check --strict dist/*.whl dist/*.tar.gz
+          python tools/check_sdist_content.py dist/*.tar.gz
           python - <<'PY'
           import email
           import os
