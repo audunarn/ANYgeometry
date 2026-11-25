@@ -23,7 +23,9 @@ env:
 concurrency:
   # A newer dispatch on the same non-main branch supersedes the older one; a re-run attempt and every
   # other run (main, tags, the weekly schedule) get a group of their own, so they are never cancelled.
-  group: ci-${{ github.workflow }}-${{ startsWith(github.ref, 'refs/heads/') && github.ref != 'refs/heads/main' && github.run_attempt == '1' && github.ref || format('run-{0}-{1}', github.run_id, github.run_attempt) }}
+  # The ci-gate- prefix differs from the pre-2026-11-25 groups, so re-running a run made under the old
+  # definition can never share a group with a new one.
+  group: ci-gate-${{ startsWith(github.ref, 'refs/heads/') && github.ref != 'refs/heads/main' && github.run_attempt == '1' && github.ref || format('run-{0}-{1}', github.run_id, github.run_attempt) }}
   cancel-in-progress: true
 
 jobs:
