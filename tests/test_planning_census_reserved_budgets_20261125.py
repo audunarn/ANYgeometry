@@ -11,6 +11,7 @@ constants, so they run unchanged on the parent and fail there (census truncated)
 end reproduce the Codex round-1 probes; each is refused on the parent as well.
 """
 import importlib
+import json
 import math
 import os
 import pathlib
@@ -161,8 +162,37 @@ def _actions(result):
 
 # Criterion 1: each cache full to its limit truncated the census on the parent; it now passes.
 
-@pytest.mark.parametrize('path', PATHS)
-def test_one_full_cache_does_not_truncate_the_planning_census(caches, path):
+def _fresh_process_check(call):
+    """Run ``call`` (a statement on this module, imported as ``t``) in a fresh interpreter: the census asserts
+    below assume a clean process, and a long test process leaves ordinary state of its own (past the shared
+    census cap, or objects aliased into a cache entry) that the census correctly declines. Reports JSON."""
+    src = pathlib.Path(ledger.__file__).resolve().parents[1]
+    env = dict(os.environ, PYTHONPATH=str(src))
+    probe = _FRESH_PROBE.replace('@@MODULE@@', pathlib.Path(__file__).stem).replace('@@CALL@@', call)
+    try:
+        result = subprocess.run([sys.executable, '-c', probe, str(pathlib.Path(__file__).parent)],
+                                capture_output=True, text=True, env=env, timeout=1800, cwd=str(src.parent))
+    except subprocess.TimeoutExpired as exc:
+        pytest.fail('fresh-process check timed out: ' + call + ' ' + str(exc.stdout)[-500:])
+    assert result.returncode == 0, result.stderr[-2000:]
+    report = json.loads(result.stdout.strip().splitlines()[-1])
+    assert report['ok'], report['error']
+
+
+_FRESH_PROBE = r'''
+import json, sys, traceback
+sys.path.insert(0, sys.argv[1])
+import @@MODULE@@ as t
+try:
+    @@CALL@@
+    report = {'ok': True, 'error': ''}
+except BaseException:
+    report = {'ok': False, 'error': traceback.format_exc()[-3000:]}
+print(json.dumps(report))
+'''
+
+
+def _check_one_full_cache(path):
     modules = _all_modules()
     empty = _actions(ledger.loaded_geometry_ledger(trusted_image=True))
     _fill(path)
@@ -175,7 +205,16 @@ def test_one_full_cache_does_not_truncate_the_planning_census(caches, path):
     assert len(_store(path)) == _limit(path)                   # validated without clearing
 
 
-def test_all_four_full_caches_do_not_truncate_the_planning_census(caches):
+@pytest.mark.parametrize('path', PATHS)
+def test_one_full_cache_does_not_truncate_the_planning_census(path):
+    _fresh_process_check('t._check_one_full_cache(%r)' % path)
+
+
+def test_all_four_full_caches_do_not_truncate_the_planning_census():
+    _fresh_process_check('t._check_all_four_full_caches()')
+
+
+def _check_all_four_full_caches():
     _all_modules()
     empty = _actions(ledger.loaded_geometry_ledger(trusted_image=True))
     for path in FILL_ORDER:
@@ -206,6 +245,10 @@ def test_the_table_registers_exactly_the_four_caches_at_their_reviewed_limits():
 
 
 def test_trig_cache_stays_a_declined_store_and_a_full_one_still_declines():
+    _fresh_process_check('t._check_trig_cache_declined_store()')
+
+
+def _check_trig_cache_declined_store():
     # Owner decision 2026-11-25: no reserved budget for _TRIG_CACHE. Small, it is a declined row as before;
     # full to its limit, the shared census truncates and the ledger declines (serial planning), as on main.
     from anygeometry import separating_plane_certificate as spc
@@ -363,6 +406,21 @@ def test_h1_cache_descendant_aliased_elsewhere_declines(caches, monkeypatch, pat
     monkeypatch.setitem(sys.modules, other.__name__, other)
     result = ledger.loaded_geometry_ledger(trusted_image=True, modules=(_module(path), other))
     with pytest.raises(QualificationDecline, match='external alias'):
+        result.validate()
+
+
+def test_h1_entry_object_aliased_into_the_standalone_store_declines(caches, monkeypatch):
+    # The 'reset descendant has external alias: ..._STANDALONE.key[0]' decline seen in full-suite shards:
+    # an earlier test left an object of a cache entry (here the memoized curve of a _MEMO key) also
+    # referenced from _canonical_curve_runtime._STANDALONE, so resetting the cache would not drop it. The
+    # census declines fail-closed; it is why the full-cache census checks run in a fresh process.
+    from anygeometry import _canonical_curve_runtime as runtime
+    path = 'anygeometry.quadric_events._MEMO'
+    _fill_memo(1)
+    curve = next(iter(_store(path)))[0]
+    monkeypatch.setitem(runtime._STANDALONE, (curve,), None)
+    result = ledger.loaded_geometry_ledger(trusted_image=True, modules=(_module(path), runtime))
+    with pytest.raises(QualificationDecline, match=r'external alias: .*_STANDALONE'):
         result.validate()
 
 

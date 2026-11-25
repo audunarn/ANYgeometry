@@ -12,7 +12,11 @@ against a reserved budget derived from their own bound (limit entries x 64 nodes
 check: every state the parent refused below the bound is still refused, and a removed, changed or exceeded
 bound declines.
 """
+import json
 import math
+import os
+import pathlib
+import subprocess
 import sys
 import types
 from collections import OrderedDict
@@ -69,7 +73,41 @@ def _one_more(name='_BRANCH_CONSTANTS'):
 
 # The class H regression: full caches truncated both planning censuses.
 
-def test_full_bounded_caches_do_not_truncate_the_planning_census(caches):
+def _fresh_process_check(call):
+    """Run ``call`` (a statement on this module, imported as ``t``) in a fresh interpreter: the census asserts
+    below assume a clean process, and a long test process leaves ordinary state of its own (past the shared
+    census cap, or objects aliased into a cache entry) that the census correctly declines. Reports JSON."""
+    src = pathlib.Path(ledger.__file__).resolve().parents[1]
+    env = dict(os.environ, PYTHONPATH=str(src))
+    probe = _FRESH_PROBE.replace('@@MODULE@@', pathlib.Path(__file__).stem).replace('@@CALL@@', call)
+    try:
+        result = subprocess.run([sys.executable, '-c', probe, str(pathlib.Path(__file__).parent)],
+                                capture_output=True, text=True, env=env, timeout=1800, cwd=str(src.parent))
+    except subprocess.TimeoutExpired as exc:
+        pytest.fail('fresh-process check timed out: ' + call + ' ' + str(exc.stdout)[-500:])
+    assert result.returncode == 0, result.stderr[-2000:]
+    report = json.loads(result.stdout.strip().splitlines()[-1])
+    assert report['ok'], report['error']
+
+
+_FRESH_PROBE = r'''
+import json, sys, traceback
+sys.path.insert(0, sys.argv[1])
+import @@MODULE@@ as t
+try:
+    @@CALL@@
+    report = {'ok': True, 'error': ''}
+except BaseException:
+    report = {'ok': False, 'error': traceback.format_exc()[-3000:]}
+print(json.dumps(report))
+'''
+
+
+def test_full_bounded_caches_do_not_truncate_the_planning_census():
+    _fresh_process_check('t._check_full_bounded_caches()')
+
+
+def _check_full_bounded_caches():
     _fill()
     modules = tuple(m for n, m in sorted(sys.modules.items()) if n == 'anygeometry' or n.startswith('anygeometry.'))
     assert _planning_purity.inventory(modules).truncated           # the shared budget alone would be exceeded
