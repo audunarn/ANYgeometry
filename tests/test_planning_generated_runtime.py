@@ -14,7 +14,7 @@ def generated_image(monkeypatch,tmp_path):
     path=tmp_path/'provider.pyd';path.write_bytes(b'controlled metadata; not loaded as executable')
     provider=types.ModuleType('provider');provider.__file__=str(path)
     modules={'provider':provider,'cython_runtime':types.ModuleType('cython_runtime')}
-    for name in ('_cython_3_2_4','_cython_3_1_4','_cython_3_3_0'):modules[name]=types.ModuleType(name)
+    for name in ('_cython_3_2_4','_cython_3_1_4','_cython_3_3_0','_cython_3_3_1'):modules[name]=types.ModuleType(name)
     monkeypatch.setattr(q,'sys',types.SimpleNamespace(modules=modules,executable=sys.executable,version=sys.version,platform=sys.platform,implementation=sys.implementation))
     monkeypatch.setattr(q,'runtime_files',lambda:{str(path):q._hash(path)})
     monkeypatch.setattr(threadpoolctl,'threadpool_info',lambda:[dict(filepath=str(path),num_threads=1,internal_api='controlled-metadata')])
@@ -38,7 +38,17 @@ def test_observed_cython_330_uses_curated_native_linkage(generated_image,request
     request.node.user_properties.extend((('execution_scope','bounded-generated-metadata-component'),('loaded_native_qualification',False)))
 
 
-@pytest.mark.parametrize('present',[(),('_cython_3_3_0',),('_cython_3_2_4','_cython_3_1_4')])
+def test_observed_cython_331_uses_curated_native_linkage(generated_image,request):
+    # Regression: weekly Tests run 45480936063 declined with 'module has no qualified origin: _cython_3_3_1'.
+    observed=q.capture_environment(generated_modules=_selected())
+    pin=observed['modules']['_cython_3_3_1']
+    assert pin['kind']=='explicit-generated-native'
+    assert pin['providers']=={'provider':observed['modules']['provider']}
+    q.verify_environment(json.loads(json.dumps(observed)),observed)
+    request.node.user_properties.extend((('execution_scope','bounded-generated-metadata-component'),('loaded_native_qualification',False)))
+
+
+@pytest.mark.parametrize('present',[(),('_cython_3_3_0',),('_cython_3_2_4','_cython_3_1_4'),('_cython_3_3_1',),('_cython_3_2_4','_cython_3_3_1')])
 def test_selection_is_only_present_curated_names(generated_image,present):
     modules,_=generated_image
     for name in tuple(modules):
