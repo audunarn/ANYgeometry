@@ -75,7 +75,7 @@ pytest collection, resolved FixtureDef scopes in each item's fixture information
 admit modules using module/class-scoped fixtures. Each admitted module stays in
 one shard; fixture-free modules still balance individual nodes. This preserves
 fixture lifetime without forcing a large fixture-free module into one job. The
-node policy remains the API default and the qualified Windows 3.14/128-shard
+node policy remains the API default and the qualified Windows 3.14/64-shard (128 until 2026-11-25)
 workflow, numerical runtime pins and fresh-host positive route remain unchanged.
 
 The shard report and collection receipt record the admitted module list. The
