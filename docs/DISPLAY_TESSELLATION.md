@@ -51,14 +51,17 @@ divisions; every interval of the union lies inside one interval of each, so all 
    none without either. Lines: 0.
    - Circle: a chord over a step `delta` leaves the circle by exactly `rho (1 - cos(delta / 2))`,
      so the uniform count is raised to `ceil(|sweep| / (4 asin(sqrt(sag / (2 rho)))))`.
-   - Ellipse: sag `<= (L / 2) sin(h)` and `L <= rho_max h` over an interval of tangent turning
-     `h <= pi/2`, with `rho_max = a^2 / b` (principal semi-axes `a >= b` of `M`, closed-form SVD).
-     *Proof sketch:* the chord's direction is one of the interval's tangent directions (mean value
-     theorem), so every tangent is within `h` of it; a point at arc length `s` is at most
-     `min(s, L - s) sin h <= (L / 2) sin h` from the chord's line (integrate `sin(psi - psi_c)` from
-     the nearer end), and its foot lies on the segment because the projection onto the chord grows
-     at `cos(psi - psi_c) >= cos h >= 0`; `L = int rho dpsi <= rho_max h`. The bound grows with `h`,
-     so the psi-uniform `n` is doubled until `(rho_max h / 2) sin(h) <= sag` holds.
+   - Ellipse: the sag of every interval is computed exactly, and an interval above the
+     allowance is bisected in `theta` (deterministically) until none is; sub-intervals keep the
+     tangent and azimuth bounds. *Proof:* `P(theta) = c + M w(theta)` is an affine image of the
+     unit circle. The signed distance of `P` from the chord's line is an affine function vanishing
+     on that line, hence a fixed multiple of the circle point's signed distance from the preimage
+     chord; both are largest at the circle arc's parametric midpoint `m` (where its tangent is
+     parallel to the chord), for `|delta theta| <= pi`. On an emitted interval the tangent turns by
+     at most `angle <= pi/2` (so `|delta theta| < pi`, affine maps keeping parallel tangents) and
+     the projection onto the chord is monotone, so the distance from the segment is the distance
+     from the line. In closed form (no cancellation of large coordinates):
+     `sag = 2 sin^2(delta / 4) |u x v| / |T(m)|`, `T(m) = -sin(m) u + cos(m) v`.
 4. A curved edge whose single chord could leave it by more than `model.tolerance.surface_residual`
    gets at least two intervals.
 
@@ -66,9 +69,9 @@ A parameter of a later division within 64 ulps of the stored angle (in edge-para
 one already kept is not repeated (the same division point reached twice, up to rounding). More
 than 4096 intervals is `EDGE_UNSUPPORTED`.
 
-The ellipse sag bound is conservative (measured on the corpus): the tripod's 6 m mitre ellipses
-take 118 intervals at the Fine step (24 for its circles); a lone 20:1 half ellipse needs 2048 at
-sag 1e-3 and more than 4096 (refused) at sag 1e-4.
+Measured at the Fine step (7.5 deg): a tripod mitre ellipse takes 48 intervals, the tripod
+circles 24, `winding_fixture`'s two ellipses 45 and 43; the lone 20:1 half ellipse 24 (no sag
+allowance), 78 at sag 1e-3 and 230 at sag 1e-4.
 
 ## Declared numeric domain (owner decision 2026-11-25)
 

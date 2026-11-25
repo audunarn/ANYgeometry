@@ -126,7 +126,7 @@ def test_every_interval_turns_at_most_one_step(name, step):
         _dense_ok(g, edge_id, samples, step, _default_allowance(supports, step), supports, label=name)
 
 
-@pytest.mark.parametrize("name,sag", [("shared_circle", 1e-4), ("steep_cuts", 1e-4), ("ellipse_edge_20", 1e-3),
+@pytest.mark.parametrize("name,sag", [("shared_circle", 1e-4), ("steep_cuts", 1e-4), ("ellipse_edge_20", 1e-4),
                                       ("skew_ellipse_edge", 1e-4), ("cone_section", 1e-4),
                                       ("cone_section_steep", 1e-4), ("wavy_band", 1e-4),
                                       ("tiny_offset_cylinder", 1e-12)])
@@ -160,16 +160,16 @@ def test_samples_end_on_the_vertices_and_repeat_bit_for_bit(name):
             assert first.parameters.tolist() == [0.0, 1.0]
 
 
-def test_the_ellipse_sag_bound_is_conservative_and_refuses_beyond_the_cap():
-    """Documented consequence of the proven bound (rho_max h / 2) sin h with the global rho_max =
-    a^2 / b = 400 of the 20:1 half ellipse: sag 1e-4 needs h <= 7.1e-4, more than 4096 psi-uniform
-    intervals over pi (refused, typed); sag 1e-3 takes 2048 (8 doubled 8 times)."""
+def test_the_20_to_1_half_ellipse_meets_a_tight_sag_by_exact_bisection():
+    """The exact ellipse sag (parametric midpoint) refines only where needed: sag 1e-4 on the 20:1
+    half ellipse is met in fewer than 1024 intervals (the former rho_max bound needed more than
+    4096); every interval's dense distance is at most the sag."""
     case = corpus.ellipse_edge()
     g, edge = case.model, case.info["edge"]
-    _refused(lambda: dt.edge_display_samples(g, edge, dt.DisplayTolerance(corpus.INTERACTION_STEP, 1e-4)),
-             "EDGE_UNSUPPORTED")
-    samples = dt.edge_display_samples(g, edge, dt.DisplayTolerance(corpus.INTERACTION_STEP, 1e-3))
-    assert len(samples.parameters) - 1 == 8 * 256
+    for sag in (1e-3, 1e-4):
+        samples = dt.edge_display_samples(g, edge, dt.DisplayTolerance(corpus.INTERACTION_STEP, sag))
+        assert len(samples.parameters) - 1 < 1024
+        _dense_ok(g, edge, samples, corpus.INTERACTION_STEP, sag, count=257)
 
 
 def test_the_20_to_1_half_ellipse_meets_the_step_on_every_emitted_chord():
@@ -318,22 +318,30 @@ def test_a_skew_ellipse_is_divided_uniformly_in_tangent_angle(angle):
     _dense_ok(g, edge, samples, angle, count=257)
 
 
-def test_a_skew_ellipse_sag_bound_refines_by_doubling():
-    """With a sag, the psi-uniform count doubles until (rho_max h / 2) sin h <= sag holds."""
-    case = corpus.skew_ellipse_edge()
-    g, edge = case.model, case.info["edge"]
-    curve = g.edges[edge].curve
-    singular = np.linalg.svd(np.column_stack((curve.u_vector, curve.v_vector)), compute_uv=False)
-    rho_max = singular[0] ** 2 / singular[1]
-    lift = _tangent_angle_lift(g, edge, np.linspace(0., 1., 200001))
-    total = abs(lift[-1] - lift[0])
-    angle, sag = .2, 1e-4
-    n = math.ceil(total / angle - 1e-9)
-    while rho_max * (total / n) / 2 * math.sin(total / n) > sag:
-        n *= 2
-    samples = dt.edge_display_samples(g, edge, dt.DisplayTolerance(angle, sag))
-    assert len(samples.parameters) - 1 == n
-    _dense_ok(g, edge, samples, angle, sag)
+@pytest.mark.parametrize("name", ["skew_ellipse_edge", "ellipse_edge_20", "steep_cuts", "cone_section_steep"])
+def test_the_ellipse_sag_is_exact_at_the_parametric_midpoint(name):
+    """An ellipse is an affine image of a circle: over every emitted interval the farthest point
+    from the drawn segment is the curve at the theta midpoint (dense check to rounding), and the
+    refinement is not grossly over-fine (some interval sags more than 1/8 of the allowance)."""
+    case = corpus.ALL[name]()
+    g = case.model
+    sag = 1e-4
+    for edge in _curved_edges(case):
+        curve = g.edges[edge].curve
+        samples = dt.edge_display_samples(g, edge, dt.DisplayTolerance(.2, sag))
+        t = samples.parameters
+        _dense_ok(g, edge, samples, .2, sag)
+        distances = []
+        for k, (t0, t1) in enumerate(zip(t[:-1], t[1:])):
+            a, b = g.evaluate_edge_many(edge, [t0, t1])
+            dense = g.evaluate_edge_many(edge, np.linspace(t0, t1, 1025))
+            middle = g.evaluate_edge_many(edge, [0.5 * (t0 + t1)])
+            far = _distance_to_segment(dense, a, b)
+            at_middle = _distance_to_segment(middle, a, b)
+            assert at_middle >= far * (1 - 1e-6) - 1e-13, (name, edge, t0, t1)
+            distances.append(far)
+        if not np.allclose(np.linalg.norm(curve.u_vector), np.linalg.norm(curve.v_vector), rtol=1e-12):
+            assert max(distances) > sag / 8
 
 
 def test_a_circle_off_its_cylinder_axis_gets_the_exact_azimuth_division():

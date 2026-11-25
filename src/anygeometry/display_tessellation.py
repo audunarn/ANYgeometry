@@ -378,11 +378,7 @@ class _Conic:
         self.plane = np.array(((nu, float(self.v @ e1)), (0.0, float(self.v @ e2))))
         self.circle = (abs(nu - nv) <= _CIRCLE_RTOL * max(nu, nv)
                        and abs(float(self.u @ self.v)) <= _CIRCLE_RTOL * nu * nv)
-        frobenius = float((self.plane * self.plane).sum())
-        det = float(self.plane[0, 0] * self.plane[1, 1])
-        major = math.sqrt(0.5 * (frobenius + math.sqrt(max(0.0, frobenius * frobenius - 4.0 * det * det))))
-        minor = det / major
-        self.rho_max = major * major / minor          # largest radius of curvature, a^2 / b
+        self.area = float(np.linalg.norm(np.cross(self.u, self.v)))    # |u x v|
         self.radius = max(nu, nv)                     # a circle's radius (conservative to 1e-12)
 
     @property
@@ -393,22 +389,13 @@ class _Conic:
         return [(theta - self.start) / self.sweep for theta in thetas]
 
     def tangent_division(self, step, allowance, residual):
-        """Edge parameters of the tangent division, refined for the sag allowance.
+        """Edge parameters of the tangent division (the sag is refined afterwards, :meth:`sag`).
 
         Circle: uniform in theta (the tangent turns uniformly).  A chord over a theta step
         ``delta`` leaves the circle by exactly ``rho (1 - cos(delta / 2)) = 2 rho sin^2(delta / 4)``
         and sub-intervals sag less, so ``delta <= 4 asin(sqrt(sag / (2 rho)))`` bounds it.
 
         Ellipse: uniform in the tangent angle ``psi`` (closed-form inverse, :class:`_AngleMap`).
-        Proof of the sag bound: over an interval of tangent turning ``h <= pi/2`` and length ``L``
-        the chord direction is one of the tangent directions (mean value theorem), so every tangent
-        is within ``h`` of it; the distance of a point at arc length ``s`` from the chord's line is
-        ``|int sin(psi - psi_c)| <= min(s, L - s) sin h <= (L / 2) sin h`` (integrated from the
-        nearer end), and its foot lies on the segment because the projection onto the chord grows
-        at ``cos(psi - psi_c) >= cos h >= 0``.  ``L = int rho dpsi <= rho_max h`` with ``rho_max =
-        a^2 / b`` the largest radius of curvature (principal semi-axes ``a >= b``).  So the sag is at
-        most ``(rho_max h / 2) sin h``, which grows with ``h``: halving the step (doubling ``n``)
-        until it holds is sufficient, and sub-intervals of the union keep it.
         """
         if self.circle:
             span = abs(self.sweep)
@@ -424,18 +411,49 @@ class _Conic:
         amap = _AngleMap(self.edge_id, self.plane, (0.0, 0.0), math.pi / 2, self.start, self.theta_end)
         total = abs(amap.angle(self.theta_end) - amap.angle(self.start))
         n = _count(self.edge_id, total, step)
-
-        def bound(h):
-            return 0.5 * self.rho_max * h * math.sin(h)
-
-        if allowance is not None:
-            while bound(total / n) > allowance:
-                n *= 2
-                if n > _MAX_INTERVALS:
-                    raise _unsupported(self.edge_id, f"needs more than {_MAX_INTERVALS} intervals for its sag")
-        if n == 1 and bound(total) > residual:
+        if n == 1 and self.sag(0.0, 1.0) > residual:
             n = 2                                       # a curved edge is never one chord
         return self.to_parameters(_angle_division(amap, self.start, self.theta_end, n))
+
+    def sag(self, t0, t1) -> float:
+        """The exact largest distance of the curve over edge parameters [t0, t1] from its chord.
+
+        Proof: ``P(theta) = c + M w(theta)`` is an affine image of the unit circle.  The signed
+        distance of ``P(theta)`` from the chord's line is an affine function of ``P`` vanishing on
+        the line, so it is a fixed multiple of the circle point's signed distance from the
+        preimage chord: both are largest at the same theta, the circle arc's parametric midpoint
+        ``m`` (where the circle's tangent is parallel to its chord), for ``|delta| <= pi``.  On an
+        emitted interval the tangent turns by at most ``angle <= pi/2`` (so ``|delta| < pi``: affine
+        maps keep parallel tangents) and the projection onto the chord is monotone, so every foot
+        lies on the segment: the distance from the segment is the distance from the line.  With
+        sum-to-product forms (no cancellation of large coordinates), ``cross(P(m) - P0, P1 - P0)
+        = 4 sin^2(delta / 4) sin(delta / 2) (u x v)`` and ``|P1 - P0| = 2 |sin(delta / 2)| |T(m)|``,
+        ``T(m) = -sin(m) u + cos(m) v``: the sag is ``2 sin^2(delta / 4) |u x v| / |T(m)|``.
+        """
+        delta = self.sweep * (t1 - t0)
+        m = self.start + self.sweep * (0.5 * (t0 + t1))
+        tangent = -math.sin(m) * self.u + math.cos(m) * self.v
+        return 2.0 * math.sin(delta / 4) ** 2 * self.area / float(np.linalg.norm(tangent))
+
+    def refine_sag(self, parameters, allowance):
+        """Bisect (in theta, deterministically) every interval whose exact sag exceeds the
+        allowance until none does; sub-intervals keep the tangent and azimuth bounds."""
+        kept = [float(parameters[0])]
+        pending = [(float(a), float(b)) for a, b in zip(parameters[:-1], parameters[1:])]
+        pending.reverse()
+        while pending:
+            a, b = pending.pop()
+            if self.sag(a, b) <= allowance:
+                kept.append(b)
+                continue
+            middle = a + 0.5 * (b - a)
+            if not a < middle < b:
+                raise _unsupported(self.edge_id, "the sag allowance cannot be met at its float resolution")
+            if len(kept) + len(pending) + 1 > _MAX_INTERVALS:
+                raise _unsupported(self.edge_id, f"needs more than {_MAX_INTERVALS} intervals for its sag")
+            pending.append((middle, b))
+            pending.append((a, middle))
+        return np.asarray(kept)
 
     def azimuth_division(self, support, step, scale_points):
         """Edge parameters dividing the azimuth about ``support``'s axis into equal steps: the
@@ -500,13 +518,15 @@ def edge_display_samples(model, edge_id: int, tol: DisplayTolerance) -> EdgeSamp
     (``EllipticArc``; else ``EDGE_UNSUPPORTED``).  The parameters are the sorted union of
 
     * the tangent division: none for a line; uniform in theta for a circle; uniform in tangent
-      angle for an ellipse (exact closed-form inverse), ``ceil(turning / angle)`` steps, refined
-      for the sag allowance (:meth:`_Conic.tangent_division`);
+      angle for an ellipse (exact closed-form inverse), ``ceil(turning / angle)`` steps; a
+      circle's count is raised for the sag allowance (:meth:`_Conic.tangent_division`);
     * for each incident cylinder or cone, the division of the azimuth about its axis into
       ``ceil(span / angle)`` equal steps, solved in closed form (none along a cylinder ruling or
       a generator through a cone's exact apex).
 
-    Every interval of the union lies inside one interval of each division, so the tangent turns,
+    then every ellipse interval whose exact sag (:meth:`_Conic.sag`) exceeds the allowance is
+    bisected in theta until none does.  Every interval lies inside one interval of each division,
+    so the tangent turns,
     and every incident cylinder's or cone's azimuth changes, by at most ``tol.angle`` over it,
     and its chord leaves the curve by at most the sag allowance (:class:`DisplayTolerance`).  A
     curved edge whose single chord could leave it by more than ``model.tolerance.surface_residual``
@@ -579,6 +599,8 @@ def edge_display_samples(model, edge_id: int, tol: DisplayTolerance) -> EdgeSamp
         # parameters closer than 64 ulps of the stored angle evaluate to the same theta (to rounding)
         gap = 64.0 * _EPS * max(1.0, abs(conic.start), abs(conic.theta_end)) / abs(conic.sweep)
         parameters = _union(edge_id, tangent, divisions, gap)
+        if allowance is not None and not conic.circle:
+            parameters = conic.refine_sag(parameters, allowance)
     return _edge_result(model, edge_id, parameters, start, end)
 
 
