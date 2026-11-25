@@ -428,3 +428,26 @@ def test_full_caches_pass_the_package_worker_ledger_and_budgets_hold():
     for path in RESET_PATHS:
         assert 'DECLINED ' + path + ' worker cache alias walk bound exceeded: ' + path in lines, result.stdout
         assert 'DECLINED ' + path + ' bounded store exceeds its limit: ' + path in lines, result.stdout
+
+
+# The census reads each type's slot layout once (census time with full caches); the walk is unchanged.
+
+class _HashingMeta(type):
+    hashed = []
+
+    def __hash__(cls):
+        _HashingMeta.hashed.append(cls)
+        return 0
+
+
+def test_slot_layout_cache_never_hashes_a_type_and_walks_every_instance():
+    cls = _HashingMeta('_Slotted', (), {'__slots__': ('first', 'second'), '__module__': __name__})
+    module = types.ModuleType('zz_layout_fixture')
+    first, second = cls(), cls()
+    first.first, first.second = 1., [1.]
+    second.first = {}                                   # 'second' unset: skipped, as before
+    module.items = (first, second)
+    report = _planning_purity.inventory((module,))
+    assert _HashingMeta.hashed == []
+    assert [s.path for s in report.stores] == ['zz_layout_fixture.items[0].second', 'zz_layout_fixture.items[1].first']
+    assert [path for path, _ in report.unknowns] == ['zz_layout_fixture.items[0]', 'zz_layout_fixture.items[1]']

@@ -94,6 +94,7 @@ def inventory(modules, *, max_nodes=INVENTORY_MAX_NODES, max_depth=24, store_obj
     namespaces = [(m, _namespace(m)) for m in modules]
     included = {id(m) for m, _ in namespaces}
     stores, unknowns, aliases, seen = [], [], [], {}
+    layouts = {}        # id(type) -> (type, slot layout), for this census only
     count = 0
     reserved = None     # remaining nodes of the bounded-store entry being walked, else None
     truncated = False
@@ -253,19 +254,24 @@ def inventory(modules, *, max_nodes=INVENTORY_MAX_NODES, max_depth=24, store_obj
         else:
             # Only concrete native slot/dict descriptors are read. Do not call
             # getattr(value, ...) or a user-supplied __dict__ property.
-            for base in type.__getattribute__(typ, '__mro__'):
-                for name, descriptor in type.__getattribute__(base, '__dict__').items():
-                    if type(descriptor) is types.MemberDescriptorType:
-                        try:
-                            visit(descriptor.__get__(value, typ), path + '.' + name, depth + 1)
-                        except AttributeError:
-                            pass
-                    elif name == '__dict__':
-                        # Native heap types may supply arbitrary getsets too.
-                        # Do not execute one to manufacture a complete walk.
-                        unknown(path + '.__dict__', 'instance dictionary access unqualified')
-                    if truncated:
-                        break
+            # The type's slot layout (its MRO's member descriptors and __dict__ entries, in order) is read
+            # once per census; the per-instance walk is unchanged. Keyed by identity, never by type hash.
+            cached = layouts.get(id(typ))
+            if cached is None or cached[0] is not typ:
+                cached = layouts[id(typ)] = (typ, tuple(
+                    (name, descriptor) for base in type.__getattribute__(typ, '__mro__')
+                    for name, descriptor in type.__getattribute__(base, '__dict__').items()
+                    if type(descriptor) is types.MemberDescriptorType or name == '__dict__'))
+            for name, descriptor in cached[1]:
+                if type(descriptor) is types.MemberDescriptorType:
+                    try:
+                        visit(descriptor.__get__(value, typ), path + '.' + name, depth + 1)
+                    except AttributeError:
+                        pass
+                else:
+                    # Native heap types may supply arbitrary getsets too.
+                    # Do not execute one to manufacture a complete walk.
+                    unknown(path + '.__dict__', 'instance dictionary access unqualified')
                 if truncated:
                     break
             unknown(path, 'opaque instance/descriptor/native state')
