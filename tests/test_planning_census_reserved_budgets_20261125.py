@@ -208,7 +208,7 @@ def _entry_nodes(key, value):
 def test_entry_budget_covers_the_writers_largest_entry(caches, path):
     # Each entry measured alone (no descendant seen before): the most a writer's entry can cost.
     FILL[path](64)
-    budget = ledger._BOUNDED[path][4]
+    budget = ledger.bounded_store_row(path)[4]
     largest = max(_entry_nodes(key, value) for key, value in _store(path).items())
     assert largest <= budget
     if path == 'anygeometry.exact_curves._DOUBLE_NODES':
@@ -217,6 +217,13 @@ def test_entry_budget_covers_the_writers_largest_entry(caches, path):
         first, second, _ = next(iter(ec._DOUBLE_NODES.values()))
         nodes = (ec._DoubleNode(1, 1, 0.), ec._DoubleNode(-1, 1, 3.))
         assert _entry_nodes((id(first), id(second)), (first, second, nodes)) <= budget
+
+
+def test_the_ledger_table_itself_is_no_declined_census_store():
+    # A module-level dict in the ledger would itself be a declined store and refuse every route.
+    result = ledger.loaded_geometry_ledger(trusted_image=True, modules=(ledger,))
+    assert not [path for path, row in result.rows.items() if row['action'] == 'decline']
+    result.validate_host()
 
 
 # Criterion 3: fail closed for each cache.
@@ -237,7 +244,7 @@ def test_cache_at_its_limit_of_trivial_entries_is_admitted(caches, path):
 
 @pytest.mark.parametrize('path', PATHS)
 def test_entry_past_its_budget_declines(caches, path):
-    budget = ledger._BOUNDED[path][4]
+    budget = ledger.bounded_store_row(path)[4]
     store = _store(path)
     store[1] = (0.,)*(budget - 2)                    # key 1 + tuple 1 + budget-2 floats: exactly the budget
     ledger.loaded_geometry_ledger(trusted_image=True, modules=(_module(path),)).validate()

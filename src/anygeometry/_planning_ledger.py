@@ -384,7 +384,11 @@ _BOUNDED_STORES = (
     # [18, 18], a fixed shape (sin/cos enclosures of one Fraction); not a reset root (its row stays 'decline')
     ('anygeometry.separating_plane_certificate', '_TRIG_CACHE', '_TRIG_CACHE_LIMIT', 1 << 18, 24, 24),
 )
-_BOUNDED = {module + '.' + store: row for row in _BOUNDED_STORES for module, store in (row[:2],)}
+
+
+def bounded_store_row(path):
+    """The table row of a registered bounded store, else None (the table is a tuple: never a census store)."""
+    return next((row for row in _BOUNDED_STORES if row[0] + '.' + row[1] == path), None)
 
 
 def bounded_store_check(module, name):
@@ -394,7 +398,7 @@ def bounded_store_check(module, name):
     """
     owner = vars(module).get('__name__') if type(module) is types.ModuleType else None
     path = str(owner) + '.' + str(name)
-    row = _BOUNDED.get(path)
+    row = bounded_store_row(path)
     if row is None or sys.modules.get(owner) is not module:
         raise QualificationDecline('unregistered bounded store: ' + path)
     _, _, limit_name, limit_value, entry_nodes, entry_identities = row
@@ -414,7 +418,8 @@ def _bounded_registry(modules):
     """Every registered bounded store of the supplied modules, checked; path -> bounded_store_check()."""
     return {path: bounded_store_check(module, row[1])
             for module in modules if type(module) is types.ModuleType
-            for path, row in _BOUNDED.items() if vars(module).get('__name__') == row[0]}
+            for row in _BOUNDED_STORES if vars(module).get('__name__') == row[0]
+            for path in (row[0] + '.' + row[1],)}
 
 
 def _census(modules, objects, *, omit_cache_payloads=False, definitions=None):
