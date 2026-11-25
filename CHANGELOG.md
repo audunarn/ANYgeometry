@@ -10,9 +10,12 @@ All notable user-visible changes to ANYgeometry are documented here.
   plane, cylinder and cone faces only, each divided in closed form (tangent angle, support
   azimuth, the exact chord sag); any other curve or incident support is refused with a typed
   code. Declared numeric domain: coordinates up to 1e9, stored angles up to 1e6 rad, distance
-  from a support axis at least 1e-9 x max(1, |coordinate|) (cone apex excepted); outside it
-  `DisplayDomainRefused` (`OUT_OF_DOMAIN`). See `docs/DISPLAY_TESSELLATION.md`. No existing
-  module changes.
+  from a support axis at least 1e-9 x max(1, |coordinate|) (an end exactly on the axis
+  excepted), ellipse aspect x max(1, |stored angle|) at most 1e6; outside it
+  `DisplayDomainRefused` (`OUT_OF_DOMAIN`). Circles and ellipses are divided in their local
+  angle, lines from their exact evaluated ends; a line has constant azimuth only when its ends
+  are collinear with the axis point; the end chords' sag bound includes the vertex offsets;
+  counts are plain ceilings. See `docs/DISPLAY_TESSELLATION.md`. No existing module changes.
 
 - Prepare version 0.4.7 for bounded B1 curved-hull hydrostatics point queries,
   including independently verified volume, body-origin first moments and raw

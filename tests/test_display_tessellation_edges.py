@@ -131,10 +131,11 @@ def test_every_interval_turns_at_most_one_step(name, step):
                                       ("cone_section_steep", 1e-4), ("wavy_band", 1e-4),
                                       ("tiny_offset_cylinder", 1e-12)])
 def test_an_explicit_sag_is_honoured(name, sag):
-    """A sag tighter than the angular default bounds every drawn segment's distance from its curve."""
+    """A sag tighter than the angular default bounds every drawn segment's distance from its curve
+    (lines included: their only sag is a vertex offset)."""
     case = corpus.ALL[name]()
     g = case.model
-    for edge_id in _curved_edges(case):
+    for edge_id in _case_edges(case):
         samples = dt.edge_display_samples(g, edge_id, dt.DisplayTolerance(corpus.INTERACTION_STEP, sag))
         assert samples.points.shape == (len(samples.parameters), 3)
         _dense_ok(g, edge_id, samples, corpus.INTERACTION_STEP, sag, label=name)
@@ -553,7 +554,7 @@ def _refused_out_of_domain(call):
 
 def test_the_domain_bounds_are_declared():
     assert dt.MAX_DISPLAY_COORDINATE == 1e9 and dt.MAX_DISPLAY_ANGLE == 1e6
-    assert dt.MIN_DISPLAY_RADIUS_RATIO == 1e-9
+    assert dt.MIN_DISPLAY_RADIUS_RATIO == 1e-9 and dt.MAX_DISPLAY_ELLIPSE_ASPECT == 1e6
     assert "OUT_OF_DOMAIN" in dt.REFUSAL_CODES
 
 
@@ -761,3 +762,300 @@ def test_cone_points_at_and_beyond_the_radius_ratio(small, inside):
                 assert samples.parameters.tolist() == [0., 1.]
         else:
             _refused_out_of_domain(call)
+
+
+# ---------------------------------------------------------------------------------------------
+# Codex N1 round 1: each finding's geometry, then its class
+# ---------------------------------------------------------------------------------------------
+from anygeometry.tolerance import TolerancePolicy  # noqa: E402
+
+
+@pytest.mark.parametrize("start", [2 * math.pi * 159154 - .01, -.01])
+def test_r1_1_a_1e9_aspect_ellipse_is_outside_the_domain(start):
+    """r1 #1: u = (1e8, 0, 0), v = (0, .1, 0) (aspect 1e9), sweep .02: at angle .1 one interval
+    turned .185 rad; now outside the declared domain at either start."""
+    g, edge = _arc_edge((0., 0., 0.), start, .02, (1e8, 0., 0.), (0., .1, 0.))
+    _refused_out_of_domain(lambda: dt.edge_display_samples(g, edge, dt.DisplayTolerance(.1)))
+
+
+def _aspect_edge(aspect, start, sweep=.02):
+    root = math.sqrt(aspect)
+    return _arc_edge((0., 0., 0.), start, sweep, (root, 0., 0.), (0., 1 / root, 0.))
+
+
+@pytest.mark.parametrize("v,inside", [(1e-3, True), (float(np.nextafter(1e-3, 0.)), False)])
+def test_r1_1_the_ellipse_aspect_at_and_beyond_the_bound(v, inside):
+    """a / b = 1e3 / 1e-3 = 1e6 (stored angles within 1): inside, every interval turns at most
+    the angle through both high-curvature ends; one ulp more aspect is refused."""
+    g, edge = _arc_edge((0., 0., 0.), -.01, .02, (1e3, 0., 0.), (0., v, 0.))
+    call = lambda: dt.edge_display_samples(g, edge, dt.DisplayTolerance(.1))  # noqa: E731
+    if inside:
+        samples = call()
+        _dense_ok(g, edge, samples, .1, count=257)
+        assert len(samples.parameters) - 1 >= math.ceil(math.pi / .1)
+    else:
+        _refused_out_of_domain(call)
+
+
+@pytest.mark.parametrize("aspect,start,inside", [(1e3, 2 * math.pi * 159 - .01, True),
+                                                 (1e3, 2 * math.pi * 160 - .01, False),
+                                                 (1e6, 2 * math.pi * 159154 - .01, False)])
+def test_r1_1_the_ellipse_aspect_counts_with_its_stored_angle(aspect, start, inside):
+    """The evaluator rounds start + sweep t by eps |theta|, which turns the tangent by up to
+    aspect x that: the bound is aspect x max(1, |stored angle|) <= 1e6.  Measured: aspect 1e6 at
+    999994 rad turns 10 % more than .001 per interval even with exact local divisions."""
+    g, edge = _aspect_edge(aspect, start)
+    call = lambda: dt.edge_display_samples(g, edge, dt.DisplayTolerance(.01))  # noqa: E731
+    if inside:
+        _dense_ok(g, edge, call(), .01, count=129)
+    else:
+        _refused_out_of_domain(call)
+
+
+@pytest.mark.parametrize("start,inside", [(9.9e5 - .3, True), (1e6 - .3, False)])
+def test_r1_1_the_ellipse_inverse_at_the_stored_angle_bound(start, inside):
+    """A non-circular ellipse of aspect 1 + 1e-6 near 1e6 rad goes through the ellipse inverse
+    (|u| != |v|) in local angles: its psi steps are equal; at 1e6 x (1 + 1e-6) it is refused."""
+    g, edge = _arc_edge((0., 0., 0.), start, .6, (1., 0., 0.), (0., 1. + 1e-6, 0.))
+    call = lambda: dt.edge_display_samples(g, edge, dt.DisplayTolerance(.05))  # noqa: E731
+    if inside:
+        samples = call()
+        psi = _tangent_angle_lift(g, edge, samples.parameters)
+        assert np.abs(np.abs(np.diff(psi)) - abs(psi[-1] - psi[0]) / (len(psi) - 1)).max() <= 1e-9
+        _dense_ok(g, edge, samples, .05, count=257)
+    else:
+        _refused_out_of_domain(call)
+
+
+def test_r1_2_a_line_range_is_divided_from_its_evaluated_ends():
+    """r1 #2: a retained range 3e-8 long on a 2e9 carrier (rational bounds 1/2 +- 7.5e-18) on a
+    tiny cylinder: the float carrier fields collapse it to a point; the exact ends do not."""
+    g = corpus.GeometryModel()
+    support = Cylinder((0., 0., 0.), (0., 0., 1.), (1., 0., 0.), math.hypot(1e-7, 1.5e-8), 1.0, -.5, 1.0)
+    pts = {(s, z): (1e-7, s * 1.5e-8, z) for s in (-1, 1) for z in (.2, .8)}
+    ids = {k: g.add_point(*v) for k, v in pts.items()}
+    half = Fraction(1.5e-8) / 2_000_000_000
+    low = g.add_curve(ids[-1, .2], ids[1, .2], LineRange((1e-7, -1e9, .2), (1e-7, 1e9, .2),
+                                                         (Fraction(1, 2) - half, Fraction(1, 2) + half)))
+    edges = [low, g.add_line(ids[1, .2], ids[1, .8]), g.add_line(ids[1, .8], ids[-1, .8]),
+             g.add_line(ids[-1, .8], ids[-1, .2])]
+    g.add_face(edges, corners=(0, 1, 2, 3), surface=support)
+    samples = dt.edge_display_samples(g, low, dt.DisplayTolerance(.1))
+    assert len(samples.parameters) - 1 == 3
+    _dense_ok(g, low, samples, .1, supports=[support], count=257)
+
+
+def _near_apex_sector(offset=5e-9, azimuth=.4):
+    g = corpus.GeometryModel(tolerance=TolerancePolicy(length=1e-8))
+    support = Cone((0., 0., 0.), (0., 0., 1.), (1., 0., 0.), 0., 1., 1., 0., 1.)
+    tip = g.add_point(offset * math.cos(azimuth), offset * math.sin(azimuth), offset)
+    a0, a1 = g.add_point(1., 0., 1.), g.add_point(math.cos(1.), math.sin(1.), 1.)
+    side0 = g.add_line(tip, a0)
+    arc = g.add_curve(a0, a1, EllipticArc((0., 0., 1.), (1., 0., 0.), (0., 1., 0.), 0., 1.))
+    side1 = g.add_line(a1, tip)
+    g.add_face((side0, arc, side1), surface=support)
+    return g, support, side0, side1
+
+
+def test_r1_3_a_line_from_near_an_apex_is_divided_by_its_azimuth():
+    """r1 #3: a side from 7e-9 off the apex (within the model length 1e-8) at azimuth .4 to the
+    unit circle at azimuth 0 turns .4 rad round the axis: it is divided like any line."""
+    g, support, side0, side1 = _near_apex_sector()
+    for edge in (side0, side1):
+        samples = dt.edge_display_samples(g, edge, dt.DisplayTolerance(.1))
+        assert len(samples.parameters) - 1 >= 4
+        _dense_ok(g, edge, samples, .1, supports=[support], count=1025)
+
+
+def test_r1_3_a_line_crossing_the_axis_is_refused():
+    """A line whose projection runs through the axis between its ends (collinear with the axis
+    point, opposite sides) has no monotone azimuth: EDGE_UNSUPPORTED; the rulings are drawn whole."""
+    g = corpus.GeometryModel(tolerance=TolerancePolicy(surface_residual=1.0))
+    support = Cylinder((0., 0., 0.), (0., 0., 1.), (1., 0., 0.), .5, 1.0, 0., math.pi)
+    p = {(x, z): g.add_point(x, 0., z) for x in (.5, -.5) for z in (.2, .8)}
+    across = g.add_line(p[.5, .2], p[-.5, .2])
+    edges = [across, g.add_line(p[-.5, .2], p[-.5, .8]), g.add_line(p[-.5, .8], p[.5, .8]),
+             g.add_line(p[.5, .8], p[.5, .2])]
+    g.add_face(edges, corners=(0, 1, 2, 3), surface=support)
+    _refused(lambda: dt.edge_display_samples(g, across, dt.DisplayTolerance(.1)), "EDGE_UNSUPPORTED")
+    for ruling in edges[1::2]:
+        assert dt.edge_display_samples(g, ruling, dt.DisplayTolerance(.1)).parameters.tolist() == [0., 1.]
+
+
+def _offset_arc(offset, u=(1., 0., 0.), v=(0., 1., 0.)):
+    g = corpus.GeometryModel()
+    arc = EllipticArc((0., 0., 0.), u, v, 0., .1)
+    end = arc.evaluate(np.array([1.]))[0]
+    return g, g.add_curve(g.add_point(u[0], u[1], offset), g.add_point(*end), arc)
+
+
+def test_r1_4_a_vertex_offset_above_the_sag_is_refused():
+    """r1 #4: the start vertex 8e-9 off the arc's start, sag 2e-9: the first chord cannot meet
+    the allowance (it was returned 8e-9 from the curve)."""
+    g, edge = _offset_arc(8e-9)
+    _refused(lambda: dt.edge_display_samples(g, edge, dt.DisplayTolerance(.2, 2e-9)), "EDGE_UNSUPPORTED")
+
+
+@pytest.mark.parametrize("v", [(0., 1., 0.), (0., 2., 0.)], ids=("circle", "ellipse"))
+def test_r1_4_the_end_chords_carry_the_vertex_offset_in_their_sag(v):
+    """Offset 8e-9 below sag 1e-8: the end intervals are bisected until sag + offset fits; every
+    drawn segment (from the vertex) is within the sag of the curve."""
+    g, edge = _offset_arc(8e-9, v=v)
+    samples = dt.edge_display_samples(g, edge, dt.DisplayTolerance(.2, 1e-8))
+    _dense_ok(g, edge, samples, .2, 1e-8, count=1025)
+
+
+@pytest.mark.parametrize("sag,ok", [(1e-8, True), (2e-9, False)])
+def test_r1_4_a_line_range_sag_is_its_vertex_offset(sag, ok):
+    """A LineRange whose end vertex is 5e-9 off its exact end: the drawn chord is within sag 1e-8
+    of the line; sag 2e-9 is refused."""
+    g = corpus.GeometryModel()
+    edge = g.add_curve(g.add_point(0., 0., 0.), g.add_point(1., 0., 5e-9), LineRange((0., 0., 0.), (1., 0., 0.)))
+    call = lambda: dt.edge_display_samples(g, edge, dt.DisplayTolerance(.2, sag))  # noqa: E731
+    if ok:
+        samples = call()
+        assert samples.parameters.tolist() == [0., 1.]
+        _dense_ok(g, edge, samples, .2, sag, count=257)
+    else:
+        _refused(call, "EDGE_UNSUPPORTED")
+
+
+def _circle_band_on_frustum(start=-4e-9):
+    g = corpus.GeometryModel(tolerance=TolerancePolicy(length=1e-13))
+    support = Cone((0., 0., 0.), (0., 0., 1.), (1., 0., 0.), 2.5e-9, 3e-9, .1, -1., 2.)
+    arcs = [EllipticArc((-.5 + 2e-9, 0., z), (.5, 0., 0.), (0., .5, 0.), start, 8e-9) for z in (0., .1)]
+    ends = [[g.add_point(*a.evaluate(np.array([t]))[0]) for t in (0., 1.)] for a in arcs]
+    low = g.add_curve(ends[0][0], ends[0][1], arcs[0])
+    high = g.add_curve(ends[1][0], ends[1][1], arcs[1])
+    g.add_face((low, g.add_line(ends[0][1], ends[1][1]), high, g.add_line(ends[1][0], ends[0][0])),
+               corners=(0, 1, 2, 3), surface=support)
+    return g, support, low
+
+
+def test_r1_5_the_closest_approach_does_not_cancel():
+    """r1 #5: a .5 circle passing 2e-9 from a frustum's axis: its closest approach (lower bound
+    = the real distance, the projection being circular) is in the domain (it cancelled to 0)."""
+    g, support, low = _circle_band_on_frustum()
+    samples = dt.edge_display_samples(g, low, dt.DisplayTolerance(.1, 1e-6))
+    _dense_ok(g, low, samples, .1, 1e-6, supports=[support], count=257)
+
+
+def test_r1_5_a_near_axis_arc_counts_its_stored_angle_rounding():
+    """The same arc at a stored angle near 1e6 rad: the evaluator's rounding of start + sweep t
+    (about 6e-11 rad) moves the point by 3e-11, a large azimuth error 2e-9 from the axis."""
+    g, support, low = _circle_band_on_frustum(2 * math.pi * 159154 - 4e-9)
+    _refused_out_of_domain(lambda: dt.edge_display_samples(g, low, dt.DisplayTolerance(.1, 1e-6)))
+
+
+def test_r1_6_a_stationary_azimuth_at_an_end_is_monotone():
+    """r1 #6: a circle on a .001 cylinder tangent at its start to the ray from the axis (g = 0
+    there, positive inside): drawn, not refused as a turnback."""
+    g = corpus.GeometryModel(tolerance=TolerancePolicy(length=1e-12, surface_residual=1e-3))
+    support = Cylinder((0., 0., 0.), (0., 0., 1.), (1., 0., 0.), .001, 1.0, 1.5, .5)
+    arcs = [EllipticArc((-.001, .001, z), (.001, 0., 0.), (0., .001, 0.), 0., .4) for z in (.2, .8)]
+    ends = [[g.add_point(*a.evaluate(np.array([t]))[0]) for t in (0., 1.)] for a in arcs]
+    low = g.add_curve(ends[0][0], ends[0][1], arcs[0])
+    high = g.add_curve(ends[1][0], ends[1][1], arcs[1])
+    g.add_face((low, g.add_line(ends[0][1], ends[1][1]), high, g.add_line(ends[1][0], ends[0][0])),
+               corners=(0, 1, 2, 3), surface=support)
+    samples = dt.edge_display_samples(g, low, dt.DisplayTolerance(.05, 1e-5))
+    _dense_ok(g, low, samples, .05, 1e-5, supports=[support], count=257)
+
+
+def test_r1_7_counts_are_plain_ceilings():
+    """r1 #7: sweep .4000000001 at .2 takes three steps (two overshot by 5e-11 rad); an exact .4
+    keeps two (the step is verified, not slackened)."""
+    g, edge = _arc_edge((0., 0., 0.), 0., .4000000001)
+    samples = dt.edge_display_samples(g, edge, dt.DisplayTolerance(.2))
+    assert len(samples.parameters) - 1 == 3
+    assert (np.diff(samples.parameters) * .4000000001).max() <= .2
+    g, edge = _arc_edge((0., 0., 0.), 0., .4)
+    assert dt.edge_display_samples(g, edge, dt.DisplayTolerance(.2)).parameters.tolist() == [0., .5, 1.]
+
+
+def test_r1_7_the_union_drops_a_near_duplicate_only_when_its_angle_agrees():
+    """A later division's cut within the gap of a kept one is dropped only when its own angle
+    there agrees to rounding; otherwise it is kept."""
+    agree = dt._Division([.5 + 1e-14], lambda t: .2 * t)               # .2 x 1e-14: rounding
+    differ = dt._Division([.5 + 1e-14], lambda t: 1e6 * t)              # 1e6 x 1e-14 = 1e-8 rad
+    assert dt._union(0, [.5], [agree], 1e-13).tolist() == [0., .5, 1.]
+    assert dt._union(0, [.5], [differ], 1e-13).tolist() == [0., .5, .5 + 1e-14, 1.]
+    many = dt._Division(np.linspace(0., 1., 4097)[1:-1].tolist(), lambda t: t)
+    _refused(lambda: dt._union(0, [.5 + 1e-3], [many], 1e-13), "EDGE_UNSUPPORTED")
+
+
+def test_r1_9_the_union_is_one_sort_at_the_cap():
+    """4095 cuts from each of two divisions, all duplicates: one sort and one pass."""
+    import time
+    first = np.linspace(0., 1., 4097)[1:-1].tolist()
+    other = dt._Division(first, lambda t: t)
+    began = time.perf_counter()
+    assert len(dt._union(0, first, [other], 1e-13)) == 4097
+    assert time.perf_counter() - began < 1.0
+
+
+def _cone_line_at_radius(radius):
+    """A non-generator line from (radius, 0, -1024) on a frustum about x = y = 0 (origin at
+    z = -1024): the radius bound there is exactly 1e-9 x 1024."""
+    g = corpus.GeometryModel(tolerance=TolerancePolicy(surface_residual=1e-6))
+    support = Cone((0., 0., -1024.), (0., 0., 1.), (1., 0., 0.), radius, 2e-6, 1.0, 0., 1.)
+    p = g.add_point(radius, 0., -1024.)
+    q0, q1 = g.add_point(2e-6, 0., -1023.), g.add_point(2e-6 * math.cos(.5), 2e-6 * math.sin(.5), -1023.)
+    line = g.add_line(p, q1)
+    top = g.add_curve(q1, q0, EllipticArc((0., 0., -1023.), (2e-6, 0., 0.), (0., 2e-6, 0.), .5, -.5))
+    g.add_face((line, top, g.add_line(q0, p)), surface=support)
+    return g, support, line
+
+
+@pytest.mark.parametrize("inside", [True, False])
+def test_r1_8_cone_radius_at_and_one_ulp_below_the_ratio(inside):
+    """r1 #8: equality with the radius bound is inside, one ulp below is refused."""
+    bound = dt.MIN_DISPLAY_RADIUS_RATIO * 1024.
+    g, support, line = _cone_line_at_radius(bound if inside else float(np.nextafter(bound, 0.)))
+    call = lambda: dt.edge_display_samples(g, line, dt.DisplayTolerance(.1))  # noqa: E731
+    if inside:
+        _dense_ok(g, line, call(), .1, supports=[support], count=1025)
+    else:
+        _refused_out_of_domain(call)
+
+
+def test_r1_8_an_intersection_curve_is_refused():
+    from anygeometry.exact_curves import CylinderIntersectionCurve
+    first = Cylinder((0., 0., -2.), (0., 0., 1.), (1., 0., 0.), 1., 4.)
+    second = Cylinder((-2., 0., 0.), (1., 0., 0.), (0., 1., 0.), .5, 4.)
+    curve = CylinderIntersectionCurve(first, second, -.3, .6, 1)
+    g = corpus.GeometryModel()
+    ends = curve.evaluate(np.array([0., 1.]))
+    edge = g.add_curve(g.add_point(*ends[0]), g.add_point(*ends[1]), curve)
+    _refused(lambda: dt.edge_display_samples(g, edge, dt.DisplayTolerance(.2)), "EDGE_UNSUPPORTED")
+
+
+def test_r1_8_an_edge_of_a_nurbs_face_is_refused():
+    from anygeometry.nurbs import CurveOnSurface, NurbsCurve, NurbsSurface
+    sheet = NurbsSurface(1, 1, (0., 0., 1., 1.), (0., 0., 1., 1.),
+                         (((0., 0., 0.), (0., 1., 0.)), ((1., 0., 0.), (1., 1., 0.))))
+    g = corpus.GeometryModel()
+    uv = ((0., 0.), (1., 0.), (1., 1.), (0., 1.))
+    points = [g.add_point(*sheet.evaluate(*q)) for q in uv]
+    edges = [g.add_curve(points[i], points[(i + 1) % 4],
+                         CurveOnSurface(sheet, NurbsCurve(1, (0., 0., 1., 1.), (uv[i], uv[(i + 1) % 4]))))
+             for i in range(4)]
+    g.add_face(edges, corners=(0, 1, 2, 3), surface=sheet)
+    _refused(lambda: dt.edge_display_samples(g, edges[0], dt.DisplayTolerance(.2)), "SUPPORT_UNSUPPORTED")
+
+
+def test_r1_8_an_edge_of_a_ruled_face_is_refused():
+    from anygeometry.surfaces import RuledSurface
+    g = corpus.GeometryModel()
+    points = [g.add_point(*xyz) for xyz in ((0., 0., 0.), (1., 0., 0.), (1., 1., 0.), (0., 1., 0.))]
+    edges = [g.add_line(points[i], points[(i + 1) % 4]) for i in range(4)]
+    g.add_face(edges, corners=(0, 1, 2, 3),
+               surface=RuledSurface(((0., 0., 0.), (1., 0., 0.)), ((0., 1., 0.), (1., 1., 0.))))
+    _refused(lambda: dt.edge_display_samples(g, edges[0], dt.DisplayTolerance(.2)), "SUPPORT_UNSUPPORTED")
+
+
+def test_an_unknown_edge_is_a_geometry_error():
+    g, edge = _arc_edge((0., 0., 0.), 0., .4)
+    with pytest.raises(GeometryError) as caught:
+        dt.edge_display_samples(g, edge + 999, dt.DisplayTolerance(.2))
+    assert not isinstance(caught.value, dt.DisplayTrimRefused)
