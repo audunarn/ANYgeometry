@@ -8,6 +8,12 @@ on:
 permissions:
   contents: read
 
+# Superseded pull-request runs are cancelled.  Every other run (main pushes, tags, schedules,
+# dispatches) gets a group of its own, so it is never cancelled or replaced by a newer run.
+concurrency:
+  group: solid-regions-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: true
+
 jobs:
   contracts:
     runs-on: ${{ matrix.os }}

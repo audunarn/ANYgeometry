@@ -1,7 +1,18 @@
 name: Panel pressure projection
-on: [push, pull_request, workflow_dispatch]
+# Branches are tested through their pull request; push runs only on main (owner, 2026-11-25: reduce CI load).
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
+# Superseded pull-request runs are cancelled.  Every other run (main pushes, tags, schedules,
+# dispatches) gets a group of its own, so it is never cancelled or replaced by a newer run.
+concurrency:
+  group: panel-pressure-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: true
+
 jobs:
   pressure-projection:
     runs-on: ubuntu-latest

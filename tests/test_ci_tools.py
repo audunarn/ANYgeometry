@@ -168,11 +168,11 @@ def test_full_ci_keeps_every_runtime_and_sixteen_shards_under_original_caps():
     assert 'timeout-minutes: 30' in qualified
     qualified_shards = re.search(r"(?m)^        shard: \[([0-9, ]+)\]$", qualified)
     assert qualified_shards is not None
-    assert [int(value) for value in qualified_shards.group(1).split(",")] == list(range(1, 129))
-    assert 'ANYGEOMETRY_TEST_SHARD: ${{ matrix.shard }}/128' in qualified
+    assert [int(value) for value in qualified_shards.group(1).split(",")] == list(range(1, 65))
+    assert 'ANYGEOMETRY_TEST_SHARD: ${{ matrix.shard }}/64' in qualified
     # The distinct lane retains exactly the same consumer, commands, pins,
     # preflight and artifacts; only its shard denominator changes.
-    assert qualified.split('    steps:\n', 1)[1].replace('/128', '/16') == regular.split('    steps:\n', 1)[1]
+    assert qualified.split('    steps:\n', 1)[1].replace('/64', '/16') == regular.split('    steps:\n', 1)[1]
     gate = text.split("\n  pytest-shards:\n", 1)[1].split("\n  planar-absence:\n", 1)[0]
     assert "needs: [pytest, pytest-qualified, minimum-dependencies]" in gate
     assert 'if [ "$PYTEST_RESULT" != success ]' in gate
