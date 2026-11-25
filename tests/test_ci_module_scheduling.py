@@ -134,7 +134,7 @@ class ModuleSchedulingTests(unittest.TestCase):
         self.assertIn('needs: unit',manual)
         self.assertIn('uses: ./.github/workflows/integration.yml',manual)
         self.assertIn('actions: read',manual)
-        self.assertIn("group: development-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}",development)
+        self.assertIn("group: development-${{ github.event_name == 'pull_request' && github.run_attempt == '1' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}-{1}', github.run_id, github.run_attempt) }}",development)
         self.assertIn("cancel-in-progress: true",development)
         gate=development.split('\n  gate:\n',1)[1].split('\n  manual-integration:\n',1)[0]
         self.assertIn('needs: [unit, manual-integration]',gate)

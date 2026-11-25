@@ -21,7 +21,7 @@ env:
 concurrency:
   # Called from ci.yml and development.yml: superseding is decided by the caller's own group, so a
   # call is cancelled only together with its caller and a main run is never cancelled here.
-  group: integration-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  group: integration-${{ github.event_name == 'pull_request' && github.run_attempt == '1' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}-{1}', github.run_id, github.run_attempt) }}
   cancel-in-progress: true
 
 jobs:
