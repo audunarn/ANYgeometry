@@ -360,12 +360,91 @@ def runtime_infrastructure():
     return handle,dict(anchor=pin_module(module),json_native=pin_module(native),json_encoder=pin_module(encoder))
 
 
+# Opaque bounded stores (owner decision 2026-11-25, 0.4.7 gate class H "Opaque bounded stores"): two
+# numerical reset roots of exact_curves whose size the module bounds by its own limit constant. Warm, each
+# entry holds about 25 census nodes (up to 2 x 4096 entries), enough to truncate the census and decline the
+# process route. Like the C entries of an LRU wrapper their payload is not walked; instead every census runs
+# an exact structural check: the exact dict at its module binding, the reviewed limit constant, the size
+# within it, and every entry of the one shape the module writes (frozen supports of atoms, read-only float
+# arrays, floats, int/int/float nodes). Any failure declines; there is no fallback walk.
+_BOUNDED_STORE_MODULE = 'anygeometry.exact_curves'
+_BOUNDED_STORE_LIMIT = ('_BRANCH_CONSTANTS_LIMIT', 4096)
+_BOUNDED_STORES = ('_BRANCH_CONSTANTS', '_DOUBLE_NODES')
+_BOUNDED_ARRAY_FIELDS = (0, 1, 2, 3, 4, 6)
+
+
+def _bounded_support(value, support, numbers):
+    if type(value) is not support:
+        return False
+    for name in ('origin', 'axis', 'radial_direction'):
+        part = object.__getattribute__(value, name)
+        if type(part) is not tuple or len(part) != 3 or any(type(item) not in numbers for item in part):
+            return False
+    return all(type(object.__getattribute__(value, name)) in numbers
+               for name in ('radius', 'height', 'start_angle', 'sweep_angle'))
+
+
+def _bounded_payload(name, payload, namespace, np):
+    if name == '_BRANCH_CONSTANTS':
+        if type(payload) is not namespace.get('_BranchConstants') or tuple.__len__(payload) != 12:
+            return False
+        for index in range(12):
+            item = tuple.__getitem__(payload, index)
+            if index in _BOUNDED_ARRAY_FIELDS:
+                if (type(item) is not np.ndarray or item.flags.writeable or item.dtype != np.float64
+                        or item.shape != (3,)):
+                    return False
+            elif type(item) is not float:
+                return False
+        return True
+    node = namespace.get('_DoubleNode')
+    return type(payload) is tuple and all(
+        type(item) is node and tuple.__len__(item) == 3 and type(tuple.__getitem__(item, 0)) is int
+        and type(tuple.__getitem__(item, 1)) is int and type(tuple.__getitem__(item, 2)) is float
+        for item in payload)
+
+
+def bounded_store_check(module, name):
+    """Admit one registered bounded cache as opaque, or decline; never a partial admission."""
+    path = _BOUNDED_STORE_MODULE + '.' + name
+    if (type(module) is not types.ModuleType or name not in _BOUNDED_STORES
+            or vars(module).get('__name__') != _BOUNDED_STORE_MODULE
+            or sys.modules.get(_BOUNDED_STORE_MODULE) is not module):
+        raise QualificationDecline('unregistered bounded store: ' + path)
+    namespace = vars(module)
+    value = namespace.get(name)
+    if type(value) is not dict:
+        raise QualificationDecline('bounded store is not its reviewed exact dict: ' + path)
+    limit_name, limit_value = _BOUNDED_STORE_LIMIT
+    limit = namespace.get(limit_name)
+    if type(limit) is not int or limit != limit_value:
+        raise QualificationDecline('bounded store limit changed or removed: ' + path)
+    try:
+        items = tuple(dict.items(value))
+    except RuntimeError:
+        raise QualificationDecline('bounded store content check unestablished: ' + path) from None
+    if len(items) > limit:
+        raise QualificationDecline('bounded store exceeds its limit: ' + path)
+    import numpy as np
+    support, numbers = namespace.get('_CylinderSupport'), (float, int, np.float64)
+    for key, entry in items:
+        if not (type(key) is tuple and len(key) == 2 and type(key[0]) is int and type(key[1]) is int
+                and type(entry) is tuple and len(entry) == 3
+                and id(entry[0]) == key[0] and id(entry[1]) == key[1]
+                and _bounded_support(entry[0], support, numbers)
+                and _bounded_support(entry[1], support, numbers)
+                and _bounded_payload(name, entry[2], namespace, np)):
+            raise QualificationDecline('bounded store content check failed: ' + path)
+    return value
+
+
 def _census(modules, objects, *, omit_cache_payloads=False, definitions=None):
     """Keep the existing bound while treating registered H stores as opaque.
 
     LRU wrappers still expose their wrapped callable/defaults to the ordinary
     walker. Their C cache entries were never traversed by inventory. This is a
     content exemption only for the existing reset registry, not new eligibility.
+    The registered bounded stores are always opaque, behind ``bounded_store_check``.
     """
     definitions = {} if definitions is None else definitions
     infrastructure,_=runtime_infrastructure()
@@ -377,17 +456,25 @@ def _census(modules, objects, *, omit_cache_payloads=False, definitions=None):
     roots = {vars(module)['__name__'] + '.' + name: value
              for module in modules for name, value in vars(module).items()
              if name in _NUMERICAL_ROOTS and type(value) in (dict, list, set)}
+    bounded = {_BOUNDED_STORE_MODULE + '.' + name: bounded_store_check(module, name)
+               for module in modules if vars(module).get('__name__') == _BOUNDED_STORE_MODULE
+               for name in _BOUNDED_STORES}
 
     def boundary(value, path):
-        if (roots.get(path) is value or type(value) in (
+        if bounded.get(path) is value:
+            omitted[path] = value
+            return True
+        if omit_cache_payloads and (roots.get(path) is value or type(value) in (
                 weakref.WeakKeyDictionary, weakref.WeakValueDictionary, weakref.WeakSet)):
             omitted[path] = value
             return True
         return False
 
     report = inventory(modules, store_objects=objects, definition_objects=definitions,
-                       store_boundary=boundary if omit_cache_payloads else None,
-                       infrastructure_boundary=infrastructure_boundary)
+                       store_boundary=boundary, infrastructure_boundary=infrastructure_boundary)
+    # Reached first through another path, the store was walked, not admitted: decline.
+    if any(omitted.get(path) is not value for path, value in bounded.items()):
+        raise QualificationDecline('bounded store not reached at its registered binding')
     if any(id(value) in definitions for value in omitted.values()):
         raise QualificationDecline('registered cache aliases protected definition')
     protected = (*_FIXED_ROOTS, *_LIVE_CONTENT_PATHS, _LIVE_NAMESPACE_PATH, *_TRUSTED_IMAGE_STORES,
