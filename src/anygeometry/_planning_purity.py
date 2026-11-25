@@ -72,12 +72,15 @@ INVENTORY_MAX_NODES = 160000
 
 
 def inventory(modules, *, max_nodes=INVENTORY_MAX_NODES, max_depth=24, store_objects=None, definition_objects=None,
-              store_boundary=None, infrastructure_boundary=None):
+              store_boundary=None, infrastructure_boundary=None, bounded_store=None):
     """Bounded actual-type walk; no user descriptors, iterators or repr calls.
 
     Module metadata is excluded from numerical stores, not from loader safety.
     Unknown native/descriptor state is explicitly reported. Aliases are retained.
     Empty and warmed stores receive the same decision; a read hit is not missed.
+    ``bounded_store(value, path)`` may return ``(max_entries, entry_nodes)`` for an
+    exact dict store: its entries are walked exactly as any other, but counted
+    against that reserved budget instead of ``max_nodes``; exceeding it truncates.
     """
     if type(modules) is not tuple or max_nodes < 1 or max_depth < 1:
         raise PurityDecline('invalid inventory bounds/modules')
@@ -89,6 +92,7 @@ def inventory(modules, *, max_nodes=INVENTORY_MAX_NODES, max_depth=24, store_obj
     included = {id(m) for m, _ in namespaces}
     stores, unknowns, aliases, seen = [], [], [], {}
     count = 0
+    reserved = None     # remaining nodes of the bounded-store entry being walked, else None
     truncated = False
 
     def definition(value, path):
@@ -111,9 +115,14 @@ def inventory(modules, *, max_nodes=INVENTORY_MAX_NODES, max_depth=24, store_obj
                 break
 
     def visit(value, path, depth):
-        nonlocal count, truncated
-        count += 1
-        if count > max_nodes or depth > max_depth:
+        nonlocal count, truncated, reserved
+        if reserved is None:
+            count += 1
+            over = count > max_nodes
+        else:
+            reserved -= 1
+            over = reserved < 0
+        if over or depth > max_depth:
             truncated = True
             return
         typ = type(value)
@@ -138,6 +147,23 @@ def inventory(modules, *, max_nodes=INVENTORY_MAX_NODES, max_depth=24, store_obj
             # The store itself and all externally visible aliases/definitions
             # remain in the census; the ledger must validate the registry choice.
             if store_boundary is not None and store_boundary(value, path):
+                return
+            limits = (bounded_store(value, path) if bounded_store is not None and typ is dict
+                      and reserved is None else None)
+            if limits is not None:
+                max_entries, entry_nodes = limits
+                for i, (key, item) in enumerate(dict.items(value)):
+                    if i >= max_entries:
+                        truncated = True
+                        break
+                    reserved = entry_nodes
+                    try:
+                        visit(key, path + f'.key[{i}]', depth + 1)
+                        visit(item, path + ('.' + key if type(key) is str else f'.value[{i}]'), depth + 1)
+                    finally:
+                        reserved = None
+                    if truncated:
+                        break
                 return
         if typ in (dict, OrderedDict):
             items = dict.items(value) if typ is dict else OrderedDict.items(value)

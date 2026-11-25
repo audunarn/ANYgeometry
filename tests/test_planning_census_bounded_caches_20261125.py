@@ -1,20 +1,22 @@
-"""Opaque bounded stores in the planner's module-state census (0.4.7 gate class H, 2026-11-25).
+"""Bounded stores in the planner's module-state census (0.4.7 gate class H, 2026-11-25).
 
 ``exact_curves._BRANCH_CONSTANTS`` and ``exact_curves._DOUBLE_NODES`` are reset roots bounded at
-``_BRANCH_CONSTANTS_LIMIT`` (4096) entries each. Warm, they hold about 25 census nodes per entry, so a process
-that had evaluated many cylinder pairs needed more than the census bound (160,000) and the ledger declined
-('ledger creation live coverage mismatch'): the process route fell back to serial in warmed processes.
+``_BRANCH_CONSTANTS_LIMIT`` (4096) entries each. Warm, they hold about 50 walk nodes per entry, so a process
+that had evaluated many cylinder pairs exceeded the census bound (160,000) and the interpreter ledger declined
+('ledger creation live coverage mismatch'); the package worker ledger's alias walk (80,000 identities)
+declined the same way ('worker cache alias walk bound exceeded').
 
-Owner decision 2026-11-25 ("Opaque bounded stores", bound kept at 160,000): the two caches are opaque like
-LRU entries, behind an exact structural check that declines when the bound is removed, changed or
-exceeded, the binding is replaced, or the entry shape cannot be established.
+Owner decision 2026-11-25 (bound kept at 160,000). Codex round 1 showed that skipping the payload loses the
+parent's alias/identity protection, so the stores are walked exactly as before, with their entries counted
+against a reserved budget derived from their own bound (limit entries x 64 nodes per entry). The walk is the
+check: every state the parent refused below the bound is still refused, and a removed, changed or exceeded
+bound declines.
 """
 import math
 import sys
 import types
 from collections import OrderedDict
 
-import numpy as np
 import pytest
 
 from anygeometry import _planning_ledger as ledger
@@ -57,28 +59,71 @@ def _rows(result):
     return sorted((path, row['action']) for path, row in result.rows.items())
 
 
+def _one_more(name='_BRANCH_CONSTANTS'):
+    """A 4097th entry of the writer's own shape."""
+    key, (first, second, payload) = next(iter(getattr(ec, name).items()))
+    extra = _pair(10**6)
+    getattr(ec, name)[(id(extra.first), id(extra.second))] = (extra.first, extra.second, payload)
+    return extra
+
+
+# The class H regression: full caches truncated both planning censuses.
+
 def test_full_bounded_caches_do_not_truncate_the_planning_census(caches):
-    # Raw inventory of all loaded anygeometry modules with both caches full needs ~224,500 nodes.
     _fill()
     modules = tuple(m for n, m in sorted(sys.modules.items()) if n == 'anygeometry' or n.startswith('anygeometry.'))
-    assert _planning_purity.inventory(modules).truncated           # the raw walk alone would exceed the bound
-    result = ledger.loaded_geometry_ledger(trusted_image=True)     # the planner's own call
+    assert _planning_purity.inventory(modules).truncated           # the shared budget alone would be exceeded
+    result = ledger.loaded_geometry_ledger(trusted_image=True)     # the interpreter ledger's own call
     assert not result.report.truncated
-    result.validate()                                              # the boundary census again
+    result.validate()
     for name in BOUNDED:
         assert result.rows['anygeometry.exact_curves.' + name]['action'] == 'reset'
     assert len(ec._BRANCH_CONSTANTS) == len(ec._DOUBLE_NODES) == 4096       # admitted without clearing
 
 
-def test_exact_curves_census_is_independent_of_cache_fill(caches):
+_PACKAGE_PROBE = r'''
+import math, types
+from anygeometry import exact_curves as ec, _planning_ledger as ledger
+from anygeometry._planning_canaries import _fixture
+from anygeometry._planning_executor import freeze_model, thaw_model
+from anygeometry._planning_qualification import QualificationDecline
+owned = ledger.package_worker_ledger(thaw_model(freeze_model(_fixture()[0])))
+assert {'anygeometry.exact_curves._BRANCH_CONSTANTS', 'anygeometry.exact_curves._DOUBLE_NODES'} <= set(owned.resets)
+for i in range(4096):
+    t = .3 + i*1e-4
+    a = ec._CylinderSupport((0., 0., 0.), (1., 0., 0.), (0., 1., 0.), 1., 6., 0., 2*math.pi)
+    b = ec._CylinderSupport((0., 0., -1.), (0., math.sin(t), math.cos(t)), (1., 0., 0.), .5, 4., 0., 2*math.pi)
+    pair = types.SimpleNamespace(first=a, second=b); ec._double_nodes(pair); ec._branch_constants(pair)
+owned.validate()                     # the manifest route's alias walk with both caches full
+key, (first, second, payload) = next(iter(ec._BRANCH_CONSTANTS.items()))
+ec._BRANCH_CONSTANTS[(id(b), id(a))] = (b, a, payload)
+try:
+    owned.validate()
+except QualificationDecline as exc:
+    print('DECLINED', exc)
+'''
+
+
+def test_full_bounded_caches_pass_the_package_worker_ledger():
+    # A fresh process: the package ledger refuses unrelated state a long test process accumulates.
+    import os
+    import pathlib
+    import subprocess
+    src = pathlib.Path(ledger.__file__).resolve().parents[1]
+    env = dict(os.environ, PYTHONPATH=str(src))
+    result = subprocess.run([sys.executable, '-c', _PACKAGE_PROBE], capture_output=True, text=True, env=env,
+                            timeout=600)
+    assert result.returncode == 0, result.stderr[-2000:]
+    assert 'DECLINED bounded store exceeds its limit' in result.stdout, result.stdout
+
+
+def test_exact_curves_ledger_rows_are_independent_of_cache_fill(caches):
     empty = ledger.loaded_geometry_ledger(trusted_image=True, modules=(ec,))
     _fill()
     full = ledger.loaded_geometry_ledger(trusted_image=True, modules=(ec,))
     full.validate()
     assert _rows(full) == _rows(empty)
-    assert full.report.unknowns == empty.report.unknowns and full.report.aliases == empty.report.aliases
-    report, objects = full.report, dict(full.objects)
-    rebuilt = ledger.build_ledger(report, objects, modules=(ec,), trusted_image=True)
+    rebuilt = ledger.build_ledger(full.report, dict(full.objects), modules=(ec,), trusted_image=True)
     assert _rows(rebuilt) == _rows(full)
 
 
@@ -86,9 +131,8 @@ def test_owned_worker_reset_still_clears_the_bounded_caches(caches):
     _fill(8)
     result = ledger.loaded_geometry_ledger(trusted_image=True, modules=(ec,))
     result.validate()
-    # The opaque stores stay reset roots; only the registered reset (not a census walk) touches them.
-    # (prepare() itself also refuses unrelated declined rows a long test process may have created, e.g.
-    # copyreg's __slotnames__ entries, so the reset registry is exercised directly.)
+    # prepare() also refuses unrelated declined rows a long test process may have created (e.g. copyreg's
+    # __slotnames__ entries), so the registered reset is exercised directly.
     from anygeometry._planning_qualification import reset_declined
     paths = ['anygeometry.exact_curves.' + name for name in BOUNDED]
     assert all(path in result.resets for path in paths)
@@ -96,13 +140,11 @@ def test_owned_worker_reset_still_clears_the_bounded_caches(caches):
     assert not ec._BRANCH_CONSTANTS and not ec._DOUBLE_NODES
 
 
-# Fail closed: each broken premise of the opaque treatment declines.
+# Fail closed: the bound itself.
 
 def test_cache_past_its_limit_declines(caches):
     _fill()
-    key, (first, second, constants) = next(iter(ec._BRANCH_CONSTANTS.items()))
-    extra = _pair(10**6)
-    ec._BRANCH_CONSTANTS[(id(extra.first), id(extra.second))] = (extra.first, extra.second, constants)
+    _one_more()
     with pytest.raises(QualificationDecline, match='exceeds its limit'):
         ledger.loaded_geometry_ledger(trusted_image=True, modules=(ec,))
 
@@ -132,42 +174,6 @@ def test_replaced_store_type_declines(caches, monkeypatch, name, replacement):
         ledger.loaded_geometry_ledger(trusted_image=True, modules=(ec,))
 
 
-def _corrupt_entries():
-    pair = _pair(0)
-    ec._branch_constants(pair)
-    ec._double_nodes(pair)
-    (key, (first, second, constants)), = ec._BRANCH_CONSTANTS.items()
-    writeable = constants._replace(axis=np.array(constants.axis))
-    other = _pair(1)
-    return dict(
-        mutable_payload=('_BRANCH_CONSTANTS', key, (first, second, [1.])),
-        writeable_array=('_BRANCH_CONSTANTS', key, (first, second, writeable)),
-        foreign_support=('_BRANCH_CONSTANTS', key, (types.SimpleNamespace(), second, constants)),
-        key_mismatch=('_BRANCH_CONSTANTS', (id(other.first), id(other.second)), (first, second, constants)),
-        mutable_node=('_DOUBLE_NODES', key, (first, second, ([1, 1, 0.],))),
-        foreign_node_value=('_DOUBLE_NODES', key, (first, second, (ec._DoubleNode(1, 1, {}),))),
-        long_entry=('_DOUBLE_NODES', key, (first, second, (), None)),
-        string_key=('_DOUBLE_NODES', 'key', (first, second, ())),
-    )
-
-
-@pytest.mark.parametrize('case', ['mutable_payload', 'writeable_array', 'foreign_support', 'key_mismatch',
-                                  'mutable_node', 'foreign_node_value', 'long_entry', 'string_key'])
-def test_unestablished_entry_shape_declines(caches, case):
-    name, key, entry = _corrupt_entries()[case]
-    getattr(ec, name)[key] = entry
-    with pytest.raises(QualificationDecline, match='content check failed'):
-        ledger.loaded_geometry_ledger(trusted_image=True, modules=(ec,))
-
-
-def test_mutable_support_field_declines(caches):
-    pair = _pair(0)
-    ec._branch_constants(pair)
-    object.__setattr__(pair.first, 'origin', [0., 0., 0.])
-    with pytest.raises(QualificationDecline, match='content check failed'):
-        ledger.loaded_geometry_ledger(trusted_image=True, modules=(ec,))
-
-
 def test_store_reached_first_through_another_binding_declines(caches, monkeypatch):
     other = types.ModuleType('anygeometry._bounded_alias_fixture')
     other.held = ec._DOUBLE_NODES
@@ -185,11 +191,107 @@ def test_foreign_module_of_the_same_name_declines():
         ledger.bounded_store_check(ec, '_PI_CACHE')
 
 
-def test_growth_past_the_limit_after_capture_declines_at_validation(caches):
+# Codex round 1 (23ad978): states the parent 1ac4352 refused must still be refused.
+
+def test_h1_cached_support_aliased_elsewhere_declines(caches, monkeypatch):
+    pair = _pair(0)
+    ec._branch_constants(pair)
+    other = types.ModuleType('anygeometry.zz_bounded_alias_fixture')
+    other.held = [pair.first]
+    monkeypatch.setitem(sys.modules, other.__name__, other)
+    result = ledger.loaded_geometry_ledger(trusted_image=True, modules=(ec, other))
+    with pytest.raises(QualificationDecline, match='external alias'):
+        result.validate()
+
+
+def _lookalike(extra_slot):
+    slots = ('origin', 'axis', 'radial_direction', 'radius', 'height', 'start_angle', 'sweep_angle')
+    return type('_CylinderSupport', (), {'__slots__': slots + (('extra',) if extra_slot else ()),
+                                         '__module__': ec.__name__})
+
+
+def _lookalike_entry(cls, **extra):
+    supports = []
+    for _ in range(2):
+        value = object.__new__(cls)
+        for name, item in zip(('origin', 'axis', 'radial_direction', 'radius', 'height', 'start_angle',
+                               'sweep_angle'), ((0., 0., 0.), (1., 0., 0.), (0., 1., 0.), 1., 6., 0., 1.)):
+            if name not in extra.get('skip', ()):
+                object.__setattr__(value, name, item)
+        for name, item in extra.get('set', {}).items():
+            object.__setattr__(value, name, item)
+        supports.append(value)
+    ec._DOUBLE_NODES[(id(supports[0]), id(supports[1]))] = (supports[0], supports[1], ())
+    return supports
+
+
+def test_h2_rebound_support_class_hiding_nested_mutable_state_declines(caches, monkeypatch):
+    nested = []
+    for _ in range(40):
+        nested = [nested]
+    cls = _lookalike(True)
+    monkeypatch.setattr(ec, '_CylinderSupport', cls)
+    _lookalike_entry(cls, set={'extra': nested})
+    with pytest.raises(QualificationDecline):
+        ledger.loaded_geometry_ledger(trusted_image=True, modules=(ec,))
+
+
+def test_h2_census_never_executes_a_field_descriptor(caches, monkeypatch):
+    calls = []
+    slots = ('origin', 'axis', 'radial_direction', 'height', 'start_angle', 'sweep_angle')
+    cls = type('_CylinderSupport', (), {'__slots__': slots, '__module__': ec.__name__,
+                                        'radius': property(lambda self: calls.append(1) or 1.)})
+    monkeypatch.setattr(ec, '_CylinderSupport', cls)
+    _lookalike_entry(cls, skip=('radius',))
+    try:
+        ledger.loaded_geometry_ledger(trusted_image=True, modules=(ec,)).validate()
+    except QualificationDecline:
+        pass
+    assert calls == []
+
+
+def test_l5_missing_support_slot_is_never_an_attribute_error(caches):
+    # The parent walk skips an unset slot (native member descriptor); never an uncaught AttributeError.
+    _lookalike_entry(ec._CylinderSupport, skip=('radius',))
+    result = ledger.loaded_geometry_ledger(trusted_image=True, modules=(ec,))
+    result.validate()
+
+
+def test_m3_one_oversized_entry_declines(caches):
+    pair = _pair(0)
+    nodes = tuple(ec._DoubleNode(1, 1, float(i)) for i in range(160001))
+    ec._DOUBLE_NODES[(id(pair.first), id(pair.second))] = (pair.first, pair.second, nodes)
+    with pytest.raises(QualificationDecline):
+        ledger.loaded_geometry_ledger(trusted_image=True, modules=(ec,))
+
+
+def test_m3_entry_budget_covers_what_the_writer_produces(caches):
+    _fill(64)
+    # The writer's largest entry (two nodes) fits the per-entry budget with room to spare.
+    first, second, _ = next(iter(ec._DOUBLE_NODES.values()))
+    ec._DOUBLE_NODES[(id(first), id(second))] = (first, second, (ec._DoubleNode(1, 1, 0.), ec._DoubleNode(-1, 1, 3.)))
+    ledger.loaded_geometry_ledger(trusted_image=True, modules=(ec,)).validate()
+
+
+def test_m4_growth_between_bound_check_and_walk_declines(caches, monkeypatch):
     _fill()
     result = ledger.loaded_geometry_ledger(trusted_image=True, modules=(ec,))
-    key, (first, second, constants) = next(iter(ec._BRANCH_CONSTANTS.items()))
-    extra = _pair(10**6)
-    ec._BRANCH_CONSTANTS[(id(extra.first), id(extra.second))] = (extra.first, extra.second, constants)
+    real, raced = ledger.inventory, []
+
+    def racing(*args, **kwargs):
+        if not raced:
+            raced.append(_one_more())   # inside one census: after the bound check, before the walk
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(ledger, 'inventory', racing)
+    with pytest.raises(QualificationDecline):
+        result.validate()
+    assert raced
+
+
+def test_m4_growth_after_capture_declines_at_validation(caches):
+    _fill()
+    result = ledger.loaded_geometry_ledger(trusted_image=True, modules=(ec,))
+    _one_more()
     with pytest.raises(QualificationDecline, match='exceeds its limit'):
         result.validate()
