@@ -21,7 +21,7 @@ from anygeometry import GeometryError, plan_intersections
 from anygeometry import batch_intersections as bi
 from anygeometry import _planning_threads as pt
 from anygeometry.batch_intersections import IntersectionBatchPolicy
-from test_planning_threads import ENV, PROCESS, _clear, joint
+from test_planning_threads import ENV, PROCESS, _clear, _own_registry, joint
 
 BOUND = 240
 
@@ -29,6 +29,7 @@ BOUND = 240
 @pytest.fixture(autouse=True)
 def _bounded(monkeypatch):
     _clear(monkeypatch)
+    _own_registry(monkeypatch)
     before, registered = threading.active_count(), set(pt._WORKERS)
     faulthandler.dump_traceback_later(BOUND, exit=True)
     yield

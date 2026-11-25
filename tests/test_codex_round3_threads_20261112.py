@@ -22,7 +22,7 @@ from anygeometry import existing_material_preparation
 from anygeometry import _planning_threads as pt
 from anygeometry.arrangement_geometry import LinePath
 from test_codex_findings_threads_20261111 import _curves
-from test_planning_threads import ENV, PROCESS, _clear, comparable_records, joint
+from test_planning_threads import ENV, PROCESS, _clear, _own_registry, comparable_records, joint
 
 PLANNED = object()
 
@@ -30,6 +30,7 @@ PLANNED = object()
 @pytest.fixture(autouse=True)
 def _clean_environment(monkeypatch):
     _clear(monkeypatch)
+    _own_registry(monkeypatch)
 
 
 # ---- 1. switch validation on every path of the public entry ----

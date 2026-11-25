@@ -21,7 +21,7 @@ import pytest
 from anygeometry import GeometryError
 from anygeometry import _planning_threads as pt
 from anygeometry.batch_intersections import IntersectionBatchPolicy
-from test_planning_threads import ENV, _clear, joint
+from test_planning_threads import ENV, _clear, _own_registry, joint
 
 WAIT = 30
 BOUND = 240
@@ -31,6 +31,7 @@ POOL = 'anygeometry-plan'
 @pytest.fixture(autouse=True)
 def _bounded(monkeypatch):
     _clear(monkeypatch)
+    _own_registry(monkeypatch)
     faulthandler.dump_traceback_later(BOUND, exit=True)
     yield
     faulthandler.cancel_dump_traceback_later()

@@ -33,9 +33,23 @@ def _clear(patch):
         patch.delenv(name, raising=False)
 
 
+def _own_registry(patch):
+    """Run the test against a worker registry of its own; the module's registry is put back afterwards.
+
+    Since PR #52 the entries of an interrupted crew stay in ``_planning_threads._WORKERS`` until the OS reuses
+    those idents (known limit (5) there), so they outlive the test that made them. When a thread of a later test
+    gets such an ident (glibc reuses idents at once), that test met state it did not make: a registry that lost
+    an entry, or a stage refused because the entry is not provably stale (0.4.7 gate class E, Tests run
+    45480936063, 2026-11-25). The threads of earlier tests are joined (the fixtures count them), so their marks
+    protect nothing here. What a later test meets is tested on purpose, with planted entries.
+    """
+    patch.setattr(pt, '_WORKERS', {})
+
+
 @pytest.fixture(autouse=True)
 def _clean_environment(monkeypatch):
     _clear(monkeypatch)
+    _own_registry(monkeypatch)
 
 
 SEGMENTS = 4

@@ -23,7 +23,7 @@ from anygeometry import GeometryError
 from anygeometry import _planning_threads as pt
 from anygeometry.batch_intersections import IntersectionBatchPolicy
 from anygeometry.runtime_diagnostics import _increment, collect_runtime_diagnostics
-from test_planning_threads import ENV, _clear, joint
+from test_planning_threads import ENV, _clear, _own_registry, joint
 
 BOUND = 240
 FAILED = 'thread planning failed outside a geometry refusal'
@@ -32,6 +32,7 @@ FAILED = 'thread planning failed outside a geometry refusal'
 @pytest.fixture(autouse=True)
 def _bounded(monkeypatch):
     _clear(monkeypatch)
+    _own_registry(monkeypatch)
     before, registered = threading.active_count(), set(pt._WORKERS)
     faulthandler.dump_traceback_later(BOUND, exit=True)
     yield

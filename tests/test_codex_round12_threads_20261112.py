@@ -19,7 +19,7 @@ import pytest
 
 from anygeometry import GeometryError
 from anygeometry import _planning_threads as pt
-from test_planning_threads import ENV, _clear
+from test_planning_threads import ENV, _clear, _own_registry
 
 BOUND = 240
 MODULE = pt.__file__
@@ -29,6 +29,7 @@ FAILED = 'thread planning failed outside a geometry refusal'
 @pytest.fixture(autouse=True)
 def _bounded(monkeypatch):
     _clear(monkeypatch)
+    _own_registry(monkeypatch)
     monkeypatch.setattr(threading, 'excepthook', lambda args: None)
     before, registered = threading.active_count(), set(pt._WORKERS)
     faulthandler.dump_traceback_later(BOUND, exit=True)

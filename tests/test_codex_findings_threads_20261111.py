@@ -21,12 +21,13 @@ from anygeometry.branch_curves import BezierQuadricCurve
 from anygeometry.quadric_algebra import QuadricSupport
 from anygeometry.runtime_diagnostics import collect_runtime_diagnostics, collect_runtime_records
 from anygeometry.surfaces import Cylinder
-from test_planning_threads import ENV, PROCESS, _clear, comparable_records, joint
+from test_planning_threads import ENV, PROCESS, _clear, _own_registry, comparable_records, joint
 
 
 @pytest.fixture(autouse=True)
 def _clean_environment(monkeypatch):
     _clear(monkeypatch)
+    _own_registry(monkeypatch)
 
 
 def outcome(threads, patch, policy='connect'):
