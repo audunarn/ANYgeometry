@@ -369,35 +369,100 @@ declared domain (or which bound makes it so):
 ## Trim ring triangulation (`anygeometry._slab_triangulation`, private, N2)
 
 `triangulate_rings(rings, extra_x=None)` triangulates the region of `rings[0]` minus `rings[1:]`
-(each ring closed implicitly; ring orientation is free; even-odd) in pure NumPy, without Shapely.
-It is not wired into any public display mesh yet (N3/N4).
+(each ring closed implicitly; ring orientation is free) in pure NumPy, without Shapely. It is not
+wired into any public display mesh yet (N3/N4).
 
-Method: a vertical line through every ring vertex (plus the caller's `extra_x` lines) cuts the
-plane into slabs; in each slab the spanning non-vertical segments are sorted by height and paired
-bottom/top, giving trapezoids whose union is the region by construction. x-monotone single rings
-take a fast path (pure Python up to 48 vertices, NumPy above) giving the same trapezoids.
+**Input contract (owner decision, N2 round 1, the recommended option): simple rings.** The outer
+ring and every hole are simple polygons: no proper crossing, no self-touch, no zero-width retrace
+(repeated consecutive points are allowed and collapse to one vertex; collinear runs are fine). The
+holes lie strictly inside the outer ring and are pairwise disjoint: no two boundaries share a point
+or an edge, and no hole lies inside another. Anything else is `TRIM_INVALID`. (The first version
+described an even-odd rule; it is dropped: validity then depended on the cut list, and
+self-touches were refused or accepted by an area comparison, not by the rule.)
+
+**Validity is decided exactly and does not depend on `extra_x`** (owner decision, N2 round 1). The
+decision uses only ordinate comparisons on slab lines. A cut point's ordinate is computed in one
+canonical form from the segment's lower-x endpoint, `y = ya + f (yb - ya)`, `f = (x - xa) / (xb - xa)`,
+so every traversal of a segment gives bit-identical values; vertices are exact. Float filter: the
+computed ordinate is within `B = 4 eps (|ya| + |yb|) + 2^-1000` of the exact one (five roundings on
+the product and one on the sum give at most `6.01 u (|ya| + |yb|)`, `u = eps / 2`; `B` is that with
+a 1.33 margin, which also absorbs the filter's own difference; the absolute term covers
+underflow). Two ordinates on a line are ordered by the filter when they differ by more than the sum
+of their bounds, otherwise by exact rational arithmetic (`fractions.Fraction`). The checks, on the
+slab structure (vertical lines through every vertex and every `extra_x`; extra lines only refine
+it, and the predicates are exact, so the verdict is the same with or without them):
+
+1. on each line, all boundary points (vertices, cut points) in exact order: two distinct points at
+   the same exact location are a contact;
+2. a vertical segment's two endpoints are adjacent in that order (nothing else touches it, no
+   vertical retrace);
+3. in each slab the spanning segments keep their order from the left line to the right line (a
+   reversal is a proper crossing; equal at both lines is an overlap);
+4. walking each slab bottom-up, a hole is entered only inside the outer ring and while no other
+   hole is open.
+
+Cost (owner decision, N2 round 1): `O(I log I)` in the number `I` of segment-slab incidences
+(sorts and linear scans, no pairs); the exact fallback runs only on lines whose adjacent pairs the
+filter cannot separate. `I` is counted before anything is allocated (preflight; a cheap upper
+bound, segments x lines, skips the count for small trims) and above `MAX_SLAB_INCIDENCES = 200000`
+(also the limit on the number of `extra_x` values) the trim is `OUT_OF_DOMAIN` ("trim too complex
+for display"); the caller keeps its old route. Why 2e5: measured `I` is 4.2e3 for a 400-vertex ring
+with 20 holes, 0.8e3 for a plain 400-vertex ring and 2.0e4 for a 400-vertex star (the densest
+ordinary trim measured), a factor 10 below; results are linear in `I` (cut points and triangles at
+most about one per incidence) and a trim just under the budget (staggered holes, `m = 315`,
+`I = 199712`, 200972 triangles) took about 0.1 s. Staggered holes need about `2 m^2` incidences, so
+`m >= 316` is refused. `I` is not `O(n)` in general (a non-monotone ring can need `O(n^2)`); the
+budget bounds it.
+
+Method: in each slab the spanning segments, in their exact order, are paired bottom/top, giving
+trapezoids whose union is the region. x-monotone single rings take a certified fast path (pure
+Python up to 48 vertices, NumPy above) giving the same trapezoids: it returns only when the float
+filter proves the two chains strictly apart at every interior line (then the ring is simple and
+the rounded ordinates are ordered); otherwise the general path decides. Tests force the general
+path with the private keyword `_fast=False` and compare.
 
 Contract of the result (`SlabTriangulation`):
 
 - `points` are the input vertices in order (rings concatenated, unchanged bits), then *cut points*;
-  cut point `k` lies on ring segment `cut_ends[k]` at fraction `cut_fraction[k]`, so a caller can
-  place it on the segment's own image. No other points are created.
-- `triangles` are counter-clockwise with strictly positive area; zero-area triangles are removed.
-- The triangles cover the region exactly (sum of areas equals the ring area minus the holes), none
-  overlap, none lie outside, and every point on a trapezoid's vertical side is used (no T-junctions).
+  cut point `k` lies on ring segment `cut_ends[k] = (a, b)`, `a` its endpoint of lower x, at
+  fraction `cut_fraction[k]` from `a`, strictly inside `(0, 1)`, so a caller can place it on the
+  segment's own image. No other points are created.
+- `triangles` are counter-clockwise with strictly positive area, decided from the slab geometry,
+  not from a determinant (owner decision, N2 round 1): each triangle has one vertical side between
+  two distinct points of one slab line and its third corner on the other line, so its exact area
+  is (side height) x (slab width) / 2 > 0. A piece is dropped only when that side has zero height
+  (one shared point).
+- The triangles tile, exactly in rational arithmetic, the *rounded* polygon (the rings with each cut
+  point inserted on its segment): no overlap, nothing outside, every point on a trapezoid's
+  vertical side used (no T-junctions). The rounded polygon's area differs from the exact one by at
+  most `sum_k B_k (x_next,k - x_prev,k) / 2` over the cut points (moving one by `d` changes the area
+  by `d` times half its neighbours' x distance).
 - The result is deterministic (bit-identical on repeat).
 
-Refusals: everything invalid raises `SlabInvalid`, a `DisplayTrimRefused` with code `TRIM_INVALID`:
-fewer than three vertices, non-numeric or non-`(n, 2)` ring data, non-finite coordinates or
-`extra_x`, a ring with no area (collinear, repeated or self-cancelling), crossing rings (odd
-boundary count in a slab, or segments crossing inside a slab), and holes outside the outer ring or
-overlapping (covered area differs from the shoelace area). No raw `IndexError`/`ValueError`.
+Refusals, in this order (no raw `IndexError`/`ValueError`/`OverflowError`/`FloatingPointError`):
 
-Precision: vertices are never altered and slab areas are exact up to float rounding; the cut
-points are computed as `a + f (b - a)` with `f = (x - xa) / (xb - xa)`, so they lie on their
-segment to a few ulps, not exactly. The validity checks compare the covered area with the shoelace
-area (relative 1e-9 plus 16 n eps extent^2) and allow a 64 eps slack for ordering inside a slab:
-a crossing smaller than that, or a hole poking out of the outer ring by less than the area
-tolerance, can be accepted. A ring that touches itself or backtracks (a zero-width spike) is
-treated by even-odd, the spike carrying no triangle. Measured: a 400-vertex ring with 20 holes
-takes about 1.3 ms, a plain 400-vertex ring 0.3 ms.
+| code | when |
+|---|---|
+| `TRIM_INVALID` (`SlabInvalid`) | not a sequence of `(n, 2)` arrays, non-numeric (string) data, fewer than three (distinct consecutive) vertices |
+| `OUT_OF_DOMAIN` (`DisplayDomainRefused`, as N1) | the declared numeric domain (owner decision, N2 round 1), checked before any arithmetic: real finite coordinates with `\|c\| <= MAX_DISPLAY_COORDINATE = 1e9` for rings and `extra_x` (complex, boolean and object arrays, e.g. integers too large for a float, are refused, never converted; non-finite values moved from `TRIM_INVALID` to `OUT_OF_DOMAIN`); then the preflight budget. Inside the domain no overflow is possible: differences are at most 2e9, shoelace products at most 4e18 |
+| `TRIM_INVALID` | the input contract above (crossing, self-touch, retrace, touching rings, hole outside or nested), decided exactly |
+| `OUT_OF_DOMAIN` | the valid input cannot be resolved in floats: a cut fraction rounds to 0 or 1 at a strictly interior x ("slab too narrow"); rounded ordinates on a slab line not strictly in their exact order ("feature below display resolution"); a ring's float area at most `16 n eps extent^2` of ITS OWN extent (a backstop; the floor used to be relative to all rings and refused a 1/64 hole in a 1e6-long face) |
+
+The tests carry an independent exact oracle (`tests/test_display_tessellation_slab_contract.py`):
+exact orientation, exact pairwise interior-disjointness (bounding-box prefilter, no cap), exact
+containment of corners, edge midpoints (closed) and centroids (strict) in the rounded polygon,
+exact equality of the triangle area sum with the rounded polygon's area, the stated bound against
+the exact polygon, cut provenance recomputed exactly, and a brute-force exact validity verdict.
+
+Fuzz (N2 round 1, 6000 cases: `display-tess-evidence-20261125/n2r1_fuzz.py`; integer-grid, star,
+snapped and one-ulp-nudged star, and x-monotone generators, half with random extra lines, some one
+ulp from an end; each case also run with the general path forced): 0 raw exceptions; 0 exact-oracle
+failures among the 2810 accepted; the brute-force exact verdict matched on all 6000 (2957 invalid,
+all `TRIM_INVALID`); fast and general paths gave the same verdict and the same triangles; the
+verdict never changed with `extra_x`. 233 valid cases were `OUT_OF_DOMAIN` (190 feature below
+display resolution, 39 slab too narrow, 4 area floor): near-contacts at the ulp level (e.g. a
+snapped vertex 1e-10 off its own edge after an offset) or an extra line one ulp from a vertex.
+
+Measured (best of 30 or 300 runs, loaded PC, before/after round 1): a 400-vertex ring with 20 holes
+2.2 / 2.3 ms, a plain 400-vertex ring 0.25 / 0.23 ms, a 400-vertex star 7.1 / 5.6 ms; a unit square
+58 / 45 us, a square with one hole 0.19 / 0.26 ms (the general path's exact checks).

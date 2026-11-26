@@ -136,11 +136,17 @@ def test_a_thin_lens_is_kept():
     [[(0., 0.), (4., 0.), (4., 4.), (0., 4.)], [(1., 1.), (3., 1.), (3., 3.)], [(1.5, 1.), (3.5, 1.), (3.5, 3.)]],
     [[(0., 0.), (1., 0.)]],                                                         # too few vertices
     [[(0., 0.), (1., 0.), (2., 0.)]],                                               # no area
-    [[(0., 0.), (1., 0.), (float("nan"), 1.)]],
-], ids=("bowtie", "hole_outside", "overlapping_holes", "two_vertices", "collinear", "nan"))
+], ids=("bowtie", "hole_outside", "overlapping_holes", "two_vertices", "collinear"))
 def test_invalid_rings_are_refused(rings):
     with pytest.raises(slab.SlabInvalid):
         slab.triangulate_rings(rings)
+
+
+def test_non_finite_coordinates_are_out_of_domain():
+    """N2 r1 owner decision (2): the declared numeric domain is checked first (as in N1)."""
+    from anygeometry.display_tessellation import DisplayDomainRefused
+    with pytest.raises(DisplayDomainRefused):
+        slab.triangulate_rings([[(0., 0.), (1., 0.), (float("nan"), 1.)]])
 
 
 def test_no_shapely_is_imported():
@@ -178,3 +184,4 @@ def test_monotone_rings_take_the_fast_path_with_the_same_coverage(count):
 def test_non_trivial_rings_are_covered_either_way(ring):
     ring = np.asarray(ring)
     _check([ring], slab.triangulate_rings([ring]))
+    _check([ring], slab.triangulate_rings([ring], _fast=False))
