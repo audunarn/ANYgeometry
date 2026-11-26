@@ -23,13 +23,13 @@ def test_missing_variable_keeps_the_30_minute_driver_budget():
     assert ci.driver_budget_seconds({}) == 1800
 
 
-@pytest.mark.parametrize('value, seconds', [('2640', 2640), ('1800', 1800), ('2700', 2700), ('1', 1)])
+@pytest.mark.parametrize('value, seconds', [('2640', 2640), ('1800', 1800), ('2700', 2700), ('1', 1), ('02640', 2640), ('0001', 1)])
 def test_the_variable_sets_the_driver_budget(value, seconds):
     assert ci.driver_budget_seconds({'ANYGEOMETRY_CI_DRIVER_SECONDS': value}) == seconds
     assert ci.PhaseBudget(seconds).seconds == seconds
 
 
-@pytest.mark.parametrize('value', ['', '0', '-5', '2701', '3600', '2640.0', ' 2640', '2640s', 'abc', '+2640', '０'])
+@pytest.mark.parametrize('value', ['', '0', '0000', '02701', '-5', '2701', '3600', '2640.0', ' 2640', '2640s', 'abc', '+2640', '０'])
 def test_a_malformed_or_out_of_range_variable_is_refused(value):
     with pytest.raises(ValueError, match='CI driver budget'):
         ci.driver_budget_seconds({'ANYGEOMETRY_CI_DRIVER_SECONDS': value})

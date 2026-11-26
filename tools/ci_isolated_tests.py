@@ -159,14 +159,14 @@ DRIVER_SECONDS_VARIABLE='ANYGEOMETRY_CI_DRIVER_SECONDS'
 
 
 def driver_budget_seconds(env):
-    """The driver budget from the workflow: unset is 1800 s; otherwise a plain decimal 1..2700.
+    """The driver budget from the workflow: unset is 1800 s; otherwise ASCII decimal digits, value 1..2700.
 
     Owner decision 2026-11-26: the macOS Intel pytest shards get a 45-minute job and 2640 s of
     driver budget; every other job keeps 30 minutes and 1800 s. A malformed value is refused.
     """
     value=env.get(DRIVER_SECONDS_VARIABLE)
     if value is None:return DRIVER_SECONDS_DEFAULT
-    if type(value) is not str or not value.isascii() or not value.isdigit() or value.startswith('0'):
+    if type(value) is not str or not value.isascii() or not value.isdigit():
         raise ValueError('invalid CI driver budget variable: '+repr(value))
     seconds=int(value)
     if not 0<seconds<=DRIVER_SECONDS_MAX:raise ValueError('invalid CI driver budget variable: '+repr(value))
