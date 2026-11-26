@@ -39,6 +39,27 @@ All notable user-visible changes to ANYgeometry are documented here.
   arithmetic under a local `np.errstate(all="ignore")` (model calls under NumPy's default state),
   so a subnormal ellipse component no longer raises under a caller's `np.seterr(all="raise")`;
   default-state results are unchanged (N1 corpus bit-identical).
+  Round 4 (owner decisions, the recommended options): a STRICT input contract replaces the
+  permissive input handling, checked first from types and shapes only: `rings` a list or tuple of
+  1 to `MAX_SLAB_RINGS` exact `np.ndarray` float64 `(n, 2)` arrays (`n >= 3`), `extra_x` None or an
+  exact float64 1-D ndarray; anything else is `TRIM_INVALID` ("input must be a list/tuple of
+  float64 (n, 2) ndarrays"), with no conversion and no iteration of foreign containers (Codex r4:
+  an empty stacked array and wide-string points allocated 14-17 MB, `range(10**40)` raised
+  `OverflowError`, a stacked ndarray subclass meshed a unit square to area 4; all refused now with
+  under 100 kB traced). The conversion code (binary64 round trip, masked handling, sequence walks)
+  is deleted. Changed results: lists of points, integer, float32, bool, complex and object arrays,
+  stacked arrays, sequence or scalar `extra_x` and every ndarray subclass are now `TRIM_INVALID`
+  (some were converted, some `OUT_OF_DOMAIN`). The N3 lift contract now requires certifying BOTH
+  orientation and coverage of the lifted mesh (Codex r4: fraction reconstruction left a gap at an
+  outer cut equal to a hole tip). `area` is the correctly rounded exact area of the emitted
+  triangles, bit-identical on the fast and general paths (changed by at most 3 ulps on 2543 of
+  6000 ordinary calls; a subnormal area no longer rounds to 0 with extra cuts). In
+  `display_tessellation`, invalid public arguments are a `GeometryError`, never a raw exception:
+  `DisplayTolerance` takes real numbers only (not bool or strings; `10**400` raised
+  `OverflowError`), the public calls take a `GeometryModel` and an integer edge id (a NaN edge id
+  raised `ValueError`; a float id such as `3.0` is now refused), an unknown refusal code raises
+  `GeometryError` (a `ValueError` subclass, it was a plain `ValueError`); N1 corpus bit-identical
+  (5744 results, 0 changes).
 - New `anygeometry.display_tessellation` (not re-exported from `anygeometry`): display edge
   samples shared by every face using an edge (`edge_display_samples`, `DisplayTolerance`,
   `EdgeSamples`, typed `DisplayTrimRefused`). Narrow contract: lines, circles and ellipses on

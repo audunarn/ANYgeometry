@@ -28,6 +28,7 @@ This module only reads the model through public calls.
 from __future__ import annotations
 
 import math
+import numbers
 from dataclasses import dataclass
 from fractions import Fraction
 
@@ -144,8 +145,8 @@ class DisplayTrimRefused(GeometryError):
     """A typed refusal: ``code`` is one of :data:`REFUSAL_CODES`."""
 
     def __init__(self, code: str, message: str):
-        if code not in REFUSAL_CODES:
-            raise ValueError(f"unknown display refusal code {code!r}")
+        if not (isinstance(code, str) and code in REFUSAL_CODES):    # GeometryError is a ValueError
+            raise GeometryError(f"unknown display refusal code {code!r}")
         super().__init__(f"{code}: {message}")
         self.code = code
 
@@ -155,6 +156,17 @@ class DisplayDomainRefused(DisplayTrimRefused):
 
     def __init__(self, message: str):
         super().__init__("OUT_OF_DOMAIN", message)
+
+
+def _real_argument(value, message: str) -> float:
+    """A real number (``numbers.Real``, not a bool) as a float, else :class:`GeometryError` (owner
+    decision N2 round 4 (4): no raw exception from argument validation, no string conversion)."""
+    if isinstance(value, (bool, np.bool_)) or not isinstance(value, numbers.Real):
+        raise GeometryError(f"{message} (got a {type(value).__name__}, not a real number)")
+    try:
+        return float(value)
+    except (ArithmeticError, ValueError, TypeError):
+        raise GeometryError(f"{message} (got {type(value).__name__} out of float range)") from None
 
 
 @dataclass(frozen=True)
@@ -171,12 +183,12 @@ class DisplayTolerance:
     sag: float | None = None
 
     def __post_init__(self):
-        angle = float(self.angle)
+        angle = _real_argument(self.angle, "display angle must be finite and in [1e-6, pi/2]")
         if not (math.isfinite(angle) and _MIN_ANGLE <= angle <= math.pi / 2):
             raise GeometryError("display angle must be finite and in [1e-6, pi/2]")
         object.__setattr__(self, "angle", angle)
         if self.sag is not None:
-            sag = float(self.sag)
+            sag = _real_argument(self.sag, "display sag must be finite and positive")
             if not (math.isfinite(sag) and sag > 0.0):
                 raise GeometryError("display sag must be finite and positive")
             object.__setattr__(self, "sag", sag)
@@ -1229,8 +1241,14 @@ class _Analysis:
 
 def _setup(model, edge_id, tol) -> _Setup:
     """Every input check against the declared domain, before any division."""
+    from .model import GeometryModel
+    if not isinstance(model, GeometryModel):
+        raise GeometryError(f"model must be a GeometryModel, got a {type(model).__name__}")
     if not isinstance(tol, DisplayTolerance):
         raise GeometryError("tol must be a DisplayTolerance")
+    # owner decision N2 round 4 (4): an integer of any integer type (not a bool), else a typed refusal
+    if isinstance(edge_id, (bool, np.bool_)) or not isinstance(edge_id, numbers.Integral):
+        raise GeometryError(f"edge id must be an integer, got a {type(edge_id).__name__}")
     edge_id = int(edge_id)
     if edge_id not in model.edges:
         raise GeometryError(f"edge {edge_id} is not in the model")

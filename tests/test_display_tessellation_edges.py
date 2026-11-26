@@ -2582,3 +2582,56 @@ def test_r3_public_calls_do_not_depend_on_the_callers_error_state(label, curve):
 
 
 _R3_REPRO = "subnormal out-of-plane ellipse (Codex r3)"
+
+
+# ----------------------------------------------------------------------------- N2 round 4 (Low b): arguments
+@pytest.mark.parametrize("args", [
+    (10 ** 400,), (-10 ** 400,), (Fraction(10 ** 400),), (True,), (False,), (np.bool_(True),), ("0.1",), (b"0.1",),
+    (complex(.1, 0),), (None,), (np.array([.1]),), ([.1],), (float("inf"),), (float("nan"),),
+    (.1, 10 ** 400), (.1, True), (.1, np.bool_(True)), (.1, "1"), (.1, complex(1, 0)), (.1, float("inf")),
+    (.1, np.array([1.])),
+], ids=lambda a: repr(a)[:30])
+def test_r4_tolerance_arguments_are_typed_refusals(args):
+    """Codex N2 r4 Low (b): DisplayTolerance(10**400) raised a raw OverflowError; strings and bools
+    were converted.  Owner decision N2 r4 (4): a real number (not bool) or a typed refusal."""
+    with pytest.raises(GeometryError):
+        dt.DisplayTolerance(*args)
+
+
+def test_r4_tolerance_accepts_every_real_number_type_with_the_same_value():
+    for value in (.1, np.float64(.1), np.float32(.25), Fraction(1, 4), 1, np.int64(1)):
+        assert dt.DisplayTolerance(value).angle == float(value)
+        assert dt.DisplayTolerance(.1, value).sag == float(value)
+
+
+def test_r4_public_call_arguments_are_typed_refusals():
+    """Codex N2 r4 Low (b): a NaN edge id raised a raw ValueError in both public calls.  Owner
+    decision N2 r4 (4): an integer edge id (not bool), a GeometryModel and a DisplayTolerance, or a
+    typed refusal (GeometryError); results for valid arguments are unchanged."""
+    case = corpus.ALL["shared_circle"]()
+    edge = case.info["shared"]
+    tol = dt.DisplayTolerance(.1)
+    for call in (dt.edge_display_samples, dt.display_rounding_allowance):
+        reference = call(case.model, edge, tol)
+        for edge_id in (float("nan"), float("inf"), -float("inf"), 1.5, float(edge), np.float64(edge), "1", b"1",
+                        True, False, np.bool_(True), None, 10 ** 400, -10 ** 400, [edge], np.array([edge]),
+                        complex(edge, 0)):
+            with pytest.raises(GeometryError):
+                call(case.model, edge_id, tol)
+        for model in (None, "model", object()):
+            with pytest.raises(GeometryError):
+                call(model, edge, tol)
+        for bad_tol in (.1, None, (.1, None)):
+            with pytest.raises(GeometryError):
+                call(case.model, edge, bad_tol)
+        again = call(case.model, np.int64(edge), tol)               # any integer type is an edge id
+        if call is dt.edge_display_samples:
+            assert np.array_equal(again.parameters, reference.parameters) and again.edge_id == edge
+        else:
+            assert again == reference
+
+
+def test_r4_refusal_constructors_refuse_unknown_codes_typed():
+    for code in ("NOT_A_CODE", None, 3, ["TRIM_INVALID"], b"TRIM_INVALID"):
+        with pytest.raises(GeometryError):
+            dt.DisplayTrimRefused(code, "x")

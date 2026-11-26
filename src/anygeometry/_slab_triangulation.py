@@ -6,9 +6,11 @@ Input contract (owner decision, N2 round 1): the outer ring and every hole are S
 crossing, no self-touch, no zero-width retrace; repeated consecutive points are allowed and
 collapse), the holes lie strictly inside the outer ring and no two boundaries share a point.  The
 decision is exact and does not depend on ``extra_x``; anything else is :class:`SlabInvalid`
-(``TRIM_INVALID``).  Inputs outside the declared numeric domain (including values not exactly
-representable in binary64), trims above the preflight budget and, as a fail-closed guard only, a
-rounding reversal are ``OUT_OF_DOMAIN``
+(``TRIM_INVALID``).  The input FORM is strict (owner decision, N2 round 4): ``rings`` is a list or
+tuple of exact ``numpy.ndarray`` float64 ``(n, 2)`` arrays, ``extra_x`` None or an exact float64 1-D
+ndarray; it is checked first, from types and shapes only, and anything else is ``TRIM_INVALID``.
+Non-finite coordinates or ``|c| > 1e9``, trims above the preflight budget and, as a fail-closed
+guard only, a rounding reversal are ``OUT_OF_DOMAIN``
 (:class:`~anygeometry.display_tessellation.DisplayDomainRefused`).
 
 The plane is cut by a vertical line through every ring vertex (plus optional extra lines).  In
@@ -16,18 +18,18 @@ each slab between two consecutive lines, the ring segments spanning it are sorte
 paired bottom/top, which gives trapezoids whose union is exactly the region.  A trapezoid's
 corners are ring vertices or *cut points* on a ring segment (their segment and fraction are
 returned as provenance metadata only: the certified product is the 2D mesh, and a lift that
-rebuilds cut points from their fractions can invert a triangle, so any lift must certify each
-lifted triangle's orientation itself; owner decision, N2 round 3).  A cut point's fraction and
+rebuilds cut points from their fractions can invert a triangle or open a gap, so any lift must
+certify both the orientation and the coverage of the lifted mesh itself; owner decisions, N2
+rounds 3 and 4).  A cut point's fraction and
 ordinate are the CORRECTLY ROUNDED values of the exact interpolation (owner decision, N2 round
 2): rounding is monotone, so the exact order on a slab line is kept as a non-strict order (ties
 allowed, never a reversal).  Every point lying on a trapezoid's vertical side is used by its
-triangles, so the mesh has no T-junctions.
+triangles, so the mesh has no T-junctions.  ``area`` is the correctly rounded exact area of the
+emitted triangles (owner decision, N2 round 4), the same bits on every path.
 """
 from __future__ import annotations
 
 import math
-import numbers as _numbers_abc
-from collections.abc import Sequence as _Sequence
 from dataclasses import dataclass
 from fractions import Fraction
 from typing import Sequence
@@ -36,7 +38,7 @@ import numpy as np
 
 from .display_tessellation import MAX_DISPLAY_COORDINATE, DisplayDomainRefused, DisplayTrimRefused
 
-__all__ = ["MAX_SLAB_INCIDENCES", "MAX_SLAB_OUTPUT", "MAX_SLAB_RING_POINTS", "SlabInvalid",
+__all__ = ["MAX_SLAB_INCIDENCES", "MAX_SLAB_OUTPUT", "MAX_SLAB_RINGS", "MAX_SLAB_RING_POINTS", "SlabInvalid",
            "SlabTriangulation", "triangulate_rings"]
 
 #: Largest number of (segment, slab) incidences (and of ``extra_x`` values) a trim may need.
@@ -44,6 +46,8 @@ MAX_SLAB_INCIDENCES = 200_000
 #: Largest total number of input ring points (every point counts: duplicates and the points of
 #: vertical segments are allocated and returned too).
 MAX_SLAB_RING_POINTS = 50_000
+#: Largest number of rings (every ring needs three points).
+MAX_SLAB_RINGS = MAX_SLAB_RING_POINTS // 3
 #: Largest preflight bound on the number of output triangles, ``I + 2 (N + cuts)`` (``I``
 #: incidences, ``N`` input points, ``cuts = I - sloped segments`` cut points).  Above any of the
 #: three the trim is ``OUT_OF_DOMAIN`` ("too complex for display") before anything is built, and
@@ -57,6 +61,10 @@ _EXACT_ROWS = 64       # up to this many cut points exact integer rounding is ch
 _SPLIT = 134217729.0   # 2**27 + 1, Veltkamp's splitter
 _SAFE = 2.0 ** -450    # a two_prod operand is zero or at least this (no underflow in its terms)
 _ABS = 2.0 ** -1060    # absolute slack for gradual underflow (each rounding at most 2**-1075)
+_EXACT_PAIRS = 24      # up to this many trapezoids the exact integer area is cheaper (measured)
+_TINY = 2.0 ** -1074   # the smallest subnormal
+#: the input-form refusal (owner decision, N2 round 4)
+_FORM = "input must be a list/tuple of float64 (n, 2) ndarrays"
 
 
 class SlabInvalid(DisplayTrimRefused):
@@ -78,7 +86,7 @@ class SlabTriangulation:
     endpoint of lower x, at fraction ``cut_fraction[k]`` from ``a`` (the exact fraction correctly
     rounded, in ``[0, 1]``; 0 or 1 only when the exact one is within half an ulp of it).
     ``cut_ends`` and ``cut_fraction`` are provenance metadata, not a certified lift.  ``area`` is
-    the covered area (the trapezoids' float sum, accumulated without underflow).
+    the exact area of the triangles, correctly rounded (the same bits on every path).
     """
 
     points: np.ndarray
@@ -89,48 +97,6 @@ class SlabTriangulation:
 
 
 # ----------------------------------------------------------------------------- input and domain
-def _numbers(value, what: str) -> np.ndarray:
-    """A real numeric array (no arithmetic yet): strings are ``TRIM_INVALID``; complex, boolean,
-    object (e.g. integers too large for an int64 or a float) arrays are ``OUT_OF_DOMAIN``."""
-    try:
-        array = np.asarray(value)
-    except OverflowError:
-        raise DisplayDomainRefused(f"{what}: a number too large for a float coordinate") from None
-    except (TypeError, ValueError) as error:
-        raise SlabInvalid(f"{what} must be numbers ({error})") from None
-    kind = array.dtype.kind
-    if kind in "USV":
-        raise SlabInvalid(f"{what} must be numbers, got dtype {array.dtype}")
-    if kind not in "fiu":
-        raise DisplayDomainRefused(f"{what} must be real numbers (floats or integers), got dtype {array.dtype}")
-    return array
-
-
-def _binary64(array: np.ndarray, what: str) -> np.ndarray:
-    """The values as float64, refusing any finite value that is not EXACTLY representable in
-    binary64 (owner decision, N2 round 2: nothing is narrowed before the exact checks)."""
-    kind, size = array.dtype.kind, array.dtype.itemsize
-    exact = True
-    if kind == "f" and size > 8:
-        narrowed = array.astype(np.float64)
-        exact = bool(np.all((narrowed.astype(array.dtype) == array) | ~np.isfinite(array)))
-    elif kind in "iu" and size >= 8 and array.size:
-        large = array > 2 ** 53 if kind == "u" else (array > 2 ** 53) | (array < -2 ** 53)
-        exact = all(int(float(v)) == v for v in array[large].tolist())
-    if not exact:
-        raise DisplayDomainRefused(f"{what}: a coordinate not exactly representable in binary64")
-    return np.array(array, dtype=np.float64)
-
-
-def _in_domain(array: np.ndarray, what: str) -> np.ndarray:
-    """Exactly representable, finite, ``|c| <= MAX_DISPLAY_COORDINATE`` (conversion is exact)."""
-    values = _binary64(array, what)
-    if values.size and not (bool(np.all(np.isfinite(values)))
-                            and float(np.abs(values).max()) <= MAX_DISPLAY_COORDINATE):
-        raise DisplayDomainRefused(f"{what} must be finite with |coordinate| <= {MAX_DISPLAY_COORDINATE:g}")
-    return values
-
-
 def _too_complex(what: str):
     return DisplayDomainRefused(f"trim too complex for display: {what}")
 
@@ -310,27 +276,89 @@ def _floor(ring) -> None:
 
 
 # ----------------------------------------------------------------------------- covered area
-# The area is half the sum of (slab width) x (height sum) over the trapezoids.  Owner decision, N2
-# round 3 (Low a): it is accumulated without underflow.  Widths and heights are scaled UP by
-# powers of two (exact) so the x and y extents lie in [1/2, 1), the products are summed, and the
-# sum is scaled back once (one rounding).  Where nothing underflows (every ordinary trim: extents
-# of 1/2 or more need no scaling at all) the bits are those of the plain float sum, because
-# power-of-two scaling commutes with every rounding in the normal range; below, no product of the
-# scaled values underflows unless it is under 2**-1022 of the extents' product (each such loses
-# at most 2**-1075 of it), so a representable area is never cut to 0.  Same rule on every path.
-def _up(extent: float) -> int:
-    """The power of two that scales ``extent`` into [1/2, 1) when it is below 1/2, else 0."""
-    return max(0, -math.frexp(extent)[1]) if extent > 0.0 else 0
+# Owner decision, N2 round 4 (3): ``area`` is RN(A), A the EXACT area of the emitted triangles.  The
+# triangles tile the trapezoids exactly (a dropped piece has zero area), so
+# 2 A = sum over trapezoids of (xr - xl) ((ytl - ybl) + (ytr - ybr)), every value a stored float.
+# Small trims: exact integers (a common power-of-two denominator), one correctly rounded division.
+# Larger: a certified float evaluation of the same sum, else the integers.  Every path yields RN(A).
+def _integers(values):
+    """``values`` (floats) as integers over one common power-of-two denominator ``q``: ``v = i / q``."""
+    ratios = [v.as_integer_ratio() for v in values]
+    bits = max((d.bit_length() for _, d in ratios), default=1)
+    return [n << (bits - d.bit_length()) for n, d in ratios], 1 << (bits - 1)
 
 
-def _area_sum(products: float, kw: int, kh: int) -> float:
-    return math.ldexp(products, -(kw + kh) - 1)
+def _area_exact(xl, xr, ybl, ytl, ybr, ytr) -> float:
+    """RN of half the exact sum over the trapezoids (lists of floats), from integers."""
+    k = len(xl)
+    ints, q = _integers((*xl, *xr, *ybl, *ytl, *ybr, *ytr))
+    left, right, bl, tl, br, tr = (ints[i * k:(i + 1) * k] for i in range(6))
+    twice = sum((r - l) * ((a - b) + (c - d)) for l, r, b, a, d, c in zip(left, right, bl, tl, br, tr))
+    return twice / (2 * q * q) + 0.0                       # CPython int / int is correctly rounded
 
 
-def _area(widths, heights, x_extent, y_extent) -> float:
-    """``0.5 sum(widths * heights)`` (arrays), accumulated without underflow."""
-    kw, kh = _up(float(x_extent)), _up(float(y_extent))
-    return _area_sum(float(np.sum(np.ldexp(widths, kw) * np.ldexp(heights, kh))), kw, kh)
+def _area_exact_lines(xs, yb, yt) -> float:
+    """:func:`_area_exact` for one trapezoid per slab (lines ``xs``, bottom and top ordinates on them)."""
+    m = len(xs)
+    ints, q = _integers((*xs, *yb, *yt))
+    x = ints[:m]
+    g = [t - b for b, t in zip(ints[m:2 * m], ints[2 * m:])]
+    twice = sum((x[j + 1] - x[j]) * (g[j] + g[j + 1]) for j in range(m - 1))
+    return twice / (2 * q * q) + 0.0
+
+
+def _area_filtered(xl, xr, ybl, ytl, ybr, ytr):
+    """RN(A) from a certified float evaluation (arrays), or ``None`` when it cannot certify.
+
+    Per trapezoid, ``w1 + w2 = xr - xl``, ``d1 + d2 = ytl - ybl``, ``d3 + d4 = ytr - ybr`` exactly
+    (two_sum), so ``2 A_k = (w1 d1 + w1 d3) + m_k`` with the main products exact as ``p + e``
+    (two_prod; operands zero or at least 2**-450) and the small rest
+    ``m_k = w1 (d2 + d4) + w2 (d1 + d2 + d3 + d4)`` evaluated with error at most ``16 u`` times its
+    magnitude sum plus 2**-1074 per product (underflow).  The products ``p`` are split exactly
+    (``q = (sigma + p) - sigma``, ``r = p - q``; ``sigma`` a power of two at least ``(n + 2) max |p|``)
+    so ``tau = sum q`` is exact in any order (multiples of ``u sigma`` below ``sigma``); the rest
+    ``s = sum(r, e, m)`` has error ``B`` (``2 (n + 1) u sum |terms|`` plus the ``m`` bound).
+    ``tau + s = c + err`` exactly (two_sum): ``c`` is RN(2 A) when ``|err| + B`` is below half the
+    gap of ``c`` to its float neighbours; halving is exact for ``c >= 2**-1020``.
+    """
+    w1, w2 = _two_sum(xr, -xl)
+    d1, d2 = _two_sum(ytl, -ybl)
+    d3, d4 = _two_sum(ytr, -ybr)
+    if not bool(np.all(_safe(w1, d1, d3))):
+        return None
+    p1, e1 = _two_prod(w1, d1)
+    p2, e2 = _two_prod(w1, d3)
+    low = d2 + d4
+    minor = w1 * low + w2 * ((d1 + d3) + low)
+    magnitude = np.abs(w1) * (np.abs(d2) + np.abs(d4)) + np.abs(w2) * (
+        (np.abs(d1) + np.abs(d3)) + (np.abs(d2) + np.abs(d4)))
+    p = np.concatenate((p1, p2))
+    big = float(np.max(np.abs(p)))
+    if not big >= 2.0 ** -800:
+        return None
+    sigma = math.ldexp(1.0, math.frexp(big)[1] + (len(p) + 2).bit_length())
+    q = (sigma + p) - sigma
+    tau = float(np.sum(q))                                  # exact
+    rest = np.concatenate((p - q, e1, e2, minor))
+    s = float(np.sum(rest))
+    bound = ((2.0 * (len(rest) + 1) * _U) * float(np.sum(np.abs(rest))) + 16.0 * _U * float(np.sum(magnitude))
+             + 16.0 * (len(xl) + 1) * _TINY) * (1.0 + 2.0 ** -40)
+    c, err = _two_sum(tau, s)
+    if not (math.isfinite(c) and c >= 2.0 ** -1020):
+        return None
+    half_gap = 0.5 * min(c - math.nextafter(c, -math.inf), math.nextafter(c, math.inf) - c)
+    if not (abs(err) + bound) * (1.0 + 2.0 ** -40) < half_gap:
+        return None
+    return 0.5 * c
+
+
+def _area(xl, xr, ybl, ytl, ybr, ytr) -> float:
+    """RN of the exact covered area of trapezoids (float64 arrays), the same bits on every path."""
+    if len(xl) > _EXACT_PAIRS:
+        area = _area_filtered(xl, xr, ybl, ytl, ybr, ytr)
+        if area is not None:
+            return area
+    return _area_exact(xl.tolist(), xr.tolist(), ybl.tolist(), ytl.tolist(), ybr.tolist(), ytr.tolist())
 
 
 # ----------------------------------------------------------------------------- monotone fast paths
@@ -418,7 +446,8 @@ def _monotone(ring, extra_x) -> SlabTriangulation | None:
         if not (top[k] == bottom[k] or gap[k] > 0.0):
             return None
     _floor(ring)
-    area = _area(np.diff(xs), gap[:-1] + gap[1:], hi - lo, float(y.max() - y.min()))
+    yb, yt = points[bottom, 1], points[top, 1]
+    area = _area(xs[:-1], xs[1:], yb[:-1], yt[:-1], yb[1:], yt[1:])
     bl, br, tl, tr = bottom[:-1], bottom[1:], top[:-1], top[1:]
     triangles = np.vstack((np.column_stack((bl, br, tr))[br != tr], np.column_stack((bl, tr, tl))[bl != tl]))
     return SlabTriangulation(points, triangles.astype(np.int64), cut_ends, fractions, area)
@@ -493,13 +522,13 @@ def _monotone_small(ring, extra_x) -> SlabTriangulation | None:
         if not (yt[j] - yb[j] > 0.0 or ((j == 0 or j == last) and top[j] == bottom[j])):
             return None
     _floor(ring)
-    ys_ = [p[1] for p in pts]
-    kw, kh = _up(hi - lo), _up(max(ys_) - min(ys_))
-    area = 0.0
+    if len(xs) - 1 <= _EXACT_PAIRS:
+        area = _area_exact_lines(xs, yb, yt)
+    else:                                            # many extra lines: the certified float route
+        lx, lb, lt = np.array(xs), np.array(yb), np.array(yt)
+        area = _area(lx[:-1], lx[1:], lb[:-1], lt[:-1], lb[1:], lt[1:])
     tris = []
     for j in range(last):
-        area += (math.ldexp(xs[j + 1] - xs[j], kw)
-                 * math.ldexp((yt[j] - yb[j]) + (yt[j + 1] - yb[j + 1]), kh))
         bl, br, tl, tr = bottom[j], bottom[j + 1], top[j], top[j + 1]
         if br != tr:
             tris.append((bl, br, tr))
@@ -508,119 +537,68 @@ def _monotone_small(ring, extra_x) -> SlabTriangulation | None:
     points = np.vstack((ring, np.column_stack((cut_x, cut_y)))) if cut_x else np.array(ring, dtype=float)
     return SlabTriangulation(points, np.array(tris, dtype=np.int64).reshape(-1, 3),
                              np.array(cut_ends, dtype=np.int64).reshape(-1, 2), np.array(fractions, dtype=float),
-                             _area_sum(area, kw, kh))
+                             area)
 
 
 # ----------------------------------------------------------------------------- preparation and budget
-# Size caps first (owner decision, N2 round 3): every cap is checked from shapes and lengths alone,
-# before any conversion, copy, reshape, scan or finiteness check, so an input far above a cap (a
-# broadcast view, a non-contiguous array) is refused without materialising it.  Arrays give their
-# ``.shape``; Python sequences their ``len()`` (of the ring list, each ring and each point);
-# anything else (generators, iterators, sets, non-sequence objects) is ``TRIM_INVALID``.  Masked
-# arrays (any mask state) are ``TRIM_INVALID``: their mask would be dropped by the conversion.
-# Other ndarray subclasses (np.matrix, np.memmap, ...) are read as stored, through np.asarray.
-def _not_masked(value, what: str) -> None:
-    if isinstance(value, np.ma.MaskedArray):
-        raise SlabInvalid(f"{what}: masked input not supported (the mask would be dropped)")
+# The input contract first (owner decision, N2 round 4 (1)), in O(number of rings) and from types and
+# shapes alone: no conversion, no iteration of a caller's container beyond the outer list or tuple,
+# no attribute of anything but an exact ndarray, so no foreign object runs code and nothing large is
+# allocated before a refusal.  Size caps follow from the same shapes (broadcast and strided views are
+# capped without being materialised).  Only then are coordinates read (finiteness and the bound).
+def _form_error(detail: str) -> SlabInvalid:
+    return SlabInvalid(f"{_FORM} ({detail})")
 
 
-def _is_sequence(value) -> bool:
-    return isinstance(value, _Sequence) and not isinstance(value, (str, bytes))
+def _check_input(rings, extra_x) -> tuple:
+    """The rings as a tuple of exact float64 (n, 2) ndarrays with n >= 3, after every size cap."""
+    if type(rings) is not list and type(rings) is not tuple:
+        raise _form_error(f"rings is a {type(rings).__name__}")
+    count = len(rings)
+    if count == 0:
+        raise _form_error("no rings")
+    if count > MAX_SLAB_RINGS:
+        raise _too_complex(f"{count} rings (MAX_SLAB_RINGS = {MAX_SLAB_RINGS})")
+    rings = tuple(rings)                                    # a snapshot of the caller's list
+    total = 0
+    for k, ring in enumerate(rings):
+        if type(ring) is not np.ndarray:
+            raise _form_error(f"ring {k} is a {type(ring).__name__}")
+        if not (ring.dtype == np.float64 and ring.ndim == 2 and ring.shape[1] == 2 and ring.shape[0] >= 3):
+            raise _form_error(f"ring {k} has dtype {ring.dtype} and shape {ring.shape}; every ring needs at "
+                              "least three points")
+        total += ring.shape[0]
+    if total > MAX_SLAB_RING_POINTS:
+        raise _too_complex(f"{total} ring points (MAX_SLAB_RING_POINTS = {MAX_SLAB_RING_POINTS})")
+    if extra_x is not None:
+        if type(extra_x) is not np.ndarray:
+            raise _form_error(f"extra_x is a {type(extra_x).__name__}, not None or a float64 1-D ndarray")
+        if not (extra_x.dtype == np.float64 and extra_x.ndim == 1):
+            raise _form_error(f"extra_x has dtype {extra_x.dtype} and shape {extra_x.shape}, not float64 1-D")
+        if extra_x.size > MAX_SLAB_INCIDENCES:
+            raise _too_complex(f"{extra_x.size} extra lines (MAX_SLAB_INCIDENCES = {MAX_SLAB_INCIDENCES})")
+    return rings
 
 
-def _ring_sizes(rings) -> list:
-    """The number of points of every ring, from shapes and lengths only; refuses above the point cap."""
-    if isinstance(rings, np.ndarray):
-        _not_masked(rings, "rings")
-        if rings.ndim != 3 or rings.shape[2] != 2:
-            raise SlabInvalid(f"rings must be a sequence of (n, 2) point arrays, got an array of shape {rings.shape}")
-        total = rings.shape[0] * rings.shape[1]
-        if total > MAX_SLAB_RING_POINTS:
-            raise _too_complex(f"{total} ring points (MAX_SLAB_RING_POINTS = {MAX_SLAB_RING_POINTS})")
-        return [rings.shape[1]] * rings.shape[0]
-    if not _is_sequence(rings):
-        raise SlabInvalid("rings must be a sequence of (n, 2) point arrays")
-    if len(rings) > MAX_SLAB_RING_POINTS // 3:        # every ring needs three points
-        raise _too_complex(f"{len(rings)} rings (MAX_SLAB_RING_POINTS = {MAX_SLAB_RING_POINTS})")
-    sizes, total = [], 0
-    for ring in rings:
-        if isinstance(ring, np.ndarray):
-            _not_masked(ring, "ring coordinates")
-            if ring.ndim != 2 or ring.shape[1] != 2:
-                raise SlabInvalid(f"a ring must be an (n, 2) array of points, got shape {ring.shape}")
-            size = ring.shape[0]
-        elif _is_sequence(ring):
-            size = len(ring)
-        else:
-            raise SlabInvalid("a ring must be an (n, 2) array or a sequence of points")
-        total += size
-        if total > MAX_SLAB_RING_POINTS:
-            raise _too_complex(f"more than {MAX_SLAB_RING_POINTS} ring points (MAX_SLAB_RING_POINTS)")
-        sizes.append(size)
-    for ring in rings:                                 # sequence rings: every point is a pair of numbers
-        if not isinstance(ring, np.ndarray):
-            for point in ring:
-                if isinstance(point, np.ndarray):
-                    _not_masked(point, "ring coordinates")
-                    if point.shape != (2,):
-                        raise SlabInvalid(f"a point must be a pair of numbers, got shape {point.shape}")
-                    continue
-                if not (_is_sequence(point) and len(point) == 2):
-                    raise SlabInvalid("a point must be a pair of numbers (a sequence of length 2)")
-                for value in point:
-                    _scalar(value, "ring coordinates")
-    return sizes
-
-
-def _scalar(value, what: str) -> None:
-    """A sequence element must be one number (an ndarray only of dimension 0); not masked."""
-    if isinstance(value, np.ndarray):
-        _not_masked(value, what)
-        if value.ndim:
-            raise SlabInvalid(f"{what}: a coordinate must be a number, got shape {value.shape}")
-    elif hasattr(value, "__len__") and not isinstance(value, (str, bytes)):   # strings: refused by dtype
-        raise SlabInvalid(f"{what}: a coordinate must be a number")
-
-
-def _extra_size(extra_x) -> int:
-    """The number of ``extra_x`` values, from its shape or length only; refuses above the cap."""
-    if isinstance(extra_x, np.ndarray):
-        _not_masked(extra_x, "extra_x")
-        size = extra_x.size
-    elif isinstance(extra_x, (_numbers_abc.Number, np.generic)) and not isinstance(extra_x, (str, bytes)):
-        size = 1
-    elif _is_sequence(extra_x):
-        size = len(extra_x)
-        if size <= MAX_SLAB_INCIDENCES:
-            for value in extra_x:
-                _scalar(value, "extra_x")
-    else:
-        raise SlabInvalid("extra_x must be an array, a sequence of numbers or one number")
-    if size > MAX_SLAB_INCIDENCES:
-        raise _too_complex(f"{size} extra lines (MAX_SLAB_INCIDENCES = {MAX_SLAB_INCIDENCES})")
-    return size
+def _in_domain(values: np.ndarray, what: str) -> None:
+    """Finite with ``|c| <= MAX_DISPLAY_COORDINATE`` (float64 data, no conversion)."""
+    if values.size and not (bool(np.all(np.isfinite(values)))
+                            and float(np.abs(values).max()) <= MAX_DISPLAY_COORDINATE):
+        raise DisplayDomainRefused(f"{what} must be finite with |coordinate| <= {MAX_DISPLAY_COORDINATE:g}")
 
 
 def _prepare(rings, extra_x):
-    """Size caps, domain, structure and the preflight budget; returns the rings' vertices and segments."""
-    sizes = _ring_sizes(rings)
-    if extra_x is not None:
-        _extra_size(extra_x)
-    if not sizes:
-        raise SlabInvalid("no rings")
-    raw = [_numbers(r, "ring coordinates") for r in rings]
-    for array in raw:
-        if array.ndim != 2 or array.shape[1] != 2:
-            raise SlabInvalid(f"a ring must be an (n, 2) array of points, got shape {array.shape}")
-        if len(array) < 3:
-            raise SlabInvalid("every ring needs at least three vertices")
-    rings = [_in_domain(a, "ring coordinates") for a in raw]
+    """Input contract and size caps, domain, structure and the preflight budget; returns the rings'
+    vertices and segments."""
+    rings = _check_input(rings, extra_x)
+    vertices = np.vstack(rings)                             # float64, at most MAX_SLAB_RING_POINTS rows
+    _in_domain(vertices, "ring coordinates")
     extra = None
     if extra_x is not None:
-        extra = _in_domain(_numbers(extra_x, "extra_x").reshape(-1), "extra_x")
-    total = sum(len(r) for r in rings)
+        extra = np.array(extra_x, dtype=np.float64)         # a copy, at most MAX_SLAB_INCIDENCES values
+        _in_domain(extra, "extra_x")
+    total = len(vertices)
 
-    vertices = np.vstack(rings)
     sizes = np.array([len(r) for r in rings])
     starts = np.concatenate(([0], np.cumsum(sizes)[:-1]))
     ends = starts + sizes
@@ -686,8 +664,13 @@ def triangulate_rings(rings: Sequence[np.ndarray], extra_x: np.ndarray | None = 
     touch, or a hole is outside the outer ring or inside another hole (decided exactly,
     independent of ``extra_x``), and ``DisplayDomainRefused`` (``OUT_OF_DOMAIN``) outside the
     numeric domain, above a preflight budget, or for a ring whose exact area is below the floor.
-    Size caps are checked from shapes and lengths before anything is converted; masked arrays,
-    generators and other non-sequence inputs are ``TRIM_INVALID``.
+    Input contract (owner decision, N2 round 4): ``rings`` is a list or tuple of 1 to
+    ``MAX_SLAB_RINGS`` exact ``numpy.ndarray`` float64 arrays of shape ``(n, 2)``, ``n >= 3``, at most
+    ``MAX_SLAB_RING_POINTS`` points in all; ``extra_x`` None or an exact float64 1-D ndarray of at
+    most ``MAX_SLAB_INCIDENCES`` values.  It is checked first, from types and shapes only; any other
+    form (lists of points, other dtypes, subclasses such as masked arrays, stacked arrays, iterables)
+    is ``TRIM_INVALID`` ("input must be a list/tuple of float64 (n, 2) ndarrays"); the caps are
+    ``OUT_OF_DOMAIN`` ("too complex").
     Independent of the caller's NumPy error state (every numeric section runs under
     ``np.errstate(all="ignore")`` with explicit finiteness checks).  ``_fast=False`` (private, for
     tests) skips the x-monotone shortcut.
@@ -826,9 +809,7 @@ def _general(prep) -> SlabTriangulation:
     bottom_l, bottom_r = left[0::2], right[0::2]
     top_l, top_r = left[1::2], right[1::2]
     pair_slab = inc_slab[0::2]
-    heights = (py[top_l] - py[bottom_l]) + (py[top_r] - py[bottom_r])
-    area = _area(xs[pair_slab + 1] - xs[pair_slab], heights, xs[-1] - xs[0],
-                 float(vertices[:, 1].max() - vertices[:, 1].min()))
+    area = _area(xs[pair_slab], xs[pair_slab + 1], py[bottom_l], py[top_l], py[bottom_r], py[top_r])
     if not np.isfinite(area):
         raise DisplayDomainRefused("the covered area is not finite (unreachable inside the domain)")
     left_lo, left_hi = position[bottom_l], position[top_l]

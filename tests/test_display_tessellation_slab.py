@@ -76,16 +76,22 @@ def _no_t_junctions(result):
         assert not np.any(on & used), (i, j, np.flatnonzero(on & used))
 
 
+def _f(*rings):
+    """Rings in the input contract's form (owner decision N2 r4): a list of float64 (n, 2) ndarrays."""
+    return [np.array(r, dtype=np.float64) for r in rings]
+
+
 def test_l_shape_is_covered_exactly_with_nothing_in_its_notch():
-    result = slab.triangulate_rings([corpus.L_RING])
-    _check([corpus.L_RING], result)
+    rings = _f(corpus.L_RING)
+    result = slab.triangulate_rings(rings)
+    _check(rings, result)
     centroids = result.points[result.triangles].mean(axis=1)
     assert not np.any((centroids[:, 0] > .4) & (centroids[:, 1] > .4))
 
 
 @pytest.mark.parametrize("builder", [corpus.cone_comb_r1, corpus.cone_comb_r3, corpus.holed_cone_comb])
 def test_lattice_combs_and_holes_are_covered_exactly(builder):
-    rings = builder().info["rings"]
+    rings = _f(*builder().info["rings"])
     for ordered in (rings, [r[::-1] for r in rings]):
         result = slab.triangulate_rings(ordered)
         _check(ordered, result)
@@ -93,7 +99,7 @@ def test_lattice_combs_and_holes_are_covered_exactly(builder):
 
 def test_the_round_3_comb_keeps_its_whole_area():
     """ANYfem round 3: a Shapely-2.0 fallback left 25 % of this comb unfilled."""
-    rings = corpus.cone_comb_r3().info["rings"]
+    rings = _f(*corpus.cone_comb_r3().info["rings"])
     assert slab.triangulate_rings(rings).area == pytest.approx(6 / 256, rel=1e-12)
 
 
@@ -139,21 +145,21 @@ def test_a_thin_lens_is_kept():
 ], ids=("bowtie", "hole_outside", "overlapping_holes", "two_vertices", "collinear"))
 def test_invalid_rings_are_refused(rings):
     with pytest.raises(slab.SlabInvalid):
-        slab.triangulate_rings(rings)
+        slab.triangulate_rings(_f(*rings))
 
 
 def test_non_finite_coordinates_are_out_of_domain():
     """N2 r1 owner decision (2): the declared numeric domain is checked first (as in N1)."""
     from anygeometry.display_tessellation import DisplayDomainRefused
     with pytest.raises(DisplayDomainRefused):
-        slab.triangulate_rings([[(0., 0.), (1., 0.), (float("nan"), 1.)]])
+        slab.triangulate_rings(_f([(0., 0.), (1., 0.), (float("nan"), 1.)]))
 
 
 def test_no_shapely_is_imported():
     source = Path(slab.__file__).read_text(encoding="utf-8")
     assert "shapely" not in source.split('"""', 2)[2]
     probe = ("import sys; import anygeometry._slab_triangulation as s; "
-             "s.triangulate_rings([[(0., 0.), (1., 0.), (0., 1.)]]); print('shapely' in sys.modules)")
+             "import numpy as np; s.triangulate_rings([np.array([(0., 0.), (1., 0.), (0., 1.)])]); print('shapely' in sys.modules)")
     out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=True)
     assert out.stdout.strip() == "False"
 

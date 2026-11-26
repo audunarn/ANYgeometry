@@ -255,6 +255,18 @@ when the end lies within `model.tolerance.length` (plus the apex point's own flo
 `OUT_OF_DOMAIN`. Round 4: a frustum with inner radius 1e-16 and a tip at the origin, and an exact
 cone with its tip on the axis 1e-6 above the apex, were drawn as one chord; both are refused.
 An edge id not in the model is a plain `GeometryError` (not a typed refusal).
+**Argument validation** (owner decision, N2 round 4 (4); Codex N2 r4 Low b): every public entry
+refuses an invalid argument with `GeometryError` (a `ValueError` subclass), never a raw exception.
+`DisplayTolerance(angle, sag)` takes real numbers only (`numbers.Real`, not `bool` or `np.bool_`;
+strings, complex numbers, arrays and `None` as the angle are refused; `DisplayTolerance(10**400)`
+raised `OverflowError`, now a `GeometryError`). `edge_display_samples` and
+`display_rounding_allowance` take a `GeometryModel`, an integer edge id of any integer type
+(`numbers.Integral`, not a bool: a NaN edge id raised `ValueError`, and a float such as `3.0` was
+silently truncated; both are refused now) and a `DisplayTolerance`. `DisplayTrimRefused(code, message)`
+with a code that is not one of `REFUSAL_CODES` (or not a string) raises `GeometryError` (it raised a
+plain `ValueError` before). The result records (`EdgeSamples`, `DisplayRoundingAllowance`) are built
+by the module and take no validation. Valid arguments give the same bits as before: the N1 corpus
+(5744 results) is bit-identical (0 changes).
 
 Inside the domain, a sag allowance at or below 4 eps x max(1, |vertex coordinates|) on a curved
 edge is `EDGE_UNSUPPORTED` (unresolvable), as are distinct parameters evaluating to one point and
@@ -482,28 +494,46 @@ subnormal component, a line with subnormal coordinates), each compared bit for b
 call. (Building the corpus models under `raise` does fail, in `exact_curves` bounding boxes and
 `nurbs`, outside the display module; not changed.)
 
-**Input forms and size caps first** (owner decisions, N2 round 3 (2) and (3)). Every size cap is
-checked from shapes and lengths alone, BEFORE any conversion, copy, reshape, scan or finiteness
-check (round 2 converted and scanned every ring first: a million-point broadcast view with 16
-bytes of storage traced about 32 MB before its refusal, and `extra_x.reshape(-1)` copied a
-non-contiguous array before its size check). `rings` is an ndarray of shape `(k, n, 2)` (its
-`.shape` counts) or a Python sequence (list, tuple) of rings; a ring is an `(n, 2)` ndarray (its
-`.shape`) or a sequence of points, each point an ndarray of shape `(2,)` or a sequence of length
-2 of numbers; `extra_x` is an ndarray of any shape (its `.size`), one number, or a flat sequence
-of numbers (its `len()`). More than `MAX_SLAB_RING_POINTS / 3` rings, more than
-`MAX_SLAB_RING_POINTS` points or more than `MAX_SLAB_INCIDENCES` extra lines are refused
-(`OUT_OF_DOMAIN`, "too complex") before anything is converted; the per-point checks of a
-sequence ring run only once its length is within the cap (Python sequences are the caller's own
-objects, so their conversion is bounded by what the caller already holds). Generators,
-iterators, sets and other non-sequence objects are `TRIM_INVALID` (never consumed). Tested:
-seven oversized inputs (broadcast views of 1e6 and 1e5 points, 20000 rings, a 200002-point list
-ring, a broadcast and a non-contiguous `extra_x`, a 300000-value list) are refused with a traced
-peak allocation under 1 MB (`tracemalloc`). Masked arrays (`np.ma.MaskedArray`, any mask state,
-also `np.ma.masked` as a coordinate) are `TRIM_INVALID` ("masked input not supported"): the
-conversion would drop the mask, and Codex round 3 showed two rings with identical visible values
-meshing to areas 1.0 and 1.5 from their hidden values. Other ndarray subclasses (`np.matrix`,
-`np.memmap`, user subclasses) are accepted and read as stored, through `np.asarray`; structured
-and character arrays are refused by their dtype as before.
+**Input contract and size caps first** (owner decision, N2 round 4 (1), the recommended option;
+it replaces the permissive input handling of rounds 1-3, whose input-form findings recurred in
+every review round). The module is private and its only caller will be N3, so the contract is
+strict and checked FIRST, in O(number of rings), from types and shapes alone, without touching
+coordinate data:
+
+- `rings` is a `list` or `tuple` (exact types, no subclass) of 1 to `MAX_SLAB_RINGS =
+  MAX_SLAB_RING_POINTS / 3 = 16666` items; each item is exactly `numpy.ndarray` (`type(a) is
+  np.ndarray`: no subclass, so no masked array, `np.matrix`, `np.memmap` or user subclass),
+  `dtype == np.float64`, `ndim == 2`, `shape[1] == 2`, `shape[0] >= 3`; the total number of points
+  (the sum of the shapes) is at most `MAX_SLAB_RING_POINTS`.
+- `extra_x` is `None` or exactly a `numpy.ndarray` with `dtype == np.float64` and `ndim == 1`, at
+  most `MAX_SLAB_INCIDENCES` values.
+- Any other form is `TRIM_INVALID` ("input must be a list/tuple of float64 (n, 2) ndarrays",
+  with the offending item named); above a cap it is `OUT_OF_DOMAIN` ("too complex"). Nothing is
+  converted, no caller container other than the outer list or tuple is iterated (it is
+  snapshotted, then only `type`, `dtype` and `shape` of its items are read), and `np.asarray` is
+  never applied to a foreign object. Lists of points, other dtypes (integers, `float32`, a
+  `np.longdouble` wider than binary64, complex, object, strings, booleans, big-endian float64),
+  stacked `(k, n, 2)` arrays, ranges, generators, iterators, nested lists, scalars and subclasses
+  are all refused by this one rule. Views of float64 arrays (strided, broadcast, Fortran order) are
+  admitted and capped by their shapes without being materialised.
+- Then the coordinates (float64 already, so nothing can be narrowed): finite and
+  `|c| <= MAX_DISPLAY_COORDINATE`, else `OUT_OF_DOMAIN`.
+
+The conversion code of rounds 1-3 (the binary64 round trip, masked-array handling, the
+sequence and scalar walks) is deleted; there is one input path. Codex round 4 reproductions, all
+refused now with a traced peak allocation under 100 kB (`tracemalloc`): an empty stacked array
+`np.empty((100000, 0, 2))` (14 MB traced before), a list of 128 wide-string point arrays (17 MB),
+`range(10**40)` as `extra_x` or as the rings (a raw `OverflowError` before), a stacked
+`ndarray` subclass whose indexing doubled what is stored (a unit square meshed to area 4), and a
+nested `extra_x` list (`[[.25], [.5]]`). The parametrised refusal test also carries every
+input-form reproduction of rounds 1-3 (oversized integers, complex with a NaN imaginary part,
+integers above `2^53`, generators and iterators, masked arrays and `np.ma.masked`) and other
+foreign forms (45 cases). The size caps keep their round-3 test (a broadcast view of 1e6 points,
+20000 rings, a broadcast and a strided `extra_x`: under 1 MB traced). Changed results (stated):
+inputs the earlier rounds converted are now `TRIM_INVALID`: Python sequences of points, integer,
+`float32`, boolean, complex and object arrays (complex, object and boolean were `OUT_OF_DOMAIN`,
+integers above `2^53` "not exactly representable" `OUT_OF_DOMAIN`), stacked arrays, scalars and
+sequences as `extra_x`, and ndarray subclasses other than masked arrays (read as stored before).
 
 Contract of the result (`SlabTriangulation`):
 
@@ -523,15 +553,21 @@ Contract of the result (`SlabTriangulation`):
   vertical side used (no T-junctions). The rounded polygon's area differs from the exact one by at
   most `sum_k |RN(y*_k) - y*_k| (x_next,k - x_prev,k) / 2` over the cut points (moving one by `d`
   changes the area by `d` times half its neighbours' x distance), each error at most half an ulp.
-- `area` is half the sum of (slab width) x (height sum) over the trapezoids, accumulated without
-  underflow (owner decision, N2 round 3, Low a): widths and heights are scaled up by powers of two
-  (exact) so the x and y extents lie in `[1/2, 1)`, the products are summed and the sum is scaled
-  back once. Where nothing underflows (every ordinary trim; extents of 1/2 or more are not scaled at
-  all) the bits are those of the plain float sum (power-of-two scaling commutes with every
-  rounding in the normal range); below, a scaled product underflows only under `2^-1022` of the
-  extents' product, losing at most `2^-1075` of it each, so a representable area is never cut to
-  0. Codex round 3: a square of side `2^-536` had area `2^-1072` uncut and 0.0 in 16 slabs on both
-  paths; now `2^-1072` on both. Same rule on the fast and general paths.
+- `area` is the EXACT area of the emitted triangles, correctly rounded once (owner decision, N2
+  round 4 (3), the recommended option): `RN(A)` with `2 A = sum (xr - xl) ((ytl - ybl) + (ytr -
+  ybr))` over the trapezoids (the triangles tile them exactly; a dropped piece has zero area), every
+  value a stored float. Up to 24 trapezoids it is computed from exact integers (a common
+  power-of-two denominator, one correctly rounded integer division); above, by a certified float
+  evaluation (error-free two-sum and two-product of the main terms, an exact split-and-sum of the
+  products, a rigorous bound on the small rest), which returns only when the bound proves the
+  rounding (else the integers decide). The value is the same bits on the fast and the general path
+  (round 3 left 23 of 6000 trims differing in the last bits) and never underflows to 0: Codex round 4
+  showed a rectangle with `s = 2^-537`, width `nextafter(s, inf)` and height `s / 2`, exact area
+  rounding to `5e-324`, reported 0.0 with cuts at `[0.09 s, 0.34 s]`; now `5e-324` on both paths, with
+  and without cuts (round 3's `2^-536` square stays `2^-1072`). The exact oracle now checks
+  `area == float(Fraction(exact triangle sum))` for every accepted mesh. Changed results: `area`
+  moves by at most a few ulps where the plain float sum was not correctly rounded (measured below);
+  points, triangles and cut data are unchanged.
 - The result is deterministic (bit-identical on repeat).
 
 **Certified product and lift** (owner decision, N2 round 3 (1), the recommended option). The
@@ -547,13 +583,26 @@ lies inside triangle `[0, 7, 10]`. Therefore any lift (N3: placing the mesh on a
 segment's own image) must certify each lifted triangle's orientation itself and refuse (fail
 closed) when it cannot; N2 promises nothing about lifted triangles.
 
+Round 4 (owner decision, N2 round 4 (2), the recommended option): orientation is not enough. Any
+lift (N3) must certify BOTH the orientation and the coverage of the lifted mesh: no gaps or
+overlaps, including at coincident 2D vertices (an outer cut point equal to a hole tip, a tie on a
+slab line), and the lifted boundary must be the lifted trim; it fails closed (refuses) when it
+cannot certify either. cut_fraction reconstruction alone is insufficient: round 3 showed an
+inversion, and Codex round 4 a gap with every lifted triangle still positively oriented. The round-4
+reproduction (kept as a test): outer ring `(0, 0), (3, yb), (3, 4), (0, 4)` with `yb = 0.1 * 3`, hole
+`(0.5, 0.5), (1, tip), (2, 1), (1, 2)` with `tip = float(Fraction(yb) / 3)`; the outer cut at `x = 1`
+rounds onto the hole tip (points 5 and 9 coincide in 2D). The 2D mesh passes the exact oracle;
+rebuilding the cut points from `cut_fraction` separates points 5 and 9, every lifted triangle stays
+counter-clockwise, yet the point `(3/2, (y5 + y9 + 2) / 4)` (lifted ordinates), covered by the 2D
+mesh, lies in no lifted triangle.
+
 Refusals, in this order (no raw `IndexError`/`ValueError`/`OverflowError`/`FloatingPointError`):
 
 | code | when |
 |---|---|
-| `TRIM_INVALID` / `OUT_OF_DOMAIN` | the input forms and size caps, from shapes and lengths only, before any conversion (owner decision, N2 round 3): not an ndarray or sequence (generators, iterators, sets), wrong shapes, masked arrays (`TRIM_INVALID`, "masked input not supported"); more than `MAX_SLAB_RING_POINTS / 3` rings, `MAX_SLAB_RING_POINTS` points or `MAX_SLAB_INCIDENCES` extra lines (`OUT_OF_DOMAIN`, "too complex") |
-| `TRIM_INVALID` (`SlabInvalid`) | non-numeric (string) data, fewer than three (distinct consecutive) vertices |
-| `OUT_OF_DOMAIN` (`DisplayDomainRefused`, as N1) | the declared numeric domain, checked before any arithmetic: real values EXACTLY representable in binary64 (owner decision, N2 round 2: a wider `np.longdouble` value by an exact round trip, an integer above `2^53` must round-trip, else "coordinate not exactly representable in binary64", before duplicate compression and the bound check; nothing is narrowed), finite, `\|c\| <= MAX_DISPLAY_COORDINATE = 1e9` for rings and `extra_x` (complex, boolean and object arrays, e.g. integers too large for a float, are refused, never converted); then the incidence and triangle budgets. Inside the domain no overflow is possible: differences are at most 2e9, shoelace products at most 4e18 |
+| `TRIM_INVALID` / `OUT_OF_DOMAIN` | the input contract and size caps, from types and shapes only, before any data is read (owner decision, N2 round 4): anything but a list/tuple of 1 to `MAX_SLAB_RINGS` exact float64 `(n, 2)` ndarrays with `n >= 3` and an `extra_x` of None or an exact float64 1-D ndarray (`TRIM_INVALID`, "input must be a list/tuple of float64 (n, 2) ndarrays"); more than `MAX_SLAB_RINGS` rings, `MAX_SLAB_RING_POINTS` points or `MAX_SLAB_INCIDENCES` extra lines (`OUT_OF_DOMAIN`, "too complex") |
+| `TRIM_INVALID` (`SlabInvalid`) | fewer than three distinct consecutive vertices |
+| `OUT_OF_DOMAIN` (`DisplayDomainRefused`, as N1) | the declared numeric domain, checked before any arithmetic: finite, `\|c\| <= MAX_DISPLAY_COORDINATE = 1e9` for rings and `extra_x` (float64 by the contract, so nothing is converted or narrowed); then the incidence and triangle budgets. Inside the domain no overflow is possible: differences are at most 2e9, shoelace products at most 4e18 |
 | `TRIM_INVALID` | the input contract above (crossing, self-touch, retrace, touching rings, hole outside or nested), decided exactly |
 | `OUT_OF_DOMAIN` | a ring whose EXACT area is at most `16 n eps extent^2` of ITS OWN extent (the float value of that expression; one rule on both paths, owner decision N2 round 2: a float shoelace filter with a rigorous bound, exact integers where it cannot decide; before, the fast path tested its slab sum and the general path a cancelling float shoelace, and they disagreed on a ring at the floor); the reversal guard (unreachable) |
 
@@ -584,7 +633,13 @@ never fired. Of the 233 valid cases refused in round 1, 229 are now accepted; th
 allowance): identical counts (3039 accepted, 0 oracle failures, 2957 `TRIM_INVALID`, 4
 `OUT_OF_DOMAIN` area floor, 0 raw exceptions). Ordinary results unchanged: 3000 seeded star trims
 with holes and extra lines (6000 calls, both paths; 5284 accepted) give bit-identical points,
-triangles, cut data and areas before and after round 3.
+triangles, cut data and areas before and after round 3. Round 4 (`n2r4_fuzz.py`: the same 6000 cases passed as float64 ndarrays, the oracle now also
+checking `area == RN(exact area)`): identical counts (3039 accepted, 0 oracle failures, 2957
+`TRIM_INVALID`, 4 `OUT_OF_DOMAIN` area floor, 0 raw exceptions). Ordinary results (`n2r4_bits.py`,
+3000 seeded star trims with holes and extra lines, both paths, 6000 calls, 5614 accepted): 0 verdict
+changes, points, triangles and cut data bit-identical; `area` changed in 2543 calls by at most 3
+ulps (the plain float sum was not correctly rounded there); fast and general paths now agree on
+every area (15 differed at c59accd).
 
 Measured (best of 30 or 300 runs, loaded PC, round 1 / round 2): a 400-vertex ring with 20 holes
 2.13 / 2.41 ms, a plain 400-vertex ring 0.21 / 0.41 ms, a 400-vertex star 5.1 / 7.8 ms; a unit
@@ -594,4 +649,8 @@ square with one hole 0.24 / 0.22 ms (same session, the round-1 code from `git ar
 7.1 ms; 48 / 51 us, 87 / 90 us, 73 / 77 us, 0.22 / 0.23 ms (the shape preflight costs about 3 us
 per call). The
 certified rounding costs about 0.15 ms of NumPy overhead per call above 64 cut points (below that,
-exact integers are cheaper) and about 0.13 us per cut point.
+exact integers are cheaper) and about 0.13 us per cut point. Round 4 (c59accd / round 4, same session, best of
+three alternating passes, `n2r4_bench.py`): 2.52 / 2.57 ms, 0.43 / 0.47 ms, 8.3 / 8.5 ms; 51 / 51 us,
+89 / 90 us, 76 / 86 us, 232 / 224 us. The exact area costs about 40 us of NumPy overhead above 24
+trapezoids (certified float route) and about 1.7 us per trapezoid below (integers); the strict
+input check is cheaper than the conversion it replaces.
