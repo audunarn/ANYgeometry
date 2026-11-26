@@ -28,7 +28,6 @@ This module only reads the model through public calls.
 from __future__ import annotations
 
 import math
-import numbers
 from dataclasses import dataclass
 from fractions import Fraction
 
@@ -145,9 +144,13 @@ class DisplayTrimRefused(GeometryError):
     """A typed refusal: ``code`` is one of :data:`REFUSAL_CODES`."""
 
     def __init__(self, code: str, message: str):
-        if not (isinstance(code, str) and code in REFUSAL_CODES):    # GeometryError is a ValueError
-            raise GeometryError(f"unknown display refusal code {code!r}")
-        super().__init__(f"{code}: {message}")
+        # owner decision N2 r5 (1): exact types only and fixed refusal text (nothing of the caller's
+        # formatted, hashed or compared before its type is known)
+        if not (type(code) is str and code in REFUSAL_CODES):     # GeometryError is a ValueError
+            raise GeometryError("unknown display refusal code (not one of REFUSAL_CODES)")
+        if type(message) is not str:
+            raise GeometryError("a display refusal message must be a str")
+        super().__init__(code + ": " + message)
         self.code = code
 
 
@@ -158,15 +161,30 @@ class DisplayDomainRefused(DisplayTrimRefused):
         super().__init__("OUT_OF_DOMAIN", message)
 
 
+#: owner decision N2 r5 (1): the exact concrete types accepted (``type(x) is``, never an ABC, never
+#: a subclass: ``bool`` is not ``int`` here, ``np.timedelta64`` is not an integer)
+_REAL_TYPES = (float, int, np.float32, np.float64)
+_ID_TYPES = (int, np.int8, np.int16, np.int32, np.int64, np.uint8, np.uint16, np.uint32, np.uint64)
+#: an int beyond this magnitude is refused before ``float()`` (which would overflow near 2**1024)
+_INT_FLOAT_BOUND = 2 ** 1023
+#: edge ids are integers with ``|id| < 2**63`` (checked arithmetically on a Python int)
+_ID_BOUND = 2 ** 63
+
+
+def _exact_type_in(value, types) -> bool:
+    kind = type(value)
+    return any(kind is t for t in types)
+
+
 def _real_argument(value, message: str) -> float:
-    """A real number (``numbers.Real``, not a bool) as a float, else :class:`GeometryError` (owner
-    decision N2 round 4 (4): no raw exception from argument validation, no string conversion)."""
-    if isinstance(value, (bool, np.bool_)) or not isinstance(value, numbers.Real):
-        raise GeometryError(f"{message} (got a {type(value).__name__}, not a real number)")
-    try:
-        return float(value)
-    except (ArithmeticError, ValueError, TypeError):
-        raise GeometryError(f"{message} (got {type(value).__name__} out of float range)") from None
+    """A float, int (not bool), np.float32 or np.float64 (exact types) as a float, else
+    :class:`GeometryError` with fixed text (owner decision N2 round 5 (1): no ABC, no attribute or
+    string conversion of a caller object; an int is compared with a bound before ``float()``)."""
+    if not _exact_type_in(value, _REAL_TYPES):
+        raise GeometryError(f"{message} (not a float, int, np.float32 or np.float64)")
+    if type(value) is int and not -_INT_FLOAT_BOUND < value < _INT_FLOAT_BOUND:
+        raise GeometryError(f"{message} (an int out of float range)")
+    return float(value)
 
 
 @dataclass(frozen=True)
@@ -470,7 +488,8 @@ class _Division:
 def _check_angle(name, *values):
     for value in values:
         if not (math.isfinite(value) and abs(value) <= MAX_DISPLAY_ANGLE):
-            raise DisplayDomainRefused(f"{name} angle {value!r} is outside |angle| <= {MAX_DISPLAY_ANGLE:g} rad")
+            raise DisplayDomainRefused(f"{name} angle {float(value)!r} is outside |angle| <= "
+                                       f"{MAX_DISPLAY_ANGLE:g} rad")
 
 
 def _check_sweep(name, sweep):
@@ -518,7 +537,7 @@ def _check_support_frame(support):
                "|radial . circumferential|": abs(float(radial @ circumferential))}
     if not all(d <= _SUPPORT_FRAME_TOL for d in defects.values()):
         found = ", ".join(f"{name} = {value!r}" for name, value in defects.items())
-        raise DisplayDomainRefused(f"a {type(support).__name__} support frame not orthonormal ({found}; each must "
+        raise DisplayDomainRefused(f"a {_support_name(support)} support frame not orthonormal ({found}; each must "
                                    f"be at most {_SUPPORT_FRAME_TOL!r}): its evaluate() disagrees with its declared "
                                    f"axis geometry")
 
@@ -532,7 +551,13 @@ def _aspect_admitted(weight) -> bool:
     return weight <= MAX_DISPLAY_ELLIPSE_ASPECT * (1.0 + _ASPECT_SLACK)
 
 
+def _support_name(support) -> str:
+    """The module's own name for a cylinder or cone support (never the caller class's name)."""
+    return "Cylinder" if isinstance(support, Cylinder) else "Cone"
+
+
 def _check_radius(name, distance, *points):
+    distance = float(distance)
     scale = max([1.0] + [float(np.abs(np.asarray(p, dtype=float)).max()) for p in points])
     if not distance >= MIN_DISPLAY_RADIUS_RATIO * scale:
         raise DisplayDomainRefused(f"{name} is {distance!r} from a support axis, below "
@@ -549,7 +574,7 @@ def _incident_supports(model, edge_id: int) -> tuple:
                                      f"edge {edge_id} is used by face {face_id}, which has an explicit parameterization")
         if not isinstance(support, (Plane, Cylinder, Cone)):
             raise DisplayTrimRefused("SUPPORT_UNSUPPORTED", f"edge {edge_id} is used by face {face_id} on a "
-                                                            f"{type(support).__name__} support")
+                                                            "support that is not a plane, cylinder or cone")
         if not any(support is s for s in found):
             found.append(support)
     return tuple(found)
@@ -1214,7 +1239,8 @@ def _guarded(edge_id, call):
     except DisplayTrimRefused:
         raise
     except (ArithmeticError, ValueError) as error:      # no raw arithmetic error escapes
-        raise _unsupported(edge_id, f"{type(error).__name__} in the closed-form division: {error}") from error
+        # fixed text (owner decision N2 r5 (1)); the error itself stays the refusal's __cause__
+        raise _unsupported(edge_id, "an arithmetic error in the closed-form division") from error
 
 
 @dataclass(frozen=True)
@@ -1242,14 +1268,18 @@ class _Analysis:
 def _setup(model, edge_id, tol) -> _Setup:
     """Every input check against the declared domain, before any division."""
     from .model import GeometryModel
-    if not isinstance(model, GeometryModel):
-        raise GeometryError(f"model must be a GeometryModel, got a {type(model).__name__}")
-    if not isinstance(tol, DisplayTolerance):
+    # owner decision N2 r5 (1): the argument's own type, never ``isinstance`` (which looks up a
+    # foreign ``__class__``) and never a caller's name in the message
+    if not issubclass(type(model), GeometryModel):
+        raise GeometryError("model must be a GeometryModel")
+    if not issubclass(type(tol), DisplayTolerance):
         raise GeometryError("tol must be a DisplayTolerance")
-    # owner decision N2 round 4 (4): an integer of any integer type (not a bool), else a typed refusal
-    if isinstance(edge_id, (bool, np.bool_)) or not isinstance(edge_id, numbers.Integral):
-        raise GeometryError(f"edge id must be an integer, got a {type(edge_id).__name__}")
+    # an int (not bool) or a NumPy integer scalar of an exact type, |id| < 2**63
+    if not _exact_type_in(edge_id, _ID_TYPES):
+        raise GeometryError("edge id must be an int or a NumPy integer scalar")
     edge_id = int(edge_id)
+    if not -_ID_BOUND < edge_id < _ID_BOUND:
+        raise GeometryError("edge id is out of range (|id| < 2**63)")
     if edge_id not in model.edges:
         raise GeometryError(f"edge {edge_id} is not in the model")
     edge = model.edges[edge_id]
@@ -1294,14 +1324,14 @@ def _setup(model, edge_id, tol) -> _Setup:
     elif isinstance(curve, Arc):
         _check_points(f"edge {edge_id}'s arc via vertex", _model_call(model.vertex_position, curve.via_vertex))
     else:
-        raise _unsupported(edge_id, f"a {type(curve).__name__} is not a line, circle or ellipse")
+        raise _unsupported(edge_id, "the curve is not a line, circle or ellipse")
     for support in supports:
         _check_support_domain(support)
     if isinstance(curve, Arc):
         try:
             frame = _model_call(model.arc_frame, edge_id)
         except GeometryError as error:
-            raise _unsupported(edge_id, str(error)) from error
+            raise _unsupported(edge_id, "the model has no arc frame for it") from error
         _check_points(f"edge {edge_id}'s arc centre", frame.center)
         _check_sweep(f"edge {edge_id}'s arc", float(frame.sweep))
         conic = _Conic(edge_id, frame.center, frame.radius * frame.e1, frame.radius * frame.e2, 0.0, frame.sweep)
@@ -1421,7 +1451,7 @@ def _evaluate(model, edge_id, parameters) -> np.ndarray:
     try:
         return np.array(_model_call(model.evaluate_edge_many, edge_id, parameters), dtype=float)
     except GeometryError as error:
-        raise _unsupported(edge_id, str(error)) from error
+        raise _unsupported(edge_id, "the model cannot evaluate it") from error
 
 
 def _edge_result(model, edge_id, parameters, start, end) -> EdgeSamples:

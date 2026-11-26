@@ -2599,7 +2599,9 @@ def test_r4_tolerance_arguments_are_typed_refusals(args):
 
 
 def test_r4_tolerance_accepts_every_real_number_type_with_the_same_value():
-    for value in (.1, np.float64(.1), np.float32(.25), Fraction(1, 4), 1, np.int64(1)):
+    # owner decision N2 r5 (1): the exact types float, int, np.float32, np.float64 (Fraction and
+    # NumPy integers, accepted in round 4, are now refused: test_r5_m3_*)
+    for value in (.1, np.float64(.1), np.float32(.25), 1):
         assert dt.DisplayTolerance(value).angle == float(value)
         assert dt.DisplayTolerance(.1, value).sag == float(value)
 
@@ -2635,3 +2637,102 @@ def test_r4_refusal_constructors_refuse_unknown_codes_typed():
     for code in ("NOT_A_CODE", None, 3, ["TRIM_INVALID"], b"TRIM_INVALID"):
         with pytest.raises(GeometryError):
             dt.DisplayTrimRefused(code, "x")
+
+
+# ----------------------------------------------------------------------------- N2 round 5 (M3): exact argument types
+class _NameRaises(type):
+    """A metaclass whose ``__name__`` runs caller code (Codex N2 r5 M1/M3)."""
+
+    def __getattribute__(cls, name):
+        if name == "__name__":
+            raise RuntimeError("executed caller code")
+        return super().__getattribute__(name)
+
+
+class _Foreign(metaclass=_NameRaises):
+    pass
+
+
+class _ClassRaises:
+    """``isinstance`` looks up ``__class__`` on a mismatch: caller code."""
+
+    @property
+    def __class__(self):
+        raise RuntimeError("executed caller code")
+
+
+_R5_INT_TYPES = (np.int8, np.int16, np.int32, np.int64, np.uint8, np.uint16, np.uint32, np.uint64)
+
+
+def _r5_foreign_numbers():
+    from decimal import Decimal
+    return (np.timedelta64(1, "D"), np.timedelta64(1, "ns"), np.datetime64("2026-01-01"), Fraction(1, 4),
+            Decimal("0.25"), True, np.bool_(True), _Foreign(), _ClassRaises(), object(), 10 ** 5000, -10 ** 5000)
+
+
+def test_r5_m3_numeric_arguments_accept_exact_concrete_types_only():
+    """Codex N2 r5 M3: NumPy registers timedelta64 as Integral and Real; a day duration raised a raw
+    TypeError, a nanosecond duration was accepted as an edge id or angle; 10**5000 raised a raw
+    ValueError when a diagnostic formatted it.  Owner decision N2 r5 (1): exact concrete types only
+    (int, np.int8..np.uint64 for ids; float, int, np.float32, np.float64 for tolerances), range checked
+    arithmetically, every other input a typed refusal."""
+    import sys
+    old = sys.get_int_max_str_digits() if hasattr(sys, "get_int_max_str_digits") else None
+    if old is not None:
+        sys.set_int_max_str_digits(4300)
+    try:
+        case = corpus.ALL["shared_circle"]()
+        edge = case.info["shared"]
+        tol = dt.DisplayTolerance(.1)
+        for call in (dt.edge_display_samples, dt.display_rounding_allowance):
+            reference = call(case.model, edge, tol)
+            for edge_id in _r5_foreign_numbers() + (2 ** 64, -(2 ** 64), np.uint64(2 ** 64 - 1)):
+                with pytest.raises(GeometryError):
+                    call(case.model, edge_id, tol)
+            for model in (_Foreign(), _ClassRaises()):
+                with pytest.raises(GeometryError):
+                    call(model, edge, tol)
+            for bad_tol in (_Foreign(), _ClassRaises()):
+                with pytest.raises(GeometryError):
+                    call(case.model, edge, bad_tol)
+            for kind in _R5_INT_TYPES:
+                again = call(case.model, kind(edge), tol)
+                if call is dt.edge_display_samples:
+                    assert again.edge_id == edge and type(again.edge_id) is int
+                    assert again.parameters.tobytes() == reference.parameters.tobytes()
+                    assert again.points.tobytes() == reference.points.tobytes()
+                else:
+                    assert again == reference
+        for value in _r5_foreign_numbers() + (10 ** 400, np.int64(1), np.longdouble(.25), np.float16(.25)):
+            with pytest.raises(GeometryError):
+                dt.DisplayTolerance(value)
+            with pytest.raises(GeometryError):
+                dt.DisplayTolerance(.1, value)
+        for value in (.25, 1, np.float64(.25), np.float32(.25)):
+            assert type(dt.DisplayTolerance(value).angle) is float
+            assert dt.DisplayTolerance(value).angle == float(value)
+            assert dt.DisplayTolerance(.1, value).sag == float(value)
+        for code in (10 ** 5000, _Foreign(), _ClassRaises(), "NOT_A_CODE"):
+            with pytest.raises(GeometryError):
+                dt.DisplayTrimRefused(code, "invalid code")
+        for message in (10 ** 5000, _Foreign(), None):
+            with pytest.raises(GeometryError):
+                dt.DisplayTrimRefused("TRIM_INVALID", message)
+    finally:
+        if old is not None:
+            sys.set_int_max_str_digits(old)
+
+
+def test_r5_m1_refusal_messages_never_format_caller_objects():
+    """Owner decision N2 r5 (1), the class: every refusal message in both modules is fixed text plus
+    values the module produced; no ``__name__``, ``numbers`` ABC, dtype or caller exception text in
+    either source."""
+    import pathlib
+    import re
+    root = pathlib.Path(dt.__file__).resolve().parent
+    for name in ("display_tessellation.py", "_slab_triangulation.py"):
+        text = (root / name).read_text(encoding="utf-8")
+        assert "__name__" not in text, name
+        assert "import numbers" not in text and "numbers." not in text, name
+        assert not re.search(r"\{[^{}]*dtype[^{}]*\}", text), name
+        assert "str(error)" not in text and "{error}" not in text, name

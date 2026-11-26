@@ -544,8 +544,10 @@ def _monotone_small(ring, extra_x) -> SlabTriangulation | None:
 # The input contract first (owner decision, N2 round 4 (1)), in O(number of rings) and from types and
 # shapes alone: no conversion, no iteration of a caller's container beyond the outer list or tuple,
 # no attribute of anything but an exact ndarray, so no foreign object runs code and nothing large is
-# allocated before a refusal.  Size caps follow from the same shapes (broadcast and strided views are
-# capped without being materialised).  Only then are coordinates read (finiteness and the bound).
+# allocated before a refusal.  Refusal messages are fixed text plus counts and indices the module
+# computed (owner decision N2 round 5 (1)): never a caller's type name, dtype or shape.  Size caps
+# follow from the same shapes (broadcast and strided views are capped without being materialised).
+# Only then are coordinates read (finiteness and the bound).
 def _form_error(detail: str) -> SlabInvalid:
     return SlabInvalid(f"{_FORM} ({detail})")
 
@@ -553,7 +555,7 @@ def _form_error(detail: str) -> SlabInvalid:
 def _check_input(rings, extra_x) -> tuple:
     """The rings as a tuple of exact float64 (n, 2) ndarrays with n >= 3, after every size cap."""
     if type(rings) is not list and type(rings) is not tuple:
-        raise _form_error(f"rings is a {type(rings).__name__}")
+        raise _form_error("rings is not a list or tuple")
     count = len(rings)
     if count == 0:
         raise _form_error("no rings")
@@ -563,18 +565,17 @@ def _check_input(rings, extra_x) -> tuple:
     total = 0
     for k, ring in enumerate(rings):
         if type(ring) is not np.ndarray:
-            raise _form_error(f"ring {k} is a {type(ring).__name__}")
+            raise _form_error(f"ring {k} is not an ndarray")
         if not (ring.dtype == np.float64 and ring.ndim == 2 and ring.shape[1] == 2 and ring.shape[0] >= 3):
-            raise _form_error(f"ring {k} has dtype {ring.dtype} and shape {ring.shape}; every ring needs at "
-                              "least three points")
+            raise _form_error(f"ring {k} is not a float64 (n, 2) array with n >= 3")
         total += ring.shape[0]
     if total > MAX_SLAB_RING_POINTS:
         raise _too_complex(f"{total} ring points (MAX_SLAB_RING_POINTS = {MAX_SLAB_RING_POINTS})")
     if extra_x is not None:
         if type(extra_x) is not np.ndarray:
-            raise _form_error(f"extra_x is a {type(extra_x).__name__}, not None or a float64 1-D ndarray")
+            raise _form_error("extra_x is not None or a float64 1-D ndarray")
         if not (extra_x.dtype == np.float64 and extra_x.ndim == 1):
-            raise _form_error(f"extra_x has dtype {extra_x.dtype} and shape {extra_x.shape}, not float64 1-D")
+            raise _form_error("extra_x is not a float64 1-D ndarray")
         if extra_x.size > MAX_SLAB_INCIDENCES:
             raise _too_complex(f"{extra_x.size} extra lines (MAX_SLAB_INCIDENCES = {MAX_SLAB_INCIDENCES})")
     return rings

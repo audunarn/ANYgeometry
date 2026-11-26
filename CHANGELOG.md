@@ -60,6 +60,24 @@ All notable user-visible changes to ANYgeometry are documented here.
   raised `ValueError`; a float id such as `3.0` is now refused), an unknown refusal code raises
   `GeometryError` (a `ValueError` subclass, it was a plain `ValueError`); N1 corpus bit-identical
   (5744 results, 0 changes).
+  Round 5 (owner decisions, the recommended options): a declared TRUST MODEL (callers are
+  in-process library code passing ordinary values; every input outside the accepted types is a
+  typed refusal decided by EXACT CONCRETE TYPE checks, never a `numbers` ABC, `isinstance` on a
+  caller value, foreign attribute, `str`/`repr`/`format` or `__name__`); every refusal message is
+  fixed text plus module-produced values (16 messages changed in the audit of all 77 raise sites,
+  2 new). Codex r5: a metaclass `__name__` escaped as a raw `RuntimeError` and a long dtype field
+  name allocated about 6 MB during refusal (now `TRIM_INVALID`, under 100 kB traced); `np.timedelta64`
+  (an `Integral` and `Real` to NumPy) raised raw `TypeError` or was accepted as an edge id or angle,
+  and `10**5000` raised raw `ValueError` (now `GeometryError`). Edge ids: `int` (not bool) or exactly
+  `np.int8`..`np.uint64`, `|id| < 2**63`; tolerances: exactly `float`, `int` (bounded before
+  `float()`), `np.float32`, `np.float64`. Changed results: `Fraction`, `Decimal` and NumPy-integer
+  tolerances (accepted in round 4) are refused; ordinary calls are bit-identical (N1 corpus, 5744
+  results, 0 changes, refusal messages included). Docs: the 2D mesh covers exactly the closure of
+  the positive-area interior of the rounded trim (zero-width parts, such as a hole edge and an outer
+  edge rounded onto one segment, are not covered); the N3 lift obligations (coverage domain and map,
+  outward-normal orientation reference, bit-equal N1 boundary samples and chords, interior chordal
+  deviation within the display tolerance, fail closed); `area` is the correctly rounded exact area,
+  which may round to 0 for subnormal-scale trims.
 - New `anygeometry.display_tessellation` (not re-exported from `anygeometry`): display edge
   samples shared by every face using an edge (`edge_display_samples`, `DisplayTolerance`,
   `EdgeSamples`, typed `DisplayTrimRefused`). Narrow contract: lines, circles and ellipses on

@@ -1159,3 +1159,102 @@ def test_r4_low_a_area_is_the_correctly_rounded_exact_area_on_every_path():
             check_mesh([ring], general, extra)                      # area == float(exact triangle sum)
             checked += 1
     assert checked == 20
+
+
+# ----------------------------------------------------------------------------- N2 round 5
+class _NameRaises(type):
+    def __getattribute__(cls, name):
+        if name == "__name__":
+            raise RuntimeError("executed caller code")
+        return super().__getattribute__(name)
+
+
+class _Foreign(metaclass=_NameRaises):
+    pass
+
+
+def test_r5_m1_refusals_run_no_caller_code_and_allocate_little():
+    """Medium (M1): a metaclass raised a raw RuntimeError from the refusal message (``__name__``),
+    and an eight-element array with a 2e6-character dtype field name allocated about 6 MB while it
+    was refused.  Owner decision N2 r5 (1): fixed refusal text, no caller object or dtype formatted."""
+    import tracemalloc
+    for rings, extra in (([_Foreign()], None), (_Foreign(), None), ([SQ], _Foreign())):
+        _refused("TRIM_INVALID", rings, extra)
+    bad = np.empty((4, 2), dtype=[("x" * 2_000_000, "f8")])
+    bad_x = np.empty(4, dtype=[("x" * 2_000_000, "f8")])
+    for rings, extra in (([bad], None), ([SQ], bad_x)):
+        tracemalloc.start()
+        try:
+            _refused("TRIM_INVALID", rings, extra)
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        assert peak < 100_000, peak
+
+
+def test_r5_m2_a_zero_width_trim_interval_is_not_covered():
+    """Medium (M2): a hole edge and an outer edge round onto the same segment.  The exact oracle
+    passes, the triangles tile the positive-area pieces, and no triangle covers the interior of the
+    coincident segment.  Owner decision N2 r5 (2): the mesh covers exactly the CLOSURE OF THE
+    POSITIVE-AREA INTERIOR of the rounded trim; zero-width parts are not covered."""
+    outer = np.array([(0., np.nextafter(1., 0.)), (4., 1.), (4., 3.), (0., 3.)])
+    hole = np.array([(2.5, 1.), (3.5, 1.), (3.5, 2.), (2.5, 2.)])
+    m = _contract([outer, hole])                                    # the exact oracle passes
+    assert np.array_equal(m.points[8:10], hole[:2])
+    q = [tuple(F(float(v)) for v in p) for p in m.points.tolist()]
+    for p in ((F(3), F(1)), (F(11, 4), F(1)), (F(13, 4), F(1))):    # interior of the coincident edges
+        assert not any(min(_orient(q[a], q[b], p), _orient(q[b], q[c], p), _orient(q[c], q[a], p)) >= 0
+                       for a, b, c in m.triangles.tolist())
+
+    # area accounting: the triangles' exact area is the rounded polygon's (rings with the cut points
+    # inserted) - the zero-width part adds nothing - correctly rounded
+    def poly_area(pts):
+        return sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(pts, pts[1:] + pts[:1])) / 2
+    exact = sum(abs(_orient(q[a], q[b], q[c])) for a, b, c in m.triangles.tolist()) / 2
+    assert m.area == float(exact)
+    hole_q = [tuple(F(float(v)) for v in p) for p in hole.tolist()]
+    outer_q = [tuple(F(float(v)) for v in p) for p in outer.tolist()]
+    assert exact <= poly_area(outer_q) - abs(poly_area(hole_q))     # the rounded polygon, not the exact
+    text = " ".join(_DOCS.read_text(encoding="utf-8").split())
+    assert "CLOSURE OF THE POSITIVE-AREA INTERIOR of the rounded trim" in text
+    assert "N3 must not assume every trim boundary segment is a triangle edge" in text
+
+
+def test_r5_m4_the_n3_obligations_are_defined():
+    """Medium (M4): on a cylinder an outward chordal mesh can cover the trim under radial projection
+    while its boundary chords leave the analytic trim.  Owner decision N2 r5 (3): the N3 obligations
+    name the coverage domain and map, the orientation reference and boundary equality."""
+    uv = np.array([(0., 0.), (np.pi / 2, 0.), (np.pi / 2, 1.), (0., 1.)])
+    m = slab.triangulate_rings([uv])
+    u, z = m.points.T
+    xyz = np.column_stack((np.cos(u), np.sin(u), z))
+    a, b, c = xyz[m.triangles].transpose(1, 0, 2)
+    radial = (a + b + c) / 3
+    radial[:, 2] = 0
+    assert np.all(np.sum(np.cross(b - a, c - a) * radial, axis=1) > 0)
+    mid = (xyz[0] + xyz[1]) / 2
+    assert np.isclose(np.linalg.norm(mid[:2]), 2 ** -.5)            # off the unit cylinder
+    text = " ".join(_DOCS.read_text(encoding="utf-8").split())
+    for phrase in ("coverage domain is the trim's 2D parameter region on the support",
+                   "the map is the support's own parameter evaluation",
+                   "orientation reference is the face's outward normal (support normal times face sense)",
+                   "equals the N1 shared edge sample bit for bit",
+                   "boundary chords are exactly the N1 chords",
+                   "bounded by the display tolerance",
+                   "not \"covered exactly\""):
+        assert phrase in text, phrase
+
+
+def test_r5_low_area_may_round_to_zero_for_subnormal_scale_trims():
+    """Low: a square of side 2**-538 is accepted on both paths with two strictly positive triangles,
+    yet its exact area 2**-1076 rounds to 0.0.  Owner decision N2 r5 (4): the guarantee is correct
+    rounding, including to zero."""
+    s = 2.0 ** -538
+    sq = np.array([(0., 0.), (s, 0.), (s, s), (0., s)])
+    for path in _PATHS:
+        m = slab.triangulate_rings([sq], **path)
+        assert m.area == 0.0 and len(m.triangles) == 2
+        q = [tuple(F(float(v)) for v in p) for p in m.points.tolist()]
+        assert all(_orient(*(q[i] for i in t)) > 0 for t in m.triangles.tolist())
+    text = " ".join(_DOCS.read_text(encoding="utf-8").split())
+    assert "may round to 0 for subnormal-scale trims" in text

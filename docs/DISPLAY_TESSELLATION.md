@@ -267,6 +267,21 @@ with a code that is not one of `REFUSAL_CODES` (or not a string) raises `Geometr
 plain `ValueError` before). The result records (`EdgeSamples`, `DisplayRoundingAllowance`) are built
 by the module and take no validation. Valid arguments give the same bits as before: the N1 corpus
 (5744 results) is bit-identical (0 changes).
+Round 5 (owner decision, N2 round 5 (1); Codex N2 r5 M3) replaces the ABC checks by EXACT CONCRETE
+TYPES (see **Trust model** below): NumPy registers `np.timedelta64` as both `numbers.Integral` and
+`numbers.Real`, so a day duration raised a raw `TypeError` and a nanosecond duration was accepted as
+an edge id or an angle; a Python int above the decimal conversion limit raised a raw `ValueError`
+when a diagnostic formatted it. Now an edge id is `type(x) is int` (so not `bool`) or exactly one of
+`np.int8`, `np.int16`, `np.int32`, `np.int64`, `np.uint8`, `np.uint16`, `np.uint32`, `np.uint64`,
+converted to a Python int and checked arithmetically to `|id| < 2**63`; an angle or sag is exactly a
+`float`, an `int` (not `bool`; compared with `2**1023` before `float()`, so no overflow), an
+`np.float32` or an `np.float64`. `timedelta64`, `datetime64`, `Fraction`, `Decimal`, NumPy
+integers as a tolerance, `bool`, `np.bool_` and any other object are a `GeometryError`; the model
+and tolerance are checked with `issubclass(type(x), ...)` (never `isinstance`, which looks up a
+foreign `__class__`). `DisplayTrimRefused(code, message)` takes `type(code) is str` and `type(message)
+is str` and formats neither otherwise. Changed results (stated): `Fraction`, `Decimal` and NumPy
+integer tolerances (accepted in round 4) and edge ids beyond `2**63` are now refused; ordinary calls
+(int ids, float or int tolerances) are bit-identical (N1 corpus rerun below).
 
 Inside the domain, a sag allowance at or below 4 eps x max(1, |vertex coordinates|) on a curved
 edge is `EDGE_UNSUPPORTED` (unresolvable), as are distinct parameters evaluating to one point and
@@ -368,6 +383,31 @@ declared domain (or which bound makes it so):
 | combined cap | `1 + sum(n - 1)` over every division's count, before any is built | integers |
 | rounding allowance | `display_rounding_allowance` (above), at most 2 % of the angle and sag | every term is a sum or quotient of positive quantities (no cancellation); `r > 0` by the radius bound |
 | raw arithmetic | any `ArithmeticError` or `ValueError` from a division | typed `EDGE_UNSUPPORTED` |
+
+## Trust model (owner decision, N2 round 5 (1))
+
+Callers are in-process library code passing ordinary values; the modules (`display_tessellation`
+and `_slab_triangulation`) are not a sandbox against hostile objects. What they guarantee is a
+TYPED refusal (`GeometryError`, or a `DisplayTrimRefused` with its code) for every input outside
+the accepted types, decided by checks against EXACT CONCRETE TYPES only: `type(x) is T` or
+`issubclass(type(x), T)` for the module's own classes; never a `numbers` ABC, never `isinstance` on
+a caller value, never an attribute of a foreign object (only of an exact `np.ndarray`), never
+`str()`, `repr()`, `format` or `__name__` of a foreign object or dtype. Every refusal message is
+FIXED text plus, at most, values the module itself produced: counts, indices, lengths and shapes it
+computed from exact ndarrays as ints, its own constants, floats it computed (or converted with
+`float()` from the model's own fields), and an edge id after it was converted to a Python int and
+range checked. No caller object, dtype or unbounded int is ever formatted, so a refusal runs no
+caller code and allocates little (Codex N2 r5 M1: a metaclass whose `__name__` raised escaped as a
+raw `RuntimeError`, and a dtype with a 2e6-character field name allocated about 6 MB while it was
+refused; both are now `TRIM_INVALID` under 100 kB traced). Audit of every raise site (round 5): all
+77 `raise` statements at 1ab837b (53 in `display_tessellation.py`, 22 in `_slab_triangulation.py`) and
+the three message builders (`_unsupported`, `_too_complex`, `_form_error`); 16 messages formatted a
+caller value and are now fixed text: a foreign type name in 11 (8 + 3), a dtype and shape in 2, a model
+or arithmetic exception's text in 3 (one of them also a type name, counted once), the refusal code's
+`repr` in 1, and two model fields (a stored angle, a cylinder radius) are converted with `float()`
+before they are formatted; 2 raise sites are new (a non-str refusal message, an edge id beyond
+`2**63`), 79 in all. Every other message already held only module-produced values. A source test
+keeps `__name__`, `numbers`, a formatted dtype and exception text out of both modules. A lower-level exception stays attached as the refusal's `__cause__`.
 
 ## Refusal codes (`REFUSAL_CODES`)
 
@@ -553,6 +593,16 @@ Contract of the result (`SlabTriangulation`):
   vertical side used (no T-junctions). The rounded polygon's area differs from the exact one by at
   most `sum_k |RN(y*_k) - y*_k| (x_next,k - x_prev,k) / 2` over the cut points (moving one by `d`
   changes the area by `d` times half its neighbours' x distance), each error at most half an ulp.
+- Coverage (owner decision, N2 round 5 (2), the recommended option): the 2D mesh covers exactly the
+  CLOSURE OF THE POSITIVE-AREA INTERIOR of the rounded trim. Zero-width parts (a hole edge and an
+  outer edge rounded onto the same segment, a tie of two boundaries on a slab line) are not covered
+  and are invisible in display; N3 must not assume every trim boundary segment is a triangle edge.
+  Codex round 5 reproduction (kept as a test): outer ring `(0, nextafter(1, 0)), (4, 1), (4, 3),
+  (0, 3)`, hole `(2.5, 1), (3.5, 1), (3.5, 2), (2.5, 2)`: the outer edge's cuts at `x = 2.5` and `3.5`
+  round onto the hole's bottom corners, the exact oracle passes, and no triangle covers the interior
+  of the coincident segment (for example `(3, 1)`). Area accounting: the zero-width part has zero
+  area, so the triangles' exact area is the rounded polygon's area (outer minus hole, with the cut
+  points inserted), as for every accepted mesh.
 - `area` is the EXACT area of the emitted triangles, correctly rounded once (owner decision, N2
   round 4 (3), the recommended option): `RN(A)` with `2 A = sum (xr - xl) ((ytl - ybl) + (ytr -
   ybr))` over the trapezoids (the triangles tile them exactly; a dropped piece has zero area), every
@@ -561,8 +611,11 @@ Contract of the result (`SlabTriangulation`):
   evaluation (error-free two-sum and two-product of the main terms, an exact split-and-sum of the
   products, a rigorous bound on the small rest), which returns only when the bound proves the
   rounding (else the integers decide). The value is the same bits on the fast and the general path
-  (round 3 left 23 of 6000 trims differing in the last bits) and never underflows to 0: Codex round 4
-  showed a rectangle with `s = 2^-537`, width `nextafter(s, inf)` and height `s / 2`, exact area
+  (round 3 left 23 of 6000 trims differing in the last bits). `area` is the correctly rounded exact
+  area, which may round to 0 for subnormal-scale trims (owner decision, N2 round 5 (4); Codex round 5:
+  a square of side `2^-538` is accepted on both paths with two strictly positive triangles, and its
+  exact area `2^-1076` rounds to `0.0`; kept as a test); it is never zeroed by the computation
+  itself: Codex round 4 showed a rectangle with `s = 2^-537`, width `nextafter(s, inf)` and height `s / 2`, exact area
   rounding to `5e-324`, reported 0.0 with cuts at `[0.09 s, 0.34 s]`; now `5e-324` on both paths, with
   and without cuts (round 3's `2^-536` square stays `2^-1072`). The exact oracle now checks
   `area == float(Fraction(exact triangle sum))` for every accepted mesh. Changed results: `area`
@@ -595,6 +648,27 @@ rounds onto the hole tip (points 5 and 9 coincide in 2D). The 2D mesh passes the
 rebuilding the cut points from `cut_fraction` separates points 5 and 9, every lifted triangle stays
 counter-clockwise, yet the point `(3/2, (y5 + y9 + 2) / 4)` (lifted ordinates), covered by the 2D
 mesh, lies in no lifted triangle.
+
+**N3 obligations** (owner decision, N2 round 5 (3), the recommended option; N3 implements them and
+is reviewed against them). Codex round 5 showed why "coverage" needs a domain and a map: on a
+cylinder, a quarter-turn trim meshed in `(u, z)` and lifted chordally is outward-facing everywhere
+and covers the trim under radial projection, yet the midpoint of its bottom boundary chord lies at
+radius `2^-1/2`, off the cylinder (kept as a test). The obligations of a lift of an N2 mesh onto a
+face:
+
+- the coverage domain is the trim's 2D parameter region on the support (the closure of the
+  positive-area interior of the rounded trim, above), and the map is the support's own parameter
+  evaluation;
+- the orientation reference is the face's outward normal (support normal times face sense): every
+  lifted triangle faces it;
+- boundary equality: every lifted boundary vertex equals the N1 shared edge sample bit for bit, and
+  the boundary chords are exactly the N1 chords, so neighbouring faces share them (no cracks, no
+  T-junction gaps);
+- interior vertices are lifted by the support map; the chordal deviation of interior triangles is
+  bounded by the display tolerance (N3 certifies it), and the analytic trim is approximated within
+  that tolerance, not "covered exactly";
+- fail closed: a typed refusal (the caller keeps its old route) whenever any obligation cannot be
+  certified.
 
 Refusals, in this order (no raw `IndexError`/`ValueError`/`OverflowError`/`FloatingPointError`):
 
@@ -654,3 +728,10 @@ three alternating passes, `n2r4_bench.py`): 2.52 / 2.57 ms, 0.43 / 0.47 ms, 8.3 
 89 / 90 us, 76 / 86 us, 232 / 224 us. The exact area costs about 40 us of NumPy overhead above 24
 trapezoids (certified float route) and about 1.7 us per trapezoid below (integers); the strict
 input check is cheaper than the conversion it replaces.
+
+Round 5 (`n2r4_fuzz.py` rerun, the same 6000 cases and oracle): identical counts (3039 accepted, 0
+oracle failures, 2957 `TRIM_INVALID`, 4 `OUT_OF_DOMAIN` area floor, 0 raw exceptions). N1 corpus
+(`n2r4_corpus.py`, 5744 results, 1ab837b against round 5): 0 sample changes and 0 allowance changes,
+refusal codes and messages included. Timing (`n2r4_bench.py`, best of three alternating passes,
+1ab837b / round 5): 2.53 / 2.57 ms, 0.475 / 0.473 ms, 8.9 / 8.2 ms; 49 / 50 us, 89 / 90 us, 84 / 83
+us, 223 / 223 us (unchanged within the loaded PC's noise; only refusal text changed).
