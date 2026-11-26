@@ -191,7 +191,9 @@ def _on_segment(mesh, j, a, b):
     pa, pb, pj = mesh.points[a], mesh.points[b], mesh.points[j]
     d = pb - pa
     f = float((pj - pa) @ d / (d @ d))
-    return 0.0 < f < 1.0 and np.linalg.norm(pa + f * d - pj) <= 1e-12 * max(1.0, float(np.abs(mesh.points).max()))
+    # f may round onto 0 or 1: a slab line through another ring's vertex can cut a chord an ulp
+    # from its end (circle holes: cos(pi/3) vs the evaluated arc point)
+    return 0.0 <= f <= 1.0 and np.linalg.norm(pa + f * d - pj) <= 1e-12 * max(1.0, float(np.abs(mesh.points).max()))
 
 
 def _naive_fraction_lift(result):
@@ -469,3 +471,62 @@ def test_input_contract_and_public_surface():
     assert "face_display_mesh" in dt.__all__ and "FaceDisplayMesh" in dt.__all__
     import anygeometry
     assert "face_display_mesh" not in getattr(anygeometry, "__all__", ())
+
+
+# ----------------------------------------------------------------------------- findings and fuzz
+def test_two_cuts_rounding_onto_one_point_beside_a_tip_are_refused():
+    """Finding (N3a bench, aligned holes): a slab line an ulp beside a hole's left tip cuts both
+    tip edges; both cut ordinates round to the tip's, so two distinct cut points share one chart
+    point.  The spec's Q2 (i) refuses it (TRIM_INVALID, fail closed); merging such cut-only
+    duplicates is an owner decision."""
+    outer = [(-3., -3.), (3., -3.), (3., 7.), (-3., 7.)]
+    tip = [(0., 4.5), (1., 3.5), (1., 5.5)]
+    near = [(1e-17, 0.), (.5, -.5), (.5, .5)]
+    m = slab.triangulate_rings([np.array(outer), np.array(tip), np.array(near)])
+    q = [_fp(p) for p in m.points]
+    assert len(set(q)) < len(q)                                     # N2 is valid, yet not injective
+    g, face = _planar([outer, tip, near])
+    text = _refused("TRIM_INVALID", lambda: _mesh(g, face, dt.DisplayTolerance(.5)))
+    assert "coincide in the chart" in text
+
+
+def test_small_fuzz_planar_faces_with_round_holes():
+    """40 random planar faces (skew planes, star outer, circle / ellipse / polygon holes): every
+    accepted mesh passes the oracles; refusals are typed.  The 1200-face run is evidence
+    n3a-fuzz.txt (n3a_fuzz.py)."""
+    from anygeometry.exact_curves import EllipticArc
+    rng = np.random.default_rng(26)
+    accepted = 0
+    for case in range(40):
+        g = GeometryModel()
+        o = rng.uniform(-50, 50, 3)
+        u = rng.normal(size=3)
+        v = np.cross(u, rng.normal(size=3)) + .4 * u
+        plane = Plane(tuple(o), tuple(u), tuple(v))
+
+        def at(x, y):
+            return o + x * u + y * v
+        m = int(rng.integers(5, 10))
+        angles = 2 * math.pi * (np.arange(m) + rng.uniform(-.3, .3, m)) / m
+        ids = [g.add_point(*at(r * math.cos(a), r * math.sin(a))) for a, r in zip(angles, rng.uniform(2, 4, m))]
+        face = g.add_face([g.add_line(a, b) for a, b in zip(ids, ids[1:] + ids[:1])], surface=plane)
+        holes = []
+        for h in range(int(rng.integers(1, 3))):
+            cx, cy = .55 * math.cos(2 * math.pi * h / 3), .55 * math.sin(2 * math.pi * h / 3)
+            c3 = at(cx, cy)
+            U, V = .2 * u, .1 * (v - (v @ u) / (u @ u) * u)
+            s0 = float(rng.uniform(-3, 3))
+            ends = [c3 + math.cos(s) * U + math.sin(s) * V for s in (s0, s0 + math.pi)]
+            p0, p1 = g.add_point(*ends[0]), g.add_point(*ends[1])
+            holes.append((OrientedEdge(g.add_curve(p0, p1, EllipticArc(tuple(c3), tuple(U), tuple(V), s0, math.pi)), True),
+                          OrientedEdge(g.add_curve(p1, p0, EllipticArc(tuple(c3), tuple(U), tuple(V), s0 + math.pi,
+                                                                       math.pi)), True)))
+        _force(g, face, holes=tuple(holes))
+        tol = dt.DisplayTolerance(float(rng.uniform(.1, 1.2)))
+        try:
+            mesh = _mesh(g, face, tol)
+        except dt.DisplayTrimRefused:
+            continue
+        _check_certified(g, face, tol, mesh)
+        accepted += 1
+    assert accepted >= 30

@@ -53,6 +53,8 @@ __all__ = [
     "MIN_DISPLAY_SWEEP",
     "edge_display_samples",
     "display_rounding_allowance",
+    "FaceDisplayMesh",
+    "face_display_mesh",
 ]
 
 #: Typed refusal codes.  ``SUPPORT_UNSUPPORTED``: an incident face's support has no display route
@@ -1471,3 +1473,55 @@ def _edge_result(model, edge_id, parameters, start, end) -> EdgeSamples:
     if np.any(np.all(points[1:] == points[:-1], axis=1)):
         raise _unsupported(edge_id, "distinct parameters evaluate to one point (lost precision)")
     return EdgeSamples(edge_id, _frozen(parameters), _frozen(points))
+
+
+# ---------------------------------------------------------------------------------------------
+# face lift (N3)
+# ---------------------------------------------------------------------------------------------
+@dataclass(frozen=True, eq=False)
+class FaceDisplayMesh:
+    """A certified display mesh of one face (:func:`face_display_mesh`).
+
+    ``points`` (n, 3) float64: first the ring vertices, which are the N1 :class:`EdgeSamples`
+    points bit for bit (outer loop, then each hole, each coedge's samples in loop direction without
+    its last point), then the cut points, each ON the 3D N1 chord it subdivides (a T-vertex against
+    the neighbour, owner decision Q8).  ``triangles`` (m, 3) int64, counter-clockwise about the face
+    normal ``sense x`` the support normal.  ``chart`` (n, 2): the 2D points of the chart mesh (plane
+    frame coordinates).  ``ring_vertex_count``: ``points[:k]`` are ring vertices.  ``source`` (n, 2)
+    int64: ``(edge id, interval index)`` of the N1 chord each point lies on (a ring vertex: the chord
+    starting at it in loop direction).  ``sense``: +1/-1, the sign of the outer ring's exact chart
+    area.  ``face_tolerance``: T_face.  ``deviation_bound``: the certified largest paired deviation
+    of the mesh from its support, ``<= face_tolerance``.  ``trim_sag_bound``: the certified largest
+    distance of the drawn boundary chords from the analytic trim (reported always, enforced only
+    when ``tol.sag`` is given).  ``degenerate_count``: triangles exempt from the orientation test as
+    rounding-thin.
+    """
+
+    face_id: int
+    points: np.ndarray
+    triangles: np.ndarray
+    chart: np.ndarray
+    ring_vertex_count: int
+    source: np.ndarray
+    sense: int
+    face_tolerance: float
+    deviation_bound: float
+    trim_sag_bound: float
+    degenerate_count: int
+
+
+def face_display_mesh(model, face_id: int, tol: DisplayTolerance) -> FaceDisplayMesh:
+    """A certified triangle mesh of one face for display (N3; N3a: faces on a ``Plane``).
+
+    The face's rings are the N1 samples of its coedges (:func:`edge_display_samples`); their chart
+    polygon is triangulated exactly (N2) and lifted by index.  The result is returned only when
+    every certificate holds: the chart map is injective, every mesh edge is shared by two oppositely
+    oriented triangles or lies on one ring chord, the boundary chains exactly to every ring, every
+    lifted triangle (except rounding-thin ones, counted) is positively oriented about the face
+    normal, and the paired deviation from the support is at most T_face (``tol.sag`` if given, else
+    the model's ``surface_residual`` on a plane); otherwise a typed :class:`DisplayTrimRefused`,
+    never a partial mesh.  Faces on a cylinder or cone, with an explicit parameterization, or on
+    any other support: ``SUPPORT_UNSUPPORTED``.  See ``docs/DISPLAY_TESSELLATION.md``.
+    """
+    from ._display_lift import _lift
+    return _lift(model, face_id, tol)
