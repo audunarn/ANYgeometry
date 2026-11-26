@@ -399,7 +399,7 @@ computed from exact ndarrays as ints, its own constants, floats it computed (or 
 range checked. No caller object, dtype or unbounded int is ever formatted (owner decision N2 round 6
 (1): EVERY formatted integer, model-produced ids included, goes through `_id_text`, which prints it
 only if |v| < 10**18 and otherwise the fixed text "<id out of display range>"; 34 sites audited, a
-face id of 10**5000 is a typed refusal). Note that form refusals use memory O(number of rings): one capped tuple snapshot of the ring list, at most 8 bytes x `MAX_SLAB_RINGS` (12,500), about 100 kB (102,027 bytes traced at the cap); domain/finiteness refusals
+face id of 10**5000 is a typed refusal). Note that form refusals use memory O(number of rings): one capped tuple snapshot of the ring list, at most 8 bytes x `MAX_SLAB_RINGS` (16,666 = 50_000 // 3), about 135 kB (135,355 bytes traced at the cap); domain/finiteness refusals
 of an accepted, capped array may make one bounded copy (at most 8 bytes x the cap, about 1.8 MB
 measured for the largest capped `float64` `extra_x`). A refusal runs no caller code (Codex N2 r5 M1: a metaclass whose `__name__` raised escaped as a
 raw `RuntimeError`, and a dtype with a 2e6-character field name allocated about 6 MB while it was
@@ -629,70 +629,17 @@ Contract of the result (`SlabTriangulation`):
   points, triangles and cut data are unchanged.
 - The result is deterministic (bit-identical on repeat).
 
-**Certified product and lift** (owner decision, N2 round 3 (1), the recommended option). The
-certified product of N2 is the 2D mesh: the vertices and triangles in the trim plane, with the
-guarantees above. `cut_ends` and `cut_fraction` are provenance metadata only. Reconstructing the
-cut points at `cut_fraction` (or at any per-point position bound) is NOT an orientation-preserving
-lift: each lifted point stays within its own bound, but neighbouring points move independently,
-and a thin triangle can invert. Codex round 3 reproduction (kept as a test): outer ring
-`(-1, -1), (1, -1), (1, 3), (-1, 3)`, hole `(-0.21, 1), (0.75, 0.75), (0.75, 1.25)`, `extra_x =
-[nextafter(-0.21, -inf)]`; the 2D mesh passes the exact oracle, but rebuilding its cut points at
-`cut_fraction` moves an outer cut past the hole tip, triangle `[7, 4, 10]` inverts and its centroid
-lies inside triangle `[0, 7, 10]`. Therefore any lift (N3: placing the mesh on a support or a
-segment's own image) must certify each lifted triangle's orientation itself and refuse (fail
-closed) when it cannot; N2 promises nothing about lifted triangles.
-
-Round 4 (owner decision, N2 round 4 (2), the recommended option): orientation is not enough. Any
-lift (N3) must certify BOTH the orientation and the coverage of the lifted mesh: no gaps or
-overlaps, including at coincident 2D vertices (an outer cut point equal to a hole tip, a tie on a
-slab line), and the lifted boundary must be the lifted trim; it fails closed (refuses) when it
-cannot certify either. cut_fraction reconstruction alone is insufficient: round 3 showed an
-inversion, and Codex round 4 a gap with every lifted triangle still positively oriented. The round-4
-reproduction (kept as a test): outer ring `(0, 0), (3, yb), (3, 4), (0, 4)` with `yb = 0.1 * 3`, hole
-`(0.5, 0.5), (1, tip), (2, 1), (1, 2)` with `tip = float(Fraction(yb) / 3)`; the outer cut at `x = 1`
-rounds onto the hole tip (points 5 and 9 coincide in 2D). The 2D mesh passes the exact oracle;
-rebuilding the cut points from `cut_fraction` separates points 5 and 9, every lifted triangle stays
-counter-clockwise, yet the point `(3/2, (y5 + y9 + 2) / 4)` (lifted ordinates), covered by the 2D
-mesh, lies in no lifted triangle.
-
-**N3 obligations** (owner decision, N2 round 5 (3), the recommended option; N3 implements them and
-is reviewed against them). Codex round 5 showed why "coverage" needs a domain and a map: on a
-cylinder, a quarter-turn trim meshed in `(u, z)` and lifted chordally is outward-facing everywhere
-and covers the trim under radial projection, yet the midpoint of its bottom boundary chord lies at
-radius `2^-1/2`, off the cylinder (kept as a test). The obligations of a lift of an N2 mesh onto a
-face:
-
-- the coverage domain is the trim's 2D parameter region on the support (the closure of the
-  positive-area interior of the rounded trim, above), and the map is the support's own parameter
-  evaluation;
-- the orientation reference is the face's outward normal (support normal times face sense): every
-  lifted triangle faces it;
-- boundary equality: every lifted boundary vertex equals the N1 shared edge sample bit for bit, and
-  the boundary chords are exactly the N1 chords, so neighbouring faces share them (no cracks, no
-  T-junction gaps);
-- N3 deviation contract (owner decision N2 round 6 (2), the recommended option): the correspondence
-  is PARAMETRIC. A point of a flat lifted triangle with barycentric weights w corresponds to the
-  support evaluated at the same barycentric weights applied to the triangle's 2D (u, v) vertices;
-  the certified quantity is the max over the triangle of |flat(w) - S(uv(w))| (3D Euclidean), which
-  N3 must bound rigorously (not by sampling) and keep at most the display chord tolerance, else fail
-  closed. This is stricter than radial projection: on the Codex frustum the flat mesh lies within
-  0.293 of the trim radially, yet its interior diagonal midpoint is 0.380 from the support at the
-  matching (u, v) midpoint, so a limit of 0.30 passes radially and fails parametrically (kept as a
-  test).
-- N3 face-level tolerance rule (owner decision N2 round 7, the recommended option): N3 certifies ONE
-  threshold per face, `T_face = tol.sag` when the caller gives `DisplayTolerance.sag`, otherwise
-  `model.tolerance.surface_residual` (the quantity N1 uses for its default per-edge allowance); a
-  face is never certified against a smaller per-edge value, so edges of one face with different N1
-  allowances do not give the face several thresholds. Boundary vertices come from N1 samples and may
-  lie off the support by up to the model's accepted residual; that offset counts toward `T_face`
-  (it is not exempt). Example kept as a test: a planar triangle whose N1 boundary lies 4e-9 off the
-  plane everywhere has a parametric error of 4e-9, above the length tolerance and within
-  `surface_residual`, so it is certified against `T_face = surface_residual`.
-- interior vertices are lifted by the support map; the chordal deviation of interior triangles is
-  bounded by the display tolerance (N3 certifies it), and the analytic trim is approximated within
-  that tolerance, not "covered exactly";
-- fail closed: a typed refusal (the caller keeps its old route) whenever any obligation cannot be
-  certified.
+**Certified product** (owner decisions, N2 rounds 3 and 8). The certified product of N2 is the 2D
+mesh: the vertices and triangles in the trim plane, with the guarantees above. `cut_ends` and
+`cut_fraction` are provenance metadata only. Lifting this mesh onto a support is N3's contract; N3
+must not rely on cut_fraction reconstruction for orientation or coverage (see the two documented
+counterexamples). Counterexample 1 (kept as a test): outer ring `(-1, -1), (1, -1), (1, 3), (-1, 3)`,
+hole `(-0.21, 1), (0.75, 0.75), (0.75, 1.25)`, `extra_x = [nextafter(-0.21, -inf)]`: the 2D mesh passes
+the exact oracle, but rebuilding its cut points at `cut_fraction` inverts triangle `[7, 4, 10]`.
+Counterexample 2 (kept as a test): outer ring `(0, 0), (3, yb), (3, 4), (0, 4)` with `yb = 0.1 * 3`,
+hole `(0.5, 0.5), (1, tip), (2, 1), (1, 2)` with `tip = float(Fraction(yb) / 3)`: the outer cut at
+`x = 1` rounds onto the hole tip; the fraction rebuild separates the two points, every triangle stays
+counter-clockwise, yet a point the 2D mesh covers lies in no lifted triangle.
 
 Refusals, in this order (no raw `IndexError`/`ValueError`/`OverflowError`/`FloatingPointError`):
 

@@ -4,9 +4,13 @@ All notable user-visible changes to ANYgeometry are documented here.
 
 ## Unreleased
 
-- N2 round 7 (docs and tests only): N3 face-level tolerance rule (`T_face` = `tol.sag`, else
-  `model.tolerance.surface_residual`; boundary offset counts); form-refusal memory wording is
-  O(number of rings), about 100 kB at the cap; stronger huge-id and frustum tests.
+- N2 round 8 (docs and tests only; supersedes the N3 wording of rounds 3-7 below): N2's contract states only what N2 guarantees (certified 2D
+  mesh, closure coverage, `cut_ends`/`cut_fraction` as provenance, input/trust model, refusals,
+  area, budgets) plus one sentence: lifting onto a support is N3's contract and N3 must not rely on
+  `cut_fraction` reconstruction (two documented counterexamples). The detailed N3 obligations of
+  rounds 4-7 (domain/map, orientation, seams, parametric deviation, `T_face`) are removed from the
+  docs; they live as open questions in the evidence note `N3-LIFT-INPUTS.md`. Form-refusal memory
+  is O(number of rings): cap 16,666 rings (50_000 // 3), 135,355 bytes traced.
 - N2 round 6: every integer formatted into a display refusal message (model ids included) uses a
   fixed text above 10**18; the N3 deviation contract is the parametric max over the triangle;
   coverage and allocation wording scoped.

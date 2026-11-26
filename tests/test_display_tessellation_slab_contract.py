@@ -872,7 +872,7 @@ def test_r3_1_the_certified_product_is_the_2d_mesh_and_a_fraction_lift_can_inver
         if not path:
             assert any(t[k:] + t[:k] == [7, 4, 10] for t in inverted for k in range(3)), inverted
     text = " ".join(_DOCS.read_text(encoding="utf-8").split())
-    assert "must certify each lifted triangle's orientation itself" in text
+    assert "must not rely on cut_fraction reconstruction for orientation or coverage" in text
     assert "metadata" in text and "[7, 4, 10]" in text
 
 
@@ -1109,7 +1109,7 @@ def test_r4_m2_the_stored_values_are_what_is_meshed():
 def test_r4_m3_a_lift_must_certify_coverage_as_well_as_orientation():
     """Medium (M3): fraction reconstruction separates an outer cut from a coincident hole tip;
     every lifted triangle stays positive, yet a point the certified 2D mesh covers falls into a gap.
-    The documented N3 contract: certify BOTH orientation and coverage, fail closed otherwise."""
+    The doc says only: N3 must not rely on cut_fraction reconstruction."""
     yb = .1 * 3
     tip = float(F(yb) / 3)
     outer = [(0, 0), (3, yb), (3, 4), (0, 4)]
@@ -1127,8 +1127,7 @@ def test_r4_m3_a_lift_must_certify_coverage_as_well_as_orientation():
     p = F(3, 2), (r[5][1] + r[9][1] + 2) / 4
     assert covered(p, q) and not covered(p, r)                      # coverage does not
     text = " ".join(_DOCS.read_text(encoding="utf-8").split())
-    assert "must certify BOTH the orientation and the coverage of the lifted mesh" in text
-    assert "no gaps or overlaps" in text and "cut_fraction reconstruction alone is insufficient" in text
+    assert "must not rely on cut_fraction reconstruction for orientation or coverage" in text
 
 
 def test_r4_low_a_area_is_the_correctly_rounded_exact_area_on_every_path():
@@ -1218,31 +1217,6 @@ def test_r5_m2_a_zero_width_trim_interval_is_not_covered():
     text = " ".join(_DOCS.read_text(encoding="utf-8").split())
     assert "CLOSURE OF THE POSITIVE-AREA INTERIOR of the rounded trim" in text
     assert "N3 must not assume every trim boundary segment is a triangle edge" in text
-
-
-def test_r5_m4_the_n3_obligations_are_defined():
-    """Medium (M4): on a cylinder an outward chordal mesh can cover the trim under radial projection
-    while its boundary chords leave the analytic trim.  Owner decision N2 r5 (3): the N3 obligations
-    name the coverage domain and map, the orientation reference and boundary equality."""
-    uv = np.array([(0., 0.), (np.pi / 2, 0.), (np.pi / 2, 1.), (0., 1.)])
-    m = slab.triangulate_rings([uv])
-    u, z = m.points.T
-    xyz = np.column_stack((np.cos(u), np.sin(u), z))
-    a, b, c = xyz[m.triangles].transpose(1, 0, 2)
-    radial = (a + b + c) / 3
-    radial[:, 2] = 0
-    assert np.all(np.sum(np.cross(b - a, c - a) * radial, axis=1) > 0)
-    mid = (xyz[0] + xyz[1]) / 2
-    assert np.isclose(np.linalg.norm(mid[:2]), 2 ** -.5)            # off the unit cylinder
-    text = " ".join(_DOCS.read_text(encoding="utf-8").split())
-    for phrase in ("coverage domain is the trim's 2D parameter region on the support",
-                   "the map is the support's own parameter evaluation",
-                   "orientation reference is the face's outward normal (support normal times face sense)",
-                   "equals the N1 shared edge sample bit for bit",
-                   "boundary chords are exactly the N1 chords",
-                   "bounded by the display tolerance",
-                   "not \"covered exactly\""):
-        assert phrase in text, phrase
 
 
 def test_r5_low_area_may_round_to_zero_for_subnormal_scale_trims():
