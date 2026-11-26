@@ -64,6 +64,14 @@ All notable user-visible changes to ANYgeometry are documented here.
   allowance (never below the former 64 eps rule), keeping the stricter division's cut: no
   sliver intervals (the `steep_cuts` ellipses had one, 1.04e-14). Against 2427aa3 every corpus
   count and refusal code is unchanged and 205 parameter arrays moved by at most 7.0e-15.
+  Round 7: the union is "merge, then verify with exact forward maps; restore on failure":
+  every merged interval is checked against every published bound (each division's angle span
+  from its own forward map plus its rounding term; a circle's exact sag) and an interval that
+  fails gets original cuts back (never a new one), at worst the no-merge union; the ends and
+  the minimum-two-interval split are mandatory (a tangent interval turning 0.8000606 rad against
+  0.8000418, a circle chord above its sag and a one-chord result are fixed). Against 9efd08e
+  every corpus count, refusal code and allowance is unchanged; 2 parameter arrays (`tripod_skins`
+  circles) moved by at most 2.2e-16; no sliver kept.
   See `docs/DISPLAY_TESSELLATION.md` (stability table, rounding allowance). No existing module
   changes.
 

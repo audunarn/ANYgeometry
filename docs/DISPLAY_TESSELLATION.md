@@ -39,7 +39,9 @@ although the model length is 1e-9.
 parameters strictly increasing from exactly 0 to exactly 1, points read-only; `points[0]` and
 `points[-1]` are the vertex positions exactly, interior points are
 `model.evaluate_edge_many(edge, parameters)`. The parameters are the sorted union of the following
-divisions; every interval of the union lies inside one interval of each, so all bounds hold on it.
+divisions; every interval of the no-merge union lies inside one interval of each, so all bounds
+hold on it, and an interval of the merged union is kept only when verified against every bound
+(below: merge, then verify with exact forward maps; restore on failure).
 
 Circles and ellipses are divided in their **local angle** `s = theta - start = sweep t`: the frame is
 rotated once, `u' = cos(start) u + sin(start) v`, `v' = -sin(start) u + cos(start) v`, so
@@ -134,25 +136,45 @@ exact multiple can come out a few ulps above an integer). There is no fixed slac
    `surface_residual = 2 sin^2(.1)` (its analytic sag; the evaluated sag exceeds it by 2.31e-12)
    was one chord; both now get two.
 
-The union is one sort and one pass (round-6 follow-up: the former rule kept every tangent cut and
-dropped a support cut only within a fixed 64-ulp parameter gap, which left a 1.04e-14 sliver on
-the `steep_cuts` ellipses). Two adjacent cuts of different divisions are merged when the cut
-dropped lies, in its OWN division's angle (tangent or azimuth, radians, the units of
-`display_rounding_allowance`), within that division's threshold of the cut kept. The threshold is
-the division's headroom, `max(T, Z...) - term_D` (the part of the published allowance's maximum
-that its own rounding term `term_D` does not use), and never less than the former rounding rule
-`64 eps max(1, |angle|)`. The cut kept is that of the stricter division (the smaller headroom; the
-ends are strictest and never dropped), the earlier cut on ties; a cut that has absorbed others is
-replaced only by a cut within every absorbed cut's own threshold; two cuts of one division are
-never merged. *Why the bound still holds:* dropping a cut moves that division's interval end by at
-most its threshold; its intervals already turn by at most `angle + 64 eps x angle + term_D` (its
-own rounding), so with the headroom they turn by at most `angle + 64 eps x angle + max(T, Z...)`,
-the published bound. (The coordinator's proposed justification, "at most its allowance, which the
-published bound already includes", would count `term_D` twice for the division whose term is the
-maximum; the headroom does not.) The `64 eps max(1, |angle|)` floor is the former rule, kept so that
-no previously merged pair splits: three divisions meeting at one point (a tripod mitre ellipse's
-tangent and two cylinders' azimuths) were otherwise emitted as slivers or refused as lost
-precision. Every division's count
+The union is **merge, then verify with exact forward maps; restore on failure** (round 7: the
+round-6 merge rule checked each dropped cut alone, and Codex found three in-domain violations:
+two moved ends of one interval spending the same headroom twice, 0.8000606 rad against the
+published 0.8000418; a circle interval lengthened past its sag, 0.07894671 against 0.07894327,
+because the circle path skips the sag check; and the minimum-two split merged into the edge's
+start, returning one chord).
+
+*Merge* (a proposal; one sort and one pass). Two adjacent cuts of different divisions are merged
+when the cut dropped lies, in its OWN division's angle (tangent or azimuth, radians), within
+`max(headroom_D, 64 eps max(1, |angle|))` of the cut kept (`headroom_D = max(T, Z...) - term_D`).
+The stricter division's cut is kept (the smaller headroom), the earlier on ties; a cut that has
+absorbed others is replaced only by a cut within every absorbed cut's threshold; two cuts of one
+division are never merged; the ends are never dropped. Nothing in the proposal is relied on for a
+bound.
+
+*Verify.* Every final interval with a dropped cut at either end is checked with exact quantities:
+each division's angle span over it from its own forward map (the tangent angle; each support's
+azimuth), accepted only when `span + term_D <= angle + allowance.angle` (the computed span plus
+that division's own documented rounding term, so the true span meets the published bound); and,
+for a circle with a sag allowance, its exact sag `2 rho sin^2(delta / 4)` (raised by its
+rounding) against `sag (1 + 64 eps)` (the published `sag + allowance.sag` less the `3 E` that the
+drawn points' rounding uses). An ellipse's sag, and a circle's end interval with a vertex offset,
+are verified exactly afterwards by the sag refinement on every final interval, as before.
+*Mandatory cuts:* the ends are never dropped, and the minimum-two-interval split is protected:
+when the tangent plan forced two intervals, a union that would be one chord is a failure (its
+dropped cuts, the split among them, are restored); the split may merge into another interior cut
+(the edge still has two intervals).
+
+*Restore.* An interval that fails first lets another ORIGINAL cut of each end's merge group stand
+for that group, then restores every cut of the group (a merge group is a contiguous run of the
+sorted cuts, so this restores every cut that lay in the interval); the pieces are verified again.
+No cut is ever invented. An interval without a dropped cut is an interval of the no-merge union,
+which meets every bound by construction, so the loop ends, at worst at "no merge at all". The
+bounds therefore hold by the verification, not by the merge rule's argument. Over the corpus the
+verification failed two merged intervals (the `tripod_skins` circle edges 19 and 35 at the fine
+step without sag: the merged tangent interval sagged 1.42e-14 and 1.47e-14 relative above the
+sag allowance, beyond its `64 eps` share) and
+both were met by the group's other original cut (a move of 2.2e-16); no sliver had to be kept and
+no group was fully restored. Every division's count
 (tangent and each support's) is computed and checked against the cap, and then their sum
 `1 + sum(n - 1)` (the most intervals the union can have), before any division is built, so
 building costs at most 4096 cuts; more than 4096 intervals is `EDGE_UNSUPPORTED` (round 3: a
@@ -304,7 +326,8 @@ declared domain (or which bound makes it so):
 | aspect bound comparison | computed `aspect x theta* <= 1e4 (1 + 4 eps)` (`_aspect_admitted`), curve and projection | the bound is inclusive: an aspect computed from exactly orthogonal axes at the bound rounds by a few eps (round 6); a skew frame's computed aspect is off by a relative `eps x aspect <= 2.2e-12`, immaterial to every term it scales |
 | ellipse sag | `2 sin^2(delta / 4) |u x v| / |T(m)|`, raised by `(1 + 8 eps x aspect)` before comparing | `|u x v|` and `|T(m)|` of a skew frame round by a relative `eps x aspect` each; the raise makes the comparison fail closed; `|T(m)| = 0` is refused; the evaluated chord ends move by `E` (the allowance's `3 E`, round 3) |
 | parameters `s / sweep` | direct | `sweep = 0` refused |
-| union merge rule | `|angle_D(k) - angle_D(v)| <= max(headroom_D, 64 eps max(1, |angle|))`, `headroom_D = max(T, Z...) - term_D`, in the dropped cut's own division | the division angles are local to the edge; the headroom is a difference of two computed nonnegative terms, used only as a threshold (a smaller value merges less: fail closed) |
+| union merge proposal | `|angle_D(k) - angle_D(v)| <= max(headroom_D, 64 eps max(1, |angle|))`, `headroom_D = max(T, Z...) - term_D`, in the dropped cut's own division | a proposal only: no bound relies on it (round 7) |
+| union verification | per merged interval: `|angle_D(b) - angle_D(a)| + term_D <= angle + allowance.angle` for every division; a circle's `2 rho sin^2(delta / 4) (1 + 8 eps) <= sag (1 + 64 eps)` | the division angles are local to the edge (forward maps of the stability rows above, their error within `term_D`); a failure restores original cuts, ending at the no-merge union |
 | sag allowance default | `2 r sin^2(angle / 4)` | no `1 - cos` cancellation |
 | bisection | `a + (b - a) / 2`, refused when not strictly inside | float resolution typed |
 | combined cap | `1 + sum(n - 1)` over every division's count, before any is built | integers |

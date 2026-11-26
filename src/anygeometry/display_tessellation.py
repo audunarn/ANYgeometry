@@ -379,10 +379,13 @@ class _Plan:
 class _Division:
     """Edge parameters dividing a monotone angle (``angle(t)``, radians, small: local to the
     edge) into equal steps.  ``angle`` lets the union measure, in this division's own angle, how
-    far a near-duplicate cut it drops is from the cut it keeps."""
+    far a near-duplicate cut it drops is from the cut it keeps, and verify every merged interval
+    (N1 round 7).  ``protected``: the cuts are mandatory (the minimum-two-interval split) and are
+    never merged away."""
 
     values: list
     angle: object = None
+    protected: bool = False
 
 
 # ---------------------------------------------------------------------------------------------
@@ -636,6 +639,7 @@ class _Conic:
         cs, sn = math.cos(self.start), math.sin(self.start)
         self.lu = cs * self.u + sn * self.v           # the local frame at s = 0
         self.lv = -sn * self.u + cs * self.v
+        self._lu, self._lv = self.lu.tolist(), self.lv.tolist()     # floats for the sag's hot loop
         nu, nv = float(np.linalg.norm(self.lu)), float(np.linalg.norm(self.lv))
         e1 = self.lu / nu
         rest = self.lv - float(self.lv @ e1) * e1
@@ -673,18 +677,20 @@ class _Conic:
                 if not largest > 0.0:
                     raise _unsupported(self.edge_id, "the sag allowance is below the circle's float resolution")
                 n = max(n, _count(self.edge_id, span, largest))
-            if n == 1 and self.drawn_sag_bound(offset) > residual:
+            forced = n == 1 and self.drawn_sag_bound(offset) > residual
+            if forced:
                 n = 2                                   # a curved edge is never one chord
             return _Plan(n, lambda: _Division(np.linspace(0.0, 1.0, n + 1)[1:-1].tolist(),
-                                              lambda t: self.sweep * t))
+                                              lambda t: self.sweep * t, forced))
         amap = _AngleMap(self.edge_id, self.plane, (0.0, 0.0), math.pi / 2, 0.0, self.sweep)
         total = abs(amap.angle(self.sweep) - amap.angle(0.0))
         n = _count(self.edge_id, total, step)
-        if n == 1 and self.drawn_sag_bound(offset) > residual:
+        forced = n == 1 and self.drawn_sag_bound(offset) > residual
+        if forced:
             n = 2                                       # a curved edge is never one chord
         start = amap.angle(0.0)
         return _Plan(n, lambda: _Division(self.to_parameters(_angle_division(amap, 0.0, self.sweep, n)),
-                                          lambda t: amap.angle(self.sweep * t) - start))
+                                          lambda t: amap.angle(self.sweep * t) - start, forced))
 
     def drawn_sag_bound(self, offset) -> float:
         """An upper bound of the distance of the EVALUATED curve over [0, 1] from the chord
@@ -714,10 +720,21 @@ class _Conic:
         """
         delta = self.sweep * (t1 - t0)
         m = self.sweep * (0.5 * (t0 + t1))           # local angle: no absolute angle is rounded
-        tangent = float(np.linalg.norm(-math.sin(m) * self.lu + math.cos(m) * self.lv))
+        sn, cs = -math.sin(m), math.cos(m)
+        t0, t1, t2 = (sn * a + cs * b for a, b in zip(self._lu, self._lv))
+        tangent = math.sqrt(t0 * t0 + t1 * t1 + t2 * t2)
         if not tangent > 0.0:
             raise _unsupported(self.edge_id, "the curve's tangent vanishes")
         return 2.0 * math.sin(delta / 4) ** 2 * self.area / tangent
+
+    def sag_exceeds(self, a, b, allowance, offsets) -> bool:
+        """Whether the chord over [a, b] can leave the curve by more than ``allowance``: the
+        exact sag :meth:`sag` (at the parametric midpoint; for a circle it is ``2 rho
+        sin^2(delta / 4)``) raised by its rounding, plus the offset of a vertex at an end of the
+        edge."""
+        inflate = 1.0 + 8.0 * _EPS * (1.0 if self.circle else self.aspect)
+        offset = max(offsets[0] if a == 0.0 else 0.0, offsets[1] if b == 1.0 else 0.0)
+        return not self.sag(a, b) * inflate + offset <= allowance
 
     def refine_sag(self, parameters, allowance, offsets):
         """Bisect (in theta, deterministically) every interval whose sag bound exceeds the
@@ -733,14 +750,13 @@ class _Conic:
         ``|u x v|`` and ``|T(m)|`` of a skew frame cancel to ``eps |u| |v|`` and ``eps (|u| + |v|)``,
         a relative error of at most ``eps x aspect`` each (``|u| |v| <= sigma_max^2``, ``|T| >=
         sigma_min``), so ``(1 + 8 eps x aspect)`` bounds the exact sag."""
-        inflate = 1.0 + 8.0 * _EPS * (1.0 if self.circle else self.aspect)
         kept = [float(parameters[0])]
         pending = [(float(a), float(b)) for a, b in zip(parameters[:-1], parameters[1:])]
         pending.reverse()
         while pending:
             a, b = pending.pop()
             offset = max(offsets[0] if a == 0.0 else 0.0, offsets[1] if b == 1.0 else 0.0)
-            if (self.circle and offset == 0.0) or self.sag(a, b) * inflate + offset <= allowance:
+            if (self.circle and offset == 0.0) or not self.sag_exceeds(a, b, allowance, offsets):
                 kept.append(b)
                 continue
             middle = a + 0.5 * (b - a)
@@ -823,22 +839,28 @@ def _sag_allowance(supports, tol: DisplayTolerance):
     return min(radii) * 2.0 * math.sin(tol.angle / 4) ** 2          # r (1 - cos(angle / 2))
 
 
-def _union(edge_id, divisions, headrooms):
-    """Sorted union of the divisions' parameters in (0, 1) with the ends (one sort, one pass).
+def _union(edge_id, divisions, headrooms, verify):
+    """Sorted union of the divisions' parameters in (0, 1) with the ends: merge, then verify with
+    exact forward maps; restore on failure (N1 round 7).
 
-    Near-duplicate cuts from different divisions are merged (N1 round 6: a fixed 64-ulp gap had
-    kept a sliver interval 1.04e-14 long).  Two adjacent cuts ``k`` (kept so far) and ``v`` of
-    different divisions are merged when the cut to be dropped lies, in its OWN division's angle,
-    within that division's ``headroom`` of the cut kept: ``|angle_D(k) - angle_D(v)| <= headroom_D``
-    (radians, the units of :func:`display_rounding_allowance`).  ``headroom_D`` is the part of
-    the published allowance its own rounding does not use, ``max(T, Z...) - term_D``
-    (:func:`_build`): dropping the cut moves that division's interval end by at most it, so every
-    union interval still turns, in that division's angle, by at most ``tol.angle +
-    allowance.angle``.  The cut of the stricter division (the smaller headroom; the ends are
-    strictest, never dropped) is kept, the earlier cut on ties; a kept cut that already absorbed
+    *Merge* (one sort, one pass; N1 round 6: a fixed 64-ulp gap had kept a sliver interval
+    1.04e-14 long).  Two adjacent cuts ``k`` (kept so far) and ``v`` of different divisions are
+    merged when the cut to be dropped lies, in its OWN division's angle, within
+    ``max(headroom_D, 64 eps max(1, |angle|))`` of the cut kept.  The cut of the stricter division
+    (the smaller headroom) is kept, the earlier cut on ties; a kept cut that already absorbed
     others is replaced only by a cut within every absorbed cut's own threshold, and no two cuts of
-    one division are merged.  The threshold is never below the former rounding rule, ``64 eps
-    max(1, |angle|)`` in that division's angle.  Exact duplicates always merge."""
+    one division are merged.  The ends and every cut of a ``protected`` division (the
+    minimum-two-interval split) are mandatory: never dropped, never replaced.  Exact duplicates
+    merge.  The rule is a proposal only: each dropped cut is checked alone, so two moved ends of
+    one interval can add (round 7).
+
+    *Verify*.  Every final interval with a dropped cut at either end is checked by ``verify(a,
+    b)`` (:func:`_build`: every division's angle span over it from its own forward map, and a
+    conic's exact sag, each against the published bound).  An interval that fails gets the dropped
+    cuts of both its ends back (the original cuts, never a new one; a merge group is a contiguous
+    run of the sorted cuts, so this restores every cut that lay inside it) and its pieces are
+    verified again.  An interval without a dropped cut is one of the no-merge union, which meets
+    every bound by construction, so the loop ends, at worst at "no merge at all"."""
     values = [np.clip(np.asarray(d.values, dtype=float), 0.0, 1.0) for d in divisions]
     owners = [np.full(len(v), i) for i, v in enumerate(values)]
     total = sum(len(v) for v in values)
@@ -847,12 +869,15 @@ def _union(edge_id, divisions, headrooms):
     values, owners = np.concatenate(values), np.concatenate(owners)
     order = np.lexsort((owners, values))
     end = -1                                    # owner of the ends: strictest, never dropped
+    fixed = {end}
+    # the minimum-two-interval split is mandatory: the result is never one chord (verified below)
+    two = any(d.protected for d in divisions)
 
     def room(owner):
-        return -1.0 if owner == end else headrooms[owner]
+        return -1.0 if owner in fixed else headrooms[owner]
 
     def close(owner, a, b):
-        if owner == end:
+        if owner in fixed:
             return False
         angle = divisions[owner].angle
         target = angle(b)
@@ -877,11 +902,57 @@ def _union(edge_id, divisions, headrooms):
         kept.append((value, owner, [(value, owner)]))
         if len(kept) > _MAX_INTERVALS:
             raise _unsupported(edge_id, f"needs more than {_MAX_INTERVALS} intervals")
+    last = [(1.0, end)]
     cut, cut_owner, group = kept[-1]
-    if cut_owner != end and (cut >= 1.0 or all(close(o, 1.0, v) for v, o in group)):
+    if cut_owner not in fixed and (cut >= 1.0 or all(close(o, 1.0, v) for v, o in group)):
         kept.pop()
-    result = np.asarray([k[0] for k in kept if 0.0 < k[0] < 1.0] + [1.0])
-    result = np.concatenate(([0.0], result))
+        last += group
+    kept.append((1.0, end, last))
+    # nodes [value, dropped values, alternatives], sorted (a merge group is a contiguous run of the
+    # sorted cuts): a mandatory cut at exactly 0 or 1 is that end, an exact duplicate one node.
+    # ``alternatives``: the group's other ORIGINAL cuts that may stand for it instead (none for an
+    # end, which is never dropped)
+    nodes = []
+    for cut, owner, group in kept:
+        dropped = [v for v, _o in group if v != cut]
+        if nodes and cut <= nodes[-1][0]:
+            nodes[-1][1].extend(x for x in dropped + [cut] if x != nodes[-1][0])
+            nodes[-1][2] = []
+            continue
+        nodes.append([cut, dropped, [] if owner in fixed else sorted(set(dropped))])
+    nodes[0][0], nodes[-1][0] = 0.0, 1.0
+    nodes[0][2], nodes[-1][2] = [], []
+    while True:
+        bad = {0, 1} if two and len(nodes) == 2 and (nodes[0][1] or nodes[1][1]) else set()
+        for i in range(len(nodes) - 1):
+            if (nodes[i][1] or nodes[i + 1][1]) and not verify(nodes[i][0], nodes[i + 1][0]):
+                bad.update((i, i + 1))
+        if not bad:
+            break
+        restored = []
+        for i, (cut, dropped, alternatives) in enumerate(nodes):
+            if i not in bad or not dropped:
+                restored.append([cut, dropped, alternatives])
+                continue
+            members = sorted({cut, *dropped})
+            if alternatives:
+                # first another original cut of the group stands for it (verified again) ...
+                other = alternatives[0]
+                restored.append([other, [x for x in members if x != other], alternatives[1:]])
+                continue
+            # ... then every cut of the group is restored
+            if i == 0:
+                members = [0.0] + [x for x in members if x > 0.0]
+            if i == len(nodes) - 1:
+                members = [x for x in members if x < 1.0] + [1.0]
+            restored.extend([x, [], []] for x in members)
+        nodes = []
+        for cut, dropped, alternatives in restored:
+            if nodes and cut == nodes[-1][0]:
+                nodes[-1][1].extend(x for x in dropped if x != nodes[-1][0])
+                continue
+            nodes.append([cut, dropped, alternatives])
+    result = np.asarray([node[0] for node in nodes])
     if len(result) - 1 > _MAX_INTERVALS:
         raise _unsupported(edge_id, f"needs more than {_MAX_INTERVALS} intervals")
     return result
@@ -913,8 +984,10 @@ def edge_display_samples(model, edge_id: int, tol: DisplayTolerance) -> EdgeSamp
 
     then every ellipse interval whose exact sag (:meth:`_Conic.sag`) exceeds the allowance is
     bisected in theta until none does, and so is every end interval whose sag plus its vertex's
-    offset from the curve does (an offset above the allowance is refused).  Every interval lies
-    inside one interval of each division, so the tangent turns, and every incident cylinder's or
+    offset from the curve does (an offset above the allowance is refused).  Every interval of
+    the no-merge union lies inside one interval of each division, and a merged interval is kept
+    only when verified against every bound (:func:`_union`: merge, then verify with exact forward
+    maps; restore on failure), so the tangent turns, and every incident cylinder's or
     cone's azimuth changes, by at most ``tol.angle`` over it, and its chord leaves the curve by at
     most the sag allowance (:class:`DisplayTolerance`), each to the edge's documented rounding
     allowance (:func:`display_rounding_allowance`), which is at most 2 % of the angle and of the
@@ -1004,6 +1077,7 @@ class _Analysis:
     terms: tuple              # the rounding terms: the tangent's, then each plan's (radians)
     offsets: tuple            # vertex offsets from the curve's ends (0 at the coordinates' resolution)
     allowance: DisplayRoundingAllowance
+    step: float = 0.0         # tol.angle
 
 
 def _setup(model, edge_id, tol) -> _Setup:
@@ -1128,21 +1202,41 @@ def _analyse(model, setup, tol) -> _Analysis:
         axis_floor=MIN_DISPLAY_RADIUS_RATIO * scale,
         axis_floors=tuple(plan.floor for plan in plans))
     return _Analysis(plans, tangent, sag, tuple([tangent_rounding] + [plan.rounding for plan in plans]), offsets,
-                     allowance)
+                     allowance, step)
 
 
 def _build(setup, analysis):
-    """The divisions (their counts already checked), their union and the sag refinement."""
+    """The divisions (their counts already checked), their union (merge, then verify) and the
+    sag refinement."""
     # each division's headroom: the share of the published allowance max(T, Z...) its own
-    # rounding term leaves unused (the union may move its interval ends by that much)
+    # rounding term leaves unused (the merge proposes moves of its interval ends within it)
+    terms = analysis.terms if setup.line is None else analysis.terms[1:]
     top = max(analysis.terms)
-    headrooms = [top - term for term in analysis.terms]
-    if setup.line is not None:
-        return _union(setup.edge_id, [plan.build() for plan in analysis.plans], headrooms[1:])
+    headrooms = [top - term for term in terms]
     conic = setup.conic
-    parameters = _union(setup.edge_id, [analysis.tangent.build(), *(plan.build() for plan in analysis.plans)],
-                        headrooms)
-    if analysis.sag is not None:
+    divisions = ([plan.build() for plan in analysis.plans] if setup.line is not None
+                 else [analysis.tangent.build(), *(plan.build() for plan in analysis.plans)])
+    # the published angle bound; a division's computed span over an interval is accepted only when
+    # it meets that bound with the division's own rounding term (the documented error of its
+    # computed angles) added: the true span then meets it too
+    limit = analysis.step + analysis.allowance.angle
+    checks = [(division.angle, term) for division, term in zip(divisions, terms) if division.angle is not None]
+
+    def verify(a, b):
+        for angle, term in checks:
+            if not abs(angle(b) - angle(a)) + term <= limit:
+                return False
+        # the sag against the published sag + allowance.sag less the evaluator's 3 E (and the
+        # hidden offsets) it carries for the drawn points: sag (1 + 64 eps); the exact sag is
+        # raised by its own rounding inside sag_exceeds
+        # (a circle only, without the vertex offsets: an ellipse's every final interval, and a
+        # circle's end interval with a vertex offset, is checked, and bisected, by refine_sag on
+        # its exact sag; a circle's other intervals are not, its uniform count meeting the sag)
+        return (conic is None or analysis.sag is None or not conic.circle
+                or not conic.sag_exceeds(a, b, analysis.sag * (1.0 + 64.0 * _EPS), (0.0, 0.0)))
+
+    parameters = _union(setup.edge_id, divisions, headrooms, verify)
+    if conic is not None and analysis.sag is not None:
         parameters = conic.refine_sag(parameters, analysis.sag, analysis.offsets)
     return parameters
 

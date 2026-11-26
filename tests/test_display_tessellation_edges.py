@@ -1054,19 +1054,26 @@ def test_r1_7_counts_are_plain_ceilings():
     assert dt.edge_display_samples(g, edge, dt.DisplayTolerance(.2)).parameters.tolist() == [0., .5, 1.]
 
 
+def _ACCEPT(a, b):
+    """A verification that accepts every interval: the union's merge proposal alone."""
+    return True
+
+
 def test_r1_7_the_union_drops_a_near_duplicate_only_when_its_angle_agrees():
     """A near-duplicate cut is dropped only when its own division's angle there agrees with the
     kept cut's within that division's threshold (its headroom, never below 64 eps max(1, |angle|));
-    otherwise it is kept.  Since the round-6 follow-up the threshold is the headroom."""
+    otherwise it is kept.  Since the round-6 follow-up the threshold is the headroom; since round 7
+    this is only the proposal, which the union's verification accepts or undoes (``_ACCEPT``
+    here)."""
     first = dt._Division([.5], lambda t: .2 * t)
     agree = dt._Division([.5 + 1e-14], lambda t: .2 * t)               # .2 x 1e-14: rounding
     differ = dt._Division([.5 + 1e-14], lambda t: 1e6 * t)              # 1e6 x 1e-14 = 1e-8 rad
-    assert dt._union(0, [first, agree], [0., 0.]).tolist() == [0., .5, 1.]
-    assert dt._union(0, [first, differ], [0., 0.]).tolist() == [0., .5, .5 + 1e-14, 1.]
-    assert dt._union(0, [first, differ], [0., 1e-7]).tolist() == [0., .5, 1.]          # within its headroom
-    assert dt._union(0, [first, differ], [1e-7, 0.]).tolist() == [0., .5 + 1e-14, 1.]  # the stricter is kept
+    assert dt._union(0, [first, agree], [0., 0.], _ACCEPT).tolist() == [0., .5, 1.]
+    assert dt._union(0, [first, differ], [0., 0.], _ACCEPT).tolist() == [0., .5, .5 + 1e-14, 1.]
+    assert dt._union(0, [first, differ], [0., 1e-7], _ACCEPT).tolist() == [0., .5, 1.]          # within its headroom
+    assert dt._union(0, [first, differ], [1e-7, 0.], _ACCEPT).tolist() == [0., .5 + 1e-14, 1.]  # the stricter is kept
     many = dt._Division(np.linspace(0., 1., 4097)[1:-1].tolist(), lambda t: t)
-    _refused(lambda: dt._union(0, [dt._Division([.5 + 1e-3], lambda t: t), many], [0., 0.]), "EDGE_UNSUPPORTED")
+    _refused(lambda: dt._union(0, [dt._Division([.5 + 1e-3], lambda t: t), many], [0., 0.], _ACCEPT), "EDGE_UNSUPPORTED")
 
 
 def test_r1_9_the_union_is_one_sort_at_the_cap():
@@ -1075,7 +1082,7 @@ def test_r1_9_the_union_is_one_sort_at_the_cap():
     first = np.linspace(0., 1., 4097)[1:-1].tolist()
     other = dt._Division(first, lambda t: t)
     began = time.perf_counter()
-    assert len(dt._union(0, [dt._Division(first, lambda t: t), other], [0., 0.])) == 4097
+    assert len(dt._union(0, [dt._Division(first, lambda t: t), other], [0., 0.], _ACCEPT)) == 4097
     assert time.perf_counter() - began < 1.0
 
 
@@ -1906,3 +1913,88 @@ def test_r6_no_sliver_intervals_over_the_corpus(step):
                 except dt.DisplayTrimRefused:
                     continue
                 assert np.diff(samples.parameters).min() >= 1024 * EPS, (name, edge, sag)
+
+
+# ---------------------------------------------------------------------------------------------
+# N1 round 7: the union's merge fails closed (merge, then verify with exact forward maps;
+# restore the dropped cuts of any interval that fails)
+# ---------------------------------------------------------------------------------------------
+def _far_cylinder_band(origin_x, u_z, heights):
+    """A radius-1 Z-axis cylinder with origin (``origin_x``, 0, 0), height 1, and two arcs
+    ``(8e8, 0, z) + cos u + sin v`` (``u = (1, 0, u_z)``, ``v = (0, 1, 0)``) over [-1.2, 1.2] at
+    ``heights``, joined by lines (surface_residual .001)."""
+    g = corpus.GeometryModel(tolerance=TolerancePolicy(surface_residual=.001))
+    support = Cylinder((origin_x, 0., 0.), (0., 0., 1.), (1., 0., 0.), 1., 1., -2., 4.)
+    arcs = [EllipticArc((8e8, 0., z), (1., 0., u_z), (0., 1., 0.), -1.2, 2.4) for z in heights]
+    low, high, _sides = _band(g, support, *arcs)
+    return g, support, (low, high)
+
+
+def test_r7_1_the_union_does_not_spend_one_headroom_twice():
+    """r7 HIGH: at 9efd08e both tangent cuts of the tilted ellipses were replaced by the support
+    cuts at 1/3 and 2/3, and the middle interval turned .8000606 rad against the published
+    .8000418 (each replacement passed its own check; the two displacements add)."""
+    g, support, edges = _far_cylinder_band(8e8, .013, (.2, .8))
+    tol = dt.DisplayTolerance(.8000190233461381, .2)
+    for edge in edges:
+        _dense_ok(g, edge, dt.edge_display_samples(g, edge, tol), tol.angle, tol.sag, supports=[support],
+                  count=257)
+
+
+def test_r7_2_a_merged_circle_interval_meets_the_sag_bound():
+    """r7 MEDIUM: unit circles .00025 off the cylinder's axis: at 9efd08e the union moved the
+    uniform sag cuts and the circle path skipped the sag check, so the middle chord sagged
+    .07894671 against the published .07894327."""
+    g, support, edges = _far_cylinder_band(8e8 - .00025, 0., (0., 1.))
+    tol = dt.DisplayTolerance(.81, 2 * math.sin(.2) ** 2)
+    for edge in edges:
+        _dense_ok(g, edge, dt.edge_display_samples(g, edge, tol), tol.angle, tol.sag, supports=[support],
+                  count=257)
+
+
+def test_r7_3_the_mandatory_two_interval_split_is_never_merged():
+    """r7 MEDIUM: a lone 1e8 circle over 1e-14 rad with both vertices moved by 1e-4 along x: the
+    drawn chord misses the curve by about 1e-4 > surface_residual 1e-5, so the tangent plan
+    splits it at .5; at 9efd08e the union merged that cut into the start and returned [0, 1]."""
+    g = corpus.GeometryModel(tolerance=TolerancePolicy(curve_fit_residual=1e-3, surface_residual=1e-5))
+    arc = EllipticArc((0., 0., 0.), (1e8, 0., 0.), (0., 1e8, 0.), 0., 1e-14)
+    ends = np.asarray(arc.evaluate(np.array([0., 1.])), dtype=float)
+    edge = g.add_curve(*(g.add_point(p[0] + 1e-4, p[1], p[2]) for p in ends), arc)
+    samples = dt.edge_display_samples(g, edge, dt.DisplayTolerance(.1))
+    assert len(samples.parameters) - 1 >= 2, samples.parameters.tolist()
+    assert .5 in samples.parameters.tolist()
+
+
+def test_r7_a_rejected_merge_restores_the_original_cuts():
+    """A verification that fails every merged interval leaves the no-merge union: the original
+    cuts, none invented (exact duplicates are one cut)."""
+    first = dt._Division([.25, .5], lambda t: t)
+    other = dt._Division([.25, .5 + 1e-14, .75], lambda t: t)
+    calls = []
+
+    def reject(a, b):
+        calls.append((a, b))
+        return False
+
+    assert dt._union(0, [first, other], [1e-3, 1e-3], reject).tolist() == [0., .25, .5, .5 + 1e-14, .75, 1.]
+    assert calls                                     # the merged intervals were checked
+    assert dt._union(0, [first, other], [1e-3, 1e-3], _ACCEPT).tolist() == [0., .25, .5, .75, 1.]
+
+
+def test_r7_another_original_cut_may_stand_for_its_group():
+    """An interval that fails first tries another ORIGINAL cut of the group (here the later of
+    the two near cuts), before every cut is restored."""
+    first = dt._Division([.5], lambda t: t)
+    other = dt._Division([.5 + 1e-14], lambda t: t)
+    # accept only the intervals whose middle end is .5 + 1e-14
+    verify = lambda a, b: .5 not in (a, b)  # noqa: E731
+    assert dt._union(0, [first, other], [1e-3, 1e-3], verify).tolist() == [0., .5 + 1e-14, 1.]
+
+
+def test_r7_the_mandatory_split_survives_when_merged_into_an_end():
+    """A protected (minimum-two) division's cut merged into an end is restored: the result is never
+    one chord; merged into another interior cut it may go (the edge has two intervals anyway)."""
+    split = dt._Division([.5], lambda t: 1e-16 * t, protected=True)
+    assert dt._union(0, [split], [1.], _ACCEPT).tolist() == [0., .5, 1.]
+    near = dt._Division([.5 + 1e-14], lambda t: t)
+    assert dt._union(0, [split, near], [1., 0.], _ACCEPT).tolist() == [0., .5 + 1e-14, 1.]
