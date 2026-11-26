@@ -1001,10 +1001,12 @@ def test_r1_4_a_line_range_sag_is_its_vertex_offset(sag, ok):
         _refused(call, "EDGE_UNSUPPORTED")
 
 
-def _circle_band_on_frustum(start=-4e-9):
+def _circle_band_on_frustum(start=-5e-9, sweep=1e-8):
+    # N1 round 8: over 1e-8 rad from -5e-9 (the minimum sweep, MIN_DISPLAY_SWEEP; 8e-9 from -4e-9
+    # before, now OUT_OF_DOMAIN)
     g = corpus.GeometryModel(tolerance=TolerancePolicy(length=1e-13))
     support = Cone((0., 0., 0.), (0., 0., 1.), (1., 0., 0.), 2.5e-9, 3e-9, .1, -1., 2.)
-    arcs = [EllipticArc((-.5 + 2e-9, 0., z), (.5, 0., 0.), (0., .5, 0.), start, 8e-9) for z in (0., .1)]
+    arcs = [EllipticArc((-.5 + 2e-9, 0., z), (.5, 0., 0.), (0., .5, 0.), start, sweep) for z in (0., .1)]
     ends = [[g.add_point(*a.evaluate(np.array([t]))[0]) for t in (0., 1.)] for a in arcs]
     low = g.add_curve(ends[0][0], ends[0][1], arcs[0])
     high = g.add_curve(ends[1][0], ends[1][1], arcs[1])
@@ -1019,12 +1021,15 @@ def test_r1_5_the_closest_approach_does_not_cancel():
     g, support, low = _circle_band_on_frustum()
     samples = dt.edge_display_samples(g, low, dt.DisplayTolerance(.1, 1e-6))
     _dense_ok(g, low, samples, .1, 1e-6, supports=[support], count=257)
+    # the original geometry (8e-9 rad from -4e-9) is below the minimum sweep since N1 round 8
+    g, _support, low = _circle_band_on_frustum(-4e-9, 8e-9)
+    _refused_out_of_domain(lambda: dt.edge_display_samples(g, low, dt.DisplayTolerance(.1, 1e-6)))
 
 
 def test_r1_5_a_near_axis_arc_counts_its_stored_angle_rounding():
     """The same arc at a stored angle near 1e6 rad: the evaluator's rounding of start + sweep t
     (about 6e-11 rad) moves the point by 3e-11, a large azimuth error 2e-9 from the axis."""
-    g, support, low = _circle_band_on_frustum(2 * math.pi * 159154 - 4e-9)
+    g, support, low = _circle_band_on_frustum(2 * math.pi * 159154 - 5e-9)
     _refused_out_of_domain(lambda: dt.edge_display_samples(g, low, dt.DisplayTolerance(.1, 1e-6)))
 
 
@@ -1323,8 +1328,9 @@ def test_r2_7_every_count_is_checked_before_any_division_is_built(monkeypatch):
     passes 2e-9 from it) needs more than 4096: refused before any division is materialised."""
     g = corpus.GeometryModel(tolerance=TolerancePolicy(length=1e-13))
     support = Cone((0., 0., 0.), (0., 0., 1.), (1., 0., 0.), 2.5e-9, 3e-9, .1, -1., 2.)
+    # over the minimum sweep 1e-8 since N1 round 8 (8e-9 before)
     low, _high, _sides = _band(g, support, *(EllipticArc((-.5 + 2e-9, 0., z), (.5, 0., 0.), (0., .5000001, 0.),
-                                                         -4e-9, 8e-9) for z in (0., .1)))
+                                                         -5e-9, 1e-8) for z in (0., .1)))
     built = []
     original = dt._angle_division
     monkeypatch.setattr(dt, "_angle_division", lambda *args: built.append(args) or original(*args))
@@ -1955,14 +1961,20 @@ def test_r7_2_a_merged_circle_interval_meets_the_sag_bound():
 def test_r7_3_the_mandatory_two_interval_split_is_never_merged():
     """r7 MEDIUM: a lone 1e8 circle over 1e-14 rad with both vertices moved by 1e-4 along x: the
     drawn chord misses the curve by about 1e-4 > surface_residual 1e-5, so the tangent plan
-    splits it at .5; at 9efd08e the union merged that cut into the start and returned [0, 1]."""
-    g = corpus.GeometryModel(tolerance=TolerancePolicy(curve_fit_residual=1e-3, surface_residual=1e-5))
-    arc = EllipticArc((0., 0., 0.), (1e8, 0., 0.), (0., 1e8, 0.), 0., 1e-14)
-    ends = np.asarray(arc.evaluate(np.array([0., 1.])), dtype=float)
-    edge = g.add_curve(*(g.add_point(p[0] + 1e-4, p[1], p[2]) for p in ends), arc)
-    samples = dt.edge_display_samples(g, edge, dt.DisplayTolerance(.1))
-    assert len(samples.parameters) - 1 >= 2, samples.parameters.tolist()
-    assert .5 in samples.parameters.tolist()
+    splits it at .5; at 9efd08e the union merged that cut into the start and returned [0, 1].
+    Since N1 round 8 the 1e-14 rad sweep is OUT_OF_DOMAIN; the same split holds at the minimum
+    sweep 1e-8 (the drawn chord still misses by about 1e-4)."""
+    for sweep in (1e-14, 1e-8):
+        g = corpus.GeometryModel(tolerance=TolerancePolicy(curve_fit_residual=1e-3, surface_residual=1e-5))
+        arc = EllipticArc((0., 0., 0.), (1e8, 0., 0.), (0., 1e8, 0.), 0., sweep)
+        ends = np.asarray(arc.evaluate(np.array([0., 1.])), dtype=float)
+        edge = g.add_curve(*(g.add_point(p[0] + 1e-4, p[1], p[2]) for p in ends), arc)
+        if sweep < dt.MIN_DISPLAY_SWEEP:
+            _refused_out_of_domain(lambda: dt.edge_display_samples(g, edge, dt.DisplayTolerance(.1)))
+            continue
+        samples = dt.edge_display_samples(g, edge, dt.DisplayTolerance(.1))
+        assert len(samples.parameters) - 1 >= 2, samples.parameters.tolist()
+        assert .5 in samples.parameters.tolist()
 
 
 def test_r7_a_rejected_merge_restores_the_original_cuts():
@@ -1998,3 +2010,171 @@ def test_r7_the_mandatory_split_survives_when_merged_into_an_end():
     assert dt._union(0, [split], [1.], _ACCEPT).tolist() == [0., .5, 1.]
     near = dt._Division([.5 + 1e-14], lambda t: t)
     assert dt._union(0, [split, near], [1., 0.], _ACCEPT).tolist() == [0., .5 + 1e-14, 1.]
+
+
+# ---------------------------------------------------------------------------------------------
+# N1 round 8: the minimum sweep (owner decision, the recommended option: |sweep| >= 1e-8 rad,
+# MIN_DISPLAY_SWEEP); a forced split never cuts at an end; the azimuth branch keeps its sign
+# ---------------------------------------------------------------------------------------------
+def _short_ellipse_edge(sweep):
+    """r8 MEDIUM 1: a lone 1e8 x 5e7 ellipse from 0 over ``sweep``, both vertices moved by 1e-4
+    along x (curve_fit_residual 1e-3, surface_residual 1e-5)."""
+    g = corpus.GeometryModel(tolerance=TolerancePolicy(length=1e-12, curve_fit_residual=1e-3, surface_residual=1e-5))
+    arc = EllipticArc((0., 0., 0.), (1e8, 0., 0.), (0., 5e7, 0.), 0., sweep)
+    ends = np.asarray(arc.evaluate(np.array([0., 1.])), dtype=float)
+    edge = g.add_curve(*(g.add_point(p[0] + 1e-4, p[1], p[2]) for p in ends), arc)
+    return g, edge
+
+
+def _r8_turnback_band():
+    """r8 MEDIUM 2: a Z-axis cylinder of radius R = 6.3e-5 with a band whose first side is two
+    lines and an ellipse over 5e-11 rad whose g = 1 + 1.000000002 cos(theta) is strictly negative
+    (-6.28e-16 to -3.79e-15, both ends within the snapping band)."""
+    z = 1. + 2e-9
+    theta0 = math.acos(-1. / z)
+    xx, yy = z + math.cos(theta0), math.sin(theta0)
+    radius = math.hypot(xx, yy)
+    azimuth = math.atan2(yy, xx)
+    g = corpus.GeometryModel(tolerance=TolerancePolicy(length=1e-14, curve_fit_residual=1e-10, surface_residual=1e-9))
+    support = Cylinder((0., 0., 0.), (0., 0., 1.), (1., 0., 0.), radius, radius, 0., 3.)
+    arc = EllipticArc((z, 0., .5 * radius - 10. * yy), (1., 0., 0.), (0., 1., 10.), theta0 + 1e-11, 5e-11)
+    p, q = arc.evaluate(np.array([0., 1.]))
+
+    def cap(h):
+        c = EllipticArc((0., 0., h * radius), (radius, 0., 0.), (0., radius, 0.), azimuth, .5)
+        i, j = [g.add_point(*x) for x in c.evaluate(np.array([0., 1.]))]
+        return i, j, g.add_curve(i, j, c)
+
+    i, j, low = cap(.3)
+    k, l, high = cap(.8)
+    m, n = [g.add_point(*x) for x in (p, q)]
+    edge = g.add_curve(m, n, arc)
+    g.add_face((low, g.add_line(j, l), high, g.add_line(k, m), edge, g.add_line(n, i)), corners=(0, 1, 2, 3),
+               surface=support)
+    assert g.validate_topology() == ()
+    return g, support, arc, edge
+
+
+def test_r8_the_minimum_sweep_is_declared():
+    assert dt.MIN_DISPLAY_SWEEP == 1e-8
+
+
+def test_r8_1_a_short_ellipse_below_the_minimum_sweep_is_out_of_domain():
+    """r8 MEDIUM 1: at 5f69ccb the forced two-interval tangent plan of the 1e-16 rad ellipse
+    rounded its cut to 0 and the edge was drawn as one chord 1e-4 off the curve."""
+    g, edge = _short_ellipse_edge(1e-16)
+    assert g.validate_topology() == ()
+    _refused_out_of_domain(lambda: dt.edge_display_samples(g, edge, dt.DisplayTolerance(.1)))
+
+
+def test_r8_2_the_turnback_reproduction_is_out_of_domain():
+    """r8 MEDIUM 2: at 5f69ccb the strictly monotone 5e-11 rad edge was refused EDGE_UNSUPPORTED
+    as a turnback; its sweep is below the minimum, so it is OUT_OF_DOMAIN."""
+    g, _support, _arc, edge = _r8_turnback_band()
+    _refused_out_of_domain(lambda: dt.edge_display_samples(g, edge, dt.DisplayTolerance(.1, .001)))
+
+
+@pytest.mark.parametrize("sign", [1., -1.], ids=("forward", "reverse"))
+def test_r8_the_minimum_sweep_boundary_and_the_next_float_below(sign):
+    """|sweep| = 1e-8 exactly is admitted (inclusive) and drawn; the next float below is refused
+    before any division, for both directions of an ellipse arc."""
+    g, edge = _arc_edge((0., 0., 0.), .3, sign * 1e-8, u=(2., 0., 0.), v=(0., 1., 0.))
+    samples = dt.edge_display_samples(g, edge, dt.DisplayTolerance(.1))
+    assert samples.parameters.tolist() == [0., 1.]
+    below = sign * float(np.nextafter(1e-8, 0.))
+    g, edge = _arc_edge((0., 0., 0.), .3, below, u=(2., 0., 0.), v=(0., 1., 0.))
+    _refused_out_of_domain(lambda: dt.edge_display_samples(g, edge, dt.DisplayTolerance(.1)))
+    _refused_out_of_domain(lambda: dt.display_rounding_allowance(g, edge, dt.DisplayTolerance(.1)))
+
+
+def test_r8_a_three_point_arc_cannot_reach_below_the_minimum_sweep():
+    """The bound applies to an Arc too (its sweep from the model's arc frame), but a three-point
+    arc is refused by the model's own collinearity rule (sin^2 of the chord angle <= 1e-12) long
+    before: at a sweep of 4e-9 it cannot be built; the smallest buildable sweep is drawn."""
+    from anygeometry.curves import DegenerateArcError
+    g = corpus.GeometryModel(tolerance=TolerancePolicy(length=1e-14))
+    points = [(math.cos(t), math.sin(t), 0.) for t in (0., 2e-9, 4e-9)]
+    with pytest.raises(DegenerateArcError):
+        g.add_arc(*(g.add_point(*p) for p in points))
+    g = corpus.GeometryModel(tolerance=TolerancePolicy(length=1e-14))
+    points = [(math.cos(t), math.sin(t), 0.) for t in (0., 4e-6, 8e-6)]
+    edge = g.add_arc(*(g.add_point(*p) for p in points))
+    assert 1e-8 < abs(g.arc_frame(edge).sweep) < 1e-5
+    assert dt.edge_display_samples(g, edge, dt.DisplayTolerance(.1)).parameters.tolist() == [0., 1.]
+
+
+def test_r8_1_a_forced_split_never_cuts_at_an_end():
+    """Inside the module (the class, below the public domain): a forced two-interval tangent plan
+    whose inverse rounds the cut onto an end uses the parametric midpoint .5 (exactly
+    representable and distinct; 5f69ccb returned the cut 0.0)."""
+    conic = dt._Conic(0, (0., 0., 0.), (1e8, 0., 0.), (0., 5e7, 0.), 0., 1e-16)
+    plan = conic.tangent_division(.1, None, 1e-5, 1e-4)
+    assert plan.count == 2
+    division = plan.build()
+    assert division.protected and division.values == [.5]
+
+
+def test_r8_2_the_azimuth_branch_keeps_its_sign_when_both_ends_snap():
+    """Inside the module: with both end values of g within the snapping band (both computed
+    negative), the branch is decided from the unsnapped values and the interior, not refused as
+    a turnback (5f69ccb raised EDGE_UNSUPPORTED)."""
+    _g, support, arc, _edge = _r8_turnback_band()
+    conic = dt._Conic(0, arc.center, arc.u_vector, arc.v_vector, arc.start_angle, arc.sweep_angle)
+    centre = np.asarray(arc.center, dtype=float)
+    plan = conic.azimuth_division(support, .1, [centre, centre + arc.u_vector, centre + arc.v_vector])
+    assert plan.count == 1 and plan.build().values == []
+
+
+def test_r8_2_opposite_signs_across_the_band_are_still_refused():
+    """The sign rule fails closed: g = 1 + z cos(x) with z = 1 + 1e-15 about x = pi is negative
+    inside and positive at both ends: refused as before."""
+    z = 1. + 1e-15
+    with pytest.raises(dt.DisplayTrimRefused):
+        dt._AngleMap(0, np.eye(2), (z, 0.), 0., math.pi - 1e-7, math.pi + 1e-7)
+
+
+def _last_admitted(predicate, start):
+    """The smallest float ``x`` near ``start`` with ``predicate(x)`` true and false at the next
+    float below (walked by single floats; the predicate is monotone there)."""
+    x = start
+    if predicate(x):
+        while predicate(float(np.nextafter(x, 0.))):
+            x = float(np.nextafter(x, 0.))
+    else:
+        while not predicate(x):
+            x = float(np.nextafter(x, 1e300))
+    return x
+
+
+def test_r8_3_the_angle_share_cutoff_is_inclusive_and_pinned():
+    """r8 LOW: the 2 % angle share, pinned at its last admitted display angle (allowance <= .02
+    x angle, inclusive) and refused OUT_OF_DOMAIN at the next float below."""
+    g, support, low = _circle_band_on_frustum()
+
+    def share(angle):
+        return dt.display_rounding_allowance(g, low, dt.DisplayTolerance(angle, 1e-6)).angle <= .02 * angle
+
+    rough = dt.display_rounding_allowance(g, low, dt.DisplayTolerance(1e-3, 1e-6)).angle
+    cutoff = _last_admitted(share, rough / (.02 - 64 * EPS))
+    below = float(np.nextafter(cutoff, 0.))
+    assert share(cutoff) and not share(below)
+    _dense_ok(g, low, dt.edge_display_samples(g, low, dt.DisplayTolerance(cutoff, 1e-6)), cutoff, 1e-6,
+              supports=[support], count=129)
+    _refused_out_of_domain(lambda: dt.edge_display_samples(g, low, dt.DisplayTolerance(below, 1e-6)))
+
+
+def test_r8_3_the_sag_share_cutoff_is_inclusive_and_pinned():
+    """r8 LOW: the 2 % sag share, pinned at its last admitted sag (allowance.sag <= .02 x sag,
+    inclusive) and refused EDGE_UNSUPPORTED at the next float below."""
+    g, edge = _arc_edge((1e9 - 2., 0., 0.), 0., .03)
+
+    def share(sag):
+        return dt.display_rounding_allowance(g, edge, dt.DisplayTolerance(.0153, sag)).sag <= .02 * sag
+
+    rough = dt.display_rounding_allowance(g, edge, dt.DisplayTolerance(.0153, 3e-4)).sag
+    cutoff = _last_admitted(share, rough / .02)
+    below = float(np.nextafter(cutoff, 0.))
+    assert share(cutoff) and not share(below)
+    _dense_ok(g, edge, dt.edge_display_samples(g, edge, dt.DisplayTolerance(.0153, cutoff)), .0153, cutoff,
+              count=257)
+    _refused(lambda: dt.edge_display_samples(g, edge, dt.DisplayTolerance(.0153, below)), "EDGE_UNSUPPORTED")

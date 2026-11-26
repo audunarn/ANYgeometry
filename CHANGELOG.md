@@ -72,6 +72,15 @@ All notable user-visible changes to ANYgeometry are documented here.
   0.8000418, a circle chord above its sag and a one-chord result are fixed). Against 9efd08e
   every corpus count, refusal code and allowance is unchanged; 2 parameter arrays (`tripod_skins`
   circles) moved by at most 2.2e-16; no sliver kept.
+  Round 8 (owner decision, the recommended option): a new domain bound `MIN_DISPLAY_SWEEP =
+  1e-8` rad on `|sweep|` of every `EllipticArc` and `Arc` (inclusive), checked before any
+  division, `OUT_OF_DOMAIN` below it (zero sweep included; it was `EDGE_UNSUPPORTED`): with stored
+  angles up to 1e4 their float spacing is at most 1.8e-12 rad, four orders below it. Both
+  round-8 reproductions (1e-16 and 5e-11 rad) are now `OUT_OF_DOMAIN`. A forced two-interval
+  split whose cut rounds onto an end uses the parametric midpoint, verified after the union; the
+  azimuth branch keeps its sign when both end values snap to zero (decided from the unsnapped
+  values and the midpoint). Tests pin the 2 % rounding-share cutoffs. Against 5f69ccb all 5744
+  corpus results and allowances are unchanged bit for bit; no new refusal.
   See `docs/DISPLAY_TESSELLATION.md` (stability table, rounding allowance). No existing module
   changes.
 

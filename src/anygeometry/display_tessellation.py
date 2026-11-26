@@ -50,6 +50,7 @@ __all__ = [
     "MAX_DISPLAY_ANGLE",
     "MIN_DISPLAY_RADIUS_RATIO",
     "MAX_DISPLAY_ELLIPSE_ASPECT",
+    "MIN_DISPLAY_SWEEP",
     "edge_display_samples",
     "display_rounding_allowance",
 ]
@@ -99,6 +100,17 @@ MIN_DISPLAY_RADIUS_RATIO = 1.0e-9
 #: refused by rounding in rounds 5 and 6).  The bound is inclusive: the computed
 #: product is compared with ``1e4 x (1 + 4 eps)`` (:func:`_aspect_admitted`).
 MAX_DISPLAY_ELLIPSE_ASPECT = 1.0e4
+#: Smallest ``|sweep|`` of an ellipse arc or a circular arc (radians, inclusive), checked before
+#: any division (``OUT_OF_DOMAIN`` below it).  Owner decision (N1 round 8, the recommended
+#: option): both round-8 MEDIUM findings needed sweeps of 1e-16 and 5e-11 rad, where the stored
+#: angles' own float spacing is a sizeable share of the sweep: the tangent inverse rounded a
+#: forced cut onto an end, and the azimuth branch test saw both ends inside its snapping band.
+#: With ``|stored angle| <= 1e4`` (every non-circular conic, aspect >= 1, and every conic with a
+#: cylinder or cone support, by :data:`MAX_DISPLAY_ELLIPSE_ASPECT`) the float spacing of the
+#: stored angles is at most 1.8e-12 rad, four orders below the minimum sweep, so the tangent
+#: inverse and the azimuth branch see a resolved interval; a lone circle's stored angles (up to
+#: :data:`MAX_DISPLAY_ANGLE`, spacing 1.2e-10) still lie two orders below it.
+MIN_DISPLAY_SWEEP = 1.0e-8
 
 _MAX_INTERVALS = 4096      # per edge
 _STEP_ROUNDING = 4.0 * float(np.finfo(float).eps)   # relative rounding of a computed span
@@ -301,6 +313,7 @@ class _AngleMap:
         # 0 when the turnback it could hide is below eps rad: g < 0 over at most delta / |g'|
         # next to the end, turning the azimuth back by about delta^2 / (2 q^3), q = |z + w| there.
         g_bound = 16.0 * _EPS * (1.0 + radius)
+        raw_ends = list(g_ends)
         for i, x in enumerate((xa, xb)):
             q = math.hypot(self.z[0] + math.cos(x), self.z[1] + math.sin(x))
             if 0.0 < abs(g_ends[i]) <= g_bound and g_ends[i] * g_ends[i] <= 2.0 * _EPS * q ** 3:
@@ -309,6 +322,12 @@ class _AngleMap:
             self.branch = 1.0
         elif max(g_ends) <= 0.0 and all(g < 0.0 for g in g_inside) and min(g_ends + g_inside) < 0.0:
             self.branch = -1.0
+        elif not g_inside and g_ends == [0.0, 0.0] and self._band_sign(raw_ends, xa, xb, middle, radius):
+            # both ends within the snapping band and no interior extreme (N1 round 8): g is
+            # monotone between the ends, so it stays in the band; the snapping zeroed both signs,
+            # so the branch is decided by the unsnapped end values and the interior's (the
+            # midpoint), which must all agree strictly (else refused below)
+            self.branch = self._band_sign(raw_ends, xa, xb, middle, radius)
         else:
             raise _unsupported(edge_id, "the azimuth about a support axis is not monotone along the edge "
                                         "(its projection reaches or turns back round the axis)")
@@ -326,6 +345,17 @@ class _AngleMap:
         distances = [math.hypot(self.z[0] + math.cos(x), self.z[1] + math.sin(x)) for x in (xa, xb)]
         distances += [abs(radius - 1.0) for k, _x in inside if k % 2]
         self.closest = det / self.sigma_max * min(distances)
+
+    @staticmethod
+    def _band_sign(raw_ends, xa, xb, middle, radius) -> float:
+        """+1 or -1 when the nonzero unsnapped end values of g and g at the interval's midpoint
+        all have that strict sign, else 0 (no branch: refused)."""
+        values = [g for g in raw_ends if g != 0.0] + [1.0 + radius * math.cos(0.5 * (xa + xb) - middle)]
+        if all(g > 0.0 for g in values):
+            return 1.0
+        if all(g < 0.0 for g in values):
+            return -1.0
+        return 0.0
 
     def _x(self, theta):
         return self.flip * (theta + self.phase)
@@ -381,11 +411,14 @@ class _Division:
     edge) into equal steps.  ``angle`` lets the union measure, in this division's own angle, how
     far a near-duplicate cut it drops is from the cut it keeps, and verify every merged interval
     (N1 round 7).  ``protected``: the cuts are mandatory (the minimum-two-interval split) and are
-    never merged away."""
+    never merged away.  ``substituted``: cuts placed otherwise (verified after the union)."""
 
     values: list
     angle: object = None
     protected: bool = False
+    #: cuts not from the equal-angle construction (a forced split's midpoint, N1 round 8): the
+    #: union's "by construction" argument does not cover them, so their intervals are verified
+    substituted: tuple = ()
 
 
 # ---------------------------------------------------------------------------------------------
@@ -395,6 +428,12 @@ def _check_angle(name, *values):
     for value in values:
         if not (math.isfinite(value) and abs(value) <= MAX_DISPLAY_ANGLE):
             raise DisplayDomainRefused(f"{name} angle {value!r} is outside |angle| <= {MAX_DISPLAY_ANGLE:g} rad")
+
+
+def _check_sweep(name, sweep):
+    """``|sweep| >= MIN_DISPLAY_SWEEP`` (inclusive; NaN is refused), before any division."""
+    if not abs(sweep) >= MIN_DISPLAY_SWEEP:
+        raise DisplayDomainRefused(f"{name} sweep {sweep!r} is outside |sweep| >= {MIN_DISPLAY_SWEEP:g} rad")
 
 
 def _check_points(name, points):
@@ -689,8 +728,18 @@ class _Conic:
         if forced:
             n = 2                                       # a curved edge is never one chord
         start = amap.angle(0.0)
-        return _Plan(n, lambda: _Division(self.to_parameters(_angle_division(amap, 0.0, self.sweep, n)),
-                                          lambda t: amap.angle(self.sweep * t) - start, forced))
+
+        def build():
+            values = self.to_parameters(_angle_division(amap, 0.0, self.sweep, n))
+            substituted = ()
+            if forced and not all(0.0 < value < 1.0 for value in values):
+                # N1 round 8: the inverse rounded the mandatory cut onto an end; the parametric
+                # midpoint is exactly representable and distinct, and is verified like any cut
+                # (:func:`_build`)
+                values, substituted = [0.5], (0.5,)
+            return _Division(values, lambda t: amap.angle(self.sweep * t) - start, forced, substituted)
+
+        return _Plan(n, build)
 
     def drawn_sag_bound(self, offset) -> float:
         """An upper bound of the distance of the EVALUATED curve over [0, 1] from the chord
@@ -1125,6 +1174,7 @@ def _setup(model, edge_id, tol) -> _Setup:
         _check_points(f"edge {edge_id}'s ellipse", np.vstack((centre, centre + curve.u_vector,
                                                               centre + curve.v_vector)))
         _check_angle(f"edge {edge_id}'s ellipse", curve.start_angle, curve.start_angle + curve.sweep_angle)
+        _check_sweep(f"edge {edge_id}'s ellipse", float(curve.sweep_angle))
     elif isinstance(curve, Arc):
         _check_points(f"edge {edge_id}'s arc via vertex", model.vertex_position(curve.via_vertex))
     else:
@@ -1137,6 +1187,7 @@ def _setup(model, edge_id, tol) -> _Setup:
         except GeometryError as error:
             raise _unsupported(edge_id, str(error)) from error
         _check_points(f"edge {edge_id}'s arc centre", frame.center)
+        _check_sweep(f"edge {edge_id}'s arc", float(frame.sweep))
         conic = _Conic(edge_id, frame.center, frame.radius * frame.e1, frame.radius * frame.e2, 0.0, frame.sweep)
     elif isinstance(curve, EllipticArc):
         conic = _Conic(edge_id, curve.center, curve.u_vector, curve.v_vector, curve.start_angle, curve.sweep_angle)
@@ -1236,6 +1287,15 @@ def _build(setup, analysis):
                 or not conic.sag_exceeds(a, b, analysis.sag * (1.0 + 64.0 * _EPS), (0.0, 0.0)))
 
     parameters = _union(setup.edge_id, divisions, headrooms, verify)
+    # a substituted cut (a forced split's midpoint) is verified like a merged one; it is never
+    # moved, so a failure is refused (fail closed)
+    cuts = parameters.tolist()
+    for division in divisions:
+        for value in division.substituted:
+            if value in cuts:
+                i = cuts.index(value)
+                if not (verify(cuts[i - 1], value) and verify(value, cuts[i + 1])):
+                    raise _unsupported(setup.edge_id, "the forced split's midpoint does not meet the bounds")
     if conic is not None and analysis.sag is not None:
         parameters = conic.refine_sag(parameters, analysis.sag, analysis.offsets)
     return parameters
