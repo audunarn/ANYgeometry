@@ -612,7 +612,7 @@ def _refused_out_of_domain(call):
 
 def test_the_domain_bounds_are_declared():
     assert dt.MAX_DISPLAY_COORDINATE == 1e9 and dt.MAX_DISPLAY_ANGLE == 1e6
-    assert dt.MIN_DISPLAY_RADIUS_RATIO == 1e-9 and dt.MAX_DISPLAY_ELLIPSE_ASPECT == 1e6
+    assert dt.MIN_DISPLAY_RADIUS_RATIO == 1e-9 and dt.MAX_DISPLAY_ELLIPSE_ASPECT == 1e4      # 1e6 before N1 r6
     assert "OUT_OF_DOMAIN" in dt.REFUSAL_CODES
 
 
@@ -847,11 +847,14 @@ def _aspect_edge(aspect, start, sweep=.02):
     return _arc_edge((0., 0., 0.), start, sweep, (root, 0., 0.), (0., 1 / root, 0.))
 
 
-@pytest.mark.parametrize("v,inside", [(1e-3, True), (float(np.nextafter(1e-3, 0.)), False)])
-def test_r1_1_the_ellipse_aspect_at_and_beyond_the_bound(v, inside):
-    """a / b = 1e3 / 1e-3 = 1e6 (stored angles within 1): inside, every interval turns at most
-    the angle through both high-curvature ends; one ulp more aspect is refused."""
-    g, edge = _arc_edge((0., 0., 0.), -.01, .02, (1e3, 0., 0.), (0., v, 0.))
+@pytest.mark.parametrize("u,v,inside", [(1e2, 1e-2, True),
+                                         (1e2, float(np.nextafter(1e-2 / (1 + 8 * EPS), 0.)), False),
+                                         (1e3, 1e-3, False)])
+def test_r1_1_the_ellipse_aspect_at_and_beyond_the_bound(u, v, inside):
+    """a / b = 1e2 / 1e-2 = 1e4 (stored angles within 1): inside, every interval turns at most
+    the angle through both high-curvature ends; beyond the bound's 4 eps slack it is refused, and
+    so is the former boundary 1e3 / 1e-3 (owner decision N1 round 6: the bound 1e6 became 1e4)."""
+    g, edge = _arc_edge((0., 0., 0.), -.01, .02, (u, 0., 0.), (0., v, 0.))
     call = lambda: dt.edge_display_samples(g, edge, dt.DisplayTolerance(.1))  # noqa: E731
     if inside:
         samples = call()
@@ -861,12 +864,14 @@ def test_r1_1_the_ellipse_aspect_at_and_beyond_the_bound(v, inside):
         _refused_out_of_domain(call)
 
 
-@pytest.mark.parametrize("aspect,start,inside", [(1e3, 2 * math.pi * 159 - .01, True),
-                                                 (1e3, 2 * math.pi * 160 - .01, False),
+@pytest.mark.parametrize("aspect,start,inside", [(10., 2 * math.pi * 159 - .01, True),
+                                                 (10., 2 * math.pi * 160 - .01, False),
+                                                 (1e3, 2 * math.pi * 159 - .01, False),     # inside before N1 r6
                                                  (1e6, 2 * math.pi * 159154 - .01, False)])
 def test_r1_1_the_ellipse_aspect_counts_with_its_stored_angle(aspect, start, inside):
     """The evaluator rounds start + sweep t by eps |theta|, which turns the tangent by up to
-    aspect x that: the bound is aspect x max(1, |stored angle|) <= 1e6.  Measured: aspect 1e6 at
+    aspect x that: the bound is aspect x max(1, |stored angle|) <= 1e4 (1e6 before N1 round 6, so
+    aspect 1e3 at 999 rad is now refused).  Measured: aspect 1e6 at
     999994 rad turns 10 % more than .001 per interval even with exact local divisions."""
     g, edge = _aspect_edge(aspect, start)
     call = lambda: dt.edge_display_samples(g, edge, dt.DisplayTolerance(.01))  # noqa: E731
@@ -876,10 +881,11 @@ def test_r1_1_the_ellipse_aspect_counts_with_its_stored_angle(aspect, start, ins
         _refused_out_of_domain(call)
 
 
-@pytest.mark.parametrize("start,inside", [(9.9e5 - .3, True), (1e6 - .3, False)])
+@pytest.mark.parametrize("start,inside", [(9.9e3 - .3, True), (1e4 - .3, False), (9.9e5 - .3, False)])
 def test_r1_1_the_ellipse_inverse_at_the_stored_angle_bound(start, inside):
-    """A non-circular ellipse of aspect 1 + 1e-6 near 1e6 rad goes through the ellipse inverse
-    (|u| != |v|) in local angles: its psi steps are equal; at 1e6 x (1 + 1e-6) it is refused."""
+    """A non-circular ellipse of aspect 1 + 1e-6 near 1e4 rad goes through the ellipse inverse
+    (|u| != |v|) in local angles: its psi steps are equal; at 1e4 x (1 + 1e-6) it is refused, and
+    so is the former case near 1e6 rad (inside before the N1 round-6 bound)."""
     g, edge = _arc_edge((0., 0., 0.), start, .6, (1., 0., 0.), (0., 1. + 1e-6, 0.))
     call = lambda: dt.edge_display_samples(g, edge, dt.DisplayTolerance(.05))  # noqa: E731
     if inside:
@@ -1165,9 +1171,12 @@ def test_r2_1_a_thin_projection_is_outside_the_domain():
 
 
 def test_r2_1_a_thin_projection_inside_the_domain_is_exact():
-    """The same band with a projected aspect 1e5 (inside the bound): every interval meets the
-    azimuth bound to the documented rounding allowance."""
+    """The same band with a projected aspect 1e3 (inside the bound): every interval meets the
+    azimuth bound to the documented rounding allowance.  The former case, projected aspect 1e5,
+    is outside the N1 round-6 bound 1e4."""
     g, support, low = _thin_projection((0., 1e-5, 100.))
+    _refused_out_of_domain(lambda: dt.edge_display_samples(g, low, dt.DisplayTolerance(.1, 1.)))
+    g, support, low = _thin_projection((0., 1e-3, 100.))
     samples = dt.edge_display_samples(g, low, dt.DisplayTolerance(.1, 1.))
     _dense_ok(g, low, samples, .1, supports=[support], count=1025)
 
@@ -1379,11 +1388,14 @@ def _thin_frustum_band(v_y):
 
 
 def test_r3_2_a_thin_projection_inside_the_domain_meets_the_allowance():
-    """r3 MEDIUM 2: projected aspect about 990099 (inside the bound): the last interval turned
+    """r3 MEDIUM 2: projected aspect about 990099 (inside the bound then): the last interval turned
     0.02967921180924682 rad round the axis at angle 0.029679211598, above the former documented
-    allowance; the allowance now covers the projected inverse's aspect amplification."""
+    allowance; the allowance now covers the projected inverse's aspect amplification.  That case
+    is outside the N1 round-6 bound 1e4; the same band at projected aspect about 9901 is drawn."""
     g, support, low = _thin_frustum_band(1.01e-6)
     tol = dt.DisplayTolerance(.029679211598, 1.)
+    _refused_out_of_domain(lambda: dt.edge_display_samples(g, low, tol))
+    g, support, low = _thin_frustum_band(1.01e-4)
     samples = dt.edge_display_samples(g, low, tol)
     _dense_ok(g, low, samples, tol.angle, 1., supports=[support], count=1025)
 
@@ -1400,11 +1412,17 @@ def test_r3_3_the_circle_sag_counts_the_evaluators_stored_angle():
 
 
 def test_r3_3_the_ellipse_sag_counts_the_evaluators_stored_angle():
+    """The ellipse of aspect 1.000001 at 999994 rad is outside the N1 round-6 bound (aspect x
+    stored angle 1e4); the same ellipse at 9994 rad (inside) meets the sag with its allowance."""
+    _refused_out_of_domain(lambda: dt.edge_display_samples(
+        *_lone_curve_edge(EllipticArc((0., 0., 0.), (1., 0., 0.), (0., 1.000001, 0.), 999994., .4)),
+        dt.DisplayTolerance(1., .004995834972010272)))
     g = corpus.GeometryModel(tolerance=TolerancePolicy(surface_residual=1.))
-    arc = EllipticArc((0., 0., 0.), (1., 0., 0.), (0., 1.000001, 0.), 999994., .4)
+    arc = EllipticArc((0., 0., 0.), (1., 0., 0.), (0., 1.000001, 0.), 9994., .4)
     ends = arc.evaluate(np.array([0., 1.]))
     edge = g.add_curve(g.add_point(*ends[0]), g.add_point(*ends[1]), arc)
-    sag = .004995834972010272
+    conic = dt._Conic(edge, arc.center, arc.u_vector, arc.v_vector, arc.start_angle, arc.sweep_angle)
+    sag = max(conic.sag(0., .5), conic.sag(.5, 1.)) * (1 + 1e-13)      # just above each half's exact sag
     samples = dt.edge_display_samples(g, edge, dt.DisplayTolerance(1., sag))
     assert samples.parameters.tolist() == [0., .5, 1.]
     _dense_ok(g, edge, samples, 1., sag, count=1025)
@@ -1461,11 +1479,11 @@ def _thin_band_call(v_y):
 
 
 def test_r3_4_the_projected_aspect_boundary_and_its_next_crossing():
-    """r3 LOW: the public bound on the projected aspect (aspect x max(1, |stored angle|) <= 1e6,
-    stored angles within 1 here), found through the public call as the last admitted float: the
-    independent SVD aspect there is 1e6, the dense oracle holds on it, and the next float down
-    (a thinner projection) is refused."""
-    inside, outside = 1.1e-6, .9e-6
+    """r3 LOW: the public bound on the projected aspect (aspect x max(1, |stored angle|) <= 1e4
+    since N1 round 6, stored angles within 1 here), found through the public call as the last
+    admitted float: the independent SVD aspect there is 1e4 (to the bound's 4 eps slack), the
+    dense oracle holds on it, and the next float down (a thinner projection) is refused."""
+    inside, outside = 1.1e-4, .9e-4
     _thin_band_call(inside)
     _refused_out_of_domain(lambda: _thin_band_call(outside))
     while float(np.nextafter(outside, 1.)) < inside:
@@ -1674,15 +1692,20 @@ def test_r4_3_an_end_at_the_exact_apex_is_a_generator():
 # ---------------------------------------------------------------------------------------------
 # Codex N1 round 5: each finding's geometry (owner's standing approval, recommended options)
 # ---------------------------------------------------------------------------------------------
-def test_r5_1_a_circular_projection_has_aspect_exactly_one():
+@pytest.mark.parametrize("bound,inside", [(1e4, True), (1e6, False)])
+def test_r5_1_a_circular_projection_has_aspect_exactly_one(bound, inside):
     """r5 MEDIUM: a unit circle on a unit Z-axis cylinder whose radial seed is (1, 1, 0), stored
     angle nextafter(1e6, 0), sweep -.2: its projection is exactly circular, but the computed
-    aspect x stored angle came out 1000000.0000000001 and the arc was refused OUT_OF_DOMAIN."""
+    aspect x stored angle came out 1000000.0000000001 and the arc was refused OUT_OF_DOMAIN.  Since
+    N1 round 6 the bound is 1e4: the same circle at nextafter(1e4, 0) is drawn, at 1e6 refused."""
     g = corpus.GeometryModel()
     support = Cylinder((0., 0., 0.), (0., 0., 1.), (1., 1., 0.), 1., 1., 0., math.tau)
-    start = float(np.nextafter(1e6, 0.))
+    start = float(np.nextafter(bound, 0.))
     low, _high, _sides = _band(g, support, *(EllipticArc((0., 0., z), (1., 0., 0.), (0., 1., 0.), start, -.2)
                                              for z in (.2, .8)))
+    if not inside:
+        _refused_out_of_domain(lambda: dt.edge_display_samples(g, low, dt.DisplayTolerance(.1)))
+        return
     samples = dt.edge_display_samples(g, low, dt.DisplayTolerance(.1))
     _dense_ok(g, low, samples, .1, _default_allowance([support], .1), supports=[support], count=257)
 
@@ -1766,3 +1789,98 @@ def test_r5_5_an_ellipse_beyond_the_aspect_limit_is_out_of_domain():
     got EDGE_UNSUPPORTED for parallel axes before the aspect check."""
     g, edge = _lone_curve_edge(EllipticArc((0., 0., 0.), (1., 0., 0.), (1., 1e-13, 0.), 0., .4))
     _refused_out_of_domain(lambda: dt.edge_display_samples(g, edge, dt.DisplayTolerance(.2)))
+
+
+# ---------------------------------------------------------------------------------------------
+# Codex N1 round 6 (owner's standing approval, recommended option): the aspect x stored-angle
+# bound is 1e4 (was 1e6), inclusive with a 4 eps slack; the in-plane frame's small diagonal is the
+# residual's norm
+# ---------------------------------------------------------------------------------------------
+def test_r6_1_the_skew_reproduction_is_outside_the_new_bound():
+    """r6 HIGH: u = (1, 1, 0), v = (1, 1.00001, 0), start .1, sweep 1.6 (aspect x stored angle
+    about 680003): at angle 1.047195891 one interval turned 1.047206284359 rad against the bound
+    1.047195895832.  Outside the round-6 bound 1e4: OUT_OF_DOMAIN."""
+    g, edge = _lone_curve_edge(EllipticArc((0., 0., 0.), (1., 1., 0.), (1., 1.00001, 0.), .1, 1.6))
+    _refused_out_of_domain(lambda: dt.edge_display_samples(g, edge, dt.DisplayTolerance(1.047195891)))
+
+
+def _exact_small_diagonal(conic):
+    """|u' x v'| / |u'| of the conic's local frame, from its float vectors in exact rationals
+    (only the final square root rounded)."""
+    lu = [Fraction(float(x)) for x in conic.lu]
+    lv = [Fraction(float(x)) for x in conic.lv]
+    uu = sum(x * x for x in lu)
+    gram = uu * sum(x * x for x in lv) - sum(x * y for x, y in zip(lu, lv)) ** 2
+    return math.sqrt(float(gram / uu))
+
+
+@pytest.mark.parametrize("u,v,start,sweep", [((1., 1., 0.), (1., 1.00001, 0.), .1, 1.6),
+                                             ((1., 1., 0.), (1., 1.0004, 0.), .1, 1.6),
+                                             ((1., 0., 0.), (0., 1., 100.), -math.pi / 4, math.pi / 2),
+                                             ((2., 3., 1.), (2.001, 3., 1.0005), 2., -.8)])
+def test_r6_1_the_in_plane_frame_recovers_the_small_diagonal(u, v, start, sweep, monkeypatch):
+    """The class of r6 HIGH: the in-plane matrix's small diagonal (the residual of v' against u')
+    within 8 eps x aspect relative of its exact value (the stability table), on skew frames inside
+    and far outside the bound.  v'.e2 amplified the residual's nonorthogonality to eps x aspect^2
+    (relative 1e-5 at the reproduction).  The frame is built with the domain bound lifted (this
+    test only): the frame itself does not depend on it."""
+    monkeypatch.setattr(dt, "MAX_DISPLAY_ELLIPSE_ASPECT", 1e12)
+    conic = dt._Conic(0, (0., 0., 0.), u, v, start, sweep)
+    exact = _exact_small_diagonal(conic)
+    assert abs(conic.plane[1, 1] - exact) <= 8 * EPS * conic.aspect * exact, (conic.plane[1, 1], exact)
+
+
+@pytest.mark.parametrize("d", [4.01e-4, 1e-3, 3e-3])
+@pytest.mark.parametrize("n", [2, 3, 5])
+def test_r6_1_skew_frames_at_the_new_bound_meet_the_tangent_bound(d, n):
+    """Skew frames u = (1, 1, 0), v = (1, 1 + d, 0) (aspect about 4 / d, up to 9977; stored angles
+    within 1), each at an angle just above its turning / n so every interval is at the limit: the
+    dense oracle holds."""
+    g, edge = _lone_curve_edge(EllipticArc((0., 0., 0.), (1., 1., 0.), (1., 1. + d, 0.), -.8, 1.6))
+    tangent = g.edge_tangent_many(edge, np.array([0., 1.]))
+    angle = float(_angles(tangent[:1], tangent[1:])[0]) / n * (1 + 1e-12)
+    samples = dt.edge_display_samples(g, edge, dt.DisplayTolerance(angle))
+    _dense_ok(g, edge, samples, angle, count=1025)
+
+
+_AT_LIMIT = 1e4 * (1 + 4 * EPS)       # the last float the inclusive bound admits (4 eps slack)
+
+
+@pytest.mark.parametrize("scale,inside", [(1e4, True), (_AT_LIMIT, True),
+                                          (float(np.nextafter(_AT_LIMIT, 2e4)), False)])
+@pytest.mark.parametrize("u,v", [((1., 1., 0.), (-1., 1., 0.)), ((3., 4., 0.), (-4., 3., 0.))],
+                         ids=("diagonal", "pythagorean"))
+def test_r6_2_a_rotated_frame_exactly_at_the_bound(u, v, scale, inside):
+    """r6 MEDIUM (the class): an ellipse with exactly orthogonal, rotated axes, aspect exactly 1e4
+    (stored angles within 1) is drawn although its SVD quotient rounds; so is the last float the
+    4 eps slack admits; one float beyond it is refused."""
+    g, edge = _lone_curve_edge(EllipticArc((0., 0., 0.), tuple(scale * x for x in u), v, 0., .4))
+    call = lambda: dt.edge_display_samples(g, edge, dt.DisplayTolerance(.2))  # noqa: E731
+    if inside:
+        _dense_ok(g, edge, call(), .2, count=257)
+    else:
+        _refused_out_of_domain(call)
+
+
+def test_r6_2_the_inclusive_comparison_and_its_slack():
+    assert dt._ASPECT_SLACK == 4 * EPS
+    assert dt._aspect_admitted(1e4) and dt._aspect_admitted(_AT_LIMIT)
+    assert not dt._aspect_admitted(float(np.nextafter(_AT_LIMIT, 2e4))) and not dt._aspect_admitted(math.nan)
+
+
+def test_r6_2_the_reproduction_at_its_own_bound_is_admitted(monkeypatch):
+    """r6 MEDIUM: u = (1e6, 1e6, 0), v = (-1, 1, 0), start 0, sweep .4 (aspect exactly 1e6) was
+    refused at the then-bound 1e6 (SVD quotient 1000000.0000000002).  With the bound set back to
+    1e6 for this test only, the slacked comparison admits it and the oracle holds; at the real
+    bound 1e4 it is OUT_OF_DOMAIN."""
+    g, edge = _lone_curve_edge(EllipticArc((0., 0., 0.), (1e6, 1e6, 0.), (-1., 1., 0.), 0., .4))
+    _refused_out_of_domain(lambda: dt.edge_display_samples(g, edge, dt.DisplayTolerance(.2)))
+    monkeypatch.setattr(dt, "MAX_DISPLAY_ELLIPSE_ASPECT", 1e6)
+    _dense_ok(g, edge, dt.edge_display_samples(g, edge, dt.DisplayTolerance(.2)), .2, count=257)
+
+
+def test_r6_3_axis_floor_is_documented_as_a_summary():
+    """r6 LOW: callers measuring support turning use axis_floors (one per support); axis_floor is
+    a summary only."""
+    doc = " ".join(dt.DisplayRoundingAllowance.__doc__.split())
+    assert "summary only" in doc and "axis_floors" in doc

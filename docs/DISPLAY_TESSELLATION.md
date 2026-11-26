@@ -159,7 +159,16 @@ and parameters bit for bit. Unchanged by the round-4 fixes: all 5744 corpus resu
 and points) identical bit for bit to c47336c. Unchanged by the round-5 fixes: all 5744
 corpus results (parameters, points and refusal codes) identical bit for bit to a49e037; 168
 rounding allowances (circles seen along their axis, now of projected aspect exactly 1) moved by
-at most 3.5e-16 relative.
+at most 3.5e-16 relative. Round 6 (the aspect bound lowered to 1e4, the in-plane frame's small
+diagonal from the residual's norm): no corpus result is newly refused and no refusal code or
+rounding allowance changed (all 5744 compared with 2427aa3); 42 results changed through the
+frame, the more accurate small diagonal moving the tangent inverse by ulps: 26 parameter arrays
+(tripod mitre ellipses, `winding_fixture`, `box_corner_cut`, `shared_circle`, `skew_ellipse_edge`)
+keep their counts and moved by at most 8.9e-16 (points by at most 1.1e-14), and the 16 results of
+the `steep_cuts` and `steep_cuts_with_plane` ellipses (two edges each, both steps, with and without sag 1e-4)
+gain one interval: their tangent cut at the symmetric midpoint moved from 0.5 - 7.1e-15 to
+0.5 + 1.04e-14, just beyond the union's 64-ulp gap (9.0e-15) from the azimuth cut at 0.5, so
+both are kept (a sliver interval 1.04e-14 long; every bound still holds on it).
 
 ## Declared numeric domain (owner decision 2026-11-25)
 
@@ -172,7 +181,7 @@ call raises `DisplayDomainRefused` (a `DisplayTrimRefused` with code `OUT_OF_DOM
 | `MAX_DISPLAY_ANGLE` | 1e6 rad: `EllipticArc` start and start + sweep; cylinder and cone start and start + sweep | float spacing 1.2e-10 rad, four orders below the smallest display angle (1e-6), so `start + sweep t` keeps its steps |
 | `MIN_DISPLAY_RADIUS_RATIO` | 1e-9 x max(1, max \|coordinate\|): every incident cylinder radius (scale: the edge's definition points and the support origin); every point used for a line's azimuth about a cylinder or cone: its ends by their own projections (except an end on the axis to the frame's rounding, `8 eps max(1, \|coordinate\|)`, at a cone's exact apex: an exactly zero radius and the end within `model.tolerance.length` of the apex point, axial position included, round 4; elsewhere, and both ends on it, refused) and its interior closest approach `\|P' x D'\| / \|D'\|` (scale: the edge's definition points, i.e. the vertices and the line's ends, and the support origin: an evaluated point `a + t (b - a)` is rounded at the scale of the ends, round 3); a cylinder or cone arc's closest approach (one rule for both) (a lower bound, `sigma_min(N) min \|z + w\|`, each candidate evaluated directly: `\| \|z\| - 1 \|` at the analytic critical angle, `\|z + w\|` at the ends) must exceed BOTH terms: (1) 1e-9 x the conic's own scale, its definition points (vertices, `c`, `c + u`, `c + v`) and `max(1, \|stored angle\|) sigma_max(M')`, the evaluator's rounding of `start + sweep t` moving the projected point by eps times that, NOT the support origin (round 5: the implementation had added it, refusing a closest approach .001 to a frustum whose origin is at -1e8); and (2) `64 eps \|c - o\|`, the frame's own rounding: the centre's offset from the support's axis point `o` is a float subtraction, rounded by eps times its result (round 5) | an azimuth computed from coordinates of size \|p\| at distance r from the axis is rounded by about eps \|p\| / r: at the bound 2.2e-7 rad, below the smallest display angle. Measured without the stored-angle term: a .5 circle 2e-9 from a frustum's axis at 999994 rad turns 0.116 rad per interval at `angle = .1` |
 | rounding share | the edge's rounding allowance (`display_rounding_allowance`, below) at most 2 % of `tol.angle` (else `OUT_OF_DOMAIN`) and of the sag allowance (else `EDGE_UNSUPPORTED`, the unresolvable-sag code) | round 3: the allowance must be small against what is asked. It binds only near the other bounds: at the radius bound the azimuth term is about `64 eps / 1e-9 = 1.4e-5` rad, so angles below about 7e-4 rad are refused there; at coordinates 1e9 the sag term is about 5e-6, so sags below about 2.7e-4 are refused there (a test at sag 3e-5 there moved to 3e-4). Over the corpus the largest share is 8.7e-8 (angle) and 2.0e-6 (sag) |
-| `MAX_DISPLAY_ELLIPSE_ASPECT` | 1e6: a non-circular ellipse's aspect `a / b` (its principal semi-axes, the singular values of `[u v]`) times `max(1, \|start\|, \|start + sweep\|)`; and, for a circle or an ellipse, the same product for its PROJECTION across every incident cylinder's or cone's axis (the 2x2 frame `M'`, whose aspect can be far above the curve's: an ellipse of aspect 100 tilted almost into the axis direction projects at 1e8). A projected frame that is a similarity to 8 eps relative (equal column norms, orthogonal columns: a circle seen along its axis) has aspect exactly 1 (round 5: the computed `1 + 2 eps` at stored angle `nextafter(1e6, 0)` was refused). The curve's own bound is checked before the parallel-axes test: a nondegenerate ellipse (`sigma_min > 64 eps sigma_max`) beyond it is `OUT_OF_DOMAIN`; only axes parallel to that resolution are `EDGE_UNSUPPORTED` (round 5) | the tangent direction moves up to `a / b` times faster than the arc angle, and the evaluator rounds the absolute angle `start + sweep t` by eps \|theta\|: the tangent error is at most `1e6 x eps = 2.2e-10` rad, four orders below the smallest display angle. Measured with `a / b <= 1e6` alone: aspect 1e6 at 999994 rad turns 10 % over `angle = 1e-3` per interval, local divisions notwithstanding. The azimuth is resolved through `M'^-1` and back (`chi`, then the polar part of `M'`), which stretches an angle error by up to `aspect(M')`: within the bound it is at most `1e6 x eps = 2.2e-10` rad. Measured outside it: the 1e8 projection above turned 0.266 rad on one interval at `angle = .1` |
+| `MAX_DISPLAY_ELLIPSE_ASPECT` | 1e4 (owner decision, N1 round 6, the recommended option: was 1e6), inclusive: the computed product is compared with `1e4 x (1 + 4 eps)` (the rounding of an aspect computed from exactly orthogonal axes at the bound; round 6: the SVD quotient of `u = (1e6, 1e6, 0)`, `v = (-1, 1, 0)` came out `1e6 (1 + 2.2e-16)` and was refused at the then-bound; for a skew frame the computed aspect is accurate to a relative `eps x aspect`, at most 2.2e-12 here). Applied to a non-circular ellipse's aspect `a / b` (its principal semi-axes, the singular values of `[u v]`) times `max(1, \|start\|, \|start + sweep\|)`; and, for a circle or an ellipse, the same product for its PROJECTION across every incident cylinder's or cone's axis (the 2x2 frame `M'`, whose aspect can be far above the curve's: an ellipse of aspect 100 tilted almost into the axis direction projects at 1e8). A projected frame that is a similarity to 8 eps relative (equal column norms, orthogonal columns: a circle seen along its axis) has aspect exactly 1 (round 5: the computed `1 + 2 eps` at stored angle `nextafter(1e6, 0)` was refused), so on a cylinder or cone a circle's stored angles are bounded by 1e4 too (lone circles and circles on planes keep `MAX_DISPLAY_ANGLE`). The curve's own bound is checked before the parallel-axes test: a nondegenerate ellipse (`sigma_min > 64 eps sigma_max`) beyond it is `OUT_OF_DOMAIN`; only axes parallel to that resolution are `EDGE_UNSUPPORTED` (round 5) | the tangent direction moves up to `a / b` times faster than the arc angle, and the evaluator rounds the absolute angle `start + sweep t` by eps \|theta\|: the tangent error is at most `1e4 x eps = 2.2e-12` rad, six orders below the smallest display angle. Measured with `a / b <= 1e6` alone: aspect 1e6 at 999994 rad turns 10 % over `angle = 1e-3` per interval, local divisions notwithstanding. The azimuth is resolved through `M'^-1` and back (`chi`, then the polar part of `M'`), which stretches an angle error by up to `aspect(M')`: within the bound it is at most `1e4 x eps = 2.2e-12` rad. Measured outside it: the 1e8 projection above turned 0.266 rad on one interval at `angle = .1`. Why 1e4 (round 6): at the old bound conic rounding amplified by the aspect was measured beyond the published bound at products 9.9e5 (round 3, a projected aspect 990099) and 6.8e5 (round 6, a skew frame whose interval turned 1.04e-5 rad beyond the angle), and rounding refused exact boundary cases at 1e6 (rounds 5 and 6): every measured overshoot lay within a factor ~1e2 of the old bound. The new bound is 68 times below the smallest product with a measured overshoot; every term the aspect scales (`32 eps x aspect x theta*`, tangent and projected) is at most 7.1e-11 rad, 3.6e-3 of the 2 % share (2e-8 rad) at the smallest display angle (it was 0.36 of it); 312 random skew frames up to the bound, each at an angle putting every interval at the limit, turned no interval beyond the angle |
 
 No apex is recognised by proximity: a line end counts as on the axis only when its projection is
 0 to the frame's own rounding (`8 eps max(1, |coordinates|)`: the evaluator's exact apex of a
@@ -196,7 +205,7 @@ evaluator errors.
 
 "Holds to rounding" means one thing, given by ONE public function,
 `display_rounding_allowance(model, edge_id, tol) -> DisplayRoundingAllowance(angle, sag,
-axis_floor)`: inside the declared domain, every emitted interval's tangent turns, and every
+axis_floor, axis_floors)`: inside the declared domain, every emitted interval's tangent turns, and every
 incident cylinder's or cone's azimuth changes, by at most `tol.angle + angle`, and every drawn
 chord lies within the sag allowance `+ sag` of its curve. The dense oracle in
 `tests/test_display_tessellation_edges.py` checks exactly this, with no other slack, and checks
@@ -207,9 +216,11 @@ that support's origin; a conic's the larger of the two closest-approach terms of
 table. The oracle measures the azimuth about each support at points at least its own floor from
 its axis (round 5: a floor shared across supports, .5 from a second cylinder's origin at
 5e8, skipped every point of a .01 cylinder, and a one-chord replacement turning .5 rad passed).
-`axis_floor` is
-`MIN_DISPLAY_RADIUS_RATIO x scale` (the edge's coordinate scale): the azimuth is defined and
-measured at points at least that far from every axis (only a cone's apex is nearer).
+`axis_floor` is a summary only: `MIN_DISPLAY_RADIUS_RATIO x scale`, the scale taken over the
+edge's definition points and EVERY incident support's origin. It is not a measurement threshold:
+it can exceed a small support's every distance from its axis (round 6: in the two-cylinder case
+above it is .5 while one cylinder's whole chord lies within .01 of its axis). Callers measuring
+support turning use `axis_floors`, one per support.
 
 With `eps` the float epsilon and `theta* = max(1, |start|, |start + sweep|)` (1 for a line):
 
@@ -241,7 +252,12 @@ With `eps` the float epsilon and `theta* = max(1, |start|, |start + sweep|)` (1 
   for every supported line); plus any vertex offset counted as 0 at the coordinates' resolution.
 
 Worst value inside the domain: 2 % of the angle and of the sag allowance, by the rounding-share
-bound (above); over the corpus at most 8.7e-8 of the angle and 2.0e-6 of the sag.
+bound (above); over the corpus at most 8.7e-8 of the angle and 2.0e-6 of the sag. Recomputed with
+the round-6 aspect bound 1e4: the aspect terms (`T = 32 eps W` and a conic's `32 eps aspect(M')
+theta*`) are at most `32 eps x 1e4 = 7.1e-11` rad (7.1e-9 at the old bound), so they alone can no
+longer approach the 2 % share at any admitted angle (2e-8 rad at the smallest, 1e-6); the share
+still binds only through the radius terms (`8 E_o / r`, `2 G / r`, about 1.4e-5 rad at the radius
+bound, as in the domain table) and the sag terms at large coordinates.
 
 ## Stability within the domain (round-2 class audit)
 
@@ -252,13 +268,13 @@ declared domain (or which bound makes it so):
 | Formula | Form used | Why stable within the domain |
 |---|---|---|
 | counts `ceil(span / step)` | quotient checked finite and `<= 4096` before any division is built; one fewer only when `span / (n - 1) <= step (1 + 4 eps)` | `step >= 1e-6`; the span is a difference of computed angles (4 eps relative) |
-| `_AngleMap` determinant, inverse | `det` of the 2x2 frame, refused when `|det| <= 1e-12 |M|^2`; inverse = adjugate / det | relative error `eps x aspect`, at most 2.2e-10 by the aspect bound (curve and projection) |
+| `_AngleMap` determinant, inverse | `det` of the 2x2 frame, refused when `|det| <= 1e-12 |M|^2`; inverse = adjugate / det | relative error `eps x aspect`, at most 2.2e-12 by the aspect bound (curve and projection) |
 | singular values `sigma_max`, `sigma_min`, aspect | `sigma_max = (hypot(m00 + m11, m10 - m01) + hypot(m00 - m11, m01 + m10)) / 2`, `sigma_min = det / sigma_max` | sums of squares and a quotient: no cancellation (the former `sqrt(F^2 - 4 det^2)` cancelled for near-circles) |
 | polar angle `alpha` | `atan2(m10 - m01, m00 + m11)` | the pair's norm is `>= sqrt(2 det) > 0`; atan2 is relative-accurate |
 | `z = N^-1 c'` | adjugate product | `|z|` large on a thin projection: relative error `eps x aspect(M')` (projected aspect bound) |
 | sign of `g = 1 + z.w` | `1 + |z| cos(x - arg z)` at the ends and interior extremes | a decision: an end within `16 eps (1 + |z|)` counts as 0 only when the hidden turnback is below eps rad; an interior `g` near 0 means `|z|` near 1, so the closest approach `sigma_min ||z| - 1|` is below the radius bound and the edge is refused (fail closed) |
 | closest approach (conic) | `det / sigma_max x min(hypot(z0 + cos x, z1 + sin x), ||z| - 1|)`, each evaluated directly | absolute error `eps (1 + |z|)` of a distance, far below the 1e-9 radius ratio; the scale includes `max(1, |stored angle|) sigma_max(M')` for cylinders and cones alike |
-| forward azimuth `angle(theta)` | `chi = x + atan2(cross(w, q), w.q)`, `Phi = chi + alpha + atan2(cross(e, S e), e.S e)` | `e.S e >= sigma_min > 0`; `cross(w, q)` subtracts terms of size `|z|` and `S` has aspect `aspect(M')`: the error is up to a few `eps x aspect(M') x theta*` (round 3: 1.45e-10 rad at aspect 990099), covered by the allowance's `32 eps aspect(M') theta*` and at most 7.1e-9 rad by the projected aspect bound |
+| forward azimuth `angle(theta)` | `chi = x + atan2(cross(w, q), w.q)`, `Phi = chi + alpha + atan2(cross(e, S e), e.S e)` | `e.S e >= sigma_min > 0`; `cross(w, q)` subtracts terms of size `|z|` and `S` has aspect `aspect(M')`: the error is up to a few `eps x aspect(M') x theta*` (round 3: 1.45e-10 rad at aspect 990099), covered by the allowance's `32 eps aspect(M') theta*` and at most 7.1e-11 rad by the projected aspect bound (7.1e-9 at the old bound 1e6) |
 | ray inverse `solve(phi)` | `h = cross(e, z)`, `w = sign(g) sqrt((1 - h)(1 + h)) e - h e_perp` | nothing of size `|z|^2` cancels (was `(z.e)^2 - |z|^2 + 1` and `lambda e - z`); its remaining error is the forward map's, in the same allowance term |
 | line projection | `A' = P(a - o)`, `B' = P(b - o)` (each end's own), `D' = P(b - a)` | no reconstruction `A' + D'` (round 3: it cancelled a 1.5e-9 end radius next to a 2e7 start); each rounds by `4 eps |p - o|`, `D'` by `4 eps |b - a|`: the allowance's `G` |
 | line on-axis, collinearity | radius `<= 8 eps max(1, |coordinates|)`, only at a cone's apex; both `|A' x D'| <= 8 eps |A'| |D'|` and `|B' x D'| <= 8 eps |B'| |D'|` (`D' = 0` included) | decisions at the frame's rounding; when the two estimates disagree the line is divided (conservative); a near-collinear line that misses the test is divided generically (span below one step: no cut) or refused by its closest approach (fail closed); the constant azimuth's residual turning `2 G / r` is in the allowance |
@@ -267,7 +283,9 @@ declared domain (or which bound makes it so):
 | circle classification | `|u| = |v|` and `u.v = 0` to 8 eps relative | the circle path's uniform steps and radius `max(|u|, |v|)` are then exact to 16 eps relative (was 1e-12: a 9e-13 skew overshot by 1.8e-13 rad and 2.3e-8 sag) |
 | circle sag count | `4 asin(sqrt(sag / (2 rho)))`, allowance `< 2 rho` | no cancellation (`2 rho sin^2(delta / 4)`, not `1 - cos`); exact for the analytic chord, the evaluated chord ends moving by `E` (the allowance's `3 E`, round 3) |
 | local frame `u'`, `v'` | one rotation by the stored start | no absolute angle formed; rounding `eps (|u| + |v|)` |
-| in-plane matrix (Gram-Schmidt) | `|u'|`, `v'.e1`, `|v' - (v'.e1) e1|` | absolute error `eps |M|`: tangent-angle error `eps x aspect <= 2.2e-10` rad by the aspect bound |
+| in-plane matrix (Gram-Schmidt) | `|u'|`, `v'.e1`, and the small diagonal as the residual's NORM `|v' - (v'.e1) e1|` (round 6: it was `v'.e2`, `e2` the normalised residual) | absolute error `eps |M|`, a relative `eps x aspect` of the small diagonal: tangent-angle error `eps x aspect <= 2.2e-12` rad by the aspect bound. `v'.e2` added `(v'.e1)(e1.rest) / |rest|`, `e1.rest` being the residual's own nonorthogonality `eps |v'|`: a relative `eps x aspect^2` (round 6: 1e-5 rad over the angle at aspect 4e5, stored angle 1.7) |
+| projections onto a nearly dependent frame (round-6 audit) | the parallel-axes test (the residual's norm against `_DEGENERATE |v|`); the in-plane matrix (above); every other projection is onto an orthonormal support frame (radial, circumferential), never onto a frame built from the curve | the residual's norm is the only quantity recovered from a nearly dependent pair; no dot product with a normalised residual remains |
+| aspect bound comparison | computed `aspect x theta* <= 1e4 (1 + 4 eps)` (`_aspect_admitted`), curve and projection | the bound is inclusive: an aspect computed from exactly orthogonal axes at the bound rounds by a few eps (round 6); a skew frame's computed aspect is off by a relative `eps x aspect <= 2.2e-12`, immaterial to every term it scales |
 | ellipse sag | `2 sin^2(delta / 4) |u x v| / |T(m)|`, raised by `(1 + 8 eps x aspect)` before comparing | `|u x v|` and `|T(m)|` of a skew frame round by a relative `eps x aspect` each; the raise makes the comparison fail closed; `|T(m)| = 0` is refused; the evaluated chord ends move by `E` (the allowance's `3 E`, round 3) |
 | parameters `s / sweep`, union gap `/ |sweep|` | direct | `sweep = 0` refused |
 | union drop rule | `|angle(k) - angle(v)| <= 64 eps max(1, |angle|)` | the division angles are local to the edge |

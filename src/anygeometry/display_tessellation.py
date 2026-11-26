@@ -87,12 +87,18 @@ MIN_DISPLAY_RADIUS_RATIO = 1.0e-9
 #: Largest ``a / b x max(1, |start|, |start + sweep|)`` of a non-circular ellipse arc (``a``, ``b``
 #: its principal semi-axes, the singular values of ``[u v]``).  The tangent direction moves up to
 #: ``a / b`` times faster than the arc angle, and the evaluator rounds the absolute angle
-#: ``start + sweep t`` by eps |theta|: the tangent moves by at most ``1e6 x eps = 2.2e-10`` rad,
-#: four orders below the smallest display angle.  The same bound applies to the arc's projection
+#: ``start + sweep t`` by eps |theta|: the tangent moves by at most ``1e4 x eps = 2.2e-12`` rad,
+#: six orders below the smallest display angle.  The same bound applies to the arc's projection
 #: across every incident cylinder's or cone's axis (the 2x2 projected frame ``M'``, which can be
-#: far thinner than the curve): the azimuth is resolved through ``M'^-1`` and back, so its
+#: far thinner than the curve; a circle seen along the axis has aspect 1, so its stored angles
+#: are bounded by 1e4 there): the azimuth is resolved through ``M'^-1`` and back, so its
 #: rounding is at most ``aspect(M') x eps`` (and the stored angle's, as for the tangent).
-MAX_DISPLAY_ELLIPSE_ASPECT = 1.0e6
+#: Owner decision (N1 round 6, the recommended option): lowered from 1e6, where conic rounding
+#: amplified by the aspect was measured beyond the published bound (rounds 3 and 6, at products
+#: 9.9e5 and 6.8e5, within a factor ~1e2 of the old bound; exact boundary cases at 1e6 were
+#: refused by rounding in rounds 5 and 6).  The bound is inclusive: the computed
+#: product is compared with ``1e4 x (1 + 4 eps)`` (:func:`_aspect_admitted`).
+MAX_DISPLAY_ELLIPSE_ASPECT = 1.0e4
 
 _MAX_INTERVALS = 4096      # per edge
 _STEP_ROUNDING = 4.0 * float(np.finfo(float).eps)   # relative rounding of a computed span
@@ -102,6 +108,9 @@ _CIRCLE_RTOL = 8.0 * _EPS  # |u| = |v| and u.v = 0 to a few eps relative: a circ
 _ON_AXIS = 8.0 * _EPS      # a projection within 8 eps max(1, |coordinates|) of an axis is on it
 _DEGENERATE = 1.0e-12      # |det| <= this * |M|^2: a projected or in-plane frame is degenerate
 _TWO_PI = 2.0 * math.pi
+#: relative slack of the inclusive aspect bound: an aspect computed from exactly orthogonal axes
+#: at the bound (a ratio of two rounded norms, or an SVD quotient) rounds by a few eps (N1 round 6)
+_ASPECT_SLACK = 4.0 * _EPS
 #: The rounding allowance may be at most this share of the requested angle and sag allowance;
 #: a finer request is refused (the declared domain, tightened in N1 round 3).
 _ALLOWANCE_SHARE = 0.02
@@ -156,9 +165,11 @@ class DisplayRoundingAllowance:
     ``angle``: absolute radians: every emitted interval's tangent turns, and every incident
     cylinder's or cone's azimuth changes, by at most ``tol.angle + angle``.  ``sag``: absolute
     model units: every drawn chord lies within the sag allowance ``+ sag`` of the curve (``None``
-    when the edge has no sag allowance).  ``axis_floor``: the declared domain's smallest distance
-    from an axis at this edge's scale (``MIN_DISPLAY_RADIUS_RATIO x scale``); the azimuth is
-    defined, and bounded, at points at least that far from every axis (a cone's apex has none).
+    when the edge has no sag allowance).  ``axis_floor``: a summary only,
+    ``MIN_DISPLAY_RADIUS_RATIO x scale`` with ``scale`` over the edge's definition points and
+    EVERY incident support's origin; it is not a measurement threshold for any one support (it can
+    exceed a small support's every distance from its axis, N1 rounds 5 and 6): callers measuring
+    support turning use ``axis_floors``, one per support.
     ``axis_floors`` (N1 round 5): each incident cylinder's or cone's OWN floor, in the order of
     ``model.faces_using_edge`` (first use): the azimuth about that support is defined, and
     bounded, at points at least that far from its axis (a line: ``MIN_DISPLAY_RADIUS_RATIO`` x the
@@ -397,6 +408,15 @@ def _check_support_domain(support):
         _check_angle("a support", support.start_angle, support.start_angle + support.sweep_angle)
 
 
+def _aspect_admitted(weight) -> bool:
+    """``aspect x max(1, |stored angle|) <= MAX_DISPLAY_ELLIPSE_ASPECT``, inclusive, for a COMPUTED
+    product: compared with the bound raised by :data:`_ASPECT_SLACK` (4 eps relative), the
+    rounding of an aspect computed from orthogonal axes exactly at the bound (N1 round 6: the
+    SVD quotient of ``u = (1e6, 1e6, 0)``, ``v = (-1, 1, 0)`` came out ``1e6 (1 + 2.2e-16)``).
+    NaN is not admitted."""
+    return weight <= MAX_DISPLAY_ELLIPSE_ASPECT * (1.0 + _ASPECT_SLACK)
+
+
 def _check_radius(name, distance, *points):
     scale = max([1.0] + [float(np.abs(np.asarray(p, dtype=float)).max()) for p in points])
     if not distance >= MIN_DISPLAY_RADIUS_RATIO * scale:
@@ -597,7 +617,7 @@ class _Conic:
         # ellipse (sigma_min above 64 eps sigma_max, its float resolution) beyond the bound is
         # OUT_OF_DOMAIN; only axes parallel to that resolution are EDGE_UNSUPPORTED
         weight = self.aspect * self.theta_star
-        if not self.circle and not weight <= MAX_DISPLAY_ELLIPSE_ASPECT and singular[1] > 64.0 * _EPS * singular[0]:
+        if not self.circle and not _aspect_admitted(weight) and singular[1] > 64.0 * _EPS * singular[0]:
             raise DisplayDomainRefused(f"edge {edge_id}'s ellipse has the aspect {self.aspect!r} at stored angles up "
                                        f"to {max(abs(self.start), abs(self.start + self.sweep))!r}: "
                                        f"aspect x max(1, |angle|) = {weight!r} is above {MAX_DISPLAY_ELLIPSE_ASPECT:g}")
@@ -619,9 +639,13 @@ class _Conic:
         nu, nv = float(np.linalg.norm(self.lu)), float(np.linalg.norm(self.lv))
         e1 = self.lu / nu
         rest = self.lv - float(self.lv @ e1) * e1
-        e2 = rest / float(np.linalg.norm(rest))
-        # in-plane matrix of (u', v'): upper triangular with a positive diagonal (det > 0)
-        self.plane = np.array(((nu, float(self.lv @ e1)), (0.0, float(self.lv @ e2))))
+        # in-plane matrix of (u', v'): upper triangular with a positive diagonal (det > 0).  The
+        # small diagonal is the RESIDUAL's norm |v' - (v'.e1) e1| (absolute error eps |v'|, a
+        # relative eps x aspect), never v'.e2 with e2 = rest / |rest|: that dot product adds
+        # (v'.e1)(e1.rest) / |rest|, where e1.rest is the rounding eps |v'| of the residual's
+        # orthogonality, a relative error eps x aspect^2 (N1 round 6: at aspect 6.8e5 an interval
+        # turned 1.0e-5 rad beyond the bound)
+        self.plane = np.array(((nu, float(self.lv @ e1)), (0.0, float(np.linalg.norm(rest)))))
 
     def to_parameters(self, local):
         return [s / self.sweep for s in local]
@@ -755,7 +779,7 @@ class _Conic:
                    and abs(float(projected[:, 0] @ projected[:, 1])) <= _CIRCLE_RTOL * n0 * n1)
         aspect = 1.0 if similar else amap.aspect
         weight = aspect * stored
-        if not weight <= MAX_DISPLAY_ELLIPSE_ASPECT:
+        if not _aspect_admitted(weight):
             raise DisplayDomainRefused(f"edge {self.edge_id}'s projection across a support axis has the aspect "
                                        f"{aspect!r}: aspect x max(1, |stored angle|) = {weight!r} is above "
                                        f"{MAX_DISPLAY_ELLIPSE_ASPECT:g}")
@@ -1017,7 +1041,7 @@ def _setup(model, edge_id, tol) -> _Setup:
         # the evaluator rounds the absolute angle start + sweep t (by eps |theta|), which moves the
         # tangent by up to aspect x that: the bound holds for aspect x max(1, |stored angle|)
         weight = conic.aspect * max(1.0, abs(conic.start), abs(conic.start + conic.sweep))
-        if not weight <= MAX_DISPLAY_ELLIPSE_ASPECT:
+        if not _aspect_admitted(weight):
             raise DisplayDomainRefused(f"edge {edge_id}'s ellipse has the aspect {conic.aspect!r} at stored angles up "
                                        f"to {max(abs(conic.start), abs(conic.start + conic.sweep))!r}: "
                                        f"aspect x max(1, |angle|) = {weight!r} is above {MAX_DISPLAY_ELLIPSE_ASPECT:g}")

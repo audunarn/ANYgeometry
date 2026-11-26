@@ -11,7 +11,7 @@ All notable user-visible changes to ANYgeometry are documented here.
   azimuth, the exact chord sag); any other curve or incident support is refused with a typed
   code. Declared numeric domain: coordinates up to 1e9, stored angles up to 1e6 rad, distance
   from a support axis at least 1e-9 x max(1, |coordinate|) (an end exactly on the axis
-  excepted), ellipse aspect x max(1, |stored angle|) at most 1e6; outside it
+  excepted), ellipse aspect x max(1, |stored angle|) at most 1e4 (1e6 before round 6); outside it
   `DisplayDomainRefused` (`OUT_OF_DOMAIN`). Circles and ellipses are divided in their local
   angle, lines from their exact evaluated ends; a line has constant azimuth only when its ends
   are collinear with the axis point; the end chords' sag bound includes the vertex offsets;
@@ -51,6 +51,16 @@ All notable user-visible changes to ANYgeometry are documented here.
   `model.tolerance.length` (else `EDGE_UNSUPPORTED`); a nondegenerate ellipse beyond the aspect
   bound is `OUT_OF_DOMAIN` before the parallel-axes test. All 5744 corpus results unchanged bit
   for bit; 168 rounding allowances moved by at most 3.5e-16 relative.
+  Round 6 (owner decision, the recommended option): the bound on aspect x max(1, |stored
+  angle|), the conic's own and its projected frame's, is lowered from 1e6 to 1e4 (still
+  `OUT_OF_DOMAIN` beyond; conic rounding amplified by the aspect had been measured beyond the
+  published bound within a factor ~1e2 of the old one), and compared inclusively with a 4 eps
+  relative slack; on a cylinder or cone a circle's stored angles are therefore bounded by 1e4.
+  The in-plane frame's small diagonal is the residual's norm (it was `v'.e2`, a relative error
+  of eps x aspect^2). `axis_floor` is documented as a summary only; callers measuring support
+  turning use `axis_floors`. No corpus case is newly refused and no refusal code or rounding
+  allowance changed; through the frame, 26 corpus parameter arrays moved by at most 8.9e-16 and
+  the 16 `steep_cuts` ellipse results gain one sliver interval (1.04e-14) next to a cut at 0.5.
   See `docs/DISPLAY_TESSELLATION.md` (stability table, rounding allowance). No existing module
   changes.
 
