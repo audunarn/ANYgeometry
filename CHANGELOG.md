@@ -4,6 +4,9 @@ All notable user-visible changes to ANYgeometry are documented here.
 
 ## Unreleased
 
+- N2 round 6: every integer formatted into a display refusal message (model ids included) uses a
+  fixed text above 10**18; the N3 deviation contract is the parametric max over the triangle;
+  coverage and allocation wording scoped.
 - Private `anygeometry._slab_triangulation.triangulate_rings`: exact-coverage slab (trapezoid)
   triangulation of trim rings with holes, pure NumPy (not yet used by any public display mesh).
   Owner decisions (N2 round 1, the recommended options): simple rings only (holes strictly

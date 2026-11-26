@@ -396,8 +396,12 @@ a caller value, never an attribute of a foreign object (only of an exact `np.nda
 FIXED text plus, at most, values the module itself produced: counts, indices, lengths and shapes it
 computed from exact ndarrays as ints, its own constants, floats it computed (or converted with
 `float()` from the model's own fields), and an edge id after it was converted to a Python int and
-range checked. No caller object, dtype or unbounded int is ever formatted, so a refusal runs no
-caller code and allocates little (Codex N2 r5 M1: a metaclass whose `__name__` raised escaped as a
+range checked. No caller object, dtype or unbounded int is ever formatted (owner decision N2 round 6
+(1): EVERY formatted integer, model-produced ids included, goes through `_id_text`, which prints it
+only if |v| < 10**18 and otherwise the fixed text "<id out of display range>"; 34 sites audited, a
+face id of 10**5000 is a typed refusal). Note that form refusals are O(1) memory; domain/finiteness refusals
+of an accepted, capped array may make one bounded copy (at most 8 bytes x the cap, about 1.8 MB
+measured for the largest capped `float64` `extra_x`). A refusal runs no caller code (Codex N2 r5 M1: a metaclass whose `__name__` raised escaped as a
 raw `RuntimeError`, and a dtype with a 2e6-character field name allocated about 6 MB while it was
 refused; both are now `TRIM_INVALID` under 100 kB traced). Audit of every raise site (round 5): all
 77 `raise` statements at 1ab837b (53 in `display_tessellation.py`, 22 in `_slab_triangulation.py`) and
@@ -594,9 +598,11 @@ Contract of the result (`SlabTriangulation`):
   most `sum_k |RN(y*_k) - y*_k| (x_next,k - x_prev,k) / 2` over the cut points (moving one by `d`
   changes the area by `d` times half its neighbours' x distance), each error at most half an ulp.
 - Coverage (owner decision, N2 round 5 (2), the recommended option): the 2D mesh covers exactly the
-  CLOSURE OF THE POSITIVE-AREA INTERIOR of the rounded trim. Zero-width parts (a hole edge and an
-  outer edge rounded onto the same segment, a tie of two boundaries on a slab line) are not covered
-  and are invisible in display; N3 must not assume every trim boundary segment is a triangle edge.
+  CLOSURE OF THE POSITIVE-AREA INTERIOR of the rounded trim. Zero-width parts of
+  the rounded trim that are not in the closure of the positive-area interior (a hole edge and an
+  outer edge rounded onto the same segment) are omitted and invisible in display; points IN that closure (for example the round-4
+  hole-tip tie, where a slab line meets a boundary at a point) are covered and may appear as vertices.
+  N3 must not assume every trim boundary segment is a triangle edge.
   Codex round 5 reproduction (kept as a test): outer ring `(0, nextafter(1, 0)), (4, 1), (4, 3),
   (0, 3)`, hole `(2.5, 1), (3.5, 1), (3.5, 2), (2.5, 2)`: the outer edge's cuts at `x = 2.5` and `3.5`
   round onto the hole's bottom corners, the exact oracle passes, and no triangle covers the interior
@@ -664,6 +670,15 @@ face:
 - boundary equality: every lifted boundary vertex equals the N1 shared edge sample bit for bit, and
   the boundary chords are exactly the N1 chords, so neighbouring faces share them (no cracks, no
   T-junction gaps);
+- N3 deviation contract (owner decision N2 round 6 (2), the recommended option): the correspondence
+  is PARAMETRIC. A point of a flat lifted triangle with barycentric weights w corresponds to the
+  support evaluated at the same barycentric weights applied to the triangle's 2D (u, v) vertices;
+  the certified quantity is the max over the triangle of |flat(w) - S(uv(w))| (3D Euclidean), which
+  N3 must bound rigorously (not by sampling) and keep at most the display chord tolerance, else fail
+  closed. This is stricter than radial projection: on the Codex frustum the flat mesh lies within
+  0.293 of the trim radially, yet its interior diagonal midpoint is 0.380 from the support at the
+  matching (u, v) midpoint, so a limit of 0.30 passes radially and fails parametrically (kept as a
+  test).
 - interior vertices are lifted by the support map; the chordal deviation of interior triangles is
   bounded by the display tolerance (N3 certifies it), and the analytic trim is approximated within
   that tolerance, not "covered exactly";

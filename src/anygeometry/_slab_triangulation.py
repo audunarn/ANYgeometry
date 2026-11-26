@@ -36,7 +36,7 @@ from typing import Sequence
 
 import numpy as np
 
-from .display_tessellation import MAX_DISPLAY_COORDINATE, DisplayDomainRefused, DisplayTrimRefused
+from .display_tessellation import MAX_DISPLAY_COORDINATE, _id_text, DisplayDomainRefused, DisplayTrimRefused
 
 __all__ = ["MAX_SLAB_INCIDENCES", "MAX_SLAB_OUTPUT", "MAX_SLAB_RINGS", "MAX_SLAB_RING_POINTS", "SlabInvalid",
            "SlabTriangulation", "triangulate_rings"]
@@ -560,24 +560,24 @@ def _check_input(rings, extra_x) -> tuple:
     if count == 0:
         raise _form_error("no rings")
     if count > MAX_SLAB_RINGS:
-        raise _too_complex(f"{count} rings (MAX_SLAB_RINGS = {MAX_SLAB_RINGS})")
+        raise _too_complex(f"{_id_text(count)} rings (MAX_SLAB_RINGS = {MAX_SLAB_RINGS})")
     rings = tuple(rings)                                    # a snapshot of the caller's list
     total = 0
     for k, ring in enumerate(rings):
         if type(ring) is not np.ndarray:
-            raise _form_error(f"ring {k} is not an ndarray")
+            raise _form_error(f"ring {_id_text(k)} is not an ndarray")
         if not (ring.dtype == np.float64 and ring.ndim == 2 and ring.shape[1] == 2 and ring.shape[0] >= 3):
-            raise _form_error(f"ring {k} is not a float64 (n, 2) array with n >= 3")
+            raise _form_error(f"ring {_id_text(k)} is not a float64 (n, 2) array with n >= 3")
         total += ring.shape[0]
     if total > MAX_SLAB_RING_POINTS:
-        raise _too_complex(f"{total} ring points (MAX_SLAB_RING_POINTS = {MAX_SLAB_RING_POINTS})")
+        raise _too_complex(f"{_id_text(total)} ring points (MAX_SLAB_RING_POINTS = {MAX_SLAB_RING_POINTS})")
     if extra_x is not None:
         if type(extra_x) is not np.ndarray:
             raise _form_error("extra_x is not None or a float64 1-D ndarray")
         if not (extra_x.dtype == np.float64 and extra_x.ndim == 1):
             raise _form_error("extra_x is not a float64 1-D ndarray")
         if extra_x.size > MAX_SLAB_INCIDENCES:
-            raise _too_complex(f"{extra_x.size} extra lines (MAX_SLAB_INCIDENCES = {MAX_SLAB_INCIDENCES})")
+            raise _too_complex(f"{_id_text(extra_x.size)} extra lines (MAX_SLAB_INCIDENCES = {MAX_SLAB_INCIDENCES})")
     return rings
 
 
@@ -647,10 +647,10 @@ def _slabs(prep):
     jl, jr = np.searchsorted(xs, x[sp]), np.searchsorted(xs, x[sq])
     incidences = int(np.sum(jr - jl))
     if incidences > MAX_SLAB_INCIDENCES:
-        raise _too_complex(f"{incidences} segment-slab incidences (MAX_SLAB_INCIDENCES = {MAX_SLAB_INCIDENCES})")
+        raise _too_complex(f"{_id_text(incidences)} segment-slab incidences (MAX_SLAB_INCIDENCES = {MAX_SLAB_INCIDENCES})")
     output = incidences + 2 * (len(vertices) + incidences - len(sloped))
     if output > MAX_SLAB_OUTPUT:
-        raise _too_complex(f"up to {output} triangles (MAX_SLAB_OUTPUT = {MAX_SLAB_OUTPUT})")
+        raise _too_complex(f"up to {_id_text(output)} triangles (MAX_SLAB_OUTPUT = {MAX_SLAB_OUTPUT})")
     prep.update(xs=xs, sp=sp, sq=sq, sring=prep["seg_ring"][sloped], jl=jl, jr=jr, incidences=incidences)
     return prep
 
