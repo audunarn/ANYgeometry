@@ -166,10 +166,12 @@ def driver_budget_seconds(env):
     """
     value=env.get(DRIVER_SECONDS_VARIABLE)
     if value is None:return DRIVER_SECONDS_DEFAULT
-    if type(value) is not str or not value.isascii() or not value.isdigit():
-        raise ValueError('invalid CI driver budget variable: '+repr(value))
-    seconds=int(value)
-    if not 0<seconds<=DRIVER_SECONDS_MAX:raise ValueError('invalid CI driver budget variable: '+repr(value))
+    refused=ValueError('invalid CI driver budget variable: '+repr(value)[:40])
+    if type(value) is not str or not value.isascii() or not value.isdigit():raise refused
+    digits=value.lstrip('0')            # any count of leading zeros; int() would count them against its digit limit
+    if not digits or len(digits)>len(str(DRIVER_SECONDS_MAX)):raise refused
+    seconds=int(digits)
+    if not 0<seconds<=DRIVER_SECONDS_MAX:raise refused
     return seconds
 
 
