@@ -12,8 +12,7 @@ All notable user-visible changes to ANYgeometry are documented here.
   docs; they live as open questions in the evidence note `N3-LIFT-INPUTS.md`. Form-refusal memory
   is O(number of rings): cap 16,666 rings (50_000 // 3), 135,355 bytes traced.
 - N2 round 6: every integer formatted into a display refusal message (model ids included) uses a
-  fixed text above 10**18; the N3 deviation contract is the parametric max over the triangle;
-  coverage and allocation wording scoped.
+  fixed text above 10**18; coverage and allocation wording scoped.
 - Private `anygeometry._slab_triangulation.triangulate_rings`: exact-coverage slab (trapezoid)
   triangulation of trim rings with holes, pure NumPy (not yet used by any public display mesh).
   Owner decisions (N2 round 1, the recommended options): simple rings only (holes strictly
@@ -37,9 +36,8 @@ All notable user-visible changes to ANYgeometry are documented here.
   does not round-trip is `OUT_OF_DOMAIN` before compression and the domain check). The area floor
   is one exact rule on both paths.
   Round 3 (owner decisions, the recommended options): the certified product is the 2D mesh;
-  `cut_ends` and `cut_fraction` are provenance metadata only, and any lift (N3) must certify each
-  lifted triangle's orientation itself and refuse when it cannot (a fraction-based lift of a valid
-  mesh inverted a triangle; the reproduction is kept as a test). Every size cap is checked from
+  `cut_ends` and `cut_fraction` are provenance metadata only (lift obligations are deferred to the
+  N3 slice; a fraction-based lift of a valid mesh inverted a triangle, kept as a test). Every size cap is checked from
   shapes and lengths before any conversion, copy or scan (a broadcast view of a million points is
   refused with under 1 MB traced); rings and `extra_x` must be ndarrays or sequences (generators
   and iterators are `TRIM_INVALID`); masked arrays are `TRIM_INVALID` ("masked input not
@@ -59,9 +57,7 @@ All notable user-visible changes to ANYgeometry are documented here.
   under 100 kB traced). The conversion code (binary64 round trip, masked handling, sequence walks)
   is deleted. Changed results: lists of points, integer, float32, bool, complex and object arrays,
   stacked arrays, sequence or scalar `extra_x` and every ndarray subclass are now `TRIM_INVALID`
-  (some were converted, some `OUT_OF_DOMAIN`). The N3 lift contract now requires certifying BOTH
-  orientation and coverage of the lifted mesh (Codex r4: fraction reconstruction left a gap at an
-  outer cut equal to a hole tip). `area` is the correctly rounded exact area of the emitted
+  (some were converted, some `OUT_OF_DOMAIN`). `area` is the correctly rounded exact area of the emitted
   triangles, bit-identical on the fast and general paths (changed by at most 3 ulps on 2543 of
   6000 ordinary calls; a subnormal area no longer rounds to 0 with extra cuts). In
   `display_tessellation`, invalid public arguments are a `GeometryError`, never a raw exception:
@@ -84,9 +80,7 @@ All notable user-visible changes to ANYgeometry are documented here.
   tolerances (accepted in round 4) are refused; ordinary calls are bit-identical (N1 corpus, 5744
   results, 0 changes, refusal messages included). Docs: the 2D mesh covers exactly the closure of
   the positive-area interior of the rounded trim (zero-width parts, such as a hole edge and an outer
-  edge rounded onto one segment, are not covered); the N3 lift obligations (coverage domain and map,
-  outward-normal orientation reference, bit-equal N1 boundary samples and chords, interior chordal
-  deviation within the display tolerance, fail closed); `area` is the correctly rounded exact area,
+  edge rounded onto one segment, are not covered); `area` is the correctly rounded exact area,
   which may round to 0 for subnormal-scale trims.
 - New `anygeometry.display_tessellation` (not re-exported from `anygeometry`): display edge
   samples shared by every face using an edge (`edge_display_samples`, `DisplayTolerance`,

@@ -472,7 +472,7 @@ becomes a NON-STRICT order of the stored ordinates, never a reversal. Therefore:
 - a fraction that rounds to 0.0 or 1.0 at a strictly interior x is ACCEPTED: the exact fraction is
   then within half an ulp of the end (`|f* - f| <= 2^-54` at 1, at most `2^-1075` at 0); the 2D
   mesh is unaffected (its cut point is the correctly rounded `(x, RN(y*))`), and the fraction is
-  provenance metadata only (see "Certified product and lift" below). Both round-1 resolution refusals ("slab too narrow", "feature below display
+  provenance metadata only (see "Certified product" below). Both round-1 resolution refusals ("slab too narrow", "feature below display
   resolution") are gone; the two Codex round-2 reproductions (a real N1 face whose right corners
   are one ulp apart, a triangular hole cut one ulp right of its tip) are meshed and pass the exact
   oracle.
@@ -488,8 +488,9 @@ The validity checks, on the exact order:
 4. walking each slab bottom-up, a hole is entered only inside the outer ring and while no other
    hole is open.
 
-Cost and budgets (owner decisions, N2 rounds 1 and 2): `O(I log I)` in the number `I` of
-segment-slab incidences (sorts and linear scans, no pairs); the exact comparisons run only on
+Cost and budgets (owner decisions, N2 rounds 1 and 2): incidence processing is `O(I log I)` in the number `I` of
+segment-slab incidences (sorts and linear scans, no pairs), and input preparation is `O(input size)`
+(a copy and scan of the capped arrays, including out-of-range `extra_x` values); the exact comparisons run only on
 lines with a tie. The preflight counts what is allocated and emitted, before anything is built
 (a cheap upper bound, segments x lines, skips the exact count for small trims): `N`, ALL input
 points (duplicates and the points of vertical segments included, each also a returned point and
