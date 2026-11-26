@@ -144,9 +144,13 @@ class DisplayTrimRefused(GeometryError):
     """A typed refusal: ``code`` is one of :data:`REFUSAL_CODES`."""
 
     def __init__(self, code: str, message: str):
-        if code not in REFUSAL_CODES:
-            raise ValueError(f"unknown display refusal code {code!r}")
-        super().__init__(f"{code}: {message}")
+        # owner decision N2 r5 (1): exact types only and fixed refusal text (nothing of the caller's
+        # formatted, hashed or compared before its type is known)
+        if not (type(code) is str and code in REFUSAL_CODES):     # GeometryError is a ValueError
+            raise GeometryError("unknown display refusal code (not one of REFUSAL_CODES)")
+        if type(message) is not str:
+            raise GeometryError("a display refusal message must be a str")
+        super().__init__(code + ": " + message)
         self.code = code
 
 
@@ -155,6 +159,32 @@ class DisplayDomainRefused(DisplayTrimRefused):
 
     def __init__(self, message: str):
         super().__init__("OUT_OF_DOMAIN", message)
+
+
+#: owner decision N2 r5 (1): the exact concrete types accepted (``type(x) is``, never an ABC, never
+#: a subclass: ``bool`` is not ``int`` here, ``np.timedelta64`` is not an integer)
+_REAL_TYPES = (float, int, np.float32, np.float64)
+_ID_TYPES = (int, np.int8, np.int16, np.int32, np.int64, np.uint8, np.uint16, np.uint32, np.uint64)
+#: an int beyond this magnitude is refused before ``float()`` (which would overflow near 2**1024)
+_INT_FLOAT_BOUND = 2 ** 1023
+#: edge ids are integers with ``|id| < 2**63`` (checked arithmetically on a Python int)
+_ID_BOUND = 2 ** 63
+
+
+def _exact_type_in(value, types) -> bool:
+    kind = type(value)
+    return any(kind is t for t in types)
+
+
+def _real_argument(value, message: str) -> float:
+    """A float, int (not bool), np.float32 or np.float64 (exact types) as a float, else
+    :class:`GeometryError` with fixed text (owner decision N2 round 5 (1): no ABC, no attribute or
+    string conversion of a caller object; an int is compared with a bound before ``float()``)."""
+    if not _exact_type_in(value, _REAL_TYPES):
+        raise GeometryError(f"{message} (not a float, int, np.float32 or np.float64)")
+    if type(value) is int and not -_INT_FLOAT_BOUND < value < _INT_FLOAT_BOUND:
+        raise GeometryError(f"{message} (an int out of float range)")
+    return float(value)
 
 
 @dataclass(frozen=True)
@@ -171,12 +201,12 @@ class DisplayTolerance:
     sag: float | None = None
 
     def __post_init__(self):
-        angle = float(self.angle)
+        angle = _real_argument(self.angle, "display angle must be finite and in [1e-6, pi/2]")
         if not (math.isfinite(angle) and _MIN_ANGLE <= angle <= math.pi / 2):
             raise GeometryError("display angle must be finite and in [1e-6, pi/2]")
         object.__setattr__(self, "angle", angle)
         if self.sag is not None:
-            sag = float(self.sag)
+            sag = _real_argument(self.sag, "display sag must be finite and positive")
             if not (math.isfinite(sag) and sag > 0.0):
                 raise GeometryError("display sag must be finite and positive")
             object.__setattr__(self, "sag", sag)
@@ -210,6 +240,19 @@ class DisplayRoundingAllowance:
     axis_floors: tuple = ()
 
 
+#: NumPy's default error state, under which every MODEL call (positions, frames, evaluation) runs
+#: (owner decision N2 round 3 (4)): the module's own arithmetic runs under a local
+#: ``np.errstate(all="ignore")`` with its explicit finiteness and domain guards deciding, so
+#: neither depends on the caller's ``np.seterr``; the model keeps the state its results were
+#: measured under (its own fast paths check for exactly this state).
+_MODEL_ERRSTATE = {"divide": "warn", "over": "warn", "under": "ignore", "invalid": "warn"}
+
+
+def _model_call(call, *args):
+    with np.errstate(call=None, **_MODEL_ERRSTATE):
+        return call(*args)
+
+
 def _norm(vector) -> float:
     return math.hypot(*(float(x) for x in vector))
 
@@ -238,8 +281,16 @@ class EdgeSamples:
     points: np.ndarray
 
 
+def _id_text(value) -> str:
+    """An int formatted into a message only if |v| < 10**18 (checked arithmetically, never by
+    ``str``), else fixed text: a model-produced id may have thousands of digits."""
+    if -10 ** 18 < value < 10 ** 18:
+        return str(int(value))
+    return "<id out of display range>"
+
+
 def _unsupported(edge_id, message):
-    return DisplayTrimRefused("EDGE_UNSUPPORTED", f"edge {edge_id}: {message}")
+    return DisplayTrimRefused("EDGE_UNSUPPORTED", f"edge {_id_text(edge_id)}: {message}")
 
 
 def _count(edge_id, span, step) -> int:
@@ -334,7 +385,7 @@ class _AngleMap:
         self.g_bound = self._g_rounding(det, float(math.hypot(*offset)), radius,
                                         max(abs(xa), abs(xb)), float(matrix_error), float(offset_error))
         if not all(abs(g) > self.g_bound for g in values):
-            raise DisplayDomainRefused(f"edge {edge_id}: azimuth near-stationary: branch not decidable (|g| = "
+            raise DisplayDomainRefused(f"edge {_id_text(edge_id)}: azimuth near-stationary: branch not decidable (|g| = "
                                        f"{min(abs(g) for g in values)!r} along the edge is within its rounding "
                                        f"bound {self.g_bound!r})")
         if all(g > 0.0 for g in values):
@@ -445,7 +496,8 @@ class _Division:
 def _check_angle(name, *values):
     for value in values:
         if not (math.isfinite(value) and abs(value) <= MAX_DISPLAY_ANGLE):
-            raise DisplayDomainRefused(f"{name} angle {value!r} is outside |angle| <= {MAX_DISPLAY_ANGLE:g} rad")
+            raise DisplayDomainRefused(f"{name} angle {float(value)!r} is outside |angle| <= "
+                                       f"{MAX_DISPLAY_ANGLE:g} rad")
 
 
 def _check_sweep(name, sweep):
@@ -493,7 +545,7 @@ def _check_support_frame(support):
                "|radial . circumferential|": abs(float(radial @ circumferential))}
     if not all(d <= _SUPPORT_FRAME_TOL for d in defects.values()):
         found = ", ".join(f"{name} = {value!r}" for name, value in defects.items())
-        raise DisplayDomainRefused(f"a {type(support).__name__} support frame not orthonormal ({found}; each must "
+        raise DisplayDomainRefused(f"a {_support_name(support)} support frame not orthonormal ({found}; each must "
                                    f"be at most {_SUPPORT_FRAME_TOL!r}): its evaluate() disagrees with its declared "
                                    f"axis geometry")
 
@@ -507,7 +559,13 @@ def _aspect_admitted(weight) -> bool:
     return weight <= MAX_DISPLAY_ELLIPSE_ASPECT * (1.0 + _ASPECT_SLACK)
 
 
+def _support_name(support) -> str:
+    """The module's own name for a cylinder or cone support (never the caller class's name)."""
+    return "Cylinder" if isinstance(support, Cylinder) else "Cone"
+
+
 def _check_radius(name, distance, *points):
+    distance = float(distance)
     scale = max([1.0] + [float(np.abs(np.asarray(p, dtype=float)).max()) for p in points])
     if not distance >= MIN_DISPLAY_RADIUS_RATIO * scale:
         raise DisplayDomainRefused(f"{name} is {distance!r} from a support axis, below "
@@ -521,10 +579,10 @@ def _incident_supports(model, edge_id: int) -> tuple:
         support = face.surface
         if face.parameterization is not None:
             raise DisplayTrimRefused("SUPPORT_UNSUPPORTED",
-                                     f"edge {edge_id} is used by face {face_id}, which has an explicit parameterization")
+                                     f"edge {_id_text(edge_id)} is used by face {_id_text(face_id)}, which has an explicit parameterization")
         if not isinstance(support, (Plane, Cylinder, Cone)):
-            raise DisplayTrimRefused("SUPPORT_UNSUPPORTED", f"edge {edge_id} is used by face {face_id} on a "
-                                                            f"{type(support).__name__} support")
+            raise DisplayTrimRefused("SUPPORT_UNSUPPORTED", f"edge {_id_text(edge_id)} is used by face {_id_text(face_id)} on a "
+                                                            "support that is not a plane, cylinder or cone")
         if not any(support is s for s in found):
             found.append(support)
     return tuple(found)
@@ -636,14 +694,14 @@ def _line_azimuth_division(edge_id, support, a, b, step, scale_points, apex_leng
     points = [*scale_points, origin]
     scale = _scale(points)
     if all(on_axis):
-        raise DisplayDomainRefused(f"edge {edge_id} lies on a support axis: it has no azimuth")
+        raise DisplayDomainRefused(f"edge {_id_text(edge_id)} lies on a support axis: it has no azimuth")
     if any(on and not _at_apex(support, p, apex_length) for on, p in zip(on_axis, (a, b))):
-        raise DisplayDomainRefused(f"edge {edge_id} ends on a support axis away from an exact cone apex (a "
+        raise DisplayDomainRefused(f"edge {_id_text(edge_id)} ends on a support axis away from an exact cone apex (a "
                                    f"cylinder, a frustum, or farther than the model length from the apex): "
                                    f"it has no azimuth there")
     for name, distance, on in (("start", ra, on_axis[0]), ("end", rb, on_axis[1])):
         if not on:
-            _check_radius(f"edge {edge_id}'s {name}", distance, *points)
+            _check_radius(f"edge {_id_text(edge_id)}'s {name}", distance, *points)
     cross_a = float(a2[0] * d2[1] - a2[1] * d2[0])
     cross_b = float(b2[0] * d2[1] - b2[1] * d2[0])
     collinear = not length > 0.0 or (abs(cross_a) <= 8.0 * _EPS * ra * length
@@ -659,7 +717,7 @@ def _line_azimuth_division(edge_id, support, a, b, step, scale_points, apex_leng
             if collinear:
                 raise _unsupported(edge_id, "the line's projection passes through a support axis")
             closest, t_star = min(found)
-            _check_radius(f"edge {edge_id}'s closest approach (t = {t_star:.17g})", closest, a + t_star * d3, *points)
+            _check_radius(f"edge {_id_text(edge_id)}'s closest approach (t = {t_star:.17g})", closest, a + t_star * d3, *points)
     if any(on_axis):
         rho = (ra + err_a if on_axis[0] else rb + err_b) + ends
         return _Plan(1, lambda: _Division([]), 2.0 * rho / (MIN_DISPLAY_RADIUS_RATIO * scale),
@@ -730,7 +788,7 @@ class _Conic:
         # OUT_OF_DOMAIN; only axes parallel to that resolution are EDGE_UNSUPPORTED
         weight = self.aspect * self.theta_star
         if not self.circle and not _aspect_admitted(weight) and singular[1] > 64.0 * _EPS * singular[0]:
-            raise DisplayDomainRefused(f"edge {edge_id}'s ellipse has the aspect {self.aspect!r} at stored angles up "
+            raise DisplayDomainRefused(f"edge {_id_text(edge_id)}'s ellipse has the aspect {self.aspect!r} at stored angles up "
                                        f"to {max(abs(self.start), abs(self.start + self.sweep))!r}: "
                                        f"aspect x max(1, |angle|) = {weight!r} is above {MAX_DISPLAY_ELLIPSE_ASPECT:g}")
         e1 = self.u / nu
@@ -925,13 +983,13 @@ class _Conic:
         aspect = 1.0 if similar else amap.aspect
         weight = aspect * stored
         if not _aspect_admitted(weight):
-            raise DisplayDomainRefused(f"edge {self.edge_id}'s projection across a support axis has the aspect "
+            raise DisplayDomainRefused(f"edge {_id_text(self.edge_id)}'s projection across a support axis has the aspect "
                                        f"{aspect!r}: aspect x max(1, |stored angle|) = {weight!r} is above "
                                        f"{MAX_DISPLAY_ELLIPSE_ASPECT:g}")
         floor = max(MIN_DISPLAY_RADIUS_RATIO * _scale([*scale_points, (stored * amap.sigma_max, 0.0, 0.0)]),
                     64.0 * _EPS * _norm(c3))
         if not amap.closest >= floor:
-            raise DisplayDomainRefused(f"edge {self.edge_id} (closest approach, lower bound) is {amap.closest!r} from "
+            raise DisplayDomainRefused(f"edge {_id_text(self.edge_id)} (closest approach, lower bound) is {amap.closest!r} from "
                                        f"a support axis, below its floor {floor!r} (the larger of "
                                        f"{MIN_DISPLAY_RADIUS_RATIO:g} x its scale and 64 eps x its centre's offset "
                                        f"{_norm(c3)!r} from the axis point)")
@@ -1125,15 +1183,22 @@ def edge_display_samples(model, edge_id: int, tol: DisplayTolerance) -> EdgeSamp
     refusal (``EDGE_UNSUPPORTED``) for a degenerate curve, an azimuth that is not monotone along
     the edge, an unresolvable sag or more than 4096 intervals.  An edge id not in the model is a
     plain :class:`GeometryError`; no raw arithmetic error escapes a division (typed
-    ``EDGE_UNSUPPORTED`` at worst).
+    ``EDGE_UNSUPPORTED`` at worst).  Independent of the caller's NumPy error state (N2 round 3):
+    the module's arithmetic runs under ``np.errstate(all="ignore")``, model calls under NumPy's
+    default state, and the explicit guards decide.
     """
+    with np.errstate(all="ignore"):
+        return _edge_display_samples(model, edge_id, tol)
+
+
+def _edge_display_samples(model, edge_id, tol) -> EdgeSamples:
     setup = _setup(model, edge_id, tol)
 
     def run():
         analysis = _analyse(model, setup, tol)
         allowance = analysis.allowance
         if not allowance.angle <= _ALLOWANCE_SHARE * tol.angle:
-            raise DisplayDomainRefused(f"edge {setup.edge_id}: its rounding allowance {allowance.angle!r} rad is "
+            raise DisplayDomainRefused(f"edge {_id_text(setup.edge_id)}: its rounding allowance {allowance.angle!r} rad is "
                                        f"above 2 % of the display angle {tol.angle!r} (the angle is finer than "
                                        f"the edge resolves at its scale and distance from the axis)")
         if allowance.sag is not None and not allowance.sag <= _ALLOWANCE_SHARE * analysis.sag:
@@ -1169,10 +1234,11 @@ def display_rounding_allowance(model, edge_id: int, tol: DisplayTolerance) -> Di
       any vertex offset treated as 0 at the coordinates' resolution.
 
     Same refusals as :func:`edge_display_samples` before its divisions are built (except the 2 %
-    rule itself).
+    rule itself), and likewise independent of the caller's NumPy error state.
     """
-    setup = _setup(model, edge_id, tol)
-    return _guarded(setup.edge_id, lambda: _analyse(model, setup, tol).allowance)
+    with np.errstate(all="ignore"):
+        setup = _setup(model, edge_id, tol)
+        return _guarded(setup.edge_id, lambda: _analyse(model, setup, tol).allowance)
 
 
 def _guarded(edge_id, call):
@@ -1181,7 +1247,8 @@ def _guarded(edge_id, call):
     except DisplayTrimRefused:
         raise
     except (ArithmeticError, ValueError) as error:      # no raw arithmetic error escapes
-        raise _unsupported(edge_id, f"{type(error).__name__} in the closed-form division: {error}") from error
+        # fixed text (owner decision N2 r5 (1)); the error itself stays the refusal's __cause__
+        raise _unsupported(edge_id, "an arithmetic error in the closed-form division") from error
 
 
 @dataclass(frozen=True)
@@ -1208,27 +1275,37 @@ class _Analysis:
 
 def _setup(model, edge_id, tol) -> _Setup:
     """Every input check against the declared domain, before any division."""
-    if not isinstance(tol, DisplayTolerance):
+    from .model import GeometryModel
+    # owner decision N2 r5 (1): the argument's own type, never ``isinstance`` (which looks up a
+    # foreign ``__class__``) and never a caller's name in the message
+    if not issubclass(type(model), GeometryModel):
+        raise GeometryError("model must be a GeometryModel")
+    if not issubclass(type(tol), DisplayTolerance):
         raise GeometryError("tol must be a DisplayTolerance")
+    # an int (not bool) or a NumPy integer scalar of an exact type, |id| < 2**63
+    if not _exact_type_in(edge_id, _ID_TYPES):
+        raise GeometryError("edge id must be an int or a NumPy integer scalar")
     edge_id = int(edge_id)
+    if not -_ID_BOUND < edge_id < _ID_BOUND:
+        raise GeometryError("edge id is out of range (|id| < 2**63)")
     if edge_id not in model.edges:
-        raise GeometryError(f"edge {edge_id} is not in the model")
+        raise GeometryError(f"edge {_id_text(edge_id)} is not in the model")
     edge = model.edges[edge_id]
-    supports = _incident_supports(model, edge_id)
+    supports = _model_call(_incident_supports, model, edge_id)
     curve = edge.curve
-    start = np.asarray(model.vertex_position(edge.start), dtype=float)
-    end = np.asarray(model.vertex_position(edge.end), dtype=float)
+    start = np.asarray(_model_call(model.vertex_position, edge.start), dtype=float)
+    end = np.asarray(_model_call(model.vertex_position, edge.end), dtype=float)
 
-    _check_points(f"edge {edge_id}'s vertices", np.vstack((start, end)))
+    _check_points(f"edge {_id_text(edge_id)}'s vertices", np.vstack((start, end)))
     conic = None
     line = None
     if isinstance(curve, (Straight, LineRange)):
         if isinstance(curve, LineRange):
-            _check_points(f"edge {edge_id}'s line carrier", np.vstack((curve.a, curve.b)))
+            _check_points(f"edge {_id_text(edge_id)}'s line carrier", np.vstack((curve.a, curve.b)))
         # the line's geometry is its evaluated ends (the exact evaluator), never the carrier's
         # float fields: a retained range can be far narrower than its carrier
         line = tuple(_evaluate(model, edge_id, [0.0, 1.0]))
-        _check_points(f"edge {edge_id}'s line ends", np.vstack(line))
+        _check_points(f"edge {_id_text(edge_id)}'s line ends", np.vstack(line))
         if isinstance(curve, LineRange):
             # owner decision (N1 round 4, recommended option): a LineRange is supported only when
             # its carrier IS the edge's segment: exact domain [0, 1] and both carrier endpoints the
@@ -1248,23 +1325,23 @@ def _setup(model, edge_id, tol) -> _Setup:
                                             "within the model's length tolerance")
     elif isinstance(curve, EllipticArc):
         centre = np.asarray(curve.center, dtype=float)
-        _check_points(f"edge {edge_id}'s ellipse", np.vstack((centre, centre + curve.u_vector,
+        _check_points(f"edge {_id_text(edge_id)}'s ellipse", np.vstack((centre, centre + curve.u_vector,
                                                               centre + curve.v_vector)))
-        _check_angle(f"edge {edge_id}'s ellipse", curve.start_angle, curve.start_angle + curve.sweep_angle)
-        _check_sweep(f"edge {edge_id}'s ellipse", float(curve.sweep_angle))
+        _check_angle(f"edge {_id_text(edge_id)}'s ellipse", curve.start_angle, curve.start_angle + curve.sweep_angle)
+        _check_sweep(f"edge {_id_text(edge_id)}'s ellipse", float(curve.sweep_angle))
     elif isinstance(curve, Arc):
-        _check_points(f"edge {edge_id}'s arc via vertex", model.vertex_position(curve.via_vertex))
+        _check_points(f"edge {_id_text(edge_id)}'s arc via vertex", _model_call(model.vertex_position, curve.via_vertex))
     else:
-        raise _unsupported(edge_id, f"a {type(curve).__name__} is not a line, circle or ellipse")
+        raise _unsupported(edge_id, "the curve is not a line, circle or ellipse")
     for support in supports:
         _check_support_domain(support)
     if isinstance(curve, Arc):
         try:
-            frame = model.arc_frame(edge_id)
+            frame = _model_call(model.arc_frame, edge_id)
         except GeometryError as error:
-            raise _unsupported(edge_id, str(error)) from error
-        _check_points(f"edge {edge_id}'s arc centre", frame.center)
-        _check_sweep(f"edge {edge_id}'s arc", float(frame.sweep))
+            raise _unsupported(edge_id, "the model has no arc frame for it") from error
+        _check_points(f"edge {_id_text(edge_id)}'s arc centre", frame.center)
+        _check_sweep(f"edge {_id_text(edge_id)}'s arc", float(frame.sweep))
         conic = _Conic(edge_id, frame.center, frame.radius * frame.e1, frame.radius * frame.e2, 0.0, frame.sweep)
     elif isinstance(curve, EllipticArc):
         conic = _Conic(edge_id, curve.center, curve.u_vector, curve.v_vector, curve.start_angle, curve.sweep_angle)
@@ -1273,7 +1350,7 @@ def _setup(model, edge_id, tol) -> _Setup:
         # tangent by up to aspect x that: the bound holds for aspect x max(1, |stored angle|)
         weight = conic.aspect * max(1.0, abs(conic.start), abs(conic.start + conic.sweep))
         if not _aspect_admitted(weight):
-            raise DisplayDomainRefused(f"edge {edge_id}'s ellipse has the aspect {conic.aspect!r} at stored angles up "
+            raise DisplayDomainRefused(f"edge {_id_text(edge_id)}'s ellipse has the aspect {conic.aspect!r} at stored angles up "
                                        f"to {max(abs(conic.start), abs(conic.start + conic.sweep))!r}: "
                                        f"aspect x max(1, |angle|) = {weight!r} is above {MAX_DISPLAY_ELLIPSE_ASPECT:g}")
     definition = [start, end] if conic is None else [start, end, conic.c, conic.c + conic.u, conic.c + conic.v]
@@ -1322,7 +1399,7 @@ def _analyse(model, setup, tol) -> _Analysis:
     counts = [plan.count for plan in plans] + ([] if tangent is None else [tangent.count])
     total = 1 + sum(max(1, count) - 1 for count in counts)
     if total > _MAX_INTERVALS:
-        raise _unsupported(edge_id, f"its divisions need up to {total} intervals together, more than {_MAX_INTERVALS}")
+        raise _unsupported(edge_id, f"its divisions need up to {_id_text(total)} intervals together, more than {_MAX_INTERVALS}")
     scale = _scale([*setup.definition, *(s.origin for s in round_supports)])
     allowance = DisplayRoundingAllowance(
         angle=64.0 * _EPS * step + max([tangent_rounding] + [plan.rounding for plan in plans]),
@@ -1380,14 +1457,14 @@ def _build(setup, analysis):
 
 def _evaluate(model, edge_id, parameters) -> np.ndarray:
     try:
-        return np.array(model.evaluate_edge_many(edge_id, parameters), dtype=float)
+        return np.array(_model_call(model.evaluate_edge_many, edge_id, parameters), dtype=float)
     except GeometryError as error:
-        raise _unsupported(edge_id, str(error)) from error
+        raise _unsupported(edge_id, "the model cannot evaluate it") from error
 
 
 def _edge_result(model, edge_id, parameters, start, end) -> EdgeSamples:
     points = _evaluate(model, edge_id, parameters)
-    _check_points(f"edge {edge_id}'s emitted points", points)
+    _check_points(f"edge {_id_text(edge_id)}'s emitted points", points)
     if np.any(np.all(points[1:] == points[:-1], axis=1)):     # before the ends become the vertices
         raise _unsupported(edge_id, "distinct parameters evaluate to one point (lost precision)")
     points[0], points[-1] = start, end

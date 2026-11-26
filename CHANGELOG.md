@@ -4,6 +4,84 @@ All notable user-visible changes to ANYgeometry are documented here.
 
 ## Unreleased
 
+- N2 round 8 (docs and tests only; supersedes the N3 wording of rounds 3-7 below): N2's contract states only what N2 guarantees (certified 2D
+  mesh, closure coverage, `cut_ends`/`cut_fraction` as provenance, input/trust model, refusals,
+  area, budgets) plus one sentence: lifting onto a support is N3's contract and N3 must not rely on
+  `cut_fraction` reconstruction (two documented counterexamples). The detailed N3 obligations of
+  rounds 4-7 (domain/map, orientation, seams, parametric deviation, `T_face`) are removed from the
+  docs; they live as open questions in the evidence note `N3-LIFT-INPUTS.md`. Form-refusal memory
+  is O(number of rings): cap 16,666 rings (50_000 // 3), 135,355 bytes traced.
+- N2 round 6: every integer formatted into a display refusal message (model ids included) uses a
+  fixed text above 10**18; coverage and allocation wording scoped.
+- Private `anygeometry._slab_triangulation.triangulate_rings`: exact-coverage slab (trapezoid)
+  triangulation of trim rings with holes, pure NumPy (not yet used by any public display mesh).
+  Owner decisions (N2 round 1, the recommended options): simple rings only (holes strictly
+  inside and disjoint, no shared point or edge; the even-odd wording is dropped), decided with
+  exact predicates independent of the extra slab lines, else `TRIM_INVALID`; the declared
+  numeric domain (real finite, `|c| <= 1e9`), a preflight budget `MAX_SLAB_INCIDENCES = 200000`
+  and unresolvable rounding are `OUT_OF_DOMAIN`; canonical cut interpolation (lower-x endpoint
+  first, `cut_ends` in that order); triangle orientation from the slab geometry, so no
+  positive-area piece is dropped.
+  Round 2 (owner decisions, the recommended options): cut fractions and ordinates are the exact
+  interpolation CORRECTLY ROUNDED (a certified float filter on an error-free residual, exact
+  integers where it cannot certify), so ties of distinct boundaries are accepted (their pieces
+  are exactly degenerate and dropped) and a fraction of 0 or 1 at an interior x is accepted; the
+  former "slab too narrow" and "feature below display resolution" refusals are gone (a reversal
+  check stays as an unreachable fail-closed guard). The preflight counts everything allocated:
+  `MAX_SLAB_RING_POINTS = 50000` input points (duplicates and vertical-side points included),
+  `MAX_SLAB_INCIDENCES = 200000`, and `MAX_SLAB_OUTPUT = 600000` on the triangle bound
+  `I + 2 (N + cuts)`. Every numeric section runs under `np.errstate(all="ignore")` with explicit
+  finiteness checks, so results do not depend on the caller's `np.seterr`. Input values must be
+  exactly representable in binary64 (a wider `np.longdouble` value or an integer above 2**53 that
+  does not round-trip is `OUT_OF_DOMAIN` before compression and the domain check). The area floor
+  is one exact rule on both paths.
+  Round 3 (owner decisions, the recommended options): the certified product is the 2D mesh;
+  `cut_ends` and `cut_fraction` are provenance metadata only (lift obligations are deferred to the
+  N3 slice; a fraction-based lift of a valid mesh inverted a triangle, kept as a test). Every size cap is checked from
+  shapes and lengths before any conversion, copy or scan (a broadcast view of a million points is
+  refused with under 1 MB traced); rings and `extra_x` must be ndarrays or sequences (generators
+  and iterators are `TRIM_INVALID`); masked arrays are `TRIM_INVALID` ("masked input not
+  supported"), other ndarray subclasses are read as stored. The covered `area` is accumulated
+  without underflow (power-of-two scaling, bit-identical where nothing underflows). In
+  `display_tessellation`, `edge_display_samples` and `display_rounding_allowance` run their own
+  arithmetic under a local `np.errstate(all="ignore")` (model calls under NumPy's default state),
+  so a subnormal ellipse component no longer raises under a caller's `np.seterr(all="raise")`;
+  default-state results are unchanged (N1 corpus bit-identical).
+  Round 4 (owner decisions, the recommended options): a STRICT input contract replaces the
+  permissive input handling, checked first from types and shapes only: `rings` a list or tuple of
+  1 to `MAX_SLAB_RINGS` exact `np.ndarray` float64 `(n, 2)` arrays (`n >= 3`), `extra_x` None or an
+  exact float64 1-D ndarray; anything else is `TRIM_INVALID` ("input must be a list/tuple of
+  float64 (n, 2) ndarrays"), with no conversion and no iteration of foreign containers (Codex r4:
+  an empty stacked array and wide-string points allocated 14-17 MB, `range(10**40)` raised
+  `OverflowError`, a stacked ndarray subclass meshed a unit square to area 4; all refused now with
+  under 100 kB traced). The conversion code (binary64 round trip, masked handling, sequence walks)
+  is deleted. Changed results: lists of points, integer, float32, bool, complex and object arrays,
+  stacked arrays, sequence or scalar `extra_x` and every ndarray subclass are now `TRIM_INVALID`
+  (some were converted, some `OUT_OF_DOMAIN`). `area` is the correctly rounded exact area of the emitted
+  triangles, bit-identical on the fast and general paths (changed by at most 3 ulps on 2543 of
+  6000 ordinary calls; a subnormal area no longer rounds to 0 with extra cuts). In
+  `display_tessellation`, invalid public arguments are a `GeometryError`, never a raw exception:
+  `DisplayTolerance` takes real numbers only (not bool or strings; `10**400` raised
+  `OverflowError`), the public calls take a `GeometryModel` and an integer edge id (a NaN edge id
+  raised `ValueError`; a float id such as `3.0` is now refused), an unknown refusal code raises
+  `GeometryError` (a `ValueError` subclass, it was a plain `ValueError`); N1 corpus bit-identical
+  (5744 results, 0 changes).
+  Round 5 (owner decisions, the recommended options): a declared TRUST MODEL (callers are
+  in-process library code passing ordinary values; every input outside the accepted types is a
+  typed refusal decided by EXACT CONCRETE TYPE checks, never a `numbers` ABC, `isinstance` on a
+  caller value, foreign attribute, `str`/`repr`/`format` or `__name__`); every refusal message is
+  fixed text plus module-produced values (16 messages changed in the audit of all 77 raise sites,
+  2 new). Codex r5: a metaclass `__name__` escaped as a raw `RuntimeError` and a long dtype field
+  name allocated about 6 MB during refusal (now `TRIM_INVALID`, under 100 kB traced); `np.timedelta64`
+  (an `Integral` and `Real` to NumPy) raised raw `TypeError` or was accepted as an edge id or angle,
+  and `10**5000` raised raw `ValueError` (now `GeometryError`). Edge ids: `int` (not bool) or exactly
+  `np.int8`..`np.uint64`, `|id| < 2**63`; tolerances: exactly `float`, `int` (bounded before
+  `float()`), `np.float32`, `np.float64`. Changed results: `Fraction`, `Decimal` and NumPy-integer
+  tolerances (accepted in round 4) are refused; ordinary calls are bit-identical (N1 corpus, 5744
+  results, 0 changes, refusal messages included). Docs: the 2D mesh covers exactly the closure of
+  the positive-area interior of the rounded trim (zero-width parts, such as a hole edge and an outer
+  edge rounded onto one segment, are not covered); `area` is the correctly rounded exact area,
+  which may round to 0 for subnormal-scale trims.
 - New `anygeometry.display_tessellation` (not re-exported from `anygeometry`): display edge
   samples shared by every face using an edge (`edge_display_samples`, `DisplayTolerance`,
   `EdgeSamples`, typed `DisplayTrimRefused`). Narrow contract: lines, circles and ellipses on

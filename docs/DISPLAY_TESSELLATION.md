@@ -255,6 +255,33 @@ when the end lies within `model.tolerance.length` (plus the apex point's own flo
 `OUT_OF_DOMAIN`. Round 4: a frustum with inner radius 1e-16 and a tip at the origin, and an exact
 cone with its tip on the axis 1e-6 above the apex, were drawn as one chord; both are refused.
 An edge id not in the model is a plain `GeometryError` (not a typed refusal).
+**Argument validation** (owner decision, N2 round 4 (4); Codex N2 r4 Low b): every public entry
+refuses an invalid argument with `GeometryError` (a `ValueError` subclass), never a raw exception.
+`DisplayTolerance(angle, sag)` takes real numbers only (`numbers.Real`, not `bool` or `np.bool_`;
+strings, complex numbers, arrays and `None` as the angle are refused; `DisplayTolerance(10**400)`
+raised `OverflowError`, now a `GeometryError`). `edge_display_samples` and
+`display_rounding_allowance` take a `GeometryModel`, an integer edge id of any integer type
+(`numbers.Integral`, not a bool: a NaN edge id raised `ValueError`, and a float such as `3.0` was
+silently truncated; both are refused now) and a `DisplayTolerance`. `DisplayTrimRefused(code, message)`
+with a code that is not one of `REFUSAL_CODES` (or not a string) raises `GeometryError` (it raised a
+plain `ValueError` before). The result records (`EdgeSamples`, `DisplayRoundingAllowance`) are built
+by the module and take no validation. Valid arguments give the same bits as before: the N1 corpus
+(5744 results) is bit-identical (0 changes).
+Round 5 (owner decision, N2 round 5 (1); Codex N2 r5 M3) replaces the ABC checks by EXACT CONCRETE
+TYPES (see **Trust model** below): NumPy registers `np.timedelta64` as both `numbers.Integral` and
+`numbers.Real`, so a day duration raised a raw `TypeError` and a nanosecond duration was accepted as
+an edge id or an angle; a Python int above the decimal conversion limit raised a raw `ValueError`
+when a diagnostic formatted it. Now an edge id is `type(x) is int` (so not `bool`) or exactly one of
+`np.int8`, `np.int16`, `np.int32`, `np.int64`, `np.uint8`, `np.uint16`, `np.uint32`, `np.uint64`,
+converted to a Python int and checked arithmetically to `|id| < 2**63`; an angle or sag is exactly a
+`float`, an `int` (not `bool`; compared with `2**1023` before `float()`, so no overflow), an
+`np.float32` or an `np.float64`. `timedelta64`, `datetime64`, `Fraction`, `Decimal`, NumPy
+integers as a tolerance, `bool`, `np.bool_` and any other object are a `GeometryError`; the model
+and tolerance are checked with `issubclass(type(x), ...)` (never `isinstance`, which looks up a
+foreign `__class__`). `DisplayTrimRefused(code, message)` takes `type(code) is str` and `type(message)
+is str` and formats neither otherwise. Changed results (stated): `Fraction`, `Decimal` and NumPy
+integer tolerances (accepted in round 4) and edge ids beyond `2**63` are now refused; ordinary calls
+(int ids, float or int tolerances) are bit-identical (N1 corpus rerun below).
 
 Inside the domain, a sag allowance at or below 4 eps x max(1, |vertex coordinates|) on a curved
 edge is `EDGE_UNSUPPORTED` (unresolvable), as are distinct parameters evaluating to one point and
@@ -357,6 +384,35 @@ declared domain (or which bound makes it so):
 | rounding allowance | `display_rounding_allowance` (above), at most 2 % of the angle and sag | every term is a sum or quotient of positive quantities (no cancellation); `r > 0` by the radius bound |
 | raw arithmetic | any `ArithmeticError` or `ValueError` from a division | typed `EDGE_UNSUPPORTED` |
 
+## Trust model (owner decision, N2 round 5 (1))
+
+Callers are in-process library code passing ordinary values; the modules (`display_tessellation`
+and `_slab_triangulation`) are not a sandbox against hostile objects. What they guarantee is a
+TYPED refusal (`GeometryError`, or a `DisplayTrimRefused` with its code) for every input outside
+the accepted types, decided by checks against EXACT CONCRETE TYPES only: `type(x) is T` or
+`issubclass(type(x), T)` for the module's own classes; never a `numbers` ABC, never `isinstance` on
+a caller value, never an attribute of a foreign object (only of an exact `np.ndarray`), never
+`str()`, `repr()`, `format` or `__name__` of a foreign object or dtype. Every refusal message is
+FIXED text plus, at most, values the module itself produced: counts, indices, lengths and shapes it
+computed from exact ndarrays as ints, its own constants, floats it computed (or converted with
+`float()` from the model's own fields), and an edge id after it was converted to a Python int and
+range checked. No caller object, dtype or unbounded int is ever formatted (owner decision N2 round 6
+(1): EVERY formatted integer, model-produced ids included, goes through `_id_text`, which prints it
+only if |v| < 10**18 and otherwise the fixed text "<id out of display range>"; 34 sites audited, a
+face id of 10**5000 is a typed refusal). Note that form refusals use memory O(number of rings): one capped tuple snapshot of the ring list, at most 8 bytes x `MAX_SLAB_RINGS` (16,666 = 50_000 // 3), about 135 kB (135,355 bytes traced at the cap); domain/finiteness refusals
+of an accepted, capped array may make one bounded copy (at most 8 bytes x the cap, about 1.8 MB
+measured for the largest capped `float64` `extra_x`). A refusal runs no caller code (Codex N2 r5 M1: a metaclass whose `__name__` raised escaped as a
+raw `RuntimeError`, and a dtype with a 2e6-character field name allocated about 6 MB while it was
+refused; both are now `TRIM_INVALID` under 100 kB traced). Audit of every raise site (round 5): all
+77 `raise` statements at 1ab837b (53 in `display_tessellation.py`, 22 in `_slab_triangulation.py`) and
+the three message builders (`_unsupported`, `_too_complex`, `_form_error`); 16 messages formatted a
+caller value and are now fixed text: a foreign type name in 11 (8 + 3), a dtype and shape in 2, a model
+or arithmetic exception's text in 3 (one of them also a type name, counted once), the refusal code's
+`repr` in 1, and two model fields (a stored angle, a cylinder radius) are converted with `float()`
+before they are formatted; 2 raise sites are new (a non-str refusal message, an edge id beyond
+`2**63`), 79 in all. Every other message already held only module-produced values. A source test
+keeps `__name__`, `numbers`, a formatted dtype and exception text out of both modules. A lower-level exception stays attached as the refusal's `__cause__`.
+
 ## Refusal codes (`REFUSAL_CODES`)
 
 | Code | Meaning |
@@ -365,3 +421,289 @@ declared domain (or which bound makes it so):
 | `EDGE_UNSUPPORTED` | the curve is not a line, circle or ellipse; degenerate frame or projection; support azimuth not monotone along the edge or reaching the axis (a line crossing it); unresolvable sag (including a sag rounding allowance above 2 % of the sag allowance); a vertex farther from its curve than the sag allowance; more than 4096 intervals (each division, or their sum); lost precision |
 | `OUT_OF_DOMAIN` | outside the declared numeric domain (`DisplayDomainRefused`), including an angle rounding allowance above 2 % of `tol.angle` |
 | `TRIM_INVALID`, `TRIM_WINDS_SUPPORT` | reserved for face trims (not raised by edge sampling) |
+
+## Trim ring triangulation (`anygeometry._slab_triangulation`, private, N2)
+
+`triangulate_rings(rings, extra_x=None)` triangulates the region of `rings[0]` minus `rings[1:]`
+(each ring closed implicitly; ring orientation is free) in pure NumPy, without Shapely. It is not
+wired into any public display mesh yet (N3/N4).
+
+**Input contract (owner decision, N2 round 1, the recommended option): simple rings.** The outer
+ring and every hole are simple polygons: no proper crossing, no self-touch, no zero-width retrace
+(repeated consecutive points are allowed and collapse to one vertex; collinear runs are fine). The
+holes lie strictly inside the outer ring and are pairwise disjoint: no two boundaries share a point
+or an edge, and no hole lies inside another. Anything else is `TRIM_INVALID`. (The first version
+described an even-odd rule; it is dropped: validity then depended on the cut list, and
+self-touches were refused or accepted by an area comparison, not by the rule.)
+
+**Validity is decided exactly and does not depend on `extra_x`** (owner decision, N2 round 1). The
+decision uses only ordinate comparisons on slab lines (vertical lines through every vertex and
+every `extra_x`; extra lines only refine the structure, and the predicates are exact, so the
+verdict is the same with or without them).
+
+**Cut points are correctly rounded** (owner decision, N2 round 2, the recommended option). A cut
+point on the segment from `(xa, ya)` to `(xb, yb)` (canonical: `a` the endpoint of lower x, so
+every traversal gives the same bits) at a slab line `x` has the exact fraction
+`f* = (x - xa) / (xb - xa)` and ordinate `y* = ya + f* (yb - ya)`; the result stores `RN(f*)` and
+`RN(y*)`, the round-to-nearest binary64 values. Method: a float candidate `c` (the plain formula,
+then one correction step) is certified when the residual `R = (v* - c)(xb - xa)`, evaluated from
+error-free transformations (two-sum, Dekker's two-product; exact for domain values, the products
+guarded against underflow: an operand is zero or at least `2^-450`), satisfies
+`|R| + E < h (xb - xa)`, `h` half the smaller gap of `c` to its float neighbours and
+`E = 16 u (sum |terms| + |R|) + 2^-1060` a rigorous bound on the residual's evaluation error (nine
+terms: at most `8.01 u` from the summation, `u` per inexact cross product, `u |R|` from the last
+sum, with margin for `E`'s own rounding; the absolute term covers gradual underflow); or when the
+residual is exactly zero. Rows it cannot certify (a residual within `E` of a rounding boundary, a
+cancelling ordinate near 0, tiny operands) are rounded from exact integers (CPython's integer
+true division is correctly rounded, subnormals included). Measured: no row of the timing trims
+needs the exact route; 1022 of the 4005 directed hard rows in the tests do.
+
+Correct rounding is monotone, so the exact strict order of the boundary points on a slab line
+becomes a NON-STRICT order of the stored ordinates, never a reversal. Therefore:
+
+- a strictly smaller stored ordinate proves a strictly smaller exact one, and only equal stored
+  ordinates (ties) are compared exactly (`fractions.Fraction`);
+- ties of distinct boundaries are ACCEPTED: the pieces they bound have a vertical side of zero
+  height and are exactly degenerate; they are dropped (below). The area they lose is already in the
+  stated bound (each cut ordinate's error times half its neighbours' x span), with the error now at
+  most half an ulp of the stored ordinate;
+- a reversal is unreachable; the check stays as a fail-closed guard (`OUT_OF_DOMAIN`, "rounded
+  ordinates reverse their exact order", never seen in the fuzz);
+- a fraction that rounds to 0.0 or 1.0 at a strictly interior x is ACCEPTED: the exact fraction is
+  then within half an ulp of the end (`|f* - f| <= 2^-54` at 1, at most `2^-1075` at 0); the 2D
+  mesh is unaffected (its cut point is the correctly rounded `(x, RN(y*))`), and the fraction is
+  provenance metadata only (see "Certified product" below). Both round-1 resolution refusals ("slab too narrow", "feature below display
+  resolution") are gone; the two Codex round-2 reproductions (a real N1 face whose right corners
+  are one ulp apart, a triangular hole cut one ulp right of its tip) are meshed and pass the exact
+  oracle.
+
+The validity checks, on the exact order:
+
+1. on each line, all boundary points (vertices, cut points) in exact order: two distinct points at
+   the same exact location are a contact;
+2. a vertical segment's two endpoints are adjacent in that order (nothing else touches it, no
+   vertical retrace);
+3. in each slab the spanning segments keep their order from the left line to the right line (a
+   reversal is a proper crossing; equal at both lines is an overlap);
+4. walking each slab bottom-up, a hole is entered only inside the outer ring and while no other
+   hole is open.
+
+Cost and budgets (owner decisions, N2 rounds 1 and 2): incidence processing is `O(I log I)` in the number `I` of
+segment-slab incidences (sorts and linear scans, no pairs), and input preparation is `O(input size)`
+(a copy and scan of the capped arrays, including out-of-range `extra_x` values); the exact comparisons run only on
+lines with a tie. The preflight counts what is allocated and emitted, before anything is built
+(a cheap upper bound, segments x lines, skips the exact count for small trims): `N`, ALL input
+points (duplicates and the points of vertical segments included, each also a returned point and
+a segment), at most `MAX_SLAB_RING_POINTS = 50000`; `I` (and the number of `extra_x` values) at
+most `MAX_SLAB_INCIDENCES = 200000`; and the triangle bound `I + 2 (N + cuts)` (`cuts = I - sloped
+segments`; a trapezoid gives `L + R - 2` triangles for `L`, `R` points on its sides, and each
+point is inside at most one left and one right side) at most `MAX_SLAB_OUTPUT = 600000`. Above any
+of them the trim is `OUT_OF_DOMAIN` ("trim too complex for display"); the caller keeps its old
+route. Why these values: the measured ordinary trims are a 400-vertex ring with 20 holes
+(`N = 800`, `I = 4.2e3`, 4280 triangles), a plain 400-vertex ring (`N = 400`, `I = 0.8e3`) and a
+400-vertex star (`N = 400`, `I = 2.0e4`, 19640 triangles, the densest ordinary trim measured); the
+budgets are 60x (`N`), 10x (`I`) and 10x (triangle bound, 5.9e4 for the star) above them. A
+subdivided vertical side (Codex round 2: 200002 triangles from 2 incidences) is refused by `N`.
+Staggered holes need about `2 m^2` incidences: `m = 314` is accepted (199706 triangles, 0.16 s),
+`m >= 315` is refused by the triangle bound (loose by about 3x there). `I` is not `O(n)` in
+general (a non-monotone ring can need `O(n^2)`); the budgets bound it.
+
+Method: in each slab the spanning segments, in their exact order, are paired bottom/top, giving
+trapezoids whose union is the region. x-monotone single rings take a certified fast path (pure
+Python up to 48 vertices, NumPy above) giving the same trapezoids: it returns only when the
+correctly rounded chains are strictly apart at every interior line (then the exact chains are
+too and the ring is simple); otherwise the general path decides, ties included. Tests force the
+general path with the private keyword `_fast=False` and compare.
+
+**Caller error state** (owner decision, N2 round 2): every numeric section runs under a local
+`np.errstate(all="ignore")` with explicit finiteness checks after, so results and refusals do not
+depend on the caller's `np.seterr`; the contract tests run every call under
+`np.errstate(all="raise")`. Audit of the merged N1 module (`display_tessellation.py`) the same
+way: all public calls of its edge tests (`edge_display_samples`, `display_rounding_allowance`)
+run under `np.errstate(all="raise")` through a test fixture. Round 2 found no escape there; Codex
+round 3 found one the fixture did not cover: an ellipse with semiaxes 2 and 1 and a SUBNORMAL
+out-of-plane component (`u = (2, 0, 2^-1074)`) samples under the default state, but under
+`raise` both public calls raised `FloatingPointError` (underflow in `u / |u|`) in their setup,
+before the arithmetic guard. Fix (owner decision, N2 round 3 (4)): both public calls run their
+own setup and arithmetic under a local `np.errstate(all="ignore")`; the existing explicit
+finiteness and domain guards decide; MODEL calls made from inside (vertex positions, incident
+faces, arc frames, `evaluate_edge_many`) run under NumPy's DEFAULT error state, whatever the
+caller's, so the model's own state-checked fast paths see the state they were measured under.
+Nothing changes under the default state: the N1 corpus (5744 results: samples, points and
+allowances, every corpus edge at both steps and both sag settings) is bit-identical before and
+after (0 changes). The fixture now also carries the reproduction and six subnormal or
+huge-but-in-domain variants (subnormal components in both axes, a circle with a subnormal tilt, a
+subnormal centre, a centre near 1e9 with a stored angle of 1e5, a millimetre ellipse with a
+subnormal component, a line with subnormal coordinates), each compared bit for bit under
+`raise`, `ignore`, `warn` and mixed states against the default. The corpus tests make no public
+call. (Building the corpus models under `raise` does fail, in `exact_curves` bounding boxes and
+`nurbs`, outside the display module; not changed.)
+
+**Input contract and size caps first** (owner decision, N2 round 4 (1), the recommended option;
+it replaces the permissive input handling of rounds 1-3, whose input-form findings recurred in
+every review round). The module is private and its only caller will be N3, so the contract is
+strict and checked FIRST, in O(number of rings), from types and shapes alone, without touching
+coordinate data:
+
+- `rings` is a `list` or `tuple` (exact types, no subclass) of 1 to `MAX_SLAB_RINGS =
+  MAX_SLAB_RING_POINTS / 3 = 16666` items; each item is exactly `numpy.ndarray` (`type(a) is
+  np.ndarray`: no subclass, so no masked array, `np.matrix`, `np.memmap` or user subclass),
+  `dtype == np.float64`, `ndim == 2`, `shape[1] == 2`, `shape[0] >= 3`; the total number of points
+  (the sum of the shapes) is at most `MAX_SLAB_RING_POINTS`.
+- `extra_x` is `None` or exactly a `numpy.ndarray` with `dtype == np.float64` and `ndim == 1`, at
+  most `MAX_SLAB_INCIDENCES` values.
+- Any other form is `TRIM_INVALID` ("input must be a list/tuple of float64 (n, 2) ndarrays",
+  with the offending item named); above a cap it is `OUT_OF_DOMAIN` ("too complex"). Nothing is
+  converted, no caller container other than the outer list or tuple is iterated (it is
+  snapshotted, then only `type`, `dtype` and `shape` of its items are read), and `np.asarray` is
+  never applied to a foreign object. Lists of points, other dtypes (integers, `float32`, a
+  `np.longdouble` wider than binary64, complex, object, strings, booleans, big-endian float64),
+  stacked `(k, n, 2)` arrays, ranges, generators, iterators, nested lists, scalars and subclasses
+  are all refused by this one rule. Views of float64 arrays (strided, broadcast, Fortran order) are
+  admitted and capped by their shapes without being materialised.
+- Then the coordinates (float64 already, so nothing can be narrowed): finite and
+  `|c| <= MAX_DISPLAY_COORDINATE`, else `OUT_OF_DOMAIN`.
+
+The conversion code of rounds 1-3 (the binary64 round trip, masked-array handling, the
+sequence and scalar walks) is deleted; there is one input path. Codex round 4 reproductions, all
+refused now with a traced peak allocation under 100 kB (`tracemalloc`): an empty stacked array
+`np.empty((100000, 0, 2))` (14 MB traced before), a list of 128 wide-string point arrays (17 MB),
+`range(10**40)` as `extra_x` or as the rings (a raw `OverflowError` before), a stacked
+`ndarray` subclass whose indexing doubled what is stored (a unit square meshed to area 4), and a
+nested `extra_x` list (`[[.25], [.5]]`). The parametrised refusal test also carries every
+input-form reproduction of rounds 1-3 (oversized integers, complex with a NaN imaginary part,
+integers above `2^53`, generators and iterators, masked arrays and `np.ma.masked`) and other
+foreign forms (45 cases). The size caps keep their round-3 test (a broadcast view of 1e6 points,
+20000 rings, a broadcast and a strided `extra_x`: under 1 MB traced). Changed results (stated):
+inputs the earlier rounds converted are now `TRIM_INVALID`: Python sequences of points, integer,
+`float32`, boolean, complex and object arrays (complex, object and boolean were `OUT_OF_DOMAIN`,
+integers above `2^53` "not exactly representable" `OUT_OF_DOMAIN`), stacked arrays, scalars and
+sequences as `extra_x`, and ndarray subclasses other than masked arrays (read as stored before).
+
+Contract of the result (`SlabTriangulation`):
+
+- `points` are the input vertices in order (rings concatenated, unchanged bits), then *cut points*;
+  cut point `k` is `(x, RN(y*))` on the slab line `x` of ring segment `cut_ends[k] = (a, b)`, `a`
+  its endpoint of lower x. `cut_fraction[k] = RN(f*)`, in `[0, 1]` (0 or 1 only within half an
+  ulp, see above), is the fraction of that point from `a`. `cut_ends` and `cut_fraction` are
+  provenance METADATA (which segment, roughly where), not a certified lift (below). No other
+  points are created.
+- `triangles` are counter-clockwise with strictly positive area, decided from the slab geometry,
+  not from a determinant (owner decision, N2 round 1): each triangle has one vertical side between
+  two points of one slab line and its third corner on the other line, so its exact area is
+  (side height) x (slab width) / 2, and the side height is the difference of two floats, exactly
+  signed. A piece is dropped exactly when that height is zero (one shared point, or a tie).
+- The triangles tile, exactly in rational arithmetic, the *rounded* polygon (the rings with each cut
+  point inserted on its segment): no overlap, nothing outside, every point on a trapezoid's
+  vertical side used (no T-junctions). The rounded polygon's area differs from the exact one by at
+  most `sum_k |RN(y*_k) - y*_k| (x_next,k - x_prev,k) / 2` over the cut points (moving one by `d`
+  changes the area by `d` times half its neighbours' x distance), each error at most half an ulp.
+- Coverage (owner decision, N2 round 5 (2), the recommended option): the 2D mesh covers exactly the
+  CLOSURE OF THE POSITIVE-AREA INTERIOR of the rounded trim. Zero-width parts of
+  the rounded trim that are not in the closure of the positive-area interior (a hole edge and an
+  outer edge rounded onto the same segment) are omitted and invisible in display; points IN that closure (for example the round-4
+  hole-tip tie, where a slab line meets a boundary at a point) are covered and may appear as vertices.
+  N3 must not assume every trim boundary segment is a triangle edge.
+  Codex round 5 reproduction (kept as a test): outer ring `(0, nextafter(1, 0)), (4, 1), (4, 3),
+  (0, 3)`, hole `(2.5, 1), (3.5, 1), (3.5, 2), (2.5, 2)`: the outer edge's cuts at `x = 2.5` and `3.5`
+  round onto the hole's bottom corners, the exact oracle passes, and no triangle covers the interior
+  of the coincident segment (for example `(3, 1)`). Area accounting: the zero-width part has zero
+  area, so the triangles' exact area is the rounded polygon's area (outer minus hole, with the cut
+  points inserted), as for every accepted mesh.
+- `area` is the EXACT area of the emitted triangles, correctly rounded once (owner decision, N2
+  round 4 (3), the recommended option): `RN(A)` with `2 A = sum (xr - xl) ((ytl - ybl) + (ytr -
+  ybr))` over the trapezoids (the triangles tile them exactly; a dropped piece has zero area), every
+  value a stored float. Up to 24 trapezoids it is computed from exact integers (a common
+  power-of-two denominator, one correctly rounded integer division); above, by a certified float
+  evaluation (error-free two-sum and two-product of the main terms, an exact split-and-sum of the
+  products, a rigorous bound on the small rest), which returns only when the bound proves the
+  rounding (else the integers decide). The value is the same bits on the fast and the general path
+  (round 3 left 23 of 6000 trims differing in the last bits). `area` is the correctly rounded exact
+  area, which may round to 0 for subnormal-scale trims (owner decision, N2 round 5 (4); Codex round 5:
+  a square of side `2^-538` is accepted on both paths with two strictly positive triangles, and its
+  exact area `2^-1076` rounds to `0.0`; kept as a test); it is never zeroed by the computation
+  itself: Codex round 4 showed a rectangle with `s = 2^-537`, width `nextafter(s, inf)` and height `s / 2`, exact area
+  rounding to `5e-324`, reported 0.0 with cuts at `[0.09 s, 0.34 s]`; now `5e-324` on both paths, with
+  and without cuts (round 3's `2^-536` square stays `2^-1072`). The exact oracle now checks
+  `area == float(Fraction(exact triangle sum))` for every accepted mesh. Changed results: `area`
+  moves by at most a few ulps where the plain float sum was not correctly rounded (measured below);
+  points, triangles and cut data are unchanged.
+- The result is deterministic (bit-identical on repeat).
+
+**Certified product** (owner decisions, N2 rounds 3 and 8). The certified product of N2 is the 2D
+mesh: the vertices and triangles in the trim plane, with the guarantees above. `cut_ends` and
+`cut_fraction` are provenance metadata only. Lifting this mesh onto a support is N3's contract; N3
+must not rely on cut_fraction reconstruction for orientation or coverage (see the two documented
+counterexamples). Counterexample 1 (kept as a test): outer ring `(-1, -1), (1, -1), (1, 3), (-1, 3)`,
+hole `(-0.21, 1), (0.75, 0.75), (0.75, 1.25)`, `extra_x = [nextafter(-0.21, -inf)]`: the 2D mesh passes
+the exact oracle, but rebuilding its cut points at `cut_fraction` inverts triangle `[7, 4, 10]`.
+Counterexample 2 (kept as a test): outer ring `(0, 0), (3, yb), (3, 4), (0, 4)` with `yb = 0.1 * 3`,
+hole `(0.5, 0.5), (1, tip), (2, 1), (1, 2)` with `tip = float(Fraction(yb) / 3)`: the outer cut at
+`x = 1` rounds onto the hole tip; the fraction rebuild separates the two points, every triangle stays
+counter-clockwise, yet a point the 2D mesh covers lies in no lifted triangle.
+
+Refusals, in this order (no raw `IndexError`/`ValueError`/`OverflowError`/`FloatingPointError`):
+
+| code | when |
+|---|---|
+| `TRIM_INVALID` / `OUT_OF_DOMAIN` | the input contract and size caps, from types and shapes only, before any data is read (owner decision, N2 round 4): anything but a list/tuple of 1 to `MAX_SLAB_RINGS` exact float64 `(n, 2)` ndarrays with `n >= 3` and an `extra_x` of None or an exact float64 1-D ndarray (`TRIM_INVALID`, "input must be a list/tuple of float64 (n, 2) ndarrays"); more than `MAX_SLAB_RINGS` rings, `MAX_SLAB_RING_POINTS` points or `MAX_SLAB_INCIDENCES` extra lines (`OUT_OF_DOMAIN`, "too complex") |
+| `TRIM_INVALID` (`SlabInvalid`) | fewer than three distinct consecutive vertices |
+| `OUT_OF_DOMAIN` (`DisplayDomainRefused`, as N1) | the declared numeric domain, checked before any arithmetic: finite, `\|c\| <= MAX_DISPLAY_COORDINATE = 1e9` for rings and `extra_x` (float64 by the contract, so nothing is converted or narrowed); then the incidence and triangle budgets. Inside the domain no overflow is possible: differences are at most 2e9, shoelace products at most 4e18 |
+| `TRIM_INVALID` | the input contract above (crossing, self-touch, retrace, touching rings, hole outside or nested), decided exactly |
+| `OUT_OF_DOMAIN` | a ring whose EXACT area is at most `16 n eps extent^2` of ITS OWN extent (the float value of that expression; one rule on both paths, owner decision N2 round 2: a float shoelace filter with a rigorous bound, exact integers where it cannot decide; before, the fast path tested its slab sum and the general path a cancelling float shoelace, and they disagreed on a ring at the floor); the reversal guard (unreachable) |
+
+The tests carry an independent exact oracle (`tests/test_display_tessellation_slab_contract.py`):
+exact orientation (Shewchuk's filter with an absolute underflow allowance, then rationals: a
+subnormal collinear triple used to pass the filter as non-zero), exact pairwise
+interior-disjointness (bounding-box prefilter, no cap), exact containment of corners, edge
+midpoints (closed) and centroids (strict) in the rounded polygon, exact equality of the triangle
+area sum with the rounded polygon's area, the stated bound against the exact polygon (each cut
+charged once, found by its segment `cut_ends[k]` and index `k` in its own ring; round 2 matched
+cuts by rounded coordinates across rings, so an outer cut rounded onto a hole vertex was charged
+to both rings: +25 % on the round-3 test case), every cut
+fraction and ordinate equal to `float(Fraction)` of the exact value, and a brute-force exact
+validity verdict.
+
+Fuzz (N2 round 1, 6000 cases: `display-tess-evidence-20261125/n2r1_fuzz.py`; integer-grid, star,
+snapped and one-ulp-nudged star, and x-monotone generators, half with random extra lines, some one
+ulp from an end; each case also run with the general path forced): 0 raw exceptions; 0 exact-oracle
+failures among the 2810 accepted; the brute-force exact verdict matched on all 6000 (2957 invalid,
+all `TRIM_INVALID`); fast and general paths gave the same verdict and the same triangles; the
+verdict never changed with `extra_x`. 233 valid cases were `OUT_OF_DOMAIN` (190 feature below
+display resolution, 39 slab too narrow, 4 area floor). Round 2, the same 6000 cases (`n2r2_fuzz.py`,
+same seed, the stricter oracle): 0 raw exceptions; 0 exact-oracle failures among the 3039 accepted;
+the brute-force verdict matched on all 6000 (2957 invalid, all `TRIM_INVALID`); fast and general
+paths agreed (verdict and triangles); the verdict never changed with `extra_x`; the reversal guard
+never fired. Of the 233 valid cases refused in round 1, 229 are now accepted; the remaining 4
+`OUT_OF_DOMAIN` are the area floor (as before). Round 3, the same 6000 cases and oracle (per-cut area
+allowance): identical counts (3039 accepted, 0 oracle failures, 2957 `TRIM_INVALID`, 4
+`OUT_OF_DOMAIN` area floor, 0 raw exceptions). Ordinary results unchanged: 3000 seeded star trims
+with holes and extra lines (6000 calls, both paths; 5284 accepted) give bit-identical points,
+triangles, cut data and areas before and after round 3. Round 4 (`n2r4_fuzz.py`: the same 6000 cases passed as float64 ndarrays, the oracle now also
+checking `area == RN(exact area)`): identical counts (3039 accepted, 0 oracle failures, 2957
+`TRIM_INVALID`, 4 `OUT_OF_DOMAIN` area floor, 0 raw exceptions). Ordinary results (`n2r4_bits.py`,
+3000 seeded star trims with holes and extra lines, both paths, 6000 calls, 5614 accepted): 0 verdict
+changes, points, triangles and cut data bit-identical; `area` changed in 2543 calls by at most 3
+ulps (the plain float sum was not correctly rounded there); fast and general paths now agree on
+every area (15 differed at c59accd).
+
+Measured (best of 30 or 300 runs, loaded PC, round 1 / round 2): a 400-vertex ring with 20 holes
+2.13 / 2.41 ms, a plain 400-vertex ring 0.21 / 0.41 ms, a 400-vertex star 5.1 / 7.8 ms; a unit
+square 43 / 48 us, the square with 9 lines 61 / 85 us, a 24-vertex monotone ring 64 / 71 us, a
+square with one hole 0.24 / 0.22 ms (same session, the round-1 code from `git archive dd5061c`). Round 3
+(76c07d2 / round 3, same session, better of two passes): 2.54 / 2.51 ms, 0.42 / 0.43 ms, 7.6 /
+7.1 ms; 48 / 51 us, 87 / 90 us, 73 / 77 us, 0.22 / 0.23 ms (the shape preflight costs about 3 us
+per call). The
+certified rounding costs about 0.15 ms of NumPy overhead per call above 64 cut points (below that,
+exact integers are cheaper) and about 0.13 us per cut point. Round 4 (c59accd / round 4, same session, best of
+three alternating passes, `n2r4_bench.py`): 2.52 / 2.57 ms, 0.43 / 0.47 ms, 8.3 / 8.5 ms; 51 / 51 us,
+89 / 90 us, 76 / 86 us, 232 / 224 us. The exact area costs about 40 us of NumPy overhead above 24
+trapezoids (certified float route) and about 1.7 us per trapezoid below (integers); the strict
+input check is cheaper than the conversion it replaces.
+
+Round 5 (`n2r4_fuzz.py` rerun, the same 6000 cases and oracle): identical counts (3039 accepted, 0
+oracle failures, 2957 `TRIM_INVALID`, 4 `OUT_OF_DOMAIN` area floor, 0 raw exceptions). N1 corpus
+(`n2r4_corpus.py`, 5744 results, 1ab837b against round 5): 0 sample changes and 0 allowance changes,
+refusal codes and messages included. Timing (`n2r4_bench.py`, best of three alternating passes,
+1ab837b / round 5): 2.53 / 2.57 ms, 0.475 / 0.473 ms, 8.9 / 8.2 ms; 49 / 50 us, 89 / 90 us, 84 / 83
+us, 223 / 223 us (unchanged within the loaded PC's noise; only refusal text changed).

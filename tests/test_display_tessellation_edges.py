@@ -21,6 +21,26 @@ from anygeometry.surfaces import Cone, Cylinder, Plane
 
 DENSE = 65
 EPS = np.finfo(float).eps
+_PUBLIC = {name: getattr(dt, name) for name in ("edge_display_samples", "display_rounding_allowance")}
+
+
+@pytest.fixture(autouse=True)
+def _public_calls_under_a_raising_numpy_error_state(monkeypatch):
+    """N2 round-2 audit (owner decision 3): every public call in these tests runs under
+    ``np.errstate(all="raise")``, so no raw ``FloatingPointError`` can depend on the caller's
+    ``np.seterr`` (fixtures are built under the default state; only the public calls are strict)."""
+    for name, function in _PUBLIC.items():
+        def strict(*args, _function=function, **kwargs):
+            with np.errstate(all="raise"):
+                return _function(*args, **kwargs)
+        monkeypatch.setattr(dt, name, strict)
+
+
+def test_the_public_calls_are_strict_in_these_tests():
+    assert dt.edge_display_samples is not _PUBLIC["edge_display_samples"]
+    with pytest.raises(FloatingPointError):
+        with np.errstate(all="raise"):
+            np.float64(1e-300) * np.float64(1e-300)
 
 
 def _angles(a, b):
@@ -2514,3 +2534,205 @@ def test_r11_the_module_frame_is_built_about_the_normalised_axis():
         worst = max(abs(e1 @ u), abs(e2 @ u), abs(e1 @ e2), abs(e1 @ e1 - 1.), abs(e2 @ e2 - 1.),
                     abs(float(np.cross(e1, e2) @ u) - 1.))
         assert worst <= 4. * EPS, (multiplier, worst / EPS)
+
+
+# N2 round 3 (Codex M4, owner decision 4): the public calls run their own arithmetic under a local
+# np.errstate(all="ignore"); the explicit domain and finiteness guards decide.  Subnormal and huge
+# (in-domain) definition values, each built under the default state, then called under several
+# caller states: the same samples (bytes) or the same refusal code every time.
+_TINY = math.ulp(0.0)
+
+
+def _r3_errstate_cases():
+    yield "subnormal out-of-plane ellipse (Codex r3)", EllipticArc((0, 0, 0), (2, 0, _TINY), (0, 1, 0), 0, .5)
+    yield "subnormal components in both axes", EllipticArc((0, 0, 0), (2, 1e-310, 1e-310), (-1e-310, 1, 1e-310), .2, 1.)
+    yield "circle with a subnormal tilt", EllipticArc((0, 0, 0), (1, 0, _TINY), (0, 1, -_TINY), 0, 2.)
+    yield "subnormal centre", EllipticArc((_TINY, -_TINY, 1e-320), (3, 0, 0), (0, 1, 0), -.4, .9)
+    yield "huge centre, large stored angle", EllipticArc((9e8, -9e8, 5e8), (3, 0, _TINY), (0, 1.5, 0), 1e5, .3)
+    yield "small ellipse", EllipticArc((0, 0, 0), (1e-3, 0, 0), (0, 5e-4, _TINY), 0, 1.)
+    yield "line with subnormal coordinates", ((_TINY, 0., 0.), (1., _TINY, -_TINY))
+
+
+def _r3_outcome(call, g, edge, tol):
+    try:
+        value = call(g, edge, tol)
+    except dt.DisplayTrimRefused as error:
+        return ("refused", error.code)
+    if isinstance(value, dt.EdgeSamples):
+        return (value.parameters.tobytes(), value.points.tobytes())
+    return (value.angle, value.sag, value.axis_floor, value.axis_floors)
+
+
+@pytest.mark.parametrize("label, curve", list(_r3_errstate_cases()), ids=[c[0] for c in _r3_errstate_cases()])
+def test_r3_public_calls_do_not_depend_on_the_callers_error_state(label, curve):
+    g = corpus.GeometryModel()
+    if isinstance(curve, tuple):
+        edge = g.add_line(g.add_point(*curve[0]), g.add_point(*curve[1]))
+    else:
+        edge = g.add_curve(g.add_point(*curve.evaluate(0)), g.add_point(*curve.evaluate(1)), curve)
+    for tol in (dt.DisplayTolerance(.15), dt.DisplayTolerance(.15, 1e-3)):
+        for name, call in _PUBLIC.items():
+            reference = _r3_outcome(call, g, edge, tol)               # the default NumPy state
+            assert reference[0] != "refused" or name != "edge_display_samples" or label != _R3_REPRO, reference
+            for state in ({"all": "raise"}, {"all": "ignore"}, {"all": "warn"},
+                          {"under": "raise", "over": "raise"}, {"divide": "raise", "invalid": "raise"}):
+                with np.errstate(**state):
+                    assert _r3_outcome(call, g, edge, tol) == reference, (label, name, state)
+            assert _r3_outcome(getattr(dt, name), g, edge, tol) == reference      # the strict fixture
+
+
+_R3_REPRO = "subnormal out-of-plane ellipse (Codex r3)"
+
+
+# ----------------------------------------------------------------------------- N2 round 4 (Low b): arguments
+@pytest.mark.parametrize("args", [
+    (10 ** 400,), (-10 ** 400,), (Fraction(10 ** 400),), (True,), (False,), (np.bool_(True),), ("0.1",), (b"0.1",),
+    (complex(.1, 0),), (None,), (np.array([.1]),), ([.1],), (float("inf"),), (float("nan"),),
+    (.1, 10 ** 400), (.1, True), (.1, np.bool_(True)), (.1, "1"), (.1, complex(1, 0)), (.1, float("inf")),
+    (.1, np.array([1.])),
+], ids=lambda a: repr(a)[:30])
+def test_r4_tolerance_arguments_are_typed_refusals(args):
+    """Codex N2 r4 Low (b): DisplayTolerance(10**400) raised a raw OverflowError; strings and bools
+    were converted.  Owner decision N2 r4 (4): a real number (not bool) or a typed refusal."""
+    with pytest.raises(GeometryError):
+        dt.DisplayTolerance(*args)
+
+
+def test_r4_tolerance_accepts_every_real_number_type_with_the_same_value():
+    # owner decision N2 r5 (1): the exact types float, int, np.float32, np.float64 (Fraction and
+    # NumPy integers, accepted in round 4, are now refused: test_r5_m3_*)
+    for value in (.1, np.float64(.1), np.float32(.25), 1):
+        assert dt.DisplayTolerance(value).angle == float(value)
+        assert dt.DisplayTolerance(.1, value).sag == float(value)
+
+
+def test_r4_public_call_arguments_are_typed_refusals():
+    """Codex N2 r4 Low (b): a NaN edge id raised a raw ValueError in both public calls.  Owner
+    decision N2 r4 (4): an integer edge id (not bool), a GeometryModel and a DisplayTolerance, or a
+    typed refusal (GeometryError); results for valid arguments are unchanged."""
+    case = corpus.ALL["shared_circle"]()
+    edge = case.info["shared"]
+    tol = dt.DisplayTolerance(.1)
+    for call in (dt.edge_display_samples, dt.display_rounding_allowance):
+        reference = call(case.model, edge, tol)
+        for edge_id in (float("nan"), float("inf"), -float("inf"), 1.5, float(edge), np.float64(edge), "1", b"1",
+                        True, False, np.bool_(True), None, 10 ** 400, -10 ** 400, [edge], np.array([edge]),
+                        complex(edge, 0)):
+            with pytest.raises(GeometryError):
+                call(case.model, edge_id, tol)
+        for model in (None, "model", object()):
+            with pytest.raises(GeometryError):
+                call(model, edge, tol)
+        for bad_tol in (.1, None, (.1, None)):
+            with pytest.raises(GeometryError):
+                call(case.model, edge, bad_tol)
+        again = call(case.model, np.int64(edge), tol)               # any integer type is an edge id
+        if call is dt.edge_display_samples:
+            assert np.array_equal(again.parameters, reference.parameters) and again.edge_id == edge
+        else:
+            assert again == reference
+
+
+def test_r4_refusal_constructors_refuse_unknown_codes_typed():
+    for code in ("NOT_A_CODE", None, 3, ["TRIM_INVALID"], b"TRIM_INVALID"):
+        with pytest.raises(GeometryError):
+            dt.DisplayTrimRefused(code, "x")
+
+
+# ----------------------------------------------------------------------------- N2 round 5 (M3): exact argument types
+class _NameRaises(type):
+    """A metaclass whose ``__name__`` runs caller code (Codex N2 r5 M1/M3)."""
+
+    def __getattribute__(cls, name):
+        if name == "__name__":
+            raise RuntimeError("executed caller code")
+        return super().__getattribute__(name)
+
+
+class _Foreign(metaclass=_NameRaises):
+    pass
+
+
+class _ClassRaises:
+    """``isinstance`` looks up ``__class__`` on a mismatch: caller code."""
+
+    @property
+    def __class__(self):
+        raise RuntimeError("executed caller code")
+
+
+_R5_INT_TYPES = (np.int8, np.int16, np.int32, np.int64, np.uint8, np.uint16, np.uint32, np.uint64)
+
+
+def _r5_foreign_numbers():
+    from decimal import Decimal
+    return (np.timedelta64(1, "D"), np.timedelta64(1, "ns"), np.datetime64("2026-01-01"), Fraction(1, 4),
+            Decimal("0.25"), True, np.bool_(True), _Foreign(), _ClassRaises(), object(), 10 ** 5000, -10 ** 5000)
+
+
+def test_r5_m3_numeric_arguments_accept_exact_concrete_types_only():
+    """Codex N2 r5 M3: NumPy registers timedelta64 as Integral and Real; a day duration raised a raw
+    TypeError, a nanosecond duration was accepted as an edge id or angle; 10**5000 raised a raw
+    ValueError when a diagnostic formatted it.  Owner decision N2 r5 (1): exact concrete types only
+    (int, np.int8..np.uint64 for ids; float, int, np.float32, np.float64 for tolerances), range checked
+    arithmetically, every other input a typed refusal."""
+    import sys
+    old = sys.get_int_max_str_digits() if hasattr(sys, "get_int_max_str_digits") else None
+    if old is not None:
+        sys.set_int_max_str_digits(4300)
+    try:
+        case = corpus.ALL["shared_circle"]()
+        edge = case.info["shared"]
+        tol = dt.DisplayTolerance(.1)
+        for call in (dt.edge_display_samples, dt.display_rounding_allowance):
+            reference = call(case.model, edge, tol)
+            for edge_id in _r5_foreign_numbers() + (2 ** 64, -(2 ** 64), np.uint64(2 ** 64 - 1)):
+                with pytest.raises(GeometryError):
+                    call(case.model, edge_id, tol)
+            for model in (_Foreign(), _ClassRaises()):
+                with pytest.raises(GeometryError):
+                    call(model, edge, tol)
+            for bad_tol in (_Foreign(), _ClassRaises()):
+                with pytest.raises(GeometryError):
+                    call(case.model, edge, bad_tol)
+            for kind in _R5_INT_TYPES:
+                again = call(case.model, kind(edge), tol)
+                if call is dt.edge_display_samples:
+                    assert again.edge_id == edge and type(again.edge_id) is int
+                    assert again.parameters.tobytes() == reference.parameters.tobytes()
+                    assert again.points.tobytes() == reference.points.tobytes()
+                else:
+                    assert again == reference
+        for value in _r5_foreign_numbers() + (10 ** 400, np.int64(1), np.longdouble(.25), np.float16(.25)):
+            with pytest.raises(GeometryError):
+                dt.DisplayTolerance(value)
+            with pytest.raises(GeometryError):
+                dt.DisplayTolerance(.1, value)
+        for value in (.25, 1, np.float64(.25), np.float32(.25)):
+            assert type(dt.DisplayTolerance(value).angle) is float
+            assert dt.DisplayTolerance(value).angle == float(value)
+            assert dt.DisplayTolerance(.1, value).sag == float(value)
+        for code in (10 ** 5000, _Foreign(), _ClassRaises(), "NOT_A_CODE"):
+            with pytest.raises(GeometryError):
+                dt.DisplayTrimRefused(code, "invalid code")
+        for message in (10 ** 5000, _Foreign(), None):
+            with pytest.raises(GeometryError):
+                dt.DisplayTrimRefused("TRIM_INVALID", message)
+    finally:
+        if old is not None:
+            sys.set_int_max_str_digits(old)
+
+
+def test_r5_m1_refusal_messages_never_format_caller_objects():
+    """Owner decision N2 r5 (1), the class: every refusal message in both modules is fixed text plus
+    values the module produced; no ``__name__``, ``numbers`` ABC, dtype or caller exception text in
+    either source."""
+    import pathlib
+    import re
+    root = pathlib.Path(dt.__file__).resolve().parent
+    for name in ("display_tessellation.py", "_slab_triangulation.py"):
+        text = (root / name).read_text(encoding="utf-8")
+        assert "__name__" not in text, name
+        assert "import numbers" not in text and "numbers." not in text, name
+        assert not re.search(r"\{[^{}]*dtype[^{}]*\}", text), name
+        assert "str(error)" not in text and "{error}" not in text, name
