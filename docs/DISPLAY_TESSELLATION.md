@@ -365,3 +365,39 @@ declared domain (or which bound makes it so):
 | `EDGE_UNSUPPORTED` | the curve is not a line, circle or ellipse; degenerate frame or projection; support azimuth not monotone along the edge or reaching the axis (a line crossing it); unresolvable sag (including a sag rounding allowance above 2 % of the sag allowance); a vertex farther from its curve than the sag allowance; more than 4096 intervals (each division, or their sum); lost precision |
 | `OUT_OF_DOMAIN` | outside the declared numeric domain (`DisplayDomainRefused`), including an angle rounding allowance above 2 % of `tol.angle` |
 | `TRIM_INVALID`, `TRIM_WINDS_SUPPORT` | reserved for face trims (not raised by edge sampling) |
+
+## Trim ring triangulation (`anygeometry._slab_triangulation`, private, N2)
+
+`triangulate_rings(rings, extra_x=None)` triangulates the region of `rings[0]` minus `rings[1:]`
+(each ring closed implicitly; ring orientation is free; even-odd) in pure NumPy, without Shapely.
+It is not wired into any public display mesh yet (N3/N4).
+
+Method: a vertical line through every ring vertex (plus the caller's `extra_x` lines) cuts the
+plane into slabs; in each slab the spanning non-vertical segments are sorted by height and paired
+bottom/top, giving trapezoids whose union is the region by construction. x-monotone single rings
+take a fast path (pure Python up to 48 vertices, NumPy above) giving the same trapezoids.
+
+Contract of the result (`SlabTriangulation`):
+
+- `points` are the input vertices in order (rings concatenated, unchanged bits), then *cut points*;
+  cut point `k` lies on ring segment `cut_ends[k]` at fraction `cut_fraction[k]`, so a caller can
+  place it on the segment's own image. No other points are created.
+- `triangles` are counter-clockwise with strictly positive area; zero-area triangles are removed.
+- The triangles cover the region exactly (sum of areas equals the ring area minus the holes), none
+  overlap, none lie outside, and every point on a trapezoid's vertical side is used (no T-junctions).
+- The result is deterministic (bit-identical on repeat).
+
+Refusals: everything invalid raises `SlabInvalid`, a `DisplayTrimRefused` with code `TRIM_INVALID`:
+fewer than three vertices, non-numeric or non-`(n, 2)` ring data, non-finite coordinates or
+`extra_x`, a ring with no area (collinear, repeated or self-cancelling), crossing rings (odd
+boundary count in a slab, or segments crossing inside a slab), and holes outside the outer ring or
+overlapping (covered area differs from the shoelace area). No raw `IndexError`/`ValueError`.
+
+Precision: vertices are never altered and slab areas are exact up to float rounding; the cut
+points are computed as `a + f (b - a)` with `f = (x - xa) / (xb - xa)`, so they lie on their
+segment to a few ulps, not exactly. The validity checks compare the covered area with the shoelace
+area (relative 1e-9 plus 16 n eps extent^2) and allow a 64 eps slack for ordering inside a slab:
+a crossing smaller than that, or a hole poking out of the outer ring by less than the area
+tolerance, can be accepted. A ring that touches itself or backtracks (a zero-width spike) is
+treated by even-odd, the spike carrying no triangle. Measured: a 400-vertex ring with 20 holes
+takes about 1.3 ms, a plain 400-vertex ring 0.3 ms.

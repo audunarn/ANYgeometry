@@ -4,6 +4,9 @@ All notable user-visible changes to ANYgeometry are documented here.
 
 ## Unreleased
 
+- Private `anygeometry._slab_triangulation.triangulate_rings`: exact-coverage slab (trapezoid)
+  triangulation of trim rings with holes, pure NumPy, invalid rings refused as `TRIM_INVALID`
+  (not yet used by any public display mesh).
 - New `anygeometry.display_tessellation` (not re-exported from `anygeometry`): display edge
   samples shared by every face using an edge (`edge_display_samples`, `DisplayTolerance`,
   `EdgeSamples`, typed `DisplayTrimRefused`). Narrow contract: lines, circles and ellipses on
