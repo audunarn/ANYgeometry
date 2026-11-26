@@ -4,6 +4,120 @@ All notable user-visible changes to ANYgeometry are documented here.
 
 ## Unreleased
 
+- New `anygeometry.display_tessellation` (not re-exported from `anygeometry`): display edge
+  samples shared by every face using an edge (`edge_display_samples`, `DisplayTolerance`,
+  `EdgeSamples`, typed `DisplayTrimRefused`). Narrow contract: lines, circles and ellipses on
+  plane, cylinder and cone faces only, each divided in closed form (tangent angle, support
+  azimuth, the exact chord sag); any other curve or incident support is refused with a typed
+  code. Declared numeric domain: coordinates up to 1e9, stored angles up to 1e6 rad, distance
+  from a support axis at least 1e-9 x max(1, |coordinate|) (an end exactly on the axis
+  excepted), ellipse aspect x max(1, |stored angle|) at most 1e4 (1e6 before round 6); outside it
+  `DisplayDomainRefused` (`OUT_OF_DOMAIN`). Circles and ellipses are divided in their local
+  angle, lines from their exact evaluated ends; a line has constant azimuth only when its ends
+  are collinear with the axis point; the end chords' sag bound includes the vertex offsets;
+  counts are plain ceilings. Round-2 stability audit: the azimuth ray inverse and the singular
+  values are formed without cancellation; the aspect x stored-angle bound also applies to an
+  arc's projection across each cylinder or cone axis, and one closest-approach rule covers
+  cylinder and cone arcs; lines project their exact end difference (a ruling on a tilted axis no
+  longer raises), an end within 8 eps of an axis is on it, a line on the axis is
+  `OUT_OF_DOMAIN`; circles need orthogonal equal axes to 8 eps; the two-interval rule counts
+  vertex offsets; every count is checked before any division is built; no raw arithmetic error
+  escapes. Corpus counts unchanged, parameters moved by at most 2.2e-16. Round 3: lines take
+  each end's radius from its own projection (no `A' + P(b - a)` reconstruction), check the
+  segment's interior closest approach before any end shortcut, and admit an end on the axis
+  only at a cone's apex (a cylinder or frustum end there is `OUT_OF_DOMAIN`); the radius bound of
+  a line point uses the scale of the edge's definition points. One public
+  `display_rounding_allowance` (`DisplayRoundingAllowance(angle, sag, axis_floor)`) defines
+  "to rounding", counting the evaluator's stored-angle rounding and the projected inverse's
+  aspect amplification; a request for which it exceeds 2 % of the angle (`OUT_OF_DOMAIN`) or of
+  the sag allowance (`EDGE_UNSUPPORTED`) is refused; the summed division counts are checked
+  against the 4096 cap before any division is built. All corpus results unchanged bit for bit.
+  Round 4 (owner decision, the recommended option): a `LineRange` is supported only when its
+  carrier IS the edge's segment (exact domain `[0, 1]`, carrier endpoints the evaluated ends
+  within `model.tolerance.length`); a range drawn over part of its carrier is now
+  `EDGE_UNSUPPORTED` (it was divided from its rounded ends, which can lie off the exact carrier
+  beyond both bounds). The line terms of the rounding allowance add each evaluated end's
+  absolute coordinate rounding (`eps x max |coordinate|`). The two-interval rule decides on the
+  drawn chord (measured vertex offsets, never zeroed, plus the evaluator's rounding). An end on a
+  support axis is an apex only on a cone with an exactly zero radius and within
+  `model.tolerance.length` of the apex point (a frustum with a tiny radius, or a tip off the
+  apex along the axis, is `OUT_OF_DOMAIN`). All 5744 corpus results unchanged bit for bit.
+  Round 5 (owner decisions, the recommended options): a projected frame that is a similarity
+  to 8 eps (a circle seen along its axis) has aspect exactly 1; a conic's closest approach is
+  checked at its documented scale (definition points and stored-angle term, no longer the
+  support origin) and, separately, against `64 eps |c - o|`; `DisplayRoundingAllowance` adds
+  `axis_floors`, each incident support's own floor, which the dense oracle now uses; a
+  `LineRange`'s carrier endpoints must also be the edge's topology vertices within
+  `model.tolerance.length` (else `EDGE_UNSUPPORTED`); a nondegenerate ellipse beyond the aspect
+  bound is `OUT_OF_DOMAIN` before the parallel-axes test. All 5744 corpus results unchanged bit
+  for bit; 168 rounding allowances moved by at most 3.5e-16 relative.
+  Round 6 (owner decision, the recommended option): the bound on aspect x max(1, |stored
+  angle|), the conic's own and its projected frame's, is lowered from 1e6 to 1e4 (still
+  `OUT_OF_DOMAIN` beyond; conic rounding amplified by the aspect had been measured beyond the
+  published bound within a factor ~1e2 of the old one), and compared inclusively with a 4 eps
+  relative slack; on a cylinder or cone a circle's stored angles are therefore bounded by 1e4.
+  The in-plane frame's small diagonal is the residual's norm (it was `v'.e2`, a relative error
+  of eps x aspect^2). `axis_floor` is documented as a summary only; callers measuring support
+  turning use `axis_floors`. No corpus case is newly refused and no refusal code or rounding
+  allowance changed. Near-duplicate cuts of different divisions are merged when the dropped cut
+  lies, in its own division's angle, within that division's headroom of the published
+  allowance (never below the former 64 eps rule), keeping the stricter division's cut: no
+  sliver intervals (the `steep_cuts` ellipses had one, 1.04e-14). Against 2427aa3 every corpus
+  count and refusal code is unchanged and 205 parameter arrays moved by at most 7.0e-15.
+  Round 7: the union is "merge, then verify with exact forward maps; restore on failure":
+  every merged interval is checked against every published bound (each division's angle span
+  from its own forward map plus its rounding term; a circle's exact sag) and an interval that
+  fails gets original cuts back (never a new one), at worst the no-merge union; the ends and
+  the minimum-two-interval split are mandatory (a tangent interval turning 0.8000606 rad against
+  0.8000418, a circle chord above its sag and a one-chord result are fixed). Against 9efd08e
+  every corpus count, refusal code and allowance is unchanged; 2 parameter arrays (`tripod_skins`
+  circles) moved by at most 2.2e-16; no sliver kept.
+  Round 8 (owner decision, the recommended option): a new domain bound `MIN_DISPLAY_SWEEP =
+  1e-8` rad on `|sweep|` of every `EllipticArc` and `Arc` (inclusive), checked before any
+  division, `OUT_OF_DOMAIN` below it (zero sweep included; it was `EDGE_UNSUPPORTED`): with stored
+  angles up to 1e4 their float spacing is at most 1.8e-12 rad, four orders below it. Both
+  round-8 reproductions (1e-16 and 5e-11 rad) are now `OUT_OF_DOMAIN`. A forced two-interval
+  split whose cut rounds onto an end uses the parametric midpoint, verified after the union; the
+  azimuth branch keeps its sign when both end values snap to zero (decided from the unsnapped
+  values and the midpoint). Tests pin the 2 % rounding-share cutoffs. Against 5f69ccb all 5744
+  corpus results and allowances are unchanged bit for bit; no new refusal.
+  Round 9 (owner decision, the recommended option): the azimuth branch of a conic on a
+  cylinder or cone is decided from `g = 1 + z.w` only with margin. Every "snap `g` to zero at an
+  end" rule is gone: `|g|` at both ends, every interior extreme and the midpoint must exceed a
+  rigorous rounding bound (`g_bound`: input, inverse and evaluation terms, stated in the
+  stability table), else the edge is `OUT_OF_DOMAIN` ("azimuth near-stationary: branch not
+  decidable"). Both round-9 reproductions (a strictly monotone edge refused as a turnback and a
+  real 1.8e-10 rad turnback drawn) are now `OUT_OF_DOMAIN`. Changed result: an arc whose azimuth
+  is exactly stationary at an end (round 1 #6) and the round-8 internal both-ends-in-band case
+  were drawn and are now `OUT_OF_DOMAIN`. Against 5bc1cd8 all 5744 corpus results and
+  allowances are unchanged bit for bit; no new refusal.
+  Round 10 (owner decision, the recommended option): the support azimuth (normal turning,
+  branch decisions, `g` and its bound) is computed in the module's OWN orthonormal frame about
+  the support's unit axis (`e1` from the axis crossed with its least-aligned basis vector,
+  normalised; `e2 = axis x e1`), never by projecting onto the stored radial / circumferential
+  directions; turning is independent of the frame's phase. A `Cylinder` or `Cone` whose stored
+  frame is self-inconsistent (`|axis . radial|`, `|axis . circumferential|` or
+  `||radial| - 1|` above 1e-9, absolute) is refused `OUT_OF_DOMAIN` ("support frame not
+  orthonormal"), its own `evaluate()` disagreeing with its declared axis. (First version 8 eps:
+  it refused 65 of 20,000 random ordinary cylinders, worst 117 eps; corrected to a sanity check,
+  since a stored frame's rounding enters no bound; 0 of 20,000 random cylinders and cones
+  refused, worst stored-frame error 1.8e-11.) Against c52a325 the corpus is unchanged bit for bit.
+  Round 11: the stored axis need not be unit (a finite seed whose squared norm is subnormal
+  stored it 0.9999999995 or 1.125 long). `_axis_frame` normalises the axis itself, and the 1e-9
+  sanity check covers the lengths of axis, radial and circumferential directions and all three
+  pairwise dot products. The 0.9999999995 support (cylinder and cone) is admitted and drawn
+  within the bound (it was one interval 2e-11 rad over it); the 1.125 support is refused
+  `OUT_OF_DOMAIN`. A cone's apex keeps the stored axis (it is the support's own point). Both round-10 reproductions (a radial seed
+  nearly along the axis, stored 2.2e-5 off orthogonal: an arc with an interior turnback drawn,
+  a strictly monotone arc refused) are now `OUT_OF_DOMAIN`; with the orthogonal seed `(1, -1, 0)`
+  the turnback is refused and the monotone arc drawn. The projection error budgets carry the
+  module frame's deviation (4 eps). Changed results against 3f066d2: 318 of 5744 corpus results
+  move by at most 9.4e-16 in parameter (the frame's phase rounding; no count or code change, no
+  new refusal); 2016 rounding allowances grow (at most 91 % relative, the line and projection
+  error terms; the largest share of the angle and sag is unchanged).
+  See `docs/DISPLAY_TESSELLATION.md` (stability table, rounding allowance). No existing module
+  changes.
+
 - Prepare version 0.4.7 for bounded B1 curved-hull hydrostatics point queries,
   including independently verified volume, body-origin first moments and raw
   waterplane moments. Results bind the model, displacement boundary, installed
