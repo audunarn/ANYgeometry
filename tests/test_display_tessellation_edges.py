@@ -2442,3 +2442,75 @@ def test_r10_random_ordinary_supports_are_never_refused_for_their_frame():
             refused += 1
     assert refused == 0 and built >= 19990, (refused, built)
     assert worst > 8. * EPS                   # the set includes frames the 8 eps version refused
+
+
+# ---------------------------------------------------------------------------------------------
+# N1 round 11: the stored axis need not be unit (a seed whose squared norm is subnormal leaves it
+# at 0.9999999995, or 1.125): _axis_frame normalises it, and the 1e-9 sanity check covers the
+# lengths of axis, radial and circumferential and all three pairwise dot products
+# ---------------------------------------------------------------------------------------------
+_R11_Y, _R11_Z = -math.sin(.1), math.cos(.1)
+
+
+def _r11_support(kind, multiplier):
+    axis = (math.ldexp(1., -537) * multiplier, 0., 0.)
+    if kind == "cylinder":
+        return Cylinder((0, 0, 0), axis, (0, 1, 1), 1, 1)
+    return Cone((0, 0, 0), axis, (0, 1, 1), 1, 2, 1)
+
+
+def _r11_band(kind, multiplier):
+    """r11 MEDIUM: a quad on a support about the x axis whose first edge is a line at x = 0
+    turning exactly 0.1 rad about the axis, from (0, 0, 1) to (0, -sin .1, cos .1)."""
+    support = _r11_support(kind, multiplier)
+    far = 1. if kind == "cylinder" else 2.             # the cone's radius at x = 1
+    # the 1.125 frame evaluates a skewed surface (axial and circumferential scaled by 1.125): its
+    # face is admitted by the model only at a coarse surface residual
+    residual = .01 if multiplier < 1.1 else .5
+    g = corpus.GeometryModel(tolerance=TolerancePolicy(surface_residual=residual))
+    v = [g.add_point(*p) for p in ((0, 0, 1), (0, _R11_Y, _R11_Z), (1, far * _R11_Y, far * _R11_Z), (1, 0, far))]
+    e = [g.add_line(v[i], v[(i + 1) % 4]) for i in range(4)]
+    g.add_face(e, corners=(0, 1, 2, 3), surface=support)
+    return g, support, e[0]
+
+
+@pytest.mark.parametrize("kind", ["cylinder", "cone"])
+def test_r11_a_subnormal_seed_axis_is_normalised_and_drawn_within_the_bound(kind):
+    """r11 MEDIUM, variant 1: the seed (2^-537 (1 - 5e-10), 0, 0) leaves the stored axis at length
+    0.9999999995 (within the 1e-9 sanity check: ADMITTED).  At 2787703 the line turning 0.1 rad
+    was drawn as one interval at angle 0.1 - 2e-11 (allowance 1.3e-14): 2e-11 rad over the bound.
+    With the axis normalised it is DRAWN, every interval within angle + allowance about the
+    exact x axis."""
+    g, support, edge = _r11_band(kind, 1 - 5e-10)
+    assert abs(float(np.linalg.norm(support.axis)) - 1.) > 1e-10
+    assert g.validate_topology() == ()
+    tol = dt.DisplayTolerance(.1 - 2e-11, .1)
+    t = dt.edge_display_samples(g, edge, tol).parameters
+    limit = tol.angle + dt.display_rounding_allowance(g, edge, tol).angle
+    points = g.evaluate_edge_many(edge, t)
+    azimuth = np.unwrap(np.arctan2(points[:, 1], points[:, 2]))        # about the exact x axis
+    assert len(t) >= 3 and float(np.abs(np.diff(azimuth)).max()) <= limit
+
+
+@pytest.mark.parametrize("kind", ["cylinder", "cone"])
+def test_r11_axis_and_circumferential_lengths_of_1_125_are_out_of_domain(kind):
+    """r11 MEDIUM, variant 2: the seed (2^-537 1.125, 0, 0) leaves the stored axis and
+    circumferential direction at length 1.125 (admitted at 2787703): REFUSED OUT_OF_DOMAIN."""
+    g, support, edge = _r11_band(kind, 1.125)
+    assert float(np.linalg.norm(support.axis)) == 1.125
+    with pytest.raises(dt.DisplayDomainRefused, match="support frame not orthonormal"):
+        dt._check_support_domain(support)
+    with pytest.raises(dt.DisplayDomainRefused, match="support frame not orthonormal"):
+        dt.edge_display_samples(g, edge, dt.DisplayTolerance(.1, .1))
+
+
+def test_r11_the_module_frame_is_built_about_the_normalised_axis():
+    """_axis_frame normalises the stored axis: its frame is orthonormal to 4 eps about the unit
+    axis direction even when the stored axis is 0.9999999995 or 1.125 long."""
+    for multiplier in (1 - 5e-10, 1.125):
+        support = _r11_support("cylinder", multiplier)
+        _o, e1, e2 = dt._axis_frame(support)
+        u = np.array((1., 0., 0.))
+        worst = max(abs(e1 @ u), abs(e2 @ u), abs(e1 @ e2), abs(e1 @ e1 - 1.), abs(e2 @ e2 - 1.),
+                    abs(float(np.cross(e1, e2) @ u) - 1.))
+        assert worst <= 4. * EPS, (multiplier, worst / EPS)

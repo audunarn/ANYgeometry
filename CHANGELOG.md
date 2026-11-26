@@ -101,7 +101,13 @@ All notable user-visible changes to ANYgeometry are documented here.
   orthonormal"), its own `evaluate()` disagreeing with its declared axis. (First version 8 eps:
   it refused 65 of 20,000 random ordinary cylinders, worst 117 eps; corrected to a sanity check,
   since a stored frame's rounding enters no bound; 0 of 20,000 random cylinders and cones
-  refused, worst stored-frame error 1.8e-11.) Against c52a325 the corpus is unchanged bit for bit. Both round-10 reproductions (a radial seed
+  refused, worst stored-frame error 1.8e-11.) Against c52a325 the corpus is unchanged bit for bit.
+  Round 11: the stored axis need not be unit (a finite seed whose squared norm is subnormal
+  stored it 0.9999999995 or 1.125 long). `_axis_frame` normalises the axis itself, and the 1e-9
+  sanity check covers the lengths of axis, radial and circumferential directions and all three
+  pairwise dot products. The 0.9999999995 support (cylinder and cone) is admitted and drawn
+  within the bound (it was one interval 2e-11 rad over it); the 1.125 support is refused
+  `OUT_OF_DOMAIN`. A cone's apex keeps the stored axis (it is the support's own point). Both round-10 reproductions (a radial seed
   nearly along the axis, stored 2.2e-5 off orthogonal: an arc with an interior turnback drawn,
   a strictly monotone arc refused) are now `OUT_OF_DOMAIN`; with the orthogonal seed `(1, -1, 0)`
   the turnback is refused and the monotone arc drawn. The projection error budgets carry the

@@ -471,8 +471,11 @@ def _check_support_domain(support):
 
 def _check_support_frame(support):
     """N1 round 10 (owner decision, the recommended option): a cylinder or cone whose STORED frame
-    is not orthonormal to :data:`_SUPPORT_FRAME_TOL` (``|axis . radial|``, ``|axis .
-    circumferential|`` or ``||radial| - 1|`` above 1e-9, absolute; NaN refused) is
+    is not orthonormal to :data:`_SUPPORT_FRAME_TOL` (any of the lengths ``||axis| - 1|``,
+    ``||radial| - 1|``, ``||circumferential| - 1|`` or the pairwise dot products ``|axis .
+    radial|``, ``|axis . circumferential|``, ``|radial . circumferential|`` above 1e-9, absolute;
+    NaN refused; N1 round 11 added the axis and circumferential lengths and the radial .
+    circumferential product: a seed whose squared norm is subnormal stored an axis 1.125 long) is
     ``OUT_OF_DOMAIN``: its own evaluate() (built on that frame) then disagrees with its declared
     axis geometry.  A sanity check for self-inconsistent supports only: a stored frame's ordinary
     rounding never enters a bound (the azimuth uses the module's own frame).  (A
@@ -482,12 +485,17 @@ def _check_support_frame(support):
     axis = np.asarray(support.axis, dtype=float)
     radial = np.asarray(support.radial_direction, dtype=float)
     circumferential = np.asarray(support.circumferential_direction, dtype=float)
-    defects = (abs(float(axis @ radial)), abs(float(axis @ circumferential)), abs(_norm(radial) - 1.0))
-    if not all(d <= _SUPPORT_FRAME_TOL for d in defects):
-        raise DisplayDomainRefused(f"a {type(support).__name__} support frame not orthonormal (|axis . radial| = "
-                                   f"{defects[0]!r}, |axis . circumferential| = {defects[1]!r}, ||radial| - 1| = "
-                                   f"{defects[2]!r}, above {_SUPPORT_FRAME_TOL!r}): its evaluate() disagrees with "
-                                   f"its declared axis geometry")
+    defects = {"||axis| - 1|": abs(_norm(axis) - 1.0),
+               "||radial| - 1|": abs(_norm(radial) - 1.0),
+               "||circumferential| - 1|": abs(_norm(circumferential) - 1.0),
+               "|axis . radial|": abs(float(axis @ radial)),
+               "|axis . circumferential|": abs(float(axis @ circumferential)),
+               "|radial . circumferential|": abs(float(radial @ circumferential))}
+    if not all(d <= _SUPPORT_FRAME_TOL for d in defects.values()):
+        found = ", ".join(f"{name} = {value!r}" for name, value in defects.items())
+        raise DisplayDomainRefused(f"a {type(support).__name__} support frame not orthonormal ({found}; each must "
+                                   f"be at most {_SUPPORT_FRAME_TOL!r}): its evaluate() disagrees with its declared "
+                                   f"axis geometry")
 
 
 def _aspect_admitted(weight) -> bool:
@@ -530,9 +538,13 @@ def _axis_frame(support):
     stored radial / circumferential directions: the azimuth's turning and every branch decision
     are independent of the frame's phase, and a stored frame off orthonormal cannot enter them
     (round 10: a radial 2.2e-5 off orthogonal moved ``g`` by 1.1e-5 against a bound of 1.2e-13).
-    Within :data:`_FRAME_ERROR` of an exact orthonormal frame about the stored axis."""
+    The stored axis is normalised here first (N1 round 11: it need not be unit, a seed whose
+    squared norm is subnormal stored it 0.9999999995 long, which entered ``e2`` directly and
+    turned an interval 2e-11 rad beyond the bound); within :data:`_FRAME_ERROR` of an exact
+    orthonormal frame about the axis direction."""
     origin = np.asarray(support.origin, dtype=float)
     axis = np.asarray(support.axis, dtype=float)
+    axis = axis / _norm(axis)
     basis = np.zeros(3)
     basis[int(np.argmin(np.abs(axis)))] = 1.0
     cross = np.cross(axis, basis)
@@ -548,7 +560,9 @@ def _at_apex(support, point, length) -> bool:
     ``radius_start == 0``, ``origin + height axis`` for ``radius_end == 0``); ``point`` is at it
     when within the model's length tolerance plus the apex's own float rounding (``8 eps
     max(1, |apex coordinate|)``), the axial position included.  A frustum (both radii positive,
-    however small) has no apex (N1 round 4)."""
+    however small) has no apex (N1 round 4).  The apex uses the STORED axis, not normalised (N1
+    round 11 audit): it is the support's own evaluated point (``evaluate`` forms ``origin + v
+    height axis`` with the stored axis), so its length is part of where the apex is."""
     if not isinstance(support, Cone):
         return False
     origin = np.asarray(support.origin, dtype=float)
