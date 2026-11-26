@@ -1033,17 +1033,31 @@ def test_r1_5_a_near_axis_arc_counts_its_stored_angle_rounding():
     _refused_out_of_domain(lambda: dt.edge_display_samples(g, low, dt.DisplayTolerance(.1, 1e-6)))
 
 
-def test_r1_6_a_stationary_azimuth_at_an_end_is_monotone():
-    """r1 #6: a circle on a .001 cylinder tangent at its start to the ray from the axis (g = 0
-    there, positive inside): drawn, not refused as a turnback."""
+def _r1_6_band(start):
     g = corpus.GeometryModel(tolerance=TolerancePolicy(length=1e-12, surface_residual=1e-3))
     support = Cylinder((0., 0., 0.), (0., 0., 1.), (1., 0., 0.), .001, 1.0, 1.5, .5)
-    arcs = [EllipticArc((-.001, .001, z), (.001, 0., 0.), (0., .001, 0.), 0., .4) for z in (.2, .8)]
+    arcs = [EllipticArc((-.001, .001, z), (.001, 0., 0.), (0., .001, 0.), start, .4) for z in (.2, .8)]
     ends = [[g.add_point(*a.evaluate(np.array([t]))[0]) for t in (0., 1.)] for a in arcs]
     low = g.add_curve(ends[0][0], ends[0][1], arcs[0])
     high = g.add_curve(ends[1][0], ends[1][1], arcs[1])
     g.add_face((low, g.add_line(ends[0][1], ends[1][1]), high, g.add_line(ends[1][0], ends[0][0])),
                corners=(0, 1, 2, 3), surface=support)
+    return g, support, low
+
+
+def test_r1_6_a_stationary_azimuth_at_an_end_is_out_of_domain():
+    """r1 #6: a circle on a .001 cylinder tangent at its start to the ray from the axis (g = 0
+    there, positive inside).  Drawn from round 1 to round 8; since N1 round 9 (owner decision) an
+    end whose g is within its rounding bound is near-stationary, its branch not decidable:
+    OUT_OF_DOMAIN."""
+    g, _support, low = _r1_6_band(0.)
+    _refused_out_of_domain(lambda: dt.edge_display_samples(g, low, dt.DisplayTolerance(.05, 1e-5)))
+
+
+def test_r1_6_the_same_arc_with_a_resolvable_g_is_drawn():
+    """The otherwise identical arc from .01 (g = 1 - cos x + sin x, about .01 at its start, far
+    beyond the bound) is drawn and passes the dense oracle."""
+    g, support, low = _r1_6_band(.01)
     samples = dt.edge_display_samples(g, low, dt.DisplayTolerance(.05, 1e-5))
     _dense_ok(g, low, samples, .05, 1e-5, supports=[support], count=257)
 
@@ -2114,15 +2128,16 @@ def test_r8_1_a_forced_split_never_cuts_at_an_end():
     assert division.protected and division.values == [.5]
 
 
-def test_r8_2_the_azimuth_branch_keeps_its_sign_when_both_ends_snap():
-    """Inside the module: with both end values of g within the snapping band (both computed
-    negative), the branch is decided from the unsnapped values and the interior, not refused as
-    a turnback (5f69ccb raised EDGE_UNSUPPORTED)."""
+def test_r8_2_both_ends_in_the_band_are_near_stationary():
+    """Inside the module: both end values of g (computed negative, -6.3e-16 to -3.8e-15) lie
+    within g's rounding bound.  5f69ccb refused it as a turnback; round 8 inferred the branch from
+    the unsnapped values and drew it; since round 9 (owner decision: no branch from a value
+    within its bound) it is near-stationary, OUT_OF_DOMAIN."""
     _g, support, arc, _edge = _r8_turnback_band()
     conic = dt._Conic(0, arc.center, arc.u_vector, arc.v_vector, arc.start_angle, arc.sweep_angle)
     centre = np.asarray(arc.center, dtype=float)
-    plan = conic.azimuth_division(support, .1, [centre, centre + arc.u_vector, centre + arc.v_vector])
-    assert plan.count == 1 and plan.build().values == []
+    with pytest.raises(dt.DisplayDomainRefused, match="near-stationary"):
+        conic.azimuth_division(support, .1, [centre, centre + arc.u_vector, centre + arc.v_vector])
 
 
 def test_r8_2_opposite_signs_across_the_band_are_still_refused():
@@ -2178,3 +2193,96 @@ def test_r8_3_the_sag_share_cutoff_is_inclusive_and_pinned():
     _dense_ok(g, edge, dt.edge_display_samples(g, edge, dt.DisplayTolerance(.0153, cutoff)), .0153, cutoff,
               count=257)
     _refused(lambda: dt.edge_display_samples(g, edge, dt.DisplayTolerance(.0153, below)), "EDGE_UNSUPPORTED")
+
+
+# ---------------------------------------------------------------------------------------------
+# N1 round 9 (owner decision, the recommended option): the azimuth branch is decided from g only
+# when its sign is decidable with margin; |g| within its rigorous rounding bound at an end, an
+# interior extreme or the midpoint is near-stationary: OUT_OF_DOMAIN, never snapped
+# ---------------------------------------------------------------------------------------------
+def _r9_cone_band(gap):
+    """r9 MEDIUM: a Z-axis cone at the origin (radius 0 to 1e-6 over height 1e-6), a band from
+    azimuth pi/2 over .5 between heights 5e-9 and 3e-8 whose first side is two lines and an
+    ellipse (centre (nextafter(1, inf), 0, 0), u = (1, 0, 0), v = (0, 1, 1)) from pi - gap over
+    the minimum sweep 1e-8."""
+    g = corpus.GeometryModel(tolerance=TolerancePolicy(length=1e-14, curve_fit_residual=1e-12,
+                                                       surface_residual=1e-12))
+    support = Cone((0., 0., 0.), (0., 0., 1.), (1., 0., 0.), 0., 1e-6, 1e-6, math.pi / 2, .5)
+    arc = EllipticArc((float(np.nextafter(1., 2.)), 0., 0.), (1., 0., 0.), (0., 1., 1.), math.pi - gap, 1e-8)
+    p, q = arc.evaluate(np.array([0., 1.]))
+
+    def cap(h):
+        c = EllipticArc((0., 0., h), (h, 0., 0.), (0., h, 0.), math.pi / 2, .5)
+        i, j = [g.add_point(*x) for x in c.evaluate(np.array([0., 1.]))]
+        return i, j, g.add_curve(i, j, c)
+
+    i, j, low = cap(5e-9)
+    k, l, high = cap(3e-8)
+    m, n = [g.add_point(*x) for x in (p, q)]
+    edge = g.add_curve(m, n, arc)
+    g.add_face((low, g.add_line(j, l), high, g.add_line(k, m), edge, g.add_line(n, i)), corners=(0, 1, 2, 3),
+               surface=support)
+    assert g.validate_topology() == ()
+    return g, support, arc, edge
+
+
+@pytest.mark.parametrize("gap", [2.06e-8, 2.40e-8], ids=("monotone", "turnback"))
+def test_r9_a_near_stationary_azimuth_is_out_of_domain(gap):
+    """r9 MEDIUM: at 5bc1cd8 the strictly monotone variant (g from -9.9e-18 to -1.7e-16, computed
+    0) was refused EDGE_UNSUPPORTED as a turnback and the variant with a real 1.8e-10 rad
+    turnback (g from +6.6e-17 to -1.2e-16) was drawn as [0, 1].  Both are near-stationary."""
+    g, _support, _arc, edge = _r9_cone_band(gap)
+    _refused_out_of_domain(lambda: dt.edge_display_samples(g, edge, dt.DisplayTolerance(.1, .001)))
+
+
+@pytest.mark.parametrize("gap", [2.06e-8, 2.40e-8], ids=("monotone", "turnback"))
+def test_r9_the_branch_decision_refuses_the_variants_directly(gap):
+    """The branch decision itself (the support's azimuth plan), not only the dense oracle."""
+    _g, support, arc, _edge = _r9_cone_band(gap)
+    conic = dt._Conic(0, arc.center, arc.u_vector, arc.v_vector, arc.start_angle, arc.sweep_angle)
+    centre = np.asarray(arc.center, dtype=float)
+    with pytest.raises(dt.DisplayDomainRefused, match="near-stationary"):
+        conic.azimuth_division(support, .1, [centre, centre + arc.u_vector, centre + arc.v_vector])
+
+
+def _unit_map(xa, xb, z=1.):
+    """g = 1 + z cos(x) over [xa, xb]: the unit circle seen from (-z, 0)."""
+    return dt._AngleMap(0, np.eye(2), (z, 0.), 0., xa, xb)
+
+
+def test_r9_the_branch_is_accepted_beyond_the_bound_and_refused_within_it():
+    """Direct accept/refuse: g = 1 + cos x, which is d^2 / 2 at x = pi - d (positive, the
+    branch +1) or x = pi + d (the branch -1 for z > 1 there, refused as a turnback at z = 1
+    across pi).  An end with g = 4 x its bound is accepted with the right branch; with g a
+    quarter of the bound it is refused OUT_OF_DOMAIN; an exactly stationary end too."""
+    bound = _unit_map(2., 3.).g_bound
+    assert 0. < bound < 1e-12
+    far = math.sqrt(8. * bound)                       # g = d^2 / 2 = 4 bound at the end
+    near = math.sqrt(.5 * bound)                      # g = bound / 4
+    assert _unit_map(2., math.pi - far).branch == 1.
+    with pytest.raises(dt.DisplayDomainRefused, match="near-stationary"):
+        _unit_map(2., math.pi - near)
+    assert _unit_map(math.pi + far, 4.).branch == 1.  # the near end first in x order
+    with pytest.raises(dt.DisplayDomainRefused, match="near-stationary"):
+        _unit_map(math.pi + near, 4.)
+    # z = 2: g = 1 + 2 cos x is negative on (2 pi / 3, 4 pi / 3): the branch -1 well inside
+    assert _unit_map(2.2, 4., z=2.).branch == -1.
+    assert _unit_map(.1, 2.).branch == 1. and _unit_map(.1, 2., z=.5).branch == 1.
+    # a sign change with margin is still a turnback (EDGE_UNSUPPORTED)
+    with pytest.raises(dt.DisplayTrimRefused) as caught:
+        _unit_map(1., 3., z=2.)
+    assert caught.value.code == "EDGE_UNSUPPORTED"
+
+
+def test_r9_the_midpoint_check_refuses_a_near_stationary_interior():
+    """g near 0 at the interval's midpoint only (z = 1, the ends at pi -+ d with g = d^2 / 2 far
+    beyond the bound, an interior extreme at pi where g = 0): OUT_OF_DOMAIN, not a branch."""
+    d = 1e-3
+    with pytest.raises(dt.DisplayDomainRefused, match="near-stationary"):
+        _unit_map(math.pi - d, math.pi + d)
+
+
+def test_r9_the_tangent_map_is_never_near_stationary():
+    """The tangent division's map (offset exactly 0: g = 1 everywhere) always decides +1."""
+    amap = dt._AngleMap(0, ((2., .3), (0., 1.)), (0., 0.), math.pi / 2, 0., 1e-8)
+    assert amap.branch == 1. and amap.g_bound < 1e-13

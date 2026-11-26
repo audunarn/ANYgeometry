@@ -261,9 +261,12 @@ class _AngleMap:
     * ``chi(x) = arg(z + w(x))`` lifts continuously as ``x + atan2(cross(w, z + w), 1 + z.w)`` while
       ``g(x) = 1 + z.w > 0`` (the angle between ``w`` and ``z + w`` stays in (-pi/2, pi/2)), and as
       ``x + pi + atan2(-cross, -g)`` while ``g < 0``.  ``dchi/dx = g / |z + w|^2``, so ``chi`` is
-      monotone exactly when ``g`` keeps its sign; ``g`` reaching 0 inside the interval (or
-      ``z + w = 0``: the curve reaching the origin) is refused, ``g = 0`` at an end (a stationary
-      end of a monotone azimuth) is not.
+      monotone exactly when ``g`` keeps its sign.  The sign is decided only with margin (N1
+      round 9, owner decision): ``g`` at the ends, at every interior extreme and at the
+      interval's midpoint must exceed :attr:`g_bound` (a rigorous bound on the rounding of the
+      computed ``g``, :meth:`_g_rounding`) in magnitude, else the azimuth is near-stationary and
+      the edge is ``OUT_OF_DOMAIN`` (no branch is inferred from a value within its bound, and
+      nothing is snapped to 0); a sign change with margin is ``EDGE_UNSUPPORTED``.
     * ``Phi = arg(N w(chi))`` lifts as ``chi + alpha + atan2(cross(e, S e), e.S e)`` with the polar
       decomposition ``N = R(alpha) S`` (``S`` symmetric positive definite: the angle between ``e``
       and ``S e`` stays in (-pi/2, pi/2)); orientation-preserving, so monotone in ``chi``.
@@ -277,7 +280,7 @@ class _AngleMap:
     two sums of squares and ``det``, without cancellation.
     """
 
-    def __init__(self, edge_id, matrix, offset, phase, theta_a, theta_b):
+    def __init__(self, edge_id, matrix, offset, phase, theta_a, theta_b, matrix_error=0.0, offset_error=0.0):
         m = np.array(matrix, dtype=float).reshape(2, 2)
         det = float(m[0, 0] * m[1, 1] - m[0, 1] * m[1, 0])
         frobenius = float((m * m).sum())
@@ -294,10 +297,17 @@ class _AngleMap:
         self.s = np.array(((ca * m[0, 0] + sa * m[1, 0], ca * m[0, 1] + sa * m[1, 1]),
                            (-sa * m[0, 0] + ca * m[1, 0], -sa * m[0, 1] + ca * m[1, 1])))
         self.z = self.inverse @ np.asarray(offset, dtype=float)
+        # Singular values without cancellation: with det > 0, sigma_max + sigma_min and
+        # sigma_max - sigma_min are the square roots of two sums of squares; sigma_min = det /
+        # sigma_max (never the difference of two close numbers).
+        self.sigma_max = 0.5 * (math.hypot(m[0, 0] + m[1, 1], m[1, 0] - m[0, 1])
+                                + math.hypot(m[0, 0] - m[1, 1], m[0, 1] + m[1, 0]))
+        self.aspect = self.sigma_max * self.sigma_max / det
         # sign of g = 1 + z.w(x) over the x interval: its extremes are at the ends or where
-        # x - arg z is a multiple of pi (strictly inside).  g may vanish at an end (the curve is
-        # tangent there to a ray from the axis: the azimuth is stationary at the end and still
-        # monotone over the interval), never inside.
+        # x - arg z is a multiple of pi (strictly inside).  N1 round 9: the sign is decided only
+        # where |g| exceeds its rounding bound at every end, interior extreme and the midpoint;
+        # within it the azimuth is near-stationary and the branch is not decidable (refused
+        # OUT_OF_DOMAIN, never snapped).
         xa, xb = sorted((self._x(theta_a), self._x(theta_b)))
         radius = float(math.hypot(*self.z))
         middle = math.atan2(self.z[1], self.z[0])
@@ -307,37 +317,22 @@ class _AngleMap:
             if middle + k * math.pi > xa:
                 inside.append((k, middle + k * math.pi))
             k += 1
-        g_ends = [1.0 + radius * math.cos(x - middle) for x in (xa, xb)]
-        g_inside = [1.0 + radius * math.cos(x - middle) for _k, x in inside]
-        # An end value within rounding of 0 (|g| <= 16 eps (1 + |z|)) of the wrong sign counts as
-        # 0 when the turnback it could hide is below eps rad: g < 0 over at most delta / |g'|
-        # next to the end, turning the azimuth back by about delta^2 / (2 q^3), q = |z + w| there.
-        g_bound = 16.0 * _EPS * (1.0 + radius)
-        raw_ends = list(g_ends)
-        for i, x in enumerate((xa, xb)):
-            q = math.hypot(self.z[0] + math.cos(x), self.z[1] + math.sin(x))
-            if 0.0 < abs(g_ends[i]) <= g_bound and g_ends[i] * g_ends[i] <= 2.0 * _EPS * q ** 3:
-                g_ends[i] = 0.0
-        if min(g_ends) >= 0.0 and all(g > 0.0 for g in g_inside) and max(g_ends + g_inside) > 0.0:
+        checks = [xa, xb] + [x for _k, x in inside] + [0.5 * (xa + xb)]
+        values = [1.0 + radius * math.cos(x - middle) for x in checks]
+        self.g_bound = self._g_rounding(det, float(math.hypot(*offset)), radius,
+                                        max(abs(xa), abs(xb)), float(matrix_error), float(offset_error))
+        if not all(abs(g) > self.g_bound for g in values):
+            raise DisplayDomainRefused(f"edge {edge_id}: azimuth near-stationary: branch not decidable (|g| = "
+                                       f"{min(abs(g) for g in values)!r} along the edge is within its rounding "
+                                       f"bound {self.g_bound!r})")
+        if all(g > 0.0 for g in values):
             self.branch = 1.0
-        elif max(g_ends) <= 0.0 and all(g < 0.0 for g in g_inside) and min(g_ends + g_inside) < 0.0:
+        elif all(g < 0.0 for g in values):
             self.branch = -1.0
-        elif not g_inside and g_ends == [0.0, 0.0] and self._band_sign(raw_ends, xa, xb, middle, radius):
-            # both ends within the snapping band and no interior extreme (N1 round 8): g is
-            # monotone between the ends, so it stays in the band; the snapping zeroed both signs,
-            # so the branch is decided by the unsnapped end values and the interior's (the
-            # midpoint), which must all agree strictly (else refused below)
-            self.branch = self._band_sign(raw_ends, xa, xb, middle, radius)
         else:
             raise _unsupported(edge_id, "the azimuth about a support axis is not monotone along the edge "
                                         "(its projection reaches or turns back round the axis)")
         self.z_radius = radius
-        # Singular values without cancellation: with det > 0, sigma_max + sigma_min and
-        # sigma_max - sigma_min are the square roots of two sums of squares; sigma_min = det /
-        # sigma_max (never the difference of two close numbers).
-        self.sigma_max = 0.5 * (math.hypot(m[0, 0] + m[1, 1], m[1, 0] - m[0, 1])
-                                + math.hypot(m[0, 0] - m[1, 1], m[0, 1] + m[1, 0]))
-        self.aspect = self.sigma_max * self.sigma_max / det
         # Closest approach of the curve to the origin over the interval, bounded below by
         # sigma_min(N) min |z + w(x)|.  |z + w(x)| is the distance of the unit circle point w(x)
         # from -z: smallest at x = arg z + pi (odd k) where it is exactly | |z| - 1 |, else at an
@@ -346,16 +341,27 @@ class _AngleMap:
         distances += [abs(radius - 1.0) for k, _x in inside if k % 2]
         self.closest = det / self.sigma_max * min(distances)
 
-    @staticmethod
-    def _band_sign(raw_ends, xa, xb, middle, radius) -> float:
-        """+1 or -1 when the nonzero unsnapped end values of g and g at the interval's midpoint
-        all have that strict sign, else 0 (no branch: refused)."""
-        values = [g for g in raw_ends if g != 0.0] + [1.0 + radius * math.cos(0.5 * (xa + xb) - middle)]
-        if all(g > 0.0 for g in values):
-            return 1.0
-        if all(g < 0.0 for g in values):
-            return -1.0
-        return 0.0
+    def _g_rounding(self, det, offset_norm, radius, x_max, matrix_error, offset_error) -> float:
+        """A rigorous bound on ``|computed g - g|`` at any point of the interval, ``g`` the exact
+        ``1 + z.w`` of the exact curve (N1 round 9; first order, doubled for the second-order
+        terms).  Three parts, with ``s = sigma_min(N) = det / sigma_max``:
+
+        * inputs: ``g = cross(p, p') / det N`` (``p = c' + N w``, ``p' = N w'``), so absolute
+          errors ``E_N`` of the frame and ``E_c`` of the offset (``matrix_error``,
+          ``offset_error``) move ``g`` by at most ``(E_c + E_N) / s + (|c'| + sigma_max) E_N /
+          (sigma_max s)``;
+        * ``z = N^-1 c'`` (adjugate / det): the computed ``det`` is off by a relative
+          ``eps |N|_F^2 / det <= 2 eps aspect`` and the product by ``2 eps`` per term, so ``|z|``
+          (at most ``|c'| / s``) moves by ``8 eps (aspect + 2) |c'| / s``;
+        * the evaluation ``1 + |z| cos(x - arg z)``: ``|z|`` (hypot) and ``arg z`` (atan2) to an
+          ulp, ``x - arg z`` to ``eps (|x| + pi)``, cos to an ulp, the product and sum to an ulp
+          each: ``8 eps (1 + |z| (4 + |x|))``.
+        """
+        s = det / self.sigma_max
+        inputs = (offset_error + matrix_error) / s + (offset_norm + self.sigma_max) * matrix_error / (self.sigma_max * s)
+        inverse = 8.0 * _EPS * (self.sigma_max * self.sigma_max / det + 2.0) * offset_norm / s
+        evaluation = 8.0 * _EPS * (1.0 + radius * (4.0 + x_max))
+        return 2.0 * (inputs + inverse + evaluation)
 
     def _x(self, theta):
         return self.flip * (theta + self.phase)
@@ -840,7 +846,13 @@ class _Conic:
         origin, x_axis, y_axis = _axis_frame(support)
         c3 = self.c - origin
         projected = np.array(((self.lu @ x_axis, self.lv @ x_axis), (self.lu @ y_axis, self.lv @ y_axis)))
-        amap = _AngleMap(self.edge_id, projected, (c3 @ x_axis, c3 @ y_axis), 0.0, 0.0, self.sweep)
+        # the projection's absolute rounding (N1 round 9, the branch bound): u', v' from one
+        # rotation (2 eps (|u'| + |v'|)) and each dot product with a unit axis vector (3 eps, the
+        # axis' own unit length an eps more); c - o rounded by eps |c - o|, then projected
+        matrix_error = 8.0 * _EPS * (_norm(self.lu) + _norm(self.lv))
+        offset_error = 8.0 * _EPS * _norm(c3)
+        amap = _AngleMap(self.edge_id, projected, (c3 @ x_axis, c3 @ y_axis), 0.0, 0.0, self.sweep,
+                         matrix_error, offset_error)
         stored = max(1.0, abs(self.start), abs(self.start + self.sweep))
         n0, n1 = math.hypot(*projected[:, 0]), math.hypot(*projected[:, 1])
         similar = (abs(n0 - n1) <= _CIRCLE_RTOL * max(n0, n1)

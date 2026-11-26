@@ -81,6 +81,16 @@ All notable user-visible changes to ANYgeometry are documented here.
   azimuth branch keeps its sign when both end values snap to zero (decided from the unsnapped
   values and the midpoint). Tests pin the 2 % rounding-share cutoffs. Against 5f69ccb all 5744
   corpus results and allowances are unchanged bit for bit; no new refusal.
+  Round 9 (owner decision, the recommended option): the azimuth branch of a conic on a
+  cylinder or cone is decided from `g = 1 + z.w` only with margin. Every "snap `g` to zero at an
+  end" rule is gone: `|g|` at both ends, every interior extreme and the midpoint must exceed a
+  rigorous rounding bound (`g_bound`: input, inverse and evaluation terms, stated in the
+  stability table), else the edge is `OUT_OF_DOMAIN` ("azimuth near-stationary: branch not
+  decidable"). Both round-9 reproductions (a strictly monotone edge refused as a turnback and a
+  real 1.8e-10 rad turnback drawn) are now `OUT_OF_DOMAIN`. Changed result: an arc whose azimuth
+  is exactly stationary at an end (round 1 #6) and the round-8 internal both-ends-in-band case
+  were drawn and are now `OUT_OF_DOMAIN`. Against 5bc1cd8 all 5744 corpus results and
+  allowances are unchanged bit for bit; no new refusal.
   See `docs/DISPLAY_TESSELLATION.md` (stability table, rounding allowance). No existing module
   changes.
 

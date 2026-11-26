@@ -87,11 +87,17 @@ exact multiple can come out a few ulps above an integer). There is no fixed slac
      any other.
    - Circles and ellipses: `c' + M' w(theta) = N (z + w(x))` (`N = M' J` with det > 0, `z = N^-1 c'`).
      `arg(z + w)` is monotone while `g = 1 + z.w` keeps its sign (its extremes over the interval
-     are found in closed form): strictly inside the interval, non-strictly at its ends (`g = 0` at
-     an end is the curve tangent there to a ray from the axis: a stationary end of a monotone
-     azimuth). An end value within rounding of 0 (`|g| <= 16 eps (1 + |z|)`) of the wrong sign
-     counts as 0 only when the turnback it could hide, about `g^2 / (2 |z + w|^3)`, is below eps
-     rad. A sign change inside, or the projection reaching the axis, is `EDGE_UNSUPPORTED`. Equal azimuth steps, each solved exactly (`A cos(theta) + B sin(theta) = C`
+     are found in closed form). The branch is decided from `g` only when its sign is decidable
+     with margin (owner decision, N1 round 9, the recommended option): `|g|` at both ends, at
+     every interior extreme and at the interval's midpoint must exceed its rigorous rounding
+     bound `g_bound` (stability table); otherwise the azimuth is near-stationary and the edge is
+     `OUT_OF_DOMAIN` ("azimuth near-stationary: branch not decidable"). No value is snapped to 0
+     and no branch is inferred from a value within its bound (round 9: at the minimum sweep a
+     strictly monotone edge whose `g` evaluated to 0 was refused as a turnback, and a nearby edge
+     with a real 1.8e-10 rad turnback was drawn after its end values were snapped). Consequence: a
+     valid arc whose azimuth is exactly stationary at an end (`g = 0` there: the curve tangent to
+     a ray from the axis, round 1 #6) changed from drawn to `OUT_OF_DOMAIN`. A sign change with
+     margin, or the projection reaching the axis, is `EDGE_UNSUPPORTED`. Equal azimuth steps, each solved exactly (`A cos(theta) + B sin(theta) = C`
      on the monotone branch: on the ray `e`, with `z = (z.e) e + h e_perp`, the point is
      `w = sign(g) sqrt((1 - h)(1 + h)) e - h e_perp`, formed directly: the former
      `(z.e)^2 - |z|^2 + 1` and `lambda e - z` cancelled terms of size `|z|^2` and `|z|` on a thin
@@ -316,7 +322,7 @@ declared domain (or which bound makes it so):
 | singular values `sigma_max`, `sigma_min`, aspect | `sigma_max = (hypot(m00 + m11, m10 - m01) + hypot(m00 - m11, m01 + m10)) / 2`, `sigma_min = det / sigma_max` | sums of squares and a quotient: no cancellation (the former `sqrt(F^2 - 4 det^2)` cancelled for near-circles) |
 | polar angle `alpha` | `atan2(m10 - m01, m00 + m11)` | the pair's norm is `>= sqrt(2 det) > 0`; atan2 is relative-accurate |
 | `z = N^-1 c'` | adjugate product | `|z|` large on a thin projection: relative error `eps x aspect(M')` (projected aspect bound) |
-| sign of `g = 1 + z.w` | `1 + |z| cos(x - arg z)` at the ends and interior extremes | a decision: an end within `16 eps (1 + |z|)` counts as 0 only when the hidden turnback is below eps rad; when both ends snap to 0 and no interior extreme lies inside (`g` is then monotone and stays in the band), the branch is the common strict sign of the unsnapped end values and of `g` at the interval's midpoint, else refused (round 8: the snapping had erased the sign of a strictly negative `g`); an interior `g` near 0 means `|z|` near 1, so the closest approach `sigma_min ||z| - 1|` is below the radius bound and the edge is refused (fail closed) |
+| sign of `g = 1 + z.w` | `1 + |z| cos(x - arg z)` at the ends, the interior extremes and the midpoint; each `|g|` must exceed `g_bound = 2 (I + Z + V)` (N1 round 9, owner decision), else `OUT_OF_DOMAIN` (near-stationary), never snapped | a decision with margin. `g_bound` bounds `|computed g - exact g|` rigorously (first order, doubled for the second-order terms), with `s = sigma_min(N) = det / sigma_max`: **I (inputs)** `g = cross(p, p') / det N` (`p = c' + N w`, `p' = N w'`), so absolute errors `E_N` of the projected frame and `E_c` of the projected offset move it by at most `(E_c + E_N) / s + (|c'| + sigma_max) E_N / (sigma_max s)`; on a cylinder or cone `E_N = 8 eps (|u'| + |v'|)` (one rotation, 2 eps, and a dot product with a unit axis vector, 3 eps plus its unit length) and `E_c = 8 eps |c - o|` (the subtraction, eps, then the projection); the tangent map's offset is exactly 0 (`g = 1`, no input term); **Z (`z = N^-1 c'`)** the computed det is off by a relative `eps |N|_F^2 / det <= 2 eps aspect`, the adjugate product by `2 eps` per term: `8 eps (aspect + 2) |c'| / s`; **V (evaluation)** hypot, atan2, cos, the product and the sum to an ulp each and `x - arg z` to `eps (|x| + pi)`: `8 eps (1 + |z| (4 + |x|))`. Each term is a sum or quotient of positive quantities. Margin at every end and interior extreme proves one strict sign over the interval (`g`'s extremes are among them; a critical point moved by rounding across an end changes `g` by second order only, within `V`). Over the corpus no edge is near this bound (all 5744 results unchanged) |
 | closest approach (conic) | `det / sigma_max x min(hypot(z0 + cos x, z1 + sin x), ||z| - 1|)`, each evaluated directly | absolute error `eps (1 + |z|)` of a distance, far below the 1e-9 radius ratio; the scale includes `max(1, |stored angle|) sigma_max(M')` for cylinders and cones alike |
 | forward azimuth `angle(theta)` | `chi = x + atan2(cross(w, q), w.q)`, `Phi = chi + alpha + atan2(cross(e, S e), e.S e)` | `e.S e >= sigma_min > 0`; `cross(w, q)` subtracts terms of size `|z|` and `S` has aspect `aspect(M')`: the error is up to a few `eps x aspect(M') x theta*` (round 3: 1.45e-10 rad at aspect 990099), covered by the allowance's `32 eps aspect(M') theta*` and at most 7.1e-11 rad by the projected aspect bound (7.1e-9 at the old bound 1e6) |
 | ray inverse `solve(phi)` | `h = cross(e, z)`, `w = sign(g) sqrt((1 - h)(1 + h)) e - h e_perp` | nothing of size `|z|^2` cancels (was `(z.e)^2 - |z|^2 + 1` and `lambda e - z`); its remaining error is the forward map's, in the same allowance term |
