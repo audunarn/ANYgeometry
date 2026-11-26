@@ -100,52 +100,19 @@ def _decimal_frame(plane):
     return o, e1, [x / nw for x in w]
 
 
-def _check_certified(model, face, tol, mesh):
+def _check_certified(model, face, tol, mesh, grid_triangles=8):
     """Independent oracles of every published claim of an accepted planar face mesh."""
     plane = model.faces[face].surface
     rings = _n1_rings(model, face, tol)
     k = sum(len(r) for r in rings)
     assert mesh.face_id == face and mesh.ring_vertex_count == k
-    for name in ("points", "triangles", "chart", "source"):
-        array = getattr(mesh, name)
-        assert type(array) is np.ndarray and not array.flags.writeable, name
-    assert mesh.points.dtype == np.float64 and mesh.triangles.dtype == np.int64 and mesh.source.dtype == np.int64
-    assert mesh.points.shape == (len(mesh.chart), 3) and mesh.source.shape == (len(mesh.chart), 2)
-    # ring vertices are N1's samples bit for bit (T7)
-    assert mesh.points[:k].tobytes() == np.vstack(rings).tobytes()
     # face tolerance rule (Q5), the bounds' order
     expected = tol.sag if tol.sag is not None else model.tolerance.surface_residual
     assert mesh.face_tolerance == expected
     assert 0.0 < mesh.deviation_bound <= mesh.face_tolerance
     assert mesh.trim_sag_bound >= 0.0 and mesh.sense in (1, -1)
-    q = [_fp(p) for p in mesh.chart]
-    assert len(set(q)) == len(q)                                    # Q2 (i): injective chart
+    _check_combinatorics(mesh, rings)
     tris = mesh.triangles.tolist()
-    # every triangle is CCW about sigma x support normal: in the chart, sense x orient > 0, exactly
-    assert all(mesh.sense * _orient(*(q[i] for i in t)) > 0 for t in tris)
-    # Q2 (ii)/(iii): the chain of each ring (vertices, then the cuts on each segment in order) is
-    # exactly the set of edges used by one triangle; every other edge is used twice, opposite
-    directed = [(t[i], t[(i + 1) % 3]) for t in tris for i in range(3)]
-    assert len(set(directed)) == len(directed)
-    present = set(directed)
-    boundary = {e for e in directed if (e[1], e[0]) not in present}
-    used_once = {frozenset(e) for e in boundary}
-    chain = set()
-    start = 0
-    by_source = {}
-    for j in range(k, len(q)):
-        by_source.setdefault(tuple(mesh.source[j].tolist()), []).append(j)
-    for ring in rings:
-        m = len(ring)
-        for i in range(m):
-            a, b = start + i, start + (i + 1) % m
-            on = [j for j in by_source.get(tuple(mesh.source[a].tolist()), ()) if _on_segment(mesh, j, a, b)]
-            xa, xb = q[a][0], q[b][0]
-            on.sort(key=lambda j: q[j][0] if xa < xb else -q[j][0])
-            nodes = [a, *on, b]
-            chain |= {frozenset(p) for p in zip(nodes, nodes[1:])}
-        start += m
-    assert used_once == chain
     # 3D orientation: every lifted triangle not counted rounding-thin has an exactly positive
     # normal against sense x (u x v)
     n = _cross(_fp(plane.u_vector), _fp(plane.v_vector))
@@ -174,7 +141,7 @@ def _check_certified(model, face, tol, mesh):
         bound = Decimal(mesh.deviation_bound)
         assert all(error(x, c) <= bound for x, c in zip(mesh.points, mesh.chart))
         grid = [(F(i, 4), F(j, 4), F(4 - i - j, 4)) for i in range(5) for j in range(5 - i)]
-        for t in tris[:8]:
+        for t in tris[:grid_triangles]:
             for w in grid:
                 x = [sum(Decimal(wi.numerator) / Decimal(wi.denominator) * Decimal(float(mesh.points[i][d]))
                          for wi, i in zip(w, t)) for d in range(3)]
@@ -182,10 +149,60 @@ def _check_certified(model, face, tol, mesh):
                           for wi, i in zip(w, t)) for d in range(2)]
                 s = [oo + cc[0] * a + cc[1] * b for oo, a, b in zip(o, e1, e2)]
                 assert sum((xx - ss) ** 2 for xx, ss in zip(x, s)).sqrt() <= bound
-    # sources: ring vertex j names the chord starting at it; a cut its chord
-    for j in range(k, len(q)):
-        assert tuple(mesh.source[j]) in {tuple(s) for s in mesh.source[:k]}
     return mesh
+
+
+def _check_combinatorics(mesh, rings):
+    """Q2 (i)-(iv), exactly: an injective chart; every chart triangle CCW about sigma; every directed
+    edge used once; the edges used by one triangle are exactly the chain of every ring (its vertices,
+    then the cuts on each chord in order), with a chain edge that occurs twice (a zero-width spike
+    where two cuts on two chords merged into one vertex, owner decision D1) cancelling."""
+    k = sum(len(r) for r in rings)
+    assert mesh.ring_vertex_count == k and mesh.sense in (1, -1)
+    for name in ("points", "triangles", "chart", "source"):
+        array = getattr(mesh, name)
+        assert type(array) is np.ndarray and not array.flags.writeable, name
+    assert mesh.points.dtype == np.float64 and mesh.triangles.dtype == np.int64 and mesh.source.dtype == np.int64
+    assert mesh.points.shape == (len(mesh.chart), 3) and mesh.source.shape == (len(mesh.chart), 2)
+    # ring vertices are N1's samples bit for bit (T7)
+    assert mesh.points[:k].tobytes() == np.vstack(rings).tobytes()
+    # sources: ring vertex j names the chord starting at it; a cut its chord
+    ring_sources = {tuple(s) for s in mesh.source[:k].tolist()}
+    assert all(tuple(s) in ring_sources for s in mesh.source[k:].tolist())
+    q = [_fp(p) for p in mesh.chart]
+    assert len(set(q)) == len(q)                                    # Q2 (i): injective chart
+    tris = mesh.triangles.tolist()
+    # every triangle is CCW about sigma x support normal: in the chart, sense x orient > 0, exactly
+    assert all(mesh.sense * _orient(*(q[i] for i in t)) > 0 for t in tris)
+    directed = [(t[i], t[(i + 1) % 3]) for t in tris for i in range(3)]
+    assert len(set(directed)) == len(directed)
+    present = set(directed)
+    boundary = {e for e in directed if (e[1], e[0]) not in present}
+    used_once = {frozenset(e) for e in boundary}
+    assert len(used_once) == len(boundary)
+    by_source = {}
+    for j in range(k, len(q)):
+        by_source.setdefault(tuple(mesh.source[j].tolist()), []).append(j)
+    cut_x = mesh.chart[k:, 0]
+    counts = {}
+    start = 0
+    for ring in rings:
+        m = len(ring)
+        for i in range(m):
+            a, b = start + i, start + (i + 1) % m
+            on = {j for j in by_source.get(tuple(mesh.source[a].tolist()), ()) if _on_segment(mesh, j, a, b)}
+            lo, hi = sorted((mesh.chart[a, 0], mesh.chart[b, 0]))
+            # a merged cut keeps one chord's source; on its other chord it is found geometrically
+            on |= {int(j) + k for j in np.flatnonzero((cut_x > lo) & (cut_x < hi)) if _on_segment(mesh, int(j) + k, a, b)}
+            xa, xb = q[a][0], q[b][0]
+            on = sorted(on, key=lambda j: q[j][0] if xa < xb else -q[j][0])
+            nodes = [a, *on, b]
+            for pair in zip(nodes, nodes[1:]):
+                key = frozenset(pair)
+                counts[key] = counts.get(key, 0) + 1
+        start += m
+    assert max(counts.values()) <= 2
+    assert used_once == {e for e, n in counts.items() if n % 2}
 
 
 def _on_segment(mesh, j, a, b):
@@ -421,8 +438,8 @@ def test_refusal_an_extruded_support():
         _refused("SUPPORT_UNSUPPORTED", lambda: _mesh(case.model, face, dt.DisplayTolerance(.3)))
 
 
-def test_refusal_cylinder_and_cone_supports_until_n3b_n3c():
-    for name in ("tripod_skins", "overrun_cone"):
+def test_refusal_cone_supports_until_n3c():
+    for name in ("overrun_cone",):
         case = corpus.ALL[name]()
         face = next(iter(case.faces.values()))
         text = _refused("SUPPORT_UNSUPPORTED", lambda: _mesh(case.model, face, dt.DisplayTolerance(.3)))
@@ -477,20 +494,68 @@ def test_input_contract_and_public_surface():
 
 
 # ----------------------------------------------------------------------------- findings and fuzz
-def test_two_cuts_rounding_onto_one_point_beside_a_tip_are_refused():
+def test_two_cuts_rounding_onto_one_point_beside_a_tip_are_merged():
     """Finding (N3a bench, aligned holes): a slab line an ulp beside a hole's left tip cuts both
     tip edges; both cut ordinates round to the tip's, so two distinct cut points share one chart
-    point.  The spec's Q2 (i) refuses it (TRIM_INVALID, fail closed); merging such cut-only
-    duplicates is an owner decision."""
+    point.  Owner decision D1 (SPEC-N3b): bitwise-equal CUT points are merged into one mesh vertex
+    before the certificate, which then holds on the merged mesh (oracle-checked)."""
     outer = [(-3., -3.), (3., -3.), (3., 7.), (-3., 7.)]
     tip = [(0., 4.5), (1., 3.5), (1., 5.5)]
     near = [(1e-17, 0.), (.5, -.5), (.5, .5)]
     m = slab.triangulate_rings([np.array(outer), np.array(tip), np.array(near)])
     q = [_fp(p) for p in m.points]
-    assert len(set(q)) < len(q)                                     # N2 is valid, yet not injective
+    assert len(set(q)) == len(q) - 1                                # N2 is valid, yet not injective
     g, face = _planar([outer, tip, near])
-    text = _refused("TRIM_INVALID", lambda: _mesh(g, face, dt.DisplayTolerance(.5)))
-    assert "coincide in the chart" in text
+    tol = dt.DisplayTolerance(.5)
+    mesh = _check_certified(g, face, tol, _mesh(g, face, tol))
+    assert len(mesh.points) == len(m.points) - 1
+    first = sorted({x: i for i, x in reversed(list(enumerate(q)))}.values())    # each chart point's first index
+    assert mesh.chart.tobytes() == m.points[first].tobytes()
+
+
+def test_a_cut_on_a_ring_vertex_stays_refused():
+    """D1 merges cut points only: a cut bitwise equal to a ring vertex (an N1 sample) stays
+    TRIM_INVALID (the T2 fixture, and a hole vertex on another hole's chord)."""
+    yb = .1 * 3
+    outer = [(0., 0.), (3., yb), (3., 4.), (0., 4.)]
+    hole = [(.5, .5), (1., float(F(yb) / 3)), (2., 1.), (1., 2.)]
+    g, face = _planar([outer, hole])
+    assert "coincide in the chart" in _refused("TRIM_INVALID", lambda: _mesh(g, face, dt.DisplayTolerance(.5)))
+
+
+def big_polygon(aligned=False):
+    """400-vertex outer polygon, 20 holes (circles and hexagons) on a 5 x 4 grid (the N3a bench
+    face); unless ``aligned``, each hole centre is jittered (fixed seed) so no two holes share a
+    vertex x."""
+    jitter = np.random.default_rng(7).uniform(-.3, .3, (20, 2))
+    g = GeometryModel()
+    n = 400
+    t = 2 * math.pi * np.arange(n) / n
+    r = 10 + .5 * np.sin(7 * t)
+    ids = [g.add_point(x, y) for x, y in zip(r * np.cos(t), r * np.sin(t))]
+    outer = [g.add_line(a, b) for a, b in zip(ids, ids[1:] + ids[:1])]
+    face = g.add_face(outer, surface=XY)
+    holes = []
+    for h in range(20):
+        cx, cy = -6 + 3 * (h % 5), -4.5 + 3 * (h // 5)
+        if not aligned:
+            cx, cy = cx + jitter[h, 0], cy + jitter[h, 1]
+        p = [g.add_point(cx + .8 * math.cos(a), cy + .8 * math.sin(a)) for a in np.arange(6) * math.pi / 3]
+        if h % 2:                                    # circle hole, three arcs
+            edges = [g.add_arc(p[0], p[1], p[2]), g.add_arc(p[2], p[3], p[4]), g.add_arc(p[4], p[5], p[0])]
+        else:                                        # hexagon hole
+            edges = [g.add_line(a, b) for a, b in zip(p, p[1:] + p[:1])]
+        holes.append(tuple(OrientedEdge(e, True) for e in edges))
+    _force(g, face, holes=tuple(holes))
+    return g, face
+
+
+def test_aligned_400_vertex_polygon_with_20_holes_is_accepted():
+    """D1: the grid-aligned 400-vertex / 20-hole polygon (N3a bench) was refused for merged cut
+    points; it is accepted and certified."""
+    g, face = big_polygon(aligned=True)
+    tol = dt.DisplayTolerance(corpus.INTERACTION_STEP)
+    _check_certified(g, face, tol, _mesh(g, face, tol), grid_triangles=8)
 
 
 def test_small_fuzz_planar_faces_with_round_holes():
