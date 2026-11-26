@@ -210,6 +210,19 @@ class DisplayRoundingAllowance:
     axis_floors: tuple = ()
 
 
+#: NumPy's default error state, under which every MODEL call (positions, frames, evaluation) runs
+#: (owner decision N2 round 3 (4)): the module's own arithmetic runs under a local
+#: ``np.errstate(all="ignore")`` with its explicit finiteness and domain guards deciding, so
+#: neither depends on the caller's ``np.seterr``; the model keeps the state its results were
+#: measured under (its own fast paths check for exactly this state).
+_MODEL_ERRSTATE = {"divide": "warn", "over": "warn", "under": "ignore", "invalid": "warn"}
+
+
+def _model_call(call, *args):
+    with np.errstate(call=None, **_MODEL_ERRSTATE):
+        return call(*args)
+
+
 def _norm(vector) -> float:
     return math.hypot(*(float(x) for x in vector))
 
@@ -1125,8 +1138,15 @@ def edge_display_samples(model, edge_id: int, tol: DisplayTolerance) -> EdgeSamp
     refusal (``EDGE_UNSUPPORTED``) for a degenerate curve, an azimuth that is not monotone along
     the edge, an unresolvable sag or more than 4096 intervals.  An edge id not in the model is a
     plain :class:`GeometryError`; no raw arithmetic error escapes a division (typed
-    ``EDGE_UNSUPPORTED`` at worst).
+    ``EDGE_UNSUPPORTED`` at worst).  Independent of the caller's NumPy error state (N2 round 3):
+    the module's arithmetic runs under ``np.errstate(all="ignore")``, model calls under NumPy's
+    default state, and the explicit guards decide.
     """
+    with np.errstate(all="ignore"):
+        return _edge_display_samples(model, edge_id, tol)
+
+
+def _edge_display_samples(model, edge_id, tol) -> EdgeSamples:
     setup = _setup(model, edge_id, tol)
 
     def run():
@@ -1169,10 +1189,11 @@ def display_rounding_allowance(model, edge_id: int, tol: DisplayTolerance) -> Di
       any vertex offset treated as 0 at the coordinates' resolution.
 
     Same refusals as :func:`edge_display_samples` before its divisions are built (except the 2 %
-    rule itself).
+    rule itself), and likewise independent of the caller's NumPy error state.
     """
-    setup = _setup(model, edge_id, tol)
-    return _guarded(setup.edge_id, lambda: _analyse(model, setup, tol).allowance)
+    with np.errstate(all="ignore"):
+        setup = _setup(model, edge_id, tol)
+        return _guarded(setup.edge_id, lambda: _analyse(model, setup, tol).allowance)
 
 
 def _guarded(edge_id, call):
@@ -1214,10 +1235,10 @@ def _setup(model, edge_id, tol) -> _Setup:
     if edge_id not in model.edges:
         raise GeometryError(f"edge {edge_id} is not in the model")
     edge = model.edges[edge_id]
-    supports = _incident_supports(model, edge_id)
+    supports = _model_call(_incident_supports, model, edge_id)
     curve = edge.curve
-    start = np.asarray(model.vertex_position(edge.start), dtype=float)
-    end = np.asarray(model.vertex_position(edge.end), dtype=float)
+    start = np.asarray(_model_call(model.vertex_position, edge.start), dtype=float)
+    end = np.asarray(_model_call(model.vertex_position, edge.end), dtype=float)
 
     _check_points(f"edge {edge_id}'s vertices", np.vstack((start, end)))
     conic = None
@@ -1253,14 +1274,14 @@ def _setup(model, edge_id, tol) -> _Setup:
         _check_angle(f"edge {edge_id}'s ellipse", curve.start_angle, curve.start_angle + curve.sweep_angle)
         _check_sweep(f"edge {edge_id}'s ellipse", float(curve.sweep_angle))
     elif isinstance(curve, Arc):
-        _check_points(f"edge {edge_id}'s arc via vertex", model.vertex_position(curve.via_vertex))
+        _check_points(f"edge {edge_id}'s arc via vertex", _model_call(model.vertex_position, curve.via_vertex))
     else:
         raise _unsupported(edge_id, f"a {type(curve).__name__} is not a line, circle or ellipse")
     for support in supports:
         _check_support_domain(support)
     if isinstance(curve, Arc):
         try:
-            frame = model.arc_frame(edge_id)
+            frame = _model_call(model.arc_frame, edge_id)
         except GeometryError as error:
             raise _unsupported(edge_id, str(error)) from error
         _check_points(f"edge {edge_id}'s arc centre", frame.center)
@@ -1380,7 +1401,7 @@ def _build(setup, analysis):
 
 def _evaluate(model, edge_id, parameters) -> np.ndarray:
     try:
-        return np.array(model.evaluate_edge_many(edge_id, parameters), dtype=float)
+        return np.array(_model_call(model.evaluate_edge_many, edge_id, parameters), dtype=float)
     except GeometryError as error:
         raise _unsupported(edge_id, str(error)) from error
 

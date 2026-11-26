@@ -414,9 +414,9 @@ becomes a NON-STRICT order of the stored ordinates, never a reversal. Therefore:
 - a reversal is unreachable; the check stays as a fail-closed guard (`OUT_OF_DOMAIN`, "rounded
   ordinates reverse their exact order", never seen in the fuzz);
 - a fraction that rounds to 0.0 or 1.0 at a strictly interior x is ACCEPTED: the exact fraction is
-  then within half an ulp of the end (`|f* - f| <= 2^-54` at 1, at most `2^-1075` at 0), so lifting
-  the point at `f` places it on the segment end, within that fraction of the segment length of the
-  exact cut point. Both round-1 resolution refusals ("slab too narrow", "feature below display
+  then within half an ulp of the end (`|f* - f| <= 2^-54` at 1, at most `2^-1075` at 0); the 2D
+  mesh is unaffected (its cut point is the correctly rounded `(x, RN(y*))`), and the fraction is
+  provenance metadata only (see "Certified product and lift" below). Both round-1 resolution refusals ("slab too narrow", "feature below display
   resolution") are gone; the two Codex round-2 reproductions (a real N1 face whose right corners
   are one ulp apart, a triangular hole cut one ulp right of its tip) are meshed and pass the exact
   oracle.
@@ -463,16 +463,55 @@ general path with the private keyword `_fast=False` and compare.
 depend on the caller's `np.seterr`; the contract tests run every call under
 `np.errstate(all="raise")`. Audit of the merged N1 module (`display_tessellation.py`) the same
 way: all public calls of its edge tests (`edge_display_samples`, `display_rounding_allowance`)
-run under `np.errstate(all="raise")` through a test fixture; no `FloatingPointError` escapes (no
-fix needed). The corpus tests make no public call. (Building the corpus models under `raise` does
-fail, in `exact_curves` bounding boxes and `nurbs`, outside the display module; not changed.)
+run under `np.errstate(all="raise")` through a test fixture. Round 2 found no escape there; Codex
+round 3 found one the fixture did not cover: an ellipse with semiaxes 2 and 1 and a SUBNORMAL
+out-of-plane component (`u = (2, 0, 2^-1074)`) samples under the default state, but under
+`raise` both public calls raised `FloatingPointError` (underflow in `u / |u|`) in their setup,
+before the arithmetic guard. Fix (owner decision, N2 round 3 (4)): both public calls run their
+own setup and arithmetic under a local `np.errstate(all="ignore")`; the existing explicit
+finiteness and domain guards decide; MODEL calls made from inside (vertex positions, incident
+faces, arc frames, `evaluate_edge_many`) run under NumPy's DEFAULT error state, whatever the
+caller's, so the model's own state-checked fast paths see the state they were measured under.
+Nothing changes under the default state: the N1 corpus (5744 results: samples, points and
+allowances, every corpus edge at both steps and both sag settings) is bit-identical before and
+after (0 changes). The fixture now also carries the reproduction and six subnormal or
+huge-but-in-domain variants (subnormal components in both axes, a circle with a subnormal tilt, a
+subnormal centre, a centre near 1e9 with a stored angle of 1e5, a millimetre ellipse with a
+subnormal component, a line with subnormal coordinates), each compared bit for bit under
+`raise`, `ignore`, `warn` and mixed states against the default. The corpus tests make no public
+call. (Building the corpus models under `raise` does fail, in `exact_curves` bounding boxes and
+`nurbs`, outside the display module; not changed.)
+
+**Input forms and size caps first** (owner decisions, N2 round 3 (2) and (3)). Every size cap is
+checked from shapes and lengths alone, BEFORE any conversion, copy, reshape, scan or finiteness
+check (round 2 converted and scanned every ring first: a million-point broadcast view with 16
+bytes of storage traced about 32 MB before its refusal, and `extra_x.reshape(-1)` copied a
+non-contiguous array before its size check). `rings` is an ndarray of shape `(k, n, 2)` (its
+`.shape` counts) or a Python sequence (list, tuple) of rings; a ring is an `(n, 2)` ndarray (its
+`.shape`) or a sequence of points, each point an ndarray of shape `(2,)` or a sequence of length
+2 of numbers; `extra_x` is an ndarray of any shape (its `.size`), one number, or a flat sequence
+of numbers (its `len()`). More than `MAX_SLAB_RING_POINTS / 3` rings, more than
+`MAX_SLAB_RING_POINTS` points or more than `MAX_SLAB_INCIDENCES` extra lines are refused
+(`OUT_OF_DOMAIN`, "too complex") before anything is converted; the per-point checks of a
+sequence ring run only once its length is within the cap (Python sequences are the caller's own
+objects, so their conversion is bounded by what the caller already holds). Generators,
+iterators, sets and other non-sequence objects are `TRIM_INVALID` (never consumed). Tested:
+seven oversized inputs (broadcast views of 1e6 and 1e5 points, 20000 rings, a 200002-point list
+ring, a broadcast and a non-contiguous `extra_x`, a 300000-value list) are refused with a traced
+peak allocation under 1 MB (`tracemalloc`). Masked arrays (`np.ma.MaskedArray`, any mask state,
+also `np.ma.masked` as a coordinate) are `TRIM_INVALID` ("masked input not supported"): the
+conversion would drop the mask, and Codex round 3 showed two rings with identical visible values
+meshing to areas 1.0 and 1.5 from their hidden values. Other ndarray subclasses (`np.matrix`,
+`np.memmap`, user subclasses) are accepted and read as stored, through `np.asarray`; structured
+and character arrays are refused by their dtype as before.
 
 Contract of the result (`SlabTriangulation`):
 
 - `points` are the input vertices in order (rings concatenated, unchanged bits), then *cut points*;
-  cut point `k` lies on ring segment `cut_ends[k] = (a, b)`, `a` its endpoint of lower x, at
-  fraction `cut_fraction[k] = RN(f*)` from `a`, in `[0, 1]` (0 or 1 only within half an ulp, see
-  above), so a caller can place it on the segment's own image; its ordinate is `RN(y*)`. No other
+  cut point `k` is `(x, RN(y*))` on the slab line `x` of ring segment `cut_ends[k] = (a, b)`, `a`
+  its endpoint of lower x. `cut_fraction[k] = RN(f*)`, in `[0, 1]` (0 or 1 only within half an
+  ulp, see above), is the fraction of that point from `a`. `cut_ends` and `cut_fraction` are
+  provenance METADATA (which segment, roughly where), not a certified lift (below). No other
   points are created.
 - `triangles` are counter-clockwise with strictly positive area, decided from the slab geometry,
   not from a determinant (owner decision, N2 round 1): each triangle has one vertical side between
@@ -484,14 +523,37 @@ Contract of the result (`SlabTriangulation`):
   vertical side used (no T-junctions). The rounded polygon's area differs from the exact one by at
   most `sum_k |RN(y*_k) - y*_k| (x_next,k - x_prev,k) / 2` over the cut points (moving one by `d`
   changes the area by `d` times half its neighbours' x distance), each error at most half an ulp.
+- `area` is half the sum of (slab width) x (height sum) over the trapezoids, accumulated without
+  underflow (owner decision, N2 round 3, Low a): widths and heights are scaled up by powers of two
+  (exact) so the x and y extents lie in `[1/2, 1)`, the products are summed and the sum is scaled
+  back once. Where nothing underflows (every ordinary trim; extents of 1/2 or more are not scaled at
+  all) the bits are those of the plain float sum (power-of-two scaling commutes with every
+  rounding in the normal range); below, a scaled product underflows only under `2^-1022` of the
+  extents' product, losing at most `2^-1075` of it each, so a representable area is never cut to
+  0. Codex round 3: a square of side `2^-536` had area `2^-1072` uncut and 0.0 in 16 slabs on both
+  paths; now `2^-1072` on both. Same rule on the fast and general paths.
 - The result is deterministic (bit-identical on repeat).
+
+**Certified product and lift** (owner decision, N2 round 3 (1), the recommended option). The
+certified product of N2 is the 2D mesh: the vertices and triangles in the trim plane, with the
+guarantees above. `cut_ends` and `cut_fraction` are provenance metadata only. Reconstructing the
+cut points at `cut_fraction` (or at any per-point position bound) is NOT an orientation-preserving
+lift: each lifted point stays within its own bound, but neighbouring points move independently,
+and a thin triangle can invert. Codex round 3 reproduction (kept as a test): outer ring
+`(-1, -1), (1, -1), (1, 3), (-1, 3)`, hole `(-0.21, 1), (0.75, 0.75), (0.75, 1.25)`, `extra_x =
+[nextafter(-0.21, -inf)]`; the 2D mesh passes the exact oracle, but rebuilding its cut points at
+`cut_fraction` moves an outer cut past the hole tip, triangle `[7, 4, 10]` inverts and its centroid
+lies inside triangle `[0, 7, 10]`. Therefore any lift (N3: placing the mesh on a support or a
+segment's own image) must certify each lifted triangle's orientation itself and refuse (fail
+closed) when it cannot; N2 promises nothing about lifted triangles.
 
 Refusals, in this order (no raw `IndexError`/`ValueError`/`OverflowError`/`FloatingPointError`):
 
 | code | when |
 |---|---|
-| `TRIM_INVALID` (`SlabInvalid`) | not a sequence of `(n, 2)` arrays, non-numeric (string) data, fewer than three (distinct consecutive) vertices |
-| `OUT_OF_DOMAIN` (`DisplayDomainRefused`, as N1) | the declared numeric domain, checked before any arithmetic: real values EXACTLY representable in binary64 (owner decision, N2 round 2: a wider `np.longdouble` value by an exact round trip, an integer above `2^53` must round-trip, else "coordinate not exactly representable in binary64", before duplicate compression and the bound check; nothing is narrowed), finite, `\|c\| <= MAX_DISPLAY_COORDINATE = 1e9` for rings and `extra_x` (complex, boolean and object arrays, e.g. integers too large for a float, are refused, never converted); then the preflight budgets. Inside the domain no overflow is possible: differences are at most 2e9, shoelace products at most 4e18 |
+| `TRIM_INVALID` / `OUT_OF_DOMAIN` | the input forms and size caps, from shapes and lengths only, before any conversion (owner decision, N2 round 3): not an ndarray or sequence (generators, iterators, sets), wrong shapes, masked arrays (`TRIM_INVALID`, "masked input not supported"); more than `MAX_SLAB_RING_POINTS / 3` rings, `MAX_SLAB_RING_POINTS` points or `MAX_SLAB_INCIDENCES` extra lines (`OUT_OF_DOMAIN`, "too complex") |
+| `TRIM_INVALID` (`SlabInvalid`) | non-numeric (string) data, fewer than three (distinct consecutive) vertices |
+| `OUT_OF_DOMAIN` (`DisplayDomainRefused`, as N1) | the declared numeric domain, checked before any arithmetic: real values EXACTLY representable in binary64 (owner decision, N2 round 2: a wider `np.longdouble` value by an exact round trip, an integer above `2^53` must round-trip, else "coordinate not exactly representable in binary64", before duplicate compression and the bound check; nothing is narrowed), finite, `\|c\| <= MAX_DISPLAY_COORDINATE = 1e9` for rings and `extra_x` (complex, boolean and object arrays, e.g. integers too large for a float, are refused, never converted); then the incidence and triangle budgets. Inside the domain no overflow is possible: differences are at most 2e9, shoelace products at most 4e18 |
 | `TRIM_INVALID` | the input contract above (crossing, self-touch, retrace, touching rings, hole outside or nested), decided exactly |
 | `OUT_OF_DOMAIN` | a ring whose EXACT area is at most `16 n eps extent^2` of ITS OWN extent (the float value of that expression; one rule on both paths, owner decision N2 round 2: a float shoelace filter with a rigorous bound, exact integers where it cannot decide; before, the fast path tested its slab sum and the general path a cancelling float shoelace, and they disagreed on a ring at the floor); the reversal guard (unreachable) |
 
@@ -500,7 +562,10 @@ exact orientation (Shewchuk's filter with an absolute underflow allowance, then 
 subnormal collinear triple used to pass the filter as non-zero), exact pairwise
 interior-disjointness (bounding-box prefilter, no cap), exact containment of corners, edge
 midpoints (closed) and centroids (strict) in the rounded polygon, exact equality of the triangle
-area sum with the rounded polygon's area, the stated bound against the exact polygon, every cut
+area sum with the rounded polygon's area, the stated bound against the exact polygon (each cut
+charged once, found by its segment `cut_ends[k]` and index `k` in its own ring; round 2 matched
+cuts by rounded coordinates across rings, so an outer cut rounded onto a hole vertex was charged
+to both rings: +25 % on the round-3 test case), every cut
 fraction and ordinate equal to `float(Fraction)` of the exact value, and a brute-force exact
 validity verdict.
 
@@ -515,11 +580,18 @@ same seed, the stricter oracle): 0 raw exceptions; 0 exact-oracle failures among
 the brute-force verdict matched on all 6000 (2957 invalid, all `TRIM_INVALID`); fast and general
 paths agreed (verdict and triangles); the verdict never changed with `extra_x`; the reversal guard
 never fired. Of the 233 valid cases refused in round 1, 229 are now accepted; the remaining 4
-`OUT_OF_DOMAIN` are the area floor (as before).
+`OUT_OF_DOMAIN` are the area floor (as before). Round 3, the same 6000 cases and oracle (per-cut area
+allowance): identical counts (3039 accepted, 0 oracle failures, 2957 `TRIM_INVALID`, 4
+`OUT_OF_DOMAIN` area floor, 0 raw exceptions). Ordinary results unchanged: 3000 seeded star trims
+with holes and extra lines (6000 calls, both paths; 5284 accepted) give bit-identical points,
+triangles, cut data and areas before and after round 3.
 
 Measured (best of 30 or 300 runs, loaded PC, round 1 / round 2): a 400-vertex ring with 20 holes
 2.13 / 2.41 ms, a plain 400-vertex ring 0.21 / 0.41 ms, a 400-vertex star 5.1 / 7.8 ms; a unit
 square 43 / 48 us, the square with 9 lines 61 / 85 us, a 24-vertex monotone ring 64 / 71 us, a
-square with one hole 0.24 / 0.22 ms (same session, the round-1 code from `git archive dd5061c`). The
+square with one hole 0.24 / 0.22 ms (same session, the round-1 code from `git archive dd5061c`). Round 3
+(76c07d2 / round 3, same session, better of two passes): 2.54 / 2.51 ms, 0.42 / 0.43 ms, 7.6 /
+7.1 ms; 48 / 51 us, 87 / 90 us, 73 / 77 us, 0.22 / 0.23 ms (the shape preflight costs about 3 us
+per call). The
 certified rounding costs about 0.15 ms of NumPy overhead per call above 64 cut points (below that,
 exact integers are cheaper) and about 0.13 us per cut point.

@@ -2534,3 +2534,51 @@ def test_r11_the_module_frame_is_built_about_the_normalised_axis():
         worst = max(abs(e1 @ u), abs(e2 @ u), abs(e1 @ e2), abs(e1 @ e1 - 1.), abs(e2 @ e2 - 1.),
                     abs(float(np.cross(e1, e2) @ u) - 1.))
         assert worst <= 4. * EPS, (multiplier, worst / EPS)
+
+
+# N2 round 3 (Codex M4, owner decision 4): the public calls run their own arithmetic under a local
+# np.errstate(all="ignore"); the explicit domain and finiteness guards decide.  Subnormal and huge
+# (in-domain) definition values, each built under the default state, then called under several
+# caller states: the same samples (bytes) or the same refusal code every time.
+_TINY = math.ulp(0.0)
+
+
+def _r3_errstate_cases():
+    yield "subnormal out-of-plane ellipse (Codex r3)", EllipticArc((0, 0, 0), (2, 0, _TINY), (0, 1, 0), 0, .5)
+    yield "subnormal components in both axes", EllipticArc((0, 0, 0), (2, 1e-310, 1e-310), (-1e-310, 1, 1e-310), .2, 1.)
+    yield "circle with a subnormal tilt", EllipticArc((0, 0, 0), (1, 0, _TINY), (0, 1, -_TINY), 0, 2.)
+    yield "subnormal centre", EllipticArc((_TINY, -_TINY, 1e-320), (3, 0, 0), (0, 1, 0), -.4, .9)
+    yield "huge centre, large stored angle", EllipticArc((9e8, -9e8, 5e8), (3, 0, _TINY), (0, 1.5, 0), 1e5, .3)
+    yield "small ellipse", EllipticArc((0, 0, 0), (1e-3, 0, 0), (0, 5e-4, _TINY), 0, 1.)
+    yield "line with subnormal coordinates", ((_TINY, 0., 0.), (1., _TINY, -_TINY))
+
+
+def _r3_outcome(call, g, edge, tol):
+    try:
+        value = call(g, edge, tol)
+    except dt.DisplayTrimRefused as error:
+        return ("refused", error.code)
+    if isinstance(value, dt.EdgeSamples):
+        return (value.parameters.tobytes(), value.points.tobytes())
+    return (value.angle, value.sag, value.axis_floor, value.axis_floors)
+
+
+@pytest.mark.parametrize("label, curve", list(_r3_errstate_cases()), ids=[c[0] for c in _r3_errstate_cases()])
+def test_r3_public_calls_do_not_depend_on_the_callers_error_state(label, curve):
+    g = corpus.GeometryModel()
+    if isinstance(curve, tuple):
+        edge = g.add_line(g.add_point(*curve[0]), g.add_point(*curve[1]))
+    else:
+        edge = g.add_curve(g.add_point(*curve.evaluate(0)), g.add_point(*curve.evaluate(1)), curve)
+    for tol in (dt.DisplayTolerance(.15), dt.DisplayTolerance(.15, 1e-3)):
+        for name, call in _PUBLIC.items():
+            reference = _r3_outcome(call, g, edge, tol)               # the default NumPy state
+            assert reference[0] != "refused" or name != "edge_display_samples" or label != _R3_REPRO, reference
+            for state in ({"all": "raise"}, {"all": "ignore"}, {"all": "warn"},
+                          {"under": "raise", "over": "raise"}, {"divide": "raise", "invalid": "raise"}):
+                with np.errstate(**state):
+                    assert _r3_outcome(call, g, edge, tol) == reference, (label, name, state)
+            assert _r3_outcome(getattr(dt, name), g, edge, tol) == reference      # the strict fixture
+
+
+_R3_REPRO = "subnormal out-of-plane ellipse (Codex r3)"

@@ -26,6 +26,19 @@ All notable user-visible changes to ANYgeometry are documented here.
   exactly representable in binary64 (a wider `np.longdouble` value or an integer above 2**53 that
   does not round-trip is `OUT_OF_DOMAIN` before compression and the domain check). The area floor
   is one exact rule on both paths.
+  Round 3 (owner decisions, the recommended options): the certified product is the 2D mesh;
+  `cut_ends` and `cut_fraction` are provenance metadata only, and any lift (N3) must certify each
+  lifted triangle's orientation itself and refuse when it cannot (a fraction-based lift of a valid
+  mesh inverted a triangle; the reproduction is kept as a test). Every size cap is checked from
+  shapes and lengths before any conversion, copy or scan (a broadcast view of a million points is
+  refused with under 1 MB traced); rings and `extra_x` must be ndarrays or sequences (generators
+  and iterators are `TRIM_INVALID`); masked arrays are `TRIM_INVALID` ("masked input not
+  supported"), other ndarray subclasses are read as stored. The covered `area` is accumulated
+  without underflow (power-of-two scaling, bit-identical where nothing underflows). In
+  `display_tessellation`, `edge_display_samples` and `display_rounding_allowance` run their own
+  arithmetic under a local `np.errstate(all="ignore")` (model calls under NumPy's default state),
+  so a subnormal ellipse component no longer raises under a caller's `np.seterr(all="raise")`;
+  default-state results are unchanged (N1 corpus bit-identical).
 - New `anygeometry.display_tessellation` (not re-exported from `anygeometry`): display edge
   samples shared by every face using an edge (`edge_display_samples`, `DisplayTolerance`,
   `EdgeSamples`, typed `DisplayTrimRefused`). Narrow contract: lines, circles and ellipses on

@@ -158,27 +158,50 @@ def brute_valid(rings) -> bool:
     return True
 
 
-def _rounded_rings(rings, result):
-    """The rings with each cut point inserted on its segment: the polygon the mesh must tile."""
+def _rounded_ring_ids(rings, result):
+    """Point ids of the rings with each cut point inserted on its segment (tracked by the cut's
+    segment ``cut_ends[k]`` and its index ``k``, never by coordinates: N2 round 3, Low b)."""
     vertices = np.vstack([np.asarray(r, float) for r in rings])
     n = len(vertices)
     groups = defaultdict(list)
-    for k, (a, b) in enumerate(result.cut_ends):
-        groups[(tuple(vertices[a]), tuple(vertices[b]))].append(n + k)
+    for k, (a, b) in enumerate(result.cut_ends.tolist()):
+        groups[(a, b)].append(n + k)
     used = 0
     out = []
+    offset = 0
     for ring in rings:
-        c = _compress(ring)
+        pts = [tuple(map(float, p)) for p in np.asarray(ring, float)]
+        ids = [offset + k for k, p in enumerate(pts) if p != pts[k - 1]] or [offset]
+        offset += len(pts)
         new = []
-        for p, q in zip(c, c[1:] + c[:1]):
+        for p, q in zip(ids, ids[1:] + ids[:1]):
             new.append(p)
-            ks = groups.get((p, q), []) + groups.get((q, p), [])
+            ks = groups.pop((p, q), []) + groups.pop((q, p), [])
             used += len(ks)
-            ks.sort(key=lambda k: result.points[k, 0], reverse=p[0] > q[0])
-            new.extend(tuple(result.points[k]) for k in ks)
+            ks.sort(key=lambda k: result.points[k, 0], reverse=vertices[p, 0] > vertices[q, 0])
+            new.extend(ks)
         out.append(new)
     assert used == len(result.cut_ends), "a cut point lies on no ring segment"
     return out
+
+
+def _rounded_rings(rings, result):
+    """The rings with each cut point inserted on its segment: the polygon the mesh must tile."""
+    return [[tuple(result.points[i]) for i in ring] for ring in _rounded_ring_ids(rings, result)]
+
+
+def _area_allowance(rings, result, bounds):
+    """The stated area bound: each cut point k moved by ``bounds[k]`` changes the area by that times
+    half the x distance of its two neighbours IN ITS OWN ring (each cut counted once)."""
+    n = sum(len(r) for r in rings)
+    allowance = F(0)
+    for ring in _rounded_ring_ids(rings, result):
+        m = len(ring)
+        for i, pid in enumerate(ring):
+            if pid >= n:
+                span = abs(F(float(result.points[ring[(i + 1) % m], 0])) - F(float(result.points[ring[i - 1], 0])))
+                allowance += bounds[pid - n] * span / 2
+    return allowance
 
 
 def _candidate_pairs(boxes):
@@ -243,15 +266,7 @@ def check_mesh(rings, result, extra=None):
     assert total == region
     exact = abs(_signed_area([_fp(p) for p in _compress(rings[0])])) - sum(
         abs(_signed_area([_fp(p) for p in _compress(h)])) for h in rings[1:])
-    allowance = F(0)
-    for ring in rounded:                                       # moving a cut by d changes the area by d w / 2
-        m = len(ring)
-        index = {p: i for i, p in enumerate(ring)}
-        for k in range(len(result.cut_ends)):
-            i = index.get(tuple(pts[n + k]))
-            if i is not None:
-                allowance += bounds[k] * abs(F(ring[(i + 1) % m][0]) - F(ring[i - 1][0])) / 2
-    assert abs(total - exact) <= allowance
+    assert abs(total - exact) <= _area_allowance(rings, result, bounds)
     # pairwise interior-disjoint (exact, all pairs after a bounding-box prefilter)
     disjoint, _ = _interiors_disjoint(pts, tri)
     assert disjoint
@@ -811,3 +826,165 @@ def test_r2_1_ties_are_accepted_and_the_reversal_guard_never_fires():
             accepted += 1
             check_mesh(rings, result, lines)
     assert accepted >= 100
+
+
+# ----------------------------------------------------------------------------- N2 round 3 (Codex)
+_DOCS = __import__("pathlib").Path(__file__).resolve().parents[1] / "docs" / "DISPLAY_TESSELLATION.md"
+
+
+def _lift_by_fraction(result):
+    """Each cut point rebuilt at ``cut_fraction`` on its segment (exact, then rounded): the lift the
+    round-2 docs described, which N2 does NOT certify (owner decision N2 r3 (1))."""
+    uv = [_fp(p) for p in result.points]
+    n = len(result.points) - len(result.cut_ends)
+    lifted = uv[:n]
+    for (a, b), f in zip(result.cut_ends.tolist(), result.cut_fraction.tolist()):
+        lifted.append(tuple(F(float(x + F(f) * (y - x))) for x, y in zip(uv[a], uv[b])))
+    return uv, lifted
+
+
+def test_r3_1_the_certified_product_is_the_2d_mesh_and_a_fraction_lift_can_invert_it():
+    """Medium (M1): rebuilding the cut points at cut_fraction moved an outer cut past a hole tip and
+    inverted triangle [7, 4, 10].  The 2D mesh is certified; any lift must check orientation itself."""
+    outer = [(-1., -1.), (1., -1.), (1., 3.), (-1., 3.)]
+    hole = [(-.21, 1.), (.75, .75), (.75, 1.25)]
+    extra = [math.nextafter(-.21, -math.inf)]
+    for path in _PATHS:
+        result = _contract([outer, hole], extra, **path)            # the 2D mesh passes the exact oracle
+        uv, lifted = _lift_by_fraction(result)
+        triangles = result.triangles.tolist()
+        assert all(_orient(*(uv[i] for i in t)) > 0 for t in triangles)
+        inverted = [t for t in triangles if _orient(*(lifted[i] for i in t)) < 0]
+        assert inverted, path
+        if not path:
+            assert any(t[k:] + t[:k] == [7, 4, 10] for t in inverted for k in range(3)), inverted
+    text = " ".join(_DOCS.read_text(encoding="utf-8").split())
+    assert "must certify each lifted triangle's orientation itself" in text
+    assert "metadata" in text and "[7, 4, 10]" in text
+
+
+def _traced_peak(call):
+    import tracemalloc
+    tracemalloc.start()
+    try:
+        call()
+        return tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+
+#: largest traced allocation (bytes) allowed before a size-cap refusal (owner decision N2 r3 (2))
+_PREFLIGHT_PEAK = 1_000_000
+
+
+def test_r3_2_size_caps_are_checked_from_shapes_before_any_conversion():
+    """Medium (M2): a million-point broadcast view (16 bytes of storage) was converted and scanned
+    (about 32 MB traced) before OUT_OF_DOMAIN; a non-contiguous extra_x was copied by reshape.
+    Bound: under 1 MB of traced peak allocation before every size-cap refusal."""
+    square = np.array(SQUARE)
+    base = np.zeros((2000, 2000))                                   # allocated before tracing
+    many_points = [(0., 0.)] * 200_000 + [(1., 0.), (1., 1.)]       # a caller-built list ring
+    many_lines = [0.5] * 300_000
+    cases = [
+        ([np.broadcast_to(np.zeros((1, 2)), (1_000_000, 2))], None),
+        ([np.broadcast_to(np.zeros((1, 2)), (100_000, 2))], None),
+        ([square] * 20_000, None),                                  # 80000 points in many rings
+        ([many_points], None),
+        ([square], np.broadcast_to(0.5, (1000, 1000))),
+        ([square], base[:, ::2]),                                   # reshape(-1) would copy 16 MB
+        ([square], many_lines),
+    ]
+    for rings, extra in cases:
+        caught = []
+
+        def call():
+            try:
+                slab.triangulate_rings(rings, extra)
+            except DisplayTrimRefused as error:
+                caught.append(error)
+        peak = _traced_peak(call)
+        assert caught and caught[0].code == "OUT_OF_DOMAIN" and "too complex" in str(caught[0]), caught
+        assert peak < _PREFLIGHT_PEAK, (peak, str(caught[0]))
+    # non-sized iterables are typed refusals, never consumed
+    assert "sequence" in str(_refused("TRIM_INVALID", (r for r in [SQUARE])))
+    assert "sequence" in str(_refused("TRIM_INVALID", [iter(SQUARE)]))
+    assert "sequence" in str(_refused("TRIM_INVALID", [SQUARE], (x for x in [0.5])))
+    # ordinary forms are still accepted, with the same result
+    reference = slab.triangulate_rings([square], np.array([0.25, 0.5]))
+    for rings, extra in (((SQUARE,), [0.25, 0.5]), ([[list(p) for p in SQUARE]], (0.25, 0.5)),
+                         ([square], np.array([[0.25], [0.5]])), ([square], np.array([0.25, 9., 0.5, 9.])[::2])):
+        again = slab.triangulate_rings(rings, extra)
+        assert np.array_equal(again.points, reference.points) and np.array_equal(again.triangles, reference.triangles)
+    assert np.array_equal(slab.triangulate_rings([square], 0.5).points,
+                          slab.triangulate_rings([square], [0.5]).points)
+
+
+def test_r3_3_masked_arrays_are_refused_and_other_subclasses_read_as_stored(tmp_path):
+    """Medium (M3): np.asarray dropped the mask, so the hidden backing value decided the mesh."""
+    rings = []
+    for hidden in (1., 2.):
+        ring = np.ma.array([(0., 0.), (hidden, 0.), (1., 1.), (0., 1.)])
+        ring[1, 0] = np.ma.masked
+        rings.append(ring)
+    assert np.ma.allequal(*rings)
+    for ring in rings + [np.ma.array(SQUARE), np.ma.array(SQUARE, mask=False)]:
+        assert "masked input not supported" in str(_refused("TRIM_INVALID", [ring]))
+    assert "masked input not supported" in str(_refused("TRIM_INVALID", [SQUARE], np.ma.array([0.5])))
+    assert "masked input not supported" in str(_refused("TRIM_INVALID", [SQUARE], [np.ma.masked]))
+    assert "masked input not supported" in str(
+        _refused("TRIM_INVALID", [[(0., 0.), np.ma.array((1., 0.)), (1., 1.), (0., 1.)]]))
+    assert "masked input not supported" in str(_refused("TRIM_INVALID", [[(0., 0.), (np.ma.masked, 0.), (1., 1.)]]))
+    # other ndarray subclasses are read as stored (np.asarray)
+    import warnings
+    reference = slab.triangulate_rings([np.array(SQUARE)], [0.5])
+    stored = np.memmap(tmp_path / "ring.bin", dtype=float, mode="w+", shape=(4, 2))
+    stored[:] = SQUARE
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", PendingDeprecationWarning)
+        matrix = np.matrix(SQUARE)
+    for ring in (matrix, stored):
+        again = slab.triangulate_rings([ring], [0.5])
+        assert np.array_equal(again.points, reference.points) and np.array_equal(again.triangles, reference.triangles)
+    del stored
+
+
+def test_r3_low_a_extra_cuts_never_underflow_the_area():
+    """Low: a square of side 2**-536 had area 2**-1072 uncut and 0.0 in 16 slabs (both paths)."""
+    s = 2.0 ** -536
+    square = [(0., 0.), (s, 0.), (s, s), (0., s)]
+    lines = [s * k / 16 for k in range(1, 16)]
+    for path in _PATHS:
+        assert slab.triangulate_rings([square], **path).area == 2.0 ** -1072
+        result = _contract([square], lines, **path)
+        assert result.area == 2.0 ** -1072, (path, result.area)
+
+
+def test_r3_low_b_the_area_allowance_counts_each_cut_once_in_its_own_ring():
+    """Low: the oracle matched cuts by rounded coordinates across rings, so an outer cut rounded onto
+    a hole vertex was charged to both rings."""
+    yb = 0.1 * 3                                                    # the cut at x = 1 rounds UP
+    tip = float(F(yb) / 3)
+    assert F(tip) > F(yb) / 3
+    outer = [(0., 0.), (3., yb), (3., 4.), (0., 4.)]
+    hole = [(.5, .5), (1., tip), (2., 1.), (1., 2.)]
+    rings = [np.asarray(r, float) for r in (outer, hole)]
+    n = 8
+    for path in _PATHS:
+        result = _contract([outer, hole], **path)
+        points = result.points
+        bounds = []
+        for k, (a, b) in enumerate(result.cut_ends.tolist()):
+            fa, fb, fc = _fp(points[a]), _fp(points[b]), _fp(points[n + k])
+            exact_y = fa[1] + (fc[0] - fa[0]) / (fb[0] - fa[0]) * (fb[1] - fa[1])
+            bounds.append(abs(fc[1] - exact_y))
+        tied = [k for k in range(len(result.cut_ends)) if tuple(points[n + k]) == (1., tip)]
+        assert len(tied) == 1 and bounds[tied[0]] > 0                # the outer cut rounded onto the hole tip
+        # independent count: each cut once, with the x distance of its neighbours on its own segment
+        expected = F(0)
+        ends = result.cut_ends.tolist()
+        for k, (a, b) in enumerate(ends):
+            on_segment = sorted([points[a, 0], points[b, 0]] + [points[n + j, 0] for j in range(len(ends))
+                                                                if ends[j] == [a, b]])
+            i = on_segment.index(points[n + k, 0])
+            expected += bounds[k] * (F(on_segment[i + 1]) - F(on_segment[i - 1])) / 2
+        assert _area_allowance(rings, result, bounds) == expected
