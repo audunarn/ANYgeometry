@@ -39,6 +39,7 @@ jobs:
     env:
       ANYGEOMETRY_SHARD_GROUPING: 'module'
       ANYGEOMETRY_TIMING_FACTOR: ${{ matrix.os == 'macos-15-intel' && '2' || '1' }}
+      ANYGEOMETRY_CI_DRIVER_SECONDS: ${{ matrix.os == 'macos-15-intel' && '2640' || '1800' }}
       ANYGEOMETRY_REQUIRE_QUALIFIED_PLANNING_TESTS: ${{ matrix.os == 'windows-latest' && matrix.python-version == '3.14' && '1' || '0' }}
     strategy:
       fail-fast: false

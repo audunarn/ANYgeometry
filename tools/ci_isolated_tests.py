@@ -153,10 +153,30 @@ def verify_positive_junit(path,node):
         raise ValueError('required positive phase did not execute original passed assertions')
 
 
+DRIVER_SECONDS_DEFAULT=1800
+DRIVER_SECONDS_MAX=2700
+DRIVER_SECONDS_VARIABLE='ANYGEOMETRY_CI_DRIVER_SECONDS'
+
+
+def driver_budget_seconds(env):
+    """The driver budget from the workflow: unset is 1800 s; otherwise a plain decimal 1..2700.
+
+    Owner decision 2026-11-26: the macOS Intel pytest shards get a 45-minute job and 2640 s of
+    driver budget; every other job keeps 30 minutes and 1800 s. A malformed value is refused.
+    """
+    value=env.get(DRIVER_SECONDS_VARIABLE)
+    if value is None:return DRIVER_SECONDS_DEFAULT
+    if type(value) is not str or not value.isascii() or not value.isdigit() or value.startswith('0'):
+        raise ValueError('invalid CI driver budget variable: '+repr(value))
+    seconds=int(value)
+    if not 0<seconds<=DRIVER_SECONDS_MAX:raise ValueError('invalid CI driver budget variable: '+repr(value))
+    return seconds
+
+
 class PhaseBudget:
-    """Secondary DRIVER budget; earlier GitHub30min whole-job cap stays stronger."""
-    def __init__(self,seconds=1800):
-        if type(seconds) is not int or not 0<seconds<=1800:raise ValueError('invalid CI driver budget')
+    """Secondary DRIVER budget; the GitHub whole-job cap (30 min, 45 on Intel Mac) starts earlier and stays stronger."""
+    def __init__(self,seconds=DRIVER_SECONDS_DEFAULT):
+        if type(seconds) is not int or not 0<seconds<=DRIVER_SECONDS_MAX:raise ValueError('invalid CI driver budget')
         self.seconds=seconds;self.started=time.monotonic();self.deadline=self.started+seconds
     def remaining(self):
         remaining=self.deadline-time.monotonic()
@@ -406,7 +426,7 @@ def main(argv=None):
     focused=args.profile is None and bool(args.select or args.k or args.m or os.environ.get('PYTEST_ADDOPTS'))
     args.profile=args.profile or 'full'
     validate_selection('unit' if focused else args.profile,args.select,args.k,args.m,os.environ)
-    budget=PhaseBudget()
+    budget=PhaseBudget(driver_budget_seconds(os.environ))
     root=args.root.resolve();folder=(root/args.evidence_dir).resolve()
     if folder.exists() and any(folder.iterdir()):raise ValueError('evidence directory must be fresh')
     folder.mkdir(parents=True,exist_ok=True)
