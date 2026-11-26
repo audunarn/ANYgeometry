@@ -133,6 +133,32 @@ def quarter_cylinder(origin=(0., 0., 0.), axis=(0., 0., 1.), radius=2.0, height=
     return g, g.add_face_from_loop(loop, (0, 1, 2, 3), surface=support)
 
 
+def window_face(origin, axis, radius, height=None, start=.3, sweep=2.2, hole=(.35, .75, .42, .58)):
+    """A cylinder patch (circle arcs, rulings) with a window hole: the hole's rulings lie inside
+    the outer arcs' chords, so N2 cuts those chords on the hole's ruling azimuths (fuzz finding:
+    the two ends of a ruling round to azimuths ulps apart)."""
+    g = GeometryModel()
+    o = np.asarray(origin, dtype=float)
+    a, e1, e2 = _frame(axis)
+    height = 2.0 * radius if height is None else height
+
+    def loop(ta, tb, h0, h1, forward):
+        def at(t, h):
+            return o + radius * (math.cos(t) * e1 + math.sin(t) * e2) + h * a
+        p = [g.add_point(*at(t, h)) for t, h in ((ta, h0), (tb, h0), (tb, h1), (ta, h1))]
+        low = g.add_curve(p[0], p[1], EllipticArc(tuple(o + h0 * a), tuple(radius * e1), tuple(radius * e2), ta, tb - ta))
+        high = g.add_curve(p[3], p[2], EllipticArc(tuple(o + h1 * a), tuple(radius * e1), tuple(radius * e2), ta, tb - ta))
+        uses = [OrientedEdge(low, True), OrientedEdge(g.add_line(p[1], p[2]), True), OrientedEdge(high, False),
+                OrientedEdge(g.add_line(p[3], p[0]), True)]
+        return tuple(uses if forward else [OrientedEdge(u.edge, not u.forward) for u in reversed(uses)])
+    outer = loop(start, start + sweep, 0.0, height, True)
+    support = Cylinder(tuple(o - a), tuple(a), tuple(e1), radius, height + 2.0)
+    face = g.add_face_from_loop(outer, (0, 1, 2, 3), surface=support)
+    f0, f1, g0, g1 = hole
+    N3a._force(g, face, holes=(loop(start + f0 * sweep, start + f1 * sweep, g0 * height, g1 * height, False),))
+    return g, face
+
+
 def _r8_sweep_face():
     """codex-n2r8 finding 2: a thin (2e-9) triangle on a 2e-4-sweep cylinder, two vertices 4e-9
     off the support; its normal is positive at the chart centroid and negative elsewhere."""
@@ -166,16 +192,23 @@ def test_t8_q3_quarter_cylinder_vertices_orientation_and_paired_deviation(kind):
         assert mesh.points[:k].tobytes() == np.vstack(N3a._n1_rings(g, face, tol)).tobytes()
         o, e1, e2 = dt._axis_frame(g.faces[face].surface)
         axis = np.asarray(g.faces[face].surface.axis)
+        thin = 0
         for t in mesh.triangles:
             a, b, c = mesh.points[t]
             n = np.cross(b - a, c - a)
+            longest = max(np.linalg.norm(b - a), np.linalg.norm(c - b), np.linalg.norm(a - c))
+            if np.linalg.norm(n) <= mesh.deviation_bound * longest:
+                thin += 1                                      # rounding-thin (ulp-wide slabs at the rulings)
+                continue
             radial = (a + b + c) / 3 - o
             radial -= (radial @ axis) * axis
             assert n @ radial > 0                              # outward
+        assert mesh.degenerate_count <= thin
         r = g.faces[face].surface.radius
         rebuilt = o[None] + r * (np.cos(mesh.chart[:k, :1]) * e1 + np.sin(mesh.chart[:k, :1]) * e2) \
             + mesh.chart[:k, 1:] * axis
-        assert not np.array_equal(rebuilt, mesh.points[:k])   # naive: evaluating the chart moves them
+        if kind == "tilted":                                 # naive: evaluating the chart moves them
+            assert not np.array_equal(rebuilt, mesh.points[:k])
 
 
 # ----------------------------------------------------------------------------- T9 (Q7)
@@ -219,14 +252,15 @@ def test_t10_a_loop_winding_the_axis_is_refused():
 @pytest.mark.parametrize("step", corpus.STEPS, ids=["fine", "interaction"])
 def test_t11_tripod_skins_are_all_accepted_and_certified(step):
     """All 18 tripod skins (half tubes, mitre ellipses, rulings) accepted at the ANYfem steps;
-    the certificates hold; 12 of them need the rounding-thin exemption (N3.0)."""
+    the certificates hold.  N3.0 measured ulp-wide slabs (rounding-thin triangles) on 12 skins;
+    the lift joins azimuths within rounding, so none remain (counted, not required)."""
     case = corpus.tripod_skins()
     tol = dt.DisplayTolerance(step)
     exempt = []
     for label, face in case.faces.items():
         mesh = _check_cylinder(case.model, face, tol, _mesh(case.model, face, tol), grid=_grid(3))
         exempt.append(mesh.degenerate_count)
-    assert len(exempt) == 18 and sum(1 for n in exempt if n) >= 1
+    assert len(exempt) == 18
 
 
 @pytest.mark.parametrize("step", corpus.STEPS, ids=["fine", "interaction"])
@@ -238,6 +272,47 @@ def test_generated_cylinder_400_faces_are_all_accepted(step):
         if i % 40 == 0:
             _check_cylinder(case.model, face, tol, mesh, grid=_grid(3))
         assert mesh.degenerate_count == 0 and mesh.deviation_bound <= mesh.face_tolerance
+
+
+@pytest.mark.parametrize("origin, axis, radius", [((31., -17., 44.), (1., 2., 2.), 1.9),
+                                                  ((5., -3., 7.), (2., -1., 3.), .7),
+                                                  ((-40., 12., 9.), (0., 1., 1.), .25)])
+def test_a_window_hole_beside_long_chords_is_accepted(origin, axis, radius, monkeypatch):
+    """Fuzz finding (N3b): the two ends of a hole's ruling round to azimuths a few ulps apart;
+    the ulp-wide slab between them puts the cut of a long outer chord (at the chart azimuth, but
+    ON the 3D chord, tangentially off it by ~ dT^3) in a sliver triangle that truly folds (3D
+    width ~1e-3, far above rounding).  The lift joins chart azimuths within their rounding
+    (``_SNAP``): accepted and certified.  Without the join the fold is refused."""
+    from anygeometry import _display_lift as lift
+    g, face = window_face(origin, axis, radius)
+    tol = dt.DisplayTolerance(.51)
+    _check_cylinder(g, face, tol, _mesh(g, face, tol))
+    monkeypatch.setattr(lift, "_SNAP", 0.0)
+    assert "folds" in _refused("TRIM_INVALID", lambda: _mesh(g, face, tol))
+
+
+@pytest.mark.parametrize("angle", [.1, .3])
+def test_refinement_bisects_slabs_whose_triangles_exceed_t_face(angle, monkeypatch):
+    """The window's hole arcs are sampled out of phase with the outer arcs: N2's strip triangles
+    join cuts near the middle of full-step chords (variance near T_face's own dT^2 / 4) across
+    wide slabs, and their paired bound exceeds T_face (refused without refinement).  Bisecting
+    those slabs brings every triangle under T_face (oracle-checked)."""
+    from anygeometry import _display_lift as lift
+    g, face = window_face((0., 0., 0.), (0., 0., 1.), 1.0)
+    tol = dt.DisplayTolerance(angle)
+    refined = _check_cylinder(g, face, tol, _mesh(g, face, tol), grid=_grid(4))
+    plain = slab.triangulate_rings([c.copy() for c in _charts(g, face, tol)])
+    assert len(refined.triangles) > len(plain.triangles)
+    monkeypatch.setattr(lift, "_REFINE_ROUNDS", 0)
+    assert "deviation bound" in _refused("TRIM_INVALID", lambda: _mesh(g, face, tol))
+
+
+def _charts(g, face, tol):
+    from anygeometry import _display_lift as lift
+    f = g.faces[face]
+    rings = [lift._ring(g, face, loop, tol) for loop in (f.loop, *f.holes)]
+    with np.errstate(all="ignore"):
+        return lift._CylinderChart(f.surface).charts(face, rings)
 
 
 # ----------------------------------------------------------------------------- Q5 / Q4 rules

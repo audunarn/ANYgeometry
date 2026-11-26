@@ -192,8 +192,10 @@ def _check_combinatorics(mesh, rings):
             a, b = start + i, start + (i + 1) % m
             on = {j for j in by_source.get(tuple(mesh.source[a].tolist()), ()) if _on_segment(mesh, j, a, b)}
             lo, hi = sorted((mesh.chart[a, 0], mesh.chart[b, 0]))
-            # a merged cut keeps one chord's source; on its other chord it is found geometrically
-            on |= {int(j) + k for j in np.flatnonzero((cut_x > lo) & (cut_x < hi)) if _on_segment(mesh, int(j) + k, a, b)}
+            # a merged cut keeps one chord's source; on its other chord it is N2's cut there: its
+            # ordinate is the chord's exact ordinate at its x, correctly rounded
+            on |= {int(j) + k for j in np.flatnonzero((cut_x > lo) & (cut_x < hi))
+                   if _on_segment(mesh, int(j) + k, a, b) and _rounds_onto(mesh.chart, int(j) + k, a, b)}
             xa, xb = q[a][0], q[b][0]
             on = sorted(on, key=lambda j: q[j][0] if xa < xb else -q[j][0])
             nodes = [a, *on, b]
@@ -203,6 +205,16 @@ def _check_combinatorics(mesh, rings):
         start += m
     assert max(counts.values()) <= 2
     assert used_once == {e for e, n in counts.items() if n % 2}
+
+
+def _rounds_onto(chart, j, a, b):
+    """``chart[j]``'s ordinate is the correctly rounded ordinate of the chart chord ``a``-``b`` at
+    ``chart[j]``'s abscissa (exact rationals)."""
+    (xa, ya), (xb, yb), (x, y) = ([F(float(v)) for v in chart[i]] for i in (a, b, j))
+    exact = ya + (x - xa) * (yb - ya) / (xb - xa)
+    yf = float(chart[j][1])
+    below, above = F(math.nextafter(yf, -math.inf)), F(math.nextafter(yf, math.inf))
+    return (below + y) / 2 <= exact <= (above + y) / 2
 
 
 def _on_segment(mesh, j, a, b):
