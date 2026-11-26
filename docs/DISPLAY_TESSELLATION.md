@@ -399,7 +399,7 @@ computed from exact ndarrays as ints, its own constants, floats it computed (or 
 range checked. No caller object, dtype or unbounded int is ever formatted (owner decision N2 round 6
 (1): EVERY formatted integer, model-produced ids included, goes through `_id_text`, which prints it
 only if |v| < 10**18 and otherwise the fixed text "<id out of display range>"; 34 sites audited, a
-face id of 10**5000 is a typed refusal). Note that form refusals are O(1) memory; domain/finiteness refusals
+face id of 10**5000 is a typed refusal). Note that form refusals use memory O(number of rings): one capped tuple snapshot of the ring list, at most 8 bytes x `MAX_SLAB_RINGS` (12,500), about 100 kB (102,027 bytes traced at the cap); domain/finiteness refusals
 of an accepted, capped array may make one bounded copy (at most 8 bytes x the cap, about 1.8 MB
 measured for the largest capped `float64` `extra_x`). A refusal runs no caller code (Codex N2 r5 M1: a metaclass whose `__name__` raised escaped as a
 raw `RuntimeError`, and a dtype with a 2e6-character field name allocated about 6 MB while it was
@@ -679,6 +679,15 @@ face:
   0.293 of the trim radially, yet its interior diagonal midpoint is 0.380 from the support at the
   matching (u, v) midpoint, so a limit of 0.30 passes radially and fails parametrically (kept as a
   test).
+- N3 face-level tolerance rule (owner decision N2 round 7, the recommended option): N3 certifies ONE
+  threshold per face, `T_face = tol.sag` when the caller gives `DisplayTolerance.sag`, otherwise
+  `model.tolerance.surface_residual` (the quantity N1 uses for its default per-edge allowance); a
+  face is never certified against a smaller per-edge value, so edges of one face with different N1
+  allowances do not give the face several thresholds. Boundary vertices come from N1 samples and may
+  lie off the support by up to the model's accepted residual; that offset counts toward `T_face`
+  (it is not exempt). Example kept as a test: a planar triangle whose N1 boundary lies 4e-9 off the
+  plane everywhere has a parametric error of 4e-9, above the length tolerance and within
+  `surface_residual`, so it is certified against `T_face = surface_residual`.
 - interior vertices are lifted by the support map; the chordal deviation of interior triangles is
   bounded by the display tolerance (N3 certifies it), and the analytic trim is approximated within
   that tolerance, not "covered exactly";

@@ -4,6 +4,9 @@ All notable user-visible changes to ANYgeometry are documented here.
 
 ## Unreleased
 
+- N2 round 7 (docs and tests only): N3 face-level tolerance rule (`T_face` = `tol.sag`, else
+  `model.tolerance.surface_residual`; boundary offset counts); form-refusal memory wording is
+  O(number of rings), about 100 kB at the cap; stronger huge-id and frustum tests.
 - N2 round 6: every integer formatted into a display refusal message (model ids included) uses a
   fixed text above 10**18; the N3 deviation contract is the parametric max over the triangle;
   coverage and allocation wording scoped.
