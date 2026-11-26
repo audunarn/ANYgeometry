@@ -2291,7 +2291,8 @@ def test_r9_the_tangent_map_is_never_near_stationary():
 # ---------------------------------------------------------------------------------------------
 # N1 round 10 (owner decision, the recommended option): the azimuth is computed in the module's
 # OWN orthonormal frame about the support's unit axis, and a cylinder or cone whose stored frame
-# is not orthonormal to 8 eps is refused OUT_OF_DOMAIN ("support frame not orthonormal")
+# is self-inconsistent (orthonormality error above 1e-9) is refused OUT_OF_DOMAIN ("support frame
+# not orthonormal"); a stored frame's ordinary rounding is never refused
 # ---------------------------------------------------------------------------------------------
 _R10_A, _R10_E, _R10_F = np.array([[1., 1., 0.], [1., -1., 0.], [0., 0., -1.]])
 _R10_R, _R10_S = 2. ** -10, math.sqrt(2)
@@ -2415,3 +2416,29 @@ def test_r10_the_module_frame_is_orthonormal_and_independent_of_the_stored_phase
         plan = conic.azimuth_division(support, .05, [centre, centre + arc.u_vector, centre + arc.v_vector])
         cuts.append(np.asarray(plan.build().values, dtype=float))
     assert len(cuts[0]) > 3 and all(np.array_equal(c, cuts[0]) for c in cuts)
+
+
+def test_r10_random_ordinary_supports_are_never_refused_for_their_frame():
+    """The frame check is a sanity check for self-inconsistent supports only: 10,000 random
+    cylinders and 10,000 random cones (fixed seed; random axes and radial seeds over six orders
+    of magnitude per component) are all admitted, though their stored frames are off by
+    rounding (the first 8 eps version refused 1756 of them; worst 1.8e-11, 55x below 1e-9)."""
+    rng = np.random.default_rng(20261126)
+    refused, built, worst = 0, 0, 0.
+    for k in range(20000):
+        axis = rng.normal(size=3) * 10. ** rng.uniform(-3, 3, size=3)
+        seed = rng.normal(size=3) * 10. ** rng.uniform(-3, 3, size=3)
+        try:
+            support = (Cylinder((0, 0, 0), axis, seed, 1., 1.) if k % 2 == 0
+                       else Cone((0, 0, 0), axis, seed, .5, 1., 1.))
+        except GeometryError:
+            continue
+        built += 1
+        u, r, c = (np.asarray(v) for v in (support.axis, support.radial_direction, support.circumferential_direction))
+        worst = max(worst, abs(u @ r), abs(u @ c), abs(np.linalg.norm(r) - 1.))
+        try:
+            dt._check_support_domain(support)
+        except dt.DisplayDomainRefused:
+            refused += 1
+    assert refused == 0 and built >= 19990, (refused, built)
+    assert worst > 8. * EPS                   # the set includes frames the 8 eps version refused

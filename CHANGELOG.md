@@ -96,9 +96,12 @@ All notable user-visible changes to ANYgeometry are documented here.
   the support's unit axis (`e1` from the axis crossed with its least-aligned basis vector,
   normalised; `e2 = axis x e1`), never by projecting onto the stored radial / circumferential
   directions; turning is independent of the frame's phase. A `Cylinder` or `Cone` whose stored
-  frame is not orthonormal to 8 eps (`|axis . radial|`, `|axis . circumferential|` or
-  `||radial| - 1|`) is refused `OUT_OF_DOMAIN` ("support frame not orthonormal"), its own
-  `evaluate()` disagreeing with its declared axis. Both round-10 reproductions (a radial seed
+  frame is self-inconsistent (`|axis . radial|`, `|axis . circumferential|` or
+  `||radial| - 1|` above 1e-9, absolute) is refused `OUT_OF_DOMAIN` ("support frame not
+  orthonormal"), its own `evaluate()` disagreeing with its declared axis. (First version 8 eps:
+  it refused 65 of 20,000 random ordinary cylinders, worst 117 eps; corrected to a sanity check,
+  since a stored frame's rounding enters no bound; 0 of 20,000 random cylinders and cones
+  refused, worst stored-frame error 1.8e-11.) Against c52a325 the corpus is unchanged bit for bit. Both round-10 reproductions (a radial seed
   nearly along the axis, stored 2.2e-5 off orthogonal: an arc with an interior turnback drawn,
   a strictly monotone arc refused) are now `OUT_OF_DOMAIN`; with the orthogonal seed `(1, -1, 0)`
   the turnback is refused and the monotone arc drawn. The projection error budgets carry the

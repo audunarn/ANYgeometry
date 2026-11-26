@@ -120,10 +120,13 @@ _CIRCLE_RTOL = 8.0 * _EPS  # |u| = |v| and u.v = 0 to a few eps relative: a circ
 _ON_AXIS = 8.0 * _EPS      # a projection within 8 eps max(1, |coordinates|) of an axis is on it
 _DEGENERATE = 1.0e-12      # |det| <= this * |M|^2: a projected or in-plane frame is degenerate
 _TWO_PI = 2.0 * math.pi
-#: N1 round 10 (owner decision): a cylinder's or cone's STORED frame is admitted only when
-#: ``|axis . radial|``, ``|axis . circumferential|`` and ``||radial| - 1|`` are at most this (else
-#: its own evaluate() disagrees with its declared axis geometry: OUT_OF_DOMAIN)
-_SUPPORT_FRAME_TOL = 8.0 * _EPS
+#: N1 round 10 (owner decision, corrected): a sanity check for self-inconsistent supports only.
+#: A cylinder's or cone's STORED frame is admitted when ``|axis . radial|``, ``|axis .
+#: circumferential|`` and ``||radial| - 1|`` (absolute, on unit vectors) are at most this, else
+#: OUT_OF_DOMAIN.  Ordinary supports are off by rounding (measured up to 1.8e-11, 55x below, over
+#: 20,000 random seeds); no bound uses the stored frame except through the support's own normal,
+#: which it tilts by at most about 2e-9 rad here (docs: domain table)
+_SUPPORT_FRAME_TOL = 1.0e-9
 #: the module's own azimuth frame (:func:`_axis_frame`) about the stored unit axis is within this
 #: of an exactly orthonormal frame about that axis, per unit vector (e1 one normalisation, about
 #: eps; e2 = axis x e1 that plus the cross product's rounding, about 2.5 eps): every projection
@@ -469,8 +472,10 @@ def _check_support_domain(support):
 def _check_support_frame(support):
     """N1 round 10 (owner decision, the recommended option): a cylinder or cone whose STORED frame
     is not orthonormal to :data:`_SUPPORT_FRAME_TOL` (``|axis . radial|``, ``|axis .
-    circumferential|`` or ``||radial| - 1|`` above 8 eps; NaN refused) is ``OUT_OF_DOMAIN``: its
-    own evaluate() (built on that frame) then disagrees with its declared axis geometry.  (A
+    circumferential|`` or ``||radial| - 1|`` above 1e-9, absolute; NaN refused) is
+    ``OUT_OF_DOMAIN``: its own evaluate() (built on that frame) then disagrees with its declared
+    axis geometry.  A sanity check for self-inconsistent supports only: a stored frame's ordinary
+    rounding never enters a bound (the azimuth uses the module's own frame).  (A
     radial seed nearly along the axis, orthogonalised by the support, came out 2.2e-5 off
     orthogonal and moved the azimuth's ``g`` by 1.1e-5, round 10.)  The azimuth itself never
     uses the stored radial or circumferential direction (:func:`_axis_frame`)."""
