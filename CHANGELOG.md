@@ -91,6 +91,21 @@ All notable user-visible changes to ANYgeometry are documented here.
   is exactly stationary at an end (round 1 #6) and the round-8 internal both-ends-in-band case
   were drawn and are now `OUT_OF_DOMAIN`. Against 5bc1cd8 all 5744 corpus results and
   allowances are unchanged bit for bit; no new refusal.
+  Round 10 (owner decision, the recommended option): the support azimuth (normal turning,
+  branch decisions, `g` and its bound) is computed in the module's OWN orthonormal frame about
+  the support's unit axis (`e1` from the axis crossed with its least-aligned basis vector,
+  normalised; `e2 = axis x e1`), never by projecting onto the stored radial / circumferential
+  directions; turning is independent of the frame's phase. A `Cylinder` or `Cone` whose stored
+  frame is not orthonormal to 8 eps (`|axis . radial|`, `|axis . circumferential|` or
+  `||radial| - 1|`) is refused `OUT_OF_DOMAIN` ("support frame not orthonormal"), its own
+  `evaluate()` disagreeing with its declared axis. Both round-10 reproductions (a radial seed
+  nearly along the axis, stored 2.2e-5 off orthogonal: an arc with an interior turnback drawn,
+  a strictly monotone arc refused) are now `OUT_OF_DOMAIN`; with the orthogonal seed `(1, -1, 0)`
+  the turnback is refused and the monotone arc drawn. The projection error budgets carry the
+  module frame's deviation (4 eps). Changed results against 3f066d2: 318 of 5744 corpus results
+  move by at most 9.4e-16 in parameter (the frame's phase rounding; no count or code change, no
+  new refusal); 2016 rounding allowances grow (at most 91 % relative, the line and projection
+  error terms; the largest share of the angle and sag is unchanged).
   See `docs/DISPLAY_TESSELLATION.md` (stability table, rounding allowance). No existing module
   changes.
 

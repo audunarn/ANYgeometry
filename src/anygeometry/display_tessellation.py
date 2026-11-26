@@ -120,6 +120,15 @@ _CIRCLE_RTOL = 8.0 * _EPS  # |u| = |v| and u.v = 0 to a few eps relative: a circ
 _ON_AXIS = 8.0 * _EPS      # a projection within 8 eps max(1, |coordinates|) of an axis is on it
 _DEGENERATE = 1.0e-12      # |det| <= this * |M|^2: a projected or in-plane frame is degenerate
 _TWO_PI = 2.0 * math.pi
+#: N1 round 10 (owner decision): a cylinder's or cone's STORED frame is admitted only when
+#: ``|axis . radial|``, ``|axis . circumferential|`` and ``||radial| - 1|`` are at most this (else
+#: its own evaluate() disagrees with its declared axis geometry: OUT_OF_DOMAIN)
+_SUPPORT_FRAME_TOL = 8.0 * _EPS
+#: the module's own azimuth frame (:func:`_axis_frame`) about the stored unit axis is within this
+#: of an exactly orthonormal frame about that axis, per unit vector (e1 one normalisation, about
+#: eps; e2 = axis x e1 that plus the cross product's rounding, about 2.5 eps): every projection
+#: onto it carries ``_FRAME_ERROR |vector|`` beyond its dot product's own rounding
+_FRAME_ERROR = 4.0 * _EPS
 #: relative slack of the inclusive aspect bound: an aspect computed from exactly orthogonal axes
 #: at the bound (a ratio of two rounded norms, or an SVD quotient) rounds by a few eps (N1 round 6)
 _ASPECT_SLACK = 4.0 * _EPS
@@ -454,6 +463,26 @@ def _check_support_domain(support):
     else:
         _check_points("a support origin", support.origin)
         _check_angle("a support", support.start_angle, support.start_angle + support.sweep_angle)
+        _check_support_frame(support)
+
+
+def _check_support_frame(support):
+    """N1 round 10 (owner decision, the recommended option): a cylinder or cone whose STORED frame
+    is not orthonormal to :data:`_SUPPORT_FRAME_TOL` (``|axis . radial|``, ``|axis .
+    circumferential|`` or ``||radial| - 1|`` above 8 eps; NaN refused) is ``OUT_OF_DOMAIN``: its
+    own evaluate() (built on that frame) then disagrees with its declared axis geometry.  (A
+    radial seed nearly along the axis, orthogonalised by the support, came out 2.2e-5 off
+    orthogonal and moved the azimuth's ``g`` by 1.1e-5, round 10.)  The azimuth itself never
+    uses the stored radial or circumferential direction (:func:`_axis_frame`)."""
+    axis = np.asarray(support.axis, dtype=float)
+    radial = np.asarray(support.radial_direction, dtype=float)
+    circumferential = np.asarray(support.circumferential_direction, dtype=float)
+    defects = (abs(float(axis @ radial)), abs(float(axis @ circumferential)), abs(_norm(radial) - 1.0))
+    if not all(d <= _SUPPORT_FRAME_TOL for d in defects):
+        raise DisplayDomainRefused(f"a {type(support).__name__} support frame not orthonormal (|axis . radial| = "
+                                   f"{defects[0]!r}, |axis . circumferential| = {defects[1]!r}, ||radial| - 1| = "
+                                   f"{defects[2]!r}, above {_SUPPORT_FRAME_TOL!r}): its evaluate() disagrees with "
+                                   f"its declared axis geometry")
 
 
 def _aspect_admitted(weight) -> bool:
@@ -489,9 +518,21 @@ def _incident_supports(model, edge_id: int) -> tuple:
 
 
 def _axis_frame(support):
+    """The axis point and the module's OWN orthonormal frame ``(e1, e2)`` about ``support``'s unit
+    axis (N1 round 10, owner decision): ``e1`` the normalised cross product of the axis with the
+    basis vector least aligned with it (exact before the normalisation: its components are axis
+    components or 0; its norm is at least sqrt(2/3)), ``e2 = axis x e1``.  Never the support's
+    stored radial / circumferential directions: the azimuth's turning and every branch decision
+    are independent of the frame's phase, and a stored frame off orthonormal cannot enter them
+    (round 10: a radial 2.2e-5 off orthogonal moved ``g`` by 1.1e-5 against a bound of 1.2e-13).
+    Within :data:`_FRAME_ERROR` of an exact orthonormal frame about the stored axis."""
     origin = np.asarray(support.origin, dtype=float)
-    return origin, np.asarray(support.radial_direction, dtype=float), np.asarray(support.circumferential_direction,
-                                                                                 dtype=float)
+    axis = np.asarray(support.axis, dtype=float)
+    basis = np.zeros(3)
+    basis[int(np.argmin(np.abs(axis)))] = 1.0
+    cross = np.cross(axis, basis)
+    e1 = cross / _norm(cross)
+    return origin, e1, np.cross(axis, e1)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -524,7 +565,8 @@ def _line_azimuth_division(edge_id, support, a, b, step, scale_points, apex_leng
     cancels an end's own small radius):
 
     * each end's radius: its OWN projection ``A' = P(a - o)``, ``B' = P(b - o)`` relative to the
-      axis point ``o`` (rounded by ``4 eps |p - o|``);
+      axis point ``o`` (rounded by ``(4 eps + _FRAME_ERROR) |p - o|``, the module frame of
+      :func:`_axis_frame` included, N1 round 10);
     * the direction: the projection ``D' = P(b - a)`` of the exact difference (a ruling's is
       exactly 0 where its separately rounded ends are not);
     * the segment's interior closest approach, from each end's estimate ``t* = -(A'.D') / |D'|^2``
@@ -565,7 +607,10 @@ def _line_azimuth_division(edge_id, support, a, b, step, scale_points, apex_leng
     d2 = np.array((float(d3 @ x_axis), float(d3 @ y_axis)))
     ra, rb = math.hypot(*a2), math.hypot(*b2)
     length = math.hypot(*d2)
-    err_a, err_b, err_d = 4.0 * _EPS * _norm(a3), 4.0 * _EPS * _norm(b3), 4.0 * _EPS * _norm(d3)
+    # each projection: the subtraction and the dot product (4 eps) plus the module frame's own
+    # deviation from an exact orthonormal frame (_FRAME_ERROR, N1 round 10)
+    projection = 4.0 * _EPS + _FRAME_ERROR
+    err_a, err_b, err_d = projection * _norm(a3), projection * _norm(b3), projection * _norm(d3)
     ends = _line_end_rounding(a, b)
     rounding = [_ON_AXIS * max(1.0, float(np.abs(p).max()), float(np.abs(origin).max())) for p in (a, b)]
     on_axis = [ra <= rounding[0], rb <= rounding[1]]
@@ -847,10 +892,11 @@ class _Conic:
         c3 = self.c - origin
         projected = np.array(((self.lu @ x_axis, self.lv @ x_axis), (self.lu @ y_axis, self.lv @ y_axis)))
         # the projection's absolute rounding (N1 round 9, the branch bound): u', v' from one
-        # rotation (2 eps (|u'| + |v'|)) and each dot product with a unit axis vector (3 eps, the
-        # axis' own unit length an eps more); c - o rounded by eps |c - o|, then projected
-        matrix_error = 8.0 * _EPS * (_norm(self.lu) + _norm(self.lv))
-        offset_error = 8.0 * _EPS * _norm(c3)
+        # rotation (2 eps (|u'| + |v'|)) and each dot product with a unit frame vector (3 eps, its
+        # unit length an eps more); c - o rounded by eps |c - o|, then projected; plus (N1 round 10)
+        # the module frame's deviation from an exact orthonormal frame about the axis (_FRAME_ERROR)
+        matrix_error = (8.0 * _EPS + _FRAME_ERROR) * (_norm(self.lu) + _norm(self.lv))
+        offset_error = (8.0 * _EPS + _FRAME_ERROR) * _norm(c3)
         amap = _AngleMap(self.edge_id, projected, (c3 @ x_axis, c3 @ y_axis), 0.0, 0.0, self.sweep,
                          matrix_error, offset_error)
         stored = max(1.0, abs(self.start), abs(self.start + self.sweep))

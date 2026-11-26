@@ -2286,3 +2286,132 @@ def test_r9_the_tangent_map_is_never_near_stationary():
     """The tangent division's map (offset exactly 0: g = 1 everywhere) always decides +1."""
     amap = dt._AngleMap(0, ((2., .3), (0., 1.)), (0., 0.), math.pi / 2, 0., 1e-8)
     assert amap.branch == 1. and amap.g_bound < 1e-13
+
+
+# ---------------------------------------------------------------------------------------------
+# N1 round 10 (owner decision, the recommended option): the azimuth is computed in the module's
+# OWN orthonormal frame about the support's unit axis, and a cylinder or cone whose stored frame
+# is not orthonormal to 8 eps is refused OUT_OF_DOMAIN ("support frame not orthonormal")
+# ---------------------------------------------------------------------------------------------
+_R10_A, _R10_E, _R10_F = np.array([[1., 1., 0.], [1., -1., 0.], [0., 0., -1.]])
+_R10_R, _R10_S = 2. ** -10, math.sqrt(2)
+_R10_PHI = math.atan2(math.sqrt(3) / 2, 1.5 * _R10_S)
+_R10_BAD = (1 + 1e-11, 1 - 1e-11, 0)       # nearly the axis: the stored radial is 2.2e-5 off orthogonal
+_R10_GOOD = (1., -1., 0.)                   # exactly orthogonal
+
+
+def _r10_arc(gap):
+    return EllipticArc(_R10_R * (2 * _R10_E + _R10_A), _R10_R * _R10_E, _R10_R * (_R10_F + _R10_A / 2),
+                       2 * math.pi / 3 - gap, 1e-5)
+
+
+def _r10_band(gap, seed):
+    """r10 MEDIUM: a cylinder about (1, 1, 0) with the radial seed ``seed``; a band between two
+    caps whose target side is an ellipse from 2 pi / 3 - gap over 1e-5 whose projection across
+    the axis has g = 1 + 2 cos(theta)."""
+    a, e, f, r, s, phi = _R10_A, _R10_E, _R10_F, _R10_R, _R10_S, _R10_PHI
+    support = Cylinder((0, 0, 0), a, seed, r * math.sqrt(21) / 2, .004, phi, .5)
+    g = corpus.GeometryModel(tolerance=TolerancePolicy(length=1e-14, surface_residual=1e-7))
+
+    def edge(curve):
+        i, j = [g.add_point(*p) for p in curve.evaluate(np.array([0., 1.]))]
+        return i, j, g.add_curve(i, j, curve)
+
+    def cap(h):
+        return edge(EllipticArc(h * a / s, support.radius * e / s, support.radius * f, phi, .5))
+
+    i, j, low = cap(r)
+    k, l, high = cap(3 * r)
+    m, n, target = edge(_r10_arc(gap))
+    lines = (g.add_line(j, l), g.add_line(k, m), g.add_line(n, i))
+    g.add_face((low, lines[0], high, lines[1], target, lines[2]), corners=(0, 1, 2, 3), surface=support)
+    assert g.validate_topology() == ()
+    return g, support, target, lines
+
+
+def _r10_plan(support, gap):
+    arc = _r10_arc(gap)
+    conic = dt._Conic(0, arc.center, arc.u_vector, arc.v_vector, arc.start_angle, arc.sweep_angle)
+    centre = np.asarray(arc.center, dtype=float)
+    return conic.azimuth_division(support, .1, [centre, centre + arc.u_vector, centre + arc.v_vector])
+
+
+@pytest.mark.parametrize("gap", [3e-6, 1.3e-5], ids=("turnback", "monotone"))
+def test_r10_a_support_frame_not_orthonormal_is_out_of_domain(gap):
+    """r10 MEDIUM: at 3f066d2 the turnback arc (exact g +5.2e-6 to -1.21e-5) was drawn as [0, 1]
+    and the strictly monotone arc (+2.25e-5 to +5.2e-6) was refused EDGE_UNSUPPORTED: the azimuth
+    was projected onto a stored radial 2.2e-5 off orthogonal to the axis.  Both are refused, the
+    band's lines too (a support domain check)."""
+    g, support, edge, lines = _r10_band(gap, _R10_BAD)
+    assert abs(float(support.axis @ support.radial_direction)) > 1e-6
+    tol = dt.DisplayTolerance(.1, 1e-6)
+    for e in (edge, *lines):
+        with pytest.raises(dt.DisplayDomainRefused, match="support frame not orthonormal"):
+            dt.edge_display_samples(g, e, tol)
+        with pytest.raises(dt.DisplayDomainRefused, match="support frame not orthonormal"):
+            dt.display_rounding_allowance(g, e, tol)
+
+
+def test_r10_the_orthogonal_seed_gives_the_correct_results():
+    """The same band with the exactly orthogonal radial seed (1, -1, 0): the turnback arc is
+    refused as a turnback (EDGE_UNSUPPORTED, not drawn) and the monotone arc is drawn, its
+    support azimuth strictly monotone and within the angle on every interval."""
+    g, support, edge, _lines = _r10_band(3e-6, _R10_GOOD)
+    _refused(lambda: dt.edge_display_samples(g, edge, dt.DisplayTolerance(.1, 1e-6)), "EDGE_UNSUPPORTED")
+    g, support, edge, _lines = _r10_band(1.3e-5, _R10_GOOD)
+    t = dt.edge_display_samples(g, edge, dt.DisplayTolerance(.1, 1e-6)).parameters
+    assert t[0] == 0. and t[-1] == 1. and np.all(np.diff(t) > 0)
+    turning = np.diff(np.unwrap(_azimuth(support, g.evaluate_edge_many(edge, np.linspace(0., 1., 257)))))
+    assert np.all(turning > 0) or np.all(turning < 0)
+    for a, b in zip(t[:-1], t[1:]):
+        ends = _azimuth(support, g.evaluate_edge_many(edge, np.array([a, b])))
+        assert abs(float(np.diff(np.unwrap(ends))[0])) <= .1
+
+
+def test_r10_the_branch_decision_is_made_in_the_module_frame():
+    """The branch decision itself (the support's azimuth plan) on the orthogonal-seed support:
+    the monotone arc is accepted, the turnback arc refused as a turnback."""
+    _g, support, _edge, _lines = _r10_band(1.3e-5, _R10_GOOD)
+    assert _r10_plan(support, 1.3e-5).count >= 1
+    with pytest.raises(dt.DisplayTrimRefused) as caught:
+        _r10_plan(support, 3e-6)
+    assert caught.value.code == "EDGE_UNSUPPORTED"
+
+
+@pytest.mark.parametrize("kind", ["cylinder", "cone"])
+def test_r10_the_support_frame_check_refuses_cylinders_and_cones(kind):
+    """The domain check itself: a stored radial off orthogonal to the axis is refused for a
+    cylinder and a cone; the exactly orthogonal seed is admitted."""
+    def make(seed):
+        if kind == "cylinder":
+            return Cylinder((0, 0, 0), (1., 1., 0.), seed, 1., 1., 0., 1.)
+        return Cone((0, 0, 0), (1., 1., 0.), seed, .5, 1., 1., 0., 1.)
+
+    with pytest.raises(dt.DisplayDomainRefused, match="support frame not orthonormal"):
+        dt._check_support_domain(make(_R10_BAD))
+    dt._check_support_domain(make(_R10_GOOD))
+
+
+def test_r10_the_module_frame_is_orthonormal_and_independent_of_the_stored_phase():
+    """The module's frame about the unit axis is orthonormal to 4 eps for random axes (the
+    stored radial is not used); the same arc on cylinders whose stored radials differ only in
+    phase gets bit-identical cuts (turning is independent of the frame's phase)."""
+    rng = np.random.default_rng(10)
+    worst = 0.
+    for _ in range(2000):
+        axis = rng.normal(size=3) * 10. ** rng.uniform(-3, 3, size=3)
+        support = Cylinder((0, 0, 0), axis, rng.normal(size=3), 1., 1.)
+        _o, e1, e2 = dt._axis_frame(support)
+        u = np.asarray(support.axis)
+        worst = max(worst, abs(e1 @ u), abs(e2 @ u), abs(e1 @ e2), abs(e1 @ e1 - 1.), abs(e2 @ e2 - 1.),
+                    abs(float(np.cross(e1, e2) @ u) - 1.))
+    assert worst <= 4. * EPS, worst / EPS
+    arc = EllipticArc((2., 0., .3), (.5, 0., .1), (0., .7, 0.), .2, 1.2)
+    centre = np.asarray(arc.center, dtype=float)
+    cuts = []
+    for phase in (0., .7, 2.5, -3.):
+        support = Cylinder((0, 0, 0), (0., 0., 1.), (math.cos(phase), math.sin(phase), 0.), 2., 1.)
+        conic = dt._Conic(0, arc.center, arc.u_vector, arc.v_vector, arc.start_angle, arc.sweep_angle)
+        plan = conic.azimuth_division(support, .05, [centre, centre + arc.u_vector, centre + arc.v_vector])
+        cuts.append(np.asarray(plan.build().values, dtype=float))
+    assert len(cuts[0]) > 3 and all(np.array_equal(c, cuts[0]) for c in cuts)
