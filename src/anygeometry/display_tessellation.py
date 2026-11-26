@@ -378,8 +378,8 @@ class _Plan:
 @dataclass(frozen=True)
 class _Division:
     """Edge parameters dividing a monotone angle (``angle(t)``, radians, small: local to the
-    edge) into equal steps.  ``angle`` lets the union verify that a near-duplicate cut it drops
-    is reached, to rounding, by the cut it keeps."""
+    edge) into equal steps.  ``angle`` lets the union measure, in this division's own angle, how
+    far a near-duplicate cut it drops is from the cut it keeps."""
 
     values: list
     angle: object = None
@@ -675,13 +675,16 @@ class _Conic:
                 n = max(n, _count(self.edge_id, span, largest))
             if n == 1 and self.drawn_sag_bound(offset) > residual:
                 n = 2                                   # a curved edge is never one chord
-            return _Plan(n, lambda: np.linspace(0.0, 1.0, n + 1)[1:-1].tolist())
+            return _Plan(n, lambda: _Division(np.linspace(0.0, 1.0, n + 1)[1:-1].tolist(),
+                                              lambda t: self.sweep * t))
         amap = _AngleMap(self.edge_id, self.plane, (0.0, 0.0), math.pi / 2, 0.0, self.sweep)
         total = abs(amap.angle(self.sweep) - amap.angle(0.0))
         n = _count(self.edge_id, total, step)
         if n == 1 and self.drawn_sag_bound(offset) > residual:
             n = 2                                       # a curved edge is never one chord
-        return _Plan(n, lambda: self.to_parameters(_angle_division(amap, 0.0, self.sweep, n)))
+        start = amap.angle(0.0)
+        return _Plan(n, lambda: _Division(self.to_parameters(_angle_division(amap, 0.0, self.sweep, n)),
+                                          lambda t: amap.angle(self.sweep * t) - start))
 
     def drawn_sag_bound(self, offset) -> float:
         """An upper bound of the distance of the EVALUATED curve over [0, 1] from the chord
@@ -820,43 +823,68 @@ def _sag_allowance(supports, tol: DisplayTolerance):
     return min(radii) * 2.0 * math.sin(tol.angle / 4) ** 2          # r (1 - cos(angle / 2))
 
 
-def _union(edge_id, first, others, gap):
-    """Sorted union of division parameters in (0, 1) with the ends (one sort, one pass).
+def _union(edge_id, divisions, headrooms):
+    """Sorted union of the divisions' parameters in (0, 1) with the ends (one sort, one pass).
 
-    Every value of ``first`` (the tangent division) is kept.  A value ``v`` of a later
-    :class:`_Division` within ``gap`` of a kept value ``k`` (the same division point reached by
-    two divisions) is dropped only when its own division's angle at ``k`` equals its angle at
-    ``v`` to rounding (``64 eps max(1, |angle|)``, the angles being local to the edge): every
-    interval of the union then still lies inside one interval of that division, up to that
-    rounding.  Otherwise it is kept (and a cut too close to evaluate apart is refused later)."""
-    base = np.unique(np.clip(np.asarray([0.0, 1.0, *first], dtype=float), 0.0, 1.0))
-    values = [np.clip(np.asarray(d.values, dtype=float), 0.0, 1.0) for d in others]
+    Near-duplicate cuts from different divisions are merged (N1 round 6: a fixed 64-ulp gap had
+    kept a sliver interval 1.04e-14 long).  Two adjacent cuts ``k`` (kept so far) and ``v`` of
+    different divisions are merged when the cut to be dropped lies, in its OWN division's angle,
+    within that division's ``headroom`` of the cut kept: ``|angle_D(k) - angle_D(v)| <= headroom_D``
+    (radians, the units of :func:`display_rounding_allowance`).  ``headroom_D`` is the part of
+    the published allowance its own rounding does not use, ``max(T, Z...) - term_D``
+    (:func:`_build`): dropping the cut moves that division's interval end by at most it, so every
+    union interval still turns, in that division's angle, by at most ``tol.angle +
+    allowance.angle``.  The cut of the stricter division (the smaller headroom; the ends are
+    strictest, never dropped) is kept, the earlier cut on ties; a kept cut that already absorbed
+    others is replaced only by a cut within every absorbed cut's own threshold, and no two cuts of
+    one division are merged.  The threshold is never below the former rounding rule, ``64 eps
+    max(1, |angle|)`` in that division's angle.  Exact duplicates always merge."""
+    values = [np.clip(np.asarray(d.values, dtype=float), 0.0, 1.0) for d in divisions]
     owners = [np.full(len(v), i) for i, v in enumerate(values)]
-    if len(base) - 1 > _MAX_INTERVALS:
-        raise _unsupported(edge_id, f"needs more than {_MAX_INTERVALS} intervals")
-    if not sum(len(v) for v in values):
-        return base
+    total = sum(len(v) for v in values)
+    if not total:
+        return np.array([0.0, 1.0])
     values, owners = np.concatenate(values), np.concatenate(owners)
     order = np.lexsort((owners, values))
-    values, owners = values[order], owners[order]
-    above = np.searchsorted(base, values)
-    accepted = []
-    for value, owner, i in zip(values.tolist(), owners.tolist(), above.tolist()):
-        near = [k for k in (base[i] if i < len(base) else None, base[i - 1] if i > 0 else None,
-                            accepted[-1] if accepted else None)
-                if k is not None and abs(float(k) - value) <= gap]
-        if near:
-            angle = others[owner].angle
-            target = angle(value)
-            if any(abs(angle(float(k)) - target) <= 64.0 * _EPS * max(1.0, abs(target)) for k in near):
+    end = -1                                    # owner of the ends: strictest, never dropped
+
+    def room(owner):
+        return -1.0 if owner == end else headrooms[owner]
+
+    def close(owner, a, b):
+        if owner == end:
+            return False
+        angle = divisions[owner].angle
+        target = angle(b)
+        return abs(angle(a) - target) <= max(headrooms[owner], 64.0 * _EPS * max(1.0, abs(target)))
+
+    # each kept cut with the cuts merged into it (value, owner): a cut replacing it must be close
+    # to every one of them in its own division's angle
+    kept = [(0.0, end, [(0.0, end)])]
+    for value, owner in zip(values[order].tolist(), owners[order].tolist()):
+        cut, cut_owner, group = kept[-1]
+        if value == cut and owner == cut_owner:
+            continue
+        if all(o != owner for _v, o in group):
+            if room(owner) >= room(cut_owner):        # the new cut's division is looser (or a tie)
+                if close(owner, cut, value):
+                    group.append((value, owner))
+                    continue
+            elif all(close(o, value, v) for v, o in group):
+                group.append((value, owner))
+                kept[-1] = (value, owner, group)
                 continue
-        accepted.append(value)
-        if len(base) - 1 + len(accepted) > _MAX_INTERVALS:
+        kept.append((value, owner, [(value, owner)]))
+        if len(kept) > _MAX_INTERVALS:
             raise _unsupported(edge_id, f"needs more than {_MAX_INTERVALS} intervals")
-    kept = np.unique(np.concatenate((base, np.asarray(accepted, dtype=float))))
-    if len(kept) - 1 > _MAX_INTERVALS:
+    cut, cut_owner, group = kept[-1]
+    if cut_owner != end and (cut >= 1.0 or all(close(o, 1.0, v) for v, o in group)):
+        kept.pop()
+    result = np.asarray([k[0] for k in kept if 0.0 < k[0] < 1.0] + [1.0])
+    result = np.concatenate(([0.0], result))
+    if len(result) - 1 > _MAX_INTERVALS:
         raise _unsupported(edge_id, f"needs more than {_MAX_INTERVALS} intervals")
-    return kept
+    return result
 
 
 # ---------------------------------------------------------------------------------------------
@@ -973,6 +1001,7 @@ class _Analysis:
     plans: list               # the incident cylinders' and cones' azimuth plans
     tangent: object           # a conic's tangent plan (None for a line)
     sag: object               # the sag allowance (None without one)
+    terms: tuple              # the rounding terms: the tangent's, then each plan's (radians)
     offsets: tuple            # vertex offsets from the curve's ends (0 at the coordinates' resolution)
     allowance: DisplayRoundingAllowance
 
@@ -1098,17 +1127,21 @@ def _analyse(model, setup, tol) -> _Analysis:
         sag=None if sag is None else 64.0 * _EPS * sag + sag_rounding + hidden,
         axis_floor=MIN_DISPLAY_RADIUS_RATIO * scale,
         axis_floors=tuple(plan.floor for plan in plans))
-    return _Analysis(plans, tangent, sag, offsets, allowance)
+    return _Analysis(plans, tangent, sag, tuple([tangent_rounding] + [plan.rounding for plan in plans]), offsets,
+                     allowance)
 
 
 def _build(setup, analysis):
     """The divisions (their counts already checked), their union and the sag refinement."""
+    # each division's headroom: the share of the published allowance max(T, Z...) its own
+    # rounding term leaves unused (the union may move its interval ends by that much)
+    top = max(analysis.terms)
+    headrooms = [top - term for term in analysis.terms]
     if setup.line is not None:
-        return _union(setup.edge_id, [], [plan.build() for plan in analysis.plans], 64.0 * _EPS)
+        return _union(setup.edge_id, [plan.build() for plan in analysis.plans], headrooms[1:])
     conic = setup.conic
-    # parameters closer than 64 ulps of the stored angle evaluate to the same theta (to rounding)
-    gap = 64.0 * _EPS * max(1.0, abs(conic.start), abs(conic.start + conic.sweep)) / abs(conic.sweep)
-    parameters = _union(setup.edge_id, analysis.tangent.build(), [plan.build() for plan in analysis.plans], gap)
+    parameters = _union(setup.edge_id, [analysis.tangent.build(), *(plan.build() for plan in analysis.plans)],
+                        headrooms)
     if analysis.sag is not None:
         parameters = conic.refine_sag(parameters, analysis.sag, analysis.offsets)
     return parameters

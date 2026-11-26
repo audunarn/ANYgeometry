@@ -134,12 +134,25 @@ exact multiple can come out a few ulps above an integer). There is no fixed slac
    `surface_residual = 2 sin^2(.1)` (its analytic sag; the evaluated sag exceeds it by 2.31e-12)
    was one chord; both now get two.
 
-The union is one sort and one pass. Every tangent-division value is kept. A value `v` of a support
-division within 64 ulps of the stored angle (in edge-parameter units: closer parameters evaluate
-to the same theta) of a kept value `k` is dropped only when that division's own angle at `k`
-equals its angle at `v` to rounding (`64 eps max(1, |angle|)`, the angles being local to the
-edge), so every interval still lies inside one interval of that division up to that rounding;
-otherwise it is kept (and a cut too close to evaluate apart is refused). Every division's count
+The union is one sort and one pass (round-6 follow-up: the former rule kept every tangent cut and
+dropped a support cut only within a fixed 64-ulp parameter gap, which left a 1.04e-14 sliver on
+the `steep_cuts` ellipses). Two adjacent cuts of different divisions are merged when the cut
+dropped lies, in its OWN division's angle (tangent or azimuth, radians, the units of
+`display_rounding_allowance`), within that division's threshold of the cut kept. The threshold is
+the division's headroom, `max(T, Z...) - term_D` (the part of the published allowance's maximum
+that its own rounding term `term_D` does not use), and never less than the former rounding rule
+`64 eps max(1, |angle|)`. The cut kept is that of the stricter division (the smaller headroom; the
+ends are strictest and never dropped), the earlier cut on ties; a cut that has absorbed others is
+replaced only by a cut within every absorbed cut's own threshold; two cuts of one division are
+never merged. *Why the bound still holds:* dropping a cut moves that division's interval end by at
+most its threshold; its intervals already turn by at most `angle + 64 eps x angle + term_D` (its
+own rounding), so with the headroom they turn by at most `angle + 64 eps x angle + max(T, Z...)`,
+the published bound. (The coordinator's proposed justification, "at most its allowance, which the
+published bound already includes", would count `term_D` twice for the division whose term is the
+maximum; the headroom does not.) The `64 eps max(1, |angle|)` floor is the former rule, kept so that
+no previously merged pair splits: three divisions meeting at one point (a tripod mitre ellipse's
+tangent and two cylinders' azimuths) were otherwise emitted as slivers or refused as lost
+precision. Every division's count
 (tangent and each support's) is computed and checked against the cap, and then their sum
 `1 + sum(n - 1)` (the most intervals the union can have), before any division is built, so
 building costs at most 4096 cuts; more than 4096 intervals is `EDGE_UNSUPPORTED` (round 3: a
@@ -166,9 +179,12 @@ frame, the more accurate small diagonal moving the tangent inverse by ulps: 26 p
 (tripod mitre ellipses, `winding_fixture`, `box_corner_cut`, `shared_circle`, `skew_ellipse_edge`)
 keep their counts and moved by at most 8.9e-16 (points by at most 1.1e-14), and the 16 results of
 the `steep_cuts` and `steep_cuts_with_plane` ellipses (two edges each, both steps, with and without sag 1e-4)
-gain one interval: their tangent cut at the symmetric midpoint moved from 0.5 - 7.1e-15 to
-0.5 + 1.04e-14, just beyond the union's 64-ulp gap (9.0e-15) from the azimuth cut at 0.5, so
-both are kept (a sliver interval 1.04e-14 long; every bound still holds on it).
+gained one interval at 514732a: their tangent cut at the symmetric midpoint moved from
+0.5 - 7.1e-15 to 0.5 + 1.04e-14, just beyond the former union's 64-ulp gap (9.0e-15) from the
+azimuth cut at 0.5 (a sliver interval). With the round-6 follow-up's merge rule (below), against
+2427aa3: all 5744 results keep their counts and refusal codes (the `steep_cuts` counts are back),
+no rounding allowance changed, 205 parameter arrays moved by at most 7.0e-15 (the frame, and which
+of two merged cuts is kept), and the shortest interval over the corpus is 4.6e-5.
 
 ## Declared numeric domain (owner decision 2026-11-25)
 
@@ -287,8 +303,8 @@ declared domain (or which bound makes it so):
 | projections onto a nearly dependent frame (round-6 audit) | the parallel-axes test (the residual's norm against `_DEGENERATE |v|`); the in-plane matrix (above); every other projection is onto an orthonormal support frame (radial, circumferential), never onto a frame built from the curve | the residual's norm is the only quantity recovered from a nearly dependent pair; no dot product with a normalised residual remains |
 | aspect bound comparison | computed `aspect x theta* <= 1e4 (1 + 4 eps)` (`_aspect_admitted`), curve and projection | the bound is inclusive: an aspect computed from exactly orthogonal axes at the bound rounds by a few eps (round 6); a skew frame's computed aspect is off by a relative `eps x aspect <= 2.2e-12`, immaterial to every term it scales |
 | ellipse sag | `2 sin^2(delta / 4) |u x v| / |T(m)|`, raised by `(1 + 8 eps x aspect)` before comparing | `|u x v|` and `|T(m)|` of a skew frame round by a relative `eps x aspect` each; the raise makes the comparison fail closed; `|T(m)| = 0` is refused; the evaluated chord ends move by `E` (the allowance's `3 E`, round 3) |
-| parameters `s / sweep`, union gap `/ |sweep|` | direct | `sweep = 0` refused |
-| union drop rule | `|angle(k) - angle(v)| <= 64 eps max(1, |angle|)` | the division angles are local to the edge |
+| parameters `s / sweep` | direct | `sweep = 0` refused |
+| union merge rule | `|angle_D(k) - angle_D(v)| <= max(headroom_D, 64 eps max(1, |angle|))`, `headroom_D = max(T, Z...) - term_D`, in the dropped cut's own division | the division angles are local to the edge; the headroom is a difference of two computed nonnegative terms, used only as a threshold (a smaller value merges less: fail closed) |
 | sag allowance default | `2 r sin^2(angle / 4)` | no `1 - cos` cancellation |
 | bisection | `a + (b - a) / 2`, refused when not strictly inside | float resolution typed |
 | combined cap | `1 + sum(n - 1)` over every division's count, before any is built | integers |

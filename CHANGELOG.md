@@ -59,8 +59,11 @@ All notable user-visible changes to ANYgeometry are documented here.
   The in-plane frame's small diagonal is the residual's norm (it was `v'.e2`, a relative error
   of eps x aspect^2). `axis_floor` is documented as a summary only; callers measuring support
   turning use `axis_floors`. No corpus case is newly refused and no refusal code or rounding
-  allowance changed; through the frame, 26 corpus parameter arrays moved by at most 8.9e-16 and
-  the 16 `steep_cuts` ellipse results gain one sliver interval (1.04e-14) next to a cut at 0.5.
+  allowance changed. Near-duplicate cuts of different divisions are merged when the dropped cut
+  lies, in its own division's angle, within that division's headroom of the published
+  allowance (never below the former 64 eps rule), keeping the stricter division's cut: no
+  sliver intervals (the `steep_cuts` ellipses had one, 1.04e-14). Against 2427aa3 every corpus
+  count and refusal code is unchanged and 205 parameter arrays moved by at most 7.0e-15.
   See `docs/DISPLAY_TESSELLATION.md` (stability table, rounding allowance). No existing module
   changes.
 

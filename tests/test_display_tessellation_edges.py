@@ -1055,14 +1055,18 @@ def test_r1_7_counts_are_plain_ceilings():
 
 
 def test_r1_7_the_union_drops_a_near_duplicate_only_when_its_angle_agrees():
-    """A later division's cut within the gap of a kept one is dropped only when its own angle
-    there agrees to rounding; otherwise it is kept."""
+    """A near-duplicate cut is dropped only when its own division's angle there agrees with the
+    kept cut's within that division's threshold (its headroom, never below 64 eps max(1, |angle|));
+    otherwise it is kept.  Since the round-6 follow-up the threshold is the headroom."""
+    first = dt._Division([.5], lambda t: .2 * t)
     agree = dt._Division([.5 + 1e-14], lambda t: .2 * t)               # .2 x 1e-14: rounding
     differ = dt._Division([.5 + 1e-14], lambda t: 1e6 * t)              # 1e6 x 1e-14 = 1e-8 rad
-    assert dt._union(0, [.5], [agree], 1e-13).tolist() == [0., .5, 1.]
-    assert dt._union(0, [.5], [differ], 1e-13).tolist() == [0., .5, .5 + 1e-14, 1.]
+    assert dt._union(0, [first, agree], [0., 0.]).tolist() == [0., .5, 1.]
+    assert dt._union(0, [first, differ], [0., 0.]).tolist() == [0., .5, .5 + 1e-14, 1.]
+    assert dt._union(0, [first, differ], [0., 1e-7]).tolist() == [0., .5, 1.]          # within its headroom
+    assert dt._union(0, [first, differ], [1e-7, 0.]).tolist() == [0., .5 + 1e-14, 1.]  # the stricter is kept
     many = dt._Division(np.linspace(0., 1., 4097)[1:-1].tolist(), lambda t: t)
-    _refused(lambda: dt._union(0, [.5 + 1e-3], [many], 1e-13), "EDGE_UNSUPPORTED")
+    _refused(lambda: dt._union(0, [dt._Division([.5 + 1e-3], lambda t: t), many], [0., 0.]), "EDGE_UNSUPPORTED")
 
 
 def test_r1_9_the_union_is_one_sort_at_the_cap():
@@ -1071,7 +1075,7 @@ def test_r1_9_the_union_is_one_sort_at_the_cap():
     first = np.linspace(0., 1., 4097)[1:-1].tolist()
     other = dt._Division(first, lambda t: t)
     began = time.perf_counter()
-    assert len(dt._union(0, first, [other], 1e-13)) == 4097
+    assert len(dt._union(0, [dt._Division(first, lambda t: t), other], [0., 0.])) == 4097
     assert time.perf_counter() - began < 1.0
 
 
@@ -1884,3 +1888,21 @@ def test_r6_3_axis_floor_is_documented_as_a_summary():
     a summary only."""
     doc = " ".join(dt.DisplayRoundingAllowance.__doc__.split())
     assert "summary only" in doc and "axis_floors" in doc
+
+
+@pytest.mark.parametrize("step", corpus.STEPS, ids=("fine", "interaction"))
+def test_r6_no_sliver_intervals_over_the_corpus(step):
+    """Round-6 follow-up: near-duplicate cuts of different divisions are merged within the
+    dropped cut's headroom, so no emitted interval is a sliver: every interval over every corpus
+    edge, with and without sag 1e-4, is at least 1024 eps long in parameter (514732a emitted
+    1.04e-14 = 47 eps on the steep_cuts ellipses)."""
+    for name in CASES:
+        case = corpus.ALL[name]()
+        g = case.model
+        for edge in _case_edges(case):
+            for sag in (None, 1e-4):
+                try:
+                    samples = dt.edge_display_samples(g, edge, dt.DisplayTolerance(step, sag))
+                except dt.DisplayTrimRefused:
+                    continue
+                assert np.diff(samples.parameters).min() >= 1024 * EPS, (name, edge, sag)
