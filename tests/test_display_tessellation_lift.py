@@ -132,12 +132,14 @@ def _check_certified(model, face, tol, mesh):
     used_once = {frozenset(e) for e in boundary}
     chain = set()
     start = 0
+    by_source = {}
+    for j in range(k, len(q)):
+        by_source.setdefault(tuple(mesh.source[j].tolist()), []).append(j)
     for ring in rings:
         m = len(ring)
         for i in range(m):
             a, b = start + i, start + (i + 1) % m
-            on = [j for j in range(k, len(q)) if mesh.source[j].tolist() == mesh.source[a].tolist()
-                  and _on_segment(mesh, j, a, b)]
+            on = [j for j in by_source.get(tuple(mesh.source[a].tolist()), ()) if _on_segment(mesh, j, a, b)]
             xa, xb = q[a][0], q[b][0]
             on.sort(key=lambda j: q[j][0] if xa < xb else -q[j][0])
             nodes = [a, *on, b]
@@ -191,9 +193,10 @@ def _on_segment(mesh, j, a, b):
     pa, pb, pj = mesh.points[a], mesh.points[b], mesh.points[j]
     d = pb - pa
     f = float((pj - pa) @ d / (d @ d))
-    # f may round onto 0 or 1: a slab line through another ring's vertex can cut a chord an ulp
-    # from its end (circle holes: cos(pi/3) vs the evaluated arc point)
-    return 0.0 <= f <= 1.0 and np.linalg.norm(pa + f * d - pj) <= 1e-12 * max(1.0, float(np.abs(mesh.points).max()))
+    # f may round onto (or an ulp past) 0 or 1: a slab line through another ring's vertex can cut a
+    # chord an ulp from its end (circle holes: cos(pi/3) vs the evaluated arc point), and the 3D
+    # cut A + f (B - A) is rounded
+    return -1e-12 <= f <= 1.0 + 1e-12 and np.linalg.norm(pa + f * d - pj) <= 1e-12 * max(1.0, float(np.abs(mesh.points).max()))
 
 
 def _naive_fraction_lift(result):
