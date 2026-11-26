@@ -6,6 +6,7 @@ simplicity check.  N2 round-1 (Codex) reproductions are the ``test_r1_*`` tests.
 """
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 from fractions import Fraction
 
@@ -19,8 +20,18 @@ F = Fraction
 SQUARE = [(0., 0.), (1., 0.), (1., 1.), (0., 1.)]
 _EPS = 2.0 ** -52
 _ORIENT_BOUND = (3.0 + 16.0 * 2.0 ** -53) * 2.0 ** -53       # Shewchuk ccwerrboundA
-_ORDINATE_BOUND = 4.0 * _EPS                                 # the module's stated cut ordinate bound
 _TINY = 2.0 ** -1000
+_TRIANGULATE = slab.triangulate_rings                      # unwrapped (the fixture below wraps it)
+
+
+@pytest.fixture(autouse=True)
+def _caller_raises_on_every_floating_point_event(monkeypatch):
+    """Owner decision N2 r2 (3): results and refusals do not depend on the caller's NumPy error
+    state, so every call in these tests runs under ``np.errstate(all="raise")``."""
+    def strict(*args, **kwargs):
+        with np.errstate(all="raise"):
+            return _TRIANGULATE(*args, **kwargs)
+    monkeypatch.setattr(slab, "triangulate_rings", strict)
 
 
 # ----------------------------------------------------------------------------- exact oracle
@@ -37,7 +48,9 @@ def _orient_signs(a, b, c):
     t1 = (b[:, 0] - a[:, 0]) * (c[:, 1] - a[:, 1])
     t2 = (b[:, 1] - a[:, 1]) * (c[:, 0] - a[:, 0])
     det = t1 - t2
-    sign = np.where(np.abs(det) > _ORIENT_BOUND * (np.abs(t1) + np.abs(t2)), np.sign(det), 2).astype(np.int8)
+    # the absolute term covers underflow: subnormal products make the relative bound round to 0
+    sign = np.where(np.abs(det) > _ORIENT_BOUND * (np.abs(t1) + np.abs(t2)) + _TINY, np.sign(det), 2)
+    sign = sign.astype(np.int8)
     for k in np.flatnonzero(sign == 2):
         e = _orient(_fp(a[k]), _fp(b[k]), _fp(c[k]))
         sign[k] = (e > 0) - (e < 0)
@@ -212,13 +225,13 @@ def check_mesh(rings, result, extra=None):
         (xa, ya), (xb, yb) = vertices[a], vertices[b]
         cx, cy = pts[n + k]
         assert xa < cx < xb and cx in lines
-        assert 0.0 < f < 1.0
+        assert 0.0 <= f <= 1.0                     # 0/1 at an interior x: owner decision N2 r2 (1)
         fa, fb, fc = _fp((xa, ya)), _fp((xb, yb)), _fp((cx, cy))
         exact_f = (fc[0] - fa[0]) / (fb[0] - fa[0])
-        assert abs(F(float(f)) - exact_f) <= 4 * F(_EPS)
-        bound = F(_ORDINATE_BOUND * (abs(ya) + abs(yb)) + _TINY)
-        assert abs(fc[1] - (fa[1] + exact_f * (fb[1] - fa[1]))) <= bound
-        bounds.append(bound)
+        exact_y = fa[1] + exact_f * (fb[1] - fa[1])
+        assert f == float(exact_f), "cut fraction not correctly rounded"      # float(Fraction) is RN
+        assert cy == float(exact_y), "cut ordinate not correctly rounded"
+        bounds.append(abs(fc[1] - exact_y))
     # exact orientation: every triangle strictly counter-clockwise
     assert len(tri) and np.all(_orient_signs(pts[tri[:, 0]], pts[tri[:, 1]], pts[tri[:, 2]]) > 0)
     # exact area: the triangles tile the rounded polygon exactly; it is within the stated bound
@@ -576,3 +589,225 @@ def test_random_garbage_matches_the_brute_force_verdict_and_the_oracle():
         ok += 1
         check_mesh(rings, result)
     assert refused > 0 and ok > 0
+
+
+# ----------------------------------------------------------------------------- N2 round-2 reproductions
+def _n1_face_ring():
+    """A nearly rectangular planar face whose two right corners are one ulp apart in x, sampled by N1."""
+    from anygeometry import GeometryModel
+    from anygeometry import display_tessellation as dt
+    from anygeometry.surfaces import Plane
+    x = math.nextafter(1.5, -math.inf)
+    g = GeometryModel()
+    vertices = [g.add_point(u, v, 0) for u, v in [(-1, 0), (1.5, 0), (x, 1), (-1, 1)]]
+    edges = [g.add_line(a, b) for a, b in zip(vertices, vertices[1:] + vertices[:1])]
+    g.add_face(edges, surface=Plane((0, 0, 0), (1, 0, 0), (0, 1, 0)))
+    tol = dt.DisplayTolerance(.15)
+    return np.array([dt.edge_display_samples(g, e, tol).points[0, :2] for e in edges])
+
+
+def test_r2_1_a_real_n1_face_with_corners_one_ulp_apart_is_accepted():
+    """Medium (M1): the bottom edge's cut fraction rounded to 1 in the subtraction; it is correctly
+    rounded now (0.9999999999999999) and the face is meshed (owner decision N2 r2 (1))."""
+    ring = _n1_face_ring()
+    x = math.nextafter(1.5, -math.inf)
+    assert ring[2, 0] == x and ring[1, 0] == 1.5
+    for path in _PATHS:
+        for extra in (None, ring[:, 0]):
+            result = _contract([ring], extra, **path)
+            assert np.any(result.cut_fraction == float((F(x) + 1) / F(2.5)))
+    for path in _PATHS:
+        _contract([[(-1, 0), (1.5, 0), (x, 1), (-1, 1)]], **path)
+        _contract([[(-1, 0), (1.5, 0), (1.5, 1), (-1, 1)]], [1.5], **path)
+
+
+def test_r2_1_a_triangular_hole_with_a_cut_one_ulp_from_its_tip_is_accepted():
+    """Medium (M1): both hole chains round to the tip's y one ulp right of the tip: a TIE, not a
+    reversal; the zero-height pieces are dropped and the mesh tiles the rounded polygon."""
+    outer = [(.5, -1), (3, -1), (3, 3), (.5, 3)]
+    hole = [(1, 1), (2, .75), (2, 1.25)]
+    near = math.nextafter(1.0, 2.0)
+    for path in _PATHS:
+        _contract([outer, hole], [1.0], **path)
+        result = _contract([outer, hole], [near], **path)
+        on_line = result.points[:, 0] == near
+        assert np.count_nonzero(result.points[on_line, 1] == 1.0) >= 2      # the tie is there
+        _contract([outer[:3] + [(near, 3)] + outer[3:], hole], **path)
+
+
+def test_r2_1_a_cut_fraction_rounding_onto_a_segment_end_is_accepted():
+    """Medium (M1/M3): a fraction correctly rounded to 0.0 (or 1.0) at a strictly interior x is
+    accepted; the cut point is the exact position rounded (within half an ulp of the fraction)."""
+    ring = [(0, 0), (2, 0), (2, 1), (0, 1)]
+    tiny = math.ulp(0.0)
+    for path in _PATHS:
+        result = _contract([ring], [tiny], **path)
+        assert np.all(result.cut_fraction == 0.0)
+        assert np.all(result.points[len(ring):, 0] == tiny)
+    long = [(-1e9, 0), (1, 0), (1, 1), (-1e9, 1)]
+    for path in _PATHS:
+        result = _contract([long], [math.nextafter(1.0, 0.0)], **path)
+        assert np.all(result.cut_fraction == 1.0)
+
+
+def test_r2_1_correctly_rounded_cut_values_on_hard_directed_inputs():
+    """The certified rounding of fraction and ordinate equals float(Fraction) on directed cases:
+    sign changes, subnormal slabs and ordinates, the domain bound, one-ulp slopes."""
+    rng = np.random.default_rng(2611)
+    rows = []
+    for _ in range(4000):
+        kind = int(rng.integers(6))
+        scale = 10.0 ** rng.uniform(-300, 9) if kind == 0 else 10.0 ** rng.uniform(-3, 9)
+        xa, xb = np.sort(rng.uniform(-1, 1, 2)) * min(scale, 1e9)
+        x = rng.uniform(xa, xb)
+        if kind == 1:
+            x = np.nextafter(xa, xb)
+        elif kind == 2:
+            x = np.nextafter(xb, xa)
+        ya, yb = rng.uniform(-1, 1, 2) * min(scale, 1e9)
+        if kind == 3:
+            yb = -ya * (1 + int(rng.integers(-3, 4)) * 2.0 ** -52)       # crosses 0 near the middle
+        if kind == 4:
+            ya, yb = ya * 1e-300, yb * 1e-300                          # subnormal ordinates
+        if kind == 5:
+            yb = np.nextafter(ya, np.inf)
+        if xa < x < xb:
+            rows.append(tuple(float(v) for v in (xa, ya, xb, yb, x)))
+    rows += [(0., 0., 2., 1., math.ulp(0.)), (-1., 0., 1.5, 0., math.nextafter(1.5, -math.inf)),
+             (-1e9, -1e9, 1e9, 1e9, 0.), (1., 1., 2., .75, math.nextafter(1., 2.)), (0., 1., 1., -1., .5)]
+    xa, ya, xb, yb, x = (np.array(c, dtype=float) for c in zip(*rows))
+    with np.errstate(all="raise"):
+        f, y = slab._cut_values(xa, ya, xb, yb, x)
+    small_f, small_y = slab._cut_values_exact(xa.tolist(), ya.tolist(), xb.tolist(), yb.tolist(), x.tolist())
+    for k, (a, b, c, d, e) in enumerate(rows):
+        fa, fb, fc, fd, fe = map(F, (a, b, c, d, e))
+        exact_f = (fe - fa) / (fc - fa)
+        assert f[k] == float(exact_f) == small_f[k], (rows[k], f[k])
+        assert y[k] == float(fb + exact_f * (fd - fb)) == small_y[k], (rows[k], y[k])
+
+
+def test_r2_2_vertical_and_duplicate_points_count_in_the_preflight():
+    """Medium (M2): one subdivided vertical side made 200002 triangles from 2 incidences."""
+    import time
+    n = slab.MAX_SLAB_INCIDENCES + 1
+    side = np.column_stack((np.ones(n), np.arange(1, n + 1) / n))
+    ring = np.vstack(([(0, 0), (1, 0)], side, [(0, 1)]))
+    start = time.perf_counter()
+    error = _refused("OUT_OF_DOMAIN", [ring])
+    assert "too complex" in str(error) and time.perf_counter() - start < 1.0
+    assert slab.MAX_SLAB_RING_POINTS == 50_000 and slab.MAX_SLAB_OUTPUT == 600_000
+    over = slab.MAX_SLAB_RING_POINTS - 2
+    dup = np.vstack(([(0., 0.)] * over, [(1., 0.), (1., 1.), (0., 1.)]))    # duplicates count too
+    assert "too complex" in str(_refused("OUT_OF_DOMAIN", [dup]))
+    _contract([dup[-(slab.MAX_SLAB_RING_POINTS - 10):]])
+
+
+def test_r2_2_the_output_bound_is_checked_before_allocation():
+    """Below the point and incidence caps, the triangle bound I + 2 (N + cuts) still binds."""
+    k = 20_000
+    side = np.column_stack((np.zeros(k), np.linspace(1, 0, k + 2)[1:-1]))
+    ring = np.vstack(([(0., 0.), (1., 0.), (1., 1.), (0., 1.)], side))
+    lines = np.linspace(0, 1, 95_002)[1:-1]
+    error = _refused("OUT_OF_DOMAIN", [ring], lines)
+    assert "too complex" in str(error) and "MAX_SLAB_OUTPUT" in str(error)
+    result = slab.triangulate_rings([ring], lines[::2])
+    assert len(result.triangles) <= slab.MAX_SLAB_OUTPUT
+
+
+def test_r2_3_the_callers_numpy_error_state_does_not_matter():
+    """Medium (M3): under np.errstate(all='raise') the interpolation's underflow escaped raw."""
+    ring = [(0, 0), (2, 0), (2, 1), (0, 1)]
+    for path in _PATHS:
+        with np.errstate(all="ignore"):
+            quiet = _TRIANGULATE([ring], [math.ulp(0.0)], **path)
+        with np.errstate(all="raise"):
+            strict = _TRIANGULATE([ring], [math.ulp(0.0)], **path)
+            _refused("OUT_OF_DOMAIN", [[(0., 0.), (1., 0.), (float("nan"), 1.)]], **path)
+        assert np.array_equal(quiet.points, strict.points) and np.array_equal(quiet.triangles, strict.triangles)
+        assert np.array_equal(quiet.cut_fraction, strict.cut_fraction)
+
+
+def test_r2_4_coordinates_not_exactly_binary64_are_refused_before_anything_else():
+    """Medium (M4): narrowing before compression lost a retrace; integers above 2**53 likewise."""
+    big = 2 ** 53 + 1
+    for value in (big, -big):
+        error = _refused("OUT_OF_DOMAIN", [np.array([(0, 0), (value, 0), (0, 1)], dtype=np.int64)])
+        assert "not exactly representable" in str(error)
+    error = _refused("OUT_OF_DOMAIN", [np.array([(0, 0), (2 ** 64 - 1, 0), (0, 1)], dtype=np.uint64)])
+    assert "not exactly representable" in str(error)
+    error = _refused("OUT_OF_DOMAIN", [SQUARE], np.array([big], dtype=np.int64))
+    assert "not exactly representable" in str(error)
+    error = _refused("OUT_OF_DOMAIN", [np.array([(0, 0), (2 ** 53, 0), (0, 1)], dtype=np.int64)])
+    assert "not exactly representable" not in str(error)                   # exact, outside the domain
+    _contract([np.array(SQUARE, dtype=np.float32)])
+    _contract([np.array([(0, 0), (3, 0), (0, 2)], dtype=np.uint8)])
+
+
+@pytest.mark.skipif(np.finfo(np.longdouble).nmant <= np.finfo(np.float64).nmant,
+                    reason="np.longdouble is binary64 on this platform: no wider value to narrow")
+def test_r2_4_a_wider_float_retrace_is_not_narrowed_into_a_valid_square():
+    wide = np.longdouble
+    x = np.nextafter(wide(1), wide(2))
+    assert x > 1 and float(x) == 1
+    ring = np.array([(0, 0), (1, 0), (x, 0), (1, 0), (1, 1), (0, 1)], dtype=wide)
+    assert "not exactly representable" in str(_refused("OUT_OF_DOMAIN", [ring]))
+    assert "not exactly representable" in str(_refused("OUT_OF_DOMAIN", [SQUARE], np.array([x], dtype=wide)))
+    _contract([np.array(SQUARE, dtype=wide)])
+
+
+def test_r2_low_a_the_area_floor_is_one_exact_rule_on_both_paths():
+    """Low: the fast path summed slab areas, the general path a cancelling shoelace; they disagreed."""
+    d = 2.0 ** -46
+    for e, admitted in ((1e-20, True), (0.0, False), (-1e-20, False)):
+        ring = [(0., 0.), (1., 1.), (1., 1. + d), (0., d + e)]
+        extent = max(1.0, 1.0 + d)
+        floor = F(16.0 * 4 * _EPS * extent * extent)
+        assert (abs(_signed_area([_fp(p) for p in ring])) > floor) == admitted
+        verdicts = []
+        for path in _PATHS:
+            try:
+                slab.triangulate_rings([ring], **path)
+                verdicts.append("ok")
+            except DisplayTrimRefused as error:
+                verdicts.append(error.code)
+        assert verdicts == (["ok", "ok"] if admitted else ["OUT_OF_DOMAIN", "OUT_OF_DOMAIN"]), (e, verdicts)
+
+
+def test_r2_low_b_the_oracle_orientation_is_exact_under_underflow():
+    """Low: subnormal products made the oracle's filter threshold 0 and skip the rational check."""
+    a = np.array([(-4.089060633435915e-164, -1.2267181900307745e-163)])
+    b = np.array([(1.9914039133227464e-155, 5.974211739968239e-155)])
+    c = np.array([(4.191769962437771e-155, 1.2575309887313312e-154)])
+    assert _orient(_fp(a[0]), _fp(b[0]), _fp(c[0])) == 0
+    assert _orient_signs(a, b, c).tolist() == [0]
+
+
+def test_r2_1_ties_are_accepted_and_the_reversal_guard_never_fires():
+    """Owner decision N2 r2 (1): valid trims with near-contacts at the ulp level (lines one ulp from
+    a vertex, snapped holes) are accepted and tile exactly; the reversal refusal stays unreachable."""
+    rng = np.random.default_rng(26112)
+    accepted = 0
+    for case in range(120):
+        k = int(rng.integers(3, 16))
+        a = np.sort(rng.uniform(0, 2 * np.pi, k))
+        outer = np.column_stack(np.array([np.cos(a), np.sin(a)]) * rng.uniform(.4, 1., k))
+        rings = [outer]
+        if case % 2:
+            c = rng.uniform(-.1, .1, 2)
+            b = np.sort(rng.uniform(0, 2 * np.pi, 3))
+            rings.append(c + .05 * np.column_stack((np.cos(b), np.sin(b))))
+        rings = [np.round(r * 2 ** 12) / 2 ** 12 for r in rings]
+        v = np.vstack(rings)[:, 0]
+        lines = np.concatenate((np.nextafter(v, np.inf), np.nextafter(v, -np.inf), rng.uniform(-1, 1, 5)))
+        valid = brute_valid(rings)
+        for path in _PATHS:
+            try:
+                result = slab.triangulate_rings(rings, lines, **path)
+            except DisplayTrimRefused as error:
+                assert "reverse" not in str(error)
+                assert error.code == "TRIM_INVALID" and not valid or "below display resolution" in str(error)
+                continue
+            assert valid
+            accepted += 1
+            check_mesh(rings, result, lines)
+    assert accepted >= 100

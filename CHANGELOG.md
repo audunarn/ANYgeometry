@@ -13,6 +13,19 @@ All notable user-visible changes to ANYgeometry are documented here.
   and unresolvable rounding are `OUT_OF_DOMAIN`; canonical cut interpolation (lower-x endpoint
   first, `cut_ends` in that order); triangle orientation from the slab geometry, so no
   positive-area piece is dropped.
+  Round 2 (owner decisions, the recommended options): cut fractions and ordinates are the exact
+  interpolation CORRECTLY ROUNDED (a certified float filter on an error-free residual, exact
+  integers where it cannot certify), so ties of distinct boundaries are accepted (their pieces
+  are exactly degenerate and dropped) and a fraction of 0 or 1 at an interior x is accepted; the
+  former "slab too narrow" and "feature below display resolution" refusals are gone (a reversal
+  check stays as an unreachable fail-closed guard). The preflight counts everything allocated:
+  `MAX_SLAB_RING_POINTS = 50000` input points (duplicates and vertical-side points included),
+  `MAX_SLAB_INCIDENCES = 200000`, and `MAX_SLAB_OUTPUT = 600000` on the triangle bound
+  `I + 2 (N + cuts)`. Every numeric section runs under `np.errstate(all="ignore")` with explicit
+  finiteness checks, so results do not depend on the caller's `np.seterr`. Input values must be
+  exactly representable in binary64 (a wider `np.longdouble` value or an integer above 2**53 that
+  does not round-trip is `OUT_OF_DOMAIN` before compression and the domain check). The area floor
+  is one exact rule on both paths.
 - New `anygeometry.display_tessellation` (not re-exported from `anygeometry`): display edge
   samples shared by every face using an edge (`edge_display_samples`, `DisplayTolerance`,
   `EdgeSamples`, typed `DisplayTrimRefused`). Narrow contract: lines, circles and ellipses on

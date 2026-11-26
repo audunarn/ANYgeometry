@@ -21,6 +21,26 @@ from anygeometry.surfaces import Cone, Cylinder, Plane
 
 DENSE = 65
 EPS = np.finfo(float).eps
+_PUBLIC = {name: getattr(dt, name) for name in ("edge_display_samples", "display_rounding_allowance")}
+
+
+@pytest.fixture(autouse=True)
+def _public_calls_under_a_raising_numpy_error_state(monkeypatch):
+    """N2 round-2 audit (owner decision 3): every public call in these tests runs under
+    ``np.errstate(all="raise")``, so no raw ``FloatingPointError`` can depend on the caller's
+    ``np.seterr`` (fixtures are built under the default state; only the public calls are strict)."""
+    for name, function in _PUBLIC.items():
+        def strict(*args, _function=function, **kwargs):
+            with np.errstate(all="raise"):
+                return _function(*args, **kwargs)
+        monkeypatch.setattr(dt, name, strict)
+
+
+def test_the_public_calls_are_strict_in_these_tests():
+    assert dt.edge_display_samples is not _PUBLIC["edge_display_samples"]
+    with pytest.raises(FloatingPointError):
+        with np.errstate(all="raise"):
+            np.float64(1e-300) * np.float64(1e-300)
 
 
 def _angles(a, b):

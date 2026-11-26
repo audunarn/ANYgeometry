@@ -5,18 +5,21 @@ Private helper of :mod:`anygeometry.display_tessellation`; pure NumPy, no Shapel
 Input contract (owner decision, N2 round 1): the outer ring and every hole are SIMPLE polygons (no
 crossing, no self-touch, no zero-width retrace; repeated consecutive points are allowed and
 collapse), the holes lie strictly inside the outer ring and no two boundaries share a point.  The
-decision is exact (a float filter with a rigorous error bound, exact rationals where it cannot
-decide) and does not depend on ``extra_x``; anything else is :class:`SlabInvalid`
-(``TRIM_INVALID``).  Inputs outside the declared numeric domain, features below float resolution
-and trims above :data:`MAX_SLAB_INCIDENCES` are ``OUT_OF_DOMAIN``
+decision is exact and does not depend on ``extra_x``; anything else is :class:`SlabInvalid`
+(``TRIM_INVALID``).  Inputs outside the declared numeric domain (including values not exactly
+representable in binary64), trims above the preflight budget and, as a fail-closed guard only, a
+rounding reversal are ``OUT_OF_DOMAIN``
 (:class:`~anygeometry.display_tessellation.DisplayDomainRefused`).
 
 The plane is cut by a vertical line through every ring vertex (plus optional extra lines).  In
 each slab between two consecutive lines, the ring segments spanning it are sorted by height and
 paired bottom/top, which gives trapezoids whose union is exactly the region.  A trapezoid's
 corners are ring vertices or *cut points* on a ring segment (their segment and fraction are
-returned so a caller can place them on the segment's own image).  Every point lying on a
-trapezoid's vertical side is used by its triangles, so the mesh has no T-junctions.
+returned so a caller can place them on the segment's own image).  A cut point's fraction and
+ordinate are the CORRECTLY ROUNDED values of the exact interpolation (owner decision, N2 round
+2): rounding is monotone, so the exact order on a slab line is kept as a non-strict order (ties
+allowed, never a reversal).  Every point lying on a trapezoid's vertical side is used by its
+triangles, so the mesh has no T-junctions.
 """
 from __future__ import annotations
 
@@ -28,20 +31,27 @@ import numpy as np
 
 from .display_tessellation import MAX_DISPLAY_COORDINATE, DisplayDomainRefused, DisplayTrimRefused
 
-__all__ = ["MAX_SLAB_INCIDENCES", "SlabInvalid", "SlabTriangulation", "triangulate_rings"]
+__all__ = ["MAX_SLAB_INCIDENCES", "MAX_SLAB_OUTPUT", "MAX_SLAB_RING_POINTS", "SlabInvalid",
+           "SlabTriangulation", "triangulate_rings"]
 
-#: Largest number of (segment, slab) incidences (and of ``extra_x`` values) a trim may need; above
-#: it the trim is ``OUT_OF_DOMAIN`` ("too complex for display") before anything is allocated, and
-#: the caller keeps its old route.  Every result array is linear in it (cut points and triangles
-#: are each at most about one per incidence).  See docs/DISPLAY_TESSELLATION.md for the measured
-#: ordinary sizes it is set against.
+#: Largest number of (segment, slab) incidences (and of ``extra_x`` values) a trim may need.
 MAX_SLAB_INCIDENCES = 200_000
+#: Largest total number of input ring points (every point counts: duplicates and the points of
+#: vertical segments are allocated and returned too).
+MAX_SLAB_RING_POINTS = 50_000
+#: Largest preflight bound on the number of output triangles, ``I + 2 (N + cuts)`` (``I``
+#: incidences, ``N`` input points, ``cuts = I - sloped segments`` cut points).  Above any of the
+#: three the trim is ``OUT_OF_DOMAIN`` ("too complex for display") before anything is built, and
+#: the caller keeps its old route.  See docs/DISPLAY_TESSELLATION.md for the ordinary sizes.
+MAX_SLAB_OUTPUT = 600_000
 
 _EPS = float(np.finfo(float).eps)
-#: Absolute term of the ordinate error bound: covers gradual underflow in the four operations
-#: (each at most 2**-1075, scaled by at most 2e9) with a wide margin.
-_TINY = 2.0 ** -1000
-_SMALL = 48   # rings up to this many vertices take the pure-Python monotone path (measured crossover ~50)
+_U = _EPS / 2.0
+_SMALL = 48            # rings up to this many vertices take the pure-Python monotone path
+_EXACT_ROWS = 64       # up to this many cut points exact integer rounding is cheaper (measured)
+_SPLIT = 134217729.0   # 2**27 + 1, Veltkamp's splitter
+_SAFE = 2.0 ** -450    # a two_prod operand is zero or at least this (no underflow in its terms)
+_ABS = 2.0 ** -1060    # absolute slack for gradual underflow (each rounding at most 2**-1075)
 
 
 class SlabInvalid(DisplayTrimRefused):
@@ -60,7 +70,8 @@ class SlabTriangulation:
 
     ``triangles`` index ``points`` counter-clockwise (strictly positive area).  Cut point ``k``
     (point ``len(vertices) + k``) lies on the ring segment ``cut_ends[k] = (a, b)``, ``a`` its
-    endpoint of lower x, at fraction ``cut_fraction[k]`` (strictly inside ``(0, 1)``) from ``a``;
+    endpoint of lower x, at fraction ``cut_fraction[k]`` from ``a`` (the exact fraction correctly
+    rounded, in ``[0, 1]``; 0 or 1 only when the exact one is within half an ulp of it);
     ``area`` is the covered area (float sum of the trapezoids).
     """
 
@@ -71,14 +82,7 @@ class SlabTriangulation:
     area: float
 
 
-# Ordinate error bound.  A cut point's ordinate is computed as ``ya + f (yb - ya)`` with
-# ``f = (x - xa) / (xb - xa)`` from the segment's lower-x end (``0 <= f <= 1``).  Five roundings on
-# the product (two subtractions and the quotient in ``f``, the subtraction and the product) and one
-# on the sum give at most ``6.01 u (|ya| + |yb|)`` (``u = eps / 2``).  ``B = 4 eps (|ya| + |yb|) +
-# _TINY`` is that with a 1.33 margin, which also absorbs the rounding of the filter's own
-# difference and sum; ``_TINY`` covers underflow.  Vertices are exact (``B = 0``).
-
-
+# ----------------------------------------------------------------------------- input and domain
 def _numbers(value, what: str) -> np.ndarray:
     """A real numeric array (no arithmetic yet): strings are ``TRIM_INVALID``; complex, boolean,
     object (e.g. integers too large for an int64 or a float) arrays are ``OUT_OF_DOMAIN``."""
@@ -96,18 +100,210 @@ def _numbers(value, what: str) -> np.ndarray:
     return array
 
 
-def _in_domain(array: np.ndarray, what: str) -> np.ndarray:
-    """Finite with ``|c| <= MAX_DISPLAY_COORDINATE``, checked before any conversion or arithmetic."""
-    if array.size:
-        if array.dtype.kind == "f":
-            ok = bool(np.all(np.isfinite(array))) and float(np.abs(array).max()) <= MAX_DISPLAY_COORDINATE
-        else:
-            ok = -MAX_DISPLAY_COORDINATE <= int(array.min()) and int(array.max()) <= MAX_DISPLAY_COORDINATE
-        if not ok:
-            raise DisplayDomainRefused(f"{what} must be finite with |coordinate| <= {MAX_DISPLAY_COORDINATE:g}")
+def _binary64(array: np.ndarray, what: str) -> np.ndarray:
+    """The values as float64, refusing any finite value that is not EXACTLY representable in
+    binary64 (owner decision, N2 round 2: nothing is narrowed before the exact checks)."""
+    kind, size = array.dtype.kind, array.dtype.itemsize
+    exact = True
+    if kind == "f" and size > 8:
+        narrowed = array.astype(np.float64)
+        exact = bool(np.all((narrowed.astype(array.dtype) == array) | ~np.isfinite(array)))
+    elif kind in "iu" and size >= 8 and array.size:
+        large = array > 2 ** 53 if kind == "u" else (array > 2 ** 53) | (array < -2 ** 53)
+        exact = all(int(float(v)) == v for v in array[large].tolist())
+    if not exact:
+        raise DisplayDomainRefused(f"{what}: a coordinate not exactly representable in binary64")
     return np.array(array, dtype=np.float64)
 
 
+def _in_domain(array: np.ndarray, what: str) -> np.ndarray:
+    """Exactly representable, finite, ``|c| <= MAX_DISPLAY_COORDINATE`` (conversion is exact)."""
+    values = _binary64(array, what)
+    if values.size and not (bool(np.all(np.isfinite(values)))
+                            and float(np.abs(values).max()) <= MAX_DISPLAY_COORDINATE):
+        raise DisplayDomainRefused(f"{what} must be finite with |coordinate| <= {MAX_DISPLAY_COORDINATE:g}")
+    return values
+
+
+def _too_complex(what: str):
+    return DisplayDomainRefused(f"trim too complex for display: {what}")
+
+
+# ----------------------------------------------------------------------------- correctly rounded cuts
+# A cut point on the segment from (xa, ya) to (xb, yb) (xa < x < xb, the lower-x end first) has the
+# exact fraction f* = N / D and ordinate y* = ya + N M / D, N = x - xa, D = xb - xa, M = yb - ya.
+# The returned values are RN(f*) and RN(y*).  Filter: a float candidate c is certified to be RN(v*)
+# when the residual R = (v* - c) D, evaluated from error-free transformations (two_sum, Dekker's
+# two_prod; all exact for domain values, the products guarded against underflow), satisfies
+# |R| + E < h D with h half the smaller gap of c to its float neighbours and E a rigorous bound on
+# the residual's evaluation error; or when R is exactly zero.  Rows it cannot certify (residual
+# within E of a rounding boundary, a cancelling ordinate near 0, tiny operands) are rounded exactly
+# from integers (CPython's int / int is correctly rounded, gradual underflow included).
+
+def _two_sum(a, b):
+    s = a + b
+    bb = s - a
+    return s, (a - (s - bb)) + (b - bb)
+
+
+def _two_prod(a, b):
+    p = a * b
+    t = _SPLIT * a
+    ah = t - (t - a)
+    al = a - ah
+    t = _SPLIT * b
+    bh = t - (t - b)
+    bl = b - bh
+    return p, ((ah * bh - p) + ah * bl + al * bh) + al * bl
+
+
+def _safe(*values):
+    ok = True
+    for v in values:
+        m = np.abs(v)
+        ok = ok & ((m == 0.0) | (m >= _SAFE))
+    return ok
+
+
+def _terms_f(f, d1, d2, n1, n2):
+    """Residual ``N - f D`` as ``s + sum(rest) + sum(u v for cross)``, ``s`` and ``rest`` exact."""
+    p, e = _two_prod(f, d1)
+    s, t = _two_sum(n1, -p)
+    return s, [t, n2, -e], [(-f, d2)], _safe(f, d1)
+
+
+def _terms_y(y, ya, d1, d2, n1, n2, m1, m2):
+    """Residual ``(ya - y) D + N M`` in the same form."""
+    a1, a2 = _two_sum(ya, -y)
+    p1, e1 = _two_prod(a1, d1)
+    p2, e2 = _two_prod(n1, m1)
+    s, t = _two_sum(p1, p2)
+    return (s, [t, e1, e2], [(a1, d2), (a2, d1), (a2, d2), (n1, m2), (n2, m1), (n2, m2)],
+            _safe(a1, d1, n1, m1))
+
+
+def _residual(s, rest, cross):
+    """The float residual ``R = s + S`` and the magnitude sum of the terms of ``S``."""
+    total = rest[0]
+    magnitude = np.abs(rest[0])
+    for t in rest[1:] + [u * v for u, v in cross]:
+        total = total + t
+        magnitude = magnitude + np.abs(t)
+    return s + total, magnitude
+
+
+def _certified(c, d1, s, rest, cross, guard):
+    """True where ``c`` is proved to be the correctly rounded value.
+
+    The exact residual is ``s + sum(rest) + sum(u * v for u, v in cross)`` (``s`` and ``rest``
+    exact floats, at most nine terms besides ``s``).  Evaluated as ``R = s + S``: its error is at
+    most ``8.01 u`` times the magnitude sum of the terms of ``S`` (summation) plus ``u`` per cross
+    product plus ``u |R|``, so ``E = 16 u (sum |terms| + |R|) + _ABS`` bounds it with margin (the
+    rounding of ``E`` itself included; ``_ABS`` covers underflow).  ``c`` is RN of the exact value
+    when ``|R| + E < h D`` (``h`` half the smaller gap to the float neighbours of ``c``), or when the
+    residual is exactly zero (every term zero).
+    """
+    residual, magnitude = _residual(s, rest, cross)
+    error = 16.0 * _U * (magnitude + np.abs(residual)) + _ABS
+    gap = np.minimum(c - np.nextafter(c, -np.inf), np.nextafter(c, np.inf) - c)
+    room = (0.5 * gap) * d1 * (1.0 - 8.0 * _U) - _ABS            # <= h D (|d2| <= u d1)
+    ok = (np.abs(residual) + error) * (1.0 + 8.0 * _U) < room
+    zero = s == 0.0
+    for t in rest:
+        zero &= t == 0.0
+    for u, v in cross:
+        zero &= (u == 0.0) | (v == 0.0)
+    return guard & (ok | zero)
+
+
+def _cut_values_exact(xa, ya, xb, yb, x):
+    """Correctly rounded fractions and ordinates from integers (lists of floats in, lists out)."""
+    fs, ys = [], []
+    for a, b, c, d, e in zip(xa, ya, xb, yb, x):
+        ratios = (a.as_integer_ratio(), b.as_integer_ratio(), c.as_integer_ratio(), d.as_integer_ratio(),
+                  e.as_integer_ratio())
+        q = max(r[1] for r in ratios)                      # powers of two: q is a common denominator
+        pa, pb, pc, pd, pe = (num * (q // den) for num, den in ratios)
+        span, part = pc - pa, pe - pa
+        fs.append(part / span + 0.0)
+        ys.append((pb * span + part * (pd - pb)) / (q * span) + 0.0)
+    return fs, ys
+
+
+def _cut_values(xa, ya, xb, yb, x):
+    """``(RN(f*), RN(y*))`` for arrays of cut rows (canonical: ``xa < x < xb``)."""
+    if len(x) <= _EXACT_ROWS:
+        fs, ys = _cut_values_exact(xa.tolist(), ya.tolist(), xb.tolist(), yb.tolist(), x.tolist())
+        return np.array(fs, dtype=float), np.array(ys, dtype=float)
+    with np.errstate(all="ignore"):                        # also when called on its own
+        return _cut_values_filtered(xa, ya, xb, yb, x)
+
+
+def _cut_values_filtered(xa, ya, xb, yb, x):
+    d1, d2 = _two_sum(xb, -xa)
+    n1, n2 = _two_sum(x, -xa)
+    m1, m2 = _two_sum(yb, -ya)
+    # candidates: the plain formulas, then one correction step c + R / D (no bound needed here)
+    f = n1 / d1
+    y = ya + f * m1
+    f = f + _residual(*_terms_f(f, d1, d2, n1, n2)[:3])[0] / d1
+    y = y + _residual(*_terms_y(y, ya, d1, d2, n1, n2, m1, m2)[:3])[0] / d1
+    ok = _certified(f, d1, *_terms_f(f, d1, d2, n1, n2))
+    ok &= _certified(y, d1, *_terms_y(y, ya, d1, d2, n1, n2, m1, m2))
+    rows = np.flatnonzero(~ok)
+    if len(rows):
+        fs, ys = _cut_values_exact(xa[rows].tolist(), ya[rows].tolist(), xb[rows].tolist(), yb[rows].tolist(),
+                                   x[rows].tolist())
+        f[rows], y[rows] = fs, ys
+    f, y = f + 0.0, y + 0.0
+    if not (bool(np.all(np.isfinite(f))) and bool(np.all(np.isfinite(y)))):
+        raise DisplayDomainRefused("a cut value is not finite (unreachable inside the domain)")
+    return f, y
+
+
+# ----------------------------------------------------------------------------- area floor
+def _floor(ring) -> None:
+    """``OUT_OF_DOMAIN`` when the ring's EXACT area is at most ``16 n eps extent^2`` (the float value
+    of that expression, ``extent`` the larger float x or y range of THIS ring).  One rule on every
+    path (owner decision, N2 round 2): a float filter with a rigorous bound, else exact integers.
+
+    Filter: ``2A = sum (x_i - x_0)(y_{i+1} - y_{i-1})``; each term carries at most three roundings,
+    the sum at most ``n - 1``, so ``(n + 8) eps sum |terms|`` (twice that need) plus ``2**-1000``
+    bounds the error; decisions keep a ``2**-40`` relative margin against the comparisons' own
+    roundings.
+    """
+    n = len(ring)
+    if n <= _SMALL:
+        pts = ring.tolist() if isinstance(ring, np.ndarray) else ring
+        xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+        extent = max(max(xs) - min(xs), max(ys) - min(ys))
+        x0 = xs[0]
+        terms = [(xs[i] - x0) * (ys[(i + 1) % n] - ys[i - 1]) for i in range(n)]
+        doubled, magnitude = sum(terms), sum(abs(t) for t in terms)
+    else:
+        x, y = ring[:, 0], ring[:, 1]
+        extent = max(float(x.max() - x.min()), float(y.max() - y.min()))
+        terms = (x - x[0]) * (np.roll(y, -1) - np.roll(y, 1))
+        doubled, magnitude = float(np.sum(terms)), float(np.sum(np.abs(terms)))
+        xs, ys = x.tolist(), y.tolist()
+    limit = 2.0 * (16.0 * n * _EPS * extent * extent)          # doubled-area threshold (exact x2)
+    error = (n + 8) * _EPS * magnitude + 2.0 ** -1000
+    if abs(doubled) - error > limit * (1.0 + 2.0 ** -40):
+        return
+    if (abs(doubled) + error) * (1.0 + 2.0 ** -40) < limit:
+        below = True
+    else:
+        ratios = [v.as_integer_ratio() for v in xs + ys]
+        q = max(r[1] for r in ratios)
+        ints = [num * (q // den) for num, den in ratios]
+        ix, iy = ints[:n], ints[n:]
+        exact = abs(sum(ix[i] * (iy[(i + 1) % n] - iy[i - 1]) for i in range(n)))
+        below = Fraction(exact, q * q) <= Fraction(limit)
+    if below:
+        raise DisplayDomainRefused("a ring's area is below display resolution relative to its own extent")
+
+
+# ----------------------------------------------------------------------------- monotone fast paths
 def _chains(x):
     """The increasing-x and decreasing-x vertex chains of an x-monotone ring (each listed in
     increasing x; at most one vertical segment at each end), else ``None``."""
@@ -143,9 +339,9 @@ def _monotone(ring, extra_x) -> SlabTriangulation | None:
     """The same trapezoids for one x-monotone ring (most faces), without the general sweep.
 
     ``ring`` has no repeated consecutive points.  A certified shortcut: it returns a result only
-    when the float filter proves the two chains strictly apart at every interior slab line (so the
-    ring is simple and the rounded ordinates are ordered); otherwise ``None`` (the general path
-    then decides exactly).
+    when the correctly rounded chains are strictly apart at every interior slab line (rounding is
+    monotone, so the exact chains are too: the ring is simple); otherwise ``None`` (the general
+    path then decides exactly, ties included).
     """
     x, y = ring[:, 0], ring[:, 1]
     n = len(ring)
@@ -159,7 +355,8 @@ def _monotone(ring, extra_x) -> SlabTriangulation | None:
         lines = np.concatenate((lines, extra_x[(extra_x > lo) & (extra_x < hi)]))
     xs = np.unique(lines)
 
-    cut_ends, cut_fraction, cut_points, cut_bound, ids = [], [], [], [], []
+    ends, at_x, ids = [], [], []
+    count = 0
     for chain in (up, down):
         cx = x[chain]
         at = np.searchsorted(cx, xs)                 # cx[at] >= xs
@@ -167,19 +364,16 @@ def _monotone(ring, extra_x) -> SlabTriangulation | None:
         ident = np.empty(len(xs), dtype=np.int64)
         ident[exact] = chain[at[exact]]
         inner = np.flatnonzero(~exact)
-        a, b = chain[at[inner] - 1], chain[at[inner]]     # canonical: a has the lower x
-        f = (xs[inner] - x[a]) / (x[b] - x[a])
-        ident[inner] = n + sum(len(c) for c in cut_fraction) + np.arange(len(inner))
-        cut_ends.append(np.column_stack((a, b)))
-        cut_fraction.append(f)
-        cut_points.append(np.column_stack((xs[inner], y[a] + f * (y[b] - y[a]))))
-        cut_bound.append(4.0 * _EPS * (np.abs(y[a]) + np.abs(y[b])) + _TINY)
+        ends.append(np.column_stack((chain[at[inner] - 1], chain[at[inner]])))   # a has the lower x
+        at_x.append(xs[inner])
+        ident[inner] = n + count + np.arange(len(inner))
+        count += len(inner)
         ids.append(ident)
-    fractions = np.concatenate(cut_fraction)
-    if np.any(fractions <= 0.0) or np.any(fractions >= 1.0):
-        return None
-    points = np.vstack([ring, *cut_points])
-    bound = np.concatenate([np.zeros(n), *cut_bound])
+    cut_ends = np.vstack(ends).astype(np.int64)
+    cut_x = np.concatenate(at_x)
+    a, b = cut_ends[:, 0], cut_ends[:, 1]
+    fractions, cut_y = _cut_values(x[a], y[a], x[b], y[b], cut_x)
+    points = np.vstack((ring, np.column_stack((cut_x, cut_y))))
     y_up, y_down = points[ids[0], 1], points[ids[1], 1]
     middle = len(xs) // 2
     probe = slice(max(middle - 1, 0), middle + 1)
@@ -188,17 +382,16 @@ def _monotone(ring, extra_x) -> SlabTriangulation | None:
     else:
         bottom, top = ids[1], ids[0]
     gap = points[top, 1] - points[bottom, 1]
-    if not np.all(gap[1:-1] > bound[top[1:-1]] + bound[bottom[1:-1]]):
+    if not np.all(gap[1:-1] > 0.0):
         return None
     for k in (0, -1):                                # ends: vertices (exact), shared or a vertical side
         if not (top[k] == bottom[k] or gap[k] > 0.0):
             return None
+    _floor(ring)
     area = float(np.sum(np.diff(xs) * (gap[:-1] + gap[1:])) * 0.5)
-    _floor(area, n, max(hi - lo, float(y.max() - y.min())))
     bl, br, tl, tr = bottom[:-1], bottom[1:], top[:-1], top[1:]
     triangles = np.vstack((np.column_stack((bl, br, tr))[br != tr], np.column_stack((bl, tr, tl))[bl != tl]))
-    return SlabTriangulation(points, triangles.astype(np.int64), np.vstack(cut_ends).astype(np.int64),
-                             fractions, area)
+    return SlabTriangulation(points, triangles.astype(np.int64), cut_ends, fractions, area)
 
 
 def _monotone_small(ring, extra_x) -> SlabTriangulation | None:
@@ -233,9 +426,7 @@ def _monotone_small(ring, extra_x) -> SlabTriangulation | None:
     if extra_x is not None and len(extra_x):
         lines.update(v for v in extra_x.tolist() if lo < v < hi)
     xs = sorted(lines)
-    eps4 = 4.0 * _EPS
-    cut_ends, cut_fraction, points, bound = [], [], [list(p) for p in pts], [0.0] * n
-    ids = []
+    cut_ends, cut_x, ids = [], [], []
     for chain in (up, down):
         ident = []
         i = 0
@@ -246,20 +437,22 @@ def _monotone_small(ring, extra_x) -> SlabTriangulation | None:
             if xs_[chain[i]] == x:
                 ident.append(chain[i])
                 continue
-            a, b = chain[i], chain[i + 1]            # canonical: a has the lower x
-            xa, ya = pts[a]
-            xb, yb = pts[b]
-            f = (x - xa) / (xb - xa)
-            if not 0.0 < f < 1.0:
-                return None
-            ident.append(len(points))
-            points.append([x, ya + f * (yb - ya)])
-            bound.append(eps4 * (abs(ya) + abs(yb)) + _TINY)
-            cut_ends.append((a, b))
-            cut_fraction.append(f)
+            ident.append(n + len(cut_x))
+            cut_ends.append((chain[i], chain[i + 1]))        # canonical: the lower-x end first
+            cut_x.append(x)
         ids.append(ident)
-    y_up = [points[k][1] for k in ids[0]]
-    y_down = [points[k][1] for k in ids[1]]
+    if len(cut_x) <= _EXACT_ROWS:
+        fractions, cut_y = _cut_values_exact([pts[a][0] for a, _ in cut_ends], [pts[a][1] for a, _ in cut_ends],
+                                             [pts[b][0] for _, b in cut_ends], [pts[b][1] for _, b in cut_ends],
+                                             cut_x)
+    else:
+        e = np.array(cut_ends, dtype=np.int64)
+        fractions, cut_y = _cut_values(ring[e[:, 0], 0], ring[e[:, 0], 1], ring[e[:, 1], 0], ring[e[:, 1], 1],
+                                       np.array(cut_x))
+        fractions, cut_y = fractions.tolist(), cut_y.tolist()
+    py = [p[1] for p in pts] + list(cut_y)
+    y_up = [py[k] for k in ids[0]]
+    y_down = [py[k] for k in ids[1]]
     m = len(xs) // 2
     if y_down[m - 1] + y_down[m] >= y_up[m - 1] + y_up[m]:
         bottom, top, yb, yt = ids[0], ids[1], y_up, y_down
@@ -267,12 +460,9 @@ def _monotone_small(ring, extra_x) -> SlabTriangulation | None:
         bottom, top, yb, yt = ids[1], ids[0], y_down, y_up
     last = len(xs) - 1
     for j in range(len(xs)):
-        gap = yt[j] - yb[j]
-        if 0 < j < last:
-            if not gap > bound[top[j]] + bound[bottom[j]]:
-                return None
-        elif not (top[j] == bottom[j] or gap > 0.0):
+        if not (yt[j] - yb[j] > 0.0 or ((j == 0 or j == last) and top[j] == bottom[j])):
             return None
+    _floor(ring)
     area = 0.0
     tris = []
     for j in range(last):
@@ -282,13 +472,13 @@ def _monotone_small(ring, extra_x) -> SlabTriangulation | None:
             tris.append((bl, br, tr))
         if bl != tl:
             tris.append((bl, tr, tl))
-    ys = [p[1] for p in pts]
-    _floor(0.5 * area, n, max(hi - lo, max(ys) - min(ys)))
-    return SlabTriangulation(np.array(points, dtype=float), np.array(tris, dtype=np.int64).reshape(-1, 3),
-                             np.array(cut_ends, dtype=np.int64).reshape(-1, 2), np.array(cut_fraction, dtype=float),
+    points = np.vstack((ring, np.column_stack((cut_x, cut_y)))) if cut_x else np.array(ring, dtype=float)
+    return SlabTriangulation(points, np.array(tris, dtype=np.int64).reshape(-1, 3),
+                             np.array(cut_ends, dtype=np.int64).reshape(-1, 2), np.array(fractions, dtype=float),
                              0.5 * area)
 
 
+# ----------------------------------------------------------------------------- preparation and budget
 def _prepare(rings, extra_x):
     """Domain, structure and the preflight budget; returns the rings' vertices and segments."""
     try:
@@ -307,9 +497,11 @@ def _prepare(rings, extra_x):
     if extra_x is not None:
         extra = _numbers(extra_x, "extra_x").reshape(-1)
         if extra.size > MAX_SLAB_INCIDENCES:
-            raise DisplayDomainRefused(f"trim too complex for display: {extra.size} extra lines "
-                                       f"(MAX_SLAB_INCIDENCES = {MAX_SLAB_INCIDENCES})")
+            raise _too_complex(f"{extra.size} extra lines (MAX_SLAB_INCIDENCES = {MAX_SLAB_INCIDENCES})")
         extra = _in_domain(extra, "extra_x")
+    total = sum(len(r) for r in rings)
+    if total > MAX_SLAB_RING_POINTS:
+        raise _too_complex(f"{total} ring points (MAX_SLAB_RING_POINTS = {MAX_SLAB_RING_POINTS})")
 
     vertices = np.vstack(rings)
     sizes = np.array([len(r) for r in rings])
@@ -333,15 +525,16 @@ def _prepare(rings, extra_x):
 
     prep = dict(vertices=vertices, extra=extra, canonical=canonical, compressed=compressed, seg_a=seg_a,
                 seg_b=seg_b, seg_ring=seg_ring)
-    # preflight: each segment spans fewer slabs than there are lines; count exactly only when that
-    # bound exceeds the budget (the fast path then never pays for it)
-    if len(seg_a) * (len(vertices) + (0 if extra is None else len(extra))) > MAX_SLAB_INCIDENCES:
+    # preflight: a segment spans fewer slabs than there are lines; count exactly only when that
+    # cheap bound could exceed a budget (the fast path then never pays for it)
+    bound = len(seg_a) * (total + (0 if extra is None else len(extra)))
+    if bound > MAX_SLAB_INCIDENCES or bound + 2 * (total + bound) > MAX_SLAB_OUTPUT:
         _slabs(prep)
     return prep
 
 
 def _slabs(prep):
-    """Slab lines, canonical sloped segments and their slab ranges; refuses above the budget."""
+    """Slab lines, canonical sloped segments and their slab ranges; refuses above the budgets."""
     if "xs" in prep:
         return prep
     vertices, extra, seg_a, seg_b = prep["vertices"], prep["extra"], prep["seg_a"], prep["seg_b"]
@@ -358,28 +551,15 @@ def _slabs(prep):
     jl, jr = np.searchsorted(xs, x[sp]), np.searchsorted(xs, x[sq])
     incidences = int(np.sum(jr - jl))
     if incidences > MAX_SLAB_INCIDENCES:
-        raise DisplayDomainRefused(f"trim too complex for display: {incidences} segment-slab incidences "
-                                   f"(MAX_SLAB_INCIDENCES = {MAX_SLAB_INCIDENCES})")
+        raise _too_complex(f"{incidences} segment-slab incidences (MAX_SLAB_INCIDENCES = {MAX_SLAB_INCIDENCES})")
+    output = incidences + 2 * (len(vertices) + incidences - len(sloped))
+    if output > MAX_SLAB_OUTPUT:
+        raise _too_complex(f"up to {output} triangles (MAX_SLAB_OUTPUT = {MAX_SLAB_OUTPUT})")
     prep.update(xs=xs, sp=sp, sq=sq, sring=prep["seg_ring"][sloped], jl=jl, jr=jr, incidences=incidences)
     return prep
 
 
-def _floor(area, count, extent):
-    """The area floor of :func:`_area_floor` for a ring whose (fast path) area is known."""
-    if area <= 16.0 * count * _EPS * extent * extent:
-        raise DisplayDomainRefused("a ring's area is below display resolution relative to its own extent")
-
-
-def _area_floor(vertices, compressed):
-    """``OUT_OF_DOMAIN`` for a ring whose float area is not resolved relative to ITS OWN extent
-    (a backstop: a simple ring has positive exact area; this refuses slivers below resolution)."""
-    for c in compressed:
-        ring = vertices[c]
-        ring = ring - ring.min(axis=0)
-        doubled = abs(float(np.dot(ring[:, 0], np.roll(ring[:, 1], -1)) - np.dot(np.roll(ring[:, 0], -1), ring[:, 1])))
-        _floor(0.5 * doubled, len(c), float(ring.max()))
-
-
+# ----------------------------------------------------------------------------- entry point
 def triangulate_rings(rings: Sequence[np.ndarray], extra_x: np.ndarray | None = None, *,
                       _fast: bool = True) -> SlabTriangulation:
     """Triangulate the region of ``rings[0]`` minus ``rings[1:]`` (each ring closed implicitly).
@@ -388,20 +568,23 @@ def triangulate_rings(rings: Sequence[np.ndarray], extra_x: np.ndarray | None = 
     step.  Raises :class:`SlabInvalid` (``TRIM_INVALID``) when a ring is not simple, two rings
     touch, or a hole is outside the outer ring or inside another hole (decided exactly,
     independent of ``extra_x``), and ``DisplayDomainRefused`` (``OUT_OF_DOMAIN``) outside the
-    numeric domain, above :data:`MAX_SLAB_INCIDENCES` or for a feature below float resolution.
-    ``_fast=False`` (private, for tests) skips the x-monotone shortcut.
+    numeric domain, above a preflight budget, or for a ring whose exact area is below the floor.
+    Independent of the caller's NumPy error state (every numeric section runs under
+    ``np.errstate(all="ignore")`` with explicit finiteness checks).  ``_fast=False`` (private, for
+    tests) skips the x-monotone shortcut.
     """
-    prep = _prepare(rings, extra_x)
-    vertices, compressed = prep["vertices"], prep["compressed"]
-    if _fast and len(compressed) == 1:
-        ring_ids = compressed[0]
-        fast = (_monotone_small if len(ring_ids) <= _SMALL else _monotone)(vertices[ring_ids], prep["extra"])
-        if fast is not None:
-            n, m = len(vertices), len(ring_ids)
-            remap = np.concatenate((ring_ids, n + np.arange(len(fast.points) - m)))
-            return SlabTriangulation(np.vstack((vertices, fast.points[m:])), remap[fast.triangles],
-                                     ring_ids[fast.cut_ends].reshape(-1, 2), fast.cut_fraction, fast.area)
-    return _general(prep)
+    with np.errstate(all="ignore"):
+        prep = _prepare(rings, extra_x)
+        vertices, compressed = prep["vertices"], prep["compressed"]
+        if _fast and len(compressed) == 1:
+            ring_ids = compressed[0]
+            fast = (_monotone_small if len(ring_ids) <= _SMALL else _monotone)(vertices[ring_ids], prep["extra"])
+            if fast is not None:
+                n, m = len(vertices), len(ring_ids)
+                remap = np.concatenate((ring_ids, n + np.arange(len(fast.points) - m)))
+                return SlabTriangulation(np.vstack((vertices, fast.points[m:])), remap[fast.triangles],
+                                         ring_ids[fast.cut_ends].reshape(-1, 2), fast.cut_fraction, fast.area)
+        return _general(prep)
 
 
 def _general(prep) -> SlabTriangulation:
@@ -423,11 +606,9 @@ def _general(prep) -> SlabTriangulation:
     cut_seg = np.repeat(np.arange(len(sp)), cuts_per)
     cut_line = jl[cut_seg] + 1 + (np.arange(len(cut_seg)) - np.repeat(cut_base, cuts_per))
     cut_x = xs[cut_line]
-    cut_fraction = (cut_x - xp[cut_seg]) / (xq[cut_seg] - xp[cut_seg])
-    cut_y = yp[cut_seg] + cut_fraction * (yq[cut_seg] - yp[cut_seg])
+    cut_fraction, cut_y = _cut_values(xp[cut_seg], yp[cut_seg], xq[cut_seg], yq[cut_seg], cut_x)
     points = np.vstack((vertices, np.column_stack((cut_x, cut_y))))
     py = points[:, 1]
-    bound = np.concatenate((np.zeros(n), 4.0 * _EPS * (np.abs(yp) + np.abs(yq))[cut_seg] + _TINY))
 
     def at_line(line):
         s = inc_seg
@@ -449,11 +630,9 @@ def _general(prep) -> SlabTriangulation:
             exact_cache[pid] = value
         return value
 
-    def certified_increasing(a, b):
-        """True where ``y[b] > y[a]`` is proved by the float filter alone."""
-        return (py[b] - py[a]) > (bound[a] + bound[b])
-
-    # 1. exact order of every boundary point on each slab line (vertices by canonical id, cut points)
+    # 1. exact order of every boundary point on each slab line (vertices by canonical id, cut points).
+    # Every ordinate is the exact one correctly rounded, so a strictly smaller float is a strictly
+    # smaller exact value; only equal floats (ties) need the exact comparison.
     vertex_ids = np.unique(canonical)
     line_points = np.concatenate((vertex_ids, np.arange(n, len(points))))
     point_line = np.full(len(points), -1, dtype=np.int64)
@@ -462,17 +641,17 @@ def _general(prep) -> SlabTriangulation:
     by_line = line_points[np.lexsort((line_points, py[line_points], point_line[line_points]))]
     lines_of = point_line[by_line]
     same = np.flatnonzero(lines_of[1:] == lines_of[:-1])
-    doubtful = same[~certified_increasing(by_line[same], by_line[same + 1])]
-    below_resolution = False
-    for line in np.unique(lines_of[doubtful]):
+    tied = same[py[by_line[same + 1]] <= py[by_line[same]]]
+    reversed_order = False
+    for line in np.unique(lines_of[tied]):
         lo, hi = np.searchsorted(lines_of, [line, line + 1])
         block = by_line[lo:hi].tolist()
         exact_block = sorted(block, key=lambda pid: (exact_y(pid), pid))
         for u, v in zip(exact_block, exact_block[1:]):
             if exact_y(u) == exact_y(v):
                 raise SlabInvalid("two boundary points coincide (rings touch or cross at a point)")
-        if exact_block != block or any(py[u] >= py[v] for u, v in zip(exact_block, exact_block[1:])):
-            below_resolution = True                   # the rounded order is not the exact one
+        if any(py[u] > py[v] for u, v in zip(exact_block, exact_block[1:])):
+            reversed_order = True                    # unreachable: correct rounding is monotone
         by_line[lo:hi] = exact_block
     position = np.empty(len(points), dtype=np.int64)
     position[by_line] = np.arange(len(by_line))
@@ -517,13 +696,12 @@ def _general(prep) -> SlabTriangulation:
                 or np.any((delta < 0) & (open_after != 0))):
             raise SlabInvalid("a hole lies outside the outer ring or inside another hole")
 
-    # rounding (the topology above is exact): every computed value must resolve it
-    if np.any(cut_fraction <= 0.0) or np.any(cut_fraction >= 1.0):
-        raise DisplayDomainRefused("slab too narrow to resolve: a cut fraction rounds onto a segment end")
-    if below_resolution:
-        raise DisplayDomainRefused("feature below display resolution: rounded ordinates on a slab line "
-                                   "are not strictly in their exact order")
-    _area_floor(vertices, prep["compressed"])
+    # fail-closed guard (the topology above is exact; correctly rounded ordinates cannot reverse it)
+    if reversed_order:
+        raise DisplayDomainRefused("rounded ordinates reverse their exact order on a slab line "
+                                   "(unreachable: correct rounding is monotone)")
+    for c in prep["compressed"]:
+        _floor(vertices[c])
 
     # trapezoids: bottom/top pairs in each slab; sides use every point between them on their line
     bottom_l, bottom_r = left[0::2], right[0::2]
@@ -531,19 +709,22 @@ def _general(prep) -> SlabTriangulation:
     pair_slab = inc_slab[0::2]
     heights = (py[top_l] - py[bottom_l]) + (py[top_r] - py[bottom_r])
     area = float(np.sum((xs[pair_slab + 1] - xs[pair_slab]) * heights) * 0.5)
+    if not np.isfinite(area):
+        raise DisplayDomainRefused("the covered area is not finite (unreachable inside the domain)")
     left_lo, left_hi = position[bottom_l], position[top_l]
     right_lo, right_hi = position[bottom_r], position[top_r]
     plain = (left_hi - left_lo <= 1) & (right_hi - right_lo <= 1)
 
-    # Each triangle has one vertical side between two distinct points of one line (strictly ordered
-    # floats) and its third corner on the other line: its exact area is (side height) x (slab
-    # width) / 2 > 0, so no determinant is evaluated.  Only a side of zero height (one shared point)
-    # gives no triangle.
+    # Each triangle has one vertical side between two points of one line and its third corner on
+    # the other line: its exact area is (side height) x (slab width) / 2, so no determinant is
+    # evaluated.  The side's height is the difference of two floats, exactly signed: a positive one
+    # gives a strictly positive triangle; a zero one (a shared point, or a TIE of two distinct
+    # points rounded to the same ordinate) gives an exactly degenerate piece, which is dropped.
     triangles = []
     p = np.flatnonzero(plain)
     bl, br, tl, tr = bottom_l[p], bottom_r[p], top_l[p], top_r[p]
-    triangles.append(np.column_stack((bl, br, tr))[br != tr])
-    triangles.append(np.column_stack((bl, tr, tl))[bl != tl])
+    triangles.append(np.column_stack((bl, br, tr))[py[tr] > py[br]])
+    triangles.append(np.column_stack((bl, tr, tl))[py[tl] > py[bl]])
     for k in np.flatnonzero(~plain):
         lchain = by_line[left_lo[k]:left_hi[k] + 1]
         rchain = by_line[right_lo[k]:right_hi[k] + 1]
@@ -553,10 +734,12 @@ def _general(prep) -> SlabTriangulation:
             advance_left = j == len(rchain) - 1 or (
                 i < len(lchain) - 1 and py[lchain[i + 1]] - py[bottom_l[k]] <= py[rchain[j + 1]] - py[bottom_r[k]])
             if advance_left:
-                made.append((lchain[i], rchain[j], lchain[i + 1]))
+                if py[lchain[i + 1]] > py[lchain[i]]:
+                    made.append((lchain[i], rchain[j], lchain[i + 1]))
                 i += 1
             else:
-                made.append((lchain[i], rchain[j], rchain[j + 1]))
+                if py[rchain[j + 1]] > py[rchain[j]]:
+                    made.append((lchain[i], rchain[j], rchain[j + 1]))
                 j += 1
         triangles.append(np.asarray(made, dtype=np.int64).reshape(-1, 3))
     triangles = np.vstack(triangles).astype(np.int64)
