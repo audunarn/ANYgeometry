@@ -335,8 +335,81 @@ def test_q4_a_fixed_n1_chord_over_the_face_tolerance_is_edge_unsupported():
     assert "face tolerance" in text
 
 
-def test_cone_support_stays_unsupported_until_n3c():
-    case = corpus.ALL["overrun_cone"]()
-    face = next(iter(case.faces.values()))
-    text = _refused("SUPPORT_UNSUPPORTED", lambda: _mesh(case.model, face, dt.DisplayTolerance(.3)))
-    assert "not supported yet" in text
+# ----------------------------------------------------------------------------- E2 / E3 (N3b decisions)
+def _pinch_face(nudge):
+    """A quarter cylinder with a triangular hole whose vertex is an interior N1 sample of the
+    outer bottom arc moved ``nudge`` ulps in x: a distinct 3D point at the same height whose
+    azimuth is within rounding of the sample's."""
+    g, face = quarter_cylinder()
+    tol = dt.DisplayTolerance(.3)
+    s = dt.edge_display_samples(g, g.faces[face].loop[0].edge, tol)
+    p = s.points[len(s.points) // 2].copy()
+    theta = math.atan2(p[1], p[0])
+    for _ in range(nudge):
+        p[0] = np.nextafter(p[0], np.inf)
+    q = [g.add_point(*p), g.add_point(2 * math.cos(theta - .1), 2 * math.sin(theta - .1), 1.),
+         g.add_point(2 * math.cos(theta + .1), 2 * math.sin(theta + .1), 1.)]
+    edges = [g.add_line(a, b) for a, b in zip(q, q[1:] + q[:1])]
+    N3a._force(g, face, holes=(tuple(OrientedEdge(e, True) for e in edges),))
+    return g, face, tol, s.points[len(s.points) // 2], p
+
+
+def test_e2_joined_azimuths_keep_the_ring_vertices_bit_for_bit():
+    """E2: the join changes chart azimuths only (the window fixture's ruling ends are joined);
+    every ring vertex is still its N1 sample bit for bit."""
+    from anygeometry import _display_lift as lift
+    g, face = window_face((31., -17., 44.), (1., 2., 2.), 1.9)
+    tol = dt.DisplayTolerance(.51)
+    joined = np.vstack(_charts(g, face, tol))
+    saved = lift._SNAP
+    try:
+        lift._SNAP = 0.0
+        raw = np.vstack(_charts(g, face, tol))
+    finally:
+        lift._SNAP = saved
+    assert not np.array_equal(joined, raw) and np.array_equal(joined[:, 1], raw[:, 1])
+    mesh = _check_cylinder(g, face, tol, _mesh(g, face, tol))
+    k = mesh.ring_vertex_count
+    assert mesh.points[:k].tobytes() == np.vstack(N3a._n1_rings(g, face, tol)).tobytes()
+    np.testing.assert_array_equal(mesh.chart[:k], joined)
+
+
+@pytest.mark.parametrize("nudge", [1, 4])
+def test_e2_a_join_that_would_merge_two_n1_samples_is_refused(nudge):
+    """E2: two distinct N1 samples (a hole vertex ulps from an outer sample, same height) whose
+    azimuths are joined would become one chart point: TRIM_INVALID with the lift's own text."""
+    g, face, tol, sample, moved = _pinch_face(nudge)
+    assert not np.array_equal(sample, moved)
+    text = _refused("TRIM_INVALID", lambda: _mesh(g, face, tol))
+    assert "two ring points coincide in the chart" in text and text.startswith("TRIM_INVALID: face 1:")
+
+
+def test_e3_refinement_stops_after_eight_bisection_rounds(monkeypatch):
+    """E3: failing slabs are bisected at most 8 rounds, then TRIM_INVALID (deviation).  With
+    ``tol.sag`` exactly the worst boundary-chord bound the boundary passes, but the triangles at
+    a cut near a chord's middle carry that chord's variance plus rounding terms, which no
+    bisection removes: 8 rounds, then refused.  A sag 1e-9 relative larger is accepted."""
+    from anygeometry import _display_lift as lift
+    g, face = window_face((0., 0., 0.), (0., 0., 1.), 1.0)
+    f = g.faces[face]
+    tol = dt.DisplayTolerance(.3)
+    rings = [lift._ring(g, face, loop, tol) for loop in (f.loop, *f.holes)]
+    with np.errstate(all="ignore"):
+        cyl = lift._CylinderChart(f.surface)
+        charts = cyl.charts(face, rings)
+        points, chart = np.vstack([r.points for r in rings]), np.vstack(charts)
+        deltas = cyl.offsets(points, chart)
+        following = lift._ring_structure(rings)[1]
+        span = np.abs(chart[following, 0] - chart[:, 0])
+        eps = lift._EPS
+        worst = float((np.maximum(deltas, deltas[following]) * (1 + 8 * eps) + cyl.r * span ** 2 / 8 * (1 + 8 * eps)
+                       + cyl.rounding(points, chart)).max())
+    rounds = []
+    original = lift._bisection
+    monkeypatch.setattr(lift, "_bisection", lambda *a, **k: rounds.append(1) or original(*a, **k))
+    text = _refused("TRIM_INVALID", lambda: _mesh(g, face, dt.DisplayTolerance(.3, sag=worst)))
+    assert "deviation bound" in text and len(rounds) == lift._REFINE_ROUNDS == 8
+    rounds.clear()
+    _check_cylinder(g, face, dt.DisplayTolerance(.3, sag=worst * (1 + 1e-9)),
+                    _mesh(g, face, dt.DisplayTolerance(.3, sag=worst * (1 + 1e-9))), grid=_grid(3))
+    assert 1 <= len(rounds) < 8

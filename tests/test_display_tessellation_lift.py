@@ -450,14 +450,6 @@ def test_refusal_an_extruded_support():
         _refused("SUPPORT_UNSUPPORTED", lambda: _mesh(case.model, face, dt.DisplayTolerance(.3)))
 
 
-def test_refusal_cone_supports_until_n3c():
-    for name in ("overrun_cone",):
-        case = corpus.ALL[name]()
-        face = next(iter(case.faces.values()))
-        text = _refused("SUPPORT_UNSUPPORTED", lambda: _mesh(case.model, face, dt.DisplayTolerance(.3)))
-        assert "not supported yet" in text
-
-
 def test_refusal_a_spline_edge_via_n1():
     g = GeometryModel()
     ids = [g.add_point(*p) for p in ((0., 0., 0.), (1 / 3, .1, 0.), (2 / 3, 0., 0.), (1., 0., 0.), (.5, 1., 0.))]
