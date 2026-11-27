@@ -4,6 +4,22 @@ All notable user-visible changes to ANYgeometry are documented here.
 
 ## Unreleased
 
+- N3 face lift (N3a plane, N3b cylinder, N3c cone): new public `display_tessellation.face_display_mesh(model, face_id, tol)`
+  returning a frozen `FaceDisplayMesh` (points, triangles, chart, ring_vertex_count, source, sense, face_tolerance,
+  deviation_bound, trim_sag_bound, degenerate_count) or a typed `DisplayTrimRefused`: the N2 chart mesh of the face's N1
+  rings lifted by index onto its `Plane`, `Cylinder` or `Cone`, ring vertices the N1 samples bit for bit, cut points on
+  the 3D N1 chords (T-vertices, crack-free to rounding), every certificate exact or closed-form (combinatorial coverage,
+  footprint orientation, paired deviation `<= T_face`); the analytic trim is approximated by the N1 chords
+  (`trim_sag_bound`), not covered. Owner decisions (2026-11-26, recommended options): T_face `tol.sag`, else
+  `surface_residual` (plane), else `r_max (angle + a)^2 / 8 + surface_residual`; trim distance always reported, enforced
+  only with `tol.sag`; `REFUSAL_CODES` unchanged (`TRIM_INVALID` with distinct fixed texts); D1-D4, E1 (deviation over
+  the ring vertices a cut stands for, exact edge maxima), E2 (azimuths within rounding joined; never two N1 samples:
+  `TRIM_INVALID`), E3 (at most 8 bisection rounds, then `TRIM_INVALID`). Cone (N3c): the mixed angle-height term as
+  `|k| |Cov(theta, h)|` with an exact maximum over each triangle; a trim reaching the apex is `OUT_OF_DOMAIN`. Not
+  re-exported from `anygeometry`. No change to N1 or N2 results; the N3c speed work keeps the plane and cylinder lifts
+  bit-identical to 57dc038 (400-face cylinder lift-only 255 -> 219 ms). See docs/DISPLAY_TESSELLATION.md, "Face lift
+  (N3)".
+
 - N2 round 8 (docs and tests only; supersedes the N3 wording of rounds 3-7 below): N2's contract states only what N2 guarantees (certified 2D
   mesh, closure coverage, `cut_ends`/`cut_fraction` as provenance, input/trust model, refusals,
   area, budgets) plus one sentence: lifting onto a support is N3's contract and N3 must not rely on

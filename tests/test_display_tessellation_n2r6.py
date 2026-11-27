@@ -69,4 +69,6 @@ def test_r7_allocation_wording():
     assert "12,500" not in _TEXT and "102,027" not in _TEXT
     assert "Lifting this mesh onto a support is N3's contract" in _TEXT
     assert "must not rely on cut_fraction reconstruction for orientation or coverage" in _TEXT
-    assert "T_face" not in _TEXT
+    # N2's own contract states no N3 obligation; since N3c the N3 section defines T_face itself
+    n2_part, n3_part = _TEXT.split("## Face lift (N3)")
+    assert "T_face" not in n2_part and "T_face" in n3_part

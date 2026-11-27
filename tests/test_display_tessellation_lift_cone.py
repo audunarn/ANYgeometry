@@ -23,6 +23,7 @@ from anygeometry.entities import OrientedEdge
 from anygeometry.exact_curves import EllipticArc
 from anygeometry.model import GeometryModel
 from anygeometry.surfaces import Cone
+from anygeometry.tolerance import TolerancePolicy
 
 _mesh, _refused = N3a._mesh, N3a._refused
 
@@ -128,7 +129,7 @@ def skew_chord_face(theta1=.04357):
     circle back to theta 0 and the ruling down.  N1 draws the line as one fixed chord (a line is
     exact, no sag to refine); its paired midpoint error on the cone is ~ |k| dT dH / 4 = 0.010784
     for theta1 = 0.04357 (the cone edge N1 accepts at sag 0.01068, codex-n2r7)."""
-    g = GeometryModel()
+    g = GeometryModel(tolerance=TolerancePolicy(surface_residual=.05))     # the skew line validates
     support = Cone((0., 0., 0.), (0., 0., 1.), (1., 0., 0.), .01, 1., 1., 0., math.pi / 2)
     p0 = g.add_point(.01, 0., 0.)
     p1 = g.add_point(math.cos(theta1), math.sin(theta1), 1.)
@@ -164,7 +165,7 @@ def test_t12_q4_the_cone_bound_holds_where_the_radial_metric_does_not():
     radial = 1 - 2 ** -.5
     dT, dH, k, rho_max = math.pi / 2, 1.0, .99, 1.0
     b_cone = rho_max * dT ** 2 / 8 + abs(k) * dT * dH / 4
-    assert radial < .3800 <= float(worst) <= b_cone
+    assert radial < float(worst) <= b_cone and abs(float(worst) - .3800) < 1e-4
     assert abs(b_cone - .697) < 1e-3
     assert rho_max * dT ** 2 / 8 < float(worst)                 # without the mixed term it would fail
     g, face = frustum_patch()
@@ -220,7 +221,10 @@ def test_t13_a_trim_reaching_the_apex_is_out_of_domain(name):
                                             ((0., 1e-3), .5, .3), ((990., 1000.), 2.5, .2)])
 def test_t13_a_very_large_frustum_is_accepted_or_too_complex(h, sweep, step):
     """Frustum radii 3e-6 / 5e8 over a height of 1e3: accepted (certified) or OUT_OF_DOMAIN
-    (N1's radius floor, or 'too complex' refinement), never a raw error."""
+    (N1's radius floor, or 'too complex' refinement), never a raw error.  One more typed outcome
+    (N3c finding): at radius 5e8 the rounding allowance A_face (~9e-6) exceeds the Q5 default's
+    slack (surface_residual), so an N1 chord at exactly the full angle step on the largest radius
+    (sweep / angle an integer: .5 / .05) is EDGE_UNSUPPORTED by rounding alone."""
     try:
         g, face = frustum_patch(3e-6, 5e8, 1e3, h=h, sweep=sweep)
     except Exception as error:                                     # the model refuses the patch itself
@@ -229,7 +233,11 @@ def test_t13_a_very_large_frustum_is_accepted_or_too_complex(h, sweep, step):
     try:
         mesh = _mesh(g, face, tol)
     except dt.DisplayTrimRefused as error:
-        assert error.code == "OUT_OF_DOMAIN", str(error)
+        assert error.code in ("OUT_OF_DOMAIN", "EDGE_UNSUPPORTED"), str(error)
+        if error.code == "EDGE_UNSUPPORTED":
+            words = str(error).split()
+            found, limit = float(words[words.index("to") + 1].rstrip(",")), float(words[-1])
+            assert "boundary chord" in str(error) and found - limit < 1e-4          # rounding level
         return
     _check_cone(g, face, tol, mesh, grid=C._grid(2), every=max(1, len(mesh.triangles) // 40))
 
@@ -254,8 +262,13 @@ CORPUS_CONE = {
 
 
 def test_corpus_cone_faces_are_all_listed():
-    found = {name for name, make in corpus.ALL.items()
-             if any(isinstance(make().model.faces[f].surface, Cone) for f in make().faces.values())}
+    found = set()
+    for name, make in corpus.ALL.items():
+        if name in ("generated_cylinder_400", "tripod_skins"):      # large, cylinders only (N3b)
+            continue
+        case = make()
+        if any(isinstance(case.model.faces[f].surface, Cone) for f in case.faces.values()):
+            found.add(name)
     assert found == set(CORPUS_CONE)
 
 

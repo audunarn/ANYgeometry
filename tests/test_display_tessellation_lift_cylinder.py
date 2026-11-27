@@ -413,3 +413,19 @@ def test_e3_refinement_stops_after_eight_bisection_rounds(monkeypatch):
     _check_cylinder(g, face, dt.DisplayTolerance(.3, sag=worst * (1 + 1e-9)),
                     _mesh(g, face, dt.DisplayTolerance(.3, sag=worst * (1 + 1e-9))), grid=_grid(3))
     assert 1 <= len(rounds) < 8
+
+
+def test_the_lift_frame_and_cross_product_are_n1_s_bit_for_bit():
+    """N3c speed work: the lift's own frame (explicit cross products) is N1's ``_axis_frame`` and
+    its ``_cross`` is ``np.cross``, bit for bit, on random and axis-aligned supports."""
+    from anygeometry import _display_lift as lift
+    rng = np.random.default_rng(2615)
+    axes = [rng.normal(size=3) * 10.0 ** rng.uniform(-3, 3) for _ in range(300)]
+    axes += [np.array(v, dtype=float) for v in ((0, 0, 1), (0, 1, 0), (1, 0, 0), (0, 0, -1), (1, 1, 0), (1e-9, 0, 1))]
+    for axis in axes:
+        radial = np.cross(axis, rng.normal(size=3))
+        support = Cylinder(tuple(rng.uniform(-50, 50, 3)), tuple(axis), tuple(radial), 1.0, 1.0)
+        for mine, theirs in zip(lift._axis_frame(support), dt._axis_frame(support)):
+            assert mine.tobytes() == theirs.tobytes()
+    u, v = rng.normal(size=(500, 3)) * 1e3, rng.normal(size=(500, 3))
+    assert lift._cross(u, v).tobytes() == np.cross(u, v).tobytes()

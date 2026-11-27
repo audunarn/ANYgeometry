@@ -420,13 +420,13 @@ keeps `__name__`, `numbers`, a formatted dtype and exception text out of both mo
 | `SUPPORT_UNSUPPORTED` | an incident face's support is not a plane, cylinder or cone, or the face has an explicit parameterization |
 | `EDGE_UNSUPPORTED` | the curve is not a line, circle or ellipse; degenerate frame or projection; support azimuth not monotone along the edge or reaching the axis (a line crossing it); unresolvable sag (including a sag rounding allowance above 2 % of the sag allowance); a vertex farther from its curve than the sag allowance; more than 4096 intervals (each division, or their sum); lost precision |
 | `OUT_OF_DOMAIN` | outside the declared numeric domain (`DisplayDomainRefused`), including an angle rounding allowance above 2 % of `tol.angle` |
-| `TRIM_INVALID`, `TRIM_WINDS_SUPPORT` | reserved for face trims (not raised by edge sampling) |
+| `TRIM_INVALID`, `TRIM_WINDS_SUPPORT` | face trims: raised by `face_display_mesh` (N3, "Face lift (N3)" below), not by edge sampling |
 
 ## Trim ring triangulation (`anygeometry._slab_triangulation`, private, N2)
 
 `triangulate_rings(rings, extra_x=None)` triangulates the region of `rings[0]` minus `rings[1:]`
 (each ring closed implicitly; ring orientation is free) in pure NumPy, without Shapely. It is not
-wired into any public display mesh yet (N3/N4).
+wired into a public display mesh by `face_display_mesh` (N3, below).
 
 **Input contract (owner decision, N2 round 1, the recommended option): simple rings.** The outer
 ring and every hole are simple polygons: no proper crossing, no self-touch, no zero-width retrace
@@ -707,3 +707,224 @@ oracle failures, 2957 `TRIM_INVALID`, 4 `OUT_OF_DOMAIN` area floor, 0 raw except
 refusal codes and messages included. Timing (`n2r4_bench.py`, best of three alternating passes,
 1ab837b / round 5): 2.53 / 2.57 ms, 0.475 / 0.473 ms, 8.9 / 8.2 ms; 49 / 50 us, 89 / 90 us, 84 / 83
 us, 223 / 223 us (unchanged within the loaded PC's noise; only refusal text changed).
+
+## Face lift (N3)
+
+`face_display_mesh(model, face_id, tol) -> FaceDisplayMesh` (public in
+`anygeometry.display_tessellation`, not re-exported from `anygeometry`; implementation in the private
+`anygeometry._display_lift`) returns a certified triangle mesh of one face whose support is a
+`Plane`, `Cylinder` or `Cone` and whose loops are edges N1 draws (lines, circles, ellipses), or a
+typed `DisplayTrimRefused`, never a partial mesh (owner decisions 2026-11-26 on SPEC-N3 Q1-Q9;
+slices N3a plane, N3b cylinder, N3c cone). Same trust model as N1 and N2: exact argument types,
+the module's arithmetic under `np.errstate(all="ignore")` with explicit guards, model calls through
+N1, no raw arithmetic error escapes, and the result does not depend on the caller's `np.seterr`.
+Nothing in it runs in a GUI thread by itself.
+
+**Steps.** (1) Support check. (2) Rings: the N1 samples of each coedge (reversed for a reversed
+coedge, last point dropped); consecutive coedges must meet bit for bit. (3) Chart of every ring
+point: on a plane its coordinates in an orthonormal frame of the plane; on a cylinder or cone
+`(theta, h)` about the module's own axis frame (`_axis_frame`), theta unwrapped along each ring
+(N1 bounds every azimuth step by the angle plus 2 %), holes shifted by multiples of 2 pi onto the
+outer ring's sheet. (4) Seam, winding and apex refusals. (5) Boundary-chord certificate against
+T_face. (6)-(7) N2 (`triangulate_rings`), refined by slab bisection where needed (cylinder,
+cone). (8) Lift by index: ring vertices are the N1 points; a cut point (a point N2 makes on a ring
+chord) is ON the 3D N1 chord, `A + f (B - A)` (`cut_fraction` is provenance only: no claim is
+derived from it). (9) Combinatorial, orientation and deviation certificates.
+
+**`FaceDisplayMesh`.** `points` (n, 3): first the ring vertices, the N1 `EdgeSamples` points bit
+for bit (outer loop, then each hole), then the cut points; `triangles` (m, 3) int64,
+counter-clockwise about the face normal `sense x` the support normal; `chart` (n, 2) the chart
+points; `ring_vertex_count`; `source` (n, 2) `(edge id, interval index)` of the N1 chord each point
+lies on; `sense` the sign of the outer ring's exact chart area; `face_tolerance` = T_face;
+`deviation_bound` (certified, `<= face_tolerance`); `trim_sag_bound`; `degenerate_count` (rounding-thin
+triangles exempt from the orientation test).
+
+### Contract
+
+- **Domain and map (Q3).** The domain is the closure of the positive-area interior of the chart
+  polygon of the N1 samples (as N2 defines it); the map is the index-wise lift, linear per
+  triangle. Ring vertices are N1's points bit for bit; cut points lie on N1 chords to rounding.
+- **Coverage (Q2), certified combinatorially and exactly:** (i) the index-to-chart map is
+  injective; (ii) every directed triangle edge occurs once, and an edge without its reverse lies on
+  one ring chord; (iii) those boundary edges are exactly the chain of every ring (its vertices with
+  each chord's cut points in order, directed so the region is on the left); (iv) every chart
+  triangle is strictly counter-clockwise (Shewchuk's filter, then rationals). With all triangles
+  positive, the 2-chain's boundary is the rings' chain, so every point off the edges is covered
+  exactly by its winding number: a conforming, non-overlapping covering of the chart region.
+- **Paired deviation (Q4).** A mesh point at barycentric weights `w` of a triangle corresponds to
+  the support point at the same weights of the chart vertices (parametric correspondence, not the
+  radial distance: on the r6 frustum the radial distance 0.2929 passes a 0.30 limit, the paired
+  0.3800 does not). `deviation_bound` bounds it over every triangle in closed form, never sampled.
+- **T_face (Q5, owner decision).** `tol.sag` if given; else on a plane
+  `model.tolerance.surface_residual`; else `r_max (tol.angle + a)^2 / 8 + surface_residual` on a
+  cylinder (`r_max` its radius) or a cone (`r_max` the larger of its two radii), `a` the largest N1
+  `allowance.angle` of the face's edges. Vertex offsets count toward it. The default admits every
+  N1 circle chord on its own support (Taylor bound `r dT^2 / 8`, `dT <= angle + a`) as long as the
+  rounding allowance `A_face` stays within the slack (see the large-radius note).
+- **Analytic trim (Q6): approximated, not covered.** The mesh covers the polygon of the N1 chords,
+  not the analytic trim region. `trim_sag_bound` certifies the largest distance of the drawn
+  boundary chords from the analytic curves (N1's exact chord sag, its rounding and the vertex
+  offsets); always reported, enforced (`EDGE_UNSUPPORTED`) only when `tol.sag` is given, as
+  `sag (1 + 64 eps)` plus the offsets N1 treats as rounding (decision D3). A plane with a circular
+  hole is accepted at the default tolerance with `trim_sag_bound >= r (1 - cos(angle / 2))`.
+- **T-vertices (Q8): crack-free to rounding, not vertex-shared.** A cut point on a boundary chord is
+  not inserted into the neighbour's samples; it lies on the shared 3D N1 chord (to `16 eps max|X|`),
+  so neighbouring faces meet without cracks above rounding, with T-vertices. N1 samples are never
+  moved and no other face is edited.
+- **Orientation (Q7).** Every lifted triangle is positively oriented against `sense x` the support
+  normal over its WHOLE chart footprint (not at its centroid: codex-n2r8's 2e-4-sweep fixture
+  passes the centroid test and folds elsewhere), except rounding-thin triangles (3D width
+  `2 area / longest edge <= A_face`), which are exempt and counted in `degenerate_count`.
+
+### Bounds per support
+
+`eps = 2^-52`, `FE = _FRAME_ERROR` (the module frame's distance from an exactly orthonormal one).
+Common lemma: for the exact chart map `S*`, a mesh point `x = sum W_j X_j` with chart
+`c = sum W_j c_j + kappa` (`W` convex weights over the ring vertices `j` that the triangle's
+vertices stand for: a cut at fraction `f` of chord `AB` stands for `A` and `B` with weights
+`1 - f`, `f`; `kappa` the computed distance of a cut's chart point from that interpolation),
+
+    |x - S*(c)| <= max_j |X_j - S*(c_j)| + |sum W_j S*(c_j) - S*(cbar)| + Lip |kappa| + 16 eps max|X|,
+
+and `|X_j - S*(c_j)| <= delta_j (1 + 8 eps) + A_face` with `delta_j = |X_j - S(c_j)|` computed.
+
+**Plane (decision D2).** The chart is measured through an exactly orthonormal chart: with the
+module's frame `e1 = u / |u|`, `n = (u x v) / |u x v|`, `e2 = n x e1` and `S*` built on the exact
+frame, an isometric affine chart, `|sum w_i (X_i - S*(c_i))| <= max_i |X_i - S*(c_i)|` (no
+curvature term). `A_face = 16 eps (|o| + max|X| + H) + 2 alpha max|c|`, `alpha = 8 eps / s + 16 eps`
+(the frame's tilt; `s` the sine between `u` and `v`, `s < 1e-12` is `OUT_OF_DOMAIN`), `H` the
+largest coordinate extent. `deviation_bound = max over triangles of max_i delta_i (1 + 8 eps) +
+A_face`. Orientation: `nT . (sense n) > (16 eps + 2 alpha) |d1| |d2|`, once per triangle.
+
+**Cylinder.** `S*(theta, h) = o + r c(theta) + h a*`, `c = cos e1* + sin e2*`;
+`A_face = 32 eps (|o| + r + H + max|X|) + 2 FE (r + H)`, `H = max |h|`. `S*_tt = -r c`, every
+other second derivative 0, so the middle term is at most `(r / 2) Var_W(theta)`. By the law of
+total variance `Var_W(theta) = sum_i w_i V_i + Var_w(m_i)`, `V_i = f_i (1 - f_i) (theta_B -
+theta_A)^2` (0 for a ring vertex), `m_i` within `kappa_t` of `theta_i`. The maximum over the
+triangle of `G(w) = sum w_i V_i + Var_w(theta_i)` lies on an edge (`G` depends on `w` through the
+image point `(sum w_i (V_i + theta_i^2), sum w_i theta_i)`; for each second coordinate the largest
+first one lies on the image triangle's boundary), and on the edge `p, q` (`tau = theta_q -
+theta_p`) `G = (1 - l) V_p + l V_q + l (1 - l) tau^2` has the exact maximum `U = max(V_p, V_q) +
+max(tau^2 - |V_q - V_p|, 0)^2 / (4 tau^2)`. Per triangle
+
+    E(T) = [max_j delta_j (1 + 8 eps) + (r / 2) (U (1 + 32 eps) + 8 eps (dT^2 + max V))
+            + A_face + 16 eps max|X| + r k_t + k_h + (r / 2) (2 k_t dT_max + k_t^2)] (1 + 8 eps).
+
+Boundary chords (two ring vertices): `max delta (1 + 8 eps) + r dT^2 / 8 (1 + 8 eps) + A_face <=
+T_face`, else `EDGE_UNSUPPORTED` (a fixed N1 chord cannot be refined inside). Orientation:
+`n . c(theta) = R cos(theta - phi)`, whose set above a margin `m >= 0` is an arc shorter than pi,
+so on a footprint narrower than pi the minimum exceeds `m` iff both end values do: checked as
+`sense n . c(theta_end) > 40 eps |d1| |d2|` at both ends; a footprint of pi or more is refused.
+
+**Decision E1.** The bound above is SPEC-N3's Taylor/Popoviciu bound taken over the ring vertices
+each cut stands for, with the exact maximum on each triangle edge. It replaces the spec's
+`E(T) = max_i delta_i + r dT^2 / 8`, which counted a cut's chord sag twice (the cut's own offset
+already holds it): 288 of the 2663 tripod triangles exceeded T_face at 7.5 deg with that form, none
+with this one.
+
+**Cone (N3c).** `S*(theta, h) = o + rho(h) c(theta) + h a*`, `rho(h) = r0 + k h`,
+`k = (r1 - r0) / (height |axis|)` (the support's `evaluate` puts `v height axis` at radius
+`(1 - v) r0 + v r1`; `height` may be negative). `A_face = 32 eps (|o| + rho_max + H + max|X|) +
+2 FE (rho_max + H) + 8 eps (|r0| + |k| H)` (the last term the rounding of `rho`, `k` included).
+Since `rho` is linear in `h`, `sum W_j rho_j = rho(hbar)` and exactly
+
+    sum W_j S*(c_j) - S*(cbar) = sum W_j rho_j (c(theta_j) - c(thetabar))
+                               = k Cov_W(theta, h) c'(thetabar) + sum W_j rho_j R_j,   |R_j| <= dt_j^2 / 2,
+
+so the middle term is at most `(1 / 2) sum W_j rho_j dt_j^2 + |k| |Cov_W(theta, h)|` (`rho_j > 0`
+by the apex rule). This is SPEC-N3's `B_cone = rho_max dT^2 / 8 + |k| dT dH / 4` (Cauchy-Schwarz
+and Popoviciu give `|Cov_w| <= dT dH / 4` for a triangle's own vertices), taken in a form that does
+not add a circle chord's variance to the mixed term at a different weight: by the laws of total
+variance and covariance, with each cut's own chord (`V_i`, `C_i = f (1 - f) dtheta dh`, 0 on a
+circle) and the cross term `|k| C_i |m_i - thetabar|` (rho varies along a skew chord),
+
+    middle term <= H(w) = sum_i w_i P_i + sum_{i<j} w_i w_j D_ij,
+    P_i = (rho_i / 2) V_i + |k| C_i (1 + dT + 2 k_t),    D_ij = (rho_T / 2) tau_ij^2 + |k| |tau_ij dh_ij|
+
+(`rho_i` the larger radius of a cut's chord ends, `rho_T` the largest over the triangle; the
+triangle vertices' own variance and covariance are `sum_{i<j} w_i w_j tau_ij^2` and
+`sum_{i<j} w_i w_j tau_ij dh_ij`). The maximum of `H` over the triangle is taken exactly: on each
+edge `max(P_p, P_q) + max(D - |P_q - P_p|, 0)^2 / (4 D)`; where `H` is strictly concave on the
+plane (`D01 > 0`, `det = 4 D01 D02 - (D01 + D02 - D12)^2` above its rounding and above
+`1e-6 (D01 + D02)^2`, so the condition number is at most 4e6) and its critical point lies in the
+triangle (to 1e-3), also the critical value (a concave quadratic's global maximum, an
+upper bound wherever it lies); where it is concave only to rounding, the boundary maximum plus
+`(det + its rounding) / (D01 + D02)` (along the flattest direction the boundary is within that).
+Per triangle
+
+    E(T) = [max_j delta_j (1 + 8 eps) + H_max (1 + 64 eps) + 32 eps (sum D + max P)
+            + ((rho_T / 2)(2 k_t dT_max + k_t^2) + |k| ((k_h dT + k_t dH) / 2 + k_t k_h)) (1 + 8 eps)
+            + A_face + 16 eps max|X| + rho_max k_t + (1 + |k|) k_h] (1 + 8 eps)
+
+(`|dS/dtheta| = rho`, `|dS/dh| = |k c + a| <= 1 + |k|` for the `kappa` shift). Boundary chords:
+`max delta (1 + 8 eps) + (rho dT^2 / 8 + |k| dT dH / 4)(1 + 8 eps) + A_face <= T_face`, else
+`EDGE_UNSUPPORTED`. On the r6 frustum's naive two-triangle mesh `B_cone = 0.3084 + 0.3888 = 0.697`
+bounds the oracle's 0.3800 (the curvature term alone, 0.3084, would not). Orientation:
+`S_theta x S_h = rho (c(theta) - k a)`, so the sign of `f(theta) = sense n . c(theta) - sense k
+n . a = R cos(theta - phi) + level` decides; its minimum over a footprint narrower than pi is at
+an end unless the sinusoid's minimum lies inside, which needs a falling slope at the low end and
+a rising one at the high end; "possibly inside" within the margin is taken as inside, and then
+`level - R` must exceed the margin too. Margin `40 eps (1 + |k|) |d1| |d2|`.
+
+**Refinement (decision E3).** Every slab holding a triangle with `E(T) > T_face` gets an N2 extra
+slab line at its middle; N2 runs again and every certificate is re-run on the new mesh, at most
+`_REFINE_ROUNDS = 8` rounds (2^8 sub-slabs per slab). Still failing: `TRIM_INVALID` ("a lifted
+triangle's deviation bound exceeds the face tolerance"); a slab too narrow to bisect likewise; more
+than `MAX_SLAB_INCIDENCES` lines: `OUT_OF_DOMAIN` ("too complex"). Bisection rather than one
+uniform step: as `tau` shrinks the edge maximum falls to `max(P_p, P_q)` as soon as
+`D <= |P_q - P_p|`, so a staggered cut near a chord's middle usually needs one or two halvings. A
+face needing none is N2's mesh itself. On a cone the mixed term needs slabs about
+`4 (T_face - chord sag) / (|k| dH)` wide: the r6 frustum (`k = 0.99`, `dH = 1`) takes 5-8 rounds at
+0.05-0.3 rad and is refused after 8 at 0.02 rad. Test: with `tol.sag` exactly the worst
+boundary-chord bound, 8 rounds then `TRIM_INVALID`.
+
+**Decision E2 (azimuth join).** Chart azimuths closer than their own rounding,
+`16 eps (max(1, |theta|) + reach / r)` (`reach` the largest ring coordinate plus the support
+origin's; on a cone `r` is the smallest `rho` at the ring points), are joined to the smallest:
+the two ends of a ruling, or a hole's ruling against another ring's vertex, otherwise make
+ulp-wide slabs whose cuts on a long chord stand tangentially off the chart order (a true sliver
+fold, 3D width ~1e-3). The join changes chart values only: every ring vertex still lifts to its N1
+sample bit for bit (tested), the offsets `delta` measure the change, and a join that would make
+two distinct N1 samples one chart point is `TRIM_INVALID` ("two ring points coincide in the
+chart", tested).
+
+**Decision D1 (aligned holes).** Two or more CUT points whose chart points are bitwise equal become
+one mesh vertex before the certificates (the boundary chain is then a 1-chain whose zero-width
+spikes cancel); a chart point shared with a ring vertex stays `TRIM_INVALID`. **D2:** the plane
+deviation is measured directly through an exactly orthonormal chart (above). **D3:** the trim-sag
+check `sag (1 + 64 eps)` plus N1's rounding offsets (above). **D4:** an arithmetic error in the
+lift is `TRIM_INVALID` with fixed text; a seam (one edge used twice) is `TRIM_WINDS_SUPPORT`; the
+tests build trims the model would refuse with `_put_entity`.
+
+**Domain (no new constant).** A cone trim reaching the apex (a ring point within N1's apex rule of
+an exactly zero radius, or `rho(h)` at most its rounding at a ring point) is `OUT_OF_DOMAIN`; otherwise `rho > 0`
+on the whole chart region (`rho` is linear in `h`, every mesh point's `h` lies between ring
+points'). Small radii are bounded by N1's `MIN_DISPLAY_RADIUS_RATIO`, large ones by the slab
+budget. Large-radius note (N3c finding): at radius 5e8 `A_face` (about 9e-6) exceeds the Q5
+default's slack (`surface_residual = 1e-8` plus `r (2 angle a + a^2) / 8`), so an N1 chord at
+exactly the full angle step on the largest radius (sweep / angle an integer) is `EDGE_UNSUPPORTED`
+by rounding alone (the 3e-6 / 5e8 frustum at sweep .5, angle .05); the T_face formula (Q5) was not
+changed.
+
+### Refusals (fixed texts; `REFUSAL_CODES` unchanged, owner decision)
+
+| code | text (after `face <id>: `) |
+|---|---|
+| `SUPPORT_UNSUPPORTED` | "the face has an explicit parameterization"; "its support is not a plane, cylinder or cone" |
+| `TRIM_WINDS_SUPPORT` | "a loop winds around the support's axis" (its steps, the closing one included, sum to more than pi in magnitude); "the face uses one edge twice (a seam or slit)" |
+| `OUT_OF_DOMAIN` | N1's and N2's domain refusals; "its plane's vectors are parallel to within a sine of 1e-12"; "its refinement needs more than 200000 slab lines (too complex)"; "its trim reaches the cone's apex (...)" |
+| `EDGE_UNSUPPORTED` | N1's edge refusals; "a boundary chord deviates from the plane / cylinder / cone by up to X, above the face tolerance T"; "edge E's drawn chords leave its curve by up to X, above the sag S" (only with `tol.sag`) |
+| `TRIM_INVALID` (trims) | "a loop has no coedges"; "consecutive coedges do not meet bit for bit"; "two ring points coincide in the chart"; N2's trim refusals (crossing, touching rings, ...) |
+| `TRIM_INVALID` (uncertified lifts) | "two mesh vertices coincide in the chart (lift not certified: ...)"; "the mesh boundary is not the chain of the ring chords (lift not certified)"; "a mesh edge is not shared by exactly two oppositely oriented triangles (lift not certified)"; "a chart triangle is not strictly counter-clockwise (lift not certified)"; "a lifted triangle folds against the face normal (lift not certified)"; "a lifted triangle's deviation bound exceeds the face tolerance (lift not certified)"; "an arithmetic error in the lift" |
+
+### Evidence
+
+Tests: `tests/test_display_tessellation_lift.py` (N3a, plane), `..._lift_cylinder.py` (N3b; E2, E3;
+the lift's frame and cross product pinned bit for bit to N1's), `..._lift_cone.py` (N3c: T12, T13,
+every corpus cone face with its expected code, window patches on tilted, narrowing, equal-radius
+and negative-height cones). Every accepted mesh is checked by independent oracles: exact Fraction
+combinatorics, a 50-digit mpmath paired deviation on barycentric grids and the footprint
+orientation against the exact frame. Evidence folder `display-tess-evidence-20261125`: fuzz
+`n3a_fuzz.py` (planar), `n3b_fuzz.py` (cylinder), `n3c_fuzz.py` (cone), 0 oracle failures and 0 raw
+exceptions each (`n3c-fuzz.txt`); the plane and cylinder lifts are bit-identical to 57dc038 across
+the N3c changes (`n3c_bits.py`, `n3c-bits-compare.txt`); timing `n3c-bench.txt`.

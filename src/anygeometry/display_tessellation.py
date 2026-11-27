@@ -1496,7 +1496,7 @@ class FaceDisplayMesh:
     its last point), then the cut points, each ON the 3D N1 chord it subdivides (a T-vertex against
     the neighbour, owner decision Q8).  ``triangles`` (m, 3) int64, counter-clockwise about the face
     normal ``sense x`` the support normal.  ``chart`` (n, 2): the 2D points of the chart mesh (plane
-    frame coordinates; on a cylinder ``(theta, h)``, theta unwrapped).  ``ring_vertex_count``:
+    frame coordinates; on a cylinder or cone ``(theta, h)``, theta unwrapped).  ``ring_vertex_count``:
     ``points[:k]`` are ring vertices.  ``source`` (n, 2) int64: ``(edge id, interval index)`` of the N1 chord each point lies on (a ring vertex: the chord
     starting at it in loop direction).  ``sense``: +1/-1, the sign of the outer ring's exact chart
     area.  ``face_tolerance``: T_face.  ``deviation_bound``: the certified largest paired deviation
@@ -1520,7 +1520,7 @@ class FaceDisplayMesh:
 
 
 def face_display_mesh(model, face_id: int, tol: DisplayTolerance) -> FaceDisplayMesh:
-    """A certified triangle mesh of one face for display (N3: faces on a ``Plane`` or a ``Cylinder``).
+    """A certified triangle mesh of one face for display (N3: faces on a ``Plane``, ``Cylinder`` or ``Cone``).
 
     The face's rings are the N1 samples of its coedges (:func:`edge_display_samples`); their chart
     polygon is triangulated exactly (N2) and lifted by index.  The result is returned only when
@@ -1528,13 +1528,14 @@ def face_display_mesh(model, face_id: int, tol: DisplayTolerance) -> FaceDisplay
     oriented triangles or lies on one ring chord, the boundary chains exactly to every ring, every
     lifted triangle (except rounding-thin ones, counted) is positively oriented about the face
     normal over its whole chart footprint, and the paired deviation from the support is at most
-    T_face (``tol.sag`` if given, else the model's ``surface_residual`` on a plane and ``r (tol.angle
-    + a)^2 / 8 + surface_residual`` on a cylinder, ``a`` the largest N1 angle allowance of the face's
-    edges; slabs are bisected until it holds); otherwise a typed :class:`DisplayTrimRefused`,
-    never a partial mesh.  Cut points that coincide in the chart are merged (never with a ring
-    vertex).  A loop winding a cylinder's axis: ``TRIM_WINDS_SUPPORT``.  Faces on a cone (until
-    N3c), with an explicit parameterization, or on any other support: ``SUPPORT_UNSUPPORTED``.
-    See ``docs/DISPLAY_TESSELLATION.md`` and ``_display_lift``.
+    T_face (``tol.sag`` if given, else the model's ``surface_residual`` on a plane and ``r_max (tol.angle
+    + a)^2 / 8 + surface_residual`` on a cylinder or cone, ``r_max`` its (larger) radius, ``a`` the
+    largest N1 angle allowance of the face's edges; slabs are bisected, at most 8 rounds, until it
+    holds); otherwise a typed :class:`DisplayTrimRefused`, never a partial mesh.  Cut points that
+    coincide in the chart are merged (never with a ring vertex).  A loop winding the axis:
+    ``TRIM_WINDS_SUPPORT``; a cone trim reaching the apex: ``OUT_OF_DOMAIN``.  Faces with an
+    explicit parameterization or on any other support: ``SUPPORT_UNSUPPORTED``.  See
+    ``docs/DISPLAY_TESSELLATION.md`` ("Face lift (N3)") and ``_display_lift``.
     """
     from ._display_lift import _lift
     return _lift(model, face_id, tol)

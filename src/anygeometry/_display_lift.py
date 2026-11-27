@@ -1,9 +1,9 @@
 """Face display meshes: the N2 chart mesh of a face's N1 rings, lifted onto its support (N3).
 
 Private helper of :func:`anygeometry.display_tessellation.face_display_mesh` (SPEC-N3, owner
-decisions 2026-11-26; SPEC-N3b decisions D1-D4).  N3a: faces on a ``Plane``; N3b: on a
-``Cylinder``; a ``Cone`` face is ``SUPPORT_UNSUPPORTED`` until N3c.  Same trust model as N1 and
-N2: exact argument types,
+decisions 2026-11-26; SPEC-N3b decisions D1-D4; SPEC-N3c decisions E1-E3).  N3a: faces on a
+``Plane``; N3b: on a ``Cylinder``; N3c: on a ``Cone``.  The contract and the derivations are in
+``docs/DISPLAY_TESSELLATION.md``, "Face lift (N3)".  Same trust model as N1 and N2: exact argument types,
 fixed refusal text, the module's arithmetic under ``np.errstate(all="ignore")`` with explicit
 guards, model calls through N1 (NumPy's default state), no raw arithmetic error escapes (typed
 ``TRIM_INVALID`` at worst), and every failure is a typed refusal, never a partial mesh.
@@ -115,6 +115,19 @@ that arc cannot contain its complement, longer than the interval).  Checked as `
 c(theta_end) > 40 eps |d1| |d2|`` at both ends (the cross product, the frame and the trigonometric
 values each round by a few eps of ``|d1| |d2|``); a footprint of pi or more is refused.  Rounding-
 thin triangles (3D width at most ``A_face``) are exempt and counted.
+
+Cone (N3c).  ``S*(theta, h) = o + rho(h) c(theta) + h a*``, ``rho = r0 + k h``, ``k = (r1 - r0) /
+(height |axis|)``; ``A_face`` as the cylinder's with ``rho_max`` for ``r`` plus the rounding of
+``rho``, ``8 eps (|r0| + |k| H)``.  ``rho`` is linear in ``h``, so exactly ``sum W_j S*(c_j) -
+S*(cbar) = k Cov_W(theta, h) c'(thetabar) + sum W_j rho_j R_j`` (``|R_j| <= dt_j^2 / 2``): the
+paired deviation is bounded by ``max delta`` plus the maximum over the triangle of ``H(w) = sum
+w_i P_i + sum_{i<j} w_i w_j D_ij`` (each cut's own chord variance and covariance in ``P``, the
+vertices' variance and covariance in ``D``), taken exactly (edges in closed form, the critical
+point where ``H`` is strictly concave), plus the kappa and rounding terms (:class:`_ConeBound`).
+Boundary chords: ``rho dT^2 / 8 + |k| dT dH / 4`` plus offsets and ``A_face``.  Orientation: the
+sign of ``n . (c(theta) - k a)`` over the footprint, ends plus the sinusoid's minimum where it may
+lie inside.  A trim reaching the apex (or ``rho <= 0`` at a ring point) is ``OUT_OF_DOMAIN``.
+Azimuth join (E2): on a cone the azimuth's rounding uses the smallest ``rho`` at the ring points.
 """
 from __future__ import annotations
 
@@ -291,7 +304,7 @@ def _trim_sag(face_id, model, samples, tol, trim) -> float:
 def _ring_sign(ring) -> int:
     """The exact sign of a ring's area (float filter, N2's bound; else exact integers)."""
     x, y = ring[:, 0], ring[:, 1]
-    terms = (x - x[0]) * (np.roll(y, -1) - np.roll(y, 1))
+    terms = (x - x[0]) * (np.concatenate((y[1:], y[:1])) - np.concatenate((y[-1:], y[:-1])))   # np.roll(y, -1), (y, 1)
     doubled, magnitude = float(np.sum(terms)), float(np.sum(np.abs(terms)))
     error = (len(ring) + 8) * _EPS * magnitude + _UNDERFLOW
     if doubled > error:
@@ -381,8 +394,14 @@ def _combinatorial(face_id, rings, chart, triangles, cut_ends, signs, remap=None
     k = sum(len(r.points) for r in rings)
     ring_of, following = _ring_structure(rings) if structure is None else structure
     position = np.arange(k, dtype=np.int64)
-    # the chord of each cut point: its ends must be consecutive ring vertices
     a, b = cut_ends[:, 0].astype(np.int64), cut_ends[:, 1].astype(np.int64)
+    if not len(a) and remap is None:
+        # no cut points: the chain is every ring's chords, directed so the region is on the left
+        # (the general construction below gives the same set of edges)
+        along = np.array([(signs[r] > 0) if r == 0 else (signs[r] < 0) for r in range(len(rings))])[ring_of]
+        expected_codes = np.where(along, position * n + following, following * n + position)
+        return _triangle_edges(face_id, chart, triangles, n, expected_codes)
+    # the chord of each cut point: its ends must be consecutive ring vertices
     if len(a) and not (bool(np.all((a >= 0) & (a < k) & (b >= 0) & (b < k)))):
         raise _invalid(face_id, _CHAIN)
     forward = following[a] == b if len(a) else np.zeros(0, dtype=bool)
@@ -410,7 +429,7 @@ def _combinatorial(face_id, rings, chart, triangles, cut_ends, signs, remap=None
     expected = []
     for r in range(len(rings)):
         nodes = order[node_ring == r]
-        tail, head = nodes, np.roll(nodes, -1)
+        tail, head = nodes, np.concatenate((nodes[1:], nodes[:1]))          # np.roll(nodes, -1)
         along_ring = (signs[r] > 0) if r == 0 else (signs[r] < 0)
         expected.append((tail, head) if along_ring else (head, tail))
     if remap is None:
@@ -430,6 +449,12 @@ def _combinatorial(face_id, rings, chart, triangles, cut_ends, signs, remap=None
         if bool(np.any(ordered[1:] == ordered[:-1])):
             raise _invalid(face_id, _CHAIN)
         expected_codes = expected_codes[~_member(heads * n + tails, ordered)]           # spikes cancel
+    return _triangle_edges(face_id, chart, triangles, n, expected_codes)
+
+
+def _triangle_edges(face_id, chart, triangles, n, expected_codes):
+    """Q2 (ii)-(iv) on the (mapped) triangles: every directed edge once, the unpaired ones exactly
+    the expected chain, every chart triangle strictly CCW.  Returns the triangles."""
     t0, t1, t2 = triangles[:, 0], triangles[:, 1], triangles[:, 2]
     tails = np.concatenate((t0, t1, t2))
     heads = np.concatenate((t1, t2, t0))
@@ -446,6 +471,36 @@ def _combinatorial(face_id, rings, chart, triangles, cut_ends, signs, remap=None
     return triangles
 
 
+def _cross(u, v):
+    """``np.cross`` of (n, 3) arrays, the same products and differences (bit for bit), without
+    its axis handling (a few microseconds per call on small meshes)."""
+    out = np.empty(np.broadcast_shapes(u.shape, v.shape))
+    out[:, 0] = u[:, 1] * v[:, 2] - u[:, 2] * v[:, 1]
+    out[:, 1] = u[:, 2] * v[:, 0] - u[:, 0] * v[:, 2]
+    out[:, 2] = u[:, 0] * v[:, 1] - u[:, 1] * v[:, 0]
+    return out
+
+
+def _cross3(u, v):
+    """``np.cross`` of two 3-vectors, bit for bit (the same float products and differences)."""
+    u0, u1, u2 = float(u[0]), float(u[1]), float(u[2])
+    v0, v1, v2 = float(v[0]), float(v[1]), float(v[2])
+    return np.array([u1 * v2 - u2 * v1, u2 * v0 - u0 * v2, u0 * v1 - u1 * v0])
+
+
+def _axis_frame(support):
+    """:func:`display_tessellation._axis_frame` (the module's own frame about the unit axis), the
+    same operations bit for bit, with :func:`_cross3` for ``np.cross`` (pinned by a test)."""
+    origin = np.asarray(support.origin, dtype=float)
+    axis = np.asarray(support.axis, dtype=float)
+    axis = axis / dt._norm(axis)
+    basis = np.zeros(3)
+    basis[int(np.argmin(np.abs(axis)))] = 1.0
+    cross = _cross3(axis, basis)
+    e1 = cross / dt._norm(cross)
+    return origin, e1, _cross3(axis, e1)
+
+
 def _member(values, ordered):
     """``values`` found in the sorted array ``ordered`` (as ``np.isin``)."""
     if not len(ordered):
@@ -459,7 +514,7 @@ class _Assembled:
     __slots__ = ("points", "triangles", "chart", "ends", "fraction", "source", "sense", "following")
 
 
-def _assemble(face_id, rings, ring_points, charts, ring_chart, mesh) -> _Assembled:
+def _assemble(face_id, rings, ring_points, charts, ring_chart, mesh, structure=None) -> _Assembled:
     """Steps (8)-(9a): N2's ring vertices checked, the sense (the outer ring's exact chart area),
     cut points ON the 3D N1 chord (``A + f (B - A)``), merged cut points (D1), the combinatorial
     certificate and the sources."""
@@ -477,7 +532,8 @@ def _assemble(face_id, rings, ring_points, charts, ring_chart, mesh) -> _Assembl
     cuts = start + fraction[:, None] * (finish - start)
     triangles = mesh.triangles.astype(np.int64)
     remap, kept = _merge(face_id, k, chart)
-    structure = _ring_structure(rings)
+    if structure is None:
+        structure = _ring_structure(rings)
     if remap is None:
         triangles = _combinatorial(face_id, rings, chart, triangles, ends, signs, structure=structure)
     else:
@@ -561,7 +617,7 @@ def _lift_plane(model, face_id, tol, support, rings, extra):
     rounding = plane.rounding(points, chart)
     a, b, c = points[triangles[:, 0]], points[triangles[:, 1]], points[triangles[:, 2]]
     d1, d2 = b - a, c - a
-    normal = np.cross(d1, d2)
+    normal = _cross(d1, d2)
     size = np.sqrt(np.sum(normal ** 2, axis=1))
     longest = np.sqrt(np.maximum.reduce([np.sum(d1 ** 2, axis=1), np.sum(d2 ** 2, axis=1),
                                          np.sum((c - b) ** 2, axis=1)]))
@@ -588,7 +644,7 @@ class _CylinderChart:
     """Chart ``(theta, h)`` about the module's own axis frame (module docstring, Cylinder)."""
 
     def __init__(self, support):
-        self.o, self.e1, self.e2 = dt._axis_frame(support)
+        self.o, self.e1, self.e2 = _axis_frame(support)
         axis = np.asarray(support.axis, dtype=float)
         self.a = axis / dt._norm(axis)
         self.r = float(support.radius)
@@ -604,6 +660,9 @@ class _CylinderChart:
     def charts(self, face_id, rings):
         """Each ring's chart, theta unwrapped along it (steps reduced into (-pi, pi]); a ring
         winding the axis is refused; holes shifted onto the outer ring's sheet."""
+        return self._join(face_id, rings, self._unwrap(face_id, rings), self.r)
+
+    def _unwrap(self, face_id, rings):
         out = []
         for ring in rings:
             theta, h = self._project(ring.points)
@@ -615,6 +674,12 @@ class _CylinderChart:
             if not (math.isfinite(total) and abs(total) < math.pi):
                 raise _refuse("TRIM_WINDS_SUPPORT", face_id, _WINDS)
             out.append((theta, h))
+        return out
+
+    def _join(self, face_id, rings, out, radius):
+        """Holes onto the outer ring's sheet, then azimuths within rounding joined (E2);
+        ``radius`` the smallest support radius at the ring points (the azimuth's rounding is
+        ``eps |P| / radius``)."""
         middle = 0.5 * (float(out[0][0].min()) + float(out[0][0].max()))
         thetas = [out[0][0]]
         for theta, _ in out[1:]:
@@ -631,8 +696,9 @@ class _CylinderChart:
         # the rounding of a computed azimuth: its own (|theta| ulps) and that of the projection,
         # eps (|P| + |o|) over the radius
         reach = max(float(np.abs(ring.points).max()) for ring in rings) + float(np.abs(self.o).max())
-        close = gaps <= _SNAP * (np.maximum(1.0, np.abs(ordered[1:])) + reach / self.r)
-        if bool(np.any(close)):
+        close = gaps <= _SNAP * (np.maximum(1.0, np.abs(ordered[1:])) + reach / radius)
+        joined_any = bool(np.any(close))
+        if joined_any:
             group = np.concatenate(([0], np.cumsum(~close)))
             first = np.concatenate(([0], np.flatnonzero(~close) + 1))
             joined[order] = ordered[first[group]]
@@ -640,6 +706,10 @@ class _CylinderChart:
         for theta, (_, h) in zip(thetas, out):
             charts.append(np.column_stack((joined[start:start + len(theta)], h)))
             start += len(theta)
+        # E2: the join moves chart azimuths only (the ring vertices stay N1's points); it must
+        # never make two distinct N1 samples one chart point
+        if joined_any and bool(np.any(_equal_runs(np.vstack(charts))[1])):
+            raise _invalid(face_id, _RING_COINCIDE)
         return charts
 
     def offsets(self, points, chart):
@@ -669,7 +739,7 @@ def _edge_maximum(vp, vq, tau):
 class _CylinderBound:
     """The per-triangle paired-deviation bound ``E(T)`` of an assembled mesh (module docstring)."""
 
-    def __init__(self, cyl, k, ring_deltas, built):
+    def __init__(self, cyl, k, ring_deltas, built, ring_rounding):
         r = cyl.r
         chart, ends, f = built.chart, built.ends, built.fraction
         theta, h = chart[:, 0], chart[:, 1]
@@ -687,7 +757,8 @@ class _CylinderBound:
         kt_max = float(kt.max()) if n else 0.0
         kh_max = float(kh.max()) if n else 0.0
         size = float(np.sqrt(np.sum(built.points ** 2, axis=1)).max())
-        self.rounding = cyl.rounding(built.points, chart)
+        # A_face of the mesh points; without cut points they are the ring's (the same value)
+        self.rounding = ring_rounding if n == k else cyl.rounding(built.points, chart)
         self.kt_max, self.kh_max, self.r = kt_max, kh_max, r
         self.extra = self.rounding + 16.0 * _EPS * size + r * kt_max + kh_max
 
@@ -736,10 +807,12 @@ def _lift_cylinder(model, face_id, tol, support, rings, extra):
     k = len(ring_points)
     # (5) boundary chords: the two-point bound
     ring_deltas = cyl.offsets(ring_points, ring_chart)
-    _, following = _ring_structure(rings)
+    structure = _ring_structure(rings)
+    following = structure[1]
     span = np.abs(ring_chart[following, 0] - ring_chart[:, 0])
+    ring_rounding = cyl.rounding(ring_points, ring_chart)
     chord = (np.maximum(ring_deltas, ring_deltas[following]) * (1.0 + 8.0 * _EPS)
-             + r * span ** 2 / 8.0 * (1.0 + 8.0 * _EPS) + cyl.rounding(ring_points, ring_chart))
+             + r * span ** 2 / 8.0 * (1.0 + 8.0 * _EPS) + ring_rounding)
     worst = float(chord.max())
     if not worst <= face_tolerance:
         raise _refuse("EDGE_UNSUPPORTED", face_id, f"a boundary chord deviates from the cylinder by up to {worst!r}, "
@@ -748,8 +821,8 @@ def _lift_cylinder(model, face_id, tol, support, rings, extra):
     lines, added = extra, np.zeros(0)
     for attempt in range(_REFINE_ROUNDS + 1):
         mesh = triangulate_rings(charts, lines)
-        built = _assemble(face_id, rings, ring_points, charts, ring_chart, mesh)
-        bound = _CylinderBound(cyl, k, ring_deltas, built)
+        built = _assemble(face_id, rings, ring_points, charts, ring_chart, mesh, structure)
+        bound = _CylinderBound(cyl, k, ring_deltas, built, ring_rounding)
         per_triangle, tt, width = bound.per_triangle(built.triangles)
         failing = ~(per_triangle <= face_tolerance)
         if not bool(np.any(failing)):
@@ -764,7 +837,7 @@ def _lift_cylinder(model, face_id, tol, support, rings, extra):
         triangles = triangles[:, [0, 2, 1]]
     a, b, c = points[triangles[:, 0]], points[triangles[:, 1]], points[triangles[:, 2]]
     d1, d2 = b - a, c - a
-    normal = np.cross(d1, d2)
+    normal = _cross(d1, d2)
     size = np.sqrt(np.sum(normal ** 2, axis=1))
     longest = np.sqrt(np.maximum.reduce([np.sum(d1 ** 2, axis=1), np.sum(d2 ** 2, axis=1),
                                          np.sum((c - b) ** 2, axis=1)]))
@@ -785,6 +858,241 @@ def _lift_cylinder(model, face_id, tol, support, rings, extra):
                               int(np.count_nonzero(thin)))
 
 
+# ----------------------------------------------------------------------------- cone
+class _ConeChart(_CylinderChart):
+    """Chart ``(theta, h)`` of a cone about the module's own axis frame (module docstring, Cone):
+    ``rho(h) = r0 + k h``, ``k = (r1 - r0) / (height |axis|)`` (the support's ``evaluate`` puts
+    ``v height axis`` at radius ``(1 - v) r0 + v r1``)."""
+
+    def __init__(self, support):
+        self.o, self.e1, self.e2 = _axis_frame(support)
+        axis = np.asarray(support.axis, dtype=float)
+        length = dt._norm(axis)
+        self.a = axis / length
+        self.r0, self.r1 = float(support.radius_start), float(support.radius_end)
+        self.r = max(self.r0, self.r1)
+        self.k = (self.r1 - self.r0) / (float(support.height) * length)
+
+    def charts(self, face_id, rings):
+        out = self._unwrap(face_id, rings)
+        h = np.concatenate([h for _, h in out])
+        low = float((self.r0 + self.k * h).min())
+        if not low > self.rho_rounding(float(np.abs(h).max())):      # the apex or the other nappe (to rounding)
+            raise dt.DisplayDomainRefused(_apex_text(face_id))
+        return self._join(face_id, rings, out, low)
+
+    def offsets(self, points, chart):
+        """``delta_i = |X_i - S(c_i)|`` computed with the module's frame."""
+        theta, h = chart[:, 0], chart[:, 1]
+        rho = self.r0 + self.k * h
+        mapped = (self.o + (rho * np.cos(theta))[:, None] * self.e1 + (rho * np.sin(theta))[:, None] * self.e2
+                  + h[:, None] * self.a)
+        return np.sqrt(np.sum((points - mapped) ** 2, axis=1))
+
+    def rho_rounding(self, height):
+        """The rounding of a computed ``rho(h) = r0 + k h`` (``k`` itself a few roundings)."""
+        return 8.0 * _EPS * (abs(self.r0) + abs(self.k) * height)
+
+    def rounding(self, points, chart):
+        """``A_face`` (module docstring, Cone)."""
+        size = float(np.sqrt(np.sum(points ** 2, axis=1)).max())
+        height = float(np.abs(chart[:, 1]).max())
+        rho = float(np.abs(self.r0 + self.k * chart[:, 1]).max()) + self.rho_rounding(height)
+        return (32.0 * _EPS * (dt._norm(self.o) + rho + height + size)
+                + 2.0 * dt._FRAME_ERROR * (rho + height) + self.rho_rounding(height))
+
+
+def _check_apex(face_id, model, support, cone, ring_points):
+    """A trim reaching the apex (a ring point within N1's apex rule of an exact zero radius) is
+    ``OUT_OF_DOMAIN``, checked before the azimuths (an apex point has none); a support radius
+    ``rho(h) <= 0`` at a ring point (the other nappe) likewise, in :meth:`_ConeChart.charts`.
+    Then ``rho > 0`` on the whole chart region (``rho`` is linear in ``h`` and every mesh point's
+    ``h`` lies between ring points' ``h``)."""
+    apexes = []
+    origin = np.asarray(support.origin, dtype=float)
+    if support.radius_start == 0.0:
+        apexes.append(origin)
+    if support.radius_end == 0.0:
+        apexes.append(origin + support.height * np.asarray(support.axis, dtype=float))
+    length = float(model.tolerance.length)
+    at_apex = any(bool(np.any(np.sqrt(np.sum((ring_points - apex) ** 2, axis=1))
+                              <= length + dt._ON_AXIS * max(1.0, float(np.abs(apex).max())))) for apex in apexes)
+    if at_apex:
+        raise dt.DisplayDomainRefused(_apex_text(face_id))
+
+
+def _apex_text(face_id):
+    return (f"face {dt._id_text(face_id)}: its trim reaches the cone's apex (a face lift needs a positive "
+            f"support radius at every trim point)")
+
+
+class _ConeBound:
+    """The per-triangle paired-deviation bound ``E(T)`` of an assembled cone mesh (module
+    docstring, Cone): the cylinder's bound with ``r`` replaced by the largest ``rho`` over the
+    ring vertices under the triangle, plus the mixed term ``|k| |Cov_W(theta, h)|``."""
+
+    def __init__(self, cone, k, ring_deltas, ring_rho, built):
+        chart, ends, f = built.chart, built.ends, built.fraction
+        theta, h = chart[:, 0], chart[:, 1]
+        n = len(chart)
+        ja = np.concatenate((np.arange(k, dtype=np.int64), ends[:, 0]))
+        jb = np.concatenate((np.arange(k, dtype=np.int64), ends[:, 1]))
+        ff = np.concatenate((np.zeros(k), f))
+        ta, tb, ha, hb = theta[ja], theta[jb], h[ja], h[jb]
+        spread = ff * (1.0 - ff)
+        self.vt = spread * (tb - ta) ** 2
+        # a cut's own covariance on its chord, f (1 - f) dtheta dh (0 on a circle: dh = 0)
+        self.cov = np.abs(spread * (tb - ta) * (hb - ha))
+        kt = np.abs(theta - (ta + ff * (tb - ta))) + 4.0 * _EPS * (np.abs(ta) + np.abs(tb))
+        kh = np.abs(h - (ha + ff * (hb - ha))) + 4.0 * _EPS * (np.abs(ha) + np.abs(hb))
+        kt[:k], kh[:k] = 0.0, 0.0
+        self.under = np.maximum(ring_deltas[ja], ring_deltas[jb])
+        self.theta, self.h = theta, h
+        self.kt_max = float(kt.max()) if n else 0.0
+        self.kh_max = float(kh.max()) if n else 0.0
+        self.slope = abs(cone.k)
+        height = float(np.abs(h).max())
+        # rho on every Taylor segment (ring vertices under the triangle to the mesh point, and on
+        # to the true chart point kappa away): its ends' largest, computed, plus its rounding
+        self.rho_under = np.maximum(ring_rho[ja], ring_rho[jb])
+        self.rho_slack = cone.rho_rounding(height) + self.slope * self.kh_max
+        rho_all = float(self.rho_under.max()) + self.rho_slack
+        size = float(np.sqrt(np.sum(built.points ** 2, axis=1)).max())
+        self.rounding = cone.rounding(built.points, chart)
+        self.extra = (self.rounding + 16.0 * _EPS * size + rho_all * self.kt_max
+                      + (1.0 + self.slope) * self.kh_max)
+
+    def per_triangle(self, triangles):
+        tt, th = self.theta[triangles], self.h[triangles]
+        rho = np.max(self.rho_under[triangles], axis=1) + self.rho_slack
+        half = 0.5 * rho
+        slope = self.slope
+        # H(w) = sum_i w_i P_i + sum_{i<j} w_i w_j D_ij bounds (rho / 2) Var_W(theta) + |k| |Cov_W|
+        # (module docstring, Cone); its maximum over the triangle, exactly: the edges' closed form
+        # and, where H is strictly concave on the plane, the critical point
+        width = tt.max(axis=1) - tt.min(axis=1)
+        height = th.max(axis=1) - th.min(axis=1)
+        kt, kh = self.kt_max, self.kh_max
+        # a cut's own chord: its variance at the chord's own largest rho, its covariance, and the
+        # cross term |k| C_i |m_i - theta_bar| (rho varies along a skew chord)
+        p = (0.5 * (self.rho_under[triangles] + self.rho_slack) * self.vt[triangles]
+             + slope * self.cov[triangles] * (1.0 + (width + 2.0 * kt))[:, None])
+        dt_ = tt[:, [1, 2, 2]] - tt[:, [0, 0, 1]]                   # edges 01, 02, 12
+        dh_ = th[:, [1, 2, 2]] - th[:, [0, 0, 1]]
+        d = half[:, None] * dt_ * dt_ + slope * np.abs(dt_ * dh_)
+        d01, d02, d12 = d[:, 0], d[:, 1], d[:, 2]
+        p0, p1, p2 = p[:, 0], p[:, 1], p[:, 2]
+        top = np.maximum.reduce([_quadratic_edge(p0, p1, d01), _quadratic_edge(p0, p2, d02),
+                                 _quadratic_edge(p1, p2, d12)])
+        m = d01 + d02 - d12
+        det = 4.0 * d01 * d02 - m * m
+        det_error = 16.0 * _EPS * (4.0 * d01 * d02 + m * m)
+        g1, g2 = p1 - p0 + d01, p2 - p0 + d02
+        flat = d01 + d02
+        # strictly concave with a bounded condition number (<= 4e6): the critical point's own
+        # rounding is far below the 1e-3 inside slack; otherwise the boundary plus the ridge term
+        concave = (d01 > 0.0) & (det > det_error) & (det > 1.0e-6 * flat * flat)
+        safe = np.where(concave, det, 1.0)
+        a = (2.0 * d02 * g1 - m * g2) / safe
+        b = (2.0 * d01 * g2 - m * g1) / safe
+        slack = 1.0e-3
+        inside = concave & (a >= -slack) & (b >= -slack) & (a + b <= 1.0 + slack)
+        # a concave H's critical value is its global maximum (an upper bound wherever it lies);
+        # a nearly singular H exceeds its boundary maximum by at most det / (D01 + D02)
+        crest = np.where(inside, p0 + 0.5 * (a * g1 + b * g2), 0.0)
+        ridge = np.where(~concave & (flat > 0.0), (np.maximum(det, 0.0) + det_error) / np.where(flat > 0.0, flat, 1.0),
+                         0.0)
+        h_max = (np.maximum(top, crest) + ridge) * (1.0 + 64.0 * _EPS) + 32.0 * _EPS * (d.sum(axis=1) + p.max(axis=1))
+        widest = float(width.max()) if len(width) else 0.0
+        # kappa: Var_w(m) <= Var_w(theta) + 2 kt dT + kt^2; |Cov_w(m)| <= |Cov_w| + (dT kh + dH kt) / 2 + kt kh
+        spread = half * (2.0 * kt * widest + kt * kt) + slope * (0.5 * (kh * width + kt * height) + kt * kh)
+        return (np.max(self.under[triangles], axis=1) * (1.0 + 8.0 * _EPS)
+                + h_max + spread * (1.0 + 8.0 * _EPS) + self.extra) * (1.0 + 8.0 * _EPS), tt, width
+
+
+def _quadratic_edge(vp, vq, d):
+    """The exact maximum over ``l`` in [0, 1] of ``(1 - l) vp + l vq + l (1 - l) d`` (``d >= 0``):
+    ``max(vp, vq) + max(d - |vq - vp|, 0)^2 / (4 d)``, before its rounding allowance."""
+    gap = np.maximum(d - np.abs(vq - vp), 0.0)
+    return np.maximum(vp, vq) + np.where(d > 0.0, gap * gap / np.where(d > 0.0, 4.0 * d, 1.0), 0.0)
+
+
+def _lift_cone(model, face_id, tol, support, rings, extra):
+    cone = _ConeChart(support)
+    if tol.sag is not None:
+        face_tolerance = float(tol.sag)
+    else:
+        a = max(ring.allowance for ring in rings)
+        face_tolerance = cone.r * (tol.angle + a) ** 2 / 8 + float(model.tolerance.surface_residual)
+    ring_points = np.vstack([ring.points for ring in rings])
+    _check_apex(face_id, model, support, cone, ring_points)
+    charts = cone.charts(face_id, rings)
+    ring_chart = np.vstack(charts)
+    k = len(ring_points)
+    # (5) boundary chords: the two-point bound rho dT^2 / 8 + |k| dT dH / 4
+    ring_deltas = cone.offsets(ring_points, ring_chart)
+    ring_rho = cone.r0 + cone.k * ring_chart[:, 1]
+    structure = _ring_structure(rings)
+    following = structure[1]
+    span = np.abs(ring_chart[following, 0] - ring_chart[:, 0])
+    rise = np.abs(ring_chart[following, 1] - ring_chart[:, 1])
+    rho = np.maximum(ring_rho, ring_rho[following]) + cone.rho_rounding(float(np.abs(ring_chart[:, 1]).max()))
+    chord = (np.maximum(ring_deltas, ring_deltas[following]) * (1.0 + 8.0 * _EPS)
+             + (rho * span ** 2 / 8.0 + abs(cone.k) * span * rise / 4.0) * (1.0 + 8.0 * _EPS)
+             + cone.rounding(ring_points, ring_chart))
+    worst = float(chord.max())
+    if not worst <= face_tolerance:
+        raise _refuse("EDGE_UNSUPPORTED", face_id, f"a boundary chord deviates from the cone by up to {worst!r}, "
+                                                   f"above the face tolerance {face_tolerance!r}")
+    # (6)-(9): N2, assembly, the deviation bound; failing slabs bisected, re-certified each round
+    lines, added = extra, np.zeros(0)
+    for attempt in range(_REFINE_ROUNDS + 1):
+        mesh = triangulate_rings(charts, lines)
+        built = _assemble(face_id, rings, ring_points, charts, ring_chart, mesh, structure)
+        bound = _ConeBound(cone, k, ring_deltas, ring_rho, built)
+        per_triangle, tt, width = bound.per_triangle(built.triangles)
+        failing = ~(per_triangle <= face_tolerance)
+        if not bool(np.any(failing)):
+            break
+        if attempt == _REFINE_ROUNDS:
+            raise _invalid(face_id, _DEVIATION)
+        added = np.concatenate((added, _bisection(face_id, tt, failing, len(added))))
+        lines = added if extra is None else np.concatenate((extra, added))
+    points, chart, triangles, sense = built.points, built.chart, built.triangles, built.sense
+    # Q7: the sign of n . (c(theta) - k a) over each footprint, exactly: both ends, and the
+    # sinusoid's minimum where it may lie inside; rounding-thin exempt
+    if sense < 0:
+        triangles = triangles[:, [0, 2, 1]]
+    a, b, c = points[triangles[:, 0]], points[triangles[:, 1]], points[triangles[:, 2]]
+    d1, d2 = b - a, c - a
+    normal = _cross(d1, d2)
+    size = np.sqrt(np.sum(normal ** 2, axis=1))
+    longest = np.sqrt(np.maximum.reduce([np.sum(d1 ** 2, axis=1), np.sum(d2 ** 2, axis=1),
+                                         np.sum((c - b) ** 2, axis=1)]))
+    thin = ~(size > bound.rounding * longest)               # 3D width |nT| / longest <= A_face
+    margin = (40.0 * _EPS * (1.0 + abs(cone.k)) * np.sqrt(np.sum(d1 ** 2, axis=1))
+              * np.sqrt(np.sum(d2 ** 2, axis=1)))
+    p = sense * (normal @ cone.e1)
+    q = sense * (normal @ cone.e2)
+    level = -sense * cone.k * (normal @ cone.a)
+    lo, hi = tt.min(axis=1), tt.max(axis=1)
+    cos_lo, sin_lo, cos_hi, sin_hi = np.cos(lo), np.sin(lo), np.cos(hi), np.sin(hi)
+    at_lo = p * cos_lo + q * sin_lo + level
+    at_hi = p * cos_hi + q * sin_hi + level
+    # the minimum of p cos + q sin lies inside (lo, hi) only if the slope is falling at lo and
+    # rising at hi (footprint < pi); "possibly inside" within rounding is taken as inside
+    inside = (-p * sin_lo + q * cos_lo <= margin) & (-p * sin_hi + q * cos_hi >= -margin)
+    bottom = level - np.hypot(p, q)
+    if not bool(np.all(thin | ((at_lo > margin) & (at_hi > margin) & (width < math.pi)
+                               & (~inside | (bottom > margin))))):
+        raise _invalid(face_id, _FOLD)
+    deviation = float(per_triangle.max())
+    trim = max(_trim_sag(face_id, model, samples, tol, curve) for ring in rings for samples, curve in ring.edges)
+    return dt.FaceDisplayMesh(face_id, dt._frozen(points), dt._frozen(triangles), dt._frozen(chart.copy()), k,
+                              dt._frozen(built.source), int(sense), face_tolerance, deviation, float(trim),
+                              int(np.count_nonzero(thin)))
+
+
 # ----------------------------------------------------------------------------- entry
 def _lift(model, face_id, tol, *, _extra_x=None):
     """The face's certified display mesh, else a typed refusal (``_extra_x``: a private test seam
@@ -796,8 +1104,6 @@ def _lift(model, face_id, tol, *, _extra_x=None):
             raise _refuse("SUPPORT_UNSUPPORTED", face_id, "the face has an explicit parameterization")
         if not isinstance(support, (Plane, Cylinder, Cone)):
             raise _refuse("SUPPORT_UNSUPPORTED", face_id, "its support is not a plane, cylinder or cone")
-        if isinstance(support, Cone):
-            raise _refuse("SUPPORT_UNSUPPORTED", face_id, "a face lift on a cone is not supported yet")
         dt._check_support_domain(support)
         loops = (face.loop, *face.holes)
         _check_loops(face_id, loops)
@@ -806,7 +1112,9 @@ def _lift(model, face_id, tol, *, _extra_x=None):
         try:
             if isinstance(support, Plane):
                 return _lift_plane(model, face_id, tol, support, rings, extra)
-            return _lift_cylinder(model, face_id, tol, support, rings, extra)
+            if isinstance(support, Cylinder):
+                return _lift_cylinder(model, face_id, tol, support, rings, extra)
+            return _lift_cone(model, face_id, tol, support, rings, extra)
         except dt.DisplayTrimRefused:
             raise
         except (ArithmeticError, ValueError) as error:      # no raw arithmetic error escapes
